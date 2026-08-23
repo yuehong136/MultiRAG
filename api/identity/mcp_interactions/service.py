@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,6 +29,7 @@ from common.mcp_interactions import (
 )
 
 
+@runtime_checkable
 class InteractionResumeExecutor(Protocol):
     """Must rehydrate live authority and issue a new operation bearer."""
 
@@ -41,6 +42,15 @@ class InteractionServiceLimits:
     batch_size: int
     max_rounds: int
     max_payload_bytes: int
+    ttl_seconds: int = 600
+
+    def __post_init__(self) -> None:
+        if any(type(value) is not int or value <= 0 for value in (self.lease_seconds, self.batch_size, self.max_rounds, self.max_payload_bytes, self.ttl_seconds)):
+            raise ValueError("interaction service limits are invalid")
+
+
+class _InteractionLeaseLost(RuntimeError):
+    """The worker no longer owns the durable resume attempt."""
 
 
 class PersistentInteractionService:
@@ -56,6 +66,10 @@ class PersistentInteractionService:
         self._session_factory = session_factory
         self._cipher = cipher
         self._limits = limits
+
+    @property
+    def ttl_seconds(self) -> int:
+        return self._limits.ttl_seconds
 
     async def pause(self, request: InteractionRequest) -> InteractionReceipt:
         async with self._repository() as repository:
@@ -111,15 +125,20 @@ class PersistentInteractionService:
         owner: str,
         executor: InteractionResumeExecutor,
     ) -> int:
-        async with self._repository() as repository:
-            leases = await repository.lease_ready(
-                owner=owner,
-                lease_seconds=self._limits.lease_seconds,
-                limit=self._limits.batch_size,
-            )
-        for lease in leases:
+        processed = 0
+        while processed < self._limits.batch_size:
+            async with self._repository() as repository:
+                leases = await repository.lease_ready(
+                    owner=owner,
+                    lease_seconds=self._limits.lease_seconds,
+                    limit=1,
+                )
+            if not leases:
+                break
+            lease = leases[0]
             await self._execute_lease(lease=lease, executor=executor)
-        return len(leases)
+            processed += 1
+        return processed
 
     async def _execute_lease(
         self,
@@ -128,10 +147,20 @@ class PersistentInteractionService:
         executor: InteractionResumeExecutor,
     ) -> None:
         try:
-            result = await executor.execute(lease.resume)
+            result = await self._execute_with_renewal(
+                lease=lease,
+                executor=executor,
+            )
         except MCPInteractionPaused:
             # The connector already persisted and atomically advanced the same
             # interaction.  The previous leased job was completed by pause().
+            return
+        except _InteractionLeaseLost:
+            logging.warning(
+                "MCP interaction lease lost (revision=%s, attempt=%s)",
+                lease.resume.revision,
+                lease.attempt,
+            )
             return
         except InteractionStateError as exc:
             async with self._repository() as repository:
@@ -159,8 +188,64 @@ class PersistentInteractionService:
                 async with self._repository() as repository:
                     await repository.complete(lease=lease, result=result)
             except InteractionStateError as exc:
-                async with self._repository() as repository:
-                    await repository.terminal_fail(lease=lease, code=exc.code)
+                try:
+                    async with self._repository() as repository:
+                        await repository.terminal_fail(lease=lease, code=exc.code)
+                except InteractionStateError:
+                    logging.warning(
+                        "MCP interaction completion lost its lease (revision=%s, attempt=%s)",
+                        lease.resume.revision,
+                        lease.attempt,
+                    )
+
+    async def _execute_with_renewal(
+        self,
+        *,
+        lease: InteractionLease,
+        executor: InteractionResumeExecutor,
+    ) -> object:
+        execution_task = asyncio.create_task(
+            executor.execute(lease.resume),
+            name=f"mcp-interaction-execute-{lease.resume.revision}",
+        )
+        renewal_task = asyncio.create_task(
+            self._renew_lease(lease),
+            name=f"mcp-interaction-renew-{lease.resume.revision}",
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                (execution_task, renewal_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if execution_task in done:
+                return await execution_task
+            try:
+                await renewal_task
+            except Exception as exc:
+                raise _InteractionLeaseLost from exc
+            raise _InteractionLeaseLost
+        finally:
+            pending = [task for task in (execution_task, renewal_task) if not task.done()]
+            for task in pending:
+                task.cancel()
+            # Observe both tasks even when execution and renewal finish in the
+            # same loop turn, otherwise a simultaneous renewal failure can be
+            # left as an unhandled task exception.
+            await asyncio.gather(
+                execution_task,
+                renewal_task,
+                return_exceptions=True,
+            )
+
+    async def _renew_lease(self, lease: InteractionLease) -> None:
+        interval = max(0.05, self._limits.lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            async with self._repository() as repository:
+                await repository.renew(
+                    lease=lease,
+                    lease_seconds=self._limits.lease_seconds,
+                )
 
     @asynccontextmanager
     async def _repository(self) -> AsyncIterator[InteractionRepository]:

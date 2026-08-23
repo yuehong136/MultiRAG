@@ -24,6 +24,7 @@ from api.identity.principal import (
 )
 from common.mcp_interactions import (
     InteractionEffect,
+    InteractionLeaseFence,
     InteractionRequest,
     InteractionResume,
 )
@@ -70,6 +71,11 @@ def _resume() -> InteractionResume:
         expires_at=datetime.now(UTC) + timedelta(minutes=5),
         interaction_id="interaction-a",
         previous_revision=1,
+        lease_fence=InteractionLeaseFence(
+            job_id="job-a",
+            owner="worker-a",
+            attempt=1,
+        ),
     )
     return InteractionResume(
         interaction_id="interaction-a",

@@ -30,5 +30,11 @@ class RunContext:
             return None
         return self.principal.platform_user_id
 
+    @property
+    def identity_revision(self) -> int | None:
+        if self.principal is None:
+            return None
+        return self.principal.identity_revision
+
 
 __all__ = ["RunContext"]

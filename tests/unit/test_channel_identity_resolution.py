@@ -437,6 +437,49 @@ async def test_no_link_preserves_legacy_context_without_identity_work() -> None:
     assert provisioning.reverify_requests == []
 
 
+async def test_action_actor_resolution_enforces_durable_provider_account_fence() -> None:
+    resolver, _, reader, provider, _ = _resolver()
+
+    result = await resolver.resolve_actor(
+        context=_context(),
+        actor=_command().actor,
+        expected_provider_account_id="provider-account-secret",
+    )
+
+    assert result.principal is not None
+    assert result.principal_id == "platform-user-secret"
+    assert len(reader.requests) == 2
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        ChannelIdentityAuthority(
+            ChannelIdentityAuthorityStatus.LINKED,
+            _provider_context(provider_account_id="replacement-account-secret"),
+        ),
+        ChannelIdentityAuthority(ChannelIdentityAuthorityStatus.NO_LINK),
+    ],
+    ids=["account-relinked", "link-removed"],
+)
+async def test_action_actor_resolution_rejects_changed_provider_authority_before_i3(
+    authority: ChannelIdentityAuthority,
+) -> None:
+    resolver, _, reader, provider, _ = _resolver(authority=authority)
+
+    with pytest.raises(ChannelIdentityResolutionError) as exc_info:
+        await resolver.resolve_actor(
+            context=_context(),
+            actor=_command().actor,
+            expected_provider_account_id="provider-account-secret",
+        )
+
+    assert exc_info.value.code == "IDENTITY_REVISION_CONFLICT"
+    assert reader.requests == []
+    assert provider.calls == []
+
+
 @pytest.mark.parametrize(
     ("scenario", "expected"),
     [

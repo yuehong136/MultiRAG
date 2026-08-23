@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal, TypeAlias
 
 
@@ -33,4 +34,17 @@ class ExecutionFailedEvent:
     event: Literal["execution_failed"] = field(default="execution_failed", init=False)
 
 
-BindingExecutionEvent: TypeAlias = MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent
+@dataclass(frozen=True, slots=True)
+class InteractionRequiredEvent:
+    """Terminal handoff to one API-owned, revision-bound form delivery."""
+
+    action_id: str = field(repr=False)
+    revision: int
+    expires_at: datetime
+    event: Literal["interaction_required"] = field(
+        default="interaction_required",
+        init=False,
+    )
+
+
+BindingExecutionEvent: TypeAlias = MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent | InteractionRequiredEvent

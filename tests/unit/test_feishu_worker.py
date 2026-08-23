@@ -11,6 +11,10 @@ from api.channels.core.base import (
     ActionHandler,
     ChannelAction,
     ChannelActionResponse,
+    ChannelFormAction,
+    FormActionHandler,
+    IncomingIdentityAssertion,
+    IncomingIdentityIdentifier,
     IncomingMessage,
     MessageHandler,
 )
@@ -52,6 +56,15 @@ class YieldingStopChannel(FakeChannel):
         for _ in range(5):
             await asyncio.sleep(0)
         await super().stop()
+
+
+class InteractionChannel(FakeChannel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.form_action_handler: FormActionHandler | None = None
+
+    def set_form_action_handler(self, handler: FormActionHandler) -> None:
+        self.form_action_handler = handler
 
 
 class FakeBridge:
@@ -110,6 +123,31 @@ class LifecycleBlockingBridge(BlockingBridge):
 
     async def close(self) -> None:
         self.closed = True
+
+
+class InteractionLifecycleBridge(LifecycleBlockingBridge):
+    def __init__(self) -> None:
+        super().__init__()
+        self.form_actions: list[ChannelFormAction] = []
+        self.delivery_started = asyncio.Event()
+        self.delivery_stopped = asyncio.Event()
+
+    async def handle_form_action(
+        self,
+        action: ChannelFormAction,
+    ) -> ChannelActionResponse:
+        self.form_actions.append(action)
+        return ChannelActionResponse("success", "durable")
+
+    async def run_interaction_deliveries(
+        self,
+        stop_event: asyncio.Event,
+    ) -> None:
+        self.delivery_started.set()
+        try:
+            await stop_event.wait()
+        finally:
+            self.delivery_stopped.set()
 
 
 class FakeAgentClient:
@@ -201,6 +239,24 @@ def _message(message_id: str) -> IncomingMessage:
     )
 
 
+def _form_action() -> ChannelFormAction:
+    return ChannelFormAction(
+        action_id="interaction-1",
+        nonce="action-nonce-1234",
+        revision=1,
+        action="accept",
+        form_value={"field-1": "Ada"},
+        identity=IncomingIdentityAssertion(
+            provider="feishu",
+            provider_tenant_key="tenant-key",
+            identifiers=(IncomingIdentityIdentifier(kind="open_id", value="ou-user"),),
+        ),
+        chat_id="oc-chat",
+        message_id="reply-message-1",
+        event_id="callback-event-1",
+    )
+
+
 def test_managed_domain_resolver_prefers_root_and_accepts_upstream_nested_shape() -> None:
     assert feishu_provider._resolve_domain({"domain": "feishu", "credential": {"domain": "lark"}}) == "feishu"
     assert feishu_provider._resolve_domain({"credential": {"domain": "lark"}}) == "lark"
@@ -256,6 +312,36 @@ async def test_worker_runs_preflight_consumes_message_and_releases_lease(
     assert redis.closed is True
     assert "queue_wait_ms=" in caplog.text
     assert "message-1" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_worker_owns_form_handler_and_interaction_delivery_task_lifecycle() -> None:
+    channel = InteractionChannel()
+    bridge = InteractionLifecycleBridge()
+    worker = _worker(
+        channel=channel,
+        bridge=bridge,
+        agent_client=FakeAgentClient(),
+        state_store=FakeStateStore(),
+        redis=FakeRedis(),
+    )
+    stop_event = asyncio.Event()
+
+    run_task = asyncio.create_task(worker.run(stop_event))
+    await channel.started.wait()
+    await asyncio.wait_for(bridge.delivery_started.wait(), timeout=1)
+
+    assert channel.form_action_handler is not None
+    response = await channel.form_action_handler(_form_action())
+    assert (response.toast_type, response.content) == ("success", "durable")
+    assert len(bridge.form_actions) == 1
+
+    stop_event.set()
+    await asyncio.wait_for(run_task, timeout=1)
+
+    assert bridge.delivery_stopped.is_set()
+    assert bridge.closed is True
+    assert channel.stopped is True
 
 
 @pytest.mark.asyncio

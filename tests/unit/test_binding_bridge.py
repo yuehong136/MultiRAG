@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import pytest
@@ -22,6 +23,7 @@ from api.channels.binding_bridge import BindingBridge
 from api.channels.core.base import (
     Channel,
     ChannelAction,
+    ChannelFormAction,
     IncomingIdentityAssertion,
     IncomingIdentityIdentifier,
     IncomingMessage,
@@ -30,8 +32,15 @@ from api.channels.core.base import (
     ReplySessionState,
     ReplyStatus,
 )
-from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
+from api.channels.execution_events import (
+    BindingExecutionEvent,
+    ExecutionFailedEvent,
+    InteractionRequiredEvent,
+    MessageCompletedEvent,
+    MessageDeltaEvent,
+)
 from api.channels.feishu.reply import FeishuProgressiveReplySession
+from api.channels.interaction_models import ClaimedInteractionDelivery
 from api.channels.state_store import binding_conversation_key
 
 _FULL_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
@@ -178,7 +187,7 @@ class _StateStore:
 class _Executor:
     def __init__(
         self,
-        events: list[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent] | None = None,
+        events: list[BindingExecutionEvent] | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.resets: list[str] = []
@@ -195,7 +204,7 @@ class _Executor:
     async def stream(
         self,
         **kwargs: Any,
-    ) -> AsyncIterator[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
+    ) -> AsyncIterator[BindingExecutionEvent]:
         self.calls.append(kwargs)
         for event in self.events:
             yield event
@@ -250,6 +259,8 @@ def _bridge(
     allowed_sender_ids: set[str] | None = None,
     private_chat_only: bool = True,
     capabilities: EffectiveReplyCapabilities | None = None,
+    interaction_client: Any | None = None,
+    interaction_presenter: Any | None = None,
 ) -> BindingBridge:
     return BindingBridge(
         channel=channel,
@@ -261,6 +272,8 @@ def _bridge(
         max_answer_chars=4000,
         private_chat_only=private_chat_only,
         capabilities=capabilities or _FULL_REPLY_CAPABILITIES,
+        interaction_client=interaction_client,
+        interaction_presenter=interaction_presenter,
     )
 
 
@@ -284,6 +297,7 @@ async def test_bridge_passes_only_transport_command_fields_to_binding_executor()
             "conversation": "oc-chat",
             "identity": None,
             "operation": "message",
+            "presentation_ref": None,
         }
     ]
     assert (
@@ -822,6 +836,262 @@ class _LifecycleChannel(_Channel):
         self.contexts.append(context)
         self.sessions.append(session)
         return session
+
+
+class _InteractionReplySession(_LifecycleReplySession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pause_calls = 0
+
+    async def pause_for_interaction(self) -> str:
+        self.pause_calls += 1
+        self.state = ReplySessionState.AWAITING_INPUT
+        return self.reply_message_id
+
+
+class _InteractionChannel(_LifecycleChannel):
+    async def begin_reply(
+        self,
+        source: IncomingMessage,
+        *,
+        max_content_chars: int,
+        context: ReplyContext | None = None,
+    ) -> _InteractionReplySession:
+        del source, max_content_chars
+        assert context is not None
+        session = _InteractionReplySession()
+        self.contexts.append(context)
+        self.sessions.append(session)
+        return session
+
+
+def _interaction_delivery(
+    *,
+    revision: int,
+    kind: Literal["form", "terminal"] = "form",
+) -> ClaimedInteractionDelivery:
+    common: dict[str, object] = {
+        "delivery_id": f"delivery-{kind}-{revision}",
+        "delivery_token": f"delivery-token-{kind}-{revision}",
+        "action_id": "interaction-1",
+        "revision": revision,
+        "kind": kind,
+        "presentation_ref": "reply-message-1",
+        "expires_at": (datetime(2026, 8, 24, 12, tzinfo=UTC) + timedelta(minutes=5)).isoformat(),
+        "safe_error_code": None,
+    }
+    if kind == "form":
+        common.update(
+            action_nonce=f"action-nonce-{revision:04d}",
+            projection={
+                "message": "Please provide the missing value.",
+                "fields": [
+                    {
+                        "name": f"field-{revision}",
+                        "kind": "text",
+                        "label": "Name",
+                        "required": True,
+                        "options": [],
+                        "min_length": 0,
+                        "max_length": 100,
+                        "minimum": None,
+                        "maximum": None,
+                    }
+                ],
+            },
+        )
+    else:
+        common.update(
+            action_nonce=None,
+            projection={
+                "state": "completed",
+                "message": "Request completed.",
+            },
+        )
+    return ClaimedInteractionDelivery.model_validate(common)
+
+
+class _InteractionClient:
+    def __init__(
+        self,
+        deliveries: dict[
+            tuple[str | None, int | None],
+            list[ClaimedInteractionDelivery],
+        ]
+        | None = None,
+    ) -> None:
+        self.deliveries = deliveries or {}
+        self.claims: list[tuple[str, str | None, int | None]] = []
+        self.acks: list[tuple[str, str, bool, str | None]] = []
+        self.callbacks: list[ChannelFormAction] = []
+
+    async def claim_interaction_delivery(
+        self,
+        *,
+        owner: str,
+        action_id: str | None = None,
+        revision: int | None = None,
+    ) -> ClaimedInteractionDelivery | None:
+        self.claims.append((owner, action_id, revision))
+        queued = self.deliveries.get((action_id, revision), [])
+        return queued.pop(0) if queued else None
+
+    async def acknowledge_interaction_delivery(
+        self,
+        *,
+        delivery: ClaimedInteractionDelivery,
+        owner: str,
+        success: bool,
+        safe_error_code: str | None = None,
+    ) -> None:
+        self.acks.append(
+            (delivery.delivery_id, owner, success, safe_error_code),
+        )
+
+    async def receive_interaction_callback(
+        self,
+        action: ChannelFormAction,
+    ) -> Literal["accepted", "duplicate"]:
+        self.callbacks.append(action)
+        return "accepted"
+
+
+class _InteractionPresenter:
+    def __init__(
+        self,
+        *,
+        stop_event: asyncio.Event | None = None,
+        stop_after: int = 0,
+    ) -> None:
+        self.deliveries: list[ClaimedInteractionDelivery] = []
+        self.stop_event = stop_event
+        self.stop_after = stop_after
+
+    async def present(self, delivery: ClaimedInteractionDelivery) -> None:
+        self.deliveries.append(delivery)
+        if self.stop_event is not None and self.stop_after and len(self.deliveries) >= self.stop_after:
+            self.stop_event.set()
+
+
+def _form_action(*, revision: int = 1) -> ChannelFormAction:
+    return ChannelFormAction(
+        action_id="interaction-1",
+        nonce=f"action-nonce-{revision:04d}",
+        revision=revision,
+        action="accept",
+        form_value={f"field-{revision}": "Ada"},
+        identity=IncomingIdentityAssertion(
+            provider="feishu",
+            provider_tenant_key="tenant-key",
+            identifiers=(IncomingIdentityIdentifier(kind="open_id", value="ou-user"),),
+        ),
+        chat_id="oc-chat",
+        message_id="reply-message-1",
+        event_id=f"callback-{revision}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_interaction_pause_replaces_original_reply_card_then_acks_delivery() -> None:
+    delivery = _interaction_delivery(revision=1)
+    client = _InteractionClient({("interaction-1", 1): [delivery]})
+    presenter = _InteractionPresenter()
+    channel = _InteractionChannel()
+    state = _StateStore()
+    executor = _Executor(
+        [
+            InteractionRequiredEvent(
+                action_id="interaction-1",
+                revision=1,
+                expires_at=datetime(2026, 8, 24, 12, tzinfo=UTC),
+            )
+        ]
+    )
+    bridge = _bridge(
+        channel=channel,
+        state=state,
+        executor=executor,
+        interaction_client=client,
+        interaction_presenter=presenter,
+    )
+
+    await bridge.handle_message(_message())
+
+    session = channel.sessions[0]
+    assert isinstance(session, _InteractionReplySession)
+    assert session.pause_calls == 1
+    assert session.state is ReplySessionState.AWAITING_INPUT
+    assert executor.calls[0]["presentation_ref"] == "reply-message-1"
+    assert presenter.deliveries == [delivery]
+    assert presenter.deliveries[0].presentation_ref == "reply-message-1"
+    assert len(client.claims) == 1
+    owner, action_id, revision = client.claims[0]
+    assert owner
+    assert (action_id, revision) == ("interaction-1", 1)
+    assert client.acks == [(delivery.delivery_id, owner, True, None)]
+    assert state.status == {"message-1": "replied"}
+
+
+@pytest.mark.asyncio
+async def test_form_callback_only_writes_durable_receipt_and_never_executes_mcp() -> None:
+    client = _InteractionClient()
+    presenter = _InteractionPresenter()
+    executor = _Executor()
+    bridge = _bridge(
+        channel=_InteractionChannel(),
+        state=_StateStore(),
+        executor=executor,
+        interaction_client=client,
+        interaction_presenter=presenter,
+    )
+    action = _form_action()
+
+    response = await bridge.handle_form_action(action)
+
+    assert (response.toast_type, response.content) == (
+        "success",
+        "提交已收到，正在处理。",
+    )
+    assert client.callbacks == [action]
+    assert client.claims == []
+    assert presenter.deliveries == []
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_interaction_poll_delivers_next_round_then_terminal_page() -> None:
+    next_round = _interaction_delivery(revision=2)
+    terminal = _interaction_delivery(revision=2, kind="terminal")
+    client = _InteractionClient(
+        {("interaction-1", 2): [next_round, terminal]},
+    )
+    stop_event = asyncio.Event()
+    presenter = _InteractionPresenter(stop_event=stop_event, stop_after=2)
+    bridge = _bridge(
+        channel=_InteractionChannel(),
+        state=_StateStore(),
+        executor=_Executor(),
+        interaction_client=client,
+        interaction_presenter=presenter,
+    )
+    await bridge.handle_form_action(_form_action(revision=1))
+
+    await asyncio.wait_for(
+        bridge.run_interaction_deliveries(stop_event),
+        timeout=1,
+    )
+
+    assert presenter.deliveries == [next_round, terminal]
+    claim_scopes = [(action_id, revision) for _, action_id, revision in client.claims]
+    assert claim_scopes == [
+        ("interaction-1", 1),
+        ("interaction-1", 2),
+        ("interaction-1", 2),
+    ]
+    assert [(delivery_id, success, code) for delivery_id, _, success, code in client.acks] == [
+        (next_round.delivery_id, True, None),
+        (terminal.delivery_id, True, None),
+    ]
 
 
 class _BlockingExecutor(_Executor):

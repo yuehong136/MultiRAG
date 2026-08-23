@@ -11,12 +11,14 @@ import pytest
 from agent.canvas import Graph
 from agent.component.agent_with_tools import Agent, AgentParam
 from agent.component.llm import LLM
+from agent.tools.base import LLMToolPluginCallSession
 from api.identity.contracts import (
     ExternalIdentityRecord,
     IdentityResolutionResult,
     IdentityResolutionStatus,
     UserMembershipRecord,
 )
+from api.identity.mcp_interactions.tool_gate import SerializedInteractionToolCallSession
 from api.identity.principal import (
     AuthenticationContext,
     AuthenticationSource,
@@ -286,6 +288,14 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
     assert set(agent.tools) == {"search_0", "search_1"}
     assert {binding.original_name for binding in agent.tools.values()} == {"search"}
     assert {binding.mcp_server_id for binding in agent.tools.values()} == {"mcp-1", "mcp-2"}
+    assert isinstance(agent.toolcall_session, SerializedInteractionToolCallSession)
+
+    monkeypatch.setattr(
+        "agent.component.agent_with_tools.resolve_mcp_interaction_handler",
+        lambda: None,
+    )
+    ordinary_agent = Agent(canvas, "agent-ordinary", param)
+    assert type(ordinary_agent.toolcall_session) is LLMToolPluginCallSession
 
 
 def test_run_context_requires_agent_and_published_revision_as_one_server_owned_pair() -> None:

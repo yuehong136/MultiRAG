@@ -13,6 +13,7 @@ from beartype.roar import BeartypeCallHintParamViolation
 
 from api.channels.core.base import (
     IncomingMessage,
+    InteractionReplySession,
     ReplyActionIds,
     ReplyContext,
     ReplySessionState,
@@ -46,6 +47,7 @@ class _Transport:
         self.reactions_removed: list[tuple[str, str]] = []
         self.cards: list[str] = []
         self.card_replies: list[tuple[str, str, str]] = []
+        self.card_replacements: list[tuple[str, str]] = []
         self.update_attempted = asyncio.Event()
         self.updates: list[tuple[str, str, int, str]] = []
         self.batch_updates: list[tuple[str, list[dict[str, object]], int, str]] = []
@@ -77,6 +79,10 @@ class _Transport:
         self._fail("card_reply")
         self.card_replies.append((message_id, card_id, delivery_uuid))
         return "reply-1"
+
+    async def update_card(self, message_id: str, card_json: str) -> None:
+        self._fail("card_replace")
+        self.card_replacements.append((message_id, card_json))
 
     async def update_card_text(
         self,
@@ -476,6 +482,38 @@ async def test_progressive_reply_throttles_updates_then_flushes_and_finishes_in_
     assert transport.reactions_removed == [("message-1", "reaction-1")]
     operation_uuids = [transport.card_replies[0][2], *(item[3] for item in transport.updates), transport.finishes[0][2]]
     assert len(operation_uuids) == len(set(operation_uuids))
+
+
+@pytest.mark.asyncio
+async def test_zero_body_interaction_pause_finishes_stream_and_returns_reply_id() -> None:
+    transport = _Transport()
+    session = await _session(transport, _Clock())
+
+    reply_message_id = await session.pause_for_interaction()
+
+    assert isinstance(session, InteractionReplySession)
+    assert reply_message_id == "reply-1"
+    assert session.reply_message_id == "reply-1"
+    assert session.state is ReplySessionState.AWAITING_INPUT
+    assert transport.updates == []
+    assert [finish[1] for finish in transport.finishes] == [1]
+    assert transport.fallbacks == []
+    assert transport.reactions_removed == [("message-1", "reaction-1")]
+    with pytest.raises(ReplySessionStateError):
+        await session.append("late answer")
+
+
+@pytest.mark.asyncio
+async def test_interaction_pause_fails_closed_without_mutable_reply_card() -> None:
+    transport = _Transport(failures={"card_create"})
+    session = await _session(transport, _Clock())
+
+    with pytest.raises(ReplySessionStateError, match="mutable Feishu reply card"):
+        await session.pause_for_interaction()
+
+    assert session.state is ReplySessionState.FAILED
+    assert transport.finishes == []
+    assert transport.fallbacks == []
 
 
 @pytest.mark.asyncio

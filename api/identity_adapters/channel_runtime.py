@@ -19,7 +19,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.channel_execution.errors import ChannelIdentityResolutionError
-from api.channel_execution.models import ChannelExecutionCommand, TrustedChannelContext
+from api.channel_execution.models import (
+    ChannelActor,
+    ChannelExecutionCommand,
+    TrustedChannelContext,
+)
 from api.db import IdentityProviderHealthState
 from api.db.db_models import (
     ChannelBinding,
@@ -333,15 +337,41 @@ class ChannelIdentityResolver:
         context: TrustedChannelContext,
         command: ChannelExecutionCommand,
     ) -> TrustedChannelContext:
+        """Resolve one message actor without changing the legacy no-link path."""
+
+        return await self.resolve_actor(
+            context=context,
+            actor=command.actor,
+            expected_provider_account_id=None,
+        )
+
+    async def resolve_actor(
+        self,
+        *,
+        context: TrustedChannelContext,
+        actor: ChannelActor,
+        expected_provider_account_id: str | None,
+    ) -> TrustedChannelContext:
+        """Reverify an actor against current authority and an optional fence.
+
+        The account fence is server-owned durable state captured when the form
+        was presented.  It prevents a callback from being promoted after the
+        Channel link has moved to a different Provider installation.
+        """
+
         authority = await self._authority_resolver.resolve(context=context)
         if authority.status is ChannelIdentityAuthorityStatus.NO_LINK:
+            if expected_provider_account_id is not None:
+                _reject(IdentityErrorCode.REVISION_CONFLICT)
             return context
         if authority.status is not ChannelIdentityAuthorityStatus.LINKED or authority.context is None:
             _reject(IdentityErrorCode.REPOSITORY_UNAVAILABLE)
         provider_context = authority.context
+        if expected_provider_account_id is not None and provider_context.provider_account_id != expected_provider_account_id:
+            _reject(IdentityErrorCode.REVISION_CONFLICT)
         assertion = _trusted_provider_assertion(
             provider_context,
-            command,
+            actor,
         )
         request = IdentityResolutionRequest(
             context=provider_context,
@@ -457,9 +487,9 @@ def _invalid_authority() -> ChannelIdentityAuthority:
 
 def _trusted_provider_assertion(
     context: ProviderContext,
-    command: ChannelExecutionCommand,
+    actor: ChannelActor,
 ) -> ExternalIdentityAssertion:
-    raw = command.actor.identity
+    raw = actor.identity
     if raw is None:
         _reject(IdentityErrorCode.ASSERTION_INVALID)
     if raw.provider != context.provider:
@@ -484,7 +514,7 @@ def _trusted_provider_assertion(
     except ValueError:
         _reject(IdentityErrorCode.ASSERTION_INVALID)
     open_id = _open_id(assertion)
-    if command.actor.subject != open_id:
+    if actor.subject != open_id:
         _reject(IdentityErrorCode.ASSERTION_INVALID)
     return assertion
 

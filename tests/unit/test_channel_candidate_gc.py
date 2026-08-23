@@ -235,3 +235,59 @@ async def test_router_lifespan_reports_an_unexpected_worker_exit(
             await asyncio.sleep(0)
 
     assert "error_code=CANDIDATE_GC_TASK_STOPPED" in caplog.text
+
+
+async def test_router_lifespan_starts_one_interaction_callback_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.apps.restful_apis import channel_execution_api
+    from api.channel_execution.interaction_worker import InteractionCallbackProcessor
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    build_calls = 0
+
+    class _Processor:
+        async def run_once(self, *, owner: str) -> int:
+            assert owner.startswith("api-")
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return 0
+
+    def build_runtime() -> tuple[InteractionCallbackProcessor, float]:
+        nonlocal build_calls
+        build_calls += 1
+        return cast(InteractionCallbackProcessor, _Processor()), 0.01
+
+    monkeypatch.setattr(
+        channel_execution_api,
+        "build_channel_candidate_gc_worker",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        channel_execution_api,
+        "_build_interaction_callback_runtime",
+        build_runtime,
+    )
+    app = FastAPI()
+    app.include_router(channel_execution_api.router)
+    app.include_router(channel_execution_api.router)
+
+    async with app.router.lifespan_context(app):
+        await started.wait()
+        assert build_calls == 1
+        handle = getattr(
+            app.state,
+            channel_execution_api._INTERACTION_CALLBACK_STATE_KEY,
+        )
+        assert handle.task.done() is False
+
+    assert cancelled.is_set()
+    assert not hasattr(
+        app.state,
+        channel_execution_api._INTERACTION_CALLBACK_STATE_KEY,
+    )

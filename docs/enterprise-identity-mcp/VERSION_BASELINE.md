@@ -3,7 +3,7 @@
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
 > 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-22；
 > `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4/I4.1 官方 SDK/live wire 调用链实现刷新：
-> 2026-08-13；RAGFlow P3 定向只读对照：2026-08-13
+> 2026-08-13；RAGFlow P3 定向只读对照：2026-08-13；飞书 Channel SDK/U15 参考刷新：2026-08-23
 > （Asia/Shanghai）**
 > 版本会变化。本文记录的是可复现快照和选型规则，不是“永远最新”的承诺。
 
@@ -14,8 +14,8 @@
 | 组件 | 当前仓库 | 最近核验的官方最新 | 本项目目标 | 处理方式 |
 |---|---|---|---|---|
 | Python | MultiRAG `>=3.12,<3.14`；of_mcp `>=3.12` | — | 保持各仓声明范围 | 不降级 |
-| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.2** | 已达成 | EIM-F1/I4.1 已完成；Auth 用 generated async request/resource/transport + strict live top-level adapter，Tenant/Contact 用 typed nested response |
-| `lark-channel-sdk` | 未安装 | **1.2.0** | `>=1.2.0,<2` | EIM-C5 PoC 通过后才引入 |
+| `lark-oapi` | 声明 `>=1.7.2,<2`，lock 为 **1.7.2** | **1.7.3**（2026-08-23 PyPI） | 保持已验证 1.7.2；1.7.3 另立版本任务 | EIM-F1/I4.1 已完成 1.7.2 契约；U15 不升级依赖，继续使用现有 WS/IM/CardKit typed OpenAPI |
+| `lark-channel-sdk` | 未安装 | **1.2.0** | `>=1.2.0,<2` | 本轮只作 U15 参考；EIM-C5 PoC 通过后才引入 |
 | MCP Python SDK `mcp` | MultiRAG 与 of_mcp 均 exact `2.0.0` | **2.0.0 stable** | 已达成；MultiRAG outbound 使用官方 `Client` | F3 已完成；后续升级单独重跑双时代矩阵 |
 | `mcp-types` | 两仓 lock 均为 2.0.0（由 `mcp` 精确约束） | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 业务代码从 `mcp.types` 导入；不重复直依赖 |
 | FastMCP stable | 仅隔离 legacy fixture exact 3.4.7 | **3.4.7** | 只作 legacy compatibility oracle | PEP 723 lock，不进入 MultiRAG 生产根环境 |
@@ -103,6 +103,12 @@ CHN-O9 和稳定浸泡，且用户明确恢复这条同步主线后，才重新�
 
 源码参考的具体内容和禁止照搬项见 [REFERENCES](REFERENCES.md)。
 
+2026-08-23 对 Channel SDK 的只读复核：`git ls-remote` 得到 main
+`731d459cca55ac76e85911bba2b1666508145e03`、`v1.2.0`
+`9186f7bbed9f50ebcc45bb1c3180dfccd7b05aae`，PyPI stable 仍为 1.2.0。该复核只更新参考证据，
+没有修改 `pyproject.toml`/`uv.lock`。官方迁移文档明确 standalone Channel 包与完整 `lark-oapi`
+并存；因此 U15 保留当前依赖是符合官方迁移路径的安全半态，不是忽略官方 SDK。
+
 ### 2026-08-13 RAGFlow P3 定向只读对照
 
 为 EIM-P3 单独核验了 `infiniflow/ragflow` 当日 official main
@@ -175,6 +181,12 @@ git ls-remote https://github.com/langbot-app/LangBot.git HEAD
 该 PoC 不阻塞 [EIM-U0/U1](ROADMAP.md#10-phase-u--用户与管理员体验)。现有 `lark-oapi`
 OpenAPI 已足以实现 reaction、reply UUID、CardKit 流式更新和媒体资源；UX 先落在稳定
 ReplySession/Provider 接口上，transport 后续可替换。
+
+EIM-U15/CHN-X15 同样不等待该 PoC：本轮从官方包吸收 Provider callback 边界、finish 后整卡更新、
+public lifecycle、`compat -> audit -> strict` 与两层去重的审计问题，但 presentation/outbox、durable
+receipt、generation fence、Principal 重验和 U14 resume 仍由 MultiRAG 自有模块实现。当前 managed
+路径是 app-bound WebSocket，只能声称 tenant/app/operator/message lineage；`security.md` 的 webhook
+request-signature 规则不属于当前运行路径。完整采用/拒绝/deferred 表见 [REFERENCES §2](REFERENCES.md#2-飞书官方-channel-sdk)。
 
 官方文档：
 
@@ -328,8 +340,8 @@ SEP 为准，不能因此退回旧 session 设计。
   `httpx2.AsyncClient`；必须保留 MCP 30/300 秒 transport 默认值，不能回落到通用 5 秒默认值；
   401/403 response hook 只记录状态码，不记录 credential、body 或完整 header；
 - `InputRequiredResult` 已由 U14 转成不进入模型的 transport-neutral pause，并以加密 InteractionSession、
-  revision/CAS、DB lease 和恢复前重授权支持跨进程恢复；功能默认关闭，未启用 U15 renderer 时不得
-  宣称飞书表单闭环或生产 rollout；
+  revision/CAS、DB lease 和恢复前重授权支持跨进程恢复；U15 native renderer/durable receipt 源码正在
+  收口，但功能仍默认关闭且未 rollout/live，不得宣称生产飞书表单闭环；
 - timeout 必须取消本地底层调用并消除旧串行队列/HOL；HTTP 远端 handler 是否终止是协作式语义，
   matrix 要记录最终 `cancelled/completed`，不能伪造“远端一定取消”；
 - inbound modern `server/discover`、`Mcp-Method/Mcp-Name`、无 session、structured result 与 legacy

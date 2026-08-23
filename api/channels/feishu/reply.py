@@ -49,8 +49,8 @@ _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\
 
 
 @runtime_checkable
-class FeishuReplyTransport(Protocol):
-    """Provider operations used by the progressive session."""
+class FeishuStreamingReplyTransport(Protocol):
+    """Provider operations used while a progressive reply is active."""
 
     async def add_typing_reaction(self, message_id: str) -> str: ...
 
@@ -100,6 +100,13 @@ class FeishuReplyTransport(Protocol):
         message_type: str,
         delivery_uuid: str,
     ) -> None: ...
+
+
+@runtime_checkable
+class FeishuReplyTransport(FeishuStreamingReplyTransport, Protocol):
+    """Full Feishu reply transport including post-stream card replacement."""
+
+    async def update_card(self, message_id: str, card_json: str) -> None: ...
 
 
 def delivery_uuid(source: IncomingMessage, stage: str) -> str:
@@ -340,7 +347,7 @@ class FeishuProgressiveReplySession:
     def __init__(
         self,
         *,
-        transport: FeishuReplyTransport,
+        transport: FeishuStreamingReplyTransport,
         source: IncomingMessage,
         max_content_chars: int,
         context: ReplyContext = ReplyContext(),
@@ -381,7 +388,7 @@ class FeishuProgressiveReplySession:
     async def begin(
         cls,
         *,
-        transport: FeishuReplyTransport,
+        transport: FeishuStreamingReplyTransport,
         source: IncomingMessage,
         max_content_chars: int,
         context: ReplyContext | None = None,
@@ -477,6 +484,35 @@ class FeishuProgressiveReplySession:
                 await self._patch_lifecycle(ReplyStatus.FINAL)
             except Exception:
                 self._log("card_controls_failed", "FEISHU_CARD_CONTROLS_FAILED")
+        finally:
+            await self._remove_typing()
+
+    async def pause_for_interaction(self) -> str:
+        """Finish CardKit progression without requiring a model answer.
+
+        The returned ID is the original interactive reply message. A renderer
+        can replace that finished card through ``message.patch`` without
+        racing the streaming CardKit sequence.
+        """
+
+        self._require_open("pause for interaction")
+        self._state = ReplySessionState.AWAITING_INPUT
+        self._terminal_flush_requested = True
+
+        try:
+            await self._drain_card_update()
+            if not self._card_active or not self._card_id or not self._reply_message_id:
+                raise ReplySessionStateError(
+                    "cannot pause without a mutable Feishu reply card",
+                )
+            answer = strip_reasoning("".join(self._parts))
+            if answer:
+                await self._patch_answer(answer=answer)
+            await self._finish_card()
+            return self._reply_message_id
+        except Exception:
+            self._state = ReplySessionState.FAILED
+            raise
         finally:
             await self._remove_typing()
 

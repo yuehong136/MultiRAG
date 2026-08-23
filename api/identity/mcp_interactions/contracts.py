@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from common.mcp_interactions import InteractionResume
+from common.mcp_interactions import InteractionLeaseFence, InteractionResume
 
 
 class InteractionErrorCode(StrEnum):
@@ -49,7 +49,16 @@ class ResponseClaim:
 class InteractionLease:
     job_id: str = field(repr=False)
     owner: str = field(repr=False)
+    attempt: int
     resume: InteractionResume = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self.resume.request.lease_fence != InteractionLeaseFence(
+            job_id=self.job_id,
+            owner=self.owner,
+            attempt=self.attempt,
+        ):
+            raise ValueError("interaction lease fence is inconsistent")
 
 
 @dataclass(frozen=True, slots=True)

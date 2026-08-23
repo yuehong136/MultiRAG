@@ -13,6 +13,7 @@ from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channels.core.base import (
     ChannelAction,
     ChannelActionResponse,
+    ChannelFormAction,
     IncomingIdentityAssertion,
     IncomingIdentityIdentifier,
     IncomingMessage,
@@ -26,6 +27,7 @@ from api.channels.feishu.channel import (
     FeishuSendError,
     _LarkOapiSDK,
 )
+from api.channels.feishu.reply import FeishuReplyTransport
 
 
 class _Response:
@@ -79,6 +81,7 @@ class _FakeSDK:
         self.reply_details: list[tuple[str, str, str, str | None]] = []
         self.creates: list[tuple[str, str]] = []
         self.cards: list[str] = []
+        self.card_message_updates: list[tuple[str, str]] = []
         self.card_updates: list[tuple[str, str, int, str]] = []
         self.card_batch_updates: list[tuple[str, list[dict[str, object]], int, str]] = []
         self.card_finishes: list[tuple[str, int, str]] = []
@@ -125,6 +128,15 @@ class _FakeSDK:
 
     def create_card(self, client: Any, card_json: str) -> _Response:
         self.cards.append(card_json)
+        return self.response
+
+    def patch_card_message(
+        self,
+        client: Any,
+        message_id: str,
+        card_json: str,
+    ) -> _Response:
+        self.card_message_updates.append((message_id, card_json))
         return self.response
 
     def update_card_text(
@@ -239,6 +251,49 @@ def _card_action_event() -> Any:
     )
 
 
+def _form_action_event(
+    *,
+    form_value: Any = None,
+    header_tenant_key: Any = "tenant-key",
+    operator_tenant_key: Any = "tenant-key",
+    app_id: Any = "app-id",
+) -> Any:
+    return SimpleNamespace(
+        header=SimpleNamespace(
+            event_id="form-event-1",
+            tenant_key=header_tenant_key,
+            app_id=app_id,
+        ),
+        event=SimpleNamespace(
+            operator=SimpleNamespace(
+                tenant_key=operator_tenant_key,
+                open_id="ou-form-user",
+                user_id="user-form",
+                union_id="on-form-user",
+            ),
+            action=SimpleNamespace(
+                tag="button",
+                value={
+                    "action_id": "opaque-form-action",
+                    "nonce": "opaque-form-nonce",
+                    "revision": 3,
+                },
+                form_value={
+                    "f0_0": "2026-08-25",
+                    "f0_1": ["annual", "paid"],
+                    "f0_2": True,
+                }
+                if form_value is None
+                else form_value,
+            ),
+            context=SimpleNamespace(
+                open_chat_id="oc-form-chat",
+                open_message_id="om-original-reply",
+            ),
+        ),
+    )
+
+
 def _channel(
     sdk: _FakeSDK | None = None,
     *,
@@ -260,6 +315,12 @@ def _channel(
         ),
         fake_sdk,
     )
+
+
+def test_channel_satisfies_full_reply_transport_protocol() -> None:
+    channel, _ = _channel()
+
+    assert isinstance(channel, FeishuReplyTransport)
 
 
 def test_normalize_maps_feishu_message_envelope() -> None:
@@ -501,7 +562,10 @@ def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> Non
     client = SimpleNamespace(
         im=SimpleNamespace(
             v1=SimpleNamespace(
-                message=SimpleNamespace(reply=capture("reply")),
+                message=SimpleNamespace(
+                    reply=capture("reply"),
+                    patch=capture("message_patch"),
+                ),
                 message_reaction=SimpleNamespace(
                     create=capture("reaction_create"),
                     delete=capture("reaction_delete"),
@@ -528,6 +592,7 @@ def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> Non
         delivery_uuid="reply-uuid",
     )
     sdk.create_card(client, '{"schema":"2.0"}')
+    sdk.patch_card_message(client, "om-reply", '{"schema":"2.0"}')
     sdk.update_card_text(
         client,
         "card-1",
@@ -555,6 +620,8 @@ def test_lark_sdk_builds_cardkit_reaction_and_idempotent_reply_requests() -> Non
     assert captured["reply"].body.uuid == "reply-uuid"
     assert captured["card_create"].body.type == "card_json"
     assert captured["card_create"].body.data == '{"schema":"2.0"}'
+    assert captured["message_patch"].message_id == "om-reply"
+    assert captured["message_patch"].body.content == '{"schema":"2.0"}'
     assert captured["card_update"].card_id == "card-1"
     assert captured["card_update"].element_id == "answer"
     assert captured["card_update"].body.sequence == 1
@@ -646,6 +713,139 @@ async def test_card_action_callback_normalizes_and_acknowledges_within_ws_thread
             message_id="om-bot-reply",
             event_id="card-event-1",
         )
+    ]
+
+
+async def test_form_callback_uses_separate_typed_handler_and_bounded_values() -> None:
+    channel, sdk = _channel()
+    channel._loop = asyncio.get_running_loop()
+    low_risk_received: list[ChannelAction] = []
+    forms_received: list[ChannelFormAction] = []
+
+    async def handle_low_risk(action: ChannelAction) -> ChannelActionResponse:
+        low_risk_received.append(action)
+        return ChannelActionResponse("error", "wrong handler")
+
+    async def handle_form(action: ChannelFormAction) -> ChannelActionResponse:
+        forms_received.append(action)
+        return ChannelActionResponse("success", "已接收")
+
+    channel.set_action_handler(handle_low_risk)
+    channel.set_form_action_handler(handle_form)
+    response = await asyncio.to_thread(channel._on_card_action, _form_action_event())
+
+    assert response == ChannelActionResponse("success", "已接收")
+    assert low_risk_received == []
+    assert len(forms_received) == 1
+    action = forms_received[0]
+    assert action.action_id == "opaque-form-action"
+    assert action.nonce == "opaque-form-nonce"
+    assert action.revision == 3
+    assert dict(action.form_value) == {
+        "f0_0": "2026-08-25",
+        "f0_1": ("annual", "paid"),
+        "f0_2": True,
+    }
+    assert action.identity == IncomingIdentityAssertion(
+        provider="feishu",
+        provider_tenant_key="tenant-key",
+        identifiers=(
+            IncomingIdentityIdentifier(kind="open_id", value="ou-form-user"),
+            IncomingIdentityIdentifier(kind="user_id", value="user-form"),
+            IncomingIdentityIdentifier(kind="union_id", value="on-form-user"),
+        ),
+    )
+    assert (action.chat_id, action.message_id, action.event_id) == (
+        "oc-form-chat",
+        "om-original-reply",
+        "form-event-1",
+    )
+    with pytest.raises(TypeError):
+        action.form_value["f0_0"] = "tampered"  # type: ignore[index]
+    rendered = repr(action)
+    assert "2026-08-25" not in rendered
+    assert "opaque-form-nonce" not in rendered
+    assert sdk.cards == []
+    assert sdk.card_message_updates == []
+
+
+@pytest.mark.parametrize(
+    ("header_tenant_key", "operator_tenant_key", "app_id"),
+    [
+        ("tenant-key", "other-tenant", "app-id"),
+        ("tenant-key", "tenant-key", "other-app"),
+        (None, "tenant-key", "app-id"),
+    ],
+)
+def test_form_callback_rejects_broken_operator_and_header_lineage(
+    header_tenant_key: Any,
+    operator_tenant_key: Any,
+    app_id: Any,
+) -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError):
+        channel._normalize_card_action(
+            _form_action_event(
+                header_tenant_key=header_tenant_key,
+                operator_tenant_key=operator_tenant_key,
+                app_id=app_id,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "form_value",
+    [
+        {"nested": {"unsafe": "value"}},
+        {"too_many": ["choice"] * 33},
+        {"oversized": "x" * 4097},
+    ],
+)
+def test_form_callback_rejects_unbounded_or_nested_form_values(
+    form_value: dict[str, object],
+) -> None:
+    channel, _ = _channel()
+
+    with pytest.raises(ValueError):
+        channel._normalize_card_action(_form_action_event(form_value=form_value))
+
+
+def test_form_callback_waits_at_most_two_and_a_half_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel, _ = _channel()
+    loop = asyncio.new_event_loop()
+    channel._loop = loop
+    timeouts: list[float | None] = []
+
+    class _ImmediateFuture:
+        def result(self, timeout: float | None = None) -> ChannelActionResponse:
+            timeouts.append(timeout)
+            return ChannelActionResponse("success", "queued")
+
+    def submit(coroutine: Any, target_loop: asyncio.AbstractEventLoop) -> _ImmediateFuture:
+        assert target_loop is loop
+        coroutine.close()
+        return _ImmediateFuture()
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", submit)
+    try:
+        response = channel._on_card_action(_form_action_event())
+    finally:
+        loop.close()
+
+    assert response == ChannelActionResponse("success", "queued")
+    assert timeouts == [2.5]
+
+
+async def test_whole_card_update_targets_original_reply_message() -> None:
+    channel, sdk = _channel()
+
+    await channel.update_card("om-original-reply", '{"schema":"2.0"}')
+
+    assert sdk.card_message_updates == [
+        ("om-original-reply", '{"schema":"2.0"}'),
     ]
 
 

@@ -196,6 +196,7 @@ class Principal:
     platform_user_id: str = field(repr=False)
     tenant_id: str
     authentication: AuthenticationContext
+    identity_revision: int | None = field(default=None, repr=False)
     enterprise_subject: EnterpriseSubject | None = field(default=None, repr=False)
     display_name: str = field(default="", repr=False)
 
@@ -214,6 +215,11 @@ class Principal:
             raise PrincipalBuildError(PrincipalErrorCode.TENANT_REQUIRED)
         if not isinstance(self.authentication, AuthenticationContext):
             raise PrincipalBuildError(PrincipalErrorCode.AUTHENTICATION_INVALID)
+        if self.authentication.source is AuthenticationSource.ENTERPRISE_IDENTITY:
+            if type(self.identity_revision) is not int or self.identity_revision <= 0:
+                raise PrincipalBuildError(PrincipalErrorCode.ASSURANCE_INVALID)
+        elif self.identity_revision is not None:
+            raise PrincipalBuildError(PrincipalErrorCode.ASSURANCE_INVALID)
         if self.enterprise_subject is not None and not isinstance(self.enterprise_subject, EnterpriseSubject):
             raise PrincipalBuildError(PrincipalErrorCode.INPUT_INVALID)
         if self.authentication.assurance is IdentityAssurance.ENTERPRISE_VERIFIED:
@@ -240,6 +246,7 @@ def _new_principal(
     platform_user_id: str,
     tenant_id: str,
     authentication: AuthenticationContext,
+    identity_revision: int | None,
     enterprise_subject: EnterpriseSubject | None,
     display_name: str,
 ) -> Principal:
@@ -247,6 +254,7 @@ def _new_principal(
     object.__setattr__(principal, "platform_user_id", platform_user_id)
     object.__setattr__(principal, "tenant_id", tenant_id)
     object.__setattr__(principal, "authentication", authentication)
+    object.__setattr__(principal, "identity_revision", identity_revision)
     object.__setattr__(principal, "enterprise_subject", enterprise_subject)
     object.__setattr__(principal, "display_name", display_name)
     principal._validate()
@@ -258,6 +266,7 @@ def _assemble_principal(
     actor: AuthenticatedActor,
     membership: TenantMembershipEvidence,
     authentication: AuthenticationContext,
+    identity_revision: int | None = None,
     enterprise_subject_evidence: VerifiedEnterpriseSubjectEvidence | None = None,
 ) -> Principal:
     if actor.platform_user_id != membership.platform_user_id:
@@ -277,6 +286,7 @@ def _assemble_principal(
         platform_user_id=actor.platform_user_id,
         tenant_id=membership.tenant_id,
         authentication=authentication,
+        identity_revision=identity_revision,
         enterprise_subject=enterprise_subject,
         display_name=actor.display_name,
     )
@@ -347,6 +357,7 @@ def build_principal_from_resolved_identity(
             tenant_id=membership.tenant_id,
         ),
         authentication=authentication,
+        identity_revision=identity.identity_revision,
         enterprise_subject_evidence=enterprise_subject_evidence,
     )
 

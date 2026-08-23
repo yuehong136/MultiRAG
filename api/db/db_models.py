@@ -2160,6 +2160,218 @@ class McpInteractionResumeJob(BaseModel):
     )
 
 
+class McpInteractionPresentation(BaseModel):
+    """Revision-bound Channel presentation, callback inbox, and delivery lease."""
+
+    __tablename__ = "t_ai_mcp_interaction_presentations"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "interaction_id",
+            "revision",
+            name="uq_mcp_interaction_presentations_round",
+        ),
+        sa.UniqueConstraint(
+            "binding_id",
+            "source_event_digest",
+            name="uq_mcp_interaction_presentations_source_event",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "binding_id",
+            name="uq_mcp_interaction_presentations_id_binding",
+        ),
+        sa.ForeignKeyConstraint(
+            ["interaction_id", "tenant_id"],
+            [
+                "usr_ai.t_ai_mcp_interactions.id",
+                "usr_ai.t_ai_mcp_interactions.tenant_id",
+            ],
+            name="fk_mcp_interaction_presentations_interaction_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["binding_id"],
+            ["usr_ai.t_ai_channel_bindings.id"],
+            name="fk_mcp_interaction_presentations_binding_id",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["provider_account_id", "tenant_id", "provider"],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.id",
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+            ],
+            name="fk_mcp_interaction_presentations_provider_account_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.CheckConstraint(
+            "response_state IN ('open', 'received', 'claimed', 'terminal')",
+            name="ck_mcp_interaction_presentations_response_state",
+        ),
+        sa.CheckConstraint(
+            "delivery_kind IN ('form', 'terminal')",
+            name="ck_mcp_interaction_presentations_delivery_kind",
+        ),
+        sa.CheckConstraint(
+            "delivery_state IN ('pending', 'leased', 'delivered', 'failed')",
+            name="ck_mcp_interaction_presentations_delivery_state",
+        ),
+        sa.CheckConstraint(
+            "revision > 0 AND binding_generation > 0 AND delivery_attempt >= 0",
+            name="ck_mcp_interaction_presentations_counters",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(conversation_ref) <> '' AND btrim(presentation_ref) <> ''",
+            name="ck_mcp_interaction_presentations_nonempty",
+        ),
+        sa.CheckConstraint(
+            "source_event_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_interaction_presentations_source_digest",
+        ),
+        sa.CheckConstraint(
+            "nonce_digest IS NULL OR nonce_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_interaction_presentations_nonce_digest",
+        ),
+        sa.CheckConstraint(
+            "delivery_token_digest IS NULL OR delivery_token_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_interaction_presentations_delivery_token_digest",
+        ),
+        sa.CheckConstraint(
+            "(form_mapping_ciphertext IS NULL AND form_mapping_key_id IS NULL) OR (form_mapping_ciphertext IS NOT NULL AND form_mapping_key_id IS NOT NULL)",
+            name="ck_mcp_interaction_presentations_form_mapping",
+        ),
+        sa.CheckConstraint(
+            "(delivery_state = 'leased' AND delivery_lease_owner IS NOT NULL AND delivery_lease_until IS NOT NULL "
+            "AND delivery_token_digest IS NOT NULL) OR "
+            "(delivery_state <> 'leased' AND delivery_lease_owner IS NULL AND delivery_lease_until IS NULL "
+            "AND delivery_token_digest IS NULL)",
+            name="ck_mcp_interaction_presentations_delivery_lease",
+        ),
+        sa.Index(
+            "ix_mcp_interaction_presentations_delivery_ready",
+            "binding_id",
+            "binding_generation",
+            "delivery_state",
+            "delivery_next_attempt_at",
+            "delivery_lease_until",
+            "created_at",
+        ),
+        sa.Index(
+            "ix_mcp_interaction_presentations_reconcile",
+            "response_state",
+            "updated_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    interaction_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    binding_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_account_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_event_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    presentation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    response_state: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+
+    delivery_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="form")
+    delivery_state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    delivery_projection: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    form_mapping_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    form_mapping_key_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    nonce_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_token_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivery_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=get_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=get_utc_now)
+
+
+class McpInteractionCallbackReceipt(BaseModel):
+    """One durable, replay-safe Feishu form callback awaiting Principal resolution."""
+
+    __tablename__ = "t_ai_mcp_interaction_callback_receipts"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "binding_id",
+            "event_digest",
+            name="uq_mcp_interaction_callback_receipts_event",
+        ),
+        sa.ForeignKeyConstraint(
+            ["presentation_id", "binding_id"],
+            [
+                "usr_ai.t_ai_mcp_interaction_presentations.id",
+                "usr_ai.t_ai_mcp_interaction_presentations.binding_id",
+            ],
+            name="fk_mcp_interaction_callback_receipts_presentation_scope",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["binding_id"],
+            ["usr_ai.t_ai_channel_bindings.id"],
+            name="fk_mcp_interaction_callback_receipts_binding_id",
+            ondelete="CASCADE",
+        ),
+        sa.CheckConstraint(
+            "state IN ('received', 'leased', 'claimed', 'rejected')",
+            name="ck_mcp_interaction_callback_receipts_state",
+        ),
+        sa.CheckConstraint(
+            "attempt >= 0 AND event_digest ~ '^[0-9a-f]{64}$' AND payload_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_mcp_interaction_callback_receipts_attempt_digest",
+        ),
+        sa.CheckConstraint(
+            "(state = 'leased' AND lease_owner IS NOT NULL AND lease_until IS NOT NULL) OR (state <> 'leased' AND lease_owner IS NULL AND lease_until IS NULL)",
+            name="ck_mcp_interaction_callback_receipts_lease",
+        ),
+        sa.Index(
+            "ix_mcp_interaction_callback_receipts_ready",
+            "state",
+            "next_attempt_at",
+            "lease_until",
+            "created_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    presentation_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    binding_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_key_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="received")
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=get_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=get_utc_now)
+
+
 class LLMFactories(BaseModel):
     __tablename__ = "t_ai_llm_factories"
     __table_args__ = {"schema": "usr_ai"}

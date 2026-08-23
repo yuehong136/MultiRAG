@@ -32,6 +32,7 @@ from ..core.base import (
     Channel,
     ChannelAction,
     ChannelActionResponse,
+    ChannelFormAction,
     IncomingIdentityAssertion,
     IncomingIdentityIdentifier,
     IncomingMessage,
@@ -94,6 +95,13 @@ class _FeishuSDK(Protocol):
     def create_message(self, client: Any, chat_id: str, content: str) -> Any: ...
 
     def create_card(self, client: Any, card_json: str) -> Any: ...
+
+    def patch_card_message(
+        self,
+        client: Any,
+        message_id: str,
+        card_json: str,
+    ) -> Any: ...
 
     def update_card_text(
         self,
@@ -162,6 +170,8 @@ class _LarkOapiSDK:
         self._create_message_body = im_api.CreateMessageRequestBody
         self._reply_message_request = im_api.ReplyMessageRequest
         self._reply_message_body = im_api.ReplyMessageRequestBody
+        self._patch_message_request = im_api.PatchMessageRequest
+        self._patch_message_body = im_api.PatchMessageRequestBody
         self._create_reaction_request = im_api.CreateMessageReactionRequest
         self._create_reaction_body = im_api.CreateMessageReactionRequestBody
         self._delete_reaction_request = im_api.DeleteMessageReactionRequest
@@ -274,6 +284,15 @@ class _LarkOapiSDK:
     def create_card(self, client: Any, card_json: str) -> Any:
         request = self._create_card_request.builder().request_body(self._create_card_body.builder().type("card_json").data(card_json).build()).build()
         return client.cardkit.v1.card.create(request)
+
+    def patch_card_message(
+        self,
+        client: Any,
+        message_id: str,
+        card_json: str,
+    ) -> Any:
+        request = self._patch_message_request.builder().message_id(message_id).request_body(self._patch_message_body.builder().content(card_json).build()).build()
+        return client.im.v1.message.patch(request)
 
     def update_card_text(
         self,
@@ -702,6 +721,21 @@ class FeishuChannel(Channel):
         self._require_success(response)
         return self._require_response_value(response, "card_id")
 
+    async def update_card(self, message_id: str, card_json: str) -> None:
+        """Replace a finished interactive message with a complete Card JSON."""
+
+        if not message_id:
+            raise ValueError("Feishu reply message ID is required")
+        if not card_json:
+            raise ValueError("Feishu card JSON is required")
+        response = await asyncio.to_thread(
+            self._sdk.patch_card_message,
+            self._rest,
+            message_id,
+            card_json,
+        )
+        self._require_success(response)
+
     async def reply_card(
         self,
         message_id: str,
@@ -861,13 +895,14 @@ class FeishuChannel(Channel):
                     content="服务正在重启，请稍后再试。",
                 )
             else:
+                dispatch = self._dispatch_form_action(action) if isinstance(action, ChannelFormAction) else self._dispatch_action(action)
                 future = asyncio.run_coroutine_threadsafe(
-                    self._dispatch_action(action),
+                    dispatch,
                     loop,
                 )
                 # Feishu requires callback completion in three seconds. The
-                # application handler only validates an opaque token and
-                # enqueues work; all Redis/HTTP/card writes happen later.
+                # handler durably receipts the bounded callback through the
+                # private API; MCP execution and card writes happen later.
                 response = future.result(timeout=2.5)
         except TimeoutError:
             response = ChannelActionResponse(
@@ -881,12 +916,20 @@ class FeishuChannel(Channel):
             )
         return self._sdk.card_action_response(response)
 
-    def _normalize_card_action(self, data: Any) -> ChannelAction:
+    def _normalize_card_action(
+        self,
+        data: Any,
+    ) -> ChannelAction | ChannelFormAction:
         event = getattr(data, "event", None)
         action = getattr(event, "action", None)
         value = getattr(action, "value", None)
         if not isinstance(value, dict):
             raise ValueError("Feishu card action has no value")
+        if getattr(action, "form_value", None) is not None or {
+            "nonce",
+            "revision",
+        }.issubset(value):
+            return self._normalize_form_action(data, value)
         action_id = value.get("action_id")
         if not isinstance(action_id, str) or not action_id:
             raise ValueError("Feishu card action has no opaque action ID")
@@ -910,6 +953,85 @@ class FeishuChannel(Channel):
             chat_id=chat_id,
             message_id=message_id,
             event_id=event_id,
+        )
+
+    def _normalize_form_action(
+        self,
+        data: Any,
+        value: dict[str, Any],
+    ) -> ChannelFormAction:
+        event = getattr(data, "event", None)
+        action = getattr(event, "action", None)
+        if getattr(action, "tag", None) != "button":
+            raise ValueError("Feishu form action is not a submit button")
+        if set(value) not in (
+            {"action_id", "nonce", "revision"},
+            {"action_id", "nonce", "revision", "action"},
+        ):
+            raise ValueError("Feishu form action metadata is invalid")
+        interaction_action = value.get("action", "accept")
+        if interaction_action not in {"accept", "decline", "cancel"}:
+            raise ValueError("Feishu form action response is invalid")
+
+        operator = getattr(event, "operator", None)
+        context = getattr(event, "context", None)
+        header = getattr(data, "header", None)
+        provider_tenant_key = _required_identity_text(
+            getattr(header, "tenant_key", None),
+            field_name="tenant_key",
+        )
+        operator_tenant_key = _required_identity_text(
+            getattr(operator, "tenant_key", None),
+            field_name="operator.tenant_key",
+        )
+        if operator_tenant_key != provider_tenant_key:
+            raise ValueError("Feishu form operator tenant does not match event tenant")
+        event_app_id = _required_identity_text(
+            getattr(header, "app_id", None),
+            field_name="app_id",
+        )
+        if event_app_id != self.account.app_id:
+            raise ValueError("Feishu form event app does not match configured account")
+
+        identifiers = [
+            IncomingIdentityIdentifier(
+                kind="open_id",
+                value=_required_identity_text(
+                    getattr(operator, "open_id", None),
+                    field_name="operator.open_id",
+                ),
+            )
+        ]
+        for kind in ("user_id", "union_id"):
+            identifier = _optional_identity_text(getattr(operator, kind, None))
+            if identifier is not None:
+                identifiers.append(
+                    IncomingIdentityIdentifier(kind=kind, value=identifier),
+                )
+        identity = IncomingIdentityAssertion(
+            provider=self.channel_id,
+            provider_tenant_key=provider_tenant_key,
+            identifiers=tuple(identifiers),
+        )
+        return ChannelFormAction(
+            action_id=value.get("action_id"),
+            nonce=value.get("nonce"),
+            revision=value.get("revision"),
+            action=interaction_action,
+            form_value=getattr(action, "form_value", None) or {},
+            identity=identity,
+            chat_id=_required_identity_text(
+                getattr(context, "open_chat_id", None),
+                field_name="open_chat_id",
+            ),
+            message_id=_required_identity_text(
+                getattr(context, "open_message_id", None),
+                field_name="open_message_id",
+            ),
+            event_id=_required_identity_text(
+                getattr(header, "event_id", None),
+                field_name="event_id",
+            ),
         )
 
     def _log_dispatch_result(self, future: Any, message_id: str) -> None:

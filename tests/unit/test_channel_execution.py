@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
@@ -42,6 +42,7 @@ from api.identity.principal import (
     build_principal_from_resolved_identity,
 )
 from api.identity.run_context import RunContext
+from common.mcp_interactions import MCPInteractionPaused
 
 
 def _command(**overrides: object) -> ChannelExecutionCommand:
@@ -400,6 +401,59 @@ class _RecordingExecutor:
         return _events()
 
 
+class _PausingExecutor(_RecordingExecutor):
+    async def execute(
+        self,
+        *,
+        context: TrustedChannelContext,
+        command: ChannelExecutionCommand,
+    ) -> AsyncIterator[ExecutionEvent]:
+        self.context = context
+
+        async def _events() -> AsyncIterator[ExecutionEvent]:
+            raise MCPInteractionPaused(
+                interaction_id="interaction-1",
+                revision=2,
+            )
+            yield ExecutionEvent(event="message_delta", content="unreachable")
+
+        return _events()
+
+
+class _InteractionRegistration:
+    def __init__(self) -> None:
+        self.action_id = "interaction-1"
+        self.revision = 2
+        self.expires_at = datetime(2026, 8, 14, tzinfo=UTC) + timedelta(minutes=5)
+
+
+class _PresentationRegistrar:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def register(
+        self,
+        *,
+        context: TrustedChannelContext,
+        interaction_id: str,
+        revision: int,
+        source_event_id: str,
+        conversation_ref: str,
+        presentation_ref: str,
+    ) -> _InteractionRegistration:
+        self.calls.append(
+            {
+                "context": context,
+                "interaction_id": interaction_id,
+                "revision": revision,
+                "source_event_id": source_event_id,
+                "conversation_ref": conversation_ref,
+                "presentation_ref": presentation_ref,
+            }
+        )
+        return _InteractionRegistration()
+
+
 def test_command_rejects_trust_fields_from_payload() -> None:
     base = _command().model_dump()
     for field in ("tenant_id", "target_id", "target_type", "revision_id", "session_id"):
@@ -447,6 +501,53 @@ async def test_service_uses_resolved_target_and_server_side_session() -> None:
     assert claims.claims == [("binding-1", "evt-1")]
     assert claims.completed == [("binding-1", "evt-1")]
     assert claims.failed == []
+
+
+async def test_paused_mcp_call_registers_terminal_interaction_without_saving_conversation() -> None:
+    store = _ConversationStore("session-existing")
+    claims = _ClaimStore()
+    executor = _PausingExecutor()
+    registrar = _PresentationRegistrar()
+    service = ChannelExecutionService(
+        binding_resolver=_Resolver(_context()),
+        principal_resolver=_PrincipalResolver(),
+        conversation_store=store,
+        claim_store=claims,
+        target_service=PublishedTargetExecutionService(
+            TargetExecutorRegistry([executor]),
+        ),
+        presentation_registrar=registrar,
+    )
+
+    events = await service.execute(
+        binding_id="binding-1",
+        workload=WorkloadIdentity(subject="runner-1"),
+        command=_command(presentation_ref="reply-message-1"),
+    )
+    collected = await _collect(events)
+
+    assert collected == [
+        ExecutionEvent(
+            event="interaction_required",
+            action_id="interaction-1",
+            revision=2,
+            expires_at=_InteractionRegistration().expires_at,
+        )
+    ]
+    assert executor.context is not None
+    assert registrar.calls == [
+        {
+            "context": executor.context,
+            "interaction_id": "interaction-1",
+            "revision": 2,
+            "source_event_id": "evt-1",
+            "conversation_ref": "oc-1",
+            "presentation_ref": "reply-message-1",
+        }
+    ]
+    assert claims.completed == [("binding-1", "evt-1")]
+    assert claims.failed == []
+    assert store.saved == []
 
 
 async def test_legacy_action_without_operation_fails_closed_before_execution() -> None:

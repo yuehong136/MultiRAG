@@ -75,6 +75,7 @@ def get_mcp_interaction_service() -> PersistentInteractionService:
             batch_size=config.batch_size,
             max_rounds=config.max_rounds,
             max_payload_bytes=config.max_payload_bytes,
+            ttl_seconds=config.ttl_seconds,
         ),
     )
 

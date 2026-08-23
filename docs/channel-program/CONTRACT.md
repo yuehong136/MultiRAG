@@ -1,6 +1,6 @@
 # Channel 前后端契约
 
-> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-13 · **变更提交**：见文末变更日志
+> **契约版本**：`channel-api/v1` · **最后变更**：2026-08-23 · **变更提交**：见文末变更日志
 >
 > 本文件是 channel 前后端接口的**唯一真源**。前端仓不得保存第二份契约描述。
 > 契约变更 = 改本文件 + 在本文件末尾的变更日志追加一行
@@ -163,6 +163,55 @@ token、不获取 credential、不发送 bearer，这些仍属于 A2/P3。这里
 `api.run_platform`。实现使用 frozen、repr-safe 的 `api.identity.run_context.RunContext`，Memory ID
 先校验 tenant，再用平台用户过滤读写；MCP wrapper 只持有实例级 opaque context。它不改变 public/private
 wire 或公开 `channel-api/v1`，因此不 bump 版本。
+
+### 1.3 私有 interaction delivery / callback（EIM-U15 / CHN-X15）
+
+下列端点只供 generation-scoped managed worker 使用，不属于公开 `channel-api/v1`，也不由 web
+消费。三条端点都沿用 binding-scoped workload bearer 和
+`X-Channel-Binding-Generation`；服务端再次核对 path binding 与 token 中的 binding/generation，
+claim/callback 响应使用 `Cache-Control: private, no-store`，ACK 返回空 204：
+
+| 方法 | 路径 | 语义 |
+|---|---|---|
+| POST | `/api/v1/internal/channel-bindings/{binding_id}/interaction-deliveries/claim` | 租约领取一个待渲染的安全 form/terminal projection；无待办返回 204 |
+| POST | `/api/v1/internal/channel-bindings/{binding_id}/interaction-deliveries/{delivery_id}/ack` | 只确认精确 owner + 未过期 lease + one-time delivery token 对应的卡片更新结果 |
+| POST | `/api/v1/internal/channel-bindings/{binding_id}/interactions/{action_id}/revisions/{revision}/callbacks` | 持久接收一次有界 form callback；提交事务后返回 202 `accepted`，同 event 同 payload 返回 202 `duplicate` |
+
+`claim` 请求只有 worker 生成的 `owner`，以及必须成对出现的可选 `action_id/revision`；服务端拥有
+lease 时长。成功响应只含 `delivery_id/delivery_token/action_id/revision/kind/presentation_ref`、
+安全 `projection`、form 专用 one-time `action_nonce`、`expires_at` 与可选稳定错误码。字段名、选项
+value、action/nonce 都是不透明值；projection 不含 `requestState`、Principal、scope、工具参数或原始
+schema。`ack` 只能提交 `owner/delivery_token/success/safe_error_code`，成功 ACK 不允许夹带错误码；
+ACK 本身不执行 MCP。租约/token/generation 任一漂移或过期均 fail closed，失败交付按服务端有界退避
+重新进入 pending，不能由 worker 自选重试窗口。
+
+callback body 是 bounded、`extra="forbid"` 的
+`event_id/nonce/action/message_id/actor/form_value`。native card 当前发出 submit 与 cancel；内部契约也
+保留 decline 终态。飞书 adapter 在 app-bound WebSocket 事件上要求 header tenant、operator tenant、
+本地 app account、operator open ID、conversation/message/event lineage 完整且一致，再构造 typed
+operator assertion；这里**不宣称 webhook request-signature 验证**。presentation store 随后再核对
+binding generation、provider/account、conversation、原卡 message、当前 revision、delivery 已完成和
+one-time nonce。回调只在 receipt 与加密 payload 已进入 PostgreSQL 后才算 `accepted`；重复 event
+必须同时匹配 presentation 与 payload digest，否则拒绝。
+
+同步回调路径到此结束：它不解析 Principal、不等待 MCP/OA、也不恢复工具。API-local background
+processor 另取有 fence 的 callback lease，重新读取当前 binding/generation/enabled/provider，沿
+I3/I4/I6/P1 重新解析 verified Principal，再调用 U14 对当前 revision 做一次 accept/decline/cancel；
+U14 自己继续负责工具 gate、identity TTL、lease、重授权和幂等恢复。字段错误可重新投递安全 form，
+终态只投递 `completed/declined/cancelled/expired/failed` 的固定安全摘要并整卡替换原消息，不显示原始
+工具结果或底层异常。
+
+原生 mapper 首期只接受严格的 JSON Schema object 子集：最多 4 个 request、合计 12 个字段、每个
+枚举最多 20 项；支持 text、integer/number、boolean、date、single enum、enum array，文本最多 1000
+字符。field/option 映射加密留在服务端，未知关键字、nested/ref/remote schema、pattern、非有限数、
+非法日期、schema 外字段和重复多选全部拒绝。H5/URL、附件、人员选择、多步骤、密码/token/OAuth/支付
+凭据均不在本阶段。
+
+这是 private additive contract，公开 `channel-api/v1` 不 bump。安全 rollout 必须是：先迁移并在
+`identity.mcp_interactions.enabled=false` 下部署新 API → 重启全部 supervisor/child consumer，让其
+能够消费 `interaction_required`、claim/ACK delivery 和持久 callback → 最后启用 producer 并重启
+API。回滚先关闭 producer 并重启 API，停止产生新的 interaction，再处理或终态化已持久记录；不要先
+降级 consumer，也不要对已有数据执行破坏性 downgrade。
 
 ---
 
@@ -443,3 +492,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-13 | v1（仅 private command consume，不 bump） | C3/X7 只在成功 claim 后经 authority、I3/I4/I6 与 P1 提升 Principal，并以 owner-aware session/target 隔离 linked 用户；NO_LINK 与 legacy subject 兼容仍保留，公开 Channel API/web 线格不变。`0ded51ff` 自动门禁全绿；加载 `2b0482c7` 的新 API smoke 六组件全绿，双 account live 的 alias/canonical identity/membership/BindingEvent、Canvas/Dialog Principal owner 与 Redis tombstone 均通过脱敏计数核验。P2 全链传播、MCP token 与 C4 legacy remove 均不属于本步 | `0ded51ff` + live `2b0482c7` |
 | 2026-08-13 | v1（仅定义 private run-context 传播，不 bump） | 为 EIM-P2 增加 CHN-X18 记账：定义 LINKED full Principal 从 Channel Execution 到 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context seam 的进程内传播边界，禁止静默匿名与 DSL 覆盖，保留 NO_LINK legacy；不签 token、不取 credential、不发 bearer，也不改变公开或 private wire。当前仅冻结契约与零上下文交接，运行时代码仍未实现 | 本次提交 |
 | 2026-08-13 | v1（仅实现 private run-context 传播，不 bump） | EIM-P2 / CHN-X18 已把 C3 full Principal 经 frozen `RunContext` 显式送入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas component workflow 与 MCP instance-local call context；LINKED 的 user key 只取可信 Principal，Memory 同时校验 tenant，NO_LINK 保留 legacy。未改 public/private wire、DSL、MCP header/arguments 或 token 体系 | 本次提交 |
+| 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | 本次提交（状态保持 `🔵`，待完整门禁与提交 SHA） |

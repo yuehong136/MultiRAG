@@ -6,16 +6,28 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
 from api.channel_runtime.schemas import RuntimeBindingConfig, RuntimeCredential
+from api.channels import runtime_client as runtime_client_module
 from api.channels.agent_bridge import AgentExecutionError, AgentReply
-from api.channels.core.base import IncomingIdentityAssertion, IncomingIdentityIdentifier
+from api.channels.core.base import (
+    ChannelFormAction,
+    IncomingIdentityAssertion,
+    IncomingIdentityIdentifier,
+)
 from api.channels.core.reply import truncate_answer
-from api.channels.execution_events import ExecutionFailedEvent, MessageCompletedEvent, MessageDeltaEvent
+from api.channels.execution_events import (
+    ExecutionFailedEvent,
+    InteractionRequiredEvent,
+    MessageCompletedEvent,
+    MessageDeltaEvent,
+)
+from api.channels.interaction_models import ClaimedInteractionDelivery
 from api.channels.runtime_client import ChannelRuntimeClient, ChannelRuntimeClientError, MultiRAGBindingExecutionClient
 
 
@@ -532,7 +544,7 @@ _STREAM_ARGUMENTS = {
 
 async def _collect_execution_stream(
     client: MultiRAGBindingExecutionClient,
-) -> list[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent]:
+) -> list[MessageDeltaEvent | MessageCompletedEvent | ExecutionFailedEvent | InteractionRequiredEvent]:
     return [event async for event in client.stream(**_STREAM_ARGUMENTS)]
 
 
@@ -578,6 +590,101 @@ async def test_execution_stream_yields_ordered_typed_events_and_ignores_additive
         MessageCompletedEvent(session_id="session-server"),
     ]
     assert not any(hasattr(event, field) for event in events for field in ("card_id", "message_id", "sequence"))
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_sends_presentation_ref_and_parses_strict_interaction_terminal() -> None:
+    captured: list[dict[str, object]] = []
+    expires_at = datetime(2026, 8, 24, 12, tzinfo=UTC)
+    sse = (
+        "data:"
+        + json.dumps(
+            {
+                "event": "interaction_required",
+                "action_id": "interaction-1",
+                "revision": 2,
+                "expires_at": expires_at.isoformat(),
+            }
+        )
+        + "\n\ndata:[DONE]\n\n"
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=sse,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = _execution_client(http_client)
+        events = [
+            event
+            async for event in client.stream(
+                **_STREAM_ARGUMENTS,
+                presentation_ref="reply-message-1",
+            )
+        ]
+
+    assert captured[0]["presentation_ref"] == "reply-message-1"
+    assert events == [
+        InteractionRequiredEvent(
+            action_id="interaction-1",
+            revision=2,
+            expires_at=expires_at,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "interaction_payload",
+    [
+        {
+            "event": "interaction_required",
+            "action_id": "interaction-1",
+            "revision": 2,
+        },
+        {
+            "event": "interaction_required",
+            "action_id": "interaction-1",
+            "revision": True,
+            "expires_at": "2026-08-24T12:00:00+00:00",
+        },
+        {
+            "event": "interaction_required",
+            "action_id": "interaction-1",
+            "revision": 2,
+            "expires_at": "2026-08-24T12:00:00",
+        },
+        {
+            "event": "interaction_required",
+            "action_id": "interaction-1",
+            "revision": 2,
+            "expires_at": "2026-08-24T12:00:00+00:00",
+            "provider_payload": "must-not-cross",
+        },
+    ],
+    ids=["missing-expiry", "boolean-revision", "naive-expiry", "extra-field"],
+)
+@pytest.mark.asyncio
+async def test_execution_stream_rejects_malformed_interaction_terminal(
+    interaction_payload: dict[str, object],
+) -> None:
+    sse = f"data:{json.dumps(interaction_payload)}\n\ndata:[DONE]\n\n"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _collect_execution_stream(_execution_client(http_client))
+
+    assert captured.value.code == "CHANNEL_EXECUTION_INVALID_SSE"
 
 
 @pytest.mark.asyncio
@@ -740,6 +847,172 @@ async def test_execution_stream_enforces_its_total_timeout() -> None:
             await _collect_execution_stream(_execution_client(http_client, total_timeout_seconds=0.001))
 
     assert captured.value.code == "CHANNEL_EXECUTION_TIMEOUT"
+
+
+def _claimed_form_payload() -> dict[str, object]:
+    return {
+        "delivery_id": "delivery-1",
+        "delivery_token": "delivery-token-1234",
+        "action_id": "interaction-1",
+        "revision": 1,
+        "kind": "form",
+        "presentation_ref": "reply-message-1",
+        "projection": {
+            "message": "Please provide the missing value.",
+            "fields": [
+                {
+                    "name": "field-1",
+                    "kind": "text",
+                    "label": "Name",
+                    "required": True,
+                    "options": [],
+                    "min_length": 0,
+                    "max_length": 100,
+                    "minimum": None,
+                    "maximum": None,
+                }
+            ],
+        },
+        "action_nonce": "action-nonce-1234",
+        "expires_at": (datetime(2026, 8, 24, 12, tzinfo=UTC) + timedelta(minutes=5)).isoformat(),
+        "safe_error_code": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_interaction_delivery_claim_and_ack_are_generation_scoped_and_fenced() -> None:
+    captured: list[tuple[str, str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        captured.append((request.method, request.url.path, payload))
+        assert request.headers["X-Channel-Binding-Generation"] == "3"
+        if request.url.path.endswith("/claim"):
+            return httpx.Response(200, json=_claimed_form_payload())
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = _execution_client(http_client)
+        delivery = await client.claim_interaction_delivery(
+            owner="worker-owner",
+            action_id="interaction-1",
+            revision=1,
+        )
+        assert isinstance(delivery, ClaimedInteractionDelivery)
+        await client.acknowledge_interaction_delivery(
+            delivery=delivery,
+            owner="worker-owner",
+            success=True,
+        )
+
+    assert captured == [
+        (
+            "POST",
+            "/api/v1/internal/channel-bindings/binding-1/interaction-deliveries/claim",
+            {
+                "owner": "worker-owner",
+                "action_id": "interaction-1",
+                "revision": 1,
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/internal/channel-bindings/binding-1/interaction-deliveries/delivery-1/ack",
+            {
+                "owner": "worker-owner",
+                "delivery_token": "delivery-token-1234",
+                "success": True,
+            },
+        ),
+    ]
+
+
+def _form_action() -> ChannelFormAction:
+    return ChannelFormAction(
+        action_id="interaction-1",
+        nonce="action-nonce-1234",
+        revision=1,
+        action="accept",
+        form_value={"field-1": "Ada", "field-2": ["option-1", "option-2"]},
+        identity=IncomingIdentityAssertion(
+            provider="feishu",
+            provider_tenant_key="tenant-key",
+            identifiers=(
+                IncomingIdentityIdentifier(kind="open_id", value="ou-user"),
+                IncomingIdentityIdentifier(kind="user_id", value="user-1"),
+            ),
+        ),
+        chat_id="oc-chat",
+        message_id="reply-message-1",
+        event_id="callback-event-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_interaction_callback_waits_for_durable_receipt_and_sends_bounded_identity() -> None:
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(202, json={"status": "accepted"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        status = await _execution_client(http_client).receive_interaction_callback(
+            _form_action(),
+        )
+
+    assert status == "accepted"
+    assert captured == [
+        (
+            "/api/v1/internal/channel-bindings/binding-1/interactions/interaction-1/revisions/1/callbacks",
+            {
+                "event_id": "callback-event-1",
+                "nonce": "action-nonce-1234",
+                "action": "accept",
+                "message_id": "reply-message-1",
+                "actor": {
+                    "provider": "feishu",
+                    "subject": "ou-user",
+                    "conversation": "oc-chat",
+                    "identity": {
+                        "provider": "feishu",
+                        "provider_tenant_key": "tenant-key",
+                        "identifiers": [
+                            {"kind": "open_id", "value": "ou-user"},
+                            {"kind": "user_id", "value": "user-1"},
+                        ],
+                    },
+                },
+                "form_value": {
+                    "field-1": "Ada",
+                    "field-2": ["option-1", "option-2"],
+                },
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interaction_callback_has_a_deadline_for_durable_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        runtime_client_module,
+        "_CALLBACK_RECEIPT_TIMEOUT_SECONDS",
+        0.001,
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.05)
+        return httpx.Response(202, json={"status": "accepted"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        with pytest.raises(AgentExecutionError) as captured:
+            await _execution_client(http_client).receive_interaction_callback(
+                _form_action(),
+            )
+
+    assert captured.value.code == "CHANNEL_INTERACTION_RECEIPT_TIMEOUT"
 
 
 class _InterruptedSSEBody(httpx.AsyncByteStream):

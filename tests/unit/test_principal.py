@@ -116,10 +116,12 @@ def test_principal_is_deeply_immutable_and_excludes_authorization_state() -> Non
     assert principal.id == "user-1"
     assert principal.nickname == "Alice"
     assert principal.tenant_id == "tenant-1"
+    assert principal.identity_revision is None
     assert {item.name for item in fields(Principal)} == {
         "platform_user_id",
         "tenant_id",
         "authentication",
+        "identity_revision",
         "enterprise_subject",
         "display_name",
     }
@@ -290,6 +292,7 @@ def test_resolved_identity_builder_binds_provider_identity_user_and_tenant() -> 
     assert principal.id == "user-1"
     assert principal.tenant_id == "tenant-1"
     assert principal.display_name == "Alice"
+    assert principal.identity_revision == 3
     assert principal.authentication.assurance is IdentityAssurance.DIRECTORY_VERIFIED
 
 

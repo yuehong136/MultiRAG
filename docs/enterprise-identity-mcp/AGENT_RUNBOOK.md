@@ -285,6 +285,47 @@ P3 失败优先收集到新增模块 `ModuleNotFoundError`；定向 **109 passed
 未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14 也已完成本地实现并解锁 U15；任何真实
 artifact/key/config/restart/secure endpoint/飞书 MCP 调用仍须另行精确批准。
 
+#### EIM-U15 / CHN-X15 当前实现与 rollout 交接
+
+U15 当前保持 `🔵`，直到根任务完成完整门禁、integration、smoke、MCP compatibility、账本和提交
+对账；源码存在不等于已部署或飞书 live。接手时按以下顺序读当前锚点：
+
+1. U14/P0：`common/mcp_interactions.py`、`common/mcp_tool_call_conn.py` 与
+   `api/identity/mcp_interactions/{contracts,repository,runtime,service}.py`。恢复必须携
+   `job_id + owner + attempt`，lease/renew/complete/retry 均要求未过期；每轮活查真实
+   `identity_revision`，connector TTL 取服务端配置，tool gate 只允许 `read/prepare`，不得靠 renderer
+   绕过；
+2. API 持久化与 private contract：`api/channel_execution/{interaction_forms,
+   interaction_presentations,interaction_worker}.py`、
+   `api/apps/restful_apis/channel_interaction_api.py` 和 migration
+   `d8f0a2b4c6e8_add_mcp_interaction_presentations.py`；
+3. worker/provider：`api/channels/{interaction_models,runtime_client,binding_bridge,worker}.py` 与
+   `api/channels/feishu/{channel,interaction_renderer,interaction_presenter,reply}.py`；
+4. 线格与状态：`docs/channel-program/CONTRACT.md#13-私有-interaction-delivery--callbackeim-u15--chn-x15`、
+   `FEISHU_BOT_UX.md#82-mcp-结构化表单与-h5url-elicitation`，再核对两份账本仍为同一状态。
+
+必须保留的边界：
+
+- 原生 mapper 只支持服务端 allowlist 的 text、integer/number、boolean、date、enum 与 enum array；
+  H5/URL、人员/附件、多步骤和 credential 输入 deferred；
+- execution pause 只在 MultiRAG 自有 composition/service 层登记 presentation，不改 RAGFlow
+  `core/llm`、Canvas/Agent 主循环，不改 `of_mcp`，也不启用 U7 敏感写；
+- worker 只能 claim 安全 projection、更新原卡并 ACK delivery；form callback 只有在 PostgreSQL
+  receipt 提交后才快速应答，不能同步解析 Principal 或调用 MCP；
+- 当前 managed transport 是 app-bound WebSocket。adapter 校验 tenant/app/operator/conversation/
+  message/event lineage；不要把官方 SDK 的 webhook request-signature 规则写成当前已实现；
+- API background processor 必须重新读取 binding/generation/enabled/provider、解析 verified Principal，
+  再让 U14 对当前 revision 做 CAS/重授权/恢复；duplicate、lease loss、identity TTL、tool gate 与未知
+  outcome 都 fail closed；
+- terminal card 只显示固定安全状态；字段错误重新投递 form，renderer failure 只重试 delivery，绝不
+  重跑工具。
+
+安全部署顺序固定为：先执行 migration，在 `identity.mcp_interactions.enabled=false` 下部署并重启新
+API；再重启所有 supervisor/child consumer，并确认新 generation 能消费 `interaction_required`、
+claim/ACK 和 durable callback；最后才启用 producer 并重启 API。回滚先关闭 producer 并重启 API，
+停止产生新 interaction；保留新 consumer 处理/终态化已持久记录，再考虑退代码。新增表有数据时不得
+destructive downgrade。真实迁移、重启、配置 key 和飞书 live 都属于外部状态操作，仍需单独批准。
+
 ### 4.4 外部 API 和 SDK 任务
 
 - 优先官方文档和官方 SDK；确实需要搜索时只采信官方文档、PyPI/npm 和官方 GitHub release；

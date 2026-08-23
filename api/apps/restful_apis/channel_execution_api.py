@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -24,6 +26,7 @@ from api.channel_capabilities import EffectiveReplyCapabilities, RunCapabilityPo
 from api.channel_control.repository import SqlAlchemyChannelRepository
 from api.channel_execution.candidate_gc import build_channel_candidate_gc_worker
 from api.channel_execution.dependencies import (
+    build_interaction_callback_processor,
     get_binding_capability_resolver,
     get_channel_conversation_store,
     get_channel_execution_service,
@@ -31,18 +34,30 @@ from api.channel_execution.dependencies import (
     require_channel_workload,
 )
 from api.channel_execution.errors import BindingDisabledError, BindingNotFoundError, ChannelExecutionError, DuplicateEventError
+from api.channel_execution.interaction_worker import (
+    InteractionCallbackProcessor,
+    run_interaction_callback_worker,
+)
 from api.channel_execution.models import ChannelExecutionCommand, ExecutionEvent, WorkloadIdentity
 from api.channel_execution.protocols import BindingCapabilityResolver, ChannelConversationStore
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
 from api.channel_providers.registry import UnknownChannelProvider, provider_spec
 from api.db.db_models import get_async_db
+from common.app_config import get_app_config
 
 LOGGER = logging.getLogger(__name__)
 _CANDIDATE_GC_STATE_KEY = "_multirag_channel_candidate_gc"
+_INTERACTION_CALLBACK_STATE_KEY = "_multirag_channel_interaction_callback"
 
 
 @dataclass(slots=True)
 class _CandidateGCLifecycleHandle:
+    stop_event: asyncio.Event
+    task: asyncio.Task[None]
+
+
+@dataclass(slots=True)
+class _InteractionCallbackLifecycleHandle:
     stop_event: asyncio.Event
     task: asyncio.Task[None]
 
@@ -74,7 +89,7 @@ def _observe_candidate_gc_task_exit(
 
 
 @asynccontextmanager
-async def _channel_execution_lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _candidate_gc_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Own exactly one API-local candidate collector for this application."""
 
     existing = getattr(app.state, _CANDIDATE_GC_STATE_KEY, None)
@@ -127,6 +142,104 @@ async def _channel_execution_lifespan(app: FastAPI) -> AsyncIterator[None]:
             LOGGER.info(
                 "channel_execution_event=candidate_gc_stop result=ok error_code=",
             )
+
+
+def _observe_interaction_callback_task_exit(
+    task: asyncio.Task[None],
+    *,
+    stop_event: asyncio.Event,
+) -> None:
+    """Report an API-local callback worker that terminates unexpectedly."""
+
+    if stop_event.is_set():
+        return
+    if task.cancelled():
+        error_code = "INTERACTION_CALLBACK_TASK_CANCELLED"
+        error_type = ""
+    else:
+        error = task.exception()
+        error_code = "INTERACTION_CALLBACK_TASK_STOPPED" if error is None else "INTERACTION_CALLBACK_TASK_CRASHED"
+        error_type = "" if error is None else f" error_type={type(error).__name__}"
+    LOGGER.error(
+        "channel_execution_event=interaction_callback_task_exit result=failed error_code=%s%s",
+        error_code,
+        error_type,
+    )
+
+
+def _build_interaction_callback_runtime() -> tuple[InteractionCallbackProcessor, float] | None:
+    processor = build_interaction_callback_processor()
+    if processor is None:
+        return None
+    return processor, float(get_app_config().identity.mcp_interactions.poll_seconds)
+
+
+@asynccontextmanager
+async def _interaction_callback_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Own one callback receipt processor per API worker process."""
+
+    existing = getattr(app.state, _INTERACTION_CALLBACK_STATE_KEY, None)
+    if isinstance(existing, _InteractionCallbackLifecycleHandle) and not existing.task.done():
+        yield
+        return
+
+    runtime = _build_interaction_callback_runtime()
+    if runtime is None:
+        yield
+        return
+    processor, poll_seconds = runtime
+    stop_event = asyncio.Event()
+    owner = f"api-{os.getpid()}-{uuid.uuid4().hex[:16]}"
+    task = asyncio.create_task(
+        run_interaction_callback_worker(
+            processor=processor,
+            owner=owner,
+            poll_seconds=poll_seconds,
+            stopping=stop_event,
+        ),
+        name="multirag-channel-interaction-callback",
+    )
+    task.add_done_callback(
+        lambda completed: _observe_interaction_callback_task_exit(
+            completed,
+            stop_event=stop_event,
+        )
+    )
+    handle = _InteractionCallbackLifecycleHandle(stop_event, task)
+    setattr(app.state, _INTERACTION_CALLBACK_STATE_KEY, handle)
+    LOGGER.info(
+        "channel_execution_event=interaction_callback_start result=ok error_code=",
+    )
+    try:
+        yield
+    finally:
+        stop_event.set()
+        task.cancel()
+        stopped_cleanly = True
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            stopped_cleanly = False
+            LOGGER.warning(
+                "channel_execution_event=interaction_callback_stop result=failed error_code=INTERACTION_CALLBACK_STOP_FAILED error_type=%s",
+                type(exc).__name__,
+            )
+        if getattr(app.state, _INTERACTION_CALLBACK_STATE_KEY, None) is handle:
+            delattr(app.state, _INTERACTION_CALLBACK_STATE_KEY)
+        if stopped_cleanly:
+            LOGGER.info(
+                "channel_execution_event=interaction_callback_stop result=ok error_code=",
+            )
+
+
+@asynccontextmanager
+async def _channel_execution_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Own API-local Channel maintenance workers without double starts."""
+
+    async with _candidate_gc_lifespan(app), _interaction_callback_lifespan(app):
+        yield
 
 
 router = APIRouter(lifespan=_channel_execution_lifespan)

@@ -2,8 +2,9 @@
 
 > 状态：设计基线；EIM-U0/CHN-X9 的执行流与 buffered ReplySession、
 > EIM-U1/CHN-U8 的飞书 CardKit 渐进式回复、EIM-U11/CHN-X13、EIM-U12/CHN-U14 与
-> EIM-U13/CHN-U15 的目标事务均已实现。
-> 最后核验：2026-08-11（Asia/Shanghai）。
+> EIM-U13/CHN-U15 的目标事务均已实现；EIM-U14 的持久 InteractionSession 已完成，
+> EIM-U15/CHN-X15 native form 源码正在收口，状态保持 `🔵`，尚未 rollout/live。
+> 最后核验：2026-08-23（Asia/Shanghai）。
 > 适用范围：MultiRAG `api/channels/`、`api/channel_execution/`、飞书企业自建应用，以及后续
 > 与 `of_mcp` 的确认交互。
 
@@ -49,12 +50,13 @@ Agent message_delta
 | 层 | 当前行为 | 直接后果 |
 |---|---|---|
 | `api/channel_execution` | executor 产生现有 SSE；Dialog/Canvas 各有私有 driver/history transaction；Canvas sidecar 显式持有候选所有权；私有 preflight 计算 Target 能力 | execution wire 不承载目标差异；新增目标不修改 Provider；候选 GC 只在 API 生命周期运行 |
-| `api/channels/runtime_client.py` | `stream()` 是执行 HTTP/SSE 的唯一路径；worker 启动另取一次脱敏 capability envelope | 正常消息、delta、卡片 patch 不查目标数据库；旧 API 降级为无交互 buffered reply |
-| `api/channels/binding_bridge.py` | 按能力交集创建 queued/running/final 状态，只签发允许的 cancel/regenerate/retry/feedback action ID | 渲染与回调二次校验；完成后替换与失败后重试语义分开 |
-| `api/channels/core/base.py::ChannelAction` | 只含 opaque action、operator/chat/message/event ID，不表达 form value 或 InteractionSession revision | 当前低风险按钮契约不能直接承载 MCP MRTR，必须 additive 演进 |
+| `api/channel_execution` | U14 pause 在主循环外持久化；U15 presentation/outbox 与 callback receipt 使用短事务、DB-time lease 和 generation fence | API 先产出 `interaction_required`，Principal/MCP 恢复不进入同步 callback；worker 仍无数据库 |
+| `api/channels/runtime_client.py` | `stream()` 是执行 HTTP/SSE 的唯一路径；另有 generation-scoped delivery claim/ACK 和 durable callback client | 正常消息、delta、卡片 patch 不查目标数据库；原生 form 也只经私有 API 消费安全 projection |
+| `api/channels/binding_bridge.py` | 按能力交集创建 queued/running/final 状态；收到 `interaction_required` 后结束流式卡、claim/ACK form；callback 只持久接收并快速返回 | 低风险 action 与 durable MCP form 分开；worker 不直接恢复 MCP |
+| `api/channels/core/base.py` | `ChannelAction` 保持低风险 opaque action；独立 `ChannelFormAction` 携 opaque action/nonce/revision、有界 form value 和 typed operator assertion | form value 仍是不可信输入；必须由 API 异步提升 Principal 并二次验证 |
 | `api/channels/core/base.py` | `Channel.begin_reply()` 默认 buffered；`ReplyContext` 携带状态、动作与最终能力 | 普通 Provider 完成时只发一条文本，支持逐 Provider 覆盖 |
-| `api/channels/feishu/channel.py` | 协商允许时使用 Typing + CardKit 2.0；否则 buffered text，CardKit 故障仍有 post/text fallback | Markdown/公式走 CardKit renderer，能力缺失时仍能交付最终答案 |
-| `api/channels/feishu/channel.py` | 入站仍只支持 text，但已保留 header tenant 与类型化 open/user/union ID，Bridge/runtime client 发送冻结、repr 脱敏的 structured assertion | 无话题、引用、附件或 mention；C3 已把 LINKED assertion 提升到 `TrustedChannelContext`/target owner，P2 尚未把完整 Principal 传进 Agent/RAG/Memory/workflow/MCP context |
+| `api/channels/feishu/channel.py` | 协商允许时使用 Typing + CardKit 2.0；否则 buffered text；form callback 校验 app-bound WS 的 tenant/app/operator/message lineage | Markdown/公式走 CardKit renderer；native form 只接收有界 typed callback，不宣称 webhook signature 验证 |
+| `api/channels/feishu/channel.py` | 入站消息仍只支持 text，但已保留 header tenant 与类型化 open/user/union ID，Bridge/runtime client 发送冻结、repr 脱敏的 structured assertion | 无话题、引用、附件或 mention；C3 已提升 LINKED Principal，P2 已把它传入 Agent/RAG/Memory/workflow/MCP context seam；A2/P3 源码默认关闭且未 rollout |
 | `api/channel_providers/feishu.py` | 声明私聊文本、CardKit 渐进式、交互、取消、反馈与 threaded reply；文件/图片仍为 false | 管理面与运行时共用同一 Provider 事实源 |
 
 必须保留的已有优势：SDK 回调只规范化并入队、有界队列、每会话顺序、Redis 原子去重、
@@ -388,8 +390,9 @@ CHN-O14 / EIM-O4。Windows 上 supervisor 停子进程走 `TerminateProcess`，�
 当前 U4 的低风险 `card.action.trigger` 回调只做长连接信任、规范化，并以 raw operator ID 与原消息
 sender 做同值校验，再绑定 chat/message/nonce/action 后入队；它**尚未**把 action operator 解析为
 verified Principal，不能据此授权敏感操作。业务执行异步完成，按钮 value 只携带 opaque
-nonce/action ID，不携带 Principal、scope、工具参数、工号或目标 URL。U7/U14/U15 的敏感确认必须
-另行接入 verified operator Principal、持久幂等 claim 与执行前重授权。
+nonce/action ID，不携带 Principal、scope、工具参数、工号或目标 URL。U15 的 MCP form 使用独立
+durable callback receipt，并在异步阶段重新解析 verified Principal；U7 的敏感确认仍必须另行接入
+Confirmation Store、业务幂等和执行前重授权，不能复用低风险按钮事实。
 
 ### 8.2 MCP 结构化表单与 H5/URL Elicitation
 
@@ -401,35 +404,45 @@ schema 选择承载方式：
 |---|---|---|
 | 短字符串/多行文本 | Card JSON 2.0 input/textarea | 长度、格式和必填约束由白名单 mapper 生成 |
 | 单选 enum | select/radio 类组件 | 只显示 schema 中的稳定 value/安全 label |
-| boolean | checkbox | 不把默认勾选当作用户确认 |
-| date/date-time | 日期/时间组件 | 统一时区并把规范值交回 resource server 验证 |
+| boolean | 静态单选 | 不把默认值当作用户确认；只接受映射回的真 boolean |
+| date | 日期组件 | 只接受真实日历日期并把规范值交回 resource server 验证；date-time 尚未开放 |
 | enum array | 多选组件 | 限制选项数和提交大小 |
-| 复杂联动、附件、人员选择、多步骤 | 飞书 H5 | 使用短期一次性 nonce，进入页面后重新免登和同人校验 |
-| 密码、API key、token、OAuth、支付凭据 | 授权页/H5 URL mode | 禁止进入卡片 form、日志或模型上下文 |
+| 复杂联动、附件、人员选择、多步骤 | 飞书 H5（deferred） | 本阶段拒绝；未来另立任务后使用短期一次性 nonce，进入页面后重新免登和同人校验 |
+| 密码、API key、token、OAuth、支付凭据 | 授权页/H5 URL mode（deferred） | 本阶段拒绝；始终禁止进入卡片 form、日志或模型上下文 |
 
 原生表单使用 Card JSON 2.0 `form` 容器，组件 `name` 在同一 form 内唯一；提交回调中的
 `event.action.form_value` 只规范化为用户输入，不自动成为 Principal、scope 或最终工具参数。不能把
 任意 MCP `inputSchema` 或模型生成的卡片 JSON 直接渲染，必须经过受控 schema 子集、组件 allowlist、
-长度/枚举/URL 校验和服务端二次验证。
+长度/枚举/日期校验和服务端二次验证。
+
+EIM-U15/CHN-X15 当前源码把这个子集固定为最多 4 个 request、合计 12 个字段、每个 enum 20 项；
+支持 text、integer/number、boolean、date、single enum 和 enum array，文本最多 1000 字符。field 与
+option value 全部换成 opaque ID，反向映射加密留在 presentation store。未知关键字、nested/ref/
+remote schema、pattern、非法日期/非有限数、schema 外字段与重复多选 fail closed。native card 只提供
+submit/cancel；terminal card 只展示 `completed/declined/cancelled/expired/failed` 的服务端白名单摘要。
 
 交互生命周期：
 
 ```text
 finish current streaming card
   -> persist InteractionSession(awaiting_input, revision)
-  -> render form or H5 handoff
-  -> callback verifies operator, persists normalized input and CAS claims revision
-  -> acknowledge quickly and enqueue resume
-  -> tools/call(inputResponses + requestState)
-  -> render next form or structured terminal result
+  -> persist presentation + emit interaction_required
+  -> worker claim safe projection, patch original card, ACK delivery
+  -> app-bound WS callback validates tenant/app/operator/message lineage
+  -> persist encrypted callback receipt, acknowledge quickly
+  -> background re-resolves Principal and submits current revision to U14
+  -> U14 re-authorizes and resumes tools/call(inputResponses + requestState)
+  -> worker claim next form or safe terminal result and patch original card
 ```
 
 进入表单前必须显式结束流式更新；不得让 stream patch 与用户编辑同一张卡片并发竞争。回调同步路径
-沿用 §8.1 的快速 ACK，不等待 MCP、OA 或数据库长事务。卡片 value/URL 只含 Interaction Store
-生成的 opaque action ID/nonce 和 revision；`requestState`、Principal、原始参数和凭据留在服务端。
+沿用 §8.1 的快速 ACK，只等待短小的 durable receipt 事务，不等待 Principal、MCP、OA 或后续数据库
+工作。当前卡片 value 只含 Interaction Store 生成的 opaque action ID/nonce 和 revision；
+`requestState`、Principal、原始参数和凭据留在服务端，URL mode 尚未实现。
 
-首期只在私聊或个人可见 H5 中开放企业敏感表单。群聊只显示安全摘要和“前往私聊/打开授权页”入口，
-不把请假原因、余额、人员或审批信息渲染到共享卡片。
+首期 native form 只在已绑定的飞书私聊卡片中开放非敏感、受控输入；H5/URL 与群聊入口均 deferred。
+未来群聊也只能显示安全摘要和“前往私聊/打开授权页”入口，不能把请假原因、余额、人员或审批信息
+渲染到共享卡片。
 
 ### 8.3 敏感操作
 
@@ -477,6 +490,13 @@ source_message_id
 
 ### `lark-channel-sdk`
 
+它对本阶段**有帮助，但只作为 Provider/transport 参考，不作为新依赖**：官方包把消息归一化、卡片
+callback、Reply/stream 生命周期、安全模式和两层去重放在同一 Channel 边界，并明确可与完整
+`lark-oapi` 并存。这支持本项目把 U15 renderer/receipt 保持在 Provider 边界、在 finish 后整卡更新、
+并让 durable state/authorization 继续归 MultiRAG；它不能替代 U14 Interaction Store、generation
+fence、Principal 重验或完整 OpenAPI。当前任务不升级依赖、不改 import，真正迁移仍由 EIM-C5/
+CHN-P14 独立 PoC 决定。
+
 PoC 重点验证：
 
 - `InboundMessage` 的 thread/mention/resources/safe text 是否能无损映射本项目 DTO；
@@ -485,6 +505,10 @@ PoC 重点验证：
 - `compat -> audit -> strict` 安全迁移；
 - 多 worker、连接上限、日志脱敏和回滚；
 - SDK 两层去重如何与 Redis 原子 claim 分工。
+
+官方 `SecurityConfig` 的 webhook signature 规则只适用于 webhook transport。当前 managed 模式是
+app-bound WebSocket；U15 能声称的是 tenant/app/operator/conversation/message lineage 校验，不能把
+未运行的 webhook request-signature 路径写成已实现。
 
 即使采用，也只替换飞书 Provider 内部 transport/outbound adapter；不得替换 MultiRAG binding、
 Secret、tenant、Principal、执行边界、Redis 状态和审计。
@@ -571,7 +595,8 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 - card action 重放、换人点击、跨租户、过期和参数变化全部拒绝。
 - form schema allowlist、component name 唯一、字段长度/枚举/日期校验和 schema 外字段拒绝；
 - InteractionSession 当前 revision 只消费一次；decline/cancel/expire、再次请求输入和重启恢复逐态覆盖；
-- H5 URL 只含一次性 nonce，`requestState`、token、Principal 和原始参数不会进入 URL/卡片/日志；
+- H5/URL mode deferred；未来实现时必须只含一次性 nonce，`requestState`、token、Principal 和原始
+  参数不得进入 URL/卡片/日志；
 - `structuredContent` 通过 `outputSchema` 校验后才生成结果卡，失败只产生稳定安全错误。
 
 ### 集成/真实飞书测试租户
@@ -584,7 +609,8 @@ SLO 是上线初始目标，真实压测和灰度后可调整；调整必须写�
 - 图片、文件、保密消息、超限、撤回消息和不匹配 file_key；
 - 权限缺少、应用未重新安装、机器人不在群和卡片 schema 错误；
 - 两个用户、两个 tenant、两个 App 的会话/身份/反馈隔离；
-- 原生 form、H5 handoff、双击、换人点击、过期 revision、断线重连和多轮 InputRequiredResult；
+- 原生 form、双击、换人点击、过期 revision、断线重连和多轮 InputRequiredResult；H5 handoff
+  deferred，不属于本阶段 live 验收；
 - 群聊只出现安全 CTA，个人表单内容不会更新到共享卡片。
 
 生产验收只使用测试应用和测试业务系统。真实员工范围、正式 App 权限、生产重启和真实副作用仍需
@@ -615,8 +641,8 @@ candidate，公开历史不含半轮或 `<think>`。这些现场结果和相关�
 | EIM-U3 | CHN-U10 | mention-only 群聊、话题、thread session | U1、U2、C3、O2 |
 | EIM-U5 | CHN-X10 | references/artifacts 结构化事件与渲染 | U0、P2 |
 | EIM-U6 | CHN-X11 | 图片/文件/语音输入输出 | U0、U5、C3、附件安全基建 |
-| EIM-U14 | — | ✅ provider-neutral InteractionSession、MRTR/legacy resume、加密结果与 outputSchema 校验；默认关闭、无 renderer | F3、P3、A4、C3 |
-| EIM-U15 | CHN-X15 | 飞书 Form/H5 renderer、快速 callback 和持久化恢复 | U14、U1、U4 |
+| EIM-U14 | — | ✅ provider-neutral InteractionSession、MRTR/legacy resume、加密结果与 outputSchema 校验；默认关闭 | F3、P3、A4、C3 |
+| EIM-U15 | CHN-X15 | 🔵 飞书 native form/terminal renderer、durable-receipt ACK 与后台恢复；H5/URL deferred，待完整门禁与 rollout/live | U14、U1、U4 |
 | EIM-U7 | CHN-X12 | 敏感确认卡和 action callback | U15、M3、M4 |
 | EIM-C5 | CHN-P14 | 官方 Channel SDK transport PoC | 与上述 UX 并行，非阻塞依赖 |
 

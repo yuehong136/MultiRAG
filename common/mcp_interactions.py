@@ -93,6 +93,27 @@ def _valid_opaque(value: object) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class InteractionLeaseFence:
+    """Opaque durable-worker ownership proof for one resume attempt."""
+
+    job_id: str = field(repr=False)
+    owner: str = field(repr=False)
+    attempt: int
+
+    def __post_init__(self) -> None:
+        if (
+            not _valid_opaque(self.job_id)
+            or type(self.owner) is not str
+            or self.owner != self.owner.strip()
+            or not self.owner
+            or len(self.owner) > 64
+            or type(self.attempt) is not int
+            or self.attempt <= 0
+        ):
+            raise ValueError("interaction lease fence is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class InteractionRequest:
     """Sensitive per-round request handed to the durable Host implementation."""
 
@@ -117,6 +138,7 @@ class InteractionRequest:
     expires_at: datetime | None = field(default=None, repr=False)
     interaction_id: str | None = field(default=None, repr=False)
     previous_revision: int | None = None
+    lease_fence: InteractionLeaseFence | None = field(default=None, repr=False)
     call_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -148,7 +170,10 @@ class InteractionRequest:
             and self.expires_at.utcoffset() is not None
             and (self.external_identity_id is None or _valid_opaque(self.external_identity_id))
             and (self.identity_revision is None or (type(self.identity_revision) is int and self.identity_revision > 0))
-            and ((self.interaction_id is None and self.previous_revision is None) or (_valid_opaque(self.interaction_id) and type(self.previous_revision) is int and self.previous_revision > 0))
+            and (
+                (self.interaction_id is None and self.previous_revision is None and self.lease_fence is None)
+                or (_valid_opaque(self.interaction_id) and type(self.previous_revision) is int and self.previous_revision > 0 and isinstance(self.lease_fence, InteractionLeaseFence))
+            )
         )
         if not valid:
             raise ValueError("interaction request is invalid")
@@ -193,6 +218,9 @@ class InteractionResume:
             or type(self.revision) is not int
             or self.revision <= 0
             or not isinstance(self.request, InteractionRequest)
+            or self.request.interaction_id != self.interaction_id
+            or self.request.previous_revision != self.revision
+            or not isinstance(self.request.lease_fence, InteractionLeaseFence)
             or not isinstance(self.input_responses, Mapping)
             or not self.input_responses
         ):
@@ -202,6 +230,9 @@ class InteractionResume:
 
 
 class InteractionHandler(Protocol):
+    @property
+    def ttl_seconds(self) -> int: ...
+
     async def pause(self, request: InteractionRequest) -> InteractionReceipt: ...
 
 
@@ -223,6 +254,7 @@ class MCPInteractionPaused(BaseException):
 __all__ = [
     "InteractionEffect",
     "InteractionHandler",
+    "InteractionLeaseFence",
     "InteractionReceipt",
     "InteractionRequest",
     "InteractionResume",

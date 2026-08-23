@@ -34,6 +34,7 @@ from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.mcp_delegation.runtime import resolve_mcp_credential_provider
 from api.identity.mcp_interactions.runtime import resolve_mcp_interaction_handler
+from api.identity.mcp_interactions.tool_gate import maybe_serialize_interaction_tool_calls
 from common.connection_utils import timeout
 from common.mcp_tool_call_conn import MCPToolBinding, MCPToolCallSession, mcp_tool_metadata_to_openai_tool
 from core.prompts.generator import citation_plus, citation_prompt, full_question, kb_prompt, message_fit_in, structured_output_prompt
@@ -111,6 +112,7 @@ class Agent(LLM, ToolBase):
             self.tool_meta.append(indexed_meta)
 
         self._mcp_sessions = []  # 保存 MCP 会话引用以便预热
+        interaction_tool_gate_enabled = False
         mcp_name_counts: dict[str, int] = {}
         for mcp in self._param.mcp:
             for canonical_name in mcp["tools"]:
@@ -130,6 +132,7 @@ class Agent(LLM, ToolBase):
                 session_kwargs["credential_provider"] = credential_provider
                 interaction_handler = resolve_mcp_interaction_handler()
                 if interaction_handler is not None:
+                    interaction_tool_gate_enabled = True
                     session_kwargs["interaction_handler"] = interaction_handler
                     session_kwargs["tool_output_schemas"] = {
                         tool_name: output_schema
@@ -176,7 +179,11 @@ class Agent(LLM, ToolBase):
                 logging.warning("MCP session failed to initialize, some tools may not work properly")
 
         self.callback = partial(self._canvas.tool_use_callback, id)
-        self.toolcall_session = LLMToolPluginCallSession(self.tools, self.callback)
+        toolcall_session = LLMToolPluginCallSession(self.tools, self.callback)
+        self.toolcall_session = maybe_serialize_interaction_tool_calls(
+            toolcall_session,
+            enabled=interaction_tool_gate_enabled,
+        )
         if self.tool_meta and self.chat_mdl is not None:
             self.chat_mdl.bind_tools(self.toolcall_session, self.tool_meta)
 

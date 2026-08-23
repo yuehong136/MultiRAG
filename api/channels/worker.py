@@ -20,11 +20,13 @@ from api.channel_capabilities import EffectiveReplyCapabilities
 from api.channel_providers import provider_spec
 from api.channel_runtime.schemas import RuntimeState
 from api.channels.agent_bridge import FeishuAgentBridge, MultiRAGAgentClient
-from api.channels.binding_bridge import BindingBridge
+from api.channels.binding_bridge import BindingBridge, InteractionPresenter
 from api.channels.core.base import (
     ActionHandler,
     ChannelAction,
     ChannelActionResponse,
+    ChannelFormAction,
+    FormActionHandler,
     IncomingMessage,
     MessageHandler,
 )
@@ -72,6 +74,11 @@ class WorkerChannel(Protocol):
 
 
 @runtime_checkable
+class FormActionChannel(Protocol):
+    def set_form_action_handler(self, handler: FormActionHandler) -> None: ...
+
+
+@runtime_checkable
 class MessageBridge(Protocol):
     async def handle_message(self, message: IncomingMessage) -> None: ...
 
@@ -94,6 +101,19 @@ class LifecycleMessageBridge(Protocol):
     async def handle_action(self, action: ChannelAction) -> ChannelActionResponse: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class InteractionLifecycleBridge(Protocol):
+    async def handle_form_action(
+        self,
+        action: ChannelFormAction,
+    ) -> ChannelActionResponse: ...
+
+    async def run_interaction_deliveries(
+        self,
+        stop_event: asyncio.Event,
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -207,8 +227,22 @@ class ChannelWorker:
             if isinstance(self._bridge, LifecycleMessageBridge):
                 self._bridge.set_message_scheduler(self.enqueue)
                 self._channel.set_action_handler(self._bridge.handle_action)
+            if isinstance(self._bridge, InteractionLifecycleBridge) and isinstance(
+                self._channel,
+                FormActionChannel,
+            ):
+                self._channel.set_form_action_handler(
+                    self._bridge.handle_form_action,
+                )
             self._tasks = [asyncio.create_task(self._consume(index), name=f"{self._provider_name}-channel-worker-{index}") for index in range(self._worker_concurrency)]
             self._tasks.append(asyncio.create_task(self._renew_leader(), name=f"{self._provider_name}-channel-leader-renew"))
+            if isinstance(self._bridge, InteractionLifecycleBridge):
+                self._tasks.append(
+                    asyncio.create_task(
+                        self._bridge.run_interaction_deliveries(stop_event),
+                        name=f"{self._provider_name}-interaction-delivery",
+                    )
+                )
             await self._channel.start()
             self._started = True
             self._tasks.append(asyncio.create_task(self._monitor_channel(), name=f"{self._provider_name}-channel-monitor"))
@@ -583,6 +617,24 @@ async def _run_managed_channel(
             total_timeout_seconds=tuning.total_timeout_seconds,
             max_answer_chars=tuning.max_answer_chars,
         )
+        interaction_client: MultiRAGBindingExecutionClient | None = None
+        interaction_presenter: InteractionPresenter | None = None
+        # U15 is an additive, disabled-by-default capability.  Old workers and
+        # Provider test doubles only owe the base Channel contract while the
+        # feature is off (including a capabilities-endpoint 404 during a
+        # rolling deploy).  Once enabled for this process, however, a Feishu
+        # binding must expose the complete CardKit replacement transport; do
+        # not silently start a producer whose durable forms cannot be shown.
+        if app_config.identity.mcp_interactions.enabled and provider.name == "feishu":
+            from api.channels.feishu.interaction_presenter import (
+                FeishuInteractionPresenter,
+            )
+            from api.channels.feishu.reply import FeishuReplyTransport
+
+            if not isinstance(channel, FeishuReplyTransport):
+                raise ChannelWorkerError("CHANNEL_INTERACTION_TRANSPORT_INVALID")
+            interaction_client = execution_client
+            interaction_presenter = FeishuInteractionPresenter(channel)
         bridge = BindingBridge(
             channel=channel,
             executor=execution_client,
@@ -598,6 +650,8 @@ async def _run_managed_channel(
             # matter what the policy says, or the bot would read messages it
             # has no way to answer.
             private_chat_only=runtime.private_chat_only or not provider_spec(provider.name).capabilities.group_chat,
+            interaction_client=interaction_client,
+            interaction_presenter=interaction_presenter,
         )
         worker = ChannelWorker(
             provider_name=provider.name,

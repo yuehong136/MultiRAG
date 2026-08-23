@@ -36,7 +36,7 @@ from api.db.db_models import (
 )
 
 _I6_REVISION = "b4c6d8e0f2a4"
-_U14_REVISION = "c6d8e0f2a4b6"
+_CURRENT_HEAD_REVISION = "d8f0a2b4c6e8"
 _I21_REVISION = "9a3b5c7d8e0f"
 _I2_REVISION = "8f2c4d6e7a9b"
 _PRE_I2_REVISION = "7c8d9e0f1a2b"
@@ -220,6 +220,13 @@ def _migration_config(alembic_cfg: Config, connection: sa.Connection) -> Config:
 
 def _drop_identity_sidecar(connection: sa.Connection) -> None:
     inspector = sa.inspect(connection)
+    for table_name in (
+        "t_ai_mcp_interaction_callback_receipts",
+        "t_ai_mcp_interaction_presentations",
+    ):
+        if inspector.has_table(table_name, schema=_SCHEMA):
+            connection.execute(sa.text(f'DROP TABLE {_SCHEMA}."{table_name}"'))
+            inspector = sa.inspect(connection)
     for table in reversed(_IDENTITY_TABLES):
         if inspector.has_table(table.name, schema=_SCHEMA):
             connection.execute(sa.text(f'DROP TABLE {_SCHEMA}."{table.name}"'))
@@ -1035,12 +1042,12 @@ def test_i2_downgrade_refuses_to_destroy_identity_history(
             schema=_SCHEMA,
         )
         head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
-        assert head == _U14_REVISION
-        # The I2.1 step is safely reversible because no account/link rows
-        # exist; the following I2 downgrade then refuses to erase the provider
-        # tenant history.  Alembic therefore remains at the last completed
-        # revision instead of pretending the whole multi-step downgrade was
-        # atomic.
+        assert head == _CURRENT_HEAD_REVISION
+        # The U15/U14 and I2.1 steps are safely reversible because their
+        # protected rows do not exist; the following I2 downgrade then refuses
+        # to erase the provider tenant history. Alembic therefore remains at
+        # the last completed revision instead of pretending the whole
+        # multi-step downgrade was atomic.
         assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _I2_REVISION
     finally:
         transaction.rollback()

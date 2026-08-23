@@ -25,6 +25,11 @@ from api.channel_execution.executors import (
     SqlAlchemyCanvasTargetDriver,
     SqlAlchemyDialogTargetDriver,
 )
+from api.channel_execution.interaction_presentations import InteractionPresentationService
+from api.channel_execution.interaction_worker import (
+    InteractionCallbackProcessor,
+    InteractionCallbackWorkerLimits,
+)
 from api.channel_execution.models import ChannelExecutionCommand, TrustedChannelContext, WorkloadIdentity
 from api.channel_execution.protocols import (
     BindingCapabilityResolver,
@@ -38,6 +43,8 @@ from api.channel_execution.registry import TargetExecutorRegistry
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
 from api.channel_runtime.tokens import derive_binding_workload_token
 from api.db.db_models import get_async_db
+from api.identity.mcp_interactions.crypto import InteractionPayloadCipher, InteractionPayloadCipherError
+from api.identity.mcp_interactions.runtime import get_mcp_interaction_service
 from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
 from api.identity.provisioning import HmacLinkCodeCodec, IdentityProvisioningService
 from api.identity.provisioning_repository import SqlAlchemyIdentityProvisioningRepository
@@ -48,7 +55,7 @@ from api.identity_adapters.channel_runtime import (
     SqlAlchemyChannelIdentityAuthorityResolver,
     SqlAlchemyChannelIdentityReader,
 )
-from common.app_config import get_app_config
+from common.app_config import AppConfigError, get_app_config
 
 
 class DenyAllWorkloadAuthenticator:
@@ -296,6 +303,14 @@ def get_channel_principal_resolver(
 ) -> ChannelPrincipalResolver:
     """Compose link authority, I3/I4/I6 and P1 over short sessions."""
 
+    return _build_channel_identity_resolver(provider_registry)
+
+
+def _build_channel_identity_resolver(
+    provider_registry: IdentityProviderRegistry,
+) -> ChannelIdentityResolver:
+    """Build the concrete resolver for request and background compositions."""
+
     session_factory = _require_async_session_factory()
     return ChannelIdentityResolver(
         authority_resolver=SqlAlchemyChannelIdentityAuthorityResolver(
@@ -385,12 +400,81 @@ def get_published_target_execution_service(
     return PublishedTargetExecutionService(registry)
 
 
+def _build_interaction_presentation_service() -> InteractionPresentationService:
+    """Build the durable U15 store for request or background composition."""
+
+    enabled_config = get_app_config().identity.mcp_interactions.require_enabled()
+    session_factory = _require_async_session_factory()
+    keys = [secret.get_secret_value() for secret in enabled_config.payload_encryption_keys]
+    cipher = InteractionPayloadCipher.from_base64_keyring(keys)
+    return InteractionPresentationService(
+        session_factory=session_factory,
+        cipher=cipher,
+    )
+
+
+def get_interaction_presentation_service() -> InteractionPresentationService | None:
+    """Build U15 presentation support only when durable interactions are on."""
+
+    if not get_app_config().identity.mcp_interactions.enabled:
+        return None
+    try:
+        return _build_interaction_presentation_service()
+    except (AppConfigError, ChannelStateUnavailableError, InteractionPayloadCipherError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CHANNEL_INTERACTIONS_UNAVAILABLE",
+        ) from exc
+
+
+def build_interaction_callback_processor() -> InteractionCallbackProcessor | None:
+    """Compose the API-local durable callback worker when U14 is enabled."""
+
+    config = get_app_config().identity.mcp_interactions
+    if not config.enabled:
+        return None
+    enabled_config = config.require_enabled()
+    provider_registry = get_identity_provider_registry()
+    return InteractionCallbackProcessor(
+        presentations=_build_interaction_presentation_service(),
+        interactions=get_mcp_interaction_service(),
+        binding_resolver=SessionFactoryBindingResolver(
+            _require_async_session_factory(),
+        ),
+        actor_resolver=_build_channel_identity_resolver(provider_registry),
+        limits=InteractionCallbackWorkerLimits(
+            lease_seconds=enabled_config.lease_seconds,
+            reconcile_limit=enabled_config.batch_size,
+        ),
+    )
+
+
+def require_interaction_presentation_service(
+    service: InteractionPresentationService | None = Depends(get_interaction_presentation_service),
+) -> InteractionPresentationService:
+    """Fail closed on private U15 routes while the capability is disabled."""
+
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CHANNEL_INTERACTIONS_UNAVAILABLE",
+        )
+    return service
+
+
+def get_interaction_delivery_lease_seconds() -> int:
+    """Keep delivery lease policy server-owned instead of accepting it on the wire."""
+
+    return int(get_app_config().identity.mcp_interactions.lease_seconds)
+
+
 def get_channel_execution_service(
     binding_resolver: BindingResolver = Depends(get_binding_resolver),
     principal_resolver: ChannelPrincipalResolver = Depends(get_channel_principal_resolver),
     conversation_store: ChannelConversationStore = Depends(get_channel_conversation_store),
     claim_store: ExecutionClaimStore = Depends(get_execution_claim_store),
     target_service: PublishedTargetExecutionService = Depends(get_published_target_execution_service),
+    presentation_registrar: InteractionPresentationService | None = Depends(get_interaction_presentation_service),
 ) -> ChannelExecutionService:
     """Build the request-scoped execution graph over one AsyncSession."""
 
@@ -400,4 +484,5 @@ def get_channel_execution_service(
         conversation_store=conversation_store,
         claim_store=claim_store,
         target_service=target_service,
+        presentation_registrar=presentation_registrar,
     )

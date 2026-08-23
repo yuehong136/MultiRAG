@@ -35,6 +35,7 @@ from api.identity.mcp_interactions.validation import (
 from api.identity.principal import Principal
 from common.mcp_interactions import (
     InteractionEffect,
+    InteractionLeaseFence,
     InteractionReceipt,
     InteractionRequest,
     InteractionResume,
@@ -177,14 +178,35 @@ class InteractionRepository:
         assert request.interaction_id is not None
         assert request.previous_revision is not None
         assert request.expires_at is not None
+        assert request.lease_fence is not None
+        fence = request.lease_fence
+        job = await self._session.scalar(sa.select(McpInteractionResumeJob).where(McpInteractionResumeJob.id == fence.job_id).with_for_update())
+        if job is None:
+            raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
         row = await self._locked_interaction(
             interaction_id=request.interaction_id,
             tenant_id=request.tenant_id,
         )
         if row is None:
             raise InteractionStateError(InteractionErrorCode.NOT_FOUND)
+        # PostgreSQL now()/CURRENT_TIMESTAMP is fixed at transaction start.
+        # Read the wall clock only after every potentially blocking row lock so
+        # a stale worker cannot wait past its lease and still advance a round.
+        now = await self._db_now()
+        if (
+            job.interaction_id != request.interaction_id
+            or job.revision != request.previous_revision
+            or job.state != "leased"
+            or job.lease_owner != fence.owner
+            or job.attempt != fence.attempt
+            or job.lease_until is None
+            or job.lease_until <= now
+        ):
+            raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
         if row.state != "resuming" or row.revision != request.previous_revision:
             raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
+        if row.expires_at <= now:
+            raise InteractionStateError(InteractionErrorCode.EXPIRED)
         if row.round_count >= self._max_rounds:
             raise InteractionStateError(InteractionErrorCode.ROUND_LIMIT)
         if not self._same_binding(
@@ -192,17 +214,6 @@ class InteractionRepository:
             request,
             output_schema=output_schema,
         ):
-            raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
-        job = await self._session.scalar(
-            sa.select(McpInteractionResumeJob)
-            .where(
-                McpInteractionResumeJob.interaction_id == row.id,
-                McpInteractionResumeJob.revision == row.revision,
-                McpInteractionResumeJob.state == "leased",
-            )
-            .with_for_update()
-        )
-        if job is None:
             raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
         revision = row.revision + 1
         original = self._encrypt(
@@ -232,7 +243,6 @@ class InteractionRepository:
             revision=revision,
             output_schema=output_schema,
         )
-        now = datetime.now(UTC)
         job.state = "succeeded"
         job.lease_owner = None
         job.lease_until = None
@@ -249,6 +259,7 @@ class InteractionRepository:
         row.output_schema_key_id = encrypted_output_schema.key_id if encrypted_output_schema is not None else None
         row.policy_revision = request.policy_revision
         row.credential_generation = request.credential_generation
+        row.identity_revision = request.identity_revision
         row.state = "awaiting_input"
         row.revision = revision
         row.round_count += 1
@@ -387,9 +398,11 @@ class InteractionRepository:
         lease_seconds: int,
         limit: int,
     ) -> list[InteractionLease]:
-        if not owner.strip() or len(owner) > 64:
+        if owner != owner.strip() or not owner or len(owner) > 64:
             raise ValueError("interaction lease owner is invalid")
-        now = await self._db_now()
+        if type(lease_seconds) is not int or lease_seconds <= 0 or type(limit) is not int or limit <= 0:
+            raise ValueError("interaction lease bounds are invalid")
+        candidate_now = await self._db_now()
         jobs = list(
             await self._session.scalars(
                 sa.select(McpInteractionResumeJob)
@@ -399,12 +412,12 @@ class InteractionRepository:
                             McpInteractionResumeJob.state == "response_ready",
                             sa.or_(
                                 McpInteractionResumeJob.next_attempt_at.is_(None),
-                                McpInteractionResumeJob.next_attempt_at <= now,
+                                McpInteractionResumeJob.next_attempt_at <= candidate_now,
                             ),
                         ),
                         sa.and_(
                             McpInteractionResumeJob.state == "leased",
-                            McpInteractionResumeJob.lease_until <= now,
+                            McpInteractionResumeJob.lease_until <= candidate_now,
                         ),
                     )
                 )
@@ -419,6 +432,9 @@ class InteractionRepository:
                 interaction_id=job.interaction_id,
                 tenant_id=job.tenant_id,
             )
+            # The interaction lock may block after the job row was selected.
+            # Issue the lease from the wall clock after both locks are held.
+            now = await self._db_now()
             if row is None or row.revision != job.revision:
                 self._terminal_job(job, now=now, code=InteractionErrorCode.STATE_CONFLICT)
                 continue
@@ -448,6 +464,7 @@ class InteractionRepository:
                 InteractionLease(
                     job_id=job.id,
                     owner=owner,
+                    attempt=job.attempt,
                     resume=self._to_resume(row=row, job=job),
                 )
             )
@@ -474,7 +491,7 @@ class InteractionRepository:
             purpose="result",
             value=normalized_result,
         )
-        now = datetime.now(UTC)
+        now = await self._db_now()
         row.result_ciphertext = encrypted.ciphertext
         row.result_key_id = encrypted.key_id
         row.state = "completed"
@@ -492,7 +509,7 @@ class InteractionRepository:
         code: InteractionErrorCode,
     ) -> None:
         row, job = await self._locked_lease(lease)
-        now = datetime.now(UTC)
+        now = await self._db_now()
         row.state = "failed"
         row.updated_at = now
         self._terminal_job(job, now=now, code=code)
@@ -507,9 +524,17 @@ class InteractionRepository:
     ) -> None:
         row, job = await self._locked_lease(lease)
         if row.effect not in {InteractionEffect.READ.value, InteractionEffect.PREPARE.value} or row.replay_mode != "reusable":
-            await self.terminal_fail(lease=lease, code=InteractionErrorCode.REMOTE_RESULT_UNKNOWN)
+            now = await self._db_now()
+            row.state = "failed"
+            row.updated_at = now
+            self._terminal_job(
+                job,
+                now=now,
+                code=InteractionErrorCode.REMOTE_RESULT_UNKNOWN,
+            )
+            await self._session.flush()
             return
-        now = datetime.now(UTC)
+        now = await self._db_now()
         row.state = "response_ready"
         row.updated_at = now
         job.state = "response_ready"
@@ -520,19 +545,50 @@ class InteractionRepository:
         job.updated_at = now
         await self._session.flush()
 
+    async def renew(
+        self,
+        *,
+        lease: InteractionLease,
+        lease_seconds: int,
+    ) -> None:
+        if type(lease_seconds) is not int or lease_seconds <= 0:
+            raise ValueError("interaction lease duration is invalid")
+        row, job = await self._locked_lease(lease)
+        now = await self._db_now()
+        job.lease_until = min(
+            now + timedelta(seconds=lease_seconds),
+            row.expires_at,
+        )
+        job.updated_at = now
+        await self._session.flush()
+
     async def _locked_lease(
         self,
         lease: InteractionLease,
     ) -> tuple[McpInteraction, McpInteractionResumeJob]:
         job = await self._session.scalar(sa.select(McpInteractionResumeJob).where(McpInteractionResumeJob.id == lease.job_id).with_for_update())
-        if job is None or job.state != "leased" or job.lease_owner != lease.owner:
+        if job is None:
             raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
         row = await self._locked_interaction(
             interaction_id=job.interaction_id,
             tenant_id=job.tenant_id,
         )
-        if row is None or row.state != "resuming" or row.revision != job.revision:
+        # Validate the fence after both locks. A transaction timestamp, or a
+        # wall clock read before the second lock, can revive an expired owner.
+        now = await self._db_now()
+        if (
+            job.state != "leased"
+            or job.lease_owner != lease.owner
+            or job.attempt != lease.attempt
+            or job.lease_until is None
+            or job.lease_until <= now
+            or row is None
+            or row.state != "resuming"
+            or row.revision != job.revision
+        ):
             raise InteractionStateError(InteractionErrorCode.STATE_CONFLICT)
+        if row.expires_at <= now:
+            raise InteractionStateError(InteractionErrorCode.EXPIRED)
         return row, job
 
     def _to_resume(
@@ -596,6 +652,11 @@ class InteractionRepository:
             expires_at=row.expires_at,
             interaction_id=row.id,
             previous_revision=row.revision,
+            lease_fence=InteractionLeaseFence(
+                job_id=job.id,
+                owner=job.lease_owner or "",
+                attempt=job.attempt,
+            ),
         )
         if request.call_digest != row.call_digest:
             raise InteractionStateError(InteractionErrorCode.PAYLOAD_INVALID)
@@ -622,7 +683,7 @@ class InteractionRepository:
         )
 
     async def _db_now(self) -> datetime:
-        value = await self._session.scalar(sa.select(sa.func.now()))
+        value = await self._session.scalar(sa.select(sa.func.clock_timestamp()))
         if not isinstance(value, datetime):
             raise RuntimeError("database clock is unavailable")
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

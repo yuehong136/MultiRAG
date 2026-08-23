@@ -162,6 +162,14 @@ Managed 模式是管理页面和生产部署使用的长期架构：
   -> BindingBridge lifecycle -> transport-neutral ReplySession
      ├── 飞书：Typing -> CardKit 2.0 -> throttled patch -> final flush/finish
      └── 普通 Provider：buffered complete -> Channel.send() 一次
+
+MCP execution 需要补充输入时
+  -> API 持久化 U14 InteractionSession + U15 presentation/outbox
+  -> SSE interaction_required（不进入模型）
+  -> worker 结束当前流式卡，claim safe projection，整卡替换为 native form，ACK delivery
+  -> 飞书 app-bound WS callback -> durable receipt -> 快速 toast ACK
+  -> API 后台重新解析 Principal / claim revision / 恢复 U14
+  -> worker claim terminal 或下一轮 form，更新同一张卡
 ```
 
 Supervisor 只协调 desired state，不接触飞书 App Secret。每个 child worker 只在内存中获得
@@ -254,6 +262,44 @@ orphan，不能充当运行 lease、取消或终态判断，worker 仍不导入�
 `ask()` 仅是消费同一个 `stream()` 并聚合为 `AgentReply` 的阶段性兼容 facade，用于迁移和回滚
 安全；它不是推荐接口，新代码不得增加调用。生产调用归零且 EIM-U1 稳定后应在独立任务中删除。
 默认实现仍是最终单条纯文本；飞书已实现 EIM-U1/CHN-U8 渐进式 Provider session。
+
+### MCP 原生 CardKit 表单（EIM-U15 / CHN-X15）
+
+当前源码在默认关闭的 `identity.mcp_interactions` gate 后，把 U14 的持久 InteractionSession 接到
+飞书原生 Card JSON 2.0 form；尚未做真实配置、进程重启、数据库 rollout 或飞书 live。execution
+遇到 `MCPInteractionPaused` 时不进入 RAGFlow/Canvas/Agent 主循环重试，而是在 API 事务边界登记
+presentation，完成原 event claim，并发送终态 `interaction_required`。Bridge 先结束正在编辑的流式卡，
+再用原回复 message ID 领取并投递安全 projection；form 和 terminal 都使用整卡更新，避免 stream
+patch 与用户编辑竞争。
+
+原生 mapper 是严格 allowlist，不接受任意 MCP schema/card JSON：每轮最多 4 个 request、合计 12 个
+字段、每个 enum 20 个选项；只支持 text、integer/number、boolean、date、single enum 与 enum array，
+文本上限 1000 字符。field/option name 都是服务端生成的不透明 ID，反向映射加密持久化；未知关键字、
+nested/ref/remote schema、pattern、非法日期/数值、schema 外字段和重复多选 fail closed。卡片只带
+opaque action ID、one-time nonce 和 revision，不带 `requestState`、Principal、scope、工具参数、
+credential 或原始 schema。submit 与 cancel 可用；复杂联动、人员/附件、多步骤、密码/API key/token/
+OAuth/支付凭据的 H5/URL mode 明确后置。
+
+worker 与 API 使用三条 generation-scoped private route：delivery `claim`、精确 lease/token `ack`、
+以及 callback durable receipt。claim/ACK 只负责卡片交付，不执行 MCP。飞书 form callback 在当前
+app-bound WebSocket 事件中核对 header tenant、operator tenant、配置 app account、operator open ID、
+conversation/message/event lineage；这里不宣称 webhook request-signature 验证。Bridge 只把有界
+typed assertion、`form_value` 和 opaque routing material 送到 callback route，并在 receipt 事务提交后
+快速返回 toast；同步路径不等待 Principal 解析、数据库长事务或 MCP。
+
+API-local callback processor 另取有 owner/attempt/expiry fence 的 lease，重新读取当前
+binding/generation/enabled/provider，经 I3/I4/I6/P1 提升 verified Principal，再调用 U14 对当前 revision
+执行一次 accept/decline/cancel。U14 继续拥有 interaction lease、tool gate、identity TTL、恢复前重授权、
+幂等和多轮上限。字段错误重新排队安全 form；完成、拒绝、取消、过期或失败只生成白名单 terminal
+摘要并更新原卡，不展示原始工具结果、MCP 参数或底层异常。renderer/worker 不访问数据库，只通过
+私有 API 消费 durable outbox/receipt。
+
+部署不是普通“新 API 先上即可”的加法窗口：先执行 migration，并在
+`identity.mcp_interactions.enabled=false` 下部署/重启 API；再重启所有 supervisor/child worker，确认
+它们已能消费 `interaction_required`、claim/ACK delivery 与 durable callback；最后才启用 producer 并
+重启 API。回滚第一步必须关闭 producer 并重启 API，停止制造新的 interaction；保留新 consumer 处理
+或终态化已持久记录后，才考虑回退 worker/API。新增表是 additive，存在数据时不得用 destructive
+downgrade 换取回滚。
 
 ### 飞书渐进式回复
 
@@ -702,18 +748,27 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   计数和状态，不含完整外部标识、PII 或 Secret。
 - Canvas 候选 owner/create/state/expiry 位于 MultiRAG 自有 sidecar；公开 Canvas/Dialog 表无 Channel
   私有列。API 侧 collector 有 batch/cycle 上限并用 `SKIP LOCKED` 协调多实例；worker 不查数据库。
+- 默认关闭的 U15 源码提供 generation-scoped interaction delivery outbox、durable callback receipt、
+  API 后台 Principal 重验/U14 恢复和飞书 native form/terminal 原卡更新；callback 202/飞书 toast 只在
+  receipt 持久提交后返回，worker 不直接恢复 MCP。
 - Supervisor 不记录原始 binding ID，worker 不记录原始飞书 ID、问题、答案或 SSE 帧。
 
 ### 尚未实现或不能宣称
 
 - API 与 supervisor 之间的主 internal token 目前仍是静态 workload token，不等于 mTLS 或
   短期 delegated token；child token 虽已缩小作用域，仍由该主 token 确定性派生。
-- `RunContext.principal` 已到达 MCP call-context seam，但尚未实现用户级 MCP/SQL 授权；A2/P3 的
-  token issuance、credential provider、动态 bearer 与业务 PDP 均未实现。
+- `RunContext.principal` 已经由 P2 到达 MCP call-context seam；A2/P3 的 token issuance、
+  request-scoped credential provider 与动态 bearer 源码也已实现，但均默认关闭、未配置真实 key/policy/
+  grant、未部署且没有真实 Channel/MCP bearer 流量。业务对象 PDP/SQL 授权仍未实现，不能把这些源码
+  边界写成生产委托已打通。
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
   **仍然不得直接替换旧 key**——替换 ≠ 轮换。
-- 当前支持飞书私聊文本与 CardKit 渐进式回复；仍不支持群聊、图片、文件或语音。
+- 当前支持飞书私聊文本、CardKit 渐进式回复，以及默认关闭、尚未 rollout/live 的 native MCP form
+  源码；仍不支持群聊、图片、文件、语音或 H5/URL elicitation。
+- native form 本阶段不开放 U7 敏感写；密码/API key/token/OAuth/支付凭据、复杂联动、附件、人员选择
+  和多步骤表单均不进入 CardKit。`lark-channel-sdk` 也未安装或迁移，仍由后续 EIM-C5/CHN-P14 PoC
+  单独决定。
 - 停机终态化只覆盖**有合作窗口**的停机（POSIX SIGTERM、两端的 Ctrl+C、显式 close）。
   `kill -9`、主机掉电、容器被强杀，以及 **Windows 上 supervisor 触发的 worker 停止**都没有这个
   窗口，卡片会停在最后一次显示的状态；这不是 CHN-U16 的回归，也不能靠它验收。

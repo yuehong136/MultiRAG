@@ -8,6 +8,7 @@ import pytest
 
 from common.mcp_interactions import (
     InteractionEffect,
+    InteractionLeaseFence,
     InteractionRequest,
     InteractionResume,
     MCPInteractionPaused,
@@ -107,7 +108,16 @@ def test_interaction_request_rejects_incomplete_binding_and_side_effect(
 
 
 def test_resume_binds_same_call_and_keeps_sensitive_values_out_of_repr() -> None:
-    request = _request()
+    fence = InteractionLeaseFence(
+        job_id="job-a",
+        owner="worker-a",
+        attempt=2,
+    )
+    request = _request(
+        interaction_id="interaction-a",
+        previous_revision=1,
+        lease_fence=fence,
+    )
     resume = InteractionResume(
         interaction_id="interaction-a",
         revision=1,
@@ -118,8 +128,17 @@ def test_resume_binds_same_call_and_keeps_sensitive_values_out_of_repr() -> None
     rendered = repr(resume)
 
     assert resume.call_digest == request.call_digest
+    assert resume.request.lease_fence == fence
     assert "2026-09-01" not in rendered
     assert "opaque-request-state" not in rendered
+
+
+def test_continuation_requires_explicit_lease_fence() -> None:
+    with pytest.raises(ValueError, match="interaction request is invalid"):
+        _request(
+            interaction_id="interaction-a",
+            previous_revision=1,
+        )
 
 
 def test_pause_signal_bypasses_upstream_exception_to_tool_result_conversion() -> None:

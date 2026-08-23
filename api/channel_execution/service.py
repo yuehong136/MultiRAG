@@ -6,6 +6,8 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import datetime
+from typing import Protocol, runtime_checkable
 
 from api.channel_capabilities import RunCapabilityPolicy, TargetCapabilities
 from api.channel_execution.errors import BindingDisabledError, BindingNotFoundError, ChannelExecutionError, DuplicateEventError
@@ -17,12 +19,47 @@ from api.channel_execution.protocols import (
     ExecutionClaimStore,
 )
 from api.channel_execution.registry import TargetExecutorRegistry
+from common.mcp_interactions import MCPInteractionPaused
 
 LOGGER = logging.getLogger(__name__)
 
 
 async def _one_failure(code: str) -> AsyncIterator[ExecutionEvent]:
     yield ExecutionEvent(event="execution_failed", error_code=code)
+
+
+async def _one_interaction(paused: MCPInteractionPaused) -> AsyncIterator[ExecutionEvent]:
+    yield ExecutionEvent(
+        event="interaction_required",
+        action_id=paused.interaction_id,
+        revision=paused.revision,
+    )
+
+
+@runtime_checkable
+class InteractionPresentationRegistrar(Protocol):
+    async def register(
+        self,
+        *,
+        context: TrustedChannelContext,
+        interaction_id: str,
+        revision: int,
+        source_event_id: str,
+        conversation_ref: str,
+        presentation_ref: str,
+    ) -> InteractionRegistration: ...
+
+
+@runtime_checkable
+class InteractionRegistration(Protocol):
+    @property
+    def action_id(self) -> str: ...
+
+    @property
+    def revision(self) -> int: ...
+
+    @property
+    def expires_at(self) -> datetime: ...
 
 
 class PublishedTargetExecutionService:
@@ -53,6 +90,8 @@ class PublishedTargetExecutionService:
             events = await executor.execute(context=context, command=command)
         except asyncio.CancelledError:
             raise
+        except MCPInteractionPaused as paused:
+            return _one_interaction(paused)
         except ChannelExecutionError as exc:
             return _one_failure(exc.code)
         except Exception as exc:
@@ -71,6 +110,12 @@ class PublishedTargetExecutionService:
                 yield ExecutionEvent.model_validate(event.model_dump())
         except asyncio.CancelledError:
             raise
+        except MCPInteractionPaused as paused:
+            yield ExecutionEvent(
+                event="interaction_required",
+                action_id=paused.interaction_id,
+                revision=paused.revision,
+            )
         except ChannelExecutionError as exc:
             yield ExecutionEvent(event="execution_failed", error_code=exc.code)
         except Exception as exc:
@@ -92,12 +137,14 @@ class ChannelExecutionService:
         conversation_store: ChannelConversationStore,
         claim_store: ExecutionClaimStore,
         target_service: PublishedTargetExecutionService,
+        presentation_registrar: InteractionPresentationRegistrar | None = None,
     ) -> None:
         self._binding_resolver = binding_resolver
         self._principal_resolver = principal_resolver
         self._conversation_store = conversation_store
         self._claim_store = claim_store
         self._target_service = target_service
+        self._presentation_registrar = presentation_registrar
 
     async def execute(
         self,
@@ -191,25 +238,19 @@ class ChannelExecutionService:
 
         return self._persist_completed_session(
             events,
-            binding_id=binding_id,
-            binding_generation=context.binding_generation,
-            conversation_key=command.conversation_key,
-            event_id=command.event_id,
-            tenant_id=trusted_context.tenant_id,
-            principal_id=trusted_context.principal_id,
+            context=trusted_context,
+            command=command,
         )
 
     async def _persist_completed_session(
         self,
         events: AsyncIterator[ExecutionEvent],
         *,
-        binding_id: str,
-        binding_generation: int,
-        conversation_key: str,
-        event_id: str,
-        tenant_id: str,
-        principal_id: str | None,
+        context: TrustedChannelContext,
+        command: ChannelExecutionCommand,
     ) -> AsyncIterator[ExecutionEvent]:
+        binding_id = context.binding_id
+        event_id = command.event_id
         try:
             async for event in events:
                 if event.event == "message_completed":
@@ -219,14 +260,43 @@ class ChannelExecutionService:
                         return
                     await self._conversation_store.put_session(
                         binding_id=binding_id,
-                        binding_generation=binding_generation,
-                        conversation_key=conversation_key,
+                        binding_generation=context.binding_generation,
+                        conversation_key=command.conversation_key,
                         session_id=event.session_id,
-                        tenant_id=tenant_id,
-                        principal_id=principal_id,
+                        tenant_id=context.tenant_id,
+                        principal_id=context.principal_id,
                     )
                     await self._claim_store.complete(binding_id=binding_id, event_id=event_id)
                     yield event
+                    return
+                if event.event == "interaction_required":
+                    if self._presentation_registrar is None or context.principal is None or command.presentation_ref is None or event.action_id is None or event.revision is None:
+                        await self._fail_claim(binding_id=binding_id, event_id=event_id)
+                        yield ExecutionEvent(
+                            event="execution_failed",
+                            error_code="CHANNEL_INTERACTION_UNAVAILABLE",
+                        )
+                        return
+                    notice = await self._presentation_registrar.register(
+                        context=context,
+                        interaction_id=event.action_id,
+                        revision=event.revision,
+                        source_event_id=command.event_id,
+                        conversation_ref=command.actor.conversation,
+                        presentation_ref=command.presentation_ref,
+                    )
+                    if notice.action_id != event.action_id or notice.revision != event.revision:
+                        raise RuntimeError("interaction presentation registration mismatch")
+                    await self._claim_store.complete(
+                        binding_id=binding_id,
+                        event_id=event_id,
+                    )
+                    yield ExecutionEvent(
+                        event="interaction_required",
+                        action_id=notice.action_id,
+                        revision=notice.revision,
+                        expires_at=notice.expires_at,
+                    )
                     return
                 if event.event == "execution_failed":
                     await self._fail_claim(binding_id=binding_id, event_id=event_id)

@@ -23,6 +23,8 @@ _PURPOSES = frozenset(
     {
         "input_requests",
         "input_response",
+        "channel_callback",
+        "form_mapping",
         "original_arguments",
         "output_schema",
         "principal_evidence",

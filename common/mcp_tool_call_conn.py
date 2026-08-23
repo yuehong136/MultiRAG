@@ -22,6 +22,7 @@ import httpx2
 from common.mcp_interactions import (
     InteractionEffect,
     InteractionHandler,
+    InteractionLeaseFence,
     InteractionReceipt,
     InteractionRequest,
     InteractionResume,
@@ -207,6 +208,7 @@ class _LegacyElicitationBridge:
         expires_at: datetime | None,
         interaction_id: str | None,
         interaction_revision: int | None,
+        interaction_lease_fence: InteractionLeaseFence | None = None,
     ) -> None:
         self._session = session
         self._name = name
@@ -218,6 +220,7 @@ class _LegacyElicitationBridge:
         self._expires_at = expires_at
         self._interaction_id = interaction_id
         self._interaction_revision = interaction_revision
+        self._interaction_lease_fence = interaction_lease_fence
         self._receipt: InteractionReceipt | None = None
         self._called = False
         self._responded = False
@@ -260,6 +263,7 @@ class _LegacyElicitationBridge:
                 expires_at=self._expires_at,
                 interaction_id=self._interaction_id,
                 interaction_revision=self._interaction_revision,
+                interaction_lease_fence=self._interaction_lease_fence,
             )
             self._receipt = await handler.pause(request)
             # The declared ask-before-effect server must terminate this attempt
@@ -535,6 +539,7 @@ class MCPToolCallSession(ToolCallSession):
         interaction_id: str | None,
         interaction_revision: int | None,
         interaction_input_requests: dict[str, Any] | None,
+        interaction_lease_fence: InteractionLeaseFence | None,
     ) -> CallToolResult | InputRequiredResult:
         auth_status = _HTTPAuthStatus()
         auth_status_token = self._http_auth_status.set(auth_status)
@@ -554,6 +559,7 @@ class MCPToolCallSession(ToolCallSession):
                 expires_at=interaction_expires_at,
                 interaction_id=interaction_id,
                 interaction_revision=interaction_revision,
+                interaction_lease_fence=interaction_lease_fence,
             )
         try:
             async with AsyncExitStack() as stack:
@@ -628,6 +634,7 @@ class MCPToolCallSession(ToolCallSession):
         interaction_id: str | None = None,
         interaction_revision: int | None = None,
         interaction_input_requests: dict[str, Any] | None = None,
+        interaction_lease_fence: InteractionLeaseFence | None = None,
     ) -> str:
         self._last_tool_call_meta = None
         # Progress notifications are request-scoped. Generic server logging has
@@ -666,6 +673,7 @@ class MCPToolCallSession(ToolCallSession):
                 interaction_id=interaction_id,
                 interaction_revision=interaction_revision,
                 interaction_input_requests=interaction_input_requests,
+                interaction_lease_fence=interaction_lease_fence,
             )
 
         if isinstance(result, InputRequiredResult):
@@ -683,6 +691,7 @@ class MCPToolCallSession(ToolCallSession):
                 expires_at=interaction_expires_at,
                 interaction_id=interaction_id,
                 interaction_revision=interaction_revision,
+                interaction_lease_fence=interaction_lease_fence,
             )
             receipt = await handler.pause(request)
             raise MCPInteractionPaused(
@@ -710,6 +719,7 @@ class MCPToolCallSession(ToolCallSession):
                 expires_at=interaction_expires_at,
                 interaction_id=interaction_id,
                 interaction_revision=interaction_revision,
+                interaction_lease_fence=interaction_lease_fence,
             )
             receipt = await handler.pause(request)
             self._last_tool_call_meta = None
@@ -784,10 +794,14 @@ class MCPToolCallSession(ToolCallSession):
         expires_at: datetime | None,
         interaction_id: str | None,
         interaction_revision: int | None,
+        interaction_lease_fence: InteractionLeaseFence | None,
     ) -> InteractionRequest:
         context = self._call_context
         principal = getattr(context, "principal", None)
         authentication = getattr(principal, "authentication", None)
+        handler = self._interaction_handler
+        if handler is None or type(handler.ttl_seconds) is not int or handler.ttl_seconds <= 0:
+            raise ValueError("MCP interaction host TTL is invalid")
         return InteractionRequest(
             tenant_id=getattr(context, "tenant_id", ""),
             platform_user_id=getattr(context, "platform_user_id", ""),
@@ -807,9 +821,10 @@ class MCPToolCallSession(ToolCallSession):
             replay_mode=credential.replay_mode,
             policy_revision=credential.policy_revision,
             credential_generation=credential.credential_generation,
-            expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=10),
+            expires_at=expires_at or datetime.now(UTC) + timedelta(seconds=handler.ttl_seconds),
             interaction_id=interaction_id,
             previous_revision=interaction_revision,
+            lease_fence=interaction_lease_fence,
         )
 
     def _legacy_interaction_envelope(
@@ -919,6 +934,7 @@ class MCPToolCallSession(ToolCallSession):
             interaction_id=resume.interaction_id,
             interaction_revision=resume.revision,
             interaction_input_requests=dict(request.input_requests),
+            interaction_lease_fence=request.lease_fence,
         )
         metadata = self.get_last_tool_call_meta()
         if metadata is not None and metadata.get("structured_content") is not None:

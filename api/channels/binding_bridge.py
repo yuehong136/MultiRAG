@@ -25,8 +25,10 @@ from api.channels.core.base import (
     Channel,
     ChannelAction,
     ChannelActionResponse,
+    ChannelFormAction,
     IncomingIdentityAssertion,
     IncomingMessage,
+    InteractionReplySession,
     OutgoingMessage,
     ReplyActionIds,
     ReplyActionKind,
@@ -39,9 +41,11 @@ from api.channels.core.reply import SERVICE_UNAVAILABLE_TEXT
 from api.channels.execution_events import (
     BindingExecutionEvent,
     ExecutionFailedEvent,
+    InteractionRequiredEvent,
     MessageCompletedEvent,
     MessageDeltaEvent,
 )
+from api.channels.interaction_models import ClaimedInteractionDelivery
 from api.channels.state_store import ChannelStateStore, binding_conversation_key
 
 LOGGER = logging.getLogger(__name__)
@@ -56,7 +60,15 @@ _MAX_ACTIONS = 4_096
 # case this lifecycle refuses to claim it handles.
 _SHUTDOWN_PREPARATION_GRACE_SECONDS = 2.0
 _SHUTDOWN_FINALIZE_BUDGET_SECONDS = 5.0
-_TERMINAL_REPLY_STATUSES = frozenset({ReplyStatus.FINAL, ReplyStatus.ERROR, ReplyStatus.CANCELLED})
+_TERMINAL_REPLY_STATUSES = frozenset(
+    {
+        ReplyStatus.AWAITING_INPUT,
+        ReplyStatus.FINAL,
+        ReplyStatus.ERROR,
+        ReplyStatus.CANCELLED,
+    }
+)
+_INTERACTION_POLL_SECONDS = 0.5
 
 
 @runtime_checkable
@@ -72,9 +84,40 @@ class BindingExecutor(Protocol):
         conversation: str,
         identity: IncomingIdentityAssertion | None = None,
         operation: Literal["message", "regenerate"] = "message",
+        presentation_ref: str | None = None,
     ) -> AsyncGenerator[BindingExecutionEvent, None]: ...
 
     async def reset(self, *, conversation_key: str) -> None: ...
+
+
+@runtime_checkable
+class InteractionDeliveryClient(Protocol):
+    async def claim_interaction_delivery(
+        self,
+        *,
+        owner: str,
+        action_id: str | None = None,
+        revision: int | None = None,
+    ) -> ClaimedInteractionDelivery | None: ...
+
+    async def acknowledge_interaction_delivery(
+        self,
+        *,
+        delivery: ClaimedInteractionDelivery,
+        owner: str,
+        success: bool,
+        safe_error_code: str | None = None,
+    ) -> None: ...
+
+    async def receive_interaction_callback(
+        self,
+        action: ChannelFormAction,
+    ) -> Literal["accepted", "duplicate"]: ...
+
+
+@runtime_checkable
+class InteractionPresenter(Protocol):
+    async def present(self, delivery: ClaimedInteractionDelivery) -> None: ...
 
 
 class _WorkKind(StrEnum):
@@ -146,7 +189,11 @@ class BindingBridge:
         max_answer_chars: int,
         capabilities: EffectiveReplyCapabilities,
         private_chat_only: bool = True,
+        interaction_client: InteractionDeliveryClient | None = None,
+        interaction_presenter: InteractionPresenter | None = None,
     ) -> None:
+        if (interaction_client is None) != (interaction_presenter is None):
+            raise ValueError("interaction client and presenter must be configured together")
         self._channel = channel
         self._executor = executor
         self._state_store = state_store
@@ -156,6 +203,11 @@ class BindingBridge:
         self._max_answer_chars = max_answer_chars
         self._private_chat_only = private_chat_only
         self._capabilities = capabilities
+        self._interaction_client = interaction_client
+        self._interaction_presenter = interaction_presenter
+        self._interaction_owner = f"channel-{secrets.token_hex(12)}"
+        self._interaction_revisions: dict[str, int] = {}
+        self._interaction_wakeup = asyncio.Event()
         self._scheduler: Callable[[IncomingMessage], Awaitable[None]] | None = None
         self._preparations: dict[int, asyncio.Task[_PreparedMessage | None]] = {}
         self._actions: dict[str, _RegisteredAction] = {}
@@ -322,6 +374,71 @@ class BindingBridge:
         )
         return ChannelActionResponse("success", "感谢反馈。")
 
+    async def handle_form_action(
+        self,
+        action: ChannelFormAction,
+    ) -> ChannelActionResponse:
+        """Durably receipt a form callback; rendering and MCP stay asynchronous."""
+
+        if self._closing:
+            return ChannelActionResponse("warning", SHUTDOWN_BUSY_TEXT)
+        client = self._interaction_client
+        if client is None:
+            return ChannelActionResponse("warning", "该表单当前不可用。")
+        try:
+            status = await client.receive_interaction_callback(action)
+        except AgentExecutionError as exc:
+            if exc.code.endswith("HTTP_404") or exc.code.endswith("HTTP_409"):
+                return ChannelActionResponse(
+                    "warning",
+                    "表单已过期或不是最新版本，请刷新后重试。",
+                )
+            return ChannelActionResponse("error", "提交未保存，请稍后重试。")
+        self._interaction_revisions[action.action_id] = action.revision
+        self._interaction_wakeup.set()
+        if status == "duplicate":
+            return ChannelActionResponse("info", "该提交已经收到，正在处理。")
+        return ChannelActionResponse("success", "提交已收到，正在处理。")
+
+    async def run_interaction_deliveries(
+        self,
+        stop_event: asyncio.Event,
+    ) -> None:
+        """Deliver follow-up rounds and terminal pages from the durable outbox."""
+
+        if self._interaction_client is None or self._interaction_presenter is None:
+            await stop_event.wait()
+            return
+        while not stop_event.is_set() and not self._closing:
+            delivered = False
+            try:
+                delivered = await self._poll_interaction_delivery()
+            except asyncio.CancelledError:
+                raise
+            except AgentExecutionError as exc:
+                if exc.code.endswith("HTTP_503"):
+                    await stop_event.wait()
+                    return
+                LOGGER.warning(
+                    "channel_event=interaction_delivery_poll result=failed error_code=%s",
+                    exc.code,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "channel_event=interaction_delivery_poll result=failed error_code=CHANNEL_INTERACTION_POLL_FAILED error_type=%s",
+                    type(exc).__name__,
+                )
+            if delivered:
+                continue
+            self._interaction_wakeup.clear()
+            try:
+                await asyncio.wait_for(
+                    self._interaction_wakeup.wait(),
+                    timeout=_INTERACTION_POLL_SECONDS,
+                )
+            except TimeoutError:
+                pass
+
     async def close(self) -> None:
         """Give every visible reply one terminal state, then drop bridge tasks.
 
@@ -346,6 +463,8 @@ class BindingBridge:
         self._preparations.clear()
         self._background_tasks.clear()
         self._actions.clear()
+        self._interaction_revisions.clear()
+        self._interaction_wakeup.set()
         self._latest_execution_by_conversation.clear()
         self._live_records.clear()
 
@@ -585,6 +704,7 @@ class BindingBridge:
                     conversation=message.chat_id,
                     identity=message.identity,
                     operation=message.operation,
+                    presentation_ref=record.reply_message_id or None,
                 )
             ) as events:
                 async for event in events:
@@ -619,6 +739,10 @@ class BindingBridge:
                             authoritative_content=event.content,
                             started_at=started_at,
                         )
+                        continue
+                    if isinstance(event, InteractionRequiredEvent):
+                        terminal_seen = True
+                        await self._pause_for_interaction(record, event)
             if terminal_seen:
                 return
             raise AgentExecutionError("CHANNEL_EXECUTION_INCOMPLETE")
@@ -637,6 +761,141 @@ class BindingBridge:
             )
             await self._mark_executed(message)
             await self._fail_reply_session(record, "CHANNEL_EXECUTION_FAILURE")
+
+    async def _pause_for_interaction(
+        self,
+        record: _ExecutionRecord,
+        event: InteractionRequiredEvent,
+    ) -> None:
+        reply_session = record.reply_session
+        client = self._interaction_client
+        presenter = self._interaction_presenter
+        if reply_session is None or not isinstance(reply_session, InteractionReplySession) or client is None or presenter is None:
+            await self._mark_executed(record.source)
+            await self._fail_reply_session(
+                record,
+                "CHANNEL_INTERACTION_UNSUPPORTED",
+            )
+            return
+        try:
+            presentation_ref = await reply_session.pause_for_interaction()
+            if presentation_ref != record.reply_message_id or not presentation_ref:
+                raise AgentExecutionError("CHANNEL_INTERACTION_PRESENTATION_MISMATCH")
+            delivery = await client.claim_interaction_delivery(
+                owner=self._interaction_owner,
+                action_id=event.action_id,
+                revision=event.revision,
+            )
+            if delivery is None or delivery.kind != "form" or delivery.action_id != event.action_id or delivery.revision != event.revision or delivery.presentation_ref != presentation_ref:
+                raise AgentExecutionError("CHANNEL_INTERACTION_DELIVERY_MISMATCH")
+            delivered = await self._publish_interaction_delivery(delivery)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            record.status = ReplyStatus.ERROR
+            await self._mark_executed(record.source)
+            self._release_record(record)
+            self._log(
+                logging.ERROR,
+                "interaction_pause_failed",
+                record.source,
+                "CHANNEL_INTERACTION_DELIVERY_FAILED",
+            )
+            self._interaction_wakeup.set()
+            return
+        record.status = ReplyStatus.AWAITING_INPUT
+        if delivered:
+            await self._mark_replied(record.source)
+        else:
+            await self._mark_executed(record.source)
+        self._release_record(record)
+        self._interaction_revisions[event.action_id] = event.revision
+        self._interaction_wakeup.set()
+        self._log(
+            logging.INFO,
+            "interaction_required",
+            record.source,
+            "",
+            result="ok" if delivered else "pending_retry",
+        )
+
+    async def _poll_interaction_delivery(self) -> bool:
+        client = self._interaction_client
+        if client is None:
+            return False
+        for action_id, revision in tuple(self._interaction_revisions.items()):
+            for candidate_revision in (revision, revision + 1):
+                delivery = await client.claim_interaction_delivery(
+                    owner=self._interaction_owner,
+                    action_id=action_id,
+                    revision=candidate_revision,
+                )
+                if delivery is None:
+                    continue
+                delivered = await self._publish_interaction_delivery(delivery)
+                if delivered:
+                    if delivery.kind == "terminal":
+                        self._interaction_revisions.pop(action_id, None)
+                    else:
+                        self._interaction_revisions[action_id] = delivery.revision
+                return True
+        # With no live reply, an unscoped claim is restart/orphan recovery and
+        # cannot race a still-streaming card owned by this bridge.
+        if self._live_records:
+            return False
+        delivery = await client.claim_interaction_delivery(
+            owner=self._interaction_owner,
+        )
+        if delivery is None:
+            return False
+        delivered = await self._publish_interaction_delivery(delivery)
+        if delivered and delivery.kind == "form":
+            self._interaction_revisions[delivery.action_id] = delivery.revision
+        return True
+
+    async def _publish_interaction_delivery(
+        self,
+        delivery: ClaimedInteractionDelivery,
+    ) -> bool:
+        client = self._interaction_client
+        presenter = self._interaction_presenter
+        if client is None or presenter is None:
+            return False
+        try:
+            await presenter.present(delivery)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning(
+                "channel_event=interaction_render result=failed error_code=CHANNEL_INTERACTION_RENDER_FAILED error_type=%s",
+                type(exc).__name__,
+            )
+            try:
+                await client.acknowledge_interaction_delivery(
+                    delivery=delivery,
+                    owner=self._interaction_owner,
+                    success=False,
+                    safe_error_code="CHANNEL_INTERACTION_RENDER_FAILED",
+                )
+            except Exception:
+                LOGGER.warning(
+                    "channel_event=interaction_delivery_ack result=failed error_code=CHANNEL_INTERACTION_ACK_FAILED",
+                )
+            return False
+        try:
+            await client.acknowledge_interaction_delivery(
+                delivery=delivery,
+                owner=self._interaction_owner,
+                success=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.warning(
+                "channel_event=interaction_delivery_ack result=failed error_code=CHANNEL_INTERACTION_ACK_FAILED",
+            )
+            return False
+        return True
 
     async def _complete_reply(
         self,

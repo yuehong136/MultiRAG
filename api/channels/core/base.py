@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 from api.channel_capabilities import EffectiveReplyCapabilities
@@ -35,6 +37,15 @@ _DEFAULT_REPLY_CAPABILITIES = EffectiveReplyCapabilities(
     retry=True,
     feedback=True,
 )
+_FORM_VALUE_MAX_FIELDS = 32
+_FORM_VALUE_MAX_BYTES = 32_768
+_FORM_VALUE_KEY_MAX_CHARS = 64
+_FORM_VALUE_TEXT_MAX_CHARS = 4_096
+_FORM_VALUE_LIST_MAX_ITEMS = 32
+_FORM_ACTION_TEXT_MAX_CHARS = 255
+_FORM_ACTION_MAX_REVISION = 2**63 - 1
+
+type ChannelFormFieldValue = str | bool | tuple[str, ...]
 
 
 def _short_hash(value: str) -> str:
@@ -259,6 +270,7 @@ class ReplySessionState(StrEnum):
     """Provider-neutral reply lifecycle states."""
 
     OPEN = "open"
+    AWAITING_INPUT = "awaiting_input"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -269,6 +281,7 @@ class ReplyStatus(StrEnum):
 
     QUEUED = "queued"
     RUNNING = "running"
+    AWAITING_INPUT = "awaiting_input"
     FINAL = "final"
     ERROR = "error"
     CANCELLED = "cancelled"
@@ -314,6 +327,66 @@ class ChannelAction:
     chat_id: str
     message_id: str
     event_id: str
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ChannelFormAction:
+    """Bounded native-form submission with untrusted provider identity.
+
+    This contract is intentionally separate from ``ChannelAction``. Low-risk
+    reply controls keep their smaller handler, while a form submission must be
+    persisted and resolved into a trusted Principal by the application before
+    any tool can resume.
+    """
+
+    action_id: str = field(repr=False)
+    nonce: str = field(repr=False)
+    revision: int
+    action: Literal["accept", "decline", "cancel"]
+    form_value: Mapping[str, ChannelFormFieldValue] = field(repr=False)
+    identity: IncomingIdentityAssertion = field(repr=False)
+    chat_id: str = field(repr=False)
+    message_id: str = field(repr=False)
+    event_id: str = field(repr=False)
+
+    def __init__(
+        self,
+        *,
+        action_id: Any,
+        nonce: Any,
+        revision: Any,
+        action: Any = "accept",
+        form_value: Any,
+        identity: Any,
+        chat_id: Any,
+        message_id: Any,
+        event_id: Any,
+    ) -> None:
+        if type(revision) is not int or not 1 <= revision <= _FORM_ACTION_MAX_REVISION:
+            raise ValueError("channel form action revision is invalid")
+        if type(identity) is not IncomingIdentityAssertion:
+            raise ValueError("channel form action identity is invalid")
+        if action not in {"accept", "decline", "cancel"}:
+            raise ValueError("channel form action response is invalid")
+        for name, value in (
+            ("action_id", action_id),
+            ("nonce", nonce),
+            ("chat_id", chat_id),
+            ("message_id", message_id),
+            ("event_id", event_id),
+        ):
+            if not _is_bounded_form_action_text(value):
+                raise ValueError(f"channel form action {name} is invalid")
+
+        object.__setattr__(self, "action_id", action_id)
+        object.__setattr__(self, "nonce", nonce)
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "form_value", _normalize_channel_form_value(form_value))
+        object.__setattr__(self, "identity", identity)
+        object.__setattr__(self, "chat_id", chat_id)
+        object.__setattr__(self, "message_id", message_id)
+        object.__setattr__(self, "event_id", event_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,7 +436,18 @@ class ReplySession(Protocol):
     async def acknowledge_feedback(self, *, helpful: bool) -> None: ...
 
 
+@runtime_checkable
+class InteractionReplySession(ReplySession, Protocol):
+    """Reply session that can stop progression before a native input form."""
+
+    async def pause_for_interaction(self) -> str:
+        """Finish streaming and return the mutable provider reply message ID."""
+
+        ...
+
+
 ActionHandler = Callable[[ChannelAction], Awaitable[ChannelActionResponse]]
+FormActionHandler = Callable[[ChannelFormAction], Awaitable[ChannelActionResponse]]
 
 
 class Channel(ABC):
@@ -375,6 +459,7 @@ class Channel(ABC):
     def __init__(self) -> None:
         self._handler: MessageHandler | None = None
         self._action_handler: ActionHandler | None = None
+        self._form_action_handler: FormActionHandler | None = None
 
     def set_message_handler(self, handler: MessageHandler) -> None:
         self._handler = handler
@@ -383,6 +468,11 @@ class Channel(ABC):
         """Register the application callback for provider card actions."""
 
         self._action_handler = handler
+
+    def set_form_action_handler(self, handler: FormActionHandler) -> None:
+        """Register the persistence-only callback for native form submits."""
+
+        self._form_action_handler = handler
 
     async def _dispatch(self, message: IncomingMessage) -> None:
         if self._handler is None:
@@ -411,6 +501,23 @@ class Channel(ABC):
             )
             return ChannelActionResponse(toast_type="error", content="操作失败，请稍后再试。")
 
+    async def _dispatch_form_action(
+        self,
+        action: ChannelFormAction,
+    ) -> ChannelActionResponse:
+        if self._form_action_handler is None:
+            return ChannelActionResponse(toast_type="warning", content="该表单当前不可用。")
+        try:
+            return await self._form_action_handler(action)
+        except Exception:  # callback boundary: persist/claim failures must still ACK safely
+            LOGGER.error(
+                "channel_event=form_action_dispatch_failed channel=%s account_id_hash=%s action_id_hash=%s result=failed error_code=FORM_ACTION_HANDLER_FAILURE",
+                self.channel_id,
+                _short_hash(self.account_id),
+                _short_hash(action.action_id),
+            )
+            return ChannelActionResponse(toast_type="error", content="提交失败，请稍后再试。")
+
     async def begin_reply(
         self,
         source: IncomingMessage,
@@ -437,3 +544,46 @@ class Channel(ABC):
 
     @abstractmethod
     async def send(self, message: OutgoingMessage) -> None: ...
+
+
+def _is_bounded_form_action_text(value: object) -> bool:
+    return type(value) is str and 0 < len(value) <= _FORM_ACTION_TEXT_MAX_CHARS and value == value.strip() and all(ord(character) >= 0x20 for character in value)
+
+
+def _normalize_channel_form_value(
+    form_value: object,
+) -> Mapping[str, ChannelFormFieldValue]:
+    if type(form_value) is not dict or len(form_value) > _FORM_VALUE_MAX_FIELDS:
+        raise ValueError("channel form value is invalid")
+
+    frozen: dict[str, ChannelFormFieldValue] = {}
+    serializable: dict[str, str | bool | list[str]] = {}
+    for key, value in form_value.items():
+        if type(key) is not str or not 0 < len(key) <= _FORM_VALUE_KEY_MAX_CHARS or key != key.strip() or any(ord(character) < 0x20 for character in key):
+            raise ValueError("channel form value field name is invalid")
+        if type(value) is str:
+            if len(value) > _FORM_VALUE_TEXT_MAX_CHARS:
+                raise ValueError("channel form value text is too large")
+            frozen[key] = value
+            serializable[key] = value
+        elif type(value) is bool:
+            frozen[key] = value
+            serializable[key] = value
+        elif type(value) is list:
+            if len(value) > _FORM_VALUE_LIST_MAX_ITEMS or any(type(item) is not str or len(item) > _FORM_VALUE_TEXT_MAX_CHARS for item in value):
+                raise ValueError("channel form value selection is invalid")
+            frozen[key] = tuple(value)
+            serializable[key] = list(value)
+        else:
+            raise ValueError("channel form value field type is invalid")
+
+    payload = json.dumps(
+        serializable,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    if len(payload) > _FORM_VALUE_MAX_BYTES:
+        raise ValueError("channel form value is too large")
+    return MappingProxyType(frozen)

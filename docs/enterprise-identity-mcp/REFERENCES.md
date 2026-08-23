@@ -57,6 +57,28 @@
 - SDK 的 `InboundMessage` 不是可信身份；
 - 不把 SDK 对象穿透到 Agent/Identity domain。
 
+### EIM-U15 / CHN-X15 本轮采用结论（2026-08-23）
+
+官方快照重新核验为 main `731d459cca55ac76e85911bba2b1666508145e03`，`v1.2.0` tag
+`9186f7bbed9f50ebcc45bb1c3180dfccd7b05aae`，PyPI stable 为 1.2.0。官方
+[迁移手册](https://github.com/larksuite/channel-sdk-python/blob/main/docs/migration-from-lark-oapi.md)
+明确 standalone Channel 包可与 `lark-oapi` 并存、完整 OpenAPI 仍保留后者；
+[安全手册](https://github.com/larksuite/channel-sdk-python/blob/main/docs/security.md) 明确
+`compat -> audit -> strict` 是迁移流程，webhook signature 属于 webhook transport；
+[CardKit streaming](https://github.com/larksuite/channel-sdk-python/blob/main/docs/cardkit-streaming.md)
+固定了 create/sequence/update/final finish 的生命周期。这些结论回答了“是否有帮助”：**有，主要
+帮助校准 Provider lifecycle、安全 rollout 和测试；不直接替代 U15 durable Host。**
+
+| 分类 | 本轮结论 |
+|---|---|
+| adopted | form callback 继续停留在 Feishu Provider 边界；先结束 streaming 再整卡进入 form/terminal；同步 callback 只做有界规范化和快速应答；保持 public lifecycle、严格 sequence、失败安全摘要与单写者/有界队列测试思路 |
+| project-owned | PostgreSQL presentation/outbox 与 encrypted callback receipt、generation-scoped claim/ACK、one-time nonce、Principal 重验、U14 revision/lease/tool gate、Redis execution claim 和租户/binding ownership；这些都不能交给 SDK memory policy/dedup |
+| rejected for U15 | 不新增或升级依赖，不把现有 direct `lark-oapi` WS/CardKit OpenAPI 改成 `lark-channel-sdk`，不改 RAGFlow 主循环或 `of_mcp`；不把官方 webhook strict signature 写成当前 app-bound WS 已验证事实 |
+| deferred | EIM-C5/CHN-P14 再做 import/transport、`compat -> audit -> strict`、SDK dedup 与 Redis 分工的独立 PoC；H5/URL、复杂/credential form 和 U7 敏感确认另立任务 |
+
+本轮没有复制 SDK 代码；只按本仓接口重写并以当前 MultiRAG contract 测试固定行为。因此无需新增
+第三方 notice，也没有把 C5 的依赖/回滚风险混入 X15。
+
 ---
 
 ## 3. 飞书完整 OpenAPI SDK
@@ -477,7 +499,8 @@ MultiRAG “流式展示不等于已提交历史、终态才发布”的选择�
 ### 飞书官方边界
 
 飞书仍只负责 Provider 交互：CardKit 单卡流式更新、关闭 streaming 后再进入终态交互、回调快速
-确认和耗时逻辑异步执行。它不拥有 MultiRAG Dialog/Canvas 历史事务。
+确认和耗时逻辑异步执行。MultiRAG 在快速确认前另加“短事务 durable receipt 已提交”这道项目级
+门槛；飞书不拥有 InteractionSession、Principal、工具恢复或 Dialog/Canvas 历史事务。
 
 - [流式更新卡片](https://open.feishu.cn/document/cardkit-v1/streaming-updates-openapi-overview)
 - [接收并处理回调](https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks)

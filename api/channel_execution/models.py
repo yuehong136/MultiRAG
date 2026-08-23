@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -15,6 +16,7 @@ ExecutionEventType = Literal[
     "message_delta",
     "message_completed",
     "execution_failed",
+    "interaction_required",
 ]
 
 
@@ -120,6 +122,14 @@ class ChannelExecutionCommand(BaseModel):
     operation: ExecutionOperation = "message"
     message: ChannelMessage
     actor: ChannelActor
+    # Provider message/card locator only.  It is never treated as authority;
+    # the API binds it to the trusted binding, Principal and interaction row.
+    presentation_ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,3 +179,23 @@ class ExecutionEvent(BaseModel):
     content: str | None = None
     session_id: str | None = None
     error_code: str | None = None
+    action_id: str | None = Field(default=None, min_length=1, max_length=32, repr=False)
+    revision: int | None = Field(default=None, gt=0)
+    expires_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_interaction_shape(self) -> ExecutionEvent:
+        interaction_values = (self.action_id, self.revision, self.expires_at)
+        if self.event == "interaction_required":
+            if (
+                self.action_id is None
+                or self.revision is None
+                or self.content is not None
+                or self.session_id is not None
+                or self.error_code is not None
+                or (self.expires_at is not None and (self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None))
+            ):
+                raise ValueError("interaction_required event is invalid")
+        elif any(value is not None for value in interaction_values):
+            raise ValueError("interaction fields require interaction_required")
+        return self
