@@ -773,6 +773,11 @@ wall clock；owner+attempt+expiry、account revision/scope marker、identity rev
 `min(DB lease 剩余时间, 配置 lease 时长) - safety margin`。当前默认 `60s - 5s = 55s`；timeout 只能
 生成 `UNAVAILABLE` 并进入持久退避，caller cancellation 继续传播。
 
+进程内低优先级 limiter 不是跨副本 correctness 边界。claim 必须在全部阻塞锁之后以 PostgreSQL clock
+写入 `next_run_at=max(existing, now+probe_interval)`，再离开事务调用 Provider；默认 interval 为 1s，
+配置范围 0.1～60s。apply 通过 lease/fence 后再次以 DB clock 延长 reservation；退避、`NOT_FOUND`
+确认、cycle completion 与 expired-lease reclaim 都只能对 `next_run_at` 作 monotonic max，不能回拨。
+
 状态语义固定为：
 
 | Provider observation | 持久化行为 |
@@ -785,8 +790,11 @@ wall clock；owner+attempt+expiry、account revision/scope marker、identity rev
 | `INVALID/CONFLICT` | fail closed；按阈值降级 health，绝不把畸形 Provider DTO 当 negative proof |
 
 每周期收紧数量超过上限即开 circuit、停止本周期并把 account 降级；只有实际处理过 target、error=0、
-consecutive failures=0 的完整 cycle 才可恢复 healthy。共享 provider runtime 保证 Channel 与 I8 不建立
-两套 token/cache island；I8 probe 必须 `from_cache=false`，走独立 per-account 1 call/s limiter。
+consecutive failures=0 的完整 cycle 才可恢复 healthy。前台 credential resolver 保持 exact HEALTHY；
+server-selected reconciliation 专用 resolver 只允许 HEALTHY/DEGRADED，不能通过 caller flag 放宽，
+从而保留暂态失败后的收敛路径而不扩大前台授权。共享 provider runtime 保证 Channel 与 I8 不建立两套
+token/cache island；I8 probe 必须 `from_cache=false`，同时受进程内低优先级 limiter 与上述 DB durable
+per-account reservation 约束。
 
 repository 的 `admin_snapshots(tenant_id)` 返回 provider、health、cycle/lease bool、时间、计数、safe
 error code 与 repr-hidden stable opaque `account_ref`。`account_ref` 是 domain-separated SHA-256 对
@@ -1948,7 +1956,7 @@ reason、调用者身份、项目人员/项目经理、CC、remark、附件、�
 
 | 结果 | 状态与 OA 行为 |
 |---|---|
-| 首次调用 / 下一轮输入 | `input_required`，持久化 `awaiting_input`；OA 零调用 |
+| 首次调用 / modern correction 下一轮 | `input_required`，持久化 `awaiting_input`；首次无效从 initial id/state 切换到独立 correction id/state，连续无效可重复该 correction form；每个 Host revision 使用 fresh one-time response nonce；OA 零调用 |
 | verified operator 接受且字段有效 | 当前 revision 只消费一次，恢复前重验 Principal/scope/policy；只调用当前 `leave_applicant` 的 OA preview |
 | decline / cancel | Host 持久化对应终态且不恢复工具；direct/legacy helper 若收到该 outcome 则返回 `LEAVE_FORM_NOT_ACCEPTED`；OA 零调用 |
 | expiry / identity TTL / operator、tenant、resource、tool 或 revision 不匹配 | Host fail closed 为对应终态或安全失败；OA 零调用 |
@@ -1957,9 +1965,13 @@ reason、调用者身份、项目人员/项目经理、CC、remark、附件、�
 accepted 路径固定 `person_type=non_project`，使用服务端固定的低敏 reason 调用既有 preview；对 Ecology
 只允许预览读取，`doCreateRequest` 调用数必须为 0。它不创建草稿、请假单或审批，不调用 submit；
 `create_leave_draft` / `submit_leave` 继续无条件 `LEAVE_WRITE_DISABLED`。表单本身、点击 accept 或
-`input_required` 都不是身份、授权或副作用确认事实。当前 `end > start` 是资源端 Pydantic
-cross-field validator：无效窗口会在恢复调用中形成 terminal failure，而不是 U15 Host 可识别的
-`RESPONSE_INVALID` fresh-nonce 重投；这是当前 UX 限制，不能宣称已自动重开表单。
+`input_required` 都不是身份、授权或副作用确认事实。`end > start` 仍由资源端最终 Pydantic model
+验证：modern `2026-07-28` 首次收到 `end<=start` 时返回 correction `InputRequiredResult`，从 initial
+id/state 切换到独立 correction id/state，并使用同一 7 字段 schema 与明确“重新填写全部字段”消息；
+重复无效可继续返回同一 correction form。Host 每轮持久化新 revision/presentation 并签发 fresh one-time
+response nonce，且每一轮 OA/create/submit 零调用。只有最终合法窗口才进入一次 preview。legacy
+协议无法表达这条 modern 多轮恢复，继续以 `interaction response is invalid` terminal error 结束，
+同样 OA 零调用；不得伪装 legacy 已获得 fresh-nonce Host 重投。
 
 成功结果只允许下列终态 envelope；MultiRAG 接受它作为直接结果，或接受**仅有** `result` 一个键的
 FastMCP wrapper。两层之外的任意额外键都拒绝：
@@ -1985,9 +1997,10 @@ wrapper 都不得进入卡片，统一显示固定 generic `处理已完成。`�
 requestState 先到期。缺 key、格式错误或轮换时过早移除旧 key 都要启动/恢复 fail closed；退役 key
 至少保留覆盖最大 TTL。`local` 仍不产生可信 Principal；仓库也没有真实 OA/HR authority、production
 replay/audit backend 或 remote-release。故 L2 代码/契约状态为 `✅`，默认业务能力关闭、未 rollout；
-of_mcp focused **114 passed**、完整 verify **580 passed / 2 skipped**、contract diff
+初始 L2 证据为 of_mcp focused **114 passed**、完整 verify **580 passed / 2 skipped**、contract diff
 **breaking 0 / behavioral 0 / additive 1**；MultiRAG focused **89 passed**、完整 verify
-**2762 passed**。这些门禁不能从代码存在推导为群聊、敏感写或生产可用。
+**2762 passed**。modern correction 由 of_mcp `f9bda8d` 补齐，完整 verify **584 passed / 2 skipped**、
+security review **0 findings**。这些门禁不能从代码存在推导为群聊、敏感写或生产可用。
 
 ### 8.3 EIM-M1/M2 medic Principal 与业务授权（目标，尚未实现）
 

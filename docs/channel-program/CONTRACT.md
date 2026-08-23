@@ -240,8 +240,10 @@ accept callback 仍先 durable receipt + 快速 ACK，随后后台重新验证 o
 lineage、Principal、identity TTL、tool gate 与当前 revision。通过后只允许 of_mcp 的
 `leave:read`、prepare/reusable、`leave_applicant` 工具对当前主体执行 OA preview，固定
 `doCreateRequest` 调用数为 0；不得创建草稿、请假单或审批。decline/cancel/expiry、换人、过期 identity、lease
-或 gate 失败都必须 OA 零调用。当前跨字段 `end > start` 在资源端恢复时验证：无效窗口会进入
-terminal failed，不是 Host 可识别并 fresh-nonce 重投的字段错误；这是当前限制。
+或 gate 失败都必须 OA 零调用。当前跨字段 `end > start` 在资源端恢复时验证：modern MCP
+`2026-07-28` 的首次无效响应从 initial request id/state 切换到独立 correction id/state；连续无效可继续
+返回同一 correction form。Host 每次持久化新的 interaction revision/presentation，并下发 fresh one-time
+response nonce；legacy revision 继续 terminal failed。两条路径都必须 OA 零调用。
 
 completed result 只有两种合法外形：直接 envelope，或 top-level **仅含** `result` 的 FastMCP wrapper：
 
@@ -265,8 +267,9 @@ active-first requestState key ring，TTL 900 秒严格大于 MultiRAG Interactio
 旧 key 提前退役或恢复过期都 fail closed。仓库未配置真实 OA/HR authority、production A6 backend、
 remote-release 或 rollout；不得宣称群聊、敏感写、H5/URL 或生产可用。当前代码/契约状态为 `✅`：
 MR focused **89 passed** / verify **2762 passed** / 强制 integration **182 passed** / MCP compatibility
-**22/22**；of_mcp focused **114 passed** / verify **580 passed / 2 skipped** / contract diff
-**breaking 0 / behavioral 0 / additive 1**；安全 diff scan **0 findings**。
+**22/22**。初始 of_mcp focused **114 passed** / verify **580 passed / 2 skipped** / contract diff
+**breaking 0 / behavioral 0 / additive 1**；modern correction 由 of_mcp `f9bda8d` 完成，完整 verify
+**584 passed / 2 skipped**、security scan **0 findings**。
 
 ### 1.5 私有 Contact directory event（EIM-I7 / CHN-X21）
 
@@ -581,6 +584,8 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 
 | 日期 | 版本 | 变更 | 提交 |
 |---|---|---|---|
+| 2026-08-24 | v1（仅进程内 composition，不 bump） | 完成 EIM-I8 / CHN-X22 default-disabled durable reconciliation slice，并以 `4a266c46` 收口恢复与节流：本地 linked/active/近期活跃候选、durable account checkpoint/target、锁后 DB clock、事务外 uncached probe；前台 credential 仍只接受 HEALTHY，reconciliation 专用 seam 仅允许 HEALTHY/DEGRADED；claim 在 provider I/O 前写入 DB-clock per-account probe reservation（默认 1s），跨副本不会只依赖进程内 limiter。二次 `NOT_FOUND`、退避、health/circuit 均只单调推进。admin snapshot 的 repr-hidden stable opaque `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority，且不返回 raw checkpoint/account ID、provider tenant/natural key/employee ID。无 Channel public/private wire 或 capability 变化，无 public admin route/rollout；CHN-X22 本地代码 `✅`，EIM-I8 因 fast path/admin/rollout deferred 仍 `🔵`。洁净树 `make verify` **2817 passed**；现有服务 integration **226 passed / 1 个既有 MinIO `SignatureDoesNotMatch`**，隔离匹配凭据 MinIO 全量 **227 passed**；MCP compatibility **22/22**；I8 初始安全 diff scan 覆盖 **15/15** production/migration surfaces、**0 findings**，恢复节流 follow-up 独立终审无 P0/P1；`uv lock --check`、diff-check 全绿 | MultiRAG `d02261a6` + `4a266c46`（未部署） |
+| 2026-08-24 | v1（private interaction 行为兼容，不 bump） | EIM-L2 / CHN-X20 modern correction：MCP `2026-07-28` 的首次 `end<=start` 从 initial request id/state 切换到独立 correction id/state；连续无效可重复返回该 correction form，Host 每个持久化 revision 使用 fresh one-time response nonce；legacy 仍 terminal failed。未改变 callback/ACK/delivery wire、七字段/p2p/preview-only 边界，invalid 路径 OA 零调用。of_mcp `f9bda8d` verify **584 passed / 2 skipped**、security scan **0 findings** | of_mcp `f9bda8d`（未部署） |
 | 2026-08-05 | v1 | 建立。从 `channel.test.ts` 的 11 条断言反推出现状契约；标出 3 处编码了错误行为的断言（§6）与 5 处契约空白（§7）；运行时错误码表由实测 grep 枚举（12 个），命令写在 §4.2 供重跑 | cdc09928 |
 | 2026-08-05 | v1（加法，不 bump） | 失败信封的 `data` 由 `False` 改为 `{"error_code": "..."}`（CHN-U1）；新增 `CHANNEL_TARGET_NOT_ACCESSIBLE`（CHN-S5）与兜底码 `CHANNEL_OPERATION_FAILED`。**向后兼容**：老前端只在成功路径读 `data`，失败路径读的是 `retcode`/`retmsg`，两者未变。按本文件头部的语义化规则，加法只记日志不 bump——这条规则本身是这次实测出来的，原先写的「契约变更就 bump」会让版本断言天天误报 | 86e76adc |
 | 2026-08-05 | v1（消费侧，线格未变） | 前端接上了 §4.1 的错误码与 §3 的状态词表（CHN-U2/U3）。契约本身没变，只是两侧终于一致：§3 与 §4.1 里那批「前端还没消费 / 前端自建 12 条词表」的 ⚠️ 已按本文件规则清理，§4.2 的运行时错误码**仍未**做映射，与 §4.1 区分开并归入 CHN-O | web a2c98c0 |

@@ -505,11 +505,14 @@ L2 是 L1 + U15 的窄组合，不是 leave 写入阶段。当前代码锚点为
 5. `secure` profile 显式 `interactions_enabled=true`，缺稳定 `OFMCP_REQUEST_STATE_KEY` 必须 fail-fast；
    key ring active-first，requestState TTL 900 秒严格大于 MR 600 秒，旧 key 至少保留覆盖最大 TTL。
    这只完成 state 安全接线；真实 OA authority、A6 production backend、remote-release 与 rollout 仍未配置；
-6. 当前 `end > start` 在资源端 cross-field validator 中执行。无效窗口恢复后会 terminal failed，而不是
-   Host 的 fresh-nonce form 重投；测试与文档必须诚实固定这个限制，后续改善要另立任务；
-7. 两仓最终门禁已经回填：of_mcp focused **114 passed**、verify **580 passed / 2 skipped**、contract
-   diff **breaking 0 / behavioral 0 / additive 1**；MultiRAG focused **89 passed**、`make verify`
-   **2762 passed**、强制 integration **182 passed**、MCP compatibility **22/22**。这足以标代码/契约
+6. 当前 `end > start` 在资源端 cross-field validator 中执行。modern MCP `2026-07-28` 的首次无效响应
+   从 initial request id/state 切换到独立 correction id/state；连续无效可重复返回同一 correction form。
+   Host 每次持久化新的 interaction revision/presentation，并下发 fresh one-time response nonce；legacy
+   revision 继续 terminal failed。两条路径都必须保持 OA 零调用；
+7. 初始落地证据为 of_mcp focused **114 passed**、verify **580 passed / 2 skipped**、contract diff
+   **breaking 0 / behavioral 0 / additive 1**；modern correction 在 of_mcp `f9bda8d` 完成，完整
+   verify **584 passed / 2 skipped**、security scan **0 findings**。MultiRAG focused **89 passed**、
+   `make verify` **2762 passed**、强制 integration **182 passed**、MCP compatibility **22/22**。这足以标代码/契约
    `✅`，但真实 authority、部署与生产 rollout 仍须另行批准。
 
 #### EIM-I8 / CHN-X22 durable reconciliation slice 交接（CHN 本地代码 `✅`；EIM `🔵`）
@@ -523,15 +526,19 @@ identity provider runtime。接手者必须保留：
 2. 每 account 持久化 checkpoint/target；同 account checkpoint 与 target 全部加锁后才读取 DB clock，
    以 keyset/target 推进替代进程内游标；`NOT_FOUND` 首次/末次/确认窗口也只能用锁后数据库时钟；
    provider I/O 必须在数据库事务外；
-3. reconciliation 使用共享 provider registry，但目录读取是独立 uncached 路径并受每 account **1/s**
-   限速；credential/KMS/token/tenant/limiter/Contact 全链预算不超过
+3. reconciliation 使用共享 provider registry，但目录读取是独立 uncached 路径；进程内低优先级 limiter
+   之外，claim 在全部锁后用 PostgreSQL clock 持久预留 per-account 下次 probe，默认间隔 **1s**、配置
+   范围 **0.1～60s**，跨 API 副本在 reservation 到期前也不能再次调用 Provider。credential/KMS/token/
+   tenant/limiter/Contact 全链预算不超过
    `min(lease remaining, configured lease)-safety margin`（默认 `60-5=55s`），timeout 只作
    `UNAVAILABLE` 退避；不得复用交互请求的 TTL cache，也不得制造第二套 provider cache；
 4. `NOT_FOUND` 需要跨确认窗口连续两次才收紧 canonical；`NOT_IN_SCOPE` 不计入 canonical 收紧；
    pending 到期必须重验 active window，过期则 Provider 零调用；`UNAVAILABLE` 只退避，不得把暂态
    失败写成身份撤销；
-5. 只有 clean full-cycle 才能把 account health 恢复 healthy；连续收紧达到阈值会打开 circuit breaker，
-   防止目录异常造成批量破坏；
+5. 前台 credential resolver 继续只接受 HEALTHY；server-selected reconciliation 专用 seam 只允许
+   HEALTHY/DEGRADED，不能由 caller flag 放宽。只有实际处理过 target、无错误的 clean full-cycle 才能把
+   account health 从 degraded 恢复 healthy；连续收紧达到阈值会打开 circuit breaker，防止目录异常造成
+   批量破坏；
 6. 当前只有 repository/admin snapshot，**没有 public admin route**；snapshot 的 repr-hidden stable
    opaque `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取
    128-bit 截断的诊断引用，不是 authority，并且不返回 raw checkpoint/account ID、provider
@@ -541,8 +548,10 @@ identity provider runtime。接手者必须保留：
    canonical identity 与 account health 不扩权，不能让 in-flight Provider observation 落库；
 8. CHN-X22 可按本地 Channel composition/生命周期切片标 `✅`；EIM-I8 必须继续 `🔵`，因为风险感知
    local fast path、公开管理员面与 rollout 仍 deferred；
-9. 本轮完整 MultiRAG 最终门禁数字由根任务完成后回填；在此之前只能写“待回填”，不得从 focused
-   测试或历史 `make verify` 数字推算。
+9. 最终证据：洁净树 `make verify` **2817 passed**；现有服务 integration **226 passed / 1 个既有
+   MinIO 凭据错误**，隔离匹配凭据 MinIO 全量 **227 passed**；MCP compatibility **22/22**；I8 初始
+   安全 diff scan 覆盖 **15/15** production/migration surfaces、**0 findings**，恢复节流 follow-up
+   独立终审无 P0/P1；`uv lock --check`、diff-check 全绿。
 
 #### EIM-I6 完成边界与 C1/C2/C3 接线交接
 

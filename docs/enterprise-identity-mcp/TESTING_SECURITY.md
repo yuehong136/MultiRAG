@@ -103,7 +103,8 @@
   并以 compare-and-set 只消费一次；
 - L2 请假表单只能在 p2p 收集批准的 7 个低敏字段；不得收集 reason/身份/PM/CC/remark，群聊、H5/URL
   与敏感写保持关闭。接受前、取消/拒绝/过期/换人/身份过期或 gate 失败时 OA 必须零调用；接受后也只
-  允许当前主体 preview，且 `doCreateRequest` 调用数必须为 0；
+  允许当前主体 preview，且 `doCreateRequest` 调用数必须为 0。modern `2026-07-28` 的无效时间窗
+  correction 可多轮重开但每轮 OA 零调用；legacy 仍 terminal，不能伪造 modern 恢复语义；
 - completed terminal 只允许严格 `com.ofmcp/interaction-terminal` v1 envelope（direct 或仅含 `result`
   的 FastMCP wrapper）；message 必须单行、trimmed、printable、至多 240 字符，其他结果统一 generic，
   不能让 tool result 直接进入飞书卡片；
@@ -128,7 +129,7 @@
 | I5 enterprise subject | server-owned authority、五态、Feishu employee_no exact mapping、default-disabled composition、persisted readback、negative/fatal 分层、repr/error 脱敏 | resolver/service/Channel pure async unit + repository 真 PostgreSQL；不以 OA/workcode、I7/I8 freshness 或 rollout 代替 |
 | I6 Identity write flow | 权威 policy/revision/TTL，JIT/link/preprovisioned 的 User/UserTenant/identity/alias/code/event 原子事务，post-lock freshness | ✅ framework-neutral async service + 真 PostgreSQL；完整门禁全绿 |
 | I7 / CHN-X21 directory event | 四事件 bounded normalize、managed-only subscription、generation/private body fence、ordered authority locks、atomic receipt、stale/future、terminal poison ACK、revision/cache generation、NO_LINK | DTO/route/worker/provider unit + 真 PostgreSQL并发/rollback/CAS；必须覆盖两进程等价 cache、late old-key refill 与 NOT_FOUND negative cache，不以后台订阅或 live 代替 |
-| I8 / CHN-X22 reconciliation | default-disabled 零 side effect、只扫本地 alias-linked active identity/User/UserTenant/近期活跃、checkpoint keyset + target proof、锁后 DB clock lease/fence/NOT_FOUND 确认、Provider I/O 事务外、全链 probe `<= min(lease remaining, 60s)-5s`、uncached 独立 1/s、NOT_FOUND 二次确认、NOT_IN_SCOPE 零 canonical 收紧、UNAVAILABLE 退避、clean-cycle health recovery、tighten circuit breaker、repr/log/admin snapshot 脱敏；`account_ref` 必须是 domain-separated SHA-256(tenant ID + 随机 provider account ID) 截断 128-bit 的 stable opaque 诊断引用、repr-hidden 且非 authority | service/runtime/API/provider unit + 真 PostgreSQL migration/多 worker lease/fence/retry/cycle；必须断言不调用 Provider list/page、不刷新 `last_seen_at`、pending 到期重验 active window、租户禁用后 claim/apply 零 canonical mutation、timeout 只退避、disabled 不构造 DB/secret/provider、无 public route；snapshot 不回显 raw checkpoint/account ID、provider tenant/natural key/employee ID，风险感知 fast path/rollout 不得作为本 slice 的既成事实 |
+| I8 / CHN-X22 reconciliation | default-disabled 零 side effect、只扫本地 alias-linked active identity/User/UserTenant/近期活跃、checkpoint keyset + target proof、锁后 DB clock lease/fence/NOT_FOUND 确认、Provider I/O 事务外、全链 probe `<= min(lease remaining, 60s)-5s`、foreground exact HEALTHY 与 recovery-only HEALTHY/DEGRADED seam、uncached probe + DB-clock per-account reservation（默认 1s）、NOT_FOUND 二次确认、NOT_IN_SCOPE 零 canonical 收紧、UNAVAILABLE 退避、clean-cycle health recovery、tighten circuit breaker、repr/log/admin snapshot 脱敏；`account_ref` 必须是 domain-separated SHA-256(tenant ID + 随机 provider account ID) 截断 128-bit 的 stable opaque 诊断引用、repr-hidden 且非 authority | service/runtime/API/provider unit + 真 PostgreSQL migration/多 worker lease/fence/retry/cycle；必须断言不调用 Provider list/page、不刷新 `last_seen_at`、pending 到期重验 active window、租户禁用后 claim/apply 零 canonical mutation、timeout 只退避、跨副本 reservation 到期前零第二次 probe、degraded 只有 clean full-cycle 才恢复、旧 revision foreground 仍拒绝、disabled 不构造 DB/secret/provider、无 public route；snapshot 不回显 raw checkpoint/account ID、provider tenant/natural key/employee ID，风险感知 fast path/rollout 不得作为本 slice 的既成事实 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
 | P2 / CHN-X18 execution context | C3 Principal 显式贯穿 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context；LINKED 零匿名；NO_LINK legacy；tenant+platform-user Memory/session 隔离；并发与 repr/wire 脱敏 | target/driver/Graph/component/MCP 纯 unit + target/history 真 PostgreSQL integration + Memory component/service user filter 与 tenant ownership 测试；若声明真实 Memory 存储隔离，必须补与当前 `msgStoreConn` backend 匹配的 integration，不能用 PostgreSQL 替代；不测试 token/bearer |
@@ -136,7 +137,7 @@
 | MCP client | resource/audience、失败映射、无静态用户 header | mock transport/官方 SDK 测试 |
 | MCP resource server | modern/legacy 协议、独立 audience、scope、无 bearer 透传 | ASGI/官方 Client 契约测试 |
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
-| EIM-L2 / CHN-X20 leave form | 空外层参数、7 字段 flat/ref-free schema、p2p-only、operator/identity TTL、OA 零写/预览、strict terminal/generic fallback、stable key 与 900s > 600s TTL | 两仓 schema/policy/unit + modern/legacy FastMCP + U14/U15 presentation/restart 契约；of_mcp focused 114 / verify 580+2 skip，MR focused 89 / verify 2762，安全 diff scan 0 findings |
+| EIM-L2 / CHN-X20 leave form | 空外层参数、7 字段 flat/ref-free schema、p2p-only、operator/identity TTL、OA 零写/预览、modern correction 多轮、legacy terminal、strict terminal/generic fallback、stable key 与 900s > 600s TTL | 两仓 schema/policy/unit + modern/legacy FastMCP + U14/U15 presentation/restart 契约；初始 of_mcp focused 114 / verify 580+2 skip，modern correction `f9bda8d` verify 584+2 skip；MR focused 89 / verify 2762；安全复核 0 findings |
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
 截至 2026-08-24，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
@@ -161,7 +162,9 @@ EIM-A1 已固定 token/JWKS test vectors；A7 的前置虽已满足，独立 aud
 Resource Server 仍未实现。EIM-U14 已在 P3/A4/C3 之后补齐加密 InteractionSession、revision/CAS、
 DB-time lease、重启恢复、恢复前重授权和 structured result schema 校验；U15 已完成默认关闭的飞书
 native renderer/callback 和一次单机临时 live。EIM-L2/CHN-X20 已在其上接 p2p-only 的低敏请假 OA
-preview 与严格 terminal 投影，并在双仓最终门禁全绿后标为 `✅`。不能因 P1、modern/legacy 协议测试
+preview 与严格 terminal 投影；of_mcp `f9bda8d` 又让 modern 无效时间窗切换到独立 correction
+id/state 并可多轮重开，Host 每个持久化 revision 使用 fresh one-time response nonce；legacy 保持 terminal，
+所有无效轮 OA 零调用。不能因 P1、modern/legacy 协议测试
 或单机 live 通过就把 A7、L2 生产 authority/rollout、群聊、H5/URL 或敏感写标为已满足。
 
 下面的 C1/C2 描述是 **C3 之前的历史兼容快照**，不得用于解释当前 resolver。EIM-C1 / CHN-X5
@@ -510,8 +513,10 @@ gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 mak
   preview 且 `doCreateRequest` 调用数为 0，cancel/decline/expiry/身份不符/重启 lease 失败全部 OA 零调用，写工具仍拒绝；
 - **L2 terminal/privacy**：direct 与仅含 `result` wrapper 的合法四键 envelope 投影 message；额外键、
   错 kind/version/bool、raw/nested、换行/tab、首尾空白、空串和 241 字符全部走固定 generic。OA raw、
-  subject、requestState 和底层异常不得出现在卡片/日志；cross-field `end<=start` 当前断言 terminal failed，
-  不误写成 Host fresh-nonce 重开；
+  subject、requestState 和底层异常不得出现在卡片/日志；cross-field `end<=start` 在 modern
+  `2026-07-28` 首次无效必须从 initial id/state 切换到独立 correction id/state，连续无效可重复该
+  correction form；Host 每个持久化 revision 使用 fresh one-time response nonce。legacy 仍 terminal，
+  两条路径都断言 OA 零调用；
 - **L2 profile gate**：secure profile interaction 显式启用，但稳定 key env 缺失必须启动失败；900 秒
   requestState TTL 大于 MR 600 秒，旧 key 轮换窗口、restart 恢复与 local 无可信 Principal 都有负向。
   这些测试不证明真实 OA authority、production A6 backend、remote-release 或 rollout；
@@ -640,7 +645,7 @@ remote-release 演练。
 | E2E-19 | H5 URL mode | URL 只含短期一次性 nonce；免登同人校验；`requestState`/token 不出现在 URL、卡片或日志 |
 | E2E-20 | MultiRAG 双 MCP 角色 audience 混用 | 发给 of_mcp 的 token 不能调用 MultiRAG MCP Server，反向同样拒绝 |
 | E2E-21 | Host 或 Resource Server 版本回滚 | 现代/legacy 兼容矩阵内可回滚，不要求两个 MCP 方向同时升级或同时回滚 |
-| E2E-22 | L2 p2p 低敏请假试算 | 私聊展示 7 字段原生表单；同一 verified operator 提交后只产生当前主体 OA preview，`doCreateRequest` 调用数为 0、零草稿/审批；安全 terminal 更新原卡。群聊、换人、过期、取消和非法字段拒绝且 OA 零调用；当前 `end<=start` 明确终态失败，不伪装已重开 |
+| E2E-22 | L2 p2p 低敏请假试算 | 私聊展示 7 字段原生表单；同一 verified operator 提交后只产生当前主体 OA preview，`doCreateRequest` 调用数为 0、零草稿/审批；安全 terminal 更新原卡。群聊、换人、过期、取消和非法字段拒绝且 OA 零调用；modern `end<=start` 首次切换独立 correction id/state，连续无效可重复该 form，每个 Host revision 使用 fresh one-time response nonce；legacy 明确终态失败 |
 
 ### 3.5 MCP Foundation 当前兼容基线
 
@@ -1050,11 +1055,11 @@ uv run --locked ofmcp contract diff
 uv run --locked ofmcp verify
 ```
 
-最终证据为：MultiRAG focused **89 passed**、完整 `make verify` **2762 passed**、强制 integration
+初始 L2 证据为：MultiRAG focused **89 passed**、完整 `make verify` **2762 passed**、强制 integration
 **182 passed**、MCP compatibility **22/22**；of_mcp focused **114 passed**、完整
-**580 passed / 2 skipped**、contract diff **breaking 0 / behavioral 0 / additive 1**。安全 diff scan
-覆盖 10/10 production/contract surfaces，**0 findings**。单机 live 或旧进程 health 仍不能代替这些证据，
-真实 authority 与 rollout 也未因此完成。
+**580 passed / 2 skipped**、contract diff **breaking 0 / behavioral 0 / additive 1**。modern correction
+提交 `f9bda8d` 的完整 of_mcp verify 为 **584 passed / 2 skipped**，security review **0 findings**。
+单机 live 或旧进程 health 仍不能代替这些证据，真实 authority 与 rollout 也未因此完成。
 
 EIM-A4 的最终证据至少要记录以下命令，不得只运行一个 happy-path HTTP 测试：
 
