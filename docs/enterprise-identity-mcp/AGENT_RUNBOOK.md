@@ -437,6 +437,42 @@ I5 的代码锚点为 `api/identity/enterprise_subjects/{contracts,feishu_employ
    `REQUIRE_SERVICES=1 make integration`，并在 EIM 与 CHN 双账本回填精确数字；本节不预填本轮尚未
    完成的验证结果。
 
+#### EIM-L1 代码边界与最终门禁交接（`✅`，默认关闭）
+
+L1 仓库为 of_mcp，依赖 A5 + I5。代码、snapshot 与最终 verify 已完成。冷启动先读 of_mcp 根
+`AGENTS.md`、`README.md`，再读 `packages/ofmcp-core` 的 service/tool-policy binding、Gateway
+settings/assembly、`services/leave/service.toml`、identity、五个工具、operations 与 Ecology adapter；
+不得把 local test default、A4 通用 seam 或 I5 的 Feishu resolver 当成真实 OA authority。
+
+实施边界固定如下：
+
+1. composition root 使用唯一、server-owned 命名 binding `leave_applicant`。service 声明把
+   `subject_type=ecology_userid` 固定为不可变语义锚点；secure override 只能提供/替换权威
+   issuer/tenant，不能覆盖 type。把 type 改成 `employee_no`、binding 缺失/未知/空白、与 tool policy
+   漂移或 authority 不匹配时，在发布工具目录前 fail-fast。local default 只供 auth-disabled contract
+   tests，不产生 Principal 或可信证明；
+2. `get_leave_balance` 是 read/reusable，`preview_leave` 是 prepare/reusable，
+   `verify_leave_request` 是 read/reusable；三者都引用 exact `leave_applicant` 并使用独立
+   `current_verified_read_subject` dependency。`list_leave_types` 无主体数据，保持 read/reusable；
+3. 所有工具保留 optional `oa_user_id` 仅为 schema 兼容，但 local/secure、mount/proxy、direct test
+   等所有模式始终忽略它。三个读/预览工具只消费当前 request-scoped Principal；缺 subject 或
+   type/issuer/tenant 不符必须在 OA 调用前稳定拒绝；dependency 还要独立重验 service-owned
+   `ecology_userid`，即使 policy + Principal 同时漂移成 `employee_no` 也必须 OA 零调用；
+4. `verify_leave_request` 的同一个 OA 响应必须同时证明 owner 等于 verified subject、workflow id 和
+   form id 等于服务配置；任一缺失/不符都走同一安全错误，不泄露存在性。读结果还必须最小化：不回显
+   subject/raw/form/contact，兼容字段使用 `current`/`redacted`，vacation 仅有界 allowlist；
+5. read dependency 已与写工具的 compatibility seam 分离。`create_leave_draft`、`submit_leave` 现已
+   无条件稳定返回 `LEAVE_WRITE_DISABLED`；任何 Principal、scope 或参数都不能解除，测试必须证明
+   连 Ecology client 都不构造、OA 请求数为零；
+6. `employee_no@feishu_contact` 不等于 Ecology userid/workcode。若权威 OA 标识无法表达为
+   `ecology_userid`，另立 identity/schema/resolver 任务；L1 不 trim、改名、映射、覆盖 service type
+   或猜测；
+7. focused core + gateway + proxy + leave **146 passed、2 skipped**；contract diff 为
+   **breaking 0 / behavioral 7 / additive 0**（service + gateway）；已审查 snapshot 与当前生成结果
+   一致，`uv run --locked ofmcp verify` 六步全绿（test **556 passed、2 skipped**）；
+8. 真实 OA/HR resolver、leave 写入、Confirmation、业务幂等/unknown-outcome、L2、U7、I7/I8、
+   配置 Secret、重启、部署、远程发布和生产 rollout 均不属于 L1。M1 始终只管 medic。
+
 #### EIM-I6 完成边界与 C1/C2/C3 接线交接
 
 I6 的代码锚点为 `api/identity/provisioning_contracts.py`、`provisioning.py`、
@@ -646,8 +682,9 @@ EIM-F9 后续把 A5 的 era 分类扩成 SDK registry 驱动的完整门禁：�
 **499 passed、2 existing skipped**。FastMCP 4.0.0b3 升级仍须另立版本任务，不能借 F9 静默升级。
 
 A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I5/I6/P1/P2/C1/C2/C3/A2/P3/U14/U15 已完成。
-I7 仍是已解锁支线；M1 的 I5 代码前置已满足，但真实 OA/workcode authority 与 leave 业务任务必须另行
-登记，不能由 Feishu employee_no resolver 推断。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
+I7 仍是已解锁支线；L1 代码、契约与最终门禁已完成并标 `✅`，但仍默认关闭；真实
+`leave_applicant` authority 未配置，不能由 Feishu employee_no resolver 推断。M1 继续 medic-only；secure 在独立远程
+发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
 

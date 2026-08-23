@@ -1767,8 +1767,75 @@ A4 已提供 request-scoped `current_principal()`：外层把 A3 verified claims
 assurance；role/group/department、Provider 原始字段和上游 token 不属于其模型。service/domain 不 import
 FastMCP 或 auth provider 类型。
 
-当前 leave/medic 业务工具尚未消费 Principal；下面是 M1/M2 需要落地的工具适配层目标，而不是 A4 已完成
-的业务主体注入证明：
+leave 的三个读/预览工具已由 EIM-L1 消费 Principal；medic 工具仍未接线。A4 的通用
+context/policy seam 本身不是业务主体已接线的证明，medic 的高风险链仍由 EIM-M1/M2 独立负责，
+两者不能合并。
+
+### 8.1 EIM-L1 leave 只读身份 binding（`✅`，默认关闭）
+
+L1 冻结一个由 composition root 持有的命名 binding：`leave_applicant`。它不是用户可选的 resolver
+名称，而是 server-owned 配置与策略引用，至少同时冻结：
+
+```text
+binding name       = leave_applicant
+subject type       = ecology_userid (immutable service semantic anchor)
+issuer             = exact configured issuer
+tenant             = exact configured issuer tenant
+value semantics    = Ecology API 接受的 userid
+```
+
+service binding 声明拥有且固定 `subject_type=ecology_userid`；secure override 只能提供或替换权威
+issuer/tenant，不能覆盖 subject type。`secure` composition 在发布工具目录前必须解析且只解析到一个
+binding，并逐字核对三个工具的 `enterprise_subject` policy。任何把 type 改成 `employee_no` 的 override、
+binding 缺失/未知/空白、坐标不完整或与 policy 漂移，都是启动期 invariant failure；不得启动后把
+调用者的 `oa_user_id`、Channel 字段、prompt 或 CardKit 输入当作后备。
+`local` service default 只用于 auth-disabled contract/test assembly；它不产生 request Principal，不能
+授权一次真实读取，也不是 L1 完成或 rollout 证据。仓库没有生产 authority，因而该能力默认关闭。
+
+L1 的工具边界固定如下：
+
+| 工具 | L1 行为 |
+|---|---|
+| `list_leave_types` | 无用户主体数据，保持 `leave:read` + read/reusable，不要求 binding |
+| `get_leave_balance` | read/reusable；要求 `leave_applicant` exact type/issuer/tenant，只用 Principal subject 查询 |
+| `preview_leave` | prepare/reusable；要求同一 exact binding，只做预览所需 OA 读取，不创建草稿、单据或流程 |
+| `verify_leave_request` | read/reusable；要求同一 exact binding，并执行下述同响应 owner/workflow/form fence |
+| `create_leave_draft` / `submit_leave` | 不属于 L1；无条件稳定返回 `LEAVE_WRITE_DISABLED`，且在构造 Ecology client 或发出任何 OA 请求前结束 |
+
+三个身份相关读工具使用独立的 `identity.current_verified_read_subject()` dependency；写工具继续走
+隔离 seam，不能得到 Principal。对所有工具，`oa_user_id` 为 additive-first schema 兼容继续保留
+optional，但在 local/secure、mount/proxy 和 direct test 等所有模式始终 ignored，绝不再作为 fallback。
+三个读工具缺 Principal subject 或 type/issuer/tenant 任一不符，由 A4/依赖层在 OA 调用前稳定拒绝。
+dependency 必须把 `ecology_userid` 当作独立的 service invariant 重验，不能只相信 policy binding；即使
+policy 与 Principal 同时漂移并一致声称 `employee_no`，也必须在构造 Ecology client 或任何 OA 调用前
+拒绝。
+
+`verify_leave_request` 的 `request_id` 只是对象定位符，不是授权证据。调用必须以当前 verified subject
+限制查询；同一个 `loadForm` 响应必须同时证明 owner 等于该 subject、workflow id 等于配置值、form id
+等于配置值。任一 proof 缺失、歧义或不符均返回同一安全错误，不返回标题、流程节点或“是否存在”等
+可枚举信息，也不因调用方知道 request id 而放宽。
+
+所有 L1 输出执行最小投影：真实 enterprise subject 不回显，兼容身份字段固定为 `current`，敏感部门值
+固定为 `redacted`；vacation data 只保留有界标量 allowlist，preview 只返回字段计数而不返回 mainData，
+verify 的兼容 `fields` 为空。OA raw response、表单正文、联系方式和 provider 标识不得进入模型上下文、
+日志或审计。
+
+I5 内建 `employee_no@feishu_contact` 只证明飞书通讯录里的逐字 employee number；它不证明该值是
+Ecology userid，也不证明它等于 OA `workcode`。只有新的声明式 OA/HR authority 能产生满足
+`leave_applicant` 语义的证据；若 Ecology userid 不等于现有 subject type，必须另立 identity/schema
+任务，L1 不能重命名或猜映射。
+
+当前代码证据覆盖 mount/proxy 同一 Principal、三种 authority mismatch、伪造 `oa_user_id` 无效、同响应
+owner/workflow/form fence、最小输出、写工具零 OA 调用与非 `ecology_userid` 双层拒绝：focused core +
+gateway + proxy + leave **146 passed、2 skipped**；`uv run --locked ofmcp verify` 六步全绿（test
+**556 passed、2 skipped**）；contract diff 为
+**breaking 0 / behavioral 7 / additive 0**，已审查 snapshot 与当前生成结果一致。因此 L1 的代码与
+契约状态为 `✅`；真实 OA/HR authority、leave 写入、L2、U7、I7/I8 freshness、密钥/部署/远程发布与
+生产 rollout 均在围栏外，能力仍默认关闭。
+
+### 8.2 EIM-M1/M2 medic Principal 与业务授权（目标，尚未实现）
+
+下面只描述 medic 工具适配层，不包含 leave：
 
 ```python
 async def submit_wtd(
@@ -1777,7 +1844,7 @@ async def submit_wtd(
 ) -> SubmissionResult: ...
 ```
 
-身份参数不得出现在 tool schema。`medic` 现有 `workcode` 等字段目前仍由调用方提供；M1/M2 为保持兼容
+新身份参数不得加入 tool schema。`medic` 现有 `workcode` 等字段目前仍由调用方提供；M1/M2 为保持兼容
 可暂时保留，但必须完成以下迁移：
 
 - 改为 optional；

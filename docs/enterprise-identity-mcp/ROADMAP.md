@@ -69,6 +69,7 @@ EIM-In  Identity data/service/provider
 EIM-Cn  Channel identity transport
 EIM-Pn  Principal propagation / MultiRAG runtime
 EIM-An  MCP authentication / authorization
+EIM-Ln  Leave read-only business workflow
 EIM-Mn  Medic high-risk workflow
 EIM-Un  User/admin experience
 EIM-On  Operations / rollout
@@ -143,7 +144,10 @@ flowchart TD
     A4 --> A8
     A7 --> A8
 
+    A5 --> L1["L1 leave read identity binding"]
+    I5 --> L1
     A5 --> M1["M1 medic Principal"]
+    I5 --> M1
     M1 --> M2["M2 business authorization"]
     M2 --> M3["M3 confirmation workflow"]
     M3 --> M4["M4 idempotency/recovery"]
@@ -721,6 +725,34 @@ URI、audience、scope namespace、protected-resource metadata、审计和回滚
 
 ---
 
+## 8A. Phase L · leave 只读业务身份接线
+
+| ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
+|---|---|---|:---:|---|---|
+| EIM-L1 | of_mcp | leave 身份相关只读工具消费 request-scoped Principal 的 exact OA enterprise subject；`oa_user_id` 保持 optional、所有模式始终 ignored | ✅ | A5,I5 | `get_leave_balance` 为 read/reusable，`preview_leave` 为 prepare/reusable，`verify_leave_request` 为 read/reusable，均绑定 server-owned `leave_applicant`；service 固定 `subject_type=ecology_userid`，secure 只覆盖 issuer/tenant，任何 type 漂移启动 fail-fast；dependency 独立重验 `ecology_userid` 后才可调用 OA；verify 同响应 owner/workflow/form fence；输出最小化；写工具无条件 `LEAVE_WRITE_DISABLED` 且 OA 零调用；contract snapshot 与完整 verify 全绿 |
+
+`leave_applicant` 已作为 composition root 拥有的命名 binding 落到代码，不是 tool argument、prompt、
+CardKit 字段或任意 Provider 字段别名。service binding 声明把 `subject_type=ecology_userid` 固定为不可变
+语义锚点；secure override 只能提供或替换权威 issuer/tenant，不能改 type。把它改成 `employee_no`、
+缺失/未知/空值、与工具策略漂移或 authority 不匹配，都是工具目录发布前的启动期 invariant failure。
+local 默认 authority 只用于 auth-disabled 契约测试，不会产生 Principal 或可信证明；仓库未提供生产
+binding，功能默认关闭且未 rollout。
+
+L1 已给上述三个无副作用读/预览工具增加独立 `current_verified_read_subject` dependency；
+`list_leave_types` 不需要企业主体，`oa_user_id` 在 local/secure、mount/proxy 等所有模式都只保留 schema
+兼容并始终忽略。dependency 还必须独立于 policy 做 defense-in-depth：即使 policy 与 Principal 同时
+漂移成 `employee_no`，也要在构造 Ecology client 或调用 OA 前拒绝。`verify_leave_request` 只接受同一个
+OA 响应同时证明 owner、配置的 workflow 和 form；任一缺失/不符均返回同一安全错误。读结果不回显
+真实 subject，provider raw/表单正文不直出，只保留有界 allowlist、计数、布尔或
+`current`/`redacted` 占位。
+
+`create_leave_draft`、`submit_leave` 不得复用 read dependency，现已无条件返回
+`LEAVE_WRITE_DISABLED`，并在构造 Ecology client 或任何 OA 调用前结束。I5 内建
+`employee_no@feishu_contact` 只证明飞书通讯录字段，不等于 Ecology userid 或 OA workcode；真实
+OA/HR resolver、L2、U7、I7/I8 freshness 与任何 rollout 均不属于 L1。
+
+---
+
 ## 9. Phase M · medic 真实副作用收口
 
 | ID | 仓库 | 任务 | 状态 | 依赖 | 完成条件 |
@@ -731,8 +763,9 @@ URI、audience、scope namespace、protected-resource metadata、审计和回滚
 | EIM-M4 | of_mcp | 端到端幂等、Jira request key/查询恢复、unknown outcome 队列 | ⬜ | M3 | 双击、网络超时、模型重试不重复建单；未知结果不自动重放 |
 | EIM-M5 | 两仓 integration | 从飞书消息到测试 Jira 的完整成功/拒绝/离职/重放测试 | ⬜ | M4,U7,I8 | sandbox/test project；零真实生产工单；跨仓 trace/audit 对账 |
 
-M1 需要修改 medic 每个工具文件，但先在共享 submission/application service 收口企业主体，不复制
-四份授权逻辑。domain 仍不 import FastMCP；dependency 只存在 tools/adapters 边界。
+M1 只处理 medic：需要修改 medic 每个工具文件，但先在共享 submission/application service 收口企业
+主体，不复制四份授权逻辑。domain 仍不 import FastMCP；dependency 只存在 tools/adapters 边界。
+leave 的读身份 binding 只能由 L1 实现，不能借 M1 顺带接线。
 
 ---
 
@@ -853,6 +886,7 @@ EIM-C1  ✅ 本地门禁与 C1 前 producer 等价 legacy-shape 飞书活体均�
 EIM-C2  ✅ worker emit 与新 worker -> 新 API 活体通过
 EIM-C3  ✅ verified consume、新 API smoke 与双 account 真实飞书 live 已完成
 EIM-I5  ✅ default-disabled 五态 resolver + persisted readback + Channel optional composition
+EIM-L1  ✅ 代码/契约与完整门禁已完成；默认关闭，未配置真实 authority 或 rollout
 EIM-I7  ⬜ 已解锁的 Contact-event 并行支线（I8 仍需 I6 + I7）
 ```
 
@@ -896,6 +930,7 @@ A4 -> A6
 
 I4 -> I5                               (✅ default-disabled；无 OA/workcode 等价或 rollout)
 I4 -> I7; I6 + I7 -> I8               (已解锁事件支线；I8 不得跳过 I6/I7)
+A5 + I5 -> L1                          (✅ code/contract；named binding，secure fail-fast，未 rollout)
 A5 + I5 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5
 I6 + I8 -> U2 -> O1/O2 -> U3
 
@@ -906,8 +941,10 @@ A3/A4/A5 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步�
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/I5/P1、
 I6、C2、C3、P2、A2、P3、U14 与 U15/CHN-X15；U15 默认关闭，单机临时 live 已通过但生产 rollout 未开始。CHN-O9 是可并行的 Channel 可观测支线，
 C4/CHN-X8 仍等待 deployment soak。I7 因 I4 已完成而可作为并行支线；I8 仍严格等待 I6 + I7。
-M1 的代码依赖 A5 + I5 已满足，但 leave/OA workcode authority 必须另立业务任务，不能把 Feishu
-employee_no 当成等价 proof。
+L1 与 M1 的代码依赖 A5 + I5 均已满足。L1 的代码、contract snapshot 与完整 verify 已完成并标
+`✅`，但仍默认关闭、未 rollout；`ecology_userid` 是 service-owned 不可变语义锚点，secure 只能提供
+issuer/tenant。真实 leave/OA authority 必须通过 `leave_applicant` 独立证明，不能把 Feishu employee_no
+当成 Ecology userid/workcode 的等价 proof。M1 保持 medic-only，不因 L1 接线而扩成泛化领域工具任务。
 `F3 + A2 + A4 + P2` 已共同完成 P3，A5/U14/U15 也已完成本地实现；U15 保持 native form-only，
 H5/URL 后置，单机临时 live 不替代生产 rollout；A7 保持独立入站
 resource；A8 仍无真实需求不启动。这个顺序既保留 of_mcp 的 fail-closed verifier/authorizer 先行，
@@ -925,6 +962,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-24 | EIM-L1 | 完成独立 Leave 只读业务身份轨：三个读/预览工具消费 exact、server-owned `leave_applicant`，所有模式始终忽略 `oa_user_id`；service 固定 `subject_type=ecology_userid`，secure 只覆盖 issuer/tenant，type 漂移启动 fail-fast，dependency 再独立拒绝非 `ecology_userid` 主体。`verify_leave_request` 用同一响应执行 owner/workflow/form fence，输出最小化；两个写工具无条件 `LEAVE_WRITE_DISABLED` 且 OA 零调用。明确 Feishu `employee_no@feishu_contact` 不等于 Ecology userid/workcode；仍默认关闭，未配置真实 OA/HR authority，未实现 L2/U7/I7/I8 或 rollout，M1 继续 medic-only | of_mcp code + 双仓账本文档 / 本次工作树 | focused core + gateway + proxy + leave **146 passed、2 skipped**；`uv run --locked ofmcp verify` 六步全绿，test **556 passed、2 skipped**；contract diff **breaking 0 / behavioral 7 / additive 0**（service + gateway），已审查 snapshot 与当前生成结果一致 | Codex |
 | 2026-08-24 | EIM-I5 / CHN-X19 | 完成 default-disabled enterprise-subject resolver/service/repository 与 Channel 可选组合：五态闭合，`RESOLVED` 只从数据库回读生成 evidence，同槽换值/跨 user 占用进入 conflict，negative 单向收紧，`UNAVAILABLE`/fatal 零写；Feishu 内建 authority 只证明逐字 `employee_no@feishu_contact`，不推断 OA workcode。沿用 I2 表、无 migration；未启用配置、未重启/部署/发真实流量，未实现 I7/I8 freshness、真实 OA/HR 或 leave 业务 | MultiRAG / 本次提交 | 定向 unit **87 passed**、真 PostgreSQL **10 passed**；`make verify` **2663 passed**；强制 integration **181 passed**；`make mcp-compat` **22/22 PASS**；final P0/P1 audit **no blockers** | Codex |
 | 2026-08-24 | EIM-U15 / CHN-X15 live | 经用户批准完成单机临时真实飞书 native-form E2E：使用 loopback TLS、严格 P3 verifier 与 tenant/user/agent/revision/resource/scope 精确 grant；CardKit form submit 先 durable receipt，再由 API background worker 重新验证并驱动 U14 resume 与第二次 MCP 调用，最终整卡替换原消息。失败优先修复飞书 300302 `update_multi`、`date_picker` 的 `YYYY-MM-DD ±HHMM` 规范化，以及 RESPONSE_INVALID 保留 interaction/fresh-nonce 重投；坏密文/映射继续 terminal fail closed。未升级依赖、未改 RAGFlow 主循环或 `of_mcp` 生产行为；H5/URL、敏感写与生产 rollout deferred | MultiRAG `41675183` 后续工作树修复；本机临时 rollout | `demo-004` live：callback receipt `claimed` attempt 1、resume job `succeeded` attempt 1、interaction `completed`、同一 message terminal `delivered`/ACK，safe error 全空；定向 **43 passed**；`make verify` **2620 passed**；`REQUIRE_SERVICES=1 make integration` **172 passed** | Codex |
 | 2026-08-23 | EIM-U15 / CHN-X15 | 完成默认关闭的飞书 CardKit native form 本地实现：U14 pause 经 generation-scoped delivery claim/ACK 投递安全 form/terminal，app-bound WebSocket callback 在 encrypted durable receipt 提交后快速 ACK，API 后台重新解析 verified Principal、claim 当前 revision 并由 U14 重授权/恢复；P0 lease/tool-gate/identity-TTL 与未知结果继续 fail closed。H5/URL 和敏感写 deferred；未升级依赖、未改 `of_mcp` 或 RAGFlow 主循环。未执行真实 migration/config、API/worker 重启、producer 启用、部署或飞书 live | MultiRAG / 本提交 | `make verify` **2610 passed**；`REQUIRE_SERVICES=1 make integration` **172 passed**；`make mcp-compat` **22/22 PASS**；`make smoke` **PASS**，仅证明现有运行服务健康，不是 U15 rollout 证据；`uv lock --check` 通过；Alembic single head `d8f0a2b4c6e8`；final P0/P1 audit **no blockers** | Codex |
