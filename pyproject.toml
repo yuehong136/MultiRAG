@@ -86,7 +86,7 @@ dependencies = [
     # beta cannot enter the runtime without rerunning the MCP compatibility gate.
     # MCP SDK 2 and httpx2 are direct dependencies because MultiRAG implements
     # the client and owns the HTTP transport lifecycle.
-    "fastmcp==4.0.0b2",
+    "fastmcp==4.0.0b3",
     "mcp==2.0.0",
     "httpx2>=2.10.0,<3.0.0",
     "mini-racer>=0.12.4,<0.13.0",
