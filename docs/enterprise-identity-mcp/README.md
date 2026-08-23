@@ -35,7 +35,8 @@
 
 ```text
 读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-U14 已完成两仓本地代码与自动门禁但尚未 rollout；下一任务可按依赖选择 U15/CHN-X15 或 I5）。
+（EIM-U15/CHN-X15 与 EIM-I5/CHN-X19 已完成默认关闭的本地实现；下一任务必须按 ROADMAP
+选择尚未完成且依赖已满足的单一任务）。
 先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
 ```
 
@@ -375,8 +376,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   和 transport 防护；领域 identity/Principal 保持框架无关，避免重复实现框架已有工具开放能力。
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
   可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14 已完成；U15 已解锁。CHN-O9 是不阻塞它的
-  Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 与 I7 已由
-  I4 解锁，可作为不共文件的并行支线；I8 仍需 I6 + I7，
+  Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 已由后续
+  EIM-I5/CHN-X19 完成；I7 已由 I4 解锁，I8 仍需 I6 + I7，
   不能跳依赖；
   C3/P2、A2/P3/A7 均不属于 P1 完成面；其中 C3/P2 已由后续独立任务完成。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
@@ -534,8 +535,9 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   domain/runtime 安全边界与 A5 audit v2 parent link，仍缺生产多实例 replay/audit、HMAC/KMS 轮换、
   OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
   Confirmation/业务 Idempotency 仍未完成；U14 Interaction ledger 已完成本地实现。
-  F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14 已完成；U15、I5/I7 是已解锁并行支线，但 I8 仍需
-  I6 + I7。不能把 P3 本地门禁通过当成 secure endpoint 已发布或真实 bearer E2E 已完成。
+  F1/I4.1/I5/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14/U15 已完成默认关闭的本地实现；I7 是已解锁支线，
+  I8 仍需 I6 + I7。I5 内建 authority 只证明 Feishu `employee_no`，不等于 OA `workcode`；不能把
+  本地门禁通过当成生产企业主体、secure endpoint 或真实 bearer rollout 已完成。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。
 

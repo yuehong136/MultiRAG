@@ -20,6 +20,7 @@ from api.db import IdentityProviderHealthState, UserAccountKind, UserTenantRole
 from api.db.db_models import (
     ChannelBinding,
     ChatChannel,
+    EnterpriseSubjectLink,
     ExternalIdentity,
     ExternalIdentityAlias,
     IdentityBindingEvent,
@@ -32,6 +33,10 @@ from api.db.db_models import (
     UserTenant,
 )
 from api.identity.contracts import ProvisioningMode
+from api.identity.enterprise_subjects.feishu_employee_number import FeishuEmployeeNumberResolver
+from api.identity.enterprise_subjects.repository import SqlAlchemyEnterpriseSubjectRepository
+from api.identity.enterprise_subjects.service import EnterpriseSubjectService
+from api.identity.principal import IdentityAssurance
 from api.identity.providers.contracts import (
     ExternalIdentityAssertion,
     ProviderContext,
@@ -174,6 +179,7 @@ async def test_real_authority_link_jit_and_active_reverification(
     provider_account_key = f"app-{suffix}"
     open_id = f"open-{suffix}"
     provider_user_id = f"user-{suffix}"
+    employee_no = f"employee-{suffix}"
     proof_at = datetime.now(UTC) - timedelta(seconds=1)
     factory = async_sessionmaker(
         bootstrapped_async_engine,
@@ -313,6 +319,7 @@ async def test_real_authority_link_jit_and_active_reverification(
                 provider_user_id=provider_user_id,
                 verified_at=proof_at,
                 open_id=open_id,
+                employee_no=employee_no,
                 display_name="Directory user",
                 provider_status=ProviderDirectoryStatus.ACTIVE,
             ),
@@ -339,6 +346,10 @@ async def test_real_authority_link_jit_and_active_reverification(
             {"feishu": lambda: provider},
         ),
         provisioning_service_factory=_provisioning_service,
+        enterprise_subject_service=EnterpriseSubjectService(
+            FeishuEmployeeNumberResolver(),
+            SqlAlchemyEnterpriseSubjectRepository(factory),
+        ),
     )
     user_ids: tuple[str, ...] = ()
     try:
@@ -354,6 +365,9 @@ async def test_real_authority_link_jit_and_active_reverification(
         assert first.principal_id == first.principal.platform_user_id
         assert first.principal.tenant_id == tenant_id
         assert first.principal.authentication.assurance_verified_at == proof_at
+        assert first.principal.authentication.assurance is IdentityAssurance.ENTERPRISE_VERIFIED
+        assert first.principal.enterprise_subject is not None
+        assert first.principal.enterprise_subject.subject == employee_no
         assert tracker.open_sessions == 0
         assert tracker.max_open_sessions == 1
 
@@ -388,6 +402,7 @@ async def test_real_authority_link_jit_and_active_reverification(
             assert membership.role == UserTenantRole.NORMAL.value
             assert await session.scalar(select(func.count()).select_from(ExternalIdentity).where(ExternalIdentity.tenant_id == tenant_id)) == 1
             assert await session.scalar(select(func.count()).select_from(IdentityBindingEvent).where(IdentityBindingEvent.tenant_id == tenant_id)) == 1
+            assert await session.scalar(select(func.count()).select_from(EnterpriseSubjectLink).where(EnterpriseSubjectLink.tenant_id == tenant_id)) == 1
     finally:
         async with factory.begin() as session:
             if not user_ids:
@@ -399,6 +414,7 @@ async def test_real_authority_link_jit_and_active_reverification(
                     )
                 )
             for model in (
+                EnterpriseSubjectLink,
                 IdentityBindingEvent,
                 ExternalIdentityAlias,
                 ExternalIdentity,

@@ -28,7 +28,18 @@ from api.identity.contracts import (
     ProvisioningAction,
     UserMembershipRecord,
 )
-from api.identity.principal import AuthenticationSource, IdentityAssurance
+from api.identity.enterprise_subjects.contracts import (
+    EnterpriseSubjectErrorCode,
+    EnterpriseSubjectEvidenceService,
+    EnterpriseSubjectResolutionStatus,
+    EnterpriseSubjectServiceResult,
+)
+from api.identity.principal import (
+    AuthenticationSource,
+    EnterpriseSubject,
+    IdentityAssurance,
+    VerifiedEnterpriseSubjectEvidence,
+)
 from api.identity.providers.contracts import (
     ExternalIdentityAssertion,
     ProviderDirectoryStatus,
@@ -317,6 +328,42 @@ class _ProvisioningService:
         )
 
 
+class _EnterpriseSubjectService:
+    def __init__(
+        self,
+        result: EnterpriseSubjectServiceResult,
+        *,
+        order: list[str] | None = None,
+    ) -> None:
+        self.result = result
+        self.order = order
+        self.calls: list[tuple[str, str, ProviderIdentity]] = []
+
+    async def resolve(
+        self,
+        *,
+        platform_user_id: str,
+        tenant_id: str,
+        provider_identity: ProviderIdentity,
+    ) -> EnterpriseSubjectServiceResult:
+        if self.order is not None:
+            self.order.append("i5")
+        self.calls.append((platform_user_id, tenant_id, provider_identity))
+        return self.result
+
+
+class _MalformedEnterpriseSubjectService:
+    async def resolve(
+        self,
+        *,
+        platform_user_id: str,
+        tenant_id: str,
+        provider_identity: ProviderIdentity,
+    ) -> object:
+        del platform_user_id, tenant_id, provider_identity
+        return object()
+
+
 class _AuthorityRows:
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
@@ -374,6 +421,7 @@ def _resolver(
     reader_results: list[IdentityResolutionResult] | None = None,
     provider_result: ProviderIdentityResult | None = None,
     provisioning_result: ProvisioningResult | None = None,
+    enterprise_subject_service: EnterpriseSubjectEvidenceService | None = None,
     now: Callable[[], datetime] = lambda: _VALIDATED_AT,
 ) -> tuple[
     ChannelIdentityResolver,
@@ -397,6 +445,7 @@ def _resolver(
         identity_reader=reader,
         provider_registry=IdentityProviderRegistry({"feishu": lambda: provider}),
         provisioning_service_factory=lambda: provisioning,
+        enterprise_subject_service=enterprise_subject_service,
         now=now,
     )
     return resolver, authority_resolver, reader, provider, provisioning
@@ -625,6 +674,167 @@ async def test_linked_jit_runs_initial_i3_i4_i6_and_fresh_i3() -> None:
     assert result.principal.authentication.external_identity_id == "external-identity-secret"
 
 
+async def test_resolved_enterprise_subject_promotes_persisted_evidence() -> None:
+    subject = EnterpriseSubject(
+        subject_type="employee_no",
+        subject="employee-number-secret",
+        issuer="feishu_contact",
+        issuer_tenant="provider-tenant-secret",
+        verified_at=_PROOF_AT,
+    )
+    service = _EnterpriseSubjectService(
+        EnterpriseSubjectServiceResult(
+            status=EnterpriseSubjectResolutionStatus.RESOLVED,
+            evidence=VerifiedEnterpriseSubjectEvidence(
+                platform_user_id="platform-user-secret",
+                tenant_id="tenant-1",
+                enterprise_subject=subject,
+            ),
+        )
+    )
+    resolver, _, _, provider, _ = _resolver(
+        enterprise_subject_service=service,
+    )
+
+    result = await resolver.resolve(context=_context(), command=_command())
+
+    assert result.principal is not None
+    assert result.principal.authentication.assurance is IdentityAssurance.ENTERPRISE_VERIFIED
+    assert result.principal.authentication.assurance_verified_at == _PROOF_AT
+    assert result.principal.enterprise_subject == subject
+    assert service.calls == [
+        (
+            "platform-user-secret",
+            "tenant-1",
+            provider.result.identity,
+        )
+    ]
+
+
+async def test_resolver_owned_proof_uses_post_i5_validation_time() -> None:
+    pre_i5 = _VALIDATED_AT
+    subject_verified_at = pre_i5 + timedelta(seconds=1)
+    post_i5 = subject_verified_at + timedelta(seconds=1)
+    times = iter((pre_i5, post_i5))
+    subject = EnterpriseSubject(
+        subject_type="workcode",
+        subject="workcode-secret",
+        issuer="oa_hr",
+        issuer_tenant="enterprise-tenant-secret",
+        verified_at=subject_verified_at,
+    )
+    service = _EnterpriseSubjectService(
+        EnterpriseSubjectServiceResult(
+            status=EnterpriseSubjectResolutionStatus.RESOLVED,
+            evidence=VerifiedEnterpriseSubjectEvidence(
+                platform_user_id="platform-user-secret",
+                tenant_id="tenant-1",
+                enterprise_subject=subject,
+            ),
+        )
+    )
+    resolver, _, _, _, _ = _resolver(
+        enterprise_subject_service=service,
+        now=lambda: next(times),
+    )
+
+    result = await resolver.resolve(context=_context(), command=_command())
+
+    assert result.principal is not None
+    assert result.principal.authentication.assurance_verified_at == subject_verified_at
+    assert result.principal.authentication.validated_at == post_i5
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        EnterpriseSubjectResolutionStatus.NOT_FOUND,
+        EnterpriseSubjectResolutionStatus.UNAVAILABLE,
+    ],
+)
+async def test_nonfatal_subject_absence_preserves_directory_principal(
+    status: EnterpriseSubjectResolutionStatus,
+) -> None:
+    service = _EnterpriseSubjectService(
+        EnterpriseSubjectServiceResult(status=status),
+    )
+    resolver, _, _, _, _ = _resolver(enterprise_subject_service=service)
+
+    result = await resolver.resolve(context=_context(), command=_command())
+
+    assert result.principal is not None
+    assert result.principal.authentication.assurance is IdentityAssurance.DIRECTORY_VERIFIED
+    assert result.principal.enterprise_subject is None
+    assert len(service.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (EnterpriseSubjectResolutionStatus.AMBIGUOUS, "IDENTITY_LINK_CONFLICT"),
+        (EnterpriseSubjectResolutionStatus.INACTIVE, "IDENTITY_INACTIVE"),
+    ],
+)
+async def test_unsafe_subject_states_reject_linked_execution(
+    status: EnterpriseSubjectResolutionStatus,
+    expected_code: str,
+) -> None:
+    resolver, _, _, _, _ = _resolver(
+        enterprise_subject_service=_EnterpriseSubjectService(
+            EnterpriseSubjectServiceResult(status=status),
+        )
+    )
+
+    with pytest.raises(ChannelIdentityResolutionError) as exc_info:
+        await resolver.resolve(context=_context(), command=_command())
+
+    assert exc_info.value.code == expected_code
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected_code"),
+    [
+        (
+            EnterpriseSubjectErrorCode.REPOSITORY_UNAVAILABLE,
+            "IDENTITY_REPOSITORY_UNAVAILABLE",
+        ),
+        (
+            EnterpriseSubjectErrorCode.RESOLUTION_INVALID,
+            "IDENTITY_ASSERTION_INVALID",
+        ),
+    ],
+)
+async def test_fatal_subject_failure_maps_to_stable_identity_error(
+    error_code: EnterpriseSubjectErrorCode,
+    expected_code: str,
+) -> None:
+    resolver, _, _, _, _ = _resolver(
+        enterprise_subject_service=_EnterpriseSubjectService(
+            EnterpriseSubjectServiceResult(
+                status=EnterpriseSubjectResolutionStatus.UNAVAILABLE,
+                error_code=error_code,
+                fatal=True,
+            ),
+        )
+    )
+
+    with pytest.raises(ChannelIdentityResolutionError) as exc_info:
+        await resolver.resolve(context=_context(), command=_command())
+
+    assert exc_info.value.code == expected_code
+
+
+async def test_malformed_subject_service_result_fails_closed() -> None:
+    resolver, _, _, _, _ = _resolver(
+        enterprise_subject_service=_MalformedEnterpriseSubjectService(),
+    )
+
+    with pytest.raises(ChannelIdentityResolutionError) as exc_info:
+        await resolver.resolve(context=_context(), command=_command())
+
+    assert exc_info.value.code == "IDENTITY_ASSERTION_INVALID"
+
+
 async def test_linked_resolution_order_is_authority_i3_i4_i6_final_i3() -> None:
     order: list[str] = []
     authority = _AuthorityResolver(
@@ -637,17 +847,24 @@ async def test_linked_resolution_order_is_authority_i3_i4_i6_final_i3() -> None:
     reader = _IdentityReader([_jit_plan(), _resolved()], order=order)
     provider = _Provider(_provider_result(), order=order)
     provisioning = _ProvisioningService(order=order)
+    subject_service = _EnterpriseSubjectService(
+        EnterpriseSubjectServiceResult(
+            status=EnterpriseSubjectResolutionStatus.NOT_FOUND,
+        ),
+        order=order,
+    )
     resolver = ChannelIdentityResolver(
         authority_resolver=authority,
         identity_reader=reader,
         provider_registry=IdentityProviderRegistry({"feishu": lambda: provider}),
         provisioning_service_factory=lambda: provisioning,
+        enterprise_subject_service=subject_service,
         now=lambda: _VALIDATED_AT,
     )
 
     await resolver.resolve(context=_context(), command=_command())
 
-    assert order == ["authority", "initial_i3", "i4", "i6", "final_i3"]
+    assert order == ["authority", "initial_i3", "i4", "i6", "final_i3", "i5"]
 
 
 async def test_active_identity_uses_reverify_then_fresh_i3() -> None:

@@ -188,11 +188,11 @@ owner 的部署 live，不能把 I6.1 的历史零写入当作当前消息路径
 | `contact:contact.base:readonly` | 获取通讯录基本信息 | Contact V3 单人查询的基础访问；人员事件消费仍属于 EIM-I7 |
 | `contact:user.base:readonly` | 获取用户基本信息 | 姓名/头像等最小显示字段 |
 | `contact:user.employee_id:readonly` | 获取用户 user ID | 从 app-scoped open_id 得到 tenant-scoped user_id |
-| `contact:user.employee:readonly` | 获取用户受雇信息 | 用户 active/离职等 status；`employee_no` 仅为可选 proof 字段，I5 前不作为 C3 上线条件 |
+| `contact:user.employee:readonly` | 获取用户受雇信息 | 用户 active/离职等 status；`employee_no` 仅为可选 proof 字段，I5 关闭时不作为 C3 上线条件 |
 
 `contact:user.employee:readonly` 范围较宽。如果企业不允许，应在当次飞书后台与官方用户字段文档中
-重新确认能提供 active/离职/冻结状态的更窄权限；没有可验证状态来源不能启用自动 JIT。只有 I5 或
-明确的企业主体消费者需要工号时，才另行评估 `contact:user.employee_number:read` 等工号权限；
+重新确认能提供 active/离职/冻结状态的更窄权限；没有可验证状态来源不能启用自动 JIT。只有显式启用
+I5 或其他企业主体消费者需要工号时，才另行评估 `contact:user.employee_number:read` 等工号权限；
 `employee_no` 缺失不阻断当前 C3 普通对话。
 
 官方来源：
@@ -396,8 +396,9 @@ Principal 提升到 `TrustedChannelContext` 和 target/session owner；Agent/RAG
 
 I6 三种 mode 的联调还必须分别确认：preprovisioned 未命中不开户；link_only code 只绑定已登录用户
 本人、过期/撤销/旧 generation 统一要求新码；JIT 只创建 external-only User + NORMAL membership。
-任何 name/email/mobile/employee_no 相同都不能触发匹配或双 User merge。I5 尚未实现，所以本轮
-不得因 Contact 返回 employee_no 就宣称 EnterpriseSubject 已建立。
+任何 name/email/mobile/employee_no 相同都不能触发匹配或双 User merge。I5 虽已实现但默认关闭；
+只有当前 I4 proof 经已启用 resolver、repository 持久化回读并提升 Principal 后，才能宣称本次
+EnterpriseSubject 已建立，单凭 Contact 返回 employee_no 仍不成立。
 
 官方 Contact API：[获取单个用户信息](https://open.feishu.cn/document/server-docs/contact-v3/user/get?lang=zh-CN)
 
@@ -462,8 +463,9 @@ INACTIVE       -> 禁止执行和新会话
 - [ ] 当前启用 EIM-U4 重新生成/反馈时已订阅 `card.action.trigger`；明确关闭交互、只做纯流式输出时
       才可不订阅。
 - [ ] 正常、范围外、冻结/离职测试账号行为符合预期。
-- [ ] 只有启用 I5/企业主体消费者时，`employee_no -> talent_id` 语义才作为上线条件，并须由 HR/OA
-      负责人签字确认或配置 OA resolver；当前 C3 普通对话不以 `employee_no` 为阻断项。
+- [ ] 只有启用 I5/企业主体消费者时，`employee_no` 的唯一性与复用规则才作为上线条件；若业务需要
+      `talent_id/workcode`，必须由 HR/OA 负责人确认并配置对应 OA/HR resolver，禁止把 employee_no
+      自动改名或转换；当前 C3 普通对话不以 `employee_no` 为阻断项。
 - [ ] 事件 callback 3 秒内返回，模型和 Contact API 不在 SDK callback 内执行。
 - [ ] 飞书后台事件日志、MultiRAG 脱敏 trace 和身份审计能关联排障。
 - [ ] Secret 轮换和应用下线联系人明确。

@@ -346,6 +346,44 @@ class TestIdentityProvisioningConfig:
         assert dumped["identity"]["provisioning"]["hmac_keyring"]["active"] == "**********"
 
 
+class TestEnterpriseSubjectResolutionConfig:
+    def test_defaults_disabled_and_fails_closed_when_required(self, conf_dir):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+
+        resolution = load_app_config().identity.enterprise_subject_resolution
+
+        assert resolution.enabled is False
+        assert resolution.resolver == "feishu_employee_number"
+        with pytest.raises(AppConfigError, match=r"identity\.enterprise_subject_resolution is disabled"):
+            resolution.require_enabled()
+
+    def test_enabled_resolver_parses_from_environment(self, conf_dir, monkeypatch):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        monkeypatch.setenv("MULTIRAG_IDENTITY__ENTERPRISE_SUBJECT_RESOLUTION__ENABLED", "true")
+        monkeypatch.setenv(
+            "MULTIRAG_IDENTITY__ENTERPRISE_SUBJECT_RESOLUTION__RESOLVER",
+            "tenant_hr_resolver_v2",
+        )
+
+        resolution = load_app_config().identity.enterprise_subject_resolution
+
+        assert resolution.require_enabled() is resolution
+        assert resolution.resolver == "tenant_hr_resolver_v2"
+
+    @pytest.mark.parametrize(
+        "resolver",
+        ["", "Feishu", "oa-hr", "has space", " noncanonical", "noncanonical ", "nonascii-é", "x" * 65],
+    )
+    def test_resolver_rejects_noncanonical_registry_names(self, conf_dir, resolver):
+        conf_dir(
+            SERVICE_CONF,
+            "identity:\n  enterprise_subject_resolution:\n    resolver: " + json.dumps(resolver) + "\n",
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.enterprise_subject_resolution\.resolver"):
+            load_app_config()
+
+
 class TestMcpIssuerConfig:
     def test_empty_issuer_config_preserves_startup_but_runtime_fails_closed(self, conf_dir):
         conf_dir(SERVICE_CONF, BASE_YAML)

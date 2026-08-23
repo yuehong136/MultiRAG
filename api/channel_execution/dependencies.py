@@ -43,6 +43,10 @@ from api.channel_execution.registry import TargetExecutorRegistry
 from api.channel_execution.service import ChannelExecutionService, PublishedTargetExecutionService
 from api.channel_runtime.tokens import derive_binding_workload_token
 from api.db.db_models import get_async_db
+from api.identity.enterprise_subjects.contracts import EnterpriseSubjectEvidenceService
+from api.identity.enterprise_subjects.feishu_employee_number import FeishuEmployeeNumberResolver
+from api.identity.enterprise_subjects.repository import SqlAlchemyEnterpriseSubjectRepository
+from api.identity.enterprise_subjects.service import EnterpriseSubjectService
 from api.identity.mcp_interactions.crypto import InteractionPayloadCipher, InteractionPayloadCipherError
 from api.identity.mcp_interactions.runtime import get_mcp_interaction_service
 from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
@@ -319,6 +323,30 @@ def _build_channel_identity_resolver(
         identity_reader=SqlAlchemyChannelIdentityReader(session_factory),
         provider_registry=provider_registry,
         provisioning_service_factory=_build_identity_provisioning_service,
+        enterprise_subject_service=_build_enterprise_subject_service(
+            session_factory,
+        ),
+    )
+
+
+def _build_enterprise_subject_service(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> EnterpriseSubjectEvidenceService | None:
+    """Compose the configured I5 resolver without tenant or vendor fallback."""
+
+    config = get_app_config().identity.enterprise_subject_resolution
+    if not config.enabled:
+        return None
+    enabled = config.require_enabled()
+    resolver_factories = {
+        "feishu_employee_number": FeishuEmployeeNumberResolver,
+    }
+    factory = resolver_factories.get(enabled.resolver)
+    if factory is None:
+        raise ChannelStateUnavailableError()
+    return EnterpriseSubjectService(
+        factory(),
+        SqlAlchemyEnterpriseSubjectRepository(session_factory),
     )
 
 

@@ -138,7 +138,8 @@ api/identity/
 └── repository.py
 ```
 
-I4 已新增 Provider 与过渡 credential composition，I5 再加 enterprise-subject adapter：
+I4 已新增 Provider 与过渡 credential composition；I5 已增加 default-disabled 的
+enterprise-subject domain/service/repository：
 
 ```text
 api/identity/
@@ -148,8 +149,10 @@ api/identity/
 │   ├── lark_oapi.py
 │   └── feishu.py
 └── enterprise_subjects/
+    ├── contracts.py
     ├── feishu_employee_number.py
-    └── oa.py
+    ├── repository.py
+    └── service.py
 
 api/identity_adapters/
 ├── channel_credentials.py
@@ -269,6 +272,34 @@ User/UserTenant/identity/alias/code/event 同事务提交或全部回滚。I6.1 
 CLI，但没有公开 HTTP/UI；消息侧 C3 adapter 已在独立任务落地并完成 live。它不写 I5 EnterpriseSubject；
 后续 P2 已把 Principal 传入 Agent 与 MCP call-context seam，但没有实现 token/credential 或授权。
 
+I5 作为 C3 composition 的可选后置阶段，不侵入 I3/I4/I6 core：
+
+```mermaid
+flowchart LR
+    P["current I4 ProviderIdentity"] --> R["server-selected EnterpriseSubjectResolver"]
+    R --> F{"five-state result"}
+    F -->|"resolved/not_found/ambiguous/inactive"| T["fresh short DB transaction"]
+    F -->|"unavailable"| Z["zero durable write"]
+    T --> L["advisory + row locks + unique constraints"]
+    L --> B["persisted readback"]
+    B -->|"resolved"| E["VerifiedEnterpriseSubjectEvidence"]
+    B -->|"not_found/unavailable"| D["directory-only Principal"]
+    B -->|"ambiguous/inactive"| X["reject linked execution"]
+```
+
+内建 Feishu resolver 只把当前 I4 proof 中逐字的 `employee_no` 解释为
+`employee_no@feishu_contact/<provider tenant>`，proof time 仍取 I4 `verified_at`。它不 trim、补零、
+改大小写或推断 OA `workcode/talent_id`；通用 service 只理解声明式 provider/subject/issuer tenant/
+proof authority，不含客户或 vendor 分支。resolver 外调在事务外，成功 evidence 只能从 repository
+持久化回读重建。同槽换值、跨 user/slot 重复值都进入 conflict，不后写覆盖；`UNAVAILABLE` 和持久层
+失败零写且脱敏 fail closed。
+
+该 composition 由 `identity.enterprise_subject_resolution.enabled=false` 默认关闭。关闭时保留既有
+`DIRECTORY_VERIFIED` C3 行为；启用后的 `NOT_FOUND/UNAVAILABLE` 也只允许普通 RAG 保持
+directory-only，需要 enterprise subject 的工具仍拒绝；`AMBIGUOUS/INACTIVE` 拒绝本次 linked
+execution。I5 没有实现 I7/I8 freshness/event/reconciliation、真实 OA/HR adapter、leave wrapper 或
+生产 rollout。
+
 #### Principal construction
 
 EIM-P1 已在 `api.identity.principal` 建立唯一的 request-scoped immutable Principal 与
@@ -369,7 +400,11 @@ sequenceDiagram
         X->>D: 锁 policy/account generation；原子 provision/link/activate/event [I6]
     end
     X->>I: fresh resolve_external_identity [final I3]
-    X->>X: immutable Principal construction [P1/C3]
+    opt I5 explicitly enabled
+        X->>X: resolve/persist enterprise subject [I5]
+        X->>D: short transaction + persisted readback
+    end
+    X->>X: immutable Principal construction [P1/C3, optional I5 evidence]
     X->>A: execute(message, principal_id owner)
     A-->>E: 回复
 ```
@@ -392,8 +427,9 @@ sequenceDiagram
 - Provider 返回 active 不自动授予管理员角色；
 - 初始 claim 与 post-claim failure/cancel tombstone 都覆盖完整 dedupe TTL；owner-aware session 与
   Dialog/Canvas existing row 都校验本次 tenant/principal；
-- I6 不消费 `employee_no` 或写 EnterpriseSubject；I5 尚未实现。enterprise subject 缺失时，高风险
-  MCP 仍一律拒绝。
+- I6 仍不消费 `employee_no` 或写 EnterpriseSubject；default-disabled I5 只在 final I3 成功后由
+  Channel composition 单独调用。缺失/unavailable 时普通 RAG 保持 directory-only，高风险 MCP 拒绝；
+  ambiguous/inactive 拒绝本次 linked execution。
 
 C1/C2 已有真实飞书 transport 证据；C3 verified consume 的源码、自动门禁与部署 live 均已完成。成功 claim 后按
 authority→initial I3→I4→I6→final I3→P1，linked event 逻辑上每次执行 I4（允许有界 cache）；NO_LINK
@@ -592,7 +628,8 @@ sequenceDiagram
 | Contact 暂时不可用，cache 过期/不存在 | 拒绝身份建立 | 拒绝 | 不创建匿名用户 |
 | 用户不在应用数据范围 | 明确拒绝 | 拒绝 | 检查飞书数据权限 |
 | employee_no 缺失 | 可按 policy 继续 RAG | 需要企业主体的工具拒绝 | HR/OA 补数据或 resolver |
-| 身份 link 冲突/歧义 | 拒绝 | 拒绝 | 人工审核/纠错；禁止自动猜测或双 User 合并 |
+| enterprise subject not-found/unavailable | 继续 directory-only RAG | 需要企业主体的工具拒绝 | 补权威数据或恢复 resolver；unavailable 零写 |
+| 身份 link 或 enterprise subject 冲突/歧义 | 拒绝 | 拒绝 | 人工审核/纠错；禁止自动猜测或双 User 合并 |
 | token issuer 不可用 | RAG 可继续 | 不调用 MCP | issuer SLO 告警 |
 | of_mcp verifier/JWKS 不可用 | 不调用 MCP | 拒绝 | 使用短期缓存的已验证 JWKS；过期后 fail closed |
 | 业务系统不可用 | RAG 可继续 | tool error，不自动重试副作用 | 幂等后人工/任务重试 |

@@ -310,6 +310,27 @@ class IdentityProvisioningConfig(_Section):
             raise AppConfigError("identity.provisioning.hmac_keyring is invalid") from exc
 
 
+class EnterpriseSubjectResolutionConfig(_Section):
+    """Disabled-by-default selection of one server-owned I5 resolver."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = False
+    resolver: str = "feishu_employee_number"
+
+    @field_validator("resolver")
+    @classmethod
+    def validate_resolver(cls, value: str) -> str:
+        if not value or value != value.strip() or not value.isascii() or len(value) > 64 or not all(char.islower() or char.isdigit() or char == "_" for char in value):
+            raise ValueError("enterprise subject resolver must be a canonical registry name")
+        return value
+
+    def require_enabled(self) -> Self:
+        if not self.enabled:
+            raise AppConfigError("identity.enterprise_subject_resolution is disabled")
+        return self
+
+
 def _validate_canonical_https_uri(value: str, field_name: str) -> str:
     if not value or value != value.strip() or not value.isascii() or len(value) > 4096:
         raise ValueError(f"{field_name} must be a non-empty canonical HTTPS URI")
@@ -545,6 +566,9 @@ class IdentityConfig(_Section):
     model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
 
     provisioning: IdentityProvisioningConfig = Field(default_factory=IdentityProvisioningConfig)
+    enterprise_subject_resolution: EnterpriseSubjectResolutionConfig = Field(
+        default_factory=EnterpriseSubjectResolutionConfig,
+    )
     mcp_issuer: McpIssuerConfig = Field(default_factory=McpIssuerConfig)
     mcp_delegation: McpDelegationConfig = Field(default_factory=McpDelegationConfig)
     mcp_interactions: McpInteractionsConfig = Field(default_factory=McpInteractionsConfig)

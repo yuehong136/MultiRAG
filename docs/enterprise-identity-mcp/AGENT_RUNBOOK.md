@@ -192,7 +192,7 @@ P1 已完成，代码锚点为 `api/identity/principal.py`、`api/identity/legac
 P1 当时不交付 C3/P2、A2/P3 或 A7。C3、P2 已在后续独立任务完成源码、自动门禁和本机飞书
 live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前 token 主线是
 P3；不得重做 C3/P2/A2，也不得把 A2 的独立 signer 当成 bearer 已接线。
-I5 与 I7 已由 I4 解锁，可在不共文件时并行；I8 仍要求 I6 + I7，不能跳过依赖。
+I5 已在后续独立任务完成且默认关闭；I7 已由 I4 解锁，I8 仍要求 I6 + I7，不能跳过依赖。
 
 #### EIM-P2 / CHN-X18 已完成边界
 
@@ -408,6 +408,35 @@ I4.1 已完成并交接 I6。接手者必须保留以下边界：
    不实现 I5/I6/I7/C3/Principal/MCP token。它只产生 verified Provider result；I6 现已在独立用例
    事务层消费该 proof，Principal 组装仍须由 C3/P1 接续。
 
+#### EIM-I5 / CHN-X19 完成边界与业务 resolver 交接
+
+I5 的代码锚点为 `api/identity/enterprise_subjects/{contracts,feishu_employee_number,repository,service}.py`、
+`api/identity_adapters/channel_runtime.py` 与 `api/channel_execution/dependencies.py`。接手者必须保留：
+
+1. 功能由 `identity.enterprise_subject_resolution.enabled=false` 默认关闭，resolver 名称只能来自
+   server-owned canonical registry；关闭时不构造 repository/resolver、不写表，原 C3
+   `DIRECTORY_VERIFIED` 行为逐项兼容；
+2. 通用 authority 显式声明 provider、subject type、issuer、issuer-tenant 来源与 proof 来源。
+   `FeishuEmployeeNumberResolver` 只证明本次 I4 proof 中逐字的 `employee_no`，issuer 固定
+   `feishu_contact`、issuer tenant 固定取 Provider tenant、proof time 固定取 I4 `verified_at`；不 trim、
+   补零、改大小写或推断 OA `workcode/talent_id`；非 canonical value 返回 normal `UNAVAILABLE`、零写；
+3. resolver 外调在数据库事务外。五态只有 `RESOLVED` 可携 subject；`UNAVAILABLE` 不带 proof 且
+   零写。malformed authority/result、resolver exception、repository exception/readback mismatch 是
+   fatal fail closed，不得伪装成 `NOT_FOUND`；
+4. repository 每次使用 fresh `AsyncSession`/短事务；同槽同值幂等且 proof/revision 只前进，同槽换值
+   或跨 user/slot subject 占用隔离为 conflict，negative result 只单向收紧，陈旧结果不倒退或复活。
+   `RESOLVED` evidence 必须从数据库回读重建，不能从 resolver DTO 直通；
+5. 并发碰撞可能让第一 claimant 在第二 claimant 揭示冲突前短暂返回；冲突事务后 subsequent readback
+   不再返回 active subject。I5 没有 retroactive token revocation，禁止把收敛测试写成已撤回此前结果；
+6. Channel 只在本次 I4 + I6 + final I3 成功后尝试 I5。`NOT_FOUND/UNAVAILABLE` 保留 ordinary RAG
+   directory-only，subject-required 工具仍拒绝；`AMBIGUOUS/INACTIVE` 拒绝本次 linked execution；
+7. I5 没有新 migration、公开 API/UI、真实 OA/HR adapter、leave wrapper、I7/I8 event/freshness/
+   reconciliation、生产 enable/rollout 或真实企业 subject live。U14 对 active subject link 的旧读取
+   不因此获得 freshness 保证；
+8. 完成时必须跑 resolver/service/Channel 定向 unit、subject repository 真 PostgreSQL、`make verify`、
+   `REQUIRE_SERVICES=1 make integration`，并在 EIM 与 CHN 双账本回填精确数字；本节不预填本轮尚未
+   完成的验证结果。
+
 #### EIM-I6 完成边界与 C1/C2/C3 接线交接
 
 I6 的代码锚点为 `api/identity/provisioning_contracts.py`、`provisioning.py`、
@@ -436,8 +465,8 @@ I6 的代码锚点为 `api/identity/provisioning_contracts.py`、`provisioning.p
    唯一。它不保存 raw subject/alias/open_id/union_id、raw code 或 PII；复合 FK 所需的 server-owned
    account scope natural keys 仍在表中且 safe projection 隐藏；
 8. explicit link 是 ExternalIdentity 到一个现有 User 的绑定与可选 local→hybrid，不是双 User merge。
-   name/email/mobile/employee_no 不参与 target 匹配；合法 display name 只作展示并截到 100 字符；I5
-   EnterpriseSubject 仍未实现；
+   name/email/mobile/employee_no 不参与 target 匹配；合法 display name 只作展示并截到 100 字符；
+   “I5 EnterpriseSubject 未实现”是 I6 完成时的历史边界，后续 I5 仍是独立后置 use case，不得回塞 I6；
 9. I6 不接 HTTP/UI、Channel/C3、Principal 传播、I7 或 FastMCP/of_mcp。必须先由 C1/C2 建立
    structured assertion 与 execution contract，C3 adapter 才能把 binding/Channel assertion 组合成
    ProviderContext，调用 I3→I4→I6，并把最终 active records 重新解析/构造 P1 Principal；不得把 I6
@@ -616,8 +645,9 @@ EIM-F9 后续把 A5 的 era 分类扩成 SDK registry 驱动的完整门禁：�
 进程矩阵为 **22/22 PASS**，of_mcp 分类/真实 proxy HTTP 定向 **20 passed**，完整 verify 为
 **499 passed、2 existing skipped**。FastMCP 4.0.0b3 升级仍须另立版本任务，不能借 F9 静默升级。
 
-A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I6/P1/P2/C1/C2/C3/A2/P3/U14 已完成。
-U15、I5/I7 可作为已解锁支线，但 M1 仍等待 I5。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
+A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I5/I6/P1/P2/C1/C2/C3/A2/P3/U14/U15 已完成。
+I7 仍是已解锁支线；M1 的 I5 代码前置已满足，但真实 OA/workcode authority 与 leave 业务任务必须另行
+登记，不能由 Feishu employee_no resolver 推断。secure 在独立远程发布闸门解除前仍不能作为远程业务入口。
 
 ### 4.8 EIM-A6 phase 1 接手与完成边界
 

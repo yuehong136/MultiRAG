@@ -212,6 +212,17 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X16 | 企业身份 ownership 漂移门禁：Channel 已有关联 Provider Account 时，普通 PATCH 只允许同账号密钥轮换，拒绝替换 provider account；DELETE 稳定拒绝并引导 disable。Channel 行锁后按 tenant/channel 锁读 Link 与 Account，不依赖通用 FK 异常 | ✅ | EIM-I2.1；`api/channel_control/repository.py::get_linked_identity_provider_account`、`service.py::ChannelIdentityOwnershipLocked` |
 | CHN-X17 | 受控企业连接 onboarding：从现有 Channel 的加密凭据验证飞书 tenant ownership，幂等创建 Provider Tenant/Account/Link/Policy；默认 dry-run，显式 apply，独立 Identity HMAC keyring | ✅ | EIM-I6.1；双 Channel live dry-run 与 1/2/1/2 atomic apply 已完成；后续 CHN-X7/EIM-C3 也已完成 |
 | CHN-X18 | 把 CHN-X7 已提升的 immutable Principal 从 Channel Execution 显式传入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；LINKED 禁止静默匿名，NO_LINK 保留显式 legacy | ✅ | EIM-P2、CHN-X7；`api.identity.run_context.RunContext`、`api/channel_execution/{protocols,executors}.py`、Canvas Graph/Memory/MCP instance-local call context 已接线；MCP 不签 token、不取 credential、不发 bearer |
+| CHN-X19 | Channel execution 可选消费 EIM-I5 enterprise-subject evidence：default-disabled registry composition，五态分流，只有 persisted readback 才提升 `ENTERPRISE_VERIFIED`；不改 private wire | ✅ | EIM-I5、CHN-X7；`api/identity_adapters/channel_runtime.py`、`api/channel_execution/dependencies.py`；Feishu 只证明 employee_no，不等于 OA workcode；无 I7/I8 freshness 或 rollout 声明 |
+
+> **CHN-X19 / EIM-I5 完成边界（2026-08-24，本地实现 `✅`）**：新增配置默认关闭的
+> enterprise-subject composition。关闭时不构造 resolver/repository、零新写并保持 C3
+> `DIRECTORY_VERIFIED`；开启后只在本次 I4、I6 和 final I3 均成功后调用 server-owned resolver。
+> `RESOLVED` 只能用数据库持久化回读 evidence 提升 `ENTERPRISE_VERIFIED`；`NOT_FOUND/UNAVAILABLE`
+> 允许普通 RAG 保持 directory-only，subject-required 工具拒绝；`AMBIGUOUS/INACTIVE` 拒绝本次 linked
+> execution。Channel assertion/private API/SSE 没有新增 subject 字段，也未 bump `channel-api/v1`。
+> 内建 Feishu authority 只证明逐字 `employee_no@feishu_contact`，绝不推断 OA `workcode/talent_id`。
+> 未启用配置、未重启/部署/发真实流量，也未实现 I7/I8 freshness、真实 OA/HR 或 leave 业务；本轮
+> 最终验证数字待根任务全门禁完成后回填。
 
 > **CHN-X15 / EIM-U15 完成边界（2026-08-23，本地实现 `✅`）**：native form 源码已连接 U14 的
 > durable InteractionSession、generation-scoped delivery claim/ACK、encrypted callback receipt、
@@ -282,7 +293,7 @@ runner 的 deployment soak。
 
 ### 企业身份扩展的权威简报
 
-CHN-X5～X17、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
+CHN-X5～X19、CHN-U8～U15、CHN-O14 与 CHN-P14 属于 EIM 项目，不在本文件重复字段、数据库、JWT 和
 飞书交互设计；CHN-U16 是 Channel 稳定化的独立近期任务，不新增 EIM 对应项。零上下文
 开工时先读 [`docs/enterprise-identity-mcp/README.md`](../enterprise-identity-mcp/README.md)，
 其中 UX 任务还必须完整读取
@@ -800,6 +811,7 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
+| 2026-08-24 | **CHN-X19 / EIM-I5 本地实现完成 `✅`。** Channel execution 增加 default-disabled enterprise-subject resolver registry composition；关闭时保持 C3 directory Principal/零 subject 写，开启后五态分流且只有 repository 持久化回读可提升 `ENTERPRISE_VERIFIED`。`NOT_FOUND/UNAVAILABLE` ordinary RAG directory-only，`AMBIGUOUS/INACTIVE` linked fail closed；Feishu authority 仅为逐字 employee_no，不推断 OA workcode。private wire/channel-api 不变，无 migration；未启用配置、重启、部署、发真实流量，未实现 I7/I8 freshness、真实 OA/HR 或 leave。**验证**：定向 unit **87 passed**、真 PostgreSQL **10 passed**；`make verify` **2663 passed**；强制 integration **181 passed**；`make mcp-compat` **22/22 PASS**；final P0/P1 audit **no blockers** | 本次提交 | Codex |
 | 2026-08-24 | **CHN-X15 / EIM-U15 本机真实 native-form 闭环通过。** 单机临时启用 A2/P3/U14/U15，使用 loopback TLS、严格签名与 tenant/user/agent/revision/resource/scope 精确 grant；真实飞书表单完成 durable receipt、首次 lease/claim、首次 resume job、第二次 MCP 调用、U14 completed 与原消息 terminal ACK。live 失败优先发现并修复飞书 300302（Card JSON 2.0 form/terminal 需 `update_multi=true`）和 `date_picker` 回传 `YYYY-MM-DD ±HHMM`；字段响应非法现在拒绝当前 receipt、保留 interaction 并重新投递 fresh-nonce form，密文/映射损坏仍 terminal fail closed。分类器误路由的一次请求没有创建 interaction，不计作 U15 失败。H5/URL 与敏感写仍 deferred；未升级依赖、未改 RAGFlow 主循环或 `of_mcp` 生产行为。**验证**：`demo-004` live 的 receipt `claimed`/attempt 1、resume job `succeeded`/attempt 1、interaction `completed`、terminal delivery `delivered`/ACK，全部 safe error 为空；定向表单/receipt/renderer **43 passed**；`make verify` **2620 passed**；`REQUIRE_SERVICES=1 make integration` **172 passed** | `41675183` 后续工作树修复 + 本机临时 rollout | Codex |
 | 2026-08-23 | **CHN-X15 / EIM-U15 本地实现完成 `✅`。** U14 InteractionSession 已接入飞书 CardKit native form/terminal、generation-scoped delivery claim/ACK 与 encrypted durable callback receipt；同步 callback 只在 receipt 提交后快速 ACK，API 后台重新解析 verified Principal、claim 当前 revision 并由 U14 重授权/恢复，P0 lease/tool-gate/identity-TTL 与未知结果继续 fail closed。功能默认关闭且未部署；H5/URL 与敏感写 deferred；未升级依赖、未改 `of_mcp` 或 RAGFlow 主循环，未执行真实 migration/config、API/worker 重启、producer 启用或飞书 live。**验证**：`make verify` **2610 passed**；`REQUIRE_SERVICES=1 make integration` **172 passed**；`make mcp-compat` **22/22 PASS**；`make smoke` **PASS**，只证明现有运行服务健康，不是 U15 rollout 证据；`uv lock --check` 通过；Alembic single head `d8f0a2b4c6e8`；final P0/P1 audit **no blockers** | 本提交 | Codex |
 | 2026-08-13 | **CHN-X18 / EIM-P2 本机 rollout 完成。** API 重启加载 `4165d439`（含 P2 `549cc9c6`），supervisor/两个飞书 worker 未重启；Canvas、Dialog 各完成一条真实飞书新对话。`make smoke` 六组件全绿；近 30 分钟 event `completed=2`、owned session `2`、legacy raw `0`，数据库 Canvas/Dialog 各 1 条且空 owner 均为 `0`、缺失 session `0`，两个 runtime connected、runtime/API error `0`。Canvas 实际装配 Agent/Retrieval/Message 与 MCP 配置但没有 `memory_ids`，因此不把此次 live 写成真实 Memory 或 MCP 工具调用证据；完整 UX smoke 仍是独立 rollout gate | `549cc9c6` + runtime `4165d439` | Codex |

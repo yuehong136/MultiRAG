@@ -62,7 +62,17 @@
   external-only User + active `UserTenant(NORMAL)`；全状态 reverse identity unique 与 active membership
   partial unique 必须由数据库承担并发最终保护；
 - explicit link 不是双 User merge；姓名、display name、邮箱、手机号和 employee_no 永不用于 target
-  匹配。I6 不写 EnterpriseSubject；inactive/conflict/revoked identity 不因新 proof 自动恢复；
+  匹配。I6 不写 EnterpriseSubject；I5 只能消费当前 I4 proof 并写自己的 subject link，不能借工号
+  反向选择/合并 User；inactive/conflict/revoked identity 不因新 proof 自动恢复；
+- enterprise-subject resolver 只能由 server registry 选择 authority；Provider、subject type、issuer、
+  issuer tenant 与 proof source 任一漂移都 fail closed。飞书内建 resolver 只证明逐字 `employee_no`，
+  绝不推断或重命名为 OA `workcode/talent_id`；
+- enterprise-subject 五态必须闭合：`resolved` 只有数据库持久化回读后可提升 assurance；
+  `not_found/unavailable` 不伪造 subject，`ambiguous/inactive` 拒绝 linked execution；`unavailable`、
+  resolver/repository 异常和 malformed result 不产生 durable write；
+- 同一 resolver slot 换值、同一 tenant subject 被不同 user/slot 占用都不得后写覆盖；相关行进入
+  conflict，陈旧 result 不得倒退 proof/revision 或复活 conflict。并发首 claimant 的发现窗口必须在
+  文档和测试中如实保留，不能伪称已具备 retroactive token revocation；
 - first-binding event append-only，raw subject/alias/code/PII 不入表；server-owned provider tenant/account
   scope natural keys 只为复合 FK 存在且 safe projection 隐藏；
 - ProviderContext 的 account revision 与 scope marker 必须同时匹配；read 必须携 alias proof 时间。scope
@@ -109,6 +119,7 @@
 | I3 IdentityService | context/alias 结构校验、account health、无效 context 与 alias miss 区分、live membership、三态 plan、policy failure | 框架无关 async unit；只 mock lookup/policy ports |
 | I3 repository | 单 SQL authority snapshot、account generation/alias freshness、ordinary/verified/account-control/ownership 分权、CAS/锁、审计时间、输入/driver 脱敏 | `tests/integration/` 真 PostgreSQL |
 | I4 Provider flow | Auth V3 generated async request/resource/transport + strict live top-level adapter、Tenant V2/Contact V3 typed nested response、阶段化 error、cache/single-flight/限流、credential link/换钥 | ✅ I4.1：live adapter sandbox 三步通过；I4+F1 118、真 PG 1、完整 verify/integration 全绿 |
+| I5 enterprise subject | server-owned authority、五态、Feishu employee_no exact mapping、default-disabled composition、persisted readback、negative/fatal 分层、repr/error 脱敏 | resolver/service/Channel pure async unit + repository 真 PostgreSQL；不以 OA/workcode、I7/I8 freshness 或 rollout 代替 |
 | I6 Identity write flow | 权威 policy/revision/TTL，JIT/link/preprovisioned 的 User/UserTenant/identity/alias/code/event 原子事务，post-lock freshness | ✅ framework-neutral async service + 真 PostgreSQL；完整门禁全绿 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
@@ -119,11 +130,16 @@
 | InteractionSession | MRTR 多轮、revision/CAS、decline/cancel/expire、重启恢复 | service 单测 + 真库集成 |
 | Structured result | `structuredContent`/`outputSchema` 一致性和安全事件转换 | schema/golden tests |
 
-截至 2026-08-13，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
+截至 2026-08-24，EIM-I3 已完成 ProviderContext 驱动的本地 identity lookup、
 verification-gated policy plan 与窄 repository/CAS seam；EIM-P1 已完成 canonical Principal、
 AuthenticationContext、I3 promotion builder 和 legacy Web/API personal-owner adapter；EIM-I6 已完成
 权威 policy/link/event schema、framework-neutral service 与三种原子 provisioning transaction，并通过
-完整门禁。EIM-C3 / CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Principal 已进入
+完整门禁。EIM-I5 已完成 default-disabled 的五态 resolver/service/repository 和 Channel 可选组合：
+Feishu authority 只证明 `employee_no@feishu_contact`，成功 evidence 必须来自持久化回读；定向 unit
+**87 passed**、真 PostgreSQL **10 passed**，`make verify` **2663 passed**、强制 integration
+**181 passed**、`make mcp-compat` **22/22 PASS**；不宣称真实 OA/workcode、I7/I8 freshness 或
+rollout。EIM-C3 /
+CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Principal 已进入
 `TrustedChannelContext`，`principal_id` 已约束 target/session owner。EIM-P2 / CHN-X18 又以
 `RunContext` 完成 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call-context 传播，
 并补当前 `msgStoreConn` backend 的同租户双用户隔离证据。EIM-F3/F8 只完成
@@ -198,7 +214,8 @@ asserted open_id match、stable user id present，以及 activated true、frozen
 
 1. 同一个飞书用户通过同一企业的两个应用进入：`open_id` 不同、`user_id` 相同，最终只能有一个
    canonical identity 和一个已绑定平台账号；两个应用安装实例都必须归属同一个 MultiRAG Tenant。
-   enterprise subject 要等 I5 才另行证明，不能把 I6 canonical identity 当工号映射。
+   enterprise subject 必须由 I5 另行证明，不能把 I6 canonical identity 当工号映射；默认关闭或
+   subject not-found/unavailable 时仍只有 directory assurance。
 2. 两个企业碰巧出现相同 `user_id`：因为 `tenant_key` 不同，绝不能合并。
 3. 同一个 `open_id` 字符串出现在不同应用：因为 `provider_account_key` 不同，绝不能合并。
 4. `open_id`、`user_id` 同时出现但目录返回的用户不一致：返回 `IDENTITY_CONFLICT`，不猜测。
@@ -339,6 +356,9 @@ asserted open_id match、stable user id present，以及 activated true、frozen
   provider-tenant 任一维度错配；
 - canonical、alias、enterprise subject 与 receipt 在各自 tenant-scoped 唯一边界内拒绝重复，在合法的
   不同 Tenant/不同 account 边界不误合并；
+- I5 repository 同槽同值幂等且只接受 proof 时间前进；同槽换值、跨 user/slot subject 占用隔离为
+  conflict，`not_found/inactive/ambiguous` 只单向收紧，陈旧结果不倒退或复活；`unavailable` 与
+  repository error 零写；成功返回逐字段等于数据库回读；并发碰撞后 subsequent readback 不再返回 subject；
 - `SELECT ... FOR UPDATE` 或唯一约束重试能收敛首次绑定竞态；
 - I3 identity resolution 必须以精确 Provider Account 为 SQL 起点，在一条 statement 中携回可选
   alias/identity 与 live User/UserTenant；无 account row 与 account 存在但 alias miss 使用不同结果；

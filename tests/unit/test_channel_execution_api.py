@@ -6,10 +6,12 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from time import sleep
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.requests import Request
 
 from api.channel_execution.dependencies import (
@@ -18,6 +20,7 @@ from api.channel_execution.dependencies import (
     get_channel_execution_service,
     require_channel_workload,
 )
+from api.channel_execution.errors import ChannelStateUnavailableError
 from api.channel_execution.models import (
     ChannelActor,
     ChannelExecutionCommand,
@@ -27,7 +30,9 @@ from api.channel_execution.models import (
     WorkloadIdentity,
 )
 from api.channel_runtime.tokens import derive_binding_workload_token
+from api.identity.enterprise_subjects.service import EnterpriseSubjectService
 from api.identity_adapters.channel_runtime import IdentityProviderRegistry
+from common.app_config import EnterpriseSubjectResolutionConfig
 
 
 class _RouteService:
@@ -550,3 +555,48 @@ def test_identity_provider_registry_cold_start_is_atomic_across_threads(
         assert provider_builds == 1
     finally:
         dependencies._reset_identity_provider_registry_for_testing()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_enterprise_subject_composition_is_explicitly_feature_gated(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    from api.channel_execution import dependencies
+
+    config = EnterpriseSubjectResolutionConfig(enabled=enabled)
+    monkeypatch.setattr(
+        dependencies,
+        "get_app_config",
+        lambda: SimpleNamespace(
+            identity=SimpleNamespace(enterprise_subject_resolution=config),
+        ),
+    )
+
+    service = dependencies._build_enterprise_subject_service(async_sessionmaker())
+
+    if enabled:
+        assert isinstance(service, EnterpriseSubjectService)
+    else:
+        assert service is None
+
+
+def test_unknown_enterprise_subject_resolver_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.channel_execution import dependencies
+
+    config = EnterpriseSubjectResolutionConfig(
+        enabled=True,
+        resolver="unregistered_resolver",
+    )
+    monkeypatch.setattr(
+        dependencies,
+        "get_app_config",
+        lambda: SimpleNamespace(
+            identity=SimpleNamespace(enterprise_subject_resolution=config),
+        ),
+    )
+
+    with pytest.raises(ChannelStateUnavailableError):
+        dependencies._build_enterprise_subject_service(async_sessionmaker())

@@ -454,6 +454,28 @@ UNIQUE(tenant_id, user_id, subject_type, issuer, issuer_tenant)
 `active` 必须有 `verified_at`。默认安全 projection 省略 `subject_value` 和 `issuer_tenant`；只有受授权
 的内部 resolver/token issuer 可以读取原值。
 
+EIM-I5 已把这张 I2 预建表接入一个窄 repository，不新增 migration。resolver 的网络/目录调用在事务外；
+每次持久化使用独立 `AsyncSession` 与短事务，并以数据库唯一约束、确定性 advisory lock 和行锁作为
+并发最后防线。状态写入规则固定为：
+
+- `resolved`：同一 resolver slot + 同一 subject 幂等；只有严格更新的 proof 才能前进
+  `verified_at/source_revision`，返回值必须从提交前的数据库回读重建，不能直接信任 resolver DTO；
+- 同一 slot 从 subject A 变成 B 不做“纠错覆盖”，而是把既有行隔离为 `conflict` 并返回
+  `ambiguous`；目标 subject 已被其他 user/slot 占用时，同样隔离冲突行且本次不返回 subject；
+- `not_found/inactive` 只在 proof 不陈旧时把既有精确 slot 单向收紧为 `inactive`；`ambiguous` 单向
+  收紧为 `conflict`；陈旧结果不得倒退 proof、覆盖 revision 或复活 conflict；
+- `unavailable` 和 repository 异常零写入；异常只向上暴露稳定、脱敏的 unavailable code。
+
+negative repository result 保留 resolver 的原五态，不伪装成当前行的 readback：即使陈旧 negative 因
+单调性而零写，本次请求仍按 `not_found/ambiguous/inactive` 分流；只有 `resolved` 必须返回 active
+数据库回读。这样把“当前权威回答”和“是否允许收紧 durable state”分开，不能用旧 active 行覆盖本次
+resolver 的拒绝结论。
+
+并发冲突存在不可消除的发现窗口：第一位 claimant 可能在第二位 claimant 揭示冲突前已获得一次成功
+回读；第二次冲突事务会隔离相关行，之后的回读/解析不再返回 active subject。I5 没有全局 token
+revocation 或追溯撤回能力，不能把这条数据库收敛语义写成已经完成 I7/I8 freshness、reconciliation
+或既发 token 的撤销。
+
 ### 3.8 `t_ai_identity_event_receipts`
 
 用于 Contact 事件幂等：
@@ -692,8 +714,8 @@ repository/application contract 是 append-only：没有 update/delete port；�
 nullable unique 按 PostgreSQL 语义只约束非 null code；JIT/preprovisioned 仍由 identity/request 唯一
 兜底。downgrade 只有 policy/code/event 三表全空时才允许，任何 provisioning 历史都拒绝销毁。
 
-I6 migration 只增加上述表、约束和索引，不创建 EnterpriseSubject；§3.7 仍是 EIM-I5 的目标表，I6
-既不读取也不写 `employee_no`/`EnterpriseSubjectLink`。
+I6 migration 只增加上述表、约束和索引，不创建 EnterpriseSubject；§3.7 是后续 EIM-I5 复用的 I2
+既有表，I6 自身始终不读取也不写 `employee_no`/`EnterpriseSubjectLink`。
 
 ---
 
@@ -1018,9 +1040,68 @@ class EnterpriseSubjectResolver:
     async def resolve(self, provider_identity: ProviderIdentity) -> EnterpriseSubjectResolution: ...
 ```
 
-Provider SPI 属于 I4，Enterprise subject SPI 属于 I5；P1 没有实现这两个 SPI。
+Provider SPI 属于 I4；Enterprise subject SPI 已由 I5 落到 `api.identity.enterprise_subjects`。P1
+只拥有 Principal/evidence builder，不调用这两个 SPI。
 
-### 4.4 P2 execution Principal 传播契约（已实现）
+### 4.4 I5 enterprise-subject 解析与 Principal 提升契约（已实现、默认关闭）
+
+I5 的 framework-neutral 边界由下列不可变值对象和窄 port 组成：
+
+```text
+EnterpriseSubjectAuthority
+  = provider + subject_type + issuer
+  + issuer_tenant_source(provider_identity | fixed)
+  + proof_source(provider_identity | resolver)
+
+EnterpriseSubjectResolution.status
+  = resolved | not_found | ambiguous | unavailable | inactive
+
+EnterpriseSubjectResolver.resolve(provider_identity)
+EnterpriseSubjectRepository.persist_resolution(command)
+EnterpriseSubjectEvidenceService.resolve(platform_user_id, tenant_id, provider_identity)
+```
+
+authority 由服务端 registry 选择，不能由 Channel assertion、prompt、工具参数或 CardKit 表单覆盖。
+service 先验证 resolver authority 与当前 I4 `ProviderIdentity` 的 provider、issuer tenant 和 proof 来源，
+再在事务外调用 resolver；只有合法结果才进入 repository。`resolved` 只有在 repository 持久化并回读
+后才能产生 `VerifiedEnterpriseSubjectEvidence`；原始 resolver result、异常路径、五态中的其他四态
+都不能构造 `ENTERPRISE_VERIFIED` Principal。malformed authority/result、resolver 异常、repository
+异常或回读不变量破坏均是 fatal、稳定脱敏的 fail-closed 结果，不得降级为“普通未找到”。
+
+内建 `FeishuEmployeeNumberResolver` 的权威范围刻意很窄：
+
+```text
+provider       = feishu
+subject_type   = employee_no
+issuer         = feishu_contact
+issuer_tenant  = 当前 I4 ProviderIdentity 的 provider_tenant_key
+subject        = 当前 I4 ProviderIdentity 的 employee_no（逐字保留）
+verified_at    = 当前 I4 ProviderIdentity 的 verified_at
+source_revision = null
+```
+
+空白、首尾空格、超长或 malformed `employee_no` 解析为 normal `UNAVAILABLE`：零写且不得产生
+subject；实现不 trim、不补零、不改大小写，也不把 `employee_no` 重命名或推断为 OA 的
+`workcode/talent_id`。未来 OA/HR 只能以新 resolver + 声明式 authority 注册接入，通用
+service/Channel composition 中不得出现客户或 vendor `if/else`。
+
+Channel composition 的 `identity.enterprise_subject_resolution.enabled` 默认 `false`。关闭时不构造
+resolver/repository，也不产生新写入，C3 保持原 `DIRECTORY_VERIFIED` 行为。显式启用后，仅在本次
+I4 proof、I6 持久化和 final I3 readback 都成功后尝试 I5：
+
+| I5 状态 | 当前 linked Channel 行为 | Principal/工具行为 |
+|---|---|---|
+| `resolved` | 继续 | 用持久化回读 evidence 构造 `ENTERPRISE_VERIFIED` |
+| `not_found` | 普通 RAG 可继续 | 保持 `DIRECTORY_VERIFIED`；要求主体的工具拒绝 |
+| `unavailable` | 普通 RAG 可继续 | 保持 `DIRECTORY_VERIFIED`；要求主体的工具拒绝；本态零写 |
+| `ambiguous` | 拒绝本次 linked execution | 不构造 Principal；进入人工纠错 |
+| `inactive` | 拒绝本次 linked execution | 不构造 Principal；不得自动恢复 |
+
+I5 没有新 freshness TTL，也没有消费 Contact event；现有 U14 resume 对 active
+`EnterpriseSubjectLink` 的持久化读取不因此获得 I7/I8 freshness 或 reconciliation 保证。真实 OA/HR
+adapter、leave 业务 wrapper、生产 enable/rollout 与真实企业 subject live 均不属于 I5 完成声明。
+
+### 4.5 P2 execution Principal 传播契约（已实现）
 
 P2/CHN-X18 的唯一可信输入是 C3 已构造并放入 `TrustedChannelContext.principal` 的 canonical
 `api.identity.principal.Principal`。worker assertion、legacy subject、DSL、模型输入、MCP arguments、
@@ -1065,7 +1146,7 @@ instance-local call-context 引用，供本次工具调用的后续授权层消�
 Canvas 均覆盖同对象传播，Memory 覆盖可信 user 覆盖、跨 tenant 拒绝与当前 `msgStoreConn` 的同租户
 双用户隔离，MCP session 的 context 为实例级引用，repr/DSL/序列化不出现平台或外部主体原值。
 
-### 4.5 I6 当前已实现的 provisioning/link 契约
+### 4.6 I6 当前已实现的 provisioning/link 契约
 
 I6 的 framework-neutral application service 只接受 I3 plan 与 I4 proof，不接受调用方提供
 `target_user_id`、mode、action、policy revision、membership role 或 account kind：
@@ -1145,10 +1226,11 @@ link code 的 invalid/expired/revoked/stale/scope-changed/target-conflict 等用
 `IDENTITY_POLICY_UNAVAILABLE` 与 `IDENTITY_REPOSITORY_UNAVAILABLE` 保留为运维可诊断的稳定失败。
 
 I6 当前只交付 domain、schema/migration、async PostgreSQL repository/application transaction 与测试。
-它不提供 HTTP route、管理员或用户 UI、Channel adapter、C3 Principal 构造/传播、I5
-EnterpriseSubject、I7 事件消费，也不修改 FastMCP/of_mcp 的工具开放或授权运行时。
+它不提供 HTTP route、管理员或用户 UI、Channel adapter、C3 Principal 构造/传播或 I7 事件消费，
+也不修改 FastMCP/of_mcp 的工具开放或授权运行时。后续 I5 EnterpriseSubject 是独立后置 use case，
+不属于 I6 transaction。
 
-### 4.6 I6.1 已实现的企业连接 onboarding 契约
+### 4.7 I6.1 已实现的企业连接 onboarding 契约
 
 受控 CLI 只接受现有 Feishu Channel ID、明确 mode 与 TTL；App ID/Secret、tenant key 和 Provider
 Account 都不能作为命令行 authority。`plan()` 先验证独立 Identity HMAC keyring readiness，再关闭

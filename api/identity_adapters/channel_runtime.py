@@ -47,11 +47,18 @@ from api.identity.contracts import (
     ProvisioningMode,
     ProvisioningPolicySnapshot,
 )
+from api.identity.enterprise_subjects.contracts import (
+    EnterpriseSubjectErrorCode,
+    EnterpriseSubjectEvidenceService,
+    EnterpriseSubjectResolutionStatus,
+    EnterpriseSubjectServiceResult,
+)
 from api.identity.principal import (
     AuthenticationContext,
     AuthenticationSource,
     IdentityAssurance,
     PrincipalBuildError,
+    VerifiedEnterpriseSubjectEvidence,
     build_principal_from_resolved_identity,
 )
 from api.identity.providers.contracts import (
@@ -323,12 +330,14 @@ class ChannelIdentityResolver:
         identity_reader: ChannelIdentityReader,
         provider_registry: IdentityProviderRegistry,
         provisioning_service_factory: Callable[[], IdentityProvisioningService],
+        enterprise_subject_service: EnterpriseSubjectEvidenceService | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._authority_resolver = authority_resolver
         self._identity_reader = identity_reader
         self._provider_registry = provider_registry
         self._provisioning_service_factory = provisioning_service_factory
+        self._enterprise_subject_service = enterprise_subject_service
         self._now = now
 
     async def resolve(
@@ -457,20 +466,55 @@ class ChannelIdentityResolver:
             or membership.role not in {"owner", "admin", "normal"}
         ):
             _reject(final.error_code or IdentityErrorCode.INACTIVE)
-        validated_at = self._now()
-        if not valid_timestamp(validated_at) or not valid_timestamp(identity.verified_at) or identity.verified_at < proof.verified_at or identity.verified_at > validated_at:
+        identity_validated_at = self._now()
+        if not valid_timestamp(identity_validated_at) or not valid_timestamp(identity.verified_at) or identity.verified_at < proof.verified_at or identity.verified_at > identity_validated_at:
+            _reject(IdentityErrorCode.ASSERTION_INVALID)
+        enterprise_subject_evidence: VerifiedEnterpriseSubjectEvidence | None = None
+        assurance = IdentityAssurance.DIRECTORY_VERIFIED
+        assurance_verified_at = identity.verified_at
+        if self._enterprise_subject_service is not None:
+            try:
+                subject_result = await self._enterprise_subject_service.resolve(
+                    platform_user_id=identity.user_id,
+                    tenant_id=identity.tenant_id,
+                    provider_identity=proof,
+                )
+            except Exception:
+                _reject(IdentityErrorCode.REPOSITORY_UNAVAILABLE)
+            if not isinstance(subject_result, EnterpriseSubjectServiceResult):
+                _reject(IdentityErrorCode.ASSERTION_INVALID)
+            if subject_result.fatal:
+                _reject(_enterprise_subject_error(subject_result.error_code))
+            if subject_result.status is EnterpriseSubjectResolutionStatus.RESOLVED:
+                enterprise_subject_evidence = subject_result.evidence
+                if enterprise_subject_evidence is None:
+                    _reject(IdentityErrorCode.ASSERTION_INVALID)
+                assurance = IdentityAssurance.ENTERPRISE_VERIFIED
+                assurance_verified_at = enterprise_subject_evidence.enterprise_subject.verified_at
+            elif subject_result.status is EnterpriseSubjectResolutionStatus.AMBIGUOUS:
+                _reject(IdentityErrorCode.LINK_CONFLICT)
+            elif subject_result.status is EnterpriseSubjectResolutionStatus.INACTIVE:
+                _reject(IdentityErrorCode.INACTIVE)
+            elif subject_result.status not in {
+                EnterpriseSubjectResolutionStatus.NOT_FOUND,
+                EnterpriseSubjectResolutionStatus.UNAVAILABLE,
+            }:
+                _reject(IdentityErrorCode.ASSERTION_INVALID)
+        principal_validated_at = self._now()
+        if not valid_timestamp(principal_validated_at) or principal_validated_at < identity_validated_at or assurance_verified_at > principal_validated_at:
             _reject(IdentityErrorCode.ASSERTION_INVALID)
         try:
             principal = build_principal_from_resolved_identity(
                 result=final,
                 authentication=AuthenticationContext(
                     source=AuthenticationSource.ENTERPRISE_IDENTITY,
-                    assurance=IdentityAssurance.DIRECTORY_VERIFIED,
-                    validated_at=validated_at,
-                    assurance_verified_at=identity.verified_at,
+                    assurance=assurance,
+                    validated_at=principal_validated_at,
+                    assurance_verified_at=assurance_verified_at,
                     provider=identity.provider,
                     external_identity_id=identity.id,
                 ),
+                enterprise_subject_evidence=enterprise_subject_evidence,
             )
             return replace(
                 context,
@@ -479,6 +523,17 @@ class ChannelIdentityResolver:
             )
         except (PrincipalBuildError, ValueError):
             _reject(IdentityErrorCode.ASSERTION_INVALID)
+
+
+def _enterprise_subject_error(
+    code: EnterpriseSubjectErrorCode | None,
+) -> IdentityErrorCode:
+    if code in {
+        EnterpriseSubjectErrorCode.RESOLVER_FAILED,
+        EnterpriseSubjectErrorCode.REPOSITORY_UNAVAILABLE,
+    }:
+        return IdentityErrorCode.REPOSITORY_UNAVAILABLE
+    return IdentityErrorCode.ASSERTION_INVALID
 
 
 def _invalid_authority() -> ChannelIdentityAuthority:
