@@ -743,6 +743,59 @@ nullable unique 按 PostgreSQL 语义只约束非 null code；JIT/preprovisioned
 I6 migration 只增加上述表、约束和索引，不创建 EnterpriseSubject；§3.7 是后续 EIM-I5 复用的 I2
 既有表，I6 自身始终不读取也不写 `employee_no`/`EnterpriseSubjectLink`。
 
+### 3.14 EIM-I8 / CHN-X22 durable reconciliation state（本地 slice `✅`，默认关闭）
+
+I8 forward migration `e1f3a5c7b9d0` 新增两张内部表，不改 Channel private/public wire：
+
+- `t_ai_identity_reconciliation_checkpoints`：每个 Provider Account 至多一行，保存 cycle keyset cursor、
+  processed/tightened/error counters、last success/completion、safe error、next run，以及 owner/attempt/
+  lease expiry。tenant/provider/account 复合外键与 unique target scope 防止跨租户或跨 provider 领活；
+- `t_ai_identity_reconciliation_targets`：每个 account×ExternalIdentity 至多一行，保存 account revision、
+  scope marker、identity revision、last activity/proof/observation、NOT_FOUND 次数与确认时间、
+  pending/completed/failed 状态和 next attempt。它不保存新的 Provider 原始标识；既有 subject/natural
+  key 只在 repr-hidden、复合 FK 所需的受控列中出现。
+
+checkpoint 是唯一 lease；target 不另建可漂移的并行 lease。claim 只选择 account alias 存在、
+canonical identity 为 active `user_id`、User 为 active/non-anonymous、同 Tenant membership active 且
+role 为 owner/admin/normal、`last_seen_at` 落在配置 active window 的本地主体。seed/keyset 查询不调用
+Provider list/page，也不枚举 scope 用户或组织树。
+
+claim 与 apply 使用 fresh `AsyncSession` 短事务，Provider `reconcile()` 位于二者之间且绝不持有连接。
+lease 起点和 apply validity 都必须在 account/checkpoint/identity/target 的全部阻塞锁之后读取 PostgreSQL
+wall clock；owner+attempt+expiry、account revision/scope marker、identity revision 任一漂移均
+`FENCE_REJECTED`，不能让旧 worker 写入。`NOT_FOUND` 的首次时间、末次时间和确认窗口也只使用锁后
+数据库时钟，不能使用 API replica 的 observation wall clock。pending target 到期后必须重新验证
+`last_seen_at` active window；过期时闭合 target 且 Provider 零调用。租户在 claim 后、Provider I/O
+期间被禁用时，apply 仍须按 `Tenant → Account → Checkpoint → Identity → Target` 锁序复核并拒绝写入；
+已有 cycle/lease 被闭合，但不得借此恢复 account health。
+
+整个 uncached probe（credential/KMS、token、tenant proof、limiter 与 Contact）受外层预算约束：
+`min(DB lease 剩余时间, 配置 lease 时长) - safety margin`。当前默认 `60s - 5s = 55s`；timeout 只能
+生成 `UNAVAILABLE` 并进入持久退避，caller cancellation 继续传播。
+
+状态语义固定为：
+
+| Provider observation | 持久化行为 |
+|---|---|
+| `RESOLVED` | 只前移 target/identity verified proof 与 revision；绝不更新 `last_seen_at` |
+| `INACTIVE` | proof 不旧于 canonical positive proof 时，identity 单向收紧为 inactive |
+| `NOT_FOUND` | 第一次只持久化 confirmation pending；至少经过配置窗口再次观测才可按同一 stale fence 收紧 |
+| `NOT_IN_SCOPE` | account-specific 结果；不修改可能仍由另一 account alias 证明的 canonical identity |
+| `UNAVAILABLE` | identity 零写；保存低基数 safe code 并有界退避 |
+| `INVALID/CONFLICT` | fail closed；按阈值降级 health，绝不把畸形 Provider DTO 当 negative proof |
+
+每周期收紧数量超过上限即开 circuit、停止本周期并把 account 降级；只有实际处理过 target、error=0、
+consecutive failures=0 的完整 cycle 才可恢复 healthy。共享 provider runtime 保证 Channel 与 I8 不建立
+两套 token/cache island；I8 probe 必须 `from_cache=false`，走独立 per-account 1 call/s limiter。
+
+repository 的 `admin_snapshots(tenant_id)` 返回 provider、health、cycle/lease bool、时间、计数、safe
+error code 与 repr-hidden stable opaque `account_ref`。`account_ref` 是 domain-separated SHA-256 对
+tenant ID + 随机 provider account ID 取 128-bit 截断的稳定诊断引用，不是 authority；snapshot 不返回
+raw checkpoint/account ID、provider tenant/natural key、employee ID、user/identity/alias 或 lease
+owner。当前 route module 只挂 default-disabled lifespan，`router.routes` 为空；这不是 public admin API。
+风险感知 freshness policy、C3 local fast path、真实 migration/config/restart/rollout 均仍 deferred，所以
+EIM-I8 保持 `🔵`。
+
 ---
 
 ## 4. Identity Service 接口
@@ -2108,8 +2161,10 @@ service-specific key；不支持时先持久化 started 并对外部返回 ID �
 ## 10. 管理/API 契约
 
 下面是目标管理能力，具体路由名称在实现任务中按现有 API 风格定稿。EIM-I6.1 已提供默认 dry-run、
-显式 apply 的受控运维 CLI；其余 HTTP/API/UI 尚未接线，不能把直接实例化 repository 或人工 SQL
-当成生产管理面：
+显式 apply 的受控运维 CLI；I8 仅新增带 repr-hidden stable opaque `account_ref` 的脱敏
+`admin_snapshots` repository projection，未暴露 HTTP route/UI。该引用仅供诊断，不是 authority，也不
+回显 raw checkpoint/account ID、provider tenant/natural key 或 employee ID。其余 HTTP/API/UI 尚未
+接线，不能把直接实例化 repository 或人工 SQL 当成生产管理面：
 
 | 能力 | 调用者 | 关键规则 |
 |---|---|---|

@@ -293,6 +293,32 @@ SDK 才注册四个 Contact processor。旧响应缺字段、404/超时与 demo/
 `channel-api/v1`。代码落地不等于飞书后台已订阅，也不等于 API/worker 已重启、staging/live 或生产
 rollout；这些仍需独立发布门禁。
 
+### 1.6 进程内 durable identity reconciliation（EIM-I8 / CHN-X22）
+
+本节不新增 public/private Channel endpoint、request/response body、capability 或 SSE wire，也不 bump
+`channel-api/v1`。它只冻结默认关闭的 API lifespan composition：reconciler 从本地 linked/alias、active
+identity、active User、合法 active UserTenant 与近期活跃窗口产生候选；禁止 provider 全员枚举，也
+不得用 reconciliation 刷新 `last_seen_at`。
+
+每 account 使用 durable checkpoint/keyset/target；同 account checkpoint 与 target 全部加锁后才读取
+DB clock，provider I/O 必须在事务外。目录 probe 复用进程唯一共享 provider registry，但使用独立
+uncached 路径和每 account 1/s 限速；全链 probe 受 `min(lease remaining, configured lease)-safety
+margin` 限制（默认 `60-5=55s`），不得复用交互 TTL cache 或复制 provider cache。`NOT_FOUND` 确认
+只使用锁后 DB clock；pending 到期重验 active window。Tenant 禁用在 claim/apply 两段都清理
+cycle/lease 并拒绝 canonical 写入。状态收敛固定为：
+
+- `NOT_FOUND`：跨确认窗口连续两次才允许收紧 canonical；
+- `NOT_IN_SCOPE`：不收紧 canonical；
+- `UNAVAILABLE`：只退避；
+- 只有 clean full-cycle 才恢复 account health；连续收紧达到阈值会打开 circuit breaker。
+
+当前没有 public admin route。repository/admin snapshot 只暴露状态与 repr-hidden 的 stable opaque
+`account_ref`：它是 domain-separated SHA-256 对 tenant ID 与随机 provider account ID 的组合取
+128-bit 截断，仅供诊断关联，不是 authority。snapshot 不返回 raw checkpoint/account ID、provider
+tenant/natural key 或 employee ID。关闭功能时 HTTP/lifespan composition 不应构造 DB/provider；当前
+没有配置启用、重启、真实目录 live 或 rollout。CHN-X22 的本地代码可标 `✅`，但风险感知 local fast
+path、公开管理员面与 rollout deferred，所以 EIM-I8 继续 `🔵`。
+
 ---
 
 ## 2. 写请求形状

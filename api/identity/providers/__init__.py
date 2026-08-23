@@ -21,6 +21,7 @@ from api.identity.providers.contracts import (
     ProviderIdentity,
     ProviderIdentityResult,
     ProviderIdentityStatus,
+    ReconciliationIdentityProvider,
 )
 from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
 from api.identity.providers.lark_oapi import LarkOapiFeishuDirectoryClient
@@ -48,4 +49,5 @@ __all__ = [
     "ProviderIdentity",
     "ProviderIdentityResult",
     "ProviderIdentityStatus",
+    "ReconciliationIdentityProvider",
 ]

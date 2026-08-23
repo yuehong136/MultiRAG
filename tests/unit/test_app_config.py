@@ -610,6 +610,76 @@ class TestMcpInteractionsConfig:
         assert retired not in rendered
 
 
+class TestIdentityReconciliationConfig:
+    def test_reconciliation_is_default_disabled(self, conf_dir):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+
+        reconciliation = load_app_config().identity.reconciliation
+
+        assert reconciliation.enabled is False
+        assert reconciliation.active_window_seconds == 2_592_000
+        assert reconciliation.lease_seconds == 60
+        assert reconciliation.seed_interval_seconds == 60.0
+        assert reconciliation.probe_safety_margin_seconds == 5.0
+        assert reconciliation.lease_seconds - reconciliation.probe_safety_margin_seconds == 55.0
+        with pytest.raises(AppConfigError, match=r"identity\.reconciliation is disabled"):
+            reconciliation.require_enabled()
+
+    def test_reconciliation_enabled_limits_are_typed(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              reconciliation:
+                enabled: true
+                seed_interval_seconds: 30
+                probe_safety_margin_seconds: 7.5
+                cycle_interval_seconds: 300
+                not_found_confirmation_seconds: 600
+                backoff_initial_seconds: 3
+                backoff_max_seconds: 30
+            """,
+        )
+
+        reconciliation = load_app_config().identity.reconciliation.require_enabled()
+
+        assert reconciliation.cycle_interval_seconds == 300
+        assert reconciliation.not_found_confirmation_seconds == 600
+        assert reconciliation.seed_interval_seconds == 30.0
+        assert reconciliation.probe_safety_margin_seconds == 7.5
+
+    def test_reconciliation_rejects_confirmation_inside_same_cycle(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              reconciliation:
+                cycle_interval_seconds: 600
+                not_found_confirmation_seconds: 300
+            """,
+        )
+
+        with pytest.raises(AppConfigError, match="not-found confirmation"):
+            load_app_config()
+
+    def test_reconciliation_rejects_probe_margin_without_positive_lease_budget(
+        self,
+        conf_dir,
+    ):
+        conf_dir(
+            SERVICE_CONF,
+            """
+            identity:
+              reconciliation:
+                lease_seconds: 30
+                probe_safety_margin_seconds: 30
+            """,
+        )
+
+        with pytest.raises(AppConfigError, match="probe safety margin"):
+            load_app_config()
+
+
 class TestDefaultModelsResolutionParity:
     """resolved_model 与旧 settings._resolve_per_model_config 逐条等价。"""
 

@@ -224,3 +224,19 @@ class EnterpriseIdentityProvider(Protocol):
         context: ProviderContext,
         provider_user_id: str,
     ) -> ProviderIdentityResult: ...
+
+
+@runtime_checkable
+class ReconciliationIdentityProvider(Protocol):
+    """Uncached, rate-limited probe used only by durable reconciliation.
+
+    This capability is deliberately separate from
+    :class:`EnterpriseIdentityProvider`: ordinary request-path providers and
+    existing test doubles are not forced to implement background scanning.
+    """
+
+    async def reconcile(
+        self,
+        context: ProviderContext,
+        provider_user_id: str,
+    ) -> ProviderIdentityResult: ...

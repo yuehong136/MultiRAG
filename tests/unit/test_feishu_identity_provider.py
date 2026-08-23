@@ -159,6 +159,16 @@ def _provider(
     )
 
 
+@pytest.mark.parametrize("limit", [0.0, -1.0, float("inf"), float("nan")])
+def test_reconciliation_limiter_must_be_finite_and_positive(limit: float) -> None:
+    with pytest.raises(ValueError, match="provider runtime limits"):
+        FeishuEnterpriseIdentityProvider(
+            _Credentials(),
+            directory_client=_Directory(),
+            reconciliation_calls_per_second=limit,
+        )
+
+
 async def test_resolve_verifies_tenant_projects_only_whitelisted_identity_and_caches() -> None:
     directory = _Directory()
     provider = _provider(directory)
@@ -178,6 +188,35 @@ async def test_resolve_verifies_tenant_projects_only_whitelisted_identity_and_ca
     assert _SENSITIVE not in repr(first)
     assert "provider-tenant-test" not in repr(first.identity)
     assert "open-test" not in repr(first.identity)
+
+
+async def test_reconciliation_bypasses_identity_cache_but_reuses_verified_token() -> None:
+    directory = _Directory()
+    provider = _provider(directory)
+
+    cached = await provider.refresh(_context(), "user-test")
+    first = await provider.reconcile(_context(), "user-test")
+    second = await provider.reconcile(_context(), "user-test")
+
+    assert cached.status is ProviderIdentityStatus.RESOLVED
+    assert first.status is second.status is ProviderIdentityStatus.RESOLVED
+    assert first.from_cache is second.from_cache is False
+    assert directory.token_calls == 1
+    assert directory.tenant_calls == 1
+    assert directory.user_calls == 3
+
+
+async def test_reconciliation_rejects_mismatched_subject_and_never_caches_result() -> None:
+    directory = _Directory()
+    directory.user = replace(directory.user, user_id="different-user")
+    provider = _provider(directory)
+
+    first = await provider.reconcile(_context(), "user-test")
+    second = await provider.reconcile(_context(), "user-test")
+
+    assert first.status is second.status is ProviderIdentityStatus.CONFLICT
+    assert first.error_code is second.error_code is ProviderErrorCode.LINK_CONFLICT
+    assert directory.user_calls == 2
 
 
 async def test_tenant_mismatch_fails_closed_before_contact_and_is_not_cached() -> None:

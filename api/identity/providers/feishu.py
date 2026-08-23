@@ -42,6 +42,7 @@ _NEGATIVE_CACHE_TTL_SECONDS = 30.0
 _TOKEN_EXPIRY_SAFETY_SECONDS = 600
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 _DEFAULT_CONTACT_CALLS_PER_SECOND = 15.0
+_DEFAULT_RECONCILIATION_CALLS_PER_SECOND = 1.0
 _MAX_TOKEN_CACHE_ENTRIES = 512
 _MAX_IDENTITY_CACHE_ENTRIES = 2_048
 _MAX_IN_FLIGHT = 512
@@ -92,9 +93,10 @@ class FeishuEnterpriseIdentityProvider:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
         contact_calls_per_second: float = _DEFAULT_CONTACT_CALLS_PER_SECOND,
+        reconciliation_calls_per_second: float = _DEFAULT_RECONCILIATION_CALLS_PER_SECOND,
     ) -> None:
-        if not math.isfinite(request_timeout_seconds) or request_timeout_seconds <= 0:
-            raise ValueError("provider timeout must be finite and positive")
+        if not math.isfinite(request_timeout_seconds) or request_timeout_seconds <= 0 or not math.isfinite(reconciliation_calls_per_second) or reconciliation_calls_per_second <= 0:
+            raise ValueError("provider runtime limits must be finite and positive")
         self._credential_resolver = credential_resolver
         self._directory_client = directory_client or LarkOapiFeishuDirectoryClient(timeout_seconds=request_timeout_seconds)
         self._clock = clock
@@ -112,6 +114,12 @@ class FeishuEnterpriseIdentityProvider:
         )
         self._rate_limiter = PerKeyRateLimiter[_AccountGeneration](
             calls_per_second=contact_calls_per_second,
+            max_keys=_MAX_TOKEN_CACHE_ENTRIES,
+            clock=clock,
+            sleep=sleep,
+        )
+        self._reconciliation_rate_limiter = PerKeyRateLimiter[_AccountGeneration](
+            calls_per_second=reconciliation_calls_per_second,
             max_keys=_MAX_TOKEN_CACHE_ENTRIES,
             clock=clock,
             sleep=sleep,
@@ -174,6 +182,57 @@ class FeishuEnterpriseIdentityProvider:
             return _result(ProviderIdentityStatus.CONFLICT, ProviderErrorCode.LINK_CONFLICT)
         return result
 
+    async def reconcile(
+        self,
+        context: ProviderContext,
+        provider_user_id: str,
+    ) -> ProviderIdentityResult:
+        """Probe one canonical user without consulting the identity cache.
+
+        Token verification remains shared and cached, while Contact calls use
+        a lower-priority per-account limiter so reconciliation cannot consume
+        the foreground identity lookup budget.
+        """
+
+        invalid = _validate_refresh_input(context, provider_user_id)
+        if invalid is not None:
+            return invalid
+        credential = await self._resolve_credential(context)
+        if isinstance(credential, ProviderIdentityResult):
+            return credential
+        account = _account_generation(context, credential)
+        try:
+            result = await self._fetch_identity(
+                context,
+                credential,
+                account,
+                ProviderIdentifierKind.USER_ID,
+                provider_user_id,
+                rate_limiter=self._reconciliation_rate_limiter,
+            )
+        except _ProviderCallFailed as exc:
+            return exc.result
+        except ProviderRuntimeCapacityError:
+            return _result(
+                ProviderIdentityStatus.UNAVAILABLE,
+                ProviderErrorCode.PROVIDER_UNAVAILABLE,
+                retryable=True,
+            )
+        except FeishuDirectoryClientError as exc:
+            return _client_failure_result(exc.failure)
+        except Exception:
+            return _result(
+                ProviderIdentityStatus.UNAVAILABLE,
+                ProviderErrorCode.PROVIDER_UNAVAILABLE,
+                retryable=True,
+            )
+        if result.status is ProviderIdentityStatus.RESOLVED and result.identity is not None and result.identity.provider_user_id != provider_user_id:
+            return _result(
+                ProviderIdentityStatus.CONFLICT,
+                ProviderErrorCode.LINK_CONFLICT,
+            )
+        return replace(result, from_cache=False)
+
     async def invalidate(self, context: ProviderContext) -> None:
         """Invalidate completed cache entries for a trusted account event."""
 
@@ -235,10 +294,12 @@ class FeishuEnterpriseIdentityProvider:
         account: _AccountGeneration,
         identifier_type: ProviderIdentifierKind,
         identifier_value: str,
+        *,
+        rate_limiter: PerKeyRateLimiter[_AccountGeneration] | None = None,
     ) -> ProviderIdentityResult:
         token = await self._verified_tenant_token(context, credential, account)
         try:
-            await self._rate_limiter.wait(account)
+            await (rate_limiter or self._rate_limiter).wait(account)
             async with asyncio.timeout(self._request_timeout_seconds):
                 response = await self._directory_client.get_user(
                     credential,
@@ -338,6 +399,28 @@ def _validate_resolve_input(
         seen.add(identifier.kind)
     if ProviderIdentifierKind.OPEN_ID not in seen:
         return _result(ProviderIdentityStatus.INVALID, ProviderErrorCode.ASSERTION_INVALID)
+    return None
+
+
+def _validate_refresh_input(
+    context: ProviderContext,
+    provider_user_id: str,
+) -> ProviderIdentityResult | None:
+    if not valid_provider_context(context):
+        return _result(
+            ProviderIdentityStatus.INVALID,
+            ProviderErrorCode.ASSERTION_INVALID,
+        )
+    if context.provider != "feishu":
+        return _result(
+            ProviderIdentityStatus.INVALID,
+            ProviderErrorCode.PROVIDER_MISMATCH,
+        )
+    if not valid_text(provider_user_id, max_length=255):
+        return _result(
+            ProviderIdentityStatus.INVALID,
+            ProviderErrorCode.ASSERTION_INVALID,
+        )
     return None
 
 

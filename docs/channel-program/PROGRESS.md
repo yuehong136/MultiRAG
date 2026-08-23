@@ -216,6 +216,27 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X19 | Channel execution 可选消费 EIM-I5 enterprise-subject evidence：default-disabled registry composition，五态分流，只有 persisted readback 才提升 `ENTERPRISE_VERIFIED`；不改 private wire | ✅ | EIM-I5、CHN-X7；`api/identity_adapters/channel_runtime.py`、`api/channel_execution/dependencies.py`；Feishu 只证明 employee_no，不等于 OA workcode；无 I7/I8 freshness 或 rollout 声明 |
 | CHN-X20 | EIM-L2 的 p2p-only 低敏请假原生表单与严格终态投影：7 个 flat/ref-free 字段提交后只做当前 Principal 的 OA preview，CardKit 不显示 raw tool result | ✅ | EIM-L2、CHN-X15、CHN-X19；`api/channel_execution/interaction_presentations.py`、of_mcp `preview_leave_form`；H5/URL、群聊、reason/身份/PM/CC/remark 与敏感写 deferred；双仓门禁全绿，真实 authority 未配置、未 rollout |
 | CHN-X21 | managed Feishu Contact V3 事件经 bounded normalize、generation-scoped private API、原子 receipt/CAS 与 durable account revision fence 收敛；post-commit provider invalidation 只加速 | ✅ | EIM-I7、CHN-X17；`api/channels/identity_events.py`、`api/channels/{feishu/channel.py,runtime_client.py,worker.py}`、`api/apps/restful_apis/channel_identity_event_api.py`、`api/identity/{directory_events.py,directory_event_repository.py}`；未改配置/后台订阅、未 rollout |
+| CHN-X22 | EIM-I8 已链接活跃身份兜底对账：复用同一 Feishu provider runtime 的低优先级 uncached probe，以 durable account checkpoint/keyset/target proof 收敛漏事件并提供管理员脱敏状态 | ✅ | EIM-I8、CHN-X21；default-disabled 本地代码已完成，不枚举通讯录全员、不刷新 `last_seen_at`、无公开 admin route/rollout；风险感知 local fast path deferred，因此 EIM-I8 仍为 `🔵` |
+
+> **CHN-X22 / EIM-I8 durable reconciliation 完成边界（2026-08-24，CHN 本地代码 `✅`；
+> EIM 仍 `🔵`，未 rollout）**：默认关闭的 reconciler 只从本地已链接/alias、active identity、active
+> User、合法 active UserTenant 与近期活跃窗口选择 subject；不做 provider 全员枚举，也不刷新
+> `last_seen_at`。每 account 持久化 checkpoint/target；锁定同 account 的 checkpoint 与 target 后才读取
+> DB clock，provider I/O 全部在事务外。目录读取复用唯一共享 provider registry，但使用独立 uncached
+> probe 与每 account 1/s 限速，不复用交互 TTL cache，也不复制 provider cache。credential/KMS/token/
+> tenant/limiter/Contact 全链预算为 `min(lease remaining, configured lease)-safety margin`（默认
+> `60-5=55s`）；`NOT_FOUND` 确认使用锁后 DB clock，pending 到期重验 active window。Tenant 禁用在
+> claim/apply 两段都闭合 cycle/lease，并拒绝 in-flight observation 修改 canonical identity。
+>
+> `NOT_FOUND` 只有跨确认窗口连续两次才收紧 canonical；`NOT_IN_SCOPE` 不收紧；`UNAVAILABLE` 只退避。
+> 只有 clean full-cycle 才恢复 account health，连续收紧达到阈值会打开 circuit breaker。当前只有
+> repository/admin snapshot，没有 public admin route；snapshot 以 repr-hidden 的 stable opaque
+> `account_ref` 区分 account，它是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID
+> 取 128-bit 截断的诊断引用，不是 authority；不返回 raw checkpoint/account ID、provider tenant/natural
+> key 或 employee ID。disabled HTTP/lifespan 路径不应构造 DB/provider。未改配置、未重启、未跑真实
+> 目录 live 或 rollout。风险感知 local fast path、公开管理员面和 rollout deferred，因此不能把
+> CHN-X22 的本地 `✅` 外推成 EIM-I8 完成。完整 MultiRAG 最终门禁数字待根任务完成后回填，不从
+> focused 或历史数字推算。
 
 > **CHN-X21 / EIM-I7 完成边界（2026-08-24，本地实现 `✅`，未 rollout）**：managed
 > capability 只有在 generation-scoped preflight 加法广告 `identity_event_receipt=true` 时，才于

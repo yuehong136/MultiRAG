@@ -8,14 +8,16 @@ from api.db.db_models import McpInteraction, McpInteractionResumeJob
 
 _SCHEMA = "usr_ai"
 _U15_REVISION = "d8f0a2b4c6e8"
+_CURRENT_HEAD_REVISION = "e1f3a5c7b9d0"
 
 
-def test_u15_is_the_single_alembic_head(alembic_cfg) -> None:
+def test_u15_remains_on_the_single_alembic_head_lineage(alembic_cfg) -> None:
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(alembic_cfg)
 
-    assert script.get_heads() == [_U15_REVISION]
+    assert script.get_heads() == [_CURRENT_HEAD_REVISION]
+    assert script.get_revision(_CURRENT_HEAD_REVISION).down_revision == _U15_REVISION
 
 
 def test_fresh_schema_has_interaction_and_resume_job_constraints(

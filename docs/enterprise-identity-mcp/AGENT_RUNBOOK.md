@@ -194,7 +194,9 @@ P1 当时不交付 C3/P2、A2/P3 或 A7。C3、P2 已在后续独立任务完成
 live；A7 的代码前置虽已满足，仍须作为独立 inbound Resource Server 实现/发布。当前 token 主线是
 P3；不得重做 C3/P2/A2，也不得把 A2 的独立 signer 当成 bearer 已接线。
 I5 已在后续独立任务完成且默认关闭；I7/CHN-X21 也已完成本地 managed event consumer、未 rollout，
-I8 的 I6 + I7 依赖现已闭合，但仍不能跳过 reconciliation/freshness 自身门禁。
+I8 的 I6 + I7 依赖现已闭合，默认关闭的 durable reconciliation slice 也已作为
+CHN-X22 本地代码落地；但风险感知的 local fast path、公开管理员面与 rollout 仍 deferred，
+所以 EIM-I8 继续保持 `🔵`，不得把局部落地写成完整 freshness 闭环。
 
 #### EIM-P2 / CHN-X18 已完成边界
 
@@ -510,6 +512,38 @@ L2 是 L1 + U15 的窄组合，不是 leave 写入阶段。当前代码锚点为
    **2762 passed**、强制 integration **182 passed**、MCP compatibility **22/22**。这足以标代码/契约
    `✅`，但真实 authority、部署与生产 rollout 仍须另行批准。
 
+#### EIM-I8 / CHN-X22 durable reconciliation slice 交接（CHN 本地代码 `✅`；EIM `🔵`）
+
+I8 当前只完成默认关闭的 durable reconciliation slice，不是完整 freshness 产品。代码锚点为
+`api/identity/reconciliation/`、migration `e1f3a5c7b9d0`、identity reconciliation lifespan 与共享
+identity provider runtime。接手者必须保留：
+
+1. 候选集只来自本地已链接/alias、active identity、active User、合法 active UserTenant，且在近期活跃
+   窗口内的 subject；禁止 provider 全员枚举，也不得用 reconciliation 刷新 `last_seen_at`；
+2. 每 account 持久化 checkpoint/target；同 account checkpoint 与 target 全部加锁后才读取 DB clock，
+   以 keyset/target 推进替代进程内游标；`NOT_FOUND` 首次/末次/确认窗口也只能用锁后数据库时钟；
+   provider I/O 必须在数据库事务外；
+3. reconciliation 使用共享 provider registry，但目录读取是独立 uncached 路径并受每 account **1/s**
+   限速；credential/KMS/token/tenant/limiter/Contact 全链预算不超过
+   `min(lease remaining, configured lease)-safety margin`（默认 `60-5=55s`），timeout 只作
+   `UNAVAILABLE` 退避；不得复用交互请求的 TTL cache，也不得制造第二套 provider cache；
+4. `NOT_FOUND` 需要跨确认窗口连续两次才收紧 canonical；`NOT_IN_SCOPE` 不计入 canonical 收紧；
+   pending 到期必须重验 active window，过期则 Provider 零调用；`UNAVAILABLE` 只退避，不得把暂态
+   失败写成身份撤销；
+5. 只有 clean full-cycle 才能把 account health 恢复 healthy；连续收紧达到阈值会打开 circuit breaker，
+   防止目录异常造成批量破坏；
+6. 当前只有 repository/admin snapshot，**没有 public admin route**；snapshot 的 repr-hidden stable
+   opaque `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取
+   128-bit 截断的诊断引用，不是 authority，并且不返回 raw checkpoint/account ID、provider
+   tenant/natural key 或 employee ID。HTTP disabled 路径不应构造 DB/provider，且没有重启、真实目录
+   live、配置变更或 rollout；
+7. Tenant 软禁用必须在 claim 与 apply 两段都按锁后状态 fail closed：清理已有 cycle/lease、保持
+   canonical identity 与 account health 不扩权，不能让 in-flight Provider observation 落库；
+8. CHN-X22 可按本地 Channel composition/生命周期切片标 `✅`；EIM-I8 必须继续 `🔵`，因为风险感知
+   local fast path、公开管理员面与 rollout 仍 deferred；
+9. 本轮完整 MultiRAG 最终门禁数字由根任务完成后回填；在此之前只能写“待回填”，不得从 focused
+   测试或历史 `make verify` 数字推算。
+
 #### EIM-I6 完成边界与 C1/C2/C3 接线交接
 
 I6 的代码锚点为 `api/identity/provisioning_contracts.py`、`provisioning.py`、
@@ -719,7 +753,8 @@ EIM-F9 后续把 A5 的 era 分类扩成 SDK registry 驱动的完整门禁：�
 **499 passed、2 existing skipped**。FastMCP 4.0.0b3 升级仍须另立版本任务，不能借 F9 静默升级。
 
 A6 phase 1 已接续且保持 `🔵`；MultiRAG F1/I3/I4/I5/I6/I7/P1/P2/C1/C2/C3/A2/P3/U14/U15 已完成。
-I7 未做飞书后台订阅、服务重启或 live，I8/freshness 仍待实现；L1 代码、契约与最终门禁已完成并标
+I7 未做飞书后台订阅、服务重启或 live；I8 默认关闭的 durable reconciliation slice 已落地，但
+风险感知 local fast path、公开管理员面与 rollout 仍待实现，因此保持 `🔵`。L1 代码、契约与最终门禁已完成并标
 `✅`，但仍默认关闭；真实
 `leave_applicant` authority 未配置，不能由 Feishu employee_no resolver 推断。M1 继续 medic-only；secure 在独立远程
 发布闸门解除前仍不能作为远程业务入口。

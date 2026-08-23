@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import AsyncIterator
-from threading import Lock
 from typing import cast
 
 from fastapi import Depends, HTTPException, Request, status
@@ -12,7 +11,6 @@ from pydantic import SecretStr
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.channel_control.secret_store import get_channel_secret_store
 from api.channel_execution.adapters import (
     AsyncExecutionRedis,
     RedisChannelExecutionStateStore,
@@ -50,16 +48,19 @@ from api.identity.enterprise_subjects.repository import SqlAlchemyEnterpriseSubj
 from api.identity.enterprise_subjects.service import EnterpriseSubjectService
 from api.identity.mcp_interactions.crypto import InteractionPayloadCipher, InteractionPayloadCipherError
 from api.identity.mcp_interactions.runtime import get_mcp_interaction_service
-from api.identity.providers.feishu import FeishuEnterpriseIdentityProvider
 from api.identity.provisioning import HmacLinkCodeCodec, IdentityProvisioningService
 from api.identity.provisioning_repository import SqlAlchemyIdentityProvisioningRepository
-from api.identity_adapters.channel_credentials import SessionFactoryChannelProviderCredentialResolver
 from api.identity_adapters.channel_directory_events import ChannelDirectoryEventService
 from api.identity_adapters.channel_runtime import (
     ChannelIdentityResolver,
     IdentityProviderRegistry,
     SqlAlchemyChannelIdentityAuthorityResolver,
     SqlAlchemyChannelIdentityReader,
+)
+from api.identity_adapters.provider_runtime import (
+    build_identity_provider_registry,
+    get_identity_provider_registry_for_session_factory,
+    reset_identity_provider_registry_for_testing,
 )
 from common.app_config import AppConfigError, get_app_config
 
@@ -237,25 +238,12 @@ def get_binding_capability_resolver() -> BindingCapabilityResolver:
     return SessionFactoryBindingResolver(_require_async_session_factory())
 
 
-_identity_provider_registry_lock = Lock()
-_identity_provider_registry: IdentityProviderRegistry | None = None
-_identity_provider_registry_session_factory: async_sessionmaker[AsyncSession] | None = None
-
-
 def _build_identity_provider_registry(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> IdentityProviderRegistry:
-    credential_resolver = SessionFactoryChannelProviderCredentialResolver(
-        session_factory,
-        get_channel_secret_store(),
-    )
-    return IdentityProviderRegistry(
-        {
-            "feishu": lambda: FeishuEnterpriseIdentityProvider(
-                credential_resolver,
-            ),
-        },
-    )
+    """Compatibility seam for existing Channel composition tests."""
+
+    return build_identity_provider_registry(session_factory)
 
 
 def get_identity_provider_registry() -> IdentityProviderRegistry:
@@ -266,20 +254,11 @@ def get_identity_provider_registry() -> IdentityProviderRegistry:
     it is not sufficient for provider cache and single-flight ownership.
     """
 
-    global _identity_provider_registry
-    global _identity_provider_registry_session_factory
-
     session_factory = _require_async_session_factory()
-    registry = _identity_provider_registry
-    if registry is not None and _identity_provider_registry_session_factory is session_factory:
-        return registry
-    with _identity_provider_registry_lock:
-        registry = _identity_provider_registry
-        if registry is None or _identity_provider_registry_session_factory is not session_factory:
-            registry = _build_identity_provider_registry(session_factory)
-            _identity_provider_registry = registry
-            _identity_provider_registry_session_factory = session_factory
-        return registry
+    return get_identity_provider_registry_for_session_factory(
+        session_factory,
+        builder=_build_identity_provider_registry,
+    )
 
 
 def get_channel_directory_event_service(
@@ -296,12 +275,7 @@ def get_channel_directory_event_service(
 def _reset_identity_provider_registry_for_testing() -> None:
     """Drop retained process state at an explicit application/test boundary."""
 
-    global _identity_provider_registry
-    global _identity_provider_registry_session_factory
-
-    with _identity_provider_registry_lock:
-        _identity_provider_registry = None
-        _identity_provider_registry_session_factory = None
+    reset_identity_provider_registry_for_testing()
 
 
 def _build_identity_provisioning_service() -> IdentityProvisioningService:

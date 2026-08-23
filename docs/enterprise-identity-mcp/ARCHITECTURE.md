@@ -447,12 +447,13 @@ request-scoped credential/bearer 接线已实现但默认 disabled、未配置 p
 
 ---
 
-## 4. I7/I8 后的目标快速路径（I7 已实现，I8/freshness 尚未）
+## 4. I7/I8 后的目标快速路径（I7 已实现；I8 durable slice 已落，fast path 尚未）
 
 当前 C3 对每个 LINKED event 都逻辑调用 I4，并允许同 account generation、subject 与 scope 命中
 有界 Provider cache；cache hit 沿用原始 proof time，不等于每条消息都发一次 Contact 网络请求。
-下面的“纯本地快速路径”只有在 EIM-I7 事件失效、EIM-I8 reconciliation 与可配置 freshness policy
-落地后才能启用，不能据此把当前实现改成无条件跳过 I4。
+I8 已用 default-disabled worker 落下 durable reconciliation 基础，但没有给 C3 增加 proof-age/effect
+policy seam。下面的“纯本地快速路径”仍只有在可配置、风险感知 freshness policy 落地后才能启用，
+不能据此把当前实现改成无条件跳过 I4。
 
 ```text
 event -> binding tenant -> open_id alias cache/DB -> active platform_user_id -> Principal -> Agent
@@ -476,6 +477,47 @@ event -> binding tenant -> open_id alias cache/DB -> active platform_user_id -> 
 | MCP access token | 5 分钟 | audience-bound，不使用 refresh token |
 
 这些值必须可配置并用时间源注入测试，不能散落 magic number。
+
+### 4.1 I8 当前 durable reconciliation slice
+
+```mermaid
+sequenceDiagram
+    participant W as API-local Worker
+    participant D as PostgreSQL
+    participant P as Shared Feishu Provider
+
+    W->>D: seed local provider-account checkpoints
+    W->>D: claim account + keyset target under lease/revision fences
+    D-->>W: active alias-linked identity + ProviderContext
+    W->>P: uncached reconcile(user_id), independent 1/s limiter
+    P-->>W: bounded provider observation
+    W->>D: re-lock account/checkpoint/identity/target
+    W->>D: DB clock validates lease + account/scope/identity revisions
+    W->>D: apply proof/tightening/retry and finish or continue cycle
+```
+
+checkpoint seed 不访问 Provider list/page API。每个 target 必须同时具备 account-scoped alias、active
+canonical identity、active non-anonymous User、active `UserTenant(owner/admin/normal)` 和近期
+`last_seen_at`；因此它只对已知、已链接且近期使用的主体作漏事件兜底，不复制组织树。Provider I/O
+完全位于短 claim/apply 事务之外；lease 起点与 apply 都在所有可能阻塞的锁之后读取 PostgreSQL wall
+clock，旧 owner、account revision、scope marker 或 identity revision 漂移均拒绝写入。`NOT_FOUND`
+确认窗口同样以锁后 DB clock 计时；pending target 到期重验 active window。Tenant 在 probe 期间禁用时，
+apply 按 `Tenant → Account → Checkpoint → Identity → Target` 复核、闭合 cycle/lease 并拒绝 canonical 写入。
+uncached probe 的 credential/KMS/token/tenant/limiter/Contact 全链预算上限为
+`min(lease remaining, configured lease)-safety margin`（默认 55 秒）。
+
+状态收敛保持保守：`RESOLVED` 只推进 verified proof/identity revision，不触碰 `last_seen_at`；
+`INACTIVE` 只单向收紧；`NOT_FOUND` 必须至少相隔确认窗口再次观测，且不得覆盖更新的正 proof；
+`NOT_IN_SCOPE` 是 account 视角，不能收紧可能仍由另一 account alias 证明的 canonical identity；
+`UNAVAILABLE` 零 identity write 并有界退避。每个周期有 tightening circuit breaker，只有处理过 target、
+零 error 且无连续失败的完整 clean cycle 才恢复 account health。
+
+当前 API route module 只贡献 default-disabled lifespan，没有 HTTP operation。repository 虽能返回
+tenant-filtered admin snapshot，但其 repr-hidden stable opaque `account_ref` 只是 domain-separated
+SHA-256 对 tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority；snapshot
+不返回 raw checkpoint/account ID、provider tenant/natural key 或 employee ID。public admin route/UI
+尚未接；worker、migration、provider probe 均未在真实环境启用或 rollout。故 CHN-X22 的本地 slice
+可记 `✅`，EIM-I8 因风险感知 fast path、public admin 面与 rollout 仍保持 `🔵`。
 
 ---
 
@@ -509,8 +551,9 @@ private API 到单事务 receipt/CAS。API body 不携 MultiRAG authority；服�
 
 `contact.scope.updated_v3` 不试图猜出哪些用户受影响：先 bump provider account 的
 `identity_revision` 并失效该 account 下 cache；下一次使用逐个重验。高风险操作立即重验。
-account revision 是跨 API 进程 correctness fence，当前进程 invalidate 仅加速；I8 reconciliation 与
-可配置 freshness fast path 仍未实现，因此 I7 不能单独授权 C3 无条件跳过 I4。
+account revision 是跨 API 进程 correctness fence，当前进程 invalidate 仅加速；I8 durable
+reconciliation slice 已实现但可配置 freshness fast path 仍未实现，因此 I7/I8 不能授权 C3 无条件
+跳过 I4。
 
 ---
 

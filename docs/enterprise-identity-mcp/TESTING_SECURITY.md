@@ -128,6 +128,7 @@
 | I5 enterprise subject | server-owned authority、五态、Feishu employee_no exact mapping、default-disabled composition、persisted readback、negative/fatal 分层、repr/error 脱敏 | resolver/service/Channel pure async unit + repository 真 PostgreSQL；不以 OA/workcode、I7/I8 freshness 或 rollout 代替 |
 | I6 Identity write flow | 权威 policy/revision/TTL，JIT/link/preprovisioned 的 User/UserTenant/identity/alias/code/event 原子事务，post-lock freshness | ✅ framework-neutral async service + 真 PostgreSQL；完整门禁全绿 |
 | I7 / CHN-X21 directory event | 四事件 bounded normalize、managed-only subscription、generation/private body fence、ordered authority locks、atomic receipt、stale/future、terminal poison ACK、revision/cache generation、NO_LINK | DTO/route/worker/provider unit + 真 PostgreSQL并发/rollback/CAS；必须覆盖两进程等价 cache、late old-key refill 与 NOT_FOUND negative cache，不以后台订阅或 live 代替 |
+| I8 / CHN-X22 reconciliation | default-disabled 零 side effect、只扫本地 alias-linked active identity/User/UserTenant/近期活跃、checkpoint keyset + target proof、锁后 DB clock lease/fence/NOT_FOUND 确认、Provider I/O 事务外、全链 probe `<= min(lease remaining, 60s)-5s`、uncached 独立 1/s、NOT_FOUND 二次确认、NOT_IN_SCOPE 零 canonical 收紧、UNAVAILABLE 退避、clean-cycle health recovery、tighten circuit breaker、repr/log/admin snapshot 脱敏；`account_ref` 必须是 domain-separated SHA-256(tenant ID + 随机 provider account ID) 截断 128-bit 的 stable opaque 诊断引用、repr-hidden 且非 authority | service/runtime/API/provider unit + 真 PostgreSQL migration/多 worker lease/fence/retry/cycle；必须断言不调用 Provider list/page、不刷新 `last_seen_at`、pending 到期重验 active window、租户禁用后 claim/apply 零 canonical mutation、timeout 只退避、disabled 不构造 DB/secret/provider、无 public route；snapshot 不回显 raw checkpoint/account ID、provider tenant/natural key/employee ID，风险感知 fast path/rollout 不得作为本 slice 的既成事实 |
 | DB schema/event | 唯一约束、事务并发、别名归一化、幂等事件 | `tests/integration/` 真 PostgreSQL |
 | P1 Principal | 单一 canonical class、sealed constructor、深不可变/脱敏 repr、evidence 一致、proof time、legacy owner 活查与 JWT fallback 分界 | 纯 domain/auth unit + 真 PostgreSQL owner-membership 行为 |
 | P2 / CHN-X18 execution context | C3 Principal 显式贯穿 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow/MCP call context；LINKED 零匿名；NO_LINK legacy；tenant+platform-user Memory/session 隔离；并发与 repr/wire 脱敏 | target/driver/Graph/component/MCP 纯 unit + target/history 真 PostgreSQL integration + Memory component/service user filter 与 tenant ownership 测试；若声明真实 Memory 存储隔离，必须补与当前 `msgStoreConn` backend 匹配的 integration，不能用 PostgreSQL 替代；不测试 token/bearer |
@@ -147,7 +148,9 @@ Feishu authority 只证明 `employee_no@feishu_contact`，成功 evidence 必须
 **87 passed**、真 PostgreSQL **10 passed**，`make verify` **2663 passed**、强制 integration
 **181 passed**、`make mcp-compat` **22/22 PASS**；该 I5 证据不宣称真实 OA/workcode、I7/I8 freshness
 或 rollout。EIM-I7/CHN-X21 后续已完成本地 managed Contact consumer：account revision 是跨进程
-cache fence，post-commit invalidate 只加速；I8 reconciliation/freshness、后台订阅与 rollout 仍未完成。
+cache fence，post-commit invalidate 只加速。I8/CHN-X22 又完成 default-disabled durable
+reconciliation slice，但 risk-aware freshness/local fast path、public admin route、后台订阅与 rollout
+仍未完成，EIM-I8 保持 `🔵`。
 EIM-C3 /
 CHN-X7 后续已完成 Channel identity composition 与部署 live：完整 Principal 已进入
 `TrustedChannelContext`，`principal_id` 已约束 target/session owner。EIM-P2 / CHN-X18 又以

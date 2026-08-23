@@ -14,8 +14,9 @@
 > EIM-I5 / CHN-X19 已完成 default-disabled enterprise-subject resolver/service/repository 与 Channel
 > 可选组合：内建 Feishu authority 只证明逐字 `employee_no@feishu_contact`，五态闭合且成功
 > `ENTERPRISE_VERIFIED` evidence 只来自持久化回读；I5 本身不实现 OA/workcode 等价、I7/I8 freshness、
-> leave 业务或 production rollout。I7 后续已完成本地 consumer 但未 rollout，I8/freshness 仍未实现；
-> 不能据此推导真实 OA/workcode 等价或生产可用。
+> leave 业务或 production rollout。I7 后续已完成本地 consumer 但未 rollout；I8 已落
+> default-disabled durable reconciliation slice，但风险感知 local fast path、public admin 面与 rollout
+> 仍 deferred，故任务保持 `🔵`。不能据此推导真实 OA/workcode 等价或生产可用。
 > EIM-I6 的权威 policy/link/event schema、framework-neutral domain service 与三种 PostgreSQL
 > 原子 provisioning transaction 已完成，完整门禁与 current-tree 安全终审全绿；
 > EIM-I2.2、EIM-C1、EIM-C2 与 EIM-I6.1 / CHN-X17 已完成；两个 Channel 的真实 Auth V3 +
@@ -253,7 +254,7 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
 | EIM-I6 | MR | 权威 policy generation、`preprovisioned/link_only/jit` 原子事务、digest-only link grant 与首次绑定审计 | ✅ | I3,I4 | domain/model unit 143；四个 identity 真 PG 面 84；verify unit 2188；integration 128；无显示字段匹配/双 User merge |
 | EIM-I6.1 | CHN-X17 / MR | 经验证的企业连接 onboarding：复用加密 Channel 凭据验证 Auth/Tenant ownership，原子创建 Provider Tenant/Account/Link/Policy，并提供独立 Identity HMAC keyring 与受控 CLI | ✅ | I2.1,I4,I6,C2 | 双 Channel live dry-run 同企业；apply 为 1/2/1/2 且两次重放零 action；六张用户身份 sidecar 与 User/Membership 不变；完整 verify 2316、integration 159、smoke 全绿；本任务本身不交付 C3/X7 |
 | EIM-I7 | CHN-X21 / MR | Contact created/updated/deleted/scope 事件规范化、receipt 幂等、cache/revision 失效 | ✅ | I4 | managed-only capability；generation-scoped private API；原子 receipt/CAS；deleted→revoked、inactive update→inactive；scope/unknown user durable revision fence；不枚举全员 |
-| EIM-I8 | MR | 已链接活跃用户兜底 reconciliation、identity health、管理员可观测性 | ⬜ | I6,I7 | 不枚举全员；限流/游标；故障续跑；指标和脱敏错误码 |
+| EIM-I8 | CHN-X22 / MR | 已链接活跃用户兜底 reconciliation、identity health、管理员可观测性 | 🔵 | I6,I7 | CHN-X22 本地 slice `✅`：default-disabled、无全员枚举、durable checkpoint/keyset/target proof、故障续跑与内部脱敏 snapshot；public admin route、风险感知纯本地 fast path 与 rollout deferred |
 
 ### EIM-I1 开工简报
 
@@ -450,6 +451,31 @@ F1/F3/F4/F7/F8 禁止携带身份功能。F2 只是 characterization/兼容矩�
   revision/marker，不枚举用户；锁后 DB 时钟拒绝超过 5 分钟的未来事件，不设置全局旧事件年龄丢弃。
 - I7 只完成事件失效与 durable fence；I8 reconciliation、可配置 freshness/纯本地快速路径、管理员
   可观测、真实后台订阅、API/worker 重启、staging/live 与 production rollout 均不在本任务。
+
+### EIM-I8 / CHN-X22 当前完成边界（CHN-X22 本地 slice `✅`；EIM-I8 保持 `🔵`）
+
+- runtime 默认关闭；disabled API lifespan 不读取 DB lifecycle、不构造 secret/provider，也不暴露 HTTP
+  operation。启用时每个 API 进程只有一个串行 worker，多进程通过 PostgreSQL lease 协调；未改配置
+  默认值、未迁移真实环境、未重启或 rollout。
+- seed 只从本地 Provider Account 建 checkpoint；target keyset 只选择 account alias 存在、canonical
+  identity 为 active `user_id`、User 与 `UserTenant(owner/admin/normal)` 均 active、且 `last_seen_at`
+  落在近期窗口的已链接主体。不会调用飞书 list/page API，也不枚举部门或全员。
+- per-account checkpoint 保存 cycle cursor/计数/health/lease，per-account×identity target 保存 account
+  revision、scope marker、identity revision、proof 与 NOT_FOUND 确认状态。claim/apply 都是短事务；
+  Provider I/O 完全在事务外，所有可能阻塞的行锁取得后再读 PostgreSQL wall clock 验 lease/fence；
+  `NOT_FOUND` 确认也只用 DB clock，pending 到期重验 active window，Tenant 禁用在 claim/apply 两段
+  都闭合 lease/cycle 并拒绝 canonical 写入。
+- Feishu `reconcile()` 绕过 identity result cache、复用同一进程 provider/token runtime，并使用独立的
+  per-account 1 call/s 低优先级 limiter；credential/KMS/token/tenant/limiter/Contact 全链路受
+  `min(lease remaining, configured lease)-safety margin` 约束（默认 `60-5=55s`）。`RESOLVED` 只前移 proof/identity revision，绝不刷新
+  `last_seen_at`；`INACTIVE` 单向收紧；`NOT_FOUND` 至少跨确认窗口二次命中才可收紧；
+  `NOT_IN_SCOPE` 不收紧 canonical identity；`UNAVAILABLE` 零 identity 写并按有界退避续跑。
+- 每周期收紧数量有 circuit breaker；只有完整、处理过 target 且零 error 的 clean cycle 才可把 account
+  health 恢复 healthy。repository 提供 tenant-filtered admin snapshot；其中 repr-hidden stable opaque
+  `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取 128-bit 截断的
+  诊断引用，不是 authority，且不返回 raw checkpoint/account ID、provider tenant/natural key 或
+  employee ID。当前没有 public admin route。风险感知 freshness policy 与 C3 纯本地 fast path 仍
+  fail closed，因此整个 EIM-I8 不改为 `✅`。
 
 ---
 
@@ -938,6 +964,7 @@ EIM-I5  ✅ default-disabled 五态 resolver + persisted readback + Channel opti
 EIM-L1  ✅ 代码/契约与完整门禁已完成；默认关闭，未配置真实 authority 或 rollout
 EIM-L2  ✅ p2p-only 低敏请假原生表单 + OA preview + 严格终态投影；代码/契约与双仓门禁完成，未 rollout
 EIM-I7  ✅ managed Contact-event receipt/CAS/invalidation 已完成；未 rollout（I8 现已解锁）
+EIM-I8  🔵 default-disabled durable reconciliation slice 已落；public admin/风险感知 fast path/rollout deferred
 ```
 
 MCP Foundation 的实际串并行轨道：
@@ -979,7 +1006,7 @@ A4 + P3 -> A5
 A4 -> A6
 
 I4 -> I5                               (✅ default-disabled；无 OA/workcode 等价或 rollout)
-I4 -> I7 (✅); I6 + I7 -> I8          (I8 已解锁，但仍不得跳过 I6/I7)
+I4 -> I7 (✅); I6 + I7 -> I8          (durable slice 已落；完整任务仍 🔵)
 A5 + I5 -> L1                          (✅ code/contract；named binding，secure fail-fast，未 rollout)
 L1 + U15 -> L2                         (✅ native form read-only preview；p2p-only，未 rollout)
 A5 + I5 -> M1 -> M2 -> M3 -> M4 -> U7 -> M5
@@ -992,7 +1019,8 @@ A3/A4/A5 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步�
 durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/I5/I7/P1、
 I6、C2、C3、P2、A2、P3、U14 与 U15/CHN-X15；U15 默认关闭，单机临时 live 已通过但生产 rollout 未开始。CHN-O9 是可并行的 Channel 可观测支线，
 C4/CHN-X8 仍等待 deployment soak。I7/CHN-X21 已完成本地 managed event consumer，但未做飞书后台
-订阅、重启或 live；I8 的 I6 + I7 依赖现已闭合。
+订阅、重启或 live；I8 的 default-disabled durable reconciliation slice 已落，但 public admin、
+风险感知 fast path 与 rollout deferred，状态保持 `🔵`。
 L1 与 M1 的代码依赖 A5 + I5 均已满足。L1 的代码、contract snapshot 与完整 verify 已完成并标
 `✅`，但仍默认关闭、未 rollout；L2/CHN-X20 已在这个围栏内增加 p2p-only 的七字段低敏 form 和
 `doCreateRequest` 零调用的 OA preview，并在双仓门禁全绿后标为 `✅`。`ecology_userid` 是 service-owned

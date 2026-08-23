@@ -1959,6 +1959,264 @@ class IdentityEventReceipt(BaseModel):
         return payload
 
 
+class IdentityReconciliationCheckpoint(BaseModel):
+    """Durable per-account cursor, lease, and bounded-cycle counters."""
+
+    __tablename__ = "t_ai_identity_reconciliation_checkpoints"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "provider_account_id",
+            name="uq_identity_reconciliation_checkpoints_account",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "provider_account_id",
+            "tenant_id",
+            "provider",
+            name="uq_identity_reconciliation_checkpoints_target_scope",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> ''",
+            name="ck_identity_reconciliation_checkpoints_nonempty",
+        ),
+        sa.CheckConstraint(
+            "lease_attempt >= 0 AND processed_count >= 0 AND tightened_count >= 0 AND error_count >= 0 AND consecutive_failures >= 0",
+            name="ck_identity_reconciliation_checkpoints_counters",
+        ),
+        sa.CheckConstraint(
+            "(lease_owner IS NULL AND lease_until IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_until IS NOT NULL)",
+            name="ck_identity_reconciliation_checkpoints_lease",
+        ),
+        sa.CheckConstraint(
+            "cycle_started_at IS NOT NULL OR cursor_identity_id IS NULL",
+            name="ck_identity_reconciliation_checkpoints_cycle_cursor",
+        ),
+        sa.ForeignKeyConstraint(
+            ["provider_account_id", "tenant_id", "provider"],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.id",
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+            ],
+            name="fk_identity_reconciliation_checkpoints_account_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_identity_reconciliation_checkpoints_due",
+            "next_run_at",
+            "lease_until",
+        ),
+        sa.Index(
+            "ix_identity_reconciliation_checkpoints_tenant",
+            "tenant_id",
+            "provider",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    provider_account_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(
+        String(32),
+        sa.ForeignKey(
+            "usr_ai.t_ai_tenants.id",
+            name="fk_identity_reconciliation_checkpoints_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    cursor_identity_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cycle_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_attempt: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    processed_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    tightened_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    error_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    safe_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("provider_account_id", None)
+        payload.pop("tenant_id", None)
+        payload.pop("cursor_identity_id", None)
+        payload.pop("lease_owner", None)
+        payload.pop("safe_error_code", None)
+        return payload
+
+
+class IdentityReconciliationTarget(BaseModel):
+    """Latest fenced observation state for one account/identity pair."""
+
+    __tablename__ = "t_ai_identity_reconciliation_targets"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "provider_account_id",
+            "external_identity_id",
+            name="uq_identity_reconciliation_targets_account_identity",
+        ),
+        sa.CheckConstraint(
+            "state IN ('pending', 'completed', 'failed')",
+            name="ck_identity_reconciliation_targets_state",
+        ),
+        sa.CheckConstraint(
+            "last_outcome IS NULL OR last_outcome IN ('resolved', 'inactive', 'not_found', 'not_in_scope', 'unavailable', 'conflict', 'invalid')",
+            name="ck_identity_reconciliation_targets_outcome",
+        ),
+        sa.CheckConstraint(
+            "account_revision >= 1 AND identity_revision >= 1 AND not_found_count >= 0",
+            name="ck_identity_reconciliation_targets_counters",
+        ),
+        sa.CheckConstraint(
+            "(not_found_count = 0 AND first_not_found_at IS NULL AND last_not_found_at IS NULL) OR "
+            "(not_found_count > 0 AND first_not_found_at IS NOT NULL AND last_not_found_at IS NOT NULL "
+            "AND last_not_found_at >= first_not_found_at)",
+            name="ck_identity_reconciliation_targets_not_found",
+        ),
+        sa.CheckConstraint(
+            "(verified_at IS NULL AND proof_account_revision IS NULL AND proof_scope_change_at IS NULL "
+            "AND proof_identity_revision IS NULL) OR "
+            "(verified_at IS NOT NULL AND proof_account_revision >= 1 AND proof_identity_revision >= 1)",
+            name="ck_identity_reconciliation_targets_proof_fence",
+        ),
+        sa.CheckConstraint(
+            "btrim(provider) <> '' AND btrim(provider_tenant_key) <> ''",
+            name="ck_identity_reconciliation_targets_nonempty",
+        ),
+        sa.ForeignKeyConstraint(
+            ["checkpoint_id", "provider_account_id", "tenant_id", "provider"],
+            [
+                "usr_ai.t_ai_identity_reconciliation_checkpoints.id",
+                "usr_ai.t_ai_identity_reconciliation_checkpoints.provider_account_id",
+                "usr_ai.t_ai_identity_reconciliation_checkpoints.tenant_id",
+                "usr_ai.t_ai_identity_reconciliation_checkpoints.provider",
+            ],
+            name="fk_identity_reconciliation_targets_checkpoint_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["provider_account_id", "tenant_id", "provider"],
+            [
+                "usr_ai.t_ai_identity_provider_accounts.id",
+                "usr_ai.t_ai_identity_provider_accounts.tenant_id",
+                "usr_ai.t_ai_identity_provider_accounts.provider",
+            ],
+            name="fk_identity_reconciliation_targets_account_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "external_identity_id",
+                "tenant_id",
+                "provider",
+                "provider_tenant_key",
+            ],
+            [
+                "usr_ai.t_ai_external_identities.id",
+                "usr_ai.t_ai_external_identities.tenant_id",
+                "usr_ai.t_ai_external_identities.provider",
+                "usr_ai.t_ai_external_identities.provider_tenant_key",
+            ],
+            name="fk_identity_reconciliation_targets_identity_scope",
+            ondelete="RESTRICT",
+        ),
+        sa.Index(
+            "ix_identity_reconciliation_targets_pending",
+            "checkpoint_id",
+            "state",
+            "next_attempt_at",
+        ),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        index=False,
+        nullable=False,
+        default=lambda: uuid.uuid4().hex,
+    )
+    checkpoint_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_account_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_tenant_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_identity_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    account_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    account_scope_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    identity_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default=text("'pending'"),
+    )
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    not_found_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    first_not_found_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_not_found_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proof_account_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    proof_scope_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proof_identity_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload.pop("checkpoint_id", None)
+        payload.pop("provider_account_id", None)
+        payload.pop("tenant_id", None)
+        payload.pop("provider_tenant_key", None)
+        payload.pop("external_identity_id", None)
+        payload.pop("safe_error_code", None)
+        return payload
+
+
 class McpInteraction(BaseModel):
     """Provider-neutral durable MCP input round owned by MultiRAG Host."""
 

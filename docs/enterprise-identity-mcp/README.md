@@ -171,16 +171,24 @@ JIT 解析 + 通讯录事件失效 + 已链接活跃用户的周期兜底校验
 - EIM-I7/CHN-X21 已完成四个 Contact V3 event 的 managed-only consumer 代码；只有 handler 安装后
   Feishu SDK 才注册 processor。飞书后台真实订阅、API/worker 重启与 rollout 仍需独立执行。
 - 离职、冻结、主动退出、不可见或数据权限被收窄时 fail closed。
-- 周期任务只校验已链接且近期活跃的身份，不抓取全量组织树。
-- I8 与可配置 freshness policy 在 I7 durable fence 之上落地后，正常 RAG 对话命中仍新鲜的本地映射可不发外部
-  Contact/OA 请求。
+- EIM-I8 / CHN-X22 已落下 default-disabled 的 durable reconciliation slice：只从本地账号中选择
+  有 account alias、active identity、active User/UserTenant 且近期 `last_seen_at` 的已链接主体；不抓取、
+  分页或枚举飞书全量组织树。
+- 风险感知 freshness policy 与纯本地 Channel fast path 仍未实现；正常 RAG 对话仍不能仅因 I8 代码存在
+  就跳过 C3/I4 的既有验证路径。
 
 **当前实现边界（2026-08-24）**：I7 本地 consumer 已实现 bounded normalize、generation-scoped
 private route、原子 receipt/CAS、durable account revision fence 与 post-commit cache invalidation；未做
-飞书后台订阅、服务重启或 live。I8 与可配置 freshness 仍未实现，因此 C3 对每个 LINKED event 仍逻辑
-调用 I4；同一 account generation、subject 与 scope 可命中 I4 有界正缓存，不等于每条消息都发一次
-Contact 网络请求，cache hit 也不会把 proof 时间伪装成当前请求时间。不得把 I7 代码完成写成已经
-上线 Contact 事件或已有 24 小时纯本地快速路径。
+飞书后台订阅、服务重启或 live。I8 本地 slice 又增加 per-account checkpoint、keyset cursor、durable
+target proof/lease、低优先级 uncached Provider probe、保守 health 收敛与脱敏 admin snapshot
+repository seam；snapshot 的 repr-hidden stable opaque `account_ref` 是 domain-separated SHA-256 对
+tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority，且不返回 raw
+checkpoint/account ID、provider tenant/natural key 或 employee ID。Provider I/O 在事务外，锁后用 DB
+clock 复核 lease/fence。它仍默认关闭、没有 public admin route、没有 rollout，也不刷新
+`last_seen_at`。因此 C3 对每个 LINKED event 仍逻辑调用 I4；同一
+account generation、subject 与 scope 可命中 I4 有界正缓存，不等于每条消息都发一次 Contact 网络请求，
+cache hit 也不会把 proof 时间伪装成当前请求时间。不得把 I7/I8 本地代码写成已经上线事件/对账或已有
+24 小时纯本地快速路径。
 
 企业策略支持三种 provisioning 模式：
 
@@ -379,8 +387,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
 - P1 已解锁 A7 的代码前置，但 A7 仍是独立 inbound Resource Server 任务，不能立即宣称
   可发布。F1/I4.1/I6/I6.1/C1/C2/C3/P2/A2/P3/A5/U14 已完成；U15 已解锁。CHN-O9 是不阻塞它的
   Channel 可观测并行支线；C4/CHN-X8 仍须等待全部 runner 升级与 deployment soak。I5 已由后续
-  EIM-I5/CHN-X19 完成；I7 已由 I4 解锁，I8 仍需 I6 + I7，
-  不能跳依赖；
+  EIM-I5/CHN-X19 完成；I8 的 I6 + I7 依赖已闭合，default-disabled durable reconciliation slice 已落，
+  但风险感知 fast path、public admin 面与 rollout 仍使 EIM-I8 保持 `🔵`；
   C3/P2、A2/P3/A7 均不属于 P1 完成面；其中 C3/P2 已由后续独立任务完成。
 - MCP 出站已使用官方 SDK 2 `Client`：Streamable HTTP 使用 `mode="auto"` 和 SDK
   `create_mcp_http_client()` 受管 client（30 秒 connect/write/pool、300 秒 read），SSE 使用
@@ -538,7 +546,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
   Confirmation/业务 Idempotency 仍未完成；U14 Interaction ledger 已完成本地实现。
   F1/I4.1/I5/I6/I6.1/I7/C1/C2/C3/P2/A2/P3/A5/U14/U15 已完成本地实现；I7 未 rollout，I8 的
-  I6 + I7 依赖已闭合。I5 内建 authority 只证明 Feishu `employee_no`，不等于 OA `workcode`；不能把
+  durable reconciliation slice 已本地落地但任务保持 `🔵`，没有 public admin route、风险感知 local
+  fast path 或 rollout。I5 内建 authority 只证明 Feishu `employee_no`，不等于 OA `workcode`；不能把
   本地门禁通过当成生产企业主体、secure endpoint 或真实 bearer rollout 已完成。
   A7 虽已解锁前置，仍须作为独立入站
   安全面实现和验收。

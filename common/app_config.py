@@ -560,6 +560,49 @@ class McpInteractionsConfig(_Section):
         return self
 
 
+class IdentityReconciliationConfig(_Section):
+    """Disabled-by-default limits for bounded I8 reconciliation."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = False
+    poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    seed_interval_seconds: float = Field(default=60.0, gt=0, le=3_600)
+    cycle_interval_seconds: PositiveInt = Field(default=21_600, le=604_800)
+    active_window_seconds: PositiveInt = Field(default=2_592_000, le=31_536_000)
+    lease_seconds: PositiveInt = Field(default=60, ge=15, le=300)
+    probe_safety_margin_seconds: float = Field(default=5.0, gt=0, le=60)
+    backoff_initial_seconds: PositiveInt = Field(default=5, le=3_600)
+    backoff_max_seconds: PositiveInt = Field(default=300, le=86_400)
+    not_found_confirmation_seconds: PositiveInt = Field(
+        default=21_600,
+        le=604_800,
+    )
+    degrade_after_failures: PositiveInt = Field(default=3, le=100)
+    max_tighten_per_cycle: PositiveInt = Field(default=10, le=1_000)
+
+    @model_validator(mode="after")
+    def validate_reconciliation_limits(self) -> Self:
+        if self.backoff_initial_seconds > self.backoff_max_seconds:
+            raise ValueError(
+                "identity reconciliation initial backoff must not exceed its maximum",
+            )
+        if self.probe_safety_margin_seconds >= self.lease_seconds:
+            raise ValueError(
+                "identity reconciliation probe safety margin must be shorter than its lease",
+            )
+        if self.not_found_confirmation_seconds < self.cycle_interval_seconds:
+            raise ValueError(
+                "identity reconciliation not-found confirmation must span at least one cycle",
+            )
+        return self
+
+    def require_enabled(self) -> Self:
+        if not self.enabled:
+            raise AppConfigError("identity.reconciliation is disabled")
+        return self
+
+
 class IdentityConfig(_Section):
     """Enterprise identity runtime configuration."""
 
@@ -572,6 +615,9 @@ class IdentityConfig(_Section):
     mcp_issuer: McpIssuerConfig = Field(default_factory=McpIssuerConfig)
     mcp_delegation: McpDelegationConfig = Field(default_factory=McpDelegationConfig)
     mcp_interactions: McpInteractionsConfig = Field(default_factory=McpInteractionsConfig)
+    reconciliation: IdentityReconciliationConfig = Field(
+        default_factory=IdentityReconciliationConfig,
+    )
 
     @model_validator(mode="after")
     def validate_delegation_has_issuer(self) -> Self:
