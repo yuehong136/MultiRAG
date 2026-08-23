@@ -184,7 +184,10 @@ target proof/lease、低优先级 uncached Provider probe、保守 health 收敛
 repository seam；snapshot 的 repr-hidden stable opaque `account_ref` 是 domain-separated SHA-256 对
 tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority，且不返回 raw
 checkpoint/account ID、provider tenant/natural key 或 employee ID。Provider I/O 在事务外，锁后用 DB
-clock 复核 lease/fence。它仍默认关闭、没有 public admin route、没有 rollout，也不刷新
+clock 复核 lease/fence。前台 credential 仍只接受 HEALTHY；reconciliation 专用 seam 只允许
+HEALTHY/DEGRADED。除进程内 limiter 外，claim 还在 Provider I/O 前写入 DB-clock per-account probe
+reservation（默认 1s），把跨副本节流变成 durable 边界。它仍默认关闭、没有 public admin route、没有
+rollout，也不刷新
 `last_seen_at`。因此 C3 对每个 LINKED event 仍逻辑调用 I4；同一
 account generation、subject 与 scope 可命中 I4 有界正缓存，不等于每条消息都发一次 Contact 网络请求，
 cache hit 也不会把 proof 时间伪装成当前请求时间。不得把 I7/I8 本地代码写成已经上线事件/对账或已有
