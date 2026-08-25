@@ -4,3 +4,9 @@
 # Docker control files are parsed and compared line-by-line during builds.
 Dockerfile* text eol=lf
 *.dockerignore text eol=lf
+
+# Test corpora are byte-exact data, not source. SHA256SUMS covers every file,
+# so any line-ending rewrite breaks base64url decoding and the checksum manifest.
+# Windows checkouts (core.autocrlf=true) rewrote every file here before this rule.
+# Use -text rather than eol=lf so a future binary fixture stays intact too.
+tests/fixtures/** -text
