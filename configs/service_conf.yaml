@@ -293,5 +293,9 @@ dcs_server:
 # Enterprise identity and MCP interaction host. Keep the interaction producer
 # disabled until the API migration and Channel consumers have been rolled out.
 identity:
+  # P3 ES256 issuer is opt-in. Generate and configure its file key provider
+  # outside Git; see docs/enterprise-identity-mcp/P3_SIGNING_KEYS.md.
+  mcp_issuer:
+    enabled: false
   mcp_interactions:
     enabled: false

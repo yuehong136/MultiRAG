@@ -253,6 +253,10 @@ A2 的代码锚点是 `api/identity/mcp_issuer/{contracts,keys,service,runtime}.
    曾经用户批准，以单机临时 key/policy/grant、loopback TLS 和严格 verifier 加载 P3 并完成一次真实
    Channel/MCP bearer + U15 live；源码默认关闭，不能把该本机证据写成生产 key/rollout 已完成。
 
+file-key bootstrap、Windows ACL、macOS/Linux owner/mode、配置与无中断轮换的操作步骤统一维护在
+[P3 ES256 签名密钥 runbook](P3_SIGNING_KEYS.md)。它只推进 EIM-O1 的 operator-tooling slice；不得据此
+宣称 KMS、生产 DNS/TLS、多副本 rotation barrier 或 rollout 已完成。
+
 A2 失败基线为新增模块收集 **2 errors**；A1+A2 定向 **130 passed**，定向 mypy **8 source files**。
 另用临时 P-256 key 动态签发且不输出 token/key，由 of_mcp production
 `StrictMcpAccessVerifier` + `parse_jwks_document` 成功验收。`make fix` **1275 files unchanged**；

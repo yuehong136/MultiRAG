@@ -31,6 +31,9 @@
    `uv run ofmcp verify`；改 MultiRAG 时最终必须执行 `make verify`，涉及身份表、迁移或
    token 持久化时另跑 `make integration`。
 
+准备启用 A2/P3 file signer 时，先按 [P3 ES256 签名密钥 runbook](P3_SIGNING_KEYS.md) 生成环境独立
+keypair、配置 owner/ACL、验证 JWKS，并遵守 prepublish → switch → retain/remove 轮换顺序。
+
 推荐的派工方式：
 
 ```text
@@ -537,7 +540,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   resource/scope/key authority；token 固定 ES256、精确 audience、至多 300 秒、4096 bytes，条件 claim
   只取 immutable Principal 的真实证据。file provider 校验 absolute/non-symlink/regular/owner-only
   private PEM、active private/public 匹配、public-only JWKS，以及至少 630 秒的 publish→switch→retain
-  轮换顺序。production code 只用 `cryptography`；PyJWT 只在测试作独立 oracle。
+  轮换顺序。production code 只用 `cryptography`；PyJWT 只在测试作独立 oracle。跨平台生成、配置、
+  权限和轮换步骤见 [P3 signing key runbook](P3_SIGNING_KEYS.md)。
 - P1 已实现领域 Principal 与存量 Web/API adapter；C3 已取得部署 live 证据，P2 已完成传播、
   自动门禁与本机 API rollout，Canvas/Dialog 各一条真实飞书 owned-session live 均完成；A2 的签发面
   与 P3 request-scoped provider/bearer 接线都已完成代码和自动门禁，但默认禁用、未配置真实 key 与
