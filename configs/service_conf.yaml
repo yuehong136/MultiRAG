@@ -289,3 +289,9 @@ dcs_server:
   semantic_server:
     access_key: 'your_access_key'
     secret_key: 'changeme'
+
+# Enterprise identity and MCP interaction host. Keep the interaction producer
+# disabled until the API migration and Channel consumers have been rolled out.
+identity:
+  mcp_interactions:
+    enabled: false
