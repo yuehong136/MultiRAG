@@ -23,7 +23,7 @@ from api.channels.feishu.interaction_renderer import (
     render_interaction_form,
     render_interaction_terminal,
 )
-from api.channels.interaction_models import ChannelInteractionTerminalProjection
+from api.channels.interaction_models import ChannelInteractionTerminalField, ChannelInteractionTerminalProjection
 
 
 class _CardTransport:
@@ -340,3 +340,45 @@ def test_terminal_card_keeps_cardkit_multi_update_enabled() -> None:
     )
 
     assert card["config"]["update_multi"] is True
+
+
+def test_completed_terminal_card_renders_bounded_structured_fields() -> None:
+    card = json.loads(
+        render_interaction_terminal(
+            ChannelInteractionTerminalProjection(
+                state="completed",
+                title="请假试算完成",
+                message="当前用户的 OA 请假试算已完成。",
+                fields=(
+                    ChannelInteractionTerminalField(
+                        label="申请人",
+                        value="当前飞书用户（服务端验证）",
+                    ),
+                    ChannelInteractionTerminalField(
+                        label="OA 试算时长",
+                        value="5.5（单位遵循 OA 规则）",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert card["header"] == {
+        "title": {"tag": "plain_text", "content": "请假试算完成"},
+        "template": "green",
+    }
+    elements = card["body"]["elements"]
+    assert [element["tag"] for element in elements] == ["div", "hr", "column_set", "column_set"]
+    first_row = elements[2]
+    assert first_row["columns"][0]["elements"][0]["text"]["content"] == "申请人"
+    assert first_row["columns"][1]["elements"][0]["text"]["content"] == "当前飞书用户（服务端验证）"
+    assert "action" not in json.dumps(card)
+
+
+def test_noncompleted_terminal_card_rejects_result_fields() -> None:
+    with pytest.raises(ValueError, match="non-completed"):
+        ChannelInteractionTerminalProjection(
+            state="failed",
+            message="处理失败。",
+            fields=(ChannelInteractionTerminalField(label="raw", value="secret"),),
+        )

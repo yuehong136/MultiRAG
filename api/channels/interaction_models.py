@@ -76,11 +76,29 @@ class ChannelInteractionFormProjection(BaseModel):
     )
 
 
+class ChannelInteractionTerminalField(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    label: str = Field(min_length=1, max_length=32)
+    value: str = Field(min_length=1, max_length=160)
+
+
 class ChannelInteractionTerminalProjection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     state: Literal["completed", "declined", "cancelled", "expired", "failed"]
     message: str = Field(min_length=1, max_length=240)
+    title: str | None = Field(default=None, min_length=1, max_length=64)
+    fields: tuple[ChannelInteractionTerminalField, ...] = Field(default=(), max_length=8)
+
+    @model_validator(mode="after")
+    def validate_terminal_shape(self) -> ChannelInteractionTerminalProjection:
+        if self.state != "completed" and (self.title is not None or self.fields):
+            raise ValueError("non-completed terminal projections cannot carry result fields")
+        labels = [item.label for item in self.fields]
+        if len(labels) != len(set(labels)):
+            raise ValueError("terminal field labels must be unique")
+        return self
 
 
 class ClaimedInteractionDelivery(BaseModel):
@@ -132,6 +150,7 @@ __all__ = [
     "ChannelInteractionFormField",
     "ChannelInteractionFormOption",
     "ChannelInteractionFormProjection",
+    "ChannelInteractionTerminalField",
     "ChannelInteractionTerminalProjection",
     "ClaimedInteractionDelivery",
     "InteractionCallbackReceipt",

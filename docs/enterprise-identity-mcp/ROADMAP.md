@@ -796,6 +796,7 @@ URI、audience、scope namespace、protected-resource metadata、审计和回滚
 | EIM-L1 | of_mcp | leave 身份相关只读工具消费 request-scoped Principal 的 exact OA enterprise subject；`oa_user_id` 保持 optional、所有模式始终 ignored | ✅ | A5,I5 | `get_leave_balance` 为 read/reusable，`preview_leave` 为 prepare/reusable，`verify_leave_request` 为 read/reusable，均绑定 server-owned `leave_applicant`；service 固定 `subject_type=ecology_userid`，secure 只覆盖 issuer/tenant，任何 type 漂移启动 fail-fast；dependency 独立重验 `ecology_userid` 后才可调用 OA；verify 同响应 owner/workflow/form fence；输出最小化；写工具无条件 `LEAVE_WRITE_DISABLED` 且 OA 零调用；contract snapshot 与完整 verify 全绿 |
 | EIM-L2 | of_mcp + MR/飞书（CHN-X20） | `preview_leave_form` 用 U14/U15 原生 CardKit form 收集 7 个低敏试算字段，接受后只为当前 Principal 做 OA preview，并以严格 terminal envelope 投影安全结果 | ✅ | L1,U15 | p2p-only；字段仅为 4 种低敏假种 + 起止日期/小时/半小时；`leave:read` + prepare/reusable + `leave_applicant`；接受前 OA 零调用，接受后 `doCreateRequest` 调用数仍为 0 且不创建草稿/审批；modern `2026-07-28` 对 `end<=start` 返回 fresh correction `InputRequired` 并可多轮重开，legacy 仍 terminal；direct/FastMCP terminal envelope 严格校验；H5/URL、敏感写、真实 authority 与 rollout 后置；初始双仓门禁见变更日志，modern correction 为 of_mcp `f9bda8d`、verify **584 passed / 2 skipped** |
 | EIM-L3 | CHN-X23 | of_mcp leave | 将 L1 的 direct enterprise subject 前提替换为通用 `BusinessActorResolver`：飞书 verified `user_id` 按已确认业务契约逐字作为 Ecology userid | ✅ | P4,A5,L2 | `leave_applicant` 改为 exact Provider binding；list types 不需身份，balance/preview/native form/verify 服务端解析；FastMCP b3 嵌套 `Depends` 隐藏 resolver；`oa_user_id` 参数继续忽略；write 工具仍硬关闭；无 DB/额外 OA mapping I/O；format 3 policy snapshot 与 A1 v2 双仓语料 |
+| EIM-L4 | CHN-X24 | of_mcp + MR/飞书 | 提供 contract-faithful、write-disabled 的本地 Ecology simulator，并把 accepted preview 从纯文本终态升级为严格 v2 结构化飞书结果卡 | ✅ | L2,L3,U15 | simulator 验证 RSA secret/userid、实现六个 auth/read/preview endpoint 与 OA-owned 时长，第七个 create 永远 403 且只能显式启动；v2 六键 envelope 有界 title/message/1..8 unique label-value，v1 只读兼容；Card JSON 2.0 无控件整卡替换；不降级 P3/Provider/grant/Host、不冒充真实 OA authority；源码全门禁已通过，live 待本机重新发布 |
 
 `leave_applicant` 已作为 composition root 拥有的命名 binding 落到代码，不是 tool argument、prompt、
 CardKit 字段或任意 Provider 字段别名。service binding 声明把 `subject_type=ecology_userid` 固定为不可变
@@ -827,11 +828,11 @@ L2 只在 L1 的只读身份围栏内增加一个原生表单入口，不改变 
 重复返回同一 correction form。Host 每次持久化新的 interaction revision/presentation，并下发 fresh
 one-time response nonce；legacy revision 继续 terminal failed。两条路径都必须 OA 零调用。
 
-L2 的终态展示是窄 opt-in 契约：只接受 direct envelope 或 FastMCP `result` wrapper，envelope 精确为
-`kind=com.ofmcp/interaction-terminal`、`version=1`、`message`、`preview_only=true`；message 必须是
-trim 后仍逐字相同的单行 printable 文本且不超过 240 字符。任何额外键、错误类型/版本、控制字符、
-多行、首尾空白、超长或其他 tool result 均显示固定 generic 文案，不把原始结果交给卡片。该投影是
-展示协议，不是授权或确认事实。
+L2/L4 的终态展示是窄 opt-in 契约：只接受 direct envelope 或 FastMCP `result` wrapper。当前 producer
+精确生成 `kind/version=2/title/message/fields/preview_only=true` 六键；title/message 分别最多 64/240，
+fields 为 1..8 个唯一、精确二键且 label/value 最多 32/160。Host 继续只读兼容历史精确四键 v1。
+任何额外键、错误类型/版本、控制字符、多行、首尾空白、重复 label、超长或其他 tool result 均显示固定
+generic 文案，不把原始结果交给卡片。该投影是展示协议，不是授权或确认事实。
 
 ---
 
@@ -1053,6 +1054,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-25 | EIM-L4 / CHN-X24 | 增加显式 `ofmcp-ecology-mock` contract simulator：验证真实形状的 RSA secret/userid，覆盖六个 auth/read/preview Ecology endpoint、OA-owned 工时和有界余额，第七个 `doCreateRequest` 永远 403；从不自动选中且不冒充 authority。accepted preview 改产严格六键 v2 terminal，当前用户/假种/起止/OA 时长/余额/执行边界进入有界 label/value；MR Host 保留 v1 只读兼容并对任意畸形结果 generic，飞书用无控件绿色 Card JSON 2.0 整卡替换。未放宽严格 P3/Provider/grant、未启用写工具或生产配置；本机空库重建后待重新发布 Channel/Canvas 再补 live 证据 | of_mcp + MultiRAG / 本次双仓提交（未部署） | of_mcp `ofmcp verify` **607 passed / 2 skipped**、contract snapshot exact；MR focused **109 passed**、`make verify` **2846 passed**、MCP compatibility **22/22**；两仓 diff/lock check 全绿 | Codex |
 | 2026-08-25 | EIM-F10 | 两仓从 FastMCP `4.0.0b2` 精确升级到 `4.0.0b3`，MCP SDK 与 `mcp-types` 保持 `2.0.0`，lock 引入 b3 的 `uncalled-for` `0.4.0`。按 b3 正式依赖绑定复核 `Depends`/`CallArgument`，并重验 auth、mount/proxy、MRTR、structured output 与 legacy/modern 双向协议；未改变身份、policy、配置 schema、工具契约或 rollout | of_mcp `6fac5e6`；MultiRAG / 本次提交（未部署） | of_mcp `uv run --locked ofmcp verify` 六步全绿、**584 passed / 2 skipped**、contract 无漂移；MultiRAG `make verify` 全绿、**2817 passed**；`make mcp-compat` **22/22 PASS**；两仓 `uv lock --check` 与 `git diff --check` 全绿 | Codex |
 | 2026-08-24 | EIM-I8 / CHN-X22 | CHN-X22 default-disabled durable reconciliation slice 本地完成，并以 `4a266c46` 收口恢复与节流；EIM-I8 保持 `🔵`。只扫描本地 account alias + active identity/User/UserTenant + 近期活跃主体，per-account checkpoint/keyset/target proof 与 DB-time lease/fence 跨进程续跑；共享同一 provider runtime，uncached probe 在事务外。前台 credential 只接受 HEALTHY，reconciliation 专用 seam 只允许 HEALTHY/DEGRADED；claim 在 Provider I/O 前写入 DB-clock per-account probe reservation（默认 1s、范围 0.1～60s），跨副本同样受限。NOT_FOUND 二次确认、NOT_IN_SCOPE 零 canonical 收紧、UNAVAILABLE 退避、clean full-cycle health recovery 与每周期收紧 circuit breaker 均 fail closed；不刷新 `last_seen_at`。admin snapshot 的 repr-hidden stable opaque `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority，且不回显 raw checkpoint/account ID、provider tenant/natural key/employee ID。无全员枚举、public admin route、配置启用、真库 migration 执行、重启或 rollout；风险感知 local fast path deferred | MultiRAG `d02261a6` + `4a266c46`（未部署） | 洁净树 `make verify` **2817 passed**；现有服务 integration **226 passed / 1 个既有 MinIO `SignatureDoesNotMatch`**，隔离匹配凭据 MinIO 全量 **227 passed**；MCP compatibility **22/22**；I8 初始安全 diff scan 覆盖 **15/15** production/migration surfaces、**0 findings**，恢复节流 follow-up 独立终审无 P0/P1；`uv lock --check`、diff-check 全绿 | Codex |
 | 2026-08-24 | EIM-L2 / CHN-X20 modern correction | of_mcp `preview_leave_form` 对 modern `2026-07-28` 的 `end<=start` 不再 terminal：首次无效从 initial request id/state 切换到独立 correction id/state；连续无效可重复返回同一 correction form，Host 每个持久化 revision 使用 fresh one-time response nonce；只有合法窗口才调用一次 OA preview。legacy 协议保持 terminal error，所有无效轮次 OA/create/submit 零调用；未改 MultiRAG private wire、依赖、H5/URL、敏感写、authority 或 rollout | of_mcp `f9bda8d` | `uv run --locked ofmcp verify` **584 passed / 2 skipped**；security review **0 findings** | Codex |

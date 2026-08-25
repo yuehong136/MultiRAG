@@ -218,6 +218,26 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X21 | managed Feishu Contact V3 事件经 bounded normalize、generation-scoped private API、原子 receipt/CAS 与 durable account revision fence 收敛；post-commit provider invalidation 只加速 | ✅ | EIM-I7、CHN-X17；`api/channels/identity_events.py`、`api/channels/{feishu/channel.py,runtime_client.py,worker.py}`、`api/apps/restful_apis/channel_identity_event_api.py`、`api/identity/{directory_events.py,directory_event_repository.py}`；未改配置/后台订阅、未 rollout |
 | CHN-X22 | EIM-I8 已链接活跃身份兜底对账：复用同一 Feishu provider runtime 的低优先级 uncached probe，以 durable account checkpoint/keyset/target proof 收敛漏事件并提供管理员脱敏状态 | ✅ | EIM-I8、CHN-X21；default-disabled 本地代码已完成，不枚举通讯录全员、不刷新 `last_seen_at`、无公开 admin route/rollout；风险感知 local fast path deferred，因此 EIM-I8 仍为 `🔵` |
 | CHN-X23 | Channel event + Contact V3 + final I3 绑定通用 `VerifiedProviderIdentity`，P3 按 A4 format-3 resource policy 条件签发严格四字段 claim；of_mcp leave 以 Provider-neutral resolver 取得当前 OA actor | ✅ | EIM-P4/EIM-L3、CHN-X7、CHN-X18；`sub` 保持 platform user，prompt/form/tool args 不可注入；飞书 `user_id` 按已确认契约逐字作为 Ecology userid；write 工具仍硬关闭；A1 v2 双仓语料，默认 disabled、未 rollout |
+| CHN-X24 | 为 EIM-L4 的本地企业身份纵切渲染严格 v2 结构化终态卡：飞书原生表单提交后，以标题、说明和有界字段行整卡替换原消息 | ✅ | EIM-L4、CHN-X20、CHN-X23；仅 completed 可携带 1..8 个唯一 `label/value` 字段，无回调控件；v1 文本 envelope 只作向后兼容；fake Ecology 是显式 developer fixture，真实 P3/Provider identity 与 U14/U15 Host 不降级 |
+
+> **CHN-X24 / EIM-L4 完成边界（2026-08-25，代码/契约 `✅`，待本机飞书 live）**：
+> of_mcp 增加显式 `ofmcp-ecology-mock` developer executable，保留真实适配器使用的 RSA-encrypted
+> `secret`/`userid` 头、六个 auth/read/preview Ecology endpoint、OA-owned 工作时长计算和有界余额结果；
+> 第七个 `doCreateRequest` 永远以 403 `MOCK_WRITE_DISABLED` 拒绝。fixture 从不自动选中，不是 OA authority、
+> secure profile 或生产 deployment。`preview_leave_form` 成功后产出严格六键 v2 envelope：固定 kind、
+> int version 2、title、message、1..8 个精确 `label/value` 字段和 bool `preview_only=true`；当前 leave
+> producer 固定展示当前飞书用户、假种、起止时间、OA 时长、余额和执行边界，不回显 provider subject、
+> raw OA、requestState、异常或 credential。
+>
+> MultiRAG 只接受 direct envelope 或 top-level 仅含 `result` 的 FastMCP wrapper。v2 title/message/field
+> 分别受 64/240/32+160 字符界限、单行 printable/trimmed、字段唯一和最多 8 项约束；任何额外键、
+> 控制字符、重复 label、错误类型或越界都退回固定 generic。已登记的 v1 四键文本 envelope 继续只读
+> 兼容，新的 of_mcp 不再生成。飞书 completed 卡使用 Card JSON 2.0 绿色 header、两列字段行、
+> `update_multi=true`，且没有可重复点击的控件；其他终态不允许携带 title/fields，继续使用 Host 固定摘要。
+> 该结果卡只是展示，不是授权、确认或真实写入证据；严格 P3、Provider identity、grant、U14/U15 durable
+> resume 均保持原边界。本轮源码门禁：of_mcp `ofmcp verify` **607 passed / 2 skipped**；MultiRAG
+> focused **109 passed**、`make verify` **2846 passed**、MCP compatibility **22/22**。真实飞书 live 待本机
+> 重新创建/发布 Channel/Canvas 后另记 rollout 证据。
 
 > **CHN-X23 / EIM-P4 / EIM-L3 完成边界（2026-08-25，代码/契约 `✅`，未 rollout）**：
 > MultiRAG 只在当前 Channel assertion 经 Contact V3 与 final I3 复核、并与同一 Principal 绑定后构造
@@ -280,9 +300,9 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 > CC、remark、人员/附件、H5/URL 均不收集。policy 固定 `leave:read`、prepare/reusable、server-owned
 > `leave_applicant`。accepted 后 U14 仍重验 operator/Principal/tenant/revision/identity TTL/tool gate，
 > 只执行当前主体的 OA preview，`doCreateRequest` 调用数为 0；cancel/decline/expiry/gate failure 与写工具均
-> OA 零写。terminal 只投影 direct 或 top-level 仅含 `result` 的精确四键
-> `com.ofmcp/interaction-terminal` v1 envelope；message 必须单行、trimmed、printable、≤240，其他结果
-> 固定 generic。当前 modern MCP `2026-07-28` 的首次 `end<=start` 从 initial request id/state 切换到
+> OA 零写。terminal 的当前 producer 使用 EIM-L4 六键 `com.ofmcp/interaction-terminal` v2 envelope；
+> Host 仍只读兼容历史四键 v1，任一版本不满足精确白名单都固定 generic。当前 modern MCP
+> `2026-07-28` 的首次 `end<=start` 从 initial request id/state 切换到
 > 独立 correction id/state；连续无效可重复返回同一 correction form。Host 每次持久化新的 interaction
 > revision/presentation，并下发 fresh one-time response nonce。legacy revision 仍 terminal failed；两条
 > 路径都保持 OA 零调用。

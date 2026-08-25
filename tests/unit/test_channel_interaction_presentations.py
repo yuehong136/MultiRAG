@@ -152,6 +152,21 @@ def _terminal_envelope(message: object = "请假预览已完成：OA 试算 8 �
     }
 
 
+def _terminal_card_envelope() -> dict[str, object]:
+    return {
+        "kind": "com.ofmcp/interaction-terminal",
+        "version": 2,
+        "title": "请假试算完成",
+        "message": "当前用户的 OA 请假试算已完成。仅预览，未创建请假单。",
+        "fields": [
+            {"label": "申请人", "value": "当前飞书用户（服务端验证）"},
+            {"label": "请假类型", "value": "事假"},
+            {"label": "OA 试算时长", "value": "5.5（单位遵循 OA 规则）"},
+        ],
+        "preview_only": True,
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "result",
@@ -186,6 +201,38 @@ async def test_reconcile_projects_only_strict_completed_terminal_summary(
 @pytest.mark.parametrize(
     "result",
     [
+        _terminal_card_envelope(),
+        {"result": _terminal_card_envelope()},
+    ],
+)
+async def test_reconcile_projects_only_strict_completed_terminal_card(
+    result: object,
+) -> None:
+    now = _now()
+    cipher = InteractionPayloadCipher([b"k" * 32])
+    presentation = _presentation(now)
+    interaction = _interaction(now, cipher=cipher, result=result)
+    session = _ScriptedSession(now, [presentation], interaction)
+
+    changed = await _repository(session, cipher).reconcile()
+
+    assert changed == 1
+    assert presentation.delivery_projection == {
+        "state": "completed",
+        "title": "请假试算完成",
+        "message": "当前用户的 OA 请假试算已完成。仅预览，未创建请假单。",
+        "fields": [
+            {"label": "申请人", "value": "当前飞书用户（服务端验证）"},
+            {"label": "请假类型", "value": "事假"},
+            {"label": "OA 试算时长", "value": "5.5（单位遵循 OA 规则）"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
         "raw-tool-result",
         {"result": _terminal_envelope(), "raw": "must-not-render"},
         {**_terminal_envelope(), "raw": "must-not-render"},
@@ -194,6 +241,18 @@ async def test_reconcile_projects_only_strict_completed_terminal_summary(
         {**_terminal_envelope(), "version": True},
         {**_terminal_envelope(), "preview_only": False},
         {**_terminal_envelope(), "preview_only": 1},
+        {**_terminal_card_envelope(), "version": 1},
+        {**_terminal_card_envelope(), "title": ""},
+        {**_terminal_card_envelope(), "title": "x" * 65},
+        {**_terminal_card_envelope(), "fields": []},
+        {**_terminal_card_envelope(), "fields": [{"label": "A", "value": "B", "raw": "x"}]},
+        {
+            **_terminal_card_envelope(),
+            "fields": [
+                {"label": "重复", "value": "甲"},
+                {"label": "重复", "value": "乙"},
+            ],
+        },
         _terminal_envelope("line-one\nraw-secret"),
         _terminal_envelope("raw-secret\tvalue"),
         _terminal_envelope("x" * 241),

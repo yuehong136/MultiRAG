@@ -250,17 +250,27 @@ completed result 只有两种合法外形：直接 envelope，或 top-level **�
 ```json
 {
   "kind": "com.ofmcp/interaction-terminal",
-  "version": 1,
+  "version": 2,
+  "title": "请假试算完成",
   "message": "当前用户的 OA 请假试算已完成。仅预览，未创建请假单或发起审批。",
+  "fields": [
+    {"label": "申请人", "value": "当前飞书用户（服务端验证）"},
+    {"label": "请假类型", "value": "年假"},
+    {"label": "OA 试算时长", "value": "5.5（单位遵循 OA 规则）"},
+    {"label": "执行边界", "value": "仅预览；未创建草稿、未发起审批"}
+  ],
   "preview_only": true
 }
 ```
 
-内层必须精确四键；`kind` 逐字如上，`version` 必须是 int 1（bool 不算），`preview_only` 必须是 bool
-true。`message` 必须非空、单行、全部 printable、首尾无空白且最多 240 字符。额外键、raw/nested
-result、错误 kind/version/type、换行/tab/控制字符、首尾空白、空串或超长一律不得进入卡片，completed
-统一回退 `处理已完成。`；其他终态仍用 §1.3 固定摘要。该终态 message 是显示投影，不是授权或
-Confirmation record。
+当前 producer 的内层必须精确六键；`kind` 逐字如上，`version` 必须是 int 2（bool 不算），
+`preview_only` 必须是 bool true。`title`/`message` 必须非空、单行、全部 printable、首尾无空白且分别
+最多 64/240 字符。`fields` 必须是 1..8 个精确 `label/value` 二键对象；label/value 分别最多 32/160
+字符且遵守同一文本约束，label 不得重复。Host 继续只读接受历史精确四键 v1
+`kind/version/message/preview_only`，但新 of_mcp 不再生成 v1。额外键、raw/nested result、错误
+kind/version/type、换行/tab/控制字符、首尾空白、空串、重复 label 或超长一律不得进入卡片，completed
+统一回退 `处理已完成。`；其他终态仍用 §1.3 固定摘要且禁止 title/fields。v2 completed 在飞书显示绿色
+Card JSON 2.0 header 与两列字段行，不包含回调控件。该投影只是显示，不是授权或 Confirmation record。
 
 运行配置仍 default closed。of_mcp `secure` profile 虽显式启用 interaction，但必须提供稳定
 active-first requestState key ring，TTL 900 秒严格大于 MultiRAG InteractionSession 600 秒；缺 key、
@@ -584,6 +594,7 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 
 | 日期 | 版本 | 变更 | 提交 |
 |---|---|---|---|
+| 2026-08-25 | v1（private interaction result opt-in 扩展，不 bump public wire） | EIM-L4 / CHN-X24：completed opt-in envelope producer 从严格四键 v1 升为严格六键 v2，新增有界 title 和最多 8 个唯一 label/value 字段；Host 保留精确 v1 只读兼容，畸形/额外/raw 结果仍 generic。飞书 v2 结果用无控件 Card JSON 2.0 绿色字段卡整卡替换。of_mcp 同批提供显式、write-disabled 的 Ecology contract simulator，仅供本地真实 P3/U14/U15 飞书纵切，不是 authority 或 rollout。源码门禁 of_mcp **607 passed / 2 skipped**；MR focused **109 passed**、verify **2846 passed**、MCP compatibility **22/22**；live 证据待重新发布后补记 | 本次双仓提交（未部署） |
 | 2026-08-24 | v1（仅进程内 composition，不 bump） | 完成 EIM-I8 / CHN-X22 default-disabled durable reconciliation slice，并以 `4a266c46` 收口恢复与节流：本地 linked/active/近期活跃候选、durable account checkpoint/target、锁后 DB clock、事务外 uncached probe；前台 credential 仍只接受 HEALTHY，reconciliation 专用 seam 仅允许 HEALTHY/DEGRADED；claim 在 provider I/O 前写入 DB-clock per-account probe reservation（默认 1s），跨副本不会只依赖进程内 limiter。二次 `NOT_FOUND`、退避、health/circuit 均只单调推进。admin snapshot 的 repr-hidden stable opaque `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority，且不返回 raw checkpoint/account ID、provider tenant/natural key/employee ID。无 Channel public/private wire 或 capability 变化，无 public admin route/rollout；CHN-X22 本地代码 `✅`，EIM-I8 因 fast path/admin/rollout deferred 仍 `🔵`。洁净树 `make verify` **2817 passed**；现有服务 integration **226 passed / 1 个既有 MinIO `SignatureDoesNotMatch`**，隔离匹配凭据 MinIO 全量 **227 passed**；MCP compatibility **22/22**；I8 初始安全 diff scan 覆盖 **15/15** production/migration surfaces、**0 findings**，恢复节流 follow-up 独立终审无 P0/P1；`uv lock --check`、diff-check 全绿 | MultiRAG `d02261a6` + `4a266c46`（未部署） |
 | 2026-08-24 | v1（private interaction 行为兼容，不 bump） | EIM-L2 / CHN-X20 modern correction：MCP `2026-07-28` 的首次 `end<=start` 从 initial request id/state 切换到独立 correction id/state；连续无效可重复返回该 correction form，Host 每个持久化 revision 使用 fresh one-time response nonce；legacy 仍 terminal failed。未改变 callback/ACK/delivery wire、七字段/p2p/preview-only 边界，invalid 路径 OA 零调用。of_mcp `f9bda8d` verify **584 passed / 2 skipped**、security scan **0 findings** | of_mcp `f9bda8d`（未部署） |
 | 2026-08-05 | v1 | 建立。从 `channel.test.ts` 的 11 条断言反推出现状契约；标出 3 处编码了错误行为的断言（§6）与 5 处契约空白（§7）；运行时错误码表由实测 grep 枚举（12 个），命令写在 §4.2 供重跑 | cdc09928 |

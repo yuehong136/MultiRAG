@@ -1964,17 +1964,26 @@ FastMCP wrapper。两层之外的任意额外键都拒绝：
 ```json
 {
   "kind": "com.ofmcp/interaction-terminal",
-  "version": 1,
+  "version": 2,
+  "title": "请假试算完成",
   "message": "当前用户的 OA 请假试算已完成。仅预览，未创建请假单或发起审批。",
+  "fields": [
+    {"label": "申请人", "value": "当前飞书用户（服务端验证）"},
+    {"label": "请假类型", "value": "年假"},
+    {"label": "OA 试算时长", "value": "5.5（单位遵循 OA 规则）"},
+    {"label": "执行边界", "value": "仅预览；未创建草稿、未发起审批"}
+  ],
   "preview_only": true
 }
 ```
 
-envelope 必须精确包含上述四键：`version` 必须是整数 1（bool 不算），`preview_only` 必须是 bool true；
-`message` 必须非空、最多 240 字符、单行、全部 printable，且 `message == message.strip()`。任何 raw tool
-result、错误 kind/version/type、控制字符/换行/tab、首尾空白、超长、nested message、额外键或非精确
-wrapper 都不得进入卡片，统一显示固定 generic `处理已完成。`。该 envelope 只影响 completed terminal
-的安全展示；declined/cancelled/expired/failed 继续使用 Host 固定摘要。
+当前 producer envelope 必须精确包含上述六键：`version` 必须是整数 2（bool 不算），`preview_only`
+必须是 bool true；`title`/`message` 必须非空、最多 64/240 字符、单行、全部 printable 且等于各自
+`strip()`。`fields` 必须是 1..8 个精确 `label/value` 二键对象，label/value 分别最多 32/160 字符并
+遵守同一文本约束，label 唯一。MultiRAG 继续只读接受历史精确四键 v1，但新的 of_mcp 不再生成。
+任何 raw tool result、错误 kind/version/type、控制字符/换行/tab、首尾空白、超长、重复 label、nested
+message、额外键或非精确 wrapper 都不得进入卡片，统一显示固定 generic `处理已完成。`。v2 completed
+投影使用无回调控件的绿色 Card JSON 2.0 字段卡；declined/cancelled/expired/failed 继续使用 Host 固定摘要。
 
 `secure` profile 对本阶段显式 `interactions_enabled=true`，必须从
 `OFMCP_REQUEST_STATE_KEY` 读取 active-first 的稳定 AES-GCM key ring，

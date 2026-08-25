@@ -45,7 +45,12 @@ _MAX_CALLBACK_BYTES = 65_536
 _MAX_FORM_TEXT_CHARS = 1_000
 _MAX_FORM_SELECTIONS = 20
 _MAX_TERMINAL_MESSAGE_CHARS = 240
-_TERMINAL_ENVELOPE_KEYS = frozenset({"kind", "version", "message", "preview_only"})
+_MAX_TERMINAL_TITLE_CHARS = 64
+_MAX_TERMINAL_FIELD_LABEL_CHARS = 32
+_MAX_TERMINAL_FIELD_VALUE_CHARS = 160
+_MAX_TERMINAL_FIELDS = 8
+_TERMINAL_V1_KEYS = frozenset({"kind", "version", "message", "preview_only"})
+_TERMINAL_V2_KEYS = frozenset({"kind", "version", "title", "message", "fields", "preview_only"})
 
 
 class InteractionPresentationErrorCode(StrEnum):
@@ -165,19 +170,25 @@ def _token_digest(purpose: str, value: str) -> str:
 def _terminal_projection(
     state: str,
     *,
-    completed_message: str | None = None,
-) -> dict[str, str]:
+    completed_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     messages = {
-        "completed": completed_message or "处理已完成。",
+        "completed": "处理已完成。",
         "declined": "你已拒绝本次请求。",
         "cancelled": "本次请求已取消。",
         "expired": "表单已过期，请重新发起。",
         "failed": "处理未完成，请稍后重试。",
     }
-    return {"state": state, "message": messages.get(state, "处理状态已更新。")}
+    projection: dict[str, Any] = {
+        "state": state,
+        "message": messages.get(state, "处理状态已更新。"),
+    }
+    if state == "completed" and completed_result is not None:
+        projection.update(completed_result)
+    return projection
 
 
-def _decode_terminal_message(value: object) -> str | None:
+def _decode_terminal_result(value: object) -> dict[str, Any] | None:
     if type(value) is not dict:
         return None
     payload = value
@@ -186,14 +197,39 @@ def _decode_terminal_message(value: object) -> str | None:
         if type(wrapped) is not dict:
             return None
         payload = wrapped
-    if set(payload) != _TERMINAL_ENVELOPE_KEYS:
+    if payload.get("kind") != "com.ofmcp/interaction-terminal" or payload.get("preview_only") is not True:
         return None
-    if payload["kind"] != "com.ofmcp/interaction-terminal" or type(payload["version"]) is not int or payload["version"] != 1 or payload["preview_only"] is not True:
+    version = payload.get("version")
+    if type(version) is not int:
         return None
-    message = payload["message"]
-    if type(message) is not str or not message or message != message.strip() or len(message) > _MAX_TERMINAL_MESSAGE_CHARS or not message.isprintable():
+    if version == 1 and set(payload) == _TERMINAL_V1_KEYS:
+        message = _terminal_text(payload.get("message"), _MAX_TERMINAL_MESSAGE_CHARS)
+        return {"message": message} if message is not None else None
+    if version != 2 or set(payload) != _TERMINAL_V2_KEYS:
         return None
-    return message
+    title = _terminal_text(payload.get("title"), _MAX_TERMINAL_TITLE_CHARS)
+    message = _terminal_text(payload.get("message"), _MAX_TERMINAL_MESSAGE_CHARS)
+    raw_fields = payload.get("fields")
+    if title is None or message is None or type(raw_fields) is not list or not 1 <= len(raw_fields) <= _MAX_TERMINAL_FIELDS:
+        return None
+    fields: list[dict[str, str]] = []
+    labels: set[str] = set()
+    for item in raw_fields:
+        if type(item) is not dict or set(item) != {"label", "value"}:
+            return None
+        label = _terminal_text(item.get("label"), _MAX_TERMINAL_FIELD_LABEL_CHARS)
+        field_value = _terminal_text(item.get("value"), _MAX_TERMINAL_FIELD_VALUE_CHARS)
+        if label is None or field_value is None or label in labels:
+            return None
+        labels.add(label)
+        fields.append({"label": label, "value": field_value})
+    return {"title": title, "message": message, "fields": fields}
+
+
+def _terminal_text(value: object, max_chars: int) -> str | None:
+    if type(value) is not str or not value or value != value.strip() or len(value) > max_chars or not value.isprintable():
+        return None
+    return value
 
 
 class InteractionPresentationRepository:
@@ -797,12 +833,12 @@ class InteractionPresentationRepository:
                 changed += 1
                 continue
             if interaction.revision == presentation.revision and interaction.state in _TERMINAL_STATES:
-                completed_message = self._completed_message(interaction) if interaction.state == "completed" else None
+                completed_result = self._completed_result(interaction) if interaction.state == "completed" else None
                 self._terminalize(
                     presentation,
                     state=interaction.state,
                     now=now,
-                    completed_message=completed_message,
+                    completed_result=completed_result,
                 )
                 changed += 1
         await self._session.flush()
@@ -883,7 +919,7 @@ class InteractionPresentationRepository:
             raise InteractionPresentationError(InteractionPresentationErrorCode.PAYLOAD_INVALID)
         return mapping
 
-    def _completed_message(self, interaction: McpInteraction) -> str | None:
+    def _completed_result(self, interaction: McpInteraction) -> dict[str, Any] | None:
         if interaction.result_ciphertext is None or interaction.result_key_id is None:
             return None
         try:
@@ -899,7 +935,7 @@ class InteractionPresentationRepository:
             )
         except (InteractionPayloadCipherError, TypeError, ValueError):
             return None
-        return _decode_terminal_message(result)
+        return _decode_terminal_result(result)
 
     async def _locked_callback(
         self,
@@ -935,14 +971,14 @@ class InteractionPresentationRepository:
         *,
         state: str,
         now: datetime,
-        completed_message: str | None = None,
+        completed_result: Mapping[str, Any] | None = None,
     ) -> None:
         presentation.response_state = "terminal"
         presentation.delivery_kind = "terminal"
         presentation.delivery_state = "pending"
         presentation.delivery_projection = _terminal_projection(
             state,
-            completed_message=completed_message,
+            completed_result=completed_result,
         )
         presentation.delivery_lease_owner = None
         presentation.delivery_lease_until = None

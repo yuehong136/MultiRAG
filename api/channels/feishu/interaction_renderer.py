@@ -104,6 +104,21 @@ class FeishuTerminalProjection(Protocol):
     @property
     def message(self) -> str: ...
 
+    @property
+    def title(self) -> str | None: ...
+
+    @property
+    def fields(self) -> Sequence[FeishuTerminalFieldProjection]: ...
+
+
+@runtime_checkable
+class FeishuTerminalFieldProjection(Protocol):
+    @property
+    def label(self) -> str: ...
+
+    @property
+    def value(self) -> str: ...
+
 
 @dataclass(frozen=True, slots=True)
 class RenderedFeishuInteractionForm:
@@ -319,12 +334,37 @@ def render_interaction_terminal(
     state = projection.state
     if state not in states:
         raise FeishuInteractionRenderError("terminal state is invalid")
-    title, template = states[state]
+    default_title, template = states[state]
+    title = default_title
+    if projection.title is not None:
+        if state != "completed":
+            raise FeishuInteractionRenderError("terminal title is invalid")
+        title = _required_text(
+            projection.title,
+            max_chars=64,
+            field="terminal title",
+        )
     message = _required_text(
         projection.message,
         max_chars=_MAX_MESSAGE_CHARS,
         field="terminal message",
     )
+    elements: list[dict[str, object]] = [_plain_div(message)]
+    fields = tuple(projection.fields)
+    if fields:
+        if state != "completed" or len(fields) > 8:
+            raise FeishuInteractionRenderError("terminal fields are invalid")
+        elements.append({"tag": "hr"})
+        labels: set[str] = set()
+        for item in fields:
+            if not isinstance(item, FeishuTerminalFieldProjection):
+                raise FeishuInteractionRenderError("terminal field is invalid")
+            label = _required_text(item.label, max_chars=32, field="terminal field label")
+            value = _required_text(item.value, max_chars=160, field="terminal field value")
+            if label in labels:
+                raise FeishuInteractionRenderError("terminal field labels must be unique")
+            labels.add(label)
+            elements.append(_terminal_field_row(label, value))
     card_json = json.dumps(
         {
             "schema": "2.0",
@@ -338,7 +378,7 @@ def render_interaction_terminal(
             },
             "body": {
                 "direction": "vertical",
-                "elements": [_plain_div(message)],
+                "elements": elements,
             },
         },
         ensure_ascii=False,
@@ -533,6 +573,32 @@ def _plain_div(content: str) -> dict[str, object]:
     }
 
 
+def _terminal_field_row(label: str, value: str) -> dict[str, object]:
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "background_style": "default",
+        "horizontal_spacing": "default",
+        "margin": "0px",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "vertical_align": "top",
+                "elements": [_plain_div(label)],
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 2,
+                "vertical_align": "top",
+                "elements": [_plain_div(value)],
+            },
+        ],
+    }
+
+
 def _required_label(label: str, required: bool) -> str:
     return f"{label} *" if required else label
 
@@ -549,6 +615,7 @@ __all__ = [
     "FeishuInteractionCardTransport",
     "FeishuInteractionRenderError",
     "FeishuInteractionRenderer",
+    "FeishuTerminalFieldProjection",
     "FeishuTerminalProjection",
     "RenderedFeishuInteractionForm",
     "render_interaction_form",

@@ -331,8 +331,11 @@ API-local callback processor 另取有 owner/attempt/expiry fence 的 lease，�
 binding/generation/enabled/provider，经 I3/I4/I6/P1 提升 verified Principal，再调用 U14 对当前 revision
 执行一次 accept/decline/cancel。U14 继续拥有 interaction lease、tool gate、identity TTL、恢复前重授权、
 幂等和多轮上限。字段错误重新排队安全 form；完成、拒绝、取消、过期或失败只生成白名单 terminal
-摘要并更新原卡，不展示原始工具结果、MCP 参数或底层异常。renderer/worker 不访问数据库，只通过
-私有 API 消费 durable outbox/receipt。
+摘要并更新原卡，不展示原始工具结果、MCP 参数或底层异常。completed 可选择严格 v2 result projection：
+有界 title/message 与最多 8 个唯一 label/value 字段渲染为无回调控件的绿色 Card JSON 2.0 结果卡；
+Host 仅为兼容历史接受严格 v1 文本 envelope。任意额外键、控制字符、重复 label 或越界都回退 generic，
+非 completed 终态禁止携带 title/fields。renderer/worker 不访问数据库，只通过私有 API 消费 durable
+outbox/receipt。
 
 部署不是普通“新 API 先上即可”的加法窗口：先执行 migration，并在
 `identity.mcp_interactions.enabled=false` 下部署/重启 API；再重启所有 supervisor/child worker，确认
