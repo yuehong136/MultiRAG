@@ -376,6 +376,7 @@ class McpIssuerResourceConfig(_Section):
 
     audience: str = ""
     registered_scopes: list[str] = Field(default_factory=list)
+    allow_provider_identity: bool = False
     enterprise_subject: McpIssuerEnterpriseSubjectConfig | None = None
 
     @field_validator("audience")

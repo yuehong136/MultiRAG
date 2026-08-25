@@ -227,7 +227,9 @@ anonymous。初始 claim 与 post-claim failure/cancel tombstone 都使用完整
 tenant/principal owner envelope，legacy raw 仅 NO_LINK 可续用；Dialog/Canvas existing row 再校验
 `principal_id` owner。C3 当时只完成 Principal promotion 与 target/session ownership；后续
 EIM-P2 / CHN-X18 已用同一 frozen `RunContext` 传播到 Agent/RAG/Memory/Canvas workflow 与 MCP
-instance-local call context。C3 定向 **203 passed**、`make verify` **2403 passed**、强制 integration
+instance-local call context。EIM-P4 / CHN-X23 又只在当前 event + Contact V3 + final I3 证明与该
+Principal 绑定后，附加 repr-hidden `VerifiedProviderIdentity`；它不能改变平台 `sub`，也不能由
+prompt/form/tool arguments 构造。C3 定向 **203 passed**、`make verify` **2403 passed**、强制 integration
 **162 passed**。12:42 API 已重启到 `v0.9.9-579-g2b0482c7`，smoke 六组件全绿；真实飞书 live 覆盖
 **2/2** account，四条 alias 收敛到一个 active ExternalIdentity/一个 canonical User，仅有一条 valid
 NORMAL membership 与一条 BindingEvent。Canvas、Dialog 各一条本次 Principal owner 记录，空 owner
@@ -800,6 +802,9 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   request-scoped credential provider 与动态 bearer 源码也已实现且默认关闭。2026-08-24 单机临时
   key/policy/grant + loopback TLS 已产生真实 Channel/MCP bearer 流量并完成 U15 E2E，但这不是生产
   key 管理、私网 TLS、多实例发布或业务 PDP/SQL 授权证据，不能写成生产委托已打通。
+- P4/CHN-X23 已让 P3 按资源策略条件签发严格四字段 Provider identity，且 of_mcp leave 已以
+  Provider-neutral resolver 消费 verified 飞书 `user_id`；当前仍未启用真实 secure Provider tenant
+  配置或重启 rollout，不能把本地门禁写成生产 OA 身份链已上线。
 - 主加密密钥支持在线轮换（密钥环，见上），但**没有存量密文重加密流程**：旧密文要靠旧
   密钥留在环上才读得到，只有该渠道下次保存新凭据时才会改用 active 密钥重写。因此
   **仍然不得直接替换旧 key**——替换 ≠ 轮换。
@@ -815,7 +820,7 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 ws_connected / 
   跨进程汇总或持久化时序存储；未部署前也不能把它写成生产监控已经生效。
 
 因此，生产 binding 仍应绑定只读、最小权限的 Agent/Dialog；涉及副作用的 MCP 工具必须
-自行验证授权和幂等键。正式 Principal/ToolRuntime 接入后，可替换内部执行适配器，而无需
+自行验证授权和幂等键。后续生产 rollout 与写操作授权可继续替换内部执行适配器，而无需
 重写飞书传输、队列、状态或 supervisor。
 
 上述体验缺口的目标契约、任务拆分和安全边界统一见

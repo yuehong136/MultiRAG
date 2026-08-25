@@ -79,7 +79,18 @@ class McpTokenIssuer:
             raise McpTokenIssuanceError(IssuanceErrorCode.RESOURCE_NOT_REGISTERED)
 
         principal = request.principal
-        assurance_verified = principal.authentication.assurance is IdentityAssurance.ENTERPRISE_VERIFIED and principal.enterprise_subject is not None
+        enterprise_subject_verified = principal.authentication.assurance is IdentityAssurance.ENTERPRISE_VERIFIED and principal.enterprise_subject is not None
+        provider_identity_verified = (
+            principal.authentication.assurance
+            in {
+                IdentityAssurance.DIRECTORY_VERIFIED,
+                IdentityAssurance.ENTERPRISE_VERIFIED,
+            }
+            and principal.provider_identity is not None
+        )
+        assurance_verified = ("enterprise_subject" not in request.requested_claims or enterprise_subject_verified) and (
+            "provider_identity" not in request.requested_claims or provider_identity_verified
+        )
         decision = evaluate_issuance_policy(
             IssuancePolicyFacts(
                 subject_is_platform_principal=True,
@@ -88,7 +99,7 @@ class McpTokenIssuer:
                 allowed_scopes=grant.allowed_scopes,
                 requested_scopes=request.requested_scopes,
                 requested_claims=request.requested_claims,
-                requires_assurance="enterprise_subject" in request.requested_claims,
+                requires_assurance=bool(request.requested_claims),
                 assurance_verified=assurance_verified,
                 allowed_requested_claims=resource.allowed_requested_claims,
             ),
@@ -137,6 +148,16 @@ class McpTokenIssuer:
                 "subject": subject.subject,
                 "tenant": subject.issuer_tenant,
                 "type": subject.subject_type,
+            }
+        if "provider_identity" in request.requested_claims:
+            provider_identity = principal.provider_identity
+            if provider_identity is None or not resource.allow_provider_identity:
+                raise McpTokenIssuanceError(IssuanceErrorCode.ASSURANCE_NOT_VERIFIED)
+            claims["provider_identity"] = {
+                "provider": provider_identity.provider,
+                "provider_tenant": provider_identity.provider_tenant,
+                "subject": provider_identity.subject,
+                "subject_type": provider_identity.subject_type,
             }
 
         snapshot = self._signing_keys.snapshot

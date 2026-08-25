@@ -17,6 +17,7 @@
 | `union_id` alias | 飞书 `union_id` | 同一开发商多个 App | 辅助关联，不是主键 |
 | `platform_user_id` | MultiRAG `User.id` | MultiRAG | 平台主体 |
 | `tenant_id` | MultiRAG `Tenant.id` | MultiRAG | 平台企业边界 |
+| `provider_identity` | `provider + provider_tenant + subject_type + subject` | 当前 Channel 身份 | 资源按需证明当前外部员工身份 |
 | `enterprise_subject` | employee_no/talent_id/workcode | 企业业务域 | MCP 业务主体 |
 
 禁止使用裸 `open_id`、姓名、邮箱或手机号做跨 App/跨租户唯一键。
@@ -1422,6 +1423,7 @@ claims。Channel `ExternalIdentityAssertion` 不属于本节，不能被任一 R
 | `acr` | 已验证的 assurance class；A1 按 profile `allowed_acr_values` 校验，A4 可按工具 policy 要求允许值集合 |
 | `amr` | 已验证的 authentication methods；A1 校验非空、无重复且均在 `allowed_amr_values`，A4 可按工具 policy 要求完整 method 集合 |
 | `enterprise_subject` | 目标 service 明确要求时；`{type, issuer, subject, tenant}` |
+| `provider_identity` | 目标 resource 明确要求时；严格四字段 `{provider, provider_tenant, subject_type, subject}` |
 
 `enterprise_subject.subject` 是面向目标 resource 的不透明业务主体，`type` 固定为 service 声明的
 `workcode/talent_id/...` 类型；`tenant` 是该 issuer 的局部边界，不等于可由调用方选择的 MultiRAG
@@ -1429,10 +1431,12 @@ claims。Channel `ExternalIdentityAssertion` 不属于本节，不能被任一 R
 `issuer` 和 `tenant`，不能“随便取第一个”。主体缺失不使普通
 低风险 token 的认证失败，只会让要求该 assurance 的操作在授权层拒绝。
 
-不允许的 claims：`authn_provider`、role、group、department、`open_id`、`union_id`、Provider 原始
-user ID、姓名、邮箱、手机号、员工号明文、飞书/OA access token、Channel message/chat ID、表单值、
-确认状态、模型提示词。Provider 和认证来源留在 MultiRAG Principal/审计；只有可验证保证才映射为
-标准 `auth_time/acr/amr`。
+`provider_identity` 必须来自当前 Channel event、服务端目录复核和同一 Principal 绑定，不能来自
+prompt、CardKit、工具参数或调用方 JSON；P3 只对 policy 明确要求的 resource/tool 签发，且 subject
+在日志、审计与用户输出中隐藏。`sub` 始终仍是 `platform_user_id`，Provider subject 不能替代它。
+不允许的 claims 仍包括 `authn_provider`、role、group、department、散装 `open_id/union_id/user_id`、
+姓名、邮箱、手机号、员工号明文、飞书/OA access token、Channel message/chat ID、表单值、确认状态和
+模型提示词。
 
 首期 canonical resource 示例：
 
@@ -1451,6 +1455,7 @@ Token Broker 最终签发的 scopes 固定取：当前工具需要 scopes、已�
 | token 有效，但缺当前工具全部所需 scope | 403 `insufficient_scope`；一次返回完整所需 scopes | `required_scope_missing` / `MCP_SCOPE_DENIED` |
 | tenant/membership/role/policy/业务对象拒绝 | 403；`oauth_error=null`，不返回 scope challenge | `tenant_mismatch` 或策略 reason / `MCP_AUTHORIZATION_DENIED` |
 | 当前工具要求企业身份保证但 token 未携带/类型不符 | 403；`oauth_error=null`，不返回 scope challenge | `enterprise_subject_required`/`enterprise_subject_type_mismatch` / `MCP_ASSURANCE_REQUIRED` |
+| 当前工具要求 Provider 身份但 token 缺失或坐标不符 | 403；`oauth_error=null`，不返回 scope challenge | `provider_identity_required` / `provider_identity_mismatch` |
 | 工具 policy 声明需要 external resolver，但 resolver 缺失、失败或返回非法结果 | 500 `authorization_invariant_failure`，fail closed；不伪装成用户 403 | 内部 `policy_resolver_required`/`policy_resolver_failed`/`policy_resolver_invalid`；公开响应不泄露细节 |
 | JWKS 不可用且没有仍新鲜的可信缓存 | 503，fail closed | `verifier_unavailable` / `MCP_VERIFIER_UNAVAILABLE` |
 
@@ -1484,7 +1489,7 @@ M2 结合验证后的 tool input 与权威业务系统再落地。
 
 `service.toml.scopes` 只登记服务可用的 scope 词表；`tool_policies` 才给每个工具分配
 `required_scopes`、`effect`、`replay_mode`、`accepted_acr_values`、`required_amr`、可选
-`enterprise_subject` 和 `external_requirements`。`effect` 只允许 `read|prepare|side_effect`，
+`enterprise_subject`、`provider_identity.any_of` 和 `external_requirements`。`effect` 只允许 `read|prepare|side_effect`，
 `replay_mode` 只允许 `reusable|single_use`，且所有模型层都必须强制 `side_effect => single_use`；不能
 根据工具名、description、scope 名或 annotation 临时猜风险。registry 必须在所有 mount/namespace
 assembly 完成后，针对最终 canonical tool catalog 一次性构造：
@@ -1498,9 +1503,9 @@ assembly 完成后，针对最终 canonical tool catalog 一次性构造：
 
 `ofmcp contract` 必须生成并校验排序稳定的 `apps/gateway/contract/tool-policies.json`。快照包含
 `snapshot_format`、`profile`、service id/namespace/scope 词表，以及每个 canonical tool 的 service id、
-required scopes、effect/replay mode、ACR/AMR、enterprise subject 和 external requirements。
-`policy_revision` 等于移除 revision 字段后的 canonical JSON document 的 SHA-256；当前值为
-`7bf9e09082ca4f1d529e51bf3fe8e6dd5c4334c62deaf9a5b6be204af9fca446`（snapshot format 2）。策略变更
+required scopes、effect/replay mode、ACR/AMR、enterprise subject、provider identity 和 external requirements。
+`policy_revision` 等于移除 revision 字段后的 canonical JSON document 的 SHA-256；当前使用
+snapshot format 3。策略变更
 必须显式刷新快照并经过 contract review；Gateway runtime、A6 审计和后续 P3 token/cache key 必须
 调用同一个 canonical builder/已发布 snapshot 获取同一 revision，不从硬编码、文件 mtime 或未排序
 映射推导。
@@ -1624,7 +1629,7 @@ GET /.well-known/jwks.json
 
 `identity.mcp_issuer` 默认 disabled，启用时必须完整给出 canonical HTTPS `issuer`、first-party
 `client_id`、1～300 秒 TTL、固定 30 秒 skew、JWKS cache TTL、resource name 到精确 HTTPS
-audience/registered scopes/可选 enterprise subject type+issuer+issuer-tenant authority 的映射，以及 file key provider。配置中的 private PEM path
+audience/registered scopes/可选 enterprise subject authority/是否允许 provider identity 的映射，以及 file key provider。配置中的 private PEM path
 使用 secret 类型，必须是 absolute、非 symlink、regular file，且 POSIX 下必须归当前进程 owner、只能由
 owner 读写；active
 private P-256 key 必须与 public keyset 中同 `kid` 的 key 完全匹配。production code 只依赖
@@ -1644,7 +1649,9 @@ audience、不可预测 JTI、`nbf=iat` 和 `exp-iat<=300`，compact bytes 不�
 `sub/tenant_id` 只从 Principal 取得；`auth_time` 仅在 Principal 真实携带时投影且不得晚于 `iat`；
 `acr` 首期只在 `ENTERPRISE_VERIFIED` 时投影为冻结值；因当前 Principal 不含已冻结 method evidence，
 首期不签 `amr`。`enterprise_subject` 只有 resource 显式允许、调用方请求且 Principal 是 matching
-enterprise-verified 时，才投影 `{type, issuer, subject, tenant}`；普通 token 不携带它。
+enterprise-verified 时，才投影 `{type, issuer, subject, tenant}`。`provider_identity` 只有 resource
+显式允许、P3 policy 要求、调用方请求且 Principal 携带同一次目录复核绑定的身份时，才逐字投影严格
+四字段；普通 token 不携带它。
 
 `SigningKeyProvider` 只暴露 active `kid`、完整 public JWKS snapshot 和 ES256 signing operation；未来
 KMS adapter 不得迫使 issuer 读取 private bytes。轮换 successor contract 要求 next active key 已存在于
@@ -1656,7 +1663,7 @@ KMS adapter 不得迫使 issuer 读取 private bytes。轮换 successor contract
 P3 不从 Agent DSL、模型可见工具名、MCP tool description、静态 headers 或数据库中的 MCP server
 名称猜授权。首期 authority 是两个启动时一次性加载、深度不可变且可独立评审的 JSON 工件：
 
-- A4 `tool-policies.json`：必须是 format 2，并重新计算 canonical SHA-256 验证
+- A4 `tool-policies.json`：接受历史 format 2 与当前 format 3，并重新计算 canonical SHA-256 验证
   `policy_revision`；逐 canonical tool 提供 `required_scopes`、`effect`、`replay_mode` 与 assurance；
 - MultiRAG `mcp-grants.json`：format 1，带 canonical `grant_revision`、正整数
   `credential_generation`、MCP server → resource/audience 的 delegated binding，以及精确到
@@ -1676,7 +1683,8 @@ Principal 或 published revision 时 delegated call 在网络前拒绝。模型�
 model alias -> MCP server id -> resource name/audience -> canonical tool -> A4 policy
 ```
 
-Provider 只缓存 immutable grant/scope decision，不缓存 bearer；请求的 ACR、AMR 与 enterprise subject
+Provider 只缓存 immutable grant/scope decision，不缓存 bearer；请求的 ACR、AMR、enterprise subject 与
+provider identity
 每次重新校验。A2 当前不签 `amr`，所以 policy 的 `required_amr` 非空时必须在发网前拒绝。decision key 完整包含 principal、
 tenant、agent+revision、server/resource/canonical tool、required scopes、A4 policy revision、grant revision
 与 credential generation。每次逻辑 `tools/call` 都调用 A2 取得新 token/JTI；`side_effect/single_use`
@@ -1693,7 +1701,7 @@ M1/M2 业务对象授权、U14 interaction resume。
 
 ### 6.6 EIM-A1 corpus wire contract
 
-MultiRAG 与 of_mcp 各自保存字节一致、无需网络的 `eim-a1/v1` corpus：
+MultiRAG 与 of_mcp 各自保存字节一致、无需网络的当前 `eim-a1/v2` corpus；v1 历史目录保持冻结：
 
 ```text
 manifest.json
@@ -1756,7 +1764,7 @@ PyJWT/joserfc 异常类型或原文写入 manifest/public response。
 期待 Resource Server 返回 401。
 `delegation_cases[]` 使用
 `id/parent_case_id/actor_case_id/required_preserved_claims/expected.{delegation,failure_reason}` 固定父
-`mcp_access` 与 actor token 的关系。actor 不能新增或改写 assurance/enterprise subject；低风险目标
+`mcp_access` 与 actor token 的关系。actor 不能新增或改写 assurance/enterprise subject/provider identity；低风险目标
 可以省略不需要的条件 claims，要求保留时则必须按 `required_preserved_claims` 逐字段相同。scope
 扩大、service audience 串用或 internal token 超过父 token 剩余时间必须在 gateway 换发阶段拒绝。
 
@@ -1812,6 +1820,7 @@ service HTTPS audience。TTL 最长 60 秒，且 `exp` 不得晚于父 `mcp_acce
 | `tenant_id` / `agent_id` | 从已验证父 Principal/执行上下文复制，不接受请求覆盖 |
 | `auth_time` / `acr` / `amr` | 条件；父 token 已携带且目标 service 需要 assurance 时原样复制，不能提升 |
 | `enterprise_subject` | 条件；只有父 token 已携带且目标 service 需要时原样复制，不能新增或改写 |
+| `provider_identity` | 条件；只有父 token 已携带且目标 service policy 需要时严格四字段原样复制，不能新增或改写 |
 | `act` | RFC 8693-shaped `{sub: <gateway workload id>}`；当前 actor，不改变顶层用户 `sub` |
 | `parent_jti_hash` | `base64url(sha256(parent_jti))`，无 padding；只作关联，不泄露父 jti |
 | `trace_id` | 跨 gateway/service 的不透明 correlation ID |
@@ -1850,79 +1859,54 @@ Principal、token、policy、replay 状态。这些实现事实已经由 of_mcp 
 
 A4 已提供 request-scoped `current_principal()`：外层把 A3 verified claims 投影为不可变领域 Principal，
 内层 list/call middleware 与后续工具 dependency 读取同一 context-local 值，并在请求结束时恢复上下文。
-领域 Principal 只包含稳定平台主体、tenant/agent/client/resource/token metadata、scopes 与可验证的条件
-assurance；role/group/department、Provider 原始字段和上游 token 不属于其模型。service/domain 不 import
+领域 Principal 只包含稳定平台主体、tenant/agent/client/resource/token metadata、scopes、可验证的条件
+assurance 与可选严格 `provider_identity`；role/group/department、散装 Provider 字段和上游 token 不属于其模型。service/domain 不 import
 FastMCP 或 auth provider 类型。
 
 leave 的三个 L1 读/预览工具和 L2 的原生表单预览工具都消费 Principal；medic 工具仍未接线。A4 的通用
 context/policy seam 本身不是业务主体已接线的证明，medic 的高风险链仍由 EIM-M1/M2 独立负责，
 两者不能合并。
 
-### 8.1 EIM-L1 leave 只读身份 binding（`✅`，默认关闭）
+### 8.1 EIM-L3 / CHN-X23 Provider identity -> leave actor bridge（`✅`，未 rollout）
 
-L1 冻结一个由 composition root 持有的命名 binding：`leave_applicant`。它不是用户可选的 resolver
-名称，而是 server-owned 配置与策略引用，至少同时冻结：
+L1 的“P3 直接携带 `ecology_userid enterprise_subject`”已被当前业务事实修订：飞书目录验证后的
+`user_id` 就是 Ecology API 所需 userid。MultiRAG 不推导 OA ID，of_mcp 也不查询数据库或额外 OA
+映射接口；它只在服务端 resolver 中逐字采用经过签名、策略约束的 opaque subject。
 
 ```text
-binding name       = leave_applicant
-subject type       = ecology_userid (immutable service semantic anchor)
-issuer             = exact configured issuer
-tenant             = exact configured issuer tenant
-value semantics    = Ecology API 接受的 userid
+P3 sub = platform_user_id
+P3 provider_identity = (feishu, tenant_key, user_id, verified user_id)
+    -> of_mcp FeishuBusinessActorResolver
+    -> oa_user_id = provider_identity.subject  # exact, no conversion/I/O
 ```
 
-service binding 声明拥有且固定 `subject_type=ecology_userid`；secure override 只能提供或替换权威
-issuer/tenant，不能覆盖 subject type。`secure` composition 在发布工具目录前必须解析且只解析到一个
-binding，并逐字核对三个工具的 `enterprise_subject` policy。任何把 type 改成 `employee_no` 的 override、
-binding 缺失/未知/空白、坐标不完整或与 policy 漂移，都是启动期 invariant failure；不得启动后把
-调用者的 `oa_user_id`、Channel 字段、prompt 或 CardKit 输入当作后备。
-`local` service default 只用于 auth-disabled contract/test assembly；它不产生 request Principal，不能
-授权一次真实读取，也不是 L1 完成或 rollout 证据。仓库没有生产 authority，因而该能力默认关闭。
+`leave_applicant` 现在是 server-owned `provider_identity` binding。生产 composition 必须用部署中的真实
+飞书 `tenant_key` 覆盖 local 测试 tenant，且 policy 只接受精确
+`(provider=feishu, provider_tenant=<tenant_key>, subject_type=user_id)`；缺失、错 Provider、跨租户、错
+subject type、畸形 subject 或 resolver unavailable 全部 fail closed。resolver registry 负责 Provider
+路由，业务工具内禁止堆叠 Channel `if/elif`。
 
-L1 的工具边界固定如下：
-
-| 工具 | L1 行为 |
+| 工具 | 当前身份行为 |
 |---|---|
-| `list_leave_types` | 无用户主体数据，保持 `leave:read` + read/reusable，不要求 binding |
-| `get_leave_balance` | read/reusable；要求 `leave_applicant` exact type/issuer/tenant，只用 Principal subject 查询 |
-| `preview_leave` | prepare/reusable；要求同一 exact binding，只做预览所需 OA 读取，不创建草稿、单据或流程 |
-| `verify_leave_request` | read/reusable；要求同一 exact binding，并执行下述同响应 owner/workflow/form fence |
-| `create_leave_draft` / `submit_leave` | 不属于 L1；无条件稳定返回 `LEAVE_WRITE_DISABLED`，且在构造 Ecology client 或发出任何 OA 请求前结束 |
+| `list_leave_types` | 无用户主体数据，不要求 Provider identity |
+| `get_leave_balance` | read/reusable；解析当前 actor 后查询余额 |
+| `preview_leave` / `preview_leave_form` | prepare/reusable；解析当前 actor 后只做 OA 预览 |
+| `verify_leave_request` | read/reusable；解析当前 actor，并继续执行 owner/workflow/form fence |
+| `create_leave_draft` / `submit_leave` | 不消费该 resolver；仍无条件 `LEAVE_WRITE_DISABLED`、OA 零调用 |
 
-三个身份相关读工具使用独立的 `identity.current_verified_read_subject()` dependency；写工具继续走
-隔离 seam，不能得到 Principal。对所有工具，`oa_user_id` 为 additive-first schema 兼容继续保留
-optional，但在 local/secure、mount/proxy 和 direct test 等所有模式始终 ignored，绝不再作为 fallback。
-三个读工具缺 Principal subject 或 type/issuer/tenant 任一不符，由 A4/依赖层在 OA 调用前稳定拒绝。
-dependency 必须把 `ecology_userid` 当作独立的 service invariant 重验，不能只相信 policy binding；即使
-policy 与 Principal 同时漂移并一致声称 `employee_no`，也必须在构造 Ecology client 或任何 OA 调用前
-拒绝。
+四个只读/预览入口通过 FastMCP 4.0.0b3 `Depends` 注入
+`current_verified_read_subject`，嵌套注入 immutable resolver registry；依赖参数不进入 MCP input schema。
+兼容 `oa_user_id` 参数继续 optional 且始终 ignored，模型、prompt、表单和工具参数都不能选择申请人。
+raw Provider subject、resolved userid、OA raw/form/contact 不进入普通日志、审计或用户输出。
 
-`verify_leave_request` 的 `request_id` 只是对象定位符，不是授权证据。调用必须以当前 verified subject
-限制查询；同一个 `loadForm` 响应必须同时证明 owner 等于该 subject、workflow id 等于配置值、form id
-等于配置值。任一 proof 缺失、歧义或不符均返回同一安全错误，不返回标题、流程节点或“是否存在”等
-可枚举信息，也不因调用方知道 request id 而放宽。
-
-所有 L1 输出执行最小投影：真实 enterprise subject 不回显，兼容身份字段固定为 `current`，敏感部门值
-固定为 `redacted`；vacation data 只保留有界标量 allowlist，preview 只返回字段计数而不返回 mainData，
-verify 的兼容 `fields` 为空。OA raw response、表单正文、联系方式和 provider 标识不得进入模型上下文、
-日志或审计。
-
-I5 内建 `employee_no@feishu_contact` 只证明飞书通讯录里的逐字 employee number；它不证明该值是
-Ecology userid，也不证明它等于 OA `workcode`。只有新的声明式 OA/HR authority 能产生满足
-`leave_applicant` 语义的证据；若 Ecology userid 不等于现有 subject type，必须另立 identity/schema
-任务，L1 不能重命名或猜映射。
-
-当前代码证据覆盖 mount/proxy 同一 Principal、三种 authority mismatch、伪造 `oa_user_id` 无效、同响应
-owner/workflow/form fence、最小输出、写工具零 OA 调用与非 `ecology_userid` 双层拒绝：focused core +
-gateway + proxy + leave **146 passed、2 skipped**；`uv run --locked ofmcp verify` 六步全绿（test
-**556 passed、2 skipped**）；contract diff 为
-**breaking 0 / behavioral 7 / additive 0**，已审查 snapshot 与当前生成结果一致。因此 L1 的代码与
-契约状态为 `✅`；真实 OA/HR authority、leave 写入、U7、I7/I8 freshness、密钥/部署/远程发布与
-生产 rollout 均在围栏外，能力仍默认关闭。
+`verify_leave_request.request_id` 仍只是对象定位符，不是授权证据；同一个 `loadForm` 响应必须同时证明
+owner 等于当前 resolved actor、workflow/form 与配置一致。任何 proof 缺失、歧义或不符使用同一安全
+错误，不因调用方知道 request id 而放宽。写路径仍必须另行完成 prepare -> 明确确认 -> 执行前重授权
+-> 一次性 CAS -> 业务幂等 -> unknown-outcome 查询与对账，本身份桥不会自动解锁写操作。
 
 ### 8.2 EIM-L2 / CHN-X20 原生低敏请假试算（`✅`，未 rollout）
 
-L2 复用 L1 的 exact `leave_applicant`，不增加另一种主体来源。新增工具
+L2 复用 L3 的 exact Provider `leave_applicant`，不增加另一种主体来源。新增工具
 `preview_leave_form` 的 MCP 业务参数 schema 为空；`Context`、`VerifiedSubject` 和 service settings
 均由依赖注入，不会成为模型可控参数，尤其没有 `oa_user_id` 或任意 identity 字段。工具策略冻结为：
 
@@ -1930,8 +1914,9 @@ L2 复用 L1 的 exact `leave_applicant`，不增加另一种主体来源。新�
 required_scopes = ["leave:read"]
 effect = prepare
 replay_mode = reusable
-enterprise_subject_binding = leave_applicant
-subject_type = ecology_userid
+provider_identity_binding = leave_applicant
+provider = feishu
+subject_type = user_id
 ```
 
 首次调用只能返回 native interaction request，OA 调用数必须为零。表单 response schema 只允许下面

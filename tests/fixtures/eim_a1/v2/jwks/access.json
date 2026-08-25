@@ -1,0 +1,22 @@
+{
+  "keys": [
+    {
+      "alg": "ES256",
+      "crv": "P-256",
+      "kid": "test-only-eim-a1-access-current",
+      "kty": "EC",
+      "use": "sig",
+      "x": "PtETt4g7TFkGODedsMIc2hZ0LtAlUEi_QzOR03S8IdE",
+      "y": "kJkgmszEyKIkyEOvpPTGigkNBNpemIna4vju_OgqN0A"
+    },
+    {
+      "alg": "ES256",
+      "crv": "P-256",
+      "kid": "test-only-eim-a1-access-old",
+      "kty": "EC",
+      "use": "sig",
+      "x": "dB3VvagX2V5GJlNzIOXVUXmYMCiy-CyZ1QDF7oYk48Q",
+      "y": "B3C0apw4X9xWc4NVSIexVI7rkSw1ulynGZX_Is1EgdM"
+    }
+  ]
+}

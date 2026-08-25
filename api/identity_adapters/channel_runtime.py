@@ -59,6 +59,7 @@ from api.identity.principal import (
     IdentityAssurance,
     PrincipalBuildError,
     VerifiedEnterpriseSubjectEvidence,
+    VerifiedProviderIdentity,
     build_principal_from_resolved_identity,
 )
 from api.identity.providers.contracts import (
@@ -504,6 +505,16 @@ class ChannelIdentityResolver:
         if not valid_timestamp(principal_validated_at) or principal_validated_at < identity_validated_at or assurance_verified_at > principal_validated_at:
             _reject(IdentityErrorCode.ASSERTION_INVALID)
         try:
+            provider_identity = VerifiedProviderIdentity(
+                platform_user_id=identity.user_id,
+                tenant_id=identity.tenant_id,
+                provider=identity.provider,
+                provider_tenant=identity.provider_tenant_key,
+                provider_account_id=provider_context.provider_account_id,
+                subject_type=identity.subject_type,
+                subject=identity.subject_value,
+                verified_at=identity.verified_at,
+            )
             principal = build_principal_from_resolved_identity(
                 result=final,
                 authentication=AuthenticationContext(
@@ -515,6 +526,7 @@ class ChannelIdentityResolver:
                     external_identity_id=identity.id,
                 ),
                 enterprise_subject_evidence=enterprise_subject_evidence,
+                provider_identity=provider_identity,
             )
             return replace(
                 context,

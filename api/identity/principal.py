@@ -19,6 +19,8 @@ from api.identity.contracts import (
 
 _MAX_PLATFORM_ID = 32
 _MAX_PROVIDER = 64
+_MAX_PROVIDER_TENANT = 255
+_MAX_PROVIDER_ACCOUNT = 32
 _MAX_SUBJECT_TYPE = 64
 _MAX_SUBJECT = 255
 _MAX_ISSUER = 128
@@ -65,6 +67,10 @@ class PrincipalBuildError(ValueError):
 
 def _valid_text(value: object, *, max_length: int) -> bool:
     return type(value) is str and 0 < len(value.strip()) and len(value) <= max_length
+
+
+def _valid_provider_text(value: object, *, max_length: int) -> bool:
+    return type(value) is str and 0 < len(value) <= max_length and value == value.strip() and value.isprintable()
 
 
 def _aware(value: object) -> bool:
@@ -189,6 +195,39 @@ class VerifiedEnterpriseSubjectEvidence:
             raise PrincipalBuildError(PrincipalErrorCode.INPUT_INVALID)
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedProviderIdentity:
+    """Current directory-verified Channel identity bound to one Principal.
+
+    The provider subject and tenant are deliberately repr-hidden.  They are
+    authority evidence for a conditional P3 claim, never model input or a
+    user-supplied tool argument.  ``provider_account_id`` remains internal and
+    is not projected into the token.
+    """
+
+    platform_user_id: str = field(repr=False)
+    tenant_id: str
+    provider: str
+    provider_tenant: str = field(repr=False)
+    provider_account_id: str = field(repr=False)
+    subject_type: str
+    subject: str = field(repr=False)
+    verified_at: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            not _valid_provider_text(self.platform_user_id, max_length=_MAX_PLATFORM_ID)
+            or not _valid_provider_text(self.tenant_id, max_length=_MAX_PLATFORM_ID)
+            or not _valid_provider_text(self.provider, max_length=_MAX_PROVIDER)
+            or not _valid_provider_text(self.provider_tenant, max_length=_MAX_PROVIDER_TENANT)
+            or not _valid_provider_text(self.provider_account_id, max_length=_MAX_PROVIDER_ACCOUNT)
+            or not _valid_provider_text(self.subject_type, max_length=_MAX_SUBJECT_TYPE)
+            or not _valid_provider_text(self.subject, max_length=_MAX_SUBJECT)
+            or not _aware(self.verified_at)
+        ):
+            raise PrincipalBuildError(PrincipalErrorCode.INPUT_INVALID)
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class Principal:
     """Canonical tenant-bound platform identity used by MultiRAG runtimes."""
@@ -197,6 +236,7 @@ class Principal:
     tenant_id: str
     authentication: AuthenticationContext
     identity_revision: int | None = field(default=None, repr=False)
+    provider_identity: VerifiedProviderIdentity | None = field(default=None, repr=False)
     enterprise_subject: EnterpriseSubject | None = field(default=None, repr=False)
     display_name: str = field(default="", repr=False)
 
@@ -220,6 +260,17 @@ class Principal:
                 raise PrincipalBuildError(PrincipalErrorCode.ASSURANCE_INVALID)
         elif self.identity_revision is not None:
             raise PrincipalBuildError(PrincipalErrorCode.ASSURANCE_INVALID)
+        if self.provider_identity is not None:
+            provider_identity = self.provider_identity
+            if (
+                not isinstance(provider_identity, VerifiedProviderIdentity)
+                or self.authentication.source is not AuthenticationSource.ENTERPRISE_IDENTITY
+                or provider_identity.platform_user_id != self.platform_user_id
+                or provider_identity.tenant_id != self.tenant_id
+                or provider_identity.provider != self.authentication.provider
+                or provider_identity.verified_at > self.authentication.validated_at
+            ):
+                raise PrincipalBuildError(PrincipalErrorCode.CONTEXT_CONFLICT)
         if self.enterprise_subject is not None and not isinstance(self.enterprise_subject, EnterpriseSubject):
             raise PrincipalBuildError(PrincipalErrorCode.INPUT_INVALID)
         if self.authentication.assurance is IdentityAssurance.ENTERPRISE_VERIFIED:
@@ -247,6 +298,7 @@ def _new_principal(
     tenant_id: str,
     authentication: AuthenticationContext,
     identity_revision: int | None,
+    provider_identity: VerifiedProviderIdentity | None,
     enterprise_subject: EnterpriseSubject | None,
     display_name: str,
 ) -> Principal:
@@ -255,6 +307,7 @@ def _new_principal(
     object.__setattr__(principal, "tenant_id", tenant_id)
     object.__setattr__(principal, "authentication", authentication)
     object.__setattr__(principal, "identity_revision", identity_revision)
+    object.__setattr__(principal, "provider_identity", provider_identity)
     object.__setattr__(principal, "enterprise_subject", enterprise_subject)
     object.__setattr__(principal, "display_name", display_name)
     principal._validate()
@@ -267,12 +320,17 @@ def _assemble_principal(
     membership: TenantMembershipEvidence,
     authentication: AuthenticationContext,
     identity_revision: int | None = None,
+    provider_identity: VerifiedProviderIdentity | None = None,
     enterprise_subject_evidence: VerifiedEnterpriseSubjectEvidence | None = None,
 ) -> Principal:
     if actor.platform_user_id != membership.platform_user_id:
         raise PrincipalBuildError(PrincipalErrorCode.CONTEXT_CONFLICT)
 
     enterprise_subject: EnterpriseSubject | None = None
+    if provider_identity is not None and (
+        provider_identity.platform_user_id != actor.platform_user_id or provider_identity.tenant_id != membership.tenant_id or provider_identity.provider != authentication.provider
+    ):
+        raise PrincipalBuildError(PrincipalErrorCode.CONTEXT_CONFLICT)
     if enterprise_subject_evidence is not None:
         if enterprise_subject_evidence.platform_user_id != actor.platform_user_id or enterprise_subject_evidence.tenant_id != membership.tenant_id:
             raise PrincipalBuildError(PrincipalErrorCode.CONTEXT_CONFLICT)
@@ -287,6 +345,7 @@ def _assemble_principal(
         tenant_id=membership.tenant_id,
         authentication=authentication,
         identity_revision=identity_revision,
+        provider_identity=provider_identity,
         enterprise_subject=enterprise_subject,
         display_name=actor.display_name,
     )
@@ -318,6 +377,7 @@ def build_principal_from_resolved_identity(
     result: IdentityResolutionResult,
     authentication: AuthenticationContext,
     enterprise_subject_evidence: VerifiedEnterpriseSubjectEvidence | None = None,
+    provider_identity: VerifiedProviderIdentity | None = None,
 ) -> Principal:
     """Promote only an I3 RESOLVED snapshot into a tenant-bound Principal."""
 
@@ -342,6 +402,16 @@ def build_principal_from_resolved_identity(
         raise PrincipalBuildError(PrincipalErrorCode.AUTHENTICATION_INVALID)
     if authentication.assurance is IdentityAssurance.DIRECTORY_VERIFIED and authentication.assurance_verified_at != identity_verified_at:
         raise PrincipalBuildError(PrincipalErrorCode.ASSURANCE_INVALID)
+    if provider_identity is not None and (
+        provider_identity.platform_user_id != identity.user_id
+        or provider_identity.tenant_id != identity.tenant_id
+        or provider_identity.provider != identity.provider
+        or provider_identity.provider_tenant != identity.provider_tenant_key
+        or provider_identity.subject_type != identity.subject_type
+        or provider_identity.subject != identity.subject_value
+        or provider_identity.verified_at != identity_verified_at
+    ):
+        raise PrincipalBuildError(PrincipalErrorCode.CONTEXT_CONFLICT)
 
     display_name = next(
         (value for key, value in identity.attributes if key == "display_name" and value is not None),
@@ -358,6 +428,7 @@ def build_principal_from_resolved_identity(
         ),
         authentication=authentication,
         identity_revision=identity.identity_revision,
+        provider_identity=provider_identity,
         enterprise_subject_evidence=enterprise_subject_evidence,
     )
 
@@ -373,6 +444,7 @@ __all__ = [
     "PrincipalErrorCode",
     "TenantMembershipEvidence",
     "VerifiedEnterpriseSubjectEvidence",
+    "VerifiedProviderIdentity",
     "build_principal_from_authenticated_actor",
     "build_principal_from_resolved_identity",
 ]

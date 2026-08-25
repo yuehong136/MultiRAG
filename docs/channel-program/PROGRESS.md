@@ -217,6 +217,21 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-X20 | EIM-L2 的 p2p-only 低敏请假原生表单与严格终态投影：7 个 flat/ref-free 字段提交后只做当前 Principal 的 OA preview，CardKit 不显示 raw tool result | ✅ | EIM-L2、CHN-X15、CHN-X19；modern `2026-07-28` 对 `end<=start` 发 fresh correction `InputRequired` 并允许多轮重开，legacy 仍 terminal；H5/URL、群聊、reason/身份/PM/CC/remark 与敏感写 deferred，真实 authority 未配置、未 rollout |
 | CHN-X21 | managed Feishu Contact V3 事件经 bounded normalize、generation-scoped private API、原子 receipt/CAS 与 durable account revision fence 收敛；post-commit provider invalidation 只加速 | ✅ | EIM-I7、CHN-X17；`api/channels/identity_events.py`、`api/channels/{feishu/channel.py,runtime_client.py,worker.py}`、`api/apps/restful_apis/channel_identity_event_api.py`、`api/identity/{directory_events.py,directory_event_repository.py}`；未改配置/后台订阅、未 rollout |
 | CHN-X22 | EIM-I8 已链接活跃身份兜底对账：复用同一 Feishu provider runtime 的低优先级 uncached probe，以 durable account checkpoint/keyset/target proof 收敛漏事件并提供管理员脱敏状态 | ✅ | EIM-I8、CHN-X21；default-disabled 本地代码已完成，不枚举通讯录全员、不刷新 `last_seen_at`、无公开 admin route/rollout；风险感知 local fast path deferred，因此 EIM-I8 仍为 `🔵` |
+| CHN-X23 | Channel event + Contact V3 + final I3 绑定通用 `VerifiedProviderIdentity`，P3 按 A4 format-3 resource policy 条件签发严格四字段 claim；of_mcp leave 以 Provider-neutral resolver 取得当前 OA actor | ✅ | EIM-P4/EIM-L3、CHN-X7、CHN-X18；`sub` 保持 platform user，prompt/form/tool args 不可注入；飞书 `user_id` 按已确认契约逐字作为 Ecology userid；write 工具仍硬关闭；A1 v2 双仓语料，默认 disabled、未 rollout |
+
+> **CHN-X23 / EIM-P4 / EIM-L3 完成边界（2026-08-25，代码/契约 `✅`，未 rollout）**：
+> MultiRAG 只在当前 Channel assertion 经 Contact V3 与 final I3 复核、并与同一 Principal 绑定后构造
+> repr-hidden `VerifiedProviderIdentity`；issuer 只对显式 resource allowlist 投影
+> `{provider, provider_tenant, subject_type, subject}`，P3 只在 format-3 exact tool policy 要求时申请，历史
+> format-2 继续可读。of_mcp A4/auth/internal actor/snapshot 均严格接受并逐工具保真该 claim；leave
+> `BusinessActorResolverRegistry` 路由 Feishu resolver，按已确认的 `user_id == Ecology userid` 逐字采用
+> subject，不查数据库、不调用额外 mapping API、不做 employee_no 转换。list types 不需身份；balance/
+> preview/native form/verify 必须解析当前 actor；兼容 `oa_user_id` 始终忽略；create/submit 继续
+> `LEAVE_WRITE_DISABLED`。FastMCP 4.0.0b3 嵌套 `Depends` 隐藏 resolver 参数，MCP schema 无注入参数。
+> A1 v1 历史语料保持冻结，新 v2 为两仓字节一致的 94 files / 82 token + 7 issuance + 6 delegation，
+> SHA256SUMS aggregate 为 `dda9df0dce66afea2048006987acf006e2d30a4ff268137fc863d2b6938224e6`。
+> 本条没有 migration、配置启用、进程重启、真实 OA 调用或 rollout；写操作仍需独立确认、重授权、
+> 一次性 CAS、业务幂等与 unknown-outcome 对账。
 
 > **CHN-X22 / EIM-I8 durable reconciliation 完成边界（2026-08-24，CHN 本地代码 `✅`；
 > EIM 仍 `🔵`，未 rollout）**：默认关闭的 reconciler 只从本地已链接/alias、active identity、active

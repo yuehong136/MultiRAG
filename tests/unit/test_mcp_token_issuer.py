@@ -39,11 +39,12 @@ from api.identity.principal import (
     IdentityAssurance,
     TenantMembershipEvidence,
     VerifiedEnterpriseSubjectEvidence,
+    VerifiedProviderIdentity,
     build_principal_from_authenticated_actor,
     build_principal_from_resolved_identity,
 )
 
-CORPUS_MANIFEST = Path(__file__).resolve().parents[1] / "fixtures" / "eim_a1" / "v1" / "manifest.json"
+CORPUS_MANIFEST = Path(__file__).resolve().parents[1] / "fixtures" / "eim_a1" / "v2" / "manifest.json"
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=UTC)
 AUDIENCE = "https://gateway.ofmcp.example/mcp"
 ISSUER = "https://auth.multirag.example"
@@ -105,6 +106,16 @@ def _enterprise_principal():
                 verified_at=proof_time,
             ),
         ),
+        provider_identity=VerifiedProviderIdentity(
+            platform_user_id="user-a",
+            tenant_id="tenant-a",
+            provider="feishu",
+            provider_tenant="provider-tenant-secret",
+            provider_account_id="provider-account-secret",
+            subject_type="user_id",
+            subject="provider-user-secret",
+            verified_at=proof_time,
+        ),
     )
 
 
@@ -138,6 +149,7 @@ def _issuer(
     tmp_path: Path,
     *,
     audience: str = AUDIENCE,
+    allow_provider_identity: bool = False,
     enterprise_subject_requirement: EnterpriseSubjectRequirement | None = None,
     jti: str = "test-jti-000000000000000000000001",
     now: datetime = NOW,
@@ -153,6 +165,7 @@ def _issuer(
                 name="ofmcp_gateway",
                 audience=audience,
                 registered_scopes=frozenset({"leave:read", "leave:submit", "medic:submit"}),
+                allow_provider_identity=allow_provider_identity,
                 enterprise_subject_requirement=enterprise_subject_requirement,
             ),
         ),
@@ -384,6 +397,52 @@ def test_enterprise_subject_and_acr_require_explicit_resource_permission(tmp_pat
             McpAccessGrant(allowed_scopes=frozenset({"leave:read"})),
         )
     assert mismatched.value.code is IssuanceErrorCode.ASSURANCE_NOT_VERIFIED
+
+
+def test_provider_identity_is_exact_and_requires_resource_permission(tmp_path: Path) -> None:
+    issuer, public_key = _issuer(tmp_path, allow_provider_identity=True)
+    result = issuer.issue(
+        McpAccessTokenRequest(
+            principal=_enterprise_principal(),
+            agent_id="agent-release-a",
+            resource_name="ofmcp_gateway",
+            requested_scopes=frozenset({"leave:read"}),
+            requested_claims=frozenset({"provider_identity"}),
+        ),
+        McpAccessGrant(allowed_scopes=frozenset({"leave:read"})),
+    )
+
+    claims = jwt.decode(
+        result.compact,
+        public_key,
+        algorithms=["ES256"],
+        audience=AUDIENCE,
+        issuer=ISSUER,
+        options={"verify_exp": False, "verify_iat": False, "verify_nbf": False},
+    )
+    assert claims["sub"] == "user-a"
+    assert claims["tenant_id"] == "tenant-a"
+    assert claims["provider_identity"] == {
+        "provider": "feishu",
+        "provider_tenant": "provider-tenant-secret",
+        "subject": "provider-user-secret",
+        "subject_type": "user_id",
+    }
+    assert "provider_account_id" not in claims["provider_identity"]
+
+    denied, _ = _issuer(tmp_path)
+    with pytest.raises(McpTokenIssuanceError) as raised:
+        denied.issue(
+            McpAccessTokenRequest(
+                principal=_enterprise_principal(),
+                agent_id="agent-release-a",
+                resource_name="ofmcp_gateway",
+                requested_scopes=frozenset({"leave:read"}),
+                requested_claims=frozenset({"provider_identity"}),
+            ),
+            McpAccessGrant(allowed_scopes=frozenset({"leave:read"})),
+        )
+    assert raised.value.code is IssuanceErrorCode.REQUESTED_CLAIM_NOT_ALLOWED
 
 
 def test_token_size_and_jti_are_checked_before_returning_compact_bearer(tmp_path: Path) -> None:

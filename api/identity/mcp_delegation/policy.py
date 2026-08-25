@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 from api.identity.mcp_delegation.contracts import (
     DelegatedEnterpriseSubjectRequirement,
+    DelegatedProviderIdentityCoordinate,
+    DelegatedProviderIdentityRequirement,
     DelegatedServerBinding,
     DelegatedToolPolicy,
     DelegationErrorCode,
@@ -103,7 +105,8 @@ def load_tool_policy_snapshot(path: Path) -> ToolPolicySnapshot:
     document = _load_document(path)
     if set(document) != {"policy_revision", "profile", "services", "snapshot_format", "tools"}:
         raise _reject()
-    if document["snapshot_format"] != 2 or document["profile"] != "secure":
+    snapshot_format = document["snapshot_format"]
+    if snapshot_format not in {2, 3} or document["profile"] != "secure":
         raise _reject()
     policy_revision = _canonical_revision(document, "policy_revision")
 
@@ -140,6 +143,8 @@ def load_tool_policy_snapshot(path: Path) -> ToolPolicySnapshot:
         "required_scopes",
         "service_id",
     }
+    if snapshot_format == 3:
+        expected_tool_fields.add("provider_identity")
     for raw_tool in raw_tools:
         if type(raw_tool) is not dict or set(raw_tool) != expected_tool_fields:
             raise _reject()
@@ -160,6 +165,31 @@ def load_tool_policy_snapshot(path: Path) -> ToolPolicySnapshot:
                 issuer=_text(raw_enterprise_subject["issuer"], max_length=128),
                 issuer_tenant=_text(raw_enterprise_subject["tenant"]),
             )
+        provider_identity: DelegatedProviderIdentityRequirement | None = None
+        if snapshot_format == 3:
+            raw_provider_identity = raw_tool["provider_identity"]
+            if raw_provider_identity is not None:
+                if type(raw_provider_identity) is not dict or set(raw_provider_identity) != {"any_of"}:
+                    raise _reject()
+                raw_alternatives = raw_provider_identity["any_of"]
+                if type(raw_alternatives) is not list or not 1 <= len(raw_alternatives) <= 8:
+                    raise _reject()
+                alternatives: list[DelegatedProviderIdentityCoordinate] = []
+                for alternative in raw_alternatives:
+                    if type(alternative) is not dict or set(alternative) != {"provider", "provider_tenant", "subject_type"}:
+                        raise _reject()
+                    alternatives.append(
+                        DelegatedProviderIdentityCoordinate(
+                            provider=_text(alternative["provider"], max_length=64),
+                            provider_tenant=_text(alternative["provider_tenant"]),
+                            subject_type=_text(alternative["subject_type"], max_length=64),
+                        ),
+                    )
+                if alternatives != sorted(alternatives) or len(alternatives) != len(set(alternatives)):
+                    raise _reject()
+                provider_identity = DelegatedProviderIdentityRequirement(
+                    any_of=tuple(alternatives),
+                )
         external_requirements = raw_tool["external_requirements"]
         if type(external_requirements) is not list or len(external_requirements) > 128:
             raise _reject()
@@ -185,6 +215,7 @@ def load_tool_policy_snapshot(path: Path) -> ToolPolicySnapshot:
             enterprise_subject=enterprise_subject,
             accepted_acr_values=accepted_acr_values,
             required_amr=required_amr,
+            provider_identity=provider_identity,
         )
     return ToolPolicySnapshot.frozen(
         policy_revision=policy_revision,

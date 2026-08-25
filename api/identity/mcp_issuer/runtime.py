@@ -34,6 +34,7 @@ def get_mcp_token_issuer() -> McpTokenIssuer:
                 name=name,
                 audience=resource.audience,
                 registered_scopes=frozenset(resource.registered_scopes),
+                allow_provider_identity=resource.allow_provider_identity,
                 enterprise_subject_requirement=(
                     EnterpriseSubjectRequirement(
                         subject_type=resource.enterprise_subject.subject_type,

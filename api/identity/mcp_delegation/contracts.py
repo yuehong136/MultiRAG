@@ -56,6 +56,18 @@ class DelegatedEnterpriseSubjectRequirement:
     issuer_tenant: str = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class DelegatedProviderIdentityCoordinate:
+    provider: str
+    provider_tenant: str = field(repr=False)
+    subject_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class DelegatedProviderIdentityRequirement:
+    any_of: tuple[DelegatedProviderIdentityCoordinate, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class DelegatedToolPolicy:
     canonical_tool_name: str
@@ -65,6 +77,10 @@ class DelegatedToolPolicy:
     enterprise_subject: DelegatedEnterpriseSubjectRequirement | None
     accepted_acr_values: frozenset[str]
     required_amr: frozenset[str]
+    provider_identity: DelegatedProviderIdentityRequirement | None = field(
+        default=None,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +136,8 @@ class GrantPolicySnapshot:
 
 __all__ = [
     "DelegatedEnterpriseSubjectRequirement",
+    "DelegatedProviderIdentityCoordinate",
+    "DelegatedProviderIdentityRequirement",
     "DelegatedServerBinding",
     "DelegatedToolPolicy",
     "DelegationErrorCode",

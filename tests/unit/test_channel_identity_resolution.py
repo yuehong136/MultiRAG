@@ -672,6 +672,13 @@ async def test_linked_jit_runs_initial_i3_i4_i6_and_fresh_i3() -> None:
     assert result.principal.authentication.validated_at == _VALIDATED_AT
     assert result.principal.authentication.assurance_verified_at == _FINAL_AT
     assert result.principal.authentication.external_identity_id == "external-identity-secret"
+    assert result.principal.provider_identity is not None
+    assert result.principal.provider_identity.provider == "feishu"
+    assert result.principal.provider_identity.provider_tenant == "provider-tenant-secret"
+    assert result.principal.provider_identity.provider_account_id == "provider-account-secret"
+    assert result.principal.provider_identity.subject_type == "user_id"
+    assert result.principal.provider_identity.subject == "provider-user-secret"
+    assert result.principal.provider_identity.verified_at == _FINAL_AT
 
 
 async def test_resolved_enterprise_subject_promotes_persisted_evidence() -> None:

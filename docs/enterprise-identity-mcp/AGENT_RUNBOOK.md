@@ -266,7 +266,7 @@ P3 的代码锚点是 `api/identity/mcp_delegation/`、`RunContext.agent_id/agen
 `common.mcp_tool_call_conn.MCPToolBinding/MCPRequestCredentialProvider`、Agent MCP 装配和 API lifespan。
 后续必须保留：
 
-1. authority 只来自 A4 `secure` format-2 snapshot、MultiRAG format-1 grant snapshot、C3/P2 Principal 与
+1. authority 只来自 A4 `secure` format-2/3 snapshot、MultiRAG format-1 grant snapshot、C3/P2 Principal 与
    服务端已验证 Canvas release；不从模型/DSL/description/static headers/runtime tool list 猜授权；
 2. 两个 snapshot absolute、regular、non-symlink、有界且 revision 可复算；POSIX group/world writable、
    policy drift、重复 server/resource/audience、未知 scope 均 fail fast；hash 是 drift check，不冒充制品签名；
@@ -276,7 +276,7 @@ P3 的代码锚点是 `api/identity/mcp_delegation/`、`RunContext.agent_id/agen
 4. grant 绑定 tenant/platform user/published agent+revision/resource。model alias 与 canonical wire name
    分离；未授权 tool 不进入模型 metadata，执行仍用 canonical name 二次判定；
 5. 只缓存有界 grant/scope decision，key 含 principal/tenant/agent+revision/server/resource/canonical tool/
-   scopes/policy+grant revision/credential generation；ACR/AMR/enterprise subject 每次重新验证。A2 当前
+   scopes/policy+grant revision/credential generation；ACR/AMR/enterprise subject/provider identity 每次重新验证。A2 当前
    不签 AMR，所以非空 `required_amr` 在发网前拒绝；
 6. 每次逻辑调用新签 token/JTI；SDK 2 operation-scoped `httpx2.Auth` 只在该次 initialize/call/retry
    复用 bearer，完成即关闭。Agent/session/global/static headers/repr/error/meta 不保存或泄露 token；
@@ -290,6 +290,16 @@ P3 失败优先收集到新增模块 `ModuleNotFoundError`；定向 **109 passed
 未跑 integration（无 DB/存储/检索变更）。A5 后续已在 of_mcp 完成本地实现，U14/U15 也已完成；
 2026-08-24 的用户批准只覆盖本机临时 live。任何生产 artifact/key/config/restart/secure endpoint、
 多实例部署或对外 MCP 流量仍须另行精确批准。
+
+#### EIM-P4 / CHN-X23 Provider identity 完成边界
+
+P4 只扩展 P3 的条件 claim，不改变平台主体：`sub` 继续是 `platform_user_id`。Channel runtime 只有在
+当前事件经目录验证、final I3 复核且与同一 Principal 绑定后，才构造 repr-hidden
+`VerifiedProviderIdentity`。issuer 仅对显式 `allow_provider_identity=true` 的 resource 接受请求，并
+只签 `{provider, provider_tenant, subject_type, subject}` 四键；P3 只在 format-3 工具 policy 要求且与
+当前 Principal exact match 时申请。prompt、CardKit、工具参数、散装 Channel ID 和调用方 JSON 都不是
+来源。A1 v2 固定语料覆盖 access/internal actor 原样保真与畸形拒绝；v1 历史目录保持冻结。默认配置
+仍关闭，真实部署配置、重启与 rollout 不在代码完成事实内。
 
 #### EIM-U15 / CHN-X15 当前实现与 rollout 交接
 
@@ -633,8 +643,8 @@ head-of-line blocking；远端是否停止取决于 transport/server 的协作�
 
 A1 是跨仓 test/docs/schema/corpus 任务，不是生产 auth 实现。开工先确认 F3/F4 为 `✅`，然后：
 
-1. 在 MultiRAG `tests/fixtures/eim_a1/v1/` 和 of_mcp
-   `packages/ofmcp-contracts/tests/fixtures/eim_a1/v1/` 保存字节一致的 corpus；
+1. 在 MultiRAG `tests/fixtures/eim_a1/v2/` 和 of_mcp
+   `packages/ofmcp-contracts/tests/fixtures/eim_a1/v2/` 保存字节一致的当前 corpus；v1 保持历史冻结；
 2. 使用 MultiRAG canonical `scripts/generate_eim_a1_vectors.py` PEP 723 脚本，以 test-only P-256 key
    和 deterministic RFC 6979 ES256 生成固定 token、manifest/schema、public JWKS 和 `SHA256SUMS`；
 3. `manifest.json` 必须分开 `cases`、`issuance_policy_cases`、`delegation_cases`；token case 用
@@ -650,9 +660,9 @@ A1 是跨仓 test/docs/schema/corpus 任务，不是生产 auth 实现。开工�
 
 A1 交付阶段在门禁满足前，ROADMAP 必须保持 `🔵`；尚未产生的 commit 可以明确写 `pending`，但不能
 预填或猜测 SHA，corpus digest 必须从实际文件计算。本轮已完成两仓独立 oracle、全部 case 无
-skip/xfail 和 corpus 字节一致性检查，ROADMAP 保持 `✅`。最终 corpus 为 91 files、79 token +
-7 issuance + 5 delegation，摘要为
-`59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`。当前验证证据为 MultiRAG
+skip/xfail 和 corpus 字节一致性检查，ROADMAP 保持 `✅`。当前 v2 corpus 为 94 files、82 token +
+7 issuance + 6 delegation，摘要为
+`dda9df0dce66afea2048006987acf006e2d30a4ff268137fc863d2b6938224e6`。当前验证证据为 MultiRAG
 定向 **96 passed**；完整 `make verify` 的 Ruff format/check、6 条 import contracts、async DB gate、
 mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 **100 passed**、完整
 门禁 **216 passed、2 existing skipped**。

@@ -15,7 +15,7 @@ TOKEN_TYPE = "at+jwt"
 TOKEN_USE = "mcp_access"
 ALGORITHM = "ES256"
 ENTERPRISE_ACR = "urn:multirag:assurance:enterprise-verified"
-ALLOWED_REQUESTED_CLAIMS = frozenset({"enterprise_subject"})
+ALLOWED_REQUESTED_CLAIMS = frozenset({"enterprise_subject", "provider_identity"})
 
 
 class IssuanceErrorCode(StrEnum):
@@ -91,6 +91,7 @@ class McpResourceProfile:
     name: str
     audience: str
     registered_scopes: frozenset[str]
+    allow_provider_identity: bool = False
     enterprise_subject_requirement: EnterpriseSubjectRequirement | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -98,13 +99,19 @@ class McpResourceProfile:
             not _nonempty_text(self.name, max_length=64)
             or not _canonical_https_uri(self.audience)
             or not _scope_set(self.registered_scopes)
+            or type(self.allow_provider_identity) is not bool
             or (self.enterprise_subject_requirement is not None and not isinstance(self.enterprise_subject_requirement, EnterpriseSubjectRequirement))
         ):
             raise ValueError("invalid MCP resource profile")
 
     @property
     def allowed_requested_claims(self) -> frozenset[str]:
-        return frozenset({"enterprise_subject"}) if self.enterprise_subject_requirement is not None else frozenset()
+        claims: set[str] = set()
+        if self.allow_provider_identity:
+            claims.add("provider_identity")
+        if self.enterprise_subject_requirement is not None:
+            claims.add("enterprise_subject")
+        return frozenset(claims)
 
 
 @dataclass(frozen=True, slots=True)

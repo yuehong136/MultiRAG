@@ -51,13 +51,13 @@
 CHN-O7（主密钥密钥环）、CHN-O12（空 env 变量）、CHN-O6（连接自检）·
 **部署**：CHN-P11 的两道闸门均已完成（2026-08-06 14:44 重启 API 与 supervisor）。
 
-**新增 EIM 身份与体验扩展**：CHN-X5～X14、CHN-U8～U15、CHN-O14、CHN-P14 统一由
+**新增 EIM 身份与体验扩展**：CHN-X5～X23、CHN-U8～U15、CHN-O14、CHN-P14 统一由
 [`docs/enterprise-identity-mcp/`](../enterprise-identity-mcp/README.md) 的 EIM 路线图驱动；其中
 CHN-X9、CHN-X13、CHN-U8、CHN-U11～U15 已完成，其余状态以 [PROGRESS](PROGRESS.md) 为准。旧程序“全部完成”
 的历史结论保持成立，但不再表示 Channel 子系统没有后续待办。CHN-U16 是 Channel 稳定化的独立
 近期任务，不新增 EIM 对应项，**已于 2026-08-11 完成**；CHN-U17 于 2026-08-13 补上其后发现的
 Python 3.12 双重取消竞态。
-**最后更新**：2026-08-13
+**最后更新**：2026-08-25
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -66,7 +66,7 @@ Python 3.12 双重取消竞态。
 | **U** | 今日可见缺陷（U1–U9、U11–U17 完成；U10 挂起） | 🔵 扩展中 |
 | **P** | Provider 通用化（P1–P11、P13 全部完成并部署） | ✅ 完成 |
 | **O** | 运维（O1–O7、O12 完成；**O9 是当前下一项**，O8/O10/O11 未排期） | 🔵 扩展中 |
-| **X** | 跨仓契约（X1–X3、X5–X7、X9、X13、X16–X18 完成） | 🔵 扩展中 |
+| **X** | 跨仓契约（X1–X3、X5–X7、X9、X13、X15–X23 完成；X14 挂起） | 🔵 扩展中 |
 | **EIM 扩展** | P2/X18 已完成并取得 Canvas/Dialog 双目标本机 live；当前 EIM 主线 A2，Channel 稳定轨下一项 O9；完整 UX smoke 与 O9 都在 soak 前补齐；F5/X14 挂起到恢复逐 commit 上游同步 | 🔵 进行中 |
 
 执行架构的 CHN-U15 已实现：X13 完成 Provider/Target 能力协商和目标私有 driver，U14 完成 Dialog

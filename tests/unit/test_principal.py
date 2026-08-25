@@ -26,6 +26,7 @@ from api.identity.principal import (
     PrincipalErrorCode,
     TenantMembershipEvidence,
     VerifiedEnterpriseSubjectEvidence,
+    VerifiedProviderIdentity,
     build_principal_from_authenticated_actor,
     build_principal_from_resolved_identity,
 )
@@ -89,6 +90,22 @@ def _subject() -> EnterpriseSubject:
     )
 
 
+def _provider_identity(**changes: object) -> VerifiedProviderIdentity:
+    return replace(
+        VerifiedProviderIdentity(
+            platform_user_id="user-1",
+            tenant_id="tenant-1",
+            provider="feishu",
+            provider_tenant="tenant-key-secret",
+            provider_account_id="provider-account-secret",
+            subject_type="user_id",
+            subject="provider-subject-secret",
+            verified_at=_PROOF_TIME,
+        ),
+        **changes,
+    )
+
+
 def test_api_utils_reexports_the_single_canonical_principal() -> None:
     assert CompatibilityPrincipal is Principal
 
@@ -122,6 +139,7 @@ def test_principal_is_deeply_immutable_and_excludes_authorization_state() -> Non
         "tenant_id",
         "authentication",
         "identity_revision",
+        "provider_identity",
         "enterprise_subject",
         "display_name",
     }
@@ -142,6 +160,9 @@ def test_default_repr_hides_platform_and_provider_identifiers() -> None:
         "identity-1",
         "employee-secret",
         "enterprise-secret",
+        "tenant-key-secret",
+        "provider-account-secret",
+        "provider-subject-secret",
     }
     subject = _subject()
     principal = build_principal_from_resolved_identity(
@@ -152,6 +173,7 @@ def test_default_repr_hides_platform_and_provider_identifiers() -> None:
             tenant_id="tenant-1",
             enterprise_subject=subject,
         ),
+        provider_identity=_provider_identity(),
     )
 
     rendered = repr(principal)
@@ -287,13 +309,50 @@ def test_resolved_identity_builder_binds_provider_identity_user_and_tenant() -> 
     principal = build_principal_from_resolved_identity(
         result=_resolved(),
         authentication=_enterprise_auth(),
+        provider_identity=_provider_identity(),
     )
 
     assert principal.id == "user-1"
     assert principal.tenant_id == "tenant-1"
     assert principal.display_name == "Alice"
     assert principal.identity_revision == 3
+    assert principal.provider_identity == _provider_identity()
     assert principal.authentication.assurance is IdentityAssurance.DIRECTORY_VERIFIED
+    assert "tenant-key-secret" not in repr(principal)
+    assert "provider-subject-secret" not in repr(principal)
+
+
+@pytest.mark.parametrize("subject", [" leading", "trailing ", "line\nbreak", "x" * 256])
+def test_provider_identity_rejects_noncanonical_subject(subject: str) -> None:
+    with pytest.raises(PrincipalBuildError) as exc_info:
+        _provider_identity(subject=subject)
+
+    assert exc_info.value.code is PrincipalErrorCode.INPUT_INVALID
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"platform_user_id": "user-other"},
+        {"tenant_id": "tenant-other"},
+        {"provider": "dingtalk"},
+        {"provider_tenant": "tenant-other"},
+        {"subject_type": "staff_id"},
+        {"subject": "provider-subject-other"},
+        {"verified_at": _PROOF_TIME - timedelta(seconds=1)},
+    ],
+)
+def test_provider_identity_cannot_be_grafted_or_reinterpreted(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises(PrincipalBuildError) as exc_info:
+        build_principal_from_resolved_identity(
+            result=_resolved(),
+            authentication=_enterprise_auth(),
+            provider_identity=_provider_identity(**changes),
+        )
+
+    assert exc_info.value.code is PrincipalErrorCode.CONTEXT_CONFLICT
 
 
 @pytest.mark.parametrize(

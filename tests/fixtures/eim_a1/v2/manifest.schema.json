@@ -1,0 +1,445 @@
+{
+  "$defs": {
+    "profile": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_acr_values": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowed_amr_values": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowed_claims": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "issuer": {
+          "pattern": "^https://",
+          "type": "string"
+        },
+        "max_ttl_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "required_claims": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "token_use": {
+          "enum": [
+            "mcp_access",
+            "mcp_internal_actor"
+          ]
+        }
+      },
+      "required": [
+        "allowed_acr_values",
+        "allowed_amr_values",
+        "allowed_claims",
+        "issuer",
+        "max_ttl_seconds",
+        "required_claims",
+        "token_use"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.multirag.example/eim-a1/v2/manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "additionalProperties": false,
+            "properties": {
+              "authentication": {
+                "enum": [
+                  "accept",
+                  "reject"
+                ]
+              },
+              "authorization": {
+                "enum": [
+                  "allow",
+                  "deny",
+                  "not_evaluated"
+                ]
+              },
+              "failure_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "http_status": {
+                "enum": [
+                  200,
+                  401,
+                  403
+                ]
+              },
+              "normalized_claims": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "oauth_error": {
+                "enum": [
+                  null,
+                  "invalid_token",
+                  "insufficient_scope"
+                ]
+              }
+            },
+            "required": [
+              "authentication",
+              "authorization",
+              "http_status",
+              "oauth_error",
+              "failure_reason",
+              "normalized_claims"
+            ],
+            "type": "object"
+          },
+          "expected_profile": {
+            "enum": [
+              "mcp_access",
+              "mcp_internal_actor"
+            ]
+          },
+          "id": {
+            "pattern": "^[a-z0-9_]+$",
+            "type": "string"
+          },
+          "jwks_file": {
+            "pattern": "^jwks/.+\\.json$",
+            "type": "string"
+          },
+          "request_context": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_resource": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "expected_tenant": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "required_enterprise_subject_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "required_scopes": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requires_enterprise_subject": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "expected_resource",
+              "expected_tenant",
+              "required_enterprise_subject_type",
+              "required_scopes",
+              "requires_enterprise_subject"
+            ],
+            "type": "object"
+          },
+          "token_file": {
+            "pattern": "^tokens/.+\\.jwt$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected",
+          "expected_profile",
+          "id",
+          "jwks_file",
+          "request_context",
+          "token_file"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "clock_skew_seconds": {
+      "const": 30,
+      "type": "integer"
+    },
+    "contract_version": {
+      "const": "eim-a1/v2"
+    },
+    "delegation_cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_case_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected": {
+            "additionalProperties": false,
+            "properties": {
+              "delegation": {
+                "enum": [
+                  "allow",
+                  "reject"
+                ]
+              },
+              "failure_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "delegation",
+              "failure_reason"
+            ],
+            "type": "object"
+          },
+          "id": {
+            "pattern": "^[a-z0-9_]+$",
+            "type": "string"
+          },
+          "parent_case_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "required_preserved_claims": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "actor_case_id",
+          "expected",
+          "id",
+          "parent_case_id",
+          "required_preserved_claims"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "issuance_policy_cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "additionalProperties": false,
+            "properties": {
+              "failure_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "issuance": {
+                "enum": [
+                  "allow",
+                  "reject"
+                ]
+              }
+            },
+            "required": [
+              "failure_reason",
+              "issuance"
+            ],
+            "type": "object"
+          },
+          "id": {
+            "pattern": "^[a-z0-9_]+$",
+            "type": "string"
+          },
+          "request": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed_scopes": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "assurance_verified": {
+                "type": "boolean"
+              },
+              "registered_scopes": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requested_claims": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requested_scopes": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requires_assurance": {
+                "type": "boolean"
+              },
+              "subject_source": {
+                "enum": [
+                  "platform_principal",
+                  "provider_external_identifier"
+                ]
+              },
+              "tenant_source": {
+                "enum": [
+                  "caller_payload",
+                  "server_context"
+                ]
+              }
+            },
+            "required": [
+              "allowed_scopes",
+              "assurance_verified",
+              "registered_scopes",
+              "requested_claims",
+              "requested_scopes",
+              "requires_assurance",
+              "subject_source",
+              "tenant_source"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "expected",
+          "id",
+          "request"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "max_token_bytes": {
+      "const": 4096,
+      "type": "integer"
+    },
+    "profiles": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp_access": {
+          "$ref": "#/$defs/profile"
+        },
+        "mcp_internal_actor": {
+          "$ref": "#/$defs/profile"
+        }
+      },
+      "required": [
+        "mcp_access",
+        "mcp_internal_actor"
+      ],
+      "type": "object"
+    },
+    "resources": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "enum": [
+              "mcp_access",
+              "mcp_internal_actor"
+            ]
+          },
+          "uri": {
+            "pattern": "^https://",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "uri"
+        ],
+        "type": "object"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "scope_registry": {
+      "additionalProperties": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "validation_time": {
+      "const": 1786492800,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "cases",
+    "clock_skew_seconds",
+    "contract_version",
+    "delegation_cases",
+    "issuance_policy_cases",
+    "max_token_bytes",
+    "profiles",
+    "resources",
+    "scope_registry",
+    "validation_time"
+  ],
+  "title": "EIM-A1 deterministic token interoperability corpus",
+  "type": "object"
+}

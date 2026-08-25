@@ -22,7 +22,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from jwt.exceptions import InvalidAudienceError, InvalidIssuerError, InvalidSignatureError, InvalidTokenError
 
-CORPUS_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "eim_a1" / "v1"
+CORPUS_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "eim_a1" / "v2"
 MANIFEST_PATH = CORPUS_ROOT / "manifest.json"
 SCHEMA_PATH = CORPUS_ROOT / "manifest.schema.json"
 
@@ -280,6 +280,24 @@ def _validate_enterprise_subject(claims: JsonObject) -> None:
         raise VectorRejected("enterprise_subject_invalid")
 
 
+def _validate_provider_identity(claims: JsonObject) -> None:
+    provider_identity = claims.get("provider_identity")
+    if provider_identity is None:
+        return
+    if not isinstance(provider_identity, dict) or set(provider_identity) != {
+        "provider",
+        "provider_tenant",
+        "subject",
+        "subject_type",
+    }:
+        raise VectorRejected("provider_identity_invalid")
+    for name in ("provider", "provider_tenant", "subject", "subject_type"):
+        value = provider_identity[name]
+        max_length = 256 if name in {"provider_tenant", "subject"} else 64
+        if not isinstance(value, str) or not value or value != value.strip() or not value.isprintable() or len(value) > max_length:
+            raise VectorRejected("provider_identity_invalid")
+
+
 def _validate_assurance_claims(claims: JsonObject, iat: int, profile: JsonObject) -> None:
     if "auth_time" in claims:
         auth_time = _numeric_date(claims, "auth_time")
@@ -338,6 +356,7 @@ def _validate_profile_claims(case: JsonObject, claims: JsonObject) -> JsonObject
     _validate_assurance_claims(claims, iat, profile)
     scopes = _parse_scopes(claims, registered_scopes)
     _validate_enterprise_subject(claims)
+    _validate_provider_identity(claims)
 
     if case["expected_profile"] == "mcp_internal_actor":
         actor = claims.get("act")
@@ -454,7 +473,13 @@ def _evaluate_delegation(case: JsonObject) -> JsonObject:
     expected_parent_hash = base64.urlsafe_b64encode(hashlib.sha256(parent["jti"].encode("utf-8")).digest()).rstrip(b"=").decode("ascii")
     if actor["parent_jti_hash"] != expected_parent_hash:
         return {"delegation": "reject", "failure_reason": "actor_parent_jti_hash_mismatch"}
-    assurance_claims = ("acr", "amr", "auth_time", "enterprise_subject")
+    assurance_claims = (
+        "acr",
+        "amr",
+        "auth_time",
+        "enterprise_subject",
+        "provider_identity",
+    )
     if any(name in actor and actor[name] != parent.get(name) for name in assurance_claims):
         return {"delegation": "reject", "failure_reason": "actor_assurance_elevated"}
     if any(actor.get(name) != parent.get(name) for name in case["required_preserved_claims"]):
@@ -505,7 +530,7 @@ def test_eim_a1_manifest_semantics_are_closed_and_cross_references_resolve() -> 
     for relation in MANIFEST["delegation_cases"]:
         assert relation["parent_case_id"] in case_ids
         assert relation["actor_case_id"] in case_ids
-        assert set(relation["required_preserved_claims"]).issubset({"acr", "amr", "auth_time", "enterprise_subject"})
+        assert set(relation["required_preserved_claims"]).issubset({"acr", "amr", "auth_time", "enterprise_subject", "provider_identity"})
 
 
 def test_eim_a1_sha256sums_are_complete_sorted_and_correct() -> None:

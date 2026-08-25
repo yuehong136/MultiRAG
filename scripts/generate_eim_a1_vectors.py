@@ -34,9 +34,9 @@ from ecdsa import NIST256p, SigningKey
 from ecdsa.util import sigencode_string
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = REPOSITORY_ROOT / "tests" / "fixtures" / "eim_a1" / "v1"
+DEFAULT_OUTPUT = REPOSITORY_ROOT / "tests" / "fixtures" / "eim_a1" / "v2"
 
-CONTRACT_VERSION = "eim-a1/v1"
+CONTRACT_VERSION = "eim-a1/v2"
 VALIDATION_TIME = 1_786_492_800  # 2026-08-12T00:00:00Z
 CLOCK_SKEW_SECONDS = 30
 MAX_TOKEN_BYTES = 4096
@@ -61,6 +61,12 @@ INTERNAL_KEY = SigningKey.from_secret_exponent(21, curve=NIST256p, hashfunc=hash
 PLATFORM_USER_ID = "11111111111111111111111111111111"
 TENANT_ID = "tenant-test-a"
 AGENT_ID = "agent-test-a"
+PROVIDER_IDENTITY = {
+    "provider": "feishu",
+    "provider_tenant": "provider-tenant-test-a",
+    "subject": "provider-user-test-0001",
+    "subject_type": "user_id",
+}
 
 JsonObject = dict[str, Any]
 
@@ -315,7 +321,7 @@ def _manifest_schema() -> JsonObject:
         },
     }
     return {
-        "$id": "https://schemas.multirag.example/eim-a1/v1/manifest.schema.json",
+        "$id": "https://schemas.multirag.example/eim-a1/v2/manifest.schema.json",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "EIM-A1 deterministic token interoperability corpus",
         "type": "object",
@@ -386,7 +392,7 @@ def _manifest_schema() -> JsonObject:
 def _readme() -> str:
     return """# EIM-A1 deterministic JWT/JWKS corpus
 
-This directory is the language-neutral `eim-a1/v1` contract shared byte-for-byte by
+This directory is the language-neutral `eim-a1/v2` contract shared byte-for-byte by
 MultiRAG and `of_mcp`. Its canonical JWKS files contain only public test keys, and all
 identifiers are synthetic `.example` values. The deliberately invalid
 `jwks/invalid/private_material.json` contains only a non-key sentinel `d` member that
@@ -530,6 +536,19 @@ def _build_corpus() -> tuple[JsonObject, dict[str, str], dict[str, JsonObject]]:
         requires_enterprise_subject=True,
     )
 
+    provider_claims = _access_claims(
+        acr="urn:multirag:assurance:enterprise-verified",
+        amr=["channel_event", "directory_lookup"],
+        auth_time=VALIDATION_TIME - 120,
+        jti="access-jti-test-provider-0001",
+        provider_identity=copy.deepcopy(PROVIDER_IDENTITY),
+    )
+    add_case(
+        "access_valid_provider_identity",
+        _sign(_header(), provider_claims, ACCESS_CURRENT_KEY),
+        claims=provider_claims,
+    )
+
     add_case(
         "access_missing_required_scope",
         valid_token,
@@ -648,6 +667,18 @@ def _build_corpus() -> tuple[JsonObject, dict[str, str], dict[str, JsonObject]]:
             "access_enterprise_subject_invalid",
             _access_claims(enterprise_subject={"issuer": "https://hr.example", "subject": "subject-test-only", "tenant": "issuer-tenant-test"}, jti="access-jti-test-subjectbad1"),
             "enterprise_subject_invalid",
+        ),
+        (
+            "access_provider_identity_invalid",
+            _access_claims(
+                jti="access-jti-test-provider-bad1",
+                provider_identity={
+                    "provider": "feishu",
+                    "provider_tenant": "provider-tenant-test-a",
+                    "subject_type": "user_id",
+                },
+            ),
+            "provider_identity_invalid",
         ),
         ("access_unknown_claim", _access_claims(jti="access-jti-test-unknown-cl1", unexpected_claim="not-allowed"), "claim_not_allowed"),
     ]
@@ -853,6 +884,22 @@ def _build_corpus() -> tuple[JsonObject, dict[str, str], dict[str, JsonObject]]:
         expected_resource="leave_proxy",
         required_enterprise_subject_type="workcode",
         requires_enterprise_subject=True,
+    )
+    provider_actor_claims = _internal_claims(
+        acr=provider_claims["acr"],
+        amr=provider_claims["amr"],
+        auth_time=provider_claims["auth_time"],
+        jti="actor-jti-test-provider-0001",
+        parent_jti=provider_claims["jti"],
+        provider_identity=provider_claims["provider_identity"],
+    )
+    add_case(
+        "internal_actor_valid_provider_identity",
+        _sign(_header(kid=INTERNAL_KID), provider_actor_claims, INTERNAL_KEY),
+        claims=provider_actor_claims,
+        expected_profile="mcp_internal_actor",
+        jwks_file="jwks/internal_actor.json",
+        expected_resource="leave_proxy",
     )
     add_case(
         "internal_actor_token_at_gateway",
@@ -1080,6 +1127,13 @@ def _build_corpus() -> tuple[JsonObject, dict[str, str], dict[str, JsonObject]]:
                 "required_preserved_claims": ["acr", "amr", "auth_time", "enterprise_subject"],
             },
             {
+                "actor_case_id": "internal_actor_valid_provider_identity",
+                "expected": {"delegation": "allow", "failure_reason": None},
+                "id": "actor_preserves_provider_identity",
+                "parent_case_id": "access_valid_provider_identity",
+                "required_preserved_claims": ["acr", "amr", "auth_time", "provider_identity"],
+            },
+            {
                 "actor_case_id": "internal_actor_scope_expanded",
                 "expected": {"delegation": "reject", "failure_reason": "actor_scope_not_attenuated"},
                 "id": "actor_rejects_scope_expansion",
@@ -1104,7 +1158,14 @@ def _build_corpus() -> tuple[JsonObject, dict[str, str], dict[str, JsonObject]]:
     )
 
     access_required = ["agent_id", "aud", "client_id", "exp", "iat", "iss", "jti", "nbf", "scope", "sub", "tenant_id", "token_use"]
-    access_allowed = [*access_required, "acr", "amr", "auth_time", "enterprise_subject"]
+    access_allowed = [
+        *access_required,
+        "acr",
+        "amr",
+        "auth_time",
+        "enterprise_subject",
+        "provider_identity",
+    ]
     internal_required = [
         "act",
         "agent_id",
@@ -1142,7 +1203,16 @@ def _build_corpus() -> tuple[JsonObject, dict[str, str], dict[str, JsonObject]]:
             "mcp_internal_actor": {
                 "allowed_acr_values": ["urn:multirag:assurance:enterprise-verified"],
                 "allowed_amr_values": ["channel_event", "directory_lookup", "oidc", "password"],
-                "allowed_claims": sorted([*internal_required, "acr", "amr", "auth_time", "enterprise_subject"]),
+                "allowed_claims": sorted(
+                    [
+                        *internal_required,
+                        "acr",
+                        "amr",
+                        "auth_time",
+                        "enterprise_subject",
+                        "provider_identity",
+                    ]
+                ),
                 "issuer": INTERNAL_ISSUER,
                 "max_ttl_seconds": 60,
                 "required_claims": sorted(internal_required),

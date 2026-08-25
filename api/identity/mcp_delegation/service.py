@@ -91,7 +91,11 @@ class BoundMcpCredentialProvider:
             binding=self._binding,
             canonical_tool_name=canonical_tool_name,
         )
-        requested_claims = frozenset({"enterprise_subject"}) if decision.policy.enterprise_subject is not None else frozenset()
+        requested_claims: set[str] = set()
+        if decision.policy.enterprise_subject is not None:
+            requested_claims.add("enterprise_subject")
+        if decision.policy.provider_identity is not None:
+            requested_claims.add("provider_identity")
         try:
             issued = self._service.issuer.issue(
                 McpAccessTokenRequest(
@@ -99,7 +103,7 @@ class BoundMcpCredentialProvider:
                     agent_id=self._agent_id,
                     resource_name=self._binding.resource_name,
                     requested_scopes=decision.policy.required_scopes,
-                    requested_claims=requested_claims,
+                    requested_claims=frozenset(requested_claims),
                 ),
                 McpAccessGrant(allowed_scopes=decision.grant.allowed_scopes),
             )
@@ -271,11 +275,18 @@ class McpDelegationService:
         if policy.accepted_acr_values and (principal.authentication.assurance is not IdentityAssurance.ENTERPRISE_VERIFIED or ENTERPRISE_ACR not in policy.accepted_acr_values):
             raise McpDelegationError(DelegationErrorCode.ASSURANCE_DENIED)
         requirement = policy.enterprise_subject
-        if requirement is None:
-            return
-        subject = principal.enterprise_subject
-        if subject is None or subject.subject_type != requirement.subject_type or subject.issuer != requirement.issuer or subject.issuer_tenant != requirement.issuer_tenant:
-            raise McpDelegationError(DelegationErrorCode.ASSURANCE_DENIED)
+        if requirement is not None:
+            subject = principal.enterprise_subject
+            if subject is None or subject.subject_type != requirement.subject_type or subject.issuer != requirement.issuer or subject.issuer_tenant != requirement.issuer_tenant:
+                raise McpDelegationError(DelegationErrorCode.ASSURANCE_DENIED)
+        provider_requirement = policy.provider_identity
+        if provider_requirement is not None:
+            provider_identity = principal.provider_identity
+            if provider_identity is None or not any(
+                provider_identity.provider == alternative.provider and provider_identity.provider_tenant == alternative.provider_tenant and provider_identity.subject_type == alternative.subject_type
+                for alternative in provider_requirement.any_of
+            ):
+                raise McpDelegationError(DelegationErrorCode.ASSURANCE_DENIED)
 
 
 __all__ = [

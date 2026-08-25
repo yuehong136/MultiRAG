@@ -1,0 +1,2642 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-00000001",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_valid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_valid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-old-key-01",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_valid_old_kid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_valid_old_kid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-broad-0001",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read",
+            "leave:submit"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_valid_extra_registered_scope",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_valid_extra_registered_scope.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "acr": "urn:multirag:assurance:enterprise-verified",
+          "agent_id": "agent-test-a",
+          "amr": [
+            "channel_event",
+            "directory_lookup"
+          ],
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "auth_time": 1786492680,
+          "client_id": "multirag-test-client",
+          "enterprise_subject": {
+            "issuer": "https://hr.example",
+            "subject": "subject-test-only",
+            "tenant": "issuer-tenant-test",
+            "type": "workcode"
+          },
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-enterprise1",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_valid_enterprise_subject",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": "workcode",
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": true
+      },
+      "token_file": "tokens/access_valid_enterprise_subject.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "acr": "urn:multirag:assurance:enterprise-verified",
+          "agent_id": "agent-test-a",
+          "amr": [
+            "channel_event",
+            "directory_lookup"
+          ],
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "auth_time": 1786492680,
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-provider-0001",
+          "nbf": 1786492740,
+          "provider_identity": {
+            "provider": "feishu",
+            "provider_tenant": "provider-tenant-test-a",
+            "subject": "provider-user-test-0001",
+            "subject_type": "user_id"
+          },
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_valid_provider_identity",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_valid_provider_identity.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "deny",
+        "failure_reason": "required_scope_missing",
+        "http_status": 403,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-00000001",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": "insufficient_scope"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_missing_required_scope",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:submit"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_missing_required_scope.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "deny",
+        "failure_reason": "enterprise_subject_required",
+        "http_status": 403,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-00000001",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_missing_enterprise_subject_when_required",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": "workcode",
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": true
+      },
+      "token_file": "tokens/access_missing_enterprise_subject_when_required.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "deny",
+        "failure_reason": "enterprise_subject_type_mismatch",
+        "http_status": 403,
+        "normalized_claims": {
+          "acr": "urn:multirag:assurance:enterprise-verified",
+          "agent_id": "agent-test-a",
+          "amr": [
+            "channel_event",
+            "directory_lookup"
+          ],
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "auth_time": 1786492680,
+          "client_id": "multirag-test-client",
+          "enterprise_subject": {
+            "issuer": "https://hr.example",
+            "subject": "subject-test-only",
+            "tenant": "issuer-tenant-test",
+            "type": "workcode"
+          },
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-enterprise1",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_wrong_enterprise_subject_type",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": "talent_id",
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": true
+      },
+      "token_file": "tokens/access_wrong_enterprise_subject_type.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "deny",
+        "failure_reason": "tenant_mismatch",
+        "http_status": 403,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-00000001",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_tenant_context_mismatch",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-b",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_tenant_context_mismatch.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493130,
+          "iat": 1786492830,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-skew-bound1",
+          "nbf": 1786492830,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_nbf_at_positive_skew_boundary",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_nbf_at_positive_skew_boundary.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_expired",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_expired",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_expired.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_expired",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_exp_at_negative_skew_boundary",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_exp_at_negative_skew_boundary.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_issued_in_future",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_issued_in_future",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_issued_in_future.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_not_yet_valid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_not_yet_valid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_not_yet_valid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_time_order_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_exp_not_after_iat",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_exp_not_after_iat.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_ttl_exceeded",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_ttl_too_long",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_ttl_too_long.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "issuer_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_wrong_issuer",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_wrong_issuer.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "audience_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_wrong_audience",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_wrong_audience.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "audience_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_audience_list",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_audience_list.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "audience_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_audience_trailing_slash",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_audience_trailing_slash.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "scope_not_registered",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_unknown_scope",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_unknown_scope.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "scope_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_duplicate_scope",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_duplicate_scope.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "scope_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_malformed_scope",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_malformed_scope.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "claim_type_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_scope_wrong_type",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_scope_wrong_type.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "claim_type_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_iat_wrong_type",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_iat_wrong_type.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "claim_type_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_exp_bool",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_exp_bool.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "claim_value_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_empty_subject",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_empty_subject.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_use_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_wrong_token_use",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_wrong_token_use.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "auth_time_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_auth_time_after_iat",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_auth_time_after_iat.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "acr_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_acr_empty",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_acr_empty.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "acr_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_acr_unknown",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_acr_unknown.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "amr_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_amr_empty",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_amr_empty.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "amr_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_amr_duplicate",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_amr_duplicate.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "enterprise_subject_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_enterprise_subject_invalid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_enterprise_subject_invalid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "provider_identity_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_provider_identity_invalid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_provider_identity_invalid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "claim_not_allowed",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_unknown_claim",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_unknown_claim.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "required_claim_missing",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_missing_required_claim",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_missing_required_claim.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_type_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_missing_typ",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_missing_typ.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_type_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_wrong_typ",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_wrong_typ.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "kid_missing",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_missing_kid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_missing_kid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "kid_unknown",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_unknown_kid",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_unknown_kid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "protected_header_forbidden",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_header_jku",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_header_jku.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "protected_header_forbidden",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_header_x5u",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_header_x5u.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "protected_header_forbidden",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_header_jwk",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_header_jwk.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "protected_header_forbidden",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_header_unknown_crit",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_header_unknown_crit.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "algorithm_not_allowed",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_alg_none",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_alg_none.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "algorithm_not_allowed",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_alg_hs256_confusion",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_alg_hs256_confusion.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "algorithm_not_allowed",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_alg_rs256",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_alg_rs256.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "signature_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_tampered_payload",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_tampered_payload.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "signature_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_tampered_header",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_tampered_header.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "signature_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_tampered_signature",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_tampered_signature.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "protected_header_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_duplicate_header_member",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_duplicate_header_member.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "payload_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_duplicate_payload_member",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_duplicate_payload_member.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "compact_serialization_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_malformed_compact",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_malformed_compact.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "compact_serialization_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_malformed_base64url",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_malformed_base64url.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "protected_header_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_malformed_header_json",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_malformed_header_json.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "payload_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_malformed_payload_json",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_malformed_payload_json.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_too_large",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_oversized",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_oversized.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "jwks_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_jwks_duplicate_kid",
+      "jwks_file": "jwks/invalid/duplicate_kid.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_jwks_duplicate_kid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "jwks_private_material",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_jwks_private_material",
+      "jwks_file": "jwks/invalid/private_material.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_jwks_private_material.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "jwks_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_jwks_wrong_alg",
+      "jwks_file": "jwks/invalid/wrong_alg.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_jwks_wrong_alg.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "jwks_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_jwks_wrong_crv",
+      "jwks_file": "jwks/invalid/wrong_crv.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_jwks_wrong_crv.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "jwks_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_jwks_wrong_kty",
+      "jwks_file": "jwks/invalid/wrong_kty.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_jwks_wrong_kty.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "jwks_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_jwks_wrong_use",
+      "jwks_file": "jwks/invalid/wrong_use.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_jwks_wrong_use.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "audience_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "inbound_token_at_ofmcp_gateway",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/inbound_token_at_ofmcp_gateway.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "audience_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "gateway_token_at_multirag_inbound",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "multirag_inbound",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "rag:query"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/gateway_token_at_multirag_inbound.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "compact_serialization_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "channel_workload_credential_at_gateway",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/channel_workload_credential_at_gateway.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "act": {
+            "sub": "ofmcp-gateway-test-workload"
+          },
+          "agent_id": "agent-test-a",
+          "aud": "https://leave.ofmcp.example/internal/mcp",
+          "client_id": "ofmcp-gateway-test-client",
+          "exp": 1786492855,
+          "iat": 1786492795,
+          "iss": "https://gateway.ofmcp.example",
+          "jti": "actor-jti-test-00000001",
+          "nbf": 1786492795,
+          "parent_jti_hash": "Qn65DrK6bNA3sn6NsTxGJgW-n13lBks_HLwQ4YWmMLU",
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_internal_actor",
+          "trace_id": "trace-test-0000000000000001"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_valid",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_valid.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "acr": "urn:multirag:assurance:enterprise-verified",
+          "act": {
+            "sub": "ofmcp-gateway-test-workload"
+          },
+          "agent_id": "agent-test-a",
+          "amr": [
+            "channel_event",
+            "directory_lookup"
+          ],
+          "aud": "https://leave.ofmcp.example/internal/mcp",
+          "auth_time": 1786492680,
+          "client_id": "ofmcp-gateway-test-client",
+          "enterprise_subject": {
+            "issuer": "https://hr.example",
+            "subject": "subject-test-only",
+            "tenant": "issuer-tenant-test",
+            "type": "workcode"
+          },
+          "exp": 1786492855,
+          "iat": 1786492795,
+          "iss": "https://gateway.ofmcp.example",
+          "jti": "actor-jti-test-enterprise01",
+          "nbf": 1786492795,
+          "parent_jti_hash": "4O7FITpmk3NWF71u-FqYowiMUQaHSesgSmCXYzW8WP0",
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_internal_actor",
+          "trace_id": "trace-test-0000000000000001"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_valid_enterprise_subject",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": "workcode",
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": true
+      },
+      "token_file": "tokens/internal_actor_valid_enterprise_subject.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "acr": "urn:multirag:assurance:enterprise-verified",
+          "act": {
+            "sub": "ofmcp-gateway-test-workload"
+          },
+          "agent_id": "agent-test-a",
+          "amr": [
+            "channel_event",
+            "directory_lookup"
+          ],
+          "aud": "https://leave.ofmcp.example/internal/mcp",
+          "auth_time": 1786492680,
+          "client_id": "ofmcp-gateway-test-client",
+          "exp": 1786492855,
+          "iat": 1786492795,
+          "iss": "https://gateway.ofmcp.example",
+          "jti": "actor-jti-test-provider-0001",
+          "nbf": 1786492795,
+          "parent_jti_hash": "mooCb-Mi1Y0t-8D3-Jc5qqQutlhTlCrv0Rmx8QII4Z0",
+          "provider_identity": {
+            "provider": "feishu",
+            "provider_tenant": "provider-tenant-test-a",
+            "subject": "provider-user-test-0001",
+            "subject_type": "user_id"
+          },
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_internal_actor",
+          "trace_id": "trace-test-0000000000000001"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_valid_provider_identity",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_valid_provider_identity.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "kid_unknown",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "internal_actor_token_at_gateway",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_token_at_gateway.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "kid_unknown",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "access_token_at_proxy",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_token_at_proxy.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_use_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "access_profile_hybrid_at_proxy",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_profile_hybrid_at_proxy.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_use_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_access",
+      "id": "internal_profile_hybrid_at_gateway",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_profile_hybrid_at_gateway.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "audience_invalid",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_service_a_at_service_b",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "medic_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "medic:submit"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_service_a_at_service_b.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "token_ttl_exceeded",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_ttl_too_long",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_ttl_too_long.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "reject",
+        "authorization": "not_evaluated",
+        "failure_reason": "required_claim_missing",
+        "http_status": 401,
+        "normalized_claims": null,
+        "oauth_error": "invalid_token"
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_missing_act",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_missing_act.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786493040,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-parent-narrow",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_parent_narrow",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_parent_narrow.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "act": {
+            "sub": "ofmcp-gateway-test-workload"
+          },
+          "agent_id": "agent-test-a",
+          "aud": "https://leave.ofmcp.example/internal/mcp",
+          "client_id": "ofmcp-gateway-test-client",
+          "exp": 1786492855,
+          "iat": 1786492795,
+          "iss": "https://gateway.ofmcp.example",
+          "jti": "actor-jti-test-scope-expand",
+          "nbf": 1786492795,
+          "parent_jti_hash": "pc2a50UZpUUhnvgHp-vEmkWYWws8kRxK4RAQ4Th8AVE",
+          "scopes": [
+            "leave:read",
+            "leave:submit"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_internal_actor",
+          "trace_id": "trace-test-0000000000000001"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_scope_expanded",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_scope_expanded.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "agent_id": "agent-test-a",
+          "aud": "https://gateway.ofmcp.example/mcp",
+          "client_id": "multirag-test-client",
+          "exp": 1786492830,
+          "iat": 1786492740,
+          "iss": "https://auth.multirag.example",
+          "jti": "access-jti-test-parent-short1",
+          "nbf": 1786492740,
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_access"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_access",
+      "id": "access_parent_short_lived",
+      "jwks_file": "jwks/access.json",
+      "request_context": {
+        "expected_resource": "ofmcp_gateway",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/access_parent_short_lived.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "act": {
+            "sub": "ofmcp-gateway-test-workload"
+          },
+          "agent_id": "agent-test-a",
+          "aud": "https://leave.ofmcp.example/internal/mcp",
+          "client_id": "ofmcp-gateway-test-client",
+          "exp": 1786492855,
+          "iat": 1786492795,
+          "iss": "https://gateway.ofmcp.example",
+          "jti": "actor-jti-test-exp-parent01",
+          "nbf": 1786492795,
+          "parent_jti_hash": "Eq3-dRxIisdjYY9D0OIp1U8jL-9nKA5Fdhwj_x7YTGM",
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_internal_actor",
+          "trace_id": "trace-test-0000000000000001"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_exceeds_parent_expiry",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_exceeds_parent_expiry.jwt"
+    },
+    {
+      "expected": {
+        "authentication": "accept",
+        "authorization": "allow",
+        "failure_reason": null,
+        "http_status": 200,
+        "normalized_claims": {
+          "act": {
+            "sub": "ofmcp-gateway-test-workload"
+          },
+          "agent_id": "agent-test-a",
+          "aud": "https://leave.ofmcp.example/internal/mcp",
+          "client_id": "ofmcp-gateway-test-client",
+          "exp": 1786492855,
+          "iat": 1786492795,
+          "iss": "https://gateway.ofmcp.example",
+          "jti": "actor-jti-test-parent-hash1",
+          "nbf": 1786492795,
+          "parent_jti_hash": "Aposw0WmTfeFn1EoHcvXMYAoYTfGybhVoFfx5NkFFSM",
+          "scopes": [
+            "leave:read"
+          ],
+          "sub": "11111111111111111111111111111111",
+          "tenant_id": "tenant-test-a",
+          "token_use": "mcp_internal_actor",
+          "trace_id": "trace-test-0000000000000001"
+        },
+        "oauth_error": null
+      },
+      "expected_profile": "mcp_internal_actor",
+      "id": "internal_actor_wrong_parent_hash",
+      "jwks_file": "jwks/internal_actor.json",
+      "request_context": {
+        "expected_resource": "leave_proxy",
+        "expected_tenant": "tenant-test-a",
+        "required_enterprise_subject_type": null,
+        "required_scopes": [
+          "leave:read"
+        ],
+        "requires_enterprise_subject": false
+      },
+      "token_file": "tokens/internal_actor_wrong_parent_hash.jwt"
+    }
+  ],
+  "clock_skew_seconds": 30,
+  "contract_version": "eim-a1/v2",
+  "delegation_cases": [
+    {
+      "actor_case_id": "internal_actor_valid",
+      "expected": {
+        "delegation": "allow",
+        "failure_reason": null
+      },
+      "id": "actor_valid_scope_attenuation",
+      "parent_case_id": "access_valid_extra_registered_scope",
+      "required_preserved_claims": []
+    },
+    {
+      "actor_case_id": "internal_actor_valid_enterprise_subject",
+      "expected": {
+        "delegation": "allow",
+        "failure_reason": null
+      },
+      "id": "actor_preserves_enterprise_assurance",
+      "parent_case_id": "access_valid_enterprise_subject",
+      "required_preserved_claims": [
+        "acr",
+        "amr",
+        "auth_time",
+        "enterprise_subject"
+      ]
+    },
+    {
+      "actor_case_id": "internal_actor_valid_provider_identity",
+      "expected": {
+        "delegation": "allow",
+        "failure_reason": null
+      },
+      "id": "actor_preserves_provider_identity",
+      "parent_case_id": "access_valid_provider_identity",
+      "required_preserved_claims": [
+        "acr",
+        "amr",
+        "auth_time",
+        "provider_identity"
+      ]
+    },
+    {
+      "actor_case_id": "internal_actor_scope_expanded",
+      "expected": {
+        "delegation": "reject",
+        "failure_reason": "actor_scope_not_attenuated"
+      },
+      "id": "actor_rejects_scope_expansion",
+      "parent_case_id": "access_parent_narrow",
+      "required_preserved_claims": []
+    },
+    {
+      "actor_case_id": "internal_actor_exceeds_parent_expiry",
+      "expected": {
+        "delegation": "reject",
+        "failure_reason": "actor_expiry_exceeds_parent"
+      },
+      "id": "actor_rejects_expiry_beyond_parent",
+      "parent_case_id": "access_parent_short_lived",
+      "required_preserved_claims": []
+    },
+    {
+      "actor_case_id": "internal_actor_wrong_parent_hash",
+      "expected": {
+        "delegation": "reject",
+        "failure_reason": "actor_parent_jti_hash_mismatch"
+      },
+      "id": "actor_rejects_wrong_parent_hash",
+      "parent_case_id": "access_valid_extra_registered_scope",
+      "required_preserved_claims": []
+    }
+  ],
+  "issuance_policy_cases": [
+    {
+      "expected": {
+        "failure_reason": "subject_not_platform_principal",
+        "issuance": "reject"
+      },
+      "id": "issuer_rejects_provider_external_subject",
+      "request": {
+        "allowed_scopes": [
+          "leave:read"
+        ],
+        "assurance_verified": true,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [],
+        "requested_scopes": [
+          "leave:read"
+        ],
+        "requires_assurance": false,
+        "subject_source": "provider_external_identifier",
+        "tenant_source": "server_context"
+      }
+    },
+    {
+      "expected": {
+        "failure_reason": "requested_scope_not_registered",
+        "issuance": "reject"
+      },
+      "id": "issuer_rejects_unknown_requested_scope",
+      "request": {
+        "allowed_scopes": [
+          "leave:read"
+        ],
+        "assurance_verified": true,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [],
+        "requested_scopes": [
+          "leave:unknown"
+        ],
+        "requires_assurance": false,
+        "subject_source": "platform_principal",
+        "tenant_source": "server_context"
+      }
+    },
+    {
+      "expected": {
+        "failure_reason": "requested_scope_not_granted",
+        "issuance": "reject"
+      },
+      "id": "issuer_rejects_scope_elevation",
+      "request": {
+        "allowed_scopes": [
+          "leave:read"
+        ],
+        "assurance_verified": true,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [],
+        "requested_scopes": [
+          "leave:submit"
+        ],
+        "requires_assurance": false,
+        "subject_source": "platform_principal",
+        "tenant_source": "server_context"
+      }
+    },
+    {
+      "expected": {
+        "failure_reason": null,
+        "issuance": "allow"
+      },
+      "id": "issuer_allows_registered_granted_scope",
+      "request": {
+        "allowed_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "assurance_verified": true,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [],
+        "requested_scopes": [
+          "leave:read"
+        ],
+        "requires_assurance": false,
+        "subject_source": "platform_principal",
+        "tenant_source": "server_context"
+      }
+    },
+    {
+      "expected": {
+        "failure_reason": "requested_claim_not_allowed",
+        "issuance": "reject"
+      },
+      "id": "issuer_rejects_forbidden_channel_and_role_claims",
+      "request": {
+        "allowed_scopes": [
+          "leave:read"
+        ],
+        "assurance_verified": true,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [
+          "channel_message",
+          "department",
+          "roles"
+        ],
+        "requested_scopes": [
+          "leave:read"
+        ],
+        "requires_assurance": false,
+        "subject_source": "platform_principal",
+        "tenant_source": "server_context"
+      }
+    },
+    {
+      "expected": {
+        "failure_reason": "tenant_not_server_bound",
+        "issuance": "reject"
+      },
+      "id": "issuer_rejects_caller_selected_tenant",
+      "request": {
+        "allowed_scopes": [
+          "leave:read"
+        ],
+        "assurance_verified": true,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [],
+        "requested_scopes": [
+          "leave:read"
+        ],
+        "requires_assurance": false,
+        "subject_source": "platform_principal",
+        "tenant_source": "caller_payload"
+      }
+    },
+    {
+      "expected": {
+        "failure_reason": "assurance_not_verified",
+        "issuance": "reject"
+      },
+      "id": "issuer_rejects_unverified_assurance",
+      "request": {
+        "allowed_scopes": [
+          "leave:read"
+        ],
+        "assurance_verified": false,
+        "registered_scopes": [
+          "leave:read",
+          "leave:submit"
+        ],
+        "requested_claims": [
+          "enterprise_subject"
+        ],
+        "requested_scopes": [
+          "leave:read"
+        ],
+        "requires_assurance": true,
+        "subject_source": "platform_principal",
+        "tenant_source": "server_context"
+      }
+    }
+  ],
+  "max_token_bytes": 4096,
+  "profiles": {
+    "mcp_access": {
+      "allowed_acr_values": [
+        "urn:multirag:assurance:enterprise-verified"
+      ],
+      "allowed_amr_values": [
+        "channel_event",
+        "directory_lookup",
+        "oidc",
+        "password"
+      ],
+      "allowed_claims": [
+        "acr",
+        "agent_id",
+        "amr",
+        "aud",
+        "auth_time",
+        "client_id",
+        "enterprise_subject",
+        "exp",
+        "iat",
+        "iss",
+        "jti",
+        "nbf",
+        "provider_identity",
+        "scope",
+        "sub",
+        "tenant_id",
+        "token_use"
+      ],
+      "issuer": "https://auth.multirag.example",
+      "max_ttl_seconds": 300,
+      "required_claims": [
+        "agent_id",
+        "aud",
+        "client_id",
+        "exp",
+        "iat",
+        "iss",
+        "jti",
+        "nbf",
+        "scope",
+        "sub",
+        "tenant_id",
+        "token_use"
+      ],
+      "token_use": "mcp_access"
+    },
+    "mcp_internal_actor": {
+      "allowed_acr_values": [
+        "urn:multirag:assurance:enterprise-verified"
+      ],
+      "allowed_amr_values": [
+        "channel_event",
+        "directory_lookup",
+        "oidc",
+        "password"
+      ],
+      "allowed_claims": [
+        "acr",
+        "act",
+        "agent_id",
+        "amr",
+        "aud",
+        "auth_time",
+        "client_id",
+        "enterprise_subject",
+        "exp",
+        "iat",
+        "iss",
+        "jti",
+        "nbf",
+        "parent_jti_hash",
+        "provider_identity",
+        "scope",
+        "sub",
+        "tenant_id",
+        "token_use",
+        "trace_id"
+      ],
+      "issuer": "https://gateway.ofmcp.example",
+      "max_ttl_seconds": 60,
+      "required_claims": [
+        "act",
+        "agent_id",
+        "aud",
+        "client_id",
+        "exp",
+        "iat",
+        "iss",
+        "jti",
+        "nbf",
+        "parent_jti_hash",
+        "scope",
+        "sub",
+        "tenant_id",
+        "token_use",
+        "trace_id"
+      ],
+      "token_use": "mcp_internal_actor"
+    }
+  },
+  "resources": {
+    "leave_proxy": {
+      "profile": "mcp_internal_actor",
+      "uri": "https://leave.ofmcp.example/internal/mcp"
+    },
+    "medic_proxy": {
+      "profile": "mcp_internal_actor",
+      "uri": "https://medic.ofmcp.example/internal/mcp"
+    },
+    "multirag_inbound": {
+      "profile": "mcp_access",
+      "uri": "https://multirag.example/mcp"
+    },
+    "ofmcp_gateway": {
+      "profile": "mcp_access",
+      "uri": "https://gateway.ofmcp.example/mcp"
+    }
+  },
+  "scope_registry": {
+    "leave_proxy": [
+      "leave:read",
+      "leave:submit"
+    ],
+    "medic_proxy": [
+      "medic:submit"
+    ],
+    "multirag_inbound": [
+      "rag:query"
+    ],
+    "ofmcp_gateway": [
+      "leave:read",
+      "leave:submit",
+      "medic:submit"
+    ]
+  },
+  "validation_time": 1786492800
+}

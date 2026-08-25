@@ -677,8 +677,8 @@ Resource Server/Principal/scope，也不能单独充当 EIM-U14 的持久化 Int
 canonical corpus 位置固定为：
 
 ```text
-MultiRAG: tests/fixtures/eim_a1/v1/
-of_mcp:  packages/ofmcp-contracts/tests/fixtures/eim_a1/v1/
+MultiRAG: tests/fixtures/eim_a1/v2/
+of_mcp:  packages/ofmcp-contracts/tests/fixtures/eim_a1/v2/
 ```
 
 两个目录必须字节一致，至少包含 `manifest.json`、`manifest.schema.json`、

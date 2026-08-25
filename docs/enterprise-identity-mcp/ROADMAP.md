@@ -25,7 +25,9 @@
 > `jit/TTL=300` policy 与 2 条 Channel link。EIM-C3 / CHN-X7 的源码、自动门禁与新 API 真实飞书
 > live 均已完成并标记 `✅`；EIM-P2 / CHN-X18 也已完成实现、自动门禁与本机 API rollout，
 > Canvas/Dialog 双目标真实飞书各 1 条均形成 owned session 且终态完成，
-> EIM-P3 request-scoped credential/bearer 接线已完成代码与自动门禁，但 A2/P3 均默认关闭且未部署；
+> EIM-P3 request-scoped credential/bearer 接线已完成代码与自动门禁；EIM-P4 / CHN-X23 已增加按资源
+> 条件签发的通用 Provider identity，并在 of_mcp 以 EIM-L3 接到 leave actor resolver。上述能力仍
+> 默认关闭且未部署；
 > EIM-A5 已在 of_mcp 完成本地实现与自动门禁；EIM-F9 已完成五个已发布协议 revision 的双向
 > 兼容加固与未知版本拒绝；U14 与 U15/CHN-X15 已完成本地实现和自动门禁，源码仍默认关闭；
 > 经用户批准，U15 已用单机临时 key/policy/grant、loopback TLS 和严格 P3 verifier 完成一次真实飞书
@@ -538,6 +540,7 @@ authority 或 proof 任一损坏都 fail closed。它只把 `principal_id` 用�
 | EIM-P1 | — | MR | 扩展/统一 immutable Principal 与 AuthenticationContext，不把 ORM 对象带出请求 | ✅ | I3 | [CONTRACTS §4](CONTRACTS.md#4-identity-service-接口)；web/token auth 基线不回归 |
 | EIM-P2 | CHN-X18 | MR | 把 C3 immutable Principal 从 Channel Execution 显式传入 Dialog/Canvas Graph、Agent/RAG/Memory/Canvas workflow 与 MCP call context seam；按 tenant + platform user 隔离 | ✅ | P1,C3 | `api.identity.run_context.RunContext`、Channel target driver、Canvas Graph 构造、Memory component/service 与 MCP instance-local call context 已接线；LINKED 不再用 `principal_id or ""` 静默匿名，NO_LINK 保留显式 legacy；未签 token、未取 credential、未发 bearer |
 | EIM-P3 | — | MR | MCP request-scoped credential provider；按 Principal/resource/scope 获取 token | ✅ | P2,F3,A2,A4 | `api.identity.mcp_delegation` 消费 A4 secure snapshot + MR grant snapshot；`RunContext` 绑定 published Canvas agent/revision，`MCPToolBinding` 分离 alias/canonical name；SDK 2 operation-scoped `httpx2.Auth` 每逻辑调用新 token/JTI。cache key 绑定 principal/tenant/agent+revision/server/resource/canonical tool/scope/policy+grant revision/generation，只缓存 grant/scope decision，assurance 每次重验；默认 disabled，未 rollout |
+| EIM-P4 | CHN-X23 | MR + of_mcp contract | P3 按资源条件签发严格四字段 `provider_identity`，保留平台 `sub`；A4 format 3 policy 用 exact Provider coordinates 申请该 claim | ✅ | P3,C3,I4,A4 | Channel event + Contact V3 + final I3 证明绑定 `VerifiedProviderIdentity`；issuer 仅对显式 resource allowlist 投影；P3 接受 format 2/3 且 exact-match 当前 Principal；A1 v2 跨仓语料覆盖 access/internal actor 保真与畸形拒绝；默认 disabled、未 rollout |
 
 P1 已完成现有消费方审计：唯一 owner 是 `api.identity.principal.Principal`，
 `api.utils.api_utils.Principal` 只是同一 class object 的兼容 re-export，存量 route import 迁完即删。
@@ -792,6 +795,7 @@ URI、audience、scope namespace、protected-resource metadata、审计和回滚
 |---|---|---|:---:|---|---|
 | EIM-L1 | of_mcp | leave 身份相关只读工具消费 request-scoped Principal 的 exact OA enterprise subject；`oa_user_id` 保持 optional、所有模式始终 ignored | ✅ | A5,I5 | `get_leave_balance` 为 read/reusable，`preview_leave` 为 prepare/reusable，`verify_leave_request` 为 read/reusable，均绑定 server-owned `leave_applicant`；service 固定 `subject_type=ecology_userid`，secure 只覆盖 issuer/tenant，任何 type 漂移启动 fail-fast；dependency 独立重验 `ecology_userid` 后才可调用 OA；verify 同响应 owner/workflow/form fence；输出最小化；写工具无条件 `LEAVE_WRITE_DISABLED` 且 OA 零调用；contract snapshot 与完整 verify 全绿 |
 | EIM-L2 | of_mcp + MR/飞书（CHN-X20） | `preview_leave_form` 用 U14/U15 原生 CardKit form 收集 7 个低敏试算字段，接受后只为当前 Principal 做 OA preview，并以严格 terminal envelope 投影安全结果 | ✅ | L1,U15 | p2p-only；字段仅为 4 种低敏假种 + 起止日期/小时/半小时；`leave:read` + prepare/reusable + `leave_applicant`；接受前 OA 零调用，接受后 `doCreateRequest` 调用数仍为 0 且不创建草稿/审批；modern `2026-07-28` 对 `end<=start` 返回 fresh correction `InputRequired` 并可多轮重开，legacy 仍 terminal；direct/FastMCP terminal envelope 严格校验；H5/URL、敏感写、真实 authority 与 rollout 后置；初始双仓门禁见变更日志，modern correction 为 of_mcp `f9bda8d`、verify **584 passed / 2 skipped** |
+| EIM-L3 | CHN-X23 | of_mcp leave | 将 L1 的 direct enterprise subject 前提替换为通用 `BusinessActorResolver`：飞书 verified `user_id` 按已确认业务契约逐字作为 Ecology userid | ✅ | P4,A5,L2 | `leave_applicant` 改为 exact Provider binding；list types 不需身份，balance/preview/native form/verify 服务端解析；FastMCP b3 嵌套 `Depends` 隐藏 resolver；`oa_user_id` 参数继续忽略；write 工具仍硬关闭；无 DB/额外 OA mapping I/O；format 3 policy snapshot 与 A1 v2 双仓语料 |
 
 `leave_applicant` 已作为 composition root 拥有的命名 binding 落到代码，不是 tool argument、prompt、
 CardKit 字段或任意 Provider 字段别名。service binding 声明把 `subject_type=ecology_userid` 固定为不可变

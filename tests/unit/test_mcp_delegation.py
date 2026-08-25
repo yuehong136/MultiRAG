@@ -11,6 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from api.identity.contracts import (
+    ExternalIdentityRecord,
+    IdentityResolutionResult,
+    IdentityResolutionStatus,
+    UserMembershipRecord,
+)
 from api.identity.mcp_delegation.contracts import DelegationErrorCode, McpDelegationError
 from api.identity.mcp_delegation.policy import load_grant_policy_snapshot, load_tool_policy_snapshot
 from api.identity.mcp_delegation.service import McpDelegationService
@@ -22,7 +28,9 @@ from api.identity.principal import (
     IdentityAssurance,
     Principal,
     TenantMembershipEvidence,
+    VerifiedProviderIdentity,
     build_principal_from_authenticated_actor,
+    build_principal_from_resolved_identity,
 )
 from api.identity.run_context import RunContext
 from common.constants import MCPServerType
@@ -40,6 +48,7 @@ def _write_snapshots(
     tmp_path: Path,
     *,
     user_ids: tuple[str, ...] = ("user-a",),
+    provider_identity: dict[str, object] | None = None,
 ) -> tuple[Path, Path, str]:
     tool_policy: dict[str, object] = {
         "profile": "secure",
@@ -50,7 +59,7 @@ def _write_snapshots(
                 "scopes": ["leave:read", "leave:submit"],
             }
         ],
-        "snapshot_format": 2,
+        "snapshot_format": 3 if provider_identity is not None else 2,
         "tools": [
             {
                 "accepted_acr_values": [],
@@ -76,6 +85,9 @@ def _write_snapshots(
             },
         ],
     }
+    if provider_identity is not None:
+        for tool in tool_policy["tools"]:  # type: ignore[union-attr]
+            tool["provider_identity"] = provider_identity
     policy_revision = _canonical_revision(tool_policy, "policy_revision")
     tool_policy["policy_revision"] = policy_revision
 
@@ -122,6 +134,51 @@ def _principal(user_id: str = "user-a") -> Principal:
             source=AuthenticationSource.WEB_SESSION,
             assurance=IdentityAssurance.AUTHENTICATED,
             validated_at=NOW,
+        ),
+    )
+
+
+def _provider_principal() -> Principal:
+    proof_time = NOW - timedelta(minutes=5)
+    return build_principal_from_resolved_identity(
+        result=IdentityResolutionResult(
+            status=IdentityResolutionStatus.RESOLVED,
+            identity=ExternalIdentityRecord(
+                id="identity-a",
+                tenant_id="tenant-a",
+                user_id="user-a",
+                provider="feishu",
+                provider_tenant_key="provider-tenant-a",
+                subject_type="user_id",
+                subject_value="oa-user-a",
+                state="active",
+                verified_at=proof_time,
+                last_seen_at=proof_time,
+                identity_revision=1,
+            ),
+            membership=UserMembershipRecord(
+                user_id="user-a",
+                tenant_id="tenant-a",
+                role="normal",
+            ),
+        ),
+        authentication=AuthenticationContext(
+            source=AuthenticationSource.ENTERPRISE_IDENTITY,
+            assurance=IdentityAssurance.DIRECTORY_VERIFIED,
+            validated_at=NOW,
+            assurance_verified_at=proof_time,
+            provider="feishu",
+            external_identity_id="identity-a",
+        ),
+        provider_identity=VerifiedProviderIdentity(
+            platform_user_id="user-a",
+            tenant_id="tenant-a",
+            provider="feishu",
+            provider_tenant="provider-tenant-a",
+            provider_account_id="provider-account-a",
+            subject_type="user_id",
+            subject="oa-user-a",
+            verified_at=proof_time,
         ),
     )
 
@@ -272,6 +329,84 @@ def test_unproven_tool_assurance_is_denied_before_token_issuance(
         provider.credential_for("leave_get_balance")
     assert raised.value.code is DelegationErrorCode.ASSURANCE_DENIED
     assert issuer.requests == []
+
+
+def test_v3_provider_identity_policy_controls_visibility_and_claim_request(
+    tmp_path: Path,
+) -> None:
+    requirement = {
+        "any_of": [
+            {
+                "provider": "feishu",
+                "provider_tenant": "provider-tenant-a",
+                "subject_type": "user_id",
+            }
+        ]
+    }
+    tool_path, grant_path, _ = _write_snapshots(
+        tmp_path,
+        provider_identity=requirement,
+    )
+    issuer = _RecordingIssuer()
+    tool_policy = load_tool_policy_snapshot(tool_path)
+    service = McpDelegationService(
+        tool_policy=tool_policy,
+        grant_policy=load_grant_policy_snapshot(grant_path, tool_policy=tool_policy),
+        issuer=issuer,
+    )
+    denied = service.bind(mcp_server=_server(), run_context=_run_context())
+    allowed = service.bind(
+        mcp_server=_server(),
+        run_context=RunContext(
+            tenant_id="tenant-a",
+            principal=_provider_principal(),
+            agent_id="agent-a",
+            agent_revision_id="release-a",
+        ),
+    )
+    assert denied is not None
+    assert allowed is not None
+    assert denied.is_authorized("leave_get_balance") is False
+    assert allowed.is_authorized("leave_get_balance") is True
+
+    allowed.credential_for("leave_get_balance")
+
+    assert len(issuer.requests) == 1
+    request, _ = issuer.requests[0]
+    assert request.requested_claims == frozenset({"provider_identity"})  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "alternatives",
+    [
+        [],
+        [
+            {
+                "provider": "feishu",
+                "provider_tenant": "z-tenant",
+                "subject_type": "user_id",
+            },
+            {
+                "provider": "feishu",
+                "provider_tenant": "a-tenant",
+                "subject_type": "user_id",
+            },
+        ],
+    ],
+)
+def test_v3_provider_identity_alternatives_are_nonempty_and_canonical(
+    tmp_path: Path,
+    alternatives: list[dict[str, object]],
+) -> None:
+    tool_path, _, _ = _write_snapshots(
+        tmp_path,
+        provider_identity={"any_of": alternatives},
+    )
+
+    with pytest.raises(McpDelegationError) as raised:
+        load_tool_policy_snapshot(tool_path)
+
+    assert raised.value.code is DelegationErrorCode.SNAPSHOT_INVALID
 
 
 @pytest.mark.parametrize(

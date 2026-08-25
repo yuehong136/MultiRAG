@@ -410,6 +410,7 @@ class TestMcpIssuerConfig:
                   ofmcp_gateway:
                     audience: https://gateway.ofmcp.example/mcp
                     registered_scopes: [leave:read, leave:submit]
+                    allow_provider_identity: true
                     enterprise_subject:
                       subject_type: workcode
                       issuer: https://hr.example
@@ -429,6 +430,7 @@ class TestMcpIssuerConfig:
         dumped = cfg.model_dump(mode="json")
 
         assert issuer.resources["ofmcp_gateway"].registered_scopes == ["leave:read", "leave:submit"]
+        assert issuer.resources["ofmcp_gateway"].allow_provider_identity is True
         assert issuer.resources["ofmcp_gateway"].enterprise_subject.subject_type == "workcode"
         assert issuer.key_provider.active_key_id == "current-2026"
         assert issuer.minimum_retired_key_retention_seconds == 630
