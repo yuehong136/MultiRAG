@@ -1,7 +1,7 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-24
-> 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13 已完成；
+> 最后更新：2026-08-25
+> 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13、EIM-U16 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；Channel 完整 UX 矩阵的真实 smoke 仍欠（C3 的
 > Principal-owner live 不替代该矩阵），Channel 稳定性下一项 CHN-O9，随后稳定浸泡；
 > EIM-A1、EIM-A3、EIM-A4 已完成；EIM-A6 phase 1 正在收口且保持 `🔵`；MultiRAG 已完成
@@ -796,7 +796,7 @@ URI、audience、scope namespace、protected-resource metadata、审计和回滚
 | EIM-L1 | of_mcp | leave 身份相关只读工具消费 request-scoped Principal 的 exact OA enterprise subject；`oa_user_id` 保持 optional、所有模式始终 ignored | ✅ | A5,I5 | `get_leave_balance` 为 read/reusable，`preview_leave` 为 prepare/reusable，`verify_leave_request` 为 read/reusable，均绑定 server-owned `leave_applicant`；service 固定 `subject_type=ecology_userid`，secure 只覆盖 issuer/tenant，任何 type 漂移启动 fail-fast；dependency 独立重验 `ecology_userid` 后才可调用 OA；verify 同响应 owner/workflow/form fence；输出最小化；写工具无条件 `LEAVE_WRITE_DISABLED` 且 OA 零调用；contract snapshot 与完整 verify 全绿 |
 | EIM-L2 | of_mcp + MR/飞书（CHN-X20） | `preview_leave_form` 用 U14/U15 原生 CardKit form 收集 7 个低敏试算字段，接受后只为当前 Principal 做 OA preview，并以严格 terminal envelope 投影安全结果 | ✅ | L1,U15 | p2p-only；字段仅为 4 种低敏假种 + 起止日期/小时/半小时；`leave:read` + prepare/reusable + `leave_applicant`；接受前 OA 零调用，接受后 `doCreateRequest` 调用数仍为 0 且不创建草稿/审批；modern `2026-07-28` 对 `end<=start` 返回 fresh correction `InputRequired` 并可多轮重开，legacy 仍 terminal；direct/FastMCP terminal envelope 严格校验；H5/URL、敏感写、真实 authority 与 rollout 后置；初始双仓门禁见变更日志，modern correction 为 of_mcp `f9bda8d`、verify **584 passed / 2 skipped** |
 | EIM-L3 | CHN-X23 | of_mcp leave | 将 L1 的 direct enterprise subject 前提替换为通用 `BusinessActorResolver`：飞书 verified `user_id` 按已确认业务契约逐字作为 Ecology userid | ✅ | P4,A5,L2 | `leave_applicant` 改为 exact Provider binding；list types 不需身份，balance/preview/native form/verify 服务端解析；FastMCP b3 嵌套 `Depends` 隐藏 resolver；`oa_user_id` 参数继续忽略；write 工具仍硬关闭；无 DB/额外 OA mapping I/O；format 3 policy snapshot 与 A1 v2 双仓语料 |
-| EIM-L4 | CHN-X24 | of_mcp + MR/飞书 | 提供 contract-faithful、write-disabled 的本地 Ecology simulator，并把 accepted preview 从纯文本终态升级为严格 v2 结构化飞书结果卡 | ✅ | L2,L3,U15 | simulator 验证 RSA secret/userid、实现六个 auth/read/preview endpoint 与 OA-owned 时长，第七个 create 永远 403 且只能显式启动；v2 六键 envelope 有界 title/message/1..8 unique label-value，v1 只读兼容；Card JSON 2.0 无控件整卡替换；不降级 P3/Provider/grant/Host、不冒充真实 OA authority；源码全门禁已通过，live 待本机重新发布 |
+| EIM-L4 | CHN-X24 | of_mcp + MR/飞书 | 提供 contract-faithful、write-disabled 的本地 Ecology simulator，并把 accepted preview 从纯文本终态升级为严格 v2 结构化飞书结果卡 | ✅ | L2,L3,U15 | simulator 验证 RSA secret/userid、实现六个 auth/read/preview endpoint 与 OA-owned 时长，第七个 create 永远 403 且只能显式启动；v2 六键 envelope 有界 title/message/1..8 unique label-value，v1 只读兼容；Card JSON 2.0 无控件整卡替换；不降级 P3/Provider/grant/Host、不冒充真实 OA authority；源码全门禁与 2026-08-25 本机真实飞书 live 均已通过 |
 
 `leave_applicant` 已作为 composition root 拥有的命名 binding 落到代码，不是 tool argument、prompt、
 CardKit 字段或任意 Provider 字段别名。service binding 声明把 `subject_type=ecology_userid` 固定为不可变
@@ -875,6 +875,7 @@ EIM-C5 与 U0/U1 并行，不是前置依赖。
 | EIM-U13 | CHN-U15 | MR | Canvas candidate strategy 独立化、候选元数据显式化、TTL GC 移出请求热路径 | ✅ | U11、U12 | 保持 MultiRAG Canvas 同步区零 Channel 私参；周期批量回收 Canvas 与 U14 前遗留 Dialog 候选；公开历史 CAS；完整 `make integration` |
 | EIM-U14 | — | 两仓 runtime/contract | 建 transport-neutral 的持久化 `InteractionRequest`/`InteractionResponse` 暂停恢复状态机，承接 MCP 2026 MRTR `input_required`，也允许 legacy server 适配到同一内部契约 | ✅ | F3,P3,A4,C3 | 缺参时不阻塞连接；状态绑定 principal/tenant/tool/参数 digest/expiry/idempotency；重启可恢复；恢复前重授权；超时/取消/重复响应 fail closed；renderer fallback 绝不重跑工具 |
 | EIM-U15 | CHN-X15 | MR + 飞书 | 在 U14 上实现 CardKit native form“点击 -> 表单 -> 提交 -> 后端处理 -> 原卡结果页”闭环；卡片只负责渲染与收集，不承担授权；H5/URL mode 明确后置 | ✅ | U14,U1,U4 | 本地实现、自动门禁和一次单机临时启用的真实飞书/P3/of_mcp E2E 完成；源码默认关闭且未生产部署；`card.action.trigger` 3 秒内校验 app/tenant/operator、去重、持久接收并应答；verified Principal、当前 revision CAS 与 MCP 恢复异步执行；成功/字段错误/授权拒绝/过期/取消/未知结果均更新原卡；本任务不启用敏感写，后续 U7 仅在 M3/M4 完成后开放 |
+| EIM-U16 | CHN-U19 | MR + 飞书 | 修复 U14 resume 只重建平台 Principal、遗漏 live `provider_identity`，导致按 P4 要求 Provider claim 的 native form 在提交后被二次授权拒绝 | ✅ | U14,U15,P4 | 仅从 active ExternalIdentity + 当前 interaction presentation + generation-matched enabled binding + healthy exact Provider Account/Channel link 重建 `VerifiedProviderIdentity`；缺失、重复、停用、跨 tenant/provider/account 或 provider tenant 漂移全部 fail closed；重新经过当前 tool policy/grant 并签发新 bearer，不持久化/反序列化旧 claim，不放宽 side-effect；自动门禁、真库查询和真实飞书表单提交恢复均已通过 |
 
 所有工具过程卡片只显示服务端白名单安全摘要；不能显示完整 MCP 参数、模型推理、企业工号、token、
 文件内容或底层错误。纯输出 U1 不订阅 `card.action.trigger`；U4 低风险 action、U15 native form 与
@@ -894,6 +895,13 @@ U7 敏感确认分别使用自己的交互契约，不能互相复用授权事�
 > `input_required` → U14 持久暂停 → 飞书原生表单 → encrypted durable receipt → fenced resume →
 > 第二次 MCP 调用 → 原卡 completed terminal ACK。live 发现并修复 CardKit `update_multi`、日期 offset
 > 规范化和可恢复字段错误 fresh-nonce 重投；生产 rollout、H5/URL 与 U7 敏感写仍未开始。
+
+> **U16 现场触发（2026-08-25）**：L4 本机 native form 已成功投递并收到用户提交；callback receipt
+> `claimed`，但 resume job 在第二次 MCP 调用前以 `INTERACTION_REAUTHORIZATION_DENIED` 终态失败。
+> 现场 authority snapshot 证明 ExternalIdentity revision、User/UserTenant、MCP server、grant/policy、
+> presentation/binding/link 与 healthy Provider Account 均有效；根因是 resume builder 未把这些服务端
+> 当前事实重新组装为 P4 所需的 `VerifiedProviderIdentity`。本项修重建缝，不复用卡片字段、旧 token
+> 或持久化 Principal，也不把提交动作升级为业务授权。
 
 U14/U15 首期不依赖 MCP Tasks 或 MCP Apps：MRTR 只定义跨请求补充输入，持久化状态、授权、幂等和
 结果恢复仍由两仓负责；Tasks 当前实现成熟度不足以替代本项目 run/interaction ledger。MCP Apps 要求
@@ -1054,7 +1062,8 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
-| 2026-08-25 | EIM-L4 / CHN-X24 | 增加显式 `ofmcp-ecology-mock` contract simulator：验证真实形状的 RSA secret/userid，覆盖六个 auth/read/preview Ecology endpoint、OA-owned 工时和有界余额，第七个 `doCreateRequest` 永远 403；从不自动选中且不冒充 authority。accepted preview 改产严格六键 v2 terminal，当前用户/假种/起止/OA 时长/余额/执行边界进入有界 label/value；MR Host 保留 v1 只读兼容并对任意畸形结果 generic，飞书用无控件绿色 Card JSON 2.0 整卡替换。未放宽严格 P3/Provider/grant、未启用写工具或生产配置；本机空库重建后待重新发布 Channel/Canvas 再补 live 证据 | of_mcp + MultiRAG / 本次双仓提交（未部署） | of_mcp `ofmcp verify` **607 passed / 2 skipped**、contract snapshot exact；MR focused **109 passed**、`make verify` **2846 passed**、MCP compatibility **22/22**；两仓 diff/lock check 全绿 | Codex |
+| 2026-08-25 | EIM-U16 / CHN-U19 | 完成 U14 native-form resume 的 Provider 身份重建：只从 active ExternalIdentity、当前 revision presentation、generation-matched enabled binding、healthy exact Provider Account 与当前 Channel link 恢复 P4 `VerifiedProviderIdentity`，再按当前 grant/tool policy 重授权并签发新 bearer；缺失、歧义、停用和 tenant/provider/account 漂移全部 fail closed，不读取卡片字段、旧 token/claim 或模型参数，不扩大 side-effect。首次 live 的 `INTERACTION_REAUTHORIZATION_DENIED` 已转为同一真实飞书场景完整成功 | MultiRAG / 本次提交；本机临时 live | 定向 **61 passed**；真实 DB authority query 唯一解析；`make verify` **2850 passed**；强制 integration **227 passed**；live callback `claimed` attempt 1、resume `succeeded` attempt 1、interaction `completed`、terminal presentation `delivered`，safe error 全空，结果已持久化且仍为 preview/prepare | Codex |
+| 2026-08-25 | EIM-L4 / CHN-X24 | 增加显式 `ofmcp-ecology-mock` contract simulator：验证真实形状的 RSA secret/userid，覆盖六个 auth/read/preview Ecology endpoint、OA-owned 工时和有界余额，第七个 `doCreateRequest` 永远 403；从不自动选中且不冒充 authority。accepted preview 改产严格六键 v2 terminal，当前用户/假种/起止/OA 时长/余额/执行边界进入有界 label/value；MR Host 保留 v1 只读兼容并对任意畸形结果 generic，飞书用无控件绿色 Card JSON 2.0 整卡替换。未放宽严格 P3/Provider/grant、未启用写工具或生产配置；2026-08-25 已通过本机真实飞书 form → simulator preview → v2 terminal CardKit live | of_mcp + MultiRAG / 本次双仓提交；本机临时 live | of_mcp `ofmcp verify` **607 passed / 2 skipped**、contract snapshot exact；MR focused **109 passed**、`make verify` **2846 passed**、MCP compatibility **22/22**；live 结果为模拟 OA 时长 4.0、余额 40.0，明确未创建草稿或发起审批 | Codex |
 | 2026-08-25 | EIM-F10 | 两仓从 FastMCP `4.0.0b2` 精确升级到 `4.0.0b3`，MCP SDK 与 `mcp-types` 保持 `2.0.0`，lock 引入 b3 的 `uncalled-for` `0.4.0`。按 b3 正式依赖绑定复核 `Depends`/`CallArgument`，并重验 auth、mount/proxy、MRTR、structured output 与 legacy/modern 双向协议；未改变身份、policy、配置 schema、工具契约或 rollout | of_mcp `6fac5e6`；MultiRAG / 本次提交（未部署） | of_mcp `uv run --locked ofmcp verify` 六步全绿、**584 passed / 2 skipped**、contract 无漂移；MultiRAG `make verify` 全绿、**2817 passed**；`make mcp-compat` **22/22 PASS**；两仓 `uv lock --check` 与 `git diff --check` 全绿 | Codex |
 | 2026-08-24 | EIM-I8 / CHN-X22 | CHN-X22 default-disabled durable reconciliation slice 本地完成，并以 `4a266c46` 收口恢复与节流；EIM-I8 保持 `🔵`。只扫描本地 account alias + active identity/User/UserTenant + 近期活跃主体，per-account checkpoint/keyset/target proof 与 DB-time lease/fence 跨进程续跑；共享同一 provider runtime，uncached probe 在事务外。前台 credential 只接受 HEALTHY，reconciliation 专用 seam 只允许 HEALTHY/DEGRADED；claim 在 Provider I/O 前写入 DB-clock per-account probe reservation（默认 1s、范围 0.1～60s），跨副本同样受限。NOT_FOUND 二次确认、NOT_IN_SCOPE 零 canonical 收紧、UNAVAILABLE 退避、clean full-cycle health recovery 与每周期收紧 circuit breaker 均 fail closed；不刷新 `last_seen_at`。admin snapshot 的 repr-hidden stable opaque `account_ref` 是 domain-separated SHA-256 对 tenant ID + 随机 provider account ID 取 128-bit 截断的诊断引用，不是 authority，且不回显 raw checkpoint/account ID、provider tenant/natural key/employee ID。无全员枚举、public admin route、配置启用、真库 migration 执行、重启或 rollout；风险感知 local fast path deferred | MultiRAG `d02261a6` + `4a266c46`（未部署） | 洁净树 `make verify` **2817 passed**；现有服务 integration **226 passed / 1 个既有 MinIO `SignatureDoesNotMatch`**，隔离匹配凭据 MinIO 全量 **227 passed**；MCP compatibility **22/22**；I8 初始安全 diff scan 覆盖 **15/15** production/migration surfaces、**0 findings**，恢复节流 follow-up 独立终审无 P0/P1；`uv lock --check`、diff-check 全绿 | Codex |
 | 2026-08-24 | EIM-L2 / CHN-X20 modern correction | of_mcp `preview_leave_form` 对 modern `2026-07-28` 的 `end<=start` 不再 terminal：首次无效从 initial request id/state 切换到独立 correction id/state；连续无效可重复返回同一 correction form，Host 每个持久化 revision 使用 fresh one-time response nonce；只有合法窗口才调用一次 OA preview。legacy 协议保持 terminal error，所有无效轮次 OA/create/submit 零调用；未改 MultiRAG private wire、依赖、H5/URL、敏感写、authority 或 rollout | of_mcp `f9bda8d` | `uv run --locked ofmcp verify` **584 passed / 2 skipped**；security review **0 findings** | Codex |

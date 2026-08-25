@@ -287,6 +287,11 @@ async def get_channel_execution_capabilities(
         {
             **reply_capabilities.model_dump(),
             "identity_event_receipt": True,
+            # Consumer support is deployed before the default-disabled
+            # interaction producer is enabled. It intentionally does not mirror
+            # the secret-bearing producer config or safe rollout would have a
+            # worker restart gap.
+            "interaction_delivery": True,
         }
     )
 

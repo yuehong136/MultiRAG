@@ -94,6 +94,7 @@ class ChannelRuntimeCapabilities(EffectiveReplyCapabilities):
     """Additive worker preflight envelope with fail-closed server features."""
 
     identity_event_receipt: bool = False
+    interaction_delivery: bool = False
 
     def to_reply_capabilities(self) -> EffectiveReplyCapabilities:
         """Keep non-reply server features out of reply rendering contracts."""

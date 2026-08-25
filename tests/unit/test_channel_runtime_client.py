@@ -133,6 +133,7 @@ async def test_runtime_fetches_sanitized_execution_capabilities_once() -> None:
                 "retry": True,
                 "feedback": False,
                 "identity_event_receipt": True,
+                "interaction_delivery": True,
                 "future_additive_capability": True,
             },
         )
@@ -152,6 +153,7 @@ async def test_runtime_fetches_sanitized_execution_capabilities_once() -> None:
     assert capabilities.retry is True
     assert capabilities.feedback is False
     assert capabilities.identity_event_receipt is True
+    assert capabilities.interaction_delivery is True
     assert len(captured) == 1
     assert captured[0].url.path == "/api/v1/internal/channel-bindings/binding/one/execution-capabilities"
     assert captured[0].headers["X-Channel-Binding-Generation"] == "7"
@@ -175,6 +177,7 @@ async def test_runtime_defaults_missing_identity_event_receipt_capability_to_fal
 
     assert capabilities.regenerate is True
     assert capabilities.identity_event_receipt is False
+    assert capabilities.interaction_delivery is False
 
 
 @pytest.mark.parametrize(
@@ -182,6 +185,7 @@ async def test_runtime_defaults_missing_identity_event_receipt_capability_to_fal
     [
         {"regenerate": "yes"},
         {"identity_event_receipt": "true"},
+        {"interaction_delivery": "true"},
     ],
 )
 @pytest.mark.asyncio

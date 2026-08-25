@@ -179,7 +179,8 @@ supervisor 会停止或重启相应进程；异常退出采用有上限的指数
 
 Managed worker 每次启动会为当前 binding generation 调一次 workload-authenticated 的
 `execution-capabilities` preflight；进程内缓存的结果只含六个 reply 布尔值与加法的
-`identity_event_receipt` 服务能力，不含 target type/id/revision 或图结构。同 generation 的 worker
+`identity_event_receipt` / `interaction_delivery` 服务能力，不含 target type/id/revision、图结构、
+interaction 配置或密钥。同 generation 的 worker
 崩溃重启允许重新读取；普通消息、模型 delta 和卡片 patch 不查目标数据库。旧 API 缺少新字段、
 preflight 404/超时或非法响应时继续交付 buffered 回答，但不签发交互 action ID，也不订阅 Contact。
 
@@ -330,7 +331,10 @@ typed assertion、`form_value` 和 opaque routing material 送到 callback route
 API-local callback processor 另取有 owner/attempt/expiry fence 的 lease，重新读取当前
 binding/generation/enabled/provider，经 I3/I4/I6/P1 提升 verified Principal，再调用 U14 对当前 revision
 执行一次 accept/decline/cancel。U14 继续拥有 interaction lease、tool gate、identity TTL、恢复前重授权、
-幂等和多轮上限。字段错误重新排队安全 form；完成、拒绝、取消、过期或失败只生成白名单 terminal
+幂等和多轮上限。若当前工具策略要求 `provider_identity`，恢复端还会从当前 revision presentation、
+generation-matched enabled binding、healthy exact Provider Account 与 Channel link 重建同一 active
+ExternalIdentity 的 `VerifiedProviderIdentity`；任一坐标缺失、重复、停用或漂移都 fail closed，不读取
+卡片字段、旧 token 或模型参数。字段错误重新排队安全 form；完成、拒绝、取消、过期或失败只生成白名单 terminal
 摘要并更新原卡，不展示原始工具结果、MCP 参数或底层异常。completed 可选择严格 v2 result projection：
 有界 title/message 与最多 8 个唯一 label/value 字段渲染为无回调控件的绿色 Card JSON 2.0 结果卡；
 Host 仅为兼容历史接受严格 v1 文本 envelope。任意额外键、控制字符、重复 label 或越界都回退 generic，
@@ -338,9 +342,11 @@ Host 仅为兼容历史接受严格 v1 文本 envelope。任意额外键、控�
 outbox/receipt。
 
 部署不是普通“新 API 先上即可”的加法窗口：先执行 migration，并在
-`identity.mcp_interactions.enabled=false` 下部署/重启 API；再重启所有 supervisor/child worker，确认
+`identity.mcp_interactions.enabled=false` 下部署/重启新 API；该版本通过 generation-scoped preflight
+广告 `interaction_delivery=true`，但仍不产生 interaction。再重启所有 supervisor/child worker，确认
 它们已能消费 `interaction_required`、claim/ACK delivery 与 durable callback；最后才启用 producer 并
-重启 API。回滚第一步必须关闭 producer 并重启 API，停止制造新的 interaction；保留新 consumer 处理
+重启 API。worker 不读取 secret-bearing producer 配置，也不持有 payload encryption key。回滚第一步
+必须关闭 producer 并重启 API，停止制造新的 interaction；保留新 consumer 处理
 或终态化已持久记录后，才考虑回退 worker/API。新增表是 additive，存在数据时不得用 destructive
 downgrade 换取回滚。
 

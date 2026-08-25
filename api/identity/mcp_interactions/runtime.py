@@ -10,11 +10,21 @@ from datetime import UTC, datetime
 from functools import lru_cache
 
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db import EnterpriseSubjectState, ExternalIdentityState
+from api.db import (
+    EnterpriseSubjectState,
+    ExternalIdentityState,
+    IdentityProviderHealthState,
+)
 from api.db.db_models import (
+    ChannelBinding,
+    ChatChannel,
     EnterpriseSubjectLink,
     ExternalIdentity,
+    IdentityProviderAccount,
+    IdentityProviderChannelLink,
+    McpInteractionPresentation,
     MCPServer,
     User,
     UserTenant,
@@ -47,6 +57,7 @@ from api.identity.principal import (
     IdentityAssurance,
     Principal,
     VerifiedEnterpriseSubjectEvidence,
+    VerifiedProviderIdentity,
     build_principal_from_resolved_identity,
 )
 from api.identity.run_context import RunContext
@@ -168,6 +179,7 @@ class ReauthorizingInteractionExecutor:
                 raise InteractionStateError(InteractionErrorCode.REAUTHORIZATION_DENIED)
             policy = get_mcp_delegation_service().tool_policy.tools.get(request.tool_name)
             requirement = None if policy is None else policy.enterprise_subject
+            provider_requirement = None if policy is None else policy.provider_identity
             subject = None
             if requirement is not None:
                 subject = await session.scalar(
@@ -182,6 +194,13 @@ class ReauthorizingInteractionExecutor:
                 )
                 if subject is None or subject.verified_at is None:
                     raise InteractionStateError(InteractionErrorCode.REAUTHORIZATION_DENIED)
+            provider_identity = None
+            if provider_requirement is not None:
+                provider_identity = await self._load_live_provider_identity(
+                    session=session,
+                    resume=resume,
+                    identity=identity,
+                )
             now = datetime.now(UTC)
             assurance = IdentityAssurance.ENTERPRISE_VERIFIED if subject is not None else IdentityAssurance.DIRECTORY_VERIFIED
             assurance_verified_at = subject.verified_at if subject is not None else identity.verified_at
@@ -233,9 +252,94 @@ class ReauthorizingInteractionExecutor:
             principal = build_principal_from_resolved_identity(
                 result=result,
                 authentication=authentication,
+                provider_identity=provider_identity,
                 enterprise_subject_evidence=subject_evidence,
             )
             return principal, server
+
+    @staticmethod
+    async def _load_live_provider_identity(
+        *,
+        session: AsyncSession,
+        resume: InteractionResume,
+        identity: ExternalIdentity,
+    ) -> VerifiedProviderIdentity:
+        """Rebuild Channel provider evidence from the current authority graph."""
+
+        request = resume.request
+        rows = (
+            await session.execute(
+                sa.select(
+                    McpInteractionPresentation,
+                    IdentityProviderAccount,
+                    ChannelBinding,
+                    ChatChannel,
+                    IdentityProviderChannelLink,
+                )
+                .join(
+                    IdentityProviderAccount,
+                    sa.and_(
+                        IdentityProviderAccount.id == McpInteractionPresentation.provider_account_id,
+                        IdentityProviderAccount.tenant_id == McpInteractionPresentation.tenant_id,
+                        IdentityProviderAccount.provider == McpInteractionPresentation.provider,
+                    ),
+                )
+                .join(
+                    ChannelBinding,
+                    ChannelBinding.id == McpInteractionPresentation.binding_id,
+                )
+                .join(ChatChannel, ChatChannel.id == ChannelBinding.channel_id)
+                .join(
+                    IdentityProviderChannelLink,
+                    sa.and_(
+                        IdentityProviderChannelLink.channel_id == ChatChannel.id,
+                        IdentityProviderChannelLink.provider_account_id == IdentityProviderAccount.id,
+                    ),
+                )
+                .where(
+                    McpInteractionPresentation.interaction_id == request.interaction_id,
+                    McpInteractionPresentation.tenant_id == request.tenant_id,
+                    McpInteractionPresentation.revision == resume.revision,
+                    McpInteractionPresentation.provider == identity.provider,
+                    IdentityProviderAccount.provider_tenant_key == identity.provider_tenant_key,
+                    IdentityProviderAccount.identity_health_state == IdentityProviderHealthState.HEALTHY.value,
+                    ChannelBinding.enabled.is_(True),
+                    ChannelBinding.generation == McpInteractionPresentation.binding_generation,
+                    ChatChannel.tenant_id == request.tenant_id,
+                    ChatChannel.channel == identity.provider,
+                    ChatChannel.status == 1,
+                    IdentityProviderChannelLink.tenant_id == request.tenant_id,
+                    IdentityProviderChannelLink.provider == identity.provider,
+                )
+                .limit(2)
+            )
+        ).all()
+        if len(rows) != 1 or identity.verified_at is None:
+            raise InteractionStateError(InteractionErrorCode.REAUTHORIZATION_DENIED)
+        presentation, account, binding, channel, link = rows[0]
+        if (
+            presentation.provider_account_id != account.id
+            or presentation.binding_id != binding.id
+            or presentation.binding_generation != binding.generation
+            or binding.channel_id != channel.id
+            or link.channel_id != channel.id
+            or link.provider_account_id != account.id
+            or account.tenant_id != request.tenant_id
+            or account.provider != identity.provider
+            or account.provider_tenant_key != identity.provider_tenant_key
+            or account.identity_health_state != IdentityProviderHealthState.HEALTHY.value
+        ):
+            raise InteractionStateError(InteractionErrorCode.REAUTHORIZATION_DENIED)
+        return VerifiedProviderIdentity(
+            platform_user_id=request.platform_user_id,
+            tenant_id=request.tenant_id,
+            provider=identity.provider,
+            provider_tenant=identity.provider_tenant_key,
+            provider_account_id=account.id,
+            subject_type=identity.subject_type,
+            subject=identity.subject_value,
+            verified_at=identity.verified_at,
+        )
 
 
 async def start_mcp_interactions() -> None:

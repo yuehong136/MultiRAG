@@ -6,7 +6,9 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.db_models import ExternalIdentity, MCPServer
 from api.identity.mcp_delegation.service import McpInteractionAuthorization
 from api.identity.mcp_interactions.contracts import (
     InteractionErrorCode,
@@ -194,3 +196,154 @@ async def test_resume_denies_when_live_policy_no_longer_binds_server(
         await executor.execute(_resume())
 
     assert raised.value.code is InteractionErrorCode.REAUTHORIZATION_DENIED
+
+
+class _LiveAuthoritySession(AsyncSession):
+    def __init__(
+        self,
+        *,
+        scalar_results: list[object],
+        get_results: dict[str, object],
+        provider_rows: list[tuple[object, object, object, object, object]],
+    ) -> None:
+        self._scalar_results = iter(scalar_results)
+        self._get_results = get_results
+        self._provider_rows = provider_rows
+
+    async def __aenter__(self) -> _LiveAuthoritySession:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def scalar(self, _statement: object) -> object:
+        return next(self._scalar_results)
+
+    async def get(self, model: type[object], _key: object) -> object:
+        return self._get_results[model.__name__]
+
+    async def execute(self, _statement: object) -> object:
+        return SimpleNamespace(all=lambda: self._provider_rows)
+
+
+class _LiveAuthoritySessionFactory:
+    def __init__(self, session: _LiveAuthoritySession) -> None:
+        self._session = session
+
+    def __call__(self) -> _LiveAuthoritySession:
+        return self._session
+
+
+def _provider_authority_rows(
+    *,
+    health: str = "healthy",
+) -> list[tuple[object, object, object, object, object]]:
+    presentation = SimpleNamespace(
+        provider_account_id="provider-account-a",
+        binding_id="binding-a",
+        binding_generation=4,
+    )
+    account = SimpleNamespace(
+        id="provider-account-a",
+        tenant_id="tenant-a",
+        provider="feishu",
+        provider_tenant_key="provider-tenant-a",
+        identity_health_state=health,
+    )
+    binding = SimpleNamespace(
+        id="binding-a",
+        channel_id="channel-a",
+        generation=4,
+    )
+    channel = SimpleNamespace(id="channel-a")
+    link = SimpleNamespace(
+        channel_id="channel-a",
+        provider_account_id="provider-account-a",
+    )
+    return [(presentation, account, binding, channel, link)]
+
+
+@pytest.mark.parametrize(
+    ("provider_rows", "expected_allowed"),
+    [
+        (_provider_authority_rows(), True),
+        ([], False),
+        (_provider_authority_rows(health="degraded"), False),
+    ],
+)
+async def test_live_authority_rebuilds_required_provider_identity_from_current_channel_link(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_rows: list[tuple[object, object, object, object, object]],
+    expected_allowed: bool,
+) -> None:
+    verified_at = datetime.now(UTC) - timedelta(seconds=5)
+    identity = ExternalIdentity(
+        id="identity-a",
+        tenant_id="tenant-a",
+        user_id="user-a",
+        provider="feishu",
+        provider_tenant_key="provider-tenant-a",
+        subject_type="user_id",
+        subject_value="provider-user-a",
+        state="active",
+        verified_at=verified_at,
+        last_seen_at=verified_at,
+        identity_revision=3,
+        attributes={},
+    )
+    membership = SimpleNamespace(
+        user_id="user-a",
+        tenant_id="tenant-a",
+        role="normal",
+    )
+    server = MCPServer(
+        id="server-a",
+        name="Leave service",
+        tenant_id="tenant-a",
+        url="https://mcp.example/leave",
+        server_type="streamable-http",
+        variables={},
+        headers={},
+    )
+    session = _LiveAuthoritySession(
+        scalar_results=[identity, membership],
+        get_results={
+            "User": SimpleNamespace(is_active=True, status="1"),
+            "MCPServer": server,
+        },
+        provider_rows=provider_rows,
+    )
+    monkeypatch.setattr(
+        "api.identity.mcp_interactions.runtime.async_session_factory",
+        _LiveAuthoritySessionFactory(session),
+    )
+    policy = SimpleNamespace(
+        enterprise_subject=None,
+        provider_identity=object(),
+    )
+    monkeypatch.setattr(
+        "api.identity.mcp_interactions.runtime.get_mcp_delegation_service",
+        lambda: SimpleNamespace(
+            tool_policy=SimpleNamespace(tools={"prepare_leave": policy}),
+        ),
+    )
+    executor = ReauthorizingInteractionExecutor(handler=SimpleNamespace())  # type: ignore[arg-type]
+
+    if not expected_allowed:
+        with pytest.raises(InteractionStateError) as raised:
+            await executor._load_live_authority(_resume())
+        assert raised.value.code is InteractionErrorCode.REAUTHORIZATION_DENIED
+        return
+
+    principal, loaded_server = await executor._load_live_authority(_resume())
+
+    assert loaded_server is server
+    assert principal.provider_identity is not None
+    assert principal.provider_identity.platform_user_id == "user-a"
+    assert principal.provider_identity.tenant_id == "tenant-a"
+    assert principal.provider_identity.provider == "feishu"
+    assert principal.provider_identity.provider_tenant == "provider-tenant-a"
+    assert principal.provider_identity.provider_account_id == "provider-account-a"
+    assert principal.provider_identity.subject_type == "user_id"
+    assert principal.provider_identity.subject == "provider-user-a"
+    assert principal.provider_identity.verified_at == verified_at

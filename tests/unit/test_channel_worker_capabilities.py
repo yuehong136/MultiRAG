@@ -47,6 +47,7 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
         retry=False,
         feedback=True,
         identity_event_receipt=preflight_mode == "current",
+        interaction_delivery=False,
     )
     runtime = RuntimeBindingConfig(
         binding_id="binding-1",
@@ -191,7 +192,7 @@ async def test_managed_worker_fetches_capabilities_once_and_passes_them_only_to_
     assert [event.event_id for event in submitted_events] == (["scope-event-1"] if preflight_mode == "current" else [])
 
 
-async def test_managed_worker_requires_full_feishu_transport_when_interactions_enabled(
+async def test_managed_worker_requires_full_feishu_transport_when_delivery_is_advertised(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = RuntimeBindingConfig(
@@ -215,7 +216,7 @@ async def test_managed_worker_requires_full_feishu_transport_when_interactions_e
             self,
             _binding_id: str,
         ) -> ChannelRuntimeCapabilities:
-            return ChannelRuntimeCapabilities()
+            return ChannelRuntimeCapabilities(interaction_delivery=True)
 
         async def close(self) -> None:
             return None
@@ -270,26 +271,15 @@ async def test_managed_worker_requires_full_feishu_transport_when_interactions_e
     )
     monkeypatch.setattr(worker_module, "_safe_runtime_report", _report)
 
-    app_config = AppConfig.model_construct(
-        channels=SimpleNamespace(
-            control=SimpleNamespace(
-                runtime_api_base_url="http://multirag.local",
-                internal_api_token=SecretStr("runtime-token"),
-                runtime_heartbeat_seconds=30,
-            )
-        ),
-        identity=SimpleNamespace(
-            mcp_interactions=SimpleNamespace(enabled=True),
-        ),
-        redis=SimpleNamespace(),
-    )
-
     with pytest.raises(
         worker_module.ChannelWorkerError,
         match="CHANNEL_INTERACTION_TRANSPORT_INVALID",
     ):
         await worker_module._run_managed_channel(
-            app_config=app_config,
+            # The independent worker does not possess the API-only encrypted
+            # interaction payload key ring. Its delivery gate is the sanitized
+            # generation-scoped preflight above, not this local config.
+            app_config=_app_config(),
             provider_name="feishu",
             binding_id="binding-1",
             binding_generation=7,

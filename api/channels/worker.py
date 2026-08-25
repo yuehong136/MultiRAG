@@ -774,13 +774,14 @@ async def _run_managed_channel(
         )
         interaction_client: MultiRAGBindingExecutionClient | None = None
         interaction_presenter: InteractionPresenter | None = None
-        # U15 is an additive, disabled-by-default capability.  Old workers and
-        # Provider test doubles only owe the base Channel contract while the
-        # feature is off (including a capabilities-endpoint 404 during a
-        # rolling deploy).  Once enabled for this process, however, a Feishu
-        # binding must expose the complete CardKit replacement transport; do
-        # not silently start a producer whose durable forms cannot be shown.
-        if app_config.identity.mcp_interactions.enabled and provider.name == "feishu":
+        # U15 delivery is an additive API/worker consumer capability. The
+        # worker learns it from the generation-scoped preflight instead of
+        # reading the API-only producer config: workers neither decrypt durable
+        # payloads nor receive that key ring. Old API responses and failed
+        # preflights keep delivery off. Once advertised, a Feishu binding must
+        # expose the complete CardKit replacement transport; do not silently
+        # start a consumer whose durable forms cannot be shown.
+        if runtime_capabilities.interaction_delivery and provider.name == "feishu":
             from api.channels.feishu.interaction_presenter import (
                 FeishuInteractionPresenter,
             )

@@ -2102,6 +2102,10 @@ created_at / updated_at
 - 恢复前重新读取 active membership/identity/grant/tool policy 并授权，换发新的 operation-scoped
   bearer；持久化的 Principal/authorization snapshot 只供审计和 revalidation，不能反序列化成 authority，
   bearer、JTI、access token 永不进入 interaction 表；
+- 当前工具策略要求 `provider_identity` 时，恢复端只能从 active ExternalIdentity、当前 revision 的
+  Channel presentation、generation-matched enabled binding、healthy exact Provider Account 与仍然一致的
+  Channel link 重新组装 `VerifiedProviderIdentity`；任何缺失、重复、停用、跨 tenant/provider/account
+  或 provider tenant 漂移都 fail closed。卡片字段、`requestState`、旧 P3 claim 和模型参数不能参与重建；
 - 一次恢复可以再次得到 `InputRequiredResult`；此时生成下一 revision 并回到 `awaiting_input`。成功
   结果必须按工具 `outputSchema` 校验后保存为结构化结果，再由 Provider 渲染；
 - decline、cancel 和 expire 是持久化终态。网络超时不能擅自当作 cancel，也不能自动重放可能已有

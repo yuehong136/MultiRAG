@@ -73,16 +73,23 @@ worker 使用，不属于前端 `channel-api/v1`。它沿用 workload bearer tok
   "cancel_running": true,
   "regenerate": true,
   "retry": true,
-  "feedback": true
+  "feedback": true,
+  "identity_event_receipt": true,
+  "interaction_delivery": true
 }
 ```
 
 - 这是 Provider × Target × RunPolicy 的服务端交集，不下发 target type/id/revision、Canvas DSL、
-  `commit_mode` 或 `effect_class`；响应为 `Cache-Control: private, no-store`。
+  `commit_mode` 或 `effect_class`；后两个布尔值是 API/worker consumer 的加法服务能力，不是目标能力，
+  也不携带配置或密钥。响应为 `Cache-Control: private, no-store`。
 - worker 每次启动时为当前 binding generation 读取一次；同 generation 的进程重启可重新读取，消息、
   delta 和卡片 patch 不调用该端点。
 - 旧 API、超时、非 200 或已知字段校验失败时，worker 继续 buffered 回答，但所有交互能力为 false；
   worker 忽略未来新增字段，以允许服务端做加法演进，删除或改变既有字段语义则必须升级端点版本。
+- `interaction_delivery=true` 表示当前 API 版本支持 U15 durable delivery/ACK consumer；它与默认关闭、
+  secret-bearing 的 `identity.mcp_interactions.enabled` producer gate 故意分离。先部署/广告 consumer、
+  重启 worker，再启用 producer，才能避免已持久化 form 无 worker 领取的发布空窗。worker 不读取该配置、
+  不持有 payload encryption key；旧响应缺字段时默认 false。
 - `regenerate` 与 action retry 在 `POST .../executions` claim event 前再次按 Target 和 RunPolicy 授权；
   拒绝产生 SSE `execution_failed(error_code="CHANNEL_OPERATION_NOT_ALLOWED")`，且不占用 event claim。
 
@@ -618,3 +625,4 @@ JSON Schema（`config_schema`）仅用于服务端请求校验与 OpenAPI，**�
 | 2026-08-24 | v1（private callback 行为兼容，不 bump） | 实机确认 CardKit `date_picker` 回传带 RFC 822 风格 offset；date-only mapping 严格归一为 `YYYY-MM-DD`。RESPONSE_INVALID 现在拒绝当前 durable receipt 并重新投递 fresh-nonce form，坏密文/映射仍 terminal；private wire 字段与状态码集合未变。单机临时真实飞书/P3/of_mcp E2E 已完成，不表示生产 rollout | `41675183` 后续工作树修复 + 本机 live |
 | 2026-08-24 | v1（private additive，不 bump） | 新增 EIM-I7 / CHN-X21 generation-scoped Contact directory event endpoint。body 只含 bounded event/header proof/identifier/status，不携 MultiRAG authority；worker 用相同 ASCII event ID 发送 `Idempotency-Key`。服务端重锁 DB authority，以 atomic receipt + identity/account CAS 单事务实现 duplicate/stale/terminal poison ACK；account revision 是跨进程 cache fence，invalidate 仅加速。当前 API 在既有 preflight 加法广告 `identity_event_receipt=true`；旧响应缺字段或 preflight 失败默认 false，只有 advertised managed Feishu 安装 handler 并订阅，demo/legacy 不订阅；合法 NO_LINK 为 204 零写。公开 Channel API、execution SSE 与已有 private command 均未改变；未改配置、未后台订阅或 rollout | 本次提交（未 rollout） |
 | 2026-08-23 | v1（private additive，不 bump） | 定义 EIM-U15 / CHN-X15 的 generation-scoped delivery claim/ACK 与 durable callback receipt：只有 PostgreSQL receipt 提交后才快速 ACK，Principal 解析、当前 revision claim 与 U14 MCP 恢复全部异步；CardKit 只消费安全 native-form/terminal projection，H5/URL 和敏感写后置。当前是 app-bound WebSocket + tenant/app/operator/message lineage，不把 webhook signature 写成已实现 | `41675183`（状态 `✅`） |
+| 2026-08-25 | v1（private capability additive，不 bump） | CHN-U18 在既有 generation-scoped preflight 增加 `interaction_delivery=true`。它只证明该 API/worker 版本能消费 U15 durable outbox，不镜像默认关闭且携密钥的 producer 配置；worker 不再读取该配置或要求 payload key。旧 API 缺字段、404/超时/非法响应仍默认 false。发布可恢复为 migration + 新 API disabled → 新 worker 取得 consumer 能力 → API producer enabled，不再存在先产 form、后启 worker 的空窗 | 本次提交 |
