@@ -1,7 +1,7 @@
 # 技术版本与上游基线
 
 > **基础版本核验：2026-08-07；飞书 SDK、官方文档和交互参考仓刷新：2026-08-09；
-> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-22；
+> 对话执行、重新生成和持久化参考刷新：2026-08-10；MCP/FastMCP/扩展边界刷新：2026-08-25；
 > `lark-oapi` 1.7.2 可执行契约刷新：2026-08-12；I4/I4.1 官方 SDK/live wire 调用链实现刷新：
 > 2026-08-13；RAGFlow P3 定向只读对照：2026-08-13；飞书 Channel SDK/U15 参考刷新：2026-08-23
 > （Asia/Shanghai）**
@@ -19,7 +19,7 @@
 | MCP Python SDK `mcp` | MultiRAG 与 of_mcp 均 exact `2.0.0` | **2.0.0 stable** | 已达成；MultiRAG outbound 使用官方 `Client` | F3 已完成；后续升级单独重跑双时代矩阵 |
 | `mcp-types` | 两仓 lock 均为 2.0.0（由 `mcp` 精确约束） | **2.0.0 stable** | 与实际 SDK/框架锁一致 | 业务代码从 `mcp.types` 导入；不重复直依赖 |
 | FastMCP stable | 仅隔离 legacy fixture exact 3.4.7 | **3.4.7** | 只作 legacy compatibility oracle | PEP 723 lock，不进入 MultiRAG 生产根环境 |
-| FastMCP 4 prerelease | MultiRAG 与 of_mcp 均 exact 4.0.0b2；MultiRAG 另 constraint `fastmcp-slim==4.0.0b2` | **4.0.0b3 beta**（2026-08-14） | b2 是当前已验证基线 | F4/F7 已完成；b3 的 auth/proxy 兼容加固值得独立评估，但升级必须另立版本任务 |
+| FastMCP 4 prerelease | MultiRAG 与 of_mcp 均 exact 4.0.0b3；MultiRAG 另 constraint `fastmcp-slim==4.0.0b3` | **4.0.0b3 beta**（2026-08-14） | 已达成并保持 exact pin | EIM-F10 独立升级；b3 `Depends`/`CallArgument`、auth/proxy/OAuth 加固已通过双仓门禁与 22 格兼容矩阵 |
 | MCP 协议 | modern 主路径 `2026-07-28`；handshake 支持 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` | **2026-07-28** | 官方 SDK 2 registry 的五个已发布 revision | F9 的 22 格真实进程矩阵双向覆盖五版本并拒绝未知 revision；不能用日期字符串猜兼容性 |
 
 版本来源：

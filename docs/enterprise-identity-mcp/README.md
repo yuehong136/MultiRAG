@@ -143,7 +143,7 @@ inbound： 外部 MCP Client -> MultiRAG RAG Resource Server -> MultiRAG API
 
 这两个方向的 resource URI、token audience、Principal、工具策略和发布/回滚面必须独立；当前又共享
 Python 依赖和一个 lock。EIM-F6/F7 已基于兼容证据选择整仓协调切换，当前精确锁定
-`fastmcp==4.0.0b2` 与 `mcp==2.0.0`，未拆出独立 Server runtime。这是技术基线，不会合并
+`fastmcp==4.0.0b3` 与 `mcp==2.0.0`，未拆出独立 Server runtime。这是技术基线，不会合并
 两个方向的 resource、credential 或授权策略。完整术语、当前事实、依赖拓扑、能力取舍、
 MRTR/飞书交互和分阶段门禁见
 [Modern MCP 与企业服务中心](MCP_ENTERPRISE_PLATFORM.md)。
@@ -415,12 +415,12 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   适配到同一状态机。恢复结果由 Host 再按持久 `outputSchema` 校验。首期只允许 `read/prepare`，功能
   未启用、未迁移真实环境、未 rollout；飞书 Form/H5 renderer 与 callback 仍属于 U15。
 - MultiRAG 还通过 [`mcp/server/server.py`](../../mcp/server/server.py) 对外提供 `/mcp` 与 legacy
-  `/sse`。入站已升级到 FastMCP `4.0.0b2` / MCP SDK `2.0.0`；真实 Server 已验证
+  `/sse`。入站已升级到 FastMCP `4.0.0b3` / MCP SDK `2.0.0`；真实 Server 已验证
   `2026-07-28` `server/discover`、路由 headers 和无 session 的 Streamable HTTP，同时逐一验证
   `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` handshake HTTP 兼容及 legacy SSE。
   未知 revision 返回结构化拒绝。这不代表 Principal、scope 或 OAuth Resource Server 已完成。
 - EIM-F2 兼容矩阵已转化为 EIM-F6/F7/F3/F8 实施与回归；当前共享运行时的 exact pins
-  是 `fastmcp==4.0.0b2` 与 `mcp==2.0.0`。顶层 `mcp/` 目录故意不包含
+  是 `fastmcp==4.0.0b3` 与 `mcp==2.0.0`。顶层 `mcp/` 目录故意不包含
   `__init__.py`，避免遮蔽官方 `mcp` 依赖。模块当前行为与不能宣称的能力见
   [`mcp/README.md`](../../mcp/README.md)。
   EIM-F9 又把矩阵扩为 22 格：双方向覆盖 SDK 2 registry 的五个已发布 revision，并以 registry

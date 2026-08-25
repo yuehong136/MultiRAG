@@ -286,7 +286,7 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
 - [FastMCP token verification](https://gofastmcp.com/servers/auth/token-verification)
 - [FastMCP Remote OAuth](https://gofastmcp.com/servers/auth/remote-oauth)
 - [FastMCP component authorization](https://gofastmcp.com/servers/authorization)
-- [FastMCP 4.0.0b2 `JWTVerifier` source](https://github.com/PrefectHQ/fastmcp/blob/v4.0.0b2/fastmcp_slim/fastmcp/server/auth/providers/jwt.py)
+- [FastMCP 4.0.0b3 `JWTVerifier` source](https://github.com/PrefectHQ/fastmcp/blob/v4.0.0b3/fastmcp_slim/fastmcp/server/auth/providers/jwt.py)
 - [Prefect Horizon](https://gofastmcp.com/deployment/prefect-horizon)
 - [FastMCP PyPI releases](https://pypi.org/project/fastmcp/#history)
 
@@ -349,7 +349,7 @@ FastMCP 实现/产品资料（不是 MCP 标准）：
   auth 接口；框架默认 backend 无法把 typed JWKS outage 映射为 503，因此精确 `/mcp` bearer 和
   401/503 由项目 middleware 控制。EIM-A4 继续保持 production endpoint `required_scopes=[]`，把
   A3 `AccessToken.claims` 立即投影成项目 immutable Principal，再由逐工具 policy registry 授权。
-- `JWTVerifier` 可以复用基础 JOSE/JWKS、issuer/audience 和 scope 检查，但 4.0.0b2 的实现不是 EIM-A1
+- `JWTVerifier` 可以复用基础 JOSE/JWKS、issuer/audience 和 scope 检查，但 4.0.0b3 的实现不是 EIM-A1
   profile oracle。A3 因此使用 joserfc + 项目 `StrictMcpAccessVerifier`，补齐 `typ/kid`、必需
   claims/types、`iat/nbf/max_ttl`、`token_use`、tenant、scope registry 和 cross-profile/resource；
   A4 不替换或放宽这条认证边界。

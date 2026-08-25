@@ -20,10 +20,10 @@
 - MultiRAG outbound 使用官方 `mcp.client.Client` 2.0.0；
 - Streamable HTTP 使用 `mode="auto"`，会先 `server/discover`，必要时回退 legacy `initialize`；
 - SSE 明确使用 `mode="legacy"`，它不会由 `auto` 自动切换 transport；
-- MultiRAG inbound 使用 FastMCP 4.0.0b2，真实协商 MCP `2026-07-28`，同时接受 SDK 2 官方
+- MultiRAG inbound 使用 FastMCP 4.0.0b3，真实协商 MCP `2026-07-28`，同时接受 SDK 2 官方
   registry 中四个 handshake revision：`2024-11-05`、`2025-03-26`、`2025-06-18`、
   `2025-11-25`；
-- of_mcp 已在提交 `23dd1fd` 固定 FastMCP 4.0.0b2、MCP/mcp-types 2.0.0；
+- of_mcp 已在 EIM-F10 从 FastMCP 4.0.0b2 升级到 4.0.0b3，MCP/mcp-types 保持 2.0.0；
 - 生产主环境不再安装 FastMCP3/MCP1，但测试用 PEP 723 独立锁固定 FastMCP 3.4.7，继续证明
   legacy fallback；
 - `make mcp-compat` 的每一格都跑真实 loopback 子进程，不以 mock 或“工具调用成功”替代 wire 证据；
@@ -44,17 +44,17 @@
 
 | 运行单元 | 版本 | 锁/提交 |
 |---|---|---|
-| MultiRAG root | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0`、httpx2 `2.10.0`、sse-starlette `3.4.8` | `uv.lock` SHA-256 `9d66f20bb3f91f99e99b20e17248699cfbc8ad2e2b5a3d2cfa3ae957c45c2323` |
+| MultiRAG root | FastMCP/slim `4.0.0b3`、MCP/mcp-types `2.0.0`、httpx2 `2.10.0`、sse-starlette `3.4.8` | `uv.lock` SHA-256 `4a831c1374cd68f72f87cb7e90e11a13f775604f05def89c78d6226aa155edd9` |
 | legacy oracle | FastMCP `3.4.7` 及其 MCP1 依赖 | `tests/compat/mcp/legacy_server.py.lock` SHA-256 `deadb04931edf60400b23544d7be3f1a94c2fd570062d35b92d6db4da23b96fc` |
 | modern oracle | MCP SDK `2.0.0` | `tests/compat/mcp/modern_server.py.lock` SHA-256 `84b2c9bb83231bec210b4a7b8a49a789637cacd2f4a1d8d9e62375de36d40907` |
-| of_mcp | FastMCP/slim `4.0.0b2`、MCP/mcp-types `2.0.0` | EIM-F4 `23dd1fd`；lock SHA-256 `9ceecde115825a75320a7877cf5c203ff731d594645aaae629014f6d3c3ca8ce` |
+| of_mcp | FastMCP/slim `4.0.0b3`、MCP/mcp-types `2.0.0` | EIM-F10；lock SHA-256 `1a3299b324788f5f84b8f794798386074553b9bd63d4368799db7ea00fd7f27f` |
 
 FastMCP 4 仍是 beta，因此 MultiRAG 同时：
 
-- 直接依赖 `fastmcp==4.0.0b2`；
+- 直接依赖 `fastmcp==4.0.0b3`；
 - 直接依赖 `mcp==2.0.0`，因为业务代码直接使用官方 Client；
 - 直接依赖 `httpx2>=2.10.0,<3.0.0`，因为业务代码拥有并管理 HTTP transport client；
-- 在 uv constraints 固定 `fastmcp-slim==4.0.0b2`，防止 wrapper/slim 漂到不同 beta；
+- 在 uv constraints 固定 `fastmcp-slim==4.0.0b3`，防止 wrapper/slim 漂到不同 beta；
 - 不直接依赖 `mcp-types`，代码继续从 `mcp.types` 导入；
 - 把后续 b3/RC/GA 当作新任务，不使用开放的 `>=4` 静默升级。
 

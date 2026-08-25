@@ -1589,7 +1589,7 @@ coordinator；无 production-ready 后端时真实 secure CLI 必须启动失败
   不能把旧 key 无限延寿。所有浮点 cache/timeout 配置必须为 finite positive number，NaN/Infinity
   在启动时拒绝。
 
-FastMCP `JWTVerifier` 可以承担基础 JWT/JWKS 解析，但 4.0.0b2 没有强制本项目全部规则。A3 实现
+FastMCP `JWTVerifier` 可以承担基础 JWT/JWKS 解析，但 4.0.0b3 没有强制本项目全部规则。A3 实现
 因此使用独立 `StrictMcpAccessVerifier`：由 joserfc 完成真实 ES256 验签，由项目 validator 补齐
 header、必需 claims、类型、max TTL、`token_use`、tenant、scope registry 和 cross-profile 规则，
 再投影为 FastMCP `AccessToken`。领域 Principal 不依赖 FastMCP 类型，A3 runtime 也不 import A1

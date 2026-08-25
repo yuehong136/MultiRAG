@@ -298,7 +298,7 @@ MultiRAG 的 FastMCP 3 服务，用户明确批准不保留该生产运行时，
 MCP SDK 2/FastMCP 4，而不是为旧 Server 新建独立 project/venv。`of_mcp` 的对应纯版本升级锚点为
 EIM-F4 commit `23dd1fd`。
 
-当前协议基线是 MCP SDK `2.0.0`/FastMCP `4.0.0b2`：
+当前协议基线是 MCP SDK `2.0.0`/FastMCP `4.0.0b3`：
 
 - MultiRAG outbound 使用官方 MCP 2 高层 `Client`，HTTP 现代优先并自动协商 legacy；
 - MultiRAG inbound 使用 FastMCP 4/MCP 2 的 `2026-07-28` modern Server，同时保留 legacy 协议兼容；

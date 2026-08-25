@@ -48,7 +48,7 @@
 | MCP `2026-07-28` | 官方协议修订版；modern/stateless era | 已正式发布 | 新架构目标协议 |
 | MCP Python SDK `2.x` | 官方 Python SDK 大版本 | `2.0.0` 稳定线 | MultiRAG outbound Client 首选实现 |
 | FastMCP `3.x` | FastMCP 稳定框架线 | 最新稳定 `3.4.7` | 只作 legacy 兼容 fixture/回滚参考，不再是两仓当前运行时 |
-| FastMCP `4.x` | 基于 MCP SDK 2 的框架大版本 | 最新 `4.0.0b2`，仍是 beta | MultiRAG 与 of_mcp 当前均 exact pin `4.0.0b2` |
+| FastMCP `4.x` | 基于 MCP SDK 2 的框架大版本 | 最新 `4.0.0b3`，仍是 beta | MultiRAG 与 of_mcp 当前均 exact pin `4.0.0b3` |
 | MCP Authorization | OAuth Resource Server、resource/audience、scope challenge | 核心规范 | 两个远程 MCP Server 都必须实现 |
 | Enterprise-Managed Authorization | 企业 IdP 经 ID-JAG 集中授权的官方扩展 | 扩展稳定；底层 ID-JAG 仍引用 IETF draft | 真实企业 IdP 到位后按租户启用 |
 | OAuth Client Credentials | 机器到机器授权扩展 | 可选扩展 | 后台任务/CI，不代表某位员工 |
@@ -68,7 +68,7 @@
 项目内统一用语：
 
 > 技术基线已切换到 MCP `2026-07-28` modern/stateless protocol era；客户端基于 MCP
-> Python SDK `2.0.0`，服务端在兼容门禁下 exact pin FastMCP `4.0.0b2`，同时保留 legacy 路径。
+> Python SDK `2.0.0`，服务端在兼容门禁下 exact pin FastMCP `4.0.0b3`，同时保留 legacy 路径。
 
 禁止在任务、提交或上线说明中只写“完成 MCP 2.0 升级”。必须写清调用方向、协议时代、SDK/框架
 版本、认证模式和兼容范围。
@@ -108,7 +108,7 @@
 当前实现位于 `mcp/server/server.py`：
 
 - 暴露 `/mcp` Streamable HTTP、`/sse` legacy SSE 和 `/health`；
-- 使用 FastMCP `4.0.0b2`，底层 MCP SDK `2.0.0`；
+- 使用 FastMCP `4.0.0b3`，底层 MCP SDK `2.0.0`；
 - `/mcp` 已用真实 Server 验证 MCP `2026-07-28` `server/discover`、
   `Mcp-Protocol-Version` / `Mcp-Method` / `Mcp-Name` 路由 headers 和无
   `Mcp-Session-Id` 的 stateless HTTP；
@@ -130,7 +130,7 @@ EIM-F2 证明旧 `fastmcp-slim 3.4.4` 与 `mcp>=2` 不可同一解析。EIM-F6 �
 lock 中 exact pin：
 
 ```text
-fastmcp==4.0.0b2
+fastmcp==4.0.0b3
 mcp==2.0.0
 ```
 
@@ -140,7 +140,7 @@ mcp==2.0.0
 
 ### 3.4 of_mcp
 
-当前 `of_mcp` 已通过 EIM-F4 独立升级并精确锁定 FastMCP `4.0.0b2`、MCP
+当前 `of_mcp` 已通过 EIM-F4/F10 独立升级并精确锁定 FastMCP `4.0.0b3`、MCP
 SDK/mcp-types `2.0.0`，具备：
 
 - apps composition root、services domain library、packages platform library；

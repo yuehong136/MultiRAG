@@ -13,7 +13,7 @@ resolution-markers = [
 [manifest]
 constraints = [
     { name = "datasets", specifier = ">=5.0.1,<6.0.0" },
-    { name = "fastmcp-slim", specifier = "==4.0.0b2" },
+    { name = "fastmcp-slim", specifier = "==4.0.0b3" },
     { name = "pyasn1", specifier = ">=0.6.3" },
 ]
 overrides = [
@@ -2184,19 +2184,19 @@ wheels = [
 
 [[package]]
 name = "fastmcp"
-version = "4.0.0b2"
+version = "4.0.0b3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "fastmcp-slim", extra = ["client", "server"] },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/08/b1/a9270d6ddcfc85c26d0d5de8174c4c55abe28d1143b2bc5a78bbdb72c40e/fastmcp-4.0.0b2.tar.gz", hash = "sha256:e0f272a2677da9e3683c55e3274ceccdf9026116abc3bc8c6a56aa0ae6a323ce" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/24/01/be88a40071d7bdce1b207c1acd2522167425393cbad33c40a778ce1f656d/fastmcp-4.0.0b3.tar.gz", hash = "sha256:1edea49ef12f6a47721ec69324bba31302eb0faccff939f2851026992fa62f93" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/96/2f/535f9d1d6d2e5ba0e64d2e56ab92eb71dc6cd37af21f65696e566a8a6ad4/fastmcp-4.0.0b2-py3-none-any.whl", hash = "sha256:367eaf66444116b95c148cade3300f42b12c667ce38463743574c8c948fb5baf" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/dd/0c/6cb98b816b0836fd8ad120761c5cb76e1c5a3a71dfd3b0549b37a3b52a54/fastmcp-4.0.0b3-py3-none-any.whl", hash = "sha256:4a68fb3877f160ca18ca5be4ee80c0d68c89f922b927734c36e6e99827d814fc" },
 ]
 
 [[package]]
 name = "fastmcp-slim"
-version = "4.0.0b2"
+version = "4.0.0b3"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "mcp-types" },
@@ -2207,9 +2207,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b8/ec/c7d2f91ea6027fa92240ba25bb0d7601b9e1f5f5e69f079bb0ee203df403/fastmcp_slim-4.0.0b2.tar.gz", hash = "sha256:b222d52c4883695f2bafb973c6fd55694bbcc8eaaa64886ebb2168d0267add3c" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/c0/35/01d59a0a8c4a7a7125f1f3b01f22b7283fea1942b7e1c5cea171bea624cc/fastmcp_slim-4.0.0b3.tar.gz", hash = "sha256:0647126ce70ebf0890912954ffb5cd162fb63bb9169a81b078ae960c8c09830e" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/7b/45/3aabf3cc93cda2e3ad580f75eba771371b4434bb7364be2781e3e5823bdc/fastmcp_slim-4.0.0b2-py3-none-any.whl", hash = "sha256:b96c96372713a2d1d504cc2913549a0201b985add128ddd5a5520faff6bc28ff" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/0d/fa/63bc5d73f77bcf52ae05c184d18ad2ff9c5b35da0d9b55500e74a5377fef/fastmcp_slim-4.0.0b3-py3-none-any.whl", hash = "sha256:59ea0be9978b45cfe3ab47f3b7413b36a5b4b929dff723d48235899eada8bb42" },
 ]
 
 [package.optional-dependencies]
@@ -4611,7 +4611,7 @@ requires-dist = [
     { name = "fastapi-login", specifier = ">=1.10.1" },
     { name = "fastembed", marker = "platform_machine != 'x86_64' or sys_platform == 'darwin'", specifier = ">=0.3.6" },
     { name = "fastembed-gpu", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'", specifier = ">=0.3.6" },
-    { name = "fastmcp", specifier = "==4.0.0b2" },
+    { name = "fastmcp", specifier = "==4.0.0b3" },
     { name = "feedparser", specifier = ">=6.0.11,<7.0.0" },
     { name = "ffmpeg-python", specifier = ">=0.2.0" },
     { name = "flagembedding", specifier = "==1.2.10" },
@@ -8714,11 +8714,11 @@ wheels = [
 
 [[package]]
 name = "uncalled-for"
-version = "0.2.0"
+version = "0.4.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/02/7c/b5b7d8136f872e3f13b0584e576886de0489d7213a12de6bebf29ff6ebfc/uncalled_for-0.2.0.tar.gz", hash = "sha256:b4f8fdbcec328c5a113807d653e041c5094473dd4afa7c34599ace69ccb7e69f" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6b/5a/92ce0b3ea5481915f55da994c2c2c5f7a3c09949afde196ee89f8ab961aa/uncalled_for-0.4.0.tar.gz", hash = "sha256:335b95bd2422332ec210d518f314a16e4c640921c39fc8bf2ad095bd3538f4af" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/ff/7f/4320d9ce3be404e6310b915c3629fe27bf1e2f438a1a7a3cb0396e32e9a9/uncalled_for-0.2.0-py3-none-any.whl", hash = "sha256:2c0bd338faff5f930918f79e7eb9ff48290df2cb05fcc0b40a7f334e55d4d85f" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/a2/40/97cec87c077eb3291fc7905e6633e08b7ca593c57d30238444bcb6bb3d53/uncalled_for-0.4.0-py3-none-any.whl", hash = "sha256:16c4bb3337532e4bd5569adc192285976f3ad5305402256d34c67a12b5c968bd" },
 ]
 
 [[package]]

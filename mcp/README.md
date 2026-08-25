@@ -52,7 +52,7 @@ uv run mcp/server/server.py \
 
 安全与运行时：
 
-- 全仓精确使用 `fastmcp==4.0.0b2` 和 `mcp==2.0.0`；FastMCP 4 仍为 beta，因此锁定版本和
+- 全仓精确使用 `fastmcp==4.0.0b3` 和 `mcp==2.0.0`；FastMCP 4 仍为 beta，因此锁定版本和
   modern/legacy 双向回归都是运行边界的一部分；
 - FastMCP error middleware 隐藏底层异常细节；结构化日志不包含 payload；
 - Streamable HTTP 保留 Host/Origin DNS-rebinding 防护；公网域名必须显式配置 allowlist；
