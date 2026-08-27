@@ -1565,11 +1565,19 @@ identity key —— 它们永久存在于 append-only 台账，换 key 会在轮
 反推；若将来要 re-key identity，该字段必须先于第一次轮换落地。生产 KMS ownership、generation
 和旧摘要查询窗口仍是 A6 未完成项。
 
-OTel 是可观测面，不是安全依赖。phase 1 adapter 只通过 OpenTelemetry API 丰富 current span，并用
+OTel 是可观测面，不是安全依赖。adapter 只通过 OpenTelemetry API 丰富 current span，并用
 `effect/replay_mode/result` 等低基数属性计数；tool name 与 policy revision 只放 span，不做 metric
-dimension，用户/tenant/client/JTI/fingerprint/参数/结果一律不进入 telemetry。不配置 SDK/exporter 时
-no-op，任何 telemetry 异常都不能改变认证、授权、replay 或业务结果。跨仓 W3C trace propagation、
-SDK/provider/exporter/collector 和 retention policy 仍未实现。
+dimension，用户/tenant/client/JTI/fingerprint/参数/结果一律不进入 telemetry。任何 telemetry 异常
+都不能改变认证、授权、replay 或业务结果。
+
+SDK 与 OTLP exporter 只在 composition root 装配且**默认关闭**（`packages/` 保持
+`opentelemetry-api`-only）；关闭时全程 no-op。**入站** W3C traceparent 的提取不受该开关控制 ——
+propagator 属于 API 包，因此审计 `trace_id` 与上游的关联即使不装 SDK 也成立。trace_id 优先级固定为
+A5 internal actor token 里已签名的 `trace_id` claim > 入站 traceparent > 本地铸造；只读
+`traceparent`/`tracestate`，不得启用全局 composite propagator（会把调用方可控的 `baggage` 读进遥测）。
+接受入站 traceparent 意味着调用方可以选择自己的审计行挂在哪个 trace 下 —— 这是关联污染而非权限
+提升，且 **remote-release 开闸前必须重新评估**。**出站** traceparent 注入（MultiRAG 侧）、
+collector 部署与 retention policy 仍未实现，因此跨仓 trace 尚未闭环。
 
 `ReplayClaimStore.multi_instance_safe` 与 `AuditSink.durable` 都为真时 coordinator 才可
 `production_ready`；这两个属性必须由实现结构保证，不能由普通配置布尔值伪造。内置 memory store/

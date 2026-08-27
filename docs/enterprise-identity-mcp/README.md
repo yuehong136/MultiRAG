@@ -498,8 +498,9 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
 - EIM-A6 的 PostgreSQL 生产持久后端已落（of_mcp `46de58d`，`packages/ofmcp-security-store`）：
   跨实例原子 replay claim、append-only audit ledger、migration head `0001_a6_security_ledger`，
   secure Gateway 由 `build_gateway_for_deployment` 显式注入生产 coordinator。A6 仍为 `🔵` —— 尚欠
-  HMAC key 的 KMS 托管、OTel SDK/exporter 与跨仓 trace、M3/M4 业务幂等、remote-release 演练
-  （fingerprint key 的例行轮换已支持；identity key 刻意单把不轮换）。
+  HMAC key 的 KMS 托管、MultiRAG 侧**出站** traceparent 注入与 collector 部署、M3/M4 业务幂等、
+  remote-release 演练（fingerprint key 的例行轮换、OTel SDK/OTLP 导出与**入站** W3C trace 继承
+  已支持；identity key 刻意单把不轮换）。
 - EIM-A6 已进入 `🔵` phase 1。每个工具 policy 现在显式声明 `effect=read|prepare|side_effect` 和
   `replay_mode=reusable|single_use`，并强制 `side_effect -> single_use`；leave 的 create/submit 与
   四个 medic submit 被归为单次副作用，其余当前工具为可复用只读。canonical policy snapshot

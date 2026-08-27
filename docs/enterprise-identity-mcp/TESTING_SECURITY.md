@@ -499,9 +499,14 @@ gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 mak
   不存在 bearer、原始 JTI、Provider ID、低熵主体、enterprise subject、患者/请假正文或异常原文。
   不同 issuer 的相同 JTI 得到不同 audit digest；HMAC domain separation、key 长度和 deterministic
   fingerprint 有正反测试；audit/replay 前置依赖失败阻断副作用；
-- **A6 OTel/cardinality**：只验证 API adapter 对 current span/counters 的受控属性；metric dimensions
-  不含 tool、policy revision、user/tenant/client/JTI/fingerprint，参数/结果永不记录；API/SDK/exporter
-  抛错不改变安全决策。不能用 unit fake meter 宣称 exporter/collector 或跨仓 trace 已完成；
+- **A6 OTel/cardinality**：metric dimensions 不含 tool、policy revision、user/tenant/client/JTI/
+  fingerprint，参数/结果永不记录；API/SDK/exporter 抛错不改变安全决策。这条现在**在真实 SDK 下**
+  也有覆盖（子进程隔离，因为 provider 是进程级只能设一次的全局），而不再只有 fake meter；
+- **A6 入站 W3C trace**：审计 `trace_id` 必须等于入站 traceparent 的 trace id，且这条**不依赖 SDK**
+  （propagator 在 API 包里）。畸形/缺失/`ff` 版本回落本地铸造且不拒绝请求；未知但合法的未来版本
+  按 W3C 向前兼容照常解析（防止有人收紧成只认 `00`，那会在上游升级时悄悄断链且无报错）；
+  只读 `traceparent`/`tracestate` 两个键。**出站** traceparent 注入属于 MultiRAG 侧，尚未完成，
+  因此不能据此宣称跨仓 trace 已闭环；
 - **A6 production gate**：memory replay/audit 的 `multi_instance_safe/durable` 固定为 false；secure 未显式
   注入 coordinator、或 coordinator 非 production-ready 时启动失败。test-only 内存开关不得成为真实
   CLI 默认，local/secure remote gate 均保持关闭。PostgreSQL 后端把这条做成**两道独立门禁**：

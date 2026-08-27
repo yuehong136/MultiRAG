@@ -812,7 +812,11 @@ I7 未做飞书后台订阅、服务重启或 live；I8 默认关闭的 durable 
   `OUTCOME_UNKNOWN`。outcome 持久化失败保留 `DISPATCHED` 且不能篡改业务响应；
 - audit/permit/telemetry/log 不含 token、参数、结果、Provider PII、enterprise subject 或医疗正文；
   JTI digest 必须隔离 issuer domain，低熵主体用 keyed HMAC；
-- OTel 失败不改变安全决定；API 已接线不等于 SDK/exporter/collector/跨仓 trace 已部署；
+- OTel 失败不改变安全决定。SDK/OTLP exporter 已接线但**默认关闭**，且只在 `apps/gateway`；
+  入站 traceparent 提取是 API-only、不受该开关控制。**出站**注入与 collector 部署仍未完成，
+  所以"跨仓 trace"尚未闭环 —— 不得据 of_mcp 侧的证据宣称已闭环；
+- 入站 traceparent 的信任边界不得默默放宽：它是调用方提供的，接受它是关联污染而非权限提升
+  （trace id 不参与任何认证/授权/replay 判定）。**remote-release 开闸前必须重新评估这条**；
 - `production_ready` 只能由 shared replay + durable audit 的实现属性成立。memory backend 不得通过
   配置伪装生产。生产后端已落（of_mcp `46de58d`，PostgreSQL），真实 secure CLI 在配好 DSN +
   fingerprint key + schema 到 head 之后可启动；缺任一项、未到 head、append-only 守卫被 DISABLE、
