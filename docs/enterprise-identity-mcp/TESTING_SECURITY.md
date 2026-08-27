@@ -503,10 +503,13 @@ gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 mak
   fingerprint，参数/结果永不记录；API/SDK/exporter 抛错不改变安全决策。这条现在**在真实 SDK 下**
   也有覆盖（子进程隔离，因为 provider 是进程级只能设一次的全局），而不再只有 fake meter；
 - **A6 入站 W3C trace**：审计 `trace_id` 必须等于入站 traceparent 的 trace id，且这条**不依赖 SDK**
-  （propagator 在 API 包里）。畸形/缺失/`ff` 版本回落本地铸造且不拒绝请求；未知但合法的未来版本
-  按 W3C 向前兼容照常解析（防止有人收紧成只认 `00`，那会在上游升级时悄悄断链且无报错）；
-  只读 `traceparent`/`tracestate` 两个键。**出站** traceparent 注入属于 MultiRAG 侧，尚未完成，
-  因此不能据此宣称跨仓 trace 已闭环；
+  （propagator 在 API 包里）。**必须同时覆盖两个入站来源**：HTTP `traceparent` header 与 MCP
+  `params._meta`（后者是 FastMCP client 的默认出站通道 —— 只测 header 会给出看似通过、实际接不上
+  默认客户端路径的假证据）。两来源并存时 HTTP 优先；坏的 HTTP header 不得废掉可用的 `_meta`。
+  畸形/缺失/`ff` 版本回落本地铸造且不拒绝请求；未知但合法的未来版本按 W3C 向前兼容照常解析
+  （防止有人收紧成只认 `00`，那会在上游升级时悄悄断链且无报错）；只读 `traceparent`/`tracestate`
+  两个键。MultiRAG 侧只需配置 OTel SDK（注入由 FastMCP client 自动完成），在那之前不能宣称
+  跨仓 trace 已闭环；
 - **A6 production gate**：memory replay/audit 的 `multi_instance_safe/durable` 固定为 false；secure 未显式
   注入 coordinator、或 coordinator 非 production-ready 时启动失败。test-only 内存开关不得成为真实
   CLI 默认，local/secure remote gate 均保持关闭。PostgreSQL 后端把这条做成**两道独立门禁**：
