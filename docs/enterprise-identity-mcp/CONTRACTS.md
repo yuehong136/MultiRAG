@@ -1571,6 +1571,14 @@ SDK/provider/exporter/collector 和 retention policy 仍未实现。
 sink 有界、进程内、重启丢失，仅供单元测试与显式 test-only 启动。secure Gateway 必须显式注入
 coordinator；无 production-ready 后端时真实 secure CLI 必须启动失败，remote-release gate 不得解除。
 
+生产实现为 of_mcp `packages/ofmcp-security-store`（PostgreSQL，`46de58d`）。它把上述结构性保证
+落成三件可机器校验的事：两个标记是不带构造参数、且不在实例 `__slots__` 里的类常量；构造要求一个
+只能由启动断言 `assert_schema_ready()` 产出的 `VerifiedSchema` 凭证（该断言校验 migration 已到
+head、append-only trigger 处于 `ENABLE ALWAYS`、`synchronous_commit` 不是 `off`）；enforce profile
+在 `Profile` validator 上就选不到 memory 后端。两道门禁互相独立：前者挡"开发注入了错的对象"，
+后者挡"运维忘了配后端"。audit 的 25 字段 allowlist 由 schema 强制（一字段一列、无 jsonb），
+因此新增字段必然是一次可见的 schema 变更。
+
 本 replay contract 不是业务幂等或结果缓存：它只能阻止相同 capability 再次进入本进程执行边界，
 不能证明 OA/Jira 是否已经提交，duplicate 也不会回放结果。M3/M4 仍须用业务 idempotency key、状态
 查询和 unknown-outcome 对账闭环。A5 已在 audit schema v2 加入 actor token 的

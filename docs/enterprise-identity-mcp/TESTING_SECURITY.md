@@ -504,7 +504,10 @@ gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 mak
   抛错不改变安全决策。不能用 unit fake meter 宣称 exporter/collector 或跨仓 trace 已完成；
 - **A6 production gate**：memory replay/audit 的 `multi_instance_safe/durable` 固定为 false；secure 未显式
   注入 coordinator、或 coordinator 非 production-ready 时启动失败。test-only 内存开关不得成为真实
-  CLI 默认，local/secure remote gate 均保持关闭；
+  CLI 默认，local/secure remote gate 均保持关闭。PostgreSQL 后端把这条做成**两道独立门禁**：
+  `Profile` validator 禁止 enforce profile 声明 memory 后端（配置级），`production_ready` 仍只由实现
+  属性成立（结构级 —— 类常量、不在实例 `__slots__`、且要求只能由启动断言产出的 `VerifiedSchema`）。
+  另有 AST 门禁断言没有任何生产模块传 `test_only_*` 开关或实例化内存后端；
 - **L2 native leave form**：工具外层 input schema 无业务参数；response schema 恰好 7 个 flat/ref-free
   字段，四种假种、日期、0..23 小时和 `00|30` 分钟逐项锁定；reason/identity/PM/CC/remark、nested、
   local/remote ref 与 schema 外字段拒绝。modern 与显式 ask-before-effect legacy 首轮 OA 零调用；
@@ -598,6 +601,23 @@ resource drift，定向 **256 passed**。`uv run --locked ofmcp verify` 六步�
 2 skipped**、contract snapshot 无漂移。该证据仍不代表真实 key/config、私网 TLS/mTLS、部署、
 MultiRAG→of_mcp 跨仓 E2E 或 remote release 已完成。
 
+A6 durable backend 的最小回归集合另外包括（真实 PostgreSQL，**刻意不 skip**）：
+
+- 两个独立连接池并发 claim 只一个 ACQUIRED，32 路跨四池同样只一个赢家且只留一行；
+- 独立解释器/重建 store 后仍拒绝重复（内存实现必然失败的那条）；
+- 终态不释放 capability；保留窗口边界以**数据库**时钟判定且含等号；
+- dispatch/outcome 的合法迁移、幂等命中与非法迁移各自可区分；
+- audit 列集恰好等于 25 字段 allowlist 加两个簿记列（加 `metadata` 列必红），
+  且 `to_record()` 键集与之双向钉住；
+- `UPDATE`/`DELETE`/`TRUNCATE` 全被 `restrict_violation` 拒绝，并在
+  `session_replication_role='replica'` 下仍然拒绝；
+- 两张表逐列 dump 的 sentinel 扫描（主体原文、原始 JTI、bearer、参数值、DSN 口令）；
+- migration 从空库到 head、additive 不动既有对象、`downgrade()` fail closed、
+  未到 head/多 head/守卫被 DISABLE/`synchronous_commit=off` 均启动失败；
+- 真实 HTTP secure Gateway 上的 409/403/503，503 时业务调用计数为 0 且响应不含驱动名或主机名；
+- DSN 不出现在 traceback，且映射后的异常 `__cause__` 与 `__context__` 均为 None；
+- 供给夹具在拿不到数据库时 raise 而不是 skip（门禁自身的测试）。
+
 A6 phase 1 的最小回归集合包括：
 
 - 所有实际工具的 effect/replay policy 与 format-2 snapshot 完整一致；canonical builder 在不同输入
@@ -610,12 +630,14 @@ A6 phase 1 的最小回归集合包括：
 - OTel fake span/meter 覆盖允许属性与低基数 counters，exploding adapter 不影响 execution decision；
 - `uv run --locked ofmcp contract diff`、完整 `uv run --locked ofmcp verify` 与 `git diff --check`。
 
-当前实现只满足上述 phase-1 自动化形状；A6/Gateway 定向 **65 passed**，完整
-`uv run --locked ofmcp verify` 六步全绿、**453 passed、2 existing skipped**，提交锚点统一以 ROADMAP
-变更日志为准。A6 必须保持 `🔵`：自动化尚未覆盖真实多副本 durable store、
-进程重启后 claim/audit、KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、
+durable backend 落地后（of_mcp `46de58d`），A6/auth/Gateway/PostgreSQL 定向 **412 passed**，
+完整 `uv run --locked ofmcp verify` 本机 Windows **907 passed、3 skipped**，另有一条既有的
+symlink 特权失败（`WinError 1314`，OS 缺 `SeCreateSymbolicLinkPrivilege`，与本次改动无关）；
+contract snapshot 零漂移。提交锚点统一以 ROADMAP 变更日志为准。A6 必须保持 `🔵`：
+自动化尚未覆盖 KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、
 P3/A5 动态 bearer 的真实跨仓运行证据、业务 idempotency/result lookup 和
-remote-release 演练。
+remote-release 演练。真实多副本 durable store 与进程重启后的 claim/audit 已由跨池、跨解释器
+与重建 store 的真实 PostgreSQL 测试覆盖。
 
 ### 3.4 跨仓端到端测试
 
@@ -1081,18 +1103,26 @@ EIM-A6 phase 1/后续收口复用同一完整门禁，并必须显式包含 repl
 
 ```bash
 uv lock --check
-uv run --locked pytest packages/ofmcp-auth/tests/test_replay.py \
+uv run --locked pytest packages/ofmcp-security-store/tests \
+  apps/gateway/tests/postgres \
+  packages/ofmcp-auth/tests/test_replay.py \
   packages/ofmcp-auth/tests/test_security_execution.py \
   packages/ofmcp-auth/tests/test_security_telemetry.py \
   packages/ofmcp-auth/tests/test_fastmcp_adapter.py \
   packages/ofmcp-core/tests/test_tool_policy_registry.py \
-  apps/gateway/tests/test_auth.py
+  apps/gateway/tests/test_auth.py \
+  tests/catalog/test_production_entrypoints.py
 uv run --locked ofmcp contract diff
 uv run --locked ofmcp verify
 git diff --check
 ```
 
-当前 A6/Gateway 定向 **65 passed**，完整 verify **453 passed、2 existing skipped**；提交锚点统一以
+完整 verify 从 durable backend 起需要 Docker（或导出 `OFMCP_A6_TEST_POSTGRES_DSN` 指向一个可丢弃的
+PostgreSQL）：49 条 `postgres` marker 测试落在普通 `pytest -q` 内，夹具拿不到数据库时**硬失败而非
+skip**。`ofmcp verify --fast` 不含 test 步，因此不需要 Docker。
+
+当前 A6/auth/Gateway/PostgreSQL 定向 **412 passed**，完整 verify 本机 Windows
+**907 passed、3 skipped**（外加一条既有 symlink 特权失败）；提交锚点统一以
 ROADMAP 变更日志为准。不得因此把当前 phase 1 改成 `✅`。生产 durable
 store/KMS/collector 与跨仓 E2E
 需要各自额外证据，单元 fake 和内存 store 不能替代。

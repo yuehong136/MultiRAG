@@ -794,7 +794,12 @@ I7 未做飞书后台订阅、服务重启或 live；I8 默认关闭的 durable 
    audit、ExecutionPermit 与 outcome；
 5. `ofmcp.auth.security_telemetry`：OTel API-only、低基数 counters、异常隔离；
 6. `ToolAuthorizationMiddleware.on_call_tool` 与 Gateway composition：A4 final allow 后才 prepare，传入
-   同一 policy/revision；secure 要求显式 production-ready coordinator。
+   同一 policy/revision；secure 要求显式 production-ready coordinator；
+7. `packages/ofmcp-security-store/README.md` 与 `ofmcp.security_store.postgres.replay` 的模块
+   docstring：生产 durable backend 的原子 claim 为什么必须是那一条语句、保留窗口下限怎么算、
+   append-only 守卫与最小权限角色、DSN 净化边界；
+8. `ofmcp.gateway.security_backend` 与 `build_gateway_for_deployment`：同步 preflight fail-fast +
+   FastMCP `@lifespan` 拥有连接池生命周期；生产入口在类型上没有 `test_only_*` 参数。
 
 不得回退的 phase-1 不变量：
 
@@ -809,26 +814,41 @@ I7 未做飞书后台订阅、服务重启或 live；I8 默认关闭的 durable 
   JTI digest 必须隔离 issuer domain，低熵主体用 keyed HMAC；
 - OTel 失败不改变安全决定；API 已接线不等于 SDK/exporter/collector/跨仓 trace 已部署；
 - `production_ready` 只能由 shared replay + durable audit 的实现属性成立。memory backend 不得通过
-  配置伪装生产；当前真实 secure CLI 应因缺 production backend fail-fast，remote gate 保持关闭。
+  配置伪装生产。生产后端已落（of_mcp `46de58d`，PostgreSQL），真实 secure CLI 在配好 DSN +
+  fingerprint key + schema 到 head 之后可启动；缺任一项、未到 head、append-only 守卫被 DISABLE、
+  `synchronous_commit=off` 或 key 不足 256 bit 都在**启动期** fail-fast。remote gate 保持关闭；
+- durable backend 的实现不变量同样不得回退：原子 claim 必须是单语句且能在竞争中返回在位记录
+  （`ON CONFLICT DO NOTHING` + `UNION ALL` 会让竞争者拿到空结果集，从而把 409 变成 503）；
+  判定时钟只有数据库侧 `now_epoch()`；保留窗口锚在 `expires_at` 且不得低于最长工具执行墙钟；
+  audit 列集必须恰好等于 25 字段 allowlist；append-only trigger 必须是 `ENABLE ALWAYS`；
+  psycopg 异常不得进入异常链。
 
 修改 A6 代码至少运行：
 
 ```bash
 uv lock --check
-uv run --locked pytest packages/ofmcp-auth/tests/test_replay.py \
+uv run --locked pytest packages/ofmcp-security-store/tests \
+  apps/gateway/tests/postgres \
+  packages/ofmcp-auth/tests/test_replay.py \
   packages/ofmcp-auth/tests/test_security_execution.py \
   packages/ofmcp-auth/tests/test_security_telemetry.py \
   packages/ofmcp-auth/tests/test_fastmcp_adapter.py \
   packages/ofmcp-core/tests/test_tool_policy_registry.py \
-  apps/gateway/tests/test_auth.py
+  apps/gateway/tests/test_auth.py \
+  tests/catalog/test_production_entrypoints.py
 uv run --locked ofmcp contract diff
 uv run --locked ofmcp verify
 git diff --check
 ```
 
-本轮 A6/Gateway 定向 **65 passed**，完整 `uv run --locked ofmcp verify` 六步全绿、
-**453 passed、2 existing skipped**；提交锚点统一以 ROADMAP 变更日志为准。即使以上全绿，也只有完成
-production multi-instance durable replay/audit、HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、
+完整 verify 从 durable backend 起需要 Docker（或导出 `OFMCP_A6_TEST_POSTGRES_DSN`）：49 条
+`postgres` marker 测试落在普通 `pytest -q` 内，夹具拿不到数据库时**硬失败而非 skip**；
+`--fast` 不含 test 步，因此不需要 Docker。
+
+本轮 A6/auth/Gateway/PostgreSQL 定向 **412 passed**，完整 `uv run --locked ofmcp verify` 本机
+Windows **907 passed、3 skipped**，另有一条既有 symlink 特权失败（`WinError 1314`，与改动无关）；
+contract snapshot 零漂移。提交锚点统一以 ROADMAP 变更日志为准。production multi-instance durable
+replay/audit 已完成；只有再完成 HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、
 P3/A5 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
 改为 `✅`。这类后续工作若涉及真实基础设施、KMS、DNS、Secret 或部署，必须先获得用户批准。
 

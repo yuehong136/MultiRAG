@@ -133,7 +133,7 @@ of_mcp
   - OAuth/MCP protected-resource metadata
   - bearer token verifier
   - immutable Principal / per-tool policy middleware
-  - auth audit / OTel API / replay protection（EIM-A6 phase 1 已落；生产持久后端未落）
+  - auth audit / OTel API / replay protection（EIM-A6 phase 1 与 PostgreSQL 生产持久后端已落）
   - business service adapters
 ```
 
@@ -495,6 +495,10 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   内建 provider cache 只保存远端 raw metadata，用户级工具可见性
   仍逐请求执行；独立 proxy Resource Server 再验精确 audience、Principal 与本地策略。audit schema v2
   已加入 `parent_jti_hash`。真实 key/TLS、部署、远程发布与跨仓 E2E 仍未执行。
+- EIM-A6 的 PostgreSQL 生产持久后端已落（of_mcp `46de58d`，`packages/ofmcp-security-store`）：
+  跨实例原子 replay claim、append-only audit ledger、migration head `0001_a6_security_ledger`，
+  secure Gateway 由 `build_gateway_for_deployment` 显式注入生产 coordinator。A6 仍为 `🔵` —— 尚欠
+  HMAC KMS/rotation、OTel SDK/exporter 与跨仓 trace、M3/M4 业务幂等、remote-release 演练。
 - EIM-A6 已进入 `🔵` phase 1。每个工具 policy 现在显式声明 `effect=read|prepare|side_effect` 和
   `replay_mode=reusable|single_use`，并强制 `side_effect -> single_use`；leave 的 create/submit 与
   四个 medic submit 被归为单次副作用，其余当前工具为可复用只读。canonical policy snapshot
@@ -550,8 +554,8 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   带已验证 Canvas release 的 Channel Canvas 是现有动态委托入口，Dialog 因没有可寻址发布 revision
   而 fail closed。of_mcp A5 已在 `5b4162a` 完成 request-scoped internal actor proxy、精确协议 era
   镜像与 mount/proxy 授权/审计等价，但未配置真实 key/TLS、部署或做跨仓 E2E；A6 虽已有 phase-1
-  domain/runtime 安全边界与 A5 audit v2 parent link，仍缺生产多实例 replay/audit、HMAC/KMS 轮换、
-  OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
+  domain/runtime 安全边界、A5 audit v2 parent link 与 PostgreSQL 生产多实例 replay/audit，
+  仍缺 HMAC/KMS 轮换、OTel SDK/exporter 与跨仓 trace，因此保持 `🔵`。M1/M2 企业主体与业务对象授权、持久
   Confirmation/业务 Idempotency 仍未完成；U14 Interaction ledger 已完成本地实现。
   F1/I4.1/I5/I6/I6.1/I7/C1/C2/C3/P2/A2/P3/A5/U14/U15 已完成本地实现；I7 未 rollout，I8 的
   durable reconciliation slice 已本地落地但任务保持 `🔵`，没有 public admin route、风险感知 local

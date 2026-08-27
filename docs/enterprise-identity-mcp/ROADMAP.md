@@ -1,6 +1,6 @@
 # EIM 实施路线图与进度账本
 
-> 最后更新：2026-08-25
+> 最后更新：2026-08-26
 > 当前状态：文档基线、EIM-U0、EIM-U1、EIM-U4、EIM-U8～U13、EIM-U16 已完成；
 > CHN-U15 迁移/API 重启已完成，CHN-U16 已完成；Channel 完整 UX 矩阵的真实 smoke 仍欠（C3 的
 > Principal-owner live 不替代该矩阵），Channel 稳定性下一项 CHN-O9，随后稳定浸泡；
@@ -569,7 +569,7 @@ request-scoped credential、不发送 bearer；这些仍属于 C4 与 A2/P3。�
 | EIM-A3 | of_mcp | gateway protected-resource metadata、WWW-Authenticate、JWT/JWKS + strict profile verifier | ✅ | A1,F4 | `RemoteAuthProvider`/自定义 verifier 组合；认证层 401 与 verifier 故障 503 分层；保留可测 403 seam、真实工具级 403 交给 A4；issuer/resource/JOSE/claims/clock/profile 全验；A3 handoff 保持 local/secure loopback；无 auth 绕过路由 |
 | EIM-A4 | of_mcp | immutable Principal dependency、service scope enforcement、tool visibility/step-up | ✅ | A3 | A1 verified claims 独立投影为 immutable Principal；post-assembly canonical tool registry 完整覆盖并生成带 `policy_revision` 的确定性快照；outer HTTP 403 preflight + inner `tools/list` filter/`tools/call` 执行前重验；scope/tenant/assurance 分层且 domain/core 不 import FastMCP；external business resolver 与 `auth_time` freshness 明确保留为 future seam；local/secure 继续 loopback |
 | EIM-A5 | of_mcp | proxy `mcp_internal_actor` 换发，mount/proxy Principal 与授权等价 | ✅ | A4,P3 | 独立 issuer/keyset/service audience；scope/TTL attenuation；外部 token/header 不透传；逐逻辑调用新 bearer/client；精确镜像 modern/legacy protocol era；内建 raw catalog cache 后逐请求授权；两形态成功/拒绝/audit 等价 |
-| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | 🔵 | A4 | **phase 1 已落**：显式 effect/replay policy、canonical runtime revision、冻结 audit schema、原子 replay coordinator、OTel API 和 A4 最终 allow 后执行边界；A5 已把 `parent_jti_hash` 纳入 audit v2；**尚欠完成门禁**：多实例 durable replay/audit、HMAC/KMS 轮换、SDK/exporter 与跨仓 trace、生产集成/演练；审计无 token/PII，高风险重复/冲突 fail closed |
+| EIM-A6 | of_mcp | auth audit、OTel、jti 高风险重放防护、指标和脱敏 | 🔵 | A4 | **phase 1 已落**：显式 effect/replay policy、canonical runtime revision、冻结 audit schema、原子 replay coordinator、OTel API 和 A4 最终 allow 后执行边界；A5 已把 `parent_jti_hash` 纳入 audit v2；**durable backend 已落**（of_mcp `46de58d`：PostgreSQL 跨实例原子 claim、append-only audit ledger、migration head `0001_a6_security_ledger`，49 条真实 PostgreSQL 测试刻意不 skip）；**尚欠完成门禁**：HMAC/KMS 轮换、SDK/exporter 与跨仓 trace、生产集成/演练；审计无 token/PII，高风险重复/冲突 fail closed |
 | EIM-A7 | MR MCP server | 把 inbound MultiRAG MCP 变成独立 OAuth Resource Server：protected-resource metadata、audience、scope、Principal 和工具可见性 | ⬜ | F8,A1,P1 | inbound/outbound resource 与 bearer 不复用；401/403/WWW-Authenticate 标准化；`tools/list` 与 direct call 均授权；dataset/tenant 隔离；legacy API-key 仅按明确迁移门禁保留 |
 | EIM-A8 | 两仓架构/PoC | 企业托管与多 issuer 采用闸门：有真实企业 IdP/外部 MCP client 需求时评估 EMA + ID-JAG；FastMCP MultiAuth 只作为组合实现候选；Horizon 只作托管平台 build-vs-buy | ⏸ | A2,A4,A7 + 真实需求 | ADR/威胁模型区分标准、扩展、框架实现和托管产品；EMA fixture 使用真实形状的 IdP assertion，不伪造飞书事件；首期短时 issuer/resource-token 路径不回归；无需求不引入依赖或平台锁定 |
 
@@ -741,11 +741,13 @@ SDK 2 request-scoped bearer，但默认 disabled、未配置真实制品或部�
    只依赖 API，给 current span 增加受控属性并发出低基数 counters；不配置 SDK/exporter 时 no-op，
    telemetry 故障不改变认证、授权或 replay 决策。
 6. secure Gateway 必须显式注入 coordinator；`production_ready` 只能由 multi-instance-safe replay store
-   与 durable audit sink 共同成立，不能靠配置布尔值伪造。内存实现仅供测试/显式 test-only 启动；
-   当前真实 secure CLI 因没有生产后端 fail-fast，loopback/remote-release gate 继续关闭。
+   与 durable audit sink 共同成立，不能靠配置布尔值伪造。内存实现仅供测试/显式 test-only 启动。
+   生产后端已落（见下节），真实 secure CLI 在配好 DSN + fingerprint key + schema 到 head 后可启动；
+   loopback/remote-release gate 继续关闭。
 
-A6 仍不得改为 `✅`，直至至少完成并验证：共享持久 replay store 与 append-only audit sink、容量/
-故障/过期/重启/多副本语义、fingerprint HMAC key 的 KMS 托管和轮换、OTel SDK/provider/exporter 与
+共享持久 replay store 与 append-only audit sink 已于 of_mcp `46de58d` 完成，容量/故障/过期/
+重启/跨实例语义均有真实 PostgreSQL 覆盖。A6 仍不得改为 `✅`，直至另外完成并验证：
+fingerprint HMAC key 的 KMS 托管和轮换、OTel SDK/provider/exporter 与
 W3C 跨仓 trace propagation、P3/A5 动态 bearer 后的真实主体链、
 业务级 idempotency/result lookup（M3/M4）以及 remote-release 演练。replay claim 只阻止同一 capability
 重复进入代码，不能证明外部系统未执行，也不能替代业务幂等或结果缓存；duplicate 只拒绝，不回放
@@ -963,7 +965,7 @@ EIM-F5 / CHN-X14 仍是长期 upstream-first 的上游审计入口，但当前�
 当前 of_mcp 与 MultiRAG 身份候选：
 
 ```text
-EIM-A6  🔵 phase 1 已落；下一半完成生产 durable backend、key rotation 与跨仓 trace
+EIM-A6  🔵 phase 1 + PostgreSQL durable backend 已落；下一半完成 key rotation 与跨仓 trace
 EIM-F1  ✅ lark-oapi 1.7.2 + Contact/import contracts
 EIM-I1  ✅ User 外部账号模型
 EIM-I2  ✅ provider ownership + external identity schema
@@ -1031,8 +1033,9 @@ I6 + I8 -> U2 -> O1/O2 -> U3
 A8 -> O3  仅在真实企业 IdP、多 issuer 或托管平台需求成立后解除挂起。
 ```
 
-A3/A4/A5 已完成，of_mcp 的 A6 phase 1 已落但保持进行中；下一步不是把内存 store 当生产后端，而是完成
-durable multi-instance replay/audit、HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/I5/I7/P1、
+A3/A4/A5 已完成，of_mcp 的 A6 phase 1 与 PostgreSQL durable backend 均已落，但 A6 整体仍进行中。
+内存 store 已不再是生产路径上的可选项：enforce profile 在 profile validator 与结构性 `production_ready`
+两道**独立**门禁上都选不到它。下一步是 HMAC key rotation 和跨仓 OTel。MultiRAG 已完成 F1/I2/I2.1/I3/I4/I5/I7/P1、
 I6、C2、C3、P2、A2、P3、U14 与 U15/CHN-X15；U15 默认关闭，单机临时 live 已通过但生产 rollout 未开始。CHN-O9 是可并行的 Channel 可观测支线，
 C4/CHN-X8 仍等待 deployment soak。I7/CHN-X21 已完成本地 managed event consumer，但未做飞书后台
 订阅、重启或 live；I8 的 default-disabled durable reconciliation slice 已落，但 public admin、
@@ -1062,6 +1065,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 
 | 日期 | ID | 变更 | 仓库/提交 | 验证证据 | 记录人 |
 |---|---|---|---|---|---|
+| 2026-08-26 | EIM-A6 durable backend slice | of_mcp 新增 `packages/ofmcp-security-store`，以 PostgreSQL 实现跨实例原子 replay claim 与 append-only audit ledger。原子 claim 避开常见 `ON CONFLICT DO NOTHING` + `UNION ALL` 在 READ COMMITTED 下让竞争者拿到空结果集的漏洞（会把并发重复从 409 变成 503），改用不带 WHERE 的 `ON CONFLICT DO UPDATE` + 每次尝试新生成的 `writer_token` 判别胜负；dispatch/outcome 用 `MATERIALIZED` CTE + `FOR NO KEY UPDATE` + resolution 判别器区分不存在/已过期/非法迁移/幂等命中。判定时钟只有 DB 侧 `now_epoch()`；保留窗口锚在 `expires_at`，默认 900 秒并设 300 秒下限（内存实现的 30 秒会让行在 `record_outcome` 落库前被清理，把已成功的调用变成 503）。audit 的 25 字段 allowlist 由 schema 强制（一字段一列、无 jsonb，两侧钉住），append-only 用 `ENABLE ALWAYS` row+truncate trigger 并在启动期以 `tgenabled='A'` 校验；INSERT 不带 RETURNING，配列级 `GRANT SELECT (event_id)` 后 runtime 角色能追加却读不到台账正文。migration head `0001_a6_security_ledger` 严格 additive、`downgrade()` 一律 raise、启动期绝不自动迁移。两道独立门禁：`Profile` validator 禁止 enforce profile 选 memory 后端；`production_ready` 仍只由实现属性成立（类常量、不在 `__slots__`、要求只能由启动断言产出的 `VerifiedSchema` 凭证）。新增 `build_gateway_for_deployment` 作为生产装配唯一入口，类型上就没有 `test_only_*` 参数。psycopg 异常在 store 边界被换成净化域异常并在 except 块外抛出，DSN 不进异常链。未做：KMS/rotation、OTel SDK/exporter/跨仓 trace、M3/M4 业务幂等、remote-release 演练；未改 services/、未解除 `LEAVE_WRITE_DISABLED`、未开放 remote-release，飞书/OA/`doCreateRequest` 调用数为零 | of_mcp `46de58d`（未 push 时记录，CI 待跑）；MultiRAG docs / 本次提交 | `uv lock --check` 通过；A6/auth/Gateway/PostgreSQL 定向 **412 passed**；`uv run --locked ofmcp verify` 六步中五步绿，test 步本机 Windows **907 passed、3 skipped**，另有一条既有的 `test_file_signing_provider_rejects_symlink_and_active_key_mismatch` `WinError 1314` 失败（OS 缺 `SeCreateSymbolicLinkPrivilege`，`ofmcp-auth/src` 与该测试文件与 HEAD 逐字节相同，与本次改动无关；改动前基线同样只有这一条失败）；`ofmcp contract diff` 零漂移；`git diff --check` 通过。49 条 `postgres` marker 测试落在普通 `pytest -q` 内，夹具拿不到数据库时**硬失败而非 skip** | Claude |
 | 2026-08-25 | EIM-O1 operator-tooling slice | 增加 Windows PowerShell 与 macOS/Linux POSIX P3 file-key bootstrap：显式生成未加密 PKCS#8 ES256/P-256 keypair，以 `kid` 隔离文件，拒绝相对路径、symlink/reparse point、非法 `kid` 和默认覆盖；落盘前验证 private/public PEM 与 DER 公钥摘要匹配，收紧 POSIX mode/Windows ACL，只输出 public fingerprint 与配置片段。新增跨平台配置、JWKS/of_mcp 接线、owner/服务账号、prepublish→switch→retain/remove、备份/泄露处置 runbook；默认 issuer 继续关闭。本项不交付 KMS、生产 DNS/TLS、网络策略、多副本 rotation barrier 或 rollout，O1 保持 `🔵` | MultiRAG / 本次提交（未部署） | POSIX 真实 OpenSSL 生成 + production `FileSigningKeyProvider` 定向 **9 passed**；Windows 安全契约静态门禁（当前 Mac 无 PowerShell，待 Windows 现场执行态复验）；`make verify` 8 import contracts、mypy 122 files、unit **2853 passed** | Codex |
 | 2026-08-25 | EIM-U16 / CHN-U19 | 完成 U14 native-form resume 的 Provider 身份重建：只从 active ExternalIdentity、当前 revision presentation、generation-matched enabled binding、healthy exact Provider Account 与当前 Channel link 恢复 P4 `VerifiedProviderIdentity`，再按当前 grant/tool policy 重授权并签发新 bearer；缺失、歧义、停用和 tenant/provider/account 漂移全部 fail closed，不读取卡片字段、旧 token/claim 或模型参数，不扩大 side-effect。首次 live 的 `INTERACTION_REAUTHORIZATION_DENIED` 已转为同一真实飞书场景完整成功 | MultiRAG / 本次提交；本机临时 live | 定向 **61 passed**；真实 DB authority query 唯一解析；`make verify` **2850 passed**；强制 integration **227 passed**；live callback `claimed` attempt 1、resume `succeeded` attempt 1、interaction `completed`、terminal presentation `delivered`，safe error 全空，结果已持久化且仍为 preview/prepare | Codex |
 | 2026-08-25 | EIM-L4 / CHN-X24 | 增加显式 `ofmcp-ecology-mock` contract simulator：验证真实形状的 RSA secret/userid，覆盖六个 auth/read/preview Ecology endpoint、OA-owned 工时和有界余额，第七个 `doCreateRequest` 永远 403；从不自动选中且不冒充 authority。accepted preview 改产严格六键 v2 terminal，当前用户/假种/起止/OA 时长/余额/执行边界进入有界 label/value；MR Host 保留 v1 只读兼容并对任意畸形结果 generic，飞书用无控件绿色 Card JSON 2.0 整卡替换。未放宽严格 P3/Provider/grant、未启用写工具或生产配置；2026-08-25 已通过本机真实飞书 form → simulator preview → v2 terminal CardKit live | of_mcp + MultiRAG / 本次双仓提交；本机临时 live | of_mcp `ofmcp verify` **607 passed / 2 skipped**、contract snapshot exact；MR focused **109 passed**、`make verify` **2846 passed**、MCP compatibility **22/22**；live 结果为模拟 OA 时长 4.0、余额 40.0，明确未创建草稿或发起审批 | Codex |
