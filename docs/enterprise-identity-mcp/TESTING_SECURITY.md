@@ -634,7 +634,9 @@ durable backend 落地后（of_mcp `46de58d`），A6/auth/Gateway/PostgreSQL 定
 完整 `uv run --locked ofmcp verify` 本机 Windows **907 passed、3 skipped**，另有一条既有的
 symlink 特权失败（`WinError 1314`，OS 缺 `SeCreateSymbolicLinkPrivilege`，与本次改动无关）；
 contract snapshot 零漂移。提交锚点统一以 ROADMAP 变更日志为准。A6 必须保持 `🔵`：
-自动化尚未覆盖 KMS/HMAC key rotation、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、
+fingerprint HMAC key 的例行轮换已覆盖（轮换窗口内合法重试仍是 409；旧 key 删太早会退化成 403，
+这个失败形态也被钉住；轮换 ring 不改变 identity hash 与 mcp_call_id）。自动化尚未覆盖
+HMAC key 的 KMS 托管、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、
 P3/A5 动态 bearer 的真实跨仓运行证据、业务 idempotency/result lookup 和
 remote-release 演练。真实多副本 durable store 与进程重启后的 claim/audit 已由跨池、跨解释器
 与重建 store 的真实 PostgreSQL 测试覆盖。

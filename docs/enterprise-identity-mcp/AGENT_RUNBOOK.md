@@ -817,6 +817,12 @@ I7 未做飞书后台订阅、服务重启或 live；I8 默认关闭的 durable 
   配置伪装生产。生产后端已落（of_mcp `46de58d`，PostgreSQL），真实 secure CLI 在配好 DSN +
   fingerprint key + schema 到 head 之后可启动；缺任一项、未到 head、append-only 守卫被 DISABLE、
   `synchronous_commit=off` 或 key 不足 256 bit 都在**启动期** fail-fast。remote gate 保持关闭；
+- A6 用**两把**分开的 HMAC key，不得再合回一把：`fingerprint_hmac_keys` 是 active-first ring
+  （值只在一次 claim 的保留窗口内被比较，可例行轮换；退役 key 只在 CONFLICT 复核路径上使用，
+  保留下限是最大 token TTL + retention_seconds + 时钟偏移）；`identity_hmac_key` 单把不轮换
+  （主体 hash 与 mcp_call_id 永久存在于 append-only 台账，换 key 会切断关联且补不回来）。
+  audit allowlist 刻意没有 key id 字段 —— 若将来要 re-key identity，该字段必须在第一次轮换
+  **之前**落地，事后补不上；
 - durable backend 的实现不变量同样不得回退：原子 claim 必须是单语句且能在竞争中返回在位记录
   （`ON CONFLICT DO NOTHING` + `UNION ALL` 会让竞争者拿到空结果集，从而把 409 变成 503）；
   判定时钟只有数据库侧 `now_epoch()`；保留窗口锚在 `expires_at` 且不得低于最长工具执行墙钟；

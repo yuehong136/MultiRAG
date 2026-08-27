@@ -1557,8 +1557,13 @@ decision, reason_code, replay_state
 低熵主体标识必须使用 secret-keyed HMAC；JTI 作为高熵关联值只存 issuer-domain-separated SHA-256，
 避免不同 issuer 恰好复用同一 JTI 时审计关联碰撞。绝不保存 bearer、原始 JTI、
 tool arguments/results、Provider ID、姓名/邮箱/电话/员工号、enterprise subject、聊天/表单/医疗正文或
-任意异常原文。HMAC key 至少 256 bit；当前只接受显式注入，生产 KMS ownership、generation、轮换和
-旧摘要查询窗口仍是 A6 未完成项。
+任意异常原文。HMAC key 至少 256 bit。**A6 用两把分开的 key**：`request_fingerprint` 走 active-first ring，
+可例行轮换（active key 签名；命中 conflict 时用退役 key 复核在位记录，任一匹配判为 409 而非
+403，避免轮换窗口内把合法重试误报成重放）；主体 HMAC 与 `mcp_call_id` 走单独一把**不轮换**的
+identity key —— 它们永久存在于 append-only 台账，换 key 会在轮换点切断主体关联且事后补不回来。
+审计 allowlist 刻意不含 key id 字段，因此 identity key 的 epoch 只能由审计行时间戳加运维记录
+反推；若将来要 re-key identity，该字段必须先于第一次轮换落地。生产 KMS ownership、generation
+和旧摘要查询窗口仍是 A6 未完成项。
 
 OTel 是可观测面，不是安全依赖。phase 1 adapter 只通过 OpenTelemetry API 丰富 current span，并用
 `effect/replay_mode/result` 等低基数属性计数；tool name 与 policy revision 只放 span，不做 metric
