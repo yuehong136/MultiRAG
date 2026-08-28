@@ -805,16 +805,19 @@ async def test_secret_rotation_between_verification_and_apply_fails_closed(
     assert "rotated-channel-key-sensitive" not in repr(caught.value)
 
 
+# 参数是**偏移量**，时间戳在用例体内折算。写成 datetime.now() 常量会在收集期定死：
+# 收集发生在任何用例执行之前，所以 "+1 分钟" 只要没能在收集后 60 秒内跑到，就已经
+# 变成"1 分钟前"，落进 _MAX_PROVIDER_PROOF_AGE 的 5 分钟有效窗口，断言反而不触发。
+# 快机器上侥幸通过、慢机器上必红，是最难查的一类假绿。stale 那半边没这个问题
+# （时间只会让它更陈旧），但两边写法保持一致更好读。
 @pytest.mark.parametrize(
-    "verified_at",
-    [
-        datetime.now(UTC) - timedelta(minutes=6),
-        datetime.now(UTC) + timedelta(minutes=1),
-    ],
+    "proof_age",
+    [timedelta(minutes=-6), timedelta(minutes=1)],
+    ids=["stale", "future"],
 )
 async def test_stale_or_future_provider_proof_cannot_authorize_writes(
     bootstrapped_async_engine: AsyncEngine,
-    verified_at: datetime,
+    proof_age: timedelta,
 ) -> None:
     factory = _factory(bootstrapped_async_engine)
     tenant_id = _new_id()
@@ -828,7 +831,7 @@ async def test_stale_or_future_provider_proof_cannot_authorize_writes(
     )
     verifier = _Verifier(
         f"provider-tenant-{_new_id()}",
-        verified_at=verified_at,
+        verified_at=datetime.now(UTC) + proof_age,
     )
     service, _ = _service(
         factory,
