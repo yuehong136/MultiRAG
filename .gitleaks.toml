@@ -26,10 +26,14 @@ paths = [
     '''configs/public\.pem''',
 ]
 
+# 版本号写成 v\d+ 而不是逐版本追加：语料每加一个版本就漏一批，v2 落地时就是这么红的
+# （77 条全部来自未豁免的 v2/tokens）。放宽版本不降低安全性——豁免只作用于 jwt 这一条
+# 规则，同目录下的私钥/API key 规则照常生效，而 test_eim_a1_sha256sums_* 逐文件校验
+# SHA-256，任何内容漂移都会先在单元测试红。
 [[allowlists]]
 description = "EIM-A1 字节锁定的合成 JWT 契约向量（只豁免 jwt 规则；目录校验和与测试会检测任何内容漂移）"
 targetRules = ["jwt"]
-paths = ['''^tests/fixtures/eim_a1/v1/tokens/[^/]+\.jwt$''']
+paths = ['''^tests/fixtures/eim_a1/v\d+/tokens/[^/]+\.jwt$''']
 
 # ---- 内容豁免（占位符/测试假值） ----
 
