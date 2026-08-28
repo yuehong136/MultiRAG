@@ -127,6 +127,15 @@ def _decode_coordinate(value: object) -> bytes:
     return decoded
 
 
+def _effective_user_id() -> int:
+    """Return the POSIX effective uid without exposing it on Windows typeshed."""
+
+    getter = getattr(os, "geteuid", None)
+    if getter is None:
+        raise SigningKeyError(SigningKeyErrorCode.PRIVATE_KEY_PERMISSIONS_INVALID)
+    return int(getter())
+
+
 def _read_key_bytes(
     path: Path,
     *,
@@ -146,7 +155,7 @@ def _read_key_bytes(
                 raise SigningKeyError(failure_code)
             if enforce_private_permissions and os.name != "nt":
                 mode = stat.S_IMODE(metadata.st_mode)
-                if mode not in {0o400, 0o600} or metadata.st_uid != os.geteuid():
+                if mode not in {0o400, 0o600} or metadata.st_uid != _effective_user_id():
                     raise SigningKeyError(SigningKeyErrorCode.PRIVATE_KEY_PERMISSIONS_INVALID)
             with os.fdopen(descriptor, "rb", closefd=False) as stream:
                 raw = stream.read(65_537)
