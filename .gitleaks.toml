@@ -35,6 +35,14 @@ description = "EIM-A1 字节锁定的合成 JWT 契约向量（只豁免 jwt 规
 targetRules = ["jwt"]
 paths = ['''^tests/fixtures/eim_a1/v\d+/tokens/[^/]+\.jwt$''']
 
+# 该文件断言的是"脚本生成的私钥文件以 PEM 头开头"以及"脚本不得把私钥打进 stdout"——
+# 命中的就是断言里那串 PEM 头字面量，文件内不含任何密钥材料，密钥由用例在 tmp_path
+# 里现生成现销毁。只豁免 private-key 这一条规则，其余规则在该文件上照常生效。
+[[allowlists]]
+description = "P3 签名密钥脚本测试里的 PEM 头字面量（断言用，非密钥材料）"
+targetRules = ["private-key"]
+paths = ['''^tests/unit/test_mcp_signing_key_scripts\.py$''']
+
 # ---- 内容豁免（占位符/测试假值） ----
 
 [[allowlists]]
