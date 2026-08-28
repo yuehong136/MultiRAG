@@ -858,9 +858,23 @@ git diff --check
 本轮 A6/auth/Gateway/PostgreSQL 定向 **412 passed**，完整 `uv run --locked ofmcp verify` 本机
 Windows **907 passed、3 skipped**，另有一条既有 symlink 特权失败（`WinError 1314`，与改动无关）；
 contract snapshot 零漂移。提交锚点统一以 ROADMAP 变更日志为准。production multi-instance durable
-replay/audit 已完成；只有再完成 HMAC KMS/rotation、OTel SDK/exporter/W3C 跨仓 trace、
-P3/A5 动态 bearer 的真实跨仓证据、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
+replay/audit、OTel SDK/exporter、W3C 跨仓 trace 与 P3 动态 bearer 的真实跨仓证据都已完成
+（2026-08-27，证据见 TESTING_SECURITY §3.7）；只有再完成 HMAC 与 ES256 的 KMS/rotation、
+真实受信 DNS/TLS、collector 部署、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
 改为 `✅`。这类后续工作若涉及真实基础设施、KMS、DNS、Secret 或部署，必须先获得用户批准。
+
+接手 A6 跨仓联调前先读两条本机绕行，它们**不是**部署方案：
+
+- of_mcp 的 JWKS fetcher 是 `httpx2.AsyncClient(trust_env=False)`，跳过 `SSL_CERT_FILE`
+  只认系统信任库，而 `build_gateway_for_deployment` 没有 `jwks_fetcher` 注入口，
+  `issuer` / `jwks_uri` 又强制 HTTPS。本机验收靠人工导入一次性 CA 完成，**生产必须提供
+  真实受信证书**；不要把这条写进 rollout 步骤。
+- `ofmcp serve` 在 Windows 上起不了 A6 durable backend：`anyio.run()` 给的是
+  `ProactorEventLoop`，psycopg 3 拒绝在其上跑 async，连接池在 lifespan 里开不出来。
+  用仓库外 launcher 先设 `WindowsSelectorEventLoopPolicy`（anyio 给 `asyncio.Runner` 传
+  `loop_factory=None`，所以策略生效）再调 of_mcp 自己的 `serve()`，**不要改兄弟仓库源码**。
+  MultiRAG 自己走的是 uvicorn `loop=` 参数那条路（`api/multirag_server.py`），机制不同，别混。
+  CI 在 ubuntu 上不复现这条。
 
 ## 5. 跨仓协调
 

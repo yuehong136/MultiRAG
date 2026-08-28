@@ -7,9 +7,10 @@ DSL、模型 alias、tool description、静态 header 或调用参数作为授�
 ## 当前行为
 
 - `identity.mcp_delegation.enabled` 默认是 `false`；关闭时所有既有 MCP server 保持 legacy 行为。
-- 启用时 API lifespan 一次性加载 `secure` profile 的 A4 format-2 `tool-policies.json` 和本模块
-  format-1 `mcp-grants.json`。两个文件必须是绝对路径、regular、非 symlink、至多 1 MiB，且在
-  POSIX 上不能 group/world writable。
+- 启用时 API lifespan 一次性加载 `secure` profile 的 A4 `tool-policies.json`（`snapshot_format` 接受
+  2 或 3，当前 of_mcp 产出 3；`profile` 必须逐字是 `secure`）和本模块 format-1 `mcp-grants.json`。
+  两个文件必须是绝对路径、regular、非 symlink、至多 1 MiB，且在 POSIX 上不能 group/world
+  writable。
 - 两个 revision 都由移除各自 revision 字段后的 canonical JSON SHA-256 复算。它们用于完整性与
   drift 检测，不替代文件发布权限、制品签名或 O1 rollout 控制。
 - delegated binding 是 `MCP server id -> resource name -> exact HTTPS audience` 的一对一映射。

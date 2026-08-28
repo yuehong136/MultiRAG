@@ -765,6 +765,108 @@ mypy 65 files 全绿，unit **1904 passed in 25.76s**。of_mcp `3e1d5ac` 定向 
 门禁 **216 passed、2 existing skipped**。计数/摘要不替代逐 case 执行；任一生成物变化都必须重新
 生成摘要、复制整目录并同时更新两仓证据。
 
+### 3.7 EIM-A6 跨仓验收本机证据（2026-08-27）
+
+第一次用 MultiRAG P3 动态签发的短期 bearer 在**真实 PostgreSQL 台账**上跑通
+`leave_submit_leave`（`side_effect` / `single_use`）。这条记录存在的理由是：409、403 和
+**重启后仍拒绝**这三条断言，内存实现必然做不到，因此它们是 durable backend 唯一不可替代的证据。
+
+拓扑全部 loopback：MultiRAG 与 of_mcp 之间、of_mcp 取 JWKS 各经一个裸 TCP+TLS 中继
+（不解析 HTTP，Streamable HTTP/SSE 原样透传）；A6 台账是 `multirag-postgres` 里的独立
+database `ofmcp_a6`，业务库不参与。
+
+#### 调用与契约
+
+| 项 | 值 |
+|---|---|
+| bearer | `alg=ES256`、`typ=at+jwt`、`kid=p3-test-2026-08-26`、`token_use=mcp_access`、TTL 300s、`nbf=iat` |
+| `iss` / `aud` | 与 `OFMCP_GATEWAY_AUTH_ISSUER` / `_EXPECTED_AUDIENCE` 逐字相等 |
+| `tenant_id` | 与 `OFMCP_GATEWAY_AUTH_EXPECTED_TENANT_ID` 相等 |
+| `scope` | 恰好是该工具的 `required_scopes`（`leave:submit`），**不是**整份 grant（`leave:read` + `leave:submit`） |
+| `policy_revision` | `25a98a175ed01306ead116f7ea45668bb5de84ba93e478e3f72beb383c55bdc2`，credential、grant 制品与落库审计三处相同 |
+| `grant_revision` | `61018eb1269396c410f01c76827a42ef8cf745862dce638d728b10d7e5206884` |
+| `credential_generation` | `1` |
+| 工具结果 | `LEAVE_WRITE_DISABLED`，`isError=true` |
+| `MCPRequestCredential.__repr__` | 不含 bearer |
+
+`tool-policies.json` 必须是 `profile=secure` 的快照（loader 强制），仓库里提交的那份是
+`profile=local`，所以本次在仓库外把 of_mcp 当库调用生成，**没有写入兄弟仓库**。
+
+#### durable backend 断言
+
+| 编号 | 动作 | 结果 |
+|---|---|---|
+| A | 新签 bearer 调用 | `pre_execution` `allow`/`replay_claimed`/`claimed` + `outcome` `error`/`execution_outcome_unknown`/`outcome_unknown`；`replay_claim` 一行，终态 `outcome_unknown`，`retention_seconds=900`，`prunable_at = expires_at + retention`（锚在 `expires_at`，不是 claim 时刻） |
+| B1 | **同一枚 bearer、同一参数** | HTTP **409** `{"error":"duplicate_operation"}`，`Cache-Control: no-store`，**无** `WWW-Authenticate`；审计 `replay_duplicate` `deny` |
+| B2 | 同一枚 bearer、换参数 | HTTP **403** `{"error":"replay_detected"}`，同样 `no-store`、无 challenge；审计 `replay_conflict` `deny` |
+| B3 | 杀掉 Gateway 进程、重启（~5s ready）后重放 B1 | **仍然 409** `duplicate_operation`；审计行全部仍在 |
+| — | bearer 过期后重放 | HTTP 401 `invalid_token` + `WWW-Authenticate`，证明严格 bearer 校验含 TTL |
+
+B1–B3 复用同一枚 JTI 是刻意的测试动作；P3 每次逻辑调用换新 token 才是生产行为。
+整个 B 序列必须脚本化串跑，因为 `ttl_seconds` 上限硬性 300 秒。
+
+#### 启动期 fail-fast（逐条取反，各起一次进程）
+
+缺 DSN、DSN 指向未迁移的库、fingerprint 给裸字符串、fingerprint 只有 16 字节、
+identity 给 JSON 数组、DSN inline 与 `_FILE` 同时给、ring 内重复 key、
+`retention_seconds` 低于 300、runtime 角色 `synchronous_commit=off`、
+append-only trigger 被 DISABLE —— **10 条全部在启动期拒绝**。
+每条错误只含异常类名、sqlstate 与 constraint name（例如 `UndefinedTable|42P01|-`），
+无 DSN 片段、口令、角色名或驱动名。
+
+#### 最小权限 runtime 角色
+
+非 superuser 角色按 `packages/ofmcp-security-store/README.md` 授权后实测：
+可 INSERT、可读 `event_id`（`ON CONFLICT` 仲裁索引推断需要它）；
+`SELECT tool_name`、`SELECT *`、`UPDATE`、`DELETE`、`TRUNCATE` 全部 **42501**；
+`show synchronous_commit` = `on`。容器 `POSTGRES_USER` 是 superuser，用它连接这条断言不成立。
+
+#### 跨仓 trace
+
+一条 trace 共 **10 个 span 跨两仓**，of_mcp 的 `mcp.request` 直接挂在 MultiRAG 的
+`MCP send tools/call leave_submit_leave` 之下，落库审计 `trace_id` **等于** MultiRAG 侧
+span 的 trace id。of_mcp 的 `tools/call leave_submit_leave` span 上带
+`ofmcp.security.effect=side_effect`、`replay_mode=single_use`、`result=outcome_unknown`
+与同一个 `policy_revision`。不接受「两边都有 span」作为这条断言的替代。
+
+MultiRAG 侧**零代码改动**：`common/observability.py` 的 `init_otel()` 已是进程唯一 SDK 装配点，
+出站 traceparent 由**官方 MCP SDK 2.0.0** 自己注入（`mcp/shared/jsonrpc_dispatcher.py` 每次
+outbound request 开 CLIENT span 并 `inject_trace_context(out_meta)`，键名 `traceparent` 与
+FastMCP 的 `TRACE_PARENT_KEY` 相同）。不得手写注入。`FASTMCP_TELEMETRY_MODE` 只对 of_mcp
+一侧生效（`off` 会关掉它的 `_meta` 提取）；MultiRAG 出站走 `httpx2`，
+`HTTPXClientInstrumentor` 只 patch `httpx`，所以不产生 HTTP header 传播，`_meta` 是唯一通道。
+
+#### 脱敏与零副作用
+
+13 条脱敏针（bearer 全文与各 segment、JTI/sub 原文、tenant/agent/client_id 原文、
+三个工具参数、工具结果、OA 环境变量名）在台账中**全部 absent**；
+主体与 `mcp_call_id` 是 keyed HMAC，`replay_key` 与 `request_fingerprint` 是 64 位 hex。
+所有日志中 A6 口令、两把 HMAC key、requestState key、完整 DSN、runtime 角色名均**未出现**。
+Gateway 进程全程只持 loopback 连接（5432 台账、4318 OTLP、8000 监听），
+无任何非回环远端；Ecology mock 从未启动；`doCreateRequest` 等写端点未出现在任何日志。
+`operations.create` 在构造 Ecology client **之前**就 `raise ToolError(LEAVE_WRITE_DISABLED)`，
+所以 OA 调用数为零是结构性的，不依赖配置。飞书本次未参与。
+
+#### 两条必须记进部署前提的本机绕行
+
+1. **JWKS 的 TLS 信任**：of_mcp 的 JWKS fetcher 是 `httpx2.AsyncClient(trust_env=False)`，
+   跳过 `SSL_CERT_FILE` / `SSL_CERT_DIR`，只认系统信任库；`build_gateway_for_deployment`
+   也没有 `jwks_fetcher` 注入口，而 `issuer` / `jwks_uri` 强制 HTTPS。本次靠人工导入一次性
+   本地 CA 完成，验收后移除。**生产必须提供真实受信证书；这条绕行不是部署方案。**
+2. **Windows 事件循环**：`ofmcp serve` 在 Windows 上起不了 A6 durable backend ——
+   `anyio.run()` 给的是 `ProactorEventLoop`，psycopg 3 拒绝在其上跑 async，连接池在 lifespan
+   里开不出来。本次用仓库外 launcher 先设 `WindowsSelectorEventLoopPolicy`（anyio 给
+   `asyncio.Runner` 传 `loop_factory=None`，所以策略生效）再调 of_mcp 自己的 `serve()`，
+   **未改兄弟仓库源码**。对照：MultiRAG 在 `api/multirag_server.py` 走 uvicorn `loop=` 参数。
+   CI 在 ubuntu 上不复现。
+
+#### 本次仍未完成（A6 保持 `🔵`）
+
+HMAC 与 ES256 的 KMS 托管、真实 DNS/TLS 发布、collector 部署、M3/M4 业务幂等与结果查询、
+remote-release 演练、入站 traceparent 信任边界在开闸前的重新评估。
+LLM 选工具那一层未被这次驱动覆盖（驱动直接从 `resolve_mcp_credential_provider` 起跑），
+它以下的链路全部是生产对象。
+
 ## 4. 安全专项测试
 
 ### 4.1 身份和租户攻击

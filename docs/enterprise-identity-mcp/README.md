@@ -497,8 +497,11 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   已加入 `parent_jti_hash`。真实 key/TLS、部署、远程发布与跨仓 E2E 仍未执行。
 - EIM-A6 的 PostgreSQL 生产持久后端已落（of_mcp `46de58d`，`packages/ofmcp-security-store`）：
   跨实例原子 replay claim、append-only audit ledger、migration head `0001_a6_security_ledger`，
-  secure Gateway 由 `build_gateway_for_deployment` 显式注入生产 coordinator。A6 仍为 `🔵` —— 尚欠
-  HMAC key 的 KMS 托管、MultiRAG 侧**出站** traceparent 注入与 collector 部署、M3/M4 业务幂等、
+  secure Gateway 由 `build_gateway_for_deployment` 显式注入生产 coordinator。跨仓验收已在
+  2026-08-27 完成（TESTING_SECURITY §3.7）：真实 P3 bearer + 真实 PostgreSQL 台账跑通 409 /
+  403 / **Gateway 重启后仍 409**，落库审计 `trace_id` 等于 MultiRAG 侧 span trace id，
+  MultiRAG 侧零代码改动（出站 traceparent 由官方 MCP SDK 2 自己注入）。A6 仍为 `🔵` —— 尚欠
+  HMAC 与 ES256 key 的 KMS 托管、真实受信 DNS/TLS、collector 部署、M3/M4 业务幂等、
   remote-release 演练（fingerprint key 的例行轮换、OTel SDK/OTLP 导出与**入站** W3C trace 继承
   已支持；identity key 刻意单把不轮换）。
 - EIM-A6 已进入 `🔵` phase 1。每个工具 policy 现在显式声明 `effect=read|prepare|side_effect` 和
