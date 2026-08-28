@@ -13,12 +13,16 @@
 - ``bootstrapped_engine``：scratch 库上镜像生产 fresh-install 引导
   （模型建表 + alembic stamp head）；
 - ``alembic_cfg``：cwd 无关的 alembic 配置。
+- ``event_loop_policy``：覆盖 pytest-asyncio 的同名 fixture，Windows 上换成 selector 循环
+  （见下方该 fixture 的说明）；其它平台保持默认。
 
 所有用例自动带上 ``integration`` marker，无需逐个标注。
 """
 
+import asyncio
 import os
 import socket
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -144,6 +148,36 @@ def _start_container_for(service: str) -> Any:
 def pytest_collection_modifyitems(config, items):
     for item in items:
         item.add_marker(pytest.mark.integration)
+
+
+@pytest.fixture(scope="session")
+def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
+    """覆盖 pytest-asyncio 的同名 fixture：Windows 上必须是 selector 循环。
+
+    psycopg 3 的 async 连接在 ``sys.platform == "win32"`` 且循环是 ``ProactorEventLoop``
+    时直接抛 ``InterfaceError``（``psycopg/connection_async.py`` 里的显式断言），而
+    ``asyncio_mode = "auto"`` 下 pytest-asyncio 拿到的正是 Windows 默认的 Proactor 循环 ——
+    于是本目录几乎每条真库用例都在建连处就死掉，且失败信息与被测逻辑毫无关系。
+
+    走 pytest-asyncio 的 ``event_loop_policy`` seam 而不是在 import 期调
+    ``asyncio.set_event_loop_policy()``：插件用 ``_temporary_event_loop_policy``
+    把策略只装在它自己的 ``Runner`` 上并在收尾时还原，进程全局状态不会被测试套件污染。
+    等 pytest-asyncio 提供 ``loop_factory`` seam（1.3.0 还没有）后，这里应改成直接返回
+    ``asyncio.SelectorEventLoop``，那才是 3.14 弃用策略体系之后的写法。
+
+    Linux/macOS 的默认循环本来就是 selector 系（epoll/kqueue），psycopg 无此限制，
+    所以那边显式返回默认策略，等价于不覆盖。分支用 ``sys.platform`` 而不是 ``os.name``
+    ——只有前者会被类型检查器当作平台守卫，``WindowsSelectorEventLoopPolicy``
+    在非 Windows 的 typeshed 里并不存在。
+
+    代价：Windows 的 selector 循环基于 ``select()``，句柄数上限 512，且不支持
+    ``asyncio`` 子进程。集成套件两者都用不到；真要加用子进程的异步用例，
+    得单独给它一个 Proactor 循环，而不是把这里改回去。
+    """
+
+    if sys.platform == "win32":
+        return asyncio.WindowsSelectorEventLoopPolicy()
+    return asyncio.DefaultEventLoopPolicy()
 
 
 @pytest.fixture(scope="session", autouse=True)
