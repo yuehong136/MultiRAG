@@ -1510,6 +1510,25 @@ snapshot format 3。策略变更
 调用同一个 canonical builder/已发布 snapshot 获取同一 revision，不从硬编码、文件 mtime 或未排序
 映射推导。
 
+仓库里提交的那份快照固定是 `local`。**`secure` 那份不进版本库**：它嵌的是**已解析的** provider /
+enterprise subject 坐标（即真实租户标识，而不是 binding 名字），且 `policy_revision` 是整份文档的
+SHA-256，因此逐部署不同。提交它既会泄漏部署标识，又会造出一份必然漂移的假契约。它是**部署期制品**，
+由运维在部署时产出并交给 P3：
+
+```bash
+uv run ofmcp contract policy-snapshot --profile secure --out <仓库外路径>/tool-policies.json
+```
+
+该命令只要求真正进入计算的输入 —— `OFMCP_GATEWAY_AUTH_*` 的 binding 覆盖；**不**需要 requestState
+key ring、A6 的 DSN 与 HMAC key，也不需要一个活着的数据库。缺任何一项 binding 覆盖时 fail closed，
+绝不回退 `service.toml` 里的测试默认坐标；profile 声明 proxy 服务时拒绝产出，因为远端工具目录离线
+枚举不出来，而半份快照会让 P3 把合法 grant 判成越权；写入仓库内任何 `contract/` 目录会被拒绝。
+它与真实 Gateway 装配算出同一份，由 of_mcp `apps/gateway/tests/test_policy_snapshot.py` 拿 `local`
+输出与已提交契约逐字节比对来锁定。
+
+P3 因此不能假设存在唯一正确的 secure `policy_revision`：revision 随部署坐标变化，校验必须以运维交付
+的那份快照为准，不得硬编码，也不得拿 `local` 那份顶替。
+
 #### 6.3.2 A6 执行审计与单 capability replay contract
 
 A6 的 security coordinator 是 framework-independent domain boundary。Gateway 只能在 A4 内层
