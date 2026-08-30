@@ -4889,6 +4889,12 @@ def _require_sha256(value: object, *, detail: str) -> str:
     return cast(str, value)
 
 
+def _require_tagged_sha256(value: object, *, detail: str) -> str:
+    if type(value) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+        raise OperatorError(ExitCode.ARTIFACT_INVALID, detail)
+    return value.removeprefix("sha256:")
+
+
 def _is_sha256(value: object) -> bool:
     return type(value) is str and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
@@ -4897,6 +4903,12 @@ def _require_sha256_list(value: object, *, detail: str) -> list[str]:
     if type(value) is not list or not value:
         raise OperatorError(ExitCode.ARTIFACT_INVALID, detail)
     return [_require_sha256(item, detail=detail) for item in value]
+
+
+def _require_fingerprint_list(value: object, *, detail: str) -> list[object]:
+    if type(value) is not list or not value:
+        raise OperatorError(ExitCode.ARTIFACT_INVALID, detail)
+    return cast(list[object], value)
 
 
 def _key_fingerprint_evidence(
@@ -4961,19 +4973,28 @@ def _key_fingerprint_evidence(
             ),
         },
         "ofmcp_request_state": {
-            "fingerprints": _require_sha256_list(
-                request_state.get("fingerprints"),
-                detail="request_state_fingerprints",
-            ),
+            "fingerprints": [
+                _require_tagged_sha256(
+                    item,
+                    detail="request_state_fingerprints",
+                )
+                for item in _require_fingerprint_list(
+                    request_state.get("fingerprints"),
+                    detail="request_state_fingerprints",
+                )
+            ],
         },
         "ofmcp_a6_fingerprint": {
-            "fingerprints": _require_sha256_list(
-                a6_fingerprint.get("fingerprints"),
-                detail="a6_fingerprints",
-            ),
+            "fingerprints": [
+                _require_tagged_sha256(item, detail="a6_fingerprints")
+                for item in _require_fingerprint_list(
+                    a6_fingerprint.get("fingerprints"),
+                    detail="a6_fingerprints",
+                )
+            ],
         },
         "ofmcp_a6_identity": {
-            "fingerprint": _require_sha256(
+            "fingerprint": _require_tagged_sha256(
                 a6_identity.get("fingerprint"),
                 detail="a6_identity_fingerprint",
             ),

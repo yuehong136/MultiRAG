@@ -1753,6 +1753,57 @@ def test_parser_exposes_complete_operator_surface() -> None:
     assert any(action.dest == "restart_waiting_runtime" for action in probe._actions)
 
 
+def test_ofmcp_tagged_key_fingerprints_are_strictly_normalized_for_evidence(
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    digest = "d" * 64
+    ofmcp_manifest = layout.root / "ofmcp-deployment.json"
+    e2e._write_json(
+        ofmcp_manifest,
+        {
+            "schema": "com.ofmcp/ops-deployment",
+            "version": 1,
+            "secrets": {
+                "request_state_key_ring": {"fingerprints": [f"sha256:{digest}"]},
+                "a6_fingerprint_key_ring": {"fingerprints": [f"sha256:{digest}"]},
+                "a6_identity_key": {"fingerprint": f"sha256:{digest}"},
+            },
+        },
+    )
+    manifest = {
+        "secrets": {
+            "channel": {
+                "active_key_id": "channel-key",
+                "key_ids": ["channel-key"],
+                "key_fingerprints": [digest],
+            },
+            "interaction": {"key_fingerprint": digest},
+            "p3": {"kid": "p3-key", "public_key_fingerprint": digest},
+            "ecology_mock": {"public_key_fingerprint": digest},
+            "ofmcp_manifest": str(ofmcp_manifest),
+        },
+    }
+
+    evidence = e2e._key_fingerprint_evidence(layout, manifest)
+
+    assert evidence["ofmcp_request_state"] == {"fingerprints": [digest]}
+    assert evidence["ofmcp_a6_fingerprint"] == {"fingerprints": [digest]}
+    assert evidence["ofmcp_a6_identity"] == {"fingerprint": digest}
+    assert e2e._valid_key_fingerprint_evidence(evidence)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["d" * 64, "SHA256:" + "d" * 64, "sha256:" + "D" * 64, "sha256:short"],
+)
+def test_ofmcp_key_fingerprint_rejects_noncanonical_tag(value: str) -> None:
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._require_tagged_sha256(value, detail="fingerprint")
+    assert error.value.code is e2e.ExitCode.ARTIFACT_INVALID
+    assert error.value.detail == "fingerprint"
+
+
 def _write_evidence_fixture(path: Path) -> None:
     path.mkdir(mode=0o700)
     digest = "d" * 64
