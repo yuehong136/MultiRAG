@@ -510,6 +510,173 @@ def test_process_manager_start_rechecks_orphan_group_after_pid_race(
     assert error.value.detail.startswith("process=api orphan_group=")
 
 
+def test_listener_uses_scoped_lsof_after_global_inventory_access_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = SimpleNamespace(pid=45677)
+    monkeypatch.setattr(
+        e2e.psutil,
+        "net_connections",
+        lambda *, kind: (_ for _ in ()).throw(e2e.psutil.AccessDenied(47817)),
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_lsof_listener_owners",
+        lambda port: frozenset({process.pid}) if port == 8123 else frozenset(),
+    )
+    monkeypatch.setattr(e2e.psutil, "Process", lambda _pid: process)
+
+    assert e2e._listener(8123) is process
+    assert e2e._listener(8765) is None
+
+
+def test_lsof_listener_inventory_uses_private_fixed_command_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run(argv: object, **kwargs: object) -> SimpleNamespace:
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout=b"45677\n45677\n", stderr=b"")
+
+    monkeypatch.setattr(e2e, "_trusted_lsof_path", lambda: Path("/usr/sbin/lsof"))
+    monkeypatch.setattr(e2e.subprocess, "run", run)
+
+    assert e2e._lsof_listener_owners(8123) == frozenset({45677})
+    assert captured["argv"] == (
+        "/usr/sbin/lsof",
+        "-nP",
+        "-a",
+        "-t",
+        "-iTCP:8123",
+        "-sTCP:LISTEN",
+    )
+    assert captured["env"] == {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+    }
+    assert captured["stdin"] is e2e.subprocess.DEVNULL
+    assert captured["timeout"] == 5
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr", "expected"),
+    [
+        (1, b"", b"", frozenset()),
+        (0, b"45677\n45678\n", b"", frozenset({45677, 45678})),
+    ],
+)
+def test_lsof_listener_inventory_handles_free_and_multiple_owners(
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+    expected: frozenset[int],
+) -> None:
+    monkeypatch.setattr(e2e, "_trusted_lsof_path", lambda: Path("/usr/sbin/lsof"))
+    monkeypatch.setattr(
+        e2e.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        ),
+    )
+
+    assert e2e._lsof_listener_owners(8123) == expected
+
+
+@pytest.mark.parametrize("port", [0, 65_536, True, "8123"])
+def test_lsof_listener_inventory_rejects_invalid_port(port: object) -> None:
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._lsof_listener_owners(cast(Any, port))
+    assert error.value.code is e2e.ExitCode.ARGUMENT_INVALID
+    assert error.value.detail == "port"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    [
+        (0, b"", b""),
+        (1, b"45677\n", b""),
+        (2, b"", b""),
+        (0, b"not-a-pid\n", b""),
+        (0, b"0\n", b""),
+        (0, b"45677\n", b"warning"),
+        (1, b"", b"warning"),
+    ],
+)
+def test_lsof_listener_inventory_fails_closed_on_ambiguous_output(
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> None:
+    monkeypatch.setattr(e2e, "_trusted_lsof_path", lambda: Path("/usr/sbin/lsof"))
+    monkeypatch.setattr(
+        e2e.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        ),
+    )
+
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._lsof_listener_owners(8123)
+    assert error.value.code is e2e.ExitCode.PREREQUISITE_MISSING
+    assert error.value.detail == "port_inventory"
+
+
+def test_listener_rejects_multiple_lsof_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        e2e.psutil,
+        "net_connections",
+        lambda *, kind: (_ for _ in ()).throw(e2e.psutil.AccessDenied()),
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_lsof_listener_owners",
+        lambda _port: frozenset({45677, 45678}),
+    )
+
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._listener(8123)
+    assert error.value.code is e2e.ExitCode.PORT_IN_USE
+    assert error.value.detail == "port=8123 pid=multiple"
+
+
+def test_listener_fails_closed_when_inventory_owner_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        status=e2e.psutil.CONN_LISTEN,
+        laddr=SimpleNamespace(port=8123),
+        pid=45677,
+    )
+    monkeypatch.setattr(
+        e2e.psutil,
+        "net_connections",
+        lambda *, kind: (connection,),
+    )
+    monkeypatch.setattr(
+        e2e.psutil,
+        "Process",
+        lambda pid: (_ for _ in ()).throw(e2e.psutil.NoSuchProcess(pid)),
+    )
+
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._listener(8123)
+    assert error.value.code is e2e.ExitCode.PREREQUISITE_MISSING
+    assert error.value.detail == "port_inventory"
+
+
 def test_stop_without_record_preserves_target_port(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

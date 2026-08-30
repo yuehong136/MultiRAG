@@ -2125,17 +2125,83 @@ def _process_cmdline(process: psutil.Process) -> tuple[str, ...]:
         return ()
 
 
+def _trusted_lsof_path() -> Path:
+    """Return a fixed, root-owned lsof binary for scoped macOS/Linux fallback."""
+
+    candidates = {
+        "Darwin": (Path("/usr/sbin/lsof"),),
+        "Linux": (Path("/usr/bin/lsof"), Path("/usr/sbin/lsof")),
+    }.get(platform.system(), ())
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+            metadata = resolved.stat()
+        except (FileNotFoundError, OSError):
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            continue
+        if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022:
+            continue
+        return resolved
+    raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory")
+
+
+def _lsof_listener_owners(port: int) -> frozenset[int]:
+    """Inventory one TCP listener without exposing command lines or environment."""
+
+    if type(port) is not int or not 1 <= port <= 65_535:
+        raise OperatorError(ExitCode.ARGUMENT_INVALID, "port")
+    executable = _trusted_lsof_path()
+    try:
+        completed = subprocess.run(
+            (
+                str(executable),
+                "-nP",
+                "-a",
+                "-t",
+                f"-iTCP:{port}",
+                "-sTCP:LISTEN",
+            ),
+            cwd=REPOSITORY_ROOT,
+            env={
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory") from exc
+    if len(completed.stdout) > 4096:
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory")
+    lines = tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
+    if completed.returncode == 1 and not lines and not completed.stderr:
+        return frozenset()
+    if completed.returncode != 0 or not lines or completed.stderr:
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory")
+    if any(re.fullmatch(rb"[1-9][0-9]{0,9}", line) is None for line in lines):
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory")
+    return frozenset(int(line) for line in lines)
+
+
 def _listener(port: int) -> psutil.Process | None:
     try:
         connections = psutil.net_connections(kind="inet")
-    except psutil.AccessDenied as exc:
-        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory") from exc
-    owners = {item.pid for item in connections if item.status == psutil.CONN_LISTEN and item.laddr and item.laddr.port == port and item.pid is not None}
+    except (psutil.AccessDenied, PermissionError):
+        owners = set(_lsof_listener_owners(port))
+    else:
+        owners = {item.pid for item in connections if item.status == psutil.CONN_LISTEN and item.laddr and item.laddr.port == port and item.pid is not None}
     if not owners:
         return None
     if len(owners) != 1:
         raise OperatorError(ExitCode.PORT_IN_USE, f"port={port} pid=multiple")
-    return psutil.Process(owners.pop())
+    try:
+        return psutil.Process(owners.pop())
+    except psutil.NoSuchProcess as exc:
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "port_inventory") from exc
 
 
 def _same_repo_allowed(process: psutil.Process, spec: ProcessSpec) -> bool:
