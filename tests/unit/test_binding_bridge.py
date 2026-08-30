@@ -1143,6 +1143,37 @@ class _InteractionPresenter:
             self.stop_event.set()
 
 
+class _TransientUnavailableInteractionClient(_InteractionClient):
+    def __init__(
+        self,
+        deliveries: dict[
+            tuple[str | None, int | None],
+            list[ClaimedInteractionDelivery],
+        ],
+    ) -> None:
+        super().__init__(deliveries)
+        self._unavailable = True
+
+    async def claim_interaction_delivery(
+        self,
+        *,
+        owner: str,
+        action_id: str | None = None,
+        revision: int | None = None,
+    ) -> ClaimedInteractionDelivery | None:
+        if self._unavailable:
+            self._unavailable = False
+            self.claims.append((owner, action_id, revision))
+            raise AgentExecutionError(
+                "CHANNEL_INTERACTION_DELIVERY_HTTP_503",
+            )
+        return await super().claim_interaction_delivery(
+            owner=owner,
+            action_id=action_id,
+            revision=revision,
+        )
+
+
 def _form_action(*, revision: int = 1) -> ChannelFormAction:
     return ChannelFormAction(
         action_id="interaction-1",
@@ -1260,6 +1291,38 @@ async def test_interaction_poll_delivers_next_round_then_terminal_page() -> None
     ]
     assert [(delivery_id, success, code) for delivery_id, _, success, code in client.acks] == [
         (next_round.delivery_id, True, None),
+        (terminal.delivery_id, True, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interaction_poll_retries_after_transient_api_unavailable() -> None:
+    terminal = _interaction_delivery(revision=1, kind="terminal")
+    client = _TransientUnavailableInteractionClient(
+        {("interaction-1", 1): [terminal]},
+    )
+    stop_event = asyncio.Event()
+    presenter = _InteractionPresenter(stop_event=stop_event, stop_after=1)
+    bridge = _bridge(
+        channel=_InteractionChannel(),
+        state=_StateStore(),
+        executor=_Executor(),
+        interaction_client=client,
+        interaction_presenter=presenter,
+    )
+    await bridge.handle_form_action(_form_action(revision=1))
+
+    await asyncio.wait_for(
+        bridge.run_interaction_deliveries(stop_event),
+        timeout=2,
+    )
+
+    assert presenter.deliveries == [terminal]
+    assert [(action_id, revision) for _, action_id, revision in client.claims] == [
+        ("interaction-1", 1),
+        ("interaction-1", 1),
+    ]
+    assert [(delivery_id, success, code) for delivery_id, _, success, code in client.acks] == [
         (terminal.delivery_id, True, None),
     ]
 

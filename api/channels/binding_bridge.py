@@ -467,12 +467,16 @@ class BindingBridge:
                 raise
             except AgentExecutionError as exc:
                 if exc.code.endswith("HTTP_503"):
-                    await stop_event.wait()
-                    return
-                LOGGER.warning(
-                    "channel_event=interaction_delivery_poll result=failed error_code=%s",
-                    exc.code,
-                )
+                    # The API is deliberately replaced during staged rollout
+                    # and waiting-input recovery.  A single unavailable poll
+                    # must not permanently orphan the durable delivery outbox
+                    # until the whole Channel worker is restarted.
+                    pass
+                else:
+                    LOGGER.warning(
+                        "channel_event=interaction_delivery_poll result=failed error_code=%s",
+                        exc.code,
+                    )
             except Exception as exc:
                 LOGGER.warning(
                     "channel_event=interaction_delivery_poll result=failed error_code=CHANNEL_INTERACTION_POLL_FAILED error_type=%s",
