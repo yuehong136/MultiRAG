@@ -6267,7 +6267,22 @@ def _probe_unlocked(
     if state is not None and state.get("candidate_ref") != candidate.ref:
         if restart_needs_recovery:
             ProcessManager(layout).stop(_inventory_specs(manifest)["api"])
-            raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+            previous_mock = state.get("mock_boundary")
+            if not isinstance(previous_mock, Mapping):
+                raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+            current_mock = _mock_run_boundary(layout, manifest)
+            if previous_mock.get("pid") == current_mock.get("pid") and previous_mock.get("create_time") == current_mock.get("create_time"):
+                raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+            _archive_abandoned_live_probe(
+                layout,
+                state,
+                reason="candidate_ref_migrated_after_interrupted_restart",
+            )
+            probe_path.unlink()
+            raise OperatorError(
+                ExitCode.LIVE_EVIDENCE_PENDING,
+                "candidate_ref_migrated_run_up",
+            )
         previous_mock = state.get("mock_boundary")
         if not isinstance(previous_mock, Mapping):
             raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
@@ -6541,6 +6556,10 @@ def _probe_unlocked(
                 interaction_identity_revision=form_identity_revision,
             ),
         )
+        # The callback itself performs a foreground proof refresh.  Read its
+        # monotonic revision only after the completed callback/resume/terminal
+        # rows have been verified, then perform a separate seal-time read below.
+        candidate = _current_candidate(manifest, candidate)
         identity_revision_timeline: dict[str, object] = {
             "at_probe_start": revision_timeline["at_probe_start"],
             "at_form": form_identity_revision,

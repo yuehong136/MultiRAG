@@ -1904,12 +1904,75 @@ def test_probe_archives_legacy_candidate_ref_only_after_mock_restart(
     assert not probe_path.exists()
 
 
+@pytest.mark.parametrize("restart_status", ["begin", "failed"])
+def test_probe_recovers_legacy_candidate_ref_after_interrupted_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    restart_status: str,
+) -> None:
+    layout = _layout(tmp_path)
+    candidate = replace(_candidate(), ref="candidate-fedcba9876543210abcd")
+    state = {
+        "schema": f"{e2e.SCHEMA}/live-probe",
+        "version": e2e.VERSION,
+        "status": "awaiting_feishu",
+        "started_at": "2026-08-30T01:00:00+00:00",
+        "candidate_ref": "candidate-legacy0000000000000",
+        "mock_boundary": {"pid": 100, "create_time": 1.0},
+        "waiting_restart": {"status": restart_status},
+    }
+    probe_path = layout.run / "live-probe.json"
+    e2e._write_json(probe_path, state)
+    actions: list[str] = []
+    monkeypatch.setattr(
+        e2e,
+        "_load_deployment",
+        lambda _root: (layout, _manifest(tmp_path)),
+    )
+    monkeypatch.setattr(e2e, "_selected_candidate", lambda _layout: candidate)
+    monkeypatch.setattr(
+        e2e,
+        "_current_candidate",
+        lambda _manifest, selected: selected,
+    )
+    monkeypatch.setattr(e2e, "_inventory_specs", lambda _manifest: {"api": "api"})
+    monkeypatch.setattr(
+        e2e,
+        "ProcessManager",
+        lambda _layout: SimpleNamespace(
+            stop=lambda spec: actions.append(f"stopped:{spec}"),
+        ),
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_mock_run_boundary",
+        lambda *args, **kwargs: {"pid": 200, "create_time": 2.0},
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_archive_abandoned_live_probe",
+        lambda *args, reason, **kwargs: actions.append(f"archived:{reason}"),
+    )
+
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._probe_unlocked(layout.root, case="leave-preview")
+
+    assert error.value.code is e2e.ExitCode.LIVE_EVIDENCE_PENDING
+    assert error.value.detail == "candidate_ref_migrated_run_up"
+    assert actions == [
+        "stopped:api",
+        "archived:candidate_ref_migrated_after_interrupted_restart",
+    ]
+    assert not probe_path.exists()
+
+
 def test_final_probe_records_monotonic_identity_revision_timeline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     layout = _layout(tmp_path)
     selected = _candidate()
+    entry_candidate = replace(selected, identity_revision=4)
     callback_candidate = replace(selected, identity_revision=5)
     seal_candidate = replace(selected, identity_revision=6)
     static_boundary: dict[str, object] = {"artifact_sha256": {}}
@@ -1940,7 +2003,9 @@ def test_final_probe_records_monotonic_identity_revision_timeline(
         "waiting_restart": {"status": "complete"},
     }
     e2e._write_json(layout.run / "live-probe.json", state)
-    current_candidates = iter((callback_candidate, seal_candidate))
+    current_candidates = iter(
+        (entry_candidate, callback_candidate, seal_candidate),
+    )
     captured: dict[str, object] = {}
 
     async def live_checks(*args: object, **kwargs: object):
