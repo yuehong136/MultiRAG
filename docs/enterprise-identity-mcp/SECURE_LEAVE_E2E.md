@@ -1,5 +1,10 @@
 # EIM-O5 / CHN-O16 secure leave 本地全链路运行手册
 
+> 本页是验收编排、回滚和证据手册，不是日常产品启动器。正常源码启动请使用
+> [LOCAL_SECURE_RUNTIME.md](LOCAL_SECURE_RUNTIME.md)：MultiRAG 读取
+> `configs/local.service_conf.yaml`，of_mcp 读取自己的 ignored `.env`，新增 MCP 服务不需要复制一套
+> leave E2E 脚本。
+
 本文是以下纵向切片的权威冷启动、恢复与验收入口：
 
 ```text
