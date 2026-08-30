@@ -28,6 +28,7 @@ import signal
 import ssl
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -52,6 +53,18 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from pydantic import BaseModel, SecretStr
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _ensure_repository_import_path() -> None:
+    """Make the documented ``python scripts/...`` entrypoint importable."""
+
+    repository = str(REPOSITORY_ROOT)
+    if repository not in sys.path:
+        sys.path.insert(0, repository)
+
+
+_ensure_repository_import_path()
+
 SCHEMA = "com.multirag/secure-leave-e2e"
 VERSION = 1
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)

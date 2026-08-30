@@ -89,6 +89,17 @@ def _manifest(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def test_documented_file_entrypoint_inserts_repository_import_path() -> None:
+    original = list(e2e.sys.path)
+    repository = str(e2e.REPOSITORY_ROOT)
+    try:
+        e2e.sys.path[:] = [item for item in e2e.sys.path if item != repository]
+        e2e._ensure_repository_import_path()
+        assert e2e.sys.path[0] == repository
+    finally:
+        e2e.sys.path[:] = original
+
+
 def test_fetch_json_disables_ambient_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
