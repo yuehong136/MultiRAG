@@ -1135,7 +1135,7 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 ## EIM-O5 / CHN-O16 双仓切片台账（2026-08-30）
 
 - 当前切片：S0-S5 实现已冻结，真实飞书 p2p 验收与脱敏证据封包待执行；因此状态保持 `🔵`，不得宣称 rollout 完成。
-- 已完成：两仓文档与安全基线、标准化密钥/目录、独立本地 CA 与 TLS、JWKS publisher、显式 trust、外部 overlay、policy/grant、A6 独立迁移、Stage A/B 编排、严格进程所有权、自动 doctor/probe/evidence verify 与 write-zero/trace/audit 门禁；飞书 proof refresh 的 volatile identity revision 已与稳定授权坐标分离，并以 `probe start → form → callback → seal` 单调时间线进入证据围栏。
+- 已完成：两仓文档与安全基线、标准化密钥/目录、独立本地 CA 与 TLS、JWKS publisher、显式 trust、外部 overlay、policy/grant、A6 独立迁移、Stage A/B 编排、严格进程所有权、自动 doctor/probe/evidence verify 与 write-zero/trace/audit 门禁；飞书 proof refresh 的 volatile identity revision 已与稳定授权坐标分离，并以 `probe start → form → callback → seal` 单调时间线进入证据围栏；Channel terminal outbox 在受控 API 切换遇到瞬时 HTTP 503 后会有界退避并继续领取，不再静默退出到下次 worker 重启。
 - 下一步：在仓库外部署根执行 `bootstrap → discover → prepare --apply → up → probe`，完成固定飞书提示、等待输入重启演练、表单提交、terminal v2 结果卡和证据校验，再由两仓台账共同记录证据路径。
 - 硬边界：Ecology 仅显式 simulator；`create_leave_draft`、`submit_leave`、`doCreateRequest` 必须为零；不包含 medic M1/M2、A7、真实 OA 写入、KMS、完整 Collector、remote-release 或 Windows；不得修改 MultiRAG `configs/service_conf.yaml`。
-- 双方实现 SHA：MultiRAG `bbfdd09315212f044721a5037632eb4c9b8a7862`；of_mcp `d81c209431ed1054817bf605239481a36fbd44cb`。
+- 双方实现 SHA：MultiRAG `a546441368ba08862441119cdb7fd5be3fe620ac`；of_mcp `d81c209431ed1054817bf605239481a36fbd44cb`。
