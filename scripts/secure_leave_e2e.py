@@ -3822,11 +3822,21 @@ def _validate_interaction_capability(
     manifest: Mapping[str, Any],
     candidate: Candidate,
 ) -> None:
+    from api.channel_runtime.tokens import derive_binding_workload_token
+
     urls = cast(dict[str, str], manifest["urls"])
-    token = _read_env_file(layout.secrets / "channel/api.env")[CHANNEL_TOKEN_ENV]
+    master_token = _read_env_file(layout.secrets / "channel/api.env")[CHANNEL_TOKEN_ENV]
+    binding_token = derive_binding_workload_token(
+        master_token,
+        binding_id=candidate.binding_id,
+        generation=candidate.binding_generation,
+    )
     payload = _fetch_json(
         f"{urls['api']}/api/v1/internal/channel-bindings/{quote(candidate.binding_id, safe='')}/execution-capabilities",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={
+            "Authorization": f"Bearer {binding_token}",
+            "X-Channel-Binding-Generation": str(candidate.binding_generation),
+        },
     )
     if payload.get("interaction_delivery") is not True:
         raise OperatorError(ExitCode.AUTHORITY_STALE, "interaction_capability")

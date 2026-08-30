@@ -163,6 +163,50 @@ def test_fetch_api_ping_requires_exact_plain_text(
     ]
 
 
+def test_interaction_capability_uses_binding_scoped_workload_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from api.channel_runtime.tokens import derive_binding_workload_token
+
+    layout = _layout(tmp_path)
+    candidate = _candidate()
+    master_token = "m" * 32
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        e2e,
+        "_read_env_file",
+        lambda _path: {e2e.CHANNEL_TOKEN_ENV: master_token},
+    )
+
+    def fetch_json(url: str, **kwargs: object) -> dict[str, object]:
+        captured["url"] = url
+        captured["headers"] = kwargs["headers"]
+        return {"interaction_delivery": True}
+
+    monkeypatch.setattr(e2e, "_fetch_json", fetch_json)
+
+    e2e._validate_interaction_capability(
+        layout,
+        _manifest(tmp_path),
+        candidate,
+    )
+
+    expected_token = derive_binding_workload_token(
+        master_token,
+        binding_id=candidate.binding_id,
+        generation=candidate.binding_generation,
+    )
+    assert str(captured["url"]).endswith(
+        "/channel-bindings/binding/execution-capabilities",
+    )
+    assert captured["headers"] == {
+        "Authorization": f"Bearer {expected_token}",
+        "X-Channel-Binding-Generation": "1",
+    }
+
+
 def test_validate_root_rejects_repo_ancestor_and_symlink(tmp_path: Path) -> None:
     with pytest.raises(e2e.OperatorError, match="secure leave operation rejected") as ancestor:
         e2e._validate_root(e2e.REPOSITORY_ROOT.parent)
