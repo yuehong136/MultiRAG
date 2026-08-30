@@ -2061,6 +2061,38 @@ def _classify_process(argv: Sequence[str]) -> str | None:
         if options is not None and options["--host"] == "127.0.0.1":
             return "jwks"
         return None
+    if executable.startswith("python") and tuple(argv[1:4]) == (
+        "-m",
+        "ofmcp.devkit.cli",
+        "serve",
+    ):
+        options = _exact_options(
+            argv[4:],
+            required=frozenset(
+                {
+                    "--profile",
+                    "--host",
+                    "--port",
+                    "--tls-cert-file",
+                    "--tls-key-file",
+                },
+            ),
+        )
+        if options is not None and options["--profile"] == "secure" and options["--host"] == "127.0.0.1":
+            return "gateway"
+        return None
+    if executable.startswith("python") and tuple(argv[1:4]) == (
+        "-m",
+        "ofmcp.services.leave.mock_ecology",
+        "serve",
+    ):
+        options = _exact_options(
+            argv[4:],
+            required=frozenset({"--private-key", "--host", "--port"}),
+        )
+        if options is not None and options["--host"] == "127.0.0.1":
+            return "mock"
+        return None
     if executable == "ofmcp" and tuple(argv[1:2]) == ("serve",):
         options = _exact_options(
             argv[2:],
@@ -2371,6 +2403,28 @@ def _base_process_env() -> dict[str, str]:
     return {name: value for name, value in os.environ.items() if name in allowed}
 
 
+def _repository_python(repository: Path) -> str:
+    """Resolve a repository venv launcher without losing its venv identity."""
+
+    candidate = repository.resolve() / ".venv/bin/python"
+    try:
+        target = candidate.resolve(strict=True)
+        target_metadata = target.stat()
+        launcher_metadata = candidate.lstat()
+    except OSError as exc:
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "repository_python") from exc
+    allowed_owners = {0, os.geteuid()}
+    if (
+        not stat.S_ISREG(target_metadata.st_mode)
+        or target_metadata.st_uid not in allowed_owners
+        or stat.S_IMODE(target_metadata.st_mode) & 0o022
+        or launcher_metadata.st_uid not in allowed_owners
+        or not os.access(candidate, os.X_OK)
+    ):
+        raise OperatorError(ExitCode.PREREQUISITE_MISSING, "repository_python")
+    return str(candidate)
+
+
 def _api_environment(
     layout: Layout,
     manifest: Mapping[str, Any],
@@ -2449,13 +2503,13 @@ def _build_specs(
     mock = cast(dict[str, str], secrets_manifest["ecology_mock"])
     public_manifest = layout.artifacts / "jwks-public-keys.json"
     _assert_regular(public_manifest, mode=0o600)
+    multirag_python = _repository_python(REPOSITORY_ROOT)
+    ofmcp_python = _repository_python(ofmcp_repo)
     return {
         "jwks": ProcessSpec(
             name="jwks",
             argv=(
-                "uv",
-                "run",
-                "python",
+                multirag_python,
                 "-m",
                 "api.identity.jwks_publisher",
                 "--host",
@@ -2475,7 +2529,7 @@ def _build_specs(
         ),
         "api": ProcessSpec(
             name="api",
-            argv=("sh", str(REPOSITORY_ROOT / "scripts/run_api.example.sh")),
+            argv=(multirag_python, "-m", "api.multirag_server"),
             cwd=REPOSITORY_ROOT,
             env=_api_environment(layout, manifest, stage=api_stage),
             port=ports["api"],
@@ -2483,9 +2537,9 @@ def _build_specs(
         "mock": ProcessSpec(
             name="mock",
             argv=(
-                "uv",
-                "run",
-                "ofmcp-ecology-mock",
+                ofmcp_python,
+                "-m",
+                "ofmcp.services.leave.mock_ecology",
                 "serve",
                 "--private-key",
                 mock["private_key_file"],
@@ -2501,9 +2555,9 @@ def _build_specs(
         "gateway": ProcessSpec(
             name="gateway",
             argv=(
-                "uv",
-                "run",
-                "ofmcp",
+                ofmcp_python,
+                "-m",
+                "ofmcp.devkit.cli",
                 "serve",
                 "--profile",
                 "secure",
@@ -2522,10 +2576,7 @@ def _build_specs(
         ),
         "supervisor": ProcessSpec(
             name="supervisor",
-            argv=(
-                "sh",
-                str(REPOSITORY_ROOT / "scripts/run_channel_supervisor.example.sh"),
-            ),
+            argv=(multirag_python, "-m", "api.channels.supervisor"),
             cwd=REPOSITORY_ROOT,
             env=_supervisor_environment(layout),
         ),

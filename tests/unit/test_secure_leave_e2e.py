@@ -816,6 +816,63 @@ def test_runtime_argv_matching_requires_exact_target_values(tmp_path: Path) -> N
     assert not e2e._runtime_argv_matches_spec(wrong_cert, spec)
 
 
+@pytest.mark.parametrize(
+    ("name", "argv"),
+    [
+        (
+            "gateway",
+            (
+                "/repo/.venv/bin/python",
+                "-m",
+                "ofmcp.devkit.cli",
+                "serve",
+                "--profile",
+                "secure",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8765",
+                "--tls-cert-file",
+                "/tls/cert",
+                "--tls-key-file",
+                "/tls/key",
+            ),
+        ),
+        (
+            "mock",
+            (
+                "/repo/.venv/bin/python",
+                "-m",
+                "ofmcp.services.leave.mock_ecology",
+                "serve",
+                "--private-key",
+                "/mock/key",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "18765",
+            ),
+        ),
+    ],
+)
+def test_runtime_argv_matching_accepts_direct_python_service_modules(
+    tmp_path: Path,
+    name: str,
+    argv: tuple[str, ...],
+) -> None:
+    spec = e2e.ProcessSpec(name, argv, tmp_path)
+
+    assert e2e._classify_process(argv) == name
+    assert e2e._runtime_argv_matches_spec(argv, spec)
+
+
+def test_repository_python_is_pinned_to_the_repository_venv() -> None:
+    launcher = Path(e2e._repository_python(e2e.REPOSITORY_ROOT))
+
+    assert launcher == e2e.REPOSITORY_ROOT / ".venv/bin/python"
+    assert launcher.resolve().is_file()
+
+
 def test_preflight_counts_exact_process_before_port_bind(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
