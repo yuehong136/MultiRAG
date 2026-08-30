@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from ssl import SSLContext
 from threading import Lock
 from typing import Any, Protocol
 
@@ -63,10 +64,17 @@ class BoundMcpCredentialProvider:
     _principal: Principal = field(repr=False)
     _agent_id: str
     _agent_revision_id: str
+    _tls_ssl_context: SSLContext | None = field(default=None, repr=False, compare=False)
 
     @property
     def resource_name(self) -> str:
         return self._binding.resource_name
+
+    @property
+    def tls_ssl_context(self) -> SSLContext | None:
+        """Optional deployment trust anchor for this delegated resource."""
+
+        return self._tls_ssl_context
 
     def is_authorized(self, canonical_tool_name: str) -> bool:
         """Evaluate model visibility without issuing or retaining a bearer."""
@@ -147,12 +155,14 @@ class McpDelegationService:
         tool_policy: ToolPolicySnapshot,
         grant_policy: GrantPolicySnapshot,
         issuer: _TokenIssuer,
+        tls_ssl_context: SSLContext | None = None,
     ) -> None:
         if grant_policy.policy_revision != tool_policy.policy_revision:
             raise McpDelegationError(DelegationErrorCode.SNAPSHOT_INVALID)
         self.tool_policy = tool_policy
         self.grant_policy = grant_policy
         self.issuer = issuer
+        self._tls_ssl_context = tls_ssl_context
         self._decision_cache: dict[tuple[object, ...], _AuthorizationDecision] = {}
         self._decision_cache_lock = Lock()
 
@@ -193,6 +203,7 @@ class McpDelegationService:
             _principal=run_context.principal,
             _agent_id=run_context.agent_id,
             _agent_revision_id=run_context.agent_revision_id,
+            _tls_ssl_context=self._tls_ssl_context,
         )
 
     def authorize(

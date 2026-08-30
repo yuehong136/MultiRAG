@@ -4,13 +4,15 @@ import json
 import logging
 import os
 import re
+import secrets
+import ssl
 import threading
 import time
 import weakref
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,6 +20,8 @@ from string import Template
 from typing import Any, Protocol, cast, override
 
 import httpx2
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 
 from common.mcp_interactions import (
     InteractionEffect,
@@ -32,6 +36,7 @@ from mcp.client import Client, Transport
 from mcp.client.session import ClientRequestContext
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 from mcp.types import (
     CallToolResult,
     ElicitRequest,
@@ -164,9 +169,85 @@ class MCPRequestCredentialProvider(Protocol):
     @property
     def resource_name(self) -> str: ...
 
+    @property
+    def tls_ssl_context(self) -> ssl.SSLContext | None: ...
+
     def is_authorized(self, canonical_tool_name: str) -> bool: ...
 
     def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential: ...
+
+
+def _create_delegated_http_client(
+    *,
+    headers: dict[str, str],
+    auth: httpx2.Auth,
+    tls_ssl_context: ssl.SSLContext | None,
+) -> httpx2.AsyncClient:
+    """Create the operation-local client, adding trust only for P3 traffic."""
+
+    if tls_ssl_context is None:
+        return create_mcp_http_client(headers=headers, auth=auth)
+    return httpx2.AsyncClient(
+        headers=headers,
+        auth=auth,
+        verify=tls_ssl_context,
+        trust_env=False,
+        follow_redirects=True,
+        timeout=httpx2.Timeout(
+            MCP_DEFAULT_TIMEOUT,
+            read=MCP_DEFAULT_SSE_READ_TIMEOUT,
+        ),
+    )
+
+
+def _nonzero_random_bits(bits: int) -> int:
+    value = 0
+    while value == 0:
+        value = secrets.randbits(bits)
+    return value
+
+
+@contextmanager
+def _delegated_trace_context(tool_name: str) -> Iterator[str]:
+    """Guarantee one safe, observable trace id at the delegated transport seam.
+
+    MCP SDK 2 propagates the current span through ``params._meta.traceparent``.
+    Channel/background execution does not always have an inbound HTTP span, so
+    a valid non-recording local root is installed only when no valid context is
+    already present.  This creates correlation, not authorization state, and
+    does not require an exporter or read global baggage.
+    """
+
+    current = trace.get_current_span().get_span_context()
+    manager = None
+    if not current.is_valid:
+        current = SpanContext(
+            trace_id=_nonzero_random_bits(128),
+            span_id=_nonzero_random_bits(64),
+            is_remote=False,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+            trace_state=TraceState(),
+        )
+        manager = trace.use_span(
+            NonRecordingSpan(current),
+            end_on_exit=False,
+        )
+    trace_id = f"{current.trace_id:032x}"
+    if manager is None:
+        logging.info(
+            "mcp_delegation_event=trace_context tool=%s trace_id=%s",
+            tool_name,
+            trace_id,
+        )
+        yield trace_id
+        return
+    with manager:
+        logging.info(
+            "mcp_delegation_event=trace_context tool=%s trace_id=%s",
+            tool_name,
+            trace_id,
+        )
+        yield trace_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +622,9 @@ class MCPToolCallSession(ToolCallSession):
         interaction_input_requests: dict[str, Any] | None,
         interaction_lease_fence: InteractionLeaseFence | None,
     ) -> CallToolResult | InputRequiredResult:
+        credential_provider = self._credential_provider
+        if credential_provider is None:
+            raise RuntimeError("delegated MCP call requires a credential provider")
         auth_status = _HTTPAuthStatus()
         auth_status_token = self._http_auth_status.set(auth_status)
         current_task = asyncio.current_task()
@@ -563,9 +647,10 @@ class MCPToolCallSession(ToolCallSession):
             )
         try:
             async with AsyncExitStack() as stack:
-                owned_http_client = create_mcp_http_client(
+                owned_http_client = _create_delegated_http_client(
                     headers=self._build_headers(),
                     auth=_BearerLeaseAuth(credential.bearer),
+                    tls_ssl_context=credential_provider.tls_ssl_context,
                 )
                 owned_http_client.event_hooks["response"].append(self._on_http_response)
                 http_client = await stack.enter_async_context(owned_http_client)
@@ -596,16 +681,17 @@ class MCPToolCallSession(ToolCallSession):
                                 }
                             },
                         )
-                    result = await client.session.call_tool(
-                        name,
-                        arguments,
-                        input_responses=input_responses,
-                        request_state=request_state,
-                        read_timeout_seconds=request_timeout,
-                        progress_callback=progress_callback,
-                        meta=legacy_meta,
-                        allow_input_required=True,
-                    )
+                    with _delegated_trace_context(name):
+                        result = await client.session.call_tool(
+                            name,
+                            arguments,
+                            input_responses=input_responses,
+                            request_state=request_state,
+                            read_timeout_seconds=request_timeout,
+                            progress_callback=progress_callback,
+                            meta=legacy_meta,
+                            allow_input_required=True,
+                        )
                     if legacy_bridge is not None:
                         legacy_bridge.raise_if_paused_or_incomplete()
                     return result

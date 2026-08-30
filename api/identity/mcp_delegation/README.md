@@ -22,6 +22,9 @@ DSL、模型 alias、tool description、静态 header 或调用参数作为授�
   A2 当前不签 `amr`，所以任何 `required_amr` 非空的工具都在发网前 fail closed。
 - 每次逻辑 `tools/call` 都向 A2 申请新 token/JTI。MCP SDK 2 的 operation-scoped `httpx2.Auth` 在该次
   initialize、call 和 transport retry 中复用同一 bearer，调用结束立即关闭 client；下一次调用重新签发。
+- `identity.mcp_delegation.tls_ca_bundle_file` 可为 delegated Streamable HTTP 配置一份绝对路径的
+  CA bundle。启用后只给上述 operation-local client 注入独立 `SSLContext`，不读取全局
+  `SSL_CERT_FILE`、不关闭证书校验，也不改变 legacy/static MCP 连接；未配置时保留 SDK 的系统信任。
 - bearer 不进入 Agent/session/global cache、静态 server headers、repr、tool metadata 或稳定错误文案。
 
 Dialog target 当前没有可验证的发布 revision，非 Channel ChatAgent 也没有 P2 Principal/revision；若它们
@@ -73,6 +76,7 @@ identity:
     enabled: true
     tool_policy_file: /etc/multirag/tool-policies.json
     grant_policy_file: /etc/multirag/mcp-grants.json
+    tls_ca_bundle_file: /etc/multirag/pki/ofmcp-ca.pem
 ```
 
 配置、key、policy/grant 制品、API 重启、真实 of_mcp secure endpoint 和真实工具调用必须作为独立 rollout

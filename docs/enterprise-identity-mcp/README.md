@@ -233,6 +233,7 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
 | [ROADMAP](ROADMAP.md) | `EIM-*` 任务、依赖、仓库、锚点、完成证据和进度 | 背景论证 |
 | [TESTING_SECURITY](TESTING_SECURITY.md) | 威胁模型、测试矩阵、上线与运维门禁 | 任务分配 |
 | [AGENT_RUNBOOK](AGENT_RUNBOOK.md) | 零上下文 Agent 如何开工、交接、记账和停止 | 具体业务实现细节 |
+| [SECURE_LEAVE_E2E](SECURE_LEAVE_E2E.md) | EIM-O5/CHN-O16 secure leave 本地纵切的冷启动、恢复、验收与证据 | 真实 OA 写入或远程生产发布 |
 
 出现重复陈述冲突时，以表中“负责回答”的文档为准。外部版本事实以
 [VERSION_BASELINE](VERSION_BASELINE.md) 为准；安全不变量以

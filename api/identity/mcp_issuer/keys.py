@@ -136,11 +136,16 @@ def _effective_user_id() -> int:
     return int(getter())
 
 
+def _trusted_public_key_owner(file_owner_id: int) -> bool:
+    return file_owner_id in {0, _effective_user_id()}
+
+
 def _read_key_bytes(
     path: Path,
     *,
     failure_code: SigningKeyErrorCode,
     enforce_private_permissions: bool,
+    enforce_public_permissions: bool = False,
 ) -> bytes:
     if not path.is_absolute() or path.is_symlink():
         raise SigningKeyError(failure_code)
@@ -157,6 +162,10 @@ def _read_key_bytes(
                 mode = stat.S_IMODE(metadata.st_mode)
                 if mode not in {0o400, 0o600} or metadata.st_uid != _effective_user_id():
                     raise SigningKeyError(SigningKeyErrorCode.PRIVATE_KEY_PERMISSIONS_INVALID)
+            elif enforce_public_permissions and os.name != "nt":
+                mode = stat.S_IMODE(metadata.st_mode)
+                if mode & 0o022 or not _trusted_public_key_owner(metadata.st_uid):
+                    raise SigningKeyError(failure_code)
             with os.fdopen(descriptor, "rb", closefd=False) as stream:
                 raw = stream.read(65_537)
         except OSError:
@@ -183,11 +192,16 @@ def _load_private_key(path: Path) -> ec.EllipticCurvePrivateKey:
     return key
 
 
-def _load_public_key(path: Path) -> ec.EllipticCurvePublicKey:
+def _load_public_key(
+    path: Path,
+    *,
+    enforce_deployment_permissions: bool = False,
+) -> ec.EllipticCurvePublicKey:
     raw = _read_key_bytes(
         path,
         failure_code=SigningKeyErrorCode.PUBLIC_KEY_INVALID,
         enforce_private_permissions=False,
+        enforce_public_permissions=enforce_deployment_permissions,
     )
     try:
         key = serialization.load_pem_public_key(raw)
@@ -196,6 +210,31 @@ def _load_public_key(path: Path) -> ec.EllipticCurvePublicKey:
     if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
         raise SigningKeyError(SigningKeyErrorCode.PUBLIC_KEY_INVALID)
     return key
+
+
+def load_public_signing_key_snapshot(
+    *,
+    active_key_id: str,
+    public_key_files: dict[str, Path],
+    enforce_deployment_permissions: bool = False,
+) -> SigningKeySnapshot:
+    """Load only the publishable P-256 material for a JWKS-only process."""
+
+    if not _valid_key_id(active_key_id) or not public_key_files or len(public_key_files) > 32:
+        raise SigningKeyError(SigningKeyErrorCode.PUBLIC_KEY_INVALID)
+    public_keys = {
+        kid: _load_public_key(
+            path,
+            enforce_deployment_permissions=enforce_deployment_permissions,
+        )
+        for kid, path in public_key_files.items()
+    }
+    if active_key_id not in public_keys:
+        raise SigningKeyError(SigningKeyErrorCode.PUBLIC_KEY_INVALID)
+    return SigningKeySnapshot(
+        active_kid=active_key_id,
+        keys=tuple(_public_jwk(key, kid) for kid, key in public_keys.items()),
+    )
 
 
 class FileSigningKeyProvider:
@@ -297,4 +336,5 @@ __all__ = [
     "SigningKeyProvider",
     "SigningKeyRotationGuard",
     "SigningKeySnapshot",
+    "load_public_signing_key_snapshot",
 ]

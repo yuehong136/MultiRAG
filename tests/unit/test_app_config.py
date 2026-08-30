@@ -9,6 +9,7 @@ import base64
 import json
 import textwrap
 import traceback
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -93,6 +94,20 @@ class TestSourcePrecedence:
         assert cfg.multirag.http_port == 9999  # env 覆盖 local
         assert cfg.multirag.host == "127.0.0.1"  # env 未覆盖的字段保持 local
         assert cfg.postgresql.password == "env-pass"  # env 覆盖 base
+
+    def test_env_beats_external_overlay_which_beats_local(self, conf_dir, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        conf_dir(SERVICE_CONF, BASE_YAML)
+        conf_dir(f"local.{SERVICE_CONF}", "multirag: {host: local, http_port: 9000}\n")
+        overlay = tmp_path / "deployment.yaml"
+        overlay.write_text("multirag: {host: external, http_port: 9443}\n", encoding="utf-8")
+        overlay.chmod(0o600)
+        monkeypatch.setenv(config_utils.EXTERNAL_CONFIG_OVERLAY_ENV, str(overlay))
+        monkeypatch.setenv("MULTIRAG_MULTIRAG__HTTP_PORT", "9999")
+
+        cfg = load_app_config()
+
+        assert cfg.multirag.host == "external"
+        assert cfg.multirag.http_port == 9999
 
 
 class TestEnvOverlay:
@@ -205,6 +220,29 @@ class TestValidation:
 
 
 class TestIdentityProvisioningConfig:
+    def test_config_log_masking_hides_identity_keyrings_as_entire_containers(self):
+        source = {
+            "identity": {
+                "provisioning": {
+                    "hmac_keyring": {
+                        "innocent-looking-key-id": "LEAK-HMAC",
+                        "password": "LEAK-HMAC-NESTED",
+                    },
+                },
+                "mcp_interactions": {
+                    "payload_encryption_keys": ["LEAK-ACTIVE", "LEAK-RETIRED"],
+                },
+            },
+        }
+
+        masked = config_utils._mask_sensitive_fields(source)
+        serialized = json.dumps(masked)
+
+        assert masked["identity"]["provisioning"]["hmac_keyring"] == "********"
+        assert masked["identity"]["mcp_interactions"]["payload_encryption_keys"] == "********"
+        assert "LEAK-" not in serialized
+        assert source["identity"]["provisioning"]["hmac_keyring"]["innocent-looking-key-id"] == "LEAK-HMAC"
+
     def test_pydantic_validation_traceback_redacts_rejected_hmac_material(self):
         marker = "LEAK-MARKER-identity-HMAC"
 
@@ -556,6 +594,7 @@ class TestMcpDelegationConfig:
                 enabled: true
                 tool_policy_file: /etc/multirag/tool-policies.json
                 grant_policy_file: /etc/multirag/mcp-grants.json
+                tls_ca_bundle_file: /etc/multirag/pki/local-ca.pem
             """,
         )
 
@@ -563,6 +602,16 @@ class TestMcpDelegationConfig:
 
         assert delegation.tool_policy_file == "/etc/multirag/tool-policies.json"
         assert delegation.grant_policy_file == "/etc/multirag/mcp-grants.json"
+        assert delegation.tls_ca_bundle_file == "/etc/multirag/pki/local-ca.pem"
+
+    def test_delegation_rejects_relative_tls_ca_bundle_path(self, conf_dir):
+        conf_dir(
+            SERVICE_CONF,
+            "identity: {mcp_delegation: {tls_ca_bundle_file: relative/ca.pem}}\n",
+        )
+
+        with pytest.raises(AppConfigError, match=r"identity\.mcp_delegation\.tls_ca_bundle_file"):
+            load_app_config()
 
 
 class TestMcpInteractionsConfig:

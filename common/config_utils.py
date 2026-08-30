@@ -2,6 +2,8 @@ import copy
 import importlib
 import logging
 import os
+import stat
+from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
@@ -9,6 +11,70 @@ from ruamel.yaml import YAML
 
 from common.constants import SERVICE_CONF
 from common.file_utils import get_project_base_directory
+
+EXTERNAL_CONFIG_OVERLAY_ENV = "MULTIRAG_CONFIG_OVERLAY_FILE"
+_MAX_EXTERNAL_CONFIG_BYTES = 1_048_576
+
+
+def _effective_user_id() -> int:
+    getter = getattr(os, "geteuid", None)
+    if getter is None:
+        raise ValueError("external config overlay ownership cannot be verified")
+    return int(getter())
+
+
+def _load_external_config_overlay() -> dict[str, Any]:
+    """Load one deployment-owned service config overlay without following links.
+
+    The overlay may contain credentials, so POSIX deployments must give it to
+    the current process owner only (0400/0600).  Reading through an already
+    validated descriptor avoids a path replacement between validation and
+    parsing.  Error messages deliberately omit both the path and file content.
+    """
+
+    configured_path = os.environ.get(EXTERNAL_CONFIG_OVERLAY_ENV)
+    if configured_path is None:
+        return {}
+    if not configured_path or configured_path != configured_path.strip():
+        raise ValueError("external config overlay path must be a canonical absolute path")
+
+    path = Path(configured_path)
+    if not path.is_absolute() or path.is_symlink():
+        raise ValueError("external config overlay path must be an absolute regular non-symlink file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        raise ValueError("external config overlay is unavailable") from None
+
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0 or metadata.st_size > _MAX_EXTERNAL_CONFIG_BYTES:
+            raise ValueError("external config overlay must be a non-empty regular file no larger than 1 MiB")
+        if os.name != "nt":
+            mode = stat.S_IMODE(metadata.st_mode)
+            if mode not in {0o400, 0o600} or metadata.st_uid != _effective_user_id():
+                raise ValueError("external config overlay must be owned by the process user with mode 0400 or 0600")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            raw = stream.read(_MAX_EXTERNAL_CONFIG_BYTES + 1)
+        if len(raw) > _MAX_EXTERNAL_CONFIG_BYTES:
+            raise ValueError("external config overlay must be a non-empty regular file no larger than 1 MiB")
+    except ValueError:
+        raise
+    except OSError:
+        raise ValueError("external config overlay is unavailable") from None
+    finally:
+        os.close(descriptor)
+
+    try:
+        yaml = YAML(typ="safe", pure=True)
+        overlay = yaml.load(raw.decode("utf-8"))
+    except Exception:
+        raise ValueError("external config overlay is invalid YAML") from None
+
+    if not isinstance(overlay, dict):
+        raise ValueError("external config overlay must contain a mapping")
+    return overlay
 
 
 def load_yaml_conf(conf_path):
@@ -55,6 +121,8 @@ def read_config(conf_name=SERVICE_CONF):
         raise ValueError(f'Invalid config file: "{global_config_path}".')
 
     global_config.update(local_config)
+    if conf_name == SERVICE_CONF:
+        global_config.update(_load_external_config_overlay())
     return global_config
 
 
@@ -91,15 +159,18 @@ def _mask_sensitive_fields(config: Any, _already_copied: bool = False) -> Any:
         "client_secret",
         "http_secret_key",
         "private_key_file",
+        "hmac_keyring",
+        "payload_encryption_keys",
     }
 
     for key, value in config.items():
-        # 如果值是字典，递归处理（传入 True 表示已经拷贝过）
-        if isinstance(value, dict):
-            config[key] = _mask_sensitive_fields(value, _already_copied=True)
-        # 如果键是敏感字段，替换为 *
-        elif str(key).lower() in sensitive_fields:
+        # 敏感容器必须先按父键整体替换；否则 keyring 中任意 key id
+        # 都会绕过逐字段名称匹配。
+        if str(key).lower() in sensitive_fields:
             config[key] = "*" * 8
+        # 如果值是字典，递归处理（传入 True 表示已经拷贝过）
+        elif isinstance(value, dict):
+            config[key] = _mask_sensitive_fields(value, _already_copied=True)
 
     return config
 

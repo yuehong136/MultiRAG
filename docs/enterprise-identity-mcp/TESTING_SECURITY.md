@@ -105,9 +105,10 @@
   与敏感写保持关闭。接受前、取消/拒绝/过期/换人/身份过期或 gate 失败时 OA 必须零调用；接受后也只
   允许当前主体 preview，且 `doCreateRequest` 调用数必须为 0。modern `2026-07-28` 的无效时间窗
   correction 可多轮重开但每轮 OA 零调用；legacy 仍 terminal，不能伪造 modern 恢复语义；
-- completed terminal 只允许严格 `com.ofmcp/interaction-terminal` v1 envelope（direct 或仅含 `result`
-  的 FastMCP wrapper）；message 必须单行、trimmed、printable、至多 240 字符，其他结果统一 generic，
-  不能让 tool result 直接进入飞书卡片；
+- 当前 producer 的 completed terminal 只允许严格 `com.ofmcp/interaction-terminal` v2 六键 envelope
+  （direct 或 top-level 仅含 `result` 的 FastMCP wrapper）；title/message/1..8 个唯一 fields 必须有界、
+  单行、trimmed、printable，`preview_only` 必须为 bool true。历史 v1 只保留精确四键只读兼容；其他
+  tool result 统一 generic，不能让任意 tool result 直接进入飞书卡片；
 - `of_mcp` 不采信参数中的 `workcode`/`talent_id` 作为调用者身份；
 - 高风险工具必须同时满足授权、用户确认、短时有效和幂等；
 - 日志不得记录 secret、完整 bearer token、OAuth code、手机号或患者敏感正文。
@@ -522,8 +523,9 @@ gate、mypy **81 source files**、unit **2188 passed**；`REQUIRE_SERVICES=1 mak
 - **L2 policy/effect/identity**：catalog 与 gateway snapshot 都固定 `leave:read`、prepare/reusable、
   `leave_applicant`；伪造 `oa_user_id` 或 form identity 无效。accepted 只用 Principal subject 调
   preview 且 `doCreateRequest` 调用数为 0，cancel/decline/expiry/身份不符/重启 lease 失败全部 OA 零调用，写工具仍拒绝；
-- **L2 terminal/privacy**：direct 与仅含 `result` wrapper 的合法四键 envelope 投影 message；额外键、
-  错 kind/version/bool、raw/nested、换行/tab、首尾空白、空串和 241 字符全部走固定 generic。OA raw、
+- **L2/L4 terminal/privacy**：direct 与仅含 `result` wrapper 的合法 v2 六键 envelope 投影
+  title/message/fields；额外键、错 kind/version/bool、raw/nested、换行/tab、首尾空白和越界值全部走
+  固定 generic，历史精确四键 v1 只读兼容。OA raw、
   subject、requestState 和底层异常不得出现在卡片/日志；cross-field `end<=start` 在 modern
   `2026-07-28` 首次无效必须从 initial id/state 切换到独立 correction id/state，连续无效可重复该
   correction form；Host 每个持久化 revision 使用 fresh one-time response nonce。legacy 仍 terminal，
@@ -643,10 +645,10 @@ durable backend 落地后（of_mcp `46de58d`），A6/auth/Gateway/PostgreSQL 定
 symlink 特权失败（`WinError 1314`，OS 缺 `SeCreateSymbolicLinkPrivilege`，与本次改动无关）；
 contract snapshot 零漂移。提交锚点统一以 ROADMAP 变更日志为准。A6 必须保持 `🔵`：
 fingerprint HMAC key 的例行轮换已覆盖（轮换窗口内合法重试仍是 409；旧 key 删太早会退化成 403，
-这个失败形态也被钉住；轮换 ring 不改变 identity hash 与 mcp_call_id）。自动化尚未覆盖
-HMAC key 的 KMS 托管、真实 OTel SDK/exporter/collector/W3C 跨仓 trace、
-P3/A5 动态 bearer 的真实跨仓运行证据、业务 idempotency/result lookup 和
-remote-release 演练。真实多副本 durable store 与进程重启后的 claim/audit 已由跨池、跨解释器
+这个失败形态也被钉住；轮换 ring 不改变 identity hash 与 mcp_call_id）。OTel SDK/exporter、P3
+动态 bearer、W3C 跨仓 trace 与真实 PostgreSQL audit 对账已于 2026-08-27 闭环；自动化尚未覆盖
+HMAC key 的 KMS 托管、collector 部署、业务 idempotency/result lookup 和 remote-release 演练。
+真实多副本 durable store 与进程重启后的 claim/audit 已由跨池、跨解释器
 与重建 store 的真实 PostgreSQL 测试覆盖。
 
 ### 3.4 跨仓端到端测试
@@ -678,6 +680,7 @@ remote-release 演练。真实多副本 durable store 与进程重启后的 clai
 | E2E-20 | MultiRAG 双 MCP 角色 audience 混用 | 发给 of_mcp 的 token 不能调用 MultiRAG MCP Server，反向同样拒绝 |
 | E2E-21 | Host 或 Resource Server 版本回滚 | 现代/legacy 兼容矩阵内可回滚，不要求两个 MCP 方向同时升级或同时回滚 |
 | E2E-22 | L2 p2p 低敏请假试算 | 私聊展示 7 字段原生表单；同一 verified operator 提交后只产生当前主体 OA preview，`doCreateRequest` 调用数为 0、零草稿/审批；安全 terminal 更新原卡。群聊、换人、过期、取消和非法字段拒绝且 OA 零调用；modern `end<=start` 首次切换独立 correction id/state，连续无效可重复该 form，每个 Host revision 使用 fresh one-time response nonce；legacy 明确终态失败 |
+| E2E-23 | EIM-O5 / CHN-O16 fresh secure leave simulator 纵切 | 按 [SECURE_LEAVE_E2E](SECURE_LEAVE_E2E.md) 两阶段启动；固定提示在真实飞书 p2p 产生七字段表单与同一交互 strict terminal v2 卡；verified applicant、callback/resume/delivery 各一次、无 safe_error，create/draft/submit/doCreateRequest 全零，跨仓 trace 与 A6 ledger 对账，脱敏 evidence 校验通过 |
 
 ### 3.5 MCP Foundation 当前兼容基线
 
@@ -1008,6 +1011,11 @@ decision/reason/replay state。它不记录 Provider/event/interaction 原文、
 - tolerate/emit/remove 的生产者、消费者版本和部署顺序；
 - 数据迁移前后计数、冲突记录数和人工处理结果；
 - 如果是线上实测：时间、binding、脱敏日志查询与回滚点。
+
+EIM-O5 / CHN-O16 另要求仓库外 `run.json`、`checks.json`、`timeline.ndjson`、脱敏日志投影和
+`SHA256SUMS`；证据 schema、哈希与敏感字段扫描必须由
+`scripts/secure_leave_e2e.py evidence verify` 重验。详细 allowlist 与固定 live 提示见
+[SECURE_LEAVE_E2E](SECURE_LEAVE_E2E.md)。健康端点和历史 live 不能替代 fresh 会话。
 
 ### 6.2 必做演练
 

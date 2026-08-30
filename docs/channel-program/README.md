@@ -37,6 +37,7 @@
 | [CONTRACT](CONTRACT.md) | ⭐ 前后端接口契约与 `channel-api/vN` 版本标记 | 前后端 |
 | [EXECUTION_ARCHITECTURE](EXECUTION_ARCHITECTURE.md) | ⭐ Provider × Dialog/Canvas 正交架构、历史事务、能力协商与实施顺序 | Channel / 执行层 |
 | [企业身份与 MCP 项目](../enterprise-identity-mcp/README.md) | 飞书企业身份、Principal、MCP 委托和 of_mcp 授权的后续扩展 | 后端 / 安全 / 运维 |
+| [secure leave 全链路](../enterprise-identity-mcp/SECURE_LEAVE_E2E.md) | CHN-O16 两阶段 Channel 启动、恢复、真实飞书验收和证据 | Channel / 运维 |
 | [飞书机器人体验基线](../enterprise-identity-mcp/FEISHU_BOT_UX.md) | ReplySession、流式卡片、队列/话题、多模态与验收 | Channel / Agent / 测试 |
 | [`api/channels/README.md`](../../api/channels/README.md) | 已上线行为、部署形态、上游所有权表（**不在本文档集内，勿重复**） | 研发 / 运维 |
 | `web:docs/channel-frontend-design.md` | 前端设计稿（ARCH-6） | 前端 |

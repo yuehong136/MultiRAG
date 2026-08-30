@@ -3,12 +3,14 @@
 import asyncio
 import inspect
 import json
+import ssl
 from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any
 
 import httpx2
 import pytest
+from opentelemetry import trace
 
 from common.constants import MCPServerType
 from common.mcp_tool_call_conn import (
@@ -66,6 +68,59 @@ def _bare_session(server_type: MCPServerType = MCPServerType.STREAMABLE_HTTP) ->
     return session
 
 
+def test_delegated_http_client_uses_explicit_context_without_environment_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from common import mcp_tool_call_conn
+
+    observed: dict[str, Any] = {}
+
+    class FakeHTTPClient:
+        def __init__(self, **kwargs: Any) -> None:
+            observed.update(kwargs)
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    auth = httpx2.BasicAuth("fixture", "fixture")
+    monkeypatch.setattr(mcp_tool_call_conn.httpx2, "AsyncClient", FakeHTTPClient)
+
+    client = mcp_tool_call_conn._create_delegated_http_client(
+        headers={"X-Test": "1"},
+        auth=auth,
+        tls_ssl_context=context,
+    )
+
+    assert isinstance(client, FakeHTTPClient)
+    assert observed["verify"] is context
+    assert observed["trust_env"] is False
+    assert observed["follow_redirects"] is True
+
+
+def test_delegated_http_client_preserves_sdk_system_trust_when_no_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from common import mcp_tool_call_conn
+
+    sentinel = object()
+    observed: dict[str, Any] = {}
+
+    def create_client(**kwargs: Any) -> object:
+        observed.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(mcp_tool_call_conn, "create_mcp_http_client", create_client)
+    auth = httpx2.BasicAuth("fixture", "fixture")
+
+    assert (
+        mcp_tool_call_conn._create_delegated_http_client(
+            headers={},
+            auth=auth,
+            tls_ssl_context=None,
+        )
+        is sentinel
+    )
+    assert observed == {"headers": {}, "auth": auth}
+
+
 async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -73,10 +128,13 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
 
     issued: list[str] = []
     auth_objects: list[Any] = []
+    http_client_kwargs: list[dict[str, Any]] = []
     wire_calls: list[dict[str, Any]] = []
+    delegated_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
     class Provider:
         resource_name = "ofmcp_gateway"
+        tls_ssl_context = delegated_context
 
         def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential:
             bearer = f"secret-bearer-{len(issued) + 1}"
@@ -94,6 +152,7 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
     class FakeHTTPClient:
         def __init__(self, **kwargs: Any) -> None:
             auth_objects.append(kwargs["auth"])
+            http_client_kwargs.append(kwargs)
             self.event_hooks: dict[str, list[Any]] = {"request": [], "response": []}
 
         async def __aenter__(self) -> "FakeHTTPClient":
@@ -104,7 +163,14 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
 
     class FakeWireSession:
         async def call_tool(self, *_args: object, **kwargs: Any) -> CallToolResult:
-            wire_calls.append(kwargs)
+            context = trace.get_current_span().get_span_context()
+            wire_calls.append(
+                {
+                    **kwargs,
+                    "observed_trace_id": f"{context.trace_id:032x}",
+                    "observed_trace_valid": context.is_valid,
+                },
+            )
             return CallToolResult(content=[TextContent(text="ok")], isError=False)
 
     class FakeClient:
@@ -144,6 +210,10 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
     assert issued == ["secret-bearer-1", "secret-bearer-2", "secret-bearer-3"]
     assert len(auth_objects) == 3
     assert all("secret-bearer" not in repr(auth) for auth in auth_objects)
+    assert all(kwargs["verify"] is delegated_context for kwargs in http_client_kwargs)
+    assert all(kwargs["trust_env"] is False for kwargs in http_client_kwargs)
+    assert all(call["observed_trace_valid"] is True for call in wire_calls)
+    assert len({call["observed_trace_id"] for call in wire_calls}) == 3
     assert wire_calls[-1]["meta"] == {
         "com.ofmcp/interaction": {
             "version": 1,
@@ -168,6 +238,7 @@ async def test_delegated_streamable_http_uses_one_sdk2_auth_lease_per_logical_ca
 def test_delegated_constructor_is_network_lazy_and_rejects_static_authorization() -> None:
     class Provider:
         resource_name = "ofmcp_gateway"
+        tls_ssl_context = None
 
         def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential:
             return MCPRequestCredential(

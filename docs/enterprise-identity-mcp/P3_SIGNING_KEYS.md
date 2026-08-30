@@ -187,6 +187,39 @@ curl --fail --silent https://multirag.example.com/.well-known/jwks.json
 响应应只含 EC public JWK，且能看到 active `kid`、`alg=ES256`、`crv=P-256`、`use=sig`；不得出现
 private PEM、文件路径或错误堆栈。issuer disabled/unready 时该端点返回安全的 HTTP 503。
 
+### 本机独立 TLS JWKS publisher
+
+EIM-O5 的 loopback 联调可以把 JWKS 从 API 进程拆到只持有 public PEM 的独立进程。先在仓库外生成
+一份不含 private key、DSN 或 Channel secret 的严格 JSON manifest：
+
+```json
+{
+  "format": 1,
+  "active_key_id": "p3-local-2026-08",
+  "jwks_cache_ttl_seconds": 300,
+  "public_key_files": {
+    "p3-local-2026-08": "/absolute/deployment/secrets/p3-local-2026-08-public.pem"
+  }
+}
+```
+
+manifest 只允许这四个键；public PEM 路径必须绝对。publisher 本身不读取应用配置、P3 private PEM、
+数据库或 Channel secret，只在 loopback 上提供 `/.well-known/jwks.json` 与 `/livez`：
+
+```bash
+uv run python -m api.identity.jwks_publisher \
+  --host 127.0.0.1 --port 9277 \
+  --public-key-manifest /absolute/deployment/artifacts/p3-public-keys.json \
+  --cert-file /absolute/deployment/pki/jwks-cert.pem \
+  --key-file /absolute/deployment/pki/jwks-key.pem
+```
+
+TLS key 是独立的 HTTPS server key，不能复用 P3 JWT signing key。POSIX 上 TLS private key 必须由进程
+owner 持有且为 `0400`/`0600`；manifest、证书与 public PEM 不可 group/world writable，publisher 使用的
+public PEM 还必须由当前进程 owner 或 root 持有。部署 doctor 还应把该进程的
+JWKS bytes 与主 API 的 canonical JWKS 做逐字节对账。该 publisher 是 EIM-O5 本机联调面，不替代
+生产 DNS、企业 PKI、KMS 或多副本 rotation barrier。
+
 ## 4. of_mcp 如何使用
 
 of_mcp 只需要信任以下服务端配置事实：

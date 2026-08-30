@@ -48,6 +48,7 @@ class _Handler:
 
 class _CredentialProvider:
     resource_name = "leave-service"
+    tls_ssl_context = None
 
     def __init__(self) -> None:
         self.calls = 0

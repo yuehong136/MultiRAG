@@ -155,6 +155,11 @@ web_modules/
 .env.production.local
 .env.local
 
+# EIM-O5 deployment material is required to live outside the repository.
+# Keep common local names ignored as defense in depth; bootstrap still refuses them.
+.secure-leave-e2e/
+.multirag-dev/
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

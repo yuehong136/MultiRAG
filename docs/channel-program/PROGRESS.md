@@ -197,6 +197,7 @@ import-linter 表达不了「不许第三方 SDK」，所以补一个子进程�
 | CHN-O12 | 空 env 变量把 `str`/`SecretStr` 配置项打成 `None` → 配置加载抛 `AppConfigError`，**默认 docker 部署起不来**。收敛点落在 `_Section` 基类：只把「类型容不下 None」的 `str`/`SecretStr` 字段的 `None` 收成 `""`，`x \| None` 不动 | ✅ | — | `common/app_config.py::_Section._empty_env_value_is_a_blank_not_a_null` |
 | CHN-O14 | Channel API 侧 durable run ledger：worker 重启恢复、单会话单活、跨实例取消与终态 CAS；不替代或复制 Canvas 目标 checkpoint runtime，只有真实恢复需求确认后才启动 | ⏸ | CHN-X13、CHN-U14/U15 | [执行架构 §8](EXECUTION_ARCHITECTURE.md#8-run-生命周期与会话历史分离)、[EIM-O4](../enterprise-identity-mcp/ROADMAP.md) |
 | CHN-O15 | 存量数据库先 Alembic、后 model-first 补表；全新库保持 create→stamp，杜绝新子表在迁移补父约束前创建。修复后安全恢复本次启动留下的零行 identity partial schema | ✅ | EIM-I2.2；新 API 启动闸门 | `api/db/schema_bootstrap.py::bootstrap_database_schema`、`tests/unit/test_schema_bootstrap.py`、`tests/integration/test_db_bootstrap.py::test_stored_database_bootstrap_migrates_parents_before_model_first_children` |
+| CHN-O16 | EIM-O5 secure leave simulator 本地编排：严格识别并接管同仓进程，先 API producer-disabled、再升级 supervisor/worker consumer、最后启用 interaction producer；输出可校验脱敏证据 | 🔵 | CHN-X15、CHN-X20、CHN-X23、CHN-X24；EIM-P3/A6/L4 | `scripts/secure_leave_e2e.py`、外部 deployment overlay、JWKS/Gateway loopback TLS、fresh 飞书 form → preview terminal live；不接管其他 worktree/仓库，不开放 leave 写入 |
 
 ---
 

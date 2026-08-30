@@ -8,6 +8,7 @@
 """
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -75,6 +76,50 @@ def test_non_dict_local_config_raises(conf_dir):
     conf_dir(f"local.{SERVICE_CONF}", "- just\n- a\n- list\n")
 
     with pytest.raises(ValueError, match="Invalid config file"):
+        config_utils.read_config(SERVICE_CONF)
+
+
+def test_external_overlay_replaces_local_whole_sections(conf_dir, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    conf_dir(SERVICE_CONF, "multirag: {host: base, http_port: 8123}\nredis: {db: 1}\n")
+    conf_dir(f"local.{SERVICE_CONF}", "multirag: {host: local, http_port: 9000}\n")
+    overlay = tmp_path / "deployment.yaml"
+    overlay.write_text("multirag: {host: external}\n", encoding="utf-8")
+    overlay.chmod(0o600)
+    monkeypatch.setenv(config_utils.EXTERNAL_CONFIG_OVERLAY_ENV, str(overlay))
+
+    merged = config_utils.read_config(SERVICE_CONF)
+
+    assert merged == {"multirag": {"host": "external"}, "redis": {"db": 1}}
+
+
+def test_external_overlay_does_not_apply_to_arbitrary_config_files(conf_dir, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    conf_dir("admin.yaml", "admin: {host: original}\n")
+    overlay = tmp_path / "deployment.yaml"
+    overlay.write_text("admin: {host: injected}\n", encoding="utf-8")
+    overlay.chmod(0o600)
+    monkeypatch.setenv(config_utils.EXTERNAL_CONFIG_OVERLAY_ENV, str(overlay))
+
+    assert config_utils.read_config("admin.yaml") == {"admin": {"host": "original"}}
+
+
+def test_external_overlay_rejects_relative_symlink_and_unsafe_mode(conf_dir, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    conf_dir(SERVICE_CONF, "multirag: {host: base}\n")
+    target = tmp_path / "target.yaml"
+    target.write_text("multirag: {host: external}\n", encoding="utf-8")
+    target.chmod(0o644)
+    link = tmp_path / "overlay.yaml"
+    link.symlink_to(target)
+
+    monkeypatch.setenv(config_utils.EXTERNAL_CONFIG_OVERLAY_ENV, "relative.yaml")
+    with pytest.raises(ValueError, match="absolute regular"):
+        config_utils.read_config(SERVICE_CONF)
+
+    monkeypatch.setenv(config_utils.EXTERNAL_CONFIG_OVERLAY_ENV, str(link))
+    with pytest.raises(ValueError, match="non-symlink"):
+        config_utils.read_config(SERVICE_CONF)
+
+    monkeypatch.setenv(config_utils.EXTERNAL_CONFIG_OVERLAY_ENV, str(target))
+    with pytest.raises(ValueError, match="0400 or 0600"):
         config_utils.read_config(SERVICE_CONF)
 
 

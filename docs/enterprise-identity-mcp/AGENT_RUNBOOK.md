@@ -40,7 +40,7 @@ MultiRAG 与 `of_mcp`；不要把相邻任务“顺手”并入一个提交。
 | EIM-L | [CONTRACTS](CONTRACTS.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、`of_mcp` 的 `AGENTS.md`/README/service contract；涉及 CardKit 时再读 Channel `PROGRESS.md`/`CONTRACT.md` |
 | EIM-M | [ARCHITECTURE](ARCHITECTURE.md)、[REFERENCES](REFERENCES.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
 | EIM-U | [FEISHU_BOT_UX](FEISHU_BOT_UX.md)、[FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md)、Channel `PROGRESS.md` |
-| EIM-O | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md) |
+| EIM-O | [FEISHU_ONBOARDING](FEISHU_ONBOARDING.md)、[TESTING_SECURITY](TESTING_SECURITY.md)；O5 另读 [SECURE_LEAVE_E2E](SECURE_LEAVE_E2E.md) |
 
 ### 2.2 核实工作区与锚点
 
@@ -813,8 +813,9 @@ I7 未做飞书后台订阅、服务重启或 live；I8 默认关闭的 durable 
 - audit/permit/telemetry/log 不含 token、参数、结果、Provider PII、enterprise subject 或医疗正文；
   JTI digest 必须隔离 issuer domain，低熵主体用 keyed HMAC；
 - OTel 失败不改变安全决定。SDK/OTLP exporter 已接线但**默认关闭**，且只在 `apps/gateway`；
-  入站 traceparent 提取是 API-only、不受该开关控制。**出站**注入与 collector 部署仍未完成，
-  所以"跨仓 trace"尚未闭环 —— 不得据 of_mcp 侧的证据宣称已闭环；
+  入站 traceparent 提取是 API-only、不受该开关控制。MultiRAG 的 MCP SDK 2 已原生把当前 span 注入
+  `_meta.traceparent`，跨仓 trace 与真实 A6 ledger 于 2026-08-27 验收；collector 部署仍未完成，
+  不得把本机对账宣称为生产 collector/远程 rollout；
 - 入站 traceparent 的信任边界不得默默放宽：它是调用方提供的，接受它是关联污染而非权限提升
   （trace id 不参与任何认证/授权/replay 判定）。**remote-release 开闸前必须重新评估这条**；
 - `production_ready` 只能由 shared replay + durable audit 的实现属性成立。memory backend 不得通过
@@ -863,12 +864,13 @@ replay/audit、OTel SDK/exporter、W3C 跨仓 trace 与 P3 动态 bearer 的真�
 真实受信 DNS/TLS、collector 部署、M3/M4 业务幂等/结果查询和 remote-release 演练后，才能把 A6
 改为 `✅`。这类后续工作若涉及真实基础设施、KMS、DNS、Secret 或部署，必须先获得用户批准。
 
-接手 A6 跨仓联调前先读两条本机绕行，它们**不是**部署方案：
+接手 A6/EIM-O5 跨仓联调前先读两条平台边界：
 
-- of_mcp 的 JWKS fetcher 是 `httpx2.AsyncClient(trust_env=False)`，跳过 `SSL_CERT_FILE`
-  只认系统信任库，而 `build_gateway_for_deployment` 没有 `jwks_fetcher` 注入口，
-  `issuer` / `jwks_uri` 又强制 HTTPS。本机验收靠人工导入一次性 CA 完成，**生产必须提供
-  真实受信证书**；不要把这条写进 rollout 步骤。
+- EIM-O5 已让 of_mcp JWKS fetcher 通过
+  `OFMCP_GATEWAY_AUTH_JWKS_CA_BUNDLE_FILE` 使用独立、校验 hostname 的显式 CA，也让 MultiRAG
+  delegated MCP client 通过 `identity.mcp_delegation.tls_ca_bundle_file` 使用自己的窄信任链。
+  两边仍都 `trust_env=False`；禁止 `verify=false`、全局 `SSL_CERT_FILE` 或修改系统信任库。该 seam
+  只解决 loopback/private PKI，生产仍须企业 PKI/DNS 与独立 remote-release gate。
 - `ofmcp serve` 在 Windows 上起不了 A6 durable backend：`anyio.run()` 给的是
   `ProactorEventLoop`，psycopg 3 拒绝在其上跑 async，连接池在 lifespan 里开不出来。
   用仓库外 launcher 先设 `WindowsSelectorEventLoopPolicy`（anyio 给 `asyncio.Runner` 传
@@ -881,7 +883,7 @@ replay/audit、OTel SDK/exporter、W3C 跨仓 trace 与 P3 动态 bearer 的真�
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS + P3 每执行新短 token/JTI 已完成代码但默认 disabled、未部署 → A6 production durable backend/跨仓 trace + 企业主体/上线证据 → 独立闸门决定 secure 远程入口；不得把自动门禁或内存 replay 通过误作 Channel 委托闭环 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS + P3 每执行新短 token/JTI 已完成代码但默认 disabled → A6 production durable backend/跨仓 trace 已验收 → EIM-O5 用真实飞书 + simulator + HTTPS loopback 补 fresh 上线证据 → 独立闸门决定 remote secure 入口；不得把自动门禁、历史 live 或 simulator 当生产 OA/远程发布 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |

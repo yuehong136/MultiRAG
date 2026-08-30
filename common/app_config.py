@@ -2,7 +2,8 @@
 
 设计要点：
 - 来源优先级：环境变量（``MULTIRAG_<SECTION>__<FIELD>``，双下划线逐层深入）
-  > configs/local.service_conf.yaml（顶层 section **整体替换**，与 read_config 语义一致）
+  > ``MULTIRAG_CONFIG_OVERLAY_FILE`` 指向的外部文件
+  > configs/local.service_conf.yaml（两种文件覆盖都按顶层 section **整体替换**）
   > configs/service_conf.yaml > 模型默认值；
 - section 与字段名和 service_conf.yaml（即 ragflow 上游）1:1 镜像——上游新增配置项时
   只需在对应模型加同名字段，移植映射见 internal/ragflow_settings_porting_map.md；
@@ -491,12 +492,13 @@ class McpDelegationConfig(_Section):
     enabled: bool = False
     tool_policy_file: str = ""
     grant_policy_file: str = ""
+    tls_ca_bundle_file: str = ""
 
-    @field_validator("tool_policy_file", "grant_policy_file")
+    @field_validator("tool_policy_file", "grant_policy_file", "tls_ca_bundle_file")
     @classmethod
     def validate_policy_path(cls, value: str) -> str:
         if value and (value != value.strip() or not os.path.isabs(value)):
-            raise ValueError("MCP delegation policy paths must be absolute")
+            raise ValueError("MCP delegation file paths must be canonical absolute paths")
         return value
 
     @model_validator(mode="after")
@@ -1043,7 +1045,7 @@ def load_app_config(conf_name: str = SERVICE_CONF) -> AppConfig:
         config = AppConfig.model_validate(merged)
     except ValidationError as exc:
         paths = "; ".join(".".join(str(p) for p in err["loc"]) + f" ← {err['msg']}" for err in exc.errors(include_input=False, include_context=False))
-        error = AppConfigError(f"service_conf 配置校验失败（检查 yaml/local 覆盖/MULTIRAG_* 环境变量）: {paths}")
+        error = AppConfigError(f"service_conf 配置校验失败（检查 yaml/local/外部覆盖/MULTIRAG_* 环境变量）: {paths}")
     else:
         config._raw = merged
         return config
