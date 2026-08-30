@@ -883,7 +883,7 @@ replay/audit、OTel SDK/exporter、W3C 跨仓 trace 与 P3 动态 bearer 的真�
 | 变更 | 生产者 | 消费者 | 安全部署顺序 |
 |---|---|---|---|
 | Channel structured assertion | worker | MultiRAG private API | tolerate API → emit worker → consume API → remove legacy |
-| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS + P3 每执行新短 token/JTI 已完成代码但默认 disabled → A6 production durable backend/跨仓 trace 已验收 → EIM-O5 用真实飞书 + simulator + HTTPS loopback 补 fresh 上线证据 → 独立闸门决定 remote secure 入口；不得把自动门禁、历史 live 或 simulator 当生产 OA/远程发布 |
+| MCP access token | MultiRAG signer | `of_mcp` verifier/authorizer | A3 verifier/JWKS + A4 Principal/tool policy + A6 phase-1 execution guard 已先行并保持业务未远程发布 → P1/C3/P2 已完成 → A2 signer/JWKS + P3 每执行新短 token/JTI 已完成代码但默认 disabled → A6 production durable backend/跨仓 trace 已验收 → EIM-O5 已用真实飞书 + simulator + HTTPS loopback 补齐 fresh 证据 → 后续只能由独立闸门决定 remote secure 入口；不得把 simulator 纵切当生产 OA/远程发布 |
 | EIM-A1 corpus | MultiRAG canonical generator + 两仓本地副本 | PyJWT/joserfc 独立 oracle | 已完成：of_mcp `3e1d5ac` → MultiRAG 本次 A1 变更；91-file corpus 字节一致，digest `59f82684aa06365f45623ce9bfad336d487f2c9351879266a6b2ab21bf8fe208`；运行时无依赖 |
 | 新 scope/tool metadata | `of_mcp` policy snapshot | MultiRAG Agent/MCP config、P3 cache/audit | resource 端先提交包含 effect/replay mode 的 canonical `tool-policies.json` 与 `policy_revision` → 调用端按 revision 重算请求与缓存；未知 scope fail closed，不从运行时可见列表反推权限，也不把 revision 自动塞入当前 A1 token profile |
 | confirmation contract | `of_mcp` challenge | MultiRAG card/channel | resource 端先返回可识别 challenge → UI 接线 → 强制确认 |

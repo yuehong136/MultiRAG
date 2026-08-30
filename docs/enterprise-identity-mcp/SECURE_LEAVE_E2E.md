@@ -13,8 +13,10 @@
 ```
 
 状态以 [ROADMAP 的 EIM-O5](ROADMAP.md) 为准；涉及 Channel 进程与交互投递时同时以
-[CHN-O16](../channel-program/PROGRESS.md) 记账。本文不证明任务已经完成：只有 fresh 真实飞书会话、
-两仓完整门禁和脱敏证据包同时通过，才能把两条任务改为 `✅`。
+[CHN-O16](../channel-program/PROGRESS.md) 记账。两条任务已于 2026-08-30 以 fresh 真实飞书会话、
+双仓完整门禁和仓库外脱敏证据包标记为 `✅`；验收记录位于
+`/Users/xldu/.local/share/multirag/secure-leave-e2e/evidence/eim-o5-20260830T060041Z-1847e961`。
+这仍是 loopback + simulator 证据，不代表真实 OA、远程入口或生产 rollout。
 
 ## 1. 安全边界
 
