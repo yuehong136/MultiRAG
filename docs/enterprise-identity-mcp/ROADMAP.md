@@ -1138,4 +1138,4 @@ C5/CHN-P14 在 C4、F1 后单独做 transport PoC，可与 U1 之后的体验任
 - 已完成：两仓文档与安全基线、标准化密钥/目录、独立本地 CA 与 TLS、JWKS publisher、显式 trust、外部 overlay、policy/grant、A6 独立迁移、Stage A/B 编排、严格进程所有权、自动 doctor/probe/evidence verify 与 write-zero/trace/audit 门禁。
 - 下一步：在仓库外部署根执行 `bootstrap → discover → prepare --apply → up → probe`，完成固定飞书提示、等待输入重启演练、表单提交、terminal v2 结果卡和证据校验，再由两仓台账共同记录证据路径。
 - 硬边界：Ecology 仅显式 simulator；`create_leave_draft`、`submit_leave`、`doCreateRequest` 必须为零；不包含 medic M1/M2、A7、真实 OA 写入、KMS、完整 Collector、remote-release 或 Windows；不得修改 MultiRAG `configs/service_conf.yaml`。
-- 双方实现 SHA：MultiRAG `25ea68d965f613fdc4e66a3bd3c8877ed09e49b9`；of_mcp `d81c209431ed1054817bf605239481a36fbd44cb`。
+- 双方实现 SHA：MultiRAG `7b3e4525a8bfc7e6b65450554131507e61d07cd7`；of_mcp `d81c209431ed1054817bf605239481a36fbd44cb`。
