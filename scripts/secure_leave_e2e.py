@@ -2956,13 +2956,13 @@ class ProcessManager:
         return result
 
 
-def _fetch_json(
+def _fetch_bytes(
     url: str,
     *,
     ca_file: Path | None = None,
     headers: Mapping[str, str] | None = None,
     timeout: float = 3.0,
-) -> dict[str, Any]:
+) -> bytes:
     context = ssl.create_default_context(cafile=str(ca_file)) if ca_file is not None else None
     request = urllib.request.Request(url, headers=dict(headers or {}))
     handlers: list[urllib.request.BaseHandler] = [urllib.request.ProxyHandler({})]
@@ -2976,6 +2976,22 @@ def _fetch_json(
                 raise ValueError
     except (OSError, urllib.error.URLError, ValueError) as exc:
         raise OperatorError(ExitCode.PROCESS_FAILED, "http_check") from exc
+    return body
+
+
+def _fetch_json(
+    url: str,
+    *,
+    ca_file: Path | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    body = _fetch_bytes(
+        url,
+        ca_file=ca_file,
+        headers=headers,
+        timeout=timeout,
+    )
     try:
         value = json.loads(body)
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -2983,6 +2999,31 @@ def _fetch_json(
     if type(value) is not dict:
         raise OperatorError(ExitCode.PROCESS_FAILED, "http_shape")
     return cast(dict[str, Any], value)
+
+
+def _fetch_exact(
+    url: str,
+    *,
+    expected: bytes,
+    ca_file: Path | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 3.0,
+) -> None:
+    if (
+        not expected
+        or _fetch_bytes(
+            url,
+            ca_file=ca_file,
+            headers=headers,
+            timeout=timeout,
+        )
+        != expected
+    ):
+        raise OperatorError(ExitCode.PROCESS_FAILED, "http_body")
+
+
+def _fetch_api_ping(api_url: str) -> None:
+    _fetch_exact(f"{api_url}/api/v1/system/ping", expected=b"pong")
 
 
 def _wait_for(check: Callable[[], object], *, seconds: float = 30.0) -> None:
@@ -3145,7 +3186,7 @@ def _quiesce_managed_runtime(
         urls = cast(dict[str, str], manifest["urls"])
         try:
             manager.start(stage_a["api"])
-            _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+            _wait_for(lambda: _fetch_api_ping(urls["api"]))
         except OperatorError as exc:
             raise OperatorError(ExitCode.PROCESS_FAILED, "quiesce=api_stage_a") from exc
         # A supervisor failure is a hard gate. Stage A and all dependencies
@@ -3192,7 +3233,7 @@ def _rollback_failed_up(
         try:
             manager.start(stage_a["api"])
             stage_a_started = True
-            _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+            _wait_for(lambda: _fetch_api_ping(urls["api"]))
         except OperatorError as exc:
             raise OperatorError(ExitCode.PROCESS_FAILED, "rollback=api_stage_a") from exc
         try:
@@ -3270,7 +3311,7 @@ def _up_unlocked(root: Path, *, runner: CommandRunner | None = None) -> dict[str
         _record_stage(layout, "api_stage_a", "begin")
         manager.start(specs["api"])
         started.add("api")
-        _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+        _wait_for(lambda: _fetch_api_ping(urls["api"]))
         _record_stage(layout, "api_stage_a", "complete")
         active_stage = "mock"
         _record_stage(layout, "mock", "begin")
@@ -3303,7 +3344,7 @@ def _up_unlocked(root: Path, *, runner: CommandRunner | None = None) -> dict[str
         manager.stop(specs["api"])
         specs = _build_specs(layout, manifest, candidate, api_stage="b")
         manager.start(specs["api"])
-        _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+        _wait_for(lambda: _fetch_api_ping(urls["api"]))
         _record_stage(layout, "api_stage_b", "complete")
         active_stage = "online_doctor"
         _record_stage(layout, "online_doctor", "begin")
@@ -3373,7 +3414,7 @@ def _down_unlocked(root: Path) -> dict[str, object]:
     urls = cast(dict[str, str], manifest["urls"])
     try:
         manager.start(stage_a["api"])
-        _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+        _wait_for(lambda: _fetch_api_ping(urls["api"]))
     except OperatorError as exc:
         raise OperatorError(ExitCode.PROCESS_FAILED, "down=api_stage_a") from exc
     stopped: list[str] = []
@@ -3425,7 +3466,7 @@ def _restart_waiting_runtime(
     manager.stop(stage_b["api"])
     try:
         manager.start(stage_a["api"])
-        _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+        _wait_for(lambda: _fetch_api_ping(urls["api"]))
     except OperatorError as exc:
         raise OperatorError(
             ExitCode.PROCESS_FAILED,
@@ -3454,7 +3495,7 @@ def _restart_waiting_runtime(
     try:
         manager.stop(stage_a["api"])
         manager.start(stage_b["api"])
-        _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+        _wait_for(lambda: _fetch_api_ping(urls["api"]))
         result = doctor(root, online=True)
         if result["status"] != "ready":
             raise OperatorError(
@@ -3480,9 +3521,7 @@ def _restart_waiting_runtime(
             manager.stop(_inventory_specs(manifest)["api"])
             manager.start(stage_a["api"])
             _wait_for(
-                lambda: _fetch_json(
-                    f"{urls['api']}/api/v1/system/ping",
-                ),
+                lambda: _fetch_api_ping(urls["api"]),
             )
         except BaseException as recovery_exc:
             raise OperatorError(
@@ -3525,7 +3564,7 @@ def _reconcile_failed_waiting_restart(
         # first so no unverified producer can survive reconciliation.
         manager.stop(inventory["api"])
         manager.start(stage_a["api"])
-        _wait_for(lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping"))
+        _wait_for(lambda: _fetch_api_ping(urls["api"]))
         manager.stop(inventory["supervisor"])
         supervisor_record = manager.start(stage_a["supervisor"])
         _wait_for_runtime(
@@ -3928,7 +3967,12 @@ def doctor(root: Path, *, online: bool) -> dict[str, object]:
     if online:
         urls = cast(dict[str, str], manifest["urls"])
         ca_file = Path(cast(dict[str, str], pki["ca"])["cert_file"])
-        checks.append(_check_result("online.api.ping", lambda: _fetch_json(f"{urls['api']}/api/v1/system/ping")))
+        checks.append(
+            _check_result(
+                "online.api.ping",
+                lambda: _fetch_api_ping(urls["api"]),
+            ),
+        )
 
         checks.append(
             _check_result(

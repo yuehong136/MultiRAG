@@ -139,6 +139,30 @@ def test_fetch_json_disables_ambient_proxy(
     assert handlers[0].proxies == {}
 
 
+def test_fetch_api_ping_requires_exact_plain_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter((b"pong", b'"pong"'))
+    observed: list[str] = []
+
+    def fetch_bytes(url: str, **_kwargs: object) -> bytes:
+        observed.append(url)
+        return next(responses)
+
+    monkeypatch.setattr(e2e, "_fetch_bytes", fetch_bytes)
+
+    e2e._fetch_api_ping("http://127.0.0.1:8123")
+    with pytest.raises(e2e.OperatorError) as mismatch:
+        e2e._fetch_api_ping("http://127.0.0.1:8123")
+
+    assert mismatch.value.code is e2e.ExitCode.PROCESS_FAILED
+    assert mismatch.value.detail == "http_body"
+    assert observed == [
+        "http://127.0.0.1:8123/api/v1/system/ping",
+        "http://127.0.0.1:8123/api/v1/system/ping",
+    ]
+
+
 def test_validate_root_rejects_repo_ancestor_and_symlink(tmp_path: Path) -> None:
     with pytest.raises(e2e.OperatorError, match="secure leave operation rejected") as ancestor:
         e2e._validate_root(e2e.REPOSITORY_ROOT.parent)
