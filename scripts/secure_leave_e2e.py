@@ -34,9 +34,9 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
@@ -86,6 +86,12 @@ CHANNEL_PROVISIONING_ENVS = frozenset(
     },
 )
 FIXED_LIVE_PROMPT = "帮我做一次请假试算，只生成预览，不创建草稿、不提交审批。缺少的信息请通过飞书原生表单向我收集。"
+IDENTITY_REVISION_STAGES = (
+    "at_probe_start",
+    "at_form",
+    "at_callback_complete",
+    "at_seal",
+)
 SENSITIVE_KEYS = frozenset(
     {
         "authorization",
@@ -141,6 +147,7 @@ LIVE_EVIDENCE_CHECK_IDS = frozenset(
         "live.runtime.wait_restart_verified",
         "live.runtime.implementation_state_recorded",
         "live.migrations.revisions_recorded",
+        "live.identity.revision_timeline_verified",
     },
 )
 ROLLBACK_ORDER = ("api_disable_producer", "supervisor", "gateway", "mock", "jwks", "api")
@@ -1216,13 +1223,33 @@ def _contains_canvas_authority(value: object, *, server_id: str) -> bool:
     return False
 
 
-def _candidate_ref(values: Iterable[object]) -> str:
+def _candidate_ref(candidate: Candidate) -> str:
     digest = hashlib.sha256()
-    digest.update(b"multirag.eim-o5.candidate.v1\x00")
+    digest.update(b"multirag.eim-o5.candidate.v2\x00")
+    values = (
+        candidate.tenant_id,
+        candidate.platform_user_id,
+        candidate.provider_tenant,
+        candidate.provider_account_id,
+        candidate.external_identity_id,
+        candidate.channel_id,
+        candidate.binding_id,
+        candidate.binding_generation,
+        candidate.agent_id,
+        candidate.agent_revision_id,
+        candidate.mcp_server_id,
+    )
     for value in values:
         digest.update(str(value).encode())
         digest.update(b"\x00")
     return f"candidate-{digest.hexdigest()[:20]}"
+
+
+def _candidate_authority_document(candidate: Candidate) -> dict[str, object]:
+    document = candidate.sensitive_document()
+    document.pop("ref")
+    document.pop("identity_revision")
+    return document
 
 
 async def _query_candidates(manifest: Mapping[str, Any]) -> list[Candidate]:
@@ -1355,50 +1382,60 @@ async def _query_candidates(manifest: Mapping[str, Any]) -> list[Candidate]:
                     )
                 ).scalars()
                 for identity in identities:
-                    values = (
-                        channel.tenant_id,
-                        identity.user_id,
-                        account.provider_tenant_key,
-                        account.id,
-                        identity.id,
-                        identity.identity_revision,
-                        channel.id,
-                        binding.id,
-                        binding.generation,
-                        binding.target_id,
-                        binding.target_revision_id,
-                        server.id,
+                    # The opaque ref selects one stable authority path.  The
+                    # current identity revision remains in the candidate,
+                    # grant source, and evidence boundary, but a proof-time
+                    # refresh must not turn the same unique selection into a
+                    # different operator choice.
+                    candidate = Candidate(
+                        ref="",
+                        tenant_id=channel.tenant_id,
+                        platform_user_id=identity.user_id,
+                        provider_tenant=account.provider_tenant_key,
+                        provider_account_id=account.id,
+                        external_identity_id=identity.id,
+                        identity_revision=identity.identity_revision,
+                        channel_id=channel.id,
+                        binding_id=binding.id,
+                        binding_generation=binding.generation,
+                        agent_id=binding.target_id,
+                        agent_revision_id=binding.target_revision_id,
+                        mcp_server_id=server.id,
                     )
                     candidates.append(
-                        Candidate(
-                            ref=_candidate_ref(values),
-                            tenant_id=channel.tenant_id,
-                            platform_user_id=identity.user_id,
-                            provider_tenant=account.provider_tenant_key,
-                            provider_account_id=account.id,
-                            external_identity_id=identity.id,
-                            identity_revision=identity.identity_revision,
-                            channel_id=channel.id,
-                            binding_id=binding.id,
-                            binding_generation=binding.generation,
-                            agent_id=binding.target_id,
-                            agent_revision_id=binding.target_revision_id,
-                            mcp_server_id=server.id,
-                        ),
+                        replace(candidate, ref=_candidate_ref(candidate)),
                     )
     unique = {candidate.ref: candidate for candidate in candidates}
     return [unique[key] for key in sorted(unique)]
 
 
+def _same_candidate_selection(
+    previous: Candidate,
+    current: Candidate,
+) -> bool:
+    return _candidate_authority_document(previous) == _candidate_authority_document(current) and current.identity_revision >= previous.identity_revision
+
+
+def _current_candidate(
+    manifest: Mapping[str, Any],
+    selected: Candidate,
+) -> Candidate:
+    matches = [candidate for candidate in asyncio.run(_query_candidates(manifest)) if candidate.ref == selected.ref]
+    if len(matches) != 1 or not _same_candidate_selection(selected, matches[0]):
+        raise OperatorError(ExitCode.AUTHORITY_STALE, "current_authority")
+    return matches[0]
+
+
 def _persist_discovery(layout: Layout, candidates: Sequence[Candidate]) -> dict[str, object]:
     discovery_path = layout.run / "discovery.json"
+    previous_candidates = _load_candidates(layout) if discovery_path.exists() else []
     document = {
         "schema": f"{SCHEMA}/discovery",
         "version": VERSION,
         "created_at": _now(),
         "candidates": [candidate.sensitive_document() for candidate in candidates],
     }
-    _write_json(discovery_path, document)
+    selection: dict[str, object] | None = None
     if len(candidates) == 1:
         selection = {
             "schema": f"{SCHEMA}/selection",
@@ -1407,10 +1444,33 @@ def _persist_discovery(layout: Layout, candidates: Sequence[Candidate]) -> dict[
         }
         if layout.selection.exists():
             current = _read_json(layout.selection)
-            if current != selection:
-                raise OperatorError(ExitCode.AUTHORITY_STALE, "selection_changed")
-        else:
-            _write_json(layout.selection, selection)
+            previous_ref = current.get("candidate_ref")
+            previous_matches = [candidate for candidate in previous_candidates if candidate.ref == previous_ref]
+            recovery_matches = [candidate for candidate in previous_candidates if current == selection and _same_candidate_selection(candidate, candidates[0])]
+            # If the prior selection-first write succeeded but the discovery
+            # replacement failed, the desired v2 ref is already selected while
+            # the matching old discovery row still carries its legacy ref.
+            previous = previous_matches[0] if len(previous_matches) == 1 else recovery_matches[0] if len(recovery_matches) == 1 else None
+            if (
+                set(current) != {"schema", "version", "candidate_ref"}
+                or current.get("schema") != f"{SCHEMA}/selection"
+                or current.get("version") != VERSION
+                or previous is None
+                or not _same_candidate_selection(
+                    previous,
+                    candidates[0],
+                )
+            ):
+                raise OperatorError(
+                    ExitCode.AUTHORITY_STALE,
+                    "selection_changed",
+                )
+    # Write the selector first.  A crash before the discovery replacement leaves
+    # a fail-closed, recoverable mismatch; the inverse order could strand a
+    # legacy selector whose candidate no longer exists in the new document.
+    if selection is not None:
+        _write_json(layout.selection, selection)
+    _write_json(discovery_path, document)
     return {
         "status": "ready" if len(candidates) == 1 else "selection_required",
         "candidate_count": len(candidates),
@@ -1534,6 +1594,12 @@ def _build_identity_overlay(
     interactions["enabled"] = interactions_enabled
     interactions["payload_encryption_keys"] = [interaction_key]
     identity["mcp_interactions"] = interactions
+    reconciliation = cast(dict[str, object], identity.get("reconciliation", {}))
+    # I8 rollout is outside EIM-O5.  Disable its background proof refreshes so
+    # the live evidence revision timeline has only the prompt/form/callback
+    # actor chain as a writer while preserving every configured safety bound.
+    reconciliation["enabled"] = False
+    identity["reconciliation"] = reconciliation
     document["identity"] = identity
     return document
 
@@ -1630,7 +1696,10 @@ def _grant_source_document(
     policy_revision: str,
 ) -> dict[str, object]:
     source = {
-        "candidate": candidate.sensitive_document(),
+        # P3 grants bind the stable tenant/user/agent/resource authority.  A
+        # fresh Feishu proof advances identity_revision for reconciliation
+        # fencing, but does not change this grant's subject or scope.
+        "candidate": _candidate_authority_document(candidate),
         "audience": audience,
         "policy_revision": policy_revision,
         "resource_name": RESOURCE_NAME,
@@ -1643,7 +1712,46 @@ def _grant_source_document(
         # reviewed identifiers, while Channel/provider binding coordinates do
         # not belong in another plaintext artifact.
         "semantic_sha256": _sha256_bytes(_canonical_bytes(source)),
+        "observed_identity_revision": candidate.identity_revision,
     }
+
+
+def _same_grant_source_semantics(
+    actual: object,
+    expected: Mapping[str, object],
+) -> bool:
+    return (
+        isinstance(actual, Mapping)
+        and set(actual)
+        == {
+            "schema",
+            "version",
+            "semantic_sha256",
+            "observed_identity_revision",
+        }
+        and actual.get("schema") == expected["schema"]
+        and actual.get("version") == expected["version"]
+        and actual.get("semantic_sha256") == expected["semantic_sha256"]
+        and type(actual.get("observed_identity_revision")) is int
+        and cast(int, actual["observed_identity_revision"]) >= 1
+    )
+
+
+def _validate_grant_source(
+    layout: Layout,
+    candidate: Candidate,
+    *,
+    audience: str,
+    policy_revision: str,
+) -> None:
+    actual = _read_json(layout.artifacts / "mcp-grants.source.json")
+    expected = _grant_source_document(
+        candidate,
+        audience=audience,
+        policy_revision=policy_revision,
+    )
+    if not _same_grant_source_semantics(actual, expected) or cast(int, actual["observed_identity_revision"]) > candidate.identity_revision:
+        raise OperatorError(ExitCode.AUTHORITY_STALE, "grant_source")
 
 
 def _grant_for_publish(
@@ -1674,7 +1782,7 @@ def _grant_for_publish(
         generation=generation,
     )
     existing_source = _read_json(source_path) if source_path.exists() else None
-    if existing is None or (existing == document and existing_source == expected_source):
+    if existing is None or (existing == document and _same_grant_source_semantics(existing_source, expected_source)):
         return document
     return _grant_document(
         candidate,
@@ -3939,6 +4047,12 @@ def doctor(root: Path, *, online: bool) -> dict[str, object]:
 
         policy = load_tool_policy_snapshot(layout.artifacts / "tool-policies.json")
         grant = load_grant_policy_snapshot(layout.artifacts / "mcp-grants.json", tool_policy=policy)
+        _validate_grant_source(
+            layout,
+            candidate,
+            audience=cast(dict[str, str], manifest["urls"])["gateway"],
+            policy_revision=policy.policy_revision,
+        )
         key = (
             candidate.tenant_id,
             candidate.platform_user_id,
@@ -3952,9 +4066,7 @@ def doctor(root: Path, *, online: bool) -> dict[str, object]:
     checks.append(_check_result("offline.authority.policy_grant", validate_artifacts))
 
     def validate_current_authority() -> None:
-        matches = [item for item in asyncio.run(_query_candidates(manifest)) if item == candidate]
-        if len(matches) != 1:
-            raise OperatorError(ExitCode.AUTHORITY_STALE, "current_authority")
+        _current_candidate(manifest, candidate)
 
     checks.append(
         _check_result(
@@ -4076,13 +4188,29 @@ def _valid_live_delivery_attempts(
     return terminal_delivery_attempt == 2 and resume_attempt == 1 and callback_attempt == 1
 
 
+def _valid_identity_revision_timeline(
+    value: object,
+    *,
+    through: str,
+) -> bool:
+    try:
+        end = IDENTITY_REVISION_STAGES.index(through) + 1
+    except ValueError:
+        return False
+    expected = IDENTITY_REVISION_STAGES[:end]
+    if not isinstance(value, Mapping) or set(value) != set(expected):
+        return False
+    revisions = [value[name] for name in expected]
+    return all(type(revision) is int and revision >= 1 for revision in revisions) and all(previous <= current for previous, current in pairwise(cast(list[int], revisions)))
+
+
 async def _validate_waiting_interaction(
     layout: Layout,
     manifest: Mapping[str, Any],
     candidate: Candidate,
     *,
     started_at: datetime,
-) -> None:
+) -> int:
     """Require one delivered, unclaimed form before the restart drill."""
 
     from sqlalchemy import select
@@ -4190,6 +4318,13 @@ async def _validate_waiting_interaction(
                 "waiting_form_state",
             )
         _validate_encrypted_seven_field_form(layout, interaction)
+        identity_revision = interaction.identity_revision
+        if type(identity_revision) is not int or identity_revision < 1:
+            raise OperatorError(
+                ExitCode.LIVE_EVIDENCE_PENDING,
+                "waiting_interaction_revision",
+            )
+        return identity_revision
 
 
 def _validate_encrypted_seven_field_form(
@@ -4316,6 +4451,7 @@ async def _live_database_checks(
     candidate: Candidate,
     *,
     started_at: datetime,
+    interaction_identity_revision: int,
 ) -> tuple[list[Check], datetime]:
     from sqlalchemy import select
 
@@ -4356,7 +4492,8 @@ async def _live_database_checks(
         grant = _read_json(layout.artifacts / "mcp-grants.json")
         if (
             interaction.external_identity_id != candidate.external_identity_id
-            or interaction.identity_revision != candidate.identity_revision
+            or interaction.identity_revision != interaction_identity_revision
+            or candidate.identity_revision < interaction_identity_revision
             or interaction.resource_name != RESOURCE_NAME
             or interaction.resource_uri != cast(dict[str, str], manifest["urls"])["gateway"]
             or interaction.policy_revision != policy.get("policy_revision")
@@ -4909,6 +5046,7 @@ def _probe_static_boundary(
             "api-stage-b.yaml",
             "jwks-public-keys.json",
             "mcp-grants.json",
+            "mcp-grants.source.json",
             "tool-policies.json",
         )
     }
@@ -4917,7 +5055,6 @@ def _probe_static_boundary(
         "selection_sha256": _sha256_file(layout.selection),
         "candidate_ref": candidate.ref,
         "binding_generation": candidate.binding_generation,
-        "identity_revision": candidate.identity_revision,
         "policy_revision": policy.get("policy_revision"),
         "grant_revision": grant.get("grant_revision"),
         "credential_generation": grant.get("credential_generation"),
@@ -5152,7 +5289,22 @@ def _write_evidence(
     process_event_end_offset: int,
     trace_ids: Sequence[str],
     live_checks: Sequence[Check],
+    identity_revision_timeline: Mapping[str, object],
 ) -> Path:
+    if not _valid_identity_revision_timeline(
+        identity_revision_timeline,
+        through="at_seal",
+    ):
+        raise OperatorError(
+            ExitCode.LIVE_EVIDENCE_PENDING,
+            "identity_revision_timeline",
+        )
+    current_candidate = _current_candidate(manifest, candidate)
+    if current_candidate.identity_revision != identity_revision_timeline["at_seal"]:
+        raise OperatorError(
+            ExitCode.LIVE_EVIDENCE_PENDING,
+            "identity_revision_seal",
+        )
     if _probe_static_boundary(layout, manifest, candidate) != static_boundary:
         raise OperatorError(ExitCode.LIVE_EVIDENCE_PENDING, "static_boundary_changed")
     if not _valid_waiting_restart_summary(
@@ -5210,7 +5362,8 @@ def _write_evidence(
         "deployment_manifest_sha256": static_boundary["deployment_manifest_sha256"],
         "selection_sha256": static_boundary["selection_sha256"],
         "binding_generation": static_boundary["binding_generation"],
-        "identity_revision": static_boundary["identity_revision"],
+        "identity_revision": identity_revision_timeline["at_seal"],
+        "identity_revision_timeline": dict(identity_revision_timeline),
         "policy_revision": static_boundary["policy_revision"],
         "grant_revision": static_boundary["grant_revision"],
         "credential_generation": static_boundary["credential_generation"],
@@ -5250,6 +5403,7 @@ def _write_evidence(
         Check("live.runtime.wait_restart_verified", "pass", "ok"),
         Check("live.runtime.implementation_state_recorded", "pass", "ok"),
         Check("live.migrations.revisions_recorded", "pass", "ok"),
+        Check("live.identity.revision_timeline_verified", "pass", "ok"),
     ]
     _write_json(directory / "run.json", run_document)
     _write_json(
@@ -5649,6 +5803,7 @@ def verify_evidence(path: Path) -> dict[str, object]:
         "selection_sha256",
         "binding_generation",
         "identity_revision",
+        "identity_revision_timeline",
         "policy_revision",
         "grant_revision",
         "credential_generation",
@@ -5684,6 +5839,11 @@ def verify_evidence(path: Path) -> dict[str, object]:
         or cast(int, run["binding_generation"]) < 1
         or type(run.get("identity_revision")) is not int
         or cast(int, run["identity_revision"]) < 1
+        or not _valid_identity_revision_timeline(
+            run.get("identity_revision_timeline"),
+            through="at_seal",
+        )
+        or cast(dict[str, object], run["identity_revision_timeline"])["at_seal"] != run.get("identity_revision")
         or type(run.get("credential_generation")) is not int
         or cast(int, run["credential_generation"]) < 1
         or _has_forbidden_evidence_key(run)
@@ -5826,6 +5986,7 @@ def verify_evidence(path: Path) -> dict[str, object]:
             "api-stage-b.yaml",
             "jwks-public-keys.json",
             "mcp-grants.json",
+            "mcp-grants.source.json",
             "tool-policies.json",
         }
         or not all(_is_sha256(value) for value in artifact_sha256.values())
@@ -6043,6 +6204,9 @@ def _begin_live_probe(
         "started_at": _now(),
         "candidate_ref": candidate.ref,
         "policy_revision": policy_revision,
+        "identity_revision_timeline": {
+            "at_probe_start": candidate.identity_revision,
+        },
         "a6_recorded_seq_baseline": _a6_audit_high_water(layout),
         "mock_boundary": mock_boundary,
         "static_boundary": static_boundary,
@@ -6088,7 +6252,8 @@ def _probe_unlocked(
     pending_restart = state.get("waiting_restart") if state is not None else None
     restart_needs_recovery = isinstance(pending_restart, Mapping) and pending_restart.get("status") in {"begin", "failed"}
     try:
-        candidate = _selected_candidate(layout)
+        selected_candidate = _selected_candidate(layout)
+        candidate = _current_candidate(manifest, selected_candidate)
     except OperatorError:
         if restart_needs_recovery:
             # Candidate authority cannot be reconstructed, so the only safe
@@ -6102,7 +6267,21 @@ def _probe_unlocked(
     if state is not None and state.get("candidate_ref") != candidate.ref:
         if restart_needs_recovery:
             ProcessManager(layout).stop(_inventory_specs(manifest)["api"])
-        raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+            raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+        previous_mock = state.get("mock_boundary")
+        if not isinstance(previous_mock, Mapping):
+            raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+        current_mock = _mock_run_boundary(layout, manifest)
+        if previous_mock.get("pid") == current_mock.get("pid") and previous_mock.get("create_time") == current_mock.get("create_time"):
+            raise OperatorError(ExitCode.AUTHORITY_STALE, "live_probe")
+        _archive_abandoned_live_probe(
+            layout,
+            state,
+            reason="candidate_ref_migrated_after_runtime_restart",
+        )
+        probe_path.unlink()
+        state = None
+        restart_needs_recovery = False
     if restart_needs_recovery:
         _reconcile_failed_waiting_restart(layout, manifest, candidate)
         _archive_abandoned_live_probe(
@@ -6173,7 +6352,24 @@ def _probe_unlocked(
                 ExitCode.AUTHORITY_STALE,
                 "static_boundary_changed",
             )
-        asyncio.run(
+        previous_restart = state.get("waiting_restart")
+        revision_timeline = state.get("identity_revision_timeline")
+        expected_revision_stage = "at_form" if isinstance(previous_restart, Mapping) and previous_restart.get("status") == "complete" else "at_probe_start"
+        if not _valid_identity_revision_timeline(
+            revision_timeline,
+            through=expected_revision_stage,
+        ):
+            raise OperatorError(
+                ExitCode.ARTIFACT_INVALID,
+                "identity_revision_timeline",
+            )
+        revisions = cast(dict[str, int], revision_timeline)
+        if candidate.identity_revision < revisions["at_probe_start"] or (expected_revision_stage == "at_form" and candidate.identity_revision != revisions["at_form"]):
+            raise OperatorError(
+                ExitCode.AUTHORITY_STALE,
+                "identity_revision_form",
+            )
+        waiting_identity_revision = asyncio.run(
             _validate_waiting_interaction(
                 layout,
                 manifest,
@@ -6181,13 +6377,26 @@ def _probe_unlocked(
                 started_at=started_at,
             ),
         )
-        previous_restart = state.get("waiting_restart")
+        # Narrow the proof-refresh race between the authority read and the
+        # interaction query.  I8 is disabled in this rollout, so any advance
+        # here is an unexpected concurrent Feishu proof and this form must not
+        # be used as the restart/evidence boundary.
+        candidate = _current_candidate(manifest, candidate)
+        if candidate.identity_revision != waiting_identity_revision:
+            raise OperatorError(
+                ExitCode.AUTHORITY_STALE,
+                "identity_revision_form",
+            )
         if isinstance(previous_restart, Mapping) and previous_restart.get("status") == "complete":
             return {
                 "status": "awaiting_feishu",
                 "prompt": FIXED_LIVE_PROMPT,
                 "instruction": ("The waiting-input restart is already verified; submit the existing form, then run this probe normally."),
             }
+        state["identity_revision_timeline"] = {
+            "at_probe_start": revisions["at_probe_start"],
+            "at_form": waiting_identity_revision,
+        }
         restart_started_at = _now()
         event_offset = _private_file_offset(
             layout.run / "process-events.ndjson",
@@ -6269,6 +6478,22 @@ def _probe_unlocked(
         api_log_offset = state.get("api_log_offset")
         if not isinstance(raw_static_boundary, dict) or not isinstance(raw_runtime_start, dict) or type(process_event_offset) is not int or type(api_log_offset) is not int:
             raise OperatorError(ExitCode.ARTIFACT_INVALID, "live_probe_provenance")
+        raw_revision_timeline = state.get("identity_revision_timeline")
+        if not _valid_identity_revision_timeline(
+            raw_revision_timeline,
+            through="at_form",
+        ):
+            raise OperatorError(
+                ExitCode.ARTIFACT_INVALID,
+                "identity_revision_timeline",
+            )
+        revision_timeline = cast(dict[str, int], raw_revision_timeline)
+        form_identity_revision = revision_timeline["at_form"]
+        if candidate.identity_revision < form_identity_revision:
+            raise OperatorError(
+                ExitCode.AUTHORITY_STALE,
+                "identity_revision_callback",
+            )
         if _probe_static_boundary(layout, manifest, candidate) != raw_static_boundary:
             raise OperatorError(ExitCode.AUTHORITY_STALE, "static_boundary_changed")
         runtime_end = _runtime_repository_evidence(layout, manifest, candidate)
@@ -6313,8 +6538,14 @@ def _probe_unlocked(
                 manifest,
                 candidate,
                 started_at=started_at,
+                interaction_identity_revision=form_identity_revision,
             ),
         )
+        identity_revision_timeline: dict[str, object] = {
+            "at_probe_start": revision_timeline["at_probe_start"],
+            "at_form": form_identity_revision,
+            "at_callback_complete": candidate.identity_revision,
+        }
         raw_mock_boundary = state.get("mock_boundary")
         baseline_seq = state.get("a6_recorded_seq_baseline")
         policy_revision = state.get("policy_revision")
@@ -6345,6 +6576,16 @@ def _probe_unlocked(
         # Seal-time revalidation. Controlled API/supervisor restarts are
         # accepted only through the append-only lifecycle chain; all static
         # authority and non-restartable process records stay byte-for-byte bound.
+        candidate = _current_candidate(manifest, candidate)
+        identity_revision_timeline["at_seal"] = candidate.identity_revision
+        if not _valid_identity_revision_timeline(
+            identity_revision_timeline,
+            through="at_seal",
+        ):
+            raise OperatorError(
+                ExitCode.AUTHORITY_STALE,
+                "identity_revision_seal",
+            )
         if _probe_static_boundary(layout, manifest, candidate) != raw_static_boundary:
             raise OperatorError(ExitCode.AUTHORITY_STALE, "static_boundary_changed")
         runtime_end = _runtime_repository_evidence(layout, manifest, candidate)
@@ -6406,6 +6647,7 @@ def _probe_unlocked(
         process_event_end_offset=process_event_end_offset,
         trace_ids=trace_ids,
         live_checks=live_checks,
+        identity_revision_timeline=identity_revision_timeline,
     )
     verify_evidence(evidence_path)
     state.update(
@@ -6413,6 +6655,7 @@ def _probe_unlocked(
             "status": "passed",
             "completed_at": completed_at.isoformat(),
             "evidence_path": str(evidence_path),
+            "identity_revision_timeline": identity_revision_timeline,
         },
     )
     _write_json(probe_path, state)

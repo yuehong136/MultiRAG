@@ -207,6 +207,207 @@ def test_interaction_capability_uses_binding_scoped_workload_token(
     }
 
 
+def test_unique_selection_migrates_only_revision_and_opaque_ref(
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    previous = _candidate()
+    e2e._persist_discovery(layout, [previous])
+    current = replace(
+        previous,
+        ref="candidate-fedcba9876543210abcd",
+        identity_revision=previous.identity_revision + 1,
+    )
+
+    result = e2e._persist_discovery(layout, [current])
+
+    assert result["status"] == "ready"
+    assert e2e._selected_candidate(layout) == current
+    assert e2e._read_json(layout.selection)["candidate_ref"] == current.ref
+
+
+def test_candidate_ref_is_stable_across_proof_refresh_revision() -> None:
+    candidate = _candidate()
+
+    assert e2e._candidate_ref(candidate) == e2e._candidate_ref(
+        replace(
+            candidate,
+            ref="candidate-ignored",
+            identity_revision=candidate.identity_revision + 1,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("tenant_id", "other-tenant"),
+        ("platform_user_id", "other-user"),
+        ("provider_tenant", "other-provider-tenant"),
+        ("provider_account_id", "other-provider-account"),
+        ("external_identity_id", "other-identity"),
+        ("channel_id", "other-channel"),
+        ("binding_id", "other-binding"),
+        ("binding_generation", 2),
+        ("agent_id", "other-agent"),
+        ("agent_revision_id", "other-agent-revision"),
+        ("mcp_server_id", "other-server"),
+    ],
+)
+def test_candidate_ref_changes_for_every_stable_authority_coordinate(
+    field_name: str,
+    value: object,
+) -> None:
+    candidate = _candidate()
+
+    assert e2e._candidate_ref(candidate) != e2e._candidate_ref(
+        replace(candidate, **{field_name: value}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("timeline", "through", "expected"),
+    [
+        ({"at_probe_start": 3}, "at_probe_start", True),
+        ({"at_probe_start": 3, "at_form": 4}, "at_form", True),
+        (
+            {
+                "at_probe_start": 3,
+                "at_form": 4,
+                "at_callback_complete": 5,
+                "at_seal": 5,
+            },
+            "at_seal",
+            True,
+        ),
+        ({"at_probe_start": 3, "at_form": 2}, "at_form", False),
+        ({"at_probe_start": 3, "at_form": True}, "at_form", False),
+        ({"at_probe_start": 3, "at_form": 4, "extra": 5}, "at_form", False),
+        ({"at_form": 4}, "at_form", False),
+    ],
+)
+def test_identity_revision_timeline_validation(
+    timeline: object,
+    through: str,
+    expected: bool,
+) -> None:
+    assert e2e._valid_identity_revision_timeline(timeline, through=through) is expected
+
+
+def test_unique_selection_migration_recovers_when_discovery_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    previous = _candidate()
+    e2e._persist_discovery(layout, [previous])
+    current = replace(
+        previous,
+        ref="candidate-fedcba9876543210abcd",
+        identity_revision=previous.identity_revision + 1,
+    )
+    original_write_json = e2e._write_json
+    failed_once = False
+
+    def fail_discovery_once(path: Path, value: object) -> None:
+        nonlocal failed_once
+        if path == layout.run / "discovery.json" and not failed_once:
+            failed_once = True
+            raise OSError("simulated atomic replacement failure")
+        original_write_json(path, value)
+
+    monkeypatch.setattr(e2e, "_write_json", fail_discovery_once)
+    with pytest.raises(OSError, match="simulated atomic replacement failure"):
+        e2e._persist_discovery(layout, [current])
+
+    assert e2e._read_json(layout.selection)["candidate_ref"] == current.ref
+    assert e2e._load_candidates(layout) == [previous]
+
+    result = e2e._persist_discovery(layout, [current])
+
+    assert result["status"] == "ready"
+    assert e2e._selected_candidate(layout) == current
+
+
+def test_selection_migration_recovers_from_multi_candidate_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    selected = _candidate()
+    other = replace(
+        selected,
+        ref="candidate-aaaaaaaaaaaaaaaaaaaa",
+        external_identity_id="other-identity",
+        platform_user_id="other-user",
+    )
+    e2e._persist_discovery(layout, [selected, other])
+    e2e._write_json(
+        layout.selection,
+        {
+            "schema": f"{e2e.SCHEMA}/selection",
+            "version": e2e.VERSION,
+            "candidate_ref": selected.ref,
+        },
+    )
+    current = replace(
+        selected,
+        ref="candidate-fedcba9876543210abcd",
+        identity_revision=selected.identity_revision + 1,
+    )
+    original_write_json = e2e._write_json
+    failed_once = False
+
+    def fail_discovery_once(path: Path, value: object) -> None:
+        nonlocal failed_once
+        if path == layout.run / "discovery.json" and not failed_once:
+            failed_once = True
+            raise OSError("simulated atomic replacement failure")
+        original_write_json(path, value)
+
+    monkeypatch.setattr(e2e, "_write_json", fail_discovery_once)
+    with pytest.raises(OSError, match="simulated atomic replacement failure"):
+        e2e._persist_discovery(layout, [current])
+
+    result = e2e._persist_discovery(layout, [current])
+
+    assert result["status"] == "ready"
+    assert e2e._selected_candidate(layout) == current
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        replace(
+            _candidate(),
+            identity_revision=_candidate().identity_revision - 1,
+        ),
+        replace(
+            _candidate(),
+            ref="candidate-fedcba9876543210abcd",
+            platform_user_id="different-user",
+        ),
+    ],
+)
+def test_unique_selection_migration_rejects_authority_change(
+    tmp_path: Path,
+    current: e2e.Candidate,
+) -> None:
+    layout = _layout(tmp_path)
+    previous = _candidate()
+    e2e._persist_discovery(layout, [previous])
+    discovery_before = layout.run.joinpath("discovery.json").read_bytes()
+    selection_before = layout.selection.read_bytes()
+
+    with pytest.raises(e2e.OperatorError) as rejected:
+        e2e._persist_discovery(layout, [current])
+
+    assert rejected.value.code is e2e.ExitCode.AUTHORITY_STALE
+    assert rejected.value.detail == "selection_changed"
+    assert layout.run.joinpath("discovery.json").read_bytes() == discovery_before
+    assert layout.selection.read_bytes() == selection_before
+
+
 def test_validate_root_rejects_repo_ancestor_and_symlink(tmp_path: Path) -> None:
     with pytest.raises(e2e.OperatorError, match="secure leave operation rejected") as ancestor:
         e2e._validate_root(e2e.REPOSITORY_ROOT.parent)
@@ -422,12 +623,18 @@ def test_full_overlay_freezes_effective_non_identity_sections(
     source = {
         "postgresql": {"host": "db.internal", "dbname": "multirag"},
         "channels": {"control": {"heartbeat_interval_seconds": 15}},
-        "identity": {"mcp_interactions": {"enabled": False}},
+        "identity": {
+            "mcp_interactions": {"enabled": False},
+            "reconciliation": {"enabled": True, "batch_size": 17},
+        },
     }
     original = copy.deepcopy(source)
     config = SimpleNamespace(
         raw=source,
-        identity={"mcp_interactions": {"enabled": False}},
+        identity={
+            "mcp_interactions": {"enabled": False},
+            "reconciliation": {"enabled": True, "batch_size": 17},
+        },
     )
     monkeypatch.setattr(app_config, "get_app_config", lambda: config)
     monkeypatch.setattr(bootstrap, "ensure_initialized", lambda **kwargs: None)
@@ -453,6 +660,10 @@ def test_full_overlay_freezes_effective_non_identity_sections(
     assert cast(dict[str, Any], overlay["identity"])["mcp_interactions"] == {
         "enabled": True,
         "payload_encryption_keys": ["interaction-key"],
+    }
+    assert cast(dict[str, Any], overlay["identity"])["reconciliation"] == {
+        "enabled": False,
+        "batch_size": 17,
     }
     assert source == original
 
@@ -495,6 +706,21 @@ def test_grant_generation_is_reused_until_authority_semantics_change(
     assert repeated == initial
     assert repeated["credential_generation"] == 7
     assert changed["credential_generation"] == 8
+
+    e2e._validate_grant_source(
+        layout,
+        replace(candidate, identity_revision=candidate.identity_revision + 1),
+        audience="https://127.0.0.1:8765/mcp",
+        policy_revision="a" * 64,
+    )
+
+    revision_changed = e2e._grant_for_publish(
+        path,
+        replace(candidate, identity_revision=candidate.identity_revision + 1),
+        audience="https://127.0.0.1:8765/mcp",
+        policy_revision="a" * 64,
+    )
+    assert revision_changed["credential_generation"] == 7
 
 
 def test_operation_lock_rejects_concurrent_owner(tmp_path: Path) -> None:
@@ -1599,6 +1825,11 @@ def test_probe_recovers_failed_restart_before_online_doctor(
     monkeypatch.setattr(e2e, "_selected_candidate", lambda _layout: candidate)
     monkeypatch.setattr(
         e2e,
+        "_current_candidate",
+        lambda _manifest, selected: selected,
+    )
+    monkeypatch.setattr(
+        e2e,
         "_reconcile_failed_waiting_restart",
         lambda *args, **kwargs: actions.append("reconciled"),
     )
@@ -1622,6 +1853,152 @@ def test_probe_recovers_failed_restart_before_online_doctor(
     assert not (layout.run / "live-probe.json").exists()
 
 
+def test_probe_archives_legacy_candidate_ref_only_after_mock_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    candidate = replace(_candidate(), ref="candidate-fedcba9876543210abcd")
+    state = {
+        "schema": f"{e2e.SCHEMA}/live-probe",
+        "version": e2e.VERSION,
+        "status": "awaiting_feishu",
+        "candidate_ref": "candidate-legacy0000000000000",
+        "mock_boundary": {"pid": 100, "create_time": 1.0},
+    }
+    probe_path = layout.run / "live-probe.json"
+    e2e._write_json(probe_path, state)
+    archived: list[str] = []
+    monkeypatch.setattr(
+        e2e,
+        "_load_deployment",
+        lambda _root: (layout, _manifest(tmp_path)),
+    )
+    monkeypatch.setattr(e2e, "_selected_candidate", lambda _layout: candidate)
+    monkeypatch.setattr(
+        e2e,
+        "_current_candidate",
+        lambda _manifest, selected: selected,
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_mock_run_boundary",
+        lambda *args, **kwargs: {"pid": 200, "create_time": 2.0},
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_archive_abandoned_live_probe",
+        lambda *args, reason, **kwargs: archived.append(reason),
+    )
+    monkeypatch.setattr(e2e, "doctor", lambda *args, **kwargs: {"status": "ready"})
+    monkeypatch.setattr(
+        e2e,
+        "_begin_live_probe",
+        lambda *args, **kwargs: {"status": "fresh"},
+    )
+
+    result = e2e._probe_unlocked(layout.root, case="leave-preview")
+
+    assert result == {"status": "fresh"}
+    assert archived == ["candidate_ref_migrated_after_runtime_restart"]
+    assert not probe_path.exists()
+
+
+def test_final_probe_records_monotonic_identity_revision_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    selected = _candidate()
+    callback_candidate = replace(selected, identity_revision=5)
+    seal_candidate = replace(selected, identity_revision=6)
+    static_boundary: dict[str, object] = {"artifact_sha256": {}}
+    runtime: dict[str, object] = {}
+    mock_boundary = {
+        "pid": 123,
+        "create_time": 1.0,
+        "do_create_request_blocked": 0,
+        "calls": {},
+    }
+    state = {
+        "schema": f"{e2e.SCHEMA}/live-probe",
+        "version": e2e.VERSION,
+        "status": "awaiting_feishu",
+        "started_at": "2026-08-30T01:00:00+00:00",
+        "candidate_ref": selected.ref,
+        "policy_revision": "a" * 64,
+        "identity_revision_timeline": {
+            "at_probe_start": 3,
+            "at_form": 4,
+        },
+        "a6_recorded_seq_baseline": 0,
+        "mock_boundary": mock_boundary,
+        "static_boundary": static_boundary,
+        "runtime_start": runtime,
+        "process_event_offset": 0,
+        "api_log_offset": 0,
+        "waiting_restart": {"status": "complete"},
+    }
+    e2e._write_json(layout.run / "live-probe.json", state)
+    current_candidates = iter((callback_candidate, seal_candidate))
+    captured: dict[str, object] = {}
+
+    async def live_checks(*args: object, **kwargs: object):
+        captured["interaction_identity_revision"] = kwargs["interaction_identity_revision"]
+        return [], e2e.datetime(2026, 8, 30, 1, 1, tzinfo=e2e.UTC)
+
+    def write_evidence(*args: object, **kwargs: object) -> Path:
+        captured["candidate"] = args[2]
+        captured["timeline"] = kwargs["identity_revision_timeline"]
+        return layout.evidence / "eim-o5-20260830T010100Z-01234567"
+
+    monkeypatch.setattr(
+        e2e,
+        "_load_deployment",
+        lambda _root: (layout, _manifest(tmp_path)),
+    )
+    monkeypatch.setattr(e2e, "_selected_candidate", lambda _layout: selected)
+    monkeypatch.setattr(
+        e2e,
+        "_current_candidate",
+        lambda _manifest, _selected: next(current_candidates),
+    )
+    monkeypatch.setattr(e2e, "doctor", lambda *args, **kwargs: {"status": "ready"})
+    monkeypatch.setattr(e2e, "_mock_run_boundary", lambda *args, **kwargs: mock_boundary)
+    monkeypatch.setattr(e2e, "_probe_static_boundary", lambda *args, **kwargs: static_boundary)
+    monkeypatch.setattr(e2e, "_runtime_repository_evidence", lambda *args, **kwargs: runtime)
+    monkeypatch.setattr(e2e, "_read_json_lines_since", lambda *args, **kwargs: ([], 0))
+    monkeypatch.setattr(e2e, "_validated_runtime_segments", lambda *args, **kwargs: [])
+    monkeypatch.setattr(e2e, "_valid_waiting_restart_summary", lambda *args, **kwargs: True)
+    monkeypatch.setattr(e2e, "_validate_runtime_repository_binding", lambda *args, **kwargs: None)
+    monkeypatch.setattr(e2e, "_live_database_checks", live_checks)
+    monkeypatch.setattr(e2e, "_a6_audit_high_water", lambda *args, **kwargs: 4)
+    monkeypatch.setattr(
+        e2e,
+        "_a6_audit_correlation",
+        lambda *args, **kwargs: {"trace_ids": ["1" * 32]},
+    )
+    monkeypatch.setattr(
+        e2e,
+        "_delegated_trace_ids_since",
+        lambda *args, **kwargs: (["1" * 32], 0),
+    )
+    monkeypatch.setattr(e2e, "_write_evidence", write_evidence)
+    monkeypatch.setattr(e2e, "verify_evidence", lambda *args, **kwargs: {})
+
+    result = e2e._probe_unlocked(layout.root, case="leave-preview")
+
+    assert result["status"] == "passed"
+    assert captured["interaction_identity_revision"] == 4
+    assert cast(e2e.Candidate, captured["candidate"]).identity_revision == 6
+    assert captured["timeline"] == {
+        "at_probe_start": 3,
+        "at_form": 4,
+        "at_callback_complete": 5,
+        "at_seal": 6,
+    }
+
+
 def test_restart_transaction_records_unexpected_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1643,12 +2020,15 @@ def test_restart_transaction_records_unexpected_failure(
         "candidate_ref": candidate.ref,
         "mock_boundary": mock_boundary,
         "static_boundary": static_boundary,
+        "identity_revision_timeline": {
+            "at_probe_start": candidate.identity_revision,
+        },
     }
     probe_path = layout.run / "live-probe.json"
     e2e._write_json(probe_path, state)
 
-    async def waiting_ok(*_args: object, **_kwargs: object) -> None:
-        return None
+    async def waiting_ok(*_args: object, **_kwargs: object) -> int:
+        return candidate.identity_revision
 
     monkeypatch.setattr(
         e2e,
@@ -1656,6 +2036,11 @@ def test_restart_transaction_records_unexpected_failure(
         lambda _root: (layout, _manifest(tmp_path)),
     )
     monkeypatch.setattr(e2e, "_selected_candidate", lambda _layout: candidate)
+    monkeypatch.setattr(
+        e2e,
+        "_current_candidate",
+        lambda _manifest, selected: selected,
+    )
     monkeypatch.setattr(e2e, "doctor", lambda *args, **kwargs: {"status": "ready"})
     monkeypatch.setattr(e2e, "_mock_run_boundary", lambda *args, **kwargs: mock_boundary)
     monkeypatch.setattr(e2e, "_probe_static_boundary", lambda *args, **kwargs: static_boundary)
@@ -1679,6 +2064,73 @@ def test_restart_transaction_records_unexpected_failure(
         "started_at": recorded["started_at"],
         "failed_stage": "unexpected",
     }
+
+
+def test_restart_rejects_identity_revision_advance_during_form_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    layout = _layout(tmp_path)
+    candidate = _candidate()
+    advanced = replace(candidate, identity_revision=candidate.identity_revision + 1)
+    mock_boundary = {
+        "pid": 123,
+        "create_time": 1.0,
+        "do_create_request_blocked": 0,
+        "calls": {},
+    }
+    static_boundary: dict[str, object] = {"artifact_sha256": {}}
+    state = {
+        "schema": f"{e2e.SCHEMA}/live-probe",
+        "version": e2e.VERSION,
+        "status": "awaiting_feishu",
+        "started_at": "2026-08-30T01:00:00+00:00",
+        "candidate_ref": candidate.ref,
+        "mock_boundary": mock_boundary,
+        "static_boundary": static_boundary,
+        "identity_revision_timeline": {
+            "at_probe_start": candidate.identity_revision,
+        },
+    }
+    e2e._write_json(layout.run / "live-probe.json", state)
+    current_candidates = iter((candidate, advanced))
+
+    async def waiting_ok(*_args: object, **_kwargs: object) -> int:
+        return candidate.identity_revision
+
+    monkeypatch.setattr(
+        e2e,
+        "_load_deployment",
+        lambda _root: (layout, _manifest(tmp_path)),
+    )
+    monkeypatch.setattr(e2e, "_selected_candidate", lambda _layout: candidate)
+    monkeypatch.setattr(
+        e2e,
+        "_current_candidate",
+        lambda _manifest, _selected: next(current_candidates),
+    )
+    monkeypatch.setattr(e2e, "doctor", lambda *args, **kwargs: {"status": "ready"})
+    monkeypatch.setattr(e2e, "_mock_run_boundary", lambda *args, **kwargs: mock_boundary)
+    monkeypatch.setattr(e2e, "_probe_static_boundary", lambda *args, **kwargs: static_boundary)
+    monkeypatch.setattr(e2e, "_validate_waiting_interaction", waiting_ok)
+    monkeypatch.setattr(
+        e2e,
+        "_restart_waiting_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("runtime restarted"),
+        ),
+    )
+
+    with pytest.raises(e2e.OperatorError) as error:
+        e2e._probe_unlocked(
+            layout.root,
+            case="leave-preview",
+            restart_waiting_runtime=True,
+        )
+
+    assert error.value.code is e2e.ExitCode.AUTHORITY_STALE
+    assert error.value.detail == "identity_revision_form"
+    assert "waiting_restart" not in e2e._read_json(layout.run / "live-probe.json")
 
 
 def test_live_delivery_attempts_count_form_and_terminal_on_same_row() -> None:
@@ -2061,6 +2513,12 @@ def _write_evidence_fixture(path: Path) -> None:
         "selection_sha256": digest,
         "binding_generation": 1,
         "identity_revision": 1,
+        "identity_revision_timeline": {
+            "at_probe_start": 1,
+            "at_form": 1,
+            "at_callback_complete": 1,
+            "at_seal": 1,
+        },
         "policy_revision": digest,
         "grant_revision": digest,
         "credential_generation": 1,
@@ -2087,6 +2545,7 @@ def _write_evidence_fixture(path: Path) -> None:
             "api-stage-b.yaml": stage_b_digest,
             "jwks-public-keys.json": digest,
             "mcp-grants.json": digest,
+            "mcp-grants.source.json": digest,
             "tool-policies.json": digest,
         },
         "fixture": {
