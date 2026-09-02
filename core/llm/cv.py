@@ -23,6 +23,7 @@ from abc import ABC
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import requests
 from openai import AsyncOpenAI, OpenAI
@@ -134,8 +135,112 @@ class Base(ABC):
                 continue
         return pmpt
 
-    async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
+    @staticmethod
+    def _extract_text_from_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            texts = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") in {"text", "input_text"} and block.get("text"):
+                    texts.append(str(block["text"]))
+                elif "text" in block and isinstance(block.get("text"), (str, int, float)):
+                    texts.append(str(block["text"]))
+            return "\n".join(texts).strip()
+        return ""
+
+    def _resolve_video_prompt(
+        self,
+        system: str | None,
+        history: list[dict[str, Any]] | None,
+        **kwargs: Any,
+    ) -> str:
+        prompt = kwargs.get("video_prompt") or kwargs.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt.strip()
+
+        for message in reversed(history or []):
+            if message.get("role") != "user":
+                continue
+            text = self._extract_text_from_content(message.get("content"))
+            if text:
+                return text
+
+        if isinstance(system, str) and system.strip():
+            return system.strip()
+
+        return "Please summarize this video in proper sentences."
+
+    @staticmethod
+    def _video_frames_to_image_bytes(video_bytes: bytes, filename: str = "") -> list[bytes]:
+        import cv2
+
+        suffix = Path(filename).suffix or ".mp4"
+        tmp_path: str | None = None
+        capture: Any | None = None
         try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+
+            capture = cv2.VideoCapture(tmp_path)
+            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            frames = []
+            for frame_ratio in (0.1, 0.5, 0.9):
+                if frame_count > 1:
+                    frame_index = min(frame_count - 1, max(0, int(frame_count * frame_ratio)))
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    raise RuntimeError("Failed to extract a frame from video.")
+                ok, encoded = cv2.imencode(".jpg", frame)
+                if not ok:
+                    raise RuntimeError("Failed to encode video frame.")
+                frames.append(encoded.tobytes())
+            return frames
+        finally:
+            if capture is not None:
+                capture.release()
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    logging.warning("[%s] Failed to cleanup temp video file: %s", Base.__name__, tmp_path)
+
+    async def _describe_video_frame(
+        self,
+        video_bytes: bytes,
+        filename: str,
+        prompt: str,
+    ) -> tuple[str, int]:
+        frames = await thread_pool_exec(self._video_frames_to_image_bytes, video_bytes, filename)
+        video_prompt = f"The attached images are representative frames sampled from a video in chronological order. Summarize the visible video content based on these frames.\n\n{prompt}"
+        response = await self.async_client.chat.completions.create(
+            model=self.model_name,
+            messages=self.vision_llm_prompt(frames, video_prompt),
+            extra_body=self.extra_body,
+        )
+        if not response.choices:
+            raise ValueError("LLM returned empty response")
+        return response.choices[0].message.content.strip(), total_token_count_from_response(response)
+
+    async def async_chat(
+        self,
+        system: str | None,
+        history: list[dict[str, Any]],
+        gen_conf: dict[str, Any],
+        images: Any = None,
+        video_bytes: bytes | None = None,
+        filename: str = "",
+        **kwargs: Any,
+    ) -> tuple[str, int]:
+        try:
+            if video_bytes:
+                prompt = self._resolve_video_prompt(system, history, **kwargs)
+                return await self._describe_video_frame(video_bytes, filename, prompt)
+
             response = await self.async_client.chat.completions.create(
                 model=self.model_name,
                 messages=self._form_history(system, history, images),
@@ -305,39 +410,6 @@ class QWenCV(GptV4):
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         super().__init__(key, model_name, lang=lang, base_url=base_url, **kwargs)
 
-    @staticmethod
-    def _extract_text_from_content(content):
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            texts = []
-            for blk in content:
-                if not isinstance(blk, dict):
-                    continue
-                if blk.get("type") in {"text", "input_text"} and blk.get("text"):
-                    texts.append(str(blk["text"]))
-                elif "text" in blk and isinstance(blk.get("text"), (str, int, float)):
-                    texts.append(str(blk["text"]))
-            return "\n".join(texts).strip()
-        return ""
-
-    def _resolve_video_prompt(self, system, history, **kwargs):
-        prompt = kwargs.get("video_prompt") or kwargs.get("prompt")
-        if isinstance(prompt, str) and prompt.strip():
-            return prompt.strip()
-
-        for h in reversed(history or []):
-            if h.get("role") != "user":
-                continue
-            txt = self._extract_text_from_content(h.get("content"))
-            if txt:
-                return txt
-
-        if isinstance(system, str) and system.strip():
-            return system.strip()
-
-        return "Please summarize this video in proper sentences."
-
     async def async_chat(self, system, history, gen_conf, images=None, video_bytes=None, filename="", **kwargs):
         if video_bytes:
             try:
@@ -459,7 +531,22 @@ class Zhipu4V(GptV4):
         )
         return response.json()
 
-    async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat(
+        self,
+        system: str | None,
+        history: list[dict[str, Any]],
+        gen_conf: dict[str, Any],
+        images: Any = None,
+        video_bytes: bytes | None = None,
+        filename: str = "",
+        **kwargs: Any,
+    ) -> tuple[str, int]:
+        if video_bytes:
+            prompt = self._resolve_video_prompt(system, history, **kwargs)
+            content, token_count = await self._describe_video_frame(video_bytes, filename, prompt)
+            cleaned = re.sub(r"<\|(begin_of_box|end_of_box)\|>", "", content).strip()
+            return cleaned, token_count
+
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
 
