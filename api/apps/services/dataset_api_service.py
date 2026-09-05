@@ -82,6 +82,11 @@ def _normalize_metadata_fields(raw_fields: list, *, skip_non_dict: bool = False)
     for f in raw_fields:
         if skip_non_dict and not isinstance(f, dict):
             continue
+        # Metadata extraction consumes key/enum field definitions; preserve this
+        # production shape instead of coercing it into the older name/type DTO.
+        if "key" in f:
+            fields.append(dict(f))
+            continue
         fields.append(
             {
                 "name": f.get("name", ""),
