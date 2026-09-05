@@ -1,199 +1,102 @@
-# MultiRAG 验证与开发规范（权威文档）
+# MultiRAG 开发协作规范
 
-任何 AI 编码助手（Claude Code / Copilot / Cursor / Codex …）与人类贡献者在本仓库工作时，
-都以本文档为验证流程的唯一权威来源。CLAUDE.md、copilot-instructions 等工具专属文件均指向这里。
+本文件是仓库级开发与验证约定的唯一维护入口；`CLAUDE.md`、
+`.github/copilot-instructions.md` 只引用这里。用户本次明确指令优先；模块文档补充局部约束。
+版本、命令和实现状态以当前代码、`pyproject.toml`、`Makefile` 与 CI 为准，本文只保留需要判断的原则和项目特有的边界。
 
-MultiRAG：基于深度文档理解的企业级 RAG 后端（Python >=3.12,<3.15，FastAPI，uv 管理依赖，
-非打包库、无 build-system）。主要包：`api/`（服务端）、`core/`（RAG 核心）、`agent/`、
-`common/`、`deepdoc/`、`workflow*/`、`memory/`、`mcp/`、`admin/`。
-`server/`、`internal/` 是停滞的并行实现，**不在质量门禁范围内**。
+## 项目导航
 
-## 验证金字塔
+MultiRAG 是基于深度文档理解的企业级 RAG 后端，使用 Python、FastAPI、SQLAlchemy 和 uv。
 
-| Tier | 命令 | 耗时 | 依赖 | 何时跑 |
-|---|---|---|---|---|
-| 0 | `make lint` | 秒级 | 无 | 每次改动 |
-| 1 | `make typecheck` | ~10s | 无 | 每次改动 |
-| 2 | `make test` | 1–2 min | 无 | 每次改动 |
-| **0+1+2** | **`make verify`** | **~2 min** | **无** | **任何任务宣布完成之前必须全绿** |
-| 3 | `make integration` | 分钟级 | docker compose base 服务 | 改动 DB/存储/检索路径时 |
-| 4 | `make smoke` | 秒级 | 运行中的服务器 | 改动启动流程/路由/健康检查时 |
-| — | `make fix` | 秒级 | 无 | 自动修复格式与 lint（不要手工排版） |
+| 工作内容 | 入口 |
+|---|---|
+| API / 业务服务 / 数据模型 | `api/apps/`（新 REST v1 端点在 `restful_apis/`）、`api/db/services/`、`api/db/db_models.py` |
+| 模型接入 / 文档处理 / 后台任务 | `core/llm/`、`core/flow/`、`core/app/`、`core/svr/task_executor.py` |
+| Agent / 文档解析 / 知识图谱 | `agent/`、`deepdoc/`、`core/graphrag/` |
+| 配置 / 资源 / 数据连接器 | `common/app_config.py`、`common/resources.py`、`common/data_source/` |
+| 部署 / MCP | [docker/README.md](docker/README.md)、[mcp/README.md](mcp/README.md) |
 
-`make help` 列出全部目标。CI（`.github/workflows/ci.yml`）跑的就是同一套命令。
+`server/` 与 Go 侧 `cmd/`、`internal/` 是停滞的并行实现，不是当前 Python 后端的扩展入口。
 
 ## 核心规则
 
-1. **编码后必跑 `make verify`**，全绿才算完成。改动涉及 DB/存储/检索时加跑 `make integration`。
-2. **修根因，不改门禁**。禁止用以下手段换绿：删除/跳过测试、往 ruff `ignore` 加规则、
-   扩大 mypy `exclude`、往 import-linter `ignore_imports` 加豁免、放宽 marker。
-   pyproject 中的门禁配置视为变更受控——确需调整时单独说明理由。
-   （各燃尽清单是遗留债，只出不进。）
-3. **新代码从严**：新增/修改的函数必须写完整类型注解（py3.12 风格：`list[str]`、`str | None`）。
-   运行时另有 beartype 校验，注解错误会直接在测试中暴露。
-4. **格式交给工具**：提交前 `make fix`。全库曾做过一次性 `ruff format`
-   （见 `.git-blame-ignore-revs`；本地执行
-   `git config blame.ignoreRevsFile .git-blame-ignore-revs` 可让 blame 跳过该提交）。
-5. **Channel 子系统的改动要记账**：动到 `api/channels/`、`api/channel_control/`、
-   `api/channel_execution/`、`api/channel_runtime/` 时，提交标题带上
-   [`docs/channel-program/PROGRESS.md`](docs/channel-program/PROGRESS.md) 的 `CHN-<面><n>` ID，
-   并按该文档的维护协议更新状态。与 `make verify` 同级——**没记账不算完成**。
-   冷启动先读 [`docs/channel-program/README.md`](docs/channel-program/README.md)。
+1. **围绕结果推进。** 先读相关实现和调用方，再做足以解决问题的改动；在已授权范围内自主完成实现、验证和必要文档。只有会改变目标、兼容性或外部影响的关键不确定性才需要澄清，普通实现选择自行判断。
+2. **保护工作现场。** 开始检查 `git status` 和相关 diff，保留用户及其他任务的改动；只暂存本任务路径。格式化、回滚和清理都要限定范围，避免用全库操作处理局部问题。生产变更先查明现状、影响与回退方式，遵守本次授权范围。
+3. **修根因，保持边界。** 不靠吞异常、伪造成功、削弱断言或放宽门禁掩盖问题。允许随行为变更更新测试；确需调整质量策略时，单独说明依据与影响，不能把既有失败当作降低标准的理由。
+4. **用证据交付。** 按下节选择验证，区分本次回归、已有问题和环境阻塞；报告实际执行结果与未验证范围。历史通过数、耗时和其他机器的基线不能充当本次证据。
+5. **维护程序契约。** 修改 `api/channels/`、`api/channel_control/`、`api/channel_execution/`、`api/channel_runtime/` 时，先读 [Channel README](docs/channel-program/README.md)，按其协议更新账本，提交标题带对应 CHN ID。EIM 与 Run Platform 工作分别从 [EIM README](docs/enterprise-identity-mcp/README.md)、[Run Platform README](docs/run-platform/README.md) 进入；只读与当前任务有关的章节，不顺手扩展相邻任务。
 
-## 零上下文交接
+## 验证
 
-任务按 ID 派发（`CHN-<面><n>` / `EIM-<面><n>`）。程序级手册各自更细：
-[channel-program/README §3.5](docs/channel-program/README.md#35-怎么把一条任务派给没有任何上下文的我)、
-[enterprise-identity-mcp/AGENT_RUNBOOK](docs/enterprise-identity-mcp/AGENT_RUNBOOK.md)。
-它们的差异是真实的（EIM 跨两个仓、有需要批准的外部操作），不要强行统一；
-但下面四条跨程序成立，改动前先读这四条：
+| 改动 | 验证要求 |
+|---|---|
+| 仅文档、注释，且不改变可执行行为 | 检查 diff、路径、链接及内容与实现的一致性；无需全套 Python 测试 |
+| Python 代码或影响其行为的配置、依赖 | 开发中跑相关检查，交付前跑 `make verify`（lint + typecheck + unit） |
+| DB、事务、存储或检索路径 | 在 `make verify` 之外跑 `make integration`，必要时补所选后端的专项验证 |
+| 启动流程、路由或健康检查 | 在 `make verify` 之外跑 `make smoke`，并验证改动端点的行为；健康检查不覆盖全部业务契约 |
+| 特定协议或程序契约 | 加跑对应程序要求的检查，例如 MCP 兼容矩阵；不能用专项检查替代通用门禁 |
 
-1. **派活说 ID，不说需求。** 复述背景反而危险——派活的人记得的是几周前的状态，
-   而文档是按维护协议持续更新的。接活的一方以文档和当前代码为准。
-2. **提示词只需补文档给不了的三样**：① 这台机器的状态（哪些服务在跑、有无未提交改动、
-   哪些验证跑得动）；② 本次围栏（哪些相邻任务不许顺手做、什么操作要先问）；
-   ③ 已知但尚未入库的事实。**阅读清单不用写**，各程序 README 会把人带到该读的地方。
-3. **验证基线是机器条件化的，必须自测，不能照抄。** 文档里记下的失败集合、耗时和通过数
-   都是某台机器某天的快照（本仓同时被 Windows 与 macOS 开发机使用，两边跑出来的东西不同）。
-   开工先自己跑一遍建立本机基线，再判断"这条失败是不是我造成的"。
-4. **AI agent 的持久记忆不跨机器，也不入库。** 它按项目路径分区，换一台机器就是空的。
-   任何刻意不写进仓库的知识（例如上游对照笔记），在另一台机器上等于不存在——
-   要么派活时贴进提示词，要么就得入库。别假设"上次那个 agent 知道"。
-
-### 文档分层（写之前先想清楚放哪一层）
-
-| 层 | 文件 | 回答什么 | **不**放什么 |
-|---|---|---|---|
-| 规则 | 本文件 | 怎么验证、怎么记账、怎么交接 | 任务状态、模块当前行为 |
-| 程序 | `docs/<program>/` | 为什么这么判、做到哪了、跨仓契约是什么 | 通用工程规则 |
-| 模块 | `<package>/README.md`（如 `api/channels/`） | 这个模块**现在**是什么行为、边界在哪、坏了怎么判断 | 任务派发协议、任务进度 |
-
-模块 README 最有价值的是"尚未实现或不能宣称"那类小节——运维半夜排查时只看那个。
-入库与本地笔记的分层是另一条轴，见 [CLAUDE.md](CLAUDE.md) 与 `CHN-ADR-05`。
+- 命令以 [Makefile](Makefile) 为准；`make help` 列出目标。无 `make` 时执行目标内的等价命令，不减少检查项。
+- 由 Ruff 负责 Python 格式与 lint。局部修改用 `uv run --no-sync ruff check --fix <paths>` 和 `uv run --no-sync ruff format <paths>`；`make fix` 会处理全库，仅在确认不会混入无关修改时使用。
+- 不要求每个任务开工都跑全套基线；涉及复杂重构、已有故障或失败归因时，再建立所需的本机对照。失败后先定位，只有新改动或新证据才值得重跑。
+- 本次引入的失败必须修复。无关失败或依赖不可用时，继续完成可验证的部分并明确交付限制；不得声称全绿，也不擅自修复其他任务。集成测试 skip 不算验证通过。
+- `make integration` 会检查服务并以 `REQUIRE_SERVICES=1` 运行；测试用隔离资源，禁止拿业务库做破坏性验证。直接运行集成 pytest 时，fixture 可能用 testcontainers 补服务；`INTEGRATION_NO_TESTCONTAINERS=1` 可关闭该行为。
 
 ## 写测试
 
-按被测对象选形态（三形态选型表）：
+测试锁定行为与契约，优先复用现有 fixture；修 bug 时增加能暴露该问题的回归用例，避免只复述实现步骤的测试。
 
-| 测什么 | 形态 | 位置 |
-|---|---|---|
-| 路由/HTTP 行为（状态码、retcode、载荷契约） | TestClient 契约式：conftest 的 session 级 `client` fixture + `dependency_overrides`，service 层 monkeypatch 真实类 | `tests/unit/` |
-| 纯编排/算法逻辑 | 纯函数式 + 显式 monkeypatch 打桩（经典形态，仍合法） | `tests/unit/` |
-| SQL/事务/迁移语义 | 真库行为测试：`bootstrapped_engine`（一次性 scratch 库，绝不触碰配置的真实 dbname） | `tests/integration/` |
+| 被测对象 | 方式 |
+|---|---|
+| HTTP 状态、业务 retcode、响应载荷 | `tests/unit/` 的 `client` fixture + `dependency_overrides`，在服务边界 monkeypatch |
+| 编排、算法、错误处理 | `tests/unit/` 的直接调用 + 显式依赖替换 |
+| SQL、事务、迁移 | `tests/integration/` 的 `pg_scratch_engine` / `bootstrapped_engine` / `bootstrapped_async_engine` |
 
-- **单元测试 → `tests/unit/`**（平铺）：**套件已封闭**——conftest 的 `pytest_configure`
-  向 `common.resources` 注册表预置假件，任何测试不得依赖真实服务（CI unit job 无服务，
-  永久守护封闭性）。外部依赖一律 monkeypatch；DB 参数用未绑定 `Session()` 过 beartype
-  （见 `tests/unit/conftest.py` 的 `db`/`fake_kb` fixtures）；需要绕过会查库的
-  `__init__` 时用 `object.__new__(Cls)`。
-  - 路由测试用 `client` fixture（真实 `api.apps.app`，已带 get_db/登录/租户基线
-    覆盖；per-test 追加的 `dependency_overrides` 自动回滚），断言只锁 HTTP 契约——
-    对内部重构免疫。**禁止新增 sys.modules 整包伪造**（桩会与生产漂移，历史上曾把
-    RetCode 桩错）。存量 monkeypatch 路由测试不强迁，坏了才按契约式重写。
-  - 迁移示范：`tests/unit/test_tenant_member_management.py`。
-- **集成测试 → `tests/integration/`**：需要真实 PostgreSQL/Redis/MinIO。conftest 三级探测：
-  ① 运行中的服务直接用 → ② docker 可用时 testcontainers 自动拉起缺失服务
-  （`INTEGRATION_NO_TESTCONTAINERS=1` 可禁用）→ ③ 整体 skip，`REQUIRE_SERVICES=1`
-  时硬失败（CI 用）。marker 自动附加。真库行为测试用 `pg_scratch_engine` /
-  `bootstrapped_engine` fixtures（示范：`test_db_bootstrap.py`、`test_common_service_crud.py`）。
-- **`tests/manual/`**：性能/压测脚本，不被收集，手动运行（见其 README）。
-- marker 只有三个：`integration`、`slow`、`smoke`（`--strict-markers` 强制）。
-- `async def test_*` 直接写即可（pytest-asyncio `asyncio_mode=auto`）。
+- 单元测试不得依赖真实外部服务。使用 [unit conftest](tests/unit/conftest.py) 提供的 `db`、`async_db`、`client` 等假件与覆盖，不新增 `sys.modules` 整包伪造。
+- SQL 语义用真库验证；[integration conftest](tests/integration/conftest.py) 提供一次性 scratch 库，不操作配置中的业务数据。
+- 异步测试直接写 `async def test_*`；marker 和收集规则以 `pyproject.toml` 为准。手工性能脚本放 `tests/manual/`。
 
-## mypy 棘轮（渐进式类型检查）
+## 配置与资源
 
-当前检查范围见 `pyproject.toml [tool.mypy] files`（common 核心 + api/utils + scripts；
-`common/data_source/`、`common/doc_store/` 是待清理的燃尽目标）。晋升流程：
+- 新代码通过 `get_app_config()` 读类型化配置，路由通过 `api/apps/deps.py` 注入资源；资源生命周期由 `common/resources.py` 管理。需要应用资源的新入口先调用 `common.bootstrap.ensure_initialized()`。
+- `common/settings.py` 是兼容 facade。紧跟 RAGFlow 的文件可以保留 `settings.X`，避免无关重构增加上游合并成本；对应关系见 [RAGFLOW_PORTING_MAP](docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)。移植上游提交时使用项目 `port-ragflow-commit` skill。
+- 配置优先级：`MULTIRAG_<SECTION>__<FIELD>` 环境变量 > `MULTIRAG_CONFIG_OVERLAY_FILE` 外部文件 > `configs/local.service_conf.yaml` > `configs/service_conf.yaml`。文件覆盖按顶层 section **整体替换**，覆盖时必须写全该 section 所需字段；具体语义见 `common/config_utils.py` 与 `common/app_config.py`。
+- 本机差异放在已忽略的本地覆盖中；不为跑测试改写共享配置，不提交密钥或在日志中暴露凭据。
+- 遵守 `pyproject.toml` 的 import-linter 依赖契约。共享逻辑下沉或通过接口注入，避免底层反向依赖路由和业务层；运行代码不依赖停滞实现。
 
-1. 清理某个包的 mypy 错误；
-2. 把它加进 `files`（或从燃尽 exclude 中移出）——CI 从此保证它不回退；
-3. 包内质量再上台阶时，用 `[[tool.mypy.overrides]]` 提升 `check_untyped_defs` /
-   `disallow_untyped_defs`。
+## 异步 SQLAlchemy 编码规范
 
-只进不退：不允许把已纳管的包移出范围。
+新 service 使用 `AsyncSession`，对应 handler 用 `async def` + `Depends(get_async_db)`。
+修改遗留同步路径时保持请求内事务一致，不为小改动扩大到整条链路迁移。
 
-## 配置与资源（重构后的规范）
+- 一个请求或 task 管理自己的 session；同一请求内不混用同步与异步 session，不跨并发 task 共享 `AsyncSession`。需要原子性的操作保持在同一事务中。
+- 使用 SQLAlchemy 2.0 查询与映射方式。显式预载 relationship，新 relationship 默认 `lazy="raise_on_sql"`；确需延迟加载时使用 `awaitable_attrs`，避免隐式 IO。
+- 异步工厂保持 `expire_on_commit=False`；需要数据库新值时显式 `refresh`。大结果集按需流式处理，避免无界加载。
+- async 路径使用异步网络/存储客户端；无法立刻迁移的阻塞调用可放入 `asyncio.to_thread`，但不能把当前 session 一起传给并发线程。
+- `run_sync` 只用于遗留桥接，保留 `TODO(async-phase4)` 标记。它只适配传入 session 的 IO，不能让回调内自开连接的同步 helper 变成非阻塞。
+- `run_sync` 的同步 facade session 不得逸出回调。遗留 `LLMBundle` 构造后若持有它，必须在回调内剥离（`bundle.db = None`），避免后续 rollback 过期 ORM 状态并触发 `MissingGreenlet`。
 
-架构（详见 internal/config_bootstrap_refactor_plan.md）：
-`common/app_config.py`（类型化配置，env `MULTIRAG_<SECTION>__<FIELD>` >
-local.service_conf.yaml > service_conf.yaml）→ `common/resources.py`（有状态资源，
-懒加载选中后端）→ `common/bootstrap.ensure_initialized()`（入口点统一初始化）→
-`common/settings.py`（PEP 562 兼容 facade，上游移植 diff 照抄的官方访问面）。
+新增或修改的函数使用完整类型注解，沿用 Python 现代类型、Pydantic v2 和项目现有接口；注意 beartype 的运行时类型校验。Ruff、mypy 的具体范围以配置为准，已纳管范围不回退。
 
-**新代码规则**：
-1. 读配置用 `get_app_config()` 的类型化字段，不要新增 `settings.大写名`；
-2. 路由层资源用 `api/apps/deps.py` 的 `Depends(get_storage)` 等注入
-   （测试用 `app.dependency_overrides` 替换，见 tests/unit/test_api_deps.py 示范），
-   不要直接引用 `settings.docStoreConn`/`settings.STORAGE_IMPL`；
-3. **例外：紧跟 ragflow 上游的文件保持 `settings.X` 风格**，保证上游 diff
-   可照抄（映射表：[docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md](docs/enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)）；
-4. 新入口点（脚本/服务）先调 `common.bootstrap.ensure_initialized()`；
-   核心资源未初始化即访问会 fail-fast 抛 `ResourcesNotInitialized`。
-5. **依赖方向受 import-linter 契约约束**（`make lint` 内含，配置见 pyproject
-   `[tool.importlinter]`）：common 是底层不依赖上层；deepdoc 不依赖 api/agent；
-   api 服务层（db/utils）不依赖路由层（apps）；任何代码不依赖停滞的 server/。
-   违规时调整依赖方向（下沉共享逻辑 / 注入依赖），禁止往豁免清单加条目。
+## 零上下文交接
 
-## 异步 SQLAlchemy 编码规范（新代码从严）
-
-API 进程的终态是纯异步（AsyncSession）。基建已就位：`api/db/db_models.py` 的
-`async_engine` / `async_session_factory`（`expire_on_commit=False` 工厂级强制）/
-`get_async_db`，`Base` 带 `AsyncAttrs`；示范端点 `GET /api/v1/system/healthz`。
-
-**共存期规则**：新写的 service 一律 async-first（签名 `db: AsyncSession`，handler
-`async def` + `Depends(get_async_db)`）；同一请求内**禁止混用**同步/异步两种 session
-（两个连接、两个事务，一致性破坏）——路由要么整体走 `get_db`，要么整体走 `get_async_db`。
-
-| ❌ 禁止 | ✅ 规范 | 原因 |
-|---|---|---|
-| 隐式 lazy load（`obj.children` 直接触发 SQL） | 查询时 `selectinload()`/`joinedload()` 显式预载；新模型 relationship 默认 `lazy="raise_on_sql"` | 异步下隐式 IO 直接抛 `MissingGreenlet`；显式预载也消灭 N+1 |
-| commit 后访问过期属性 | `expire_on_commit=False`（工厂级强制）+ 确需新值时 `await session.refresh(obj)` | 同上 |
-| 迁移期确需延迟加载 | `await obj.awaitable_attrs.children`（AsyncAttrs） | 显式可 await 的逃生门 |
-| 跨 asyncio task 共享同一 `AsyncSession`；`gather()` 里多协程共用一个 session | 一个请求/一个 task 一个 session；并发查询各开 session 或改串行 | AsyncSession **非 task-safe**，共享会损坏事务状态 |
-| `session.query(...)`（1.x 风格） | `select(M).where(...)` + `await session.execute()` / `await session.scalars()` | 既有约定延续 |
-| 主键查询写 select | `await session.get(Model, pk)` | 利用 identity map（既有约定的 async 版） |
-| 大结果集 `(await session.scalars(...)).all()` | `async for row in await session.stream_scalars(stmt)` | 流式，控内存 |
-| async 函数里 `time.sleep` / `requests` / 同步 redis | `asyncio.sleep` / `httpx.AsyncClient` / `redis.asyncio` | ruff `ASYNC` 规则强制 |
-| 新代码调 `session.run_sync(...)` | 仅迁移期桥接遗留同步逻辑允许，带 `# TODO(async-phase4)` 标记 | 收口阶段验收要求清零 |
-| run_sync 的 facade session 被构造物持有并逸出 greenlet（如 `run_sync(lambda s: LLMBundle(s, ...))` 后 bundle 带着 s 存活） | 构造后立即剥离（`bundle.db = None`）；facade 只在 run_sync 回调内使用 | 同步方法内 rollback 会**先过期全部 ORM 状态、后抛 MissingGreenlet 且可能被吞**——炸点漂移到后续任意属性访问，单测打桩抓不到（Phase 1 活体实锤） |
-| 自开连接的同步 helper 经 run_sync 桥接（`llm_id2llm_type`、`LLMBundle(None, ...)` 等内部 `db_connection()` 的函数） | `asyncio.to_thread` 外移，或改造为接收 session 参数 | run_sync 只把该 session 自身的 IO 变非阻塞，回调内其他同步连接仍阻塞事件循环 |
-
-测试基建：unit 层 `async_db` fixture（未绑定 `AsyncSession`，对齐 `db` fixture 模式）、
-`client` 基线已覆盖 `get_async_db`；integration 层 `bootstrapped_async_engine`
-（示范：`tests/integration/test_async_engine.py`）。
+- 有 CHN / EIM 等任务 ID 时，用 ID 定位最新契约和状态；没有 ID 的普通需求直接按目标开展。交接补充目标、范围、已做改动、验证结果、待决问题和未入库事实即可，不要求固定提示词模板。
+- 仓库文档写可供下一位维护者复用的事实，明确当前行为、已知限制与计划。持久记忆和本地笔记只能辅助定位，不能替代代码、契约或本机验证。
+- 文档分层：`AGENTS.md` 放跨模块规则；`docs/<program>/` 放设计、契约、任务状态；模块 `README.md` 放当前行为与排障边界。更新事实发生的那一层，避免多处复制。
+- `internal/*.md` 是用户本地笔记，可按任务需要读写，但不得暂存提交。上游对照细节与入库文档的分工见 [CHN-ADR-05](docs/channel-program/DECISIONS.md#chn-adr-05--文档分层入库讲我们的代码本地讲别人的代码)。
 
 ## 服务与运行
 
+先检查已有进程、监听端口和服务状态，复用可用实例；需要启动时使用以下入口：
+
 ```bash
-# 基础服务（PostgreSQL + Redis/valkey + MinIO）
+make install  # uv sync --group dev --frozen
+
 docker compose -f docker/docker-compose-base.yml up -d
-
-# API 服务器（先起基础服务；端口/地址来自 configs/service_conf.yaml 的 multirag 段）
 uv run python -m api.multirag_server
-
-# 任务执行器
 uv run python -m core.svr.task_executor
 ```
 
-- **本地配置覆盖**：`configs/local.service_conf.yaml`（已 gitignore）按**顶层 section 整体替换**
-  `configs/service_conf.yaml`——覆盖某 section 时必须把该 section 的字段写全。
-- **健康端点**：`GET /api/v1/system/ping`（→ pong）、`GET /api/v1/system/healthz`
-  （分组件状态，`scripts/smoke.py` 消费）。
-- 依赖同步：`make install`（等价 `uv sync --group dev --frozen`）。
-
-## 自动化钩子
-
-- **pre-commit**（可选，人各一次）：`uv run pre-commit install`——commit 时自动跑
-  ruff check/format 与基础卫生检查。
-- **Claude Code**：`.claude/settings.json` 的 PostToolUse 钩子对每次编辑的 .py 单文件
-  即时 ruff（自动修复 + 残留问题回灌）；mypy 纳管范围内的文件追加 dmypy 增量类型检查
-  （类型错误同样即时回灌）。其他 AI 工具没有钩子，务必遵守规则 1。
-
-## 编码规范（速查）
-
-- Python 3.12+ 类型：`list[str]` / `dict[str, Any]` / `str | None`（禁用 `List`/`Optional`/`Union`）
-- FastAPI 0.128+：`Query(pattern=)`、`Body(examples=[...])`、`FastAPI(lifespan=...)`
-- Pydantic v2：`model_config = ConfigDict(...)`、`.model_dump()`、`.model_validate()`、`@field_validator`
-- SQLAlchemy 2.0：`Mapped[...]` + `mapped_column()`、`select(M).where(...)`、
-  主键查询用 `session.get(Model, pk)`
-- lint/format 全部由 ruff 承担，规则见 `pyproject.toml [tool.ruff.lint]`
+地址和端口以生效配置为准。健康端点为 `GET /api/v1/system/ping` 与
+`GET /api/v1/system/healthz`；诊断还需核对组件状态、业务响应和相关日志，HTTP 200 本身不代表业务成功。
+部署与恢复见 [docker/README.md](docker/README.md)，工具钩子以 `.claude/settings.json` 和实际脚本为准，不能替代交付验证。

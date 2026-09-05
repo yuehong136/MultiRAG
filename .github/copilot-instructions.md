@@ -1,1 +1,1 @@
-Refer to [AGENTS.MD](../AGENTS.md) for all repo instructions.
+本项目的开发与验证规范统一维护在 [AGENTS.md](../AGENTS.md)。请先读取并遵循该文件，不在此维护独立规则。
