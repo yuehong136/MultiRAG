@@ -54,6 +54,10 @@ class MetadataBatchUpdateRequest(BaseModel):
     deletes: Any = Field(default_factory=list)
 
 
+class DocumentIdsRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=1)
+
+
 @router.patch("/datasets/{dataset_id}/documents/metadatas", summary="批量更新文档元数据")
 async def update_metadata(
     dataset_id: str,
@@ -480,3 +484,51 @@ async def delete_documents(
         return get_result(data={"deleted": len(doc_ids)})
 
     return await db.run_sync(_delete)  # TODO(async-phase4)
+
+
+@router.post("/datasets/{dataset_id}/documents/parse", summary="解析数据集中的文档")
+async def parse_documents(
+    dataset_id: str,
+    request: DocumentIdsRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    def _parse(s: Session) -> Response:
+        if not KnowledgebaseService.accessible(s, kb_id=dataset_id, user_id=tenant_id):
+            return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
+        unique_doc_ids, duplicate_messages = check_duplicate_ids(request.document_ids, "document")
+        try:
+            result = document_api_service.parse_dataset_documents(s, dataset_id, tenant_id, unique_doc_ids, list(duplicate_messages))
+        except document_api_service.DocumentParseError as e:
+            return get_error_data_result(retmsg=str(e))
+        except Exception as e:
+            logger.exception(e)
+            return get_error_data_result(retmsg="Internal server error")
+        return get_result(data=result)
+
+    return await db.run_sync(_parse)  # TODO(async-phase4)
+
+
+@router.post("/datasets/{dataset_id}/documents/stop", summary="停止解析数据集中的文档")
+async def stop_parse_documents(
+    dataset_id: str,
+    request: DocumentIdsRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    def _stop(s: Session) -> Response:
+        if not KnowledgebaseService.accessible(s, kb_id=dataset_id, user_id=tenant_id):
+            return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
+
+        unique_doc_ids, duplicate_messages = check_duplicate_ids(request.document_ids, "document")
+        try:
+            result = document_api_service.stop_dataset_documents(s, dataset_id, unique_doc_ids, list(duplicate_messages))
+        except document_api_service.DocumentParseError as e:
+            return get_error_data_result(retmsg=str(e))
+        except Exception as e:
+            logger.exception(e)
+            return get_error_data_result(retmsg="Internal server error")
+        return get_result(data=result)
+
+    return await db.run_sync(_stop)  # TODO(async-phase4)

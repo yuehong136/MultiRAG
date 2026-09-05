@@ -6,12 +6,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document
+from api.db.db_models import Document, Task
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from api.utils import validation_utils
 from api.utils.api_utils import get_error_data_result, get_parser_config, server_error_response
@@ -215,3 +216,106 @@ def _process_run_mapping(doc: dict[str, Any], run_status: Any) -> dict[str, Any]
     # 未知 run 值原样透出（不强制归 UNSTART），避免丢失状态信息。
     doc["run"] = run_mapping.get(str(run_status), str(run_status))
     return doc
+
+
+class DocumentParseError(ValueError):
+    """Raised when a parse/stop request names documents the dataset does not hold."""
+
+
+def _partition_dataset_documents(db: Session, dataset_id: str, document_ids: list[str]) -> tuple[list[str], list[str]]:
+    """Split requested ids into those the dataset actually holds and those it does not."""
+    valid_ids = []
+    missing_ids = []
+    for document_id in document_ids:
+        if DocumentService.query(db, kb_id=dataset_id, id=document_id):
+            valid_ids.append(document_id)
+        else:
+            missing_ids.append(document_id)
+    return valid_ids, missing_ids
+
+
+def parse_dataset_documents(db: Session, dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
+    """(Re)queue parsing for documents in a dataset.
+
+    Re-parsing a finished document drops its previous chunks first, so the run starts clean.
+    """
+    valid_ids, missing_ids = _partition_dataset_documents(db, dataset_id, document_ids)
+    if missing_ids and not valid_ids:
+        raise DocumentParseError(f"Documents not found: {missing_ids}")
+
+    kb_table_num_map: dict[str, Any] = {}
+    success_count = 0
+    for document_id in valid_ids:
+        doc = DocumentService.get_by_id(db, document_id)
+        if not doc:
+            errors.append(f"Document not found: {document_id}")
+            continue
+
+        info: dict[str, Any] = {"run": str(TaskStatus.RUNNING.value), "progress": 0}
+        if str(doc.run) == TaskStatus.DONE.value:
+            DocumentService.clear_chunk_num_when_rerun(db, doc.id)
+            info["progress_msg"] = ""
+            info["chunk_num"] = 0
+            info["token_num"] = 0
+
+        DocumentService.update_by_id(db, document_id, info)
+        TaskService.filter_delete(db, [Task.doc_id == document_id])
+        _drop_document_from_doc_store(db, doc.id, doc.kb_id)
+
+        DocumentService.run(db, tenant_id, doc.to_dict(), kb_table_num_map)
+        success_count += 1
+
+    if missing_ids:
+        errors.append(f"Documents not found: {missing_ids}")
+
+    result: dict[str, Any] = {"success_count": success_count}
+    if errors:
+        result["errors"] = errors
+    return result
+
+
+def _drop_document_from_doc_store(db: Session, doc_id: str, kb_id: str) -> None:
+    """Clear a document's chunks from whichever doc-store backend is configured.
+
+    Milvus addresses one collection per dataset and has no index_exist; the other
+    backends probe the index first. Mirrors the legacy /document/run branch.
+    """
+    kb = KnowledgebaseService.get_by_id(db, kb_id)
+    if not kb:
+        return
+    collection_name = search.index_name_one(kb.tenant_id, kb.name)
+    if settings.docStoreConn.db_type() == "milvus":
+        if settings.docStoreConn.has_collection(collection_name):
+            settings.docStoreConn.delete(condition={"doc_id": doc_id}, index_name=collection_name, dataset_id=kb.id)
+        return
+    if settings.docStoreConn.index_exist(collection_name, kb_id):
+        settings.docStoreConn.delete({"doc_id": doc_id}, collection_name, kb_id)
+
+
+def stop_dataset_documents(db: Session, dataset_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
+    """Cancel in-flight parsing for documents in a dataset."""
+    valid_ids, missing_ids = _partition_dataset_documents(db, dataset_id, document_ids)
+    if missing_ids:
+        raise DocumentParseError(f"Documents not found: {missing_ids}")
+
+    success_count = 0
+    for document_id in valid_ids:
+        doc = DocumentService.get_by_id(db, document_id)
+        if not doc:
+            errors.append(f"Document not found: {document_id}")
+            continue
+
+        tasks = list(TaskService.query(db, doc_id=document_id))
+        has_unfinished_task = any((task.progress or 0) < 1 for task in tasks)
+        if str(doc.run) not in [TaskStatus.RUNNING.value, TaskStatus.CANCEL.value] and not has_unfinished_task:
+            errors.append("Can't stop parsing document that has not started or already completed")
+            continue
+
+        cancel_all_task_of(db, document_id)
+        DocumentService.update_by_id(db, document_id, {"run": str(TaskStatus.CANCEL.value)})
+        success_count += 1
+
+    result: dict[str, Any] = {"success_count": success_count}
+    if errors:
+        result["errors"] = errors
+    return result

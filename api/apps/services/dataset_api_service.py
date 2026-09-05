@@ -24,18 +24,43 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import File, db_connection
 from api.db.services.connector_service import Connector2KbService
+from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID, TaskService
-from api.db.services.user_service import TenantService, UserService
+from api.db.services.user_service import TenantService, UserService, UserTenantService
 from api.utils.api_utils import deep_merge, flatten_parent_child_config, get_parser_config, remap_dictionary_keys, verify_embedding_availability
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common import settings
 from common.constants import PAGERANK_FLD, FileSource, StatusEnum
 from core.nlp import search
+from core.utils.redis_conn import REDIS_CONN
 
 logger = logging.getLogger(__name__)
+
+# 统一索引任务（graph/raptor/mindmap）的类型表。graph 对外用 "graph"，
+# 内部任务类型与 KB 列名仍是历史的 "graphrag"。
+VALID_INDEX_TYPES = ("graph", "raptor", "mindmap")
+
+_INDEX_TYPE_TO_TASK_TYPE = {
+    "graph": "graphrag",
+    "raptor": "raptor",
+    "mindmap": "mindmap",
+}
+
+_INDEX_TYPE_TO_TASK_ID_FIELD = {
+    "graph": "graphrag_task_id",
+    "raptor": "raptor_task_id",
+    "mindmap": "mindmap_task_id",
+}
+
+_INDEX_TYPE_TO_DISPLAY_NAME = {
+    "graph": "Graph",
+    "raptor": "RAPTOR",
+    "mindmap": "Mindmap",
+}
 
 
 def _tag_chunk_method_guard(parser_id: str | None) -> str | None:
@@ -645,3 +670,378 @@ def trace_raptor(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, An
         return False, "RAPTOR Task Not Found or Error Occurred"
 
     return True, task.to_dict()
+
+
+# ==================== 统一索引任务（graph / raptor / mindmap） ====================
+
+
+def run_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+    """运行索引任务（graph/raptor/mindmap），三者共用同一套排队与去重逻辑。"""
+    if index_type not in VALID_INDEX_TYPES:
+        return False, f"Invalid index type '{index_type}'. Must be one of {sorted(VALID_INDEX_TYPES)}"
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    task_type = _INDEX_TYPE_TO_TASK_TYPE[index_type]
+    task_id_field = _INDEX_TYPE_TO_TASK_ID_FIELD[index_type]
+    display_name = _INDEX_TYPE_TO_DISPLAY_NAME[index_type]
+
+    existing_task_id = getattr(kb, task_id_field, None)
+    if existing_task_id:
+        task = TaskService.get_by_id(db, existing_task_id)
+        if not task:
+            logger.warning(f"A valid {display_name} task id is expected for Dataset {dataset_id}")
+        if task and task.progress not in [-1, 1]:
+            return False, f"Task {existing_task_id} in progress with status {task.progress}. A {display_name} Task is already running."
+
+    documents, _ = DocumentService.get_by_kb_id(
+        db,
+        kb_id=dataset_id,
+        page_number=0,
+        items_per_page=0,
+        orderby="create_time",
+        desc=False,
+        keywords="",
+        run_status=[],
+        types=[],
+        suffix=[],
+    )
+    if not documents:
+        return False, f"No documents in Dataset {dataset_id}"
+
+    sample_document = documents[0]
+    document_ids = [document["id"] for document in documents]
+
+    task_id = queue_raptor_o_graphrag_tasks(
+        db,
+        sample_doc=sample_document,
+        ty=task_type,
+        priority=0,
+        fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
+        doc_ids=list(document_ids),
+    )
+
+    if not KnowledgebaseService.update_by_id(db, kb.id, {task_id_field: task_id}):
+        logger.warning(f"Cannot save {task_id_field} for Dataset {dataset_id}")
+
+    return True, {"task_id": task_id}
+
+
+async def run_index_async(tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+    """run_index 的异步入口：同 run_graphrag_async 口径（共享 helper 内 DB+Redis 交错）。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return run_index(s, tenant_id, dataset_id, index_type)
+
+    return await asyncio.to_thread(_run)
+
+
+def trace_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+    """追踪索引任务（graph/raptor/mindmap）状态。任务未建立时返回空 dict。"""
+    if index_type not in VALID_INDEX_TYPES:
+        return False, f"Invalid index type '{index_type}'. Must be one of {sorted(VALID_INDEX_TYPES)}"
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    task_id = getattr(kb, _INDEX_TYPE_TO_TASK_ID_FIELD[index_type], None)
+    if not task_id:
+        return True, {}
+
+    task = TaskService.get_by_id(db, task_id)
+    if not task:
+        return True, {}
+
+    return True, task.to_dict()
+
+
+def delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+    """取消并解绑索引任务，同时清掉该任务写进 doc-store 的产物。
+
+    RAPTOR 之外的 mindmap 没有独立产物字段，只解绑任务。
+    """
+    if index_type not in VALID_INDEX_TYPES:
+        return False, f"Invalid index type '{index_type}'. Must be one of {sorted(VALID_INDEX_TYPES)}"
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    task_id_field = _INDEX_TYPE_TO_TASK_ID_FIELD[index_type]
+    task_finish_at_field = task_id_field.replace("_task_id", "_task_finish_at")
+    task_id = getattr(kb, task_id_field, None)
+
+    if task_id:
+        try:
+            REDIS_CONN.set(f"{task_id}-cancel", "x")
+        except Exception as e:
+            logger.exception(e)
+        TaskService.delete_by_id(db, task_id)
+
+    index_name = search.index_name_one(kb.tenant_id, kb.name)
+    if index_type == "graph":
+        settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, index_name, dataset_id)
+    elif index_type == "raptor":
+        settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, index_name, dataset_id)
+
+    if not KnowledgebaseService.update_by_id(db, kb.id, {task_id_field: "", task_finish_at_field: None}):
+        return False, f"Internal error: cannot delete {index_type} task"
+
+    return True, {}
+
+
+async def delete_index_async(tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+    """delete_index 的异步入口：Redis 取消信号 + doc-store 删除 + DB 写交错，
+    整块进工作线程 + 自开短会话（同 delete_datasets_async 口径）。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return delete_index(s, tenant_id, dataset_id, index_type)
+
+    return await asyncio.to_thread(_run)
+
+
+# ==================== 数据集详情与摄取日志 ====================
+
+
+def get_dataset(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    """获取单个数据集详情。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, f"User '{tenant_id}' lacks permission for dataset '{dataset_id}'"
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    return True, remap_dictionary_keys(kb.to_dict())
+
+
+def get_ingestion_summary(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    """获取数据集的摄取概览：文档/分块/token 计数 + 各解析状态计数。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, f"User '{tenant_id}' lacks permission for dataset '{dataset_id}'"
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    status = DocumentService.get_parsing_status_by_kb_ids(db, [dataset_id]).get(dataset_id, {})
+    return True, {
+        "doc_num": kb.doc_num,
+        "chunk_num": kb.chunk_num,
+        "token_num": kb.token_num,
+        "status": status,
+    }
+
+
+def list_ingestion_logs(
+    db: Session,
+    tenant_id: str,
+    dataset_id: str,
+    page: int = 0,
+    page_size: int = 0,
+    orderby: str = "create_time",
+    desc: bool = True,
+    operation_status: list[str] | None = None,
+    create_date_from: str | None = None,
+    create_date_to: str | None = None,
+) -> tuple[bool, Any]:
+    """列出数据集级（graph/raptor/mindmap）摄取日志。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    logs, total = PipelineOperationLogService.get_dataset_logs_by_kb_id(
+        db,
+        dataset_id,
+        page,
+        page_size,
+        orderby,
+        desc,
+        operation_status or [],
+        create_date_from,
+        create_date_to,
+    )
+    return True, {"total": total, "logs": logs}
+
+
+def get_ingestion_log(db: Session, tenant_id: str, dataset_id: str, log_id: str) -> tuple[bool, Any]:
+    """获取单条摄取日志。日志必须属于该数据集，否则视为不存在。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    log = PipelineOperationLogService.get_or_none(db, id=log_id, kb_id=dataset_id)
+    if not log:
+        return False, "Log not found"
+
+    return True, log.to_dict()
+
+
+# ==================== 标签 ====================
+
+
+def list_tags(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    """列出数据集的标签聚合，形如 [{"value": tag, "count": n}]。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    tenants = UserTenantService.get_tenants_by_user_id(db, tenant_id)
+    tags: list[dict[str, Any]] = []
+    for tenant in tenants:
+        tags += [{"value": tag, "count": count} for tag, count in settings.retriever.all_tags(tenant["tenant_id"], [dataset_id])]
+    return True, tags
+
+
+async def list_tags_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    """list_tags 的异步入口：retriever.all_tags 内部自开 db_connection() 且走 doc-store
+    同步 HTTP，run_sync 桥不了——整块进工作线程 + 自开短会话。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return list_tags(s, tenant_id, dataset_id)
+
+    return await asyncio.to_thread(_run)
+
+
+def aggregate_tags(db: Session, tenant_id: str, dataset_ids: list[str]) -> tuple[bool, Any]:
+    """跨数据集合并标签计数。跨租户的数据集按各自租户分组查询后再合并。"""
+    if not dataset_ids:
+        return False, 'Lack of "dataset_ids"'
+
+    for dataset_id in dataset_ids:
+        if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+            return False, f"No authorization for dataset '{dataset_id}'"
+
+    dataset_ids_by_tenant: dict[str, list[str]] = {}
+    for dataset_id in dataset_ids:
+        kb = KnowledgebaseService.get_by_id(db, dataset_id)
+        if not kb:
+            return False, f"Invalid Dataset ID '{dataset_id}'"
+        dataset_ids_by_tenant.setdefault(kb.tenant_id, []).append(dataset_id)
+
+    merged: dict[str, int] = {}
+    for kb_tenant_id, kb_ids in dataset_ids_by_tenant.items():
+        for tag, count in settings.retriever.all_tags(kb_tenant_id, kb_ids):
+            merged[tag] = merged.get(tag, 0) + count
+
+    return True, [{"value": tag, "count": count} for tag, count in merged.items()]
+
+
+async def aggregate_tags_async(tenant_id: str, dataset_ids: list[str]) -> tuple[bool, Any]:
+    """aggregate_tags 的异步入口：同 list_tags_async 口径。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return aggregate_tags(s, tenant_id, dataset_ids)
+
+    return await asyncio.to_thread(_run)
+
+
+def delete_tags(db: Session, tenant_id: str, dataset_id: str, tags: list[str]) -> tuple[bool, Any]:
+    """从数据集的所有分块上摘掉给定标签。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    index_name = search.index_name_one(kb.tenant_id, kb.name)
+    for tag in tags:
+        settings.docStoreConn.update({"tag_kwd": tag, "kb_id": [dataset_id]}, {"remove": {"tag_kwd": tag}}, index_name, dataset_id)
+
+    return True, {}
+
+
+async def delete_tags_async(tenant_id: str, dataset_id: str, tags: list[str]) -> tuple[bool, Any]:
+    """delete_tags 的异步入口：doc-store 写是同步 HTTP，整块进工作线程 + 自开短会话。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return delete_tags(s, tenant_id, dataset_id, tags)
+
+    return await asyncio.to_thread(_run)
+
+
+def rename_tag(db: Session, tenant_id: str, dataset_id: str, from_tag: str, to_tag: str) -> tuple[bool, Any]:
+    """把数据集内的一个标签整体改名。"""
+    if not dataset_id:
+        return False, 'Lack of "Dataset ID"'
+    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        return False, "No authorization."
+
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if not kb:
+        return False, "Invalid Dataset ID"
+
+    settings.docStoreConn.update(
+        {"tag_kwd": from_tag, "kb_id": [dataset_id]},
+        {"remove": {"tag_kwd": from_tag.strip()}, "add": {"tag_kwd": to_tag}},
+        search.index_name_one(kb.tenant_id, kb.name),
+        dataset_id,
+    )
+
+    return True, {"from": from_tag, "to": to_tag}
+
+
+async def rename_tag_async(tenant_id: str, dataset_id: str, from_tag: str, to_tag: str) -> tuple[bool, Any]:
+    """rename_tag 的异步入口：同 delete_tags_async 口径。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return rename_tag(s, tenant_id, dataset_id, from_tag, to_tag)
+
+    return await asyncio.to_thread(_run)
+
+
+# ==================== 元数据聚合 ====================
+
+
+def get_flattened_metadata(db: Session, tenant_id: str, dataset_ids: list[str]) -> tuple[bool, Any]:
+    """跨数据集拉平文档元数据，形如 {field: {value: [doc_id, ...]}}。"""
+    if not dataset_ids:
+        return False, 'Lack of "dataset_ids"'
+
+    for dataset_id in dataset_ids:
+        if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+            return False, f"No authorization for dataset '{dataset_id}'"
+
+    return True, DocMetadataService.get_flatted_meta_by_kbs(db, dataset_ids)
+
+
+async def get_flattened_metadata_async(tenant_id: str, dataset_ids: list[str]) -> tuple[bool, Any]:
+    """get_flattened_metadata 的异步入口：元数据 store 在 ES 后端下走 doc-store
+    同步 HTTP，整块进工作线程 + 自开短会话。"""
+
+    def _run() -> tuple[bool, Any]:
+        with db_connection() as s:
+            return get_flattened_metadata(s, tenant_id, dataset_ids)
+
+    return await asyncio.to_thread(_run)

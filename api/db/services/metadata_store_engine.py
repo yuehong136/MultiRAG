@@ -220,14 +220,24 @@ class EngineMetadataStore(MetadataStore):
         index_name = self._index_name(tenant_id)
 
         if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
-            # ES: partial update or insert
+            # ES: replace meta_fields wholesale, or insert
             if not settings.docStoreConn.index_exist(index_name, ""):
                 settings.docStoreConn.create_doc_meta_idx(index_name)
                 return self._insert(index_name, doc_id, kb_id, meta_fields)
             try:
                 doc_exists = settings.docStoreConn.get(doc_id, index_name, [kb_id])
                 if doc_exists:
-                    settings.docStoreConn.es.update(index=index_name, id=doc_id, refresh=True, doc={"meta_fields": meta_fields})
+                    # A `doc=` partial update deep-merges object fields, so keys the caller
+                    # dropped would survive. Assign through a script to replace the whole map.
+                    settings.docStoreConn.es.update(
+                        index=index_name,
+                        id=doc_id,
+                        refresh=True,
+                        script={
+                            "source": "ctx._source.meta_fields = params.meta_fields",
+                            "params": {"meta_fields": meta_fields or {}},
+                        },
+                    )
                     return True
             except Exception:
                 pass
