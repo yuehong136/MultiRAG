@@ -19,6 +19,7 @@ from datetime import datetime
 from functools import partial
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
+from typing import Any
 
 import numpy as np
 import xxhash
@@ -2517,12 +2518,12 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
 
 
 @timeout(60 * 60 * 3, 1)
-async def do_handle_task(db, task):
+async def do_handle_task(db: Session, task: Any) -> None:
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)
 
     # 预处理 auth 列，转换为列表，处理 None 值
-    def convert_auth(auth_str):
+    def convert_auth(auth_str: Any) -> Any:
         if auth_str is None:
             return []  # 如果 auth 为 None，转换为空列表
         try:
@@ -2693,10 +2694,19 @@ async def do_handle_task(db, task):
             progress_callback(prog=-1.0, msg="Cannot found valid dataset for GraphRAG task")
             return
 
-        kb_parser_config = kb.parser_config
-        if not kb_parser_config.get("graphrag", {}).get("use_graphrag", False):
-            progress_callback(prog=-1.0, msg="Internal error: Invalid GraphRAG configuration")
-            return
+        kb_parser_config = copy.deepcopy(kb.parser_config or {})
+        if not (kb_parser_config.get("graphrag") or {}).get("use_graphrag", False):
+            # A manually queued graph task enables GraphRAG, as RAPTOR does.
+            # Preserve user settings when filling the required defaults.
+            kb_parser_config["graphrag"] = {
+                "entity_types": ["organization", "person", "geo", "event", "category"],
+                "method": "light",
+                **(kb_parser_config.get("graphrag") or {}),
+                "use_graphrag": True,
+            }
+            if not KnowledgebaseService.update_by_id(db, kb.id, {"parser_config": kb_parser_config}):
+                progress_callback(prog=-1.0, msg="Internal error: Cannot save GraphRAG configuration")
+                return
 
         graphrag_conf = kb_parser_config.get("graphrag", {})
         start_ts = timer()
