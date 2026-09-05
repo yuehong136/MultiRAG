@@ -6,8 +6,10 @@ index_exist，走 has_collection + 每数据集一个 collection。
 """
 
 import types
+from contextlib import contextmanager
 
 import pytest
+from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
 from api.db.services.document_service import DocumentService
@@ -100,9 +102,9 @@ def test_parse_continues_with_valid_documents_and_reports_the_rest(db, parse_stu
     monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: [] if kw["id"] == "ghost" else [_doc(kw["id"])]))
     monkeypatch.setattr(DocumentService, "get_by_id", classmethod(lambda cls, s, doc_id: _doc(doc_id)))
 
-    result = document_api_service.parse_dataset_documents(db, "kb1", "t1", ["d1", "ghost"], [])
-
-    assert result == {"success_count": 1, "errors": ["Documents not found: ['ghost']"]}
+    with pytest.raises(document_api_service.DocumentParseError) as exc:
+        document_api_service.parse_dataset_documents(db, "kb1", "t1", ["d1", "ghost"], [])
+    assert exc.value.result == {"success_count": 1, "errors": ["Documents not found: ['ghost']"]}
     assert parse_stubs["runs"] == ["d1"]
 
 
@@ -150,6 +152,16 @@ def test_stop_allows_a_done_document_with_an_unfinished_task(db, monkeypatch):
 # ---------------------------------------------------------------------------
 # 路由层
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def worker_session(monkeypatch):
+    @contextmanager
+    def connection():
+        with Session() as session:
+            yield session
+
+    monkeypatch.setattr(document_api_service, "db_connection", connection)
 
 
 def test_parse_route_shape(client, monkeypatch):
@@ -212,3 +224,43 @@ def test_parse_route_dedupes_document_ids(client, monkeypatch):
     # check_duplicate_ids 去重但不保序（list(set(...))），只锁集合与重复告警
     assert sorted(seen[0]) == ["d1", "d2"]
     assert reported == [["Duplicate document ids: d1"]]
+
+
+@pytest.mark.parametrize("operation", ["parse", "stop"])
+async def test_document_workflow_keeps_blocking_io_and_session_on_worker(monkeypatch, worker_session, operation):
+    import asyncio
+    import threading
+
+    loop_thread = threading.get_ident()
+    entered = threading.Event()
+    release = threading.Event()
+    worker_threads = []
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, db, kb, user: worker_threads.append(threading.get_ident()) or True))
+
+    def blocking_workflow(session, *args):
+        assert isinstance(session, Session)
+        worker_threads.append(threading.get_ident())
+        entered.set()
+        assert release.wait(3)
+        return {"success_count": 1}
+
+    monkeypatch.setattr(document_api_service, f"{operation}_dataset_documents", blocking_workflow)
+    task = asyncio.create_task(getattr(document_api_service, f"{operation}_dataset_documents_async")("kb1", "t1", ["d1"], []))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        assert not task.done()
+        assert len(set(worker_threads)) == 1 and worker_threads[0] != loop_thread
+    finally:
+        release.set()
+    assert await task == {"success_count": 1}
+
+
+def test_parse_partial_failure_returns_error_code_and_completed_count(client, monkeypatch):
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb, user: True))
+
+    def partial(*args):
+        raise document_api_service.DocumentParseError("Documents not found: ['missing']", {"success_count": 1, "errors": ["missing"]})
+
+    monkeypatch.setattr(document_api_service, "parse_dataset_documents", partial)
+    body = client.post("/api/v1/datasets/kb1/documents/parse", json={"document_ids": ["d1", "missing"]}).json()
+    assert body["code"] != 0 and body["data"]["success_count"] == 1 and "missing" in body["message"]

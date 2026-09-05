@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Task
+from api.db.db_models import Document, Task, db_connection
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -219,7 +220,11 @@ def _process_run_mapping(doc: dict[str, Any], run_status: Any) -> dict[str, Any]
 
 
 class DocumentParseError(ValueError):
-    """Raised when a parse/stop request names documents the dataset does not hold."""
+    """Invalid document selection; partial parse results remain available to callers."""
+
+    def __init__(self, message: str, result: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 def _partition_dataset_documents(db: Session, dataset_id: str, document_ids: list[str]) -> tuple[list[str], list[str]]:
@@ -271,6 +276,8 @@ def parse_dataset_documents(db: Session, dataset_id: str, tenant_id: str, docume
     result: dict[str, Any] = {"success_count": success_count}
     if errors:
         result["errors"] = errors
+    if missing_ids:
+        raise DocumentParseError(f"Documents not found: {missing_ids}", result=result)
     return result
 
 
@@ -319,3 +326,32 @@ def stop_dataset_documents(db: Session, dataset_id: str, document_ids: list[str]
     if errors:
         result["errors"] = errors
     return result
+
+
+async def parse_dataset_documents_async(dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
+    """Legacy parsing unit of work: its session and blocking IO stay in one worker.
+
+    Do not pass an AsyncSession facade into this unit: queue_tasks mixes database,
+    object storage, PDF parsing and Redis operations. TODO(async-phase4): migrate
+    that shared queue workflow before replacing this boundary.
+    """
+
+    def _run() -> dict[str, Any]:
+        with db_connection() as db:
+            if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+                raise DocumentParseError(f"You don't own the dataset {dataset_id}.")
+            return parse_dataset_documents(db, dataset_id, tenant_id, document_ids, errors)
+
+    return await asyncio.to_thread(_run)
+
+
+async def stop_dataset_documents_async(dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
+    """Keep the legacy SQL/Redis cancellation unit on a single worker-owned session."""
+
+    def _run() -> dict[str, Any]:
+        with db_connection() as db:
+            if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+                raise DocumentParseError(f"You don't own the dataset {dataset_id}.")
+            return stop_dataset_documents(db, dataset_id, document_ids, errors)
+
+    return await asyncio.to_thread(_run)

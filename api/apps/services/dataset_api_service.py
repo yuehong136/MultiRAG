@@ -17,12 +17,14 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import File, db_connection
+from api.db.db_models import Document, File, Knowledgebase, Task, db_connection
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
@@ -34,7 +36,7 @@ from api.db.services.user_service import TenantService, UserService, UserTenantS
 from api.utils.api_utils import deep_merge, flatten_parent_child_config, get_parser_config, remap_dictionary_keys, verify_embedding_availability
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common import settings
-from common.constants import PAGERANK_FLD, FileSource, StatusEnum
+from common.constants import PAGERANK_FLD, FileSource, StatusEnum, TaskStatus
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 
@@ -504,61 +506,14 @@ async def delete_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: s
 
 
 def run_graphrag(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """运行 GraphRAG 任务生成知识图谱。"""
-    if not dataset_id:
-        return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
-        return False, "No authorization."
-
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not kb:
-        return False, "Invalid Dataset ID"
-
-    task_id = kb.graphrag_task_id
-    if task_id:
-        task = TaskService.get_by_id(db, task_id)
-        if not task:
-            logger.warning(f"A valid GraphRAG task id is expected for Dataset {dataset_id}")
-        if task and task.progress not in [-1, 1]:
-            return False, f"Task {task_id} in progress with status {task.progress}. A Graph Task is already running."
-
-    documents, _ = DocumentService.get_by_kb_id(
-        db,
-        kb_id=dataset_id,
-        page_number=0,
-        items_per_page=0,
-        orderby="create_time",
-        desc=False,
-        keywords="",
-        run_status=[],
-        types=[],
-        suffix=[],
-    )
-    if not documents:
-        return False, f"No documents in Dataset {dataset_id}"
-
-    sample_document = documents[0]
-    document_ids = [document["id"] for document in documents]
-
-    task_id = queue_raptor_o_graphrag_tasks(
-        db,
-        sample_doc=sample_document,
-        ty="graphrag",
-        priority=0,
-        fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
-        doc_ids=list(document_ids),
-    )
-
-    if not KnowledgebaseService.update_by_id(db, kb.id, {"graphrag_task_id": task_id}):
-        logger.warning(f"Cannot save graphrag_task_id for Dataset {dataset_id}")
-
-    return True, {"graphrag_task_id": task_id}
+    """Compatibility adapter retaining the legacy task-id field."""
+    success, result = run_index(db, tenant_id, dataset_id, "graph")
+    if success:
+        return True, {"graphrag_task_id": result["task_id"]}
+    return False, result
 
 
 async def run_graphrag_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """run_graphrag 的异步入口：queue_raptor_o_graphrag_tasks（共享 helper）内部
-    DB 写 + Redis 入队交错，混轨块整体进工作线程 + 自开短会话。"""
-
     def _run() -> tuple[bool, Any]:
         with db_connection() as s:
             return run_graphrag(s, tenant_id, dataset_id)
@@ -566,83 +521,19 @@ async def run_graphrag_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any
     return await asyncio.to_thread(_run)
 
 
-def trace_graphrag(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """追踪 GraphRAG 任务状态。"""
-    if not dataset_id:
-        return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
-        return False, "No authorization."
-
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not kb:
-        return False, "Invalid Dataset ID"
-
-    task_id = kb.graphrag_task_id
-    if not task_id:
-        return True, {}
-
-    task = TaskService.get_by_id(db, task_id)
-    if not task:
-        return True, {}
-
-    return True, task.to_dict()
+async def trace_graphrag(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    return await trace_index(db, tenant_id, dataset_id, "graph")
 
 
 def run_raptor(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """运行 RAPTOR 任务。"""
-    if not dataset_id:
-        return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
-        return False, "No authorization."
-
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not kb:
-        return False, "Invalid Dataset ID"
-
-    task_id = kb.raptor_task_id
-    if task_id:
-        task = TaskService.get_by_id(db, task_id)
-        if not task:
-            logger.warning(f"A valid RAPTOR task id is expected for Dataset {dataset_id}")
-        if task and task.progress not in [-1, 1]:
-            return False, f"Task {task_id} in progress with status {task.progress}. A RAPTOR Task is already running."
-
-    documents, _ = DocumentService.get_by_kb_id(
-        db,
-        kb_id=dataset_id,
-        page_number=0,
-        items_per_page=0,
-        orderby="create_time",
-        desc=False,
-        keywords="",
-        run_status=[],
-        suffix=[],
-        types=[],
-    )
-    if not documents:
-        return False, f"No documents in Dataset {dataset_id}"
-
-    sample_document = documents[0]
-    document_ids = [document["id"] for document in documents]
-
-    task_id = queue_raptor_o_graphrag_tasks(
-        db,
-        sample_doc=sample_document,
-        ty="raptor",
-        priority=0,
-        fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID,
-        doc_ids=list(document_ids),
-    )
-
-    if not KnowledgebaseService.update_by_id(db, kb.id, {"raptor_task_id": task_id}):
-        logger.warning(f"Cannot save raptor_task_id for Dataset {dataset_id}")
-
-    return True, {"raptor_task_id": task_id}
+    """Compatibility adapter retaining the legacy task-id field."""
+    success, result = run_index(db, tenant_id, dataset_id, "raptor")
+    if success:
+        return True, {"raptor_task_id": result["task_id"]}
+    return False, result
 
 
 async def run_raptor_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """run_raptor 的异步入口：同 run_graphrag_async 口径（共享 helper 内 DB+Redis 交错）。"""
-
     def _run() -> tuple[bool, Any]:
         with db_connection() as s:
             return run_raptor(s, tenant_id, dataset_id)
@@ -650,26 +541,8 @@ async def run_raptor_async(tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
     return await asyncio.to_thread(_run)
 
 
-def trace_raptor(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """追踪 RAPTOR 任务状态。"""
-    if not dataset_id:
-        return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
-        return False, "No authorization."
-
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    if not kb:
-        return False, "Invalid Dataset ID"
-
-    task_id = kb.raptor_task_id
-    if not task_id:
-        return True, {}
-
-    task = TaskService.get_by_id(db, task_id)
-    if not task:
-        return False, "RAPTOR Task Not Found or Error Occurred"
-
-    return True, task.to_dict()
+async def trace_raptor(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+    return await trace_index(db, tenant_id, dataset_id, "raptor", missing_task_error="RAPTOR Task Not Found or Error Occurred")
 
 
 # ==================== 统一索引任务（graph / raptor / mindmap） ====================
@@ -743,16 +616,16 @@ async def run_index_async(tenant_id: str, dataset_id: str, index_type: str) -> t
     return await asyncio.to_thread(_run)
 
 
-def trace_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+async def trace_index(db: AsyncSession, tenant_id: str, dataset_id: str, index_type: str, *, missing_task_error: str | None = None) -> tuple[bool, Any]:
     """追踪索引任务（graph/raptor/mindmap）状态。任务未建立时返回空 dict。"""
     if index_type not in VALID_INDEX_TYPES:
         return False, f"Invalid index type '{index_type}'. Must be one of {sorted(VALID_INDEX_TYPES)}"
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, "No authorization."
 
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    kb = await db.get(Knowledgebase, dataset_id)
     if not kb:
         return False, "Invalid Dataset ID"
 
@@ -760,9 +633,9 @@ def trace_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -
     if not task_id:
         return True, {}
 
-    task = TaskService.get_by_id(db, task_id)
+    task = await db.get(Task, task_id)
     if not task:
-        return True, {}
+        return (False, missing_task_error) if missing_task_error else (True, {})
 
     return True, task.to_dict()
 
@@ -820,32 +693,43 @@ async def delete_index_async(tenant_id: str, dataset_id: str, index_type: str) -
 # ==================== 数据集详情与摄取日志 ====================
 
 
-def get_dataset(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+async def get_dataset(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
     """获取单个数据集详情。"""
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, f"User '{tenant_id}' lacks permission for dataset '{dataset_id}'"
 
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    kb = await db.get(Knowledgebase, dataset_id)
     if not kb:
         return False, "Invalid Dataset ID"
 
     return True, remap_dictionary_keys(kb.to_dict())
 
 
-def get_ingestion_summary(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+async def get_ingestion_summary(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
     """获取数据集的摄取概览：文档/分块/token 计数 + 各解析状态计数。"""
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, f"User '{tenant_id}' lacks permission for dataset '{dataset_id}'"
 
-    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    kb = await db.get(Knowledgebase, dataset_id)
     if not kb:
         return False, "Invalid Dataset ID"
 
-    status = DocumentService.get_parsing_status_by_kb_ids(db, [dataset_id]).get(dataset_id, {})
+    status_fields = {
+        TaskStatus.UNSTART.value: "unstart_count",
+        TaskStatus.RUNNING.value: "running_count",
+        TaskStatus.CANCEL.value: "cancel_count",
+        TaskStatus.DONE.value: "done_count",
+        TaskStatus.FAIL.value: "fail_count",
+    }
+    status = dict.fromkeys(status_fields.values(), 0)
+    rows = await db.execute(select(Document.run, func.count(Document.id)).where(Document.kb_id == dataset_id).group_by(Document.run))
+    for run, count in rows:
+        if str(run) in status_fields:
+            status[status_fields[str(run)]] = int(count)
     return True, {
         "doc_num": kb.doc_num,
         "chunk_num": kb.chunk_num,
@@ -854,8 +738,8 @@ def get_ingestion_summary(db: Session, tenant_id: str, dataset_id: str) -> tuple
     }
 
 
-def list_ingestion_logs(
-    db: Session,
+async def list_ingestion_logs(
+    db: AsyncSession,
     tenant_id: str,
     dataset_id: str,
     page: int = 0,
@@ -863,57 +747,66 @@ def list_ingestion_logs(
     orderby: str = "create_time",
     desc: bool = True,
     operation_status: list[str] | None = None,
-    create_date_from: str | None = None,
-    create_date_to: str | None = None,
+    create_date_from: datetime | None = None,
+    create_date_to: datetime | None = None,
 ) -> tuple[bool, Any]:
     """列出数据集级（graph/raptor/mindmap）摄取日志。"""
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, "No authorization."
 
-    logs, total = PipelineOperationLogService.get_dataset_logs_by_kb_id(
-        db,
-        dataset_id,
-        page,
-        page_size,
-        orderby,
-        desc,
-        operation_status or [],
-        create_date_from,
-        create_date_to,
-    )
+    model = PipelineOperationLogService.model
+    fields = PipelineOperationLogService.get_dataset_logs_fields()
+    stmt = select(*fields).where(model.kb_id == dataset_id, model.document_id == GRAPH_RAPTOR_FAKE_DOC_ID)
+    if operation_status:
+        stmt = stmt.where(model.operation_status.in_(operation_status))
+    if create_date_from:
+        stmt = stmt.where(model.create_date >= create_date_from)
+    if create_date_to:
+        stmt = stmt.where(model.create_date <= create_date_to)
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+    columns = {field.key: field for field in fields}
+    if orderby not in columns:
+        return False, "Invalid orderby field"
+    column = columns[orderby]
+    stmt = stmt.order_by(column.desc() if desc else column.asc())
+    if page and page_size:
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+    logs = [dict(row) for row in (await db.execute(stmt)).mappings()]
     return True, {"total": total, "logs": logs}
 
 
-def get_ingestion_log(db: Session, tenant_id: str, dataset_id: str, log_id: str) -> tuple[bool, Any]:
+async def get_ingestion_log(db: AsyncSession, tenant_id: str, dataset_id: str, log_id: str) -> tuple[bool, Any]:
     """获取单条摄取日志。日志必须属于该数据集，否则视为不存在。"""
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
-    if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+    if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, "No authorization."
 
-    log = PipelineOperationLogService.get_or_none(db, id=log_id, kb_id=dataset_id)
+    model = PipelineOperationLogService.model
+    stmt = select(*PipelineOperationLogService.get_dataset_logs_fields()).where(model.id == log_id, model.kb_id == dataset_id)
+    log = (await db.execute(stmt)).mappings().first()
     if not log:
         return False, "Log not found"
 
-    return True, log.to_dict()
+    return True, dict(log)
 
 
 # ==================== 标签 ====================
 
 
 def list_tags(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """列出数据集的标签聚合，形如 [{"value": tag, "count": n}]。"""
+    """列出数据集的标签聚合，保留上游 [(tag, count)] 契约。"""
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
     if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
         return False, "No authorization."
 
     tenants = UserTenantService.get_tenants_by_user_id(db, tenant_id)
-    tags: list[dict[str, Any]] = []
+    tags: list[tuple[str, int]] = []
     for tenant in tenants:
-        tags += [{"value": tag, "count": count} for tag, count in settings.retriever.all_tags(tenant["tenant_id"], [dataset_id])]
+        tags += settings.retriever.all_tags(tenant["tenant_id"], [dataset_id])
     return True, tags
 
 

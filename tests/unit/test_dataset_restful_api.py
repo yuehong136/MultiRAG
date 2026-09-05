@@ -12,6 +12,7 @@ get_knowledge_graph 已于 9004fabf 转换，测试在 test_dataset_knowledge_gr
 
 import threading
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -107,17 +108,19 @@ def test_dataset_auto_metadata_roundtrip(client, monkeypatch):
     _assert_sync_facade(records)
 
 
-def test_dataset_trace_routes_use_sync_facade(client, monkeypatch):
-    records: list[dict] = []
-    monkeypatch.setattr(dataset_api_service, "trace_graphrag", lambda s, t, d: _record(records, s) or (True, {"progress": 0.5}))
-    monkeypatch.setattr(dataset_api_service, "trace_raptor", lambda s, t, d: _record(records, s) or (False, "No authorization."))
+def test_dataset_trace_routes_use_async_session(client, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
 
+    graph_service = AsyncMock(return_value=(True, {"progress": 0.5}))
+    raptor_service = AsyncMock(return_value=(False, "No authorization."))
+    monkeypatch.setattr(dataset_api_service, "trace_graphrag", graph_service)
+    monkeypatch.setattr(dataset_api_service, "trace_raptor", raptor_service)
     graph = client.get("/api/v1/datasets/kb-1/trace_graphrag").json()
     raptor = client.get("/api/v1/datasets/kb-1/trace_raptor").json()
-
     assert graph["code"] == 0 and graph["data"] == {"progress": 0.5}
     assert raptor["code"] == int(RetCode.DATA_ERROR) and raptor["message"] == "No authorization."
-    _assert_sync_facade(records)
+    assert isinstance(graph_service.call_args.args[0], AsyncSession)
+    assert isinstance(raptor_service.call_args.args[0], AsyncSession)
 
 
 # ---------------------------------------------------------------------------

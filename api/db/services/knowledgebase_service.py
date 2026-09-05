@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.constants import DATASET_NAME_LIMIT
@@ -523,6 +524,22 @@ class KnowledgebaseService(CommonService):
             return False
 
         return UserTenantService.can_access_tenant_resources(membership.role)
+
+    @classmethod
+    async def accessible_async(cls, db: AsyncSession, kb_id: str, user_id: str) -> bool:
+        """Native async equivalent of accessible, including active membership checks."""
+        stmt = (
+            select(UserTenant.role)
+            .join(cls.model, cls.model.tenant_id == UserTenant.tenant_id)
+            .where(
+                cls.model.id == kb_id,
+                cls.model.status == StatusEnum.VALID.value,
+                UserTenant.user_id == user_id,
+                UserTenant.status == StatusEnum.VALID.value,
+            )
+            .limit(1)
+        )
+        return UserTenantService.can_access_tenant_resources(await db.scalar(stmt))
 
     @classmethod
     def get_kb_by_id(cls, db: Session, kb_id, user_id):

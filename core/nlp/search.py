@@ -1025,15 +1025,23 @@ class Dealer:
                 break
         return res
 
-    def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
+    def all_tags(self, tenant_id: str, kb_ids: list[str], S: int = 1000) -> list[tuple[str, int]]:
+        """Aggregate each dataset's own index, without retaining detached ORM rows."""
         from api.db.services.knowledgebase_service import KnowledgebaseService
 
-        with db_connection() as db:
-            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
-        if not self.dataStore.index_exist(index_name_one(tenant_id, kb.kb_name), kb_ids[0]):
+        if not kb_ids:
             return []
-        res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id, [kb.kb_name]), kb_ids, ["tag_kwd"])
-        return self.dataStore.get_aggregation(res, "tag_kwd")
+        with db_connection() as db:
+            datasets = [(kb.id, kb.name) for kb in KnowledgebaseService.get_by_ids(db, list(dict.fromkeys(kb_ids))) if kb.tenant_id == tenant_id]
+        counts: dict[str, int] = {}
+        for kb_id, name in datasets:
+            idx = index_name_one(tenant_id, name)
+            if not self.dataStore.index_exist(idx, kb_id):
+                continue
+            res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, [idx], [kb_id], ["tag_kwd"])
+            for tag, count in self.dataStore.get_aggregation(res, "tag_kwd"):
+                counts[tag] = counts.get(tag, 0) + int(count)
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:S]
 
     def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
         from api.db.services.knowledgebase_service import KnowledgebaseService

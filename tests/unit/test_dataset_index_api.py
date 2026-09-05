@@ -1,18 +1,13 @@
-"""统一索引 API（graph/raptor/mindmap）与数据集管理端点的服务与路由契约。
-
-路由顺序是本文件的核心资产：`DELETE /datasets/{id}/{index_type}` 是 catch-all，
-FastAPI 按注册顺序线性匹配，任何把它提前的改动都会静默吞掉 knowledge_graph /
-tags / index 三条具体 DELETE 路由。上游 Flask 下静态段天然优先，没有这个约束，
-所以这组断言只在我方成立，也只能由我方守。
-"""
+"""Unified index API, explicit compatibility routes and dataset contracts."""
 
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 
 from api.apps.services import dataset_api_service
+from api.db.db_models import Knowledgebase
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import TaskService
 from common import settings
 
@@ -67,14 +62,16 @@ def test_run_index_refuses_while_previous_task_runs(db, monkeypatch, fake_kb):
     assert "A RAPTOR Task is already running." in result
 
 
-def test_trace_index_reads_the_column_for_its_type(db, monkeypatch, fake_kb):
-    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
-    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kb_id: fake_kb(graphrag_task_id="g1", raptor_task_id=None)))
-    monkeypatch.setattr(TaskService, "get_by_id", classmethod(lambda cls, s, tid: types.SimpleNamespace(to_dict=lambda: {"id": tid, "progress": 1})))
+async def test_trace_index_reads_the_column_for_its_type(async_db, monkeypatch, fake_kb):
+    monkeypatch.setattr(KnowledgebaseService, "accessible_async", AsyncMock(return_value=True))
+    kb = fake_kb(graphrag_task_id="g1", raptor_task_id=None)
 
-    assert dataset_api_service.trace_index(db, "tenant-unit", "kb1", "graph") == (True, {"id": "g1", "progress": 1})
-    # 未建立任务的类型返回空 dict，而不是报错
-    assert dataset_api_service.trace_index(db, "tenant-unit", "kb1", "raptor") == (True, {})
+    async def get(model, key):
+        return kb if model is Knowledgebase else types.SimpleNamespace(to_dict=lambda: {"id": key, "progress": 1})
+
+    monkeypatch.setattr(async_db, "get", get)
+    assert await dataset_api_service.trace_index(async_db, "tenant-unit", "kb1", "graph") == (True, {"id": "g1", "progress": 1})
+    assert await dataset_api_service.trace_index(async_db, "tenant-unit", "kb1", "raptor") == (True, {})
 
 
 def test_delete_index_cancels_task_and_wipes_only_graph_artifacts(db, kb_access, monkeypatch):
@@ -140,12 +137,12 @@ def test_aggregate_tags_requires_ids(db):
     assert dataset_api_service.aggregate_tags(db, "tenant-unit", []) == (False, 'Lack of "dataset_ids"')
 
 
-def test_list_tags_shapes_retriever_tuples_as_objects(db, monkeypatch):
+def test_list_tags_preserves_upstream_pairs(db, monkeypatch):
     monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
     monkeypatch.setattr(dataset_api_service.UserTenantService, "get_tenants_by_user_id", classmethod(lambda cls, s, uid: [{"tenant_id": "t1"}]))
     monkeypatch.setattr(settings, "retriever", types.SimpleNamespace(all_tags=lambda tid, kb_ids: [("alpha", 7)]))
 
-    assert dataset_api_service.list_tags(db, "tenant-unit", "kb1") == (True, [{"value": "alpha", "count": 7}])
+    assert dataset_api_service.list_tags(db, "tenant-unit", "kb1") == (True, [("alpha", 7)])
 
 
 # ---------------------------------------------------------------------------
@@ -153,42 +150,28 @@ def test_list_tags_shapes_retriever_tuples_as_objects(db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_ingestion_summary_reports_counts_and_status(db, monkeypatch, fake_kb):
-    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
-    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kb_id: fake_kb(doc_num=4, chunk_num=40, token_num=400)))
-    monkeypatch.setattr(
-        dataset_api_service.DocumentService,
-        "get_parsing_status_by_kb_ids",
-        classmethod(lambda cls, s, kb_ids: {"kb1": {"done_count": 4}}),
-    )
-
-    success, result = dataset_api_service.get_ingestion_summary(db, "tenant-unit", "kb1")
-
-    assert (success, result) == (True, {"doc_num": 4, "chunk_num": 40, "token_num": 400, "status": {"done_count": 4}})
+async def test_get_ingestion_summary_reports_counts_and_status(async_db, monkeypatch, fake_kb):
+    monkeypatch.setattr(KnowledgebaseService, "accessible_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(async_db, "get", AsyncMock(return_value=fake_kb(doc_num=4, chunk_num=40, token_num=400)))
+    monkeypatch.setattr(async_db, "execute", AsyncMock(return_value=[("3", 4)]))
+    success, result = await dataset_api_service.get_ingestion_summary(async_db, "tenant-unit", "kb1")
+    assert success and result["doc_num"] == 4 and result["chunk_num"] == 40 and result["token_num"] == 400
+    assert result["status"] == {"unstart_count": 0, "running_count": 0, "cancel_count": 0, "done_count": 4, "fail_count": 0}
 
 
-def test_get_ingestion_log_scopes_lookup_to_the_dataset(db, monkeypatch):
-    """日志必须同时匹配 log_id 与 kb_id，否则可跨数据集读到别人的日志。"""
-    seen: dict[str, object] = {}
-
-    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
-    monkeypatch.setattr(
-        PipelineOperationLogService,
-        "get_or_none",
-        classmethod(lambda cls, s, **kw: seen.update(kw) or types.SimpleNamespace(to_dict=lambda: {"id": "log1"})),
-    )
-
-    success, result = dataset_api_service.get_ingestion_log(db, "tenant-unit", "kb1", "log1")
-
-    assert (success, result) == (True, {"id": "log1"})
-    assert seen == {"id": "log1", "kb_id": "kb1"}
+async def test_get_ingestion_log_scopes_lookup_to_the_dataset(async_db, monkeypatch):
+    monkeypatch.setattr(KnowledgebaseService, "accessible_async", AsyncMock(return_value=True))
+    executed = AsyncMock(return_value=types.SimpleNamespace(mappings=lambda: types.SimpleNamespace(first=lambda: {"id": "log1"})))
+    monkeypatch.setattr(async_db, "execute", executed)
+    assert await dataset_api_service.get_ingestion_log(async_db, "tenant-unit", "kb1", "log1") == (True, {"id": "log1"})
+    params = executed.call_args.args[0].compile().params
+    assert "kb1" in params.values() and "log1" in params.values()
 
 
-def test_get_ingestion_log_missing(db, monkeypatch):
-    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
-    monkeypatch.setattr(PipelineOperationLogService, "get_or_none", classmethod(lambda cls, s, **kw: None))
-
-    assert dataset_api_service.get_ingestion_log(db, "tenant-unit", "kb1", "nope") == (False, "Log not found")
+async def test_get_ingestion_log_missing(async_db, monkeypatch):
+    monkeypatch.setattr(KnowledgebaseService, "accessible_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(async_db, "execute", AsyncMock(return_value=types.SimpleNamespace(mappings=lambda: types.SimpleNamespace(first=lambda: None))))
+    assert await dataset_api_service.get_ingestion_log(async_db, "tenant-unit", "kb1", "nope") == (False, "Log not found")
 
 
 # ---------------------------------------------------------------------------
@@ -251,15 +234,14 @@ def test_catch_all_delete_serves_index_types(client, monkeypatch):
 def test_catch_all_delete_rejects_unknown_segment(client):
     resp = client.delete("/api/v1/datasets/kb1/bogus")
 
-    assert resp.status_code == 200
-    assert "Invalid index type 'bogus'" in resp.json()["message"]
+    assert resp.status_code == 404
 
 
 def test_ingestions_summary_is_not_read_as_a_log_id(client, monkeypatch):
     reached: list[str] = []
 
-    monkeypatch.setattr(dataset_api_service, "get_ingestion_summary", lambda s, t, d: reached.append("summary") or (True, {}))
-    monkeypatch.setattr(dataset_api_service, "get_ingestion_log", lambda s, t, d, log_id: reached.append(f"log:{log_id}") or (True, {}))
+    monkeypatch.setattr(dataset_api_service, "get_ingestion_summary", AsyncMock(side_effect=lambda s, t, d: reached.append("summary") or (True, {})))
+    monkeypatch.setattr(dataset_api_service, "get_ingestion_log", AsyncMock(side_effect=lambda s, t, d, log_id: reached.append(f"log:{log_id}") or (True, {})))
 
     assert client.get("/api/v1/datasets/kb1/ingestions/summary").status_code == 200
     assert client.get("/api/v1/datasets/kb1/ingestions/log-7").status_code == 200
@@ -279,7 +261,7 @@ def test_static_collection_paths_win_over_dataset_id(client, monkeypatch):
 
     monkeypatch.setattr(dataset_api_service, "aggregate_tags_async", _aggregate)
     monkeypatch.setattr(dataset_api_service, "get_flattened_metadata_async", _flattened)
-    monkeypatch.setattr(dataset_api_service, "get_dataset", lambda s, t, d: reached.append(f"detail:{d}") or (True, {}))
+    monkeypatch.setattr(dataset_api_service, "get_dataset", AsyncMock(side_effect=lambda s, t, d: reached.append(f"detail:{d}") or (True, {})))
 
     assert client.get("/api/v1/datasets/tags/aggregation?dataset_ids=kb1,kb2").status_code == 200
     assert client.get("/api/v1/datasets/metadata/flattened?dataset_ids=kb1").status_code == 200
@@ -302,7 +284,7 @@ def test_index_routes_pass_the_type_query_through(client, monkeypatch):
         return True, {"task_id": "t1"}
 
     monkeypatch.setattr(dataset_api_service, "run_index_async", _run)
-    monkeypatch.setattr(dataset_api_service, "trace_index", lambda s, t, d, index_type: seen.append(f"trace:{index_type}") or (True, {}))
+    monkeypatch.setattr(dataset_api_service, "trace_index", AsyncMock(side_effect=lambda s, t, d, index_type: seen.append(f"trace:{index_type}") or (True, {})))
 
     assert client.post("/api/v1/datasets/kb1/index?type=mindmap").json()["data"] == {"task_id": "t1"}
     assert client.get("/api/v1/datasets/kb1/index?type=raptor").status_code == 200
@@ -327,3 +309,57 @@ def test_rename_tag_rejects_blank_names(client):
 
     assert resp.status_code == 200
     assert resp.json()["message"] == "from_tag and to_tag must not be empty"
+
+
+def test_document_delete_is_not_shadowed_when_dataset_routes_register_first(client, monkeypatch):
+    from fastapi.responses import JSONResponse
+
+    def contains(route, suffix):
+        children = getattr(getattr(route, "original_router", None), "routes", [route])
+        return any(getattr(child, "path", "").endswith(suffix) for child in children)
+
+    routes = client.app.router.routes
+    dataset_branch = next(route for route in routes if contains(route, "/datasets/{dataset_id}/index"))
+    document_branch = next(route for route in routes if contains(route, "/datasets/{dataset_id}/documents"))
+    reordered = [dataset_branch, *[route for route in routes if route is not dataset_branch]]
+    assert reordered.index(dataset_branch) < reordered.index(document_branch)
+    monkeypatch.setattr(client.app.router, "routes", reordered)
+    # Invalid document body must reach Document API validation, never the index handler.
+    response = client.request("DELETE", "/api/v1/datasets/kb1/documents", json=["invalid-body"])
+    assert response.status_code == 422
+
+    # Mutation check: restoring the old catch-all must make this same request miss Documents.
+    async def shadow():
+        return JSONResponse(status_code=418, content={"shadowed": True})
+
+    dataset_router = dataset_branch.original_router
+    monkeypatch.setattr(dataset_router, "routes", list(dataset_router.routes))
+    # Preserve FastAPI's route-cache version as well as its routes after the mutation.
+    monkeypatch.setattr(dataset_router, "_routes_version", dataset_router._routes_version)
+    dataset_router.add_api_route("/datasets/{dataset_id}/{index_type}", shadow, methods=["DELETE"])
+    assert client.request("DELETE", "/api/v1/datasets/kb1/documents", json=["invalid-body"]).status_code == 418
+
+
+@pytest.mark.parametrize(("legacy", "index_type", "key"), [("run_graphrag", "graph", "graphrag_task_id"), ("run_raptor", "raptor", "raptor_task_id")])
+def test_legacy_run_adapts_only_task_id_field(db, monkeypatch, legacy, index_type, key):
+    seen = []
+    monkeypatch.setattr(dataset_api_service, "run_index", lambda s, t, d, kind: seen.append(kind) or (True, {"task_id": "task1"}))
+    assert getattr(dataset_api_service, legacy)(db, "t1", "kb1") == (True, {key: "task1"})
+    assert seen == [index_type]
+
+
+async def test_legacy_trace_keeps_missing_raptor_error(async_db, monkeypatch, fake_kb):
+    monkeypatch.setattr(KnowledgebaseService, "accessible_async", AsyncMock(return_value=True))
+    monkeypatch.setattr(async_db, "get", AsyncMock(side_effect=lambda model, key: fake_kb(raptor_task_id="missing") if model is Knowledgebase else None))
+    assert await dataset_api_service.trace_index(async_db, "t1", "kb1", "raptor") == (True, {})
+    assert await dataset_api_service.trace_raptor(async_db, "t1", "kb1") == (False, "RAPTOR Task Not Found or Error Occurred")
+
+
+def test_ingestion_dates_are_validated_before_database_access(client):
+    response = client.get("/api/v1/datasets/kb1/ingestions?create_date_from=not-a-date")
+    assert response.status_code == 422
+
+
+def test_single_dataset_tags_serialize_as_upstream_pairs(client, monkeypatch):
+    monkeypatch.setattr(dataset_api_service, "list_tags_async", AsyncMock(return_value=(True, [("alpha", 2)])))
+    assert client.get("/api/v1/datasets/kb1/tags").json()["data"] == [["alpha", 2]]

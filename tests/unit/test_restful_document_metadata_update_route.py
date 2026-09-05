@@ -9,7 +9,8 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 
 
-def test_restful_metadata_update_uses_canonical_static_route(client, monkeypatch):
+@pytest.mark.parametrize(("method", "path"), [("PATCH", "documents/metadatas"), ("POST", "metadata/update")])
+def test_restful_metadata_update_uses_canonical_static_route(client, monkeypatch, method, path):
     calls: list[tuple[Any, ...]] = []
 
     def _update(db, dataset_id, tenant_id, selector, updates, deletes):
@@ -18,8 +19,9 @@ def test_restful_metadata_update_uses_canonical_static_route(client, monkeypatch
 
     monkeypatch.setattr(document_api_service, "batch_update_document_metadata", _update)
 
-    response = client.patch(
-        "/api/v1/datasets/kb-1/documents/metadatas",
+    response = client.request(
+        method,
+        f"/api/v1/datasets/kb-1/{path}",
         json={"selector": {"document_ids": ["doc-1"]}, "updates": [{"key": "author", "value": "Ada"}]},
     )
 
@@ -87,6 +89,6 @@ def test_metadata_update_routes_replace_removed_legacy_routes(client):
     schema = client.app.openapi()
 
     assert schema["paths"]["/api/v1/datasets/{dataset_id}/documents/metadatas"]["patch"].get("deprecated") is not True
-    assert "/api/v1/datasets/{dataset_id}/metadata/update" not in schema["paths"]
+    assert "post" in schema["paths"]["/api/v1/datasets/{dataset_id}/metadata/update"]
     assert "/v1/document/metadata/update" not in schema["paths"]
     assert "put" not in schema["paths"]["/api/v1/datasets/{dataset_id}/documents/{document_id}"]

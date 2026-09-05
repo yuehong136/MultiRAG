@@ -12,9 +12,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import OperationalError
@@ -76,7 +77,7 @@ def _parse_dataset_ids(raw: str | None) -> list[str]:
     return [d.strip() for d in (raw or "").split(",") if d.strip()]
 
 
-async def _delete_index(tenant_id: str, dataset_id: str, index_type: str):
+async def _delete_index(tenant_id: str, dataset_id: str, index_type: str) -> Response:
     """DELETE 索引的两种寻址（?type= 与路径段）共用的执行体。"""
     index_type = (index_type or "").lower()
     if index_type not in dataset_api_service.VALID_INDEX_TYPES:
@@ -92,7 +93,7 @@ async def _delete_index(tenant_id: str, dataset_id: str, index_type: str):
 # ==================== 响应映射 ====================
 
 
-def _respond(success: bool, result: Any):
+def _respond(success: bool, result: Any) -> Response:
     """通用映射：成功 -> get_result(data)，失败 -> get_error_data_result(retmsg)。
 
     兼容个别底层 helper（如 KnowledgebaseService.create_with_name）失败时仍返回
@@ -208,7 +209,7 @@ async def list_datasets(
 async def aggregate_tags(
     dataset_ids: str | None = Query(None, description="数据集ID列表，逗号分隔"),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     ids = _parse_dataset_ids(dataset_ids)
     if not ids:
         return get_error_data_result(retmsg="Lack of dataset_ids in query parameters")
@@ -224,7 +225,7 @@ async def aggregate_tags(
 async def get_flattened_metadata(
     dataset_ids: str | None = Query(None, description="数据集ID列表，逗号分隔"),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     ids = _parse_dataset_ids(dataset_ids)
     if not ids:
         return get_error_data_result(retmsg="Lack of dataset_ids in query parameters")
@@ -241,9 +242,9 @@ async def get_dataset(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.get_dataset(s, tenant_id, dataset_id))  # TODO(async-phase4)
+        success, result = await dataset_api_service.get_dataset(db, tenant_id, dataset_id)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -255,9 +256,9 @@ async def get_ingestion_summary(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.get_ingestion_summary(s, tenant_id, dataset_id))  # TODO(async-phase4)
+        success, result = await dataset_api_service.get_ingestion_summary(db, tenant_id, dataset_id)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -267,30 +268,28 @@ async def get_ingestion_summary(
 @router.get("/datasets/{dataset_id}/ingestions", summary="列出数据集摄取日志")
 async def list_ingestion_logs(
     dataset_id: str,
-    page: int = Query(0, description="页码"),
-    page_size: int = Query(0, description="每页数量"),
+    page: int = Query(0, ge=0, description="页码"),
+    page_size: int = Query(0, ge=0, description="每页数量"),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     operation_status: list[str] | None = Query(None, description="按操作状态过滤，可重复"),
-    create_date_from: str | None = Query(None, description="创建日期起始"),
-    create_date_to: str | None = Query(None, description="创建日期结束"),
+    create_date_from: datetime | None = Query(None, description="创建日期起始"),
+    create_date_to: datetime | None = Query(None, description="创建日期结束"),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(  # TODO(async-phase4)
-            lambda s: dataset_api_service.list_ingestion_logs(
-                s,
-                tenant_id,
-                dataset_id,
-                page,
-                page_size,
-                orderby,
-                desc,
-                operation_status,
-                create_date_from,
-                create_date_to,
-            )
+        success, result = await dataset_api_service.list_ingestion_logs(
+            db,
+            tenant_id,
+            dataset_id,
+            page,
+            page_size,
+            orderby,
+            desc,
+            operation_status,
+            create_date_from,
+            create_date_to,
         )
         return _respond(success, result)
     except Exception as e:
@@ -305,9 +304,9 @@ async def get_ingestion_log(
     log_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.get_ingestion_log(s, tenant_id, dataset_id, log_id))  # TODO(async-phase4)
+        success, result = await dataset_api_service.get_ingestion_log(db, tenant_id, dataset_id, log_id)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -318,7 +317,7 @@ async def get_ingestion_log(
 async def list_tags(
     dataset_id: str,
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         success, result = await dataset_api_service.list_tags_async(tenant_id, dataset_id)
         return _respond(success, result)
@@ -332,7 +331,7 @@ async def delete_tags(
     dataset_id: str,
     request: DeleteTagsRequest,
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         success, result = await dataset_api_service.delete_tags_async(tenant_id, dataset_id, request.tags)
         return _respond(success, result)
@@ -346,7 +345,7 @@ async def rename_tag(
     dataset_id: str,
     request: RenameTagRequest,
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     if not request.from_tag.strip() or not request.to_tag.strip():
         return get_error_data_result(retmsg="from_tag and to_tag must not be empty")
     try:
@@ -362,7 +361,7 @@ async def run_index(
     dataset_id: str,
     type: str = Query("", description="索引类型：graph / raptor / mindmap"),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         success, result = await dataset_api_service.run_index_async(tenant_id, dataset_id, type)
         return _respond(success, result)
@@ -377,9 +376,9 @@ async def trace_index(
     type: str = Query("", description="索引类型：graph / raptor / mindmap"),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.trace_index(s, tenant_id, dataset_id, type))  # TODO(async-phase4)
+        success, result = await dataset_api_service.trace_index(db, tenant_id, dataset_id, type)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -391,7 +390,7 @@ async def delete_index_by_query(
     dataset_id: str,
     type: str = Query("", description="索引类型：graph / raptor / mindmap"),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     return await _delete_index(tenant_id, dataset_id, type)
 
 
@@ -400,7 +399,7 @@ async def get_metadata_config(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         success, result = await db.run_sync(lambda s: dataset_api_service.get_auto_metadata(s, tenant_id, dataset_id))  # TODO(async-phase4)
         return _respond(success, result)
@@ -418,7 +417,7 @@ async def update_metadata_config(
     request: AutoMetadataConfigRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump()))  # TODO(async-phase4)
         return _respond(success, result)
@@ -472,7 +471,7 @@ async def get_knowledge_graph(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         success, result = await dataset_api_service.get_knowledge_graph(db, tenant_id, dataset_id)
         if success:
@@ -505,7 +504,7 @@ async def delete_knowledge_graph(
 async def run_graphrag(
     dataset_id: str,
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         # 任务入队（共享 helper）内 DB 写 + Redis 交错：整块在工作线程 + 自开短会话执行
         success, result = await dataset_api_service.run_graphrag_async(tenant_id, dataset_id)
@@ -521,9 +520,9 @@ async def trace_graphrag(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.trace_graphrag(s, tenant_id, dataset_id))  # TODO(async-phase4)
+        success, result = await dataset_api_service.trace_graphrag(db, tenant_id, dataset_id)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -535,7 +534,7 @@ async def trace_graphrag(
 async def run_raptor(
     dataset_id: str,
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         # 任务入队（共享 helper）内 DB 写 + Redis 交错：整块在工作线程 + 自开短会话执行
         success, result = await dataset_api_service.run_raptor_async(tenant_id, dataset_id)
@@ -551,22 +550,26 @@ async def trace_raptor(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.trace_raptor(s, tenant_id, dataset_id))  # TODO(async-phase4)
+        success, result = await dataset_api_service.trace_raptor(db, tenant_id, dataset_id)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
 
 
-# 这条 catch-all 必须留在文件最后：{index_type} 会吞掉同前缀的任何具体 DELETE 路由
-# （knowledge_graph、tags、index 都在它之前注册）。上游 Flask 下静态段天然优先，
-# FastAPI 没有这个保证，顺序就是契约。
-@router.delete("/datasets/{dataset_id}/{index_type}", summary="删除索引任务及其产物")
-async def delete_index(
-    dataset_id: str,
-    index_type: str,
-    tenant_id: str = Depends(async_current_tenant_id),
-):
-    return await _delete_index(tenant_id, dataset_id, index_type)
+# Explicit compatibility paths must not match another router's /documents endpoint.
+@router.delete("/datasets/{dataset_id}/graph", summary="删除图索引任务及产物")
+async def delete_graph_index(dataset_id: str, tenant_id: str = Depends(async_current_tenant_id)) -> Response:
+    return await _delete_index(tenant_id, dataset_id, "graph")
+
+
+@router.delete("/datasets/{dataset_id}/raptor", summary="删除 RAPTOR 索引任务及产物")
+async def delete_raptor_index(dataset_id: str, tenant_id: str = Depends(async_current_tenant_id)) -> Response:
+    return await _delete_index(tenant_id, dataset_id, "raptor")
+
+
+@router.delete("/datasets/{dataset_id}/mindmap", summary="删除思维导图索引任务")
+async def delete_mindmap_index(dataset_id: str, tenant_id: str = Depends(async_current_tenant_id)) -> Response:
+    return await _delete_index(tenant_id, dataset_id, "mindmap")
