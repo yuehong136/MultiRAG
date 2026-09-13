@@ -20,16 +20,15 @@
 
 ## 1. 五分钟上手
 
-1. 读本文件，先建立术语和系统边界。
-2. 读 [DECISIONS](DECISIONS.md)，不要重新发明已经定案的架构。
-3. 在 [ROADMAP](ROADMAP.md) 找到用户指定的 `EIM-*` 任务；没有指定时，不要自行并行开多条，
-   先根据依赖图选择第一个未阻塞任务。
-4. 按任务的“开工前必读”和“验收证据”执行。
+1. 在 [ROADMAP](ROADMAP.md) 定位用户指定的 `EIM-*` 任务，读取维护协议、该任务状态、依赖与验收证据。
+   用户要求接续主线而未指定 ID 时，按依赖图选择一个未阻塞任务；普通问题按目标定位，不先扩成路线图任务。
+2. 用本页索引和 [AGENT_RUNBOOK](AGENT_RUNBOOK.md#21-读文档) 定位相关契约、ADR 与实现；只读本次涉及的章节。
+3. 复核当前代码和任务锚点，按用户范围完成实现、适用验证、回归修复和记账。
+4. 任务要求运行验收时实际运行并检查结果；明确区分代码完成、本机验收与已部署状态。
 5. 改 MultiRAG 的 Channel 子系统时，同一提交还必须带任务表指定的 `CHN-*` ID，并更新
    Channel 进度账本。
-6. 改 of_mcp 时先完整读取**那个仓自己的** `AGENTS.md`（在它的 checkout 根目录），最终必须执行
-   `uv run ofmcp verify`；改 MultiRAG 时最终必须执行 `make verify`，涉及身份表、迁移或
-   token 持久化时另跑 `make integration`。
+6. 改 of_mcp 时读取**那个仓自己的** `AGENTS.md`，按其当前门禁验证；MultiRAG 按根
+   [AGENTS.md 验证表](../../AGENTS.md#验证) 选择检查，代码改动不以专项测试替代通用门禁。
 
 准备启用 A2/P3 file signer 时，先按 [P3 ES256 签名密钥 runbook](P3_SIGNING_KEYS.md) 生成环境独立
 keypair、配置 owner/ACL、验证 JWKS，并遵守 prepublish → switch → retain/remove 轮换顺序。
@@ -37,14 +36,14 @@ keypair、配置 owner/ACL、验证 JWKS，并遵守 prepublish → switch → r
 推荐的派工方式：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md，然后完成 ROADMAP 中当前主线任务
-（EIM-U15/CHN-X15 与 EIM-I5/CHN-X19 已完成默认关闭的本地实现；下一任务必须按 ROADMAP
-选择尚未完成且依赖已满足的单一任务）。
-先复核任务锚点和依赖，把准备修改的文件与验收标准告诉我；确认后再写代码。
+完成 EIM-<ID>，以 ROADMAP 的当前任务、依赖和验收标准为准。
+在授权范围内完成实现、适用验证、修复本次失败并更新账本；包含运行验收时检查实际结果。
+遇到尚未授权的部署或外部管理操作，先准备具体方案、影响和回退方式，再请求批准。
 ```
 
 一次只派一个任务。`EIM-*` 是跨项目工作包 ID；某些任务同时映射一个 `CHN-*` ID，这是
 Channel 仓内的强制记账，不是重复任务。
+需要先审计时，在请求中明确“只读审计，确认后再实施”；该阶段边界不作为所有任务的默认流程。
 
 ---
 

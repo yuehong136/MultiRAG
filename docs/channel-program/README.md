@@ -7,9 +7,9 @@
 
 ## 五分钟上手
 
-1. 读本文件，重点是 §3（现在该干什么）、§5（跨仓部署顺序）、§6（硬不变量）。
-2. 读 [PROGRESS](PROGRESS.md) 顶部的「维护协议（MANDATORY）」——它约束你怎么记账。
-3. 只读你要动的那个阶段的任务表，其余略过。
+1. 用本页索引定位工作；接续主线时查 §3，涉及部署时查 §5，修改行为时核对 §6 的相关不变量。
+2. 处理任务条目时读 [PROGRESS](PROGRESS.md) 顶部的维护协议，核实当前任务状态、依赖和验收标准。
+3. 只读目标任务及相关契约、决策的章节；历史记录按需检索。
 4. 动到前后端接口就读 [CONTRACT](CONTRACT.md)；动到已上线行为就读
    [`api/channels/README.md`](../../api/channels/README.md) 的「已实现 / 尚未实现或不能宣称」。
 5. 需要背景（为什么这么判、怎么复现）→ `internal/channel-audit-2026-08.md`（本地笔记，不入库）。
@@ -175,106 +175,52 @@ Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
 
 ## 3.5 怎么把一条任务派给「没有任何上下文的我」
 
-> 跨程序共通的四条不变量（说 ID 不说需求 / 提示词只补哪三样 / 验证基线要自测 /
-> agent 记忆不跨机器）已收在 [`AGENTS.md` 的「零上下文交接」](../../AGENTS.md#零上下文交接)。
-> 本节只讲 CHN 特有的部分，别在这里重复那四条。
+> 共通交接规则见 [AGENTS.md](../../AGENTS.md#零上下文交接)。本节仅补充 CHN 的任务依赖与验收。
 
-一句话版本：**说 ID，别说需求。**
+有任务 ID 时直接引用；新问题可描述目标，由当前代码与账本定位，无需用户先发明 ID。
 
+```text
+完成 CHN-<ID>，以 PROGRESS 的当前任务、依赖和验收标准为准。
+完成实现、适用验证、修复本次失败并按维护协议记账；包含运行验收时检查实际结果。
+尚未授权的线上重启或部署，先给出影响、回退方式和待执行动作，再请求批准。
 ```
-读 docs/channel-program/README.md，然后做 CHN-O7。
-```
 
-这就够了。README 是入口，它指向 PROGRESS.md 的任务表与「待办任务简报」，简报里有问题
-描述、证据、闸门、验收标准和从哪读起；DECISIONS.md 有为什么是这个方案；CONTRACT.md 有
-前后端契约。**不需要你复述背景**——复述反而危险，因为你记得的是几周前的状态，而文档是
-按维护协议持续更新的。
+同一兼容链一次推进一个已满足依赖的任务，不越过 tolerate / emit 等部署半步。
+任务锚点以当前代码复核，背景与决策按 README 索引查相关章节；不把历史状态复制进派工模板。
 
-几条让交接不出错的补充：
+只读审计或先审后改由用户在请求中明确；已有授权不重复索取。线上重启可能重置飞书会话与
+dedupe 窗口，适用部署门禁仍须核实。询问下一项优先级时，按当前账本与依赖给出建议。
 
-- **一次只派一条。** 这些任务有闸门依赖，同时开两条容易在半态上打架。
-- **想让它先确认再动手**，就加一句：`先复核锚点，把你要改的文件和验收标准说给我听，
-  我确认后再写代码。` 简报里的行号一定会漂，维护协议第 1 条要求先核对。
-- **涉及重启线上进程的**（CHN-P11 要重启 API、注册新 provider 要重启 supervisor），
-  加一句：`重启前先问我。` 重启会让飞书 bot 会话重置一次、dedupe 窗口空一次。
-- **不确定该派哪条**，就说：`读 docs/channel-program/README.md，告诉我现在最该做什么、
-  为什么。` §3 已经按「闸门是否满足」排好了。
-
-反面例子（**不要这样写**）：
-
-> 我们之前做了一个 channel 的重构，有个凭据加密的问题，你帮我看看能不能支持密钥轮换……
-
-这样写会让我从零重新调研一遍已经调研过的东西，而且大概率得出与 `CHN-ADR-06` 冲突的方案。
-ID 是这套账本存在的全部理由。
-
-**验收也用 ID 收口**：完工后让我按维护协议更新 `PROGRESS.md` 状态 + 变更日志，并把
-`CHN-<面><n>` 写进提交标题——`git log --grep=CHN-` 是这套账本唯一的交叉校验手段。
+完工按维护协议更新 `PROGRESS.md` 的状态与变更日志，提交标题包含对应 `CHN-*` ID。
+代码完成、本机验证和部署完成分别记账。
 
 ## 4. 验证命令（两个仓）
 
 ### 后端 · MultiRAG
 
-**本机是 Windows，没有 `make`。** AGENTS.md 里的 `make verify` 在这台机器上跑不了，
-直接跑下面的命令（Makefile 里 `UV := uv run --no-sync`）：
+按根 [AGENTS.md 的验证表](../../AGENTS.md#验证) 选择检查；命令以当前 [Makefile](../../Makefile) 为准。
+Python 行为改动交付前跑 `make verify`；纯文档做 diff、链接与内容一致性检查。
+无 `make` 的机器执行目标内的等价命令；格式化限定改动文件，不先运行全库修复。
 
-```powershell
-$env:PYTHONUTF8 = "1"          # 必须；否则中文日志/断言会炸编码
-uv run --no-sync ruff format .            # 先格式化，否则下一行在 Windows 上先炸行尾
-uv run --no-sync ruff format --check .
-uv run --no-sync ruff check .
-uv run --no-sync lint-imports
-uv run --no-sync python scripts/check_async_sync_db.py
-uv run --no-sync mypy
-uv run --no-sync pytest tests/unit -q
-```
+Channel 开发中的定向回路可按受影响面选择，例如：
 
-Channel 快速回路（提交前仍要跑上面全套）：
-
-```powershell
+```bash
 uv run --no-sync pytest tests/unit -q -k "channel or feishu"
-uv run --no-sync ruff check api/channels api/channel_control api/channel_execution api/channel_runtime
 ```
 
-⚠️ **先确认 uv 版本闸门**：`pyproject.toml` 有 `required-version`（`58d9e82e` 起是
-`>=0.12,<0.13`），uv 比它旧时**上面每一条命令都不会执行**，而是立刻报
-`error: Required uv version ... does not match the running version ...`；
-`.claude/settings.json` 的 PostToolUse ruff/mypy 钩子会以同样理由每次编辑都失败——
-那是工具链闸门，不是你的代码有问题。先 `uv --version` 对一下再动手。
+定向检查不替代适用的通用门禁或真实端点验收。工具链不满足 `pyproject.toml` 时记录环境阻塞，
+不降低版本要求；钩子行为以 `.claude/settings.json` 与当前脚本为准。
+Windows 若遇到中文编码问题，可设置 `PYTHONUTF8=1` 后复核。
 
-真撞上时有两条路：升级 uv（本机是 winget 装的，`uv self update` 会拒绝），或者绕开 uv
-直接用项目 venv 里的同一批工具——`uv run --no-sync` 本来就等价于此：
+历史 Windows 的 bash 模板、ProactorEventLoop 或子进程故障只用于排障定位，
+见 [PROGRESS 的历史测试记录](PROGRESS.md#testsunit-先天失败基线)。
+是否仍失败、是否由本次引入，均需当前机器的命令与失败集合证明；旧通过数和耗时不作基线。
+单次 import 成功不能代替 `make smoke` 或业务响应验证。
 
-```powershell
-.venv\Scripts\ruff.exe format --check .; .venv\Scripts\ruff.exe check .
-.venv\Scripts\lint-imports.exe; .venv\Scripts\python.exe scripts/check_async_sync_db.py
-.venv\Scripts\mypy.exe; .venv\Scripts\python.exe -m pytest tests/unit -q
-```
+### 前端 · 独立 web 仓
 
-（2026-08-11 实测记录：本机 uv 0.11.32 撞闸门，CHN-U16 全程走上面的 venv 兜底；用户随后升到
-**0.12.2**，`uv run --no-sync` 与钩子均已恢复，静态门禁与 U16 测试都用 uv 复跑过一遍。）
-
-⚠️ **`tests/integration` 在本机目前整体不可用**（2026-08-11 实测 20 failed / 15 passed）：
-全部死在 `psycopg.InterfaceError: Psycopg cannot use the 'ProactorEventLoop' to run in async
-mode`——Windows 默认 ProactorEventLoop，而 async psycopg 需要 SelectorEventLoop。这是测试基建
-问题，不是被测代码问题（连 `test_async_engine_select_one` 都红），改动 Channel 时不必被它挡住；
-真要修就是给 `tests/integration/conftest.py` 设 `WindowsSelectorEventLoopPolicy`，那是独立一条。
-
-⚠️ **三个必须知道的坑**：
-
-1. **`tests/unit` 有 6 条先天失败**（2026-08-05 实测 6 failed / 1486 passed / 761.94s，
-   全是 Windows 上 bash 渲染配置模板导致的，与 channel 无关）。**逐条测试名记在
-   [PROGRESS · 先天失败基线](PROGRESS.md#testsunit-先天失败基线)**——比对的是**失败集合**，
-   不是通过数。出现不在名单里的失败才是回归。被你改动的测试文件另外单独跑，要求零失败。
-   全量一次 12 分 41 秒，所以日常用下面的 channel 快速回路，提交前才跑全量。
-2. **上面这套不覆盖 CI 全部**：CI 另跑 gitleaks 与 smoke。测试里的假凭据必须低于 gitleaks
-   的 3.5 香农熵阈值（历史上踩过，见提交 `fd95d0a1`）——用 `cli_aaaaaaaaaaaaaaaa` 这类结构化
-   重复占位符，绝不用 base64/hex 形状的随机串。
-3. **新建顶层包或改路由后**必须自查导入（smoke 的本地替身，不需要 Milvus/Postgres/MinIO/Redis）：
-   ```powershell
-   uv run --no-sync python -c "import api.apps, api.channel_control.schemas; print('import ok')"
-   ```
-
-### 前端 · web（`D:/project/web`）
+在实际 `web` checkout 读取它的 `AGENTS.md`、`package.json` 与 CI，按改动选择当前门禁。
+以下为既有 Channel 验证命令与覆盖盲区的历史参考，运行前核实仍适用：
 
 ```powershell
 npm run lint; npm run lint:file-size; npm run lint:typed; npm run typecheck:agent-strict

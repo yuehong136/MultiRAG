@@ -2,36 +2,31 @@
 
 > 目标：一个没有任何历史对话的 Agent，只凭本目录就能安全接手一个独立任务。
 > 本文规定工作方式；技术事实以 [CONTRACTS](CONTRACTS.md)、[DECISIONS](DECISIONS.md) 和任务行本身为准。
-> 跨程序共通的四条不变量（说 ID 不说需求 / 提示词只补哪三样 / 验证基线要自测 /
-> agent 记忆不跨机器）在 [`AGENTS.md` 的「零上下文交接」](../../AGENTS.md#零上下文交接)；
-> 本文是 EIM 特有的加码（跨两个仓、外部管理后台操作要批准），不重复那四条。
+> 跨程序的范围、完成标准与交接规则见 [AGENTS.md](../../AGENTS.md#零上下文交接)。
+> 本文补充 EIM 的跨仓契约和任务约束，按当前任务读取。
 
 ## 1. 接单格式
 
 用户应尽量按 ID 派工：
 
 ```text
-读 docs/enterprise-identity-mcp/README.md 和 AGENT_RUNBOOK.md，执行用户指定的 EIM-<ID>。
-先复核依赖和当前代码；按 ROADMAP 维护协议记账。涉及部署或外部管理后台操作时先停下来征得批准。
+完成 EIM-<ID>，从 README 和 ROADMAP 定位当前契约、依赖及验收标准。
+完成实现、适用验证、修复本次失败并按维护协议记账；包含运行验收时检查实际结果。
+尚未授权的部署或外部管理操作，在方案、影响和回退方式可审查后请求批准。
 ```
 
 一个 Agent 一次只负责一个 ROADMAP ID。任务本身确实要求跨仓原子完成时，才在同一次工作中操作
 MultiRAG 与 `of_mcp`；不要把相邻任务“顺手”并入一个提交。
 
-## 2. 开工前必须完成
+## 2. 定位任务
 
 ### 2.1 读文档
 
-所有任务先完整阅读：
+当前仓库的 `AGENTS.md` 规定开发与验证边界；已在上下文中时无需重复读取。
+从 [README](README.md) 的索引和 [ROADMAP](ROADMAP.md) 的维护协议、目标任务行进入，
+核实状态、依赖、验收和涉及的部署顺序。下表用于定位相关章节，不要求整份通读本手册或所有参考文档。
 
-1. [README](README.md)：最终结论、边界、文档索引；
-2. [ROADMAP](ROADMAP.md)：任务状态、依赖、验收、部署顺序；
-3. 本文；
-4. 当前仓库的 `AGENTS.md`。
-
-再按任务类型补读：
-
-| 任务前缀 | 必读 |
+| 任务前缀 | 相关章节入口 |
 |---|---|
 | EIM-F | [VERSION_BASELINE](VERSION_BASELINE.md)、[REFERENCES](REFERENCES.md) |
 | EIM-I | [DECISIONS](DECISIONS.md)、[CONTRACTS](CONTRACTS.md)、[ARCHITECTURE](ARCHITECTURE.md) |
@@ -55,7 +50,7 @@ rg -n "目标符号或旧契约名" api common tests docs
 - ROADMAP 和 REFERENCES 里的路径是时点快照。先用 `rg` 找当前符号，再更新任务锚点。
 - 在 `of_mcp` 仓工作时（另一个独立 checkout，路径随机器而变），重新读取**那里实际存在的**
   `AGENTS.md`；MultiRAG 规则不能代替另一个仓库的规则。
-- 核对 ROADMAP 依赖均为 `✅`。依赖未满足时不要跳过半步，记录阻塞并停止。
+- 核对 ROADMAP 依赖的当前状态与证据。依赖未满足时不越过该半步，记录阻塞；可继续不依赖它的分析或验证，不自行接管前置任务。
 
 ### 2.3 确认任务尚未完成
 
@@ -102,23 +97,19 @@ rg -n "相关模型、迁移、测试或错误码" .
 在 [ROADMAP](ROADMAP.md) 对应行改成 `🔵`，同时写清更新后的文件/符号锚点。如果任务映射到
 `CHN-*`，也按 Channel `PROGRESS.md` 协议同步置为进行中。一个任务不要同时让两个 Agent 修改。
 
-### 4.2 先写契约/测试，再改实现
+### 4.2 按验收标准完成
 
-推荐顺序：
-
-1. 把 CONTRACTS 的提案形状与当前任务需要的最终形状对齐；
-2. 写失败测试，包含至少一个拒绝路径；
-3. 做最小实现；
-4. 跑快速测试；
-5. 处理迁移、兼容半步和文档；
-6. 跑完整门禁。
+实现与当前任务契约一致，并有本次验证证据；修 bug 保留能暴露问题的回归测试，
+身份、授权或输入校验变更覆盖适用拒绝路径。迁移、兼容半步和文档属于相应任务的交付，
+不在第一版代码后默认停下等待 review。检查范围按根 [AGENTS.md](../../AGENTS.md#验证) 选择，
+通过后仅在新改动或未解决问题需要时复跑；用户明确要求只读或分阶段审批时遵守该边界。
 
 Channel private DTO 必须按 tolerate → emit → consume → remove 分 PR。共享模型有默认值也可能被
 FastAPI 自动序列化出去，因此 tolerate PR 必须用线格测试证明旧 payload **逐字节不变**。
 
 ### 4.3 数据库任务
 
-- 新 service 一律 async-first，使用 `AsyncSession`，遵守根 AGENTS.md 的 session 规则；
+- 新 service 使用 `AsyncSession`，遵守 [异步 SQLAlchemy 细则](../development.md#异步-sqlalchemy-编码规范)；
 - 迁移只新增表/列/索引时先保证老代码可运行，再切读写，最后才删除旧字段；
 - 用数据库约束守住身份唯一性，不只靠应用层“先查再插”；
 - I2 必须先用 provider-tenant ownership 强制外部企业单 Tenant，再让 provider account、alias 和
@@ -897,32 +888,18 @@ replay/audit、OTel SDK/exporter、W3C 跨仓 trace 与 P3 动态 bearer 的真�
 
 ### 6.1 MultiRAG
 
-快速回路可按改动范围选择，但宣布完成前必须：
-
-```bash
-make fix
-make verify
-```
-
-涉及 DB/identity storage：
-
-```bash
-REQUIRE_SERVICES=1 make integration
-```
-
-涉及路由/启动/JWKS：
-
-```bash
-make smoke
-```
+按根 [AGENTS.md 的验证表](../../AGENTS.md#验证) 执行；Python 行为改动需要 `make verify`，
+DB/identity storage 加 `make integration`，路由/启动/JWKS 加 `make smoke` 和相应端点验收。
+文档修订只做文档检查；局部格式化限定本次路径，不默认运行全库 `make fix`。
 
 如果工具链版本不满足 `pyproject.toml`，这是环境阻塞，不得改低项目要求换绿。记录实际版本、失败
 命令和用户需要执行的升级动作；仍可运行不会破坏环境的静态检查，但不能宣称完整门禁通过。
 
 ### 6.2 `of_mcp`
 
-以该仓实时规则为准。最低证据必须包含 formatter/lint、typecheck、unit、auth negative tests、
+以该仓实时规则为准。代码任务的最低证据包含 formatter/lint、typecheck、unit、auth negative tests、
 integration；FastMCP/MCP 升级任务还要跑协议版本、legacy client 和 sessionless/stateless 组合测试。
+纯文档按该仓文档验证规则执行，不在本手册另设测试门禁。
 
 ### 6.3 F2/F3/F4/F6/F7/F8 跨仓矩阵
 
@@ -977,7 +954,10 @@ feat(auth): issue short-lived MCP access tokens (EIM-A2)
 记录：ROADMAP/CHN 账本已更新；提交 SHA。
 ```
 
-## 8. 必须停止并请用户决策的情况
+## 8. 需要用户决策的边界
+
+以下情况仅暂停受影响的动作；先完成已授权、可独立推进的准备工作，提供具体可审查结果。
+同一范围已获授权且事实未变化时不重复请求；测试失败先归因、修复本次回归，不自动转成审批问题。
 
 - 需要在飞书管理后台申请权限、发布应用、扩大通讯录范围；
 - 需要重启线上 API/supervisor、轮换 secret/签名密钥、执行生产迁移；

@@ -11,7 +11,7 @@ help: ## 列出全部可用目标
 install: ## 同步依赖（dev 组，按锁文件）
 	uv sync --group dev --frozen
 
-fix: ## 自动修复 lint 违规并格式化（提交前先跑这个）
+fix: ## 全库修复 lint 并格式化（局部改动请限定路径）
 	$(UV) ruff check --fix .
 	$(UV) ruff format .
 
@@ -45,4 +45,4 @@ mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议�
 	uv lock --check --script tests/compat/mcp/modern_server.py
 	$(UV) python scripts/check_mcp_compat.py
 
-verify: lint typecheck test ## 标准编码后门禁（Tier 0+1+2）——任务完成前必须全绿
+verify: lint typecheck test ## Python 编码交付门禁（Tier 0+1+2；适用范围见 AGENTS.md）
