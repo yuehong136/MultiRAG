@@ -3,12 +3,15 @@ import base64
 import ipaddress
 import json
 import logging
+import os
 import re
 import smtplib
 import socket
+import stat
 from collections.abc import Sequence
 from email.message import EmailMessage
 from email.utils import formataddr
+from pathlib import Path
 from urllib.parse import urlparse
 
 from jinja2 import Template
@@ -221,6 +224,18 @@ def __send_devtools(driver, cmd, params=None):
         raise RuntimeError("This Selenium WebDriver does not support execute_cdp_cmd. Ensure you are using a compatible driver and browser.")
 
 
+def _managed_chromedriver_service() -> Service:
+    driver_path = Path(ChromeDriverManager().install())
+    executable_name = "chromedriver.exe" if os.name == "nt" else "chromedriver"
+    if driver_path.name != executable_name:
+        executable = driver_path.with_name(executable_name)
+        if executable.is_file():
+            driver_path = executable
+    if os.name != "nt" and driver_path.is_file() and not os.access(driver_path, os.X_OK):
+        driver_path.chmod(driver_path.stat().st_mode | stat.S_IXUSR)
+    return Service(str(driver_path))
+
+
 def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_options: dict):
     webdriver_options = Options()
     webdriver_prefs: dict = {}
@@ -233,7 +248,7 @@ def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_opt
     webdriver_prefs["profile.default_content_settings"] = {"images": 2}
 
     if install_driver:
-        service = Service(ChromeDriverManager().install())
+        service = _managed_chromedriver_service()
         driver = webdriver.Chrome(service=service, options=webdriver_options)
     else:
         driver = webdriver.Chrome(options=webdriver_options)

@@ -51,4 +51,17 @@
 新增创建模式与既有上传路由定向测试通过，另增 OpenAPI 兼容标记检查。
 `make integration` 因 Redis `127.0.0.1:6379`、MinIO `127.0.0.1:9020` 不可达而未运行测试；
 `make smoke` 因 API `127.0.0.1:8123` 未启动而失败。本项未启动会初始化配置数据库的服务入口，
-因此真实存储写入与网页抓取端到端验收仍待具备隔离服务的环境完成。
+因此当时真实存储写入与网页抓取端到端验收尚未完成。
+
+补验收（2026-09-27，基础服务启动后）：`make integration` 通过 235 个测试。
+API 使用仅供本次验收的新建 PostgreSQL scratch 库启动，`make smoke` 通过；健康检查的
+数据库、Redis、文档引擎和存储状态均为 `ok`。通过真实 REST 请求创建了 `empty` 虚拟文档、
+`local` 文本文档和 `web` PDF 文档，逐个通过列表接口读回，并独立查验 scratch 库中的
+文档行和文件关联。删除文档、读回空列表、删除数据集后，API 停止且 scratch 库已删除；
+未对配置的 `xldu` 库运行启动迁移。公网域名在本机被 DNS 映射到保留地址而被 SSRF 校验拒绝，
+网页模式改用通过校验的 `https://1.1.1.1/cdn-cgi/trace` 完成验收。
+
+补验收发现 webdriver-manager 在本机将可执行路径指向 `THIRD_PARTY_NOTICES.chromedriver`，
+导致网页创建返回业务错误。已在共享 `html2pdf` helper 中选择同目录真实 `chromedriver`，
+并补齐其执行权限；增加对此缓存布局的回归测试。修复后网页创建成功并完成上述读回与清理。
+修复后重跑 `make verify`（unit 3116 passed）与 `make integration`（235 passed），均通过。
