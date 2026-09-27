@@ -3,6 +3,37 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2846a939981b41e155ef9975727bfb0e7f7a0ca8 · 修正大型 PDF 页数截断
+
+- 上游：`infiniflow/ragflow` #14382，提交于 2026-04-27；按目标 SHA 核对完整 24 文件 diff。
+  2026-09-27 fetch 后 `origin/main` 为 `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+  此项只移植 Python 解析与任务链；下一指定提交 `290f0294` 留待单独处理。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `common/constants.py`；`deepdoc/parser/{pdf,docling,mineru,opendataloader,paddleocr,docx}_parser.py` | 增加解析页上界 `100000` 与独立的任务标记 `100000000`。DeepDOC、Vision 默认不再在第 299 页截止，Docling、MinerU、OpenDataLoader 不再默认在第 600 页截止；PaddleOCR、DOCX 同步统一默认值。DeepDOC 的 `parse_into_bboxes` 接收并传递明确页范围，文字提取失败时只为实际渲染的页分配空列表。纳入后续 `3a829fb6d` 的 Vision 指定页范围原页码修正。 |
+| `rag/app/{book,email,laws,manual,naive,one,paper,presentation,qa,resume,table}.py` | 对应本仓 `core/app/` 同名模块，统一“全部页”默认值与 DOCX/PPT/Excel 调用处的哨兵；保留现有解析模式选择和显式页范围。 |
+| `api/db/db_models.py`、`api/db/services/{document,file,task}_service.py` | 统一任务表默认标记、排队分页区间、非分页任务和复用任务判断；本仓文档/文件直接解析入口沿用解析页上界。 |
+| 两个上游 SDK route 测试文件 | 仅调整其整包伪造的 `common.constants` 测试桩；本仓没有同类测试桩，不复制。新增本地真实 PDF、任务分片和 scratch DB 回归。 |
+
+本仓还有 `document_analysis_service.py`、`pipeline_analysis_service.py`、
+`guard_detection_app.py` 和 `core/flow/parser/parser.py` 的直接解析入口，已同步页上界；
+`core/svr/task_executor.py` 的非分页任务进度标记也同步使用任务常量。
+`core/flow/parser/parser.py` 的 DeepDOC bbox 路径未配置指定页范围，当前使用新默认值。
+
+后续链核对：`3a829fb6d` 修正 Vision 指定范围的原始页码，本项已纳入；
+`c446c403d` 再将 bbox 解析分批并延迟加载页面图像，是单独的内存优化，当前 302 页
+轻量 PDF 验收不代表高分辨率完整 OCR 对超长 PDF 的内存压力已解决。
+`81361c210` 后续修正 MinerU API 对页范围的转发；本仓现有 MinerU API 模式
+仍将页码固定为全量，Docling/OpenDataLoader 调用链也尚未转发显式范围，
+这些后端的范围控制不能用本次 DeepDOC/Plain/Vision 验收结果推断。
+
+验证：生成 302 页轻量 PDF，实际经 `pdfplumber` 渲染、提取并读回末页 `PAGE302`；
+另验证第 301–302 页指定范围、短 PDF、提取失败时的回退列表长度、Vision 原页码、
+任务切分覆盖末页及 scratch PostgreSQL 中的非分页任务标记。
+`make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3163 passed），
+`make integration` 通过（240 passed）。未运行完整 DeepDOC OCR/版面模型及真实外部解析服务。
+
 ## c3eac4103a0408f9b8d25948e625e58821b5d54a · 阿里云 Go 模型提供商
 
 - 上游：`infiniflow/ragflow` #14379，提交于 2026-04-27；父提交为上项 `0b46ab07`。

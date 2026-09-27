@@ -18,6 +18,7 @@ import logging
 import re
 from collections import Counter
 from io import BytesIO
+from typing import Any
 
 import pandas as pd
 from docx import Document
@@ -27,6 +28,7 @@ from docx.image.exceptions import (
     UnrecognizedImageError,
 )
 
+from common.constants import MAXIMUM_PAGE_NUMBER
 from core.nlp import rag_tokenizer
 from core.utils.lazy_image import LazyImage
 
@@ -158,7 +160,7 @@ class RAGFlowDocxParser:
             return lines
         return ["\n".join(lines)]
 
-    def __call__(self, fnm, from_page=0, to_page=100000000):
+    def __call__(self, fnm: Any, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER) -> Any:
         self.doc = Document(fnm) if isinstance(fnm, str) else Document(BytesIO(fnm))
         pn = 0  # parsed page
         secs = []  # parsed contents

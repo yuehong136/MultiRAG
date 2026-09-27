@@ -36,10 +36,12 @@ import random
 import re
 import unicodedata
 from io import BytesIO
+from typing import Any
 
 import numpy as np
 
 from common import settings
+from common.constants import MAXIMUM_PAGE_NUMBER
 
 # tiktoken for long random string filtering (ref: SmartResume should_remove strategy)
 try:
@@ -2482,7 +2484,7 @@ def _blackout_text_regions(image: "np.ndarray", meta_blocks: list[dict], page_id
     return blacked
 
 
-def chunk(filename, binary, tenant_id, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename: Any, binary: Any, tenant_id: Any, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
     """
     Resume parsing entry function (compatible with task_executor.py)
 

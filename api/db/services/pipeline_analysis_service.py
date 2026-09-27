@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import time
+from typing import Any
 
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
@@ -11,7 +12,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.metadata_extractor import BatchMetadataExtractor
 from common import settings
-from common.constants import LLMType
+from common.constants import MAXIMUM_PAGE_NUMBER, LLMType
 from common.misc_utils import thread_pool_exec
 from core.nlp.term_weight import Dealer as TermWeightDealer
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
@@ -450,7 +451,7 @@ class PipelineAnalysisService:
             logger.exception(f"Failed to parse file with flow: {e}")
             raise
 
-    async def _parse_uploaded_file_old(self, file, filename: str | None) -> list[dict]:
+    async def _parse_uploaded_file_old(self, file: Any, filename: str | None) -> list[dict]:
         """旧的解析方法（备用）"""
         import os
         import tempfile
@@ -486,7 +487,9 @@ class PipelineAnalysisService:
                 return None
 
             # 执行切片
-            result = await thread_pool_exec(module.chunk, fname, binary=file_content, from_page=0, to_page=100000, lang="Chinese", callback=_noop, parser_config={}, tenant_id=self.tenant_id)
+            result = await thread_pool_exec(
+                module.chunk, fname, binary=file_content, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=_noop, parser_config={}, tenant_id=self.tenant_id
+            )
 
             # 统一格式
             chunks = []

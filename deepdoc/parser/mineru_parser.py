@@ -35,6 +35,7 @@ import pdfplumber
 import requests
 from PIL import Image
 
+from common.constants import MAXIMUM_PAGE_NUMBER
 from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 from deepdoc.parser.utils import extract_pdf_outlines
 
@@ -317,7 +318,14 @@ class MinerUParser(RAGFlowPdfParser):
         except requests.RequestException as e:
             raise RuntimeError(f"[MinerU] api failed with exception {e}")
 
-    def __images__(self, fnm, zoomin: int = 1, page_from=0, page_to=600, callback=None):
+    def __images__(
+        self,
+        fnm: str | bytes | PathLike[str],
+        zoomin: int = 1,
+        page_from: int = 0,
+        page_to: int = MAXIMUM_PAGE_NUMBER,
+        callback: Callable[..., Any] | None = None,
+    ) -> None:
         self.page_from = page_from
         self.page_to = page_to
         try:

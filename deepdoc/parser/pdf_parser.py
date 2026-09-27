@@ -24,9 +24,11 @@ import sys
 import threading
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from copy import deepcopy
 from io import BytesIO
 from timeit import default_timer as timer
+from typing import Any
 
 import numpy as np
 import pdfplumber
@@ -38,6 +40,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
 from common import settings
+from common.constants import MAXIMUM_PAGE_NUMBER
 from common.file_utils import get_project_base_directory
 from common.misc_utils import thread_pool_exec
 from core.nlp import rag_tokenizer
@@ -1581,7 +1584,7 @@ class RAGFlowPdfParser:
         except Exception:
             logging.exception("total_page_number")
 
-    def __images__(self, fnm, zoomin=3, page_from=0, page_to=299, callback=None):
+    def __images__(self, fnm: Any, zoomin: int | float = 3, page_from: int = 0, page_to: int = MAXIMUM_PAGE_NUMBER, callback: Callable[..., Any] | None = None) -> None:
         self.lefted_chars = []
         self.mean_height = []
         self.mean_width = []
@@ -1601,7 +1604,7 @@ class RAGFlowPdfParser:
                         self.page_chars = [[c for c in page.dedupe_chars().chars if self._has_color(c)] for page in self.pdf.pages[page_from:page_to]]
                     except Exception as e:
                         logging.warning(f"Failed to extract characters for pages {page_from}-{page_to}: {e!s}")
-                        self.page_chars = [[] for _ in range(page_to - page_from)]  # If failed to extract, using empty list instead.
+                        self.page_chars = [[] for _ in range(len(self.page_images))]  # Keep fallback bounded by pages actually rendered.
 
                     # Detect garbled pages and clear their chars so the OCR
                     # path will be used instead.
@@ -1751,10 +1754,10 @@ class RAGFlowPdfParser:
         tbls = self._extract_table_figure(need_image, zoomin, return_html, False)
         return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls
 
-    def parse_into_bboxes(self, fnm, callback=None, zoomin=3):
+    def parse_into_bboxes(self, fnm: Any, callback: Callable[..., Any] | None = None, zoomin: int | float = 3, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER) -> list[dict[str, Any]]:
         start = timer()
         self.outlines = extract_pdf_outlines(fnm)
-        self.__images__(fnm, zoomin, callback=callback)
+        self.__images__(fnm, zoomin, from_page, to_page, callback=callback)
         if callback:
             callback(0.40, f"OCR finished ({timer() - start:.2f}s)")
 
@@ -2000,7 +2003,7 @@ class RAGFlowPdfParser:
 
 
 class PlainParser:
-    def __call__(self, filename, from_page=0, to_page=100000, **kwargs):
+    def __call__(self, filename: str | bytes, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, **kwargs: Any) -> tuple[list[tuple[str, str]], list[Any]]:
         lines = []
         try:
             self.pdf = pdf2_read(filename if isinstance(filename, str) else BytesIO(filename))
@@ -2026,7 +2029,7 @@ class VisionParser(RAGFlowPdfParser):
         self.vision_model = vision_model
         self.outlines = []
 
-    def __images__(self, fnm, zoomin=3, page_from=0, page_to=299, callback=None):
+    def __images__(self, fnm: Any, zoomin: int | float = 3, page_from: int = 0, page_to: int = MAXIMUM_PAGE_NUMBER, callback: Callable[..., Any] | None = None) -> None:
         try:
             with sys.modules[LOCK_KEY_pdfplumber]:
                 self.pdf = pdfplumber.open(fnm) if isinstance(fnm, str) else pdfplumber.open(BytesIO(fnm))
@@ -2037,7 +2040,7 @@ class VisionParser(RAGFlowPdfParser):
             self.total_page = 0
             logging.exception("VisionParser __images__")
 
-    def __call__(self, filename, from_page=0, to_page=100000, **kwargs):
+    def __call__(self, filename: Any, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, **kwargs: Any) -> tuple[list[tuple[str, str]], list[Any]]:
         callback = kwargs.get("callback", lambda prog, msg: None)
         zoomin = kwargs.get("zoomin", 3)
         self.__images__(fnm=filename, zoomin=zoomin, page_from=from_page, page_to=to_page, callback=callback)
@@ -2050,7 +2053,7 @@ class VisionParser(RAGFlowPdfParser):
         all_docs = []
 
         for idx, img_binary in enumerate(self.page_images or []):
-            pdf_page_num = idx  # 0-based
+            pdf_page_num = from_page + idx  # 0-based in the original PDF
             if pdf_page_num < start_page or pdf_page_num >= end_page:
                 continue
 

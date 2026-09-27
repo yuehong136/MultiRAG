@@ -31,6 +31,8 @@ import pdfplumber
 import requests
 from PIL import Image
 
+from common.constants import MAXIMUM_PAGE_NUMBER
+
 try:
     from docling.document_converter import DocumentConverter
 except Exception:
@@ -125,7 +127,14 @@ class DoclingParser(RAGFlowPdfParser):
             self.logger.error(f"[Docling] init DocumentConverter failed: {e}")
             return False
 
-    def __images__(self, fnm, zoomin: int = 1, page_from=0, page_to=600, callback=None):
+    def __images__(
+        self,
+        fnm: str | bytes | PathLike[str],
+        zoomin: int = 1,
+        page_from: int = 0,
+        page_to: int = MAXIMUM_PAGE_NUMBER,
+        callback: Callable[..., Any] | None = None,
+    ) -> None:
         self.page_from = page_from
         self.page_to = page_to
         bytes_io = None

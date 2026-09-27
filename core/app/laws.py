@@ -17,10 +17,11 @@
 import logging
 import re
 from io import BytesIO
+from typing import Any
 
 from docx import Document
 
-from common.constants import ParserType
+from common.constants import MAXIMUM_PAGE_NUMBER, ParserType
 from common.parser_config_utils import normalize_layout_recognizer
 from core.app.naive import PARSERS, by_plaintext
 from core.nlp import Node, bullets_category, docx_question_level, make_colon_as_title, rag_tokenizer, remove_contents_table, tokenize_chunks, tree_merge
@@ -36,7 +37,7 @@ class Docx(DocxParser):
         line = re.sub(r"\u3000", " ", line).strip()
         return line
 
-    def old_call(self, filename, binary=None, from_page=0, to_page=100000):
+    def old_call(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER) -> Any:
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         lines = []
@@ -53,7 +54,7 @@ class Docx(DocxParser):
                     pn += 1
         return [line for line in lines if line]
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER) -> Any:
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         lines = []
@@ -98,7 +99,7 @@ class Pdf(PdfParser):
         self.model_speciess = ParserType.LAWS.value
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None) -> Any:
         from timeit import default_timer as timer
 
         start = timer()
@@ -117,7 +118,7 @@ class Pdf(PdfParser):
         return [(b["text"], self._line_tag(b, zoomin)) for b in self.boxes], None
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
     """
     Supported file formats are docx, pdf, txt.
     """

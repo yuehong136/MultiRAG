@@ -12,21 +12,23 @@ import re
 from email import policy
 from email.parser import BytesParser
 from timeit import default_timer as timer
+from typing import Any
 
+from common.constants import MAXIMUM_PAGE_NUMBER
 from core.app.naive import chunk as naive_chunk
 from core.nlp import naive_merge, rag_tokenizer, tokenize_chunks
 from deepdoc.parser import HtmlParser, TxtParser
 
 
 def chunk(
-    filename,
-    binary=None,
-    from_page=0,
-    to_page=100000,
-    lang="Chinese",
-    callback=None,
-    **kwargs,
-):
+    filename: Any,
+    binary: Any = None,
+    from_page: int = 0,
+    to_page: int = MAXIMUM_PAGE_NUMBER,
+    lang: str = "Chinese",
+    callback: Any = None,
+    **kwargs: Any,
+) -> Any:
     """
     Only eml is supported
     """

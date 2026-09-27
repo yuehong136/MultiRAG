@@ -17,7 +17,9 @@
 import logging
 import re
 from io import BytesIO
+from typing import Any
 
+from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER
 from common.parser_config_utils import normalize_layout_recognizer
 from core.app import naive
 from core.app.naive import PARSERS, by_plaintext
@@ -28,7 +30,7 @@ from deepdoc.parser.utils import get_text
 
 
 class Pdf(PdfParser):
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None) -> Any:
         from timeit import default_timer as timer
 
         start = timer()
@@ -55,7 +57,7 @@ class Pdf(PdfParser):
         return [(txt, "") for txt, _ in sorted(sections, key=lambda x: (x[-1][0][0], x[-1][0][3], x[-1][0][1]))], tbls
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
     """
     Supported file formats are docx, pdf, excel, txt.
     One file forms a chunk which maintains original text order.
@@ -126,7 +128,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     elif re.search(r"\.xlsx?$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
         excel_parser = ExcelParser()
-        sections = excel_parser.html(binary, 1000000000)
+        sections = excel_parser.html(binary, MAXIMUM_TASK_PAGE_NUMBER)
 
     elif re.search(r"\.(txt|md|markdown|mdx))$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")

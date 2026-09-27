@@ -20,11 +20,13 @@ import re
 from copy import deepcopy
 from io import BytesIO
 from timeit import default_timer as timer
+from typing import Any
 
 from docx import Document
 from markdown import markdown
 from openpyxl import load_workbook
 
+from common.constants import MAXIMUM_PAGE_NUMBER
 from common.float_utils import get_float
 from core.nlp import add_positions, concat_img, docx_question_level, has_qbullet, is_english, qbullets_category, rag_tokenizer, random_choices, tokenize_table
 from deepdoc.parser import DocxParser, ExcelParser, PdfParser
@@ -69,7 +71,7 @@ class Excel(ExcelParser):
 
 
 class Pdf(PdfParser):
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None) -> Any:
         start = timer()
         callback(msg="OCR started")
         self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
@@ -174,7 +176,7 @@ class Docx(DocxParser):
     def __init__(self):
         pass
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, callback: Any = None) -> Any:
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         last_answer, last_image = "", None
@@ -282,7 +284,7 @@ def mdQuestionLevel(s):
     return (len(match.group(0)), s.lstrip("#").lstrip()) if match else (0, s)
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
     """
     Excel and csv(txt) format files are supported.
     If the file is in Excel format, there should be 2 column question and answer without header.
@@ -416,7 +418,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
     elif re.search(r"\.docx$", filename, re.IGNORECASE):
         docx_parser = Docx()
-        qai_list, tbls = docx_parser(filename, binary, from_page=0, to_page=10000, callback=callback)
+        qai_list, tbls = docx_parser(filename, binary, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=callback)
         res = tokenize_table(tbls, doc, eng)
         for i, (q, a, image) in enumerate(qai_list):
             res.append(beAdocDocx(deepcopy(doc), q, a, eng, image, i))

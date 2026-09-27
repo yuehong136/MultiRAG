@@ -19,9 +19,11 @@ import logging
 import re
 from collections import defaultdict
 from io import BytesIO
+from typing import Any
 
 from pypdf import PdfReader as pdf2_read
 
+from common.constants import MAXIMUM_PAGE_NUMBER
 from common.parser_config_utils import normalize_layout_recognizer
 from core.app.naive import PARSERS, by_plaintext
 from core.nlp import rag_tokenizer, tokenize
@@ -33,7 +35,7 @@ class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, **kwargs):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None, **kwargs: Any) -> Any:
         # 1. OCR
         callback(msg="OCR started")
         self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
@@ -113,7 +115,7 @@ class Pdf(PdfParser):
 
 
 class PlainPdf(PlainParser):
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, callback: Any = None, **kwargs: Any) -> Any:
         self.pdf = pdf2_read(filename if not binary else BytesIO(binary))
         page_txt = []
         for page in self.pdf.pages[from_page:to_page]:
@@ -122,7 +124,7 @@ class PlainPdf(PlainParser):
         return [(txt, None) for txt in page_txt], []
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, parser_config=None, **kwargs):
+def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, parser_config: Any = None, **kwargs: Any) -> Any:
     """
     The supported file formats are pdf, ppt, pptx.
     Every page will be treated as a chunk. And the thumbnail of every page will be stored.
@@ -137,7 +139,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     if re.search(r"\.pptx?$", filename, re.IGNORECASE):
         try:
             ppt_parser = PptParser()
-            for pn, txt in enumerate(ppt_parser(filename if not binary else binary, from_page, 1000000, callback)):
+            for pn, txt in enumerate(ppt_parser(filename if not binary else binary, from_page, MAXIMUM_PAGE_NUMBER, callback)):
                 d = copy.deepcopy(doc)
                 pn += from_page
                 d["doc_type_kwd"] = "image"

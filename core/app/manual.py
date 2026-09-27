@@ -23,7 +23,7 @@ from typing import Any
 
 from docx import Document
 
-from common.constants import ParserType
+from common.constants import MAXIMUM_PAGE_NUMBER, ParserType
 from common.parser_config_utils import normalize_layout_recognizer
 from common.token_utils import num_tokens_from_string
 from core.app.naive import PARSERS, by_plaintext
@@ -38,7 +38,7 @@ class Pdf(PdfParser):
         self.model_speciess = ParserType.MANUAL.value
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None) -> Any:
         from timeit import default_timer as timer
 
         start = timer()
@@ -74,7 +74,7 @@ class Docx(DocxParser):
     def __init__(self):
         pass
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, callback: Any = None) -> Any:
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         last_answer, last_image = "", None
@@ -141,7 +141,7 @@ def chunk(
     filename: str,
     binary: bytes | None = None,
     from_page: int = 0,
-    to_page: int = 100000,
+    to_page: int = MAXIMUM_PAGE_NUMBER,
     lang: str = "Chinese",
     callback: Callable[..., Any] | None = None,
     **kwargs: Any,
@@ -285,7 +285,7 @@ def chunk(
 
     elif re.search(r"\.docx?$", filename, re.IGNORECASE):
         docx_parser = Docx()
-        ti_list, tbls = docx_parser(filename, binary, from_page=0, to_page=10000, callback=callback)
+        ti_list, tbls = docx_parser(filename, binary, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=callback)
         tbls = vision_figure_parser_docx_wrapper(sections=ti_list, tbls=tbls, callback=callback, **kwargs)
         res = tokenize_table(tbls, doc, eng)
         for text, image in ti_list:

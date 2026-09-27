@@ -6,6 +6,7 @@ import os
 import re
 import time
 from collections import Counter
+from typing import Any
 
 import numpy as np
 from sqlalchemy.orm import Session
@@ -16,7 +17,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from common import settings
-from common.constants import LLMType
+from common.constants import MAXIMUM_PAGE_NUMBER, LLMType
 from common.misc_utils import thread_pool_exec
 from common.token_utils import truncate
 from core.graphrag.utils import get_embed_cache, get_llm_cache, set_embed_cache, set_llm_cache
@@ -280,7 +281,7 @@ class DocumentAnalysisService:
 
     async def _parse_uploaded_file(
         self,
-        file,  # UploadFile or file-like object
+        file: Any,  # UploadFile or file-like object
         filename: str | None = None,
     ) -> list[dict]:
         """
@@ -336,7 +337,9 @@ class DocumentAnalysisService:
                 return None
 
             # 执行切片 (使用asyncio.to_thread)
-            result = await thread_pool_exec(module.chunk, fname, binary=file_content, from_page=0, to_page=100000, lang="Chinese", callback=_noop, parser_config={}, tenant_id=self.tenant_id)
+            result = await thread_pool_exec(
+                module.chunk, fname, binary=file_content, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=_noop, parser_config={}, tenant_id=self.tenant_id
+            )
 
             # 统一格式
             chunks = []

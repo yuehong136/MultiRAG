@@ -24,6 +24,7 @@ from api.db.services.guard_log_service import GuardLogService
 from api.db.services.guard_service_service import GuardServiceService
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common import settings
+from common.constants import MAXIMUM_PAGE_NUMBER
 from core.app import naive
 
 router = APIRouter()
@@ -550,7 +551,7 @@ def detect_batch_content(request: BatchDetectionRequest, db: Session = Depends(g
 
 
 @router.post("/batch-detect-documents", summary="批量文档安全检测")
-def detect_batch_documents(request: BatchDocumentDetectionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
+def detect_batch_documents(request: BatchDocumentDetectionRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/batch-detect-documents` 批量文档安全检测
 
@@ -825,7 +826,7 @@ def detect_batch_documents(request: BatchDocumentDetectionRequest, db: Session =
                         filename=doc.name,
                         binary=binary,
                         from_page=0,
-                        to_page=100000,
+                        to_page=MAXIMUM_PAGE_NUMBER,
                         lang="Chinese",
                         callback=progress_callback,
                         parser_config=parser_config,
@@ -1202,7 +1203,7 @@ def test_library_matching(request: dict[str, Any], db: Session = Depends(get_db)
 
 
 @router.post("/detect-document", summary="文档安全检测")
-def detect_document_chunks(request: DocumentGuardDetectionRequest, db: Session = Depends(get_db), user=Depends(manager)) -> dict[str, Any]:
+def detect_document_chunks(request: DocumentGuardDetectionRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> dict[str, Any]:
     """
     ### POST `/detect-document` 文档安全检测
 
@@ -1355,7 +1356,15 @@ def detect_document_chunks(request: DocumentGuardDetectionRequest, db: Session =
 
             # 调用naive解析器进行切片
             chunks = naive.chunk(
-                filename=doc.name, binary=binary, from_page=0, to_page=100000, lang="Chinese", callback=progress_callback, parser_config=parser_config, kb_id=doc.kb_id, tenant_id=service.tenant_id
+                filename=doc.name,
+                binary=binary,
+                from_page=0,
+                to_page=MAXIMUM_PAGE_NUMBER,
+                lang="Chinese",
+                callback=progress_callback,
+                parser_config=parser_config,
+                kb_id=doc.kb_id,
+                tenant_id=service.tenant_id,
             )
 
             if not chunks:

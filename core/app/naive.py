@@ -34,7 +34,7 @@ from PIL import Image
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.llm_service import LLMBundle
-from common.constants import LLMType
+from common.constants import MAXIMUM_PAGE_NUMBER, LLMType
 from common.float_utils import normalize_overlapped_percent
 from common.parser_config_utils import normalize_layout_recognizer
 from common.text_utils import normalize_arabic_presentation_forms
@@ -87,7 +87,7 @@ def _normalize_section_text_for_rtl_presentation_forms(sections):
     return normalized_sections
 
 
-def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+def by_deepdoc(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, pdf_cls: Any = None, **kwargs: Any) -> Any:
     callback = callback
     binary = binary
     pdf_parser = pdf_cls() if pdf_cls else Pdf()
@@ -103,18 +103,18 @@ def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
 
 
 def by_mineru(
-    filename,
-    binary=None,
-    from_page=0,
-    to_page=100000,
-    lang="Chinese",
-    callback=None,
-    pdf_cls=None,
+    filename: Any,
+    binary: Any = None,
+    from_page: int = 0,
+    to_page: int = MAXIMUM_PAGE_NUMBER,
+    lang: str = "Chinese",
+    callback: Any = None,
+    pdf_cls: Any = None,
     parse_method: str = "raw",
     mineru_llm_name: str | None = None,
     tenant_id: str | None = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Any:
     pdf_parser = None
     if tenant_id:
         if not mineru_llm_name:
@@ -154,7 +154,7 @@ def by_mineru(
     return None, None, None
 
 
-def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+def by_docling(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, pdf_cls: Any = None, **kwargs: Any) -> Any:
     pdf_parser = DoclingParser()
     parse_method = kwargs.get("parse_method", "raw")
 
@@ -179,7 +179,7 @@ def by_opendataloader(
     filename: str,
     binary: bytes | BytesIO | None = None,
     from_page: int = 0,
-    to_page: int = 100000,
+    to_page: int = MAXIMUM_PAGE_NUMBER,
     lang: str = "Chinese",
     callback: Callable[..., Any] | None = None,
     pdf_cls: type | None = None,
@@ -227,7 +227,7 @@ def by_opendataloader(
     return None, None, None
 
 
-def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+def by_tcadp(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, pdf_cls: Any = None, **kwargs: Any) -> Any:
     tcadp_parser = TCADPParser()
 
     if not tcadp_parser.check_installation():
@@ -239,18 +239,18 @@ def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese",
 
 
 def by_paddleocr(
-    filename,
-    binary=None,
-    from_page=0,
-    to_page=100000,
-    lang="Chinese",
-    callback=None,
-    pdf_cls=None,
+    filename: Any,
+    binary: Any = None,
+    from_page: int = 0,
+    to_page: int = MAXIMUM_PAGE_NUMBER,
+    lang: str = "Chinese",
+    callback: Any = None,
+    pdf_cls: Any = None,
     parse_method: str = "raw",
     paddleocr_llm_name: str | None = None,
     tenant_id: str | None = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Any:
     pdf_parser = None
     if tenant_id:
         if not paddleocr_llm_name:
@@ -289,7 +289,7 @@ def by_paddleocr(
     return None, None, None
 
 
-def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
+def by_plaintext(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, callback: Any = None, **kwargs: Any) -> Any:
     layout_recognizer = (kwargs.get("layout_recognizer") or "").strip()
     if (not layout_recognizer) or (layout_recognizer == "Plain Text"):
         pdf_parser = PlainParser()
@@ -436,7 +436,7 @@ class Docx(DocxParser):
 
         return ""
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER) -> Any:
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         lines = []
@@ -599,7 +599,9 @@ class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, separate_tables_figures=False):
+    def __call__(
+        self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None, separate_tables_figures: bool = False
+    ) -> Any:
         start = timer()
         first_start = start
         callback(msg="OCR started")
@@ -792,7 +794,7 @@ def chunk(
     filename: str,
     binary: bytes | None = None,
     from_page: int = 0,
-    to_page: int = 100000,
+    to_page: int = MAXIMUM_PAGE_NUMBER,
     lang: str = "Chinese",
     callback: Callable[..., Any] | None = None,
     **kwargs: Any,

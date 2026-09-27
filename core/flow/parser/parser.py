@@ -19,6 +19,7 @@ import os
 import random
 import re
 from functools import partial
+from typing import Any
 
 import numpy as np
 from litellm import logging
@@ -30,7 +31,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
 from common import settings
-from common.constants import LLMType
+from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER, LLMType
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.app.naive import Docx
 from core.flow.base import ProcessBase, ProcessParamBase
@@ -286,7 +287,7 @@ class Parser(ProcessBase):
     component_name = "Parser"
 
     @staticmethod
-    def _extract_word_title_lines(doc, to_page=100000):
+    def _extract_word_title_lines(doc: Any, to_page: int = MAXIMUM_PAGE_NUMBER) -> list[tuple[Any, str]]:
         lines = []
         if not doc or not getattr(doc, "paragraphs", None):
             return lines
@@ -784,7 +785,7 @@ class Parser(ProcessBase):
                 mkdn += b.get("text", "") + "\n"
             self.set_output("markdown", mkdn)
 
-    def _spreadsheet(self, name, blob, **kwargs):
+    def _spreadsheet(self, name: str, blob: Any, **kwargs: Any) -> Any:
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a Spreadsheet.")
         conf = self._param.setups["spreadsheet"]
         self.set_output("output_format", conf["output_format"])
@@ -858,7 +859,7 @@ class Parser(ProcessBase):
             # Default DeepDOC parser
             spreadsheet_parser = ExcelParser()
             if conf.get("output_format") == "html":
-                htmls = spreadsheet_parser.html(blob, 1000000000)
+                htmls = spreadsheet_parser.html(blob, MAXIMUM_TASK_PAGE_NUMBER)
                 self.set_output("html", htmls[0])
             elif conf.get("output_format") == "json":
                 self.set_output("json", [{"text": txt, "doc_type_kwd": "text"} for txt in spreadsheet_parser(blob) if txt])
@@ -982,7 +983,7 @@ class Parser(ProcessBase):
                 markdown_text = "\n".join(remove_toc_word(markdown_text.split("\n"), outlines))
             self.set_output("markdown", markdown_text)
 
-    def _slides(self, name, blob, **kwargs):
+    def _slides(self, name: str, blob: Any, **kwargs: Any) -> Any:
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a PowerPoint Document")
 
         conf = self._param.setups["slides"]
@@ -1028,7 +1029,7 @@ class Parser(ProcessBase):
             from deepdoc.parser.ppt_parser import RAGFlowPptParser as ppt_parser
 
             ppt_parser = ppt_parser()
-            txts = ppt_parser(blob, 0, 100000, None)
+            txts = ppt_parser(blob, 0, MAXIMUM_PAGE_NUMBER, None)
 
             sections = [{"text": section, "doc_type_kwd": "text"} for section in txts if section.strip()]
 

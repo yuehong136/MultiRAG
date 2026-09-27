@@ -34,7 +34,7 @@ from api.db import (
 
 # from common.time_utils import current_timestamp, timestamp_to_date, date_string_to_timestamp
 from common.config_utils import decrypt_database_config
-from common.constants import ParserType
+from common.constants import MAXIMUM_TASK_PAGE_NUMBER, ParserType
 
 DATABASE_TYPE = os.getenv("DB_TYPE", "postgresql")
 DATABASE = decrypt_database_config(name=DATABASE_TYPE)
@@ -3010,7 +3010,7 @@ class Task(BaseModel):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
     doc_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     from_page: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
-    to_page: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=100000000)
+    to_page: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=MAXIMUM_TASK_PAGE_NUMBER)
     task_type: Mapped[str] = mapped_column(String(32), index=False, nullable=False, default="")
     begin_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
     process_duration: Mapped[float] = mapped_column(Float, index=False, nullable=False, default=0)

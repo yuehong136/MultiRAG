@@ -25,7 +25,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.file_utils import filename_type, read_potential_broken_pdf, sanitize_path, thumbnail_img
 from common import settings
-from common.constants import FileSource, ParserType, TaskStatus
+from common.constants import MAXIMUM_PAGE_NUMBER, FileSource, ParserType, TaskStatus
 from common.misc_utils import get_uuid
 from common.ssrf_guard import assert_url_is_safe, pin_dns
 from core.llm.cv_model.models.gptv4 import GptV4
@@ -478,7 +478,7 @@ class FileService(CommonService):
         return "\n\n".join(res)
 
     @staticmethod
-    def parse(filename, blob, img_base64=True, tenant_id=None, layout_recognize=None):
+    def parse(filename: str, blob: Any, img_base64: bool = True, tenant_id: Any = None, layout_recognize: Any = None) -> Any:
         from core.app import audio, email, naive, picture, presentation
 
         def dummy(prog=None, msg=""):
@@ -486,7 +486,7 @@ class FileService(CommonService):
 
         FACTORY = {ParserType.PRESENTATION.value: presentation, ParserType.PICTURE.value: picture, ParserType.AUDIO.value: audio, ParserType.EMAIL.value: email}
         parser_config = {"chunk_token_num": 16096, "delimiter": "\n!?;。；！？", "layout_recognize": layout_recognize or "Plain Text"}
-        kwargs = {"lang": "Chinese", "callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": 100000, "tenant_id": tenant_id}
+        kwargs = {"lang": "Chinese", "callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": MAXIMUM_PAGE_NUMBER, "tenant_id": tenant_id}
         file_type = filename_type(filename)
         if img_base64 and file_type == FileType.VISUAL.value:
             return GptV4.image2base64(blob)

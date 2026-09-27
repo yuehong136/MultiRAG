@@ -17,10 +17,11 @@
 import copy
 import logging
 import re
+from typing import Any
 
 import numpy as np
 
-from common.constants import ParserType
+from common.constants import MAXIMUM_PAGE_NUMBER, ParserType
 from common.parser_config_utils import normalize_layout_recognizer
 from core.app.naive import PARSERS, by_plaintext
 from core.nlp import add_positions, attach_media_context, bullets_category, rag_tokenizer, title_frequency, tokenize, tokenize_chunks, tokenize_table
@@ -33,7 +34,7 @@ class Pdf(PdfParser):
         self.model_speciess = ParserType.PAPER.value
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+    def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None) -> Any:
         from timeit import default_timer as timer
 
         start = timer()
@@ -132,7 +133,7 @@ class Pdf(PdfParser):
         }
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
     """
     Only pdf is supported.
     The abstract of the paper will be sliced as an entire chunk, and will not be sliced partly.

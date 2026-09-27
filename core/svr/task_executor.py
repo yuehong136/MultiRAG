@@ -41,7 +41,7 @@ from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_
 from common import settings
 from common.config_utils import show_configs
 from common.connection_utils import timeout
-from common.constants import PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
+from common.constants import MAXIMUM_TASK_PAGE_NUMBER, PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
 from common.exceptions import TaskCanceledException
 from common.file_utils import get_project_base_directory
 from common.log_ctx import bind_log_context, clear_log_context
@@ -1063,7 +1063,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
     return tk_count
 
 
-async def run_dataflow(db: Session, task: dict):
+async def run_dataflow(db: Session, task: dict) -> Any:
     from api.db.services.canvas_service import UserCanvasService
     from core.flow.pipeline import Pipeline
 
@@ -1193,7 +1193,7 @@ async def run_dataflow(db: Session, task: dict):
     collection_name = search.index_name_one(task["tenant_id"], kb_name)
     schema = await get_schema(collection_name)
 
-    e = await insert_chunks(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, 100000000), collection_name, schema)
+    e = await insert_chunks(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, MAXIMUM_TASK_PAGE_NUMBER), collection_name, schema)
     if not e:
         PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
         return
@@ -2618,7 +2618,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
         enable_sse = task_data.get("enable_sse", config.get("enable_sse", False))
 
         # 创建进度回调
-        progress_callback_sse = partial(set_progress, db, task_id, task.get("from_page", 0), task.get("to_page", 100000000), enable_sse=enable_sse)
+        progress_callback_sse = partial(set_progress, db, task_id, task.get("from_page", 0), task.get("to_page", MAXIMUM_TASK_PAGE_NUMBER), enable_sse=enable_sse)
 
         try:
             # 绑定 LLM 模型

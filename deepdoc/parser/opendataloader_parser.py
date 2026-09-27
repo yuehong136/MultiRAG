@@ -15,6 +15,8 @@ import pdfplumber
 import requests
 from PIL import Image
 
+from common.constants import MAXIMUM_PAGE_NUMBER
+
 try:
     from deepdoc.parser.pdf_parser import RAGFlowPdfParser
 except Exception:
@@ -161,7 +163,7 @@ class OpenDataLoaderParser(RAGFlowPdfParser):
         fnm: str | PathLike[str] | BytesIO | bytes,
         zoomin: int = 1,
         page_from: int = 0,
-        page_to: int = 600,
+        page_to: int = MAXIMUM_PAGE_NUMBER,
         callback: Callable[..., Any] | None = None,
     ) -> None:
         self.page_from = page_from

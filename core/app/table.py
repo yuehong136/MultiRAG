@@ -21,6 +21,7 @@ import logging
 import re
 from collections import Counter
 from io import BytesIO
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,7 @@ from xpinyin import Pinyin
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
+from common.constants import MAXIMUM_TASK_PAGE_NUMBER
 from core.nlp import rag_tokenizer, tokenize, tokenize_table
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.figure_parser import vision_figure_parser_figure_xlsx_wrapper
@@ -39,7 +41,7 @@ from deepdoc.parser.utils import get_text
 
 
 class Excel(ExcelParser):
-    def __call__(self, fnm, binary=None, from_page=0, to_page=10000000000, callback=None, **kwargs):
+    def __call__(self, fnm: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_TASK_PAGE_NUMBER, callback: Any = None, **kwargs: Any) -> Any:
         if not binary:
             wb = Excel._load_excel_to_workbook(fnm)
         else:
@@ -361,7 +363,7 @@ def column_data_type(arr):
     return arr, ty
 
 
-def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_TASK_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
     """
     Excel and csv(txt) format files are supported.
     For csv or txt file, the delimiter between columns is TAB.

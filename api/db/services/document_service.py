@@ -27,7 +27,17 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils.db_utils import bulk_insert_into_db
 from common import settings
-from common.constants import PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, FileSource, LLMType, ParserType, StatusEnum, TaskStatus
+from common.constants import (
+    MAXIMUM_PAGE_NUMBER,
+    MAXIMUM_TASK_PAGE_NUMBER,
+    PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES,
+    SVR_CONSUMER_GROUP_NAME,
+    FileSource,
+    LLMType,
+    ParserType,
+    StatusEnum,
+    TaskStatus,
+)
 from common.doc_store.doc_store_base import OrderByExpr
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
@@ -745,13 +755,13 @@ class DocumentService(CommonService):
 
         # 解析页区间（优先 parser_config），兼容 pdf/table/文本等
         effective_from = 0
-        effective_to = 100000
+        effective_to = MAXIMUM_PAGE_NUMBER
         try:
             if isinstance(base_cfg, dict):
                 if "from_page" in base_cfg:
                     effective_from = int(base_cfg.get("from_page", 0))
                 if "to_page" in base_cfg:
-                    effective_to = int(base_cfg.get("to_page", 100000))
+                    effective_to = int(base_cfg.get("to_page", MAXIMUM_PAGE_NUMBER))
                 # 若提供 pages 列表，则按其最小/最大范围覆盖
                 pages = base_cfg.get("pages")
                 if isinstance(pages, list) and pages:
@@ -765,7 +775,7 @@ class DocumentService(CommonService):
                     except Exception:
                         pass
         except Exception:
-            effective_from, effective_to = 0, 100000
+            effective_from, effective_to = 0, MAXIMUM_PAGE_NUMBER
 
         # 选择解析器模块（支持用户覆盖，且校验文件类型允许列表）
         module, parser_id = cls._resolve_parser_for_filename(filename, override_parser_id or parser_id)
@@ -990,7 +1000,7 @@ class DocumentService(CommonService):
 
         # 解析有效页区间
         effective_from = int(merged_cfg.get("from_page", 0)) if isinstance(merged_cfg, dict) else 0
-        effective_to = int(merged_cfg.get("to_page", 100000)) if isinstance(merged_cfg, dict) else 100000
+        effective_to = int(merged_cfg.get("to_page", MAXIMUM_PAGE_NUMBER)) if isinstance(merged_cfg, dict) else MAXIMUM_PAGE_NUMBER
         if isinstance(merged_cfg, dict):
             pages = merged_cfg.get("pages")
             if isinstance(pages, list) and pages:
@@ -1430,13 +1440,13 @@ class DocumentService(CommonService):
 
         # 解析页区间（仅对部分解析器有效）
         effective_from = 0
-        effective_to = 100000
+        effective_to = MAXIMUM_PAGE_NUMBER
         try:
             if isinstance(base_cfg, dict):
                 if "from_page" in base_cfg:
                     effective_from = int(base_cfg.get("from_page", 0))
                 if "to_page" in base_cfg:
-                    effective_to = int(base_cfg.get("to_page", 100000))
+                    effective_to = int(base_cfg.get("to_page", MAXIMUM_PAGE_NUMBER))
                 pages = base_cfg.get("pages")
                 if isinstance(pages, list) and pages:
                     try:
@@ -1449,7 +1459,7 @@ class DocumentService(CommonService):
                     except Exception:
                         pass
         except Exception:
-            effective_from, effective_to = 0, 100000
+            effective_from, effective_to = 0, MAXIMUM_PAGE_NUMBER
 
         def _noop(prog=None, msg=""):
             return None
@@ -3014,7 +3024,7 @@ class DocumentService(CommonService):
             queue_tasks(db, doc, bucket, name, 0)
 
 
-def queue_raptor_o_graphrag_tasks(db, sample_doc, ty, priority, fake_doc_id="", doc_ids=[]):
+def queue_raptor_o_graphrag_tasks(db: Session, sample_doc: dict[str, Any], ty: str, priority: int, fake_doc_id: str = "", doc_ids: list[str] = []) -> str:
     """
     You can provide a fake_doc_id to bypass the restriction of tasks at the knowledgebase level.
     Optionally, specify a list of doc_ids to determine which documents participate in the task.
@@ -3026,12 +3036,12 @@ def queue_raptor_o_graphrag_tasks(db, sample_doc, ty, priority, fake_doc_id="", 
     for field in sorted(chunking_config.keys()):
         hasher.update(str(chunking_config[field]).encode("utf-8"))
 
-    def new_task():
+    def new_task() -> dict[str, Any]:
         return {
             "id": get_uuid(),
             "doc_id": fake_doc_id,
-            "from_page": 100000000,
-            "to_page": 100000000,
+            "from_page": MAXIMUM_TASK_PAGE_NUMBER,
+            "to_page": MAXIMUM_TASK_PAGE_NUMBER,
             "task_type": ty,
             "progress_msg": datetime.now().strftime("%H:%M:%S") + " created task " + ty,
             "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -3050,7 +3060,7 @@ def queue_raptor_o_graphrag_tasks(db, sample_doc, ty, priority, fake_doc_id="", 
     return task["id"]
 
 
-async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, priority=0):
+async def queue_analyze_v2_task(db: Session, doc_id: str | None, kb_id: str | None, config: dict[str, Any], user_id: str, file: Any = None, priority: int = 0) -> str:
     """
     创建 analyze_v2 任务并加入队列
 
@@ -3105,7 +3115,7 @@ async def queue_analyze_v2_task(db, doc_id, kb_id, config, user_id, file=None, p
         "progress_msg": f"{datetime.now().strftime('%H:%M:%S')} 任务已创建",
         "priority": priority,
         "from_page": 0,
-        "to_page": 100000000,
+        "to_page": MAXIMUM_TASK_PAGE_NUMBER,
         # 使用 chunk_ids 存储配置
         "chunk_ids": json.dumps(
             {
@@ -3145,7 +3155,7 @@ def get_queue_length(priority):
     return int(group_info.get("lag", 0) or 0)
 
 
-def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
+def doc_upload_and_parse(db: Any, conversation_id: str, file_objs: Any, user_id: str) -> Any:
     from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from api.db.services.api_service import API4ConversationService
     from api.db.services.conversation_service import ConversationService
@@ -3187,7 +3197,7 @@ def doc_upload_and_parse(db, conversation_id, file_objs, user_id):
     for d, blob in files:
         doc_nm[d["id"]] = d["name"]
     for d, blob in files:
-        kwargs = {"callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": 100000, "tenant_id": kb.tenant_id, "lang": kb.language}
+        kwargs = {"callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": MAXIMUM_PAGE_NUMBER, "tenant_id": kb.tenant_id, "lang": kb.language}
         threads.append(exe.submit(FACTORY.get(d["parser_id"], naive).chunk, d["name"], blob, **kwargs))
 
     for (docinfo, _), th in zip(files, threads):

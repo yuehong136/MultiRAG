@@ -250,6 +250,11 @@ SVR_QUEUE_NAME = "multi_rag_svr_queue"
 SVR_CONSUMER_GROUP_NAME = "multi_rag_svr_task_broker"
 TAG_FLD = "tag_feas"
 
+# Parsing uses a page-index upper bound; task metadata uses a separate marker
+# so non-page tasks never collide with a user-selected page range.
+MAXIMUM_PAGE_NUMBER = 100_000
+MAXIMUM_TASK_PAGE_NUMBER = MAXIMUM_PAGE_NUMBER * 1_000
+
 
 MINERU_ENV_KEYS = ["MINERU_APISERVER", "MINERU_OUTPUT_DIR", "MINERU_BACKEND", "MINERU_SERVER_URL", "MINERU_DELETE_OUTPUT"]
 MINERU_DEFAULT_CONFIG = {
