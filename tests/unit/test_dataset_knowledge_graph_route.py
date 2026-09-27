@@ -76,13 +76,14 @@ async def test_get_knowledge_graph_parses_and_trims_graph(async_db, kg_service_s
 # ---------------------------------------------------------------------------
 
 
-def test_route_success_shape(client, monkeypatch):
+@pytest.mark.parametrize("path", ["/api/v1/datasets/kb1/graph/search", "/api/v1/datasets/kb1/knowledge_graph"])
+def test_route_success_shape(client, monkeypatch, path):
     async def _fake(db, tenant_id, dataset_id):
         return True, {"graph": {"nodes": []}, "mind_map": {}}
 
     monkeypatch.setattr(dataset_api_service, "get_knowledge_graph", _fake)
 
-    resp = client.get("/api/v1/datasets/kb1/knowledge_graph")
+    resp = client.get(path)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -90,15 +91,24 @@ def test_route_success_shape(client, monkeypatch):
     assert body["data"] == {"graph": {"nodes": []}, "mind_map": {}}
 
 
-def test_route_denied_shape(client, monkeypatch):
+@pytest.mark.parametrize("path", ["/api/v1/datasets/kb1/graph/search", "/api/v1/datasets/kb1/knowledge_graph"])
+def test_route_denied_shape(client, monkeypatch, path):
     async def _fake(db, tenant_id, dataset_id):
         return False, "No authorization."
 
     monkeypatch.setattr(dataset_api_service, "get_knowledge_graph", _fake)
 
-    resp = client.get("/api/v1/datasets/kb1/knowledge_graph")
+    resp = client.get(path)
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["code"] == int(RetCode.AUTHENTICATION_ERROR)
     assert body["message"] == "No authorization."
+
+
+def test_graph_route_openapi_marks_only_legacy_paths_deprecated(client):
+    paths = client.app.openapi()["paths"]
+
+    assert paths["/api/v1/datasets/{dataset_id}/graph/search"]["get"].get("deprecated") is None
+    assert paths["/api/v1/datasets/{dataset_id}/knowledge_graph"]["get"]["deprecated"] is True
+    assert paths["/api/v1/datasets/{dataset_id}/knowledge_graph"]["delete"]["deprecated"] is True

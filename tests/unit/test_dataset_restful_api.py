@@ -231,6 +231,7 @@ def test_dataset_routes_have_pure_async_dependency_tree(client, route_dependency
         ("GET", "/api/v1/datasets/{dataset_id}/auto_metadata"),
         ("PUT", "/api/v1/datasets/{dataset_id}/auto_metadata"),
         ("GET", "/api/v1/datasets/{dataset_id}/knowledge_graph"),
+        ("GET", "/api/v1/datasets/{dataset_id}/graph/search"),
         ("DELETE", "/api/v1/datasets/{dataset_id}/knowledge_graph"),
         ("POST", "/api/v1/datasets/{dataset_id}/run_graphrag"),
         ("GET", "/api/v1/datasets/{dataset_id}/trace_graphrag"),

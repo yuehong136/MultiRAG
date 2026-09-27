@@ -3,6 +3,9 @@
 本目录路由挂载在 `/api/v1`。数据集业务由 `api/apps/services/dataset_api_service.py`
 和 `document_api_service.py` 提供。
 
+图谱读取使用 `GET /datasets/{id}/graph/search`；旧 `/knowledge_graph` 读取和删除
+路径继续作为 deprecated 兼容入口，删除的新路径为 `DELETE /datasets/{id}/graph`。
+
 ## 索引与兼容接口
 
 `POST/GET/DELETE /datasets/{id}/index?type=graph|raptor|mindmap` 分别执行、查询和删除索引任务。

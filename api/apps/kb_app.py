@@ -295,7 +295,7 @@ def update(request: UpdateKnowledgebaseRequest, db: Session = Depends(get_db), u
         return server_error_response(e)
 
 
-@router.post("/update_metadata_setting", summary="更新知识库元数据配置")
+@router.post("/update_metadata_setting", summary="更新知识库元数据配置", deprecated=True)
 def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, request.kb_id, user.id):
         return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
@@ -311,7 +311,7 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
     return get_json_result(data=kb_dict)
 
 
-@router.get("/detail", summary="获取知识库详情", response_description="成功获取知识库详情")
+@router.get("/detail", summary="获取知识库详情", response_description="成功获取知识库详情", deprecated=True)
 def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     try:
         tenants = UserTenantService.query(db, user_id=user.id)
@@ -453,7 +453,7 @@ def rm(request: RemoveKnowledgebaseRequest, db: Session = Depends(get_db), user=
         return server_error_response(e)
 
 
-@router.get("/{kb_id}/tags", summary="获取知识库标签")
+@router.get("/{kb_id}/tags", summary="获取知识库标签", deprecated=True)
 def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
@@ -464,7 +464,7 @@ def list_tags(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     return get_json_result(data=tags)
 
 
-@router.get("/tags", summary="获取多个知识库的标签")
+@router.get("/tags", summary="获取多个知识库的标签", deprecated=True)
 def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(manager)):
     kb_id_list = kb_ids.split(",")
     for kb_id in kb_id_list:
@@ -477,7 +477,7 @@ def list_tags_from_kbs(kb_ids: str, db: Session = Depends(get_db), user=Depends(
     return get_json_result(data=tags)
 
 
-@router.post("/{kb_id}/rm_tags", summary="删除知识库标签")
+@router.post("/{kb_id}/rm_tags", summary="删除知识库标签", deprecated=True)
 def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
@@ -493,7 +493,7 @@ def rm_tags(kb_id: str, request: RemoveTagsRequest, db: Session = Depends(get_db
     return get_json_result(data=True)
 
 
-@router.post("/{kb_id}/rename_tag", summary="重命名知识库标签")
+@router.post("/{kb_id}/rename_tag", summary="重命名知识库标签", deprecated=True)
 def rename_tags(kb_id: str, request: RenameTagRequest, db: Session = Depends(get_db), user=Depends(manager)):
     if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
@@ -557,7 +557,7 @@ def delete_knowledge_graph(kb_id, db: Session = Depends(get_db), user=Depends(ma
     return get_json_result(data=True)
 
 
-@router.get("/get_meta", summary="查询知识库元数据聚合", response_description="元数据聚合结果")
+@router.get("/get_meta", summary="查询知识库元数据聚合", response_description="元数据聚合结果", deprecated=True)
 def get_meta(kb_ids: str = Query(default="", description="知识库ID列表，逗号分隔"), db: Session = Depends(get_db), user=Depends(manager)):
     """汇总指定知识库中文档元数据字段的取值分布，便于在 Apifox 等工具中查看筛选项。
 
@@ -580,7 +580,7 @@ def get_meta(kb_ids: str = Query(default="", description="知识库ID列表，�
         return server_error_response(e)
 
 
-@router.get("/basic_info", summary="获取知识库文档处理统计信息", response_description="返回文档处理状态统计")
+@router.get("/basic_info", summary="获取知识库文档处理统计信息", response_description="返回文档处理状态统计", deprecated=True)
 def get_basic_info(kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取知识库的文档处理基本统计信息
@@ -626,7 +626,7 @@ def get_basic_info(kb_id: str = Query(..., description="知识库ID"), db: Sessi
         return server_error_response(e)
 
 
-@router.post("/list_pipeline_logs", summary="列出Pipeline日志", response_description="成功获取Pipeline日志列表")
+@router.post("/list_pipeline_logs", summary="列出Pipeline日志", response_description="成功获取Pipeline日志列表", deprecated=True)
 def list_pipeline_logs(
     request_body: ListPipelineLogsRequest,
     kb_id: str = Query(..., description="知识库ID"),
@@ -724,7 +724,7 @@ def list_pipeline_logs(
         return server_error_response(e)
 
 
-@router.post("/list_pipeline_dataset_logs", summary="列出Pipeline数据集日志", response_description="成功获取Pipeline数据集日志列表")
+@router.post("/list_pipeline_dataset_logs", summary="列出Pipeline数据集日志", response_description="成功获取Pipeline数据集日志列表", deprecated=True)
 def list_pipeline_dataset_logs(
     request_body: ListPipelineLogsRequest,
     kb_id: str = Query(..., description="知识库ID"),
@@ -811,7 +811,7 @@ def list_pipeline_dataset_logs(
         return server_error_response(e)
 
 
-@router.post("/delete_pipeline_logs", summary="删除Pipeline日志", response_description="成功删除Pipeline日志")
+@router.post("/delete_pipeline_logs", summary="删除Pipeline日志", response_description="成功删除Pipeline日志", deprecated=True)
 def delete_pipeline_logs(request_body: DeletePipelineLogsRequest, kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     批量删除指定的Pipeline处理日志
@@ -863,7 +863,7 @@ def delete_pipeline_logs(request_body: DeletePipelineLogsRequest, kb_id: str = Q
     return get_json_result(data=True)
 
 
-@router.get("/pipeline_log_detail", summary="获取Pipeline日志详情", response_description="成功获取Pipeline日志详情")
+@router.get("/pipeline_log_detail", summary="获取Pipeline日志详情", response_description="成功获取Pipeline日志详情", deprecated=True)
 def pipeline_log_detail(log_id: str = Query(..., description="日志ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     获取单条Pipeline日志的详细信息
@@ -1264,7 +1264,7 @@ def trace_raptor(kb_id: str = Query(..., description="知识库ID"), db: Session
     return get_json_result(data=task.to_dict())
 
 
-@router.post("/run_mindmap", summary="运行思维导图", response_description="成功启动思维导图任务")
+@router.post("/run_mindmap", summary="运行思维导图", response_description="成功启动思维导图任务", deprecated=True)
 def run_mindmap(request: RunMindmapRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     为指定知识库启动思维导图生成任务
@@ -1363,7 +1363,7 @@ def run_mindmap(request: RunMindmapRequest, db: Session = Depends(get_db), user=
     return get_json_result(data={"mindmap_task_id": task_id})
 
 
-@router.get("/trace_mindmap", summary="追踪思维导图任务", response_description="成功获取思维导图任务状态")
+@router.get("/trace_mindmap", summary="追踪思维导图任务", response_description="成功获取思维导图任务状态", deprecated=True)
 def trace_mindmap(kb_id: str = Query(..., description="知识库ID"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     追踪指定知识库的Mindmap任务执行状态
@@ -1398,7 +1398,7 @@ def trace_mindmap(kb_id: str = Query(..., description="知识库ID"), db: Sessio
     return get_json_result(data=task.to_dict())
 
 
-@router.delete("/unbind_task", summary="解绑知识库任务", response_description="成功解绑任务")
+@router.delete("/unbind_task", summary="解绑知识库任务", response_description="成功解绑任务", deprecated=True)
 def delete_kb_task(kb_id: str = Query(..., description="知识库ID"), pipeline_task_type: str = Query(..., description="Pipeline任务类型"), db: Session = Depends(get_db), user=Depends(manager)):
     """
     解绑知识库与Pipeline任务的关联关系，并清理相关数据
@@ -1507,7 +1507,7 @@ def delete_kb_task(kb_id: str = Query(..., description="知识库ID"), pipeline_
     return get_json_result(data=True)
 
 
-@router.post("/check_embedding", summary="抽样校验知识库向量一致性")
+@router.post("/check_embedding", summary="抽样校验知识库向量一致性", deprecated=True)
 def check_embedding(request: CheckEmbeddingRequest, db: Session = Depends(get_db), user=Depends(manager)):
 
     def _guess_vec_field(src: dict) -> str | None:

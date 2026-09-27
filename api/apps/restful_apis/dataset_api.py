@@ -466,7 +466,8 @@ async def update_auto_metadata(
         return get_error_data_result(retmsg="Internal server error")
 
 
-@router.get("/datasets/{dataset_id}/knowledge_graph", summary="获取数据集知识图谱")
+@router.get("/datasets/{dataset_id}/graph/search", summary="获取数据集知识图谱")
+@router.get("/datasets/{dataset_id}/knowledge_graph", summary="获取数据集知识图谱", deprecated=True)
 async def get_knowledge_graph(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),
@@ -483,7 +484,7 @@ async def get_knowledge_graph(
         return get_error_data_result(retmsg="Internal server error")
 
 
-@router.delete("/datasets/{dataset_id}/knowledge_graph", summary="删除数据集知识图谱")
+@router.delete("/datasets/{dataset_id}/knowledge_graph", summary="删除数据集知识图谱", deprecated=True)
 async def delete_knowledge_graph(
     dataset_id: str,
     db: AsyncSession = Depends(get_async_db),

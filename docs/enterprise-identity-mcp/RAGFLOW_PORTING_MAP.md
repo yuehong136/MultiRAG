@@ -12,6 +12,7 @@
 | Quart/Flask handler | FastAPI router + Pydantic + dependency | 新 service async-first；同一请求不混用同步/异步 session |
 | peewee model/query | `api/db/db_models.py` + SQLAlchemy 2.0 repository | 迁移和真 PostgreSQL 测试固定约束；业务事务放自有 service/repository |
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
+| `api/apps/kb_app.py` 的数据集管理路由 | `api/apps/restful_apis/dataset_api.py`、`document_api.py` | 新契约由 `/api/v1/datasets` 提供；旧 `kb_app.py` 路由待调用方迁移后按兼容策略退役 |
 
 ## 2. EIM-U14 Interaction 所有权
 
