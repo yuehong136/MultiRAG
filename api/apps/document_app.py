@@ -553,7 +553,7 @@ async def upload(
     return await thread_pool_exec(_upload_sync)
 
 
-@router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页")
+@router.post("/web_crawl", summary="网页爬取", response_description="成功爬取网页", deprecated=True)
 def web_crawl(request_body: WebCrawlRequest, db: Session = Depends(get_db), user=Depends(manager)):
     """
     ### POST `/web_crawl` 网页爬取接口
@@ -765,7 +765,7 @@ def web_crawl(request_body: WebCrawlRequest, db: Session = Depends(get_db), user
     return construct_json_result(data=doc)
 
 
-@router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹")
+@router.post("/create", summary="创建文件或文件夹", response_description="成功创建文件或文件夹", deprecated=True)
 def create_document(request_body: CreateDocumentRequest, db: Session = Depends(get_db), user=Depends(manager)):
     req = request_body.model_dump()
     kb_id = req["kb_id"]

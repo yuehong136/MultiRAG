@@ -6,6 +6,17 @@
 图谱读取使用 `GET /datasets/{id}/graph/search`；旧 `/knowledge_graph` 读取和删除
 路径继续作为 deprecated 兼容入口，删除的新路径为 `DELETE /datasets/{id}/graph`。
 
+## 文档创建
+
+`POST /datasets/{id}/documents` 的 `type` 查询参数选择创建方式：省略或 `local` 使用
+`multipart/form-data` 的 `file`（兼容字段 `files`）上传一个或多个文件，返回文档数组；
+`web` 使用表单字段 `name`、`url` 抓取网页并存为 PDF，返回单个文档；`empty` 使用
+JSON `{"name": "..."}` 创建虚拟文档及文件关联，也返回单个文档。三种方式都不自动开始解析。
+旧 `/v1/document/web_crawl`、`/v1/document/create` 仍可用，并在 OpenAPI 中标为 deprecated。
+
+网页抓取在工作线程中完成 URL 校验、PDF 转换和现有文件上传链；数据库会话在该线程内短暂创建，
+不跨线程传递请求的 AsyncSession。空白文档经请求会话的 `run_sync` 桥接遗留同步文件服务。
+
 ## 索引与兼容接口
 
 `POST/GET/DELETE /datasets/{id}/index?type=graph|raptor|mindmap` 分别执行、查询和删除索引任务。

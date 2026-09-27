@@ -472,34 +472,49 @@ DELETE /datasets/{dataset_id}
 
 ## 文档 API
 
-### 上传文档
+### 创建文档
 
-上传文档到知识库。
+上传本地文件、抓取网页为 PDF，或创建空白虚拟文档。创建后不会自动开始解析。
 
 **请求**
 
 ```
-POST /datasets/{dataset_id}/documents
+POST /datasets/{dataset_id}/documents?type=local|web|empty
 ```
 
-**请求体** (multipart/form-data)
+`type` 可省略，默认为 `local`。
 
-| 参数 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| file | file | 是 | 要上传的文件 |
-| run | boolean | 否 | 是否立即开始解析 |
+| type | 请求体 | 必需字段 | 成功时的 `data` |
+|------|--------|----------|-----------------|
+| local | multipart/form-data | `file` 或兼容字段 `files`，可上传多个 | 文档数组 |
+| web | multipart/form-data | `name`、`url` | 单个文档 |
+| empty | application/json | `{"name": "blank.txt"}` | 单个文档 |
 
-**响应**
+`local` 可使用可选表单字段 `parent_path`，并支持 `return_raw_files=true` 查询参数返回原始文档字段。
+网页 URL 会经过出网地址校验；各模式均检查数据集访问权限。失败时检查响应中的非零业务 `code`。
+
+**请求示例**
+
+```bash
+curl -X POST 'http://{address}/api/v1/datasets/{dataset_id}/documents?type=web' \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'name=example-page' -F 'url=https://example.com'
+
+curl -X POST 'http://{address}/api/v1/datasets/{dataset_id}/documents?type=empty' \
+  -H 'Authorization: Bearer <API_KEY>' -H 'Content-Type: application/json' \
+  -d '{"name":"blank.txt"}'
+```
+
+**成功响应示例**（`web`、`empty`；`local` 的 `data` 为文档数组）
 
 ```json
 {
   "code": 0,
   "data": {
     "id": "document-uuid",
-    "name": "document.pdf",
-    "size": 1024000,
-    "status": "pending",
-    "created_at": "2024-01-01T00:00:00Z"
+    "name": "example-page.pdf",
+    "dataset_id": "dataset-uuid",
+    "run": "UNSTART"
   }
 }
 ```

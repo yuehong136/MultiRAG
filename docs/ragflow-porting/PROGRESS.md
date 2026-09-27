@@ -27,3 +27,28 @@
 验证：`make verify` 全绿（8 条 import contracts、mypy 124 个源文件、unit 3100 passed）；
 图谱新旧路径的成功/鉴权失败响应及 OpenAPI deprecated 状态由 unit 覆盖。
 `make smoke` 未通过：本机没有运行中的 API，Redis 与 MinIO 不可达；本次未启动会初始化配置数据库的服务入口。
+
+## a9e5724b46e9f006b90ddd70f812fb59840c6806 · 统一文档创建入口
+
+- 上游：`infiniflow/ragflow` #14345，提交于 2026-04-27；目标父提交是上项 `4dcc42e0`。
+  2026-09-27 fetch 后 `origin/main` 为 `313ca90f6abd7682fe8523e16fd67b3653a3fa84`；
+  本项按目标提交的 10 文件完整 diff 评估。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `api/apps/restful_apis/document_api.py` 新增 `type=local|web|empty` | 移植到现有 FastAPI `POST /api/v1/datasets/{id}/documents`。`local` 保留已有 `file`/`files` 批量上传与返回数组契约；`web` 接收表单名称和 URL，校验租户与 URL 后转换 PDF，复用现有 `FileService.upload_document`；`empty` 接收 JSON 名称，创建虚拟文档与文件关联。网页的 Selenium 与同步存储链在自有会话的工作线程执行；空白文档经请求会话桥接遗留同步 service。 |
+| `api/apps/document_app.py` 删除旧 `/web_crawl`、`/create` | 本地仍有旧调用方，两个路由保留可用并标记 deprecated，待消费方迁移后退役。 |
+| `docs/references/http_api_reference.md` 的三种请求示例 | 更新本仓同名参考文档和 REST 模块 README；按本地契约说明 `file`/`files`、返回形状和不自动解析。 |
+| `test/testcases/test_web_api` 四个文件的 helper/验收改写 | 不复制上游 Quart/Peewee harness；本仓增加 FastAPI 路由、鉴权、URL 阻断、空白文档与文件关联等单元回归，保留已有上传回归。 |
+| `web/src` 三个文件的调用切换 | 本地前端在独立 `../web` 仓，本项不改该仓；服务端新路径已就绪，旧路径供其迁移期间使用。 |
+
+后续链核对：`a339e8a57` 处理批量文件部分成功，属于后续上传契约变更；
+`6e0e49592` 修复阻塞式上传/网页处理，这里已经按 MultiRAG 异步边界将网页链放入线程，
+两条后续提交均不作为本项额外范围。现有 `is_valid_url` 检查输入 URL 的出网地址；
+浏览器抓取过程仍依赖既有 Selenium 实现。
+
+验证：`make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3115 passed）；
+新增创建模式与既有上传路由定向测试通过，另增 OpenAPI 兼容标记检查。
+`make integration` 因 Redis `127.0.0.1:6379`、MinIO `127.0.0.1:9020` 不可达而未运行测试；
+`make smoke` 因 API `127.0.0.1:8123` 未启动而失败。本项未启动会初始化配置数据库的服务入口，
+因此真实存储写入与网页抓取端到端验收仍待具备隔离服务的环境完成。

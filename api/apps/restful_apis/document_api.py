@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError
@@ -210,24 +210,74 @@ async def metadata_summary(
     return await db.run_sync(_summary)  # TODO(async-phase4)
 
 
-@router.post("/datasets/{dataset_id}/documents", summary="上传文档")
+@router.post("/datasets/{dataset_id}/documents", summary="创建文档（本地文件、网页或空白文档）")
 async def upload_documents(
     dataset_id: str,
+    request: Request,
     file: list[UploadFile] | None = File(None, description="上传的文件（与 files 等价，至少提供其一）"),
     files: list[UploadFile] | None = File(None, description="上传的文件"),
+    name: str | None = Form(None, description="type=web 时的文档名称"),
+    url: str | None = Form(None, description="type=web 时的网页 URL"),
     parent_path: str | None = Form(None, description="父文件夹下的可选嵌套路径，使用 '/' 分隔"),
+    creation_type: str = Query("local", alias="type", description="local / web / empty"),
     return_raw_files: bool = Query(False, description="跳过文档键名映射，返回原始文档数据"),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
 ):
-    """上传文档到数据集（web 会话与 API token 统一入口）。
+    """统一创建数据集文档（web 会话与 API token 共用入口）。
 
+    - ``type=local`` 或省略时沿用文件上传契约；
+    - ``type=web`` 接收 multipart 的 ``name``、``url``；
+    - ``type=empty`` 接收 JSON 的 ``name``。
     - multipart 字段 ``file`` 与 ``files`` 等价：``file`` 为正典字段名，
       ``files`` 兼容既有 SDK 消费方，二者可混用、按序合并。
     - ``return_raw_files=true`` 返回原始文档字段（web/admin 消费格式）；
       默认返回映射后的键名（chunk_count/dataset_id/... + run=UNSTART）。
     - 只负责上传和创建文档，不自动启动解析任务。
     """
+    mode = creation_type.lower()
+    if mode not in {"local", "web", "empty"}:
+        return get_error_data_result(retmsg='`type` must be one of "local", "web", or "empty".', retcode=RetCode.ARGUMENT_ERROR)
+
+    if mode == "web":
+        document_name = (name or "").strip()
+        if not document_name:
+            return get_error_data_result(retmsg='Lack of "name"', retcode=RetCode.ARGUMENT_ERROR)
+        if len(document_name.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+            return get_error_data_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
+        if not url:
+            return get_error_data_result(retmsg='Lack of "url"', retcode=RetCode.ARGUMENT_ERROR)
+        try:
+            result = await document_api_service.create_web_document_async(dataset_id, tenant_id, document_name, url)
+            return get_result(data=result)
+        except document_api_service.DocumentCreationError as e:
+            return get_error_data_result(retmsg=str(e), retcode=e.retcode)
+        except Exception:
+            logger.exception("Web document creation failed")
+            return get_error_data_result(retmsg="Internal server error")
+
+    if mode == "empty":
+        try:
+            payload = await request.json()
+        except ValueError:
+            return get_error_data_result(retmsg="Request body must be a JSON object.", retcode=RetCode.ARGUMENT_ERROR)
+        if not isinstance(payload, dict):
+            return get_error_data_result(retmsg="Request body must be a JSON object.", retcode=RetCode.ARGUMENT_ERROR)
+        raw_name = payload.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            return get_error_data_result(retmsg="File name can't be empty.", retcode=RetCode.ARGUMENT_ERROR)
+        document_name = raw_name.strip()
+        if len(document_name.encode("utf-8")) > FILE_NAME_LEN_LIMIT:
+            return get_error_data_result(retmsg=f"File name must be {FILE_NAME_LEN_LIMIT} bytes or less.", retcode=RetCode.ARGUMENT_ERROR)
+        try:
+            result = await db.run_sync(lambda s: document_api_service.create_empty_document(s, dataset_id, tenant_id, document_name))  # TODO(async-phase4)
+            return get_result(data=result)
+        except document_api_service.DocumentCreationError as e:
+            return get_error_data_result(retmsg=str(e), retcode=e.retcode)
+        except Exception:
+            logger.exception("Empty document creation failed")
+            return get_error_data_result(retmsg="Internal server error")
+
     file_objs = (file or []) + (files or [])
     if not file_objs:
         return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)

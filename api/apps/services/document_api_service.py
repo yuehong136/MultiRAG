@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Task, db_connection
+from api.common.check_team_permission import check_kb_team_permission
+from api.db import FileType
+from api.db.db_models import Document, Knowledgebase, Task, db_connection
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -18,9 +21,11 @@ from api.db.services.user_service import UserTenantService
 from api.utils import validation_utils
 from api.utils.api_utils import get_error_data_result, get_parser_config, server_error_response
 from api.utils.validation_utils import UpdateDocumentReq
+from api.utils.web_utils import html2pdf, is_valid_url
 from common import settings
-from common.constants import TaskStatus
+from common.constants import RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter
+from common.misc_utils import get_uuid
 from core.nlp import rag_tokenizer, search
 
 
@@ -217,6 +222,82 @@ def _process_run_mapping(doc: dict[str, Any], run_status: Any) -> dict[str, Any]
     # 未知 run 值原样透出（不强制归 UNSTART），避免丢失状态信息。
     doc["run"] = run_mapping.get(str(run_status), str(run_status))
     return doc
+
+
+class DocumentCreationError(ValueError):
+    """A document creation failure with the public business error code."""
+
+    def __init__(self, message: str, retcode: RetCode = RetCode.DATA_ERROR) -> None:
+        super().__init__(message)
+        self.retcode = retcode
+
+
+def _dataset_for_creation(db: Session, dataset_id: str, tenant_id: str) -> Knowledgebase:
+    kb = KnowledgebaseService.get_by_id(db, dataset_id)
+    if kb is None:
+        raise DocumentCreationError(f"Can't find the dataset with ID {dataset_id}!")
+    if not check_kb_team_permission(db, kb, tenant_id):
+        raise DocumentCreationError("No authorization.", RetCode.AUTHENTICATION_ERROR)
+    return kb
+
+
+def create_empty_document(db: Session, dataset_id: str, tenant_id: str, name: str) -> dict[str, Any]:
+    """Create a virtual document and its file association in one request session."""
+    kb = _dataset_for_creation(db, dataset_id, tenant_id)
+    if DocumentService.query(db, name=name, kb_id=dataset_id):
+        raise DocumentCreationError("Duplicated document name in the same dataset.")
+
+    kb_root_folder = FileService.get_kb_folder(db, kb.tenant_id)
+    if not kb_root_folder:
+        raise DocumentCreationError("Cannot find the root folder.")
+    kb_folder = FileService.new_a_file_from_kb(db, kb.tenant_id, kb.name, kb_root_folder["id"])
+    if not kb_folder:
+        raise DocumentCreationError("Cannot find the kb folder for this file.")
+
+    doc = {
+        "id": get_uuid(),
+        "kb_id": kb.id,
+        "parser_id": kb.parser_id,
+        "pipeline_id": kb.pipeline_id,
+        "parser_config": kb.parser_config,
+        "created_by": tenant_id,
+        "type": FileType.VIRTUAL,
+        "name": name,
+        "suffix": Path(name).suffix.lstrip("."),
+        "location": "",
+        "size": 0,
+    }
+    DocumentService.insert(db, doc)
+    FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+    persisted = DocumentService.get_by_id(db, doc["id"])
+    if persisted is None:
+        raise RuntimeError("Created document could not be read back.")
+    return map_doc_keys(db, persisted)
+
+
+def create_web_document(dataset_id: str, tenant_id: str, name: str, url: str) -> dict[str, Any]:
+    """Crawl and upload in a worker with self-owned short database sessions."""
+    with db_connection() as db:
+        _dataset_for_creation(db, dataset_id, tenant_id)
+
+    if not is_valid_url(url):
+        raise DocumentCreationError("The URL format is invalid", RetCode.ARGUMENT_ERROR)
+    blob = html2pdf(url)
+    if not blob:
+        raise DocumentCreationError("Download failure.", RetCode.SERVER_ERROR)
+
+    with db_connection() as db:
+        kb = _dataset_for_creation(db, dataset_id, tenant_id)
+        errors, uploaded = FileService.upload_document(db, kb, [(blob, f"{name}.pdf")], tenant_id)
+        if errors:
+            raise DocumentCreationError("\n".join(errors), RetCode.SERVER_ERROR)
+        if not uploaded:
+            raise DocumentCreationError("There seems to be an issue with your file format. Please verify it is correct and not corrupted.")
+        return map_doc_keys_with_run_status(uploaded[0][0], "0")
+
+
+async def create_web_document_async(dataset_id: str, tenant_id: str, name: str, url: str) -> dict[str, Any]:
+    return await asyncio.to_thread(create_web_document, dataset_id, tenant_id, name, url)
 
 
 class DocumentParseError(ValueError):
