@@ -15,6 +15,7 @@ description: 将指定的 RAGFlow commit 或 PR 评估、移植到 MultiRAG；�
 `origin/main` 用于检查后续演进，目标代码取用户指定提交的 `git show <commit>:<path>`，不用本地工作树代替。
 用户指定其他基准时遵循该基准；默认只移植指定 commit 的行为。
 
+以目标 SHA 的逐文件 diff 为准；PR 标题和描述只作线索，冲突时以代码为准。
 评估覆盖完整 diff 的功能足迹、我方已有接口，以及相关 revert / re-land / 后续修复链。
 已回退的改动以有效 re-land 或修复链评估，交代与原请求的差异；必要前置修复纳入说明，
 会改变目标或兼容性的范围变化再澄清。已有等价实现复用；不把 WIP、功能回退或假成功桩搬入本仓。
@@ -25,7 +26,7 @@ description: 将指定的 RAGFlow commit 或 PR 评估、移植到 MultiRAG；�
 |---|---|
 | Python 生产代码 | [Python 适配](references/python.md)：框架、async、兼容入口和测试 |
 | Go `cmd/`、`internal/` | [Go 适配](references/go.md)：只在本次提交涉及 Go 或用户点名时处理 |
-| 上游 `web/` | 前端是独立 `web` 仓，默认另排；用户授权同批时确认实际 checkout，按 API 契约适配我方实现，先核实目标版本与当前上游契约差异 |
+| 上游 `web/` | 前端是独立 `web` 仓，默认另排；用户授权同批时确认实际 checkout、目标版本与当前上游契约差异，核实本仓是否有同等页面、路由和调用链，再按本仓现行 API 契约适配。新接后端接口时区分合同测试与隔离环境中的实际请求、业务码及读回；无法运行时明确未验收项 |
 | 文档 / CI / 工具链 | 逐项判断本仓是否需要；已有等价设施时不复制上游 harness |
 | 相似历史问题 | 按接口或提交号查 [历史判例](references/cases.md)，无需通读 |
 
