@@ -811,7 +811,7 @@ class PipelineAnalysisService:
 
         logger.info(f"Running RAPTOR on {len(raptor_inputs)} chunks")
 
-        cluster_results = await raptor(raptor_inputs, random_state=config.get("random_seed", 42))
+        cluster_results, _ = await raptor(raptor_inputs, random_state=config.get("random_seed", 42))
 
         # 提取聚类摘要
         summaries = [text for text, _ in cluster_results]

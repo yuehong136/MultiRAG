@@ -16,6 +16,8 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import umap
@@ -109,9 +111,15 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
         optimal_clusters = n_clusters[np.argmin(bics)]
         return optimal_clusters
 
-    async def __call__(self, chunks, random_state, callback=None, task_id: str = ""):
+    async def __call__(
+        self,
+        chunks: list[tuple[str, Any]],
+        random_state: int,
+        callback: Callable[..., Any] | None = None,
+        task_id: str = "",
+    ) -> tuple[list[tuple[str, Any]], list[tuple[int, int]]]:
         if len(chunks) <= 1:
-            return []
+            return [], []
         chunks = [(s, a) for s, a in chunks if s and a is not None and len(a) > 0]
         layers = [(0, len(chunks))]
         start, end = 0, len(chunks)
@@ -212,4 +220,4 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
             start = end
             end = len(chunks)
 
-        return chunks
+        return chunks, layers

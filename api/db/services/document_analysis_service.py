@@ -483,7 +483,7 @@ Focus on the main ideas and key points. Keep the summary coherent and readable."
         )
 
         # 运行 RAPTOR（直接 await，RAPTOR 已改造为 asyncio）
-        raptor_result = await raptor(raptor_chunks, raptor_config.get("random_seed", 42), lambda msg: logging.info(f"RAPTOR: {msg}"))
+        raptor_result, _ = await raptor(raptor_chunks, raptor_config.get("random_seed", 42), lambda msg: logging.info(f"RAPTOR: {msg}"))
 
         # 5. 提取聚类摘要
         logging.info(f"RAPTOR result: original_length={original_length}, result_length={len(raptor_result)}")

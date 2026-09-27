@@ -543,6 +543,14 @@
         }
       },
       {
+        "raptor_layer_int_template": {
+          "match": "raptor_layer_int",
+          "mapping": {
+            "type": "INT64"
+          }
+        }
+      },
+      {
         "default_template": {
           "match_pattern": "regex",
           "match": ".*",

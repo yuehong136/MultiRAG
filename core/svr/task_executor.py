@@ -15,6 +15,7 @@ import signal
 import socket
 import sys
 import threading
+from collections.abc import Callable
 from datetime import datetime
 from functools import partial
 from multiprocessing.context import TimeoutError
@@ -1193,7 +1194,16 @@ async def has_raptor_chunks(doc_id: str, tenant_id: str, kb_id: str) -> bool:
 
 
 @timeout(3600)
-async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_size, callback=None, doc_ids=[], db=None):
+async def run_raptor_for_kb(
+    row: dict[str, Any],
+    kb_parser_config: dict[str, Any],
+    chat_mdl: Any,
+    embd_mdl: Any,
+    vector_size: int,
+    callback: Callable[..., Any] | None = None,
+    doc_ids: list[str] = [],
+    db: Session | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     fake_doc_id = GRAPH_RAPTOR_FAKE_DOC_ID
 
     raptor_config = kb_parser_config.get("raptor", {})
@@ -1214,7 +1224,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
                 if doc.name:
                     doc_name_by_id[doc.id] = doc.name
 
-    async def generate(chunks, did):
+    async def generate(chunks: list[tuple[str, np.ndarray]], did: str) -> None:
         nonlocal tk_count, res
         raptor = Raptor(
             raptor_config.get("max_cluster", 64),
@@ -1226,13 +1236,14 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
             max_errors=max_errors,
         )
         original_length = len(chunks)
-        chunks = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
+        chunks, layers = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
         effective_doc_name = row["name"] if did == fake_doc_id else doc_name_by_id.get(did, row["name"])
         doc = {"doc_id": did, "kb_id": [str(row["kb_id"])], "docnm_kwd": effective_doc_name, "title_tks": rag_tokenizer.tokenize(effective_doc_name), "raptor_kwd": "raptor"}
         if row["pagerank"]:
             doc[PAGERANK_FLD] = int(row["pagerank"])
 
-        for content, vctr in chunks[original_length:]:
+        chunk_layer = {ci: layer_idx for layer_idx, (start, end) in enumerate(layers) if layer_idx > 0 for ci in range(start, end)}
+        for idx, (content, vctr) in enumerate(chunks[original_length:], start=original_length):
             d = copy.deepcopy(doc)
             d["pk"] = xxhash.xxh64((content + str(did)).encode("utf-8")).hexdigest()
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
@@ -1242,6 +1253,7 @@ async def run_raptor_for_kb(row, kb_parser_config, chat_mdl, embd_mdl, vector_si
             d["content_with_weight"] = content
             d["content_ltks"] = rag_tokenizer.tokenize(content)
             d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
+            d["raptor_layer_int"] = chunk_layer.get(idx, 1)
             res.append(d)
             tk_count += num_tokens_from_string(content)
 
@@ -1636,7 +1648,14 @@ def _post_process_result(raw_output, post_process):
 
 
 @timeout(3600)
-async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callback=None):
+async def run_analyze_v2_task(
+    task: dict[str, Any],
+    chat_mdl: Any,
+    embd_mdl: Any,
+    vector_size: int,
+    db: Any,
+    callback: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
     """
     执行 analyze_v2 文档分析任务
 
@@ -2111,7 +2130,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                         threshold=raptor_config.get("threshold", 0.1),
                         max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                     )
-                    chapter_results = await raptor(
+                    chapter_results, _ = await raptor(
                         chapter_raptor_inputs, random_state=raptor_config.get("random_seed", 42), callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR ({chapter['title'][:20]}): {msg}")
                     )
 
@@ -2201,7 +2220,7 @@ async def run_analyze_v2_task(task, chat_mdl, embd_mdl, vector_size, db, callbac
                     max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
                 )
 
-                cluster_results = await raptor(raptor_inputs, random_state=raptor_config.get("random_seed", 42), callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}"))
+                cluster_results, _ = await raptor(raptor_inputs, random_state=raptor_config.get("random_seed", 42), callback=lambda msg: callback(prog=0.5, msg=f"RAPTOR: {msg}"))
 
                 original_length = len(raptor_inputs)
                 if len(cluster_results) > original_length:

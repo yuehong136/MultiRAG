@@ -65,3 +65,30 @@ API 使用仅供本次验收的新建 PostgreSQL scratch 库启动，`make smoke
 导致网页创建返回业务错误。已在共享 `html2pdf` helper 中选择同目录真实 `chromedriver`，
 并补齐其执行权限；增加对此缓存布局的回归测试。修复后网页创建成功并完成上述读回与清理。
 修复后重跑 `make verify`（unit 3116 passed）与 `make integration`（235 passed），均通过。
+
+## 3ad3241ae06f414d2ccd2c92fda8c576bb96a96a · 保存 RAPTOR 摘要层级
+
+- 上游：`infiniflow/ragflow` #13286，提交于 2026-04-27；父提交为 `a9e5724b`。
+  核对了目标提交的 3 文件完整 diff；2026-09-27 fetch 后的 `origin/main` 为
+  `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `rag/raptor.py` 返回 `(chunks, layers)`，少于两个输入返回 `([], [])` | 对齐到 `core/raptor.py`，保留原有聚类和摘要过程；`layers[0]` 是原始节点，后续边界对应逐级摘要。 |
+| `rag/svr/task_executor.py` 为索引中的摘要写入 `raptor_layer_int` | 对齐到 `run_raptor_for_kb`：按摘要节点在完整结果中的下标映射层级，第一层为 1，第二层为 2；保留本地 `pk` 和文档 ID 规则。另有四处本地分析调用点消费原来的纯列表返回值，均解包新返回值并继续使用原摘要列表。 |
+| `conf/infinity_mapping.json` 新增整数列，ES 由 `*_int` 动态模板处理 | 更新 `configs/infinity_mapping.json`；本地 Milvus 是默认文档后端，其显式 schema 另在 `configs/mapping.json` 增加 INT64 字段。ES/OpenSearch 已有 `*_int` 动态模板。 |
+
+后续链核对：`bf4864e61` 为后续新增的 RAPTOR `extra` 字段修补 Infinity 写入，
+本项摘要未写 `extra`；`2717ee283` 引入新的 Psi RAPTOR 构树流程，
+`62f94cd59` 将实现拆到 `raptor_service.py`，`0c2fb622e` 调整小层聚类。
+这些是后续独立行为；当前上游主线仍在任务执行和重构后的 RAPTOR service 写入
+`raptor_layer_int`，未回退本项语义。
+
+验证：新增单测覆盖 RAPTOR 返回边界和 1、1、2 多层摘要索引字段；
+`make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3118 passed），
+`make integration` 通过（235 passed）。隔离 Milvus 集合实测新 schema 为 INT64，
+摘要层 2 和未带字段的普通切片默认值 0 均可在 flush 后读回；用旧 schema
+模拟的动态字段集合也读回层 2，两个临时集合均已删除。
+Infinity 未配置运行实例，映射和既有列迁移逻辑仅经代码核对，未做真实后端写入验收。
+VastBase 的现有映射连 `raptor_kwd` 也未定义，本项不扩大到修复该后端原有的
+RAPTOR 写入契约；该后端的 RAPTOR 层级落库仍待单独处理。
