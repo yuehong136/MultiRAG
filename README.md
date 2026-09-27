@@ -558,6 +558,7 @@ OpenAPI 文档默认可通过 `/docs` 访问（服务启动后）。
 ### 文档导航
 
 - Run Platform（远程 Run API、事件、状态机与灰度）：[`docs/run-platform/README.md`](./docs/run-platform/README.md)
+- 知识库使用指南：[`docs/knowledge-base-guide.md`](./docs/knowledge-base-guide.md)
 - 快速开始：[`docs/get_started.md`](./docs/get_started.md)
 - 部署说明：[`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)
 - 架构说明：[`docs/architecture.md`](./docs/architecture.md)

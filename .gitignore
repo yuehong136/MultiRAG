@@ -240,6 +240,8 @@ internal/*.md
 # 写成裸 docs 时下面的 ! 行会静默失效，文件看着已加其实谁都看不到。
 docs/*
 !docs/development.md
+!docs/knowledge-base-guide.md
+!docs/knowledge-base-guide-assets/
 !docs/references/
 !docs/channel-program/
 !docs/enterprise-identity-mcp/
