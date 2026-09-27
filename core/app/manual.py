@@ -17,7 +17,9 @@
 import copy
 import logging
 import re
+from collections.abc import Callable
 from io import BytesIO
+from typing import Any
 
 from docx import Document
 
@@ -135,7 +137,15 @@ class Docx(DocxParser):
         return ti_list, tbls
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(
+    filename: str,
+    binary: bytes | None = None,
+    from_page: int = 0,
+    to_page: int = 100000,
+    lang: str = "Chinese",
+    callback: Callable[..., Any] | None = None,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     """
     Only pdf is supported.
     """
@@ -269,6 +279,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         image_ctx = max(0, int(parser_config.get("image_context_size", 0) or 0))
         if table_ctx or image_ctx:
             attach_media_context(res, table_ctx, image_ctx)
+        if res and outlines:
+            res[0]["__outline__"] = [{"title": title, "depth": depth} for title, depth, *_ in outlines]
         return res
 
     elif re.search(r"\.docx?$", filename, re.IGNORECASE):

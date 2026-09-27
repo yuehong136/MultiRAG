@@ -788,7 +788,15 @@ def load_from_xml_v2(baseURI, rels_item_xml):
     return srels
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(
+    filename: str,
+    binary: bytes | None = None,
+    from_page: int = 0,
+    to_page: int = 100000,
+    lang: str = "Chinese",
+    callback: Callable[..., Any] | None = None,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     """
     Supported file formats are docx, pdf, excel, txt.
     This method apply the naive ways to chunk files.
@@ -1139,6 +1147,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         res.extend(url_res)
     # if table_context_size or image_context_size:
     #     attach_media_context(res, table_context_size, image_context_size)
+    if res and pdf_parser and getattr(pdf_parser, "outlines", None):
+        res[0]["__outline__"] = [{"title": title, "depth": depth} for title, depth, *_ in pdf_parser.outlines]
     return res
 
 

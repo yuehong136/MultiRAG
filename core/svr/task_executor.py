@@ -62,6 +62,7 @@ from core.svr import executor_metrics
 from core.utils.base64_image import image2id
 from core.utils.raptor_utils import get_skip_reason, should_skip_raptor
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
+from deepdoc.parser.utils import extract_pdf_outlines
 
 BATCH_SIZE = 64
 
@@ -438,8 +439,37 @@ async def get_storage_binary(bucket, name):
     return await thread_pool_exec(settings.STORAGE_IMPL.get, bucket, name)
 
 
+def _persist_pdf_outline_metadata(db: Session, doc_id: str, outline: list[dict[str, Any]]) -> bool:
+    try:
+        existing_meta = DocMetadataService.get_document_metadata(db, doc_id)
+        existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
+        if DocMetadataService.update_document_metadata(db, doc_id, {**existing_meta, "outline": outline}):
+            logging.info("Persisted PDF outline (%d entries) for doc %s", len(outline), doc_id)
+            return True
+        logging.warning("Failed to persist PDF outline for doc %s", doc_id)
+    except Exception:
+        logging.exception("Failed to persist PDF outline for doc %s", doc_id)
+    return False
+
+
+async def _persist_pdf_outline_from_storage(db: Session, doc_id: str, filename: str) -> bool:
+    if not filename.lower().endswith(".pdf"):
+        return False
+    try:
+        bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_id)
+        binary = await get_storage_binary(bucket, name)
+        raw_outline = await asyncio.to_thread(extract_pdf_outlines, binary)
+    except Exception:
+        logging.exception("Failed to extract PDF outline for doc %s", doc_id)
+        return False
+    if not raw_outline:
+        return False
+    outline = [{"title": title, "depth": depth} for title, depth, *_ in raw_outline]
+    return _persist_pdf_outline_metadata(db, doc_id, outline)
+
+
 @timeout(60 * 80, 1)
-async def build_chunks(task, progress_callback, db: Session):
+async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., Any], db: Session) -> list[dict[str, Any]]:
     if task["size"] > settings.DOC_MAXIMUM_SIZE:
         set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         return []
@@ -484,6 +514,12 @@ async def build_chunks(task, progress_callback, db: Session):
         progress_callback(-1, "Internal server error while chunking: %s" % str(e).replace("'", ""))
         logging.exception("Chunking {}/{} got exception".format(task["location"], task["name"]))
         raise
+
+    outline = cks[0].pop("__outline__", None) if cks else None
+    for ck in cks[1:]:
+        ck.pop("__outline__", None)
+    if not outline and task["name"].lower().endswith(".pdf"):
+        outline = [{"title": title, "depth": depth} for title, depth, *_ in await asyncio.to_thread(extract_pdf_outlines, binary)]
 
     docs = []
     doc = {"doc_id": task["doc_id"], "kb_id": [str(task["kb_id"])]}
@@ -708,6 +744,9 @@ async def build_chunks(task, progress_callback, db: Session):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         progress_callback(msg=f"Tagging {len(docs)} chunks completed in {timer() - st:.2f}s")
+
+    if outline:
+        _persist_pdf_outline_metadata(db, task["doc_id"], outline)
 
     return docs
 
@@ -1143,6 +1182,8 @@ async def run_dataflow(db: Session, task: dict):
         existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
         metadata = update_metadata_to(metadata, existing_meta)
         DocMetadataService.update_document_metadata(db, doc_id, metadata)
+
+    await _persist_pdf_outline_from_storage(db, doc_id, task["name"])
 
     start_ts = timer()
     set_progress(db, task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")

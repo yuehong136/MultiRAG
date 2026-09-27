@@ -151,3 +151,38 @@ MultiRAG 后端无需移植：目标提交没有后端 diff；其修复是去掉
 （8 条 import contracts、mypy 124 个源文件、unit 3132 passed）。
 `make integration` 通过（235 passed）。
 本机无 Infinity 容器，`127.0.0.1:23817` 也不可连接，本项未做真实 Infinity 写入验收。
+
+## 0d87cecae2e47b3f9b46836d2c3d06b97f082f4d · 持久化 PDF 原始书签
+
+- 上游：`infiniflow/ragflow` #13287，提交于 2026-04-27；核对目标的 3 文件完整 diff。
+  2026-09-27 fetch 后 `origin/main` 为 `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `rag/app/naive.py` | 对齐到 `core/app/naive.py`：PDF 解析器已有书签时，在首个切片附临时 `__outline__`。按后续 `907587243` 修复，从实际的 `(title, depth, page)` 三元组取前两项，避免原提交的解包异常。 |
+| `rag/app/manual.py` | 对齐到 `core/app/manual.py`：复用本地 manual 解析时已经提取的书签列表，不依赖部分解析器没有提供的 `pdf_parser.outlines` 属性；无书签不附临时字段。 |
+| `rag/svr/task_executor.py` | 对齐到 `core/svr/task_executor.py`：移除切片中的 `__outline__`，把 `[{title, depth}]` 写入 `DocMetadataService` 的文档元数据，并按布尔返回值区分保存成功与失败。 |
+
+本地 `FACTORY` 还含 book、paper、laws、one、presentation 等 PDF 解析路径；
+当解析器未传 `__outline__` 时，任务执行器从原始 PDF 在工作线程提取书签。
+本地 `run_dataflow` 绕过 `build_chunks`，也在索引前从关联的 PDF 文件提取并保存书签；
+`analyze_v2` 使用临时文档 ID、没有 Document 记录，不属于此持久化路径。
+书签写入放在自动元数据生成之后，避免通用 `update_metadata_to` 将已有的字典列表过滤掉；
+写入时保留其他已有元数据，并以新书签替换旧 `outline`。无书签不写入。
+保存失败时记录警告或异常，沿用上游的解析继续语义，不记录虚假的持久化成功。
+本地 Milvus 配置下，`DocMetadataService` 将 `meta_fields` 存在独立的
+`t_ai_document_metadata` 表，而不是直接改 `Document.meta_fields` 列。
+
+后续链核对：`907587243` 修正上游的书签三元组解包崩溃，本项已包含；
+`f0cb7a544` 将上游任务执行器拆层并记录元数据写入返回值，未回退书签行为。
+当前上游主线仍有 naive/manual 的临时书签传递与任务执行器写入；下一指定提交
+`6a23dfee` 不在本项范围。
+
+验证：单测覆盖 naive 真 PDF 有/无书签、manual 三元组、其他 PDF 解析模式的回退、
+临时字段从全部切片清理、元数据合并与保存返回 `False` 或异常时不记录成功。
+隔离 PostgreSQL scratch 库用生成的 PDF 运行标准解析，再通过
+`DocMetadataService` 独立读回 `outline` 和原有字段；另直接验收 dataflow 补充路径
+的取件、保存与读回。带书签和无书签各覆盖两条路径，随后删除临时文档、数据集与元数据；
+`make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3141 passed），
+`make integration` 通过（239 passed）。未启动完整 Canvas dataflow 管道；其书签
+取件与元数据写入部分由上述隔离测试验证。
