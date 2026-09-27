@@ -76,10 +76,9 @@ func (m *GiteeModel) Chat(modelName, message *string, apiConfig *APIConfig, chat
 
 	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Chat)
 
-	// I need to get the model series, such as qwen3 is the prefix, the model series will be qwen. glm is the prefix, the model series will be glm. such as the model name: qwen3-0.6b, the model series will be qwen3
-	// the model name is glm-4.7, the model series will be glm
-	modelSeries := strings.Split(*modelName, "-")[0]
-	if modelSeries == "qwen" || modelSeries == "glm" {
+	// Use the model class prefix to select the provider's asynchronous endpoint.
+	modelClass := strings.Split(*modelName, "-")[0]
+	if modelClass == "qwen" || modelClass == "glm" {
 		url = fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.AsyncChat)
 	}
 
@@ -179,7 +178,7 @@ func (m *GiteeModel) Chat(modelName, message *string, apiConfig *APIConfig, chat
 		return nil, fmt.Errorf("invalid content format")
 	}
 
-	thinking, answer := GetThinkingAndAnswer(chatModelConfig.ModelSeries, &content)
+	thinking, answer := GetThinkingAndAnswer(chatModelConfig.ModelClass, &content)
 
 	chatResponse := &ChatResponse{
 		Answer:           answer,

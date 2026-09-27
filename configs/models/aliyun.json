@@ -1,0 +1,25 @@
+{
+  "name": "Aliyun",
+  "url": {
+    "default": "https://dashscope.aliyuncs.com",
+    "singapore": "https://dashscope-intl.aliyuncs.com",
+    "us": "https://dashscope-us.aliyuncs.com"
+  },
+  "url_suffix": {
+    "chat": "compatible-mode/v1/chat/completions",
+    "models": "compatible-mode/v1/models"
+  },
+  "models": [
+    {
+      "name": "qwen-flash",
+      "max_tokens": 995904,
+      "model_types": ["chat"]
+    }
+  ],
+  "features": {
+    "thinking": {
+      "default_value": true,
+      "supported_models": ["qwen-flash"]
+    }
+  }
+}

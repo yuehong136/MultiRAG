@@ -7,7 +7,7 @@
   "url_suffix": {
     "chat": "chat/completions"
   },
-  "series": "grok",
+  "class": "grok",
   "models": [
     {
       "name": "grok-4",

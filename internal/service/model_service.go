@@ -746,7 +746,7 @@ func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName
 		if modelConfig == nil {
 			modelConfig = &modelModule.ChatConfig{}
 		}
-		modelConfig.ModelSeries = model.Series
+		modelConfig.ModelClass = model.Class
 		region, err := decodeModelInstanceRegion(instance.Extra)
 		if err != nil {
 			return nil, common.CodeServerError, err

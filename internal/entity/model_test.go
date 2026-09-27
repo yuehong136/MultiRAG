@@ -1,10 +1,27 @@
 package entity
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 )
+
+func TestProviderModelClassWithoutHyphen(t *testing.T) {
+	directory := t.TempDir()
+	config := `{"name":"DeepSeek","url":{"default":"https://example.invalid"},"models":[{"name":"plain","model_types":["chat"]}]}`
+	if err := os.WriteFile(filepath.Join(directory, "provider.json"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProviderManager(directory)
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+	model, err := manager.GetModelByName("DeepSeek", "plain")
+	if err != nil || model.Class == nil || *model.Class != "plain" {
+		t.Fatalf("model without hyphen = %#v, %v", model, err)
+	}
+}
 
 func TestProviderModelsKeepInitializedTypeMaps(t *testing.T) {
 	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
@@ -119,8 +136,8 @@ func TestDeepSeekProviderIsConfigured(t *testing.T) {
 	if !model.ModelTypeMap["chat"] {
 		t.Fatalf("ModelTypeMap = %#v, want chat", model.ModelTypeMap)
 	}
-	if model.Series == nil || *model.Series != "deepseek" {
-		t.Fatalf("Series = %#v, want deepseek", model.Series)
+	if model.Class == nil || *model.Class != "deepseek" {
+		t.Fatalf("Class = %#v, want deepseek", model.Class)
 	}
 }
 
@@ -145,6 +162,33 @@ func TestGiteeAndSiliconFlowProvidersAreConfigured(t *testing.T) {
 		if modelErr != nil || !model.ModelTypeMap["chat"] {
 			t.Fatalf("model %q/%q = %#v, %v", testCase.provider, testCase.model, model, modelErr)
 		}
+	}
+}
+
+func TestAliyunProviderIsConfigured(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatalf("NewProviderManager() error = %v", err)
+	}
+	provider := manager.FindProvider("Aliyun")
+	if provider == nil || provider.ModelDriver.Name() != "aliyun" {
+		t.Fatalf("Aliyun provider = %#v", provider)
+	}
+	if provider.URL["singapore"] != "https://dashscope-intl.aliyuncs.com" {
+		t.Fatalf("Aliyun Singapore URL = %q", provider.URL["singapore"])
+	}
+	if provider.URLSuffix.Chat != "compatible-mode/v1/chat/completions" {
+		t.Fatalf("Aliyun chat suffix = %q", provider.URLSuffix.Chat)
+	}
+	model, err := manager.GetModelByName("Aliyun", "qwen-flash")
+	if err != nil || !model.ModelTypeMap["chat"] {
+		t.Fatalf("Aliyun model = %#v, %v", model, err)
+	}
+	if model.Class == nil || *model.Class != "qwen" {
+		t.Fatalf("Aliyun model class = %#v", model.Class)
+	}
+	if model.Thinking == nil || !model.Thinking.DefaultValue {
+		t.Fatalf("Aliyun thinking feature = %#v", model.Thinking)
 	}
 }
 

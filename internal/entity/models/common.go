@@ -27,11 +27,11 @@ func normalizeChatConfig(config *ChatConfig) *ChatConfig {
 }
 
 // GetThinkingAndAnswer separates provider-specific inline reasoning markup.
-func GetThinkingAndAnswer(modelSeries *string, content *string) (*string, *string) {
-	if modelSeries == nil || content == nil {
+func GetThinkingAndAnswer(modelClass *string, content *string) (*string, *string) {
+	if modelClass == nil || content == nil {
 		return nil, content
 	}
-	if *modelSeries == "qwen3" {
+	if *modelClass == "qwen3" {
 		return extractThinkContent(content)
 	}
 	return nil, content

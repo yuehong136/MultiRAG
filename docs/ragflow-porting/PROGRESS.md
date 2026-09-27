@@ -3,35 +3,38 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
-## c3eac4103a0408f9b8d25948e625e58821b5d54a · 阿里云 Go 模型提供商（仅审查）
+## c3eac4103a0408f9b8d25948e625e58821b5d54a · 阿里云 Go 模型提供商
 
 - 上游：`infiniflow/ragflow` #14379，提交于 2026-04-27；父提交为上项 `0b46ab07`。
   核对了目标的 9 文件完整 diff。2026-09-27 fetch 后 `origin/main` 为
   `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
-- 结论：本项全部属于停滞的 Go 并行实现，不移植到当前 Python 后端，也不启动 Go 移植。
-  本仓 Go 服务从 `configs/models/` 加载提供商；Python 从独立的
-  `configs/llm_factories.json` 加载模型，已有 `Tongyi-Qianwen` 和 DashScope 调用实现。
-  上游 `conf/models/aliyun.json` 不是 Python 的共享配置，本项无 Python 行为缺口。
+- 本项已移植到 Go 并行实现。本仓 Go 服务从 `configs/models/` 加载提供商；
+  Python 从独立的 `configs/llm_factories.json` 加载模型，已有 `Tongyi-Qianwen`
+  和 DashScope 调用实现，本项没有改 Python 代码或共享配置。
 
-| 上游 diff | Go 独立任务的移植边界 |
+| 上游 diff | 本项结论 |
 |---|---|
-| `conf/models/aliyun.json` | 对应本仓 `configs/models/`；目标只列 `qwen-flash` 与三个地域 URL，`series: "deepseek"` 和同时改动的 `type` 字段不一致。后续上游已删该字段，并将提供商改名为 `Tongyi-Qianwen`、扩充模型及能力。未来应按选定的上游版本统一目录、名称、地域和模型目录，不照搬初始 JSON。 |
-| `internal/entity/model.go` | `Model`、`Provider` 的 `Series`/JSON 字段改为 `Type`，并用模型名首段推断；目标在名称没有 `-` 时会用负下标切片。本仓现有推断已处理无连字符名称，不能回退。后续 `f670913bb` 又将 `Type` 改为 `Class`；若恢复 Go 路线，应连同现有提供商 JSON 和消费者一起迁移。 |
-| `internal/entity/models/common.go`、`internal/entity/models/types.go` | `GetThinkingAndAnswer` 参数和 `ChatConfig.ModelSeries` 随之改名。需要和模型类别推断、思考内容解析及所有调用方同时变更，单独改名没有用户可见收益。 |
-| `internal/entity/models/factory.go`、`internal/service/model_service.go` | 工厂注册阿里云驱动，聊天服务向配置传递模型类别；需和提供商名称、配置加载及驱动接口同时落地，验证服务实际选中该驱动。 |
-| `internal/entity/models/gitee.go`、`internal/entity/models/siliconflow.go` | 仅随上述字段改名调整局部变量和思考解析调用；未来迁移时覆盖已有提供商行为，避免类别传递回归。 |
-| 新增 `internal/entity/models/aliyun.go` | 初版实现聊天、流式聊天、模型列表和连接检查；`ChatWithMessages`、Embedding、余额仍返回未实现错误。`Name()` 误返 `siliconflow`；流式请求默认 `stream: false`，只在配置显式提供时覆盖，且使用默认 SSE scanner 缓冲区。当前不能作为可直接移植的完整驱动。 |
+| `conf/models/aliyun.json` | 映射为 `configs/models/aliyun.json`，保留初版 `Aliyun` 名称、`qwen-flash` 和三个地域；模型列表 URL 采用后续 `a75e733b3` 修正的 OpenAI 兼容路径。初版 `series: "deepseek"` 与模型不符，不带入。Embedding/Rerank 的模型目录和能力属于后续提交。 |
+| `internal/entity/model.go` | 将模型/提供商的 `Series` 改为后续 `f670913bb` 确立的 `Class`，同时迁移本仓六份使用 `series` 的 Go 提供商 JSON，保持原有类别值。模型名无 `-` 时保留本仓安全推断；提供商显式 `class` 值直接传给模型，不照搬初版取提供商名称的错误。 |
+| `internal/entity/models/common.go`、`internal/entity/models/types.go` | 思考解析参数与 `ChatConfig` 同步使用 `ModelClass`；原有空指针处理和 `qwen3` 解析语义保留。 |
+| `internal/entity/models/factory.go`、`internal/service/model_service.go` | 工厂注册 `Aliyun` 驱动；聊天服务继续从模型目录把类别传到驱动配置。 |
+| `internal/entity/models/gitee.go`、`internal/entity/models/siliconflow.go` | 思考解析调用同步传 `ModelClass`，不改变两家原有请求协议。 |
+| 新增 `internal/entity/models/aliyun.go` | 实现单消息和多角色同步聊天、sender 流式聊天、模型列表及连接检查。修正初版 `Name()` 误报 `siliconflow`、流式默认 `false`、未知地域产生空 URL、默认 scanner 丢弃大事件、异常结束仍发送 `[DONE]` 等问题；对 HTTP/业务错误显式返回错误。Embedding、余额和旧 channel 流式接口明确返回不支持，不伪装成功。 |
 
-后续链核对：`effc84a04` 重构 Go 模型服务，`f670913bb` 调整模型类别字段；
-`a82ae4a99`、`2ad854c58` 后补 Embedding 和 Rerank，`827cceccb` 修正驱动名称及
-未知地域 URL 的报错，`04aa8d04e` 扩大 SSE scanner 缓冲区。当前上游主线的
-`aliyun.go` 已使用共享 `BaseModel`、请求上下文和流式响应处理器，提供商名为
-`Tongyi-Qianwen`；本提交语义仍在，但实现链已明显演进。未来单独排 Go 移植时，
-先确定目标版本与接口，再核对聊天/流式错误语义、地域选择、思考内容、模型列表，
-并为所选能力补驱动与服务测试；在隔离配置下运行 `gofmt`、Go build/vet 和相关测试，
-有测试凭据时再验收实际 DashScope 请求。本项未改可执行代码，不运行 Go 或 Python 门禁。
+后续链核对：`effc84a04` 重构 Go 模型服务，`f670913bb` 将初版 `Type` 改为
+`Class`；`a82ae4a99`、`2ad854c58` 后补 Embedding 和 Rerank，`827cceccb`
+修正驱动名称及未知地域 URL，`04aa8d04e` 扩大 SSE 缓冲区，`a75e733b3`
+修正模型列表路径。当前上游主线又迁移到共享 `BaseModel` 和 `Tongyi-Qianwen`
+提供商名；这些架构及名称变动不在本次提交范围。
 
-验证仅针对审查文档：核对目标及后续提交、两套配置加载路径，检查文档 diff、路径与链接。
+验证：用本机已有的 `golang:1.25` Docker 镜像运行 `gofmt`，
+`go test ./internal/entity/models ./internal/entity`、`go build ./internal/...`、
+`go vet ./internal/...` 均通过。mock HTTP 测试覆盖提供商注册、类别推断、
+同步/多角色消息、地域、128 KiB 流式事件、`[DONE]` 和异常响应。
+额外的 `go test ./internal/service` 因缺少 `internal/cpp/cmake-build-release/`
+下的 C++ tokenizer 静态库而在链接阶段失败；本项没有修改该 native 构建链。
+未配置真实 DashScope 凭据，因此没有对外部服务发 live 请求；Python 文件未改，
+不运行 Python 门禁；已检查本次 diff、路径和链接。
 下一指定提交 `2846a939` 不在本项范围。
 
 ## 0b46ab07c59eb715cbb4c1623724a11bda57b398 · 恢复 OpenAI 兼容聊天补全
