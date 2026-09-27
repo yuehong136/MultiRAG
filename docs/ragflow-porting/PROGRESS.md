@@ -186,3 +186,30 @@ MultiRAG 后端无需移植：目标提交没有后端 diff；其修复是去掉
 `make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3141 passed），
 `make integration` 通过（239 passed）。未启动完整 Canvas dataflow 管道；其书签
 取件与元数据写入部分由上述隔离测试验证。
+
+## 6a23dfeec1632d25736fcbff33cc9fb2a53d4e1c · 共享 UI 组件目录约定（仅审查）
+
+- 上游：`infiniflow/ragflow` #14381，提交于 2026-04-27；完整 diff 只有
+  `web/CLAUDE.md` 新增 8 行。2026-09-27 fetch 后 `origin/main` 为
+  `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+- 这是一条前端协作约定，不改运行代码、API 或协议；MultiRAG Python 后端没有可移植项。
+  本仓 `AGENTS.md` 是后端协作规则唯一入口，`CLAUDE.md` 只映射它，
+  不把独立前端的目录保护规则复制进后端指令。
+
+| 上游 diff | 独立 `../web` 仓的评估交接 |
+|---|---|
+| `web/CLAUDE.md` 的 Shared UI Component Lock | 将整个 `src/components/ui/`（含子目录）视为共享组件库；常规需求不直接修改、重构或改样式。先在目录外的 `src/components/` 或功能目录包装、组合，通过 `className`、props 等定制。确需修改现有共享组件，应先取得当前会话用户明确许可；新增共享组件或用 shadcn CLI 升级原语，仅在用户明确要求时做。 |
+
+后续链核对：上游 `cad7c46be` 把 `web/CLAUDE.md` 原样改名为
+`web/AGENTS.md`，删除根目录单行 `CLAUDE.md`；当前主线的锁定条款仍在
+`web/AGENTS.md`，不是行为回退。本地 `../web` HEAD 为 `0834bb9`，
+`src/components/ui/` 确有共享原语和项目组件，但本地
+`AGENTS.md`、`CLAUDE.md` 尚无此锁定条款。两份本地文件明定为同一规则集的
+中英文版本：若前端任务决定采纳，应在**同一次前端提交**同步中文和英文，
+并核对现有“`src/components/ui/` 仅原子组件”的分层措辞，避免相互矛盾。
+按本次派工，前端会话仍在补 `a9e5724b` 的实际运行验收；本项不跨仓编辑或运行前端门禁，
+也不将该工作状态作为本次实测结论。
+下一指定提交 `0b46ab07` 不在本项范围。
+
+验证：核对目标完整 diff、上游后续改名和当前条款、本地两个工作树状态、
+目录及双语指令；仅更新本记录并检查文档 diff、路径与链接，不运行 Python 或前端测试。
