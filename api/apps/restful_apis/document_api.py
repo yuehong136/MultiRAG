@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
+from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES
@@ -22,7 +23,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result, server_error_response
+from api.utils.api_utils import Principal, async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_data_result, get_result, server_error_response
 from api.utils.validation_utils import UpdateDocumentReq
 from common.constants import RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
@@ -31,6 +32,22 @@ MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/documents/artifact/{filename}", summary="下载沙箱产物", response_description="成功获取沙箱产物文件")
+async def get_artifact(
+    filename: str,
+    run_id: str | None = None,
+    session_id: str | None = None,
+    db: AsyncSession = Depends(get_async_db),
+    principal: Principal = Depends(async_current_user),
+) -> Response:
+    """Download a sandbox artifact bound to the current user and run."""
+    try:
+        return await download_artifact(filename, principal.platform_user_id, db, run_id=run_id, session_id=session_id)
+    except Exception as exc:
+        logger.exception("Failed to download sandbox artifact")
+        return server_error_response(exc)
 
 
 class UpdateDocumentRequest(UpdateDocumentReq):

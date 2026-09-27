@@ -3,6 +3,47 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 290f0294d6e043f64fb1c79b5780421cfc48d045 · 沙箱产物下载迁移到 REST
+
+- 上游：`infiniflow/ragflow` #14348，提交于 2026-04-27；核对目标提交的 4 文件完整 diff。
+  2026-09-27 fetch 后 `origin/main` 为 `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+  本项止于此提交；下一指定 `d88f7ac8` 单独处理。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `agent/tools/code_exec.py` | 产物 URL 改为 `/api/v1/documents/artifact/{filename}`。上传时把随机文件名精确绑定到可信用户、本次运行 ID 和可选会话 ID，URL 携带 `run_id` 与可选 `session_id`。绑定失败则尝试移除对象且不输出不可下载链接。 |
+| `api/apps/document_app.py` 删除旧入口 | 本仓有旧调用方，保留 `/v1/document/artifact/{filename}` 并标为 deprecated；旧新路径共用鉴权、绑定校验、文件名白名单、原始字节和安全响应头。 |
+| `api/apps/restful_apis/document_api.py` 新增入口 | 新增 `/api/v1/documents/artifact/{filename}`，由异步请求会话和当前用户身份校验；实际下载在工作线程，HTML/SVG 强制 attachment。 |
+| `web/src/components/next-markdown-content/index.tsx` 更新链接识别 | 前端属于独立 `../web` 仓；其当前 `6894adf` 已在 `src/lib/agent/artifact-url.ts` 和 `src/components/chat/MarkdownArtifact.tsx` 识别新旧路径并保留查询参数。本项未编辑前端仓。 |
+
+后续链核对：`212429bf9` 增加上游基于助手消息文本的归属检查，但文本可被提示诱导
+复述已知的其他用户 URL，不能作为文件所有权凭据。`93f6d647d` 为流式预览加
+`session_id` 兜底；仅验证该会话可访问仍不能证明指定文件属于该会话。本仓采用上传时
+登记的精确文件、用户、运行和会话绑定，下载不读取助手消息文本。Agent SSE 在
+`canvas.run` 完毕后才持久化助手消息；精确绑定使流式上传后、落库前即可下载。
+没有持久化会话的调试运行按用户、文件和运行绑定授权。历史上未登记的裸链接无法
+安全证明归属，不能继续下载。登记按沙箱产物保留期到期；对象沿用现有生命周期配置，
+配置失败时可能滞留，但没有登记仍不可下载。
+
+前端对接：保留 `?run_id=<运行 ID>`，会话运行还保留 `&session_id=<会话 ID>`；
+不要只凭 `session_id` 构造其他文件 URL。新旧地址都用同一凭据拉取原始二进制，
+401 和非零业务码均当失败处理。独立 web 仓的 `artifact-url.ts`、
+`MarkdownArtifact.tsx`、`markdown-artifact.test.ts` 和单步调试附件列表是对应联调点；
+当前前端单测只覆盖 `session_id` 查询参数，完整 `run_id` 链接尚待前端仓补契约测试与联调。
+另需修正前端 `fetchArtifactBlob` 对合法 `.json`、`.html` 附件的处理：它调用的通用
+`assertPreviewResponse` 将 `application/json`、`text/html` 一律视为错误，当前这两类
+附件即使后端返回正确原始字节也无法在页面下载。合法附件带 `Content-Disposition`
+文件名，业务错误 JSON 没有；应结合已识别的产物 URL 与响应头区分业务错误、登录页
+和合法附件，再做对应回归；本项未编辑独立前端仓。
+
+验证：定向单元与 scratch PostgreSQL/Redis 测试 15 passed，覆盖流式落库前放行、他人和
+错运行拒绝、助手复述他人 URL 拒绝、会话删除后的拒绝。一次性 API + scratch PostgreSQL +
+真实 MinIO 运行 CodeExec 上传方法，并验收新旧路由有效令牌原始字节、无令牌和他人令牌、
+错误路径、伪造助手引用、删除对象后的读回；临时对象、登记、数据库和进程均清理。
+`make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3177 passed），
+`make integration` 通过（241 passed），`make smoke` 通过。真实模型驱动的完整 Agent SSE
+未运行；落库前时序由独立会话行、CodeExec 上传和真实下载组合验收。
+
 ## 2846a939981b41e155ef9975727bfb0e7f7a0ca8 · 修正大型 PDF 页数截断
 
 - 上游：`infiniflow/ragflow` #14382，提交于 2026-04-27；按目标 SHA 核对完整 24 文件 diff。

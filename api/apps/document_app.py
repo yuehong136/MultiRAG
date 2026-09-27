@@ -22,6 +22,7 @@ from starlette.status import (
 )
 
 from api.apps import manager
+from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
@@ -41,7 +42,7 @@ from api.utils.document_upload import UploadDocumentsManifest, UploadManifestVal
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common import settings
-from common.constants import SANDBOX_ARTIFACT_BUCKET, VALID_TASK_STATUS, ParserType, RetCode, TaskStatus
+from common.constants import VALID_TASK_STATUS, ParserType, RetCode, TaskStatus
 from common.file_utils import get_project_base_directory
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 from common.misc_utils import get_uuid, thread_pool_exec
@@ -2764,47 +2765,22 @@ def get_image(
         return construct_error_response(e)
 
 
-ARTIFACT_CONTENT_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".svg": "image/svg+xml",
-    ".pdf": "application/pdf",
-    ".csv": "text/csv",
-    ".json": "application/json",
-    ".html": "text/html",
-}
-
-
-@router.get("/artifact/{filename}", summary="下载沙箱产物", response_description="成功获取沙箱产物文件")
-def get_artifact(
+@router.get("/artifact/{filename}", summary="下载沙箱产物（兼容入口）", response_description="成功获取沙箱产物文件", deprecated=True)
+async def get_artifact(
     filename: str,
-    user=Depends(manager),
-):
+    run_id: str | None = None,
+    session_id: str | None = None,
+    db: AsyncSession = Depends(get_async_db),
+    principal: Principal = Depends(async_current_user),
+) -> Response:
     """
     下载代码沙箱（CodeExec）执行产生的产物文件（图表、PDF、CSV 等）。
 
     参数：
-    - **filename**: 产物文件名（uuid hex + 允许的扩展名）
+    - **filename**: 产物文件名（32 位 uuid hex + 允许的扩展名）
     """
     try:
-        # Validate filename: must be basename with allowed extension, nothing else
-        basename = os.path.basename(filename)
-        if basename != filename or "/" in filename or "\\" in filename:
-            return get_data_error_result(retmsg="Invalid filename.")
-        ext = os.path.splitext(basename)[1].lower()
-        if ext not in ARTIFACT_CONTENT_TYPES:
-            return get_data_error_result(retmsg="Invalid file type.")
-        data = settings.STORAGE_IMPL.get(SANDBOX_ARTIFACT_BUCKET, basename)
-        if not data:
-            return get_data_error_result(retmsg="Artifact not found.")
-        content_type = ARTIFACT_CONTENT_TYPES.get(ext, "application/octet-stream")
-        response = Response(content=data, media_type=content_type)
-        safe_filename = re.sub(r"[^\w.\-]", "_", basename)
-        apply_safe_file_response_headers(response, content_type, ext)
-        if not response.headers.get("Content-Disposition"):
-            response.headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
-        return response
+        return await download_artifact(filename, principal.platform_user_id, db, run_id=run_id, session_id=session_id)
     except Exception as e:
         return construct_error_response(e)
 

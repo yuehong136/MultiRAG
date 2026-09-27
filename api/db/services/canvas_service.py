@@ -355,6 +355,7 @@ async def completion(
             custom_header=custom_header,
             run_context=run_context,
         )
+        canvas.artifact_session_id = session_id
         if run_context is not None and run_context.principal is not None:
             # The trusted platform user is carried only by RunContext.  Clear
             # any persisted/attacker-controlled DSL value instead of making it

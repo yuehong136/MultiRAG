@@ -478,6 +478,27 @@ DELETE /datasets/{dataset_id}
 
 ## 文档 API
 
+### 下载代码沙箱产物
+
+CodeExec 生成的 Markdown 附件链接指向以下 REST 路径：
+
+```
+GET /documents/artifact/{filename}
+```
+
+完整地址为 `/api/v1/documents/artifact/{filename}`；旧地址
+`/v1/document/artifact/{filename}` 暂作 deprecated 兼容入口。两者均需登录令牌或
+个人 API Key。`filename` 为生成时的 32 位小写十六进制 ID，加
+`.png`、`.jpg`、`.jpeg`、`.svg`、`.pdf`、`.csv`、`.json` 或 `.html` 扩展名。
+CodeExec 生成的 URL 带 `run_id`；有持久化 Agent 会话时另带 `session_id`，例如
+`/api/v1/documents/artifact/<filename>?run_id=<run_id>&session_id=<session_id>`。
+服务端在上传时登记文件名与请求用户、运行 ID、可选会话 ID 的精确绑定；下载时检查该登记，
+会话运行还要求会话存在且 Canvas 可访问。只提供一个属于自己的 `session_id`，或让助手消息
+引用其他人的文件 URL，均不能取得该对象。流式链接在登记完成后即可下载，无需等待助手消息落库。
+历史上未登记的裸链接无法证明归属，不提供无鉴权兜底。成功时响应为原始文件字节，
+`Content-Type` 按扩展名设置，HTML 与 SVG 强制作为附件下载。
+无权访问、文件不存在或文件名无效时检查非零业务 `retcode`，不能只看 HTTP 200。
+
 ### 创建文档
 
 上传本地文件、抓取网页为 PDF，或创建空白虚拟文档。创建后不会自动开始解析。

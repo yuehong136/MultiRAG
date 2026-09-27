@@ -22,6 +22,7 @@ import uuid
 from abc import ABC
 from collections.abc import Mapping
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -30,6 +31,7 @@ from api.db.services.file_service import FileService
 from common import settings
 from common.connection_utils import timeout
 from common.constants import SANDBOX_ARTIFACT_BUCKET, SANDBOX_ARTIFACT_EXPIRE_DAYS
+from core.utils.sandbox_artifact_registry import record_artifact_binding
 
 SYSTEM_OUTPUT_KEYS = frozenset(
     {
@@ -510,7 +512,7 @@ class CodeExec(ToolBase, ABC):
             # Do NOT set _lifecycle_configured so we retry next time
             logging.warning(f"[CodeExec]: Failed to set bucket lifecycle: {e}")
 
-    def _upload_artifacts(self, artifacts: list) -> list[dict]:
+    def _upload_artifacts(self, artifacts: list[Any]) -> list[dict[str, Any]]:
         self._ensure_bucket_lifecycle()
         uploaded = []
         for art in artifacts:
@@ -528,7 +530,15 @@ class CodeExec(ToolBase, ABC):
 
                 settings.STORAGE_IMPL.put(SANDBOX_ARTIFACT_BUCKET, storage_name, binary)
 
-                url = f"/v1/document/artifact/{storage_name}"
+                run_id = getattr(self._canvas, "task_id", "")
+                owner_id = getattr(self._canvas, "artifact_owner_id", "")
+                session_id = getattr(self._canvas, "artifact_session_id", None)
+                if not record_artifact_binding(storage_name, owner_id, run_id, session_id):
+                    settings.STORAGE_IMPL.rm(SANDBOX_ARTIFACT_BUCKET, storage_name)
+                    raise RuntimeError("Sandbox artifact ownership record failed")
+                url = f"/api/v1/documents/artifact/{storage_name}?run_id={run_id}"
+                if session_id:
+                    url += f"&session_id={session_id}"
                 uploaded.append(
                     {
                         "name": name,

@@ -106,6 +106,8 @@ class Graph:
             raise ValueError("run identity context is inconsistent")
         self._run_context = run_context
         self.task_id = task_id if task_id else get_uuid()
+        self.artifact_owner_id = run_context.principal.platform_user_id if run_context is not None and run_context.principal is not None else tenant_id
+        self.artifact_session_id: str | None = None
         self.custom_header = custom_header
         self._thread_pool = ThreadPoolExecutor(max_workers=5)
         self.load()

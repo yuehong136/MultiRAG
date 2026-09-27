@@ -14,6 +14,15 @@
 JSON `{"name": "..."}` 创建虚拟文档及文件关联，也返回单个文档。三种方式都不自动开始解析。
 旧 `/v1/document/web_crawl`、`/v1/document/create` 仍可用，并在 OpenAPI 中标为 deprecated。
 
+代码沙箱生成的附件使用 `GET /api/v1/documents/artifact/{filename}`。请求须携带用户登录令牌或
+个人 API Key；文件名必须是生成时的 32 位小写十六进制 ID 和允许的扩展名。链接带 `run_id`，
+会话运行另带 `session_id`。CodeExec 上传时在 Redis 登记该文件名、请求用户、运行 ID 和可选
+会话 ID；两个路由都核对精确登记。会话运行还检查会话存在及当前 Canvas 访问权，因此助手消息
+保存前的流式产物可以下载。调试运行没有持久化会话，只凭文件名、用户和运行 ID 的精确登记放行。
+登记和对象按沙箱产物保留期过期；历史上未登记的裸链接不能据助手消息文本推定归属。
+旧 `GET /v1/document/artifact/{filename}` 共用相同鉴权与响应，标为 deprecated。
+HTML、SVG 作为附件下载；其他允许的类型按文件类型返回。
+
 网页抓取在工作线程中完成 URL 校验、PDF 转换和现有文件上传链；数据库会话在该线程内短暂创建，
 不跨线程传递请求的 AsyncSession。空白文档经请求会话的 `run_sync` 桥接遗留同步文件服务。
 
