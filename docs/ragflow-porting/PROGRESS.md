@@ -92,3 +92,37 @@ API 使用仅供本次验收的新建 PostgreSQL scratch 库启动，`make smoke
 Infinity 未配置运行实例，映射和既有列迁移逻辑仅经代码核对，未做真实后端写入验收。
 VastBase 的现有映射连 `raptor_kwd` 也未定义，本项不扩大到修复该后端原有的
 RAPTOR 写入契约；该后端的 RAPTOR 层级落库仍待单独处理。
+
+## 33bb464ce3f5598bf3107a8598d86fef9a4011d7 · 聊天共享页误发 Agent 请求（仅审查）
+
+- 上游：`infiniflow/ragflow` #14190，提交于 2026-04-27；父提交为上项 `3ad3241a`。
+  核对了 5 文件完整 diff。2026-09-27 fetch 后 `origin/main` 为
+  `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+- 独立前端 checkout `../web` 的 HEAD 为 `75db97866bc496294e5db55fe829fd47006750ef`，
+  本次只读审查，未跨仓编辑。其当前路由有 `/agent/share`、`/chats/widget`，
+  没有上游的 `/chats/share` 页面。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `web/src/hooks/use-agent-request.ts` | 实际 diff 将 `useFetchSharedAgent` 改名为 `useFetchFlowSSE`，并给查询加 `enabled: !!sharedId`；并未新增可由调用方传入的 `enabled` 参数。查询函数仍调用 `agentService.getAgent(sharedId)`，对应 `/api/v1/agents/{id}`，且目标提交中该 hook 已无调用方。本地 `../web/src/hooks/use-agent-query.ts` 另有按 Agent ID 启用的同名 hook，不应照搬上游的改名。 |
+| `web/src/pages/next-chats/share/index.tsx` | 移除共享聊天页的 Agent 查询、`from` 分支和 Agent 头像读取，统一使用聊天信息的 `avatar`。根因是把聊天 `dialog_id` 当 Agent/Canvas ID 请求，触发权限错误；本地没有此页面，当前无需移植。若以后实现聊天共享页，应从聊天信息取头像，且不得用聊天 ID 调 Agent 查询。 |
+| `web/src/locales/zh.ts` | `rootAsHeadingTip` 仅换行排版，无文案变化；不移植。 |
+| `web/src/pages/user-setting/data-source/data-source-detail-page/index.tsx` | `useAddDataSource` 调用只调整空格，无行为变化；不移植。 |
+| `web/src/pages/user-setting/data-source/hooks.ts` | import 与函数参数仅调整排版，无行为变化；不移植。 |
+
+独立 web 仓待办：若新增 `/chats/share?shared_id=...&from=chat`，先确认后端的聊天共享信息及
+公开访问契约，再实现独立聊天数据查询；不要复用 Agent/Canvas 详情查询。
+增加覆盖请求边界的回归：聊天共享页实际打开后网络请求中没有
+`/api/v1/agents/{dialog_id}`（也没有 Canvas 详情请求），聊天标题、头像与消息正常显示；
+同时验证 `/agent/share` 的 Agent 信息与头像仍正常、缺失 ID 时不发详情请求。
+改动发生在 `../web` 时运行其 `npm run lint`、`npm run build`、`npm run test:unit`，
+再用浏览器核对请求与业务码，不能只凭 HTTP 200 判断。当前本地 Agent 共享页使用
+`useFetchExternalAgentInputs`，并不调用同名 `useFetchFlowSSE`。
+
+MultiRAG 后端无需移植：目标提交没有后端 diff；其修复是去掉错误的前端请求，
+不能通过放宽 `/api/v1/agents/{canvas_id}` 的 Canvas 权限校验来掩盖问题。
+上游后续链中未发现对此删除行为的 revert 或直接修补；当前 `origin/main` 的聊天共享页
+仍不调用 Agent 查询。后续 `5a2cd36b4` 修改共享页语言同步，属独立问题。
+
+验证仅针对审查文档：核对目标 diff、上游当前状态、本地路由和调用链；
+检查本次文档 diff、路径与链接。不改可执行代码，因此本项不运行 Python 或 web 门禁。
