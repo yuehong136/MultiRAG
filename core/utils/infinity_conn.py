@@ -487,10 +487,10 @@ class InfinityConnection(InfinityConnectionBase):
         # if 'position_int' in newValue:
         #     logger.info(f"update position_int: {newValue['position_int']}")
         inf_conn = self.connPool.get_conn()
+        # Empty knowledgebase_id means use the index_name directly (metadata tables)
+        table_name = index_name if not knowledgebase_id else f"{index_name}_{knowledgebase_id}"
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            # Empty knowledgebase_id means use the index_name directly (metadata tables)
-            table_name = index_name if not knowledgebase_id else f"{index_name}_{knowledgebase_id}"
             table_instance = db_instance.get_table(table_name)
             # if "exists" in condition:
             #    del condition["exists"]
@@ -615,6 +615,11 @@ class InfinityConnection(InfinityConnectionBase):
 
             table_instance.update(filter, new_value)
             return True
+        except InfinityException as exc:
+            if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                raise
+            self.logger.warning("INFINITY update skipped because table %s does not exist", table_name)
+            return False
         finally:
             self.connPool.release_conn(inf_conn)
 

@@ -442,9 +442,9 @@ class InfinityConnection(InfinityConnectionBase):
 
     def update(self, condition: dict, new_value: dict, index_name: str, memory_id: str) -> bool:
         inf_conn = self.connPool.get_conn()
+        table_name = f"{index_name}_{memory_id}"
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            table_name = f"{index_name}_{memory_id}"
             table_instance = db_instance.get_table(table_name)
 
             columns = {}
@@ -474,6 +474,11 @@ class InfinityConnection(InfinityConnectionBase):
             self.logger.debug(f"INFINITY update table {table_name}, filter {filter}, newValue {new_value}.")
             table_instance.update(filter, update_dict)
             return True
+        except InfinityException as exc:
+            if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                raise
+            self.logger.warning("INFINITY update skipped because table %s does not exist", table_name)
+            return False
         finally:
             self.connPool.release_conn(inf_conn)
 

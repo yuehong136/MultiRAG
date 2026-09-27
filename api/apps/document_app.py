@@ -1675,7 +1675,7 @@ def thumbnails(doc_ids: list[str] = Query(..., description="文档ID列表，例
 
 
 @router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态")
-def change_status(request_body: ChangeStatusRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def change_status(request_body: ChangeStatusRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Response:
     """
     ### POST `/change_status` 更改文档状态接口
 
@@ -1946,16 +1946,14 @@ def change_status(request_body: ChangeStatusRequest, db: Session = Depends(get_d
                         search.index_name_one(kb.tenant_id, kb.name),
                         doc.kb_id,
                     )
-                except Exception as exc:
-                    msg = str(exc)
-                    if "3022" in msg:
-                        result[doc_id] = {"error": "Document store table missing."}
-                    else:
-                        result[doc_id] = {"error": f"Document store update failed: {msg}"}
+                except Exception:
+                    logging.exception("Document store update failed in change_status: doc_id=%s kb_id=%s status=%s", doc_id, doc.kb_id, status_int)
+                    result[doc_id] = {"error": "Document store update failed."}
                     has_error = True
                     continue
                 if not ok:
-                    result[doc_id] = {"error": "Database error (docStore update)!"}
+                    logging.warning("Document store update returned False in change_status: doc_id=%s kb_id=%s status=%s", doc_id, doc.kb_id, status_int)
+                    result[doc_id] = {"error": "Document store table missing or update failed."}
                     has_error = True
                     continue
             result[doc_id] = {"status": status}

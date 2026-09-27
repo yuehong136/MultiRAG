@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from api.common.check_team_permission import check_kb_team_permission
@@ -151,7 +152,7 @@ def update_chunk_method_only(db: Session, req: dict[str, Any], doc: Document, da
     return None
 
 
-def update_document_status_only(db: Session, status: int, doc: Document, kb):
+def update_document_status_only(db: Session, status: int, doc: Document, kb: Knowledgebase) -> Response | None:
     current_status = None if doc.status is None else int(doc.status)
     if current_status == status:
         return None
@@ -159,7 +160,10 @@ def update_document_status_only(db: Session, status: int, doc: Document, kb):
     try:
         if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
             return get_error_data_result(retmsg="Database error (Document update)!")
-        settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
+        if getattr(doc, "chunk_num", 0) > 0:
+            ok = settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
+            if not ok:
+                return get_error_data_result(retmsg="Document store table missing or update failed.")
     except Exception as e:
         return server_error_response(e)
     return None

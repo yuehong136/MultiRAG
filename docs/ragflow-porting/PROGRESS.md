@@ -126,3 +126,28 @@ MultiRAG 后端无需移植：目标提交没有后端 diff；其修复是去掉
 
 验证仅针对审查文档：核对目标 diff、上游当前状态、本地路由和调用链；
 检查本次文档 diff、路径与链接。不改可执行代码，因此本项不运行 Python 或 web 门禁。
+
+## f3b7d55a1e4f2fa2748979caaef42f93651d41c8 · Infinity 更新遇到缺表
+
+- 上游：`infiniflow/ragflow` #14153，提交于 2026-04-27；核对目标的 3 文件完整 diff。
+  2026-09-27 fetch 后 `origin/main` 为 `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| `rag/utils/infinity_conn.py` 的 `update` | 移植到 `core/utils/infinity_conn.py`：Infinity 抛出精确的 `TABLE_NOT_EXIST`（3022）时记录缺表并返回 `False`，其余错误原样抛出；连接始终释放。本地实现同时覆盖查表与更新期间删表。 |
+| `memory/utils/infinity_conn.py` 的 `update` | 本仓确有活跃的 memory Infinity 存储路径，按相同规则移植，并覆盖查表、更新与连接释放。 |
+| `api/apps/document_app.py` 的 `change_status` | 移除按异常文字包含 `3022` 分类的逻辑；存储返回 `False` 或抛异常均返回非零业务码及每文档错误，不把状态更新报告为成功。 |
+
+本地还有 `api/apps/services/document_api_service.py:update_document_status_only` 供 REST 文档状态路径调用；
+原逻辑未检查存储 `update` 的布尔结果。本项使已有切片的文档在 `False` 时返回业务错误，
+未解析、无切片的文档沿用旧路由规则跳过存储更新。其他 Infinity 错误仍进入原有服务端错误响应。
+
+后续链核对：上游 `a536980e2` 将旧 `change_status` 路由迁移到 REST 批量状态接口，
+不是本次缺表处理的回退；当前 `origin/main` 的文档与记忆 Infinity `update` 仍保留
+`TABLE_NOT_EXIST` 判断。下一指定提交 `0d87ceca` 不在本项范围。
+
+验证：新增单测覆盖两种 Infinity 存储的查表和写入阶段 3022、其他错误、正常更新与连接释放，
+以及旧路由和 REST 路由的失败业务码、未解析文档跳过存储更新。`make verify` 通过
+（8 条 import contracts、mypy 124 个源文件、unit 3132 passed）。
+`make integration` 通过（235 passed）。
+本机无 Infinity 容器，`127.0.0.1:23817` 也不可连接，本项未做真实 Infinity 写入验收。
