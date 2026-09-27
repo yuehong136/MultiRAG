@@ -281,22 +281,28 @@ POST /chats/{chat_id}/completions
 
 **OpenAI 兼容补全**
 
-如需使用 OpenAI SDK 风格的 `messages` 请求，请调用：
+使用已有聊天助手的 ID、API Key 和 OpenAI 风格的 `messages` 请求：
 
 ```
-POST /chats_openai/{chat_id}/chat/completions
+POST /openai/{chat_id}/chat/completions
 ```
 
-当 `stream` 为 `true` 时，响应以 SSE 分块返回；当 `stream` 为 `false` 时，完整回答和引用信息会随一次响应返回。可通过 `extra_body.reference_metadata.include` 控制引用分块是否包含文档元数据。
+`model` 必填；传 `"model"` 使用聊天助手已配置的模型，传具体模型名（例如 `glm-4-flash@ZHIPU-AI`）时必须是当前租户可用的聊天模型。`messages` 最后一条必须为用户消息；文本数组内容支持 `type: "text"`，图片等非文本内容会返回参数错误。省略 `stream` 时新路径返回非流式响应；设为 `true` 则返回 SSE。旧路径 `/chats_openai/{chat_id}/chat/completions` 暂保留，省略 `stream` 时仍默认流式，已标记 deprecated。
+
+可在 `extra_body` 中设置 `reference: true`、`reference_metadata: {"include": true, "fields": ["author"]}` 和 `metadata_condition`。非流式引用位于 `choices[0].message.reference`；流式引用及完整最终正文位于收尾帧的 `choices[0].delta.reference` 和 `final_content`。引用切片的 `document_metadata` 只包含请求的字段。
+
+Python OpenAI 客户端的 `base_url` 应设为 `http://<your-server>:8123/api/v1/openai/{chat_id}`，再调用 `client.chat.completions.create(...)`；客户端会自行追加 `/chat/completions`。客户端还会把 `extra_body` 中的 `reference` 等参数合并到请求 JSON 顶层；直接发送 HTTP 时也可将这些参数放在 JSON 的 `extra_body` 对象中，无需双重嵌套。
 
 **流式响应 (SSE)**
 
 ```
-data: {"id":"completion-uuid","choices":[{"delta":{"content":"I'm"}}]}
+data: {"id":"chatcmpl-chat-id","choices":[{"delta":{"content":"I'm"}}]}
 
-data: {"id":"completion-uuid","choices":[{"delta":{"content":" doing"}}]}
+data: {"id":"chatcmpl-chat-id","choices":[{"delta":{"content":" doing"}}]}
 
-data: {"id":"completion-uuid","choices":[{"delta":{"content":" well"}}]}
+data: {"id":"chatcmpl-chat-id","choices":[{"delta":{"content":" well"}}]}
+
+data: {"id":"chatcmpl-chat-id","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}
 
 data: [DONE]
 ```

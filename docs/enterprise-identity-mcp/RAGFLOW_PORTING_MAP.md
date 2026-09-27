@@ -14,6 +14,7 @@
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
 | `api/apps/kb_app.py` 的数据集管理路由 | `api/apps/restful_apis/dataset_api.py`、`document_api.py` | 新契约由 `/api/v1/datasets` 提供；旧 `kb_app.py` 路由待调用方迁移后按兼容策略退役 |
 | `api/apps/document_app.py` 的网页、空白文档创建 | `api/apps/restful_apis/document_api.py` + `api/apps/services/document_api_service.py` | 新入口由 `/api/v1/datasets/{id}/documents?type=web|empty` 提供；旧 `/v1/document` 创建路由保留 deprecated 兼容层 |
+| `api/apps/restful_apis/openai_api.py` 的聊天补全 | `api/apps/restful_apis/openai_api.py` | 新入口为 `/api/v1/openai/{chat_id}/chat/completions`；旧 `/api/v1/chats_openai/{chat_id}/chat/completions` 由同一 handler 保留 deprecated 别名，待客户端迁移后退役 |
 
 ## 2. EIM-U14 Interaction 所有权
 

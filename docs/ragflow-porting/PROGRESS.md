@@ -3,6 +3,34 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 0b46ab07c59eb715cbb4c1623724a11bda57b398 · 恢复 OpenAI 兼容聊天补全
+
+- 上游：`infiniflow/ragflow` #14380，提交于 2026-04-27；核对目标的 10 文件完整 diff。
+  2026-09-27 fetch 后 `origin/main` 为 `313ca90f6abd7682fe8523e16fd67b3653a3fa84`。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| 新增 `api/apps/restful_apis/openai_api.py`，从 SDK session 迁移 `/chats_openai/{id}/chat/completions` | 新建同名 FastAPI 路由模块，提供 `/api/v1/openai/{id}/chat/completions`；旧路径由同一 handler 保留并标为 deprecated。使用已有 API Key 异步鉴权和请求级 `AsyncSession`，按租户及有效状态读取聊天助手。`/chats/{id}/completions` 是本仓仍有调用方的原有契约，本项保留；`/chat/completions` 是另一种统一会话 API，不复用为 OpenAI 协议入口。 |
+| `model` 占位符及指定模型 | `"model"` 使用助手配置；具体模型从当前租户的聊天模型记录验证并选择其 `tenant_llm_id`。对本次请求使用深拷贝的 Dialog，避免 ORM 自动 flush 将覆盖模型写回助手。响应中的 `model` 是实际使用的模型名。 |
+| `messages`、同步 JSON、SSE、引用及元数据 | 校验消息角色、最后一条用户消息与文本内容；文本数组拼接，非文本内容显式报参数错误。新路径省略 `stream` 时默认非流式，旧别名保持默认流式。SSE 只发增量正文，完整最终正文放扩展字段 `final_content`，末帧携带 usage 和可选引用后发 `[DONE]`；错误帧不伪装为成功结束。引用元数据经当前异步会话的 `run_sync` 查询，可筛选字段；`metadata_condition` 无匹配时传 `-999` 防止退化成无过滤检索。Python OpenAI 客户端会将 `extra_body` 合并到 JSON 顶层，因此同时支持顶层和历史嵌套格式。 |
+| HTTP/Python 参考与 benchmark 路径 | 更新本仓 HTTP 参考、OpenAPI 筛选示例与稳定路径映射；本仓没有上游 `python_api_reference.md` 和 benchmark 脚本，不复制文件。实际用本机 OpenAI SDK 的 MockTransport 核对 URL 拼接：`base_url` 须止于 `/openai/{chat_id}`，上游文档末尾再加 `/chat` 会得到重复的 `/chat/chat/completions`。 |
+| HTTP 测试 helper 的 related questions 路径、音频单测及旧 session 测试删除 | 本仓已有 `/searchbots/related_questions`，旧 `/sessions/related_questions` 保留兼容；音频路由在本仓独立实现且本次生产 diff 未改动，不复制上游 Quart 测试。使用本仓 FastAPI 测试覆盖新旧路由、鉴权、模型、同步与流式响应、引用、元数据及错误语义。 |
+
+后续链核对：`bd6251f46` 将新路径默认响应改为非流式，`09d0a1745` 处理数组消息内容，
+`5b02fe484` 消除流式最终答案重复；本项纳入这三个必要修复。
+`e6dd39753` 的 session ID 改动由 `bb148edf4` 回退，未纳入；
+`a75ea7ba7` 的生成参数覆盖、`3bfad1f00`/`6a77523bf` 的后续模型映射及
+`24af0875e` 的引用元数据展示配置属于后续独立行为，未提前移植。
+本地适配额外修复上游引用元数据 helper 缺少数据库参数、流式异常仍发 `stop` 的假成功，
+以及 SDK `extra_body` 实际在顶层的请求形状。下一指定提交 `c3eac410` 不在本项范围。
+
+验证：定向路由单测 23 passed；`make verify` 通过（8 条 import contracts、mypy 124 个源文件、unit 3156 passed），
+`make integration` 通过（239 passed）。隔离 PostgreSQL scratch 库启动真实 HTTP API，
+`make smoke` 通过（ping/healthz 全部组件 `ok`）；新路由非流式、SSE `[DONE]`、旧别名默认流式、
+缺失 API Key 401、未知模型业务码 101、指定模型响应均通过实际请求，独立查询确认 Dialog 模型未改变。
+回答生成在隔离进程中用固定模型桩替代外部 LLM；真实模型推理与真实检索引用元数据没有端到端运行，
+对应路由行为由定向测试覆盖。临时数据库和进程已清理。
+
 ## 4dcc42e0e14ad4a93373f08b325757cba285ac54 · 统一数据集与索引 API
 
 - 上游：`infiniflow/ragflow` #14222，提交于 2026-04-27；核对了完整 51 文件 diff。

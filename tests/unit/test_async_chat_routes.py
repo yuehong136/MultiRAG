@@ -203,12 +203,12 @@ def test_chat_completion_rejects_session_without_chat(client):
 def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stubs):
     from api.utils.api_utils import async_token_required
 
-    sdk_session = _route_module("api.apps.sdk.session")
+    openai_api = _route_module("api.apps.restful_apis.openai")
     calls = []
 
     client.app.dependency_overrides[async_token_required] = lambda: "tenant-unit"
     monkeypatch.setattr(
-        sdk_session,
+        openai_api,
         "async_chat",
         _fake_async_chat(
             [
@@ -221,7 +221,7 @@ def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stu
 
     resp = client.post(
         "/api/v1/chats_openai/dlg-1/chat/completions",
-        json={"model": "m", "messages": [{"role": "user", "content": "hi"}], "stream": True, "internet": True},
+        json={"model": "model", "messages": [{"role": "user", "content": "hi"}], "stream": True, "internet": True},
     )
 
     assert resp.status_code == 200

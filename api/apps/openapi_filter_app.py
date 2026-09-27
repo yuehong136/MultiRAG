@@ -91,7 +91,7 @@ async def filter_openapi_post(rule: FilterRule = Body(..., description="过滤�
     {
       "paths": [
         "/api/v1/chats/*",
-        "/api/v1/chats_openai/*",
+        "/api/v1/openai/*",
         "/api/v1/sessions/*",
         "/api/v1/datasets/*",
         "/api/v1/files/*",
