@@ -30,7 +30,9 @@ async def test_upload_info_file_branch_bridges_db_and_thread(async_db, monkeypat
 
     def _put_blob(user_id, location, blob):
         seen["off_loop"] = threading.current_thread() is not threading.main_thread()
-        seen["blob"] = blob
+        if not location.endswith(".upload.json"):
+            seen["blob"] = blob
+        return True
 
     monkeypatch.setattr(DocumentService, "check_doc_health", classmethod(lambda cls, s, user_id, filename: _check_doc_health(s, user_id, filename)))
     monkeypatch.setattr(FileService, "put_blob", staticmethod(_put_blob))
@@ -44,6 +46,7 @@ async def test_upload_info_file_branch_bridges_db_and_thread(async_db, monkeypat
     assert result["name"] == "a.txt"
     assert result["created_by"] == "user-unit"
     assert result["mime_type"] == "text/plain"
+    assert result["size"] == len(b"hello")
 
 
 async def test_upload_info_rejects_invalid_file_object(async_db):
@@ -138,6 +141,7 @@ async def test_upload_info_url_uses_validated_final_url_and_browser_dns_pins(asy
     class FakeCrawler:
         def __init__(self, *, config) -> None:
             del config
+            self.crawler_strategy = types.SimpleNamespace(set_hook=lambda *_args: None)
 
         async def __aenter__(self):
             return self
@@ -149,6 +153,8 @@ async def test_upload_info_url_uses_validated_final_url_and_browser_dns_pins(asy
             seen["crawl_url"] = url
             seen["run_config"] = config
             return types.SimpleNamespace(
+                success=True,
+                status_code=200,
                 pdf=None,
                 markdown="safe content",
                 response_headers={"content-type": "text/html"},
@@ -169,13 +175,54 @@ async def test_upload_info_url_uses_validated_final_url_and_browser_dns_pins(asy
     result = await FileService.upload_info(async_db, "user-unit", None, "https://example.com/start")
 
     assert seen["crawl_url"] == "https://cdn.example.net/final"
-    assert seen["browser_config"] == {
-        "headless": True,
-        "verbose": False,
-        "extra_args": ["--host-resolver-rules=MAP example.com 93.184.216.34,MAP cdn.example.net 1.1.1.1"],
-    }
+    config = seen["browser_config"]
+    assert config["headless"] is True and config["ignore_https_errors"] is False
+    assert config["proxy_config"]["server"].startswith("http://127.0.0.1:")
+    assert "--proxy-bypass-list=<-loopback>" in config["extra_args"]
     assert seen["blob"] == b"safe content"
     assert result["mime_type"] == "text/html"
+
+
+@pytest.mark.parametrize("status", [404, 500])
+def test_resolve_safe_crawl_url_rejects_http_failure(monkeypatch, status: int) -> None:
+    monkeypatch.setattr(FileService, "_validate_url_for_crawl", staticmethod(lambda _url: ("example.com", "93.184.216.34")))
+    monkeypatch.setattr(file_service_module, "pin_dns", lambda *_args: nullcontext())
+    monkeypatch.setattr(file_service_module.requests, "get", lambda *_args, **_kwargs: _RedirectResponse(status))
+    with pytest.raises(ValueError, match=f"HTTP {status}"):
+        FileService._resolve_safe_crawl_url("https://example.com/missing")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        types.SimpleNamespace(success=False, status_code=200, pdf=None, markdown="error page"),
+        types.SimpleNamespace(success=True, status_code=404, pdf=None, markdown="not found"),
+        types.SimpleNamespace(success=True, status_code=200, pdf=None, markdown=None, response_headers=None),
+    ],
+)
+async def test_upload_info_crawl_failure_does_not_store(async_db, monkeypatch, result: object) -> None:
+    class FailedCrawler:
+        def __init__(self, **_kwargs: object) -> None:
+            self.crawler_strategy = types.SimpleNamespace(set_hook=lambda *_args: None)
+
+        async def __aenter__(self) -> "FailedCrawler":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+        async def arun(self, **_kwargs: object) -> object:
+            return result
+
+    monkeypatch.setattr(FileService, "_resolve_safe_crawl_url", staticmethod(lambda _url: ("https://example.com", {"example.com": "93.184.216.34"})))
+    monkeypatch.setattr(crawl4ai, "AsyncWebCrawler", FailedCrawler)
+
+    def forbidden_store(*_args: object) -> None:
+        pytest.fail("failed crawl must not write storage")
+
+    monkeypatch.setattr(FileService, "put_blob", staticmethod(forbidden_store))
+    with pytest.raises(ValueError, match=r"crawl|content"):
+        await FileService.upload_info(async_db, "user-unit", None, "https://example.com")
 
 
 # ---------------------------------------------------------------------------

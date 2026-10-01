@@ -3,6 +3,89 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 61a24a2c14dde696244646e1ec69e5f150eeda54 · 聊天附件上传迁入 REST
+
+- 上游 #14359，2026-04-27；本轮确认 `origin` 并 fetch，`origin/main` 为
+  `519e7d98a5651564d4e35d6648f006cba4baaf4f`。目标代码取指定 SHA tree，完整核对 7 文件 diff。
+  从本仓 `70dd89a4` 开始，只处理本项；下一项 `0f2778efe744b5aef879f1743c3ec50fd1143aab` 等待派发。
+
+| 上游文件/行为 | 处置 |
+|---|---|
+| `api/apps/restful_apis/document_api.py` | 采纳 `/api/v1/documents/upload`，重复 `file` / query `url` 互斥且须其一，单对象/多数组。PR 描述的 `documentss` 拼写错误不采纳。FastAPI + 异步 Principal + 请求级 AsyncSession；直接 await 已有 async service，不复制上游线程池包装异步函数。 |
+| `api/apps/document_app.py` 删除旧路由和导入 | 迁移期间保留 deprecated，共用上传 service。开工时独立 web 的 conversation/use-chat-upload/use-mcp-upload 使用旧路由；交付复核 web `5c7a773` 已切换 URL，仍待前端真实跨端验收后退出。 |
+| `test/testcases/test_web_api/test_common.py` | 不复制上游 HTTP harness；重建当前 unit fixture 与 scratch PostgreSQL/MinIO 的真实 HTTP 验收。 |
+| `test/.../test_upload_info_unit.py` | 采纳测试意图，但不采用只看 data 存在、条件性数组断言；明确验证类型、元素字段、业务码、鉴权、owner、独立字节读回和实际消费者。 |
+| `web/src/hooks/use-chat-request.ts` | 前端另派；本项核对并修复后端聊天/MCP 附件消费链，未修改 web。 |
+| `web/src/services/next-chat-service.ts` | 前端 `5c7a773` 已完成代码阶段；提供准确 multipart/响应/认证契约，SDK 既有入口保留。 |
+| `web/src/utils/api.ts` | 新 URL 已落实两仓；web 代码阶段已提交，真实跨端验收尚待其任务完成。 |
+
+未查到本项的 revert/re-land；后续 `a4f325be2` (#16264) 恢复旧路径兼容，
+与本仓保留已查明活动消费者一致。`e35860ad7` (#16269) 另补 Go 上传与 metadata batch；
+其中 downloads descriptor、正确字节数、HTTP 错误与 URL 内容类型归一化作为交叉核验。
+后续 Python 删除不是本项迁移目标。已实际核对本仓 Go `internal/router/router.go`、
+`internal/handler/document.go`、`internal/service/file.go` 与 `internal/cli/{client,http_client,contextengine/*}.go`：
+Go 无 upload_info 路由/descriptor 消费者；活跃 CLI 文件 provider 使用 `/files`、dataset provider 使用
+`/datasets/{id}/documents`，本次新增附件入口未改变它们的路径/数据合同，因此本项不改 Go。
+
+必要本地适配：三个文档/文件网关共用 `FileService.upload_infos`，SDK `/files/upload_info`
+保留字段 `files` 与已有鉴权；旧 web 保留 retcode 响应。新入口的 JWT / SDK Key 都校验
+有效用户与个人 owner membership，`created_by` 使用服务器 Principal 的 platform_user_id。
+存储仍为 `<owner>-downloads`，没有写入 dataset/File/Document 表或宣称解析完成。
+`size` 改为实际 bytes 长度，URL 生成的 PDF 使用正确 MIME。
+存储回执按现有 adapter 处理：GCS False 失败，MinIO 有效对象成功；S3/OSS/OpenDAL
+的 None 要核对象存在，失败不返回附件 id。上传服务在同 owner 空间登记 `<id>.upload.json`，
+登记失败补偿文件；批量失败只补偿本批 location 与描述，明确暴露清理未确认；
+取消请求屏蔽对写任务的直接取消、等待完成并补偿，强制进程终止及存储不可达不保证回滚。
+
+同项 MCP 最小适配：保持 `ChatRequest.files: list[str]`，按 Principal.platform_user_id
+读取服务器登记，校验 id/owner/字段及对象存在；不信前端自造 descriptor、created_by 或
+助手消息。真实 Canvas 读取/解析后，文字加入本轮用户消息，图片放入 visual_files_var
+再走 Agent 的既有模型 images 路径。普通/structured、tools/no-tools 与相关非流式共用，
+每次调用清空旧附件且预解析只消费一次，重复调用重新验证；缺失/越权/描述或 blob 缺失/
+解析失败流前 HTTP 400。structured error 不再包装成功 retcode；流中错误发 500 后终止，
+普通流亦不再跟成功完成帧。非流式 structured 实际走结构化分支并累积全文。
+
+URL 保留原初始/DNS/redirect 防护，并修复 HTTP 预检与浏览器第二次请求之间的绕过：
+浏览器每个 HTTP GET/HEAD 经 `common/safe_crawl.py` 转发，每个新目标与 redirect 在请求前
+校验并 DNS 绑定，不用环境代理重新解析目标；浏览器旁路走自持有、拒绝连接的代理，
+禁用 loopback bypass 和非代理 WebRTC UDP，并拦截 WebSocket。抓取失败、空内容和
+安全阻断返回可识别参数错误，不存成成功附件。CI 的 integration job 安装 Chromium 运行资源。
+
+实际验收：scratch PostgreSQL 的两位 owner、真实 JWT 与 API Key、随机 MinIO bucket/
+owner key、随机 Redis descriptor key、完整 API 的临时 HTTP 监听（不启后台 lifespan）。
+单文件与重复 file 的文本+PNG 多文件验证完整元数据、逐对象独立字节读回、错误 owner key 无对象；
+实际 `split_file_attachments` 和 `Canvas.get_files_async` 解析文字/图片，再把 Redis 读回的
+descriptor 交给消费者。旧 web/SDK 入口亦实际上传并读回。缺/无效认证、失效 membership、
+缺/混合/空字段、内网 URL、真实 MinIO 失败和第二次写失败均核业务码与无成功 data。
+第二次失败后独立列举对象，证明本批无残留且既有对象仍在；unit 另覆盖 False/None 回执、
+清理失败诊断、描述登记失败补偿和请求取消后无对象。真实补偿验收发现 nest_asyncio 的
+Python Task 与 beartype 的 C Task 注解不相容，drain 边界改用 Awaitable，已复跑真存储补偿通过。
+
+另用真实 HTTP 上传文本+PNG，独立 MinIO 字节/可信描述读回，再仅提交 IDs 到 MCP。
+使用真实 ChatAgentAdapter、Agent、Canvas 和解析器，普通/structured、tools/no-tools、
+流式/非流式 8 分支在模型调用边界捕获到了文件正文和正确 image data URI；旧 web/SDK
+上传登记也经 ID-only 聊天实际消费。missing/foreign ID、删除 blob、真实损坏 DOCX 解析
+失败均覆盖普通/structured/非流式，模型未被调用。provider exception/错误标记均无成功完成帧。
+模型 provider 为捕获假件；tools 分支选用工具存在假件，没有调用远程 LLM 或外部 MCP 工具。
+
+真实 Chromium 控制测试：只把已验证测试域的 HTTP transport 映射到本机 origin，
+真实 SSRF guard 对其他目标保持启用；预检 200 后第二次返回内网 302、JS 导航、iframe、
+图片、fetch 与 WebSocket 均未命中内网 trap，错误 code=101 且无存储对象；正常测试 origin
+生成 PDF 并独立读回。外部 URL `https://1.1.1.1/cdn-cgi/trace` 亦实际抓取、存储、
+解析后读到 `h=1.1.1.1`。`httpbin.org` 首次尝试因本机代理 Fake-IP `198.18.*` 被拒绝，
+没有放宽共享防护；缺 Chromium 时明确失败，安装运行资源后验收成功。
+所有 scratch 用户、membership、token、MinIO 对象/bucket、Redis key 和 HTTP 监听都在退出时清理。
+
+本次最终门禁：`make verify` 通过（Ruff、8 个分层契约、async DB 检查、mypy 126 文件、
+3324 unit）；带外部 URL 选项的 `make integration` 249 passed、无 skip。
+隔离 HTTP 验收内实际运行 `make smoke` 通过；URL、真实浏览器防绕过、附件可信恢复与
+模型输入捕获均在当前树复跑。未将旧运行结果当本次门禁证据。
+
+前端契约与兼容退出条件集中见 [HTTP API](../references/http_api_reference.md#上传运行时附件)。
+本项未运行远程大模型或完整外部 MCP 工具调用；前端跨端验收由已派发的 web 任务完成。
+没有修改既有 Agent 上传/同步 webhook 的鉴权和事务链。同步 webhook 尚有旧线程池调用
+async upload_info 的既有签名问题，本项未为附件路径迁移扩大整个 webhook session 改造。
+
 ## c446c403deb749e8e290de83bbf5f18d29f9a265 · PDF bbox 分批与 OCR 裁图懒转换
 
 - 上游：`infiniflow/ragflow` #14385，2026-04-27；核对完整 2 文件 diff。

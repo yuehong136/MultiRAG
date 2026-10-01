@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from array import array
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any, Literal
 
@@ -20,6 +21,7 @@ from api.apps import manager
 from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.dialog_service import _stream_with_think_delta
+from api.db.services.file_service import FileService, RuntimeAttachmentError
 from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
@@ -48,12 +50,15 @@ def _preview_stream_text(value: Any, limit: int = 120) -> str:
 class ChatAgentAdapter:
     """对话Agent适配器，直接复用Agent类但适配对话场景"""
 
-    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] = None, output_schema: dict = None):
+    def __init__(self, tenant_id: str, llm_name: str, system_prompt: str = "", mcp_ids: list[str] | None = None, output_schema: dict | None = None, upload_owner_id: str | None = None) -> None:
         self.tenant_id = tenant_id
         self.llm_name = llm_name
         self.system_prompt = system_prompt
         self.mcp_ids = mcp_ids or []
         self.output_schema = output_schema  # 结构化输出 schema
+        self.upload_owner_id = upload_owner_id
+        self._prepared_file_ids: list[str] | None = None
+        self._prepared_files: list[str] = []
 
         # 创建简化的Canvas mock - 只提供Agent需要的接口
         self.canvas_mock = self._create_canvas_mock()
@@ -63,6 +68,7 @@ class ChatAgentAdapter:
         agent_param.llm_id = llm_name
         agent_param.sys_prompt = system_prompt or "You are a helpful AI assistant."
         agent_param.prompts = [{"role": "user", "content": "{sys.query}"}]
+        agent_param.visual_files_var = "sys.runtime_attachment_images"
         agent_param.mcp = self._prepare_mcp_config()
         agent_param.tools = []
         agent_param.max_rounds = 5
@@ -257,10 +263,54 @@ class ChatAgentAdapter:
         schema = json.dumps(self.output_schema, ensure_ascii=False, indent=2)
         return structured_output_prompt(schema)
 
-    async def chat_with_tools_stream_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None):
+    async def prepare_runtime_files(self, file_ids: list[str]) -> None:
+        """Validate ownership and parse before the HTTP response starts streaming."""
+        self._prepared_file_ids = None
+        self._prepared_files = []
+        self.canvas_mock.globals["sys.query"] = ""
+        self.canvas_mock.globals["sys.files"] = []
+        self.canvas_mock.globals["sys.runtime_attachment_images"] = []
+        self.agent.imgs = []
+        if file_ids and not self.upload_owner_id:
+            raise RuntimeAttachmentError("Attachment owner is unavailable.")
+        descriptors = await FileService.resolve_runtime_uploads(self.upload_owner_id or "", file_ids)
+        try:
+            parsed = await self.canvas_mock.get_files_async(descriptors)
+            if any(not isinstance(item, str) or not item.strip() for item in parsed):
+                raise ValueError("Empty attachment content")
+        except Exception as exc:
+            logging.exception("Runtime attachment parsing failed")
+            raise RuntimeAttachmentError("Failed to read or parse attachment.") from exc
+        self._prepared_file_ids = list(file_ids)
+        self._prepared_files = parsed
+
+    async def _prepare_chat_query(self, query: str, files: list[str] | None) -> str:
+        file_ids = list(files or [])
+        if self._prepared_file_ids != file_ids:
+            await self.prepare_runtime_files(file_ids)
+        parsed = self._prepared_files
+        # A prepared result is consumed once; the next invocation restores afresh.
+        self._prepared_file_ids, self._prepared_files = None, []
+        self.canvas_mock.globals["sys.files"] = parsed
+        self.canvas_mock.globals["sys.runtime_attachment_images"] = [item for item in parsed if item.startswith("data:image/")]
+        self.agent.imgs = []
+        self.agent.set_output("_ERROR", None)
+        text = "\n\n".join(item for item in parsed if not item.startswith("data:image/"))
+        query = f"{query}\n\n{text}" if text else query
+        self.canvas_mock.globals["sys.query"] = query
+        # Restore the template on repeated calls after the no-tool branch.
+        self.agent._param.prompts = [{"role": "user", "content": "{sys.query}"}]
+        return query
+
+    def _raise_model_error(self) -> None:
+        if self.agent.error():
+            raise RuntimeError("Model generation failed.")
+
+    async def chat_with_tools_stream_async(self, query: str, messages: list[dict] | None = None, knowledge_context: str = "", files: list[str] | None = None) -> AsyncGenerator[str, None]:
         """
         异步版本的工具流式对话，直接复用Agent的异步流式能力
         """
+        query = await self._prepare_chat_query(query, files)
         # 准备历史记录
         history = []
         if messages:
@@ -272,8 +322,6 @@ class ChatAgentAdapter:
 
         # 准备输入变量
         self.canvas_mock.globals["sys.query"] = query
-        if files:
-            self.canvas_mock.globals["sys.files"] = files
 
         # 如果有知识上下文，临时修改系统提示词
         original_prompt = self.agent._param.sys_prompt or ""
@@ -287,7 +335,7 @@ class ChatAgentAdapter:
             kwargs = {"user_prompt": query, "reasoning": "Direct chat request", "context": "Chat conversation context"}
 
             if self.agent.tools:
-                prompt, msg, _ = self.agent._prepare_prompt_variables()
+                prompt, msg, _ = await asyncio.to_thread(self.agent._prepare_prompt_variables)
 
                 from core.prompts.generator import message_fit_in
 
@@ -322,6 +370,8 @@ class ChatAgentAdapter:
                     return out
 
                 async for delta_ans in self.agent._generate_streamly(msg):
+                    if "**ERROR**" in delta_ans:
+                        raise RuntimeError("Model generation failed.")
                     for ev in _drain_tool_events():
                         yield ev
                     if delta_ans:
@@ -338,21 +388,25 @@ class ChatAgentAdapter:
 
             else:
                 self.agent._param.prompts = [{"role": "user", "content": query}]
-                prompt, msg, _ = self.agent._prepare_prompt_variables()
+                prompt, msg, _ = await asyncio.to_thread(self.agent._prepare_prompt_variables)
 
                 # 使用异步流式输出
                 async for delta in self.agent._stream_output_async(prompt, msg):
                     yield delta
+            self._raise_model_error()
 
         finally:
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
-    async def chat_with_tools_stream_structured_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None):
+    async def chat_with_tools_stream_structured_async(
+        self, query: str, messages: list[dict] | None = None, knowledge_context: str = "", files: list[str] | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         异步版本的结构化工具流式对话
         返回结构化的SSE消息，每个文本消息都包含累积内容
         """
+        query = await self._prepare_chat_query(query, files)
         messages = messages or []
         history = []
 
@@ -368,7 +422,7 @@ class ChatAgentAdapter:
         elif not original_prompt:
             self.agent._param.sys_prompt = "You are a helpful AI assistant."
 
-        def _emit_text_delta(delta: str, in_think: bool):
+        def _emit_text_delta(delta: str, in_think: bool) -> tuple[list[dict[str, Any]], bool]:
             """解析 delta 中的 <think></think> 标记，返回结构化事件列表。
             marker 事件统一使用 start_to_think/end_to_think，与其他 SSE 端点保持一致。
             think 块内的文本同样作为 {"type": "text"} 事件输出，客户端通过 marker 判断上下文。
@@ -413,8 +467,7 @@ class ChatAgentAdapter:
 
         try:
             self.canvas_mock.history = history
-            self.agent._param.prompts = history
-            prompt, msg, _ = self.agent._prepare_prompt_variables()
+            prompt, msg, _ = await asyncio.to_thread(self.agent._prepare_prompt_variables)
 
             in_think = False
 
@@ -451,6 +504,8 @@ class ChatAgentAdapter:
                     return out
 
                 async for delta_ans in self.agent._generate_streamly(msg):
+                    if "**ERROR**" in delta_ans:
+                        raise RuntimeError("Model generation failed.")
                     for ev in _drain_tool_events():
                         yield ev
                     if delta_ans:
@@ -477,7 +532,7 @@ class ChatAgentAdapter:
 
             else:
                 self.agent._param.prompts = [{"role": "user", "content": query}]
-                prompt, msg, _ = self.agent._prepare_prompt_variables()
+                prompt, msg, _ = await asyncio.to_thread(self.agent._prepare_prompt_variables)
 
                 # 使用异步流式输出
                 async for delta in self.agent._stream_output_async(prompt, msg):
@@ -491,6 +546,8 @@ class ChatAgentAdapter:
                     in_think = False
                     yield {"end_to_think": True}
 
+            self._raise_model_error()
+
         except Exception as e:
             yield {"type": "error", "content": {"error": str(e), "code": 500}}
 
@@ -498,7 +555,7 @@ class ChatAgentAdapter:
             if knowledge_context:
                 self.agent._param.sys_prompt = original_prompt or "You are a helpful AI assistant."
 
-    async def chat_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None) -> str:
+    async def chat_async(self, query: str, messages: list[dict] | None = None, knowledge_context: str = "", files: list[str] | None = None) -> str:
         """
         非流式异步对话方法 - 用于不需要流式输出的场景
 
@@ -517,7 +574,7 @@ class ChatAgentAdapter:
                 result_content += delta
         return result_content
 
-    async def chat_structured_async(self, query: str, messages: list[dict] = None, knowledge_context: str = "", files: list[str] = None) -> dict:
+    async def chat_structured_async(self, query: str, messages: list[dict] | None = None, knowledge_context: str = "", files: list[str] | None = None) -> dict[str, Any]:
         """
         非流式结构化异步对话方法 - 返回最终的结构化结果
 
@@ -536,7 +593,7 @@ class ChatAgentAdapter:
             content = message.get("content")
 
             if msg_type == "text":
-                result["text"] = content  # 累积内容，最后一个是完整的
+                result["text"] += content
             elif msg_type == "tool_call":
                 result["tool_calls"].append(content)
             elif msg_type == "tool_result":
@@ -2530,7 +2587,7 @@ async def fill_fields(req: FillFieldsRequest, db: Session = Depends(get_db), use
 
 
 @router.post("/enhanced_chat_sse")
-async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
+async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Any:
 
     mcp_sessions = []
 
@@ -2568,23 +2625,36 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Dep
         # 创建对话Agent适配器，直接复用Agent类
         # 构造期自开连接查 DB/MCP 配置(不收 session 参数)——与 Canvas 构造同构：局部、明确、
         # 不持有请求 Session 的同步 IO，线程池外移即为终态形态(AGENTS.md 规约)，非待还的桥接债
-        chat_agent = await thread_pool_exec(ChatAgentAdapter, tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids)
+        chat_agent = await thread_pool_exec(
+            ChatAgentAdapter, tenant_id=tenant_id, llm_name=request.llm_name, system_prompt=request.prompt, mcp_ids=request.mcp_ids, upload_owner_id=user.platform_user_id
+        )
+        if request.files:
+            try:
+                await chat_agent.prepare_runtime_files(request.files)
+            except RuntimeAttachmentError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if not request.stream:
             # 非流式响应 - 使用纯异步方法，避免阻塞事件循环
             try:
-                result_content = await chat_agent.chat_async(
+                chat_method = chat_agent.chat_structured_async if request.structured_output else chat_agent.chat_async
+                result_content = await chat_method(
                     query=request.messages[-1]["content"] if request.messages else "",
                     messages=request.messages[:-1] if request.messages else [],
                     knowledge_context=knowledge_context,
                     files=request.files,
                 )
-                return {"retcode": 0, "retmsg": "success", "data": {"answer": result_content}}
+                data = (
+                    {"answer": result_content["text"], "tool_calls": result_content["tool_calls"], "tool_results": result_content["tool_results"]}
+                    if request.structured_output
+                    else {"answer": result_content}
+                )
+                return {"retcode": 0, "retmsg": "success", "data": data}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Chat error: {e!s}")
 
         # 流式响应 - 使用原生异步方法，减少线程开销
-        async def sse_stream():
+        async def sse_stream() -> AsyncGenerator[str, None]:
             try:
                 if request.structured_output:
                     # 结构化输出模式 - 使用异步方法
@@ -2595,6 +2665,10 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Dep
                         knowledge_context=knowledge_context,
                         files=request.files,
                     ):
+                        if message.get("type") == "error":
+                            error = message.get("content") or {}
+                            yield f"data: {json.dumps({'retcode': 500, 'retmsg': error.get('error', 'Chat failed.'), 'data': message}, ensure_ascii=False)}\n\n"
+                            return
                         if "start_to_think" in message or "end_to_think" in message:
                             # think 标记提升到 SSE 顶层，与其他端点格式一致
                             key = "start_to_think" if "start_to_think" in message else "end_to_think"
@@ -2652,8 +2726,6 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Dep
                 logging.exception(f"Stream error: {e}")
                 error_data = {"retcode": 500, "retmsg": str(e), "data": {"answer": f"**ERROR**: {e!s}"}}
                 yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
-                end_data = {"retcode": 0, "retmsg": "", "data": True}
-                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             sse_stream(),

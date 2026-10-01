@@ -51,6 +51,77 @@ Authorization: Bearer <your-api-key>
 
 ## 对话 API
 
+### 上传运行时附件
+
+**POST** `/documents/upload`（完整路径 `/api/v1/documents/upload`）。
+
+上传聊天、Agent 或 MCP 输入用的附件，返回运行时文件元数据。
+文件存入已认证 owner 的 `<owner>-downloads` 空间；本接口不创建 dataset 文档，
+不启动解析或索引。聊天取件时才由附件消费者读取并解析文件。
+
+认证使用 `Authorization: Bearer <token>`，接受 web 会话 JWT 或 SDK API Key。
+两种凭据都需要有效用户及个人 owner membership；`created_by` 由服务器确定，
+不能通过请求指定 owner、storage key 或 dataset。
+
+| 输入 | 规则 |
+|---|---|
+| multipart `file` | 一个或多个文件，多个文件重复使用字段名 `file`；每个字段须有文件名 |
+| query `url` | 单个 HTTP/HTTPS URL，与 `file` 互斥，必须提供其中一种输入 |
+
+例如上传两个文件：
+
+```bash
+curl -X POST 'http://localhost:8123/api/v1/documents/upload' \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -F 'file=@notes.txt' -F 'file=@image.png'
+```
+
+单文件或单 URL 的 `data` 为对象，多文件为对象数组，文件顺序与输入相同。
+成功体为 `{"code":0,"data":...}`，每个对象具有以下字段：
+
+| 字段 | 含义 |
+|---|---|
+| `id` | 随机存储 location，供附件取件使用；不是 dataset document ID |
+| `name`, `extension`, `mime_type` | 文件名、扩展名及内容类型；URL 生成 PDF 时使用 `application/pdf` |
+| `size` | 实际存储字节数，PDF 修复后按修复结果计算 |
+| `created_by`, `created_at` | 服务器认证 owner ID、Unix 时间秒数 |
+| `preview_url` | 当前为 `null` |
+
+缺输入、混合输入、空文件字段、不安全 URL 或失败的 URL 抓取返回 HTTP 200、
+`code=101`、`message`，不返回成功 `data`。存储及其他执行失败为 `code=100`。
+缺失/无效凭据、失效 owner membership 返回 HTTP 401、`code=401`。
+调用方须同时检查 HTTP 状态和业务码。
+
+多个文件中途失败时，service 对本次已写对象执行补偿删除并检查存在状态；
+同时删除本批服务器描述登记，不会删除历史对象。描述登记失败也会补偿对应文件。
+无法确认清理时仍返回非零业务码，并明确说明 cleanup 未能确认。
+取消请求会等待正在进行的写入后补偿；这不是对象存储事务，进程被强制终止、
+存储不可达时不能保证补偿完成。
+
+URL 的初始地址、DNS 与每个 HTTP redirect 都校验；浏览器 HTTP 请求通过
+DNS 绑定的转发取件，浏览器自己的其他网络流量走拒绝连接的代理。
+内网/保留地址、无法验证的目的地及 WebSocket 被阻断；只转发 GET/HEAD，
+不转发浏览器 cookie/Authorization，也不使用环境代理替代 DNS 绑定。
+URL 模式生成 PDF 或网页 Markdown，仍需可用的 Chromium 运行资源。
+
+MCP 聊天 `POST /v1/llm/enhanced_chat_sse` 的 `files` 保持文件 ID 字符串数组，
+例如 `{"files":["上传响应中的id"], ...}`。服务器在当前认证用户的 downloads 空间
+恢复上传时登记的描述，读取对象并通过 Canvas/FileService 解析；不能由客户端
+`created_by`、自造描述或消息中的 URL 选择其他 owner。文字进入本轮用户消息，
+图片通过现有模型 `images` 路径传递。普通/结构化、工具/无工具和非流式使用同一取件逻辑。
+每次调用清空旧附件；历史上传没有可信登记时须重新上传，不能凭 ID 猜测所属用户。
+
+附件 ID 不存在、属于其他用户、描述/对象缺失或解析失败时，聊天在发送 SSE 前返回
+HTTP 400 和 `detail`。开始回答后发生模型等执行错误，SSE 发送 `retcode=500` 后终止，
+不再发送 `retcode=0, data=true` 的成功完成帧；非流式执行失败返回 HTTP 500。
+成功的 SSE 帧格式保持原协议。
+
+兼容情况：`POST /v1/document/upload_info` 保留 `retcode/retmsg/data` 响应并标记
+deprecated，作为独立 web 的上传迁移验收兼容入口。web `5c7a773` 已把 Explore
+与 MCP 调用切换到新 URL；两条前端链路的真实跨端请求验收仍待其任务完成，完成后删除旧入口。
+SDK 已有 `POST /api/v1/files/upload_info` 继续使用 multipart 字段 `files` 及
+`code/data` 响应；它与新入口复用上传 service，不因路径相似而退役。
+
 ### 创建聊天会话
 
 为指定的聊天助手创建一个新的会话。

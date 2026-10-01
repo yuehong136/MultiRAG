@@ -21,9 +21,9 @@ from api.db import VALID_FILE_TYPES
 from api.db.db_models import get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
-from api.db.services.file_service import FileService
+from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import Principal, async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_data_result, get_result, server_error_response
+from api.utils.api_utils import Principal, async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_argument_result, get_error_data_result, get_result, server_error_response
 from api.utils.validation_utils import UpdateDocumentReq
 from common.constants import RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
@@ -32,6 +32,25 @@ MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.post("/documents/upload", summary="上传聊天附件并获取运行时元数据")
+async def upload_info(
+    file: list[UploadFile | str] | None = File(None),
+    url: str | None = Query(None),
+    db: AsyncSession = Depends(get_async_db),
+    principal: Principal = Depends(async_current_user),
+) -> Response:
+    """Accept repeated file fields or one URL; upload does not create dataset documents."""
+    try:
+        return get_result(data=await FileService.upload_infos(db, principal.platform_user_id, file, url))
+    except UploadInfoArgumentError as exc:
+        return get_error_argument_result(str(exc))
+    except UploadInfoCleanupError as exc:
+        return get_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=str(exc))
+    except Exception:
+        logger.exception("Runtime document upload failed")
+        return get_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="Failed to upload document.")
 
 
 @router.get("/documents/artifact/{filename}", summary="下载沙箱产物", response_description="成功获取沙箱产物文件")

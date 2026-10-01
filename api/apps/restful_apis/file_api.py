@@ -33,9 +33,10 @@ from api.apps.services import file_api_service
 from api.db import FileType
 from api.db.db_models import get_async_db
 from api.db.services.file2document_service import File2DocumentService
-from api.db.services.file_service import FileService
+from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
 from api.utils.api_utils import async_current_tenant_id, get_error_argument_result, get_error_data_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
+from common.constants import RetCode
 from common.misc_utils import thread_pool_exec
 
 router = APIRouter()
@@ -160,28 +161,21 @@ async def list_files(
 
 @router.post("/files/upload_info", summary="上传运行时文件元数据（SDK 会话用）")
 async def upload_info(
-    files: list[UploadFile] | None = File(None),
+    files: list[UploadFile | str] | None = File(None),
     url: str | None = Query(None),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> JSONResponse:
     """为 SDK chat completions 上传运行时文件元数据；multipart 文件与 URL 互斥、须其一。"""
-    file_objs = [f for f in files if getattr(f, "filename", "")] if files else []
-
-    if file_objs and url:
-        return get_error_argument_result("Provide either multipart file(s) or ?url=..., not both.")
-    if not file_objs and not url:
-        return get_error_argument_result("Missing input: provide multipart file(s) or url")
-
     try:
-        if url and not file_objs:
-            return get_result(data=await FileService.upload_info(db, tenant_id, None, url))
-        if len(file_objs) == 1:
-            return get_result(data=await FileService.upload_info(db, tenant_id, file_objs[0], None))
-        results = [await FileService.upload_info(db, tenant_id, f, None) for f in file_objs]
-        return get_result(data=results)
-    except Exception as e:
-        return server_error_response(e)
+        return get_result(data=await FileService.upload_infos(db, tenant_id, files, url))
+    except UploadInfoArgumentError as exc:
+        return get_error_argument_result(str(exc))
+    except UploadInfoCleanupError as exc:
+        return get_result(retcode=RetCode.EXCEPTION_ERROR, retmsg=str(exc))
+    except Exception:
+        logger.exception("Runtime SDK file upload failed")
+        return get_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="Failed to upload file.")
 
 
 @router.get("/files/root", summary="获取根文件夹")

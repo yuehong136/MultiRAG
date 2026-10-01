@@ -217,6 +217,9 @@ jobs:
             sleep 15
           done
           exit 1
+      - name: Install Chromium for browser SSRF integration regression
+        run: uv run --no-sync playwright install chromium --only-shell --with-deps
+
       - name: Write CI service config override
         # 浅合并按顶层 section 整体替换，因此每个 section 必须写全
         run: |

@@ -3,8 +3,9 @@ import base64
 import json
 import logging
 import re
-import sys
+import socket
 import time
+from collections.abc import Awaitable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,21 @@ from api.utils.file_utils import filename_type, read_potential_broken_pdf, sanit
 from common import settings
 from common.constants import MAXIMUM_PAGE_NUMBER, FileSource, ParserType, TaskStatus
 from common.misc_utils import get_uuid
+from common.safe_crawl import SafeCrawlNetwork
 from common.ssrf_guard import assert_url_is_safe, pin_dns
 from core.llm.cv_model.models.gptv4 import GptV4
+
+
+class UploadInfoArgumentError(ValueError):
+    """Invalid runtime upload input or rejected URL fetch."""
+
+
+class UploadInfoCleanupError(RuntimeError):
+    """Upload failed and compensation could not be confirmed."""
+
+
+class RuntimeAttachmentError(ValueError):
+    """An owner-scoped runtime attachment cannot be restored or parsed."""
 
 
 class FileService(CommonService):
@@ -575,6 +589,8 @@ class FileService(CommonService):
                 response.close()
 
             if status_code not in FileService._REDIRECT_STATUS_CODES or not location:
+                if status_code >= 400:
+                    raise ValueError(f"URL returned HTTP {status_code}.")
                 return current_url, host_pins
             if redirect_count >= FileService._MAX_CRAWL_REDIRECTS:
                 break
@@ -585,6 +601,117 @@ class FileService(CommonService):
             current_url = next_url
 
         raise ValueError(f"Exceeded {FileService._MAX_CRAWL_REDIRECTS} redirects while fetching URL.")
+
+    @staticmethod
+    async def upload_infos(
+        db: AsyncSession,
+        user_id: str,
+        files: Sequence[Any] | None,
+        url: str | None = None,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Share validation and descriptor shape across runtime upload gateways."""
+        file_objs = list(files or [])
+        if file_objs and url is not None:
+            raise UploadInfoArgumentError("Provide either multipart file(s) or ?url=..., not both.")
+        if not file_objs and not (url and url.strip()):
+            raise UploadInfoArgumentError("Missing input: provide multipart file(s) or url")
+        if any(not getattr(file, "filename", "") for file in file_objs):
+            raise UploadInfoArgumentError("No file selected: every file field must have a filename.")
+
+        results: list[dict[str, Any]] = []
+        pending: asyncio.Task[dict[str, Any]] | None = None
+        try:
+            for file in file_objs or [None]:
+                # Cancellation must not abandon a still-running storage thread.
+                pending = asyncio.create_task(FileService.upload_info(db, user_id, file, url if file is None else None))
+                results.append(await asyncio.shield(pending))
+                pending = None
+        except BaseException as exc:
+            if pending is not None and isinstance(exc, asyncio.CancelledError):
+                try:
+                    results.append(await FileService._drain_runtime_task(pending))
+                except Exception:
+                    logging.exception("Cancelled runtime upload failed while draining its write")
+            if results:
+                compensation = asyncio.create_task(asyncio.to_thread(FileService._remove_runtime_blobs, user_id, [item["id"] for item in results]))
+                await FileService._drain_runtime_task(compensation)
+            if isinstance(exc, ValueError):
+                raise UploadInfoArgumentError(str(exc)) from exc
+            raise
+        return results[0] if len(results) == 1 else results
+
+    @staticmethod
+    async def _drain_runtime_task(task: Awaitable[Any]) -> Any:
+        """Drain compensation/in-flight writes even if the request is cancelled again."""
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if getattr(task, "cancelled", lambda: False)():
+                    raise
+
+    @staticmethod
+    def _remove_runtime_blobs(user_id: str, locations: list[str]) -> None:
+        """Compensate only keys allocated by this upload; never touch historical files."""
+        failed = False
+        keys = [key for location in locations for key in (location, FileService._runtime_descriptor_key(location))]
+        for location in keys:
+            try:
+                bucket = f"{user_id}-downloads"
+                receipt = settings.STORAGE_IMPL.rm(bucket, location)
+                if receipt is False or settings.STORAGE_IMPL.obj_exist(bucket, location) is not False:
+                    failed = True
+            except Exception:
+                logging.exception("Runtime upload compensation failed")
+                failed = True
+        if failed:
+            raise UploadInfoCleanupError("Upload failed; cleanup of runtime files could not be confirmed.")
+
+    @staticmethod
+    def _runtime_descriptor_key(location: str) -> str:
+        return f"{location}.upload.json"
+
+    @staticmethod
+    def _put_runtime_object(user_id: str, location: str, blob: bytes) -> None:
+        receipt = FileService.put_blob(user_id, location, blob)
+        # Adapter receipts differ: False is always failure; None requires readback.
+        if receipt is False or (receipt is None and not settings.STORAGE_IMPL.obj_exist(f"{user_id}-downloads", location)):
+            raise RuntimeError("Failed to store uploaded file.")
+
+    @staticmethod
+    async def resolve_runtime_uploads(owner_id: str, file_ids: list[str]) -> list[dict[str, Any]]:
+        """Restore server-written descriptors from the authenticated owner's namespace."""
+
+        def restore() -> list[dict[str, Any]]:
+            descriptors: list[dict[str, Any]] = []
+            for location in dict.fromkeys(file_ids):
+                if not re.fullmatch(r"[0-9a-f]{32}", location):
+                    raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+                key = FileService._runtime_descriptor_key(location)
+                bucket = f"{owner_id}-downloads"
+                if not settings.STORAGE_IMPL.obj_exist(bucket, key) or not settings.STORAGE_IMPL.obj_exist(bucket, location):
+                    raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+                raw = FileService.get_blob(owner_id, key)
+                try:
+                    descriptor = json.loads(raw)
+                    valid = (
+                        isinstance(descriptor, dict)
+                        and descriptor.get("id") == location
+                        and descriptor.get("created_by") == owner_id
+                        and all(isinstance(descriptor.get(field), str) for field in ("name", "mime_type", "extension"))
+                        and type(descriptor.get("size")) is int
+                        and descriptor["size"] >= 0
+                        and isinstance(descriptor.get("created_at"), (int, float))
+                        and descriptor.get("preview_url") is None
+                    )
+                except (ValueError, TypeError):
+                    valid = False
+                if not valid:
+                    raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+                descriptors.append(descriptor)
+            return descriptors
+
+        return await asyncio.to_thread(restore)
 
     @staticmethod
     async def upload_info(
@@ -610,42 +737,64 @@ class FileService(CommonService):
                 blob = read_potential_broken_pdf(blob)
 
             location = get_uuid()
-            FileService.put_blob(user_id, location, blob)
-
-            return {
+            descriptor = {
                 "id": location,
                 "name": filename,
-                "size": sys.getsizeof(blob),
+                "size": len(blob),
                 "extension": filename.split(".")[-1].lower(),
-                "mime_type": content_type,
+                "mime_type": content_type or "application/octet-stream",
                 "created_by": user_id,
                 "created_at": time.time(),
                 "preview_url": None,
             }
+            try:
+                FileService._put_runtime_object(user_id, location, blob)
+                FileService._put_runtime_object(user_id, FileService._runtime_descriptor_key(location), json.dumps(descriptor, ensure_ascii=False).encode())
+            except Exception:
+                FileService._remove_runtime_blobs(user_id, [location])
+                raise
+            return descriptor
 
         if url:
             current_url, host_pins = await asyncio.to_thread(FileService._resolve_safe_crawl_url, url)
-            map_rules = ",".join(f"MAP {hostname} {ip}" for hostname, ip in host_pins.items())
 
             from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CrawlResult, DefaultMarkdownGenerator, PruningContentFilter
 
             filename = re.sub(r"\?.*", "", url.split("/")[-1])
 
-            browser_config = BrowserConfig(
-                headless=True,
-                verbose=False,
-                extra_args=[f"--host-resolver-rules={map_rules}"],
-            )
-            async with AsyncWebCrawler(config=browser_config) as crawler:
-                crawler_config = CrawlerRunConfig(markdown_generator=DefaultMarkdownGenerator(content_filter=PruningContentFilter()), pdf=True, screenshot=False)
-                page: CrawlResult = await crawler.arun(url=current_url, config=crawler_config)
+            network = SafeCrawlNetwork(host_pins)
+            # Unrouted browser traffic (workers, sockets, background requests)
+            # falls back to an owned, bound but non-listening loopback socket.
+            # Python fulfills each HTTP request through its DNS-pinned relay.
+            with socket.socket() as denied_proxy:
+                denied_proxy.bind(("127.0.0.1", 0))
+                browser_config = BrowserConfig(
+                    headless=True,
+                    verbose=False,
+                    ignore_https_errors=False,
+                    proxy_config={"server": f"http://127.0.0.1:{denied_proxy.getsockname()[1]}"},
+                    extra_args=["--proxy-bypass-list=<-loopback>", "--host-resolver-rules=MAP * ~NOTFOUND", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
+                )
+                crawler = AsyncWebCrawler(config=browser_config)
+                crawler.crawler_strategy.set_hook("on_page_context_created", network.install)
+                async with crawler:
+                    crawler_config = CrawlerRunConfig(markdown_generator=DefaultMarkdownGenerator(content_filter=PruningContentFilter()), pdf=True, screenshot=False)
+                    page: CrawlResult = await crawler.arun(url=current_url, config=crawler_config)
 
+            if network.blocked:
+                raise ValueError("URL crawl blocked an unsafe or unavailable network request.")
+
+            if not page.success or (page.status_code is not None and page.status_code >= 400):
+                raise ValueError("Failed to crawl the validated URL.")
+            headers = page.response_headers or {}
             if page.pdf:
                 if filename.split(".")[-1].lower() != "pdf":
                     filename += ".pdf"
-                return await asyncio.to_thread(structured, filename, "pdf", page.pdf, page.response_headers.get("content-type", "application/pdf"))
+                return await asyncio.to_thread(structured, filename, "pdf", page.pdf, "application/pdf")
 
-            return await asyncio.to_thread(structured, filename, "html", str(page.markdown).encode("utf-8"), page.response_headers.get("content-type", "text/html"))
+            if page.markdown is None:
+                raise ValueError("URL crawl returned no content.")
+            return await asyncio.to_thread(structured, filename, "html", str(page.markdown).encode("utf-8"), headers.get("content-type", "text/html"))
 
         # 处理文件上传
         if hasattr(file, "read"):
