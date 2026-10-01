@@ -1,10 +1,9 @@
 import json
 import logging
-import os.path
 import pathlib
 import re
 from io import BytesIO
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -43,24 +42,9 @@ from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common import settings
 from common.constants import VALID_TASK_STATUS, ParserType, RetCode, TaskStatus
-from common.file_utils import get_project_base_directory
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.nlp import rag_tokenizer, search
-from deepdoc.parser.html_parser import RAGFlowHtmlParser
-
-
-def _is_safe_download_filename(name: str) -> bool:
-    if not name or name in {".", ".."}:
-        return False
-    if "\x00" in name or len(name) > 255:
-        return False
-    if name != PurePosixPath(name).name:
-        return False
-    if name != PureWindowsPath(name).name:
-        return False
-    return True
-
 
 router = APIRouter()
 
@@ -2783,137 +2767,6 @@ async def get_artifact(
         return await download_artifact(filename, principal.platform_user_id, db, run_id=run_id, session_id=session_id)
     except Exception as e:
         return construct_error_response(e)
-
-
-@router.post("/parse", summary="解析网页或文件内容", response_description="成功解析内容")
-async def parse(url: str | None = Form(None, description="网页URL（可选）"), files: list[UploadFile] | None = File(None), user=Depends(manager)):
-    """
-    **功能描述**:
-    此接口用于解析用户上传的文件或提供的网页URL内容，提取其中的文本信息并返回给用户。支持两种模式：基于URL解析网页内容或上传文件进行解析。
-
-    ### 请求参数:
-    - **url** (str, 可选):
-        - 描述: 用户提供的网页URL，用于解析网页内容。
-        - 备注: 若提供此参数，系统将优先处理URL内容。
-    - **files** (list[UploadFile], 可选):
-        - 描述: 用户上传的文件列表，可包含多个文件。
-        - 备注: 若未提供URL参数，则会尝试解析上传的文件内容。
-    - **user**:
-        - 描述: 通过依赖项注入的用户信息，用于权限校验。
-
-    ### 功能流程:
-    1. **URL解析模式**:
-        - 验证URL格式是否合法。
-        - 使用Selenium驱动器加载网页，捕获页面的请求响应头，并提取网页的HTML内容。
-        - 对HTML内容进行文本解析，提取有意义的段落并返回。
-        - 若网页内容下载文件，则模拟 `File` 类读取文件内容并解析。
-
-    2. **文件解析模式**:
-        - 验证是否提供了文件。
-        - 逐个读取上传文件的内容，将文件数据传递给 `FileService.parse_docs` 进行解析。
-        - 返回解析后的文本内容。
-
-    3. **异常处理**:
-        - 捕获处理过程中发生的所有异常，并记录日志，返回适当的错误消息。
-
-    ### 响应 (Response):
-    - **成功响应 (200)**:
-        - `data` (str): 返回解析后的文本内容，按段落分割。
-    - **错误响应**:
-        - **400: 参数错误**:
-            - URL格式无效或未提供文件时返回。
-        - **500: 服务器错误**:
-            - 解析过程中发生内部错误时返回。
-
-    ### 注意事项:
-    - **优先级**:
-        - 当URL和文件同时提供时，系统优先处理URL内容。
-    - **目录管理**:
-        - 下载的文件会存储在 `logs/downloads` 目录中，请确保目录具有写入权限。
-    - **Selenium配置**:
-        - 采用无头浏览器模式运行，为了兼容性，需安装Chrome及对应的WebDriver。
-    - **文件解析**:
-        - 上传文件内容会以字节流方式读取并处理，文件名作为辅助信息传递。
-    """
-
-    if url:
-        if not is_valid_url(url):
-            return get_json_result(data=False, retmsg="The URL format is invalid", retcode=RetCode.ARGUMENT_ERROR)
-        download_path = os.path.join(get_project_base_directory(), "logs/downloads")
-        os.makedirs(download_path, exist_ok=True)
-        from seleniumwire.webdriver import Chrome, ChromeOptions
-
-        options = ChromeOptions()
-        options.add_argument("--headless")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_experimental_option("prefs", {"download.default_directory": download_path, "download.prompt_for_download": False, "download.directory_upgrade": True, "safebrowsing.enabled": True})
-        # driver = Chrome(options=options)
-        # driver.get(url)
-        # res_headers = [r.response.headers for r in driver.requests]
-        # if len(res_headers) > 1:
-        #     sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
-        #     driver.quit()
-        #     return get_json_result(data="\n".join(sections))
-        try:
-            driver = Chrome(options=options)
-            driver.get(url)
-
-            res_headers = [r.response.headers for r in driver.requests if r.response]
-            logging.info(f"res_headers:{res_headers}")
-            if len(res_headers) > 1:
-                sections = RAGFlowHtmlParser().parser_txt(driver.page_source)
-                driver.quit()
-                return get_json_result(data="\n".join(sections))
-
-            # 模拟 File 类逻辑
-            r = re.search(r"filename=\"([^\"]+)\"", str(res_headers))
-            if not r or not r.group(1):
-                return get_json_result(data=False, retmsg="Cannot identify downloaded file", retcode=RetCode.ARGUMENT_ERROR)
-
-            class File:
-                filename: str
-                filepath: str
-
-                def __init__(self, filename, filepath):
-                    self.filename = filename
-                    self.filepath = filepath
-
-                def read(self):
-                    with open(self.filepath, "rb") as f:
-                        return f.read()
-
-            filename = r.group(1).strip()
-            if not _is_safe_download_filename(filename):
-                return get_json_result(data=False, retmsg="Invalid downloaded filename", retcode=RetCode.ARGUMENT_ERROR)
-            filepath = os.path.join(download_path, filename)
-            f = File(filename, filepath)
-            txt = FileService.parse_docs([f], user.id)
-            return get_json_result(data=txt)
-        except Exception as e:
-            logging.exception("[ERROR] URL processing failed")
-            # traceback.print_exc()
-            return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=str(e), data=False)
-        finally:
-            if driver:
-                driver.quit()
-
-    if not files:
-        return get_json_result(data=False, retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
-
-    try:
-        # 读取每个文件的内容为字节数据，并将文件名与内容作为元组传递给 parse_docs
-        file_data = [(await file.read(), file.filename) for file in files]
-
-        # 调用 parse_docs 处理文件内容
-        txt = FileService.parse_docs(file_data, user.id)
-        # print(f"[DEBUG] parse text from files: {txt}")  # Debug print
-        return get_json_result(data=txt)
-    except Exception as e:
-        logging.exception("[ERROR] File processing failed")
-        # traceback.print_exc()
-        return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg=str(e), data=False)
 
 
 # ============================================================================

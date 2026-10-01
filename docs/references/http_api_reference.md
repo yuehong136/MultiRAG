@@ -229,6 +229,15 @@ HTTP 400 和 `detail`。开始回答后发生模型等执行错误，SSE 发送 
 SDK 已有 `POST /api/v1/files/upload_info` 继续使用 multipart 字段 `files` 及
 `code/data` 响应，与新入口复用上传 service。
 
+旧的临时 URL/文件转文本入口 `POST /v1/document/parse` 已移除，返回 HTTP 404、
+`code=404`、`data=null`，OpenAPI 不再提供该操作。
+`POST /api/v1/datasets/{dataset_id}/documents/parse` 继续接收 JSON `document_ids`，
+调度数据集文档的异步解析任务；它不返回临时文件的文本内容。
+会话文档 `POST /v1/document/upload_and_parse` 仍使用 multipart `conversation_id`
+和 `file`，成功返回 `retcode=0`、`data` 文档 ID 数组。
+写作参考资料 `POST /v1/write/api/reference-materials/parse` 仍接收 `chapter_id` 和
+`file`，通过共享文件解析服务生成文本并保存参考资料；成功返回 `retcode=0` 和资料摘要。
+
 ### 创建聊天会话
 
 为指定的聊天助手创建一个新的会话。

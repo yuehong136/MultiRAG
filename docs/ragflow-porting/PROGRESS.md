@@ -3,6 +3,66 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## c1941fd50352d514ecfb20a74785ccb7a1753ad4 · 删除未使用的临时文本解析入口
+
+- 上游 #14367；2026-10-02 核对预期 origin 并 fetch，
+  `origin/main` 为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本仓 `768fd2f5384ece46e9d4b2103d017f90605a8e5c` 开始，核对目标两个文件完整 diff 和目标树。
+
+| 上游 diff | 本项处置 |
+|---|---|
+| `api/apps/document_app.py` 删除旧临时 URL/上传文件转文本的 `/parse`、专用文件名 helper 与导入 | 删除本地 `POST /v1/document/parse` 及 `_is_safe_download_filename`、`os.path`、PurePosixPath/PureWindowsPath、HTML parser 和项目下载目录导入。保留其他入口消费的 `FileService`、`is_valid_url`、`html2pdf`、`re` 与上传表单类型。 |
+| `test/testcases/test_web_api/test_document_app/test_upload_documents.py` 删除旧入口的 Quart mock 测试和专用导入 | 本仓没有这些旧测试，不复制 Quart harness。新增 4 个隔离 FastAPI HTTP/存储回归，验证退役及保留的调用链。 |
+
+目标没有查到 revert/re-land。后续 `343bda111` 删除 `upload_and_parse`，但独立 web
+`src/api/conversation.ts:uploadAndParse` 仍实际消费该合同，本项不采用；后续
+`a536980e2`（批量 status）、`49912a156`（run）、`c5116b90e`（thumbnails）、
+`c81081f8e`（parser）、`f70316911`（preview/download）是独立迁移，不整包纳入。
+稳定 API 退役判据沿用技能中的逐接口核对，本轮补充共享 helper、不同解析合同及实际退役验收说明。
+
+实际消费者：核本仓 Python API、agent/core、后台、MCP、scripts，独立 web 的 `src`，
+以及两个可见 Python SDK checkout 的 client 路径，没有旧 `/v1/document/parse` 的活动消费。
+SDK checkout 中的同名旧后端源码副本不是客户端请求。保留：
+
+- REST 数据集 `/api/v1/datasets/{dataset_id}/documents/parse` 接收 `document_ids`，
+  独立 web `src/api/knowledge-document-parsing.ts` 消费，真实后台调度仍经过
+  `DocumentService.run`、`queue_tasks`；这不是临时文件转文本的替代合同。
+- 会话 `upload_and_parse` 保持 `conversation_id`、multipart `file` 和 `retcode/data` ID 数组。
+- `write_app.parse_reference_material` → `ReferenceService.parse_file_content` →
+  `FileService.parse_docs(..., "system")` 保留；`web_parse`、SDK datasets chunks 也不变。
+
+Go 实际核 `internal/router/`、`internal/handler/`、`internal/service/`、`cmd/` 和
+`internal/cli/`，没有该旧 HTTP 路由或客户端请求。`internal/cli/user_parser.go` 的
+`parseParseDataset/parseParseDocs` 生成 `parse_dataset_docs` CLI 命令，与此临时文本 API
+不同。本项没有 Go/web 代码变更，不宣称 Go build 或浏览器跨端验收。
+AST 比对确认生产文件仅删两个定义，其他函数/模型定义一致；上述保留 service/路由文件逐字未改。
+现行合同已补入 [HTTP 参考](../references/http_api_reference.md#上传运行时附件)。
+
+专项验收：4 个集成用例通过。旧入口的空请求、URL 表单、文件上传分别使用无凭据、
+JWT、API key、无效凭据，共 12 次真实 HTTP 404，核完整错误体及 OpenAPI operation 消失。
+浏览器导入、文件解析、对象写入、Redis 写命令和 SQL DML 均有失败守卫；
+独立核 SQL 行数、专属 Redis key、桶对象、Milvus collection 与 `logs/downloads` 前后不变。
+在同一实际隔离 API 执行 `make smoke`，检查退出码。
+
+保留数据集解析验证鉴权失败、缺 `document_ids`、不存在 ID 及成功调度，独立 SQL
+读回 RUNNING/初始排队进度和 Task，Redis 读回真实消息及 task/doc ID，MinIO 读回源字节。
+会话上传验证缺会话、表单错误、未认证及成功 ID；真实文件上传、TXT 分块、MindMapExtractor
+和索引写入均执行，SQL 状态/计数、MinIO 字节、Milvus Strong query 的文本和 768 维向量
+与本次返回 ID 对应，真实 Redis 模型缓存也读回。只替换模型配置/provider 输出和 Redis
+专属命名空间路由，未替换业务返回或数据库/对象/向量存储；未跑远程模型、浏览器或后台解析 worker。
+实际 `FileService.parse_docs`、ReferenceService 及写作 HTTP 都解析确定性 TXT，SQL 读回完整参考文本。
+fixture 逐项检查专属 SQL 行、Redis stream/cache、MinIO 对象/桶、Milvus collection 和 HTTP
+listener 清理；共享 fixture 删除 scratch DB，没有创建本项容器或卷。
+
+额外诊断发现写作参考的空文件/无输入分支用整数 400/500 调用要求 RetCode 的
+`get_json_result`，实际空文件 HTTP 为 500。用改动前 HEAD 的实际 handler 定义复现同一
+beartype 错误，写作文件和 helper 均未改，这是既有问题，本项未修，也不宣称该分支返回业务 400。
+本项保留路径回归的负例采用实际未认证、缺必填字段及缺文档/会话；没有放宽存储读回断言。
+
+本轮 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，
+3414 unit passed）；`make integration` 320 passed，无 skip，包括本项 4 个真实 HTTP
+用例及隔离 API 的实际 `make smoke`。本项没有新增协议兼容层或 Go/web 修改。
+
 ## 4f6651968a4d3bd2d6635c048e1b5cf454b5221f · 会话变量默认值与 Explore 会话选择
 
 - 上游 #14399，2026-04-27；2026-10-02 核对 origin 并 fetch，
