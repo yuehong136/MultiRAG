@@ -19,7 +19,10 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.db.services.evaluation_service import EvaluationService
 
-router = APIRouter()
+# Preserve the legacy evaluation contract until its callers and persisted data
+# have an explicit migration path; dataset REST APIs manage knowledge bases,
+# not evaluation datasets, cases, runs, or results.
+router = APIRouter(deprecated=True)
 
 
 # ==================== Pydantic Models ====================

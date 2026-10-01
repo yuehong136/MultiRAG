@@ -3,6 +3,85 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## d88f7ac8d2a573997d8a9c46e077ff068cbb38b4 · 标记旧评估接口并保留 KB 兼容能力
+
+- 上游：`infiniflow/ragflow` #14394，提交于 2026-04-27，父提交为 `290f0294`。
+  2026-10-01 核对 remote 并 fetch；`origin/main` 为
+  `519e7d98a5651564d4e35d6648f006cba4baaf4f`。核对目标 3 文件完整 diff（1500 行删除）。
+  本项止于这个 SHA，后续提交单独派工。
+
+| 上游 diff | 本项结论 |
+|---|---|
+| 删除 `api/apps/evaluation_app.py`（479 行） | 本仓自动注册 `/v1/evaluation`，有 17 个操作和真实评估 service、4 张数据表，没有 REST 替代。保留请求、鉴权依赖、响应和执行行为；整个 router 标为 deprecated。仓内未找到活动消费者不等于已确认外部调用和持久化数据可下线。 |
+| 删除 `api/apps/kb_app.py`（446 行） | 上游父提交中这 10 个旧操作已全部位于三引号注释内。本仓有 26 个可用操作，均已标为 deprecated，并有上游文件之外的本地能力；保留模块，不重复改标记。 |
+| 删除 `test_evaluation_routes_unit.py`（575 行） | 上游用整包模块假件测试 Quart handler，包括空成功桩。本仓没有该测试文件；不复制或删除本地 KB、REST、鉴权和存储回归。 |
+
+评估操作逐项处置（路径前缀 `/v1/evaluation`）：
+
+| 旧操作 | 本仓能力与处置 |
+|---|---|
+| `POST /dataset/create`、`GET /dataset/list`、`GET/PUT/DELETE /dataset/{dataset_id}` | 评估样本集的创建、分页、详情、更新和软删除；保留并标为 deprecated。`/api/v1/datasets` 管理知识库，不能承接这些评估表。 |
+| `POST /dataset/{dataset_id}/case/add`、`POST /dataset/{dataset_id}/case/import`、`GET /dataset/{dataset_id}/cases`、`DELETE /case/{case_id}` | 问题、参考答案、相关文档/块及案例元数据；保留并标为 deprecated。 |
+| `POST /run/start` | 本地 service 实际执行聊天和指标计算、落库；保留并标为 deprecated。 |
+| `GET /run/{run_id}`、`GET /run/{run_id}/results` | 读取执行状态、配置快照和明细；保留并标为 deprecated。 |
+| `GET /run/list`、`DELETE /run/{run_id}` | 本地 service 实际查询或删除运行及结果，不是上游 TODO 空成功桩；保留并标为 deprecated。旧路由排序导致 `run/list` 被 `run/{run_id}` 截获，属于已有问题，见下方验证限制。 |
+| `GET /run/{run_id}/recommendations`、`POST /compare` | 根据落库指标给出建议、读取多次运行的比较数据；保留并标为 deprecated。 |
+| `GET /run/{run_id}/export` | 保留 JSON 导出并标为 deprecated；CSV 仍未实现。 |
+| 上游 `POST /evaluate_single` | 本仓不存在；上游只返回空答案、空指标和空检索结果，不新增这个桩。 |
+
+上游 KB 删除范围逐项处置（旧路径前缀 `/v1/kb`，REST 前缀 `/api/v1`）：
+
+| 旧操作 | 当前替代与处置 |
+|---|---|
+| `POST /create` | `POST /datasets`；旧入口保留既有 deprecated 标记。 |
+| `POST /update` | `PUT /datasets/{id}`；旧入口保留既有 deprecated 标记。 |
+| `POST /list` | `GET /datasets`；旧入口保留既有 deprecated 标记。 |
+| `POST /rm` | `DELETE /datasets`，请求体 `ids`；旧入口保留既有 deprecated 标记。 |
+| `GET /{kb_id}/knowledge_graph` | `GET /datasets/{id}/graph/search`；旧入口和 REST `knowledge_graph` 别名继续兼容。 |
+| `DELETE /{kb_id}/knowledge_graph` | `DELETE /datasets/{id}/index?type=graph`；保留旧入口。新接口还处理任务绑定，不能只替换 URL 并假定返回契约完全相同。 |
+| `POST /run_graphrag`、`GET /trace_graphrag` | `POST/GET /datasets/{id}/index?type=graph`；保留旧入口。 |
+| `POST /run_raptor`、`GET /trace_raptor` | `POST/GET /datasets/{id}/index?type=raptor`；保留旧入口。 |
+
+消费者核对：独立 web `fa30aef2` 工作树干净，其 `knowledge.ts` 使用 REST 管理 KB，
+`knowledge-index.ts` 使用统一索引 API；没有评估调用。但文件日志页面的
+`use-log-list-state.ts` → `knowledge-ingestions.ts:listFileLogs` 仍实际调用
+`POST /v1/kb/list_pipeline_logs`，现有 REST ingestion 列表不含这些文件下载日志，
+不能删除 `kb_app.py`。可见的两个 SDK checkout（`multirag-python-sdk-v1`、
+`multirag-rest-first-python-sdk`）的客户端源码、MCP、HTTP 参考和 Go benchmark
+使用数据集接口，没有评估或这 10 个旧 KB 操作的消费；Python benchmark 直接调用
+知识库 service 和检索器。后台代码未发现导入这两个 router 或调用评估 service 的其他入口。
+这些静态结果不能证明外部部署没有旧客户端。
+
+Go 核对：`internal/router/router.go` 仍在鉴权组注册旧 KB update、graph 等接口，
+handler/service 有独立实现；CLI 还有 KB tags/metadata 请求。`internal/entity/evaluation.go`
+定义的评估表参与 DAO 初始化，但没有评估 handler/service，不是 Python 评估执行的替代。目标没有 Go diff，
+本项不修改这些能力。
+
+后续链：两份旧 API 文件未恢复；`faf77a5a8` 后来补评估 token usage，
+`a0e65637e` (#16614) 再删除上游评估 service，当前主线的 `670e68872` 又移除更多
+Python API。这些是上游继续下线的演进，没有给本仓建立等价评估入口；本项不提前删除
+本地 service、数据表或迁移到 Go。兼容层退出条件统一见稳定映射。
+
+验证：`make verify` 通过（Ruff 格式与 lint、8 条 import contracts、async DB 门禁、
+mypy 124 个源文件、unit 3177 passed）。一次性 PostgreSQL scratch 库启动真实 HTTP API，
+`make smoke` 通过，全部健康组件 `ok`；OpenAPI 保留评估 17 个与 KB 26 个操作且均为
+deprecated，REST 数据集管理仍为当前接口。缺少令牌返回 401，错误载荷返回 422，
+缺失评估数据集返回 404。实际请求验证评估数据集创建、列表、详情、更新与软删除，
+案例添加、列表与删除，两次评估运行和 4 条结果、详情、比较、建议、JSON 导出及运行删除；
+每次写入和删除均由独立 SQL 查询读回。KB 新旧列表和 web 文件日志入口返回业务码 0。
+评估聊天输出在隔离进程使用固定模型桩；未运行外部模型推理或完整检索。本次仅修改
+路由元数据，没有 DB/事务/存储实现改动，未跑全套 `make integration`。临时进程和数据库已清理。
+
+验收发现的已有问题（对应 handler/service 与 `HEAD` 一致，本项未修改）：
+批量案例导入仍使用 `metadata` 字段和 Peewee `bulk_create`，实际返回
+`success_count=0, failure_count=1` 且数据库无新增；`GET /run/list` 被先注册的
+`GET /run/{run_id}` 截获，返回 404。这两项没有计入成功验收；CSV 导出、token usage、
+高级 LLM 评判也仍未实现。此项保留兼容契约，不代表评估模块的全部能力已验收。
+
+前端交接：本项没有新旧 URL 或载荷变更，无需前端提交。将来整体退役 KB 模块前，
+须先给 `knowledge-ingestions.ts:listFileLogs` 的文件日志能力建立等价 REST 契约并迁移
+`use-log-list-state.ts`，不能把现有数据集摄取日志列表当作等价替代。
+
 ## 290f0294d6e043f64fb1c79b5780421cfc48d045 · 沙箱产物下载迁移到 REST
 
 - 上游：`infiniflow/ragflow` #14348，提交于 2026-04-27；核对目标提交的 4 文件完整 diff。
