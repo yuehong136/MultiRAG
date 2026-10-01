@@ -61,6 +61,56 @@ Redis 同步 False 回执另有验收：返回“已保存但副本同步失败�
 3346 unit passed）；`make integration` 253 passed、无 skip。最终树复跑了上述
 真实 HTTP/SQL/Redis 与运行验收，含 `make smoke`；没有沿用历史通过数。
 
+
+### 2026-10-02 同 SHA 运行链补修
+
+从本地 `57a2fafaed346968cce911d20a3d0cd6ad227d5c` 补修，未开始下一 SHA。
+隔离 HTTP 先复现：owner 无发布版本、Agent missing、私有画布外部用户、非成员
+首次发布运行，非流式均为 HTTP 500。原生成器到消费时才做 setup，流式也可能在
+已发 200 后失败；初次测试只覆盖 owner + 已发布版本，未覆盖这些拒绝路径。
+
+`prepare_agent_run` 用请求 AsyncSession 在开流前核对 Agent 存在、owner 或
+permission=TEAM 且属于 owner 团队的访问权，读取已发布快照或已有会话的 DSL。
+它返回纯值 `PreparedAgentRun`，DSL 与版本标题来自同一版本行；实际执行直接消费，
+不再查询一次 latest。模型/组件资源使用 Agent owner 的运行租户，权限使用认证调用者。
+准备完成后先推进生成器完成 Canvas 构造与 setup，再发送 SSE 响应头。
+普通 REST 已有会话也进入这条准备链，检查 session 与 path Agent 的绑定并保留原 DSL。
+SDK/显式创建会话、PUT 更新/发布的 owner 校验未放宽；旧 OpenAI-compatible 适配分支未改变。
+
+开流前返回 JSON：无/失效认证 401 + code401；missing 404 + retcode102；
+无权限或 session 绑定错误 403 + retcode103；无发布快照 409 + retcode102；
+其他准备失败 500 + retcode100，均不报告成功。前三种准备错误用 HTTP 4xx，是因为
+现有 web `lib/streaming/transport.ts:assertSSEResponse` 只按 response.ok 拒绝响应，
+200 JSON 业务错误会被 SSE transport 忽略。保留 retcode/retmsg/data=false，现有
+web 可以直接显示 retmsg。使用真实 web transport 函数回放 403/404/409 Response，
+均按原 retmsg 抛错；这是消费合同回放，未做真实浏览器 UI 验收，未修改 web。
+
+未处理的组件错误、显式 error 帧或运行异常在流式返回 event=error/code100/message/data.error，
+随后的 DONE 仅表示传输结束；非流式返回非零 retcode，不再把错误文本包装成成功答案。
+实际运行记录 user input 与 errors，不追加本次成功 assistant；成功 message_end 等持久化
+之后才发，故结束后异常也不会先送出成功终态。运行生成器退出时显式关闭执行生成器，并取消自身任务。
+
+本轮真实 HTTP + PostgreSQL/Redis 验收：stream=false/true 分别覆盖无发布、missing、
+private（即使有 TEAM membership）、TEAM 非成员、缺/坏/失效身份；拒绝无新增会话、
+无 Canvas 执行、自有状态不变。owner 和 TEAM member 分别运行真实 Begin/Message 发布内容，
+独立 SQL 读回会话的 user_id、DSL、version_title、答案与 errors，Redis 草稿不变；
+TEAM 的 PUT 发布和显式 POST sessions 仍拒绝。发布新版本后已有会话继续原 DSL。
+在准备后实际插入新的发布版本，确认 stream 两种模式都运行已固定旧快照，并读回新版本
+与旧会话标题，覆盖二次选择风险。已有 session missing、绑定到其他 Agent、private 和
+nonmember 请求也在开流前拒绝，user_id 字段不能替代认证身份。
+
+错误验收：真实 Message 的无效 Jinja 模板产生组件失败；异常和显式 error 事件在真实
+Canvas 构造/首事件之后，于 Canvas.run 边界注入。没有替换 DB、auth、Canvas 构造、
+会话写入或远程模型 provider；没有调用远程 LLM。这三类失败在两种 stream 模式均被消费者
+识别，SQL 会话有 errors、无本次成功 assistant；Canvas/version/Redis 草稿保持原值。
+unit 另覆盖 malformed 帧、非零 code、生成器关闭及 message_end 后异常。
+复用隔离 HTTP 验收中的 make smoke；临时用户/membership/token/Canvas/version/session、
+自有 Redis key 和 listener 在退出时删除并检查，无生产部署/数据操作。
+
+本轮最终门禁：`make verify` 通过（Ruff、8 条依赖契约、async DB 检查、
+mypy 126 文件、3358 unit passed）；`make integration` 287 passed、无 skip。
+最终树包含以上真实 HTTP/SQL/Redis、运行及隔离 make smoke 验收，本项收尾未沿用旧通过数。
+
 ## 61a24a2c14dde696244646e1ec69e5f150eeda54 · 聊天附件上传迁入 REST
 
 - 上游 #14359，2026-04-27；本轮确认 `origin` 并 fetch，`origin/main` 为

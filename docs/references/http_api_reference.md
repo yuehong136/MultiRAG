@@ -90,6 +90,35 @@ Authorization: Bearer <your-api-key>
 创建 `/agents/{agent_id}/sessions` 或首次调用 `/agents/chat/completion` 时传
 `release: true`，使用最新发布快照，即使当前画布已有新草稿。已有会话继续使用创建时保存的 DSL。
 
+### 运行发布版本的授权与错误
+
+普通 **POST** `/agents/chat/completion` 首次传 `release: true`，或传已有 `session_id` 时，
+先验证当前认证身份能访问该 Agent，再固定本次要运行的 DSL。
+owner 可以运行；其他用户需要属于 owner 的团队，且画布 `permission` 为 `team`。
+私有画布即使有团队 membership 也不能由其他用户运行。
+更新/发布画布及显式 **POST** `/agents/{agent_id}/sessions` 仍只允许 owner。
+
+准备阶段的失败在 SSE 响应头发送前返回 JSON，流式与非流式请求行为相同：
+
+| 情况 | HTTP 状态 | 响应 |
+|---|---|---|
+| 缺失、无效或失效认证身份 | 401 | `code=401`，`message` |
+| Agent 或会话不存在 | 404 | `retcode=102`，`retmsg`，`data=false` |
+| 无运行权限 | 403 | `retcode=103`，`retmsg`，`data=false` |
+| 首次发布运行找不到发布版本 | 409 | `retcode=102`，`retmsg=No available published version`，`data=false` |
+| 其他准备失败 | 500 | `retcode=100`，`retmsg`，`data=false` |
+
+调用方同时检查 HTTP 状态与业务码；此处是普通 Agent 运行路径的合同。
+选中的发布 DSL 与版本标题由同一条快照记录取得，运行直接消费这些准备结果。
+即使准备后出现新发布版本，本次也继续运行选中的快照；已有会话继续使用自己的 DSL。
+
+运行中的错误在非流式请求中返回非零 `retcode`，不返回成功答案。
+流式请求已经开始时，返回 `event=error`、`code=100`、`message` 及 `data.error`，
+随后结束传输。`data:[DONE]` 只表示传输结束；出现 error 帧的运行仍是失败。
+未处理的组件错误、显式 error 事件和运行异常不会被事件过滤吞掉。
+失败会话记录错误和本次用户输入，不追加本次的成功助手答案；已有历史答案保留。
+成功的 `message_end` 在运行结果持久化后才发送。
+
 ## 对话 API
 
 ### 上传运行时附件

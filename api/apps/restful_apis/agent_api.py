@@ -12,6 +12,7 @@ import ipaddress
 import json
 import logging
 import time
+from collections.abc import AsyncGenerator
 from functools import partial
 from typing import Any
 from urllib.parse import quote_plus
@@ -35,8 +36,11 @@ from api.db.db_models import Task, UserCanvas, get_async_db, get_db
 from api.db.services.canvas_service import (
     API4ConversationService,
     CanvasTemplateService,
+    PublishedAgentVersionUnavailable,
     UserCanvasService,
+    agent_event_error,
     completion_openai,
+    prepare_agent_run,
 )
 from api.db.services.canvas_service import (
     completion as agent_completion,
@@ -515,7 +519,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         return get_data_error_result(retmsg="`agent_id` is required.")
 
     session_id = req.get("session_id")
-    if session_id:
+    if session_id and openai_compatible:
         conversation = await db.run_sync(lambda session: API4ConversationService.get_by_id(session, session_id))  # TODO(async-phase4)
         if conversation is None:
             return get_data_error_result(retmsg="Session not found!")
@@ -640,25 +644,68 @@ async def exp_agent_completion(
     request_body: dict[str, Any],
     db: AsyncSession,
     user: Principal,
-):
-    """
-    实验性Agent Completion端点，支持trace返回。
+) -> Response:
+    """Run an authorized, fixed snapshot and preserve execution failures."""
+    req = dict(request_body)
+    # Only the authenticated route can supply this internal preparation value.
+    req.pop("prepared_run", None)
+    req.setdefault("user_id", user.id)
+    return_trace = bool(req.get("return_trace", False))
 
-    通过 canvas_id 指定Agent，流式执行并返回SSE事件。
-    当 return_trace=True 时，node_finished 事件会附带完整 trace 链。
-    """
-    tenant_id = user.id
-    return_trace = bool(request_body.get("return_trace", False))
+    def preparation_error(message: str, code: RetCode, status: int) -> JSONResponse:
+        return JSONResponse(status_code=status, content={"retcode": code, "retmsg": message, "data": False})
 
-    if not request_body.get("stream", True):
+    try:
+        prepared = await prepare_agent_run(
+            db,
+            canvas_id,
+            user.id,
+            session_id=req.get("session_id"),
+            release_mode=str(req.get("release", "")).strip().lower() == "true",
+        )
+        answers = agent_completion(db=db, tenant_id=user.id, agent_id=canvas_id, prepared_run=prepared, **req)
+        # Setup and Canvas construction run before sending SSE headers. The
+        # generator consumes the prepared snapshot, without selecting it again.
+        first = await anext(answers)
+    except PermissionError as error:
+        await db.rollback()
+        return preparation_error(str(error), RetCode.OPERATING_ERROR, 403)
+    except PublishedAgentVersionUnavailable as error:
+        await db.rollback()
+        return preparation_error(str(error), RetCode.DATA_ERROR, 409)
+    except LookupError as error:
+        await db.rollback()
+        return preparation_error(str(error), RetCode.DATA_ERROR, 404)
+    except StopAsyncIteration:
+        return preparation_error("Agent completion returned no events.", RetCode.EXCEPTION_ERROR, 500)
+    except Exception:
+        await db.rollback()
+        logging.exception("Failed to prepare agent completion")
+        return preparation_error("Agent completion failed.", RetCode.EXCEPTION_ERROR, 500)
+
+    def parse_answer(answer: str | dict[str, Any]) -> dict[str, Any]:
+        parsed = json.loads(answer[5:]) if isinstance(answer, str) else answer
+        if not isinstance(parsed, dict):
+            raise ValueError("Invalid agent completion event.")
+        return parsed
+
+    async def with_first() -> AsyncGenerator[str | dict[str, Any], None]:
+        yield first
+        async for answer in answers:
+            yield answer
+
+    if not req.get("stream", True):
         full_content = ""
         reference: dict[str, Any] = {}
         final_answer: dict[str, Any] = {}
         trace_items: list[dict[str, Any]] = []
         structured_output: dict[str, Any] = {}
-        async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=canvas_id, **request_body):
-            try:
-                parsed = json.loads(answer[5:]) if isinstance(answer, str) else answer
+        try:
+            async for answer in with_first():
+                parsed = parse_answer(answer)
+                failure = agent_event_error(parsed)
+                if failure:
+                    return get_data_error_result(retmsg=failure)
                 if parsed.get("event") == "message":
                     full_content += parsed["data"]["content"]
                 if parsed.get("data", {}).get("reference"):
@@ -672,9 +719,11 @@ async def exp_agent_completion(
                     if return_trace:
                         trace_items.append({"component_id": component_id, "trace": [copy.deepcopy(data)]})
                 final_answer = parsed
-            except Exception as error:
-                return get_json_result(data=f"**ERROR**: {error!s}")
-
+        except Exception:
+            logging.exception("Agent completion failed")
+            return get_data_error_result(retmsg="Agent completion failed.")
+        finally:
+            await answers.aclose()
         if not final_answer:
             return get_data_error_result(retmsg="Agent completion returned no events.")
         final_answer.setdefault("data", {})["content"] = full_content
@@ -685,47 +734,34 @@ async def exp_agent_completion(
             final_answer["data"]["trace"] = trace_items
         return get_json_result(data=final_answer)
 
-    async def generate():
-        trace_items = []
-        async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=canvas_id, **request_body):
-            if isinstance(answer, str):
-                try:
-                    ans = json.loads(answer[5:])  # remove "data:"
-                except Exception:
-                    continue
-            else:
-                ans = answer
-
-            event = ans.get("event")
-            if event == "node_finished":
-                if return_trace:
-                    data = ans.get("data", {})
-                    trace_items.append(
-                        {
-                            "component_id": data.get("component_id"),
-                            "trace": [copy.deepcopy(data)],
-                        }
-                    )
-                    ans.setdefault("data", {})["trace"] = trace_items
-                    answer = "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
-                yield answer
-
-            if event not in ("message", "message_end", "a2ui_command"):
-                continue
-
-            yield answer
-
+    async def generate() -> AsyncGenerator[str, None]:
+        trace_items: list[dict[str, Any]] = []
+        try:
+            async for answer in with_first():
+                ans = parse_answer(answer)
+                failure = agent_event_error(ans)
+                if failure:
+                    ans.update(event="error", code=100, message=failure, data={"error": failure})
+                    yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+                    break
+                event = ans.get("event")
+                if event == "node_finished":
+                    if return_trace:
+                        data = ans.get("data", {})
+                        trace_items.append({"component_id": data.get("component_id"), "trace": [copy.deepcopy(data)]})
+                        ans.setdefault("data", {})["trace"] = trace_items
+                    yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+                elif event in ("message", "message_end", "a2ui_command"):
+                    yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+        except Exception:
+            logging.exception("Agent stream failed")
+            yield "data:" + json.dumps({"event": "error", "code": 100, "message": "Agent completion failed.", "data": {"error": "Agent completion failed."}}) + "\n\n"
+        finally:
+            await answers.aclose()
+        # Transport termination only; an error frame remains a failed execution.
         yield "data:[DONE]\n\n"
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
 
 @router.post("/agents/rerun", summary="重新运行Pipeline", response_description="成功重新运行")

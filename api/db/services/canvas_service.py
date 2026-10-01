@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +22,7 @@ from sqlalchemy.sql import desc as sa_desc
 from agent.a2ui import validate_client_a2ui_messages
 from agent.canvas import Canvas
 from api.db import CanvasCategory, TenantPermission
-from api.db.db_models import CanvasTemplate, User, UserCanvas, UserCanvasVersion
+from api.db.db_models import API4Conversation, CanvasTemplate, User, UserCanvas, UserCanvasVersion, UserTenant
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
 from api.db.services.user_canvas_version import UserCanvasVersionService
@@ -274,6 +277,63 @@ class UserCanvasService(CommonService):
         return cvs, dsl
 
 
+@dataclass(frozen=True)
+class PreparedAgentRun:
+    agent_id: str
+    caller_id: str
+    runtime_tenant_id: str
+    dsl: str
+    version_title: str | None
+    conversation: dict[str, Any] | None = None
+
+
+class PublishedAgentVersionUnavailable(LookupError):
+    """The authorized Agent has no published snapshot to run."""
+
+
+async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, session_id: str | None = None, release_mode: bool = False) -> PreparedAgentRun:
+    """Authorize the REST run and select its exact DSL before any stream starts.
+
+    Match accessible's owner/TEAM membership contract. The owner-only SDK and
+    canvas update helpers retain their separate authorization contracts.
+    """
+    canvas = await db.scalar(select(UserCanvas).join(User, UserCanvas.user_id == User.id).where(UserCanvas.id == agent_id))
+    if canvas is None:
+        raise LookupError("Agent not found.")
+    if canvas.user_id != caller_id:
+        membership = await db.scalar(select(UserTenant.id).where(UserTenant.user_id == caller_id, UserTenant.tenant_id == canvas.user_id).limit(1))
+        if canvas.permission != TenantPermission.TEAM.value or membership is None:
+            raise PermissionError("Only authorized users can run this agent.")
+    conversation = None
+    if session_id:
+        conv = await db.get(API4Conversation, session_id)
+        if conv is None:
+            raise LookupError("Session not found!")
+        if conv.dialog_id != agent_id:
+            raise PermissionError("Session does not belong to the requested agent.")
+        conversation = copy.deepcopy(conv.to_dict())
+        dsl, version_title = conv.dsl, conv.version_title
+    elif release_mode:
+        version = await db.scalar(
+            select(UserCanvasVersion).where(UserCanvasVersion.user_canvas_id == agent_id, UserCanvasVersion.release.is_(True)).order_by(UserCanvasVersion.create_time.desc()).limit(1)
+        )
+        if version is None:
+            raise PublishedAgentVersionUnavailable("No available published version")
+        dsl, version_title = version.dsl, version.title
+    else:
+        dsl, version_title = canvas.dsl, None
+    return PreparedAgentRun(agent_id, caller_id, canvas.user_id, dsl if isinstance(dsl, str) else json.dumps(dsl, ensure_ascii=False), version_title, conversation)
+
+
+def agent_event_error(event: dict[str, Any]) -> str | None:
+    """Read explicit execution failures without confusing trace warnings."""
+    if event.get("event") != "error" and event.get("code", event.get("retcode", 0)) in (0, None):
+        return None
+    data = event.get("data")
+    detail = data.get("error") or data.get("message") or data.get("content") if isinstance(data, dict) else data
+    return str(event.get("message") or event.get("retmsg") or detail or "Agent execution failed.")
+
+
 # ---------------------------
 # 推理流程（SSE / OpenAI 兼容）
 # ---------------------------
@@ -283,6 +343,7 @@ async def completion(
     agent_id: str,
     session_id: str | None = None,
     run_context: RunContext | None = None,
+    prepared_run: PreparedAgentRun | None = None,
     **kwargs: Any,
 ) -> AsyncGenerator[str, None]:
     """
@@ -305,9 +366,30 @@ async def completion(
     custom_header = kwargs.get("custom_header", "")
     release_mode = str(kwargs.get("release", "")).strip().lower()
     is_new_session = not session_id
+    if prepared_run is not None and (prepared_run.agent_id != agent_id or prepared_run.caller_id != tenant_id):
+        raise PermissionError("Prepared run identity is inconsistent.")
 
-    def _setup(s: Session) -> tuple[dict, str, str]:
+    def _setup(s: Session) -> tuple[dict[str, Any], str, str]:
         """会话与 DSL 装配。产物**只有纯 dict/str**——ORM 对象不得跨下方的流式期存活。"""
+        if prepared_run is not None:
+            if session_id:
+                if prepared_run.conversation is None or prepared_run.conversation["id"] != session_id:
+                    raise PermissionError("Prepared session is inconsistent.")
+                return dict(prepared_run.conversation), prepared_run.dsl, agent_id
+            return (
+                {
+                    "id": get_uuid(),
+                    "dialog_id": agent_id,
+                    "user_id": user_id,
+                    "message": [],
+                    "source": "agent",
+                    "dsl": prepared_run.dsl,
+                    "reference": [],
+                    "version_title": prepared_run.version_title,
+                },
+                prepared_run.dsl,
+                agent_id,
+            )
         if session_id:
             conv = API4ConversationService.get_by_id(s, session_id)
             if not conv:
@@ -350,7 +432,7 @@ async def completion(
         # Reusing agent_id here made concurrent runs share cancel/log Redis keys.
         canvas = Canvas(
             dsl,
-            tenant_id,
+            prepared_run.runtime_tenant_id if prepared_run is not None else tenant_id,
             task_id=uuid4().hex,
             canvas_id=canvas_id,
             custom_header=custom_header,
@@ -368,6 +450,10 @@ async def completion(
 
     # 组件 __init__ 各自开连接查模型配置（reset 还打 Redis）——整体入线程池
     canvas = await asyncio.to_thread(_build_canvas)
+    if prepared_run is not None and is_new_session:
+        # Invalid Canvas construction must not leave a successful session row.
+        conv = await db.run_sync(lambda s: API4ConversationService.save(s, **conv).to_dict())
+    conv["message"] = conv.get("message") or []
 
     # setup 产物已全是纯 dict/str（无 ORM 对象存活、save 自带 commit）——此处安全结束
     # autobegin 的读事务，把连接还回池：canvas.run 是分钟级流式，不能让连接全程以
@@ -382,6 +468,7 @@ async def completion(
     if metadata:
         user_message["metadata"] = metadata
     conv["message"].append(user_message)
+    attempted_message_count = len(conv["message"])
 
     # 流式运行
     txt = ""
@@ -396,39 +483,80 @@ async def completion(
     }
     if run_context is None or run_context.principal is None:
         run_kwargs["user_id"] = legacy_user_id
-    async for ans in canvas.run(**run_kwargs):
-        ans["session_id"] = session_id
-        if ans["event"] == "message":
-            txt += ans["data"]["content"]
-            if ans["data"].get("start_to_think", False):
-                txt += "<think>"
-            elif ans["data"].get("end_to_think", False):
-                txt += "</think>"
-        elif ans["event"] == "a2ui_command":
-            data = ans.get("data") or {}
-            commands = data.get("commands") if isinstance(data, dict) else None
-            surface_ids = data.get("surface_ids") if isinstance(data, dict) else None
-            if isinstance(commands, list):
-                a2ui_commands.extend(commands)
-            if isinstance(surface_ids, list):
-                a2ui_surface_ids.update(x for x in surface_ids if isinstance(x, str))
-            elif isinstance(data, dict) and isinstance(data.get("surface_id"), str):
-                a2ui_surface_ids.add(data["surface_id"])
-        yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+    terminal_frames: list[dict[str, Any]] = []
 
-    # 结束：写入 assistant 消息、引用、错误，并更新持久层
-    assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
-    if a2ui_commands:
-        assistant_message["a2ui"] = {
-            "commands": a2ui_commands,
-            "surface_ids": sorted(a2ui_surface_ids),
-        }
-    conv["message"].append(assistant_message)
-    conv["reference"] = canvas.get_reference()
-    conv["errors"] = canvas.error
-    conv["dsl"] = str(canvas)
+    def failure_frame(message: str) -> str:
+        return "data:" + json.dumps({"event": "error", "code": 100, "message": message, "data": {"error": message}, "session_id": session_id}, ensure_ascii=False) + "\n\n"
 
-    await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))  # TODO(async-phase4)
+    async def persist_failure(message: str) -> None:
+        # Keep the attempted user input and failure, without an assistant success.
+        conv["message"] = conv["message"][:attempted_message_count]
+        conv["errors"] = message
+        conv["dsl"] = str(canvas)
+        written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))
+        if written != 1:
+            raise RuntimeError("Failed to persist agent failure.")
+
+    try:
+        async with aclosing(canvas.run(**run_kwargs)) as run_events:
+            async for ans in run_events:
+                ans["session_id"] = session_id
+                if prepared_run is not None:
+                    failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
+                    if failure:
+                        await persist_failure(failure)
+                        yield failure_frame(failure)
+                        return
+                    if ans.get("event") == "message_end":
+                        terminal_frames.append(ans)
+                        continue
+                if ans["event"] == "message":
+                    txt += ans["data"]["content"]
+                    if ans["data"].get("start_to_think", False):
+                        txt += "<think>"
+                    elif ans["data"].get("end_to_think", False):
+                        txt += "</think>"
+                elif ans["event"] == "a2ui_command":
+                    data = ans.get("data") or {}
+                    commands = data.get("commands") if isinstance(data, dict) else None
+                    surface_ids = data.get("surface_ids") if isinstance(data, dict) else None
+                    if isinstance(commands, list):
+                        a2ui_commands.extend(commands)
+                    if isinstance(surface_ids, list):
+                        a2ui_surface_ids.update(x for x in surface_ids if isinstance(x, str))
+                    elif isinstance(data, dict) and isinstance(data.get("surface_id"), str):
+                        a2ui_surface_ids.add(data["surface_id"])
+                yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+        if prepared_run is not None and canvas.error:
+            await persist_failure(str(canvas.error))
+            yield failure_frame(str(canvas.error))
+            return
+
+        # 结束：写入 assistant 消息、引用、错误，并更新持久层
+        assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
+        if a2ui_commands:
+            assistant_message["a2ui"] = {
+                "commands": a2ui_commands,
+                "surface_ids": sorted(a2ui_surface_ids),
+            }
+        conv["message"].append(assistant_message)
+        conv["reference"] = canvas.get_reference()
+        conv["errors"] = canvas.error
+        conv["dsl"] = str(canvas)
+
+        written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))  # TODO(async-phase4)
+        if prepared_run is not None and written != 1:
+            raise RuntimeError("Failed to persist agent result.")
+        for terminal in terminal_frames:
+            yield "data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n"
+    except Exception as error:
+        if prepared_run is None:
+            raise
+        await persist_failure(str(error))
+        yield failure_frame(str(error))
+    finally:
+        if prepared_run is not None:
+            canvas.cancel_task()
 
 
 async def completion_openai(

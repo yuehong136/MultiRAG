@@ -10,10 +10,13 @@ import asyncio
 import json
 import sys
 import threading
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
+from typing import Any
 from uuid import UUID
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -153,12 +156,17 @@ async def test_completion_allocates_unique_task_id_per_execution(completion_stub
 
 
 @pytest.fixture
-def agent_route_stubs(monkeypatch, client):
+def agent_route_stubs(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> TestClient:
     async def _fake_completion(db, tenant_id, agent_id, session_id=None, **kwargs):
         yield "data:" + json.dumps({"event": "message", "data": {"content": "hi"}}) + "\n\n"
 
     for mod in ("api.apps.restful_apis.agent", "api.apps.sdk.session"):
         monkeypatch.setattr(_route_module(mod), "agent_completion", _fake_completion)
+
+    async def fake_prepare(db: AsyncSession, agent_id: str, caller_id: str, **kwargs: Any) -> canvas_service.PreparedAgentRun:
+        return canvas_service.PreparedAgentRun(agent_id, caller_id, caller_id, "{}", None)
+
+    monkeypatch.setattr(_route_module("api.apps.restful_apis.agent"), "prepare_agent_run", fake_prepare)
 
     monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: SimpleNamespace(dialog_id="agent-1")))
     monkeypatch.setattr(UserCanvasService, "accessible", classmethod(lambda cls, s, cid, tid: True))
@@ -239,3 +247,67 @@ def test_sdk_agent_bot_completions_stream_frames(agent_route_stubs):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert '"content": "hi"' in resp.text
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("failure", ["event", "code", "exception", "malformed"])
+def test_agent_adapter_preserves_failure_and_closes_generator(agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, stream: bool, failure: str) -> None:
+    closed: list[bool] = []
+
+    async def fail_completion(**kwargs: Any) -> AsyncGenerator[str, None]:
+        try:
+            yield 'data:{"event":"workflow_started","data":{}}\n\n'
+            if failure == "exception":
+                raise RuntimeError("controlled execution failure")
+            if failure == "malformed":
+                yield "data:invalid-json\n\n"
+            else:
+                frame = {"event": "error", "data": {"error": "controlled execution failure"}} if failure == "event" else {"code": 100, "message": "controlled execution failure", "data": False}
+                yield "data:" + json.dumps(frame) + "\n\n"
+            yield 'data:{"event":"message_end","data":{"must_not_succeed":true}}\n\n'
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(_route_module("api.apps.restful_apis.agent"), "agent_completion", fail_completion)
+    response = agent_route_stubs.post("/api/v1/agents/chat/completion", json={"agent_id": "agent-1", "release": True, "stream": stream})
+    assert response.status_code == 200 and closed == [True]
+    assert "must_not_succeed" not in response.text
+    if stream:
+        frames = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:") and "[DONE]" not in line]
+        assert len(frames) == 1 and frames[0]["event"] == "error" and frames[0]["code"] != 0
+        assert "data:[DONE]" in response.text
+    else:
+        assert response.json()["retcode"] != 0 and response.json().get("data") is not True
+
+
+@pytest.mark.parametrize("failure", ["event", "exception", "node", "after_terminal"])
+async def test_prepared_run_records_failure_without_success(completion_stubs: dict[str, object], monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    saved: list[dict[str, Any]] = []
+
+    async def failing_run(self: _FakeCanvas, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+        yield {"event": "workflow_started", "data": {}}
+        if failure == "after_terminal":
+            yield {"event": "message_end", "data": {}}
+        if failure in {"exception", "after_terminal"}:
+            raise RuntimeError("controlled execution failure")
+        if failure == "node":
+            self.error = "unhandled node failure"
+            yield {"event": "node_finished", "data": {"error": self.error}}
+        else:
+            yield {"event": "error", "data": {"error": "controlled execution failure"}}
+        yield {"event": "message_end", "data": {}}
+
+    def persist(db: Session, conv_id: str, conv: dict[str, Any]) -> int:
+        saved.append(dict(conv))
+        return 1
+
+    monkeypatch.setattr(_FakeCanvas, "run", failing_run)
+    monkeypatch.setattr(_FakeCanvas, "cancel_task", lambda self: True, raising=False)
+    monkeypatch.setattr(API4ConversationService, "append_message", persist)
+    prepared = canvas_service.PreparedAgentRun("agent-1", "tenant-unit", "tenant-unit", "{}", None, {"id": "sess-1", "message": [], "dsl": "{}"})
+    db = _RecordingAsyncSession({})
+    frames = [json.loads(frame[5:]) async for frame in canvas_service.completion(db, "tenant-unit", "agent-1", session_id="sess-1", prepared_run=prepared, query="test")]
+    assert frames[-1]["event"] == "error" and frames[-1]["code"] != 0
+    assert not any(frame["event"] == "message_end" for frame in frames)
+    assert len(saved) == 1 and saved[0]["errors"]
+    assert [message["role"] for message in saved[0]["message"]] == ["user"]
