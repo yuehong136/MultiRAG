@@ -16,6 +16,7 @@
 import ast
 import logging
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 import json_repair
@@ -212,7 +213,8 @@ def dedupe_list(values: list) -> list:
     return deduped
 
 
-def update_metadata_to(metadata, meta):
+def update_metadata_to(metadata: dict[str, Any], meta: Any) -> dict[str, Any]:
+    """Merge extracted values without dropping scalar or structured metadata."""
     if not meta:
         return metadata
     if isinstance(meta, str):
@@ -225,21 +227,25 @@ def update_metadata_to(metadata, meta):
         return metadata
 
     for k, v in meta.items():
-        if isinstance(v, list):
-            v = [vv for vv in v if isinstance(vv, str)]
-            if not v:
-                continue
+        if isinstance(v, list) and v and all(isinstance(item, str) for item in v):
             v = dedupe_list(v)
-        if not isinstance(v, list) and not isinstance(v, str):
+        elif isinstance(v, (dict, list)):
+            # Structured values are atomic; never concatenate them with tags.
+            if k not in metadata:
+                metadata[k] = deepcopy(v)
+            continue
+        elif not isinstance(v, (str, bool, int, float)) and v is not None:
             continue
         if k not in metadata:
-            metadata[k] = v
+            metadata[k] = deepcopy(v)
             continue
-        if isinstance(metadata[k], list):
+        if isinstance(metadata[k], list) and isinstance(v, (list, str)):
+            if not all(isinstance(item, str) for item in metadata[k]):
+                continue
             if isinstance(v, list):
-                metadata[k].extend(v)
+                metadata[k] = metadata[k] + v
             else:
-                metadata[k].append(v)
+                metadata[k] = metadata[k] + [v]
             metadata[k] = dedupe_list(metadata[k])
         else:
             metadata[k] = v
@@ -281,7 +287,7 @@ def _is_json_schema(obj: dict) -> bool:
     return obj.get("type") == "object" and isinstance(obj.get("properties"), dict)
 
 
-def _is_metadata_list(obj: list) -> bool:
+def _is_metadata_list(obj: list[Any]) -> bool:
     if not isinstance(obj, list) or not obj:
         return False
     for item in obj:
@@ -290,28 +296,46 @@ def _is_metadata_list(obj: list) -> bool:
         key = item.get("key")
         if not isinstance(key, str) or not key:
             return False
-        if "enum" in item and not isinstance(item["enum"], list):
+        if item.get("enum") is not None and not isinstance(item["enum"], list):
             return False
-        if "description" in item and not isinstance(item["description"], str):
+        if item.get("description") is not None and not isinstance(item["description"], str):
             return False
-        if "descriptions" in item and not isinstance(item["descriptions"], str):
+        if item.get("descriptions") is not None and not isinstance(item["descriptions"], str):
             return False
     return True
 
 
-def turn2jsonschema(obj: dict | list) -> dict[str, Any]:
+def turn2jsonschema(obj: dict[str, Any] | list[Any]) -> dict[str, Any]:
     if isinstance(obj, dict) and _is_json_schema(obj):
         return obj
     if isinstance(obj, list) and _is_metadata_list(obj):
         normalized = []
         for item in obj:
-            description = item.get("description", item.get("descriptions", ""))
+            description = item.get("description") or item.get("descriptions") or ""
             normalized_item = {
                 "key": item.get("key"),
                 "description": description,
             }
-            if "enum" in item:
+            if item.get("enum") is not None:
                 normalized_item["enum"] = item["enum"]
             normalized.append(normalized_item)
         return metadata_schema(normalized)
     return {}
+
+
+def build_metadata_config(parser_config: dict[str, Any]) -> dict[str, Any] | list[Any]:
+    """Combine schema or legacy fields with built-ins, preserving schema constraints."""
+    metadata_conf = parser_config.get("metadata", [])
+    built_in_metadata = parser_config.get("built_in_metadata") or []
+    built_in_metadata = deepcopy(built_in_metadata) if isinstance(built_in_metadata, list) else []
+    if isinstance(metadata_conf, dict):
+        if not isinstance(metadata_conf.get("properties"), dict):
+            metadata_conf = {"type": "object", "properties": {}}
+        else:
+            metadata_conf = deepcopy(metadata_conf)
+        if built_in_metadata:
+            metadata_conf["properties"].update(turn2jsonschema(built_in_metadata).get("properties", {}))
+        return metadata_conf
+    if isinstance(metadata_conf, list):
+        return deepcopy(metadata_conf) + built_in_metadata
+    return built_in_metadata

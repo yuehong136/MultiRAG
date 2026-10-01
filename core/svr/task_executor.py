@@ -46,7 +46,7 @@ from common.exceptions import TaskCanceledException
 from common.file_utils import get_project_base_directory
 from common.log_ctx import bind_log_context, clear_log_context
 from common.log_utils import init_root_logger
-from common.metadata_utils import turn2jsonschema, update_metadata_to
+from common.metadata_utils import build_metadata_config, turn2jsonschema, update_metadata_to
 from common.misc_utils import thread_pool_exec
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
@@ -640,21 +640,24 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
             raise
         progress_callback(msg=f"Question generation {len(docs)} chunks completed in {timer() - st:.2f}s")
 
-    if task["parser_config"].get("enable_metadata", False) and task["parser_config"].get("metadata"):
+    metadata_conf = build_metadata_config(task["parser_config"]) if task["parser_config"].get("enable_metadata", False) else []
+    metadata_schema = turn2jsonschema(metadata_conf)
+    if metadata_schema.get("properties"):
         st = timer()
         progress_callback(msg="Start to generate meta-data for every chunk ...")
         model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
         chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
 
-        async def gen_metadata_task(chat_mdl, d):
-            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "metadata", task["parser_config"]["metadata"])
+        async def gen_metadata_task(chat_mdl: Any, d: dict[str, Any]) -> None:
+            cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "metadata", metadata_conf)
             if not cached:
                 if has_canceled(task["id"]):
                     progress_callback(-1, msg="Task has been canceled.")
                     return
                 async with chat_limiter:
-                    cached = await gen_metadata(chat_mdl, turn2jsonschema(task["parser_config"]["metadata"]), d["content_with_weight"])
-                set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "metadata", task["parser_config"]["metadata"])
+                    cached = await gen_metadata(chat_mdl, metadata_schema, d["content_with_weight"])
+                if cached:
+                    set_llm_cache(chat_mdl.llm_name, d["content_with_weight"], cached, "metadata", metadata_conf)
             if cached:
                 d["metadata_obj"] = cached
 
@@ -664,21 +667,21 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except Exception as e:
-            logging.error("Error in doc_question_proposal", exc_info=e)
+            logging.error("Error in gen_metadata", exc_info=e)
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         metadata = {}
         for doc in docs:
-            metadata = update_metadata_to(metadata, doc["metadata_obj"])
-            del doc["metadata_obj"]
+            metadata = update_metadata_to(metadata, doc.pop("metadata_obj", None))
         if metadata:
             existing_meta = DocMetadataService.get_document_metadata(db, task["doc_id"])
             existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
             metadata = update_metadata_to(metadata, existing_meta)
-            DocMetadataService.update_document_metadata(db, task["doc_id"], metadata)
-        progress_callback(msg=f"Question generation {len(docs)} chunks completed in {timer() - st:.2f}s")
+            if not DocMetadataService.update_document_metadata(db, task["doc_id"], metadata):
+                raise RuntimeError(f"Failed to persist generated metadata for document {task['doc_id']}")
+        progress_callback(msg=f"Metadata generation {len(docs)} chunks completed in {timer() - st:.2f}s")
 
     if task["kb_parser_config"].get("tag_kb_ids", []):
         progress_callback(msg="Start to tag for every chunk ...")

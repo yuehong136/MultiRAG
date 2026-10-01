@@ -3,6 +3,65 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 4303be223fba929fe2982249ce6faafd764cd1b3 · 保留升级后的元数据 Schema
+
+- 上游：`infiniflow/ragflow` #14383，提交于 2026-04-27；完整 diff 仅含
+  `rag/svr/task_executor.py`。2026-10-01 fetch 后 `origin/main` 为
+  `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本地 `c1c24fe1` 开始处理，本项止于该 SHA，下一指定 `c446c403` 等待另行派发。
+
+上游修复 v0.24 → v0.25 升级后 `list(metadata_dict)` 误把 JSON Schema 变成键名
+列表的问题。本仓原链已用 `turn2jsonschema` 接受 schema，但没有合并
+`built_in_metadata`。现由 `common.metadata_utils.build_metadata_config` 在每次解析
+构建有效配置；缓存读取、缓存写入和生成 schema 都来自这份配置。
+
+| 输入 | 当前行为 |
+|---|---|
+| Schema dict，`properties` 为 dict | 保留 `$schema`、`required`、`additionalProperties`、组合约束及用户属性；把内置字段转换后并入属性，同名内置属性优先。 |
+| Dict 的 `properties` 缺失或非法 | 归一为 `{type: object, properties: {}}`，再合并内置属性，不保留失效 schema 的其他约束。 |
+| 旧字段 list | 拼接内置字段 list，保持既有列表转 schema 规则。 |
+| 其他类型 | 使用内置字段 list。关闭提取或最终无属性时跳过模型和缓存，不写入元数据。 |
+
+配置合并和提示词枚举注释使用独立副本，避免修改原 parser_config、跨切片共享的
+schema 或缓存键。`gen_metadata` 能处理没有 description 的 enum 属性以及合法的
+布尔属性 schema。生成结果从切片中消费并删除 `metadata_obj`，不传给索引；
+空模型结果不再触发 KeyError。多切片合并沿用字符串和标签列表规则，原有标量字段
+参与最后一轮合并；数字、布尔值、null、对象和结构化列表均可保留。结构化值按原子
+值处理，同名已存在时保留先写入的值，避免把 PDF outline 和字符串标签拼在一起。
+保存返回 False 时任务报错，不发送元数据完成进度。
+
+后续链核对：`f0cb7a544`、`b36314699` 将上游执行器拆层，合并配置仍进入缓存与生成；
+`3eff41361` 修复列表字段的 enum/description 为 null 时失效，本项包含该必要修复；
+`e9cace9a0` 修复元数据合并丢弃非字符串值，本项包含对应语义，并保留合法空数组。
+没有发现目标修复被回退。`c8d1b21ae` 另增加 file_name/update_time 的确定性填充，
+属于独立行为，本项不提前移植；Python 删除与 Go 迁移也不在范围内。
+
+调用链核对：文件上传与 REST 文档创建沿用完整 KB parser_config，
+`TaskService.get_task` 从 Document 读取配置；KB/文档设置接受 schema 或旧 list，
+文档列表与 KB 详情的 `turn2jsonschema` 消费继续兼容。专用 REST 自动元数据
+`fields` 接口仍为列表契约，本项没有将其改成 schema 编辑器。`gen_metadata` 当前
+只有标准任务解析这一处调用；dataflow 在索引前聚合并删除临时 `metadata`，复用相同
+合并函数，因此也保留非字符串值。`analyze_v2` 的 metadata_fields 是独立提取配置，
+没有套用本次 schema 合并。Milvus 配置下经 `DocMetadataService` 写独立
+`t_ai_document_metadata` 表；ES/Infinity 继续使用既有 metadata store，本项未改变
+其映射或写入协议，也未修改 web、Go 或其他会话的 Channel 文件。
+
+验证：新增单测覆盖 schema 顶层与字段约束、同名内置属性、旧列表、非法/空配置、
+null 字段、提示词不改配置、缓存读写参数一致及内置字段变化、空回复、关闭提取、
+元数据合并与保存失败。新增 5 个集成场景，在一次性 PostgreSQL scratch 库创建
+Tenant/KB/Document/Task，由 `TaskService.get_task` 取任务，真实 MinIO 取件和 naive
+文本解析，经真实 Redis 缓存、实际元数据 service 写入，再用独立 Session 和表记录
+读回。Schema、旧 list、非法 properties、仅内置字段、空配置均覆盖；第二次解析
+命中缓存，修改文档内置字段后重新生成并读回新增字段。模型和模型配置查询使用假件，
+未调用真实 LLM，也未运行后续 embedding/向量索引。临时记录、对象、bucket、缓存键
+及 scratch 数据库均在验收后清理。
+
+交付门禁：`make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、
+mypy 124 个源文件、unit 3229 passed）；`make integration` 通过（246 passed，
+无 skip）。本项不涉及启动流程、路由或健康检查，未加跑 `make smoke`。
+ES/Infinity 未做本次真实后端写入验收；本次解析与持久化运行证据对应 Milvus 配置下
+的 SQL metadata store。独立 web 工作树保持干净，scoped diff 与文档路径检查通过。
+
 ## d88f7ac8d2a573997d8a9c46e077ff068cbb38b4 · 删除未使用的旧评估与 KB 入口
 
 - 上游：`infiniflow/ragflow` #14394，提交于 2026-04-27，父提交为 `290f0294`。
