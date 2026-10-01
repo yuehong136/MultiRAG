@@ -366,19 +366,19 @@ class Canvas(Graph):
         self.retrieval = self.dsl["retrieval"]
         self.memory = self.dsl.get("memory", [])
 
-    def __str__(self):
+    def __str__(self) -> str:
         self.dsl["history"] = self.history
         self.dsl["retrieval"] = self.retrieval
         self.dsl["memory"] = self.memory
+        self.dsl["globals"] = self.globals
         return super().__str__()
 
-    def reset(self, mem=False):
+    def reset(self, mem: bool = False) -> None:
         super().reset()
         if not mem:
             self.history = []
             self.retrieval = []
             self.memory = []
-        print(self.variables)
         for k in self.globals.keys():
             if k.startswith("sys."):
                 if isinstance(self.globals[k], str):
@@ -393,29 +393,23 @@ class Canvas(Graph):
                     self.globals[k] = {}
                 else:
                     self.globals[k] = None
-            if k.startswith("env."):
-                key = k[4:]
-                if key in self.variables:
-                    variable = self.variables[key]
-                    if variable["type"] == "string":
-                        self.globals[k] = ""
-                        variable["value"] = ""
-                    elif variable["type"] == "number":
-                        self.globals[k] = 0
-                        variable["value"] = 0
-                    elif variable["type"] == "boolean":
-                        self.globals[k] = False
-                        variable["value"] = False
-                    elif variable["type"] == "object":
-                        self.globals[k] = {}
-                        variable["value"] = {}
-                    elif variable["type"].startswith("array"):
-                        self.globals[k] = []
-                        variable["value"] = []
-                    else:
-                        self.globals[k] = ""
-                else:
-                    self.globals[k] = ""
+        variable_keys = {key[4:] for key in self.globals if key.startswith("env.")} | self.variables.keys()
+        for key in variable_keys:
+            variable = self.variables.get(key, {})
+            variable_type = variable.get("type", "")
+            if variable.get("value") is not None:
+                value = deepcopy(variable["value"])
+            elif variable_type == "number":
+                value = 0
+            elif variable_type == "boolean":
+                value = False
+            elif variable_type == "object":
+                value = {}
+            elif isinstance(variable_type, str) and variable_type.startswith("array"):
+                value = []
+            else:
+                value = ""
+            self.globals[f"env.{key}"] = value
 
     async def run(self, **kwargs):
         self.globals["sys.date"] = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")

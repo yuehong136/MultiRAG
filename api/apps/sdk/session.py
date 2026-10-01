@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -185,7 +185,7 @@ class CreateAgentSessionRequest(BaseModel):
     release: bool = False
 
 
-def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest = None, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest | None = None, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)) -> JSONResponse:
     user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
     release_mode = request_body.release if request_body else False
 
@@ -208,7 +208,7 @@ def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest 
     canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
     canvas.reset()
 
-    cvs.dsl = json.loads(str(canvas))
+    session_dsl = json.loads(str(canvas))
     # 记录建会话时 canvas 的版本标题（按 release_mode 取已发布/最新版本）
     version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode)
     conv = {
@@ -217,7 +217,7 @@ def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest 
         "user_id": user_id,
         "message": [{"role": "assistant", "content": canvas.get_prologue()}],
         "source": "agent",
-        "dsl": cvs.dsl,
+        "dsl": session_dsl,
         "version_title": version_title,
     }
     API4ConversationService.save(db, **conv)

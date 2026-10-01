@@ -3,6 +3,69 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 4f6651968a4d3bd2d6635c048e1b5cf454b5221f · 会话变量默认值与 Explore 会话选择
+
+- 上游 #14399，2026-04-27；2026-10-02 核对 origin 并 fetch，
+  `origin/main` 为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本仓 `4bcac86494b9470af2f961c62ab9e067d974f5bc` 开始，核对目标两个文件完整 diff。
+
+| 上游 diff | 本项处置 |
+|---|---|
+| `agent/canvas.py:Canvas.reset` 从变量定义恢复 env 默认值，不再改定义 | 采用后修 `c949096db` 的 `value is not None` 和类型兜底，保留 False/0/空值；object/list 深拷贝，隔离真实 VariableAssigner 的原位 append。补齐定义有但 globals 无的键，序列化保存 globals；不改变 sys 清理及 mem 参数边界。 |
+| `web/src/pages/agent/chat/use-send-agent-message.ts` 优先 Explore session ID | 独立 web 由根聊天另派。本仓实际消费者为 `src/pages/agent/explore/hooks/use-explore-session-chat.ts` 与 `src/api/agent.ts`，交接下列现行契约，不修改 web。 |
+
+没有查到目标行为的 revert/re-land。相关链逐项处理：
+
+- `c949096db038f11d44b969902da440a800a75a3f` 修 truthy 判断：采纳，
+  同时修本地可变默认值别名问题，避免运行后定义被 append 污染。
+- `c1ee17bebc95d708263df3c04f97c3e0520e3d86` 删除 reset 中变量打印：采纳；
+  同提交 Invoke 代理改动属于另一行为，不合入。
+- `c50f9c59aae2a2ef1da356563a14acca084d255d`、
+  `c15241c3a9226c1d9d94f213f1c1689e382bd791` 的新会话清 history/sys.history/path：
+  本地 REST 显式建会话与 completion 首次会话已有完整 reset，真实 HTTP/SQL 验证复用；
+  已有会话装载自身 DSL 且不 reset。相关 Categorize/MCP 改动不合入。
+- `decb5dcb6f25a2be7d92d33277edc444d2cf961b` 与
+  `8a3699fa87d3842e6981d1313216674b86d9d81f` 改暂停路径组件 inputs/outputs 的逐轮重置：
+  属于 UserFillUp 暂停/续跑的组件状态规则，本项目标只改变完整 reset 的 env 默认值；
+  没有搬入该相邻调度重构。后续 Python 后端整体删除不在范围内。
+
+本地消费链：REST 显式创建会话、普通发布首次运行、已有会话运行、OpenAI 消息适配首次运行、
+显式 reset、组件 debug 均执行真实 Canvas/组件。SDK `create_agent_session` 没有注册 HTTP 路由，
+本项直接调用实际 helper 验证 scratch 事务；修复其把 reset 结果赋回 ORM Canvas 的问题，
+使新会话运行 DSL 独立保存，不会随 save 提交覆盖草稿。没有新增旧 SDK 路由。
+web serializer 把默认值放入 `variables[name].value` 与 `globals["env.name"]`，本次格式无需迁移。
+
+Go 核对 `internal/entity/canvas.go` 的 JSONMap DSL、`internal/dao/user_canvas.go` 的通用 CRUD、
+`internal/router/router.go` 的 CanvasService TODO、`internal/handler/memory.go` 与
+`internal/service/memory.go` 的 Canvas 消费 TODO，以及 `cmd/` 和 handler/service 全部入口。
+本仓没有 Go Canvas reset/VariableAssigner 执行链；`internal/server/variable.go` 是服务密钥配置，
+不是 env 会话变量。目标也无 Go diff，不新增空实现，无 Go 改动或专项构建声称。
+
+现行前端合同见 [HTTP 参考：会话变量默认值与重置](../references/http_api_reference.md#会话变量默认值与重置)：
+
+- 新会话 POST `/api/v1/agents/{id}/sessions`，body `release`，成功 `retcode=0/data.id`；
+  当前所选 Explore 会话 ID 放入 POST `/api/v1/agents/chat/completion` 的 `session_id`，
+  与 `agent_id/query/stream` 同传。普通 SSE 事件归属发起请求的 session，
+  切换会话后不得把在途流的 ID/history 写入另一个已选会话。
+- `variables` 是定义，`globals["env.*"]` 是会话运行值；旧会话保持自己的 DSL，
+  新会话/reset 恢复默认值。发布与草稿选择、开流前授权/失败及运行 error 合同沿用第五项。
+- POST `/api/v1/agents/{id}/reset` 只重置 SQL Canvas，不清已有会话、版本或 Redis 编辑器副本；
+  component debug 从 SQL 创建临时 reset 实例且不持久化。普通无 session 且未发布的 run
+  消费 Redis 编辑器副本，不能被声称为新会话 reset；草稿新会话需显式先创建。
+- 独立 web 正在另项修改；本项只有后端验收，没有浏览器 E2E 或前端完成声明。
+
+验证：改动前 35 个真实 Canvas 单测及 4 个 HTTP 默认值用例均复现失败；
+修复后的 35 个变量单测与 6 个既有 release 单测通过。新增 11 个集成用例
+（9 个真实 HTTP、2 个实际 SDK helper）通过，覆盖类型兜底、空值、mutable append、
+重复 reset、已选会话续跑、其他会话不变、发布/草稿首次运行、显式 reset/debug 及私有画布拒绝。
+SQL 独立读回确认定义默认值不被改写、旧会话运行值累计、新会话恢复默认值，
+Canvas/发布快照/Redis 保持对应边界；无远程 LLM 调用。
+本轮 `make verify` 通过（Ruff、8 条 import contracts、mypy 126 个源文件、3393 单测）；
+`make integration` 312 passed，无 skip，含既有 52 个发布/授权/错误回归和真实隔离 API 的
+`make smoke`。首轮 verify 只因两份新测试格式失败，局部格式化后复跑通过。
+fixture 确认 scratch 用户/token/成员关系/Canvas/版本/会话、专属 Redis key 和监听清理，
+一次性 scratch 数据库由共享 fixture 删除。未部署或操作生产数据；其他任务改动保留。
+
 ## 10e28e5c5f007f12df0cfa1ec36f307341b7316b · nginx 配置源挂载
 
 - 上游 #14361，2026-04-27；2026-10-02 核对预期 origin 并 fetch 后，

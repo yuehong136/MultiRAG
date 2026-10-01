@@ -378,6 +378,125 @@ def test_published_run_denials_before_stream(release_api: dict[str, Any], monkey
     assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("openai_compatible", [False, True])
+def test_http_variable_defaults_first_run(release_api: dict[str, Any], stream: bool, openai_compatible: bool) -> None:
+    env = release_api
+    created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "First run defaults", "dsl": variable_dsl("published")}, timeout=30).json()
+    assert created["retcode"] == 0
+    agent_id = created["data"]["id"]
+    update(env, agent_id, {"release": True})
+    update(env, agent_id, {"dsl": variable_dsl("draft")})
+    before = read_state(env, agent_id)
+    replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
+    replica_before = REDIS_CONN.get(replica_key)
+    seed = "draft" if openai_compatible else "published"
+    payload = {"agent_id": agent_id, "stream": stream, "release": not openai_compatible}
+    if openai_compatible:
+        payload.update({"openai-compatible": True, "messages": [{"role": "user", "content": "first"}]})
+    else:
+        payload["query"] = "first"
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json=payload, timeout=30)
+    assert response.status_code == 200, response.text
+    if stream:
+        events = sse_events(response.text)
+        if openai_compatible:
+            content = "".join(event["choices"][0]["delta"].get("content", "") for event in events)
+            assert "data: [DONE]" in response.text
+        else:
+            assert not any(event.get("event") == "error" for event in events)
+            content = "".join(event["data"]["content"] for event in events if event.get("event") == "message")
+    elif openai_compatible:
+        content = response.json()["choices"][0]["message"]["content"]
+    else:
+        assert response.json()["retcode"] == 0, response.text
+        content = response.json()["data"]["data"]["content"]
+    assert json.loads(content) == [seed, "first"]
+    with Session(env["engine"]) as db:
+        conversations = list(db.scalars(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id)))
+        assert len(conversations) == 1
+        session = conversations[0]
+        assert not session.errors
+        assert_variable_state(json.loads(session.dsl), seed, [seed, "first"], executed=True)
+        history = json.loads(session.dsl)["history"]
+        assert history[0] == ["user", "first"] and all("stale" not in str(turn) for turn in history)
+        expected_title = next(version["title"] for version in before["versions"] if version["release"] == (not openai_compatible))
+        assert session.version_title == expected_title
+        if stream and not openai_compatible:
+            assert all(event.get("session_id") == session.id for event in events)
+    assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_sdk_session_helper_variable_defaults_preserve_draft(release_api: dict[str, Any], release: bool) -> None:
+    from api.apps.sdk.session import CreateAgentSessionRequest, create_agent_session
+
+    env = release_api
+    created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "SDK defaults", "dsl": variable_dsl("published")}, timeout=30).json()
+    assert created["retcode"] == 0
+    agent_id = created["data"]["id"]
+    update(env, agent_id, {"release": True})
+    update(env, agent_id, {"dsl": variable_dsl("draft")})
+    before = read_state(env, agent_id)
+    replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
+    replica_before = REDIS_CONN.get(replica_key)
+    # This legacy helper is not registered as an HTTP route. Exercise its real
+    # Canvas and transaction against scratch, without inventing an SDK URL.
+    with Session(env["engine"]) as db:
+        response = create_agent_session(agent_id, CreateAgentSessionRequest(release=release), db=db, tenant_id=env["owners"][0])
+        result = json.loads(response.body)
+        assert result["code"] == 0, result
+        session_id = result["data"]["id"]
+    with Session(env["engine"]) as db:
+        session = db.get(API4Conversation, session_id)
+        assert session is not None
+        seed = "published" if release else "draft"
+        assert_variable_state(session.dsl, seed, [seed], executed=False)
+        assert session.dsl["history"] == [] and session.dsl["path"] == []
+    assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
+
+
+def test_http_variable_defaults_reset_and_component_debug(release_api: dict[str, Any]) -> None:
+    env = release_api
+    created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Reset defaults", "dsl": variable_dsl("seed")}, timeout=30).json()
+    assert created["retcode"] == 0
+    agent_id = created["data"]["id"]
+    before = read_state(env, agent_id)
+    replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
+    replica_before = REDIS_CONN.get(replica_key)
+    created_session = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={}, timeout=30).json()
+    assert created_session["retcode"] == 0
+    session_id = created_session["data"]["id"]
+    with Session(env["engine"]) as db:
+        session = db.get(API4Conversation, session_id)
+        assert session is not None
+        session_before = session.to_dict()
+    debug_url = f"{env['base']}/api/v1/agents/{agent_id}/components/Message:answer/debug"
+    for _ in range(2):
+        response = env["client"].post(debug_url, json={"params": {}}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+        assert json.loads(response.json()["data"]["content"]) == ["seed"]
+        assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
+    for _ in range(2):
+        response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/reset", json={}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+        assert_variable_state(response.json()["data"], "seed", ["seed"], executed=False)
+        state = read_state(env, agent_id)
+        assert_variable_state(state["dsl"], "seed", ["seed"], executed=False)
+        assert state["dsl"]["history"] == [] and state["dsl"]["path"] == [] and state["dsl"]["globals"]["sys.history"] == []
+        assert state["versions"] == before["versions"] and state["release"] == before["release"]
+        # The existing explicit reset contract updates SQL Canvas only.
+        assert REDIS_CONN.get(replica_key) == replica_before
+        with Session(env["engine"]) as db:
+            session = db.get(API4Conversation, session_id)
+            assert session is not None and session.to_dict() == session_before
+    after_reset = read_state(env, agent_id)
+    for url, payload in [(debug_url, {"params": {}}), (f"{env['base']}/api/v1/agents/{agent_id}/reset", {})]:
+        response = env["client"].post(url, json=payload, headers={"Authorization": f"Bearer {env['foreign_jwt']}"}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 103 and response.json()["data"] is False, response.text
+        assert read_state(env, agent_id) == after_reset and REDIS_CONN.get(replica_key) == replica_before
+
+
 def sse_events(text: str) -> list[dict[str, Any]]:
     return [json.loads(line[5:]) for line in text.splitlines() if line.startswith("data:") and "[DONE]" not in line]
 
@@ -576,3 +695,125 @@ def test_existing_session_run_denials_are_http_errors(release_api: dict[str, Any
         assert session is not None and session.to_dict() == before
         assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id.in_([agent_id, requested_agent]))) == 1
     assert read_state(env, agent_id) == agent_before and REDIS_CONN.get(replica_key) == replica_before
+
+
+def variable_dsl(seed: str) -> dict[str, Any]:
+    dsl = message_dsl("{env.items}")
+    dsl["components"]["begin"]["downstream"] = ["VariableAssigner:append"]
+    dsl["components"]["Message:answer"]["upstream"] = ["VariableAssigner:append"]
+    dsl["components"]["VariableAssigner:append"] = {
+        "obj": {
+            "component_name": "VariableAssigner",
+            "params": {
+                "variables": [{"variable": "{env.items}", "operator": "append", "parameter": "{sys.query}"}, {"variable": "{env.object}", "operator": "set", "parameter": {"runtime": ["changed"]}}]
+            },
+        },
+        "upstream": ["begin"],
+        "downstream": ["Message:answer"],
+    }
+    dsl["variables"] = {
+        "items": {"type": "array<string>", "value": [seed]},
+        "object": {"type": "object", "value": {"nested": [seed]}},
+        "text": {"type": "string", "value": seed},
+        "number": {"type": "number", "value": 7},
+        "boolean": {"type": "boolean", "value": True},
+        "explicit_false": {"type": "number", "value": False},
+        "explicit_zero": {"type": "boolean", "value": 0},
+        "explicit_empty": {"type": "number", "value": ""},
+        "empty_object": {"type": "object", "value": {}},
+        "empty_array": {"type": "array<string>", "value": []},
+        "fallback_number": {"type": "number", "value": None},
+        "fallback_boolean": {"type": "boolean"},
+        "fallback_object": {"type": "object", "value": None},
+        "fallback_array": {"type": "array<string>"},
+        "fallback_string": {"type": "string", "value": None},
+        "fallback_unknown": {"type": "unknown", "value": None},
+    }
+    dsl["globals"] = {"sys.query": "stale", "sys.user_id": "stale", "sys.conversation_turns": 8, "sys.files": [], "sys.history": ["stale"], **{f"env.{name}": "stale" for name in dsl["variables"]}}
+    dsl["globals"]["env.items"] = ["stale-runtime"]
+    dsl["globals"]["env.object"] = {"stale": []}
+    dsl["history"] = [["user", "stale history"]]
+    return dsl
+
+
+def assert_variable_state(dsl: dict[str, Any], seed: str, items: list[str], *, executed: bool) -> None:
+    assert dsl["variables"] == variable_dsl(seed)["variables"]
+    expected = {
+        "env.items": items,
+        "env.object": {"runtime": ["changed"]} if executed else {"nested": [seed]},
+        "env.text": seed,
+        "env.number": 7,
+        "env.boolean": True,
+        "env.explicit_false": False,
+        "env.explicit_zero": 0,
+        "env.explicit_empty": "",
+        "env.empty_object": {},
+        "env.empty_array": [],
+        "env.fallback_number": 0,
+        "env.fallback_boolean": False,
+        "env.fallback_object": {},
+        "env.fallback_array": [],
+        "env.fallback_string": "",
+        "env.fallback_unknown": "",
+    }
+    for key, value in expected.items():
+        assert dsl["globals"][key] == value and type(dsl["globals"][key]) is type(value), key
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("release", [False, True])
+def test_http_variable_defaults_new_and_existing_sessions(release_api: dict[str, Any], stream: bool, release: bool) -> None:
+    env = release_api
+    created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Variable defaults", "dsl": variable_dsl("published")}, timeout=30).json()
+    assert created["retcode"] == 0
+    agent_id = created["data"]["id"]
+    update(env, agent_id, {"release": True})
+    update(env, agent_id, {"dsl": variable_dsl("draft")})
+    seed = "published" if release else "draft"
+    before = read_state(env, agent_id)
+    replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
+    replica_before = REDIS_CONN.get(replica_key)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": release}, timeout=30)
+    assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+    session_id = response.json()["data"]["id"]
+    untouched = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": release}, timeout=30).json()
+    assert untouched["retcode"] == 0
+    untouched_id = untouched["data"]["id"]
+    with Session(env["engine"]) as db:
+        session = db.get(API4Conversation, session_id)
+        assert session is not None
+        assert_variable_state(session.dsl, seed, [seed], executed=False)
+        assert session.dsl["history"] == [] and session.dsl["path"] == [] and session.dsl["globals"]["sys.history"] == []
+        unrelated = db.get(API4Conversation, untouched_id)
+        assert unrelated is not None
+        unrelated_before = unrelated.to_dict()
+    for query, expected in [("first", [seed, "first"]), ("second", [seed, "first", "second"])]:
+        response = env["client"].post(
+            f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id, "session_id": session_id, "release": release, "query": query, "stream": stream}, timeout=30
+        )
+        assert response.status_code == 200, response.text
+        if stream:
+            events = sse_events(response.text)
+            assert not any(e.get("event") == "error" for e in events)
+            content = "".join(e["data"]["content"] for e in events if e.get("event") == "message")
+            assert all(e.get("session_id") == session_id for e in events)
+        else:
+            assert response.json()["retcode"] == 0, response.text
+            content = response.json()["data"]["data"]["content"]
+        assert json.loads(content) == expected
+        with Session(env["engine"]) as db:
+            session = db.get(API4Conversation, session_id)
+            assert session is not None and not session.errors
+            assert_variable_state(json.loads(session.dsl), seed, expected, executed=True)
+    other = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": release}, timeout=30).json()
+    assert other["retcode"] == 0 and other["data"]["id"] != session_id
+    with Session(env["engine"]) as db:
+        other_session = db.get(API4Conversation, other["data"]["id"])
+        assert other_session is not None
+        assert_variable_state(other_session.dsl, seed, [seed], executed=False)
+        session = db.get(API4Conversation, session_id)
+        assert session is not None
+        assert_variable_state(json.loads(session.dsl), seed, [seed, "first", "second"], executed=True)
+        unrelated = db.get(API4Conversation, untouched_id)
+        assert unrelated is not None and unrelated.to_dict() == unrelated_before
+    assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before

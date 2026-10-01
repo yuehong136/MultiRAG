@@ -121,6 +121,35 @@ owner 可以运行；其他用户需要已加入 owner 的团队（成员关系 
 失败会话记录错误和本次用户输入，不追加本次的成功助手答案；已有历史答案保留。
 成功的 `message_end` 在运行结果持久化后才发送。
 
+### 会话变量默认值与重置
+
+Agent DSL 的 `variables` 保存定义，例如
+`{"items": {"type": "array<string>", "value": ["seed"]}}`；
+`globals["env.items"]` 保存本次运行值，组件通过 `{env.items}` 引用。
+重置只恢复运行值，不改写 `variables.items.value`。`value` 非 `null` 时直接采用，
+包括 `false`、`0`、`""`、`{}`、`[]`；object/list 在运行前深拷贝，append 不会污染默认值。
+缺少 `value` 或为 `null` 时，number/boolean/object/array 分别恢复为
+`0`/`false`/`{}`/`[]`，string、未知或缺少类型恢复为 `""`。
+定义已存在但 `globals` 尚无对应键时也会初始化；序列化会保存这些运行值。
+
+| 操作 | 变量与会话状态 |
+|---|---|
+| **POST** `/agents/{agent_id}/sessions`，body `{"release": false}` 或 `{"release": true}` | 从草稿或最新发布快照创建新会话，恢复默认值、清空 history/path；成功 `retcode=0`，新 ID 为 `data.id` |
+| 普通 **POST** `/agents/chat/completion`，首次传 `release: true` | 首次运行发布快照并创建会话，恢复默认值；`stream` 可为 true/false |
+| 同一路径传 `agent_id`、`session_id`、`query`、`stream` | 装载该会话保存的 DSL，继续运行值和历史；`release` 不替换已有会话 DSL |
+| **POST** `/agents/{agent_id}/reset`，空 body | SQL Canvas 恢复变量默认值并清空运行状态，成功返回 `retcode=0` 和 `data` DSL；既有会话、版本和 Redis 编辑器副本保持原状态 |
+| **POST** `/agents/{agent_id}/components/{component_id}/debug`，body `{"params": {}}` | 从 SQL Canvas 建立临时运行实例并 reset；返回组件输出，不保存 Canvas 或会话状态 |
+
+普通会话运行的 SSE 成功帧带本次 `session_id`，非流式成功响应为
+`{"retcode": 0, "data": {"data": {"content": "..."}, "session_id": "..."}}`。
+前端应将 Explore 当前选择的会话 ID 放入运行请求；切换选择后仍把在途结果归属到
+发起请求的会话，禁止用该流返回的 ID 覆盖另一个已选会话。新建会话后使用 `data.id`。
+运行失败沿用上一节的 HTTP/业务码及 SSE error 语义。
+
+无 `session_id` 且 `release` 非 true 的普通运行使用 Redis 编辑器副本，不创建 SQL 会话，
+不能当作上述新会话重置操作。需要草稿新会话时先显式创建，再传该 `session_id` 运行。
+`openai-compatible: true` 的消息适配路径另用 OpenAI 响应形状，不能套用普通 SSE 会话 ID 合同。
+
 ## 对话 API
 
 ### 上传运行时附件
