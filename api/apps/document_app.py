@@ -32,7 +32,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.document_service import DocumentService, doc_upload_and_parse, queue_analyze_v2_task
 from api.db.services.file2document_service import File2DocumentService
-from api.db.services.file_service import FileService, UploadInfoArgumentError
+from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService, cancel_all_task_of
@@ -5364,41 +5364,3 @@ async def get_document_summary(
     except Exception as e:
         logging.exception(f"Get document summary failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/upload_info", summary="上传文件获取信息", response_description="成功上传文件", deprecated=True)
-async def upload_info(
-    url: str | None = Query(None, description="URL地址，用于下载网页内容"),
-    file: list[UploadFile | str] | None = File(None),
-    db: AsyncSession = Depends(get_async_db),
-    user: Principal = Depends(async_current_user),
-) -> Response:
-    """
-    兼容入口。新客户端使用 POST /api/v1/documents/upload。
-    独立 web 的 conversation.uploadInfo、use-chat-upload 和 use-mcp-upload
-    切换并完成实际请求验收后，删除此入口。
-
-    概要：支持两种方式：1) 直接上传一个或多个文件，2) 通过URL抓取网页内容。
-    两者互斥，且必须提供其一。
-
-    参数：
-    - **url**: URL地址（可选），用于爬取网页内容
-    - **file**: 上传的文件（可选，支持多个）
-
-    返回：
-    - dict | list[dict]: 单文件/单 URL 返回 dict；多文件返回 dict 列表
-        - id: 文件唯一标识
-        - name: 文件名
-        - size: 文件大小
-        - extension: 文件扩展名
-        - mime_type: MIME类型
-        - created_by: 创建者ID
-        - created_at: 创建时间
-        - preview_url: 预览URL
-    """
-    try:
-        return get_json_result(data=await FileService.upload_infos(db, user.platform_user_id, file, url))
-    except UploadInfoArgumentError as exc:
-        return get_json_result(data=False, retmsg=str(exc), retcode=RetCode.BAD_REQUEST)
-    except Exception as e:
-        return server_error_response(e)

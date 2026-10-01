@@ -117,6 +117,12 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     env = runtime_upload_api
     headers = {"Authorization": f"Bearer {env['jwt']}"}
     url = f"{env['base']}/api/v1/documents/upload"
+    retired = requests.post(f"{env['base']}/v1/document/upload_info", headers=headers, files={"file": ("retired.txt", b"must not upload")}, timeout=30)
+    assert retired.status_code == 404
+    assert retired.json() == {"code": 404, "message": "Not Found: /v1/document/upload_info", "data": None, "error": "Not Found"}
+    assert not list(env["storage"].list_objects(env["bucket"], recursive=True))
+    paths = requests.get(f"{env['base']}/openapi.json", timeout=30).json()["paths"]
+    assert "/v1/document/upload_info" not in paths and "post" in paths["/v1/document/upload_and_parse"]
     text = b"Runtime attachment from the REST endpoint. Owned by the first test user."
     response = requests.post(url, headers=headers, files={"file": ("single.txt", text, "text/plain")}, timeout=30)
     assert response.status_code == 200 and response.json()["code"] == 0
@@ -125,6 +131,7 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     assert single["name"] == "single.txt" and single["mime_type"] == "text/plain" and single["size"] == len(text)
     assert single["extension"] == "txt" and single["preview_url"] is None and isinstance(single["created_at"], (float, int))
     assert read_object(env["storage"], env["bucket"], f"{single['created_by']}-downloads/{single['id']}") == text
+    assert json.loads(read_object(env["storage"], env["bucket"], f"{single['created_by']}-downloads/{single['id']}.upload.json")) == single
     with pytest.raises(S3Error) as denied:
         read_object(env["storage"], env["bucket"], f"{env['owners'][1]}-downloads/{single['id']}")
     assert denied.value.code == "NoSuchKey"
@@ -143,8 +150,9 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     for item, binary in zip(multiple, [b"second owner's text", image_bytes], strict=True):
         assert item["created_by"] == env["owners"][1] and item["size"] == len(binary)
         assert read_object(env["storage"], env["bucket"], f"{item['created_by']}-downloads/{item['id']}") == binary
+        assert json.loads(read_object(env["storage"], env["bucket"], f"{item['created_by']}-downloads/{item['id']}.upload.json")) == item
     for path, field, auth, code_key, owner in [
-        ("/v1/document/upload_info", "file", headers, "retcode", env["owners"][0]),
+        ("/api/v1/documents/upload", "file", headers, "code", env["owners"][0]),
         ("/api/v1/files/upload_info", "files", api_headers, "code", env["owners"][1]),
     ]:
         body = requests.post(f"{env['base']}{path}", headers=auth, files={field: ("compat.txt", b"compatibility bytes", "text/plain")}, timeout=30).json()
@@ -152,6 +160,7 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
         descriptor = body["data"]
         assert descriptor["created_by"] == owner and descriptor["size"] == len(b"compatibility bytes")
         assert read_object(env["storage"], env["bucket"], f"{owner}-downloads/{descriptor['id']}") == b"compatibility bytes"
+        assert json.loads(read_object(env["storage"], env["bucket"], f"{owner}-downloads/{descriptor['id']}.upload.json")) == descriptor
     canvas = Canvas.__new__(Canvas)
     with ThreadPoolExecutor(max_workers=2) as pool:
         canvas._thread_pool = pool
@@ -237,4 +246,6 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
 
     smoke = subprocess.run(["make", "smoke"], cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
-    print("real HTTP: JWT single + API-key repeated-file; MinIO bytes/owner + chat/Canvas + Redis descriptor readback; make smoke passed; scratch cleanup required")
+    print(
+        "real HTTP: retired metadata alias rejects without objects/OpenAPI; REST JWT single + API-key repeated-file + SDK files retained; independent MinIO bytes/owner/registration + chat/Canvas + Redis readback; make smoke passed; scratch cleanup required"
+    )

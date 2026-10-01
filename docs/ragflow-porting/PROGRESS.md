@@ -12,23 +12,25 @@
 | 上游文件/行为 | 处置 |
 |---|---|
 | `api/apps/restful_apis/document_api.py` | 采纳 `/api/v1/documents/upload`，重复 `file` / query `url` 互斥且须其一，单对象/多数组。PR 描述的 `documentss` 拼写错误不采纳。FastAPI + 异步 Principal + 请求级 AsyncSession；直接 await 已有 async service，不复制上游线程池包装异步函数。 |
-| `api/apps/document_app.py` 删除旧路由和导入 | 迁移期间保留 deprecated，共用上传 service。开工时独立 web 的 conversation/use-chat-upload/use-mcp-upload 使用旧路由；交付复核 web `5c7a773` 已切换 URL，仍待前端真实跨端验收后退出。 |
+| `api/apps/document_app.py` 删除旧路由和导入 | 开工时 web 的 conversation/use-chat-upload/use-mcp-upload 使用旧路由，迁移期间先保留 deprecated。web `5c7a773` 完成真实跨端验收后，本项收尾删除 `/v1/document/upload_info` 及唯一专用导入 `UploadInfoArgumentError`。 |
 | `test/testcases/test_web_api/test_common.py` | 不复制上游 HTTP harness；重建当前 unit fixture 与 scratch PostgreSQL/MinIO 的真实 HTTP 验收。 |
 | `test/.../test_upload_info_unit.py` | 采纳测试意图，但不采用只看 data 存在、条件性数组断言；明确验证类型、元素字段、业务码、鉴权、owner、独立字节读回和实际消费者。 |
 | `web/src/hooks/use-chat-request.ts` | 前端另派；本项核对并修复后端聊天/MCP 附件消费链，未修改 web。 |
-| `web/src/services/next-chat-service.ts` | 前端 `5c7a773` 已完成代码阶段；提供准确 multipart/响应/认证契约，SDK 既有入口保留。 |
-| `web/src/utils/api.ts` | 新 URL 已落实两仓；web 代码阶段已提交，真实跨端验收尚待其任务完成。 |
+| `web/src/services/next-chat-service.ts` | 前端 `5c7a773` 已完成代码与隔离跨端验收；准确 multipart/响应/认证契约，SDK 既有入口保留。 |
+| `web/src/utils/api.ts` | 新 URL 已落实两仓，web 当前 tracked 文件无旧路径活动调用，真实上传和消费者验收通过。 |
 
 未查到本项的 revert/re-land；后续 `a4f325be2` (#16264) 恢复旧路径兼容，
-与本仓保留已查明活动消费者一致。`e35860ad7` (#16269) 另补 Go 上传与 metadata batch；
+本仓初期据已查明活动消费者保留兼容；当前 web 完成迁移验收，按用户授权和已约定退出条件
+删除旧别名。`e35860ad7` (#16269) 另补 Go 上传与 metadata batch；
 其中 downloads descriptor、正确字节数、HTTP 错误与 URL 内容类型归一化作为交叉核验。
-后续 Python 删除不是本项迁移目标。已实际核对本仓 Go `internal/router/router.go`、
+后续整体 Python 后端删除另属其他提交。已实际核对本仓 Go `internal/router/router.go`、
 `internal/handler/document.go`、`internal/service/file.go` 与 `internal/cli/{client,http_client,contextengine/*}.go`：
 Go 无 upload_info 路由/descriptor 消费者；活跃 CLI 文件 provider 使用 `/files`、dataset provider 使用
 `/datasets/{id}/documents`，本次新增附件入口未改变它们的路径/数据合同，因此本项不改 Go。
 
-必要本地适配：三个文档/文件网关共用 `FileService.upload_infos`，SDK `/files/upload_info`
-保留字段 `files` 与已有鉴权；旧 web 保留 retcode 响应。新入口的 JWT / SDK Key 都校验
+必要本地适配：当前 REST 文档与 SDK 文件两个网关共用 `FileService.upload_infos`，
+SDK `/files/upload_info` 保留字段 `files` 与已有鉴权；旧 web metadata 网关已退役。
+新入口的 JWT / SDK Key 都校验
 有效用户与个人 owner membership，`created_by` 使用服务器 Principal 的 platform_user_id。
 存储仍为 `<owner>-downloads`，没有写入 dataset/File/Document 表或宣称解析完成。
 `size` 改为实际 bytes 长度，URL 生成的 PDF 使用正确 MIME。
@@ -55,7 +57,8 @@ URL 保留原初始/DNS/redirect 防护，并修复 HTTP 预检与浏览器第�
 owner key、随机 Redis descriptor key、完整 API 的临时 HTTP 监听（不启后台 lifespan）。
 单文件与重复 file 的文本+PNG 多文件验证完整元数据、逐对象独立字节读回、错误 owner key 无对象；
 实际 `split_file_attachments` 和 `Canvas.get_files_async` 解析文字/图片，再把 Redis 读回的
-descriptor 交给消费者。旧 web/SDK 入口亦实际上传并读回。缺/无效认证、失效 membership、
+descriptor 交给消费者。核心阶段旧 web/SDK 入口亦实际上传并读回；退役收尾改为验证
+旧路径拒绝且不写对象，REST/SDK 继续上传并独立读回字节和可信描述。缺/无效认证、失效 membership、
 缺/混合/空字段、内网 URL、真实 MinIO 失败和第二次写失败均核业务码与无成功 data。
 第二次失败后独立列举对象，证明本批无残留且既有对象仍在；unit 另覆盖 False/None 回执、
 清理失败诊断、描述登记失败补偿和请求取消后无对象。真实补偿验收发现 nest_asyncio 的
@@ -63,7 +66,7 @@ Python Task 与 beartype 的 C Task 注解不相容，drain 边界改用 Awaitab
 
 另用真实 HTTP 上传文本+PNG，独立 MinIO 字节/可信描述读回，再仅提交 IDs 到 MCP。
 使用真实 ChatAgentAdapter、Agent、Canvas 和解析器，普通/structured、tools/no-tools、
-流式/非流式 8 分支在模型调用边界捕获到了文件正文和正确 image data URI；旧 web/SDK
+流式/非流式 8 分支在模型调用边界捕获到了文件正文和正确 image data URI；REST/SDK
 上传登记也经 ID-only 聊天实际消费。missing/foreign ID、删除 blob、真实损坏 DOCX 解析
 失败均覆盖普通/structured/非流式，模型未被调用。provider exception/错误标记均无成功完成帧。
 模型 provider 为捕获假件；tools 分支选用工具存在假件，没有调用远程 LLM 或外部 MCP 工具。
@@ -76,13 +79,35 @@ Python Task 与 beartype 的 C Task 注解不相容，drain 边界改用 Awaitab
 没有放宽共享防护；缺 Chromium 时明确失败，安装运行资源后验收成功。
 所有 scratch 用户、membership、token、MinIO 对象/bucket、Redis key 和 HTTP 监听都在退出时清理。
 
-本次最终门禁：`make verify` 通过（Ruff、8 个分层契约、async DB 检查、mypy 126 文件、
+核心提交 `691a889c` 门禁：`make verify` 通过（Ruff、8 个分层契约、async DB 检查、mypy 126 文件、
 3324 unit）；带外部 URL 选项的 `make integration` 249 passed、无 skip。
 隔离 HTTP 验收内实际运行 `make smoke` 通过；URL、真实浏览器防绕过、附件可信恢复与
 模型输入捕获均在当前树复跑。未将旧运行结果当本次门禁证据。
 
-前端契约与兼容退出条件集中见 [HTTP API](../references/http_api_reference.md#上传运行时附件)。
-本项未运行远程大模型或完整外部 MCP 工具调用；前端跨端验收由已派发的 web 任务完成。
+2026-10-02 收尾再次 fetch，上游 `origin/main` 仍为上述 SHA。前端
+`5c7a77382cb87400bf70ff492b1b310cb89ce3bd` 对后端
+`691a889c` 的真实浏览器隔离验收完成。ExplorePage 文件选择器上传 TXT/PNG，实际
+conversation/completion 的 FileService 解析结果进入 system prompt/images；MCPChatPage
+上传后只传两个字符串 ID，经 Canvas 解析进入模型边界。structured 分支用临时入口挂载
+相同 useMcpUpload/streamStructuredChat；模型 provider 为边界假件，未验工具配置 UI
+或执行外部 MCP 工具。401 后恢复凭据重试、即时取消无可发送 ID、具同等模型配置的
+第二 owner/missing ID 流前 400、普通/structured 错误非零无成功完成帧及非流式 500 通过。
+独立 MinIO 逐字节/owner/size/可信描述核对 10 个前端对象和 2 个 SDK 对象；隔离库 10 张相关
+SQL 表均为 0 行，测试桶/对象/描述清除，专用 Redis 清空后容器和匿名卷移除，四个自有监听关闭。
+主浏览器 origin 存储清空；旧错误/失联标签页因策略或超时未强行处理，测试账号与有效凭据已失效。
+当前两仓活动调用核对未见旧别名消费者；本项仅移除该别名，保留 REST/SDK、
+`/v1/document/upload_and_parse` 及 Agent 共用 helper，相关单测改为退役断言。
+
+退役收尾门禁：本轮 `make verify`（Ruff、8 个分层契约、async DB 检查、mypy 126 文件、
+3323 unit）与 `make integration`（249 passed、无 skip）通过。后者在隔离 HTTP API 内
+实际运行 `make smoke` 通过；旧路径返回 HTTP/code 404、data=null，不写对象，路由与
+OpenAPI 均无该别名。REST JWT 单文件/API Key 多文件及 SDK `files` 继续 code=0，
+逐对象独立读回字节、owner/size 和可信描述；MCP 内容消费回归保留。随机测试桶及对象/描述、
+scratch 用户/token/membership、Redis key 与自有 API 监听退出时均已清理，scratch DB 由 fixture 删除。
+首轮新断言误将统一 404 的 data=null 视作异常，按现有错误协议改为完整响应断言后复跑通过。
+
+当前契约集中见 [HTTP API](../references/http_api_reference.md#上传运行时附件)。
+本项未运行远程大模型或完整外部 MCP 工具调用。
 没有修改既有 Agent 上传/同步 webhook 的鉴权和事务链。同步 webhook 尚有旧线程池调用
 async upload_info 的既有签名问题，本项未为附件路径迁移扩大整个 webhook session 改造。
 

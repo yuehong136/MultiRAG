@@ -63,7 +63,7 @@ def test_real_http_mcp_attachment_consumption_and_failures(runtime_upload_api: d
             assert not any(location in str(model_input) for location in ids)
 
     # All active upload gateways register descriptors that ID-only MCP can restore.
-    for path, field, auth, code_key in (("/v1/document/upload_info", "file", headers, "retcode"), ("/api/v1/files/upload_info", "files", foreign_headers, "code")):
+    for path, field, auth, code_key in (("/api/v1/documents/upload", "file", headers, "code"), ("/api/v1/files/upload_info", "files", foreign_headers, "code")):
         compat = requests.post(f"{env['base']}{path}", headers=auth, files={field: ("compat-mcp.txt", b"compat MCP content", "text/plain")}, timeout=30).json()
         assert compat[code_key] == 0
         response = request([compat["data"]["id"]], False, False, auth)

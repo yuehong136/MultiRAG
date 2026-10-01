@@ -1,7 +1,7 @@
-"""FileService.upload_info 与其三条路由契约（restful_apis AsyncSession 收口）。
+"""FileService.upload_info、SDK/Agent 上传契约与旧文档别名退役。
 
 服务层：健康检查走 run_sync，PDF 修复 + 存储写入在工作线程执行；
-路由层：file_api 的 code/data、canvas/document 的 retcode 两套形状钉板。
+路由层：file_api 的 code/data 与 canvas 的 retcode 两套形状钉板。
 """
 
 import threading
@@ -10,6 +10,7 @@ from contextlib import nullcontext
 
 import crawl4ai
 import pytest
+from fastapi.testclient import TestClient
 
 import api.db.services.file_service as file_service_module
 from api.db.services.canvas_service import UserCanvasService
@@ -226,7 +227,7 @@ async def test_upload_info_crawl_failure_does_not_store(async_db, monkeypatch, r
 
 
 # ---------------------------------------------------------------------------
-# 路由层（FileService.upload_info 打桩，锁三套响应形状）
+# 路由层（FileService.upload_info 打桩，锁 SDK/Agent 响应及旧别名退役）
 # ---------------------------------------------------------------------------
 
 
@@ -286,11 +287,9 @@ def test_canvas_upload_missing_canvas_shape(client, upload_info_stub, monkeypatc
     assert upload_info_stub == []
 
 
-def test_document_upload_info_shape(client, upload_info_stub):
+def test_document_upload_info_is_retired(client: TestClient, upload_info_stub: list[tuple]) -> None:
     resp = client.post("/v1/document/upload_info", files={"file": ("c.txt", b"data", "text/plain")})
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["retcode"] == 0
-    assert body["data"] == {"id": "loc1", "name": "c.txt"}
-    assert upload_info_stub == [("user-unit", "c.txt", None)]  # Principal.id 注入 user_id 位
+    assert resp.status_code == 404
+    assert resp.json() == {"code": 404, "message": "Not Found: /v1/document/upload_info", "data": None, "error": "Not Found"}
+    assert upload_info_stub == []

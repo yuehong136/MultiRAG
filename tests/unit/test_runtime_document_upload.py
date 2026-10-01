@@ -89,7 +89,6 @@ def test_rest_upload_rejects_bad_input_before_storage(client: TestClient, upload
     [
         ("/api/v1/documents/upload", "file", "code", RetCode.ARGUMENT_ERROR),
         ("/api/v1/files/upload_info", "files", "code", RetCode.ARGUMENT_ERROR),
-        ("/v1/document/upload_info", "file", "retcode", RetCode.BAD_REQUEST),
     ],
 )
 def test_gateways_share_shapes_and_url_argument_errors(client: TestClient, uploaded: list, monkeypatch: pytest.MonkeyPatch, path: str, field: str, code_key: str, error_code: int) -> None:
@@ -227,11 +226,13 @@ def test_unknown_cleanup_readback_is_not_confirmed_success(client: TestClient, m
     assert "data" not in response.json()
 
 
-def test_upload_routes_have_correct_compatibility_flags(client: TestClient) -> None:
+def test_upload_routes_expose_rest_and_sdk_without_retired_alias(client: TestClient) -> None:
     paths = client.app.openapi()["paths"]
-    assert paths["/v1/document/upload_info"]["post"]["deprecated"] is True
+    assert "/v1/document/upload_info" not in paths
+    assert not any(getattr(route, "path", None) == "/v1/document/upload_info" for route in client.app.routes)
     assert not paths["/api/v1/documents/upload"]["post"].get("deprecated", False)
     assert not paths["/api/v1/files/upload_info"]["post"].get("deprecated", False)
+    assert "post" in paths["/v1/document/upload_and_parse"]
 
 
 @pytest.mark.parametrize("token", [None, "invalid-token"])

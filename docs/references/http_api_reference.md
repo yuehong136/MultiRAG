@@ -116,11 +116,11 @@ HTTP 400 和 `detail`。开始回答后发生模型等执行错误，SSE 发送 
 不再发送 `retcode=0, data=true` 的成功完成帧；非流式执行失败返回 HTTP 500。
 成功的 SSE 帧格式保持原协议。
 
-兼容情况：`POST /v1/document/upload_info` 保留 `retcode/retmsg/data` 响应并标记
-deprecated，作为独立 web 的上传迁移验收兼容入口。web `5c7a773` 已把 Explore
-与 MCP 调用切换到新 URL；两条前端链路的真实跨端请求验收仍待其任务完成，完成后删除旧入口。
+`POST /v1/document/upload_info` 已移除；聊天附件上传使用
+`POST /api/v1/documents/upload` 和上述 `file`、`code/data` 合同。
+旧路径返回 HTTP 404、`code=404`、`data=null`，不再出现在 OpenAPI 中。
 SDK 已有 `POST /api/v1/files/upload_info` 继续使用 multipart 字段 `files` 及
-`code/data` 响应；它与新入口复用上传 service，不因路径相似而退役。
+`code/data` 响应，与新入口复用上传 service。
 
 ### 创建聊天会话
 
