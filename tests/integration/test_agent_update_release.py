@@ -16,13 +16,16 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 import uvicorn
+from fastapi import BackgroundTasks
 from requests import Session as HTTPSession
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from agent.canvas import Canvas
+from api.db import UserTenantRole
 from api.db.db_models import API4Conversation, APIToken, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant, get_async_db, get_db
+from common.constants import StatusEnum
 from core.utils.redis_conn import REDIS_CONN
 
 
@@ -48,7 +51,7 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
     sync_sessions = sessionmaker(bootstrapped_engine, expire_on_commit=False)
     with sync_sessions() as db:
         for owner, token in zip(owners, api_keys, strict=True):
-            db.add(User(id=owner, email=f"{owner}@release.test", nickname="Release test", password="unused", access_token="active"))
+            db.add(User(id=owner, email=f"{owner}@release.example.com", nickname="Release test", password="unused", access_token="active"))
             db.add(Tenant(id=owner, name="Release scratch", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
             db.add(UserTenant(id=uuid4().hex, user_id=owner, tenant_id=owner, role="owner", invited_by=owner))
             db.add(APIToken(tenant_id=owner, token=token, name="release-test"))
@@ -91,7 +94,7 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
             time.sleep(0.05)
         assert server.started
         with HTTPSession() as client:
-            client.headers["Authorization"] = f"Bearer {apps.manager.create_access_token(data={'sub': f'{owners[0]}@release.test'})}"
+            client.headers["Authorization"] = f"Bearer {apps.manager.create_access_token(data={'sub': f'{owners[0]}@release.example.com'})}"
             yield {
                 "base": base,
                 "owners": owners,
@@ -100,8 +103,8 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 "engine": bootstrapped_engine,
                 "task_ids": task_ids,
                 "runtime_tenants": runtime_tenants,
-                "jwts": [apps.manager.create_access_token(data={"sub": f"{owner}@release.test"}) for owner in owners],
-                "foreign_jwt": apps.manager.create_access_token(data={"sub": f"{owners[1]}@release.test"}),
+                "jwts": [apps.manager.create_access_token(data={"sub": f"{owner}@release.example.com"}) for owner in owners],
+                "foreign_jwt": apps.manager.create_access_token(data={"sub": f"{owners[1]}@release.example.com"}),
             }
     finally:
         server.should_exit = True
@@ -152,6 +155,52 @@ def update(env: dict[str, Any], agent_id: str, payload: dict[str, Any]) -> None:
     response = env["client"].put(f"{env['base']}/api/v1/agents/{agent_id}", json=payload, timeout=30)
     assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
     assert response.json()["data"] is True
+
+
+def invite_member(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caller: int) -> None:
+    scheduled: list[tuple[str, str]] = []
+
+    def record_email(background_tasks: BackgroundTasks, tenant_id: str, to_email: str, inviter: str) -> None:
+        scheduled.append((tenant_id, to_email))
+
+    email = f"{env['owners'][caller]}@release.example.com"
+    # Exercise real invitation/auth/SQL; intercept only outbound mail scheduling.
+    with monkeypatch.context() as patch:
+        patch.setattr(sys.modules["api.apps.restful_apis.tenant"], "_schedule_invite_email", record_email)
+        response = env["client"].post(f"{env['base']}/api/v1/tenants/{env['owners'][0]}/users", json={"email": email}, timeout=30)
+    assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+    assert scheduled == [(env["owners"][0], email)]
+    with Session(env["engine"]) as db:
+        membership = db.scalar(sa.select(UserTenant).where(UserTenant.user_id == env["owners"][caller], UserTenant.tenant_id == env["owners"][0]))
+        assert membership is not None and membership.role == UserTenantRole.INVITE and membership.status == StatusEnum.VALID.value
+        personal = db.scalar(sa.select(UserTenant).where(UserTenant.user_id == env["owners"][caller], UserTenant.tenant_id == env["owners"][caller]))
+        assert personal is not None and personal.role == UserTenantRole.OWNER and personal.status == StatusEnum.VALID.value
+
+
+def join_member(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caller: int, role: UserTenantRole) -> None:
+    invite_member(env, monkeypatch, caller)
+    response = env["client"].patch(f"{env['base']}/api/v1/tenants/{env['owners'][0]}", headers={"Authorization": f"Bearer {env['jwts'][caller]}"}, timeout=30)
+    assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+    if role == UserTenantRole.ADMIN:
+        response = env["client"].put(f"{env['base']}/api/v1/tenants/{env['owners'][0]}/users/{env['owners'][caller]}/role", json={"role": role}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+    with Session(env["engine"]) as db:
+        membership = db.scalar(sa.select(UserTenant).where(UserTenant.user_id == env["owners"][caller], UserTenant.tenant_id == env["owners"][0]))
+        assert membership is not None and membership.role == role and membership.status == StatusEnum.VALID.value
+
+
+def denied_membership(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+    if case == "invite":
+        invite_member(env, monkeypatch, 2)
+        return
+    role = UserTenantRole.ADMIN if case == "inactive_admin" else UserTenantRole.NORMAL
+    join_member(env, monkeypatch, 2, role)
+    # Removal APIs delete rows; seed only the legacy invalid status under test.
+    with Session(env["engine"]) as db:
+        db.execute(sa.update(UserTenant).where(UserTenant.user_id == env["owners"][2], UserTenant.tenant_id == env["owners"][0]).values(status=StatusEnum.INVALID.value))
+        db.commit()
+        membership = db.scalar(sa.select(UserTenant).where(UserTenant.user_id == env["owners"][2], UserTenant.tenant_id == env["owners"][0]))
+        assert membership is not None and membership.role == role and membership.status == StatusEnum.INVALID.value
 
 
 def assert_published_runtime(env: dict[str, Any], agent_id: str, published: str, draft: str) -> None:
@@ -280,14 +329,16 @@ def test_http_agent_write_failure_rolls_back(release_api: dict[str, Any], table:
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("case", ["unpublished", "missing", "private", "nonmember", "invalid_identity", "inactive_identity", "missing_auth"])
-def test_published_run_denials_before_stream(release_api: dict[str, Any], stream: bool, case: str) -> None:
+@pytest.mark.parametrize("case", ["unpublished", "missing", "private", "nonmember", "invite", "inactive_member", "inactive_admin", "invalid_identity", "inactive_identity", "missing_auth"])
+def test_published_run_denials_before_stream(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stream: bool, case: str) -> None:
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Denied release", "dsl": message_dsl("draft")}, timeout=30).json()
     assert created["retcode"] == 0
     agent_id = created["data"]["id"]
     if case != "unpublished":
-        update(env, agent_id, {"release": True, "permission": "team" if case == "nonmember" else "me"})
+        update(env, agent_id, {"release": True, "permission": "team" if case in {"nonmember", "invite", "inactive_member", "inactive_admin"} else "me"})
+    if case in {"invite", "inactive_member", "inactive_admin"}:
+        denied_membership(env, monkeypatch, case)
     if case == "private":
         with Session(env["engine"]) as db:
             db.add(UserTenant(id=uuid4().hex, user_id=env["owners"][2], tenant_id=env["owners"][0], role="normal", invited_by=env["owners"][0]))
@@ -300,20 +351,24 @@ def test_published_run_denials_before_stream(release_api: dict[str, Any], stream
     replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
     replica_before = REDIS_CONN.get(replica_key)
     headers = {}
-    if case in {"private", "nonmember"}:
+    if case in {"private", "nonmember", "invite", "inactive_member", "inactive_admin"}:
         headers["Authorization"] = f"Bearer {env['jwts'][2]}"
     if case == "invalid_identity":
         headers["Authorization"] = "Bearer invalid"
     if case == "missing_auth":
         headers["Authorization"] = ""
     requested_agent = uuid4().hex if case == "missing" else agent_id
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": requested_agent, "release": True, "stream": stream}, timeout=30)
+    response = env["client"].post(
+        f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": requested_agent, "release": True, "stream": stream, "user_id": env["owners"][0]}, timeout=30
+    )
     auth_failure = case in {"invalid_identity", "inactive_identity", "missing_auth"}
-    expected_status = 401 if auth_failure else {"unpublished": 409, "missing": 404, "private": 403, "nonmember": 403}[case]
+    expected_status = 401 if auth_failure else {"unpublished": 409, "missing": 404}.get(case, 403)
     assert response.status_code == expected_status, response.text
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["code" if auth_failure else "retcode"] != 0
     assert response.json().get("data") is not True
+    if case in {"private", "nonmember", "invite", "inactive_member", "inactive_admin"}:
+        assert response.json()["retcode"] == 103 and response.json()["data"] is False
     with Session(env["engine"]) as db:
         assert (
             db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(sa.or_(API4Conversation.dialog_id.in_([agent_id, requested_agent]), API4Conversation.user_id.in_(env["owners"]))))
@@ -328,17 +383,17 @@ def sse_events(text: str) -> list[dict[str, Any]]:
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("member", [False, True])
-def test_published_run_owner_team_and_existing_session(release_api: dict[str, Any], stream: bool, member: bool) -> None:
+@pytest.mark.parametrize("caller_role", [UserTenantRole.OWNER, UserTenantRole.NORMAL, UserTenantRole.ADMIN])
+def test_published_run_owner_team_and_existing_session(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stream: bool, caller_role: UserTenantRole) -> None:
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Shared release", "dsl": message_dsl("published-fixed")}, timeout=30).json()
     assert created["retcode"] == 0
     agent_id = created["data"]["id"]
     update(env, agent_id, {"release": True, "permission": "team"})
     update(env, agent_id, {"dsl": message_dsl("current-draft")})
-    with Session(env["engine"]) as db:
-        db.add(UserTenant(id=uuid4().hex, user_id=env["owners"][1], tenant_id=env["owners"][0], role="normal", invited_by=env["owners"][0]))
-        db.commit()
+    member = caller_role != UserTenantRole.OWNER
+    if member:
+        join_member(env, monkeypatch, 1, caller_role)
     caller = 1 if member else 0
     headers = {"Authorization": f"Bearer {env['jwts'][caller]}"}
     before = read_state(env, agent_id)
@@ -362,14 +417,16 @@ def test_published_run_owner_team_and_existing_session(release_api: dict[str, An
         assert sessions[0].message[-1]["content"] == "published-fixed" and not sessions[0].errors
         assert sessions[0].version_title == next(v["title"] for v in before["versions"] if v["release"])
     assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
+    assert env["runtime_tenants"] == [env["owners"][0]]
     if member:
-        assert env["runtime_tenants"] == [env["owners"][0]]
         denied_update = env["client"].put(f"{env['base']}/api/v1/agents/{agent_id}", headers=headers, json={"release": True}, timeout=30)
         assert denied_update.json()["retcode"] == 103
         denied_create = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", headers=headers, json={"release": True}, timeout=30)
         assert denied_create.json()["retcode"] != 0
         assert read_state(env, agent_id) == before
     update(env, agent_id, {"dsl": message_dsl("new-published"), "release": True})
+    next_state = read_state(env, agent_id)
+    next_replica = REDIS_CONN.get(replica_key)
     response = env["client"].post(
         f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": agent_id, "session_id": session_id, "release": True, "stream": stream, "query": "continue"}, timeout=30
     )
@@ -381,7 +438,10 @@ def test_published_run_owner_team_and_existing_session(release_api: dict[str, An
     with Session(env["engine"]) as db:
         session = db.get(API4Conversation, session_id)
         assert session is not None and session.message[-1]["content"] == "published-fixed"
+        assert json.loads(session.dsl)["components"]["begin"]["obj"]["params"]["prologue"] == "published-fixed" and not session.errors
         assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == agent_id)) == 1
+    assert env["runtime_tenants"] == [env["owners"][0], env["owners"][0]]
+    assert read_state(env, agent_id) == next_state and REDIS_CONN.get(replica_key) == next_replica
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -471,13 +531,15 @@ def test_published_run_consumes_the_prepared_snapshot(release_api: dict[str, Any
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("case", ["missing_session", "cross_agent", "private", "nonmember"])
-def test_existing_session_run_denials_are_http_errors(release_api: dict[str, Any], stream: bool, case: str) -> None:
+@pytest.mark.parametrize("case", ["missing_session", "cross_agent", "private", "nonmember", "invite", "inactive_member", "inactive_admin"])
+def test_existing_session_run_denials_are_http_errors(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stream: bool, case: str) -> None:
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Session access", "dsl": message_dsl("published")}, timeout=30).json()
     assert created["retcode"] == 0
     agent_id = created["data"]["id"]
-    update(env, agent_id, {"release": True, "permission": "team" if case == "nonmember" else "me"})
+    update(env, agent_id, {"release": True, "permission": "team" if case in {"nonmember", "invite", "inactive_member", "inactive_admin"} else "me"})
+    if case in {"invite", "inactive_member", "inactive_admin"}:
+        denied_membership(env, monkeypatch, case)
     created_session = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": True}, timeout=30).json()
     assert created_session["retcode"] == 0
     session_id = created_session["data"]["id"]
@@ -494,8 +556,11 @@ def test_existing_session_run_denials_are_http_errors(release_api: dict[str, Any
     with Session(env["engine"]) as db:
         session = db.get(API4Conversation, session_id)
         assert session is not None
-        before = {"message": session.message, "dsl": session.dsl, "errors": session.errors}
-    headers = {"Authorization": f"Bearer {env['jwts'][2]}"} if case in {"private", "nonmember"} else {}
+        before = session.to_dict()
+    agent_before = read_state(env, agent_id)
+    replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
+    replica_before = REDIS_CONN.get(replica_key)
+    headers = {"Authorization": f"Bearer {env['jwts'][2]}"} if case in {"private", "nonmember", "invite", "inactive_member", "inactive_admin"} else {}
     response = env["client"].post(
         f"{env['base']}/api/v1/agents/chat/completion",
         headers=headers,
@@ -503,9 +568,11 @@ def test_existing_session_run_denials_are_http_errors(release_api: dict[str, Any
         timeout=30,
     )
     assert response.status_code == (404 if case == "missing_session" else 403), response.text
-    assert response.json()["retcode"] != 0 and response.json().get("data") is False
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["retcode"] == (102 if case == "missing_session" else 103) and response.json()["data"] is False
     assert len(env["task_ids"]) == task_count
     with Session(env["engine"]) as db:
         session = db.get(API4Conversation, session_id)
-        assert session is not None and {"message": session.message, "dsl": session.dsl, "errors": session.errors} == before
+        assert session is not None and session.to_dict() == before
         assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id.in_([agent_id, requested_agent]))) == 1
+    assert read_state(env, agent_id) == agent_before and REDIS_CONN.get(replica_key) == replica_before

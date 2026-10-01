@@ -21,13 +21,14 @@ from sqlalchemy.sql import desc as sa_desc
 
 from agent.a2ui import validate_client_a2ui_messages
 from agent.canvas import Canvas
-from api.db import CanvasCategory, TenantPermission
+from api.db import CanvasCategory, TenantPermission, UserTenantRole
 from api.db.db_models import API4Conversation, CanvasTemplate, User, UserCanvas, UserCanvasVersion, UserTenant
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.identity.run_context import RunContext
 from api.utils.api_utils import get_data_openai
+from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 
 
@@ -294,14 +295,23 @@ class PublishedAgentVersionUnavailable(LookupError):
 async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, session_id: str | None = None, release_mode: bool = False) -> PreparedAgentRun:
     """Authorize the REST run and select its exact DSL before any stream starts.
 
-    Match accessible's owner/TEAM membership contract. The owner-only SDK and
-    canvas update helpers retain their separate authorization contracts.
+    Require active, joined TEAM members for non-owner runs. The owner-only SDK
+    and canvas update helpers retain their separate authorization contracts.
     """
     canvas = await db.scalar(select(UserCanvas).join(User, UserCanvas.user_id == User.id).where(UserCanvas.id == agent_id))
     if canvas is None:
         raise LookupError("Agent not found.")
     if canvas.user_id != caller_id:
-        membership = await db.scalar(select(UserTenant.id).where(UserTenant.user_id == caller_id, UserTenant.tenant_id == canvas.user_id).limit(1))
+        membership = await db.scalar(
+            select(UserTenant.id)
+            .where(
+                UserTenant.user_id == caller_id,
+                UserTenant.tenant_id == canvas.user_id,
+                UserTenant.status == StatusEnum.VALID.value,
+                UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
+            )
+            .limit(1)
+        )
         if canvas.permission != TenantPermission.TEAM.value or membership is None:
             raise PermissionError("Only authorized users can run this agent.")
     conversation = None

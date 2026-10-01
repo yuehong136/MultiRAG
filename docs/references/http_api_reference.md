@@ -94,7 +94,9 @@ Authorization: Bearer <your-api-key>
 
 普通 **POST** `/agents/chat/completion` 首次传 `release: true`，或传已有 `session_id` 时，
 先验证当前认证身份能访问该 Agent，再固定本次要运行的 DSL。
-owner 可以运行；其他用户需要属于 owner 的团队，且画布 `permission` 为 `team`。
+owner 可以运行；其他用户需要已加入 owner 的团队（成员关系 `status=1`，角色为
+`normal` 或 `admin`），且画布 `permission` 为 `team`。
+未接受邀请的 `invite` 角色和失效成员关系即使已有记录也不能运行，首次运行与已有会话均返回 403。
 私有画布即使有团队 membership 也不能由其他用户运行。
 更新/发布画布及显式 **POST** `/agents/{agent_id}/sessions` 仍只允许 owner。
 

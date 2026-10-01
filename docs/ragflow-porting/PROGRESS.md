@@ -111,6 +111,43 @@ unit 另覆盖 malformed 帧、非零 code、生成器关闭及 message_end 后�
 mypy 126 文件、3358 unit passed）；`make integration` 287 passed、无 skip。
 最终树包含以上真实 HTTP/SQL/Redis、运行及隔离 make smoke 验收，本项收尾未沿用旧通过数。
 
+### 2026-10-02 同 SHA 已加入成员授权补修
+
+从本地 `538b93f22d9da09377fc75582b92154a57fab2b4` 补修本项新准备链。
+复核目标完整 diff 并刷新预期上游 origin，`origin/main` 仍为
+`519e7d98a5651564d4e35d6648f006cba4baaf4f`；未开始第六项。
+原 `prepare_agent_run` 只检查 UserTenant 行存在，沿用了旧 accessible 的缺口：
+真实 POST tenants/users 邀请写入 `invite/status=1`，接受前并非已加入成员；
+失效成员的旧记录也不能授予 owner 运行租户的资源访问。
+
+修改前隔离 HTTP 复现：未接受邀请者首次/已有会话 × stream=false/true 共 4 例，
+均返回 200 并成功执行；已接受 normal/admin 成员的团队关系置为 status=0 后，
+相同矩阵共 8 例也错误执行。调用者本人的账号和个人 owner membership 始终有效。
+
+本次只收窄新 `prepare_agent_run` 的非 owner 查询：`StatusEnum.VALID` 且
+`UserTenantRole.NORMAL/ADMIN`，符合 UserTenantService 的已加入成员资源访问语义，
+同时保留画布 TEAM 条件。owner 由画布所有者身份核对；首次发布与普通 REST 已有
+session 共用同一准备链。未改全局 accessible、GET/versions、OpenAI 分支、SDK，
+未放宽 PUT 更新/发布和显式创建会话的 owner-only 合同。
+
+验收通过真实 REST 邀请、PATCH 接受、PUT 成员角色变更形成 invite/normal/admin；
+仅在邮件调度边界记录调用，不发送外部邮件，不替换认证或数据库。成员删除接口物理删行，
+故 status=0 旧记录只在 scratch 库种入：先真实加入并核角色，再更新目标团队关系状态；
+调用者个人 membership 保持有效。无远程 LLM，运行使用真实 Begin/Message。
+
+首次和已有会话分别验证两种 stream：invite、失效 normal/admin、private、非成员在
+开流前返回 JSON 403 + retcode103/data=false；body user_id 不能替代认证身份。
+拒绝不构造 Canvas、不新增会话，已有会话完整 SQL 读回不变，Canvas/version 与 Redis
+草稿读回不变。owner、有效 normal/admin 在两种 stream 均可首次运行和继续原会话，
+运行租户仍为 owner；再发布后旧会话保持原 DSL，更新/显式创建会话仍拒绝非 owner。
+临时账号、成员关系、token、Canvas/version/session、自有 Redis key 和监听器均检查清理。
+Go 当前只有管理查询/DAO，无对应发布运行入口，本轮不修改 Go；web 消费现有 403/error
+合同，无前端改动或真实浏览器验收。
+
+本轮最终 `make verify` 通过：Ruff、8 条依赖契约、async DB 门禁、mypy 126 文件，
+3358 unit passed；`make integration` 301 passed、无 skip。其中本项 52 个真实 HTTP
+用例通过，包含隔离 API 的 `make smoke`、独立 SQL/Redis 读回与清理断言；未沿用旧通过数。
+
 ## 61a24a2c14dde696244646e1ec69e5f150eeda54 · 聊天附件上传迁入 REST
 
 - 上游 #14359，2026-04-27；本轮确认 `origin` 并 fetch，`origin/main` 为
