@@ -204,6 +204,39 @@ OpenAI 消息适配的 strict 失败返回 `{"error":{"message":"...","type":"se
 流式失败发送同形状的 SSE 后结束，不发送成功 choices 或 `[DONE]`，非流式失败也不返回 choices。
 失败会话保存本次用户输入及错误，不追加成功助手答案。
 
+### 分享与嵌入 Agent 的补全
+
+**POST** `/agentbots/{agent_id}/completions`（完整路径 `/api/v1/agentbots/{agent_id}/completions`）。
+使用 `Authorization: Bearer <beta token>`；普通 API Key 或 web JWT 不能替代 beta token。
+请求包含 `query`（也兼容 `question`）、`inputs`、`files`、`session_id`、`stream` 和 `release`。
+省略 `stream` 时默认 true。body 的 release 缺失/为 null 时才采用同名 query 参数；
+首次 `release: true` 运行发布快照，已有会话继续自己的 DSL。
+
+`stream: false` 消费完整执行，检查每一帧错误并聚合 message 内容和引用。
+成功使用 SDK 的 `code` 外层，data 为终态对象，不是 started 帧的 SSE 字符串：
+
+```json
+{"code": 0, "data": {"event": "message_end", "session_id": "session-id", "data": {"content": "[\"a\", \"b\"]", "reference": {}}}}
+```
+
+没有 Message 的已完成工作流可以返回 `event=workflow_finished`，保留 `data.outputs`。
+等待用户输入返回 `code=0`、`data.event=user_inputs`，保留 `data.inputs/tips`，
+`data.content` 为本轮已输出的提示内容；它表示暂停等待，调用方填表后用同一 session_id 继续。
+共享执行在落库后才发送缓冲的 message_end，非流式返回优先保留等待输入终态。
+首个 started、部分正文和没有终态的 EOF 均不能作为成功返回。
+异常、坏事件、非零帧或 strict 失败返回 `{"code":102,"message":"..."}`，不带成功 data。
+错误不被包装成 `**ERROR**` 的成功答案。
+
+`stream: true` 保持共享 SSE 事件合同，含 message、workflow_finished、message_end 或
+user_inputs；此入口不额外发送 `[DONE]`。strict 失败发送非零 code 的 error 帧后结束，
+不产生本次的成功答案或 message_end。失败会话保存用户输入/errors/运行 DSL，
+成功运行完整保存消息与结果；生成器在完成、出错和关闭时均释放。
+
+缺失/无效 beta 凭据返回 HTTP 401、`retcode=109`、`retmsg`、`data=false`。
+有效 beta token 的非 owner 首次运行沿用既有拒绝合同：HTTP 200，非流式为非零
+SDK code，流式为非零 SSE code；不会执行 Canvas 或创建会话。
+此节是活动 agentbots 路由；未注册的 `/agents/{id}/completions` 仍返回 404。
+
 ## 对话 API
 
 ### 上传运行时附件

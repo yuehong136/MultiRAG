@@ -5,11 +5,13 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from io import BytesIO
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -25,7 +27,7 @@ from api.db.joint_services.tenant_model_service import (
     get_tenant_default_model_by_type,
 )
 from api.db.services.api_service import API4ConversationService
-from api.db.services.canvas_service import UserCanvasService, completion_openai
+from api.db.services.canvas_service import UserCanvasService, agent_event_error, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, async_completion, async_iframe_completion
 from api.db.services.dialog_service import DialogService, async_ask, gen_mindmap
@@ -668,17 +670,18 @@ async def agent_bot_completions(
     release: str | None = Query(None),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_beta_token_required),
-):
+) -> Response:
     req = body.model_dump()
     if release is not None and req.get("release") is None:
         req["release"] = release
 
     if req.get("stream", True):
 
-        async def stream():
+        async def stream() -> AsyncGenerator[str, None]:
             try:
-                async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
-                    yield answer
+                async with aclosing(agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req)) as answers:
+                    async for answer in answers:
+                        yield answer
             except Exception as e:
                 logging.exception(e)
                 yield build_sse_error_payload(e)
@@ -691,8 +694,38 @@ async def agent_bot_completions(
         return resp
 
     try:
-        async for answer in agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req):
-            return get_result(data=answer)
+        full_content = ""
+        reference: dict[str, Any] = {}
+        terminal: dict[str, Any] | None = None
+        awaiting_inputs: dict[str, Any] | None = None
+        async with aclosing(agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req)) as answers:
+            async for answer in answers:
+                event = json.loads(answer[5:]) if isinstance(answer, str) else answer
+                if not isinstance(event, dict):
+                    raise ValueError("Invalid agent completion event.")
+                failure = agent_event_error(event)
+                if failure:
+                    return get_error_data_result(retmsg=failure)
+                data = event.get("data", {})
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid agent completion data.")
+                if event.get("event") == "message":
+                    full_content += data["content"]
+                if data.get("reference"):
+                    reference.update(data["reference"])
+                if event.get("event") == "user_inputs":
+                    awaiting_inputs = event
+                elif event.get("event") in {"message_end", "workflow_finished"}:
+                    terminal = event
+        # A user-input pause can precede buffered message_end frames. Preserve
+        # its form/tips instead of presenting a pause as a finished answer.
+        terminal = awaiting_inputs or terminal
+        if terminal is None:
+            return get_error_data_result(retmsg="Agent completion returned no terminal event.")
+        terminal = copy.deepcopy(terminal)
+        terminal.setdefault("data", {})["content"] = full_content
+        terminal["data"]["reference"] = reference
+        return get_result(data=terminal)
     except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg=str(e) or "Unknown error")

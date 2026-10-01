@@ -253,6 +253,72 @@ def test_sdk_agent_bot_completions_stream_frames(agent_route_stubs):
     assert '"content": "hi"' in resp.text
 
 
+@pytest.mark.parametrize("failure", ["event", "code", "exception", "malformed", "nonobject", "partial", "empty", "text_error", "after_end", "bad_data"])
+def test_agentbot_nonstream_rejects_incomplete_or_failed_run(agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    closed: list[bool] = []
+
+    async def source(**kwargs: Any) -> AsyncGenerator[str, None]:
+        try:
+            if failure == "empty":
+                return
+            yield 'data:{"event":"workflow_started","data":{}}\n\n'
+            if failure in {"partial", "after_end"}:
+                yield 'data:{"event":"message","data":{"content":"partial"}}\n\n'
+                if failure == "partial":
+                    return
+                yield 'data:{"event":"message_end","data":{}}\n\n'
+                raise RuntimeError("failure after a tentative end")
+            if failure == "exception":
+                raise RuntimeError("controlled execution failure")
+            if failure == "malformed":
+                yield "data:invalid-json\n\n"
+            elif failure == "text_error":
+                yield "data:**ERROR**: controlled execution failure\n\n"
+            elif failure == "nonobject":
+                yield "data:[]\n\n"
+            elif failure == "bad_data":
+                yield 'data:{"event":"message_end","data":false}\n\n'
+            else:
+                frame = {"event": "error", "data": {"error": "controlled execution failure"}} if failure == "event" else {"retcode": 100, "retmsg": "controlled execution failure", "data": False}
+                yield "data:" + json.dumps(frame) + "\n\n"
+            yield 'data:{"event":"message_end","data":{"content":"must not succeed"}}\n\n'
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(_route_module("api.apps.sdk.session"), "agent_completion", source)
+    response = agent_route_stubs.post("/api/v1/agentbots/agent-1/completions", json={"query": "hi", "stream": False})
+    assert response.status_code == 200 and closed == [True]
+    assert response.json()["code"] != 0 and response.json()["message"] and "data" not in response.json()
+    assert "must not succeed" not in response.text
+
+
+@pytest.mark.parametrize("terminal", ["message_end", "workflow_finished", "user_inputs"])
+def test_agentbot_nonstream_aggregates_answer_and_keeps_pause(agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, terminal: str) -> None:
+    closed: list[bool] = []
+
+    async def source(**kwargs: Any) -> AsyncGenerator[str, None]:
+        try:
+            yield 'data:{"event":"workflow_started","data":{},"session_id":"session"}\n\n'
+            yield 'data:{"event":"message","data":{"content":"hel","reference":{"chunks":[1]}},"session_id":"session"}\n\n'
+            yield 'data:{"event":"message","data":{"content":"lo"},"session_id":"session"}\n\n'
+            yield "data:" + json.dumps({"event": terminal, "data": {"inputs": {"answer": {"type": "string"}}, "tips": "Fill answer", "reference": {"doc_aggs": [2]}}, "session_id": "session"}) + "\n\n"
+            if terminal == "user_inputs":
+                # Shared completion flushes pre-pause message_end after its
+                # persisted user_inputs event. This must not hide the form.
+                yield 'data:{"event":"message_end","data":{},"session_id":"session"}\n\n'
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(_route_module("api.apps.sdk.session"), "agent_completion", source)
+    response = agent_route_stubs.post("/api/v1/agentbots/agent-1/completions", json={"query": "hi", "stream": False})
+    assert response.status_code == 200 and closed == [True]
+    body = response.json()
+    assert body["code"] == 0 and body["data"]["event"] == terminal and body["data"]["session_id"] == "session"
+    assert body["data"]["data"]["content"] == "hello"
+    assert body["data"]["data"]["reference"] == {"chunks": [1], "doc_aggs": [2]}
+    assert body["data"]["data"]["tips"] == "Fill answer" and body["data"]["data"]["inputs"] == {"answer": {"type": "string"}}
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("failure", ["event", "code", "exception", "malformed"])
 def test_agent_adapter_preserves_failure_and_closes_generator(agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, stream: bool, failure: str) -> None:

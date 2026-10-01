@@ -75,6 +75,50 @@ fixture 检查专属用户/token/成员关系/Canvas/版本/会话、Redis key �
 对既有通用 HTTP 500 错误文案的错误预期，以及上述 OpenAI 丢失真实 strict 错误。
 前三项修正夹具/合同预期，后者修生产根因并加入失败传播回归，未放宽成功或存储断言。
 
+### 活动 SDK 非流式消费补修
+
+根审查指出 `0f9de26c` 未验活动 **POST** `/api/v1/agentbots/{id}/completions`。
+该 SDK 路由的非流式分支对共享 completion 第一帧立即返回 code=0；
+真实 Canvas 第一帧是 workflow_started，此时 Begin/ListOperations 尚未执行。
+隔离实际 beta token、HTTP 与完整 Canvas 复现两个失败用例：strict 和成功请求均
+返回 code=0 + started 字符串，独立 SQL 会话 errors 为 null、message 为空，未保存终态。
+初始 fixture 的普通 API tokens 没有 beta 值，本轮仅给自有 scratch token 行登记随机 beta，
+再通过独立 SQL 读回使用，没有覆盖鉴权依赖或业务返回。
+
+最小补修只改 `api/apps/sdk/session.py:agent_bot_completions` 的消费：非流式读至结束，
+用共用 agent_event_error 检测逐帧失败，聚合正文/引用并返回可用终态；未完成 EOF、
+坏事件及异常返回非零 SDK code，不用 `**ERROR**` 成功文本。user_inputs 优先于之后
+缓冲的 message_end，保留等待表单/tips。两个分支用 aclosing 正确关闭共享生成器；
+流式仍直接透传，不新增 [DONE]，不改 beta 鉴权、发布选择或已有会话 DSL。
+SDK `agent_completions` 无装饰、旧 `/agents/{id}/completions` 未注册，本轮未改或注册它；
+此前的 `create_agent_session` helper 验收不能替代此活动路由。
+
+独立 web `src/api/agent.ts:runExternalAgent` 实际调用 agentbots，传 beta token、
+release 和已有 session_id，未显式传 stream（当前默认 true）；
+`share/use-shared-agent-runner.ts` 用共享 SSE 消费 message_end、workflow_finished、
+user_inputs 和错误。保持这些事件形状；本轮没有 web 修改或浏览器验收，
+ListOperations 前端仍等待根另派。成功/等待/失败的当前响应形状见
+[HTTP 参考](../references/http_api_reference.md#分享与嵌入-agent-的补全)。
+
+专项运行/协议与组件单测 282 passed（新增 13 个消费、EOF、错误与关闭回归）；
+本轮 27 个真实 HTTP 用例通过（新增 10 个 agentbots，加原有 17 个普通 REST/OpenAI
+列表操作用例），含同隔离 API 的实际 make smoke。新 v2 strict 失败/v2 成功/历史无
+marker 成功均覆盖 stream 真/假、首次/已有会话续跑；发布后改草稿及新建其他会话，
+独立读回本次 session 的 messages/errors/DSL marker/result/first/last/轮数，
+其他会话、草稿/发布版本及 Redis 编辑器副本保持各自内容。
+真实 UserFillUp 在有前置 Message 时暂停，再填列表恢复运行，保留提示并完成 ListOperations。
+缺失/坏 beta、误用 API key/JWT 及有效非 owner beta 均真实拒绝，SQL 无会话、无 Canvas
+执行，Redis/原画布内容不变。HTTP 验收保留完整 Canvas/run 和真实组件/存储，未用模型/provider、
+鉴权或业务响应替身，不调用远程 LLM。fixture 检查专属 SQL 行、Redis key 与 listener 清理，
+共享 fixture 删除 scratch 数据库，beta 值随自有 token 行删除；不操作生产数据。
+
+本轮 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，
+3675 unit passed）；`make integration` 347 passed，无 skip，含上述真实 HTTP 与 smoke。
+验收夹具补齐自有 beta token、按实际 SQL 的 DSL 字符串/对象形状构造历史无 marker 会话；
+路由返回注解使用 Response，避免 FastAPI 为响应子类联合构造 Pydantic 字段。
+AST 对比确认生产文件只改变活动 agent_bot_completions 定义和对应导入，未注册 helper
+及其他业务定义不变；本轮补修没有改共享 Canvas/运行 service 或第九项列表语义。
+
 ## c1941fd50352d514ecfb20a74785ccb7a1753ad4 · 删除未使用的临时文本解析入口
 
 - 上游 #14367；2026-10-02 核对预期 origin 并 fetch，
