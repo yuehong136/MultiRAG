@@ -20,8 +20,8 @@ from uuid import uuid4
 import jwt
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, text
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,7 @@ from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
-from api.db.db_models import Task, get_async_db, get_db
+from api.db.db_models import Task, UserCanvas, get_async_db, get_db
 from api.db.services.canvas_service import (
     API4ConversationService,
     CanvasTemplateService,
@@ -80,7 +80,20 @@ class UpdateAgentRequest(BaseModel):
     avatar: str | None = None
     permission: str | None = None
     canvas_category: str | None = None
-    release: bool | str | None = None
+    release: bool | None = None
+
+    @field_validator("release", mode="before", json_schema_input_type=bool | str | None)
+    @classmethod
+    def normalize_release(cls, value: Any) -> bool | None:
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1"}:
+                return True
+            if normalized in {"false", "0", ""}:
+                return False
+        raise ValueError("release must be a boolean or true/false/1/0 string.")
 
 
 class RemoveCanvasRequest(BaseModel):
@@ -329,15 +342,8 @@ def update_agent(
     agent_id: str,
     request_body: UpdateAgentRequest,
     db: Session = Depends(get_db),
-    user=Depends(manager),
-):
-    if not UserCanvasService.query(db, user_id=user.id, id=agent_id):
-        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
-
-    current = UserCanvasService.get_by_id(db, agent_id)
-    if not current:
-        return get_data_error_result(retmsg="canvas not found.")
-
+    user: Any = Depends(manager),
+) -> JSONResponse:
     updates = request_body.model_dump(exclude_unset=True, exclude_none=True)
     if "title" in updates:
         updates["title"] = updates["title"].strip()
@@ -347,25 +353,47 @@ def update_agent(
         except ValueError as error:
             return get_data_error_result(retmsg=str(error))
 
-    release = updates.pop("release", None)
-    if updates:
-        UserCanvasService.update_by_id(db, agent_id, updates)
+    save_snapshot = "dsl" in updates or "release" in updates
+    try:
+        # Serialize saves for this owner and keep the canvas and snapshot in one
+        # request transaction; CommonService writes commit independently.
+        current = db.scalar(select(UserCanvas).where(UserCanvas.id == agent_id, UserCanvas.user_id == user.id).with_for_update())
+        if current is None:
+            return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
+        if not updates:
+            return get_json_result(data=True)
 
-    if "dsl" in updates:
-        title = updates.get("title") or current.title
-        category = updates.get("canvas_category") or current.canvas_category
-        UserCanvasVersionService.save_or_replace_latest(
-            db,
-            user_canvas_id=agent_id,
-            dsl=updates["dsl"],
-            title=UserCanvasVersionService.build_version_title(getattr(user, "nickname", user.id), title),
-            release=bool(release) if release is not None else False,
-        )
+        title = updates.get("title", current.title) or ""
+        category = updates.get("canvas_category", current.canvas_category)
+        if save_snapshot:
+            updates.setdefault("release", False)
+            dsl = CanvasReplicaService.normalize_dsl(updates.get("dsl", current.dsl))
+            _, created = UserCanvasVersionService.save_or_replace_latest(
+                db,
+                user_canvas_id=agent_id,
+                dsl=dsl,
+                title=UserCanvasVersionService.build_version_title(getattr(user, "nickname", user.id), title),
+                release=updates["release"],
+                commit=False,
+            )
+            if created is None:
+                raise RuntimeError("Failed to save agent version.")
+        for key, value in updates.items():
+            setattr(current, key, value)
+        current.update_time = UserCanvasService.current_timestamp()
+        current.update_date = UserCanvasService.current_datetime()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logging.exception("Failed to save agent %s", agent_id)
+        return get_data_error_result(retmsg="Failed to save agent.")
+
+    if save_snapshot:
         if not CanvasReplicaService.replace_for_set(
             canvas_id=agent_id,
             tenant_id=str(user.id),
             runtime_user_id=str(user.id),
-            dsl=updates["dsl"],
+            dsl=dsl,
             canvas_category=category,
             title=title,
         ):
@@ -430,7 +458,7 @@ def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post("/agents/chat/completion", summary="运行Canvas", response_description="成功执行Canvas")
-async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
+async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
     """
     执行Canvas推理任务
 
@@ -521,7 +549,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             return response
         return get_data_error_result(retmsg="Agent completion returned no response.")
 
-    if session_id:
+    if session_id or str(req.get("release", "")).strip().lower() == "true":
         return await exp_agent_completion(agent_id, req, db, user)
 
     req["id"] = agent_id

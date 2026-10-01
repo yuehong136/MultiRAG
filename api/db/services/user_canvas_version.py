@@ -1,13 +1,15 @@
 import json
 import logging
 import time
+from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from agent.dsl_migration import normalize_chunker_dsl
 from api.db.db_models import UserCanvasVersion
 from api.db.services.common_service import CommonService
+from common.misc_utils import get_uuid
 
 
 class UserCanvasVersionService(CommonService):
@@ -23,7 +25,7 @@ class UserCanvasVersionService(CommonService):
 
     # Normalize DSL before comparing or writing version content.
     @staticmethod
-    def _normalize_dsl(dsl):
+    def _normalize_dsl(dsl: str | dict[str, Any]) -> dict[str, Any]:
         normalized = dsl
         if isinstance(normalized, str):
             try:
@@ -73,7 +75,7 @@ class UserCanvasVersionService(CommonService):
         return res
 
     @classmethod
-    def delete_all_versions(cls, db: Session, user_canvas_id: str) -> bool:
+    def delete_all_versions(cls, db: Session, user_canvas_id: str, *, commit: bool = True) -> bool:
         """Keep only the latest 20 unpublished versions and remove the rest. Released versions are always kept."""
         stmt = (
             select(cls.model.id)
@@ -86,9 +88,14 @@ class UserCanvasVersionService(CommonService):
         try:
             version_ids = db.execute(stmt).scalars().all()
             if len(version_ids) > 20:
-                cls.delete_by_ids(db, version_ids[20:])
+                db.execute(delete(cls.model).where(cls.model.id.in_(version_ids[20:])))
+                if commit:
+                    db.commit()
             return True
         except Exception:
+            if not commit:
+                raise
+            db.rollback()
             logging.exception("Failed to trim canvas versions for %s", user_canvas_id)
             return False
 
@@ -124,60 +131,64 @@ class UserCanvasVersionService(CommonService):
         return latest.title if latest else None
 
     @classmethod
-    def save_or_replace_latest(cls, db: Session, user_canvas_id: str, dsl, title: str | None = None, description: str | None = None, release=None):
-        """
-        Persist a canvas snapshot into version history.
+    def save_or_replace_latest(
+        cls,
+        db: Session,
+        user_canvas_id: str,
+        dsl: str | dict[str, Any],
+        title: str | None = None,
+        description: str | None = None,
+        release: bool | None = None,
+        *,
+        commit: bool = True,
+    ) -> tuple[str | None, bool | None]:
+        """Save a snapshot, protecting published content on a draft save.
 
-        If the latest version has the same DSL content, update that version in place
-        instead of creating a new row.
-
-        Exception: If the latest version is released (release=True) and current save is not,
-        create a new version to protect the released version.
+        With commit=False the caller owns the transaction and errors propagate.
+        Legacy callers retain the committed (version_id, created) result contract.
         """
         try:
             normalized_dsl = cls._normalize_dsl(dsl)
-            stmt = select(cls.model).where(cls.model.user_canvas_id == user_canvas_id).order_by(cls.model.create_time.desc())
-            latest = db.execute(stmt).scalars().first()
-
-            # Repeated saves with the same DSL only refresh the latest snapshot.
-            if latest and cls._normalize_dsl(latest.dsl) == normalized_dsl:
-                # Protect released version: if latest is released and current is not,
-                # create a new version instead of updating
-                if latest.release and not release:
-                    insert_data = {"user_canvas_id": user_canvas_id, "dsl": normalized_dsl}
-                    if title is not None:
-                        insert_data["title"] = title
-                    if description is not None:
-                        insert_data["description"] = description
-                    if release is not None:
-                        insert_data["release"] = release
-                    cls.insert(db, **insert_data)
-                    cls.delete_all_versions(db, user_canvas_id)
-                    return None, True
-
-                # Normal case: update existing version
-                # DSL unchanged: do NOT update title to preserve version identity
-                # Only update dsl (for normalization consistency), description, and release
-                update_data = {"dsl": normalized_dsl}
+            latest = db.scalar(select(cls.model).where(cls.model.user_canvas_id == user_canvas_id).order_by(cls.model.create_time.desc()))
+            replace = latest is not None and cls._normalize_dsl(latest.dsl) == normalized_dsl and not (latest.release and not release)
+            timestamp = cls.current_timestamp()
+            now = cls.current_datetime()
+            if replace:
+                version = latest
+                timestamp = max(timestamp, version.create_time or 0, version.update_time or 0)
+                version.dsl = normalized_dsl
                 if description is not None:
-                    update_data["description"] = description
+                    version.description = description
                 if release is not None:
-                    update_data["release"] = release
-                cls.update_by_id(db, latest.id, update_data)
-                cls.delete_all_versions(db, user_canvas_id)
-                return latest.id, False
-
-            # Real content changes create a new snapshot.
-            insert_data = {"user_canvas_id": user_canvas_id, "dsl": normalized_dsl}
-            if title is not None:
-                insert_data["title"] = title
-            if description is not None:
-                insert_data["description"] = description
-            if release is not None:
-                insert_data["release"] = release
-            cls.insert(db, **insert_data)
-            cls.delete_all_versions(db, user_canvas_id)
-            return None, True
-        except Exception as e:
-            logging.exception(e)
+                    version.release = release
+                version.update_time = timestamp
+                version.update_date = now
+            else:
+                # Even two saves in one millisecond must have a stable newest
+                # snapshot. The agent update caller holds the canvas row lock.
+                timestamp = max(timestamp, (latest.create_time or 0) + 1) if latest else timestamp
+                version = cls.model(
+                    id=get_uuid(),
+                    user_canvas_id=user_canvas_id,
+                    dsl=normalized_dsl,
+                    title=title,
+                    description=description,
+                    release=release if release is not None else False,
+                    create_time=timestamp,
+                    create_date=now,
+                    update_time=timestamp,
+                    update_date=now,
+                )
+                db.add(version)
+            db.flush()
+            if not cls.delete_all_versions(db, user_canvas_id, commit=False):
+                raise RuntimeError("Failed to trim canvas versions.")
+            if commit:
+                db.commit()
+            return (version.id, False) if replace else (None, True)
+        except Exception:
+            if not commit:
+                raise
+            db.rollback()
+            logging.exception("Failed to save canvas version for %s", user_canvas_id)
             return None, None

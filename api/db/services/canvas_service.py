@@ -97,7 +97,7 @@ class UserCanvasService(CommonService):
         return res
 
     @classmethod
-    def get_by_canvas_id(cls, db: Session, pid: str):
+    def get_by_canvas_id(cls, db: Session, pid: str) -> tuple[bool, dict[str, Any] | None]:
         try:
             fields = [
                 cls.model.id,
@@ -106,6 +106,7 @@ class UserCanvasService(CommonService):
                 cls.model.dsl,
                 cls.model.description,
                 cls.model.permission,
+                cls.model.release,
                 cls.model.update_time,
                 cls.model.user_id,
                 cls.model.create_time,

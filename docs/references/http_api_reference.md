@@ -49,6 +49,47 @@ Authorization: Bearer <your-api-key>
 }
 ```
 
+## Agent API
+
+### 更新与发布画布
+
+**PUT** `/agents/{agent_id}`（完整路径 `/api/v1/agents/{agent_id}`）。
+接受 owner 的 web 会话 JWT 或 API Key，其他用户不能更新。
+请求采用增量更新，`null` 字段忽略；`dsl` 可以是 JSON 对象或对象的 JSON 字符串。
+
+| 请求 | 行为 |
+|---|---|
+| `dsl` 加 `release: true` | 保存当前画布并发布对应版本 |
+| `dsl` 加 `release: false`，或省略/置空 `release` | 保存草稿，保留此前的发布快照 |
+| 只有 `release: true/false` | 发布当前 DSL 或保存当前 DSL 的草稿版本 |
+| 只有标题、描述、头像、权限等元数据，省略/置空 `release` | 更新元数据，保留当前发布标志，不改版本历史 |
+| 空对象或只有 `null` 字段 | 无变更 |
+
+`release` 推荐传布尔值。兼容字符串 `true`/`false`/`1`/`0`/空字符串，
+忽略大小写和两侧空白；`false`/`0`/空字符串映射为 `false`，不会因字符串非空而发布。
+其他字符串、数字、数组或对象返回 HTTP 422，JSON `detail` 指明 `body.release`。
+
+此组既有 Agent 路由使用 `retcode/retmsg` 响应。更新成功为 HTTP 200：
+
+```json
+{"retcode": 0, "retmsg": "success", "data": true}
+```
+
+业务失败检查非零 `retcode`；缺失/无效认证为 HTTP 401、`code=401`。
+版本写入、清理和 Canvas 更新处于同一数据库事务，任一步失败均回滚。
+数据库提交后的 Redis 副本同步失败返回非零 `retcode` 与
+`agent saved, but replica sync failed.`；数据库内容已保存，可重试同一请求同步副本。
+数据库与 Redis 不构成分布式事务。
+
+**GET** `/agents/{agent_id}` 的 `data.release` 表示当前画布的发布状态；
+`last_publish_time` 表示已有发布版本的最近更新时间。保存草稿后，前者变为 `false`，
+后者仍可存在。`/agents/{agent_id}/versions` 中每个版本的 `release` 独立表示该快照是否发布。
+相同 DSL 重复保存复用最新版本；发布快照后的草稿保存另建版本，发布快照始终保留，
+未发布版本只保留最新 20 个。
+
+创建 `/agents/{agent_id}/sessions` 或首次调用 `/agents/chat/completion` 时传
+`release: true`，使用最新发布快照，即使当前画布已有新草稿。已有会话继续使用创建时保存的 DSL。
+
 ## 对话 API
 
 ### 上传运行时附件

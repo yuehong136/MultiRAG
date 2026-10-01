@@ -3,6 +3,64 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 0f2778efe744b5aef879f1743c3ec50fd1143aab · Agent 更新支持发布
+
+- 上游 #14396，2026-04-27；2026-10-02 确认 origin 并 fetch 后，
+  `origin/main` 为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本仓 `771d6864` 开始，完整核对指定 SHA 的一个文件、两处 diff。
+
+| 上游 diff | 本项处置 |
+|---|---|
+| `api/apps/restful_apis/agent_api.py:update_agent` 归一化 `release` 并更新 Canvas | 保留字段并写入 Canvas；兼容明确的布尔字符串，避免上游 `bool("false")` 误发布。DSL 保存缺省/空值为草稿；纯元数据增量更新保留现有发布标志。 |
+| 同方法把 `release` 传给 `save_or_replace_latest` | 同一个同步 Session 保存 Canvas 与版本；release-only 使用当前 DSL 保存/发布。请求持有 owner Canvas 行锁，版本服务支持 `commit=False`，异常向调用方传播；插入、版本清理和 Canvas 更新一次提交，失败回滚。 |
+
+当前本地的关联读回缺口一并修复：`UserCanvasService.get_by_canvas_id` 的选列新增
+`release`，GET 返回当前状态；首次 `/agents/chat/completion` 的 `release=true`
+进入已有会话/发布版本运行链，避免使用 Redis 草稿副本。已建会话继续使用其自己的 DSL。
+相同 DSL 重复发布不另建快照、版本标题不变；发布后草稿另建版本，已发布快照不删除，
+草稿最多 20 个。新快照的创建顺序在同毫秒保存时仍明确，更新时间不早于创建时间。
+API 的请求、响应及 Redis 部分失败合同见 [HTTP API 参考](../references/http_api_reference.md#更新与发布画布)。
+
+未找到本项 revert/re-land。后续 `569a29500` (#17576) 改更新响应为 update_time，
+`a0438517b` (#18056) 补组件参数验证，分别属于相邻目标；本项保持当前 `data=true`
+与 DSL 归一化合同。版本服务后续 `006747090` 修正无序分页，未回退发布行为；
+上游整体删除 Python 后端不在本次范围。下一项 `10e28e5c` 等待派发。
+
+调用方核对：旧 `/v1/canvas` 只保留任务取消，无 set/get/save 消费者；REST 是当前
+唯一创建/更新链。复制/模板导入经 POST 创建新画布，未把原发布历史复制到新 ID。
+SDK API Key 通过同一 PUT 入口及 owner 校验，实际 HTTP 已验证；`api/apps/sdk/session.py`
+的已发布 DSL 选择帮助函数与 `canvas_service.completion` 都使用最新 released 快照。
+独立 Python SDK 工作树 `multirag-rest-first-python-sdk` 的 `d0d34818` 无 Agent 更新资源。
+独立 web `5c7a77382cb87400bf70ff492b1b310cb89ce3bd` 的 `src/api/agent.ts:setAgent`
+透传 release；主编辑器与嵌入编辑器发布时传 true，普通保存省略。`useSetAgent` 成功后
+失效详情及版本查询，详情/发布组件读取 release/last_publish_time，API client 兼容 retcode。
+没有发现需修改的前端合同，本项不编辑 web，也未做本项的真实浏览器验收。
+列表重命名目前也发送 DSL，按既有“保存 DSL 即草稿”语义处理；仅元数据请求仍保持发布状态。
+
+Go 实际核对 `internal/router/router.go`、handler/service、`internal/dao/user_canvas.go`、
+`internal/entity/canvas.go` 和 `internal/cli/{parser,client}.go`：无 Agent 更新、发布、版本
+或运行路由及服务消费者。DAO 只有泛用 Canvas CRUD，UserCanvas entity 已有 release，
+版本 entity 尚无 release；CLI 的 LIST AGENTS 仅解析，执行分派落入未实现分支。
+没有相同目标链，本项不新增 Go API/字段，不运行无改动的 Go 编译门禁。稳定路径映射未改变。
+
+验证与实测：unit 覆盖 true/false、字符串、非法类型、缺省/None、元数据与 release-only，
+并拒绝版本失败回执。隔离 PostgreSQL scratch 库中的真实 HTTP 完成发布、相同 DSL
+重复保存/发布、改 DSL 草稿、再次发布、GET/版本列表与独立 SQL Canvas/version 读回；
+缺/坏认证、其他 owner JWT/API Key、非法 release/DSL 均无错误写入。
+发布后改草稿，再创建 release=true 会话，独立 SQL 确认 session DSL/prologue/version_title；
+首次发布运行用真实 Begin/Message 输出旧发布内容，Redis 独立读回仍为新草稿。
+没有模型 provider 假件或远程模型调用。
+真实 PostgreSQL trigger 分别拒绝版本 INSERT、Canvas UPDATE、版本清理 DELETE，
+HTTP 返回非零 retcode，Canvas/版本/Redis 均保持原值；移除 trigger 后重试成功。
+Redis 同步 False 回执另有验收：返回“已保存但副本同步失败”，数据库已提交，
+重试恢复副本；数据库与 Redis 不是分布式事务。未声称生产部署或生产数据验收。
+全部临时账户、membership、token、Canvas、版本、会话、trigger/function、自身 Redis key
+和 HTTP 监听均已清理并检查。隔离 API 内实际执行 `make smoke` 通过。
+
+最终门禁：`make verify` 通过（Ruff、8 条依赖契约、async DB 检查、mypy 126 文件、
+3346 unit passed）；`make integration` 253 passed、无 skip。最终树复跑了上述
+真实 HTTP/SQL/Redis 与运行验收，含 `make smoke`；没有沿用历史通过数。
+
 ## 61a24a2c14dde696244646e1ec69e5f150eeda54 · 聊天附件上传迁入 REST
 
 - 上游 #14359，2026-04-27；本轮确认 `origin` 并 fetch，`origin/main` 为
