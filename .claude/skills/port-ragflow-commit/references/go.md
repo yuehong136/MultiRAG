@@ -12,7 +12,7 @@
 - CLI 的共享叶子解析放 `parser.go`；复用 `expectSemicolon`、`-o` / `\format` 与 `looksLikeContextEngine` 分流。新语法核对 token（含 `isKeyword` 上界）、parser、command、client 的 Execute 接线。
 - 存储接口变更核对 infinity / elasticsearch / milvus 三种实现；既有桩不扩成假写入成功，新写能力缺基盘时保持不可用并说明。
 - Infinity SDK 跟目标 commit 的版本，不追上游 HEAD 的无关升级。
-- Go 旧名按目标提交对齐，不套用 Python 生产 API 的 deprecated 保留惯例；命名改动参考本项目 [go-naming](../../../../.agents/skills/go-naming/SKILL.md)。
+- Go 旧名按目标提交对齐；生产 API 的退役同样按 [逐接口删除判据](python.md#行为与兼容性) 核对查明的调用和兼容承诺。命名改动参考本项目 [go-naming](../../../../.agents/skills/go-naming/SKILL.md)。
 
 ## 验证
 

@@ -3,6 +3,93 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 488c3ef6a306cf11f73dd642c0e7fd0420c4001e · Task 取消 REST API
+
+- 上游 #14393；2026-10-02 核对预期 origin 并 fetch，
+  `origin/main` 为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本仓 `0550829cd6cea9d2611fa3fa6e3b2f6ddfd5b660` 开始，核对目标四文件完整 diff 与目标树。
+  本项为本批第十项，完成后停止并等待下一次派发；本项没有 push 或其他聊天派工。
+
+| 上游 diff | 本项处置 |
+|---|---|
+| 删除 `api/apps/canvas_app.py` | 独立 Web 的 `src/api/agent.ts` 中 Agent/DataFlow 两个取消函数仍 PUT 旧路由，保留此单一路由并共用新授权服务；Web POST 迁移及两类运行验收后删除。 |
+| 新增 `api/apps/restful_apis/task_api.py` | FastAPI POST cancel、PATCH action=stop；异步 Principal + AsyncSession，没有 GET。文档和图任务按有效 SQL 资源/已加入成员授权，运行任务另需服务器可信登记。 |
+| `web/src/services/agent-service.ts` 两个取消函数 PUT→POST | 独立 Web 由根聊天另派。本项交接准确路径、业务码及 task/message ID 合同，不复制上游前端，不宣称浏览器验收。 |
+| `web/src/utils/api.ts` 取消 URL→Task REST | 当前稳定合同见 [HTTP 参考](../references/http_api_reference.md#task-api)。本项没有 Web 代码变更。 |
+
+相关后续修复逐项核对：`5885691c683c5cf10954d06087e453e485cef7e2` 的未知/终态幂等采用；
+`28a41ed0701adec9222a9dc5851239af70950cd8` 的文档取消日志采用，未扩展无关 Langfuse；
+`19ec6245c4fad1c73d500defcaf37f28e9cd77d8` 的授权前禁止 Redis 写入采用，并补齐上游哨兵
+绕过的归属缺口；`2223a514de9b8daad18b41b3f06119928d7b53a3` 的 begin2parse、失败进度与
+取消传播按本地链适配。当前 chunk 构建已重抛 TaskCanceledException，文档同步已有 CANCEL
+守卫，不引入不存在的上游 chunk_builder。未查到 Task 特定 revert/re-land；
+`6a4b9be42` 为格式变化，`670e68872` 整体删除 Python 后端不作为本项撤回。
+
+### 归属、生命周期与写入
+
+普通 Task 联查有效 Document/KB/当前 status=1 的 owner、normal、admin；图任务从有效 KB 的
+graphrag/raptor/mindmap_task_id 反查，不把 `graph_raptor_x` 当文档。DataFlow 调试响应的
+message_id 就是实际入队 Task ID，`dataflow_x` 的归属来自登记与真实队列；Agent 的随机
+Canvas.task_id 没有 SQL Task 行，SSE task_id 与 message_id 不同，未伪造 Canvas Task。
+
+`task_cancellation_service.py` 从 SQL 画布取 owner 并验证当前调用者；实际 REST 草稿、发布、
+续跑、共享 SDK/OpenAI completion 在首帧前绑定，DataFlow 在入队前绑定。成员的 binding
+principal_id 是当前用户，tenant_id 与队列 tenant 是 SQL 画布 owner；客户端 user_id、tenant_id
+和 DSL 不提供授权。共享运行链也识别可信 RunContext 平台用户。
+
+`core/utils/task_runtime.py` 定义 Python/Go 共用 Redis `task-runtime:v1:{id}` 协议：version=1、
+principal/tenant/resource/kind/state，24 小时 TTL。SET NX 登记；active→cancel_requested 的
+CAS 同时写 nonce 取消标志；自然结束只把 active→finished，保留取消状态。旧/过期无登记的
+Agent ID 无副作用成功，仍有 SQL 行但无可信归属的旧 DataFlow 调试任务明确拒绝。
+运行清理用 SET NX，保留 API nonce 和 TTL；未知、终态、重复或 finish 获胜均不额外写标志。
+
+SQL 行锁序列化取消。Task -1 与单次 nullable 日志、活动文档 CANCEL/progress=0 同事务提交。
+持久 `[cancel_requested]` 标记守卫 get_task/update_progress 的迟到写入；begin2parse 不复活
+CANCEL 文档，普通失败 -1 无此标记仍允许恢复。Redis False/异常、SQL 提交失败和回滚失败
+均非成功；SQL 失败尝试只补偿本次 nonce，补偿无法确认明确失败。响应只确认提交/幂等，
+不承诺 worker 已停止；没有分布式事务或新增 Task 查询 API。
+
+### Go 与实际验收
+
+Go 增加实际 TaskHandler/TaskService/路由/DI，通过现有 GetUser 和 SQL API token 鉴权，
+使用同一 PostgreSQL 与 raw Redis；没有调用错误的 DeleteByTenantID，也没有编造 Go Canvas
+引擎。`dao.PostgresDSN` 将安全校验后的 search_path 放进每连接参数，替代只影响某条池连接
+的 SET。真实验收同时持有三条连接，逐条确认 usr_ai；用户名/密码 URL 编码有单测。
+
+`test_task_cancellation.py` 的 38 个真实 HTTP 用例通过：JWT/API key、POST/PATCH/旧 PUT、
+未知/终态、nullable 日志、普通文档实际 queue_tasks、三类实际 run_index 图任务、实际 DataFlow
+调试入队、邀请/失效与真实加入成员、登记失败首帧前拒绝、SQL/Redis 故障、同时取消、worker
+已读任务后的迟到进度、普通失败重试以及当前 set_progress/Pipeline.callback 观察取消。
+实际 Agent 草稿/发布/续跑在可控等待后取消，兄弟运行仍成功；独立 SQL/Redis 读回会话错误、
+无成功助手终态、无 Agent Task、画布/版本及发布运行编辑副本隔离；自然清理后 API nonce/TTL
+不变。等待仅替换 VariableAssigner 的执行边界，Canvas/Begin/Message、鉴权与存储真实。
+
+Go 跨端验收显式运行 `tests/integration/task_cancellation_go_acceptance.py`，避免普通 Python
+CI 增加 Go/CGO 前置。它驱动真实 Go Router/AuthHandler/TaskService HTTP listener，取消 Python
+实际创建的文档、DataFlow、图任务及 Agent 草稿/发布/续跑；SQL/Redis 独立读回后 Python 的
+Canvas/Pipeline 确认取消。Go 使用隔离 signing store，不写全局签名 Redis key；本地许可状态
+仅初始化测试运行状态，未验收真实许可系统。其他无关 handlers 不在本项 listener 实例化。
+
+本机原无 Go 和 native 静态库。实际下载校验官方 Go 1.25.14，与 go.mod 的 1.25 系列一致；
+Go 1.27.1 与既有 grpc/x-net 依赖编译不兼容，未为本项升级共享依赖。使用当前 C++ tokenizer
+源码、真实 PCRE2 与 SIMDe 0.8.2 在自有临时目录构建静态库，未使用 stub、未改 native 源码。
+本项使用的仓内 native 符号链接在最终验收后删除。复跑跨端验收需先准备真实 tokenizer 静态库：
+
+```sh
+MULTIRAG_TEST_GO=/path/to/go REQUIRE_SERVICES=1 uv run --no-sync pytest tests/integration/task_cancellation_go_acceptance.py -q -s
+```
+
+最终 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，3695 unit
+passed）；`make integration` 385 passed，无 skip，含上述 38 个真实 HTTP 用例及同 listener 的
+实际 `make smoke`。显式 Go/Python 跨端验收 10 passed，无 skip；gofmt、Go build/vet
+`./internal/...`、DSN/Task handler 专项单测及三个 cmd 入口分别 build 均通过。依赖 m1cpu 的
+CGO VLA 编译警告仍存在，不影响退出码；没有为了换绿放宽门禁。原始日志位于本机
+`/tmp/multirag-488-` 前缀的 verify、integration、http、smoke、go-http、go-live、go125-build、
+go-vet、go-unit、go-cmd、native-config、native-build `.log` 文件；没有连接密钥。
+fixture 逐项检查自有 SQL 行、Redis stream/归属/取消 key 和 HTTP listener 清理，共享 fixture
+删除 scratch 数据库；不操作业务库，本项没有创建容器/卷。没有运行完整后台 worker 进程、
+远程 LLM/provider 或浏览器，真实 worker 进度和 Pipeline 取消观察不能替代这些验收。
+
 ## 82313020c71b8b91873232c2334c2c1c382f1c49 · 列表操作与 strict 模式
 
 - 上游 #14387；2026-10-02 核对预期 origin 并 fetch，

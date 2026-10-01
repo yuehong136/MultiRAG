@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 import xxhash
-from sqlalchemy import asc, delete, desc, select, update
+from sqlalchemy import asc, delete, desc, func, select, update
 from sqlalchemy.orm import Session
 
 from api.db import FileType
@@ -27,6 +27,7 @@ from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
+from core.utils.task_runtime import TASK_CANCEL_MARKER, read_binding
 from deepdoc.parser import PdfParser
 from deepdoc.parser.excel_parser import RAGFlowExcelParser
 
@@ -95,7 +96,7 @@ class TaskService(CommonService):
         return cls.update_by_id(db, id, {"begin_at": datetime.now()})
 
     @classmethod
-    def get_task(cls, db: Session, task_id: str, doc_ids: list[str] | None = None):
+    def get_task(cls, db: Session, task_id: str, doc_ids: list[str] | None = None) -> dict[str, Any] | None:
         # 先获取任务的doc_id，判断是否需要使用doc_ids[0]
         stmt = select(cls.model.doc_id).where(cls.model.id == task_id)
         task_record = db.execute(stmt).scalar_one_or_none()
@@ -171,12 +172,16 @@ class TaskService(CommonService):
         # task["progress"] = prog
 
         # 将更新写入数据库
-        stmt = update(cls.model).where(cls.model.id == task["id"]).values(progress_msg=cls.model.progress_msg + msg, progress=prog)
-        db.execute(stmt)
+        stmt = (
+            update(cls.model)
+            .where(cls.model.id == task["id"], ~func.coalesce(cls.model.progress_msg, "").contains(TASK_CANCEL_MARKER))
+            .values(progress_msg=func.coalesce(cls.model.progress_msg, "") + msg, progress=prog)
+        )
+        written = db.execute(stmt).rowcount
 
         db.commit()
 
-        if task["retry_count"] >= 3:
+        if not written or task["retry_count"] >= 3:
             return None
 
         return task
@@ -291,7 +296,7 @@ class TaskService(CommonService):
     #     )
 
     @classmethod
-    def update_progress(cls, db: Session, id: str, info: dict):
+    def update_progress(cls, db: Session, id: str, info: dict[str, Any]) -> None:
         """Update the progress information for a task.
 
         This method updates both the progress message and completion percentage of a task.
@@ -299,7 +304,8 @@ class TaskService(CommonService):
         when necessary to ensure thread safety.
 
         Update Rules:
-            - progress_msg: Always appends the new message to the existing one, and trims the result to max 3000 lines.
+            - A persisted cancellation marker prevents all later worker writes.
+            - progress_msg: Appends the new message, and trims the result to max 3000 lines.
             - progress: Updates when (a) new progress >= 1 (allows recovery from -1), or
                         (b) current progress != -1 AND (new progress is -1 OR greater than existing).
 
@@ -310,19 +316,21 @@ class TaskService(CommonService):
                         - progress (float, optional): Progress percentage (0.0 to 1.0)
         """
 
-        def do_update():
+        def do_update() -> None:
             task = cls.get_by_id(db, id)
             if not task:
                 logging.warning("Update_progress error: task not found")
                 return
 
+            filters = [cls.model.id == id, ~func.coalesce(cls.model.progress_msg, "").contains(TASK_CANCEL_MARKER)]
+
             if info.get("progress_msg"):
                 progress_msg = trim_header_by_lines((task.progress_msg or "") + "\n" + str(info["progress_msg"]), 3000)
-                db.execute(update(cls.model).where(cls.model.id == id).values(progress_msg=progress_msg))
+                db.execute(update(cls.model).where(*filters).values(progress_msg=progress_msg))
 
             if "progress" in info:
                 prog = info["progress"]
-                progress_filters = [cls.model.id == id]
+                progress_filters = list(filters)
                 if prog < 1:
                     progress_filters.append(cls.model.progress != -1)
                     if prog != -1:
@@ -333,7 +341,7 @@ class TaskService(CommonService):
             begin_at = cls._coerce_begin_at(task.begin_at)
             if begin_at:
                 process_duration = (datetime.now() - begin_at).total_seconds()
-                db.execute(update(cls.model).where(cls.model.id == id).values(process_duration=process_duration))
+                db.execute(update(cls.model).where(*filters).values(process_duration=process_duration))
 
         if os.environ.get("MACOS"):
             do_update()
@@ -556,6 +564,11 @@ def queue_dataflow(
         "priority": priority,
         "begin_at": datetime.now(),
     }
+
+    if doc_id == CANVAS_DEBUG_DOC_ID:
+        runtime = read_binding(task_id)
+        if runtime is None or runtime[1]["kind"] != "dataflow" or runtime[1]["resource_id"] != flow_id or runtime[1]["tenant_id"] != tenant_id:
+            raise PermissionError("Dataflow task requires trusted runtime ownership before enqueue.")
 
     if doc_id not in [CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID]:
         TaskService.filter_delete(db, [Task.doc_id == doc_id])

@@ -49,6 +49,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
+from api.db.services.task_cancellation_service import bind_canvas_task, require_canvas
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, TaskService, queue_dataflow
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService
@@ -59,6 +60,7 @@ from common.misc_utils import get_uuid, thread_pool_exec
 from core.flow.pipeline import Pipeline
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
+from core.utils.task_runtime import finish_runtime
 
 router = APIRouter()
 
@@ -582,12 +584,22 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
 
     # DataFlow模式（只取所需字段，不让 ORM 对象活到流式期）
-    stored_category = await db.run_sync(lambda s: UserCanvasService.get_by_id(s, req["id"]).canvas_category)  # TODO(async-phase4)
+    stored_category, resource_owner_id = (await db.execute(select(UserCanvas.canvas_category, UserCanvas.user_id).where(UserCanvas.id == req["id"]))).one()
+    try:
+        await require_canvas(db, req["id"], resource_owner_id, tenant_id)
+    except PermissionError as error:
+        return get_json_result(data=False, retmsg=str(error), retcode=RetCode.AUTHENTICATION_ERROR)
     if stored_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
-        Pipeline(dsl_str, tenant_id=tenant_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
-        ok, error_message = await db.run_sync(lambda s: queue_dataflow(s, user_id, req["id"], task_id, CANVAS_DEBUG_DOC_ID, files if files else None, 0))  # TODO(async-phase4)
+        Pipeline(dsl_str, tenant_id=resource_owner_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
+        await bind_canvas_task(db, task_id, tenant_id, req["id"], "dataflow")
+        try:
+            ok, error_message = await db.run_sync(lambda s: queue_dataflow(s, resource_owner_id, req["id"], task_id, CANVAS_DEBUG_DOC_ID, files if files else None, 0))  # TODO(async-phase4)
+        except BaseException:
+            await asyncio.to_thread(finish_runtime, task_id)
+            raise
         if not ok:
+            await asyncio.to_thread(finish_runtime, task_id)
             return get_data_error_result(retmsg=error_message)
         return get_json_result(data={"message_id": task_id})
 
@@ -597,12 +609,13 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         canvas = await asyncio.to_thread(
             Canvas,
             dsl_str,
-            tenant_id,
+            resource_owner_id,
             task_id=uuid4().hex,
             canvas_id=req["id"],
         )
     except Exception as e:
         return server_error_response(e)
+    await bind_canvas_task(db, canvas.task_id, tenant_id, req["id"])
 
     # setup 产物已全是纯值（无 ORM 对象存活）——结束 autobegin 的读事务，避免连接在
     # 下方分钟级的 SSE 流式期间以 idle-in-transaction 状态钉死
@@ -634,7 +647,10 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             logging.exception(e)
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
         finally:
-            canvas.cancel_task()
+            try:
+                await asyncio.to_thread(finish_runtime, canvas.task_id)
+            finally:
+                canvas.cancel_task()
 
     return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 

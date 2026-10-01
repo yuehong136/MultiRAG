@@ -196,6 +196,13 @@ class RedisDB:
             self.__open__()
         return False
 
+    def set_if_absent(self, key: str, value: str, exp: int = 3600) -> bool:
+        """Set a flag without replacing another request's value or expiry."""
+        if self.REDIS is None:
+            return False
+        created = self.REDIS.set(key, value, ex=exp, nx=True)
+        return bool(created or self.REDIS.exists(key))
+
     def sadd(self, key: str, member: str):
         try:
             self.REDIS.sadd(key, member)

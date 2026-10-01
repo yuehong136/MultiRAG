@@ -305,11 +305,12 @@ class Graph:
 
     def cancel_task(self) -> bool:
         try:
-            REDIS_CONN.set(f"{self.task_id}-cancel", "x")
+            # Attempt IDs are unique. Preserve an API cancellation nonce and
+            # its TTL rather than replacing it during runtime cleanup.
+            return REDIS_CONN.set_if_absent(f"{self.task_id}-cancel", "x")
         except Exception as e:
             logging.exception(e)
             return False
-        return True
 
 
 class Canvas(Graph):

@@ -62,6 +62,7 @@ from core.svr import executor_metrics
 from core.utils.base64_image import image2id
 from core.utils.raptor_utils import get_skip_reason, should_skip_raptor
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
+from core.utils.task_runtime import finish_runtime
 from deepdoc.parser.utils import extract_pdf_outlines
 
 BATCH_SIZE = 64
@@ -2883,7 +2884,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
                 logging.exception(f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}")
 
 
-async def handle_task():
+async def handle_task() -> None:
 
     global DONE_TASKS, FAILED_TASKS
     with db_connection() as db:
@@ -2968,6 +2969,9 @@ async def handle_task():
                 logging.exception(f"handle_task got exception for task {json.dumps(task_error_dict, default=str)}")
 
             finally:
+                # Expiring ownership is shared by Python and Go. Preserve a
+                # cancel_requested state; only active attempts become terminal.
+                await asyncio.to_thread(finish_runtime, task_id)
                 # analyze_v2 任务不记录 pipeline 操作日志（临时 doc_id，无对应 Document 记录）
                 if task_type != "analyze_v2":
                     referred_document_id = None

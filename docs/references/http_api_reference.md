@@ -49,6 +49,58 @@ Authorization: Bearer <your-api-key>
 }
 ```
 
+## Task API
+
+### 提交取消请求
+
+接受当前 Web 会话 JWT 或 API Key（`Authorization: Bearer ...`）。
+两种请求执行相同的授权与取消逻辑：
+
+| 方法与完整路径 | 请求体 |
+|---|---|
+| `POST /api/v1/tasks/{task_id}/cancel` | 无需请求体 |
+| `PATCH /api/v1/tasks/{task_id}` | `{"action":"stop"}`，不接受额外字段 |
+
+`task_id` 为 1–32 个字母、数字、下划线或连字符。没有公开的 GET Task 接口。
+
+| 运行类型 | 可取消的 ID 与授权依据 |
+|---|---|
+| 文档解析 | SQL Task ID；有效文档、知识库与当前已加入的 owner/normal/admin 成员 |
+| GraphRAG、RAPTOR、MindMap | 启动结果的 `task_id`；由有效知识库登记的任务字段反查归属 |
+| Agent | 运行 SSE 的 `task_id`，与 `message_id` 不同；服务器在首帧前登记本次尝试与画布归属 |
+| DataFlow 调试 | 运行响应 `data.message_id` 就是 Task ID；服务器在真实入队前登记本次尝试与画布归属 |
+
+Agent/DataFlow 的 owner 可取消；其他当前已加入成员还需要画布为 team。
+请求中的 `user_id`、`tenant_id`、DSL 与仅持有 UUID 均不构成授权。
+取消按单次尝试隔离，不取消同一画布的其他并发运行，也不改草稿或发布版本。
+
+Python 返回既有 `retcode/retmsg` 结构；Go 返回 `code/message`，业务码相同：
+
+```json
+{"retcode":0,"retmsg":"success","data":true}
+```
+
+- `0`：已提交取消请求，或已结束/已取消/不存在的任务无需变更。成功不证明 worker 已停止。
+- `109`、`data:false`：已知任务无权限、资源无效，或 DataFlow 调试任务没有可信归属。
+- `100`、`data:false`：SQL、Redis 或补偿失败，不能当作取消成功。
+- Python 缺失/无效认证为 HTTP 401；ID、PATCH action 或额外字段错误为 HTTP 422。
+  Go 使用现有鉴权及参数错误响应，调用方同时检查 HTTP 状态和 `code`。
+
+文档 Task 变为 `progress=-1` 并追加一次取消记录；正在运行/排队的文档变为 CANCEL、
+`progress=0`。图谱和 DataFlow 哨兵不作为文档 ID 更新。
+迟到的 Task 进度与文档启动写入不能覆盖此次取消，普通失败任务仍可重试。
+Redis 与 SQL 不构成分布式事务；提交失败尝试仅撤销本次请求的 Redis nonce，
+补偿不能确认时仍返回失败，需要重新检查任务状态。
+
+服务器运行归属登记与取消标志有效期为 24 小时，运行结束保留有限期终态；
+取消通过 CAS 与结束竞争，重复取消不重复写日志。旧 Agent ID 无登记或登记已过期时
+无副作用成功；仍存在但没有可信登记的旧 DataFlow 调试任务返回 `109`。
+当前没有额外任务查询 API，可从运行流的错误/终态和已有解析进度确认运行结果。
+
+旧 `PUT /v1/canvas/cancel/{task_id}` 暂时保留并标过时，调用同一授权服务。
+现有 Web 的 Agent/DataFlow 取消仍使用它；Web 改为上述 POST 并完成两类真实运行验收后，
+直接删除该路由及专用调用，不把保留旧接口作为默认兼容策略。
+
 ## Agent API
 
 ### 更新与发布画布

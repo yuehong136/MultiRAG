@@ -25,11 +25,13 @@ from api.db import CanvasCategory, TenantPermission, UserTenantRole
 from api.db.db_models import API4Conversation, CanvasTemplate, User, UserCanvas, UserCanvasVersion, UserTenant
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
+from api.db.services.task_cancellation_service import bind_canvas_task
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.identity.run_context import RunContext
 from api.utils.api_utils import get_data_openai
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
+from core.utils.task_runtime import finish_runtime
 
 
 class CanvasTemplateService(CommonService):
@@ -404,6 +406,8 @@ async def completion(
             conv = API4ConversationService.get_by_id(s, session_id)
             if not conv:
                 raise LookupError("Session not found!")
+            if conv.dialog_id != agent_id or conv.source != "agent":
+                raise PermissionError("Session does not belong to the requested agent.")
             if not conv.message:
                 conv.message = []
             if not isinstance(conv.dsl, str):
@@ -460,6 +464,8 @@ async def completion(
 
     # 组件 __init__ 各自开连接查模型配置（reset 还打 Redis）——整体入线程池
     canvas = await asyncio.to_thread(_build_canvas)
+    task_principal_id = prepared_run.caller_id if prepared_run is not None else run_context.platform_user_id if run_context is not None and run_context.principal is not None else tenant_id
+    await bind_canvas_task(db, canvas.task_id, task_principal_id, canvas_id)
     if prepared_run is not None and is_new_session:
         # Invalid Canvas construction must not leave a successful session row.
         conv = await db.run_sync(lambda s: API4ConversationService.save(s, **conv).to_dict())
@@ -556,13 +562,17 @@ async def completion(
         written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))  # TODO(async-phase4)
         if written != 1:
             raise RuntimeError("Failed to persist agent result.")
+        await asyncio.to_thread(finish_runtime, canvas.task_id)
         for terminal in terminal_frames:
             yield "data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n"
     except Exception as error:
         await persist_failure(str(error))
         yield failure_frame(str(error))
     finally:
-        canvas.cancel_task()
+        try:
+            await asyncio.to_thread(finish_runtime, canvas.task_id)
+        finally:
+            canvas.cancel_task()
 
 
 async def completion_openai(

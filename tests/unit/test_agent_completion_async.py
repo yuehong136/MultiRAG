@@ -47,6 +47,7 @@ class _FakeCanvas:
         del tenant_id, canvas_id, custom_header, run_context
         type(self).built_on_worker.append(threading.current_thread() is not threading.main_thread())
         type(self).task_ids.append(task_id)
+        self.task_id = task_id
         self.dsl = dsl
         self.error = ""
 
@@ -98,11 +99,19 @@ def completion_stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             self.id = "sess-1"
             self.message = []
             self.dsl = "{}"
+            self.dialog_id = "agent-1"
+            self.source = "agent"
 
         def to_dict(self):
             return dict(conv_row)
 
     monkeypatch.setattr(canvas_service, "Canvas", _FakeCanvas)
+
+    async def bind_task(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(canvas_service, "bind_canvas_task", bind_task)
+    monkeypatch.setattr(canvas_service, "finish_runtime", lambda task_id: None)
     monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: _FakeConv()))
 
     def append_message(cls: type[API4ConversationService], db: Session, cid: str, conv: dict[str, Any]) -> int:

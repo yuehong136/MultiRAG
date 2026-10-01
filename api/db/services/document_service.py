@@ -2685,7 +2685,7 @@ class DocumentService(CommonService):
         return query.count()
 
     @classmethod
-    def begin2parse(cls, db: Session, doc_id: str, keep_progress: bool = False):
+    def begin2parse(cls, db: Session, doc_id: str, keep_progress: bool = False) -> None:
         info = {
             "progress_msg": "Task is queued...",
             "process_begin_at": get_format_time(),
@@ -2695,7 +2695,8 @@ class DocumentService(CommonService):
             info["run"] = TaskStatus.RUNNING.value
             # keep the doc in DONE state when keep_progress=True for GraphRAG, RAPTOR and Mindmap tasks
 
-        cls.update_by_id(db, doc_id, info)
+        db.execute(update(cls.model).where(cls.model.id == doc_id, or_(cls.model.run.is_(None), cls.model.run != TaskStatus.CANCEL.value)).values(**info))
+        db.commit()
 
     @classmethod
     def update_meta_fields(cls, db: Session, doc_id, meta_fields):

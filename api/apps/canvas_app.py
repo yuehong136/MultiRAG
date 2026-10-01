@@ -1,22 +1,18 @@
 """Legacy canvas surface retained only for task cancellation."""
 
-import logging
-
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps import manager
-from api.db.db_models import get_db
-from api.utils.api_utils import get_json_result
-from core.utils.redis_conn import REDIS_CONN
+from api.apps.restful_apis.task_api import TaskID, cancel_response
+from api.db.db_models import get_async_db
+from api.utils.api_utils import Principal, async_current_user
 
 router = APIRouter()
 
 
-@router.put("/cancel/{task_id}", summary="取消任务", response_description="成功取消任务")
-def cancel(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    try:
-        REDIS_CONN.set(f"{task_id}-cancel", "x")
-    except Exception as error:
-        logging.exception(error)
-    return get_json_result(data=True)
+# Active web caller: cancelCanvas/cancelDataflow. Delete after its Task REST
+# migration is accepted; authorization and errors are identical to the new API.
+@router.put("/cancel/{task_id}", summary="提交任务取消请求", deprecated=True)
+async def cancel(task_id: TaskID, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
+    return await cancel_response(db, task_id, user)
