@@ -511,15 +511,14 @@ async def completion(
         async with aclosing(canvas.run(**run_kwargs)) as run_events:
             async for ans in run_events:
                 ans["session_id"] = session_id
-                if prepared_run is not None:
-                    failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
-                    if failure:
-                        await persist_failure(failure)
-                        yield failure_frame(failure)
-                        return
-                    if ans.get("event") == "message_end":
-                        terminal_frames.append(ans)
-                        continue
+                failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
+                if failure:
+                    await persist_failure(failure)
+                    yield failure_frame(failure)
+                    return
+                if ans.get("event") == "message_end":
+                    terminal_frames.append(ans)
+                    continue
                 if ans["event"] == "message":
                     txt += ans["data"]["content"]
                     if ans["data"].get("start_to_think", False):
@@ -537,7 +536,7 @@ async def completion(
                     elif isinstance(data, dict) and isinstance(data.get("surface_id"), str):
                         a2ui_surface_ids.add(data["surface_id"])
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
-        if prepared_run is not None and canvas.error:
+        if canvas.error:
             await persist_failure(str(canvas.error))
             yield failure_frame(str(canvas.error))
             return
@@ -555,18 +554,15 @@ async def completion(
         conv["dsl"] = str(canvas)
 
         written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))  # TODO(async-phase4)
-        if prepared_run is not None and written != 1:
+        if written != 1:
             raise RuntimeError("Failed to persist agent result.")
         for terminal in terminal_frames:
             yield "data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n"
     except Exception as error:
-        if prepared_run is None:
-            raise
         await persist_failure(str(error))
         yield failure_frame(str(error))
     finally:
-        if prepared_run is not None:
-            canvas.cancel_task()
+        canvas.cancel_task()
 
 
 async def completion_openai(
@@ -576,39 +572,38 @@ async def completion_openai(
     question: str,
     session_id: str | None = None,
     stream: bool = True,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> AsyncGenerator[str | dict[str, Any], None]:
     """
     OpenAI 兼容适配器，基于 completion() 函数封装。
     - 调用 completion() 获取内部 SSE 流
     - 解析并转换为 OpenAI 格式
-    - 流模式：yield "data: {...}\\n\\n"，最后 "data: [DONE]\\n\\n"
-    - 非流模式：yield 最终完整对象
+    - 流模式成功才发送 [DONE]；失败发送 error 对象，不伪造 choices
+    - 非流模式：成功返回完整对象；失败返回 error 对象
     """
     tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
     prompt_tokens = len(tiktoken_encoder.encode(str(question)))
-    user_id = kwargs.get("user_id", "")
+    run_kwargs = {**kwargs, "query": question}
+    run_kwargs.setdefault("user_id", "")
+
+    async def responses() -> AsyncGenerator[dict[str, Any], None]:
+        async with aclosing(completion(db=db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id, **run_kwargs)) as answers:
+            async for answer in answers:
+                parsed = json.loads(answer[5:]) if isinstance(answer, str) else answer
+                if not isinstance(parsed, dict):
+                    raise ValueError("Invalid agent completion event.")
+                failure = agent_event_error(parsed)
+                if failure:
+                    raise RuntimeError(failure)
+                yield parsed
+
+    def error_payload(error: Exception) -> dict[str, Any]:
+        return {"error": {"message": str(error) or "Agent completion failed.", "type": "server_error", "code": 100}}
 
     if stream:
         completion_tokens = 0
         try:
-            async for ans in completion(
-                db=db,
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                query=question,
-                user_id=user_id,
-                **kwargs,
-            ):
-                if isinstance(ans, str):
-                    try:
-                        # 移除 "data:" 前缀并解析 JSON
-                        ans = json.loads(ans[5:])
-                    except Exception as e:
-                        logging.exception(f"Canvas OpenAI adapter parse answer failed: {e}")
-                        continue
-
+            async for ans in responses():
                 # 检查是否有答案内容
                 if ans.get("event") not in ["message", "message_end"]:
                     continue
@@ -630,41 +625,14 @@ async def completion_openai(
 
         except Exception as e:
             logging.exception(e)
-            err_text = f"**ERROR**: {e!s}"
-            yield (
-                "data: "
-                + json.dumps(
-                    get_data_openai(
-                        id=session_id or str(uuid4()),
-                        model=agent_id,
-                        content=err_text,
-                        finish_reason="stop",
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=len(tiktoken_encoder.encode(err_text)),
-                        stream=True,
-                    ),
-                    ensure_ascii=False,
-                )
-                + "\n\n"
-            )
-            yield "data: [DONE]\n\n"
+            yield "data: " + json.dumps(error_payload(e), ensure_ascii=False) + "\n\n"
 
     else:
         # 非流模式：聚合所有内容后一次性返回
         try:
             all_content = ""
             reference = {}
-            async for ans in completion(
-                db=db,
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                query=question,
-                user_id=user_id,
-                **kwargs,
-            ):
-                if isinstance(ans, str):
-                    ans = json.loads(ans[5:])
+            async for ans in responses():
                 if ans.get("event") not in ["message", "message_end"]:
                     continue
 
@@ -686,13 +654,4 @@ async def completion_openai(
             yield openai_data
         except Exception as e:
             logging.exception(e)
-            err_text = f"**ERROR**: {e!s}"
-            yield get_data_openai(
-                id=session_id or str(uuid4()),
-                model=agent_id,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=len(tiktoken_encoder.encode(err_text)),
-                content=err_text,
-                finish_reason="stop",
-                param=None,
-            )
+            yield error_payload(e)

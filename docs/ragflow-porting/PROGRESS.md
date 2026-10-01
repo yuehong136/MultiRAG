@@ -3,6 +3,78 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 82313020c71b8b91873232c2334c2c1c382f1c49 · 列表操作与 strict 模式
+
+- 上游 #14387；2026-10-02 核对预期 origin 并 fetch，
+  `origin/main` 为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本仓 `9bf2c4d7a797c1ed14ad35db3b2a69e1c850dca6` 开始，核对目标 6 文件完整 diff 与目标树。
+  本项止于该 SHA；下一项等待另行派发。
+
+| 上游 diff | 本项处置 |
+|---|---|
+| `agent/component/list_operations.py` 新增 nth/strict，head/tail 改为切片 | 同名组件适配，显式 `operations_version: 2` 使用新合同，缺失/1 保留历史合同。strict 正确解析布尔字符串，空输出 first/last 为 None，错误清空上一轮结果。过滤/排序/去重保留本地行为。 |
+| `test/testcases/test_web_api/test_canvas_app/test_list_operations_unit.py` 新增语义矩阵 | 不复制整包伪造或 `__new__` harness，使用实际 Canvas、Begin、参数检查及 invoke 建立 236 个组件单测；另测实际 HTTP、SQL 和 Redis 边界。 |
+| `web/src/locales/en.ts` 改 nth 文案并新增 strict 说明 | 独立 web 由根聊天另派；交接准确合同。宽松 head/tail 超长返回全部，不能沿用上游 tip 中“无效 n 一律空数组”的笼统说法。 |
+| `web/src/locales/zh.ts` 更新 head/tail/nth 与 strict 文案 | 同上，nth 支持正负位置，head/tail 明确前/后 N 项。 |
+| `web/src/pages/agent/constant/index.tsx` 默认 nth、strict=false | 交接新建节点必须显式写版本 2，历史加载先确定版本 1，不能靠新默认值覆盖旧节点。 |
+| `web/src/pages/agent/form/list-operations-form/index.tsx` n 整数输入、负数及 strict switch | 交接本仓实际表单/类型/defaults/normalizer/serializer 落点；本项无 web 代码或浏览器验收。 |
+
+未查到目标的 revert/re-land。后续链：
+
+- `f58fae5fb71bad1970da747dfecc8b241875a44f` 的 topN 大小写/空白归一化采用；
+  历史版本归一为 topN，新版本归一为 head，不重释历史 head/tail。
+- `38c40e64a98c4657b3ac49de217aa3993bd757ef` 的输入 None→空数组采用，非列表仍报错。
+- `3f805a64f15587e16900f85ffd661d49fa9161fc` 的 sort_by 字典字段排序属另一行为，
+  不提前合入；保留当前完整 hashable key 的字典排序。`6a4b9be42` 只有格式变化。
+  后续整体删除 Python 后端不作为本项撤回。
+
+本地历史 DSL 没有版本字段。缺失或整数 1 保持：topN/省略 operations 取前 N 项，
+旧 head/tail 取正数第 N/倒数第 N 单项；非正数或越界保持原空结果，topN 超长保持全部。
+历史冗余 strict 字段继续忽略。新版本 nth 支持 1-based 与负数位置；head/tail 取切片，
+strict 默认 false，严格范围 nth 为非零且 abs(n)<=len，head/tail 为 1<=n<=len。
+`int(n)` 转换保留有限小数截断、整数字符串及 bool；转换失败按 0。版本只收整数 1/2。
+新增 marker 的边界在参数 update 的深拷贝，所有加载来源一致；真实 Graph/Canvas
+序列化保存该字段，无全局 DSL 迁移、模板修改或运行时 ORM Canvas/发布快照污染。
+稳定合同及显式历史转换规则见 [HTTP 参考](../references/http_api_reference.md#列表操作组件与历史-dsl)。
+
+消费者核对覆盖 Python Agent/Canvas、REST 创建/更新/发布/版本/副本/运行/会话/reset/debug、
+SDK helper、Channel 历史组件 allowlist；仓内模板无 ListOperations。
+独立 web 的 `src/pages/agent/constant/index.ts:initialListOperationsValues` 仍用 topN，
+`types.ts:IListOperationsForm` 尚无 strict/version；表单、节点、默认参数和
+`operators/normalizers.ts:normalizeListOperationsFormForStore` 及通用 serializer 是实际落点。
+新建、历史编辑、导入、复制与保存必须保留版本；不能按字段名推断或批量升级。
+本项不替 web 任务完成这些改动。
+
+真实 HTTP strict 验收发现 OpenAI 适配忽略内部 error，旧 completion 非 prepared 分支
+还会追加成功助手消息。本项修复共用运行链的错误记录和成功终态时序，再把 error/code、
+异常和坏事件转换为 OpenAI error 对象；失败不产生 choices 或 [DONE]。
+不以 `**ERROR**` 的成功答案掩盖异常，不放宽 ordinary/SDK 的授权或选择合同。
+普通发布运行的无效版本在 Canvas 构造时返回既有通用 HTTP 500/retcode=100，
+不是参数细节回显；开流前无会话写入。SDK `create_agent_session` 未注册 HTTP，
+本项直接调用真实 helper，再以普通 HTTP 运行其会话，没有新增旧 SDK 路由。
+
+Go 核对 `internal/router/`、`internal/handler/`、`internal/service/`、`internal/cli/`、
+`cmd/`、`server/`。`internal/entity/canvas.go` 与 `internal/dao/user_canvas.go` 只承载
+通用 JSON DSL/CRUD；`internal/router/router.go:246`、`internal/handler/memory.go:463`、
+`internal/service/memory.go:664,667` 的 Canvas 消费尚为 TODO。Go 的 topN 是检索/聊天数量，
+没有本组件执行链或对应路由/CLI，不制造 Go Agent 空实现；本项没有 Go 改动或构建声称。
+
+专项：236 组件单测及 33 运行/协议单测通过。17 个隔离 HTTP 用例通过，实际
+Begin→ListOperations→Message 覆盖新旧边界、JWT/API key、stream true/false、strict 失败、
+None 输入、草稿/发布会话、新建/续跑会话、历史无 marker 续跑、重复 reset/debug、
+OpenAI 成功/失败和 SDK 建会话；同一实际隔离 API 的 `make smoke` 通过。
+独立 SQL 读回 result/first/last、消息/错误、marker、历史/轮数及 env 默认值，
+运行与 debug 前后 Canvas/版本内容相等，Redis 副本字节相等；显式 reset 只保存 SQL Canvas，
+已有会话/版本/Redis 不变。未替换组件、模型/provider、业务返回或存储，未调用远程 LLM。
+fixture 检查专属用户/token/成员关系/Canvas/版本/会话、Redis key 与 HTTP listener 清理，
+共享 fixture 删除 scratch 数据库。本项不写对象/向量，未操作生产数据。
+
+本轮 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，
+3662 unit passed）；`make integration` 337 passed，无 skip，包含本项 17 个 HTTP 用例
+和隔离 API 的实际 smoke。验收中的失败来自测试画布重名、测试 DSL 缺少 sys globals、
+对既有通用 HTTP 500 错误文案的错误预期，以及上述 OpenAI 丢失真实 strict 错误。
+前三项修正夹具/合同预期，后者修生产根因并加入失败传播回归，未放宽成功或存储断言。
+
 ## c1941fd50352d514ecfb20a74785ccb7a1753ad4 · 删除未使用的临时文本解析入口
 
 - 上游 #14367；2026-10-02 核对预期 origin 并 fetch，

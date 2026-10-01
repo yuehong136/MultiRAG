@@ -156,6 +156,54 @@ reset 不会将它们静默转换为空变量。
 不能当作上述新会话重置操作。需要草稿新会话时先显式创建，再传该 `session_id` 运行。
 `openai-compatible: true` 的消息适配路径另用 OpenAI 响应形状，不能套用普通 SSE 会话 ID 合同。
 
+### 列表操作组件与历史 DSL
+
+`ListOperations` 的参数位于 `components[component_id].obj.params`。
+新建节点须显式保存整数 `operations_version: 2`，例如：
+
+```json
+{"query": "{begin@items}", "operations_version": 2, "operations": "nth", "n": -1, "strict": false}
+```
+
+| v2 操作 | `strict: false`（默认） | `strict: true` |
+|---|---|---|
+| `nth` | 正数按 1 起算，负数从末尾起算，返回单项数组；0 或越界返回 `[]` | 要求 `n != 0` 且 `abs(n) <= 列表长度`，否则报错 |
+| `head` | 返回前 N 项；N < 1 返回 `[]`，N 超过长度返回全部 | 要求 `1 <= N <= 列表长度`，否则报错 |
+| `tail` | 返回后 N 项，保持原顺序；N < 1 返回 `[]`，N 超过长度返回全部 | 要求 `1 <= N <= 列表长度`，否则报错 |
+
+v2 省略或清空 `operations` 时默认 `nth`；旧名 `topN`（忽略大小写和两侧空白）
+作为 `head` 的别名。`n` 默认 0，按 Python `int` 转换：整数、整数字符串、有限小数
+（向 0 截断）和布尔值兼容；无法转换时按 0 处理，再执行上述范围规则。
+`strict` 推荐传布尔值；字符串 `true/1/yes/on` 为真，忽略大小写与两侧空白，
+其他字符串（包括 `false/0/no/off`）为假。
+
+`operations_version` 缺失或为整数 1 时，始终保留历史语义：
+
+| 历史操作 | 执行结果 | 显式转换为 v2 时的等价规则 |
+|---|---|---|
+| `topN` 或省略 `operations` | 前 N 项；N < 1 返回 `[]`，超长返回全部 | 改为 `head`，保留 n，`strict: false` |
+| `head` | 第 N 项的单项数组；非正数或越界返回 `[]` | 改为 `nth`；转换后的 N > 0 时保留，否则置 0；`strict: false` |
+| `tail` | 倒数第 N 项的单项数组；非正数或越界返回 `[]` | 改为 `nth`；转换后的 N > 0 时取 -N，否则置 0；`strict: false` |
+
+历史参数中的冗余 `strict` 不改变执行。转换 n 时采用上面的 `int` 规则；
+不能把历史负数 `head/tail` 直接改成负数 `nth`，否则会把原空结果改为有效单项。
+保持版本 1 即可继续编辑和运行历史节点，无需转换或批量改写存储。
+其他版本值（包括字符串 `"2"` 和布尔值）被拒绝，不能依据操作名或 strict 字段猜版本。
+
+编辑器加载旧节点时应先确定版本 1，再合并默认字段，避免新建默认版本 2 覆盖历史语义。
+导入、复制、保存和发布保留该标记。运行只在 DSL 副本中补齐历史版本 1，
+会话序列化保留标记；运行及组件 debug 不改写原草稿、发布快照或 Redis 编辑器副本。
+显式 reset 会保存重置后的 SQL Canvas，不改已有会话、版本和 Redis 副本。
+
+输入值为 `null` 时按空列表处理，其他非列表值报 `TypeError`；strict 越界报 `ValueError`。
+`filter/sort/drop_duplicates` 保持原行为。输出字段仍为 `result/first/last`，
+空结果的 first/last 为 `null`。失败清空结果，不复用上一轮输出。
+普通会话运行的错误沿用上一节非零业务码和 SSE error 合同；
+普通发布运行在构造 Canvas 时发现无效版本，开流前返回 HTTP 500、`retcode=100`，不创建会话。
+OpenAI 消息适配的 strict 失败返回 `{"error":{"message":"...","type":"server_error","code":100}}`；
+流式失败发送同形状的 SSE 后结束，不发送成功 choices 或 `[DONE]`，非流式失败也不返回 choices。
+失败会话保存本次用户输入及错误，不追加成功助手答案。
+
 ## 对话 API
 
 ### 上传运行时附件

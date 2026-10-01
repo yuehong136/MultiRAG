@@ -12,6 +12,7 @@
 | Quart/Flask handler | FastAPI router + Pydantic + dependency | 新 service async-first；同一请求不混用同步/异步 session |
 | peewee model/query | `api/db/db_models.py` + SQLAlchemy 2.0 repository | 迁移和真 PostgreSQL 测试固定约束；业务事务放自有 service/repository |
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
+| `agent/component/list_operations.py` | 同名组件 + `api/db/services/canvas_service.py` 运行适配 | 新合同显式 `operations_version: 2`，缺省/1 保留历史 topN 与 head/tail 单项语义；只在运行副本补版本，不批量改写存储。错误经普通或 OpenAI 协议传递，见 [HTTP API](../references/http_api_reference.md#列表操作组件与历史-dsl) |
 | `deepdoc/parser/pdf_parser.py` 的 bbox 分批与布局选择 | 同名 parser、`deepdoc/vision/layout_recognizer.py`、`common/deepdoc_config.py` | 类型化读取 `deepdoc` section，保留上游环境名；窗口内裁图，返回全局页码。flow 多栏排序读 `bbox_page_width`。DLA 可选客户端协议未提供，缺客户端时明确失败，不复制成功桩 |
 | `api/apps/kb_app.py` 的数据集管理、图谱和 RAPTOR 路由 | `api/apps/restful_apis/dataset_api.py`、`document_api.py` | `/api/v1/datasets` 提供管理与索引契约；已迁移的旧创建、更新、列表、删除、图谱读取/删除及 GraphRAG/RAPTOR 启动/追踪入口已移除。文件日志等本地扩展仍由 `kb_app.py` 提供，其他入口按实际调用逐项退役 |
 | `api/apps/evaluation_app.py` 的评估路由 | 评估 API 已移除；`api/db/services/evaluation_service.py` 与评估表保留 | 未使用的 `/v1/evaluation` 已下线；知识库 REST 数据集不承接评估数据集。入口退役不自动删除 service、数据库表或历史数据 |

@@ -60,6 +60,9 @@ class _FakeCanvas:
     def get_reference(self):
         return {"chunks": []}
 
+    def cancel_task(self) -> None:
+        pass
+
     def __str__(self):
         return json.dumps({"graph": {}})
 
@@ -81,7 +84,7 @@ class _RecordingAsyncSession(AsyncSession):
 
 
 @pytest.fixture
-def completion_stubs(monkeypatch):
+def completion_stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     _FakeCanvas.built_on_worker = []
     _FakeCanvas.task_ids = []
     saved: dict[str, object] = {}
@@ -101,11 +104,12 @@ def completion_stubs(monkeypatch):
 
     monkeypatch.setattr(canvas_service, "Canvas", _FakeCanvas)
     monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: _FakeConv()))
-    monkeypatch.setattr(
-        API4ConversationService,
-        "append_message",
-        classmethod(lambda cls, s, cid, conv: saved.setdefault("payload", (cid, conv))),
-    )
+
+    def append_message(cls: type[API4ConversationService], db: Session, cid: str, conv: dict[str, Any]) -> int:
+        saved["payload"] = (cid, conv)
+        return 1
+
+    monkeypatch.setattr(API4ConversationService, "append_message", classmethod(append_message))
     return saved
 
 
@@ -281,7 +285,8 @@ def test_agent_adapter_preserves_failure_and_closes_generator(agent_route_stubs:
 
 
 @pytest.mark.parametrize("failure", ["event", "exception", "node", "after_terminal"])
-async def test_prepared_run_records_failure_without_success(completion_stubs: dict[str, object], monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+@pytest.mark.parametrize("prepared_mode", [False, True])
+async def test_completion_records_failure_without_success(completion_stubs: dict[str, object], monkeypatch: pytest.MonkeyPatch, failure: str, prepared_mode: bool) -> None:
     saved: list[dict[str, Any]] = []
 
     async def failing_run(self: _FakeCanvas, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
@@ -304,10 +309,39 @@ async def test_prepared_run_records_failure_without_success(completion_stubs: di
     monkeypatch.setattr(_FakeCanvas, "run", failing_run)
     monkeypatch.setattr(_FakeCanvas, "cancel_task", lambda self: True, raising=False)
     monkeypatch.setattr(API4ConversationService, "append_message", persist)
-    prepared = canvas_service.PreparedAgentRun("agent-1", "tenant-unit", "tenant-unit", "{}", None, {"id": "sess-1", "message": [], "dsl": "{}"})
+    prepared = canvas_service.PreparedAgentRun("agent-1", "tenant-unit", "tenant-unit", "{}", None, {"id": "sess-1", "message": [], "dsl": "{}"}) if prepared_mode else None
     db = _RecordingAsyncSession({})
     frames = [json.loads(frame[5:]) async for frame in canvas_service.completion(db, "tenant-unit", "agent-1", session_id="sess-1", prepared_run=prepared, query="test")]
     assert frames[-1]["event"] == "error" and frames[-1]["code"] != 0
     assert not any(frame["event"] == "message_end" for frame in frames)
     assert len(saved) == 1 and saved[0]["errors"]
     assert [message["role"] for message in saved[0]["message"]] == ["user"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("failure", ["event", "code", "exception", "malformed"])
+async def test_openai_agent_adapter_reports_errors_and_closes_source(monkeypatch: pytest.MonkeyPatch, stream: bool, failure: str) -> None:
+    closed: list[bool] = []
+
+    async def source(**kwargs: Any) -> AsyncGenerator[str, None]:
+        assert kwargs["user_id"] == "caller" and kwargs["query"] == "question"
+        try:
+            yield 'data:{"event":"workflow_started","data":{}}\n\n'
+            if failure == "exception":
+                raise RuntimeError("controlled failure")
+            if failure == "malformed":
+                yield "data:invalid-json\n\n"
+            else:
+                frame = {"event": "error", "data": {"error": "controlled failure"}} if failure == "event" else {"code": 100, "message": "controlled failure", "data": False}
+                yield "data:" + json.dumps(frame) + "\n\n"
+            yield 'data:{"event":"message_end","data":{"content":"must not succeed"}}\n\n'
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(canvas_service, "completion", source)
+    db = _RecordingAsyncSession({})
+    answers = [answer async for answer in canvas_service.completion_openai(db, "tenant", "agent", "question", stream=stream, user_id="caller")]
+    assert closed == [True] and len(answers) == 1
+    frame = json.loads(str(answers[0])[5:]) if stream else answers[0]
+    assert isinstance(frame, dict) and frame["error"]["type"] == "server_error" and frame["error"]["code"] != 0
+    assert "choices" not in frame and "[DONE]" not in str(answers)
