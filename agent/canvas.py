@@ -340,7 +340,7 @@ class Canvas(Graph):
         )
         self._id = canvas_id
 
-    def load(self):
+    def load(self) -> None:
         super().load()
         self.history = self.dsl.get("history", [])
         if "globals" in self.dsl:
@@ -361,6 +361,10 @@ class Canvas(Graph):
         if "variables" in self.dsl:
             self.variables = self.dsl["variables"]
         else:
+            self.variables = {}
+        # Legacy templates use [] for no definitions; keep that stored DSL
+        # shape while exposing an empty mapping to the variable runtime.
+        if self.variables == []:
             self.variables = {}
 
         self.retrieval = self.dsl["retrieval"]

@@ -132,6 +132,12 @@ Agent DSL 的 `variables` 保存定义，例如
 `0`/`false`/`{}`/`[]`，string、未知或缺少类型恢复为 `""`。
 定义已存在但 `globals` 尚无对应键时也会初始化；序列化会保存这些运行值。
 
+历史无变量 DSL 可省略 `variables`，或保留 `{}`、`[]`。其中空列表仅在 Canvas
+运行视图中按空映射处理，保存的 DSL 仍为 `variables: []`，无需改写模板或已存会话。
+reset 将无定义的 `env.*` 运行键恢复为 `""`；已有会话继续运行时保留这些运行值。
+有变量定义时仍须使用名称到定义的映射；非空列表、`null`、字符串和数字不在此兼容范围内，
+reset 不会将它们静默转换为空变量。
+
 | 操作 | 变量与会话状态 |
 |---|---|
 | **POST** `/agents/{agent_id}/sessions`，body `{"release": false}` 或 `{"release": true}` | 从草稿或最新发布快照创建新会话，恢复默认值、清空 history/path；成功 `retcode=0`，新 ID 为 `data.id` |

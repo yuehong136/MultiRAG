@@ -60,11 +60,44 @@ Go 核对 `internal/entity/canvas.go` 的 JSONMap DSL、`internal/dao/user_canva
 重复 reset、已选会话续跑、其他会话不变、发布/草稿首次运行、显式 reset/debug 及私有画布拒绝。
 SQL 独立读回确认定义默认值不被改写、旧会话运行值累计、新会话恢复默认值，
 Canvas/发布快照/Redis 保持对应边界；无远程 LLM 调用。
-本轮 `make verify` 通过（Ruff、8 条 import contracts、mypy 126 个源文件、3393 单测）；
+`bb2431f5` 的 `make verify` 通过（Ruff、8 条 import contracts、mypy 126 个源文件、3393 单测）；
 `make integration` 312 passed，无 skip，含既有 52 个发布/授权/错误回归和真实隔离 API 的
 `make smoke`。首轮 verify 只因两份新测试格式失败，局部格式化后复跑通过。
 fixture 确认 scratch 用户/token/成员关系/Canvas/版本/会话、专属 Redis key 和监听清理，
 一次性 scratch 数据库由共享 fixture 删除。未部署或操作生产数据；其他任务改动保留。
+
+### 历史空列表模板补修
+
+根审查发现 `bb2431f5` 新增的 keys 联合对 `variables` 无条件调用 `.keys()`，
+仓内 11 个真实模板（包括 `data_analysis_beginner_assistant.json`）仍使用 `variables: []`。
+真实 `normalize_chunker_dsl` 和 `CanvasReplicaService.normalize_dsl` 保留该形状，
+`api/db/init_data.py:add_graph_templates` 会种入模板，REST 模板列表供用户创建 Canvas。
+本次真实模板→规范化→完整 Canvas 构造→reset 均复现 AttributeError，
+另有 4 个真实 HTTP 建会话用例返回失败。它是本次引入的模板回归，不沿用旧门禁结论。
+
+最小补修只在 `Canvas.load` 把历史空列表转换为运行视图的空映射，
+原 DSL 和序列化结果保留 `variables: []`。缺省与空 dict 继续可用；
+空 list/dict 及缺省定义的 orphan env 键在 reset 时清为 `""`，已有会话装载/续跑保留运行值。
+非空列表、null、字符串和数字没有被静默归一化，当前 reset 对这些非映射形状仍报错；
+本项没有新增统一 DSL 参数校验。模板文件、provider 行为、SDK helper、组件调度均无生产改动。
+
+验收边界：11 个真实模板保持全部实际组件、参数检查和 reset，
+只替换模型配置 DB 及 provider 构造边界，检查模型假件已成功装配，不接受缺模型异常作为通过。
+模板的模型/文档解析/沙箱工作流没有执行；HTTP 验收使用真实 Begin/Message 的确定性 DSL
+并保留 `variables: []`，覆盖草稿/发布建会话、首次发布运行、已有 list 会话多轮续跑、
+重复 reset/debug、成功终态和独立 SQL/Redis 读回、旧会话/版本/草稿副本边界。
+
+本补修改动前专项复现 13 个单测失败（11 个真实模板、2 个空列表/orphan 组合），
+缺省/空 dict 的 4 个对照用例通过；4 个 HTTP 用例均在建会话时失败。
+修复后变量单测 56 passed，包含全部 11 个真实模板、6 个无变量形状/orphan 组合、
+4 个非法非映射形状及原有 35 个默认值回归；4 个 HTTP 用例通过。
+本轮 `make verify` 通过（Ruff、8 条 import contracts、mypy 126 个源文件、3414 单测）；
+`make integration` 316 passed，无 skip，包含全部 67 个 Agent 发布/授权/错误/变量用例
+及隔离 API 的实际 `make smoke`。已有会话的 orphan 运行值、历史和轮数继续，
+新会话清理初始状态；每轮读取 SQL 确认其他会话、原 Canvas、发布快照和 Redis 副本边界。
+重复 debug 不写状态，显式 reset 只写 SQL Canvas，所有会话/版本/Redis 读回保持原合同。
+fixture 检查专属 SQL 行、Redis key、HTTP listener 已清理，共享 fixture 删除 scratch 库。
+本轮没有修改真实模板、独立 web 或生产数据；测试只替换上述模型配置/provider 边界。
 
 ## 10e28e5c5f007f12df0cfa1ec36f307341b7316b · nginx 配置源挂载
 

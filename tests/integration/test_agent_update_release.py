@@ -378,6 +378,122 @@ def test_published_run_denials_before_stream(release_api: dict[str, Any], monkey
     assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
 
 
+def legacy_list_dsl(content: str, has_orphan: bool) -> dict[str, Any]:
+    dsl = message_dsl(content)
+    dsl["variables"] = []
+    dsl["history"] = [["user", "stale"]]
+    dsl["globals"] = {"sys.query": "stale", "sys.user_id": "stale", "sys.conversation_turns": 8, "sys.files": [], "sys.history": ["stale"]}
+    if has_orphan:
+        dsl["globals"]["env.orphan"] = ["stale"]
+    return dsl
+
+
+def assert_legacy_list_reset(dsl: dict[str, Any], has_orphan: bool) -> None:
+    assert dsl["variables"] == []
+    assert dsl["history"] == [] and dsl["path"] == []
+    assert dsl["globals"]["sys.history"] == [] and dsl["globals"]["sys.conversation_turns"] == 0
+    if has_orphan:
+        assert dsl["globals"]["env.orphan"] == ""
+    else:
+        assert not any(key.startswith("env.") for key in dsl["globals"])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("has_orphan", [False, True])
+def test_http_legacy_empty_list_variables_all_reset_paths(release_api: dict[str, Any], stream: bool, has_orphan: bool) -> None:
+    env = release_api
+    created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "Legacy list variables", "dsl": legacy_list_dsl("published-list", has_orphan)}, timeout=30).json()
+    assert created["retcode"] == 0
+    agent_id = created["data"]["id"]
+    update(env, agent_id, {"release": True})
+    update(env, agent_id, {"dsl": legacy_list_dsl("draft-list", has_orphan)})
+    before = read_state(env, agent_id)
+    replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
+    replica_before = REDIS_CONN.get(replica_key)
+    session_ids = []
+    for release in (True, False):
+        response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": release}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+        session_ids.append(response.json()["data"]["id"])
+        with Session(env["engine"]) as db:
+            session = db.get(API4Conversation, session_ids[-1])
+            assert session is not None
+            assert_legacy_list_reset(session.dsl, has_orphan)
+            if not release:
+                untouched_before = session.to_dict()
+    # A persisted legacy list session already has runtime state. Continuing it
+    # must not apply the new-session reset or clear orphan env runtime values.
+    with Session(env["engine"]) as db:
+        old_session = db.get(API4Conversation, session_ids[0])
+        assert old_session is not None
+        old_dsl = json.loads(json.dumps(old_session.dsl))
+        old_dsl["history"] = [["user", "prior"]]
+        old_dsl["globals"]["sys.history"] = ["user: prior"]
+        old_dsl["globals"]["sys.conversation_turns"] = 3
+        if has_orphan:
+            old_dsl["globals"]["env.orphan"] = ["ongoing"]
+        old_session.dsl = old_dsl
+        db.commit()
+    for query, session_id in [("fresh", None), ("next", session_ids[0]), ("again", session_ids[0])]:
+        payload = {"agent_id": agent_id, "release": True, "query": query, "stream": stream}
+        if session_id:
+            payload["session_id"] = session_id
+        response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json=payload, timeout=30)
+        assert response.status_code == 200, response.text
+        if stream:
+            events = sse_events(response.text)
+            assert not any(event.get("event") == "error" for event in events)
+            assert any(event.get("event") == "message_end" for event in events) and "data:[DONE]" in response.text
+            content = "".join(event["data"]["content"] for event in events if event.get("event") == "message")
+        else:
+            assert response.json()["retcode"] == 0, response.text
+            assert response.json()["data"]["event"] == "message_end"
+            content = response.json()["data"]["data"]["content"]
+        assert content == "published-list"
+        with Session(env["engine"]) as db:
+            if session_id is None:
+                session_id = db.scalar(sa.select(API4Conversation.id).where(API4Conversation.dialog_id == agent_id, API4Conversation.id.not_in(session_ids)))
+                assert session_id is not None
+            session = db.get(API4Conversation, session_id)
+            assert session is not None and not session.errors and session.message[-1]["role"] == "assistant"
+            stored = json.loads(session.dsl)
+            assert stored["variables"] == []
+            users = [turn[1] for turn in stored["history"] if turn[0] == "user"]
+            expected_users = {"fresh": ["fresh"], "next": ["prior", "next"], "again": ["prior", "next", "again"]}[query]
+            assert users == expected_users
+            assert stored["globals"]["sys.conversation_turns"] == {"fresh": 1, "next": 4, "again": 5}[query]
+            if has_orphan:
+                assert stored["globals"]["env.orphan"] == ("" if query == "fresh" else ["ongoing"])
+            if stream:
+                assert all(event.get("session_id") == session_id for event in events)
+            untouched = db.get(API4Conversation, session_ids[1])
+            assert untouched is not None and untouched.to_dict() == untouched_before
+        assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key) == replica_before
+    with Session(env["engine"]) as db:
+        conversations_before_reset = {session.id: session.to_dict() for session in db.scalars(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))}
+        untouched = db.get(API4Conversation, session_ids[1])
+        assert untouched is not None
+        assert_legacy_list_reset(untouched.dsl, has_orphan)
+    for _ in range(2):
+        debug_before = read_state(env, agent_id)
+        response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/components/Message:answer/debug", json={"params": {}}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0 and response.json()["data"]["content"] == "draft-list", response.text
+        assert read_state(env, agent_id) == debug_before and REDIS_CONN.get(replica_key) == replica_before
+        with Session(env["engine"]) as db:
+            after_debug = {session.id: session.to_dict() for session in db.scalars(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))}
+            assert after_debug == conversations_before_reset
+        response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/reset", json={}, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+        assert_legacy_list_reset(response.json()["data"], has_orphan)
+        state = read_state(env, agent_id)
+        assert_legacy_list_reset(state["dsl"], has_orphan)
+        assert state["versions"] == before["versions"] and state["release"] == before["release"] and state["title"] == before["title"]
+        assert REDIS_CONN.get(replica_key) == replica_before
+        with Session(env["engine"]) as db:
+            after = {session.id: session.to_dict() for session in db.scalars(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))}
+            assert after == conversations_before_reset
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("openai_compatible", [False, True])
 def test_http_variable_defaults_first_run(release_api: dict[str, Any], stream: bool, openai_compatible: bool) -> None:
