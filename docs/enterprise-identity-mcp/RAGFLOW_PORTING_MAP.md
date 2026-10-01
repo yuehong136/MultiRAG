@@ -12,8 +12,8 @@
 | Quart/Flask handler | FastAPI router + Pydantic + dependency | 新 service async-first；同一请求不混用同步/异步 session |
 | peewee model/query | `api/db/db_models.py` + SQLAlchemy 2.0 repository | 迁移和真 PostgreSQL 测试固定约束；业务事务放自有 service/repository |
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
-| `api/apps/kb_app.py` 的数据集管理路由 | `api/apps/restful_apis/dataset_api.py`、`document_api.py` | 新契约由 `/api/v1/datasets` 提供；旧 `kb_app.py` 路由待调用方迁移后按兼容策略退役 |
-| `api/apps/evaluation_app.py` 的评估路由 | `api/apps/evaluation_app.py` + `api/db/services/evaluation_service.py` | `/v1/evaluation` 保留并标为 deprecated；知识库 REST 数据集不等价于评估数据集。只有确认外部调用、评估数据和执行能力的迁移或下线方案后才退役 |
+| `api/apps/kb_app.py` 的数据集管理、图谱和 RAPTOR 路由 | `api/apps/restful_apis/dataset_api.py`、`document_api.py` | `/api/v1/datasets` 提供管理与索引契约；已迁移的旧创建、更新、列表、删除、图谱读取/删除及 GraphRAG/RAPTOR 启动/追踪入口已移除。文件日志等本地扩展仍由 `kb_app.py` 提供，其他入口按实际调用逐项退役 |
+| `api/apps/evaluation_app.py` 的评估路由 | 评估 API 已移除；`api/db/services/evaluation_service.py` 与评估表保留 | 未使用的 `/v1/evaluation` 已下线；知识库 REST 数据集不承接评估数据集。入口退役不自动删除 service、数据库表或历史数据 |
 | `api/apps/document_app.py` 的网页、空白文档创建 | `api/apps/restful_apis/document_api.py` + `api/apps/services/document_api_service.py` | 新入口由 `/api/v1/datasets/{id}/documents?type=web|empty` 提供；旧 `/v1/document` 创建路由保留 deprecated 兼容层 |
 | `api/apps/document_app.py` 的沙箱产物下载 | `api/apps/restful_apis/document_api.py` + `api/apps/services/sandbox_artifact_service.py` + `core/utils/sandbox_artifact_registry.py` | CodeExec 生成带 `run_id`、可选 `session_id` 的 REST 链接并登记精确文件归属；旧 `/v1/document/artifact/{filename}` 保留 deprecated 兼容层，两者共用登记核验 |
 | `api/apps/restful_apis/openai_api.py` 的聊天补全 | `api/apps/restful_apis/openai_api.py` | 新入口为 `/api/v1/openai/{chat_id}/chat/completions`；旧 `/api/v1/chats_openai/{chat_id}/chat/completions` 由同一 handler 保留 deprecated 别名，待客户端迁移后退役 |

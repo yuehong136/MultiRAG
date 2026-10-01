@@ -24,7 +24,7 @@ description: 将指定的 RAGFlow commit 或 PR 评估、移植到 MultiRAG；�
 
 | 涉及内容 | 阅读与处置 |
 |---|---|
-| Python 生产代码 | [Python 适配](references/python.md)：框架、async、兼容入口和测试 |
+| Python 生产代码 | [Python 适配](references/python.md)：框架、async、逐接口删除判据、兼容入口和测试 |
 | Go `cmd/`、`internal/` | [Go 适配](references/go.md)：只在本次提交涉及 Go 或用户点名时处理 |
 | 上游 `web/` | 前端是独立 `web` 仓，默认另排；用户授权同批时确认实际 checkout、目标版本与当前上游契约差异，核实本仓是否有同等页面、路由和调用链，再按本仓现行 API 契约适配。新接后端接口时区分合同测试与隔离环境中的实际请求、业务码及读回；无法运行时明确未验收项 |
 | 文档 / CI / 工具链 | 逐项判断本仓是否需要；已有等价设施时不复制上游 harness |

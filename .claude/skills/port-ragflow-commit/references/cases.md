@@ -18,7 +18,7 @@
 | #13928 + #13706 回补 | 缺基盘的功能先补基盘再开写侧；绝不做假 stub；旧注释变假要顺手修正 |
 | #13948/#13952/#13955 | 跳过判例四型：WIP 不编译 / 对我方回退 / 上游已废弃路线 / 半成品 bug |
 | #13983（log level CLI） | 「只做本 commit 做的事」判据：它删的我删、它留的我留；Go 侧值级适配（我方 config 更丰富）非漂移债 |
-| #13956（version RESTful） | Python 加新留旧（deprecated），Go 直接对齐；ragflow 自身 py/go 分歧则不跟 |
+| #13956（version RESTful） | 当时 Python 加新留旧（deprecated），Go 直接对齐；旧入口当前是否保留按 Python 适配中的逐接口删除判据核对，不作为默认保留规则 |
 | #13974（Go Delete + 表命令改名） | ① 上游大拆文件（index.go→common/dataset/metadata）：先 `git show pre/post` 逐函数 diff 隔离**真实改动**，再按上游结构**重排我方文件**只套真实改动——保住本地质量改进（路径 helper/注释/typing），git 还能识别 rename；② 上游 rename 半途遗留的死函数副本（旧函数改名后又新建同体函数）→ 验 origin/main HEAD 已消亡即不搬；③ 上游新增却无任何规则引用的 lark 终结符（DATASET_TABLE）不搬（标准 lexer 下反而抢 token）；④ 上游 transformer 把 doc_id 误收进 chunk_ids → 用我方既有 remove_tags 的 FROM 截断惯用法修正（#13903 谱系：bug 不照搬，修法贴我方惯用法） |
 | 鉴权统一（_load_user 对齐） | fastapi_login 兜底要重写 `__call__` 整体（不是 get_current_user）；改 `__init__.py` 须重启服务生效 |
 | #13972（ES9 dense_vector fields） | **上游过渡期洞**：commit 主目的是终态（HEAD 存活）但携带副作用回归（get_fields 丢 `_score`，Dealer/KG 打分静默归零）、上游 6 周后在 #14970 改调用方绕过而非回修 → 结构照搬 + 最小垫片保我方契约 + **记日落点**（跟到 #14970 删垫片收敛），垫片配钉板测试变异验证防未来"忠实对齐"误删；评估时先查该 commit 到 HEAD 的同文件演进链，"后续修复链"可能改的是调用方 |

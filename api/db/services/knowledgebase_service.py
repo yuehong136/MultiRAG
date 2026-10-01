@@ -413,10 +413,9 @@ class KnowledgebaseService(CommonService):
 
     @classmethod
     def create_with_name(cls, db: Session, *, name: str, tenant_id: str, parser_id: str | None = None, embd_id: str | None = None, parser_config: dict | None = None, **kwargs):
-        """Create a dataset (dataset) by name with kb_app defaults.
+        """Create a dataset by name with the shared knowledge base defaults.
 
-        This encapsulates the creation logic used in kb_app.create so other callers
-        (including RESTFul endpoints) can reuse the same behavior.
+        RESTful endpoints and other service callers share this creation behavior.
 
         Args:
             db: Database session

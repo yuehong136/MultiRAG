@@ -3,84 +3,77 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
-## d88f7ac8d2a573997d8a9c46e077ff068cbb38b4 · 标记旧评估接口并保留 KB 兼容能力
+## d88f7ac8d2a573997d8a9c46e077ff068cbb38b4 · 删除未使用的旧评估与 KB 入口
 
 - 上游：`infiniflow/ragflow` #14394，提交于 2026-04-27，父提交为 `290f0294`。
   2026-10-01 核对 remote 并 fetch；`origin/main` 为
   `519e7d98a5651564d4e35d6648f006cba4baaf4f`。核对目标 3 文件完整 diff（1500 行删除）。
+- 初次提交 `1e25c6a0` 依旧兼容规则仅标记评估 API 为 deprecated。用户确认应删除
+  查明无调用的接口后，本项收敛为实际删除，并更新共用 Skill 的逐接口退役判据。
   本项止于这个 SHA，后续提交单独派工。
 
-| 上游 diff | 本项结论 |
+| 上游 diff | 当前处置 |
 |---|---|
-| 删除 `api/apps/evaluation_app.py`（479 行） | 本仓自动注册 `/v1/evaluation`，有 17 个操作和真实评估 service、4 张数据表，没有 REST 替代。保留请求、鉴权依赖、响应和执行行为；整个 router 标为 deprecated。仓内未找到活动消费者不等于已确认外部调用和持久化数据可下线。 |
-| 删除 `api/apps/kb_app.py`（446 行） | 上游父提交中这 10 个旧操作已全部位于三引号注释内。本仓有 26 个可用操作，均已标为 deprecated，并有上游文件之外的本地能力；保留模块，不重复改标记。 |
-| 删除 `test_evaluation_routes_unit.py`（575 行） | 上游用整包模块假件测试 Quart handler，包括空成功桩。本仓没有该测试文件；不复制或删除本地 KB、REST、鉴权和存储回归。 |
+| 删除 `api/apps/evaluation_app.py`（479 行） | 删除本仓同名文件，移除全部 17 个 `/v1/evaluation` 操作。web、可见 SDK、MCP、HTTP/benchmark 和后台均未发现消费者；用户明确下线这个未使用的入口，无需新增替代 API。评估 service、4 张数据表和历史数据保留；入口退役没有执行数据清理。 |
+| 删除 `api/apps/kb_app.py`（446 行） | 上游父提交中 10 个旧操作已在三引号注释内。本仓删除对应 10 个 handler、6 个专用请求模型及无用导入，清理其旧引用和 async DB 基线条目。剩余 16 个本地扩展入口保留，包括 web 实际使用的文件日志能力。 |
+| 删除 `test_evaluation_routes_unit.py`（575 行） | 本仓没有该 Quart 假件测试文件。保留已有 REST/鉴权/存储回归，增加真实 FastAPI 27 个已移除操作的 404、OpenAPI 边界及文件日志业务响应/鉴权测试。 |
 
-评估操作逐项处置（路径前缀 `/v1/evaluation`）：
+已移除的评估入口（路径前缀 `/v1/evaluation`）：
 
-| 旧操作 | 本仓能力与处置 |
+| 操作组 | 删除范围 |
 |---|---|
-| `POST /dataset/create`、`GET /dataset/list`、`GET/PUT/DELETE /dataset/{dataset_id}` | 评估样本集的创建、分页、详情、更新和软删除；保留并标为 deprecated。`/api/v1/datasets` 管理知识库，不能承接这些评估表。 |
-| `POST /dataset/{dataset_id}/case/add`、`POST /dataset/{dataset_id}/case/import`、`GET /dataset/{dataset_id}/cases`、`DELETE /case/{case_id}` | 问题、参考答案、相关文档/块及案例元数据；保留并标为 deprecated。 |
-| `POST /run/start` | 本地 service 实际执行聊天和指标计算、落库；保留并标为 deprecated。 |
-| `GET /run/{run_id}`、`GET /run/{run_id}/results` | 读取执行状态、配置快照和明细；保留并标为 deprecated。 |
-| `GET /run/list`、`DELETE /run/{run_id}` | 本地 service 实际查询或删除运行及结果，不是上游 TODO 空成功桩；保留并标为 deprecated。旧路由排序导致 `run/list` 被 `run/{run_id}` 截获，属于已有问题，见下方验证限制。 |
-| `GET /run/{run_id}/recommendations`、`POST /compare` | 根据落库指标给出建议、读取多次运行的比较数据；保留并标为 deprecated。 |
-| `GET /run/{run_id}/export` | 保留 JSON 导出并标为 deprecated；CSV 仍未实现。 |
-| 上游 `POST /evaluate_single` | 本仓不存在；上游只返回空答案、空指标和空检索结果，不新增这个桩。 |
+| 数据集（5 个） | `POST /dataset/create`、`GET /dataset/list`、`GET/PUT/DELETE /dataset/{dataset_id}` |
+| 案例（4 个） | `POST /dataset/{dataset_id}/case/add`、`POST /dataset/{dataset_id}/case/import`、`GET /dataset/{dataset_id}/cases`、`DELETE /case/{case_id}` |
+| 运行（5 个） | `POST /run/start`、`GET /run/{run_id}`、`GET /run/{run_id}/results`、`GET /run/list`、`DELETE /run/{run_id}` |
+| 分析与导出（3 个） | `GET /run/{run_id}/recommendations`、`POST /compare`、`GET /run/{run_id}/export` |
 
-上游 KB 删除范围逐项处置（旧路径前缀 `/v1/kb`，REST 前缀 `/api/v1`）：
+上游的 `POST /evaluate_single` 在本仓从未注册，不新增空成功桩。知识库 REST 数据集
+不承接评估数据集；本次下线不声称评估能力已迁移。旧评估导入和 `run/list` 的已有问题
+不再通过 HTTP 暴露，保留的 service 没有在本次任务中重构。
 
-| 旧操作 | 当前替代与处置 |
+已移除的 KB 入口（旧前缀 `/v1/kb`，替代前缀 `/api/v1`）：
+
+| 旧操作 | 当前替代 |
 |---|---|
-| `POST /create` | `POST /datasets`；旧入口保留既有 deprecated 标记。 |
-| `POST /update` | `PUT /datasets/{id}`；旧入口保留既有 deprecated 标记。 |
-| `POST /list` | `GET /datasets`；旧入口保留既有 deprecated 标记。 |
-| `POST /rm` | `DELETE /datasets`，请求体 `ids`；旧入口保留既有 deprecated 标记。 |
-| `GET /{kb_id}/knowledge_graph` | `GET /datasets/{id}/graph/search`；旧入口和 REST `knowledge_graph` 别名继续兼容。 |
-| `DELETE /{kb_id}/knowledge_graph` | `DELETE /datasets/{id}/index?type=graph`；保留旧入口。新接口还处理任务绑定，不能只替换 URL 并假定返回契约完全相同。 |
-| `POST /run_graphrag`、`GET /trace_graphrag` | `POST/GET /datasets/{id}/index?type=graph`；保留旧入口。 |
-| `POST /run_raptor`、`GET /trace_raptor` | `POST/GET /datasets/{id}/index?type=raptor`；保留旧入口。 |
+| `POST /create` | `POST /datasets` |
+| `POST /update` | `PUT /datasets/{id}` |
+| `POST /list` | `GET /datasets` |
+| `POST /rm` | `DELETE /datasets`，请求体 `ids` |
+| `GET /{kb_id}/knowledge_graph` | `GET /datasets/{id}/graph/search` |
+| `DELETE /{kb_id}/knowledge_graph` | `DELETE /datasets/{id}/index?type=graph`；新契约同时处理任务绑定 |
+| `POST /run_graphrag`、`GET /trace_graphrag` | `POST/GET /datasets/{id}/index?type=graph` |
+| `POST /run_raptor`、`GET /trace_raptor` | `POST/GET /datasets/{id}/index?type=raptor` |
 
-消费者核对：独立 web `fa30aef2` 工作树干净，其 `knowledge.ts` 使用 REST 管理 KB，
-`knowledge-index.ts` 使用统一索引 API；没有评估调用。但文件日志页面的
-`use-log-list-state.ts` → `knowledge-ingestions.ts:listFileLogs` 仍实际调用
-`POST /v1/kb/list_pipeline_logs`，现有 REST ingestion 列表不含这些文件下载日志，
-不能删除 `kb_app.py`。可见的两个 SDK checkout（`multirag-python-sdk-v1`、
-`multirag-rest-first-python-sdk`）的客户端源码、MCP、HTTP 参考和 Go benchmark
-使用数据集接口，没有评估或这 10 个旧 KB 操作的消费；Python benchmark 直接调用
-知识库 service 和检索器。后台代码未发现导入这两个 router 或调用评估 service 的其他入口。
-这些静态结果不能证明外部部署没有旧客户端。
+消费者核对：独立 web `fa30aef2` 工作树干净，`knowledge.ts` 已用 REST 管理 KB，
+`knowledge-index.ts` 已用统一索引 API；上述 10 个旧操作及评估 API 均无调用。
+文件日志页面 `use-log-list-state.ts` → `knowledge-ingestions.ts:listFileLogs` 仍调用
+`POST /v1/kb/list_pipeline_logs`，现有 REST 摄取列表不含这些文件下载日志，因此保留
+该能力。两个可见 SDK checkout（`multirag-python-sdk-v1`、`multirag-rest-first-python-sdk`）、
+MCP、HTTP 参考和 Go benchmark 使用数据集接口；Python benchmark 直接使用知识库
+service 和检索器。未发现后台导入被删 handler 或通过其他入口调用评估 service。
 
-Go 核对：`internal/router/router.go` 仍在鉴权组注册旧 KB update、graph 等接口，
-handler/service 有独立实现；CLI 还有 KB tags/metadata 请求。`internal/entity/evaluation.go`
-定义的评估表参与 DAO 初始化，但没有评估 handler/service，不是 Python 评估执行的替代。目标没有 Go diff，
-本项不修改这些能力。
+Go 核对：旧 KB update/graph 有独立的鉴权 router、handler/service；CLI 还有 KB
+标签与元数据请求。评估实体参与 DAO 初始化，没有评估 handler/service。目标没有 Go diff，
+本次 Python API 删除不修改 Go 的独立实现。
 
 后续链：两份旧 API 文件未恢复；`faf77a5a8` 后来补评估 token usage，
-`a0e65637e` (#16614) 再删除上游评估 service，当前主线的 `670e68872` 又移除更多
-Python API。这些是上游继续下线的演进，没有给本仓建立等价评估入口；本项不提前删除
-本地 service、数据表或迁移到 Go。兼容层退出条件统一见稳定映射。
+`a0e65637e` (#16614) 再删评估 service，`670e68872` 移除更多 Python API。
+本项只跟进 API 删除，不提前删除本地 service、数据表或迁移到 Go。
 
-验证：`make verify` 通过（Ruff 格式与 lint、8 条 import contracts、async DB 门禁、
-mypy 124 个源文件、unit 3177 passed）。一次性 PostgreSQL scratch 库启动真实 HTTP API，
-`make smoke` 通过，全部健康组件 `ok`；OpenAPI 保留评估 17 个与 KB 26 个操作且均为
-deprecated，REST 数据集管理仍为当前接口。缺少令牌返回 401，错误载荷返回 422，
-缺失评估数据集返回 404。实际请求验证评估数据集创建、列表、详情、更新与软删除，
-案例添加、列表与删除，两次评估运行和 4 条结果、详情、比较、建议、JSON 导出及运行删除；
-每次写入和删除均由独立 SQL 查询读回。KB 新旧列表和 web 文件日志入口返回业务码 0。
-评估聊天输出在隔离进程使用固定模型桩；未运行外部模型推理或完整检索。本次仅修改
-路由元数据，没有 DB/事务/存储实现改动，未跑全套 `make integration`。临时进程和数据库已清理。
+验证：删除后的 `make verify` 通过（Ruff、8 条 import contracts、mypy 124 个源文件、
+unit 3207 passed）；async DB 基线随被删图谱路由收缩 1 条，存量由 58 降为 57，
+门禁仍检查新增违规和过期条目。`make integration` 通过（241 passed）。
+一次性 PostgreSQL scratch 库启动真实 HTTP API，`make smoke` 通过，全部健康组件 `ok`。
+实际请求逐项确认全部 27 个旧操作返回 404；OpenAPI 无评估入口，KB 保留 16 个操作。
+文件日志业务码 0、匿名请求 401；REST 数据集创建/列表/详情/更新/删除、空图谱读取、
+GraphRAG/RAPTOR 状态读取与解绑成功，无文档的索引启动返回明确非零业务码。
+写入、删除和解绑均独立 SQL 读回，预置评估数据行仍存在。未运行真实模型驱动的完整
+GraphRAG/RAPTOR 构建；任务排队、分派与权限由既有单元及集成回归覆盖。
+AST 对比确认剩余 KB handler 与请求模型行为未改；文档路径、链接和 scoped diff 检查通过。
+临时进程和数据库已清理，本项未修改独立 web 工作树。
 
-验收发现的已有问题（对应 handler/service 与 `HEAD` 一致，本项未修改）：
-批量案例导入仍使用 `metadata` 字段和 Peewee `bulk_create`，实际返回
-`success_count=0, failure_count=1` 且数据库无新增；`GET /run/list` 被先注册的
-`GET /run/{run_id}` 截获，返回 404。这两项没有计入成功验收；CSV 导出、token usage、
-高级 LLM 评判也仍未实现。此项保留兼容契约，不代表评估模块的全部能力已验收。
-
-前端交接：本项没有新旧 URL 或载荷变更，无需前端提交。将来整体退役 KB 模块前，
-须先给 `knowledge-ingestions.ts:listFileLogs` 的文件日志能力建立等价 REST 契约并迁移
-`use-log-list-state.ts`，不能把现有数据集摄取日志列表当作等价替代。
+前端交接：上述旧操作的调用方已迁移，本项无需前端修改。将来退役其余 KB 本地入口
+时逐项查实际调用；文件日志需先建立等价 REST 契约，再迁移 `listFileLogs` 及页面消费。
 
 ## 290f0294d6e043f64fb1c79b5780421cfc48d045 · 沙箱产物下载迁移到 REST
 
@@ -228,7 +221,7 @@ deprecated，REST 数据集管理仍为当前接口。缺少令牌返回 401，�
 | `api/apps/restful_apis/dataset_api.py`、`api/apps/services/dataset_api_service.py` 的数据集详情、摄取概览/日志、标签聚合/修改、元数据配置及统一 `graph/raptor/mindmap` 索引 | 主体由上述三次 MultiRAG 提交语义移植；保留 FastAPI、AsyncSession、显式删除路径和旧接口兼容层。本次发现并补齐 `GET /datasets/{id}/graph/search`，复用现有图谱 service。 |
 | `api/apps/restful_apis/document_api.py` 的 `POST /metadata/update`、文档 parse/stop | 已由本地 `document_api.py` 与 `document_api_service.py` 实现；混合有效/无效 ID 的 parse 响应保留非零业务码及部分执行结果。 |
 | `api/db/services/doc_metadata_service.py` 的 ES 元数据整字段替换 | 已由 `metadata_store_engine.py` 等价实现：用脚本替换 `meta_fields`，避免对象深合并留下被删除的 key。 |
-| `api/apps/kb_app.py` 删去旧路由与相应旧测试 | 暂不删除仍供调用方使用的 `/v1/kb` 路由；本次将上游删除范围内仍存在的旧路由标为 deprecated。新行为只在 `/api/v1/datasets` 实现，旧路由待调用方迁移后按兼容策略退役。 |
+| `api/apps/kb_app.py` 删去旧路由与相应旧测试 | 当次将删除范围内仍存在的旧路由标为 deprecated，新行为在 `/api/v1/datasets` 实现。其中后续 `d88f7ac8` 涉及的 10 个操作现已删除，见该项最新记录；其余本地入口按实际调用逐项退役。 |
 | `POST /datasets/{id}/embedding` | 暂不采纳：上游后续 `70a49c947` (#16936) 明确删除这个未使用的端点和 service。现有 `/v1/kb/check_embedding` 是抽样校验，不是该端点的等价替代。 |
 | `sdk/python/ragflow_sdk/modules/dataset.py` 将自动元数据配置改用 `/metadata/config` | 本仓无该客户端 SDK 源码；服务端新路径已存在，旧 `/auto_metadata` 仍为 deprecated 兼容入口。客户端方法迁移留给 SDK 所在任务。`api/apps/sdk/dataset.py` 是服务端空 router，并非该客户端模块。 |
 | `web/src/...` 九个文件的调用路径调整 | 前端是独立 `../web` 仓，按移植 Skill 另排；本次只保证新增的图谱读取路径在服务端可用，未改前端。 |

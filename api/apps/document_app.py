@@ -3745,7 +3745,7 @@ async def run_analyze_v2(
     创建文档分析任务并加入处理队列，立即返回任务ID。任务在后台异步执行，支持进度查询和历史记录。
 
     **设计理念**:
-    参考现有的 `/v1/kb/run_raptor` 接口，采用成熟的数据库持久化方案。
+    参考 `/api/v1/datasets/{dataset_id}/index?type=raptor`，采用数据库持久化方案。
 
     **适用场景**:
     - ✅ 自己的前端产品（推荐）
@@ -4219,7 +4219,7 @@ async def run_analyze_v2(
     ---
 
     **设计理念**:
-    参考 `/v1/kb/run_raptor`，采用数据库持久化 + 任务队列架构。
+    参考 `/api/v1/datasets/{dataset_id}/index?type=raptor`，采用数据库持久化 + 任务队列架构。
 
     **适用场景**:
     - ✅ 自己的前端产品（推荐）
@@ -4317,7 +4317,7 @@ def trace_analyze(task_id: str, db: Session = Depends(get_db), user=Depends(mana
     ### GET `/trace_analyze/{task_id}` 查询文档分析任务进度
 
     **功能描述**:
-    查询指定任务的执行状态、进度和结果。参考 `/v1/kb/trace_raptor` 的设计。
+    查询指定任务的执行状态、进度和结果。参考 `GET /api/v1/datasets/{dataset_id}/index?type=raptor` 的设计。
 
     **适用场景**:
     - 前端轮询显示进度条
@@ -4376,7 +4376,7 @@ def trace_analyze(task_id: str, db: Session = Depends(get_db), user=Depends(mana
 
 
     **功能描述**:
-    查询指定任务的执行状态、进度和结果。参考 `/v1/kb/trace_raptor` 的设计。
+    查询指定任务的执行状态、进度和结果。参考 `GET /api/v1/datasets/{dataset_id}/index?type=raptor` 的设计。
 
     **适用场景**:
     - 前端轮询显示进度条（每 3-5 秒调用一次）
