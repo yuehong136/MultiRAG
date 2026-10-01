@@ -87,13 +87,13 @@ services:
       # ----------------------------------------------------------
       # Nginx 配置文件
       # 默认由镜像内置（见 Dockerfile），entrypoint 按 API_PROXY_SCHEME 选择站点配置。
-      # 如需本地覆盖调试，取消下面注释挂载（注意：会让 entrypoint 的自动选择失效）。
+      # 本地覆盖只挂配置源，不挂 entrypoint 生成的 multirag.conf。
       # ----------------------------------------------------------
-      # - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      # - ./nginx/proxy.conf:/etc/nginx/proxy.conf
-      # - ./nginx/multirag.conf:/etc/nginx/conf.d/multirag.conf
-      # HTTPS 配置（启用 HTTPS 时取消注释）
-      # - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf
+      # - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # - ./nginx/proxy.conf:/etc/nginx/proxy.conf:ro
+      # - ./nginx/multirag.conf.python:/etc/nginx/conf.d/multirag.conf.python:ro
+      # HTTPS（API_PROXY_SCHEME=python）：用下条替换 Python HTTP 源挂载，再挂载证书。
+      # - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf.python:ro
       # SSL 证书（启用 HTTPS 时取消注释）
       # - /path/to/ssl/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       # - /path/to/ssl/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
@@ -175,9 +175,10 @@ services:
     # ========== 数据卷挂载 ==========
     volumes:
       # Nginx 配置文件（默认镜像内置，见 Dockerfile / entrypoint 自动选择）
-      # - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      # - ./nginx/proxy.conf:/etc/nginx/proxy.conf
-      # - ./nginx/multirag.conf:/etc/nginx/conf.d/multirag.conf
+      # 只读挂载配置源，保留 multirag.conf 为可写生成目标。
+      # - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # - ./nginx/proxy.conf:/etc/nginx/proxy.conf:ro
+      # - ./nginx/multirag.conf.python:/etc/nginx/conf.d/multirag.conf.python:ro
       # 应用配置
       - ../configs:/multirag/configs
       - ./service_conf.yaml.template:/multirag/docker/service_conf.yaml.template

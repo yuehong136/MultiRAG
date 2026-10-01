@@ -372,9 +372,29 @@ curl http://your-server:8130/api/v1/admin/users
 nginx/
 ├── nginx.conf              # Nginx 主配置文件
 ├── proxy.conf              # 代理通用配置（请求头、超时、缓冲区）
-├── multirag.conf           # HTTP 站点配置（端口 80）
-└── multirag.https.conf     # HTTPS 站点配置（端口 443，预留）
+├── multirag.conf.python    # Python HTTP 配置源（默认模式）
+├── multirag.conf.golang    # Go HTTP 配置源
+├── multirag.conf.hybrid    # Python/Go 分流配置源
+├── multirag.conf           # 旧 HTTP 示例；容器中的同名路径是生成目标
+└── multirag.https.conf     # Python HTTPS 配置源（需证书）
 ```
+
+镜像内置前三套配置源。`docker/entrypoint.sh:start_nginx` 按
+`API_PROXY_SCHEME=python|go|hybrid` 选择源（缺省为 `python`），复制到
+`/etc/nginx/conf.d/multirag.conf`；`nginx.conf` 只 include 这个生成文件。
+该目标必须留在容器可写层，不能用宿主文件或只读 ConfigMap 占住。
+挂可写宿主文件会被启动时的复制覆盖；挂只读文件会使复制失败。
+
+本地覆盖应只读挂到选用模式的源路径。例如 Python 模式：
+
+```yaml
+volumes:
+  - ./nginx/multirag.conf.python:/etc/nginx/conf.d/multirag.conf.python:ro
+```
+
+Go 和 hybrid 分别覆盖 `multirag.conf.golang`、`multirag.conf.hybrid` 同名路径。
+Python 源挂载只影响 Python 模式，不会取代其他模式的内置源。
+macOS Compose 已启用 Python 源挂载；普通 Compose 的覆盖示例默认注释。
 
 ### 端口映射
 
@@ -403,10 +423,12 @@ nginx/
 - 超时配置（3600s，支持长时间运行的请求）
 - 缓冲区配置（适合大文件传输）
 
-#### multirag.conf
+#### multirag.conf.python / multirag.conf.golang / multirag.conf.hybrid
 
-HTTP 站点配置，监听端口 80：
-- API 路由到后端服务
+HTTP 配置源，均监听端口 80：
+
+- Python 主服务/admin 代理到 8123/8130；Go 模式代理到 8127/8132
+- hybrid 按文件中的 location 分流，主服务一般请求仍到 Python 8123
 - Gzip 压缩
 - 前端静态资源服务（预留）
 
@@ -441,22 +463,28 @@ HTTPS 站点配置模板（预留），包含：
    - 私钥: `/etc/letsencrypt/live/your-multirag-domain.com/privkey.pem`
 
 4. **修改 docker-compose.yml**
-   在 `multirag` 服务中添加卷挂载：
+   在所选主服务中将 Python HTTP 源挂载替换为 HTTPS 源，并添加证书挂载。
+   以下为 CPU 服务，GPU 服务使用 `multirag-gpu`；同一源目标只保留一条挂载：
    ```yaml
    services:
-     multirag:
+     multirag-cpu:
        # ...existing configuration...
+       environment:
+         - API_PROXY_SCHEME=python
        volumes:
          # SSL 证书
          - /etc/letsencrypt/live/your-multirag-domain.com/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
          - /etc/letsencrypt/live/your-multirag-domain.com/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
-         # 切换到 HTTPS 配置
-         - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf
+         # 替换 Python HTTP 配置源，保留可写生成目标
+         - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf.python:ro
          # ...other existing volumes...
    ```
 
 5. **更新 nginx 配置**
    编辑 `nginx/multirag.https.conf`，将 `your-multirag-domain.com` 替换为实际域名。
+   保留 `nginx.conf` 的 include；入口脚本仍生成 `multirag.conf`。
+   此 HTTPS 模板代理到 Python 8123/8130，不提供 Go/hybrid 的 TLS 分流模板。
+   nginx 启动前需有可读的 fullchain.pem/privkey.pem，缺证书时 `nginx -t` 会失败。
 
 6. **重启服务**
    ```bash

@@ -3,6 +3,68 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 10e28e5c5f007f12df0cfa1ec36f307341b7316b · nginx 配置源挂载
+
+- 上游 #14361，2026-04-27；2026-10-02 核对预期 origin 并 fetch 后，
+  `origin/main` 为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
+  从本仓 `8060cd8837738a9d0d2cee8a50a2aadf3cf2f304` 开始，核完整两个文件 diff。
+
+| 上游 diff | 本项处置 |
+|---|---|
+| Helm 工作负载的 mountPath/subPath 改为 `ragflow.conf.python` | 本仓无 Helm chart。修同类活动 macOS Compose：Python 配置源只读挂到 `multirag.conf.python`，保留 `multirag.conf` 为容器可写生成目标；nginx 主配置/proxy 配置也只读。 |
+| ConfigMap key 同步改为 `ragflow.conf.python` | 本仓用宿主文件 bind source，没有该 ConfigMap。Linux CPU/GPU 覆盖示例、HTTP/HTTPS 源挂载注释和 Docker 运行文档同步正确路径。 |
+
+目标树中 nginx 主配置仍 include 生成目标，上游 entrypoint 从选中源复制。
+未发现本项 revert/re-land。后续 `d441aa033` (#19126) 禁用 macOS 的旧目标挂载，
+修其源文件已消失导致的启动问题；本仓源文件仍在，但旧目标挂载会覆盖宿主源，
+因此保留本仓活动覆盖能力并修到正确源路径。`53c4f55ff` 后整体删除 Helm chart，
+未消除本仓的 Compose 问题；本项不引入 Helm 部署体系。
+
+实际消费者核对：根 Dockerfile 将 python/golang/hybrid 三套源打进镜像；
+`docker/entrypoint.sh:start_nginx` 缺省 python，按模式复制为 `multirag.conf`，
+`docker/nginx/nginx.conf` 只 include 该生成文件。普通 Compose CPU/GPU 示例默认
+注释，macOS 活动覆盖已修；standalone Compose 不覆盖 nginx 文件，原模式选择保持。
+`Dockerfile.dev/new` 也调用入口脚本，但没有三套 nginx 源，未找到当前 Compose/CI
+引用，本项不扩展这两个旧构建配方。稳定路径映射和 API 消费合同未改变，web 无修改。
+
+Go 具体核对 `cmd/server_main.go`、`cmd/admin_server.go`、`internal/server/config.go`、
+`internal/router/router.go`、`internal/handler/system.go`、`internal/admin/handler.go`：
+Go 主服务端口为 Python http_port+4（8127），admin 为配置端口+2（8132），
+两个 ping 路由存在；入口的 start_server/start_admin_server 根据同一模式启动进程。
+三套站点源及端口已匹配，无需 Go 代码改动。本次用真实 nginx 验证选择/分流：
+Go ping/admin 分别到 8127/8132；hybrid ping 到 Python 8123、admin ping 到 Go 8132，
+`/v1/system/config` 到 Go 8127、admin roles 到 Python 8130。
+Python 源 bind 没有盖掉内置 Go/hybrid 源；无 Go 源码变更，未运行 Go build/vet。
+
+本轮运行验收边界：本机无 `multirag:latest`/依赖镜像；已有 `multi-rag-api:local`
+是另一项目镜像且无 nginx。构建专用 linux/amd64 Ubuntu 24.04 镜像，使用根 Dockerfile
+同一官方源和钉住的 nginx `1.29.5-1~noble` 包、当前三套配置和入口脚本。
+实际执行当前入口的定义区及 `start_nginx`，未运行 DB 初始化、API/admin/worker 启动；
+8123/8130/8127/8132 上游是隔离 HTTP 合同假件，用响应头/载荷标明接收端口。
+因此以下证明 nginx/配置合同，不是完整 MultiRAG/Go 服务启动或真实 DB 健康证明。
+
+- 旧路径在 scratch 宿主文件复现：可写目标挂载被真实 cp 覆盖；只读目标挂载复制失败
+  (`Device or resource busy`)，源 hash 不变。没有改动仓库宿主源。
+- `docker compose config` 分别读回 macOS CPU、Linux CPU/GPU；macOS 三个 nginx 源
+  的 source/target/read_only 正确，Linux 默认无覆盖，均不挂生成目标。CPU/GPU 分别选择，
+  两者同开会因既有同 container_name 冲突，不作为本项支持的组合。
+- 隔离 Compose 项目执行缺省、python、go、hybrid 和 Python HTTPS 五种启动；
+  每次 Docker inspect 确认源 RW=false、无目标 bind，实际写源被拒绝。
+  独立读生成文件与选中源逐字相同，`nginx -t` 通过，宿主各源 SHA256 前后相同。
+- 每种模式从真实 nginx 入口请求 `/api/v1/system/ping`，得到原 `pong`，并核接收端口；
+  admin/config/roles 代理分流及 HTTP 200 中假件业务码 0/73 均保留，未把 200 当业务成功。
+- HTTPS 缺证书时真实 nginx 拒绝启动；临时自签证书加入客户端信任后，TLS ping/代理
+  请求、`nginx -t` 和 HTTP 301 重定向通过。生产域名/CA 证书未验收；模板明确只适用
+  Python 8123/8130，HTTP 源挂载被替换而不是与 HTTPS 占用同一目标。
+- HTTP 缺省和 HTTPS 两次 `make smoke` 通过；healthz 的 `db=ok` 来自上述假件，
+  只证明 nginx 入口的 smoke 合同，不报告 SQL 或真实 API 服务健康。
+
+本轮 `make verify` 通过：Ruff、8 条依赖契约、async DB 门禁、mypy 126 文件，
+3358 unit passed。DB/存储未改，未重复 integration；无 Helm template/deploy 目标。
+隔离容器/网络和临时证书已检查删除，验收镜像随后移除；保留运行日志供核对。
+没有启动/改动生产或其他任务服务，`docker/docker-compose-base.yml` 的他人改动保留。
+第七项 `4f6651968a4d3bd2d6635c048e1b5cf454b5221f` 等待派发。
+
 ## 0f2778efe744b5aef879f1743c3ec50fd1143aab · Agent 更新支持发布
 
 - 上游 #14396，2026-04-27；2026-10-02 确认 origin 并 fetch 后，
@@ -24,7 +86,7 @@ API 的请求、响应及 Redis 部分失败合同见 [HTTP API 参考](../refer
 未找到本项 revert/re-land。后续 `569a29500` (#17576) 改更新响应为 update_time，
 `a0438517b` (#18056) 补组件参数验证，分别属于相邻目标；本项保持当前 `data=true`
 与 DSL 归一化合同。版本服务后续 `006747090` 修正无序分页，未回退发布行为；
-上游整体删除 Python 后端不在本次范围。下一项 `10e28e5c` 等待派发。
+上游整体删除 Python 后端不在本次范围。后续 nginx 源挂载修复见 `10e28e5c` 项记录。
 
 调用方核对：旧 `/v1/canvas` 只保留任务取消，无 set/get/save 消费者；REST 是当前
 唯一创建/更新链。复制/模板导入经 POST 创建新画布，未把原发布历史复制到新 ID。
