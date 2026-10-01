@@ -179,6 +179,7 @@ func startServer(config *server.Config) {
 	fileService := service.NewFileService()
 	memoryService := service.NewMemoryService()
 	modelProviderService := service.NewModelProviderService()
+	taskService := service.NewTaskService(dao.DB, cache.Get().GetClient())
 
 	// Initialize handler layer
 	authHandler := handler.NewAuthHandler()
@@ -197,9 +198,10 @@ func startServer(config *server.Config) {
 	fileHandler := handler.NewFileHandler(fileService, userService)
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	providerHandler := handler.NewProviderHandler(userService, modelProviderService)
+	taskHandler := handler.NewTaskHandler(taskService)
 
 	// Initialize router
-	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, llmHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler)
+	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, llmHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
 
 	// Create Gin engine
 	ginEngine := gin.New()

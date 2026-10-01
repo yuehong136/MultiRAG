@@ -40,6 +40,7 @@ type Router struct {
 	fileHandler          *handler.FileHandler
 	memoryHandler        *handler.MemoryHandler
 	providerHandler      *handler.ProviderHandler
+	taskHandler          *handler.TaskHandler
 }
 
 // NewRouter create router
@@ -60,6 +61,7 @@ func NewRouter(
 	fileHandler *handler.FileHandler,
 	memoryHandler *handler.MemoryHandler,
 	providerHandler *handler.ProviderHandler,
+	taskHandler *handler.TaskHandler,
 ) *Router {
 	return &Router{
 		authHandler:          authHandler,
@@ -78,6 +80,7 @@ func NewRouter(
 		fileHandler:          fileHandler,
 		memoryHandler:        memoryHandler,
 		providerHandler:      providerHandler,
+		taskHandler:          taskHandler,
 	}
 }
 
@@ -127,6 +130,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// API v1 route group
 		v1 := authorized.Group("/api/v1")
 		{
+			v1.POST("/tasks/:task_id/cancel", r.taskHandler.Cancel)
+			v1.PATCH("/tasks/:task_id", r.taskHandler.Update)
 			// User routes
 			//users := v1.Group("/users")
 			//{

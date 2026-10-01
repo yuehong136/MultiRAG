@@ -18,10 +18,15 @@ package dao
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,18 +95,14 @@ func InitDB() error {
 	var err error
 	switch dbCfg.Driver {
 	case "postgres", "postgresql":
-		dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-			dbCfg.Host, dbCfg.Port, dbCfg.Username, dbCfg.Password, dbCfg.Database)
+		dsn, err := PostgresDSN(dbCfg)
+		if err != nil {
+			return err
+		}
 		DB, err = gorm.Open(postgres.Open(dsn), gormConfig)
 		if err != nil {
 			return fmt.Errorf("failed to connect postgres database: %w", err)
 		}
-		// Set search_path for PostgreSQL schema
-		schema := dbCfg.Schema
-		if schema == "" {
-			schema = "usr_ai"
-		}
-		DB.Exec("SET search_path TO " + schema + ", public")
 	case "mysql", "":
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
 			dbCfg.Username, dbCfg.Password, dbCfg.Host, dbCfg.Port, dbCfg.Database, dbCfg.Charset)
@@ -185,6 +186,22 @@ func InitDB() error {
 	}
 	logger.Info("Model providers loaded successfully")
 	return nil
+}
+
+// PostgresDSN configures search_path on every pooled connection, including
+// connections opened after initialization. Never interpolate SQL identifiers.
+func PostgresDSN(cfg server.DatabaseConfig) (string, error) {
+	schema := cfg.Schema
+	if schema == "" {
+		schema = "usr_ai"
+	}
+	if len(schema) > 63 || !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(schema) {
+		return "", errors.New("invalid PostgreSQL schema")
+	}
+	u := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.Username, cfg.Password), Host: net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)), Path: "/" + cfg.Database}
+	query := url.Values{"sslmode": {"disable"}, "search_path": {schema + ",public"}}
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 // GetDB get database instance
