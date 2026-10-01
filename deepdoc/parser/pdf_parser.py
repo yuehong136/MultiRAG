@@ -41,6 +41,7 @@ from sklearn.metrics import silhouette_score
 
 from common import settings
 from common.constants import MAXIMUM_PAGE_NUMBER
+from common.deepdoc_config import get_deepdoc_config
 from common.file_utils import get_project_base_directory
 from common.misc_utils import thread_pool_exec
 from core.nlp import rag_tokenizer
@@ -585,7 +586,7 @@ class RAGFlowPdfParser:
                 b["H_right"] = spans[ii]["x1"]
                 b["SP"] = ii
 
-    def _ocr_rotated_tables(self, ZM, table_layouts, tsr_results, tbcnt):
+    def _ocr_rotated_tables(self, ZM: int | float, table_layouts: list[dict[str, Any]], tsr_results: Any, tbcnt: list[int]) -> None:
         """
         Re-OCR rotated table images and update self.boxes.
 
@@ -606,12 +607,12 @@ class RAGFlowPdfParser:
             table_bottom_cum = table_bottom + self.page_cum_height[page_index]
             return table_x0, table_top, table_x1, table_bottom, table_top_cum, table_bottom_cum
 
-        def _collect_table_boxes(page_index, table_x0, table_x1, table_top_cum, table_bottom_cum):
+        def _collect_table_boxes(page_index: int, table_x0: int | float, table_x1: int | float, table_top_cum: int | float, table_bottom_cum: int | float) -> tuple[list[dict[str, Any]], int]:
             indices = [
                 i
                 for i, b in enumerate(self.boxes)
                 if (
-                    b.get("page_number") == page_index + self.page_from
+                    b.get("page_number") == page_index + 1
                     and b.get("layout_type") == "table"
                     and b["x0"] >= table_x0 - 5
                     and b["x1"] <= table_x1 + 5
@@ -647,7 +648,9 @@ class RAGFlowPdfParser:
                 return y, height - x
             return x, y
 
-        def _insert_ocr_boxes(ocr_results, page_index, table_x0, table_top, insert_at, table_index, best_angle, table_w_px, table_h_px):
+        def _insert_ocr_boxes(
+            ocr_results: Any, page_index: int, table_x0: int | float, table_top: int | float, insert_at: int, table_index: int, best_angle: int, table_w_px: int | float, table_h_px: int | float
+        ) -> int:
             added = 0
             for bbox, (text, conf) in ocr_results:
                 if conf < 0.5:
@@ -665,7 +668,7 @@ class RAGFlowPdfParser:
                     "x1": box_x1 + table_x0,
                     "top": box_top + table_top + self.page_cum_height[page_index],
                     "bottom": box_bottom + table_top + self.page_cum_height[page_index],
-                    "page_number": page_index + self.page_from,
+                    "page_number": page_index + 1,
                     "layout_type": "table",
                     "layoutno": f"table-{table_index}",
                     "_rotated": True,
@@ -828,9 +831,11 @@ class RAGFlowPdfParser:
         logging.info(f"__ocr sorting {len(chars)} chars cost {timer() - start}s")
         start = timer()
         boxes_to_reg = []
-        img_np = np.array(img)
+        img_np = None
         for b in bxs:
             if not b["text"]:
+                if img_np is None:
+                    img_np = np.asarray(img)
                 quad = b.get("quad")
                 if quad is not None:
                     b["box_image"] = self.ocr.get_rotate_crop_image(img_np, quad)
@@ -1585,6 +1590,7 @@ class RAGFlowPdfParser:
             logging.exception("total_page_number")
 
     def __images__(self, fnm: Any, zoomin: int | float = 3, page_from: int = 0, page_to: int = MAXIMUM_PAGE_NUMBER, callback: Callable[..., Any] | None = None) -> None:
+        self._release_loaded_window()
         self.lefted_chars = []
         self.mean_height = []
         self.mean_width = []
@@ -1593,6 +1599,8 @@ class RAGFlowPdfParser:
         self.page_cum_height = [0]
         self.page_layout = []
         self.page_from = page_from
+        self.is_english = False
+        self.total_page = 0
         start = timer()
         try:
             with sys.modules[LOCK_KEY_pdfplumber]:
@@ -1755,12 +1763,108 @@ class RAGFlowPdfParser:
         return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls
 
     def parse_into_bboxes(self, fnm: Any, callback: Callable[..., Any] | None = None, zoomin: int | float = 3, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER) -> list[dict[str, Any]]:
-        start = timer()
-        self.outlines = extract_pdf_outlines(fnm)
-        self.__images__(fnm, zoomin, from_page, to_page, callback=callback)
-        if callback:
-            callback(0.40, f"OCR finished ({timer() - start:.2f}s)")
+        """Return global 1-based pages with coordinates cumulative in the selected range.
 
+        Page-local positions and ready-to-use crops survive window release. Whole
+        page images are temporary; bbox_page_width preserves the first page width
+        needed by flow's multi-column ordering.
+        """
+        self._release_loaded_window()
+        self.bbox_page_width = None
+        self.outlines = extract_pdf_outlines(fnm)
+        if from_page < 0 or zoomin <= 0:
+            raise ValueError("PDF from_page must be nonnegative and zoomin must be positive")
+        if to_page <= from_page:
+            return []
+        batch_size = get_deepdoc_config().page_batch_size
+        total_pages = self.total_page_number(fnm) if isinstance(fnm, str) else self.total_page_number(fnm, binary=fnm)
+        if total_pages is None:
+            raise ValueError("Cannot determine PDF page count for bounded bbox parsing")
+        effective_to_page = min(to_page, total_pages)
+        if effective_to_page <= from_page:
+            return []
+
+        all_boxes: list[dict[str, Any]] = []
+        height_offset = 0.0
+        last_progress = 0.0
+        selected_pages = effective_to_page - from_page
+        try:
+            for page_from in range(from_page, effective_to_page, batch_size):
+                page_to = min(page_from + batch_size, effective_to_page)
+
+                def window_callback(progress: int | float, msg: str = "") -> None:
+                    nonlocal last_progress
+                    if callback is None:
+                        return
+                    last_progress = max(last_progress, (page_from - from_page + min(1.0, max(0.0, progress)) * (page_to - page_from)) / selected_pages)
+                    callback(last_progress, msg)
+
+                window_callback(0, f"Loading pages {page_from + 1}-{page_to}")
+                start = timer()
+                self.__images__(fnm, zoomin, page_from=page_from, page_to=page_to, callback=window_callback)
+                if len(self.page_images) != page_to - page_from:
+                    raise RuntimeError(f"PDF rendered an incomplete window {page_from}-{page_to}")
+                if self.bbox_page_width is None:
+                    self.bbox_page_width = self.page_images[0].width / zoomin
+                window_callback(0.60, f"OCR finished ({timer() - start:.2f}s)")
+                chunk_boxes = self._parse_loaded_window_into_bboxes(zoomin, callback=window_callback)
+                all_boxes.extend(self._to_global_boxes(chunk_boxes, height_offset))
+                height_offset += float(self.page_cum_height[-1])
+                window_callback(1, f"Structured: {page_to}/{effective_to_page} pages")
+                self._release_loaded_window()
+        finally:
+            self._release_loaded_window()
+        return all_boxes
+
+    def _release_loaded_window(self) -> None:
+        """Release parser-owned raster buffers, keeping returned crops independent."""
+        images = list(getattr(self, "page_images", []))
+        images.extend(getattr(self, "rotated_table_imgs", {}).values())
+        images.extend(box.get("image") for box in getattr(self, "boxes", []) if isinstance(box, dict))
+        for img in images:
+            if isinstance(img, Image.Image):
+                img.close()
+        self.page_images = []
+        self.page_chars = []
+        self.boxes = []
+        self.page_layout = []
+        self.page_cum_height = [0]
+        self.mean_height = []
+        self.mean_width = []
+        self.lefted_chars = []
+        self.garbages = {}
+        self.rotated_table_imgs = {}
+        self.table_rotations = {}
+        self.tb_cpns = []
+        self.is_english = False
+        pdf = getattr(self, "pdf", None)
+        if pdf is not None:
+            pdf.close()
+            self.pdf = None
+
+    @staticmethod
+    def _offset_position_tag(text: str, page_offset: int) -> str:
+        def replace(match: re.Match[str]) -> str:
+            pages = "-".join(str(int(page) + page_offset) for page in match.group(1).split("-"))
+            return f"@@{pages}\t"
+
+        return re.sub(r"@@([0-9]+(?:-[0-9]+)*)\t", replace, text)
+
+    def _to_global_boxes(self, boxes: list[dict[str, Any]], height_offset: int | float = 0) -> list[dict[str, Any]]:
+        # Called once on independent output copies, after all local crop operations.
+        for box in boxes:
+            box["page_number"] += self.page_from
+            box["top"] += height_offset
+            box["bottom"] += height_offset
+            if isinstance(box.get("position_tag"), str):
+                box["position_tag"] = self._offset_position_tag(box["position_tag"], self.page_from)
+            if isinstance(box.get("positions"), list):
+                box["positions"] = [[int(pos[0]) + self.page_from, *pos[1:]] for pos in box["positions"]]
+        return boxes
+
+    def _parse_loaded_window_into_bboxes(self, zoomin: int | float = 3, callback: Callable[..., Any] | None = None) -> list[dict[str, Any]]:
+        if callback:
+            callback(0.60, "OCR finished")
         start = timer()
         self._layouts_rec(zoomin)
         if callback:
@@ -1849,14 +1953,21 @@ class RAGFlowPdfParser:
                         "layout_type": layout_type,
                         "text": txt,
                         "image": img,
-                        "positions": [[pn + 1, int(left), int(right), int(top), int(bott)]],
+                        "positions": [
+                            [local_pn + 1, int(local_left), int(local_right), int(local_top), int(local_bottom)] for local_pn, local_left, local_right, local_top, local_bottom in local_poss
+                        ],
+                        "position_tag": "".join(
+                            f"@@{local_pn + 1}\t{local_left:.1f}\t{local_right:.1f}\t{local_top:.1f}\t{local_bottom:.1f}##" for local_pn, local_left, local_right, local_top, local_bottom in local_poss
+                        ),
                     },
                 )
 
         for b in self.boxes:
             b["position_tag"] = self._line_tag(b, zoomin)
-            b["image"] = self.crop(b["position_tag"], zoomin)
-            b["positions"] = [[pos[0][-1] + 1, *pos[1:]] for pos in RAGFlowPdfParser.extract_positions(b["position_tag"])]
+            b["image"], crop_positions = self.crop(b["position_tag"], zoomin, need_position=True)
+            # crop reports absolute 0-based pages; keep this window local until
+            # _to_global_boxes applies its single final offset.
+            b["positions"] = [[pn - self.page_from + 1, *coordinates] for pn, *coordinates in crop_positions or []]
 
         insert_table_figures(tbls, "table")
         insert_table_figures(figs, "figure")

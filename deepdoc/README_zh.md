@@ -130,6 +130,44 @@ export HF_ENDPOINT=https://hf-mirror.com
 <a name="3"></a>
 ## 3. 解析器
 
+### PDF bbox 分批与运行选项
+
+`RAGFlowPdfParser.parse_into_bboxes` 按选定范围分批渲染，默认每批 50 页。
+`from_page` 从 0 开始且包含该页，`to_page` 不包含该页，默认上界为 100000；
+输出 `page_number`、`position_tag` 和 `positions` 都使用原 PDF 的 1-based 页码。
+`positions` 的坐标位于各自页面，bbox 的 `top/bottom` 保持所选范围内累计高度。
+原始书签保留，切片裁图在当前窗口内生成；解析结束后整页图像不再驻留。
+多栏重排使用首个选中页面的 `bbox_page_width`，不依赖最后一批的图像。
+
+运行选项由 `common/deepdoc_config.py` 校验，通过应用配置的 `deepdoc` section
+读取，沿用[配置优先级](../docs/development.md#配置与资源)。无需修改共享配置来调试：
+
+| 选项 | 默认 | 标准环境覆盖 | 兼容环境名 |
+|---|---|---|---|
+| `page_batch_size` | 50，必须为正整数 | `MULTIRAG_DEEPDOC__PAGE_BATCH_SIZE` | `PDF_PARSER_PAGE_BATCH_SIZE` |
+| `dla_url` | 空，使用本地布局模型 | `MULTIRAG_DEEPDOC__DLA_URL` | `DEEPDOC_URL`，其次 `TENSORRT_DLA_SVR` |
+
+明确配置的 section 值优先于兼容环境名，空 `dla_url` 可关闭远程选择。
+配置远程 DLA 时，先初始化客户端；本地布局模型加载和下载不会先行执行。
+本仓没有经过验证的 `deepdoc.vision.dla_cli.DLAClient` 实现或远端协议，
+需要部署方提供该可选客户端，否则立即明确报错；不能把配置了 URL 当成远端已可用。
+本地布局模型路径和缺模型时的下载回退继续保留。
+
+分批只限制当前 bbox 解析窗口的整页图像。返回列表仍保留所有 bbox 和裁图，
+模型本身也占用内存；flow 的文本预览恢复仍会全文渲染。跨批的文本/长表合并粒度
+可能变化，高分辨率完整 OCR 与整条 flow 的峰值需单独验收。
+复现窗口驻留与 RSS 对照可运行：
+
+```bash
+uv run --no-sync python tests/manual/pdf_bbox_batch_memory.py --pages 121 --batch-size 7 --zoom 1
+uv run --no-sync python tests/manual/pdf_bbox_batch_memory.py --pages 121 --batch-size 50 --zoom 1
+uv run --no-sync python tests/manual/pdf_bbox_batch_memory.py --pages 121 --batch-size 1000 --zoom 1
+```
+
+每条命令在独立进程运行，输出 PDF 页数/分辨率、结果摘要、整页图像驻留和峰值 RSS。
+默认用假件隔离 OCR、布局/表格推理与合并，实际执行 PDF 渲染、文字提取、bbox 与裁图；
+加 `--real-models` 使用本地模型，需先具备模型资源。记录两种模式时应明确区分。
+
 PDF、DOCX、EXCEL和PPT四种文档格式都有相应的解析器。最复杂的是PDF解析器，因为PDF具有灵活性。PDF解析器的输出包括：
   - 在PDF中有自己位置的文本块（页码和矩形位置）。
   - 带有PDF裁剪图像的表格，以及已经翻译成自然语言句子的内容。

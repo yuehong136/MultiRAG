@@ -17,11 +17,14 @@ import os
 import re
 from collections import Counter
 from copy import deepcopy
+from importlib import import_module
+from typing import Any
 
 import cv2
 import numpy as np
 from huggingface_hub import snapshot_download
 
+from common.deepdoc_config import get_deepdoc_config
 from common.file_utils import get_project_base_directory
 from deepdoc.vision.operators import nms
 from deepdoc.vision.recognizer import Recognizer
@@ -42,7 +45,15 @@ class LayoutRecognizer(Recognizer):
         "Equation",
     ]
 
-    def __init__(self, domain):
+    def __init__(self, domain: str) -> None:
+        self.garbage_layouts = ["footer", "header", "reference"]
+        self.client = None
+        dla_url = get_deepdoc_config().dla_url
+        if dla_url:
+            self.client = self._create_remote_client(dla_url)
+            logging.info("LayoutRecognizer using remote DLA client")
+            return
+
         try:
             model_dir = os.path.join(get_project_base_directory(), "core/res/deepdoc")
             super().__init__(self.labels, domain, model_dir)
@@ -50,12 +61,15 @@ class LayoutRecognizer(Recognizer):
             model_dir = snapshot_download(repo_id="InfiniFlow/deepdoc", local_dir=os.path.join(get_project_base_directory(), "core/res/deepdoc"), local_dir_use_symlinks=False)
             super().__init__(self.labels, domain, model_dir)
 
-        self.garbage_layouts = ["footer", "header", "reference"]
-        self.client = None
-        if os.environ.get("TENSORRT_DLA_SVR"):
-            from deepdoc.vision.dla_cli import DLAClient
-
-            self.client = DLAClient(os.environ["TENSORRT_DLA_SVR"])
+    @staticmethod
+    def _create_remote_client(url: str) -> Any:
+        try:
+            client_module = import_module("deepdoc.vision.dla_cli")
+        except ModuleNotFoundError as exc:
+            if exc.name != "deepdoc.vision.dla_cli":
+                raise
+            raise RuntimeError("Remote DLA requires the deployment-provided deepdoc.vision.dla_cli.DLAClient; this checkout does not include a verified client protocol") from exc
+        return client_module.DLAClient(url)
 
     def __call__(self, image_list, ocr_res, scale_factor=3, thr=0.2, batch_size=16, drop=True):
         def __is_garbage(b):
@@ -153,7 +167,9 @@ class LayoutRecognizer(Recognizer):
         ocr_res = [b for b in ocr_res if b["text"].strip() not in garbag_set]
         return ocr_res, page_layout
 
-    def forward(self, image_list, thr=0.7, batch_size=16):
+    def forward(self, image_list: list[Any], thr: float = 0.7, batch_size: int = 16) -> list[list[dict[str, Any]]]:
+        if self.client:
+            return self.client.predict(image_list)
         return super().__call__(image_list, thr, batch_size)
 
 

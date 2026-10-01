@@ -18,6 +18,7 @@ import logging
 import sys
 from copy import deepcopy
 from functools import partial
+from typing import Any
 
 import numpy as np
 import pdfplumber
@@ -116,13 +117,17 @@ def normalize_pdf_items_metadata(items):
     return items
 
 
-def reorder_multi_column_bboxes(pdf_parser, bboxes, zoom=PDF_MULTI_COLUMN_ZOOM):
+def reorder_multi_column_bboxes(pdf_parser: Any, bboxes: list[dict[str, Any]], zoom: int | float = PDF_MULTI_COLUMN_ZOOM) -> list[dict[str, Any]]:
     text_boxes = [box for box in bboxes if box.get("layout_type") == "text" and all(box.get(key) is not None for key in ["x0", "x1", "page_number"])]
-    if not text_boxes or not pdf_parser.page_images:
+    if not text_boxes:
         return bboxes
 
     column_width = np.median([box["x1"] - box["x0"] for box in text_boxes])
-    page_width = pdf_parser.page_images[0].size[0] / zoom
+    page_width = getattr(pdf_parser, "bbox_page_width", None)
+    if page_width is None:
+        if not pdf_parser.page_images:
+            return bboxes
+        page_width = pdf_parser.page_images[0].size[0] / zoom
     if column_width >= page_width / 2:
         return bboxes
 
