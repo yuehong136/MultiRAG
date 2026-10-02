@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import pathlib
@@ -9,7 +10,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field, Json, ValidationError, field_validator
+from pydantic import BaseModel, Field, Json, StrictStr, ValidationError, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.status import (
@@ -29,7 +30,8 @@ from api.db.db_models import Task, get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
-from api.db.services.document_service import DocumentService, doc_upload_and_parse, queue_analyze_v2_task
+from api.db.services.document_service import DocumentService, doc_upload_and_parse_in_session, queue_analyze_v2_task
+from api.db.services.document_status_service import batch_document_status, finish_status_write
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -206,11 +208,28 @@ class DocumentFilter(BaseModel):
 
 
 class ChangeStatusRequest(BaseModel):
-    doc_ids: list[str] | str = Field(..., description="文档ID或文档ID列表")
-    status: int = Field(..., description="状态")
+    doc_ids: list[StrictStr] | StrictStr | None = None
+    status: Any
+    doc_id: StrictStr | None = None
 
-    # 兼容旧版本字段
-    doc_id: str | None = Field(None, description="文档ID（兼容旧版本）")
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, value: Any) -> str:
+        if type(value) is str and value in {"0", "1"}:
+            return value
+        if type(value) is int and value in {0, 1}:
+            return str(int(value))
+        raise ValueError("status must be 0 or 1")
+
+    @model_validator(mode="after")
+    def validate_ids(self) -> "ChangeStatusRequest":
+        ids = self.doc_ids if self.doc_ids is not None else self.doc_id
+        if isinstance(ids, str):
+            ids = [ids]
+        if not ids or any(not identifier.strip() for identifier in ids):
+            raise ValueError("Document ID(s) required")
+        self.doc_ids = ids
+        return self
 
 
 class ChangeAuthRequest(BaseModel):
@@ -1659,296 +1678,24 @@ def thumbnails(doc_ids: list[str] = Query(..., description="文档ID列表，例
         return server_error_response(e)
 
 
-@router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态")
-def change_status(request_body: ChangeStatusRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Response:
+@router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态", deprecated=True)
+async def change_status(request_body: ChangeStatusRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
+    """Compatibility for the active knowledge-document Web status caller.
+
+    Accept doc_ids (one string or a nonempty string list), or fallback doc_id.
+    Status accepts only integer 0/1 or string "0"/"1"; malformed bodies are 422.
+    Each distinct document is authorized and updated independently, including
+    disabled documents. Full success is code 0; partial failure is code 500
+    with the entire per-document status/error map retained.
+    Sunset after the Web adopts and validates the dataset-scoped REST endpoint.
     """
-    ### POST `/change_status` 更改文档状态接口
-
-    **功能描述**:
-    此接口用于更改单个或多个文档的可用状态，支持批量操作和向后兼容。接口会同步更新数据库中的文档状态和搜索索引中的可用性标记。
-
-    ---
-
-    ### 请求体 (Request Body)
-
-    | 字段        | 类型               | 必填 | 描述                                                                                 |
-    |-------------|-------------------|------|--------------------------------------------------------------------------------------|
-    | `doc_ids`   | `list[str]` 或 `str` | 是   | 文档ID列表或单个文档ID。支持批量操作，可传入字符串数组或单个字符串。                 |
-    | `status`    | `int`             | 是   | 文档状态：0 = 禁用，1 = 启用。                                                      |
-    | `doc_id`    | `str`             | 否   | 单个文档ID（向后兼容字段）。当 `doc_ids` 不存在时使用此字段。                        |
-
-    **兼容性说明**:
-    - 新版本调用者应使用 `doc_ids` 字段
-    - 旧版本调用者可继续使用 `doc_id` 字段，系统会自动兼容
-    - 优先级：`doc_ids` > `doc_id`
-
-    ---
-
-    ### 响应 (Response)
-
-    #### 成功响应 (200)
-
-    - **`Content-Type: application/json`**
-    - **批量操作响应示例**:
-        ```json
-        {
-            "retcode": 0,
-            "retmsg": "success",
-            "data": {
-                "doc_123": {"status": "1"},
-                "doc_456": {"status": "1"},
-                "doc_789": {"error": "No authorization."}
-            }
-        }
-        ```
-
-    - **单文档操作响应示例**:
-        ```json
-        {
-            "retcode": 0,
-            "retmsg": "success",
-            "data": {
-                "doc_123": {"status": "1"}
-            }
-        }
-        ```
-
-    #### 错误响应
-
-    - **400: 参数错误**
-        - **状态值无效**:
-            ```json
-            {
-                "retcode": 400,
-                "retmsg": "\"Status\" must be either 0 or 1!",
-                "data": false
-            }
-            ```
-        - **文档ID缺失**:
-            ```json
-            {
-                "retcode": 400,
-                "retmsg": "Document ID(s) required!",
-                "data": false
-            }
-            ```
-
-    #### 单个文档处理错误类型
-
-    在批量操作中，每个文档ID的处理结果单独返回，可能的错误包括：
-
-    - **权限不足**:
-        ```json
-        "doc_id": {"error": "No authorization."}
-        ```
-
-    - **文档不存在**:
-        ```json
-        "doc_id": {"error": "Document not found!"}
-        ```
-
-    - **知识库不存在**:
-        ```json
-        "doc_id": {"error": "Can't find this dataset!"}
-        ```
-
-    - **数据库更新失败**:
-        ```json
-        "doc_id": {"error": "Database error (Document update)!"}
-        ```
-
-    - **搜索索引更新失败**:
-        ```json
-        "doc_id": {"error": "Database error (docStore update)!"}
-        ```
-
-    - **内部服务器错误**:
-        ```json
-        "doc_id": {"error": "Internal server error: 具体错误信息"}
-        ```
-
-    ---
-
-    ### 主要流程
-
-    1. **参数验证**:
-        - 验证状态值必须为 0 或 1
-        - 处理兼容性字段，优先使用 `doc_ids`，回退到 `doc_id`
-        - 将单个文档ID转换为列表格式以统一处理
-
-    2. **批量处理循环**:
-        - 遍历所有文档ID
-        - 对每个文档进行权限验证
-        - 验证文档和所属知识库的存在性
-
-    3. **状态更新**:
-        - 更新数据库中的文档状态记录
-        - 同步更新搜索索引中的 `available_int` 字段
-        - 确保数据库和搜索引擎的数据一致性
-
-    4. **结果汇总**:
-        - 为每个文档ID返回处理结果
-        - 成功时返回新状态，失败时返回错误信息
-
-    ---
-
-    ### 使用场景
-
-    #### 1. 单文档状态更改（向后兼容）
-    ```json
-    {
-        "doc_id": "doc_123456",
-        "status": 1
-    }
-    ```
-
-    #### 2. 批量文档状态更改（新功能）
-    ```json
-    {
-        "doc_ids": ["doc_123", "doc_456", "doc_789"],
-        "status": 0
-    }
-    ```
-
-    #### 3. 混合格式（推荐使用 doc_ids）
-    ```json
-    {
-        "doc_ids": "doc_123456",
-        "status": 1
-    }
-    ```
-
-    ---
-
-    ### 注意事项
-
-    - **权限控制**: 只有文档的拥有者才能更改文档状态
-    - **数据一致性**: 接口会同时更新关系数据库和向量数据库的状态
-    - **批量操作**: 每个文档的处理结果独立返回，部分失败不影响其他文档
-    - **状态含义**:
-      - `0`: 文档禁用，不参与检索
-      - `1`: 文档启用，正常参与检索
-    - **错误处理**: 单个文档处理失败不会影响其他文档的处理
-    - **向后兼容**: 完全兼容旧版本的 `doc_id` 字段调用方式
-
-    ---
-
-    ### 示例请求
-
-    #### 批量启用文档:
-    ```json
-    {
-        "doc_ids": ["doc_001", "doc_002", "doc_003"],
-        "status": 1
-    }
-    ```
-
-    #### 单文档禁用（旧版本兼容）:
-    ```json
-    {
-        "doc_id": "doc_123456",
-        "status": 0
-    }
-    ```
-
-    ### 示例响应
-
-    #### 批量操作成功响应:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": {
-            "doc_001": {"status": "1"},
-            "doc_002": {"status": "1"},
-            "doc_003": {"error": "Document not found!"}
-        }
-    }
-    ```
-
-    #### 单文档操作成功响应:
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": {
-            "doc_123456": {"status": "0"}
-        }
-    }
-    ```
-    """
-    req = request_body.model_dump()
-    if str(req["status"]) not in ["0", "1"]:
-        return construct_json_result(data=False, message='"Status" must be either 0 or 1!', code=RetCode.ARGUMENT_ERROR)
-
-    # 处理兼容性：优先使用 doc_ids，如果不存在则使用 doc_id
-    doc_ids = req.get("doc_ids")
-    if doc_ids is None:
-        doc_ids = req.get("doc_id")
-
-    # 确保 doc_ids 是列表格式
-    if isinstance(doc_ids, str):
-        doc_ids = [doc_ids]
-
-    if not doc_ids:
-        return construct_json_result(data=False, message="Document ID(s) required!", code=RetCode.ARGUMENT_ERROR)
-
-    result = {}
-    has_error = False
-    status = str(req["status"])
-    for doc_id in doc_ids:
-        if not DocumentService.accessible(db, doc_id, user.id):
-            result[doc_id] = {"error": "No authorization."}
-            has_error = True
-            continue
-
-        try:
-            doc = DocumentService.get_by_id(db, doc_id)
-            if not doc:
-                result[doc_id] = {"error": "Document not found!"}
-                has_error = True
-                continue
-            kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
-            if not kb:
-                result[doc_id] = {"error": "Can't find this dataset!"}
-                has_error = True
-                continue
-            if str(doc.status) == status:
-                result[doc_id] = {"status": status}
-                continue
-
-            if not DocumentService.update_by_id(db, doc_id, {"status": status}):
-                result[doc_id] = {"error": "Database error (Document update)!"}
-                has_error = True
-                continue
-
-            status_int = int(status)
-            if getattr(doc, "chunk_num", 0) > 0:
-                try:
-                    ok = settings.docStoreConn.update(
-                        {"doc_id": doc_id},
-                        {"available_int": status_int},
-                        search.index_name_one(kb.tenant_id, kb.name),
-                        doc.kb_id,
-                    )
-                except Exception:
-                    logging.exception("Document store update failed in change_status: doc_id=%s kb_id=%s status=%s", doc_id, doc.kb_id, status_int)
-                    result[doc_id] = {"error": "Document store update failed."}
-                    has_error = True
-                    continue
-                if not ok:
-                    logging.warning("Document store update returned False in change_status: doc_id=%s kb_id=%s status=%s", doc_id, doc.kb_id, status_int)
-                    result[doc_id] = {"error": "Document store table missing or update failed."}
-                    has_error = True
-                    continue
-            result[doc_id] = {"status": status}
-        except Exception as e:
-            result[doc_id] = {"error": f"Internal server error: {e!s}"}
-            has_error = True
-
-    if has_error:
-        return construct_json_result(data=result, message="Partial failure", code=RetCode.SERVER_ERROR)
-    return construct_json_result(data=result)
+    # Current Web changeStatus/useDocumentActions consumes this compatibility
+    # route. Retire after its dataset-scoped POST migration is accepted.
+    ids = request_body.doc_ids
+    assert isinstance(ids, list)
+    result = await batch_document_status(db, ids, request_body.status, user.id)
+    failed = any("error" in item for item in result.values())
+    return construct_json_result(data=result, message="Partial failure" if failed else "success", code=RetCode.SERVER_ERROR if failed else RetCode.SUCCESS)
 
 
 @router.post("/change_auth", summary="更改文档授权", response_description="成功更改文档授权")
@@ -2837,7 +2584,9 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
 
 
 @router.post("/upload_and_parse", summary="上传文件并解析", response_description="成功上传并解析文件")
-async def upload_and_parse(conversation_id: str = Form(..., description="会话ID"), files: list[UploadFile] = File(..., alias="file"), db: Session = Depends(get_db), user=Depends(manager)):
+async def upload_and_parse(
+    conversation_id: str = Form(..., description="会话ID"), files: list[UploadFile] = File(..., alias="file"), db: Session = Depends(get_db), user: Any = Depends(manager)
+) -> Response:
     """在对话上下文中上传文件并自动解析入库。
 
     - **conversation_id**: 会话ID，用于关联对话所绑定的知识库
@@ -2853,7 +2602,7 @@ async def upload_and_parse(conversation_id: str = Form(..., description="会话I
         file_contents.append((await file_obj.read(), file_obj.filename))
 
     try:
-        doc_ids = doc_upload_and_parse(db, conversation_id, file_contents, user.id)
+        doc_ids = await finish_status_write(asyncio.to_thread(doc_upload_and_parse_in_session, db.get_bind(), conversation_id, file_contents, user.id))
         return get_json_result(data=doc_ids)
     except AssertionError as e:
         return get_json_result(data=False, retmsg=str(e), retcode=RetCode.ARGUMENT_ERROR)

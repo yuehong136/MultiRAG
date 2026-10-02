@@ -15,6 +15,7 @@ import xxhash
 from sqlalchemy import and_, asc, func, or_, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import desc as sa_desc
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session, aliased
 
@@ -23,6 +24,7 @@ from api.db import CanvasCategory, FileType, UserTenantRole
 from api.db.db_models import Document, File, File2Document, Knowledgebase, Task, Tenant, User, UserCanvas, UserTenant
 from api.db.services.common_service import CommonService, retry_transient_tx_conflict
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils.db_utils import bulk_insert_into_db
@@ -3156,6 +3158,12 @@ def get_queue_length(priority):
     return int(group_info.get("lag", 0) or 0)
 
 
+def doc_upload_and_parse_in_session(bind: Engine | Connection, conversation_id: str, file_objs: list[tuple[bytes, str]], user_id: str) -> Any:
+    """Own the entire legacy parse transaction chain in its worker thread."""
+    with Session(bind, expire_on_commit=False) as db:
+        return doc_upload_and_parse(db, conversation_id, file_objs, user_id)
+
+
 def doc_upload_and_parse(db: Any, conversation_id: str, file_objs: Any, user_id: str) -> Any:
     from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from api.db.services.api_service import API4ConversationService
@@ -3319,7 +3327,7 @@ def doc_upload_and_parse(db: Any, conversation_id: str, file_objs: Any, user_id:
                 if not settings.docStoreConn.index_exist(idxnm, kb_id):
                     settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]), kb.parser_id)
                 try_create_idx = False
-            settings.docStoreConn.insert(cks[b : b + es_bulk_size], idxnm, kb_id)
+            insert_source_chunks(db.get_bind(), cks[b : b + es_bulk_size], idxnm, kb_id)
 
         DocumentService.increment_chunk_num(db, doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
         # 更新文档状态为完成

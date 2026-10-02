@@ -15,6 +15,7 @@ from api.db.db_models import get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
+from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -1333,7 +1334,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
         d["vector"] = v.tolist()  # 始终保存到标准vector字段以保持兼容性
         d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
 
-        settings.docStoreConn.insert([d], search.index_name_one(tenant_id, kb.name), kb.id)
+        insert_source_chunks(db.get_bind(), [d], search.index_name_one(tenant_id, kb.name), kb.id)
 
         if image_base64:
             store_chunk_image(doc.kb_id, chunk_id, base64.b64decode(image_base64))

@@ -1,0 +1,502 @@
+"""Actual status HTTP, PostgreSQL, Milvus and source write acceptance.
+
+Only model/provider output and specifically named failure boundaries are
+controlled. Authentication, routes, transactions, index writes and reads are real.
+"""
+
+import asyncio
+import copy
+import json
+import os
+import subprocess
+import threading
+from collections.abc import Iterator
+from typing import Any
+from uuid import uuid4
+
+import numpy as np
+import pytest
+import requests
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session
+
+from api.db.db_models import APIToken, Document, Knowledgebase, Task, UserTenant
+from api.db.services import document_status_service as status_service
+from common import settings
+from common.doc_store.doc_store_base import OrderByExpr
+from tests.integration.test_document_parse_retirement import _ModelOutput
+from tests.integration.test_document_parse_retirement import parse_api as parse_api
+from tests.integration.test_runtime_document_upload import read_object
+from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+
+
+@pytest.fixture
+def status_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    env = parse_api
+    env.update({name: uuid4().hex for name in ["doc", "zero", "second", "other_kb", "foreign_doc", "task"]})
+    env["owner_key"] = f"status-{uuid4().hex}"
+    owner = env["owners"][0]
+    with Session(env["engine"]) as db:
+        db.add(APIToken(tenant_id=owner, token=env["owner_key"], name="status scratch"))
+        db.add(Knowledgebase(id=env["other_kb"], tenant_id=owner, created_by=owner, name="other_status", embd_id="scratch-embedding", parser_id="naive", parser_config={}))
+        for key, kb, count in [("doc", env["kb"], 2), ("zero", env["kb"], 0), ("second", env["kb"], 1), ("foreign_doc", env["other_kb"], 0)]:
+            db.add(Document(id=env[key], kb_id=kb, created_by=owner, name=key + ".txt", type="doc", parser_id="naive", parser_config={}, status="1", chunk_num=count, location=key + ".txt"))
+        db.add(Task(id=env["task"], doc_id=env["zero"], task_type="Parse"))
+        db.commit()
+    rows = [chunk(env, env["doc"], "first"), chunk(env, env["doc"], "second"), chunk(env, env["second"], "sibling")]
+    assert settings.docStoreConn.insert(rows, env["collection"], env["kb"]) == []
+    env["storage_adapter"].put(env["kb"], "doc.txt", b"Owned original source bytes.")
+    try:
+        yield env
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(APIToken).where(APIToken.token == env["owner_key"]))
+            db.execute(sa.delete(Document).where(Document.id == env["foreign_doc"]))
+            db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == env["other_kb"]))
+            db.execute(sa.delete(UserTenant).where(UserTenant.tenant_id == owner, UserTenant.user_id == env["owners"][1]))
+            db.commit()
+            assert db.get(Document, env["foreign_doc"]) is None
+            assert db.get(Knowledgebase, env["other_kb"]) is None
+
+
+def chunk(env: dict[str, Any], doc: str, text: str) -> dict[str, Any]:
+    identifier = uuid4().hex
+    return {
+        "id": identifier,
+        "pk": identifier,
+        "doc_id": doc,
+        "kb_id": env["kb"],
+        "docnm_kwd": "source.txt",
+        "content_with_weight": text,
+        "available_int": 1,
+        "vector": [0.1] * 768,
+        "q_768_vec": [0.1] * 768,
+        "create_time": "2026-10-02 10:00:00",
+        "create_timestamp_flt": 1790920000.0,
+        "tag_kwd": "stable",
+    }
+
+
+def change(env: dict[str, Any], ids: list[str], status: Any, *, key: str | None = None, dataset: str | None = None) -> requests.Response:
+    return requests.post(
+        f"{env['base']}/api/v1/datasets/{dataset or env['kb']}/documents/batch-update-status",
+        headers={"Authorization": f"Bearer {key or env['owner_key']}"},
+        json={"doc_ids": ids, "status": status},
+        timeout=30,
+    )
+
+
+def sql_rows(env: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    with env["engine"].connect() as connection:
+        table = Document.__table__
+        return {row["id"]: dict(row) for row in connection.execute(sa.select(table).where(table.c.kb_id.in_([env["kb"], env["other_kb"]]))).mappings()}
+
+
+def index_rows(env: dict[str, Any], doc: str | None = None) -> list[dict[str, Any]]:
+    # A separate client with strong consistency, independent of the write wrapper.
+    from pymilvus import MilvusClient
+
+    from common.config_utils import CONFIGS
+
+    config = CONFIGS["milvus"]
+    client = MilvusClient(uri=config["hosts"], user=config.get("username", ""), password=config.get("password", ""), db_name=config.get("db_name") or "default")
+    try:
+        return sorted(
+            client.query(env["collection"], filter=f'doc_id == "{doc}"' if doc else 'pk != ""', output_fields=["*", "vector", "q_768_vec"], consistency_level="Strong"), key=lambda row: row["pk"]
+        )
+    finally:
+        client.close()
+
+
+def test_http_disable_enable_retry_partial_preserves_every_source_field(status_api: dict[str, Any]) -> None:
+    env = status_api
+    before_sql, before_index = sql_rows(env), index_rows(env)
+    assert change(env, [env["doc"], env["doc"]], 0).json() == {"code": 0, "message": "success", "data": {env["doc"]: {"status": "0"}}}
+    assert sql_rows(env)[env["doc"]]["status"] == "0"
+    rows = index_rows(env)
+    for row, original in zip(rows, before_index, strict=True):
+        if row["doc_id"] == env["doc"]:
+            assert row["available_int"] == 0
+            row["available_int"] = 1
+        assert row == original
+    current_sql = sql_rows(env)
+    current_sql[env["doc"]]["status"] = "1"
+    assert current_sql == before_sql
+    assert read_object(env["storage"], env["bucket"], f"{env['kb']}/doc.txt") == b"Owned original source bytes."
+    assert change(env, [env["doc"]], "1", key=env["jwt"]).json()["code"] == 0
+    assert index_rows(env) == before_index
+    # Create the old SQL/index mismatch deliberately and prove same-state repair.
+    assert settings.docStoreConn.update({"doc_id": env["doc"]}, {"available_int": 0}, env["collection"], env["kb"])
+    assert change(env, [env["doc"]], 1).json()["code"] == 0
+    assert index_rows(env) == before_index
+    missing = uuid4().hex
+    response = change(env, [env["doc"], missing, env["foreign_doc"], env["second"]], "0").json()
+    assert response["code"] == 500
+    assert response["data"][env["doc"]] == response["data"][env["second"]] == {"status": "0"}
+    assert response["data"][missing] == response["data"][env["foreign_doc"]] == {"error": "Document not found in this dataset."}
+    assert sql_rows(env)[env["foreign_doc"]] == before_sql[env["foreign_doc"]]
+    result = settings.docStoreConn.search(["id", "available_int"], [], {"doc_id": env["doc"], "available_int": 0}, [], OrderByExpr(), 0, 10, [env["collection"]], [env["kb"]])
+    assert settings.docStoreConn.get_total(result) == 2
+    result = settings.docStoreConn.search(["id"], [], {"doc_id": env["doc"], "available_int": 1}, [], OrderByExpr(), 0, 10, [env["collection"]], [env["kb"]])
+    assert settings.docStoreConn.get_total(result) == 0
+    legacy = requests.post(env["base"] + "/v1/document/change_status", headers={"Authorization": f"Bearer {env['owner_key']}"}, json={"doc_id": env["doc"], "status": 1}, timeout=30)
+    assert legacy.json()["code"] == 0 and sql_rows(env)[env["doc"]]["status"] == "1"
+    paths = requests.get(env["base"] + "/openapi.json", timeout=30).json()["paths"]
+    assert paths["/v1/document/change_status"]["post"]["deprecated"]
+    assert "post" in paths["/api/v1/datasets/{dataset_id}/documents/batch-update-status"]
+    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+    assert smoke.returncode == 0, smoke.stdout + smoke.stderr
+    print("Real HTTP/SQL/Milvus full payload+vectors+timestamps, sibling and object bytes preserved; same-state retry, partial map and available0/1 filters; same-listener smoke passed")
+
+
+def test_patch_enabled_uses_status_service_and_repairs_same_state(status_api: dict[str, Any]) -> None:
+    env = status_api
+    before_sql, before_index = sql_rows(env), index_rows(env)
+    url = f"{env['base']}/api/v1/datasets/{env['kb']}/documents/{env['doc']}"
+    headers = {"Authorization": f"Bearer {env['owner_key']}"}
+    for status in [0, 1]:
+        response = requests.patch(url, headers=headers, json={"enabled": status}, timeout=30)
+        assert response.status_code == 200 and response.json()["code"] == 0
+        assert sql_rows(env)[env["doc"]]["status"] == str(status)
+        assert all(row["available_int"] == status for row in index_rows(env, env["doc"]))
+    assert sql_rows(env) == before_sql and index_rows(env) == before_index
+    assert settings.docStoreConn.update({"doc_id": env["doc"]}, {"available_int": 0}, env["collection"], env["kb"])
+    assert requests.patch(url, headers=headers, json={"enabled": 1}, timeout=30).json()["code"] == 0
+    assert sql_rows(env) == before_sql and index_rows(env) == before_index
+
+
+@pytest.mark.parametrize("role,active,allowed", [("admin", "1", True), ("owner", "1", True), ("normal", "1", False), ("invite", "1", False), ("admin", "0", False), (None, "1", False)])
+def test_http_actual_membership(status_api: dict[str, Any], role: str | None, active: str, allowed: bool) -> None:
+    env = status_api
+    before = sql_rows(env)
+    if role:
+        with Session(env["engine"]) as db:
+            db.add(UserTenant(id=uuid4().hex, tenant_id=env["owners"][0], user_id=env["owners"][1], role=role, status=active, invited_by=env["owners"][0]))
+            db.commit()
+    response = change(env, [env["doc"]], 0, key=env["api_key"])
+    assert response.status_code == 200
+    assert response.json()["code"] == (0 if allowed else 109)
+    assert sql_rows(env)[env["doc"]]["status"] == ("0" if allowed else "1")
+    if not allowed:
+        assert sql_rows(env) == before
+
+
+def test_http_body_auth_and_dataset_boundaries(status_api: dict[str, Any]) -> None:
+    env = status_api
+    before = sql_rows(env), index_rows(env)
+    url = f"{env['base']}/api/v1/datasets/{env['kb']}/documents/batch-update-status"
+    for body in [
+        {},
+        {"doc_ids": [], "status": 0},
+        {"doc_ids": "a", "status": 0},
+        {"doc_ids": [1], "status": 0},
+        {"doc_ids": [" "], "status": 0},
+        {"doc_ids": [env["doc"]], "status": True},
+        {"doc_ids": [env["doc"]], "status": 0.0},
+        {"doc_ids": [env["doc"]], "status": 1.0},
+        {"doc_ids": [env["doc"]], "status": 0.5},
+        {"doc_ids": [env["doc"]], "status": "2"},
+        {"doc_ids": [env["doc"]], "status": 0, "tenant_id": env["owners"][0]},
+    ]:
+        assert requests.post(url, headers={"Authorization": f"Bearer {env['owner_key']}"}, json=body, timeout=30).status_code == 422
+    for token in ["invalid-api-key", "a.b.c", ""]:
+        response = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json={"doc_ids": [env["doc"]], "status": 0}, timeout=30)
+        assert response.status_code == 401
+    assert change(env, [env["doc"]], 0, dataset=uuid4().hex).json()["code"] == 109
+    with Session(env["engine"]) as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["kb"]).values(status="0"))
+        db.commit()
+    assert change(env, [env["doc"]], 0).json()["code"] == 109
+    with Session(env["engine"]) as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["kb"]).values(status="1"))
+        db.commit()
+    assert (sql_rows(env), index_rows(env)) == before
+
+
+@pytest.mark.parametrize("fault", ["false", "exception", "partial", "sql", "recovery"])
+def test_real_store_sql_failure_and_compensation(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    env = status_api
+    before = sql_rows(env), index_rows(env)
+    store = settings.docStoreConn
+    actual = store.update
+    attempts = 0
+
+    def update(condition: dict[str, Any], values: dict[str, Any], *args: Any) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if condition["doc_id"] != env["doc"]:
+            return actual(condition, values, *args)
+        if fault == "recovery":
+            actual(condition, values, *args)
+            return False
+        if attempts == 1 and fault in {"false", "exception", "partial"}:
+            if fault == "partial":
+                one = index_rows(env, env["doc"])[0]["pk"]
+                assert actual({"pk": one}, values, *args)
+            if fault == "exception":
+                raise RuntimeError("3022 secret provider endpoint")
+            return False
+        return actual(condition, values, *args)
+
+    def fail_sql(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        if statement.lstrip().startswith("UPDATE usr_ai.t_ai_documents"):
+            raise RuntimeError("controlled SQL failure")
+
+    monkeypatch.setattr(store, "update", update)
+    if fault == "sql":
+        sa.event.listen(env["engine"], "before_cursor_execute", fail_sql)
+        # Async HTTP has its own engine. Inject at the SQL statement boundary.
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        execute = AsyncSession.execute
+
+        async def failing_execute(self: AsyncSession, statement: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(statement, sa.sql.dml.Update) and statement.table.name == Document.__tablename__:
+                raise RuntimeError("controlled SQL failure")
+            return await execute(self, statement, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncSession, "execute", failing_execute)
+    try:
+        response = change(env, [env["doc"], env["second"]], 0).json()
+        assert response["code"] == 500 and "error" in response["data"][env["doc"]]
+        assert "secret" not in json.dumps(response) and "3022" not in json.dumps(response)
+        assert sql_rows(env)[env["doc"]] == before[0][env["doc"]]
+        assert index_rows(env, env["doc"]) == [row for row in before[1] if row["doc_id"] == env["doc"]]
+        if fault != "sql":
+            assert response["data"][env["second"]] == {"status": "0"}
+        if fault == "recovery":
+            assert response["data"][env["doc"]]["error"] == status_service.COMPENSATION_ERROR
+    finally:
+        if fault == "sql":
+            sa.event.remove(env["engine"], "before_cursor_execute", fail_sql)
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_recovery_failure_releases_per_document_transaction(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, asynchronous: bool) -> None:
+    env = status_api
+    before = sql_rows(env), index_rows(env)
+    actual = settings.docStoreConn.update
+
+    def unconfirmed(*args: Any, **kwargs: Any) -> bool:
+        assert actual(*args, **kwargs)
+        return False
+
+    def independently_lock() -> None:
+        with env["engine"].begin() as connection:
+            assert connection.scalar(sa.select(Document.status).where(Document.id == env["doc"]).with_for_update(nowait=True)) == "1"
+
+    monkeypatch.setattr(settings.docStoreConn, "update", unconfirmed)
+
+    async def scenario() -> None:
+        engine = create_async_engine(env["engine"].url)
+        try:
+            async with async_sessionmaker(engine)() as db:
+                assert await status_service.change_document_status(db, env["doc"], "0", env["owners"][0], env["kb"]) == status_service.COMPENSATION_ERROR
+                assert not db.in_transaction()
+                independently_lock()
+        finally:
+            await engine.dispose()
+
+    if asynchronous:
+        asyncio.run(scenario())
+    else:
+        with Session(env["engine"]) as db:
+            doc, kb = db.get(Document, env["doc"]), db.get(Knowledgebase, env["kb"])
+            assert status_service.change_document_status_sync(db, doc, kb, "0") == status_service.COMPENSATION_ERROR
+            assert not db.in_transaction()
+            independently_lock()
+    assert (sql_rows(env), index_rows(env)) == before
+
+
+def test_zero_disabled_source_rest_legacy_worker_and_mixed_status(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    chunk_api = vars(sys.modules["api.apps.restful_apis.chunk"])
+    chunk_app = vars(sys.modules["api.apps.chunk"])
+    from core.svr import task_executor
+
+    env = status_api
+    assert change(env, [env["zero"]], 0).json()["code"] == 0
+    model = _ModelOutput("status scratch", [])
+    monkeypatch.setitem(chunk_api, "_embedding_model", lambda *args: model)
+    monkeypatch.setitem(chunk_app, "LLMBundle", lambda *args: model)
+    for name in ["get_model_config_by_id", "get_model_config_by_type_and_name", "get_tenant_default_model_by_type"]:
+        monkeypatch.setitem(chunk_app, name, lambda *args: {})
+    headers = {"Authorization": f"Bearer {env['owner_key']}"}
+    response = requests.post(f"{env['base']}/api/v1/datasets/{env['kb']}/documents/{env['zero']}/chunks", headers=headers, json={"content": "REST source while disabled"}, timeout=30)
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    response = requests.post(
+        env["base"] + "/v1/chunk/create", headers=headers, json={"doc_id": env["zero"], "content_with_weight": "Legacy source while disabled", "important_kwd": [], "question_kwd": []}, timeout=30
+    )
+    assert response.json()["retcode"] == 0, response.text
+    rows = [chunk(env, env["zero"], "worker disabled"), chunk(env, env["second"], "worker enabled")]
+    rows[0]["mom"] = "Hidden mother source"
+    with Session(env["engine"]) as db:
+        assert asyncio.run(
+            task_executor.insert_chunks(
+                db, env["task"], env["owners"][0], env["kb"], rows, lambda *args, **kwargs: None, env["collection"], settings.docStoreConn._get_connection().describe_collection(env["collection"])
+            )
+        )
+    assert all(row["available_int"] == 0 for row in index_rows(env, env["zero"]))
+    assert all(row["available_int"] == 1 for row in index_rows(env, env["second"]))
+    assert len(index_rows(env, env["zero"])) == 4
+    assert change(env, [env["zero"]], 1).json()["code"] == 0
+    assert sql_rows(env)[env["zero"]]["status"] == "1"
+    enabled_rows = index_rows(env, env["zero"])
+    assert sum(row["available_int"] == 0 for row in enabled_rows) == 1
+    assert next(row for row in enabled_rows if row["available_int"] == 0)["content_with_weight"] == "Hidden mother source"
+    print("Real disabled zero-chunk insertion through REST/legacy/worker, mixed-document grouping and hidden mother source; enable readback passed")
+
+
+def test_source_read_failure_has_no_store_write(status_api: dict[str, Any]) -> None:
+    env = status_api
+    before = index_rows(env)
+    with pytest.raises(ValueError, match="status unavailable"):
+        status_service.insert_source_chunks(env["engine"], [chunk(env, uuid4().hex, "missing source")], env["collection"], env["kb"])
+    assert index_rows(env) == before
+
+
+def test_cancelled_status_drains_store_before_next_sql_winner(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = status_api
+    entered, release = threading.Event(), threading.Event()
+    actual = settings.docStoreConn.update
+    first = True
+
+    def blocked(*args: Any, **kwargs: Any) -> bool:
+        nonlocal first
+        if first:
+            first = False
+            entered.set()
+            assert release.wait(10)
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(settings.docStoreConn, "update", blocked)
+
+    async def scenario() -> None:
+        engine = create_async_engine(env["engine"].url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with sessions() as first_db, sessions() as next_db:
+                write = asyncio.create_task(status_service.change_document_status(first_db, env["doc"], "0", env["owners"][0], env["kb"]))
+                assert await asyncio.to_thread(entered.wait, 10)
+                write.cancel()
+                later = asyncio.create_task(status_service.change_document_status(next_db, env["doc"], "1", env["owners"][0], env["kb"]))
+                await asyncio.sleep(0.1)
+                assert not write.done() and not later.done()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await write
+                assert await later is None
+        finally:
+            release.set()
+            await engine.dispose()
+
+    asyncio.run(scenario())
+    assert sql_rows(env)[env["doc"]]["status"] == "1" and all(row["available_int"] == 1 for row in index_rows(env, env["doc"]))
+
+
+def test_upload_parse_zero_disabled_during_provider_boundary(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.joint_services import tenant_model_service
+    from api.db.services import llm_service
+
+    env = status_api
+    initial = set(sql_rows(env))
+    seen: list[str] = []
+
+    class Model(_ModelOutput):
+        def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+            with Session(env["engine"]) as db:
+                docs = list(db.scalars(sa.select(Document).where(Document.kb_id == env["kb"])))
+                fresh = [doc for doc in docs if doc.id not in initial]
+                assert len(fresh) == 1 and fresh[0].chunk_num == 0
+                identifier = fresh[0].id
+            if identifier not in seen:
+                assert change(env, [identifier], 0).json()["code"] == 0
+                seen.append(identifier)
+            return super().encode(texts)
+
+    monkeypatch.setattr(tenant_model_service, "get_model_config_by_type_and_name", lambda *args, **kwargs: {"llm_name": env["cache_prefix"]})
+    monkeypatch.setattr(tenant_model_service, "get_tenant_default_model_by_type", lambda *args, **kwargs: {"llm_name": env["cache_prefix"]})
+    monkeypatch.setattr(llm_service, "LLMBundle", lambda *args, **kwargs: Model(env["cache_prefix"], []))
+    binary = b"New conversation source stays disabled after its first real insertion."
+    response = requests.post(
+        env["base"] + "/v1/document/upload_and_parse",
+        headers={"Authorization": f"Bearer {env['jwt']}"},
+        data={"conversation_id": env["conversation"]},
+        files={"file": ("new-disabled.txt", binary, "text/plain")},
+        timeout=60,
+    )
+    assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+    assert len(seen) == 1
+    doc = sql_rows(env)[seen[0]]
+    assert doc["status"] == "0" and doc["chunk_num"] > 0
+    source = [row for row in index_rows(env, seen[0]) if not row.get("knowledge_graph_kwd")]
+    assert source and all(row["available_int"] == 0 for row in source)
+    assert read_object(env["storage"], env["bucket"], f"{env['kb']}/{doc['location']}") == binary
+    before = copy.deepcopy(index_rows(env, seen[0]))
+    assert change(env, seen, 1).json()["code"] == 0
+    after = index_rows(env, seen[0])
+    for row in before:
+        row["available_int"] = 1
+    assert after == before
+    print("Actual upload_and_parse SQL/MinIO/Milvus after zero-chunk disable at explicitly controlled provider boundary; latest SQL inherited, bytes preserved and re-enable readback passed")
+
+
+def test_source_special_products_and_read_then_delete(status_api: dict[str, Any]) -> None:
+    env = status_api
+    special = [chunk(env, "graph_raptor_x", "graph product"), chunk(env, uuid4().hex, "raptor product")]
+    special[0]["knowledge_graph_kwd"] = "mind_map"
+    special[1]["raptor_kwd"] = "summary"
+    special[0]["available_int"] = special[1]["available_int"] = 0
+    with status_service.source_document_availability(env["engine"], special, env["kb"]):
+        assert [row["available_int"] for row in special] == [0, 0]
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(Document).where(Document.id == env["zero"]))
+        db.commit()
+    response = change(env, [env["zero"], env["second"]], 0).json()
+    assert response["code"] == 500 and response["data"][env["zero"]] == {"error": "Document not found in this dataset."}
+    assert response["data"][env["second"]] == {"status": "0"}
+
+
+def test_source_insert_before_counter_status_race(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    env = status_api
+    entered, release = threading.Event(), threading.Event()
+    actual = settings.docStoreConn.insert
+
+    def blocked(*args: Any, **kwargs: Any) -> list[str]:
+        entered.set()
+        assert release.wait(10)
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(settings.docStoreConn, "insert", blocked)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        insert = executor.submit(status_service.insert_source_chunks, env["engine"], [chunk(env, env["zero"], "Race source before counter")], env["collection"], env["kb"])
+        assert entered.wait(10)
+        disable = executor.submit(change, env, [env["zero"]], 0)
+        time.sleep(0.1)
+        assert not disable.done()
+        release.set()
+        assert insert.result(timeout=10) == []
+        assert disable.result(timeout=10).json()["code"] == 0
+    assert sql_rows(env)[env["zero"]]["chunk_num"] == 0
+    assert sql_rows(env)[env["zero"]]["status"] == "0"
+    assert index_rows(env, env["zero"])[0]["available_int"] == 0
+    assert change(env, [env["zero"]], 1).json()["code"] == 0
+    assert index_rows(env, env["zero"])[0]["available_int"] == 1
+
+
+def test_actual_missing_collection_is_nonzero_and_retry_reconciles(status_api: dict[str, Any]) -> None:
+    env = status_api
+    original_sql, original_index = sql_rows(env), index_rows(env)
+    settings.docStoreConn.delete_idx(env["collection"], env["kb"])
+    response = change(env, [env["doc"], env["zero"]], 0).json()
+    assert response["code"] == 500 and "error" in response["data"][env["doc"]]
+    assert response["data"][env["zero"]] == {"status": "0"}
+    assert sql_rows(env)[env["doc"]] == original_sql[env["doc"]]
+    assert settings.docStoreConn.insert(original_index, env["collection"], env["kb"]) == []
+    assert change(env, [env["doc"]], 0).json()["code"] == 0
+    assert all(row["available_int"] == 0 for row in index_rows(env, env["doc"]))

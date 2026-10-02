@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from api.db import VALID_FILE_TYPES
 from api.db.db_models import get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
+from api.db.services.document_status_service import batch_document_status, writable_dataset
 from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import Principal, async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_argument_result, get_error_data_result, get_result, server_error_response
@@ -93,6 +94,44 @@ class MetadataBatchUpdateRequest(BaseModel):
 
 class DocumentIdsRequest(BaseModel):
     document_ids: list[str] = Field(min_length=1)
+
+
+def document_status_value(value: Any) -> str:
+    if type(value) is str and value in {"0", "1"}:
+        return value
+    if type(value) is int and value in {0, 1}:
+        return str(int(value))
+    raise ValueError("status must be 0 or 1")
+
+
+class BatchDocumentStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    doc_ids: list[StrictStr] = Field(min_length=1)
+    status: str
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, value: Any) -> str:
+        return document_status_value(value)
+
+    @field_validator("doc_ids")
+    @classmethod
+    def validate_ids(cls, value: list[str]) -> list[str]:
+        if any(not identifier.strip() for identifier in value):
+            raise ValueError("doc_ids must contain non-empty document IDs")
+        return value
+
+
+@router.post("/datasets/{dataset_id}/documents/batch-update-status", summary="批量更改文档启用状态")
+async def batch_update_document_status(
+    dataset_id: str, request: BatchDocumentStatusRequest, db: AsyncSession = Depends(get_async_db), principal: Principal = Depends(async_current_user)
+) -> JSONResponse:
+    if await writable_dataset(db, dataset_id, principal.id) is None:
+        await db.rollback()
+        return JSONResponse({"code": RetCode.AUTHENTICATION_ERROR, "message": "Dataset unavailable or no authorization.", "data": {}})
+    result = await batch_document_status(db, request.doc_ids, request.status, principal.id, dataset_id)
+    failed = any("error" in item for item in result.values())
+    return JSONResponse({"code": RetCode.SERVER_ERROR if failed else RetCode.SUCCESS, "message": "Partial failure" if failed else "success", "data": result})
 
 
 @router.post("/datasets/{dataset_id}/metadata/update", summary="批量更新文档元数据")

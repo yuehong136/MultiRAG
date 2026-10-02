@@ -20,6 +20,7 @@ This module provides a specialized Milvus connection for storing and retrieving 
 
 import ast
 import copy
+import json
 import re
 import time
 from datetime import datetime
@@ -225,7 +226,7 @@ class MilvusConnection(MilvusConnectionBase):
         filter_parts = []
         if condition:
             for k, v in condition.items():
-                if k == "pk" or not v:
+                if k == "pk" or (not v and k != "available_int"):
                     continue
                 if k == "doc_id":
                     if isinstance(v, list):
@@ -234,7 +235,7 @@ class MilvusConnection(MilvusConnectionBase):
                     else:
                         filter_parts.append(f"doc_id == '{v}'")
                 elif k == "available_int":
-                    filter_parts.append(f"available_int != {v - 1}")
+                    filter_parts.append(f"available_int == {int(v)}")
                 elif k == "auth":
                     filter_parts.append(f"{v}")
                 elif k == "content_with_weight":
@@ -485,6 +486,13 @@ class MilvusConnection(MilvusConnectionBase):
             if "source_id" in new_row and isinstance(new_row["source_id"], list):
                 new_row["source_id"] = "\n".join(new_row["source_id"])
 
+            # The REST chunk contract supplies tag_kwd as a list, while this
+            # backend's existing mapping stores it as JSON in a VARCHAR field.
+            if isinstance(new_row.get("tag_kwd"), list):
+                new_row["tag_kwd"] = json.dumps(new_row["tag_kwd"], ensure_ascii=False)
+            if isinstance(new_row.get("tag_feas"), dict):
+                new_row["tag_feas"] = json.dumps(new_row["tag_feas"], ensure_ascii=False)
+
             # Handle position fields
             if "position_int" in new_row and isinstance(new_row["position_int"], list):
                 flat_array = [num for row in new_row["position_int"] for num in row]
@@ -563,6 +571,14 @@ class MilvusConnection(MilvusConnectionBase):
             self.logger.error(f"Insert into {collection_name} failed: {error_msg}")
             return [error_msg]
 
+    def document_chunk_count(self, document_id: str, index_name: str, dataset_id: str) -> int:
+        """Strong read for the source insert/SQL-counter status boundary."""
+        conn = self._get_connection()
+        if not conn.has_collection(index_name):
+            return 0
+        rows = conn.query(index_name, expr=f"doc_id == {json.dumps(document_id)}", output_fields=["count(*)"], consistency_level="Strong")
+        return int(rows[0]["count(*)"]) if rows else 0
+
     def update(self, condition: dict, new_value: dict, index_name: str | list[str], dataset_id: str) -> bool:
         """
         Update documents in Milvus.
@@ -633,13 +649,14 @@ class MilvusConnection(MilvusConnectionBase):
         # Retry mechanism
         for attempt in range(ATTEMPT_TIME):
             try:
-                results = conn.query(collection_name, expr=filter_expr, output_fields=["*"])
+                results = conn.query(collection_name, expr=filter_expr, output_fields=["*"], consistency_level="Strong")
 
                 if not results:
                     self.logger.warning(f"No records found matching condition: {filter_expr}")
                     return False
 
                 updated_records = []
+                parent_ids = {record.get("mom_id") for record in results if record.get("mom_id")}
                 current_time = datetime.now()
                 time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
                 timestamp = current_time.timestamp()
@@ -670,9 +687,19 @@ class MilvusConnection(MilvusConnectionBase):
                             record[field] = value
 
                     updated_record = {**record, **doc}
-                    updated_record["create_time"] = time_str
-                    updated_record["create_timestamp_flt"] = timestamp
+                    if set(new_value) == {"available_int"} and new_value["available_int"] == 1 and updated_record.get("id", updated_record.get("pk")) in parent_ids:
+                        updated_record["available_int"] = 0
+                    if set(new_value) != {"available_int"}:
+                        updated_record["create_time"] = time_str
+                        updated_record["create_timestamp_flt"] = timestamp
                     updated_records.append(updated_record)
+
+                if set(new_value) == {"available_int"}:
+                    # Availability never deletes source rows first. Preserve
+                    # payloads/vectors and creation time; failed upsert remains
+                    # retryable from the original rows.
+                    result = conn.upsert_rows(collection_name, updated_records)
+                    return result.upsert_count == len(updated_records)
 
                 try:
                     delete_res = conn.delete(collection_name, expression=filter_expr)

@@ -1,17 +1,21 @@
 import json
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from infinity.common import InfinityException
 from infinity.errors import ErrorCode
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps import document_app
 from api.apps.services import document_api_service
 from api.db.db_models import Document, Knowledgebase
+from api.db.services.document_status_service import STATUS_ERROR
+from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
 from common.constants import RetCode
 from core.utils.infinity_conn import InfinityConnection as DocumentInfinityConnection
 from memory.utils.infinity_conn import InfinityConnection as MemoryInfinityConnection
@@ -124,67 +128,83 @@ def test_successful_update_returns_true(factory: Callable[..., Any], monkeypatch
     assert pool.release_count == 1
 
 
-@pytest.mark.parametrize(
-    ("update_result", "expected_error"),
-    [
-        (False, "Document store table missing or update failed."),
-        (RuntimeError("3022 in an unrelated error"), "Document store update failed."),
-    ],
-)
-def test_legacy_document_status_reports_store_failure(
-    update_result: bool | Exception,
-    expected_error: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    doc = SimpleNamespace(kb_id="kb", status="1", chunk_num=2)
-    kb = SimpleNamespace(tenant_id="tenant", name="name")
-    monkeypatch.setattr(document_app.DocumentService, "accessible", lambda *args, **kwargs: True)
-    monkeypatch.setattr(document_app.DocumentService, "get_by_id", lambda *args, **kwargs: doc)
-    monkeypatch.setattr(document_app.DocumentService, "update_by_id", lambda *args, **kwargs: True)
-    monkeypatch.setattr(document_app.KnowledgebaseService, "get_by_id", lambda *args, **kwargs: kb)
-    monkeypatch.setattr(document_app.search, "index_name_one", lambda *args, **kwargs: "index")
+class StatusSession(Session):
+    """Explicit unit SQL boundary; production SQL is tested in integration."""
 
-    def update(*args: Any, **kwargs: Any) -> bool:
-        if isinstance(update_result, Exception):
-            raise update_result
-        return update_result
+    def __init__(self, doc: Document) -> None:
+        self.doc = doc
+        self.pending: str | None = None
 
-    monkeypatch.setattr(document_app.settings, "docStoreConn", SimpleNamespace(update=update), raising=False)
-    with Session() as db:
-        response = document_app.change_status(document_app.ChangeStatusRequest(doc_ids=["doc"], status=0), db=db, user=SimpleNamespace(id="owner"))
+    def scalar(self, statement: Any) -> Document:
+        return self.doc
 
-    payload = json.loads(response.body)
-    assert payload["code"] == RetCode.SERVER_ERROR
-    assert payload["data"]["doc"] == {"error": expected_error}
+    def execute(self, statement: Any) -> SimpleNamespace:
+        self.pending = statement.compile().params["status"]
+        return SimpleNamespace(rowcount=1)
+
+    def commit(self) -> None:
+        if self.pending is not None:
+            self.doc.status = self.pending
+        self.pending = None
+
+    def rollback(self) -> None:
+        self.pending = None
 
 
-def test_rest_document_status_rejects_false_store_update(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("failure", [False, RuntimeError("3022 in an unrelated provider error")])
+def test_rest_and_legacy_status_share_safe_recoverable_store_failure(failure: bool | Exception, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.services import document_status_service
+
     doc = Document(id="doc", kb_id="kb", status="1", chunk_num=2)
     kb = Knowledgebase(id="kb", tenant_id="tenant", name="name")
-    monkeypatch.setattr(document_api_service.DocumentService, "update_by_id", lambda *args, **kwargs: True)
-    monkeypatch.setattr(document_api_service.search, "index_name", lambda *args, **kwargs: "index")
-    monkeypatch.setattr(document_api_service.settings, "docStoreConn", SimpleNamespace(update=lambda *args, **kwargs: False), raising=False)
+    writes: list[int] = []
 
-    with Session() as db:
-        response = document_api_service.update_document_status_only(db, 0, doc, kb)
+    def update(condition: Any, values: dict[str, Any], *args: Any) -> bool:
+        writes.append(values["available_int"])
+        if len(writes) == 1:
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return True
 
+    monkeypatch.setattr(document_api_service.settings, "docStoreConn", SimpleNamespace(update=update), raising=False)
+    db = StatusSession(doc)
+    response = document_api_service.update_document_status_only(db, 0, doc, kb)
     assert response is not None
-    payload = json.loads(response.body)
-    assert payload["code"] == RetCode.DATA_ERROR
-    assert payload["message"] == "Document store table missing or update failed."
+    assert json.loads(response.body)["code"] == RetCode.SERVER_ERROR
+    assert json.loads(response.body)["message"] == STATUS_ERROR
+    assert doc.status == "1" and writes == [0, 1]
+
+    async def shared(*args: Any, **kwargs: Any) -> dict[str, dict[str, str]]:
+        writes.clear()
+        error = document_status_service.change_document_status_sync(db, doc, kb, "0")
+        return {"doc": {"error": error}}
+
+    monkeypatch.setattr(document_app, "batch_document_status", shared)
+    import asyncio
+
+    response = asyncio.run(
+        document_app.change_status(
+            document_app.ChangeStatusRequest(doc_ids=["doc"], status=0),
+            db=AsyncSession(),
+            user=build_principal_from_authenticated_actor(
+                actor=AuthenticatedActor(platform_user_id="owner"),
+                membership=TenantMembershipEvidence(platform_user_id="owner", tenant_id="owner"),
+                authentication=AuthenticationContext(source=AuthenticationSource.WEB_SESSION, assurance=IdentityAssurance.AUTHENTICATED, validated_at=datetime.now(UTC)),
+            ),
+        )
+    )
+    assert json.loads(response.body) == {"code": 500, "message": "Partial failure", "data": {"doc": {"error": STATUS_ERROR}}}
+    assert doc.status == "1" and writes == [0, 1]
 
 
 def test_rest_document_status_skips_store_for_unparsed_document(monkeypatch: pytest.MonkeyPatch) -> None:
     doc = Document(id="doc", kb_id="kb", status="1", chunk_num=0)
     kb = Knowledgebase(id="kb", tenant_id="tenant", name="name")
-    monkeypatch.setattr(document_api_service.DocumentService, "update_by_id", lambda *args, **kwargs: True)
 
     def unexpected_update(*args: Any, **kwargs: Any) -> bool:
-        pytest.fail("unparsed document should not update the document store")
+        pytest.fail("unparsed document with no table should not update the store")
 
-    monkeypatch.setattr(document_api_service.settings, "docStoreConn", SimpleNamespace(update=unexpected_update), raising=False)
-
-    with Session() as db:
-        response = document_api_service.update_document_status_only(db, 0, doc, kb)
-
-    assert response is None
+    monkeypatch.setattr(document_api_service.settings, "docStoreConn", SimpleNamespace(update=unexpected_update, index_exist=lambda *args: False), raising=False)
+    assert document_api_service.update_document_status_only(StatusSession(doc), 0, doc, kb) is None
+    assert doc.status == "0"

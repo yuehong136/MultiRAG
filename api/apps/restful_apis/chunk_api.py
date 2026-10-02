@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import db_connection, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.document_service import DocumentService
+from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result, server_error_response
@@ -255,7 +256,7 @@ def _add_chunk(user_id: str, dataset_id: str, document_id: str, request: AddChun
         vectors, token_count = model.encode([doc.name, "\n".join(chunk["question_kwd"]) or req["content"]])
         vector = 0.1 * vectors[0] + 0.9 * vectors[1]
         chunk[f"q_{len(vector)}_vec"] = vector.tolist()
-        settings.docStoreConn.insert([chunk], _index_name(kb), dataset_id)
+        insert_source_chunks(db.get_bind(), [chunk], _index_name(kb), dataset_id)
         if req["image_base64"]:
             store_chunk_image(dataset_id, chunk_id, base64.b64decode(req["image_base64"]))
         DocumentService.increment_chunk_num(db, document_id, dataset_id, token_count, 1, 0)

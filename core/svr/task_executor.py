@@ -33,6 +33,7 @@ from api.db.joint_services.memory_message_service import handle_save_to_memory_t
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
+from api.db.services.document_status_service import finish_status_write, insert_source_chunks
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -2405,7 +2406,9 @@ async def delete_image(kb_id, chunk_id):
         raise
 
 
-async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, progress_callback, collection_name, schema):
+async def insert_chunks(
+    db: Session, task_id: str, task_tenant_id: str, task_dataset_id: str, chunks: list[dict[str, Any]], progress_callback: Callable[..., Any], collection_name: str, schema: dict[str, Any]
+) -> bool:
     """
     将chunks批量插入向量数据库（支持 Milvus/ES/OpenSearch/Infinity），包含类型转换和错误处理
 
@@ -2445,7 +2448,21 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         flds = list(mom_ck.keys())
         for fld in flds:
             # pk 是 Milvus 主键，必须保留
-            if fld not in ["id", "pk", "content_with_weight", "doc_id", "docnm_kwd", "kb_id", "available_int", "position_int", "create_timestamp_flt", "page_num_int", "top_int", "chunk_order_int"]:
+            if fld not in [
+                "id",
+                "pk",
+                "mom_id",
+                "content_with_weight",
+                "doc_id",
+                "docnm_kwd",
+                "kb_id",
+                "available_int",
+                "position_int",
+                "create_timestamp_flt",
+                "page_num_int",
+                "top_int",
+                "chunk_order_int",
+            ]:
                 del mom_ck[fld]
         mothers.append(mom_ck)
 
@@ -2454,19 +2471,11 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
         mother_batch = mothers[b : b + settings.DOC_BULK_SIZE]
         converted_batch = [convert_data_types(m, schema) for m in mother_batch]
         try:
-            db_type = settings.docStoreConn.db_type()
-            if db_type == "milvus":
-                await thread_pool_exec(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
-            else:
-                es_batch = []
-                for doc in converted_batch:
-                    es_doc = doc.copy()
-                    if "id" not in es_doc and "pk" in es_doc:
-                        es_doc["id"] = es_doc["pk"]
-                    es_batch.append(es_doc)
-                await thread_pool_exec(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
-        except Exception as e:
-            logging.warning(f"Insert mother chunks error: {e}")
+            await finish_status_write(asyncio.create_task(asyncio.to_thread(insert_source_chunks, db.get_bind(), converted_batch, collection_name, task_dataset_id)))
+        except Exception:
+            logging.exception("Insert mother chunks failed")
+            progress_callback(-1, msg="Source chunk insertion failed.")
+            return False
 
         task_canceled = has_canceled(task_id)
         if task_canceled:
@@ -2489,34 +2498,11 @@ async def insert_chunks(db, task_id, task_tenant_id, task_dataset_id, chunks, pr
             converted_batch.append(converted_chunk)
 
         try:
-            # 根据数据库类型调用不同的insert方法
-            db_type = settings.docStoreConn.db_type()
-            if db_type == "milvus":
-                # Milvus 使用 collection_name 和 data 参数
-                # insert 返回 list[str]：空列表表示成功，非空列表包含错误信息
-                doc_store_errors = await thread_pool_exec(settings.docStoreConn.insert, documents=converted_batch, index_name=collection_name)
-                # 检查是否有错误（非空列表表示有错误）
-                if doc_store_errors:
-                    error_message = f"Insert failed: {doc_store_errors}"
-                    progress_callback(-1, msg=error_message)
-                    raise Exception(error_message)
-                # 记录成功插入
-                successful_inserts.append({"insert_count": len(converted_batch)})
-            else:
-                # ES/OpenSearch/Infinity 使用位置参数: documents, index_name, knowledgebase_id
-                # ES 要求文档有 "id" 字段，Milvus 使用 "pk"，需要做映射
-                es_batch = []
-                for doc in converted_batch:
-                    es_doc = doc.copy()
-                    # 如果没有 "id" 字段，使用 "pk" 作为 id
-                    if "id" not in es_doc and "pk" in es_doc:
-                        es_doc["id"] = es_doc["pk"]
-                    es_batch.append(es_doc)
-                errors = await thread_pool_exec(settings.docStoreConn.insert, es_batch, collection_name, task_dataset_id)
-                if errors:
-                    logging.warning(f"Insert errors: {errors}")
-                # 记录成功插入
-                successful_inserts.append({"insert_count": len(converted_batch)})
+            for chunk in converted_batch:
+                if "id" not in chunk and "pk" in chunk:
+                    chunk["id"] = chunk["pk"]
+            await finish_status_write(asyncio.create_task(asyncio.to_thread(insert_source_chunks, db.get_bind(), converted_batch, collection_name, task_dataset_id)))
+            successful_inserts.append({"insert_count": len(converted_batch)})
 
         except Exception:
             # 如果出现异常，记录失败并进行删除回滚

@@ -814,6 +814,46 @@ DELETE /datasets/{dataset_id}
 
 ## 文档 API
 
+### 批量更改文档启用状态
+
+`POST /api/v1/datasets/{dataset_id}/documents/batch-update-status`
+
+JWT 或 API Key 鉴权。有效数据集的 owner/admin 可写；当前租户 owner 身份沿用
+user ID 等于 tenant ID 的规则，其余成员要求有效 owner/admin membership。
+normal、invite、失效成员和外部用户不能修改。路径数据集必须包含目标文档；
+文档 status=0 表示禁用，仍可重新启用。
+
+请求：
+
+```json
+{"doc_ids":["document_id_1","document_id_2"],"status":0}
+```
+
+status 只接受整数 0/1 或字符串 "0"/"1"；布尔、浮点数、空 ID、非字符串 ID、
+空列表、错误形状及额外字段返回 HTTP 422。缺失或无写权限的数据集返回 HTTP 200、
+业务 code=109。每个 ID 独立处理，重复 ID 只处理一次；完整成功 code=0，
+部分失败 code=500，并保留完整 data 映射：
+
+```json
+{"code":500,"message":"Partial failure","data":{"document_id_1":{"status":"0"},"document_id_2":{"error":"Document not found in this dataset."}}}
+```
+
+即使 SQL 已是目标状态也会重新对齐索引。同文档状态写入和普通 source 写入使用
+SQL 行锁排序；索引完成后才提交 SQL，失败尝试按当前 SQL 状态恢复索引。
+恢复无法确认时返回安全错误，调用方可重试。没有分块的文档更新 SQL，后续普通
+source 分块按写入前的最新状态插入；母块保持隐藏，图谱/RAPTOR 等产品保留原语义。
+这是跨存储补偿合同，进程崩溃和外部直接改写索引不构成分布式原子提交保证。
+
+Go 使用同一路径及响应合同，接受当前 Python HS256 JWT（同服务签名密钥）和
+现有 API/login token。Infinity 支持实际索引写入；Go ES/Milvus 当前无状态写入
+基盘，有索引时返回逐文档非零错误且 SQL 不变。无表、无分块场景可仅更新 SQL；
+Milvus 有集合但无法判定当前文档是否有分块时同样明确拒绝。
+
+旧 `POST /v1/document/change_status` 暂留 deprecated：独立 Web 的
+knowledge-documents.changeStatus、useDocumentActions 单条/批量操作仍在调用。
+旧 body 兼容 doc_ids 字符串/数组和 doc_id fallback，新旧共用状态服务；
+Web 迁移到上述 REST 合同并完成真实请求/读回验收后删除旧入口。
+
 ### 下载代码沙箱产物
 
 CodeExec 生成的 Markdown 附件链接指向以下 REST 路径：

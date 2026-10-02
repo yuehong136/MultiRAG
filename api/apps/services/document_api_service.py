@@ -14,13 +14,14 @@ from api.db import FileType
 from api.db.db_models import Document, Knowledgebase, Task, db_connection
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
+from api.db.services.document_status_service import change_document_status_sync
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from api.utils import validation_utils
-from api.utils.api_utils import get_error_data_result, get_parser_config, server_error_response
+from api.utils.api_utils import get_error_data_result, get_parser_config
 from api.utils.validation_utils import UpdateDocumentReq
 from api.utils.web_utils import html2pdf, is_valid_url
 from common import settings
@@ -153,20 +154,8 @@ def update_chunk_method_only(db: Session, req: dict[str, Any], doc: Document, da
 
 
 def update_document_status_only(db: Session, status: int, doc: Document, kb: Knowledgebase) -> Response | None:
-    current_status = None if doc.status is None else int(doc.status)
-    if current_status == status:
-        return None
-
-    try:
-        if not DocumentService.update_by_id(db, doc.id, {"status": str(status)}):
-            return get_error_data_result(retmsg="Database error (Document update)!")
-        if getattr(doc, "chunk_num", 0) > 0:
-            ok = settings.docStoreConn.update({"doc_id": doc.id}, {"available_int": status}, search.index_name(kb.tenant_id, [kb.name]), doc.kb_id)
-            if not ok:
-                return get_error_data_result(retmsg="Document store table missing or update failed.")
-    except Exception as e:
-        return server_error_response(e)
-    return None
+    error = change_document_status_sync(db, doc, kb, str(status))
+    return get_error_data_result(retmsg=error, retcode=RetCode.SERVER_ERROR) if error else None
 
 
 def validate_document_update_fields(db: Session, update_doc_req: UpdateDocumentReq, doc: Document, req: dict[str, Any]):

@@ -3,6 +3,107 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## a536980e229d8a28a6fd55077ca575f2983f59c8 · 文档批量启停
+
+2026-10-02 从本仓 `dd451b00353c81923c407e1dec5f21965bdd2f92` 开始。
+核对 upstream remote 为 `git@github.com:infiniflow/ragflow.git`，沿用根聊天本轮已刷新
+的 `origin/main=519e7d98a5651564d4e35d6648f006cba4baaf4f`，完整核目标十文件 diff。
+本项 Python、Go 分别范围提交，不 push；原有 25 项 Channel/config/docker 等无关改动保留。
+本项完成后等待根审结，不开始第三项。
+
+| 目标 diff / 必要后修 | 本项处置 |
+|---|---|
+| `api/apps/document_app.py` 旧 change_status | 因查明的活动 Web 暂留 deprecated，新旧共用正确状态服务；保留 doc_id fallback、doc_ids 单字符串/数组，部分失败保留映射且非零。未删除 status、run 或 upload_and_parse。 |
+| `api/apps/restful_apis/document_api.py` 新 batch status | 唯一正式 POST；FastAPI 严格 body、异步 Principal/AsyncSession，按当前 owner/admin 权限适配；未采用上游仅 owner 限制、同状态直接跳过或忽略索引失败。现 PATCH enabled 只做必要共享接线。相邻 metadata/parser/图像/import 调整不扩纳。 |
+| `test_common.py`、`test_document_metadata.py` | 重建本仓状态契约、真实 SQL/索引、权限和故障回归；不复制上游 metadata/parser 等相邻测试或 harness。 |
+| 六处 Web diff：use-document-request、dataset-table、use-bulk-operate-dataset、use-dataset-table-columns、knowledge-service、utils/api | 独立 Web 由根在后端稳定后派发，本项未修改 Web。当前知识库文档页的单条/批量操作仍走旧入口，不能提前退役。 |
+| `bed9cc5a4f72aef0e6ae8d02a6a0e10d94909ea6` 五文件 | 完整核对 source availability 后修，映射到本仓 worker 母/主块、会话 doc_upload_and_parse、REST _add_chunk、legacy create 四个实际写点。没有复制不存在的 task_executor_refactor/Go ingestion pipeline。 |
+| `5046626c1796ae832b391a2cfd09d716d349b040` 四文件 | 完整核 handler/service/router/test，实际实现 Go handler/router/auth/service/DAO/DI，同合同独立验收；未采用上游 SQL 回退错误被忽略、同状态早退的缺陷。 |
+
+无本项行为 revert/re-land。`f4d36f708` 是 run/run_status 查询过滤，不扩纳；
+`670e688726` 整体删除 Python 及后续整体删除 Go 不作为该启停行为撤回。
+稳定输入、业务码、部分成功与兼容退出合同见
+[HTTP 参考](../references/http_api_reference.md#批量更改文档启用状态)。
+
+### 状态服务和 source 写入
+
+每 distinct ID 独立事务，以真实 Document 行锁串行；status=0 可重新启用，不使用只查
+status=1 的 accessible。有效 KB 的 owner/admin 可写，保留 user_id==tenant_id 的 owner
+捷径，其余要求有效 membership。索引真实完成后才提交 SQL；同状态请求仍修复索引。
+失败回滚后重新锁定当前 SQL 赢家补偿，补偿无法确认返回安全错误；失败恢复事务也释放
+行锁后再继续下一项。成功要求真实索引状态达目标，SQL rowcount 必须为 1，缺失/跨库
+不会伪成功或暴露 provider 详情。Python 取消会等待已拥有的阻塞写入结束，再释放 Session。
+
+普通 source 写入前，独立 Session 按可信 doc_id 分组、排序行锁并读最新 SQL 状态，锁只跨
+实际 store insert，不跨 callbacks/chunk_num 更新；无法读回全部来源时写入前失败。
+状态检查还核真实分块数量，覆盖插入已完成而 SQL chunk_num 尚为 0 的窗口。
+母块保持 available=0，重新启用不暴露母块；图谱/RAPTOR/compile 特殊产品不统一重写。
+会话旧同步解析链在 worker 自有 Session 中完成，避免 async listener 被同步解析阻塞而与
+状态行锁互相等待；没有把请求 Session 传入线程。
+
+Milvus availability 更新用 Strong 全行读回和 upsert，不先 delete；保留完整 source payload、
+向量及创建字段，真实部分写入可补偿/重试。检索 available=0 用准确相等过滤，不被 falsy
+判断跳过。实际 REST source 验收发现现有 VARCHAR tag 字段收到 list/dict，需要按现行
+mapping 序列化为 JSON；只补必要存储输入适配，没有扩大 metadata 功能。
+跨 SQL/索引使用补偿，不能保证进程崩溃或外部直接写索引时的分布式原子提交。
+
+### Go 合同与实际边界
+
+Go 使用同一个正式 endpoint、严格 0/1 body 和完整 code/message/data 映射。
+该路由接受当前 Python HS256 JWT（同签名密钥、有效期、签名 email 查可信活动 SQL 用户）
+和既有 Go login/API token；其他路由的鉴权没有更改，保留当前超管/服务可用规则。
+实际 listener 使用同 scratch PostgreSQL，三条同时持有的池连接逐条确认 usr_ai search_path。
+
+Infinity 使用真正 SDK count/update 和 dataset namespace；3022 仅按 SDK 结构化错误码
+识别缺表，不匹配错误文本。SQL 执行或提交失败后，包含已结束事务的 sql.ErrTxDone，
+均重新读取/锁定 SQL 赢家再恢复真实索引。HTTP 断开不先取消 SQL 锁而遗留仍运行的 RPC。
+Go ES/Milvus UpdateDataset 没有写入基盘，显式不可用；有分块返回逐文档失败且 SQL 不变。
+无表且确无分块可仅更新 SQL，Milvus 有集合却无法计数当前文档时保守拒绝。没有用 nil
+写入桩宣称成功，没有扩整套引擎。复跑跨端验收须准备真实 native tokenizer 静态库和
+隔离 Infinity 服务，并显式运行 `document_status_go_acceptance.py`；普通 Python CI 不附带 Go 前置。
+
+### 本轮验证、独立读回与清理
+
+- 最终 `make verify`：Ruff、8 条 import contracts、async DB 门禁、mypy 127 文件通过；
+  **3737 unit passed**。最终 `REQUIRE_SERVICES=1 make integration`：**498 passed，无 skip**。
+- 本项正式 Python integration 23 个用例，包含实际 FastAPI JWT/API key、owner/admin、
+  normal/invite/inactive/foreign、无效 body、缺/跨 dataset、重复、0↔1、same-state 修复、
+  PATCH、部分结果、缺集合/重试、查后删除、源插入/counter 竞争、取消排空。
+  模型/provider 输出及 False/异常/部分 upsert/SQL/恢复失败为注明的控制边界；
+  HTTP、SQL、真实 Milvus 及对象写读均未替换。async/sync 恢复失败用独立连接 NOWAIT
+  证明行锁已释放；实际 listener 内运行 `make smoke` 通过。
+- 四处实际 source 写入证明零分块禁用后按最新状态插入、混合来源分组、母块隐藏；
+  会话 provider encode 内用真实 HTTP 禁用新文档，再查实际首次插入及重新启用。
+  独立 SQL 整行、独立 Milvus Strong client 全 payload/向量/创建字段及原始 MinIO bytes
+  读回，兄弟文档与其他 dataset 不变，available=0/1 检索正确。
+- 显式 Go 真实 HTTP 矩阵 **18 passed，无 skip**：Infinity 真写/读、同状态修复、完整数据
+  保留、逐项继续，真实 PG 执行失败与 deferred constraint 提交失败补偿、并发及删除竞争。
+  ES/Milvus 分支验证明确拒绝和 SQL 不变，不冒称其支持写入；三个引擎都验证其他无索引
+  dataset 的零分块 SQL 更新。Go 源/向量/创建字段由独立 Python Infinity SDK 读回。
+- gofmt、`go build ./internal/...`、`go vet ./internal/...`、handler/router 专项测试通过；
+  server/admin/CLI 三个独立 cmd main 各自临时构建通过。复用本机已有真实 Go 1.25.14 与
+  native 静态库；m1cpu 依赖仍有 CGO VLA 编译警告，不影响退出码，未放宽门禁。
+
+原始日志在本机 `/tmp/multirag-a536-` 前缀：`verify-complete.log`、
+`integration-complete.log`、`http-final.log`（新增恢复锁用例前 21 passed）、
+`go-http-final.log`、`go-build-final.log`、`go-vet-final.log`、`go-unit-final.log`、
+`go-cmd-{server,admin,cli}-final.log`、`cleanup.log`、`cleanup-readback.json`。
+首次 source 验收的 fixture 路由模块绑定/legacy body/schema 和遗漏 asyncio 导入均已修复，
+最终门禁无未解决失败；早期矩阵或历史 retirement 结果不作为本项通过证据。
+
+fixtures 清理自有 SQL 行/库、Redis queue/cache、Milvus collection、MinIO bucket/objects，
+独立读回当前 scratch 库/桶/集合/队列均为零。Go 清理自有 Infinity DB、listener、私有配置
+与客户端；自有 Infinity 容器无命名卷，删除后确认两端口关闭。仓内临时 native symlink
+和三个临时二进制已删除，复用的外部 native/toolchain 保留。未修改业务数据、共享配置或
+Web；没有运行完整后台 worker、远程模型/provider、真实许可系统或浏览器验收。
+
+## c949096db038f11d44b969902da440a800a75a3f · 本批首项已有等价实现
+
+2026-10-02 只读核目标完整单文件 diff 与当前 Canvas.reset：非 None 显式值保留、类型默认
+兜底、deepcopy、缺 env 补齐及 globals 序列化已随 4f 采用在 `bb2431f59e8ed15c627514f069a0c14403c9e496`。
+此前记录见下方 4f 小节，本次无剩余实现或新范围提交，不重复历史门禁/运行验收。
+Web 当前仍保存 variables.value/globals；Go 无 reset/VariableAssigner 基盘，本项不适用。
+
 ## 488c3ef6a306cf11f73dd642c0e7fd0420c4001e · Task 取消 REST API
 
 - 上游 #14393；2026-10-02 核对预期 origin 并 fetch，
