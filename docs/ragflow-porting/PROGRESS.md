@@ -174,7 +174,7 @@ ASGI 2.3 断连、2.4 OSError、响应头失败和外部 Task.cancel 的关闭�
 Go/Python 显式矩阵追加三种 Agent surface 的消息发送处取消、EOF 等待取消、完成先赢
 后关闭；Go 只提供真实认证与取消 HTTP，组件与实际执行仍在 Python，未编造 Go Canvas。
 
-本轮最终 `make verify` 退出 0：Ruff、8 条 import contracts、async DB 门禁、mypy 127
+关闭与失败历史补修（`cdda343e`）最终 `make verify` 退出 0：Ruff、8 条 import contracts、async DB 门禁、mypy 127
 源文件及 3706 unit passed。`make integration` 退出 0，463 passed、无 skip；其中收尾
 HTTP 39 个（原 33 加显式草稿 6）、真实 TCP/ASGI 关闭 39 个，同一次隔离 API listener
 的 `make smoke` 通过。Go 显式真实 HTTP 矩阵退出 0，27 passed、无 skip（原 18 加
@@ -192,6 +192,49 @@ fixture 验证自有用户/token、Agent/版本/session/Task 等 SQL 行、Redis
 及本轮验收日志保留供审查。没有创建容器/卷、改业务库或部署，没有改 web/旧 PUT 退出
 条件。仍未验收完整后台 worker、远程模型/provider、浏览器或内核缓冲区饱和；关闭后
 不保证错误帧交付，已经发出的片段不能撤回。
+
+### 同 SHA debug 首次迭代前生命周期补修
+
+本轮仅修 debug 在响应头发送前失败/取消的剩余窗口，仍止于第十 SHA；前述已通过的
+成功持久化竞争、GeneratorExit 单轮失败保存与 history/sys.history 补修保持原实现。
+根的 AST/内存复现不是 HTTP 证据；本轮正式新增 4 个真实隔离回归，改前均失败：
+response.start 发送 OSError 与首次迭代前实际 TCP shutdown 的两类窗口，分别在 active
+或 API cancel_requested 获胜后关闭。前者实际 HTTP 500，后者在受控响应头 send 等待
+中发生真实 socket 断连/ASGI CancelledError；都确认实际 Canvas.run 尚未开始。
+改前 active 没有结束，cancel_requested 场景也未执行 runtime finish/cleanup。
+
+debug 的 finish_attempted 现在归响应与 sse 共同持有，新增一次性 close_runtime：执行
+finally 和响应 close_callback 共用保护性 finish/cleanup。未启动的生成器 aclose 没有
+finally 时，回调仍收尾已登记运行；正常运行、已开始后关闭和已提交副本不重复收尾。
+成功资格判定已经尝试后不重试 finish，原 CAS 获胜状态与 API nonce/TTL 不覆盖。
+登记后释放 SQL 读事务若失败/取消也走同一收尾，然后继续传播异常；没有提前开始或
+执行 Canvas，没有给 debug 新增 SQL 共享会话，没有保存失败副本或在关闭中 yield。
+生产仅改 agent_api.py 的这个 debug 分支；beta/OpenAI/旧 SDK helper、授权与通用
+response helper、Go 生产代码和 Web 未改。
+
+正式单测调用当前已注册路由函数生成响应，覆盖 response.start OSError/CancelledError、
+body send 失败、正常完成和登记后 setup 取消；各验证收尾/cleanup 一次及不吞关闭信号。
+实际 HTTP 用例薄包装记录真实 finish、Canvas.cancel_task、Canvas.run 调用，仍执行原
+Lua/Redis/SQL/组件，没有假造收尾成功；独立 SQL 会话/Task、定义/版本、Redis 原副本、
+binding v1、状态、nonce/TTL 均读回。Go 另追加真实取消 HTTP→Python 两个头窗口验收，
+不虚构 Go Canvas。受控头 send 故障不称自然 TCP 头发送失败或内核缓冲饱和。
+
+本轮最终 `make verify` 退出 0（Ruff、8 条 import contracts、async DB 门禁、mypy 127
+源文件、3711 unit passed）；`make integration` 退出 0，REQUIRE_SERVICES=1 下 467
+passed、无 skip，保留前轮 39 收尾 HTTP 与 39 TCP 关闭回归并新增上述 4 个头窗口。
+同一实际隔离 listener 的 `make smoke` 通过。显式 Go HTTP→Python 矩阵退出 0，29
+passed、无 skip（原 27 加 2 个取消先赢的 debug 头窗口）。没有把前轮通过数作为本轮
+证据，没有改 Go 生产实现或重复无关 native/build/vet/三个 cmd 门禁。
+日志用 `/tmp/multirag-488-header-` 前缀的 before、unit、http、verify、integration、
+go-http、smoke、cleanup `.log`；before 为正式改前 4 failed，http 为修复后定向 82
+passed。单测初版路由选取的 fixture 错误另存 unit-fixture-adjustment，不当作缺口复现。
+
+fixture 核验自有 SQL 行、运行绑定/nonce/副本/队列、Python/Go listener 与客户端清理；
+独立读回 scratch 库 0、自有验收队列 0，并确认同 smoke listener 已关闭。自有仓内
+native 链接移除，29 个本轮 Go 临时目录的控制/log 文件清理，私有 config 均不存在；
+以前已留存的外部工具链/静态库和本轮验收日志供审查。不操作业务库，不创建容器/卷，
+不改 Web 或旧 PUT 退出条件、不 push。完整 worker、远程 provider/模型、浏览器和
+内核缓冲区饱和仍不在已验范围，响应头前断连不声称任何响应帧交付。
 
 ## 82313020c71b8b91873232c2334c2c1c382f1c49 · 列表操作与 strict 模式
 

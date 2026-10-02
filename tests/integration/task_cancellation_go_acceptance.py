@@ -28,6 +28,7 @@ from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import read_binding
 from tests.integration.test_agent_completion_close import close_case
 from tests.integration.test_agent_update_release import release_api as release_api
+from tests.integration.test_debug_response_start import debug_start_case
 from tests.integration.test_task_cancellation import cancel, persistent_state
 from tests.integration.test_task_cancellation import cancel_api as cancel_api
 from tests.integration.test_task_cancellation import test_agent_run_bound_before_first_frame_cancel_and_sibling_isolation as run_agent_case
@@ -185,3 +186,8 @@ def test_go_http_at_python_terminal_boundary(cancel_api: dict[str, Any], go_task
 @pytest.mark.parametrize("mode,window,winner", [("first", "send", "cancel"), ("continued", "canvas", "cancel"), ("published", "send", "finish")])
 def test_go_http_at_python_close_boundary(cancel_api: dict[str, Any], go_task_api: str, monkeypatch: pytest.MonkeyPatch, surface: str, mode: str, window: str, winner: str) -> None:
     close_case(cancel_api, monkeypatch, surface=surface, mode=mode, window=window, winner=winner, cancel_base=go_task_api)
+
+
+@pytest.mark.parametrize("failure", ["send_error", "disconnect"])
+def test_go_http_cancels_unstarted_debug_response(cancel_api: dict[str, Any], go_task_api: str, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    debug_start_case(cancel_api, monkeypatch, failure=failure, cancelled=True, cancel_base=go_task_api)

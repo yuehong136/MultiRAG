@@ -309,6 +309,80 @@ def test_canvas_run_rejects_non_owner(client, monkeypatch):
     assert "authorized" in body["retmsg"]
 
 
+@pytest.mark.parametrize("window", ["header_error", "header_cancel", "body_error", "success", "setup_cancel"])
+async def test_registered_debug_response_owns_bound_runtime(client: TestClient, monkeypatch: pytest.MonkeyPatch, window: str) -> None:
+    from starlette.requests import ClientDisconnect
+
+    from api.db import CanvasCategory
+    from api.utils.api_utils import async_current_user
+
+    module = _route_module("api.apps.restful_apis.agent")
+    principal = client.app.dependency_overrides[async_current_user]()
+    calls: list[str] = []
+
+    class DebugDB(_RecordingAsyncSession):
+        async def execute(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(one=lambda: (CanvasCategory.Agent, principal.id))
+
+        async def rollback(self) -> None:
+            if window == "setup_cancel":
+                raise asyncio.CancelledError()
+            await super().rollback()
+
+    class DebugCanvas(_FakeCanvas):
+        async def run(self, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+            calls.append("run")
+            async for answer in super().run(**kwargs):
+                yield answer
+
+        def cancel_task(self) -> None:
+            calls.append("cleanup")
+
+    async def bind(*args: Any, **kwargs: Any) -> None:
+        calls.append("bind")
+
+    async def authorized(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(UserCanvasService, "accessible", classmethod(lambda cls, db, cid, tid: True))
+    monkeypatch.setattr(module.CanvasReplicaService, "load_for_run", lambda **kwargs: {"dsl": {}, "title": "debug"})
+    monkeypatch.setattr(module.CanvasReplicaService, "commit_after_run", lambda **kwargs: calls.append("commit") or True)
+    monkeypatch.setattr(module, "Canvas", DebugCanvas)
+    monkeypatch.setattr(module, "bind_canvas_task", bind)
+    monkeypatch.setattr(module, "require_canvas", authorized)
+    monkeypatch.setattr(module, "finish_runtime", lambda task_id: calls.append("finish"))
+    monkeypatch.setattr(module, "require_runtime_finish", lambda task_id: calls.append("finish"))
+    assert "/api/v1/agents/chat/completion" in client.app.openapi()["paths"]
+    if window == "setup_cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await module.run({"agent_id": "agent-unit", "query": "hi"}, DebugDB({}), principal)
+        assert calls == ["bind", "finish", "cleanup"]
+        return
+    response = await module.run({"agent_id": "agent-unit", "query": "hi"}, DebugDB({}), principal)
+    assert calls == ["bind"]
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start" and window.startswith("header"):
+            if window == "header_cancel":
+                raise asyncio.CancelledError()
+            raise OSError("header failed")
+        if message["type"] == "http.response.body" and window == "body_error":
+            raise OSError("body failed")
+
+    async def receive() -> dict[str, Any]:
+        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
+
+    if window == "success":
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+    else:
+        with pytest.raises(asyncio.CancelledError if window == "header_cancel" else ClientDisconnect):
+            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+    assert calls.count("finish") == calls.count("cleanup") == 1
+    assert calls.count("run") == (0 if window.startswith("header") else 1)
+    assert calls.count("commit") == (1 if window == "success" else 0)
+
+
 def test_restful_agents_openai_mode_streams(agent_route_stubs, monkeypatch):
     async def _fake_completion_openai(db, tenant_id, agent_id, question, session_id=None, stream=True, **kw):
         yield 'data: {"choices": []}\n\n'

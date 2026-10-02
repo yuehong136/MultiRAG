@@ -619,14 +619,32 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     except Exception as e:
         return server_error_response(e)
     await bind_canvas_task(db, canvas.task_id, tenant_id, req["id"])
+    finish_attempted = False
+    runtime_closed = False
+
+    async def close_runtime() -> None:
+        nonlocal finish_attempted, runtime_closed
+        if runtime_closed:
+            return
+        runtime_closed = True
+        with CancelScope(shield=True):
+            try:
+                if not finish_attempted:
+                    finish_attempted = True
+                    await asyncio.to_thread(finish_runtime, canvas.task_id)
+            finally:
+                canvas.cancel_task()
 
     # setup 产物已全是纯值（无 ORM 对象存活）——结束 autobegin 的读事务，避免连接在
     # 下方分钟级的 SSE 流式期间以 idle-in-transaction 状态钉死
-    await db.rollback()
+    try:
+        await db.rollback()
+    except BaseException:
+        await close_runtime()
+        raise
 
     async def sse() -> AsyncGenerator[str, None]:
-        nonlocal canvas, user_id
-        finish_attempted = False
+        nonlocal canvas, user_id, finish_attempted
         terminal_frames: list[dict[str, Any]] = []
         try:
             async with aclosing(canvas.run(query=query, files=files, user_id=user_id, inputs=inputs)) as run_events:
@@ -664,14 +682,9 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             logging.exception(e)
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
         finally:
-            with CancelScope(shield=True):
-                try:
-                    if not finish_attempted:
-                        await asyncio.to_thread(finish_runtime, canvas.task_id)
-                finally:
-                    canvas.cancel_task()
+            await close_runtime()
 
-    return AgentStreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+    return AgentStreamingResponse(sse(), close_callback=close_runtime, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
 
 async def exp_agent_completion(
