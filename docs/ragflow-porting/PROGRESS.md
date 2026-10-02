@@ -78,8 +78,9 @@ Go ES/Milvus UpdateDataset 没有写入基盘，显式不可用；有分块返�
   读回，兄弟文档与其他 dataset 不变，available=0/1 检索正确。
 - 显式 Go 真实 HTTP 矩阵 **18 passed，无 skip**：Infinity 真写/读、同状态修复、完整数据
   保留、逐项继续，真实 PG 执行失败与 deferred constraint 提交失败补偿、并发及删除竞争。
-  ES/Milvus 分支验证明确拒绝和 SQL 不变，不冒称其支持写入；三个引擎都验证其他无索引
-  dataset 的零分块 SQL 更新。Go 源/向量/创建字段由独立 Python Infinity SDK 读回。
+  ES/Milvus 分支验证明确拒绝和 SQL 不变，不冒称其支持写入；Infinity/Milvus 使用真实
+  客户端验证其他无索引 dataset 的零分块 SQL 更新。ES 使用 nil-store service 控制，
+  未连接真实 ES client/server。Go 源/向量/创建字段由独立 Python Infinity SDK 读回。
 - gofmt、`go build ./internal/...`、`go vet ./internal/...`、handler/router 专项测试通过；
   server/admin/CLI 三个独立 cmd main 各自临时构建通过。复用本机已有真实 Go 1.25.14 与
   native 静态库；m1cpu 依赖仍有 CGO VLA 编译警告，不影响退出码，未放宽门禁。
@@ -96,6 +97,39 @@ fixtures 清理自有 SQL 行/库、Redis queue/cache、Milvus collection、MinI
 与客户端；自有 Infinity 容器无命名卷，删除后确认两端口关闭。仓内临时 native symlink
 和三个临时二进制已删除，复用的外部 native/toolchain 保留。未修改业务数据、共享配置或
 Web；没有运行完整后台 worker、远程模型/provider、真实许可系统或浏览器验收。
+
+### 同 SHA 根审查补修：鉴权、并发与支持引擎的可用性
+
+初次交付 `ed9197802f67045525bdb74f2c27be81584cf06c` 和
+`295d3826baf238c4b585a15d849af0b4976095f0` 的门禁及读回成立，但根审查发现下列遗漏。
+本轮逐项补修后重新运行适用门禁，初次通过数不替代这里的证据。
+
+| 具体缺口 | 补修与验收 |
+|---|---|
+| Go 只核用户 status/is_active，遗漏 JWT logout 与个人 Principal | 本路由增加 is_authenticated、非匿名、有效个人 Tenant(id=user.id) 与唯一有效个人 owner membership。签名 JWT 另拒绝 load_user 所用 INVALID_ 标记；API key 不套用 JWT 登出规则。真实 Python REST logout 后，同旧 JWT 在 Python/Go HTTP 均 401，拒绝前后完整 SQL/索引不变；API key 仍真实成功。逐项核失效用户、租户、个人成员角色/状态及缺失个人租户/成员，保留有效 owner/admin。 |
+| 不同文档共享 Go Infinity Thrift client | 每文档打开独占连接，服务只使用该连接执行 count/update/recovery，取消排空后关闭；共享主连接没有被本项状态调用使用。透明 TCP proxy 仅延迟一个实际 Update 请求，观察不同文档走不同 Thrift TCP 连接、另一文档完成、关闭 HTTP socket 后 SQL 锁仍持有、后续同文档赢家正确。HTTP 返回前私有连接均关闭，listener 结束后 proxy/主连接也关闭。不是把不同文档行锁当连接锁。 |
+| 母块隐藏只实现于 Milvus | Python Infinity 和 Go Infinity 按 mom_id=id 分离母/子更新；ES/OpenSearch availability 专项使用原子脚本，母块始终 0，子块按目标，并保留真正 no-op。真实 Python/Go Infinity 验启停、same-state 修复、实际 SQL deferred COMMIT 失败恢复；available=1 查询不含母块，完整内容/向量/创建字段/关系/数量保留。已选 Milvus 母块回归继续通过。 |
+| ES/OpenSearch conflicts=proceed 丢弃响应返回 True | availability 专项核 total=updated+noops、无超时/冲突/failures，缺表/未知/不完整/部分响应失败。正式调用真实 connector 和 DSL，仅控制 transport 返回；覆盖 complete/noop、各失败形状、SQL 不变、补偿与重试。非 availability 通用更新没有扩改。未启动真实 ES/OpenSearch 服务，不能把该边界当成真实引擎验收。 |
+| Python 未验提交失败叠加赢家/恢复前删除 | 隔离 PG deferred constraint 真正在 COMMIT 抛错；具名恢复调度门在真实 rollback 后暂停。删除自有触发器后，真实新 HTTP 赢家提交 0，原补偿按新 SQL 0 恢复；另一用例在已查到并写过索引后、恢复前真实删除文档，返回恢复无法确认并继续下一文档，不伪成功。独立 SQL 整行与 Milvus 完整索引读回符合当前赢家，恢复事务释放。 |
+
+修后实际结果：`make verify` **3772 unit passed**（Ruff、8 import contracts、async DB 与
+mypy 通过）；`REQUIRE_SERVICES=1 make integration` **500 passed，无 skip**，含同实际
+FastAPI listener 的 smoke 与本项 25 个正式状态用例。ES/OS connector+已有 Infinity 缺表专项
+**48 passed**；显式实际 Go HTTP **22 passed，无 skip**，追加个人租户/成员缺失和私有连接
+关闭断言后只补跑受影响两例 **2 passed，20 deselected**，不把重复用例合算为新的覆盖数。
+Go gofmt、build/vet internal、handler/router 专项与三个 cmd 独立 main build 通过；m1cpu
+既有 CGO VLA 警告未改变。原始日志使用本机 `/tmp/multirag-a536-review-` 前缀的
+`verify-final.log`、`integration.log`、`connector-unit-final.log`、`go-http.log`、
+`principal-rpc-final.log`、`go-build.log`、`go-vet.log`、`go-unit.log`、
+`go-cmd-{server,admin,cli}.log`。首次新增用例因 Infinity 无序行返回及测试 DROP FUNCTION
+未限定 schema 失败，已按 ID 对齐全部字段并限定 usr_ai，未削弱数据或业务断言。
+
+Go ES 验收实例的 store 为 nil：只证明当前 service 的 capability 拒绝和 SQL 语义，
+没有真实 ES client/server，也不能宣称真实 ES 的无索引或写入能力。Milvus 客户端真实但
+该 Go 写能力仍不可用；Infinity 真写、真实 SDK 读回。所有故障调度/transport 边界已注明；
+没有声明浏览器、完整 worker、远程模型或真实许可系统验收。只清自有本轮 scratch 库、
+对象/索引/队列、Infinity 数据库/容器、listener/proxy、私有配置和临时构建产物；共享业务
+资源及 25 项无关改动保留。独立清理读回见本机本轮 review-cleanup 文件。
 
 ## c949096db038f11d44b969902da440a800a75a3f · 本批首项已有等价实现
 

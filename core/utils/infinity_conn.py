@@ -500,6 +500,15 @@ class InfinityConnection(InfinityConnectionBase):
                 for n, ty, de, _ in table_instance.show_columns().rows():
                     clmns[n] = (ty, de)
             filter = self.equivalent_condition_to_str(condition, table_instance)
+            if set(new_value) == {"available_int"} and "doc_id" in condition:
+                status = int(new_value["available_int"])
+                if "mom_id" in clmns:
+                    parent = "(mom_id != '' AND mom_id = id)"
+                    table_instance.update(f"({filter}) AND {parent}", {"available_int": 0})
+                    table_instance.update(f"({filter}) AND NOT {parent}", {"available_int": status})
+                else:
+                    table_instance.update(filter, {"available_int": status})
+                return True
             removeValue = {}
             for k, v in list(new_value.items()):
                 if k == "docnm_kwd":

@@ -331,6 +331,9 @@ class ESConnection(ESConnectionBase):
         return res
 
     def update(self, condition: dict, new_value: dict, index_name: str, knowledgebase_id: str) -> bool:
+        from common.doc_store.availability import availability_script, complete_availability_update
+
+        availability = set(new_value) == {"available_int"} and "doc_id" in condition
         doc = copy.deepcopy(new_value)
         doc.pop("id", None)
         condition["kb_id"] = knowledgebase_id
@@ -399,14 +402,16 @@ class ESConnection(ESConnectionBase):
                 raise Exception(f"newValue `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str.")
         ubq = UpdateByQuery(index=index_name).using(self.es).query(bool_query)
         ubq = ubq.script(source="".join(scripts), params=params)
+        if availability:
+            ubq = ubq.script(**availability_script(int(new_value["available_int"])))
         ubq = ubq.params(refresh=True)
         ubq = ubq.params(slices=5)
         ubq = ubq.params(conflicts="proceed")
 
         for _ in range(ATTEMPT_TIME):
             try:
-                _ = ubq.execute()
-                return True
+                response = ubq.execute()
+                return complete_availability_update(response) if availability else True
             except ConnectionTimeout:
                 self.logger.exception("ES request timeout")
                 time.sleep(3)

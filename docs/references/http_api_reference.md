@@ -842,10 +842,16 @@ status 只接受整数 0/1 或字符串 "0"/"1"；布尔、浮点数、空 ID、
 SQL 行锁排序；索引完成后才提交 SQL，失败尝试按当前 SQL 状态恢复索引。
 恢复无法确认时返回安全错误，调用方可重试。没有分块的文档更新 SQL，后续普通
 source 分块按写入前的最新状态插入；母块保持隐藏，图谱/RAPTOR 等产品保留原语义。
+ES/OpenSearch availability 更新要求完整响应：超时、版本冲突、失败项、缺表、未知或部分更新
+都不算成功；全部 updated/noops 与 total 对齐时接受，同状态 no-op 可以成功。
+Infinity 与 ES/OpenSearch 启用及补偿只更改普通子块，母块保持隐藏。
 这是跨存储补偿合同，进程崩溃和外部直接改写索引不构成分布式原子提交保证。
 
 Go 使用同一路径及响应合同，接受当前 Python HS256 JWT（同服务签名密钥）和
-现有 API/login token。Infinity 支持实际索引写入；Go ES/Milvus 当前无状态写入
+现有 API/login token。用户须有效、活动、已认证且非匿名，并具有唯一有效个人 owner
+成员及个人租户；JWT 登出标记 INVALID_ 会拒绝旧 JWT，API key 不由该 JWT 登出标记失效。
+Infinity 每文档使用独占连接完成计数、写入及恢复，排空后关闭，避免共享 Thrift 并发。
+Infinity 支持实际索引写入；Go ES/Milvus 当前无状态写入
 基盘，有索引时返回逐文档非零错误且 SQL 不变。无表、无分块场景可仅更新 SQL；
 Milvus 有集合但无法判定当前文档是否有分块时同样明确拒绝。
 

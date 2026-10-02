@@ -500,3 +500,82 @@ def test_actual_missing_collection_is_nonzero_and_retry_reconciles(status_api: d
     assert settings.docStoreConn.insert(original_index, env["collection"], env["kb"]) == []
     assert change(env, [env["doc"]], 0).json()["code"] == 0
     assert all(row["available_int"] == 0 for row in index_rows(env, env["doc"]))
+
+
+@pytest.mark.parametrize("winner", ["status", "delete"])
+def test_python_commit_failure_uses_current_winner_or_reports_deleted_recovery(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, winner: str) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    env = status_api
+    before_sql, before_index = sql_rows(env), index_rows(env)
+    name = "status_commit_" + uuid4().hex
+    with env["engine"].begin() as connection:
+        connection.execute(
+            sa.text(
+                f"CREATE FUNCTION usr_ai.{name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id = '{env['doc']}' THEN RAISE EXCEPTION 'controlled commit failure'; END IF; RETURN NEW; END $$"
+            )
+        )
+        connection.execute(sa.text(f"CREATE CONSTRAINT TRIGGER {name} AFTER UPDATE ON usr_ai.t_ai_documents DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION usr_ai.{name}()"))
+    rolled_back, release = threading.Event(), threading.Event()
+    first_session: AsyncSession | None = None
+    paused = False
+    commit, rollback = AsyncSession.commit, AsyncSession.rollback
+
+    async def marked_commit(self: AsyncSession) -> None:
+        nonlocal first_session
+        if first_session is None:
+            first_session = self
+        await commit(self)
+
+    async def recovery_gate(self: AsyncSession) -> None:
+        nonlocal paused
+        await rollback(self)
+        if self is first_session and not paused:
+            paused = True
+            rolled_back.set()
+            assert await asyncio.to_thread(release.wait, 15)
+
+    monkeypatch.setattr(AsyncSession, "commit", marked_commit)
+    monkeypatch.setattr(AsyncSession, "rollback", recovery_gate)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failed = executor.submit(change, env, [env["doc"], env["second"]], 0)
+            try:
+                assert rolled_back.wait(10)
+                # The real first transaction has failed COMMIT and rolled back;
+                # remove only this owned guard so a new winner can really commit.
+                with env["engine"].begin() as connection:
+                    connection.execute(sa.text(f"DROP TRIGGER {name} ON usr_ai.t_ai_documents"))
+                    if winner == "delete":
+                        connection.execute(sa.delete(Document).where(Document.id == env["doc"]))
+                if winner == "status":
+                    assert change(env, [env["doc"]], 0).json()["code"] == 0
+                    assert sql_rows(env)[env["doc"]]["status"] == "0"
+                else:
+                    assert env["doc"] not in sql_rows(env)
+            finally:
+                release.set()
+            result = failed.result(timeout=15).json()
+        assert result["code"] == 500
+        assert result["data"][env["doc"]] == {"error": status_service.STATUS_ERROR if winner == "status" else status_service.COMPENSATION_ERROR}
+        assert result["data"][env["second"]] == {"status": "0"}
+        final_sql = sql_rows(env)
+        expected_sql = copy.deepcopy(before_sql)
+        if winner == "delete":
+            expected_sql.pop(env["doc"])
+        else:
+            expected_sql[env["doc"]]["status"] = "0"
+        expected_sql[env["second"]]["status"] = "0"
+        assert final_sql == expected_sql
+        expected_index = copy.deepcopy(before_index)
+        for row in expected_index:
+            if row["doc_id"] in {env["doc"], env["second"]}:
+                row["available_int"] = 0
+        assert index_rows(env) == expected_index
+    finally:
+        release.set()
+        with env["engine"].begin() as connection:
+            connection.execute(sa.text(f"DROP TRIGGER IF EXISTS {name} ON usr_ai.t_ai_documents"))
+            connection.execute(sa.text(f"DROP FUNCTION usr_ai.{name}()"))
