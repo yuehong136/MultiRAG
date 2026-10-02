@@ -948,8 +948,10 @@ SQL、队列归属和当前状态协调，后来任务世代的写入不会被�
 
 现有 dataset `documents/parse` 保持清理历史、不开启 apply_kb 的默认行为；
 `documents/stop` 默认保留历史。admin 两个实际解析调用已迁至 ingest，SYNC 仅在
-本次提交 ID 全部读回 DONE 时完成。旧 `POST /v1/document/run` 暂保留 deprecated
-兼容入口，待 Web 实际迁移验收及消费者复核后单独退出。
+本次提交 ID 全部读回 DONE 时完成。Web 普通解析/停止继续使用 dataset canonical 接口，
+显式重新解析的保留/清理历史分支统一使用 ingest，并传递用户选择的 `apply_kb`；
+部分失败保留失败文档的选择和选项。Web 与 admin 迁移已完成真实验收，旧
+`POST /v1/document/run` 仍保留 deprecated，待全部消费者复核后单独退出。
 
 ### 读取缩略图和图片
 
@@ -980,7 +982,8 @@ binary 成功响应为完整原始 PNG、JPEG、GIF、WebP 或 BMP 字节，`Con
 
 旧 `GET /v1/document/thumbnails` 已移除，返回 routing404。旧 binary
 `GET /v1/document/image/{image_id}` 暂保留 deprecated 的原有公开读取、JPEG MIME 和错误格式，
-待 Web 与 Agent Hub 的新接口实际迁移验收后单独退出；不能据新接口鉴权声称旧入口已经退出。
+Agent Hub 已完成新接口的真实认证、完整字节和页面迁移验收；Web 消费者迁移仍在进行。
+旧 binary 待双方迁移接受及全部消费者复核后单独退出，不能据新接口鉴权声称旧入口已经退出。
 
 ### 下载代码沙箱产物
 

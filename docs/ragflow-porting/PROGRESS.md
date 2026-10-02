@@ -7,7 +7,7 @@
 
 2026-10-03 后端范围提交 `4a4604c43c784ffe0d8a1933d1d5a6dac3c6e4e2`（6 路径）
 完成根审结，未 push。复用已接受的5个 image service/storage 文件，没有改写组件；
-整项仍待 Web、Agent Hub 真实迁移和旧 binary 必要退出，固定批次与原25路径改动保持。
+Agent Hub 真实消费已另行审结；整项仍待 Web 迁移和旧 binary 必要退出，固定批次与原25路径改动保持。
 
 - 三个可信异步读取接口提供 thumbnails、知识库登记图片和 owner runtime 附件；局部
   adapter 覆盖依赖鉴权、query422及安全 typed errors，raw raster MIME、no-store/nosniff
@@ -35,11 +35,26 @@
 `/tmp/multirag-c511-api-wiring-code-review.md` 与 `/tmp/multirag-c511-http-evidence-review.md`。
 公开合同见 [HTTP API](../references/http_api_reference.md#读取缩略图和图片)。
 
+### Agent Hub 关联真实消费验收
+
+2026-10-03 独立 Agent Hub scope `62ade9d0b7b58fe4e19630c72343c14e4efb1f73`
+（4个 Go 路径）已根接受。真实 Gin/JWT/GuestGuard/角色、上游 API Key、SQL/index/MinIO/Redis
+与当前生产构建浏览器链完成43 gateway、2 direct-auth、11组完整 stores/MySQL前后零写；
+复合 key、完整 raster bytes/MIME、安全头、页面解码/安全失败/重试/blob revoke 有原始材料。
+当前717源文件及实际11上游输入绑定；full Go/race分别1141/728条 top-level PASS，frontend
+611 tests/92 files及fmt/vet/build/tsc/lint实际exit0、无skip，终止race与六轮失败资源记录保留。
+根fresh exact union 6 PG库、24 collections、6 buckets/103对象、97 keys、29 PIDs、15 ports、
+13 private paths及自有container/volume/workdir无残留。重复Vary头的raw合并/快照最后值差异、
+历史SQL ID/namespace/OSstarttime/private写前登记及browser关闭捕获不足如实保留；不补称
+生产daemon/worker、模型质量或512 sniff后的所有stream均完整。没有新功能、持久写或漏清阻断。
+独立代码/raw报告及根绑定见 `/tmp/multirag-c511-agenthub-live-root-accepted.md`。
+此验收不关闭Web迁移或旧binary退出，不改变整批完成状态。
+
 ## 49912a156e3fb072d3e897b4f107e4ccae52fb15 · 文档 ingest 后端验收
 
 2026-10-03 后端范围提交 `7faf1dcb3974239a472822602a880dcbd95eb549`（30 路径）
-完成根审结，未 push。整项仍待关联 Web 迁移和旧 run 必要退出；不将后端交付
-写成整项完成。固定批次与其他 25 路径改动保持。
+完成根审结，未 push。关联 Web 迁移已另行审结；整项仍待旧 run 必要退出，
+不将后端与Web交付写成整项完成。固定批次与其他 25 路径改动保持。
 
 - 新全局 POST `/api/v1/documents/ingest` 采用可信异步 Principal、全请求预检、
   严格 run=0/1/2、delete/apply_kb 布尔值和完整逐文档结果。保留 canonical
@@ -67,8 +82,23 @@
 均使用 `/tmp/multirag-49912a-` 前缀）；独立报告为
 `/tmp/multirag-499-evidence-delivery-review.md` 和 `/tmp/multirag-499-api-final-delta-review.md`。
 稳定公开合同见 [HTTP API](../references/http_api_reference.md#批量提交取消或重置文档解析)。
-旧 `/v1/document/run` 暂保留 deprecated，待 Web/admin 实际迁移验收和 fresh 消费者核对后
-另作退出；本项没有新增 MultiRAG Go ingestion 接口。
+旧 `/v1/document/run` 暂保留 deprecated；Web/admin 实际迁移已验，待fresh全部消费者核对后
+由原APIwriter独立退出，不混当前parser/PATCH实现范围。本项没有新增MultiRAG Go ingestion接口。
+
+### 499 关联 Web 最终验收
+
+Web组合 `093b681f436ad1544090a216bf2475d76d8d0ba6` 与最后焦点差量
+`66f342441a5108f19cc4699f77775a6dfb092719` 已根接受。原25路径包括严格raw response、
+canonical parse/stop、显式ingest两delete分支/apply选项、完整partial与失败选择/选项、cache/late/busy；
+原固定输入896 CI、19 HTTP/26完整stores及独立代码/raw审查均已消费。最后仅两路径复用现有Radix
+焦点约束，16 mounted回归、完整tsc-b/Vite build、局部lint/size/budget实际通过，不把历史896计入新检查。
+真实native keyboard补齐busy trap、单次提交、及时业务失败后保false选项/选择并显式retry；
+新完整SQL71表/index双768/schema/create/payload/source bytes/Redis DUMP/XRANGE读回、storage0与完整tabs[]
+已独立核实。源/门禁/提交25feature hashes相同，根fresh新DB/collection/bucket对象/6keys/2PIDports/4private全absent。
+前两browser超时、已解锁的旧意图标签、Milvus异步stats、成功移除opener后BODY、旧关闭原始捕获不足仍保留；
+新keyboard listener期间后端5路径合法变化只归已启动实例，两初始dirty文件没有精确bytes备份。
+成功为queued Task/queue0→1，不称workerDONE或替新parser后端最终输入验收。根与独立最后差量报告入口
+`/tmp/multirag-499-frontend-root-accepted.md`；旧run仍活动，故whole499未完成。
 
 ## 965717c4fbbcaece97cd68ff08c12174cec60a04 · Google provider 与模型推理默认值
 
