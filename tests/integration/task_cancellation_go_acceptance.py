@@ -26,6 +26,7 @@ from common.exceptions import TaskCanceledException
 from core.flow.pipeline import Pipeline
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import read_binding
+from tests.integration.test_agent_completion_close import close_case
 from tests.integration.test_agent_update_release import release_api as release_api
 from tests.integration.test_task_cancellation import cancel, persistent_state
 from tests.integration.test_task_cancellation import cancel_api as cancel_api
@@ -178,3 +179,9 @@ def test_go_graph_binding_and_terminal_noops(cancel_api: dict[str, Any], go_task
 )
 def test_go_http_at_python_terminal_boundary(cancel_api: dict[str, Any], go_task_api: str, monkeypatch: pytest.MonkeyPatch, mode: str, window: str, winner: str, stream: bool) -> None:
     terminal_case(cancel_api, monkeypatch, surface="rest", mode=mode, stream=stream, window=window, winner=winner, cancel_base=go_task_api)
+
+
+@pytest.mark.parametrize("surface", ["rest", "beta", "openai"])
+@pytest.mark.parametrize("mode,window,winner", [("first", "send", "cancel"), ("continued", "canvas", "cancel"), ("published", "send", "finish")])
+def test_go_http_at_python_close_boundary(cancel_api: dict[str, Any], go_task_api: str, monkeypatch: pytest.MonkeyPatch, surface: str, mode: str, window: str, winner: str) -> None:
+    close_case(cancel_api, monkeypatch, surface=surface, mode=mode, window=window, winner=winner, cancel_base=go_task_api)

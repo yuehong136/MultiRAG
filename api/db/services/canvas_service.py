@@ -503,6 +503,8 @@ async def completion(
     terminal_frames: list[dict[str, Any]] = []
     finish_attempted = False
     round_persisted = False
+    prior_history = copy.deepcopy(canvas.history)
+    prior_sys_history = copy.deepcopy(canvas.globals["sys.history"])
 
     def failure_frame(message: str) -> str:
         return "data:" + json.dumps({"event": "error", "code": 100, "message": message, "data": {"error": message}, "session_id": session_id}, ensure_ascii=False) + "\n\n"
@@ -512,6 +514,11 @@ async def completion(
         # Keep the attempted user input and failure, without an assistant success.
         conv["message"] = conv["message"][:attempted_message_count]
         conv["errors"] = message
+        # Canvas EOF has already appended its assistant output. Only a
+        # successful SQL round may expose that output to the next model run.
+        # Restore the existing prefix, retaining this attempt's user input.
+        canvas.history = prior_history + [entry for entry in canvas.history[len(prior_history) :] if entry[0] == "user"]
+        canvas.globals["sys.history"] = prior_sys_history + [entry for entry in canvas.globals["sys.history"][len(prior_sys_history) :] if entry.startswith("user: ")]
         conv["dsl"] = str(canvas)
         written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))
         if written != 1:
@@ -578,10 +585,10 @@ async def completion(
         # Preserve the existing shared API order: workflow end then message end.
         for frame in success_frames:
             yield frame
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, GeneratorExit):
         if not round_persisted:
-            # Starlette cancels the iterator when the real HTTP client leaves.
-            # Shield the one failed-round write; do not rewrite a committed run.
+            # Await cancellation and close-at-yield are both failed delivery.
+            # Persist once without yielding during close, then propagate it.
             with CancelScope(shield=True):
                 message = "Agent completion disconnected."
                 finish_attempted = True
@@ -649,23 +656,24 @@ async def completion_openai(
     if stream:
         completion_tokens = 0
         try:
-            async for ans in responses():
-                # 检查是否有答案内容
-                if ans.get("event") not in ["message", "message_end"]:
-                    continue
+            async with aclosing(responses()) as response_events:
+                async for ans in response_events:
+                    # 检查是否有答案内容
+                    if ans.get("event") not in ["message", "message_end"]:
+                        continue
 
-                content_piece = ""
-                if ans["event"] == "message":
-                    content_piece = ans["data"]["content"]
+                    content_piece = ""
+                    if ans["event"] == "message":
+                        content_piece = ans["data"]["content"]
 
-                completion_tokens += len(tiktoken_encoder.encode(content_piece))
+                    completion_tokens += len(tiktoken_encoder.encode(content_piece))
 
-                openai_data = get_data_openai(id=session_id or str(uuid4()), model=agent_id, content=content_piece, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, stream=True)
+                    openai_data = get_data_openai(id=session_id or str(uuid4()), model=agent_id, content=content_piece, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, stream=True)
 
-                if ans.get("data", {}).get("reference", None):
-                    openai_data["choices"][0]["delta"]["reference"] = ans["data"]["reference"]
+                    if ans.get("data", {}).get("reference", None):
+                        openai_data["choices"][0]["delta"]["reference"] = ans["data"]["reference"]
 
-                yield "data: " + json.dumps(openai_data, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps(openai_data, ensure_ascii=False) + "\n\n"
 
             yield "data: [DONE]\n\n"
 
@@ -678,15 +686,16 @@ async def completion_openai(
         try:
             all_content = ""
             reference = {}
-            async for ans in responses():
-                if ans.get("event") not in ["message", "message_end"]:
-                    continue
+            async with aclosing(responses()) as response_events:
+                async for ans in response_events:
+                    if ans.get("event") not in ["message", "message_end"]:
+                        continue
 
-                if ans["event"] == "message":
-                    all_content += ans["data"]["content"]
+                    if ans["event"] == "message":
+                        all_content += ans["data"]["content"]
 
-                if ans.get("data", {}).get("reference", None):
-                    reference.update(ans["data"]["reference"])
+                    if ans.get("data", {}).get("reference", None):
+                        reference.update(ans["data"]["reference"])
 
             completion_tokens = len(tiktoken_encoder.encode(all_content))
 

@@ -13,14 +13,16 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from functools import partial
 from typing import Any
 from urllib.parse import quote_plus
 from uuid import uuid4
 
 import jwt
+from anyio import CancelScope
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +55,7 @@ from api.db.services.task_cancellation_service import bind_canvas_task, require_
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, TaskService, queue_dataflow
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService
+from api.utils.agent_streaming import AgentStreamingResponse
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common import settings
 from common.constants import RetCode
@@ -546,7 +549,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             **req,
         )
         if stream:
-            return StreamingResponse(
+            return AgentStreamingResponse(
                 completion,
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
@@ -626,14 +629,15 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         finish_attempted = False
         terminal_frames: list[dict[str, Any]] = []
         try:
-            async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
-                failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
-                if failure:
-                    raise RuntimeError(failure)
-                if ans.get("event") in {"message_end", "workflow_finished"}:
-                    terminal_frames.append(ans)
-                    continue
-                yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
+            async with aclosing(canvas.run(query=query, files=files, user_id=user_id, inputs=inputs)) as run_events:
+                async for ans in run_events:
+                    failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
+                    if failure:
+                        raise RuntimeError(failure)
+                    if ans.get("event") in {"message_end", "workflow_finished"}:
+                        terminal_frames.append(ans)
+                        continue
+                    yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
 
             finish_attempted = True
             await asyncio.to_thread(require_runtime_finish, canvas.task_id)
@@ -660,13 +664,14 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             logging.exception(e)
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
         finally:
-            try:
-                if not finish_attempted:
-                    await asyncio.to_thread(finish_runtime, canvas.task_id)
-            finally:
-                canvas.cancel_task()
+            with CancelScope(shield=True):
+                try:
+                    if not finish_attempted:
+                        await asyncio.to_thread(finish_runtime, canvas.task_id)
+                finally:
+                    canvas.cancel_task()
 
-    return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+    return AgentStreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
 
 async def exp_agent_completion(
@@ -792,7 +797,9 @@ async def exp_agent_completion(
         # Successful completion only. A failed execution ends after its error.
         yield "data:[DONE]\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+    return AgentStreamingResponse(
+        generate(), close_callback=answers.aclose, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+    )
 
 
 @router.post("/agents/rerun", summary="重新运行Pipeline", response_description="成功重新运行")

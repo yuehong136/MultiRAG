@@ -37,6 +37,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
+from api.utils.agent_streaming import AgentStreamingResponse
 from api.utils.api_utils import (
     async_beta_token_required,
     async_token_required,
@@ -686,7 +687,7 @@ async def agent_bot_completions(
                 logging.exception(e)
                 yield build_sse_error_payload(e)
 
-        resp = StreamingResponse(stream(), media_type="text/event-stream")
+        resp = AgentStreamingResponse(stream(), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"

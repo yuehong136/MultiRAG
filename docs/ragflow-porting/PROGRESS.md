@@ -125,7 +125,7 @@ before_cursor_execute 一次失败为故障注入，随后仍实际回滚/写入
 正常 Lua、组件、存储和业务响应真实，未使用模型/provider 替身或远程模型。
 Go 真实鉴权 HTTP 增加首次/续跑/发布收尾取消和 finish 获胜的 stream 真/假用例。
 
-本轮最终 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，
+上一轮收尾补修（`a4afaced`）最终 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，
 3698 unit passed）；`make integration` 418 passed，无 skip，含新增 33 个真实 HTTP 与同
 隔离 listener 的实际 smoke；Go 跨端 18 passed，无 skip，含新增 8 个收尾窗口用例。
 全量中三个既有错误流 DONE 断言按根明确合同改为断言不出现 DONE，保留错误码、无成功
@@ -136,6 +136,62 @@ verify、integration、go-http、smoke、cleanup `.log`，原有第十项已完�
 fixture 和额外读回检查自有
 SQL/Redis/listener/scratch 库/私有配置清理，最终删除自有 native 链接；仍未运行完整后台
 worker、远程 provider 或浏览器。没有改变 Web 或旧 PUT 的已核实兼容退出条件。
+
+### 同 SHA 关闭与失败历史补修
+
+仍是第十 SHA `488c3ef6a306cf11f73dd642c0e7fd0420c4001e`，没有开始下一项。
+根指出帧 yield 处 aclose 注入 GeneratorExit 没有保存失败轮次，且 Canvas EOF 已把本轮
+assistant 写入 history/sys.history，取消失败轮次仍被下一轮模型消费。
+先补正式改前回归：close-at-frame 单测 1 failed；实际隔离 HTTP 首次/续跑的 SQL history
+断言 2 failed；真实 HTTP 消息 send 等待时 shutdown TCP 又复现实际 Canvas 未关闭
+（1 failed）。单测和根 AST 复现没有当作 HTTP 证据。
+
+新增 AgentStreamingResponse，在 ASGI 响应退出后、请求 DB 依赖退出前保护性关闭 body
+迭代链；REST 预取首帧另登记关闭回调，覆盖响应头发送失败且外层生成器尚未启动的情况。
+completion 把 GeneratorExit 与 CancelledError 统一为未提交轮次的失败保存，关闭过程中
+不 yield，保存后继续传播原关闭；已保存成功轮次不重复 append 或改写。OpenAI 外层显式
+aclosing responses，beta 保留 aclosing；debug 显式关闭真实 Canvas 并保护运行收尾，
+没有为它新增 SQL 会话。未改授权、身份 helper、binding v1/CAS/nonce/TTL 或 Go 生产实现。
+
+共享 completion 在执行前深拷贝历史前缀，失败持久化恢复此前 history/sys.history，只保留
+当前实际新增用户输入；取消、Redis 收尾异常/False、SQL flush 失败都走该路径。
+不清空旧成功历史，不批量修历史会话，不改 Agent 定义/版本、发布快照或其他会话副本。
+每个相关失败用例独立读 SQL DSL 并重建真实 Canvas.get_history；继续实际 HTTP 运行同一
+session，检查真实 Canvas.run 开始前的 get_history 输入与失败 SQL 一致，没有失败助手。
+
+新增 TCP 关闭矩阵覆盖 REST/beta/OpenAI 首次、续跑、发布快照和显式草稿会话，
+消息 send 等待与 Canvas EOF 内部 await 两种取消先赢窗口，以及完成/成功 SQL 提交先赢
+后在终帧 send 处迟到取消与断连。另验收 debug 两类取消关闭与已成功副本关闭。
+send 仅控制真实 ASGI send 的等待边界，随后实际 shutdown 自有 TCP socket；
+不是内核缓冲区饱和证明。保持响应强引用，避免 GC 被误当作响应负责的关闭。
+实际记录 send 处 GeneratorExit、内部 await 处 CancelledError，SQL message/errors/round、
+history/sys.history、恢复/续跑 get_history、定义/草稿/版本/Redis 原副本、runtime/nonce/TTL
+均独立读回。结束先赢取消在关闭前不新增 nonce/log，关闭后内部 x 的既有 1 小时 TTL
+与 API nonce 的 24 小时 TTL 分别验证。显式草稿会话原有开场消息作为前缀完整保留。
+ASGI 2.3 断连、2.4 OSError、响应头失败和外部 Task.cancel 的关闭传播另由正式单测覆盖，
+这些 send 假件结果没有当作真实 socket 验收。
+
+Go/Python 显式矩阵追加三种 Agent surface 的消息发送处取消、EOF 等待取消、完成先赢
+后关闭；Go 只提供真实认证与取消 HTTP，组件与实际执行仍在 Python，未编造 Go Canvas。
+
+本轮最终 `make verify` 退出 0：Ruff、8 条 import contracts、async DB 门禁、mypy 127
+源文件及 3706 unit passed。`make integration` 退出 0，463 passed、无 skip；其中收尾
+HTTP 39 个（原 33 加显式草稿 6）、真实 TCP/ASGI 关闭 39 个，同一次隔离 API listener
+的 `make smoke` 通过。Go 显式真实 HTTP 矩阵退出 0，27 passed、无 skip（原 18 加
+关闭 9）；未改 Go 生产代码/协议，未重复无关 build/vet/三个 cmd 门禁。
+原始日志用 `/tmp/multirag-488-close-` 前缀的 unit-before、history-before、send-before、
+unit、verify、integration、go-http、smoke、cleanup `.log`；中途 fixture 修正记录另存
+http-fixture-adjustments `.log`，不是最终通过证据。fixture 修正覆盖 Redis 返回字符串、
+内部清理 x 的原有 1 小时 TTL、OpenAI 中间空内容帧及草稿预置开场消息/初始 dict DSL，
+保持最终 nonce、历史前缀与真实终态断言，没有削弱生产门禁。
+
+fixture 验证自有用户/token、Agent/版本/session/Task 等 SQL 行、Redis 运行归属/nonce/
+队列/副本、Python/Go listener 与客户端清理；独立读 PG scratch 库 0、验收队列 0，并
+确认同 smoke listener 已关闭。当前自有仓内 native 链接已移除，54 个本轮 Go 验收临时
+目录内的 base/stop/log 文件清理，私有 config 均不存在；本轮以前的外部工具链与静态库
+及本轮验收日志保留供审查。没有创建容器/卷、改业务库或部署，没有改 web/旧 PUT 退出
+条件。仍未验收完整后台 worker、远程模型/provider、浏览器或内核缓冲区饱和；关闭后
+不保证错误帧交付，已经发出的片段不能撤回。
 
 ## 82313020c71b8b91873232c2334c2c1c382f1c49 · 列表操作与 strict 模式
 

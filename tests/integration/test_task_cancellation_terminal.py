@@ -49,7 +49,7 @@ def terminal_case(
 ) -> None:
     agent_id = env["client"].post(env["base"] + "/api/v1/agents", json={"title": f"terminal {uuid4().hex}", "dsl": message_dsl("real answer")}, timeout=30).json()["data"]["id"]
     update(env, agent_id, {"dsl": message_dsl("real answer"), "release": True})
-    if mode == "published":
+    if mode in {"published", "draft"}:
         update(env, agent_id, {"dsl": message_dsl("different draft")})
     headers = dict(env["client"].headers)
     if surface == "beta":
@@ -74,6 +74,15 @@ def terminal_case(
     session_id = None
     prior_messages: list[dict[str, Any]] = []
     prior_round = 0
+    prior_dsl: dict[str, Any] = {"history": [], "globals": {"sys.history": []}}
+    if mode == "draft":
+        created = env["client"].post(env["base"] + f"/api/v1/agents/{agent_id}/sessions", json={"release": False}, timeout=30)
+        assert created.status_code == 200 and created.json()["retcode"] == 0
+        session_id = created.json()["data"]["id"]
+        with Session(env["engine"]) as db:
+            row = db.get(API4Conversation, session_id)
+            prior_messages, prior_round = deepcopy(row.message), row.round
+            prior_dsl = deepcopy(row.dsl) if isinstance(row.dsl, dict) else json.loads(row.dsl)
     if mode == "continued":
         initial = request(streaming=False)
         assert initial.status_code == 200
@@ -81,6 +90,7 @@ def terminal_case(
             row = db.scalar(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))
             assert row and row.message[-1]["role"] == "assistant" and not row.errors
             session_id, prior_messages, prior_round = row.id, deepcopy(row.message), row.round
+            prior_dsl = json.loads(row.dsl)
     before = read_state(env, agent_id)
     replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
     replica = REDIS_CONN.REDIS.get(replica_key)
@@ -190,9 +200,27 @@ def terminal_case(
                     else "terminal Redis failure"
                 )
                 assert expected_error in row.errors
+                assert_failed_history(row.dsl, prior_dsl, "final window", env["owners"][0], agent_id)
+                failed_dsl = row.dsl
     assert read_state(env, agent_id) == before
     if surface != "debug" or failed:
         assert REDIS_CONN.REDIS.get(replica_key) == replica
+    if failed and surface != "debug":
+        restored_inputs: list[list[dict[str, Any]]] = []
+
+        async def resumed_run(self: Canvas, **kwargs: Any) -> Any:
+            restored_inputs.append(deepcopy(self.get_history(100)))
+            async with aclosing(original_run(self, **kwargs)) as output:
+                async for event in output:
+                    yield event
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Canvas, "run", resumed_run)
+            resumed = request(gate["session_id"], streaming=False)
+        assert resumed.status_code == 200
+        assert "choices" in resumed.json() if surface == "openai" else resumed.json().get("retcode", resumed.json().get("code")) == 0
+        assert restored_inputs == [Canvas(failed_dsl, env["owners"][0], canvas_id=agent_id).get_history(100)]
+        assert read_state(env, agent_id) == before and REDIS_CONN.REDIS.get(replica_key) == replica
     # An independent sibling still completes using the same actual Canvas.
     sibling = request(streaming=False)
     assert sibling.status_code == 200 and not any(event.get("event") == "error" for event in events(sibling))
@@ -206,8 +234,17 @@ def terminal_case(
     print(f"terminal HTTP: {surface}/{mode}/stream={stream}, {window}, winner={winner}; SQL round and lifecycle independently verified")
 
 
+def assert_failed_history(dsl: str, prior: dict[str, Any], query: str, owner: str, agent_id: str) -> None:
+    stored = json.loads(dsl)
+    assert stored["history"] == prior["history"] + [["user", query]]
+    assert stored["globals"]["sys.history"] == prior["globals"]["sys.history"] + [f"user: {query}"]
+    restored = Canvas(dsl, owner, canvas_id=agent_id)
+    previous = Canvas(json.dumps({**stored, "history": prior["history"]}), owner, canvas_id=agent_id)
+    assert restored.get_history(100) == previous.get_history(100) + [{"role": "user", "content": query}]
+
+
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("mode", ["first", "continued", "published"])
+@pytest.mark.parametrize("mode", ["first", "continued", "published", "draft"])
 @pytest.mark.parametrize("surface", ["rest", "beta", "openai"])
 def test_cancel_wins_after_last_event(cancel_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, surface: str, mode: str, stream: bool) -> None:
     terminal_case(cancel_api, monkeypatch, surface=surface, mode=mode, stream=stream, window="after_events", winner="cancel")

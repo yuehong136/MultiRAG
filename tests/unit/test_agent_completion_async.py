@@ -50,6 +50,8 @@ class _FakeCanvas:
         self.task_id = task_id
         self.dsl = dsl
         self.error = ""
+        self.history: list[tuple[str, object]] = []
+        self.globals: dict[str, object] = {"sys.history": []}
 
     def reset(self):
         pass
@@ -162,6 +164,75 @@ async def test_completion_allocates_unique_task_id_per_execution(completion_stub
     assert len(set(task_ids)) == 4
     assert "agent-1" not in task_ids
     assert all(UUID(hex=task_id).version == 4 for task_id in task_ids)
+
+
+async def test_close_at_frame_persists_cancelled_round_once(completion_stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(canvas_service, "finish_runtime", lambda task_id: "cancel_requested")
+    db = _RecordingAsyncSession({"id": "sess-1"})
+    answers = canvas_service.completion(db, "tenant-unit", "agent-1", session_id="sess-1", query="hi")
+    assert '"content": "hello"' in await anext(answers)
+    await answers.aclose()
+    await answers.aclose()
+    _, payload = completion_stubs["payload"]
+    assert [message["role"] for message in payload["message"]] == ["user"]
+    assert "canceled" in payload["errors"] and "disconnected" in payload["errors"]
+    assert db.calls.count("run_sync") == 2  # setup and exactly one failed round
+
+
+async def test_openai_close_propagates_to_suspended_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[bool] = []
+    retained: list[AsyncGenerator[str, None]] = []
+
+    async def source(**kwargs: Any) -> AsyncGenerator[str, None]:
+        try:
+            yield 'data:{"event":"message","data":{"content":"hello"}}\n\n'
+        finally:
+            closed.append(True)
+
+    def create(**kwargs: Any) -> AsyncGenerator[str, None]:
+        result = source(**kwargs)
+        retained.append(result)
+        return result
+
+    monkeypatch.setattr(canvas_service, "completion", create)
+    answers = canvas_service.completion_openai(_RecordingAsyncSession({}), "tenant", "agent", "hi")
+    assert "hello" in await anext(answers)
+    await answers.aclose()
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("failure", ["cancel", "redis"])
+async def test_terminal_failure_restores_history_prefix(completion_stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    from common.exceptions import TaskCanceledException
+
+    class HistoryCanvas(_FakeCanvas):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.history = [("user", "old question"), ("assistant", {"content": "old answer"})]
+            self.globals = {"sys.history": ["user: old question", "assistant: old answer"]}
+
+        async def run(self, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+            self.history.append(("user", kwargs["query"]))
+            self.globals["sys.history"].append("user: " + kwargs["query"])
+            yield {"event": "message", "data": {"content": "failed answer"}}
+            yield {"event": "workflow_finished", "data": {}}
+            self.history.append(("assistant", {"content": "failed answer"}))
+            self.globals["sys.history"].append("assistant: failed answer")
+
+        def __str__(self) -> str:
+            return json.dumps({"history": self.history, "globals": self.globals})
+
+    def finish(task_id: str) -> None:
+        raise TaskCanceledException("cancelled") if failure == "cancel" else ConnectionError("Redis unavailable")
+
+    monkeypatch.setattr(canvas_service, "Canvas", HistoryCanvas)
+    monkeypatch.setattr(canvas_service, "require_runtime_finish", finish)
+    frames = [frame async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant", "agent-1", session_id="sess-1", query="current question")]
+    assert '"event": "error"' in frames[-1]
+    _, payload = completion_stubs["payload"]
+    stored = json.loads(payload["dsl"])
+    assert stored["history"] == [["user", "old question"], ["assistant", {"content": "old answer"}], ["user", "current question"]]
+    assert stored["globals"]["sys.history"] == ["user: old question", "assistant: old answer", "user: current question"]
 
 
 # ---------------------------------------------------------------------------
