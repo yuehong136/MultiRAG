@@ -951,6 +951,37 @@ SQL、队列归属和当前状态协调，后来任务世代的写入不会被�
 本次提交 ID 全部读回 DONE 时完成。旧 `POST /v1/document/run` 暂保留 deprecated
 兼容入口，待 Web 实际迁移验收及消费者复核后单独退出。
 
+### 读取缩略图和图片
+
+以下三个只读接口使用 JWT 或 API Key 鉴权：
+
+| 请求 | 返回与授权 |
+|---|---|
+| `GET /api/v1/thumbnails?doc_ids=id1&doc_ids=id2` | HTTP200、`code:0`、`data` 为文档 ID 到缩略图 URL 的映射；最多100个原始 ID，重复也计入上限。过滤不存在、无权读取或知识库停用的文档；保留 inline `data:image/*`、null 和空串。 |
+| `GET /api/v1/documents/images/{image_id}` | 读取可访问知识库中的精确 SQL thumbnail，或由同知识库索引与 Document 登记的图片；禁用文档的登记图片仍可读取。 |
+| `GET /api/v1/documents/runtime/{file_id}/image` | 读取上传时登记在当前认证 owner downloads 空间的运行时附件，校验可信 sidecar 与实际大小；请求中的 owner、created_by、preview_url 不构成授权。 |
+
+binary 成功响应为完整原始 PNG、JPEG、GIF、WebP 或 BMP 字节，`Content-Type` 与实际格式一致。
+`image_id` 的首个 hyphen 分隔知识库和对象 key；对象 key 中的空间、percent、Unicode、hyphen
+及 slash 由返回的 canonical URL 编码一次，调用方应使用该 URL。REST 和旧文档列表均返回新 URL。
+这些 GET 不提交解析，不写 SQL、索引、对象或队列；所有新接口的成功与失败响应均带
+`Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`。
+
+新接口失败为安全 JSON `{code, message, data:null}`：
+
+| HTTP | code | 含义 |
+|---|---|---|
+| 422 | 101 | query 形状或必填字段无效 |
+| 400 | 101 | 图片输入无效 |
+| 401 / 403 | 401 / 109 | 未认证或认证依赖拒绝；保留安全认证 challenge |
+| 404 | 102 | 图片不可用；包含无权访问、未登记和缺失情况，不表示已经判定物理对象不存在 |
+| 415 | 102 | 实际内容不是完整受支持的 raster 图片 |
+| 500 | 500 | 存储或服务器读取失败 |
+
+旧 `GET /v1/document/thumbnails` 已移除，返回 routing404。旧 binary
+`GET /v1/document/image/{image_id}` 暂保留 deprecated 的原有公开读取、JPEG MIME 和错误格式，
+待 Web 与 Agent Hub 的新接口实际迁移验收后单独退出；不能据新接口鉴权声称旧入口已经退出。
+
 ### 下载代码沙箱产物
 
 CodeExec 生成的 Markdown 附件链接指向以下 REST 路径：

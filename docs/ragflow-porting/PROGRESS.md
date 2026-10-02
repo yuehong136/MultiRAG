@@ -3,6 +3,38 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## c5116b90e5399d0eb6cf473a100e2467b44ca5ed · 图片读取 HTTP 接线
+
+2026-10-03 后端范围提交 `4a4604c43c784ffe0d8a1933d1d5a6dac3c6e4e2`（6 路径）
+完成根审结，未 push。复用已接受的5个 image service/storage 文件，没有改写组件；
+整项仍待 Web、Agent Hub 真实迁移和旧 binary 必要退出，固定批次与原25路径改动保持。
+
+- 三个可信异步读取接口提供 thumbnails、知识库登记图片和 owner runtime 附件；局部
+  adapter 覆盖依赖鉴权、query422及安全 typed errors，raw raster MIME、no-store/nosniff
+  和已解码 slash 保持。三个实际列表 producer 返回的新 URL 已经真实 listener 取回。
+- 无活动消费者的旧 thumbnails JSON 已删除并验证 routing404/OpenAPI absence；旧
+  binary 有活动 Web 消费者，保留原有行为并 deprecated，没有宣称全部图片访问已迁移。
+- 最终固定输入 `make verify` **4224 passed**、`REQUIRE_SERVICES=1 make integration`
+  **602 passed、无 skip**，自有 listener smoke **exit0**。三次 HTTP fixture/路由/旧协议
+  断言失败留存并有修后回归，未修改认证、共享配置或放宽门禁。
+- 独立 raw 核查110请求记录、10表完整 SQL、4索引 schema/payload/双768向量、35对象
+  完整字节与 Redis stream 前后无写；正常 credential、runtime sidecar、特殊 key、
+  故障和旧 binary 兼容明确分界。部分请求 raw 未保存 params/producer method，runtime
+  upload 只保存 descriptor 与物理 sidecar；相应用例由固定源码实际执行断言绑定，不补称
+  所有 wire 均逐项完整归档。listener lifespan off；不称生产 daemon、worker/provider、Go
+  或 Web/AH live 已验，denied/read/close/index fault 为受控 transport 回归。
+- 根绑定6个提交 blob、1470源码输入、静态 review 与5组件均无漂移，index 空、原25保留。
+  fresh cleanup 219 manifests、7 PG 库、741 Redis keys、205 collections、113 buckets、
+  689唯一 bucket/object 对和138 ports 无自有残留；原1088对象计数含399重复登记，
+  补核一项原漏 runtime key。PID 无 starttime、privatefile/container 仅声明，锁核查限
+  已登记单整数 PostgreSQL advisory keys；不构造完整历史生命周期证据。
+
+本机证据入口：`/tmp/multirag-c511-http-root-accepted.md`、`final-report.md`、
+`final-evidence-index.json`、`root-scope-bind.json`、`root-fresh-cleanup.json`、
+`root-runtime-cleanup.json`（后五项使用 `/tmp/multirag-c511-http-` 前缀），独立报告
+`/tmp/multirag-c511-api-wiring-code-review.md` 与 `/tmp/multirag-c511-http-evidence-review.md`。
+公开合同见 [HTTP API](../references/http_api_reference.md#读取缩略图和图片)。
+
 ## 49912a156e3fb072d3e897b4f107e4ccae52fb15 · 文档 ingest 后端验收
 
 2026-10-03 后端范围提交 `7faf1dcb3974239a472822602a880dcbd95eb549`（30 路径）
