@@ -905,6 +905,52 @@ Web 单条/批量启停已迁至上述 dataset REST 并完成真实请求与存�
 任何凭据均返回 HTTP 404、`code=404`、`data=null`，OpenAPI 不再提供该操作。
 新 batch、PATCH enabled 与共享状态/source 服务继续使用上述合同。
 
+### 批量提交、取消或重置文档解析
+
+`POST /api/v1/documents/ingest` 使用 JWT 或 API Key 鉴权。每个目标文档须属于
+当前用户可写的活动知识库，权限沿用 owner/admin 规则；禁用文档仍可提交解析，
+新普通 source 分块继承当前 SQL status，母块保持隐藏。
+
+```json
+{"doc_ids":["document_id_1","document_id_2"],"run":1,"delete":false,"apply_kb":false}
+```
+
+`doc_ids` 必须是非空字符串数组，按首次出现顺序去重。`run` 只接受整数 0/1/2
+或精确字符串 "0"/"1"/"2"；布尔、浮点数、空 ID、错误形状及额外字段返回
+HTTP 422。`delete`、`apply_kb` 只接受布尔值，默认均为 false；`apply_kb=true`
+仅可用于 run=1。全请求权限预检先于任何文档变更。
+
+| run | 行为 |
+|---|---|
+| 1 | 提交或复用解析任务；默认保留历史，`delete=true` 清理解析历史后重新提交 |
+| 2 | 提交活动文档及未完成任务的取消请求；默认保留已有切片和计数 |
+| 0 | 重置任务状态，不排队；默认保留已完成历史 |
+
+清理历史会对齐索引、任务和 Document/Knowledgebase 计数，不删除 Document、File
+或源对象。`apply_kb=true` 只继承知识库的 `llm_id`、`enable_metadata`、`metadata`
+三个字段，保留文档其余 parser、RAPTOR、GraphRAG 和 pipeline 配置。
+
+完整成功为 HTTP 200、整数 `code=0`、`data=true`；这表示提交或复用已确认，
+不表示后台解析 DONE，取消确认也不表示 worker 已排空。业务拒绝仍使用 HTTP 200：
+权限失败 code=109、状态冲突 code=102，部分失败或内部失败 code=500。逐文档执行
+失败时，`data.results` 保留每个去重请求 ID 的真实结果，例如：
+
+```json
+{"code":500,"message":"Document ingestion was not fully submitted.","data":{"results":{"document_id_1":{"run":"1"},"document_id_2":{"error":"Document could not be ingested."}}}}
+```
+
+失败项可能另有 `queued_task_ids`、`uncertain_task_ids` 或副作用说明；有 error 的项
+不能当作整项成功。缺失或未知结果须重新读回，不能因 HTTP 200 或某个 queue ID
+清除失败选择。等价的完整任务计划已确认排队且尚未开始时，重试复用 Task ID，
+不重复排队；已开始的重新解析产生新任务世代。失败补偿使用持久恢复材料，按实际
+SQL、队列归属和当前状态协调，后来任务世代的写入不会被旧任务的迟到写入撤销。
+这不构成跨 SQL、索引和队列的分布式原子提交保证。
+
+现有 dataset `documents/parse` 保持清理历史、不开启 apply_kb 的默认行为；
+`documents/stop` 默认保留历史。admin 两个实际解析调用已迁至 ingest，SYNC 仅在
+本次提交 ID 全部读回 DONE 时完成。旧 `POST /v1/document/run` 暂保留 deprecated
+兼容入口，待 Web 实际迁移验收及消费者复核后单独退出。
+
 ### 下载代码沙箱产物
 
 CodeExec 生成的 Markdown 附件链接指向以下 REST 路径：

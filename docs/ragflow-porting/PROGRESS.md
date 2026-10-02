@@ -3,6 +3,41 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 49912a156e3fb072d3e897b4f107e4ccae52fb15 · 文档 ingest 后端验收
+
+2026-10-03 后端范围提交 `7faf1dcb3974239a472822602a880dcbd95eb549`（30 路径）
+完成根审结，未 push。整项仍待关联 Web 迁移和旧 run 必要退出；不将后端交付
+写成整项完成。固定批次与其他 25 路径改动保持。
+
+- 新全局 POST `/api/v1/documents/ingest` 采用可信异步 Principal、全请求预检、
+  严格 run=0/1/2、delete/apply_kb 布尔值和完整逐文档结果。保留 canonical
+  parse/stop 默认，仅三项知识库 metadata 设置继承；源对象和其余配置保持。
+- 真实 SQL/index acknowledgement、Doc/KB ledger、部分排队、失败补偿和公开重试
+  按持久恢复材料及实际归属协调。旧 worker 的 insert/count/finally/rollback/image
+  与 Pipeline 写入受 Task 世代约束；保留 TOC 排空及母块隐藏。SYNC admin 校验
+  本次提交 ID 的完整 DONE 读回，业务失败、空页和缺失 ID 不冒充完成。
+- 最终固定输入上 `make verify` **4182 passed**，`REQUIRE_SERVICES=1 make integration`
+  **601 passed、无 skip**，自有真实 listener 的 smoke **exit=0**。此前 metadata、
+  TOC 假件、换代 fixture 和 canonical 错误断言失败均保留原日志并有修后回归。
+- 独立审查覆盖 generation、补偿和 API/admin 修复差量；原始证据复核包含 224 份
+  完整存储快照、115 个真实请求记录及所选 Milvus/PostgreSQL/Redis/MinIO 链路。
+  ES/OS 延迟 transport 与 OB/seekdb/VastBase adapter 为受控回归，未声明远程服务、
+  生产 daemon/provider 或浏览器验收。部分早期 auth/422/canonical 请求只有正式测试
+  断言和存储证据，未逐一归档 wire JSON；不补称已保存。
+- 根绑定 30 提交路径、1452 份固定源码/配置输入及原无关改动，无漂移、index 空。
+  fresh exact cleanup 核查 543 manifests、31 PG 库、4355 Redis keys、1171 collections、
+  634 buckets、629 ports 和 219 advisory keys 均无自有残留；补核两项未列入原审计
+  的 runtime Redis keys。211 份旧 manifest 没有 PID，既有 PID 无 starttime，故只证明
+  已登记进程检查与端口结果，不声明完整历史后代进程生命周期记录。
+
+本机证据入口：`/tmp/multirag-49912a-root-accepted.md`、`final-report.md`、
+`final-evidence-index.json`、`root-scope-bind.json`、`root-fresh-cleanup.json`（后四项
+均使用 `/tmp/multirag-49912a-` 前缀）；独立报告为
+`/tmp/multirag-499-evidence-delivery-review.md` 和 `/tmp/multirag-499-api-final-delta-review.md`。
+稳定公开合同见 [HTTP API](../references/http_api_reference.md#批量提交取消或重置文档解析)。
+旧 `/v1/document/run` 暂保留 deprecated，待 Web/admin 实际迁移验收和 fresh 消费者核对后
+另作退出；本项没有新增 MultiRAG Go ingestion 接口。
+
 ## 965717c4fbbcaece97cd68ff08c12174cec60a04 · Google provider 与模型推理默认值
 
 2026-10-02 完整评估目标 15 路径，沿用既有冻结来源 `519e7d98`，未 fetch 新批。
