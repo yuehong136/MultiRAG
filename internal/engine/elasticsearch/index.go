@@ -166,8 +166,7 @@ func (e *elasticsearchEngine) InsertMetadata(ctx context.Context, documents []ma
 
 // UpdateDataset updates chunks by condition
 func (e *elasticsearchEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
-	// TODO: implement dataset update for Elasticsearch
-	return nil
+	return fmt.Errorf("document status index updates are not implemented for this Go engine")
 }
 
 // UpdateMetadata updates document metadata in tenant's metadata index

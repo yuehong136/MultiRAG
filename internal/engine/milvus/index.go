@@ -49,8 +49,7 @@ func (e *milvusEngine) InsertMetadata(ctx context.Context, documents []map[strin
 
 // UpdateDataset updates chunks by condition in Milvus
 func (e *milvusEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
-	// TODO: implement dataset update for Milvus
-	return nil
+	return fmt.Errorf("document status index updates are not implemented for this Go engine")
 }
 
 // UpdateMetadata updates document metadata in tenant's metadata collection in Milvus

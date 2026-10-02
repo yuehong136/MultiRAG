@@ -27,10 +27,13 @@ import (
 	"multirag/internal/engine"
 	"multirag/internal/entity"
 	"multirag/internal/server"
+
+	"gorm.io/gorm"
 )
 
 // DocumentService document service
 type DocumentService struct {
+	db          *gorm.DB
 	documentDAO *dao.DocumentDAO
 	kbDAO       *dao.KnowledgebaseDAO
 	docEngine   engine.DocEngine
@@ -42,6 +45,7 @@ type DocumentService struct {
 func NewDocumentService() *DocumentService {
 	cfg := server.GetConfig()
 	return &DocumentService{
+		db:          dao.DB,
 		documentDAO: dao.NewDocumentDAO(),
 		kbDAO:       dao.NewKnowledgebaseDAO(),
 		docEngine:   engine.Get(),

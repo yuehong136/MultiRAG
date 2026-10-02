@@ -105,6 +105,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 	// User logout endpoint
 	engine.GET("/v1/user/logout", r.userHandler.Logout)
 
+	engine.POST("/api/v1/datasets/:dataset_id/documents/batch-update-status", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.BatchUpdateStatus)
+
 	// Protected routes
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())

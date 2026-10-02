@@ -17,8 +17,22 @@
 package dao
 
 import (
+	"fmt"
+	"gorm.io/gorm"
 	"multirag/internal/entity"
 )
+
+// UpdateStatus requires an existing row in the authorized dataset.
+func (dao *DocumentDAO) UpdateStatus(tx *gorm.DB, id, datasetID, status string) error {
+	result := tx.Model(&entity.Document{}).Where("id = ? AND kb_id = ?", id, datasetID).Update("status", status)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("document unavailable during status update")
+	}
+	return nil
+}
 
 // DocumentDAO document data access object
 type DocumentDAO struct{}
@@ -107,14 +121,14 @@ func (dao *DocumentDAO) DeleteByTenantID(tenantID string) (int64, error) {
 // GetAllDocIDsByKBIDs gets all document IDs by knowledge base IDs
 func (dao *DocumentDAO) GetAllDocIDsByKBIDs(kbIDs []string) ([]map[string]string, error) {
 	var docs []struct {
-		ID  string `gorm:"column:id"`
+		ID   string `gorm:"column:id"`
 		KbID string `gorm:"column:kb_id"`
 	}
 	err := DB.Model(&entity.Document{}).Select("id, kb_id").Where("kb_id IN ?", kbIDs).Find(&docs).Error
 	if err != nil {
 		return nil, err
 	}
-	
+
 	result := make([]map[string]string, len(docs))
 	for i, doc := range docs {
 		result[i] = map[string]string{"id": doc.ID, "kb_id": doc.KbID}
