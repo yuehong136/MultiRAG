@@ -1738,3 +1738,20 @@ MultiRAG 后端无需移植：目标提交没有后端 diff；其修复是去掉
 
 验证：核对目标完整 diff、上游后续改名和当前条款、本地两个工作树状态、
 目录及双语指令；仅更新本记录并检查文档 diff、路径与链接，不运行 Python 或前端测试。
+
+## 0cf105da8da0cd4bb7dbed55a7f3d05220c4d9b6 · 数据库 schema 与迁移指南
+
+按本轮并行授权独立评估完整上游三文件 68 增 1 删。栏目 JSON 和 backup 页面移动/slug
+不适用于本仓 Markdown 导航；新增 [数据库迁移指南](../database-migration.md)，按当前
+PostgreSQL/SQLAlchemy/Alembic 的空库建表后 stamp、存量库先迁移再补表、容器先行建表
+及默认数据初始化行为适配。不复制 MySQL/Peewee 工具、初始化开关或版本数据迁移保证。
+
+指南明确应用 DB engine 与 CLI `ALEMBIC_DATABASE_URL` 的边界、URL 的子进程导出、六卷
+备份覆盖、SeekDB bind mount、空备份目录与旧包混用风险、恢复叠加解压及 downgrade
+不恢复原模型 ID。升级、跨存储恢复、业务对账和回退各自需要实际证明。
+
+本项仅文档及入库白名单、导航、映射整合。原交付 turn 的只读 Alembic heads/history/命令
+help 与脚本语法检查均 exit=0，单 head `e1f3a5c7b9d0`；完整上游 diff、16 个本地链接及
+锚点已根核，独立只读审查无阻断，四项操作说明微调后复核文档。未连接数据库或生产，
+未运行升级、备份或恢复；纯文档范围无需 Python/Web 门禁。这是本项文档结论，固定批次
+其他独立实现及相关 Web、旧入口退出仍需分别审结，不因队尾文档先完成而结束整批。

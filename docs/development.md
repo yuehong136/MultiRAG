@@ -51,6 +51,7 @@ uv run python -m core.svr.task_executor
 地址和端口以生效配置为准。健康端点为 `GET /api/v1/system/ping` 与
 `GET /api/v1/system/healthz`；诊断还需核对组件状态、业务响应和相关日志，HTTP 200 本身不代表业务成功。
 部署与恢复见 [docker/README.md](../docker/README.md)，工具钩子以 `.claude/settings.json` 和实际脚本为准，不能替代交付验证。
+数据库启动引导、schema 升级和备份恢复边界见 [数据库迁移指南](database-migration.md)。
 
 ## 维护协作指令
 
