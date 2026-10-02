@@ -10,7 +10,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.document_app import ChangeStatusRequest
 from api.apps.restful_apis.document_api import BatchDocumentStatusRequest, batch_update_document_status
 from api.db.services import document_status_service as service
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
@@ -19,15 +18,12 @@ from api.identity.principal import AuthenticatedActor, AuthenticationContext, Au
 @pytest.mark.parametrize("value", [0, 1, "0", "1"])
 def test_status_contract(value: Any) -> None:
     assert BatchDocumentStatusRequest(doc_ids=["a"], status=value).status == str(value)
-    assert ChangeStatusRequest(doc_id="a", status=value).doc_ids == ["a"]
-    assert ChangeStatusRequest(doc_ids="a", status=value).doc_ids == ["a"]
 
 
 @pytest.mark.parametrize("value", [True, False, 0.0, 1.0, 0.5, 2, -1, "01", " 0", "", None, [], {}])
 def test_status_rejects_coercion(value: Any) -> None:
-    for model in [BatchDocumentStatusRequest, ChangeStatusRequest]:
-        with pytest.raises(ValidationError):
-            model(doc_ids=["a"], status=value)
+    with pytest.raises(ValidationError):
+        BatchDocumentStatusRequest(doc_ids=["a"], status=value)
 
 
 @pytest.mark.parametrize("ids", [[], "a", [1], [True], [None], [""], ["  "], None])

@@ -11,7 +11,7 @@ from infinity.errors import ErrorCode
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.apps import document_app
+from api.apps.restful_apis import document_api
 from api.apps.services import document_api_service
 from api.db.db_models import Document, Knowledgebase
 from api.db.services.document_status_service import STATUS_ERROR
@@ -134,11 +134,13 @@ class StatusSession(Session):
     def __init__(self, doc: Document) -> None:
         self.doc = doc
         self.pending: str | None = None
+        self.execute_calls = 0
 
     def scalar(self, statement: Any) -> Document:
         return self.doc
 
     def execute(self, statement: Any) -> SimpleNamespace:
+        self.execute_calls += 1
         self.pending = statement.compile().params["status"]
         return SimpleNamespace(rowcount=1)
 
@@ -152,11 +154,11 @@ class StatusSession(Session):
 
 
 @pytest.mark.parametrize("failure", [False, RuntimeError("3022 in an unrelated provider error")])
-def test_rest_and_legacy_status_share_safe_recoverable_store_failure(failure: bool | Exception, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rest_batch_status_preserves_safe_recoverable_store_failure(failure: bool | Exception, monkeypatch: pytest.MonkeyPatch) -> None:
     from api.db.services import document_status_service
 
     doc = Document(id="doc", kb_id="kb", status="1", chunk_num=2)
-    kb = Knowledgebase(id="kb", tenant_id="tenant", name="name")
+    kb = Knowledgebase(id="kb", tenant_id="owner", name="name")
     writes: list[int] = []
 
     def update(condition: Any, values: dict[str, Any], *args: Any) -> bool:
@@ -173,21 +175,29 @@ def test_rest_and_legacy_status_share_safe_recoverable_store_failure(failure: bo
     assert response is not None
     assert json.loads(response.body)["code"] == RetCode.SERVER_ERROR
     assert json.loads(response.body)["message"] == STATUS_ERROR
-    assert doc.status == "1" and writes == [0, 1]
+    assert doc.status == "1" and writes == [0, 1] and db.execute_calls == 0
 
-    async def shared(*args: Any, **kwargs: Any) -> dict[str, dict[str, str]]:
+    async def shared(session: AsyncSession, ids: list[str], status: str, principal_id: str, dataset_id: str) -> dict[str, dict[str, str]]:
+        assert ids == ["doc"] and status == "0" and principal_id == "owner" and dataset_id == "kb"
         writes.clear()
         error = document_status_service.change_document_status_sync(db, doc, kb, "0")
+        assert error is not None
         return {"doc": {"error": error}}
 
-    monkeypatch.setattr(document_app, "batch_document_status", shared)
+    async def writable(session: AsyncSession, dataset_id: str, principal_id: str) -> Knowledgebase:
+        assert dataset_id == kb.id and principal_id == "owner"
+        return kb
+
+    monkeypatch.setattr(document_api, "writable_dataset", writable)
+    monkeypatch.setattr(document_api, "batch_document_status", shared)
     import asyncio
 
     response = asyncio.run(
-        document_app.change_status(
-            document_app.ChangeStatusRequest(doc_ids=["doc"], status=0),
+        document_api.batch_update_document_status(
+            "kb",
+            document_api.BatchDocumentStatusRequest(doc_ids=["doc"], status=0),
             db=AsyncSession(),
-            user=build_principal_from_authenticated_actor(
+            principal=build_principal_from_authenticated_actor(
                 actor=AuthenticatedActor(platform_user_id="owner"),
                 membership=TenantMembershipEvidence(platform_user_id="owner", tenant_id="owner"),
                 authentication=AuthenticationContext(source=AuthenticationSource.WEB_SESSION, assurance=IdentityAssurance.AUTHENTICATED, validated_at=datetime.now(UTC)),
@@ -195,7 +205,7 @@ def test_rest_and_legacy_status_share_safe_recoverable_store_failure(failure: bo
         )
     )
     assert json.loads(response.body) == {"code": 500, "message": "Partial failure", "data": {"doc": {"error": STATUS_ERROR}}}
-    assert doc.status == "1" and writes == [0, 1]
+    assert doc.status == "1" and writes == [0, 1] and db.execute_calls == 0
 
 
 def test_rest_document_status_skips_store_for_unparsed_document(monkeypatch: pytest.MonkeyPatch) -> None:

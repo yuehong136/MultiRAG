@@ -896,10 +896,10 @@ Infinity 支持实际索引写入；Go ES/Milvus 当前无状态写入
 基盘，有索引时返回逐文档非零错误且 SQL 不变。无表、无分块场景可仅更新 SQL；
 Milvus 有集合但无法判定当前文档是否有分块时同样明确拒绝。
 
-旧 `POST /v1/document/change_status` 暂留 deprecated：独立 Web 的
-knowledge-documents.changeStatus、useDocumentActions 单条/批量操作仍在调用。
-旧 body 兼容 doc_ids 字符串/数组和 doc_id fallback，新旧共用状态服务；
-Web 迁移到上述 REST 合同并完成真实请求/读回验收后删除旧入口。
+Web 单条/批量启停已迁至上述 dataset REST 并完成真实请求与存储读回验收。
+旧 `POST /v1/document/change_status` 及专用请求模型已移除：合法或非法 body、
+任何凭据均返回 HTTP 404、`code=404`、`data=null`，OpenAPI 不再提供该操作。
+新 batch、PATCH enabled 与共享状态/source 服务继续使用上述合同。
 
 ### 下载代码沙箱产物
 

@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field, Json, StrictStr, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, Json, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.status import (
@@ -30,7 +30,6 @@ from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
-from api.db.services.document_status_service import batch_document_status
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -204,31 +203,6 @@ class DocumentFilter(BaseModel):
     metadata_condition: MetadataCondition | dict | None = Field(default=None, description="元数据过滤条件")
     metadata: dict | None = Field(default=None, description="元数据过滤，同字段内OR，不同字段间AND")
     return_empty_metadata: bool = Field(default=False, description="是否仅返回空元数据的文档")
-
-
-class ChangeStatusRequest(BaseModel):
-    doc_ids: list[StrictStr] | StrictStr | None = None
-    status: Any
-    doc_id: StrictStr | None = None
-
-    @field_validator("status", mode="before")
-    @classmethod
-    def validate_status(cls, value: Any) -> str:
-        if type(value) is str and value in {"0", "1"}:
-            return value
-        if type(value) is int and value in {0, 1}:
-            return str(int(value))
-        raise ValueError("status must be 0 or 1")
-
-    @model_validator(mode="after")
-    def validate_ids(self) -> "ChangeStatusRequest":
-        ids = self.doc_ids if self.doc_ids is not None else self.doc_id
-        if isinstance(ids, str):
-            ids = [ids]
-        if not ids or any(not identifier.strip() for identifier in ids):
-            raise ValueError("Document ID(s) required")
-        self.doc_ids = ids
-        return self
 
 
 class ChangeAuthRequest(BaseModel):
@@ -1675,26 +1649,6 @@ def thumbnails(doc_ids: list[str] = Query(..., description="文档ID列表，例
         return get_json_result(data={d["id"]: d["thumbnail"] for d in docs})
     except Exception as e:
         return server_error_response(e)
-
-
-@router.post("/change_status", summary="更改文档状态", response_description="成功更改文档状态", deprecated=True)
-async def change_status(request_body: ChangeStatusRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
-    """Compatibility for the active knowledge-document Web status caller.
-
-    Accept doc_ids (one string or a nonempty string list), or fallback doc_id.
-    Status accepts only integer 0/1 or string "0"/"1"; malformed bodies are 422.
-    Each distinct document is authorized and updated independently, including
-    disabled documents. Full success is code 0; partial failure is code 500
-    with the entire per-document status/error map retained.
-    Sunset after the Web adopts and validates the dataset-scoped REST endpoint.
-    """
-    # Current Web changeStatus/useDocumentActions consumes this compatibility
-    # route. Retire after its dataset-scoped POST migration is accepted.
-    ids = request_body.doc_ids
-    assert isinstance(ids, list)
-    result = await batch_document_status(db, ids, request_body.status, user.id)
-    failed = any("error" in item for item in result.values())
-    return construct_json_result(data=result, message="Partial failure" if failed else "success", code=RetCode.SERVER_ERROR if failed else RetCode.SUCCESS)
 
 
 @router.post("/change_auth", summary="更改文档授权", response_description="成功更改文档授权")

@@ -3,6 +3,46 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## a536980e2 · 旧文档状态接口条件退出
+
+2026-10-02 从本仓 `2f46a4407e04862555ba0fb20914761fc3fb6497` 开始，完成此前
+约定的退出续作。Python/Go 新启停合同已验收；独立 Web `66bafd85` 已将单条/批量
+操作迁至 dataset REST 并通过真实请求与存储读回。当前 Web、两套 SDK 实际客户端、
+MCP/Agent、worker 和 Go 没有旧 `change_status` 的活动调用，因此退出条件已满足。
+本轮沿用已审结的冻结基准，不新增上游任务或重新实现原启停功能。
+
+| 范围 | 本项处置 |
+|---|---|
+| 旧入口与模型 | 删除 `POST /v1/document/change_status`、`ChangeStatusRequest` 及独占导入；OpenAPI operation/schema 均不存在 |
+| 共享状态与新入口 | 保留 dataset batch、PATCH enabled、`document_status_service` 与共享 source 写入；其他生产函数/模型 AST 完全一致 |
+| 旧失败回归 | 转到活动 REST batch handler，保留严格 body、合法 dataset/Principal、完整 partial data、安全错误、SQL 不写及索引恢复 `[0,1]` |
+| async DB baseline | 当前没有旧 change_status 条目，不改其他条目 |
+| Web / Go | 本轮没有改动；Go 原本没有旧 route，退役验证不另造 Go 能力或重复其已审结门禁 |
+
+### 本轮实际验收与门禁
+
+- 定向 unit **40 passed、exit=0**；实际状态 integration **25 passed、exit=0**。
+- 同一真实 FastAPI listener 的旧 POST 矩阵为 6 类凭据 × 5 类 body，共 **30 次请求**：
+  无凭据、有效 owner JWT/API key、另一用户有效 API key、错误 token 和真实过期 JWT；
+  空 body、doc_id、doc_ids 数组/字符串与非法状态均返回完整统一 HTTP/code 404、data=null。
+- 新 SQL 连接读取七张完整表，独立 Strong Milvus client 读取完整 payload/vector/时间戳，
+  原始 MinIO bytes 和精确私有 Redis stream 均 before/after 相等；旧入口执行守卫没有触发。
+  随后的活动 batch owner JWT 启用成功，OpenAPI 保留新 POST；同 listener smoke 成功。
+- 本轮最终 `make verify`：Ruff、8 import contracts、async DB、mypy 127 文件与
+  **3795 unit passed、exit=0**；`REQUIRE_SERVICES=1 make integration` 本轮
+  **526 passed、无 skip、exit=0**，最后可执行修改之后运行，Python 源码快照保持一致。
+- 最终运行中三条验收各对自己的真实 listener 执行 smoke，均 exit=0、健康端点 HTTP 200。两次状态验收的
+  完整读回独立复核相等（共 60 次旧 POST）；两次运行共 57 份精确 ownership manifest。
+  57 个 bucket、54 个集合、55 个 Redis key 和 57 个端口独立查为不存在/关闭，
+  两个精确 scratch 库均不存在，owned SQL 行数为零。只清本项资源，共享服务保留。
+
+保留新 batch/PATCH 的严格校验、owner/admin 权限、禁用/启用、同状态修复、partial、
+跨 dataset 隔离、SQL commit 补偿、并发排空、零分块最新 source 状态继承及旧/新母块
+保护回归。实际基盘为 PostgreSQL/Milvus/MinIO/Redis；Infinity 失败与 ES/OS transport
+仍采用既有受控回归，不把本轮称为完整 worker/provider 或真实 ES/OS server 验收。
+资源只按本次精确 ownership 清理；保留原 25 项无关改动、并行 owner 的独占改动及共享服务。
+独立旧 `/v1/document/status` 的 Web 死定义不属于本项范围，没有声称其为活动页面调用。
+
 ## 343bda11193dd9d236c3a07f8a8ca8e2809a2517 · 退役会话解析入库
 
 2026-10-02 从本仓 `27665d9bb6193ca7825d3f1e69bd167056c48a7a` 开始，按根冻结队列
@@ -122,10 +162,10 @@ listener 全关闭；三个精确 scratch 库经独立查询均不存在，清�
 
 | 目标 diff / 必要后修 | 本项处置 |
 |---|---|
-| `api/apps/document_app.py` 旧 change_status | 因查明的活动 Web 暂留 deprecated，新旧共用正确状态服务；保留 doc_id fallback、doc_ids 单字符串/数组，部分失败保留映射且非零。未删除 status、run 或 upload_and_parse。 |
+| `api/apps/document_app.py` 旧 change_status | 当时因活动 Web 暂留 deprecated，新旧共用正确状态服务；兼容 doc_id fallback、doc_ids 单字符串/数组，部分失败映射非零。Web66bafd85 验收后旧 route/model 已在本项条件退出续作删除；未扩大其他入口。 |
 | `api/apps/restful_apis/document_api.py` 新 batch status | 唯一正式 POST；FastAPI 严格 body、异步 Principal/AsyncSession，按当前 owner/admin 权限适配；未采用上游仅 owner 限制、同状态直接跳过或忽略索引失败。现 PATCH enabled 只做必要共享接线。相邻 metadata/parser/图像/import 调整不扩纳。 |
 | `test_common.py`、`test_document_metadata.py` | 重建本仓状态契约、真实 SQL/索引、权限和故障回归；不复制上游 metadata/parser 等相邻测试或 harness。 |
-| 六处 Web diff：use-document-request、dataset-table、use-bulk-operate-dataset、use-dataset-table-columns、knowledge-service、utils/api | 独立 Web 由根在后端稳定后派发，本项未修改 Web。当前知识库文档页的单条/批量操作仍走旧入口，不能提前退役。 |
+| 六处 Web diff：use-document-request、dataset-table、use-bulk-operate-dataset、use-dataset-table-columns、knowledge-service、utils/api | 独立 Web 后续66bafd85 已完成新 dataset REST 单/批启停与真实读回验收并根审结；本 Python 续作未修改 Web，旧入口退出条件已满足。 |
 | `bed9cc5a4f72aef0e6ae8d02a6a0e10d94909ea6` 五文件 | 完整核对 source availability 后修，映射到本仓 worker 母/主块、会话 doc_upload_and_parse、REST _add_chunk、legacy create 四个实际写点。没有复制不存在的 task_executor_refactor/Go ingestion pipeline。 |
 | `5046626c1796ae832b391a2cfd09d716d349b040` 四文件 | 完整核 handler/service/router/test，实际实现 Go handler/router/auth/service/DAO/DI，同合同独立验收；未采用上游 SQL 回退错误被忽略、同状态早退的缺陷。 |
 
@@ -259,7 +299,7 @@ Python ES/OS 现在按可信 dataset/doc 查询完整 scroll 快照，校验超�
 索引字段保留；available=1 查询排除两类母块、包含普通切片，其他文档/数据集不变。
 受影响真实 HTTP 三例（两栈母块与不同文档 RPC/取消）通过；这些是既有 22 例中的
 受影响复跑，不合算为新增 25 例。ES/OS 仍仅真实 connector/DSL 加受控 transport，
-没有真实 ES/OS 服务验收。Go ES/Milvus 能力边界及旧 change_status 迁移条件保持当前合同。
+没有真实 ES/OS 服务验收。Go ES/Milvus 能力边界保持当前合同；旧 change_status 后续已按本项条件退出续作删除。
 
 本轮修后 `make verify` **3792 unit passed**，Ruff、8 import contracts、async DB 和
 mypy 127 文件通过；`REQUIRE_SERVICES=1 make integration` **500 passed，无 skip**，

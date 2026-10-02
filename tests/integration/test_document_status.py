@@ -11,6 +11,7 @@ import os
 import subprocess
 import threading
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ from api.db.db_models import APIToken, Document, Knowledgebase, Task, UserTenant
 from api.db.services import document_status_service as status_service
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
-from tests.integration.test_document_parse_retirement import _ModelOutput, assert_retired_upload_has_no_work
+from tests.integration.test_document_parse_retirement import _ModelOutput, assert_retired_upload_has_no_work, object_snapshot, sql_snapshot
 from tests.integration.test_document_parse_retirement import parse_api as parse_api
 from tests.integration.test_runtime_document_upload import read_object
 from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
@@ -116,7 +117,50 @@ def index_rows(env: dict[str, Any], doc: str | None = None) -> list[dict[str, An
         client.close()
 
 
-def test_http_disable_enable_retry_partial_preserves_every_source_field(status_api: dict[str, Any]) -> None:
+def assert_retired_status_has_no_work(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps import manager
+    from core.utils.redis_conn import REDIS_CONN
+
+    before = sql_snapshot(env), index_rows(env), object_snapshot(env), REDIS_CONN.REDIS.xrange(env["queue"])
+    calls: list[str] = []
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        calls.append("status write")
+        raise AssertionError("retired status route executed a write")
+
+    expired = manager.create_access_token(data={"sub": f"{env['owners'][0]}@upload.test"}, expires=timedelta(seconds=-1))
+    with monkeypatch.context() as scoped:
+        for target, attribute in [
+            (status_service, "change_document_status"),
+            (status_service, "change_document_status_sync"),
+            (settings.docStoreConn, "update"),
+            (settings.docStoreConn, "insert"),
+            (env["storage_adapter"], "put"),
+            (REDIS_CONN, "queue_product"),
+        ]:
+            scoped.setattr(target, attribute, forbidden)
+        for token in [None, env["jwt"], env["owner_key"], env["api_key"], "invalid-token", expired]:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            for body in [None, {"doc_id": env["doc"], "status": 1}, {"doc_ids": [env["doc"]], "status": "1"}, {"doc_ids": env["doc"], "status": 1}, {"doc_ids": [env["doc"]], "status": True}]:
+                response = requests.post(env["base"] + "/v1/document/change_status", headers=headers, json=body, timeout=30)
+                assert response.status_code == 404
+                assert response.json() == {"code": 404, "message": "Not Found: /v1/document/change_status", "data": None, "error": "Not Found"}
+    assert calls == []
+    after = sql_snapshot(env), index_rows(env), object_snapshot(env), REDIS_CONN.REDIS.xrange(env["queue"])
+    assert after == before
+    readback = {
+        label: {"sql": snapshot[0], "index": snapshot[1], "objects_hex": {key: binary.hex() for key, binary in snapshot[2].items()}, "queue": snapshot[3]}
+        for label, snapshot in [("before", before), ("after", after)]
+    }
+    path = env["record_path"].with_suffix(".legacy-status-readback.json")
+    path.write_text(json.dumps(readback, default=str))
+    env["record"]["legacy_status_retirement"] = {"requests": 30, "unchanged": True, "execution_calls": calls, "readback": str(path)}
+    schema = requests.get(env["base"] + "/openapi.json", timeout=30).json()
+    assert "/v1/document/change_status" not in schema["paths"] and "ChangeStatusRequest" not in schema["components"]["schemas"]
+    assert "post" in schema["paths"]["/api/v1/datasets/{dataset_id}/documents/batch-update-status"]
+
+
+def test_http_disable_enable_retry_partial_preserves_every_source_field(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env = status_api
     before_sql, before_index = sql_rows(env), index_rows(env)
     assert change(env, [env["doc"], env["doc"]], 0).json() == {"code": 0, "message": "success", "data": {env["doc"]: {"status": "0"}}}
@@ -147,12 +191,12 @@ def test_http_disable_enable_retry_partial_preserves_every_source_field(status_a
     assert settings.docStoreConn.get_total(result) == 2
     result = settings.docStoreConn.search(["id"], [], {"doc_id": env["doc"], "available_int": 1}, [], OrderByExpr(), 0, 10, [env["collection"]], [env["kb"]])
     assert settings.docStoreConn.get_total(result) == 0
-    legacy = requests.post(env["base"] + "/v1/document/change_status", headers={"Authorization": f"Bearer {env['owner_key']}"}, json={"doc_id": env["doc"], "status": 1}, timeout=30)
-    assert legacy.json()["code"] == 0 and sql_rows(env)[env["doc"]]["status"] == "1"
-    paths = requests.get(env["base"] + "/openapi.json", timeout=30).json()["paths"]
-    assert paths["/v1/document/change_status"]["post"]["deprecated"]
-    assert "post" in paths["/api/v1/datasets/{dataset_id}/documents/batch-update-status"]
+    assert_retired_status_has_no_work(env, monkeypatch)
+    enabled = change(env, [env["doc"]], 1, key=env["jwt"])
+    assert enabled.status_code == 200 and enabled.json() == {"code": 0, "message": "success", "data": {env["doc"]: {"status": "1"}}}
+    assert sql_rows(env)[env["doc"]]["status"] == "1"
     smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+    env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print("Real HTTP/SQL/Milvus full payload+vectors+timestamps, sibling and object bytes preserved; same-state retry, partial map and available0/1 filters; same-listener smoke passed")
 
