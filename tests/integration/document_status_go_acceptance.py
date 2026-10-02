@@ -16,9 +16,10 @@ import sqlalchemy as sa
 from infinity.common import ConflictType, NetworkAddress
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, User, UserTenant
+from api.db.db_models import Document, Tenant, User, UserTenant
 from common import settings
 from common.config_utils import CONFIGS
+from tests.integration.document_status_rpc_proxy import StatusRPCProxy
 from tests.integration.test_document_status import chunk as chunk
 from tests.integration.test_document_status import index_rows as index_rows
 from tests.integration.test_document_status import parse_api as parse_api
@@ -43,6 +44,7 @@ def go_status_api(status_api: dict[str, Any], tmp_path: Any, request: pytest.Fix
         {
             "id": {"type": "varchar"},
             "doc_id": {"type": "varchar"},
+            "mom_id": {"type": "varchar", "default": ""},
             "available_int": {"type": "integer"},
             "content": {"type": "varchar"},
             "created": {"type": "varchar"},
@@ -58,10 +60,11 @@ def go_status_api(status_api: dict[str, Any], tmp_path: Any, request: pytest.Fix
     )
     url = env["engine"].url
     milvus = CONFIGS["milvus"]
+    proxy = StatusRPCProxy(port)
     cfg = {
         "SecretKey": settings.SECRET_KEY,
         "Database": {"Driver": "postgres", "Host": url.host, "Port": url.port, "Database": url.database, "Username": url.username, "Password": url.password, "Schema": "usr_ai"},
-        "InfinityURI": f"127.0.0.1:{port}",
+        "InfinityURI": f"127.0.0.1:{proxy.port}",
         "InfinityDB": db_name,
         "EngineType": kind,
         "Milvus": {"Hosts": milvus["hosts"], "Username": milvus.get("username", ""), "Password": milvus.get("password", ""), "DBName": milvus.get("db_name", "")},
@@ -83,7 +86,7 @@ def go_status_api(status_api: dict[str, Any], tmp_path: Any, request: pytest.Fix
                 assert process.poll() is None, output_path.read_text()
                 time.sleep(0.1)
             assert (tmp_path / "base").exists(), output_path.read_text()
-            env.update(go_base=(tmp_path / "base").read_text(), go_engine=kind, infinity_table=table)
+            env.update(go_base=(tmp_path / "base").read_text(), go_engine=kind, infinity_table=table, rpc_proxy=proxy, infinity_port=port, infinity_db=db_name, infinity_table_name=table_name)
             yield env
         finally:
             (tmp_path / "stop").touch()
@@ -93,6 +96,7 @@ def go_status_api(status_api: dict[str, Any], tmp_path: Any, request: pytest.Fix
                 process.terminate()
                 process.wait(timeout=10)
                 raise
+            proxy.close()
             config_path.unlink()
             conn.drop_database(db_name, ConflictType.Error)
             assert db_name not in conn.list_databases().db_names
@@ -116,7 +120,9 @@ def inf_rows(env: dict[str, Any], condition: str | None = None) -> dict[str, Any
     if condition:
         query = query.filter(condition)
     data = query.to_result()[0]
-    return json.loads(json.dumps(data, default=lambda value: value.tolist() if hasattr(value, "tolist") else str(value)))
+    normalized = json.loads(json.dumps(data, default=lambda value: value.tolist() if hasattr(value, "tolist") else str(value)))
+    order = sorted(range(len(normalized["id"])), key=lambda index: normalized["id"][index])
+    return {field: [values[index] for index in order] for field, values in normalized.items()}
 
 
 def test_go_actual_supported_and_unavailable_index_contract(go_status_api: dict[str, Any]) -> None:
@@ -272,3 +278,166 @@ def test_go_concurrent_status_writes_end_at_sql_winner(go_status_api: dict[str, 
     else:
         assert [body["code"] for body in outcomes] == [500, 500]
         assert sql_rows(env) == before
+
+
+@pytest.mark.parametrize("go_status_api", ["infinity"], indirect=True)
+def test_go_current_principal_and_python_logout(go_status_api: dict[str, Any]) -> None:
+    env = go_status_api
+    owner = env["owners"][0]
+    before_sql, before_index = sql_rows(env), inf_rows(env)
+    response = requests.post(env["base"] + "/api/v1/auth/logout", headers={"Authorization": "Bearer " + env["jwt"]}, timeout=30)
+    assert response.status_code == 200 and response.json().get("code", response.json().get("retcode")) == 0
+    for base in [env["base"], env["go_base"]]:
+        response = requests.post(
+            f"{base}/api/v1/datasets/{env['kb']}/documents/batch-update-status", headers={"Authorization": "Bearer " + env["jwt"]}, json={"doc_ids": [env["doc"]], "status": 0}, timeout=30
+        )
+        assert response.status_code == 401
+    assert sql_rows(env) == before_sql and inf_rows(env) == before_index
+    # API keys deliberately retain their current Python contract after JWT logout.
+    assert go_change(env, [env["doc"]], 0).json()["code"] == 0
+    assert go_change(env, [env["doc"]], 1).json()["code"] == 0
+    assert inf_rows(env) == before_index
+    with env["engine"].begin() as db:
+        db.execute(sa.update(User).where(User.id == owner).values(access_token="active"))
+    cases = [
+        (User, "is_authenticated", False, True),
+        (User, "is_anonymous", True, False),
+        (User, "is_active", False, True),
+        (User, "status", "0", "1"),
+        (Tenant, "status", "0", "1"),
+        (UserTenant, "status", "0", "1"),
+        (UserTenant, "role", "normal", "owner"),
+    ]
+    for model, field, invalid, valid in cases:
+        condition = (model.user_id == owner) & (model.tenant_id == owner) if model is UserTenant else model.id == owner
+        with env["engine"].begin() as db:
+            db.execute(sa.update(model).where(condition).values({field: invalid}))
+        try:
+            for token in [env["jwt"], env["owner_key"]]:
+                assert go_change(env, [env["doc"]], 0, token).status_code == 401
+            assert sql_rows(env) == before_sql and inf_rows(env) == before_index
+        finally:
+            with env["engine"].begin() as db:
+                db.execute(sa.update(model).where(condition).values({field: valid}))
+    assert go_change(env, [env["doc"]], 1, env["jwt"]).json()["code"] == 0
+
+    for model in [Tenant, UserTenant]:
+        condition = (model.user_id == owner) & (model.tenant_id == owner) if model is UserTenant else model.id == owner
+        with env["engine"].begin() as db:
+            saved = dict(db.execute(sa.select(model.__table__).where(condition)).mappings().one())
+            db.execute(sa.delete(model).where(condition))
+        try:
+            for token in [env["jwt"], env["owner_key"]]:
+                assert go_change(env, [env["doc"]], 0, token).status_code == 401
+            assert sql_rows(env) == before_sql and inf_rows(env) == before_index
+        finally:
+            with env["engine"].begin() as db:
+                db.execute(sa.insert(model).values(saved))
+
+
+@pytest.mark.parametrize("go_status_api", ["infinity"], indirect=True)
+def test_go_different_documents_private_rpc_and_cancelled_http(go_status_api: dict[str, Any]) -> None:
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+    from urllib.parse import urlparse
+
+    env = go_status_api
+    proxy = env["rpc_proxy"]
+    before_sql, before_index = sql_rows(env), inf_rows(env)
+    proxy.arm = True
+    addr = urlparse(env["go_base"])
+    body = json.dumps({"doc_ids": [env["doc"]], "status": 0}).encode()
+    path = f"/api/v1/datasets/{env['kb']}/documents/batch-update-status"
+    with socket.create_connection((addr.hostname, addr.port), timeout=10) as client, ThreadPoolExecutor(max_workers=2) as executor:
+        client.sendall(f"POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {env['owner_key']}\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+        assert proxy.entered.wait(10)
+        blocked_connection = next(identifier for identifier, method in reversed(proxy.events) if method == "Update")
+        try:
+            later = executor.submit(go_change, env, [env["doc"]], 1)
+            other = executor.submit(go_change, env, [env["second"]], 0)
+            assert other.result(timeout=10).json()["code"] == 0
+            assert not later.done()
+            assert sql_rows(env)[env["doc"]] == before_sql[env["doc"]]
+            assert any(identifier != blocked_connection and method == "Update" for identifier, method in proxy.events)
+            client.shutdown(socket.SHUT_RDWR)
+            time.sleep(0.1)
+            assert not later.done() and sql_rows(env)[env["doc"]] == before_sql[env["doc"]]
+        finally:
+            proxy.release.set()
+        assert later.result(timeout=10).json()["code"] == 0
+    rows = inf_rows(env)
+    for i, doc in enumerate(rows["doc_id"]):
+        assert rows["available_int"][i] == (1 if doc == env["doc"] else 0)
+    rows["available_int"] = before_index["available_int"]
+    assert rows == before_index
+    assert sql_rows(env)[env["doc"]] == before_sql[env["doc"]]
+    private_connections = {identifier for identifier, method in proxy.events if method == "Update"}
+    assert proxy.events[0][0] not in private_connections
+    deadline = time.monotonic() + 5
+    while proxy.active & private_connections and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not proxy.active & private_connections
+    print(
+        "Distinct actual Thrift TCP connections; delayed real Update held SQL lock after HTTP socket close, different document progressed, subsequent winner retained; private connections drained/closed"
+    )
+
+
+@pytest.mark.parametrize("go_status_api", ["infinity"], indirect=True)
+@pytest.mark.parametrize("stack", ["python", "go"])
+def test_real_infinity_mothers_retry_and_commit_recovery(go_status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stack: str) -> None:
+    import logging
+
+    from core.utils.infinity_conn import InfinityConnection
+    from tests.integration.test_document_status import change
+
+    env = go_status_api
+    table = env["infinity_table"]
+    parent = uuid4().hex
+    table.update(f"doc_id = '{env['doc']}'", {"mom_id": parent})
+    table.insert([{"id": parent, "doc_id": env["doc"], "mom_id": parent, "available_int": 0, "content": "hidden mother", "created": "original mother", "vector": [0.1, 0.2, 0.3, 0.4]}])
+    opened, closed = [], []
+
+    class OwnedPool:
+        def get_conn(self) -> Any:
+            client = infinity.connect(NetworkAddress("127.0.0.1", env["infinity_port"]))
+            opened.append(client)
+            return client
+
+        def release_conn(self, client: Any) -> None:
+            client.disconnect()
+            closed.append(client)
+
+    if stack == "python":
+        cls = next(cell.cell_contents for cell in InfinityConnection.__closure__ if isinstance(cell.cell_contents, type))
+        store = object.__new__(cls)
+        store.connPool, store.dbName, store.logger = OwnedPool(), env["infinity_db"], logging.getLogger(__name__)
+        monkeypatch.setattr(settings, "docStoreConn", store)
+    request_status = change if stack == "python" else go_change
+    before_sql, before_index = sql_rows(env), inf_rows(env)
+    assert request_status(env, [env["doc"]], 0).json()["code"] == 0
+    assert all(value == 0 for value in inf_rows(env, f"doc_id = '{env['doc']}'")["available_int"])
+    assert request_status(env, [env["doc"]], 1).json()["code"] == 0
+    assert inf_rows(env) == before_index and sql_rows(env) == before_sql
+    table.update(f"id = '{parent}'", {"available_int": 1})
+    assert request_status(env, [env["doc"]], 1).json()["code"] == 0
+    assert inf_rows(env) == before_index
+    name = "mother_guard_" + uuid4().hex
+    with env["engine"].begin() as db:
+        db.execute(
+            sa.text(
+                f"CREATE FUNCTION usr_ai.{name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id = '{env['doc']}' THEN RAISE EXCEPTION 'controlled mother commit failure'; END IF; RETURN NEW; END $$"
+            )
+        )
+        db.execute(sa.text(f"CREATE CONSTRAINT TRIGGER {name} AFTER UPDATE ON usr_ai.t_ai_documents DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION usr_ai.{name}()"))
+    try:
+        response = request_status(env, [env["doc"]], 0).json()
+        assert response["code"] == 500 and "error" in response["data"][env["doc"]]
+        assert sql_rows(env) == before_sql and inf_rows(env) == before_index
+        visible = inf_rows(env, f"doc_id = '{env['doc']}' AND available_int = 1")
+        assert len(visible["id"]) == 2 and parent not in visible["id"]
+    finally:
+        with env["engine"].begin() as db:
+            db.execute(sa.text(f"DROP TRIGGER {name} ON usr_ai.t_ai_documents"))
+            db.execute(sa.text(f"DROP FUNCTION usr_ai.{name}()"))
+    assert opened == closed
+    print(f"Actual {stack} Infinity mothers remain0 across enable/same-state/SQL-commit recovery; visible1 excludes mother; complete source/vector/created fields and SQL preserved")

@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
+	"multirag/internal/engine/types"
 	"multirag/internal/entity"
 	"multirag/internal/server"
 )
@@ -70,7 +71,7 @@ func (s *DocumentService) BatchUpdateStatus(ctx context.Context, datasetID, user
 	return results, nil
 }
 
-func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, userID, id, status string) string {
+func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, userID, id, status string) (message string) {
 	tx := s.db.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return documentStatusError
@@ -90,18 +91,27 @@ func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, u
 	}
 	prefix := fmt.Sprintf("multirag_%s_%s", kb.TenantID, kb.Name)
 	indexed := doc.ChunkNum > 0
+	var statusStore types.DocumentStatusStore
 	if s.engineType == server.EngineInfinity && s.docEngine != nil {
-		counter, ok := s.docEngine.(interface {
-			DocumentChunkCount(context.Context, string, string, string) (int64, error)
+		factory, ok := s.docEngine.(interface {
+			OpenDocumentStatusStore() (types.DocumentStatusStore, error)
 		})
 		if !ok {
-			err = errors.New("index count unavailable")
+			err = errors.New("isolated status connection unavailable")
 		} else {
-			var count int64
-			count, err = counter.DocumentChunkCount(ctx, prefix, datasetID, id)
-			indexed = count > 0
-			if doc.ChunkNum > 0 && count == 0 && err == nil {
-				err = errors.New("indexed document rows unavailable")
+			statusStore, err = factory.OpenDocumentStatusStore()
+			if err == nil {
+				defer func() {
+					if statusStore.Close() != nil {
+						message = documentStatusRecoveryError
+					}
+				}()
+				var count int64
+				count, err = statusStore.DocumentChunkCount(ctx, prefix, datasetID, id)
+				indexed = count > 0
+				if doc.ChunkNum > 0 && count == 0 && err == nil {
+					err = errors.New("indexed document rows unavailable")
+				}
 			}
 		}
 	} else if !indexed && s.docEngine != nil {
@@ -113,7 +123,7 @@ func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, u
 			tx.Rollback()
 			return "Document status index updates are unavailable for this Go engine."
 		}
-		err = s.docEngine.UpdateDataset(ctx, map[string]interface{}{"doc_id": id}, map[string]interface{}{"available_int": statusInt(status)}, prefix, datasetID)
+		err = statusStore.UpdateDataset(ctx, map[string]interface{}{"doc_id": id}, map[string]interface{}{"available_int": statusInt(status)}, prefix, datasetID)
 	}
 	if err == nil {
 		err = s.documentDAO.UpdateStatus(tx, id, datasetID, status)
@@ -127,7 +137,7 @@ func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, u
 	if rollback := tx.Rollback().Error; rollback != nil && !errors.Is(rollback, gorm.ErrInvalidTransaction) && !errors.Is(rollback, sql.ErrTxDone) {
 		return documentStatusRecoveryError
 	}
-	if indexed {
+	if indexed && statusStore != nil {
 		// Re-lock and restore the current SQL winner after an uncertain write/commit.
 		recovery := s.db.WithContext(context.WithoutCancel(ctx)).Begin()
 		if recovery.Error != nil {
@@ -142,7 +152,7 @@ func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, u
 		if current.Status != nil && *current.Status == "0" {
 			target = "0"
 		}
-		if s.docEngine.UpdateDataset(context.WithoutCancel(ctx), map[string]interface{}{"doc_id": id}, map[string]interface{}{"available_int": statusInt(target)}, prefix, datasetID) != nil {
+		if statusStore.UpdateDataset(context.WithoutCancel(ctx), map[string]interface{}{"doc_id": id}, map[string]interface{}{"available_int": statusInt(target)}, prefix, datasetID) != nil {
 			return documentStatusRecoveryError
 		}
 		if recovery.Rollback().Error != nil {

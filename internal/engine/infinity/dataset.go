@@ -362,6 +362,18 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 
 	// Build filter string from condition
 	filter := buildFilterFromCondition(condition, clmns)
+	if target, ok := newValue["available_int"].(int); ok && len(newValue) == 1 && condition["doc_id"] != nil {
+		if _, hasParent := clmns["mom_id"]; hasParent {
+			parent := "(mom_id != '' AND mom_id = id)"
+			if _, err := table.Update("("+filter+") AND "+parent, map[string]interface{}{"available_int": 0}); err != nil {
+				return err
+			}
+			_, err = table.Update("("+filter+") AND NOT "+parent, map[string]interface{}{"available_int": target})
+		} else {
+			_, err = table.Update(filter, map[string]interface{}{"available_int": target})
+		}
+		return err
+	}
 
 	// Process remove operation first
 	removeValue := make(map[string]interface{})

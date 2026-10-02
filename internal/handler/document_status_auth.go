@@ -21,6 +21,7 @@ func (h *AuthHandler) DocumentStatusAuthMiddleware() gin.HandlerFunc {
 		raw := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 		var user *entity.User
 		var err error
+		webJWT := false
 		if strings.Count(raw, ".") == 2 {
 			claims := &jwt.RegisteredClaims{}
 			token, verifyErr := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (interface{}, error) {
@@ -30,6 +31,7 @@ func (h *AuthHandler) DocumentStatusAuthMiddleware() gin.HandlerFunc {
 				return []byte(server.GetVariables().SecretKey), nil
 			})
 			if verifyErr == nil && token.Valid && claims.ExpiresAt != nil && claims.Subject != "" {
+				webJWT = true
 				user, err = dao.NewUserDAO().GetByEmail(claims.Subject)
 			} else {
 				var code common.ErrorCode
@@ -45,7 +47,19 @@ func (h *AuthHandler) DocumentStatusAuthMiddleware() gin.HandlerFunc {
 			_ = code
 		}
 
-		if err != nil || user == nil || user.Status == nil || *user.Status != "1" || !user.IsActive {
+		valid := err == nil && user != nil && user.Status != nil && *user.Status == "1" && user.IsActive && user.IsAuthenticated && !user.IsAnonymous
+		if valid && webJWT && user.AccessToken != nil && strings.HasPrefix(*user.AccessToken, "INVALID_") {
+			valid = false
+		}
+		if valid {
+			var memberships int64
+			err = dao.DB.Table("t_ai_user_tenants AS membership").
+				Joins("JOIN t_ai_tenants AS tenant ON tenant.id = membership.tenant_id").
+				Where("membership.user_id = ? AND membership.tenant_id = ? AND membership.role = ? AND membership.status = ? AND tenant.status = ?", user.ID, user.ID, "owner", "1", "1").
+				Count(&memberships).Error
+			valid = err == nil && memberships == 1
+		}
+		if !valid {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": common.CodeAuthenticationError, "message": "Invalid access token"})
 			return
 		}
