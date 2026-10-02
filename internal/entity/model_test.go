@@ -56,7 +56,7 @@ func TestProviderModelsResolveThinkingFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelByName() error = %v", err)
 	}
-	if thinkingModel.Thinking == nil || !thinkingModel.Thinking.DefaultValue || !thinkingModel.Thinking.ClearContent {
+	if thinkingModel.Thinking == nil || !thinkingModel.Thinking.DefaultValue || !thinkingModel.Thinking.ClearThinking {
 		t.Fatalf("Thinking = %#v", thinkingModel.Thinking)
 	}
 
@@ -110,7 +110,7 @@ func TestMoonshotProviderSupportsBalanceLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelByName() error = %v", err)
 	}
-	if model.Thinking == nil || !model.Thinking.ClearContent {
+	if model.Thinking == nil || !model.Thinking.ClearThinking {
 		t.Fatalf("kimi-k2.6 thinking = %#v, want clear_thinking enabled", model.Thinking)
 	}
 }
@@ -215,5 +215,55 @@ func TestMinimaxProviderIsConfigured(t *testing.T) {
 	}
 	if !model.ModelTypeMap["chat"] || model.Thinking == nil || !model.Thinking.DefaultValue {
 		t.Fatalf("MiniMax model = %#v", model)
+	}
+}
+
+func TestModelLevelThinkingAndGoogleFactory(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		provider, model string
+		clear           bool
+	}{
+		{"Google", "gemini-2.5-flash", true}, {"DeepSeek", "deepseek-v4-pro", true},
+		{"Moonshot", "kimi-k2.5", true}, {"ZHIPU-AI", "glm-5-turbo", true},
+		{"ZHIPU-AI", "glm-4.7-flashx", true}, {"MiniMax", "minimax-m2.7", false},
+	} {
+		model, err := manager.GetModelByName(test.provider, test.model)
+		if err != nil || model.Thinking == nil || !model.Thinking.DefaultValue || model.Thinking.ClearThinking != test.clear {
+			t.Fatalf("%s/%s: %#v %v", test.provider, test.model, model, err)
+		}
+	}
+	provider := manager.FindProvider("Google")
+	if provider == nil || provider.ModelDriver.Name() != "google" {
+		t.Fatal("Google not wired to factory")
+	}
+	if _, err := manager.GetModelByName("ZHIPU-AI", "glm-5.1"); err == nil {
+		t.Fatal("target removed model still advertised")
+	}
+	for _, provider := range []string{"Gitee", "SiliconFlow"} {
+		for _, model := range manager.FindProvider(provider).Models {
+			if model.Thinking != nil {
+				t.Fatalf("stale provider thinking applied to %s/%s", provider, model.Name)
+			}
+		}
+	}
+}
+
+func TestExplicitModelThinkingTakesPrecedenceOverLegacyProviderDefaults(t *testing.T) {
+	directory := t.TempDir()
+	config := `{"name":"Google","url":{"default":"https://example.invalid"},"models":[{"name":"gemini-test","model_types":["chat"],"thinking":{"default_value":false,"clear_thinking":false}}],"features":{"thinking":{"default_value":true,"supported_models":["gemini"]}}}`
+	if err := os.WriteFile(filepath.Join(directory, "google.json"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProviderManager(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := manager.GetModelByName("Google", "gemini-test")
+	if err != nil || model.Thinking == nil || model.Thinking.DefaultValue {
+		t.Fatalf("explicit model default overwritten: %v %v", model, err)
 	}
 }

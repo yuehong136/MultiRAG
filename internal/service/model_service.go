@@ -30,6 +30,8 @@ import (
 	"multirag/internal/entity"
 	modelModule "multirag/internal/entity/models"
 	"multirag/internal/service/models"
+
+	"gorm.io/gorm"
 )
 
 // ModelProvider provides model instances based on tenant and model type
@@ -733,6 +735,9 @@ func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName
 
 	_, err = m.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(provider.ID, instance.ID, modelName)
 	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, common.CodeServerError, err
+		}
 		providerInfo := dao.GetModelProviderManager().FindProvider(providerName)
 		if providerInfo == nil {
 			return nil, common.CodeNotFound, errors.New("provider not found")
@@ -746,7 +751,7 @@ func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName
 		if modelConfig == nil {
 			modelConfig = &modelModule.ChatConfig{}
 		}
-		modelConfig.ModelClass = model.Class
+		applyModelChatDefaults(model, modelConfig)
 		region, err := decodeModelInstanceRegion(instance.Extra)
 		if err != nil {
 			return nil, common.CodeServerError, err
@@ -773,12 +778,15 @@ func (m *ModelProviderService) ChatToModelByAPIKey(providerName, modelName, apiK
 	if providerInfo == nil {
 		return nil, common.CodeNotFound, errors.New("provider not found")
 	}
-	if _, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName); err != nil {
+	model, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+	if err != nil {
 		return nil, common.CodeNotFound, fmt.Errorf("provider %s model %s not found", providerName, modelName)
 	}
 
+	config := &modelModule.ChatConfig{}
+	applyModelChatDefaults(model, config)
 	apiConfig := &modelModule.APIConfig{APIKey: &apiKey}
-	response, err := providerInfo.ModelDriver.Chat(&modelName, &message, apiConfig, nil)
+	response, err := providerInfo.ModelDriver.Chat(&modelName, &message, apiConfig, config)
 	if err != nil {
 		return nil, common.CodeServerError, err
 	}
@@ -791,11 +799,14 @@ func (m *ModelProviderService) ChatWithMessagesToModelByAPIKey(providerName, mod
 	if providerInfo == nil {
 		return nil, common.CodeNotFound, errors.New("provider not found")
 	}
-	if _, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName); err != nil {
+	model, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+	if err != nil {
 		return nil, common.CodeNotFound, fmt.Errorf("provider %s model %s not found", providerName, modelName)
 	}
 
-	response, err := providerInfo.ModelDriver.ChatWithMessages(modelName, &apiKey, messages, nil)
+	config := &modelModule.ChatConfig{}
+	applyModelChatDefaults(model, config)
+	response, err := providerInfo.ModelDriver.ChatWithMessages(modelName, &apiKey, messages, config)
 	if err != nil {
 		return nil, common.CodeServerError, err
 	}
@@ -873,16 +884,25 @@ func (m *ModelProviderService) ChatToModelStream(providerName, instanceName, mod
 	return streamChan, errChan, common.CodeServerError, errors.New("model is disabled")
 }
 
+// applyModelChatDefaults respects explicit false and uses the selected model's defaults.
+func applyModelChatDefaults(model *entity.Model, config *modelModule.ChatConfig) {
+	config.ModelClass = model.Class
+	if config.Thinking == nil && model.Thinking != nil {
+		value := model.Thinking.DefaultValue
+		config.Thinking = &value
+	}
+}
+
 // ChatToModelStreamWithSender streams chat response directly via sender function (best performance, no channel)
-func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) common.ErrorCode {
+func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
 	if err != nil {
-		return common.CodeServerError
+		return common.CodeServerError, err
 	}
 
 	if len(tenants) == 0 {
-		return common.CodeNotFound
+		return common.CodeNotFound, errors.New("user has no tenants")
 	}
 
 	tenantID := tenants[0].TenantID
@@ -890,28 +910,35 @@ func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanc
 	// Check if provider exists
 	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
 	if err != nil {
-		return common.CodeServerError
+		return common.CodeServerError, err
 	}
 
 	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, instanceName)
 	if err != nil {
-		return common.CodeServerError
+		return common.CodeServerError, err
 	}
 
 	_, err = m.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(provider.ID, instance.ID, modelName)
 	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return common.CodeServerError, err
+		}
 		providerInfo := dao.GetModelProviderManager().FindProvider(providerName)
 		if providerInfo == nil {
-			return common.CodeNotFound
+			return common.CodeNotFound, errors.New("provider not found")
 		}
 
-		_, err = dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+		model, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
 		if err != nil {
-			return common.CodeNotFound
+			return common.CodeNotFound, err
 		}
+		if modelConfig == nil {
+			modelConfig = &modelModule.ChatConfig{}
+		}
+		applyModelChatDefaults(model, modelConfig)
 		region, err := decodeModelInstanceRegion(instance.Extra)
 		if err != nil {
-			return common.CodeServerError
+			return common.CodeServerError, err
 		}
 		if apiConfig == nil {
 			apiConfig = &modelModule.APIConfig{}
@@ -922,13 +949,13 @@ func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanc
 		// Direct call with sender function
 		err = providerInfo.ModelDriver.ChatStreamlyWithSender(&modelName, &message, apiConfig, modelConfig, sender)
 		if err != nil {
-			return common.CodeServerError
+			return common.CodeServerError, err
 		}
 
-		return common.CodeSuccess
+		return common.CodeSuccess, nil
 	}
 
-	return common.CodeServerError
+	return common.CodeServerError, errors.New("model is disabled")
 }
 
 func (m *ModelProviderService) GetDefaultModel(modelType entity.ModelType, tenantID string) (*entity.ModelCredentials, error) {

@@ -169,3 +169,26 @@ func TestZhipuAIRejectsUnknownRegion(t *testing.T) {
 		t.Fatalf("Chat() error = %v", err)
 	}
 }
+
+func TestZhipuAIStreamSendsReasoningBeforeContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning_content\":\"reason\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer server.Close()
+	model := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat/completions"})
+	key, name, message, stream := "test-key", "glm-test", "hello", true
+	var events []string
+	err := model.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, &ChatConfig{Stream: &stream}, func(content, reason *string) error {
+		if reason != nil {
+			events = append(events, "r:"+*reason)
+		}
+		if content != nil {
+			events = append(events, "a:"+*content)
+		}
+		return nil
+	})
+	if err != nil || strings.Join(events, ",") != "r:reason,a:answer,a:[DONE]" {
+		t.Fatalf("events %v err %v", events, err)
+	}
+}

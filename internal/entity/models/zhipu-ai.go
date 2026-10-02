@@ -638,16 +638,16 @@ func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, message *string, apiCon
 			continue
 		}
 
-		content, ok := delta["content"].(string)
-		if ok && content != "" {
-			if err := sender(&content, nil); err != nil {
+		reasoningContent, ok := delta["reasoning_content"].(string)
+		if ok && reasoningContent != "" {
+			if err := sender(nil, &reasoningContent); err != nil {
 				return err
 			}
 		}
 
-		reasoningContent, ok := delta["reasoning_content"].(string)
-		if ok && reasoningContent != "" {
-			if err := sender(nil, &reasoningContent); err != nil {
+		content, ok := delta["content"].(string)
+		if ok && content != "" {
+			if err := sender(&content, nil); err != nil {
 				return err
 			}
 		}

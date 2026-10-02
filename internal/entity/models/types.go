@@ -1,5 +1,7 @@
 package models
 
+import "context"
+
 // Message represents a chat message with role.
 type Message struct {
 	Role    string
@@ -62,8 +64,10 @@ type ChatConfig struct {
 }
 
 type APIConfig struct {
-	APIKey *string
-	Region *string
+	// Context carries request cancellation; nil uses a bounded background context.
+	Context context.Context
+	APIKey  *string
+	Region  *string
 }
 
 type EmbeddingConfig struct{}

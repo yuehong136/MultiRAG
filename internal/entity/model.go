@@ -152,10 +152,11 @@ type ProviderFeatures struct {
 	ClearThinking *ThinkingClearConfig `json:"clear_thinking,omitempty"`
 }
 
-// ModelThinking contains the resolved thinking defaults for one model.
+// ModelThinking describes defaults declared by one model. Legacy provider defaults
+// remain a fallback for configurations that have not moved to model-level thinking.
 type ModelThinking struct {
-	DefaultValue bool `json:"default_value"`
-	ClearContent bool `json:"clear_content"`
+	DefaultValue  bool `json:"default_value"`
+	ClearThinking bool `json:"clear_thinking"`
 }
 
 // Model represents a single LLM model
@@ -237,13 +238,13 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		}
 
 		for _, model := range provider.Models {
-			if provider.Features.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.Thinking.SupportedModels) {
+			if model.Thinking == nil && provider.Features.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.Thinking.SupportedModels) {
 				model.Thinking = &ModelThinking{
 					DefaultValue: provider.Features.Thinking.DefaultValue,
 				}
-			}
-			if provider.Features.ClearThinking != nil && model.Thinking != nil && modelNameHasPrefix(model.Name, provider.Features.ClearThinking.SupportedModels) {
-				model.Thinking.ClearContent = provider.Features.ClearThinking.DefaultValue
+				if provider.Features.ClearThinking != nil && modelNameHasPrefix(model.Name, provider.Features.ClearThinking.SupportedModels) {
+					model.Thinking.ClearThinking = provider.Features.ClearThinking.DefaultValue
+				}
 			}
 			modelClass := provider.Class
 			if modelClass == "" {
@@ -579,7 +580,7 @@ func getFeaturesMap(model *Model) map[string]interface{} {
 	if model.Thinking != nil {
 		featuresMap["thinking"] = map[string]interface{}{
 			"default_value": model.Thinking.DefaultValue,
-			"clear_content": model.Thinking.ClearContent,
+			"clear_content": model.Thinking.ClearThinking,
 		}
 	}
 

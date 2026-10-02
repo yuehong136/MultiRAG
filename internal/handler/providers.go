@@ -410,7 +410,7 @@ func (h *ProviderHandler) CheckProviderConnection(c *gin.Context) {
 		return
 	}
 	if errorCode, err := h.modelProviderService.CheckProviderConnection(providerName, instanceName, user.ID); err != nil {
-		jsonError(c, errorCode, err.Error())
+		jsonError(c, errorCode, "Provider connection failed")
 		return
 	}
 	jsonResponse(c, common.CodeSuccess, nil, "success")
@@ -523,7 +523,7 @@ func (h *ProviderHandler) ListInstanceModels(c *gin.Context) {
 	if strings.EqualFold(c.Query("supported"), "true") {
 		modelNames, err := h.modelProviderService.ListSupportedModels(providerName, instanceName, c.GetString("user_id"))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"code": common.CodeServerError, "message": err.Error()})
+			c.JSON(http.StatusOK, gin.H{"code": common.CodeServerError, "message": "Provider model listing failed"})
 			return
 		}
 		models := make([]map[string]string, 0, len(modelNames))
@@ -611,7 +611,7 @@ type ChatToModelRequest struct {
 	ModelName string  `json:"model_name" binding:"required"`
 	Message   string  `json:"message" binding:"required"`
 	Stream    bool    `json:"stream"`
-	Thinking  bool    `json:"thinking"`
+	Thinking  *bool   `json:"thinking"`
 	Effort    *string `json:"effort"`
 	Verbosity *string `json:"verbosity"`
 }
@@ -637,10 +637,9 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 
 	var req ChatToModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		println("JSON bind error: %v (type: %T)", err, err)
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeBadRequest,
-			"message": err.Error(),
+			"message": "Model request failed",
 		})
 		return
 	}
@@ -651,14 +650,14 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 		return
 	}
 
-	if !req.Thinking {
+	if req.Thinking != nil && !*req.Thinking {
 		req.Effort = nil
 		req.Verbosity = nil
 	}
 
-	apiConfig := models.APIConfig{}
+	apiConfig := models.APIConfig{Context: c.Request.Context()}
 	chatConfig := models.ChatConfig{
-		Thinking:  &req.Thinking,
+		Thinking:  req.Thinking,
 		Stream:    &req.Stream,
 		Stop:      &[]string{},
 		Effort:    req.Effort,
@@ -676,10 +675,17 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 
 		// Create sender function that writes directly to response
 		sender := func(content, reasoningContent *string) error {
+			if err := c.Request.Context().Err(); err != nil {
+				return err
+			}
 			// Check for [DONE] marker (OpenAI compatible)
 			if content != nil {
 				if *content == "[DONE]" {
 					c.SSEvent("done", "[DONE]")
+					c.Writer.Flush()
+					if len(c.Errors) > 0 {
+						return c.Errors.Last()
+					}
 					return nil
 				}
 				message := fmt.Sprintf("[MESSAGE]%s", *content)
@@ -693,14 +699,18 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 				c.Writer.Flush()
 			}
 
+			if len(c.Errors) > 0 {
+				return c.Errors.Last()
+			}
 			return nil
 		}
 
 		// Stream response using sender function (best performance, no channel)
-		errorCode := h.modelProviderService.ChatToModelStreamWithSender(providerName, instanceName, req.ModelName, user.ID, req.Message, &apiConfig, &chatConfig, sender)
+		errorCode, err := h.modelProviderService.ChatToModelStreamWithSender(providerName, instanceName, req.ModelName, user.ID, req.Message, &apiConfig, &chatConfig, sender)
 
-		if errorCode != common.CodeSuccess {
-			c.SSEvent("error", "stream failed")
+		if errorCode != common.CodeSuccess || err != nil {
+			c.SSEvent("error", "Model stream failed")
+			c.Writer.Flush()
 		}
 		return
 	}
@@ -710,7 +720,7 @@ func (h *ProviderHandler) ChatToModel(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    errorCode,
-			"message": err.Error(),
+			"message": "Model request failed",
 		})
 		return
 	}
