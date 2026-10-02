@@ -21,8 +21,10 @@ import random
 import re
 import time
 from abc import ABC
+from collections.abc import AsyncIterator
 from copy import deepcopy
 from enum import StrEnum
+from typing import Any
 
 import json_repair
 import litellm
@@ -1335,7 +1337,7 @@ class LiteLLMBase(ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly(self, system, history, gen_conf, **kwargs):
+    async def async_chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> AsyncIterator[str | int]:
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
@@ -1388,6 +1390,9 @@ class LiteLLMBase(ABC):
                             ans += LENGTH_NOTIFICATION_EN
 
                     yield ans
+                    if kwargs.get("with_reasoning", True) and _reasoning and delta.content:
+                        reasoning_start = False
+                        yield delta.content
                 yield total_tokens
                 return
             except Exception as e:
@@ -1566,7 +1571,7 @@ class LiteLLMBase(ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict = {}):
+    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> AsyncIterator[str | int]:
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system and history and history[0].get("role") != "system":
@@ -1620,6 +1625,10 @@ class LiteLLMBase(ABC):
                                 ans = "<think>"
                             ans += _reasoning + "</think>"
                             yield ans
+                            if delta.content:
+                                reasoning_start = False
+                                answer += delta.content
+                                yield delta.content
                         else:
                             reasoning_start = False
                             answer += delta.content
