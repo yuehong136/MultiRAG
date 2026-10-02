@@ -386,6 +386,10 @@ SDK 已有 `POST /api/v1/files/upload_info` 继续使用 multipart 字段 `files
 HTTP 404、`code=404`、`data=null`，OpenAPI 不再提供该操作，不上传、解析或调度任务。
 该入口原来把文件写入会话绑定的知识库并同步完成解析入库；这项能力已退役。
 运行时附件入口返回可信附件描述，继续支持聊天内容提取，它不会自动执行上述会话入库流程。
+Explore 和 MCP 页面共用上传状态作为附件列表、取消和发送资格的唯一来源。移除会取消
+本次上传请求，迟到结果不恢复卡片；失败或已移除的附件不进入后续聊天请求。
+Explore 保留重试，MCP 沿用现有无重试 UI。浏览器移除/取消不承诺删除服务端已经登记的
+运行时对象；成功聊天仍按上述可信描述取件与提取合同处理。
 写作参考资料 `POST /v1/write/api/reference-materials/parse` 仍接收 `chapter_id` 和
 `file`，通过共享文件解析服务生成文本并保存参考资料；成功返回 `retcode=0` 和资料摘要。
 
@@ -1321,6 +1325,24 @@ POST /agents/{agent_id}/run
   "stream": true
 }
 ```
+
+## Go Provider API（并行实现）
+
+本节描述 Go `internal/` 的独立实现；当前 Web 模型页仍使用 Python `/v1/llm/*`。
+基础路径为 `/api/v1/providers`，现有认证与用户/tenant 约束继续适用。
+
+| 路径 | 行为 |
+|---|---|
+| `POST /{provider_name}/instances/{instance_name}/models` | 普通 JSON 或 sender SSE；`thinking` 省略时使用所选模型默认，显式 true/false 优先 |
+| `GET /{provider_name}/instances/{instance_name}/connection` | Google 通过实际模型分页列表检查连接 |
+| `GET /{provider_name}/instances/{instance_name}/models?supported=true` | 返回 provider 支持的模型名；Google 遍历全部页，保留 `models/` 前缀 |
+
+Google 使用 Gemini genai SDK，BaseURL 依次按 region/空 region 与 default 选择。
+JSON 成功继续返回 `code`、`answer`、`reasoning_content`；sender 先发 `[REASONING]`
+再发 `[MESSAGE]`，实际文本答案成功后才发完成帧。provider/SQL/写流错误为安全非零
+JSON 或错误 SSE，取消传到 SDK 请求；空候选/空内容不会伪成功。Google embedding、
+余额与旧 channel-only streaming 明确不支持。实际本地验收采用受控身份和 provider
+HTTP，不表示远程 Google 账号、生产身份、完整 worker 或 Web 页面已验收。
 
 ## 系统 API
 

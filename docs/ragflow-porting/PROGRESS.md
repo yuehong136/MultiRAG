@@ -3,6 +3,62 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 965717c4fbbcaece97cd68ff08c12174cec60a04 · Google provider 与模型推理默认值
+
+2026-10-02 完整评估目标 15 路径，沿用既有冻结来源 `519e7d98`，未 fetch 新批。
+Go 范围提交 `27da32e667a9a73327467f77203fef1e54a9ddee`（21 路径），必要 Python
+适配提交 `744dad08f136255fbb875ad64f81f08392275f98`（2 路径）；执行者分别提交，未 push。
+
+- Google 文本聊天、sender SSE、历史角色、所有分页模型列表和连接检查使用真实
+  `google.golang.org/genai v1.54.0`，支持 region/default BaseURL、请求取消和安全错误。
+  空候选/空内容不是成功；reasoning 先于 answer，只有实际答案成功后发送完成帧。
+  不支持的 Google embedding、余额及旧 channel-only streaming 明确返回错误。
+- 七个 Go 模型 JSON 完整适配模型级 thinking。保留本地 URL/tag/class，MiniMax
+  实际 m2 推理能力迁至各模型；未改的 Aliyun 保留旧 provider 默认。
+  类型字段采用 `clear_thinking`，现有公开 feature-map `clear_content` 保持。
+  handler 显式 `thinking=false` 优先于模型默认，SQL 错误不冒充 disabled-row 不存在。
+- Python 读取 `llm_factories.json`，七个 Go JSON 不自动生效；已有 Gemini/Vertex
+  注册继续使用。两个活动 LiteLLM async loop 修复同 delta 的 reasoning 与 answer
+  丢失，tools 累积 answer，原隐藏推理、wrapper、token 和错误合同保持。
+
+修后 Go build/vet、models race、targeted 和三个独立 cmd main 构建均 exit0；采用
+仓库 Go1.25.14 与当前原生 tokenizer，overlay 只定位自有编译产物，不替换行为。
+Go1.27.1 在未修改 grpc/Milvus 的既有编译问题如实保留，未借此升级无关依赖。
+真实 Gin/service/GORM/PostgreSQL/genai HTTP 验证成功、分页、错误、SQL 状态及取消；
+认证和 provider 为受控 fixture，不称远程 Google、生产身份或 Web 对等验收。
+
+Python 正式专项 13 passed，实际 LiteLLM 七次 HTTP 及旧源码失败对照有效：答案原来
+丢失，修后保留。wire usage 未进入当前 LiteLLM，原新两版 fallback 均为 1，生产计量
+无变化。最后修改后 `make verify` **3830 passed**，`REQUIRE_SERVICES=1 make integration`
+**526 passed、无 skip**，自有 FastAPI listener smoke 均 exit0；专项不叠加全量。
+1444 输入门禁快照在当时无漂移，后续 API 修改不归入本次冻结版本。
+
+独立 Python fresh 33 ownership 清单资源全部清理。Go 原清理未保存精确 DB/端口，
+因此仅重放一次现有正式 live test，加 `/tmp` manifest 插桩且保留全部断言；23 正式
+文件 hash 不变，完整独立 SQL 行读回和根 fresh 连接确认精确 scratch DB、两个端口、
+两个 PID/private 文件均不存在或关闭。代码与原始证据独立审查无阻断；根核契约、
+scope/hash、实际清理与消费者边界后审结。原始证据索引为本机 `/tmp/multirag-965717-`。
+
+### 343bda 关联 Web 最终验收
+
+Web `64378b1d` 清理两个死入口路径，`d1b55f392c50013d681770188cbeecfc999d9ed8`
+完成实际 composer 附件所有权修复。生产 hook 管理上传、取消、发送资格和迟到保护，
+两页直接渲染其列表；vendor 仅选择文件，上传中仍可移除。Explore 保留已有 retry，
+MCP 不新增 retry。file-size 只收紧，没有放宽；当前 Web 工作区/index 为空，未 push。
+
+最后 Explore File UID 修正后完整门禁再次通过：**871 = Node554 + Vitest226 + Desktop81 + Tooling10**，
+inventory141、零 skip；lint0error/1497warning、build/filesize/bundle exit0。
+独立组件专项22通过，不叠加全量。最终两页实际成功发送、失败、移除、取消迟到、预览，
+Explore 重试、真实401与旧404均有 API/模型输入及完整存储读回。MCP 矩阵先于最后仅
+影响 Explore 的修改，Explore 受影响行为已再验；不称两页全矩阵全部重新执行。
+
+两库完整 SQL、4D Infinity payload/向量/关系、五历史对象 bytes/queue 保持；22 新原始
+附件与22可信描述一一对应，登记失败无孤儿对象。client abort 不代表服务端删已登记对象。
+原 cleanup exit1 发生在资源清理断言完成后的跨 owner Git 检查；逐表 counts 未持久保存，
+如实保留该限制。独立 fresh 核四精确容器、三卷、private 文件 absent、六端口 closed，
+成功浏览器 storage0/tab关闭；外部 runtime 保留。模型受控，无完整 worker/远程 provider
+或 Go 附件对等声明。独立代码及原始证据复核无阻断，合用后端结论，343 整项审结。
+
 ## 872ff0830451f4b3a02edf9b715115bfb010db06 · TOC 线程生命周期
 
 2026-10-02 完整核对目标的一条 `executor.shutdown(wait=False)` 改动，并沿用冻结
