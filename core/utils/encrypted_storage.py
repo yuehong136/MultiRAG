@@ -85,6 +85,19 @@ class EncryptedStorageWrapper:
             logging.exception(f"Failed to get and decrypt data: {bucket}/{fnm}, error: {e!s}")
             raise
 
+    def get_bytes(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        """Strict read with the configured transparent decryption preserved."""
+        try:
+            read = getattr(self.storage_impl, "get_bytes", None)
+            if read is None:
+                raise RuntimeError("Strict object storage read is unavailable.")
+            encrypted = read(bucket, fnm, tenant_id)
+            if encrypted is None or not self.encryption_enabled:
+                return encrypted
+            return self.crypto.decrypt(encrypted)
+        except Exception:
+            raise RuntimeError("Object storage read failed.") from None
+
     def rm(self, bucket, fnm, tenant_id=None):
         """
         Delete data (same as original storage implementation, no decryption needed)

@@ -183,6 +183,29 @@ class MultiRAGMinio:
                 time.sleep(1)
         return
 
+    def get_bytes(self, bucket: str, filename: str, tenant_id: str | None = None) -> bytes | None:
+        """Strict read using the existing physical bucket and namespace mapping."""
+        bucket, filename = self._resolve_bucket_and_path(bucket, filename)
+        response = None
+        try:
+            response = self.conn.get_object(bucket, filename)
+            return response.read()
+        except S3Error as exc:
+            if exc.code in {"NoSuchKey", "NoSuchBucket", "ResourceNotFound"}:
+                return None
+            raise RuntimeError("Object storage read failed.") from None
+        except Exception:
+            raise RuntimeError("Object storage read failed.") from None
+        finally:
+            if response is not None:
+                try:
+                    try:
+                        response.close()
+                    finally:
+                        response.release_conn()
+                except Exception:
+                    raise RuntimeError("Object storage read failed.") from None
+
     @use_default_bucket
     @use_prefix_path
     def obj_exist(self, bucket, filename, tenant_id=None):
