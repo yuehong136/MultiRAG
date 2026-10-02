@@ -86,7 +86,16 @@ def go_status_api(status_api: dict[str, Any], tmp_path: Any, request: pytest.Fix
                 assert process.poll() is None, output_path.read_text()
                 time.sleep(0.1)
             assert (tmp_path / "base").exists(), output_path.read_text()
-            env.update(go_base=(tmp_path / "base").read_text(), go_engine=kind, infinity_table=table, rpc_proxy=proxy, infinity_port=port, infinity_db=db_name, infinity_table_name=table_name)
+            env.update(
+                go_base=(tmp_path / "base").read_text(),
+                go_engine=kind,
+                infinity_table=table,
+                infinity_database=database,
+                rpc_proxy=proxy,
+                infinity_port=port,
+                infinity_db=db_name,
+                infinity_table_name=table_name,
+            )
             yield env
         finally:
             (tmp_path / "stop").touch()
@@ -392,9 +401,27 @@ def test_real_infinity_mothers_retry_and_commit_recovery(go_status_api: dict[str
 
     env = go_status_api
     table = env["infinity_table"]
-    parent = uuid4().hex
+    parent, new_parent, ordinary = uuid4().hex, uuid4().hex, uuid4().hex
     table.update(f"doc_id = '{env['doc']}'", {"mom_id": parent})
-    table.insert([{"id": parent, "doc_id": env["doc"], "mom_id": parent, "available_int": 0, "content": "hidden mother", "created": "original mother", "vector": [0.1, 0.2, 0.3, 0.4]}])
+    table.insert(
+        [
+            {"id": parent, "doc_id": env["doc"], "available_int": 0, "content": "old hidden mother", "created": "original old mother", "vector": [0.1, 0.2, 0.3, 0.4]},
+            {"id": new_parent, "doc_id": env["doc"], "mom_id": new_parent, "available_int": 0, "content": "new hidden mother", "created": "original new mother", "vector": [0.1, 0.2, 0.3, 0.4]},
+            {"id": uuid4().hex, "doc_id": env["doc"], "mom_id": new_parent, "available_int": 1, "content": "new child", "created": "original child", "vector": [0.1, 0.2, 0.3, 0.4]},
+            {"id": ordinary, "doc_id": env["doc"], "available_int": 1, "content": "ordinary without mom_id", "created": "original ordinary", "vector": [0.1, 0.2, 0.3, 0.4]},
+        ]
+    )
+    # A different document's reference must not hide this ordinary chunk.
+    table.update(f"doc_id = '{env['second']}'", {"mom_id": ordinary})
+    old = inf_rows(env, f"id = '{parent}'")
+    assert old["mom_id"] == [""] and inf_rows(env, f"id = '{ordinary}'")["mom_id"] == [""]
+    other = env["infinity_database"].create_table(
+        env["collection"] + "_" + env["other_kb"],
+        {"id": {"type": "varchar"}, "doc_id": {"type": "varchar"}, "mom_id": {"type": "varchar", "default": ""}, "available_int": {"type": "integer"}},
+        ConflictType.Error,
+    )
+    other.insert([{"id": ordinary, "doc_id": env["doc"], "mom_id": ordinary, "available_int": 0}])
+    other_before = other.output(["*"]).to_result()[0]
     opened, closed = [], []
 
     class OwnedPool:
@@ -418,7 +445,7 @@ def test_real_infinity_mothers_retry_and_commit_recovery(go_status_api: dict[str
     assert all(value == 0 for value in inf_rows(env, f"doc_id = '{env['doc']}'")["available_int"])
     assert request_status(env, [env["doc"]], 1).json()["code"] == 0
     assert inf_rows(env) == before_index and sql_rows(env) == before_sql
-    table.update(f"id = '{parent}'", {"available_int": 1})
+    table.update(f"id IN ('{parent}', '{new_parent}')", {"available_int": 1})
     assert request_status(env, [env["doc"]], 1).json()["code"] == 0
     assert inf_rows(env) == before_index
     name = "mother_guard_" + uuid4().hex
@@ -434,10 +461,13 @@ def test_real_infinity_mothers_retry_and_commit_recovery(go_status_api: dict[str
         assert response["code"] == 500 and "error" in response["data"][env["doc"]]
         assert sql_rows(env) == before_sql and inf_rows(env) == before_index
         visible = inf_rows(env, f"doc_id = '{env['doc']}' AND available_int = 1")
-        assert len(visible["id"]) == 2 and parent not in visible["id"]
+        assert len(visible["id"]) == 4 and parent not in visible["id"] and new_parent not in visible["id"] and ordinary in visible["id"]
+        assert other.output(["*"]).to_result()[0] == other_before
     finally:
         with env["engine"].begin() as db:
             db.execute(sa.text(f"DROP TRIGGER {name} ON usr_ai.t_ai_documents"))
             db.execute(sa.text(f"DROP FUNCTION usr_ai.{name}()"))
     assert opened == closed
-    print(f"Actual {stack} Infinity mothers remain0 across enable/same-state/SQL-commit recovery; visible1 excludes mother; complete source/vector/created fields and SQL preserved")
+    print(
+        f"Actual {stack} Infinity old(default empty mom_id) and new mothers remain0 across enable/same-state/SQL-commit recovery; ordinary empty mom_id enabled; other doc/dataset and all source/vector/created fields preserved"
+    )
