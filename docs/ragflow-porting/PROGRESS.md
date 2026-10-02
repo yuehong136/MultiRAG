@@ -3,6 +3,45 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 872ff0830451f4b3a02edf9b715115bfb010db06 · TOC 线程生命周期
+
+2026-10-02 完整核对目标的一条 `executor.shutdown(wait=False)` 改动，并沿用冻结
+`origin/main=519e7d98a5651564d4e35d6648f006cba4baaf4f`，本轮未 fetch。本地原线程池
+在取消、解析空结果等提前退出之前创建，TOC 提交和 schema 获取也在旧 finally 之外，
+因此采用完整生命周期的最小适配。相关后修 `cc207b5b05532f6296e72bbe01e9813ae0ead7e1`
+只作生命周期参考，没有扩大解析架构或改变 TOC 输出合同。
+
+- 仅真正需要 TOC 时，在受保护的 try 内创建本任务线程池；普通任务和提交前的提前退出不建池。
+- 用 `wrap_future` 与异步 shield 等待保留 TOC 和普通索引写入并行，事件循环继续响应。
+- 所有提交后成功、早退、异常和取消出口先停止接收任务、取消待运行工作，再于事件循环外
+  join 自有线程并取回 future 结果；重复取消沿用现有排空 helper。未消费的 TOC 异常记录到日志。
+  已运行线程等待其结束，不能把 `wait=False` 或 future 取消称为强制停止线程。
+- 线程收尾先于索引取消清理、session 释放、worker 终态和消息 ack；共享线程池保持可用。
+  `insert_chunks`、最新 SQL source 状态继承、旧/新母块隐藏与其他 35 个顶层函数/类 AST 不变。
+  没有改 HTTP、模型/provider、对象、任务队列合同；Go/Web 本目标准确为不适用。
+
+### 本轮验证与根审结
+
+正式新增 22 个生命周期用例使用真实线程池，覆盖提交前出口、成功、schema/索引/计数/TOC
+失败、业务取消、重复异步取消及 ack/终态顺序；确认线程已结束、关闭后拒绝提交和共享池可用。
+相关定向 **32 passed、exit=0**，不叠加进全量。所有正式可执行修改之后：
+`make verify` 为 Ruff、8 import contracts、async DB、mypy 127 文件及 **3817 unit passed、exit=0**；
+`REQUIRE_SERVICES=1 make integration` 为 **526 passed、无 skip、exit=0**。
+1434 文件门禁快照无漂移，根在释放下一 Python 写窗口之前重新核过；后续 Google 修改不属于本项旧快照。
+
+真实隔离运行 **1 passed、exit=0**，走 FileService 上传、真实 HTTP parse、SQL Task/Redis
+入队、实际 collect/worker/build_chunks/build_TOC 与索引写入。TOC 等待期间通过真实 HTTP
+禁用文档，随后 TOC 继承最新 SQL 状态 0；完整七表 SQL、三条 payload/768 维向量、创建字段、
+母子引用、TOC 关联、原对象 41 bytes、Task progress=1、Redis pending=0 和自有线程退出均读回。
+再启用仅改变普通/TOC 块的可用状态，母块仍隐藏，其余索引字段及对象字节不变。
+parser/model 输出受控，不称生产 worker daemon、远程 provider 或浏览器验收。
+
+原始报告和日志位于本机 `/tmp/multirag-872ff-` 前缀。初始测试夹具与 live 准备失败均已纠正，
+没有削弱行为断言。独立审查以新连接只读复核 4 次 live 和 32 份完整 integration ownership
+记录：精确 scratch 数据库、bucket、collection、stream/cache 与端口均不存在/关闭，记录的
+自有 SQL 行为零。只清本项资源，保留原 25 项无关改动、其他并行 owner 改动及共享服务。
+根完整核源码/正式测试、原始本轮门禁、业务码、完整读回与清理，独立审查无阻断；未 push。
+
 ## a536980e2 · 旧文档状态接口条件退出
 
 2026-10-02 从本仓 `2f46a4407e04862555ba0fb20914761fc3fb6497` 开始，完成此前

@@ -2567,6 +2567,20 @@ async def insert_chunks(
     return True
 
 
+async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor, toc_future: asyncio.Future[Any] | None, result_observed: bool) -> None:
+    """Join owned TOC work off-loop before the task releases its session."""
+    executor.shutdown(wait=False, cancel_futures=True)
+
+    async def drain() -> None:
+        await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
+        if toc_future is not None:
+            result = (await asyncio.gather(toc_future, return_exceptions=True))[0]
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError) and not result_observed:
+                logging.error("TOC generation failed during task cleanup", exc_info=(type(result), result, result.__traceback__))
+
+    await finish_status_write(asyncio.create_task(drain()))
+
+
 @timeout(60 * 60 * 3, 1)
 async def do_handle_task(db: Session, task: Any) -> None:
     # 将 Row 转换为字典，确保可以修改字段
@@ -2646,8 +2660,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
     task_document_name = task.get("name", "unknown")
     task_parser_config = task.get("parser_config", {})
     task_start_ts = timer()
-    toc_thread = None
-    executor = concurrent.futures.ThreadPoolExecutor()
+    needs_toc = False
 
     # prepare the progress callback function
     progress_callback = partial(set_progress, db, task_id, task_from_page, task_to_page)
@@ -2808,25 +2821,31 @@ async def do_handle_task(db: Session, task: Any) -> None:
         progress_message = f"Embedding chunks ({timer() - start_ts:.2f}s)"
         logging.info(progress_message)
         progress_callback(msg=progress_message)
-        if task["parser_id"].lower() == "naive" and task["parser_config"].get("toc_extraction", False):
-            toc_thread = executor.submit(build_TOC, task, chunks, progress_callback)
+        needs_toc = task["parser_id"].lower() == "naive" and task["parser_config"].get("toc_extraction", False)
 
-    chunk_count = len({chunk["pk"] for chunk in chunks})
-    # 记录开始时间
-    start_ts = timer()
-
-    # 获取集合 schema，用于做数据类型转换
-    schema = await get_schema(search.index_name_one(task_tenant_id, kb_name))
+    executor: concurrent.futures.ThreadPoolExecutor | None = None
+    toc_thread: asyncio.Future[Any] | None = None
+    toc_result_observed = False
     collection_name = search.index_name_one(task_tenant_id, kb_name)
-
-    async def _maybe_insert_chunks(_chunks):
-        if has_canceled(task_id):
-            progress_callback(-1, msg="Task has been canceled.")
-            return False
-        insert_result = await insert_chunks(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback, collection_name, schema)
-        return bool(insert_result)
-
     try:
+        if needs_toc:
+            executor = concurrent.futures.ThreadPoolExecutor()
+            toc_thread = asyncio.wrap_future(executor.submit(build_TOC, task, chunks, progress_callback))
+
+        chunk_count = len({chunk["pk"] for chunk in chunks})
+        # 记录开始时间
+        start_ts = timer()
+
+        # 获取集合 schema，用于做数据类型转换
+        schema = await get_schema(collection_name)
+
+        async def _maybe_insert_chunks(_chunks: list[dict[str, Any]]) -> bool:
+            if has_canceled(task_id):
+                progress_callback(-1, msg="Task has been canceled.")
+                return False
+            insert_result = await insert_chunks(db, task_id, task_tenant_id, task_dataset_id, _chunks, progress_callback, collection_name, schema)
+            return bool(insert_result)
+
         if not await _maybe_insert_chunks(chunks):
             return
 
@@ -2837,7 +2856,10 @@ async def do_handle_task(db: Session, task: Any) -> None:
         progress_callback(msg=f"Indexing done ({timer() - start_ts:.2f}s).")
 
         if toc_thread:
-            d = toc_thread.result()
+            try:
+                d = await asyncio.shield(toc_thread)
+            finally:
+                toc_result_observed = toc_thread.done()
             if d:
                 if not await _maybe_insert_chunks([d]):
                     return
@@ -2852,22 +2874,26 @@ async def do_handle_task(db: Session, task: Any) -> None:
         logging.info(f"Chunk doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), token({token_count}), elapsed:{task_time_cost:.2f}")
 
     finally:
-        if has_canceled(task_id):
-            try:
-                exists = await thread_pool_exec(
-                    doc_store_exists,
-                    collection_name,
-                    task_dataset_id,
-                )
-                if exists:
-                    await thread_pool_exec(
-                        delete_chunks_by_doc_id,
+        try:
+            if executor is not None:
+                await _shutdown_toc_executor(executor, toc_thread, toc_result_observed)
+        finally:
+            if has_canceled(task_id):
+                try:
+                    exists = await thread_pool_exec(
+                        doc_store_exists,
                         collection_name,
-                        task_doc_id,
                         task_dataset_id,
                     )
-            except Exception as e:
-                logging.exception(f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}")
+                    if exists:
+                        await thread_pool_exec(
+                            delete_chunks_by_doc_id,
+                            collection_name,
+                            task_doc_id,
+                            task_dataset_id,
+                        )
+                except Exception as e:
+                    logging.exception(f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}")
 
 
 async def handle_task() -> None:
