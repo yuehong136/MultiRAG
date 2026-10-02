@@ -230,7 +230,7 @@ async def update_metadata_config(
     request: UpdateMetadataConfigRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     """更新单个文档的元数据模板配置（写入 parser_config.metadata）。"""
 
     def _update_config(s: Session) -> Response:
@@ -246,7 +246,13 @@ async def update_metadata_config(
         doc = doc[0]
 
         try:
-            DocumentService.update_parser_config(s, doc.id, {"metadata": request.metadata})
+            config = {"metadata": request.metadata}
+            # The general parser updater treats omitted RAPTOR as removal.
+            # This endpoint only changes metadata, so retain the current value.
+            parser_config = doc.parser_config or {}
+            if "raptor" in parser_config:
+                config["raptor"] = parser_config["raptor"]
+            DocumentService.update_parser_config(s, doc.id, config)
             doc = DocumentService.get_by_id(s, doc.id)
         except Exception as e:
             logger.exception(e)

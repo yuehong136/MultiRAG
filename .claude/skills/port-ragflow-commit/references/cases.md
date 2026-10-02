@@ -5,6 +5,7 @@
 
 | 判例 | 教训 |
 |---|---|
+| d7801396（dataset management HTTP tests） | 测试移植以逐文件 diff 为准，PR 描述的缺 ID 用例未必实际新增。先核当前严格 body 与鉴权错误信封，用合法 metadata body 才能验证未找到/跨库权限；缺 body 的 422 不能替代服务错误回归。真实保存独立读回完整 parser_config，防通用更新 helper 删除未提交的 RAPTOR；有效倒序日期必须非零，另核正序/相等/单边与时区。模型插入钩子会覆盖夹具时间，应插入后显式 SQL 设边界时间，不禁用生产钩子。 |
 | 7827f0fc（mind map fix） | 「真修复逐字搬 / 顺带重构映射我方抽象」二分法的确立 |
 | d32967ed（excel LazyImage） | 无抽象分歧的领域 → 行为+改名全忠实照搬 |
 | dd839f30（matplotlib/tool-calling） | 文件映射要核实（chat.py 非 chat_model/base.py）；重 service 顶层 import 触发循环导入 → 惰性 import |

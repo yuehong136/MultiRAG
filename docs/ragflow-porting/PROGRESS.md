@@ -3,6 +3,57 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## d78013964af8044e4d7b761e0bf1e5113a4bfdd1 · 数据集管理 HTTP 回归
+
+2026-10-02 从本仓 `d30c8d3ae863e913e3d90e7c069109f207d757f9` 开始。
+核对 upstream remote 为 `git@github.com:infiniflow/ragflow.git`，按根聊天冻结队列沿用
+`origin/main=519e7d98a5651564d4e35d6648f006cba4baaf4f`，未改变基准。
+目标只有两个 Python HTTP 测试文件、158 新增行，没有生产、Go、Web、SDK 或 MCP diff。
+完整 diff 中 metadata 为 10 个方法、鉴权参数化后 13 例；ingestion 只新增一条有效反向日期
+范围用例。PR 描述中的缺 dataset ID 未出现在 diff，本仓补充的缺 ID 404 是本地新增。
+目标测试路径到该基准只有 `adf2e0c07` 整体删除 Python 测试，不是行为 revert/re-land。
+
+| 目标与本地缺口 | 处置 |
+|---|---|
+| dataset metadata GET/PUT、document metadata PUT | 复用既有路由、严格请求模型和真实 JWT/API key 鉴权；用隔离 PostgreSQL 与实际 FastAPI listener 补正式 HTTP 回归，不复制上游 harness |
+| dataset owner、document owner/admin | 保持现行权限；dataset admin/真实外人拒绝，合法请求体验证不存在与跨 dataset 文档，不用空 body 的 422 替代业务授权检查 |
+| 有效日期倒序 | 最小 service 校验，在访问权限检查后按 UTC 规范化输入；from > to 返回 HTTP 200、code=102、安全 message，相等及单边范围合法 |
+| metadata 保存清除 RAPTOR | 真实验收暴露通用 parser helper 的省略删除语义；仅 metadata handler 将原 RAPTOR 配置一并传入，保留其余 parser 字段，不改变通用 parser 更新行为 |
+| Go / Web / SDK / MCP | 无目标 diff，不新增派工或协议。Go 当前没有 metadata/config 或 ingestions 等价路由/HTTP harness，属于缺能力，不声明已实现或已验收 Go 等价行为 |
+
+稳定输入、响应、日期边界见 [HTTP 合同](../references/http_api_reference.md#元数据模板配置)；
+路径映射及兼容入口见 [移植映射](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)。
+Web 文档 metadata 的 `withLegacyFallback` 仍消费 `/v1/document/update_metadata_setting`；
+FILE_LOGS 仍消费 `/v1/kb/list_pipeline_logs`（非数据集哨兵日志），REST ingestions 只选择
+数据集哨兵日志。保留两个活动旧入口，也不改相邻 status/run/upload_and_parse/change_status。
+
+### 本轮验证与资源边界
+
+- 定向单元 **54 passed**；真实 HTTP **26 passed**。涵盖四个端点无/坏凭证、两类有效凭证，
+  dataset PUT→GET、document 数组/schema/空模板与 admin，缺 body、缺/跨库资源、外人拒绝；
+  日志正序/相等/单边/时区/status/分页、反序、无权 dataset 和跨库 log。
+- `make verify`：Ruff、8 条 import contracts、async DB 门禁、mypy 127 文件通过；
+  **3795 unit passed，exit=0**。`REQUIRE_SERVICES=1 make integration`：
+  **526 passed，无 skip，exit=0**，包含最终 26 项真实 HTTP 回归及同 listener smoke。
+- fixture 只覆盖 `get_async_db` 到真实 scratch PostgreSQL；HTTP/auth/service/SQL 未替换。
+  每步独立 SQL 读回完整 parser_config 与相关表整行，其他 dataset/document/log 保持不变；
+  未创建本项索引、对象、Redis queue/key、worker/provider 或浏览器资源，不冒称解析执行验收。
+- 同一实际 listener 中调用 `make smoke` 并断言 exit=0；最终集成运行的原始 smoke 输出另存
+  对应 fixture 的 `.smoke.log`，健康检查也使用该 scratch AsyncSession。
+- 资源记录只含本项 database、user/dataset/document/log ID、token name 与端口，不含凭证。
+  各 fixture 删除后用新 SQL 连接断言七类自有行均为 0，并确认 listener 关闭；suite 的 scratch
+  数据库由现有 fixture DROP，最终只按记录的精确库名独立查询，不扫描/删除公共前缀。
+- 初轮 token name 超出 varchar(20)、夹具日期被生产插入钩子覆盖及误设 422 信封已修正。
+  日期用插入后 SQL 设置，不禁用生产钩子；真实 RAPTOR 回归修复后重新通过全部相关用例。
+
+本机原始证据：`/tmp/multirag-d780-unit-corrected.log`、`http-corrected.log`、
+`verify-final.log`、`integration-final.log`（后三个均为 `/tmp/multirag-d780-` 前缀），
+清理汇总 `/tmp/multirag-d780-cleanup-readback.json` 与验收报告
+`/tmp/multirag-d780-acceptance.md`：三次实际资源运行共 78 份记录，自有行全为 0、
+listener 全关闭；三个精确 scratch 库经独立查询均不存在，清理检查 exit=0。
+保持原有 25 项无关脏改及并发新增文件，范围提交，
+不 push；完成后等待根审结，本项不推进下一 SHA。
+
 ## a536980e229d8a28a6fd55077ca575f2983f59c8 · 文档批量启停
 
 2026-10-02 从本仓 `dd451b00353c81923c407e1dec5f21965bdd2f92` 开始。

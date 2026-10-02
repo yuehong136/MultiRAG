@@ -812,6 +812,42 @@ DELETE /datasets/{dataset_id}
 }
 ```
 
+### 元数据模板配置
+
+以下接口接受当前会话 JWT 或 API Key。模板写入 `parser_config.metadata`，保留
+其他解析配置（包括 RAPTOR）；它不直接修改已解析分块的元数据值。
+
+| 方法与路径（均以 `/api/v1` 开头） | 请求及权限 |
+|---|---|
+| `GET /datasets/{dataset_id}/metadata/config` | 数据集 owner；返回 `data.enabled` 和 `data.fields` |
+| `PUT /datasets/{dataset_id}/metadata/config` | 数据集 owner；`{"enabled":true,"fields":[{"key":"author","description":"作者"}]}`；空 fields 合法，`{}` 使用 enabled=true、fields=[] 的默认值 |
+| `PUT /datasets/{dataset_id}/documents/{document_id}/metadata/config` | 当前数据集 owner/admin；`{"metadata":[{"key":"author"}]}`，也接受 JSON schema 对象；`{"metadata":[]}` 清空模板 |
+
+文档必须属于路径中的数据集。成功为 HTTP 200、`code:0`；不存在/跨数据集为
+`code:102`，文档写入权限不足为 `code:109`。数据集配置保持 owner 权限，不开放给
+团队 admin。缺请求体或缺文档 metadata 字段为 HTTP 422、`detail` 验证错误列表。
+缺失/无效凭证为 HTTP 401、`retcode:109`、`retmsg`、`data:false`；调用方应分别检查
+HTTP 状态与对应业务码。
+
+### 数据集摄取日志
+
+`GET /api/v1/datasets/{dataset_id}/ingestions` 按现行数据集访问权限读取数据集级
+GraphRAG/RAPTOR/MindMap 日志，成功返回 `{"code":0,"data":{"total":0,"logs":[]}}`。
+它与 Web 文件日志 `POST /v1/kb/list_pipeline_logs` 的筛选范围不同。
+
+| Query 参数 | 含义 |
+|---|---|
+| `create_date_from`、`create_date_to` | ISO 日期或 datetime，含边界；可单独使用。无时区按 UTC，显式时区先换算 UTC |
+| `operation_status` | 可重复的状态筛选参数 |
+| `orderby`、`desc` | 默认 create_time、true；orderby 必须为日志响应字段 |
+| `page`、`page_size` | 均为非负整数；同时非零时分页，page 从 1 开始；total 为筛选后未分页的条数 |
+
+换算后起始时间晚于结束时间，返回 HTTP 200、`code:102` 和
+`message:"create_date_from must not be later than create_date_to"`，不会返回成功空列表。
+相等时间合法。日期格式错误或负页码为 HTTP 422、`detail` 验证错误列表；不存在或
+无权限的数据集为 `code:102`、`message:"No authorization."`，鉴权错误沿用上节 HTTP 401
+信封。`GET /api/v1/datasets/{dataset_id}/ingestions/{log_id}` 不返回其他数据集的日志。
+
 ## 文档 API
 
 ### 批量更改文档启用状态

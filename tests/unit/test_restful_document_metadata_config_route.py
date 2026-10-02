@@ -12,7 +12,10 @@ PUT /api/v1/datasets/{dataset_id}/documents/{document_id}/metadata/config 收编
 
 import sys
 from types import SimpleNamespace
+from typing import Any
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
@@ -34,14 +37,16 @@ def _assert_sync_facade(sessions):
         assert isinstance(s, Session), f"同步 service 收到 {type(s).__name__}，应为 sqlalchemy.orm.Session"
 
 
-def _stub_chain(monkeypatch, sessions, *, can_update=True, docs=(SimpleNamespace(id="doc1"),)):
+def _stub_chain(
+    monkeypatch: pytest.MonkeyPatch, sessions: list[object], *, can_update: bool = True, docs: tuple[SimpleNamespace, ...] = (SimpleNamespace(id="doc1", parser_config={}),)
+) -> list[tuple[str, dict[str, Any]]]:
     config_calls: list[tuple[str, dict]] = []
 
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kb_id: sessions.append(s) or SimpleNamespace(id=kb_id, tenant_id="tenant-unit")))
     monkeypatch.setattr(document_api_service, "can_update_dataset", lambda s, user_id, kb: sessions.append(s) or can_update)
     monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: sessions.append(s) or list(docs)))
 
-    def _update_parser_config(cls, s, doc_id, config):
+    def _update_parser_config(cls: type[DocumentService], s: Session, doc_id: str, config: dict[str, Any]) -> None:
         sessions.append(s)
         config_calls.append((doc_id, config))
 
@@ -74,6 +79,18 @@ def test_update_accepts_json_schema_object_shape(client, monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert config_calls == [("doc1", {"metadata": schema})], config_calls
+
+
+def test_metadata_update_preserves_existing_raptor_config(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions: list[object] = []
+    raptor = {"use_raptor": True, "max_cluster": 64}
+    config_calls = _stub_chain(monkeypatch, sessions, docs=(SimpleNamespace(id="doc1", parser_config={"raptor": raptor}),))
+
+    response = client.put(_PATH, json={"metadata": _SETTINGS})
+
+    assert response.status_code == 200 and response.json()["code"] == RetCode.SUCCESS
+    assert config_calls == [("doc1", {"metadata": _SETTINGS, "raptor": raptor})]
+    _assert_sync_facade(sessions)
 
 
 def test_update_rejects_scalar_metadata_and_missing_body(client, monkeypatch):

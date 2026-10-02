@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -760,6 +760,15 @@ async def list_ingestion_logs(
         return False, 'Lack of "Dataset ID"'
     if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, "No authorization."
+
+    # PostgreSQL create_date is a UTC timestamp without timezone. Normalize
+    # explicit offsets before comparing/filtering, including mixed inputs.
+    if create_date_from and create_date_from.tzinfo is not None:
+        create_date_from = create_date_from.astimezone(UTC).replace(tzinfo=None)
+    if create_date_to and create_date_to.tzinfo is not None:
+        create_date_to = create_date_to.astimezone(UTC).replace(tzinfo=None)
+    if create_date_from and create_date_to and create_date_from > create_date_to:
+        return False, "create_date_from must not be later than create_date_to"
 
     model = PipelineOperationLogService.model
     fields = PipelineOperationLogService.get_dataset_logs_fields()
