@@ -240,7 +240,8 @@ def test_strict_minio_missing_vs_transport(failure: str, missing: bool) -> None:
 
 
 @pytest.mark.parametrize("mode", ["good", "missing", "transport", "decrypt", "disabled"])
-def test_strict_encrypted_reads_keep_cipher_and_fail_safely(mode: str) -> None:
+@pytest.mark.parametrize("strict", [True, False])
+def test_strict_encrypted_reads_keep_cipher_and_fail_safely(mode: str, strict: bool) -> None:
     wrapper = object.__new__(EncryptedStorageWrapper)
     wrapper.encryption_enabled = mode != "disabled"
 
@@ -255,7 +256,7 @@ def test_strict_encrypted_reads_keep_cipher_and_fail_safely(mode: str) -> None:
             raise ValueError("secret crypto detail")
         return b"plain"
 
-    wrapper.storage_impl = SimpleNamespace(get_bytes=read)
+    wrapper.storage_impl = SimpleNamespace(**{"get_bytes" if strict else "get": read})
     wrapper.crypto = SimpleNamespace(decrypt=decrypt)
     if mode in {"transport", "decrypt"}:
         with pytest.raises(RuntimeError, match=r"^Object storage read failed\.$"):

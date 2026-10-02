@@ -415,6 +415,12 @@ async def test_image_read_real_storage_matrix_no_writes(image_resources: dict[st
                     assert (await dataset(db, "owner", "png-wrong.jpg")).data == _image("PNG")
                     assert (await dataset(db, "owner", "encrypted.png")).data == _image("PNG")
                     await dataset(db, "owner", "broken-encryption.png", service.ImageStorageFailure)
+                # Only-get legacy backends retain namespace/decryption compatibility.
+                legacy_adapter = SimpleNamespace(**{name: getattr(env["adapter"], name) for name in ["put", "get", "rm", "obj_exist", "health"]})
+                legacy_encrypted = EncryptedStorageWrapper(legacy_adapter, key="scratch-image-key")
+                with monkeypatch.context() as fault:
+                    fault.setitem(resources._state, "storage", legacy_encrypted)
+                    assert (await dataset(db, "owner", "encrypted.png")).data == _image("PNG")
         finally:
             sa.event.remove(bootstrapped_async_engine.sync_engine, "before_cursor_execute", sql_guard)
     after = _snapshot(env)

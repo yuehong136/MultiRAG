@@ -88,9 +88,9 @@ class EncryptedStorageWrapper:
     def get_bytes(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
         """Strict read with the configured transparent decryption preserved."""
         try:
-            read = getattr(self.storage_impl, "get_bytes", None)
-            if read is None:
-                raise RuntimeError("Strict object storage read is unavailable.")
+            # Legacy adapters remain supported; their None is only unavailable,
+            # never evidence of a specific not-found condition.
+            read = getattr(self.storage_impl, "get_bytes", None) or self.storage_impl.get
             encrypted = read(bucket, fnm, tenant_id)
             if encrypted is None or not self.encryption_enabled:
                 return encrypted
