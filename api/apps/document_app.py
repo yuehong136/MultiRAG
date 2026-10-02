@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import pathlib
@@ -30,8 +29,8 @@ from api.db.db_models import Task, get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
-from api.db.services.document_service import DocumentService, doc_upload_and_parse_in_session, queue_analyze_v2_task
-from api.db.services.document_status_service import batch_document_status, finish_status_write
+from api.db.services.document_service import DocumentService, queue_analyze_v2_task
+from api.db.services.document_status_service import batch_document_status
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -2581,35 +2580,6 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
         return get_data_error_result(retmsg="Document not found!")
 
     return get_json_result(data=DocumentService.serialize_document(db, doc))
-
-
-@router.post("/upload_and_parse", summary="上传文件并解析", response_description="成功上传并解析文件")
-async def upload_and_parse(
-    conversation_id: str = Form(..., description="会话ID"), files: list[UploadFile] = File(..., alias="file"), db: Session = Depends(get_db), user: Any = Depends(manager)
-) -> Response:
-    """在对话上下文中上传文件并自动解析入库。
-
-    - **conversation_id**: 会话ID，用于关联对话所绑定的知识库
-    - **files**: 要上传的文件列表
-    - **返回值**: 成功上传并解析后的文档ID列表
-    """
-    # 验证文件并读取内容
-    file_contents = []
-    for file_obj in files:
-        if not file_obj.filename:
-            return get_json_result(data=False, retmsg="No file selected!", retcode=RetCode.ARGUMENT_ERROR)
-        # 读取文件内容并转换为 (bytes, filename) 元组
-        file_contents.append((await file_obj.read(), file_obj.filename))
-
-    try:
-        doc_ids = await finish_status_write(asyncio.to_thread(doc_upload_and_parse_in_session, db.get_bind(), conversation_id, file_contents, user.id))
-        return get_json_result(data=doc_ids)
-    except AssertionError as e:
-        return get_json_result(data=False, retmsg=str(e), retcode=RetCode.ARGUMENT_ERROR)
-    except LookupError as e:
-        return get_json_result(data=False, retmsg=str(e), retcode=RetCode.DATA_ERROR)
-    except Exception as e:
-        return server_error_response(e)
 
 
 # ============================================================================

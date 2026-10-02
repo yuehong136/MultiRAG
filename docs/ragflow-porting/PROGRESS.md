@@ -3,6 +3,64 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 343bda11193dd9d236c3a07f8a8ca8e2809a2517 · 退役会话解析入库
+
+2026-10-02 从本仓 `27665d9bb6193ca7825d3f1e69bd167056c48a7a` 开始，按根冻结队列
+沿用预期 upstream remote 与 `origin/main=519e7d98a5651564d4e35d6648f006cba4baaf4f`，
+本轮未 fetch。完整目标 diff 只有三条 Python 路径、7 增 177 删：旧上传解析 route、专属
+helper 和一条旧测试方法。到冻结基准的相关 first-parent 行为历史没有恢复；后续整体
+删除 Python/测试不作为该能力的 revert/re-land。
+
+| 目标足迹 | 本项处置 |
+|---|---|
+| document_app upload_and_parse | 删除 `POST /v1/document/upload_and_parse`，不新建替代入口 |
+| document_service doc_upload_and_parse | 删除专属解析入库 helper 与专属线程 Session helper，只清其独占导入；异步 DB baseline 精确移除该 route 一行 |
+| 旧测试方法 | 本地旧保留断言改为退役；两条原会话解析/source producer 集成用例转换为真实 404、无执行、完整存储不变回归 |
+| Web / SDK / MCP / Go | 目标无 diff。当前 Web 只有死方法定义与专用测试，没有产品调用，独立清理由根后续协调；两个 SDK 实际客户端走 dataset REST。Go 无该 route/helper，不新增并行能力或宣称 Go 等价验收 |
+
+旧入口原来同步创建会话知识库的 Document/File/File2Document、对象、分块、向量和计数，
+这项会话入库能力正式退役。运行时 REST/SDK 附件上传、可信描述与聊天提取继续提供，
+行为不等同于会话入库；现行合同集中在 [HTTP 参考](../references/http_api_reference.md#上传运行时附件)。
+活动 Web 的 Explore/MCPChat 使用附件 hooks 与新 runtime API；后端、MCP/Agent、worker、
+两个 SDK client 及 Go 未发现旧入口或两个专属 helper 的活动调用。
+
+保留 FileService upload_document、parse/parse_docs/get_files、dataset 上传/parse/worker、
+写作参考、Canvas/聊天共享资料提取、共享 insert_source_chunks，以及 worker/REST/legacy
+source 最新状态与旧/新母块保护。没有改 status/run/change_status/web_parse/metadata/parser，
+a536 兼容入口退出由根单独协调。AST 对比确认两个生产文件仅删除一个 route、两个 helper，
+所有其他函数/模型定义完全一致；re/xxhash/MAXIMUM_PAGE_NUMBER 的其他实际使用保留。
+
+### 本轮实际验收与门禁
+
+- 定向 unit **24 passed**；相关四个 integration 模块 **31 passed、exit=0**。
+  两条退役用例各发送 15 次实际请求：无凭据/JWT/API key/错误凭据/过期 JWT，分别空请求、
+  错字段、合法 conversation_id + file multipart，均为完整统一 HTTP/code 404、data=null。
+- 真实 conversation/dataset、已有 Document/File/File2Document/Task 及对象、带母关系的
+  Milvus payload/vector/可用状态和 Redis task 消息作为基盘；新 SQL 连接、独立 Strong
+  Milvus client、原始 MinIO bytes 与具体 stream before/after 完全一致。完整读回 JSON 存档，
+  parser/provider、SQL DML、object/index/Redis 写入和临时文件执行守卫均未触发，OpenAPI
+  operation 与两个 helper 消失。禁用的零分块文档不再由这个已删除 producer 新增 source。
+- 正式保留回归实际验证 runtime REST JWT/API key 与 SDK multipart，可信 owner/size/描述与
+  独立对象字节；聊天/Canvas/MCP ID 恢复后内容进入捕获模型；dataset parse 真 SQL Task/Redis
+  入队；写作参考真实文本解析与 SQL 保存。其余 source/status/mother/补偿/并发测试原断言保留。
+  模型输出在既有明确边界受控，不宣称远程模型或完整后台 worker 解析执行。
+- 完整 `make verify`：Ruff、8 个 import contracts、async DB、mypy 127 文件、
+  **3795 unit passed，exit=0**；`REQUIRE_SERVICES=1 make integration`：
+  **526 passed，无 skip，exit=0**。所有本项可执行改动均在这两项本轮门禁前完成。
+  同实际 listener 的 `make smoke` 在正式真实 HTTP 用例中执行并断言 exit=0，原始输出存档。
+- 自有 scratch DB、owner IDs、bucket/object 名、dataset/document/SQL 关系 IDs、collection、
+  stream/cache key、端口与 token 的非秘密行标识均记录；只删除这些自有资源，各 fixture 用
+  独立连接核 SQL 为 0，并核 collection、queue/cache、bucket 及 listener 退出。共享服务与
+  外部 Go/native 资源保留，未新建容器/修改共享配置，不按通用资源前缀扫删。
+
+本机原始日志在 `/tmp/multirag-343bda-` 前缀：`unit-initial.log`、`http-initial.log`、
+`verify-final.log`、`integration-final.log`；最终 ownership/retirement before-after/smoke 存于
+`integration-final-evidence/`。独立清理读回 `/tmp/multirag-343bda-cleanup-readback.json`
+与验收报告 `/tmp/multirag-343bda-acceptance.md`：两次运行共 63 份自有资源记录，
+63 个 bucket、58 个 collection、60 个具体 Redis key/stream 及两个 scratch DB 均不存在；
+SQL 自有行均为 0，自有 listener 关闭，两份完整 retirement before/after 一致，清理 exit=0。
+保留原有 25 项无关脏改，不 push，不取下一 SHA；完整交付后等根审结。
+
 ## d78013964af8044e4d7b761e0bf1e5113a4bfdd1 · 数据集管理 HTTP 回归
 
 2026-10-02 从本仓 `d30c8d3ae863e913e3d90e7c069109f207d757f9` 开始。
@@ -639,8 +697,9 @@ AST 对比确认生产文件只改变活动 agent_bot_completions 定义和对�
 | `api/apps/document_app.py` 删除旧临时 URL/上传文件转文本的 `/parse`、专用文件名 helper 与导入 | 删除本地 `POST /v1/document/parse` 及 `_is_safe_download_filename`、`os.path`、PurePosixPath/PureWindowsPath、HTML parser 和项目下载目录导入。保留其他入口消费的 `FileService`、`is_valid_url`、`html2pdf`、`re` 与上传表单类型。 |
 | `test/testcases/test_web_api/test_document_app/test_upload_documents.py` 删除旧入口的 Quart mock 测试和专用导入 | 本仓没有这些旧测试，不复制 Quart harness。新增 4 个隔离 FastAPI HTTP/存储回归，验证退役及保留的调用链。 |
 
-目标没有查到 revert/re-land。后续 `343bda111` 删除 `upload_and_parse`，但独立 web
-`src/api/conversation.ts:uploadAndParse` 仍实际消费该合同，本项不采用；后续
+目标没有查到 revert/re-land。当时暂未采用后续 `343bda111` 的 `upload_and_parse` 删除。
+343bda 本轮重新沿产品调用链核查：独立 web 的 `uploadAndParse` 只有方法定义和专用测试，
+没有活动产品调用；旧会话入库能力现已退役，现行合同以本文最新 343bda 项及 HTTP 参考为准。后续
 `a536980e2`（批量 status）、`49912a156`（run）、`c5116b90e`（thumbnails）、
 `c81081f8e`（parser）、`f70316911`（preview/download）是独立迁移，不整包纳入。
 稳定 API 退役判据沿用技能中的逐接口核对，本轮补充共享 helper、不同解析合同及实际退役验收说明。
@@ -652,7 +711,7 @@ SDK checkout 中的同名旧后端源码副本不是客户端请求。保留：
 - REST 数据集 `/api/v1/datasets/{dataset_id}/documents/parse` 接收 `document_ids`，
   独立 web `src/api/knowledge-document-parsing.ts` 消费，真实后台调度仍经过
   `DocumentService.run`、`queue_tasks`；这不是临时文件转文本的替代合同。
-- 会话 `upload_and_parse` 保持 `conversation_id`、multipart `file` 和 `retcode/data` ID 数组。
+- 当时保留会话 `upload_and_parse`；现已在 343bda 项独立退役，不影响本项保留的共享文本解析。
 - `write_app.parse_reference_material` → `ReferenceService.parse_file_content` →
   `FileService.parse_docs(..., "system")` 保留；`web_parse`、SDK datasets chunks 也不变。
 
@@ -1083,8 +1142,9 @@ conversation/completion 的 FileService 解析结果进入 system prompt/images�
 独立 MinIO 逐字节/owner/size/可信描述核对 10 个前端对象和 2 个 SDK 对象；隔离库 10 张相关
 SQL 表均为 0 行，测试桶/对象/描述清除，专用 Redis 清空后容器和匿名卷移除，四个自有监听关闭。
 主浏览器 origin 存储清空；旧错误/失联标签页因策略或超时未强行处理，测试账号与有效凭据已失效。
-当前两仓活动调用核对未见旧别名消费者；本项仅移除该别名，保留 REST/SDK、
-`/v1/document/upload_and_parse` 及 Agent 共用 helper，相关单测改为退役断言。
+该次核对未见旧别名消费者；当时仅移除该别名，保留 REST/SDK、
+`/v1/document/upload_and_parse` 及 Agent 共用 helper。会话旧入口后续已在 343bda 项退役，
+REST/SDK 与 Agent 共享附件提取继续保留，现行合同见 HTTP 参考。
 
 退役收尾门禁：本轮 `make verify`（Ruff、8 个分层契约、async DB 检查、mypy 126 文件、
 3323 unit）与 `make integration`（249 passed、无 skip）通过。后者在隔离 HTTP API 内

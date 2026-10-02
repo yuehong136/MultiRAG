@@ -34,7 +34,7 @@ from common.config_utils import CONFIGS
 
 
 @pytest.fixture
-def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
     from api.apps import app, manager
 
     owner_ids = [uuid4().hex, uuid4().hex]
@@ -68,13 +68,25 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
     base = f"http://127.0.0.1:{listener.getsockname()[1]}"
     server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    record = {
+        "database": bootstrapped_engine.url.database,
+        "owners": owner_ids,
+        "api_token_owner": owner_ids[1],
+        "api_token_name": "upload-test",
+        "bucket": bucket,
+        "port": listener.getsockname()[1],
+    }
+    evidence = Path(os.environ.get("MULTIRAG_343BDA_EVIDENCE_DIR", str(tmp_path)))
+    evidence.mkdir(parents=True, exist_ok=True)
+    record_path = evidence / (owner_ids[0] + ".json")
+    record_path.write_text(json.dumps(record))
     thread.start()
     try:
         deadline = time.monotonic() + 30
         while not server.started and thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert server.started, "scratch HTTP API failed to start"
-        yield {
+        env = {
             "base": base,
             "owners": owner_ids,
             "jwt": manager.create_access_token(data={"sub": f"{owner_ids[0]}@upload.test"}),
@@ -83,13 +95,18 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
             "bucket": bucket,
             "engine": bootstrapped_engine,
             "storage_adapter": storage,
+            "record": record,
+            "record_path": record_path,
         }
+        yield env
     finally:
         server.should_exit = True
         thread.join(timeout=15)
         listener.close()
         asyncio.run(async_engine.dispose())
-        for item in storage_client.list_objects(bucket, recursive=True):
+        objects = list(storage_client.list_objects(bucket, recursive=True))
+        record["objects"] = [item.object_name for item in objects]
+        for item in objects:
             storage_client.remove_object(bucket, item.object_name)
         assert not list(storage_client.list_objects(bucket, recursive=True))
         storage_client.remove_bucket(bucket)
@@ -100,6 +117,17 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
             db.execute(sa.delete(User).where(User.id.in_(owner_ids)))
             db.commit()
         assert not thread.is_alive()
+        with bootstrapped_engine.connect() as db:
+            remaining = {
+                model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(column.in_(owner_ids)))
+                for model, column in [(APIToken, APIToken.tenant_id), (UserTenant, UserTenant.user_id), (Tenant, Tenant.id), (User, User.id)]
+            }
+            assert not any(remaining.values()), remaining
+        assert not storage_client.bucket_exists(bucket)
+        with socket.socket() as client:
+            assert client.connect_ex(("127.0.0.1", record["port"])) != 0
+        record.update(base_remaining=remaining, bucket_removed=True, listener_closed=True)
+        record_path.write_text(json.dumps(record))
 
 
 def read_object(client: Minio, bucket: str, key: str) -> bytes:
@@ -122,7 +150,8 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     assert retired.json() == {"code": 404, "message": "Not Found: /v1/document/upload_info", "data": None, "error": "Not Found"}
     assert not list(env["storage"].list_objects(env["bucket"], recursive=True))
     paths = requests.get(f"{env['base']}/openapi.json", timeout=30).json()["paths"]
-    assert "/v1/document/upload_info" not in paths and "post" in paths["/v1/document/upload_and_parse"]
+    assert "/v1/document/upload_info" not in paths and "/v1/document/upload_and_parse" not in paths
+    assert "post" in paths["/api/v1/documents/upload"] and "post" in paths["/api/v1/files/upload_info"]
     text = b"Runtime attachment from the REST endpoint. Owned by the first test user."
     response = requests.post(url, headers=headers, files={"file": ("single.txt", text, "text/plain")}, timeout=30)
     assert response.status_code == 200 and response.json()["code"] == 0
@@ -181,6 +210,7 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     finally:
         cache.delete(key)
         assert cache.get(key) is None
+        env["record"]["runtime_redis"] = {"key": key, "removed": True}
         cache.close()
 
     for auth in [{}, {"Authorization": "Bearer invalid-key"}]:
@@ -245,6 +275,7 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     assert len(list(env["storage"].list_objects(env["bucket"], recursive=True))) == (12 if crawl_url else 10)
 
     smoke = subprocess.run(["make", "smoke"], cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print(
         "real HTTP: retired metadata alias rejects without objects/OpenAPI; REST JWT single + API-key repeated-file + SDK files retained; independent MinIO bytes/owner/registration + chat/Canvas + Redis readback; make smoke passed; scratch cleanup required"

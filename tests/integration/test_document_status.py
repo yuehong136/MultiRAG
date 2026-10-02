@@ -14,7 +14,6 @@ from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
-import numpy as np
 import pytest
 import requests
 import sqlalchemy as sa
@@ -25,7 +24,7 @@ from api.db.db_models import APIToken, Document, Knowledgebase, Task, UserTenant
 from api.db.services import document_status_service as status_service
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
-from tests.integration.test_document_parse_retirement import _ModelOutput
+from tests.integration.test_document_parse_retirement import _ModelOutput, assert_retired_upload_has_no_work
 from tests.integration.test_document_parse_retirement import parse_api as parse_api
 from tests.integration.test_runtime_document_upload import read_object
 from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
@@ -47,6 +46,7 @@ def status_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
     rows = [chunk(env, env["doc"], "first"), chunk(env, env["doc"], "second"), chunk(env, env["second"], "sibling")]
     assert settings.docStoreConn.insert(rows, env["collection"], env["kb"]) == []
     env["storage_adapter"].put(env["kb"], "doc.txt", b"Owned original source bytes.")
+    env["record"]["status"] = {key: env[key] for key in ["doc", "zero", "second", "other_kb", "foreign_doc", "task"]}
     try:
         yield env
     finally:
@@ -58,6 +58,13 @@ def status_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
             db.commit()
             assert db.get(Document, env["foreign_doc"]) is None
             assert db.get(Knowledgebase, env["other_kb"]) is None
+        with env["engine"].connect() as db:
+            remaining = {
+                model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(model.id == identifier))
+                for model, identifier in [(Document, env["foreign_doc"]), (Knowledgebase, env["other_kb"])]
+            }
+            assert not any(remaining.values())
+        env["record"]["status"]["remaining"] = remaining
 
 
 def chunk(env: dict[str, Any], doc: str, text: str) -> dict[str, Any]:
@@ -396,51 +403,12 @@ def test_cancelled_status_drains_store_before_next_sql_winner(status_api: dict[s
     assert sql_rows(env)[env["doc"]]["status"] == "1" and all(row["available_int"] == 1 for row in index_rows(env, env["doc"]))
 
 
-def test_upload_parse_zero_disabled_during_provider_boundary(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    from api.db.joint_services import tenant_model_service
-    from api.db.services import llm_service
-
+def test_retired_upload_parse_has_no_producer_for_disabled_zero_document(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env = status_api
-    initial = set(sql_rows(env))
-    seen: list[str] = []
-
-    class Model(_ModelOutput):
-        def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
-            with Session(env["engine"]) as db:
-                docs = list(db.scalars(sa.select(Document).where(Document.kb_id == env["kb"])))
-                fresh = [doc for doc in docs if doc.id not in initial]
-                assert len(fresh) == 1 and fresh[0].chunk_num == 0
-                identifier = fresh[0].id
-            if identifier not in seen:
-                assert change(env, [identifier], 0).json()["code"] == 0
-                seen.append(identifier)
-            return super().encode(texts)
-
-    monkeypatch.setattr(tenant_model_service, "get_model_config_by_type_and_name", lambda *args, **kwargs: {"llm_name": env["cache_prefix"]})
-    monkeypatch.setattr(tenant_model_service, "get_tenant_default_model_by_type", lambda *args, **kwargs: {"llm_name": env["cache_prefix"]})
-    monkeypatch.setattr(llm_service, "LLMBundle", lambda *args, **kwargs: Model(env["cache_prefix"], []))
-    binary = b"New conversation source stays disabled after its first real insertion."
-    response = requests.post(
-        env["base"] + "/v1/document/upload_and_parse",
-        headers={"Authorization": f"Bearer {env['jwt']}"},
-        data={"conversation_id": env["conversation"]},
-        files={"file": ("new-disabled.txt", binary, "text/plain")},
-        timeout=60,
-    )
-    assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
-    assert len(seen) == 1
-    doc = sql_rows(env)[seen[0]]
-    assert doc["status"] == "0" and doc["chunk_num"] > 0
-    source = [row for row in index_rows(env, seen[0]) if not row.get("knowledge_graph_kwd")]
-    assert source and all(row["available_int"] == 0 for row in source)
-    assert read_object(env["storage"], env["bucket"], f"{env['kb']}/{doc['location']}") == binary
-    before = copy.deepcopy(index_rows(env, seen[0]))
-    assert change(env, seen, 1).json()["code"] == 0
-    after = index_rows(env, seen[0])
-    for row in before:
-        row["available_int"] = 1
-    assert after == before
-    print("Actual upload_and_parse SQL/MinIO/Milvus after zero-chunk disable at explicitly controlled provider boundary; latest SQL inherited, bytes preserved and re-enable readback passed")
+    assert change(env, [env["zero"]], 0).json()["code"] == 0
+    assert sql_rows(env)[env["zero"]]["chunk_num"] == 0 and sql_rows(env)[env["zero"]]["status"] == "0"
+    assert_retired_upload_has_no_work(env, monkeypatch)
+    assert index_rows(env, env["zero"]) == []
 
 
 def test_source_special_products_and_read_then_delete(status_api: dict[str, Any]) -> None:

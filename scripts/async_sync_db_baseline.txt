@@ -31,7 +31,6 @@ api/apps/document_app.py::get_document_tags
 api/apps/document_app.py::preview_chunks
 api/apps/document_app.py::run_analyze_v2
 api/apps/document_app.py::upload
-api/apps/document_app.py::upload_and_parse
 api/apps/docx2zjform_app.py::convert
 api/apps/llm_app.py::add_llm
 api/apps/llm_app.py::embeddings_api

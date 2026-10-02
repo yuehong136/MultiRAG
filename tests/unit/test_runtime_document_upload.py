@@ -232,7 +232,8 @@ def test_upload_routes_expose_rest_and_sdk_without_retired_alias(client: TestCli
     assert not any(getattr(route, "path", None) == "/v1/document/upload_info" for route in client.app.routes)
     assert not paths["/api/v1/documents/upload"]["post"].get("deprecated", False)
     assert not paths["/api/v1/files/upload_info"]["post"].get("deprecated", False)
-    assert "post" in paths["/v1/document/upload_and_parse"]
+    assert "/v1/document/upload_and_parse" not in paths
+    assert not any(getattr(route, "path", None) == "/v1/document/upload_and_parse" for route in client.app.routes)
 
 
 @pytest.mark.parametrize("token", [None, "invalid-token"])

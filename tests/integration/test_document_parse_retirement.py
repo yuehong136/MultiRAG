@@ -6,7 +6,6 @@ No browser, remote model or background parse worker is run.
 """
 
 import builtins
-import hashlib
 import json
 import os
 import subprocess
@@ -19,7 +18,6 @@ import numpy as np
 import pytest
 import requests
 import sqlalchemy as sa
-from pymilvus import Collection
 from sqlalchemy.orm import Session, sessionmaker
 
 from api.db import db_models
@@ -71,6 +69,8 @@ def parse_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         db.add(WritingProject(id=env["project"], user_id=owner, user_input="scratch", content_type="article", language_style="plain", word_count=100))
         db.add(WritingChapter(id=env["chapter"], project_id=env["project"], title="Scratch chapter"))
         db.commit()
+    env["record"]["parse"] = {key: env[key] for key in ["kb", "dialog", "conversation", "project", "chapter", "collection", "queue", "cache_prefix"]}
+    env["record_path"].write_text(json.dumps(env["record"]))
     try:
         yield env
     finally:
@@ -94,11 +94,23 @@ def parse_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
                 (Dialog, Dialog.id == env["dialog"]),
                 (Knowledgebase, Knowledgebase.id == env["kb"]),
             ]
+            owned_rows = {model.__tablename__: list(db.scalars(sa.select(model.id).where(condition))) for model, condition in scoped}
             for model, condition in scoped:
                 db.execute(sa.delete(model).where(condition))
             db.commit()
-            for model, condition in scoped:
-                assert db.scalar(sa.select(sa.func.count()).select_from(model).where(condition)) == 0
+        with env["engine"].connect() as db:
+            remaining = {model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(condition)) for model, condition in scoped}
+            assert not any(remaining.values()), remaining
+        assert index_snapshot(env) == []
+        env["record"]["parse"].update(
+            documents=doc_ids,
+            owned_rows=owned_rows,
+            remaining=remaining,
+            collection_removed=True,
+            queue_removed=True,
+            cache_keys=[key.decode() if isinstance(key, bytes) else key for key in keys],
+            cache_removed=True,
+        )
 
 
 def _headers(env: dict[str, Any]) -> dict[str, str]:
@@ -160,7 +172,7 @@ def test_retired_parse_http_openapi_no_execution(parse_api: dict[str, Any], monk
     assert after == downloads
     paths = requests.get(env["base"] + "/openapi.json", timeout=30).json()["paths"]
     assert "/v1/document/parse" not in paths
-    for path in ["/v1/document/upload_and_parse", "/api/v1/datasets/{dataset_id}/documents/parse", "/v1/write/api/reference-materials/parse", "/v1/document/web_parse"]:
+    for path in ["/api/v1/datasets/{dataset_id}/documents/parse", "/v1/write/api/reference-materials/parse", "/v1/document/web_parse"]:
         assert "post" in paths[path]
     smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
@@ -214,63 +226,148 @@ class _ModelOutput:
         return "# Deterministic document\n## Verified text\n- Retained upload and parse content\n"
 
 
-def test_conversation_upload_parse_real_sql_minio_milvus(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    from api.db.joint_services import tenant_model_service
-    from api.db.services import llm_service
-    from core.graphrag.general import extractor
+def sql_snapshot(env: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Independent connection, all columns including relationships and counters."""
+    with env["engine"].connect() as db:
+        return {
+            model.__tablename__: [dict(row) for row in db.execute(sa.select(model.__table__).order_by(model.id)).mappings()]
+            for model in [Document, File, File2Document, Task, Conversation, Dialog, Knowledgebase]
+        }
 
-    env = parse_api
+
+def object_snapshot(env: dict[str, Any]) -> dict[str, bytes]:
+    return {item.object_name: read_object(env["storage"], env["bucket"], item.object_name) for item in env["storage"].list_objects(env["bucket"], recursive=True)}
+
+
+def index_snapshot(env: dict[str, Any]) -> list[dict[str, Any]]:
+    from pymilvus import MilvusClient
+
+    from common.config_utils import CONFIGS
+
+    config = CONFIGS["milvus"]
+    client = MilvusClient(uri=config["hosts"], user=config.get("username", ""), password=config.get("password", ""), db_name=config.get("db_name") or "default")
+    try:
+        if not client.has_collection(env["collection"]):
+            return []
+        return sorted(client.query(env["collection"], filter='pk != ""', output_fields=["*", "vector", "q_768_vec"], consistency_level="Strong"), key=lambda row: row["pk"])
+    finally:
+        client.close()
+
+
+def assert_retired_upload_has_no_work(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Actual old requests cannot authenticate, parse, write or create temp files."""
+    import tempfile
+    from datetime import timedelta
+
+    import starlette.formparsers
+
+    from api.apps import manager
+    from api.db.services import document_service, llm_service
+    from core.app import naive
+
+    before = sql_snapshot(env), object_snapshot(env), index_snapshot(env), REDIS_CONN.REDIS.xrange(env["queue"])
     calls: list[str] = []
 
-    def config(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {"llm_name": env["cache_prefix"]}
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        calls.append("execution")
+        raise AssertionError("retired upload producer executed work")
 
-    def provider(*args: Any, **kwargs: Any) -> _ModelOutput:
-        return _ModelOutput(env["cache_prefix"], calls)
+    def sql_guard(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        assert statement.lstrip().split()[0].upper() not in {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"}
 
-    def cache_key(name: str, text: str, history: Any, conf: Any) -> str:
-        return env["cache_prefix"] + hashlib.sha256(str((name, text, history, conf)).encode()).hexdigest()
+    execute = REDIS_CONN.REDIS.execute_command
 
-    def get_cache(name: str, text: str, history: Any, conf: Any) -> str | None:
-        return REDIS_CONN.REDIS.get(cache_key(name, text, history, conf))
+    def redis_guard(command: str, *args: Any, **kwargs: Any) -> Any:
+        assert command.upper() in {"PING", "GET", "MGET", "EXISTS", "SCAN", "TYPE", "TTL", "XRANGE"}, command
+        return execute(command, *args, **kwargs)
 
-    def set_cache(name: str, text: str, value: str, history: Any, conf: Any) -> None:
-        assert REDIS_CONN.REDIS.set(cache_key(name, text, history, conf), value, ex=60)
-
-    monkeypatch.setattr(tenant_model_service, "get_model_config_by_type_and_name", config)
-    monkeypatch.setattr(tenant_model_service, "get_tenant_default_model_by_type", config)
-    monkeypatch.setattr(llm_service, "LLMBundle", provider)
-    monkeypatch.setattr(extractor, "get_llm_cache", get_cache)
-    monkeypatch.setattr(extractor, "set_llm_cache", set_cache)
+    expired = manager.create_access_token(data={"sub": f"{env['owners'][0]}@upload.test"}, expires=timedelta(seconds=-1))
     url = env["base"] + "/v1/document/upload_and_parse"
-    missing = requests.post(url, headers=_headers(env), data={"conversation_id": uuid4().hex}, files={"file": ("missing.txt", b"missing conversation")}, timeout=30)
-    assert missing.status_code == 200 and missing.json()["retcode"] == 101 and missing.json()["data"] is False
-    bad_shape = requests.post(url, headers=_headers(env), files={"files": ("wrong-field.txt", b"wrong contract")}, timeout=30)
-    assert bad_shape.status_code == 422
-    denied = requests.post(url, data={"conversation_id": env["conversation"]}, files={"file": ("denied.txt", b"denied")}, timeout=30)
-    assert denied.status_code == 401
-    assert _counts(env)[0] == 0 and calls == []
-    binary = b"Retained conversation upload text is present in actual stored chunks."
-    response = requests.post(url, headers=_headers(env), data={"conversation_id": env["conversation"]}, files={"file": ("conversation.txt", binary, "text/plain")}, timeout=60)
-    body = response.json()
-    assert response.status_code == 200 and body["retcode"] == 0, body
-    assert len(body["data"]) == 1 and isinstance(body["data"][0], str)
-    doc_id = body["data"][0]
+    with monkeypatch.context() as scoped:
+        for target, attribute in [
+            (FileService, "upload_document"),
+            (FileService, "parse_docs"),
+            (llm_service, "LLMBundle"),
+            (naive, "chunk"),
+            (env["storage_adapter"], "put"),
+            (settings.docStoreConn, "insert"),
+            (REDIS_CONN, "queue_product"),
+            (tempfile, "NamedTemporaryFile"),
+            (starlette.formparsers, "SpooledTemporaryFile"),
+        ]:
+            scoped.setattr(target, attribute, forbidden)
+        scoped.setattr(REDIS_CONN.REDIS, "execute_command", redis_guard)
+        sa.event.listen(env["engine"], "before_cursor_execute", sql_guard)
+        try:
+            for credential in [None, env["jwt"], env["api_key"], "invalid-token", expired]:
+                headers = {"Authorization": f"Bearer {credential}"} if credential else {}
+                for kwargs in [
+                    {},
+                    {"files": {"files": ("wrong-field.txt", b"must not write")}},
+                    {"data": {"conversation_id": env["conversation"]}, "files": {"file": ("retired.txt", b"must not parse", "text/plain")}},
+                ]:
+                    response = requests.post(url, headers=headers, timeout=30, **kwargs)
+                    assert response.status_code == 404
+                    assert response.json() == {"code": 404, "message": "Not Found: /v1/document/upload_and_parse", "data": None, "error": "Not Found"}
+        finally:
+            sa.event.remove(env["engine"], "before_cursor_execute", sql_guard)
+    assert calls == []
+    after = sql_snapshot(env), object_snapshot(env), index_snapshot(env), REDIS_CONN.REDIS.xrange(env["queue"])
+    assert after == before
+    readback = {}
+    for label, snapshot in [("before", before), ("after", after)]:
+        readback[label] = {"sql": snapshot[0], "objects_hex": {key: binary.hex() for key, binary in snapshot[1].items()}, "index": snapshot[2], "queue": snapshot[3]}
+    readback_path = env["record_path"].with_suffix(".retirement-readback.json")
+    readback_path.write_text(json.dumps(readback, default=str))
+    paths = requests.get(env["base"] + "/openapi.json", timeout=30).json()["paths"]
+    assert "/v1/document/upload_and_parse" not in paths
+    assert not hasattr(document_service, "doc_upload_and_parse") and not hasattr(document_service, "doc_upload_and_parse_in_session")
+    env["record"].setdefault("retirement", []).append(
+        {
+            "requests": 15,
+            "sql_rows": {table: len(rows) for table, rows in before[0].items()},
+            "objects": sorted(before[1]),
+            "index_rows": len(before[2]),
+            "queue_messages": len(before[3]),
+            "unchanged": True,
+            "execution_calls": calls,
+            "readback": str(readback_path),
+        }
+    )
+
+
+def test_retired_conversation_upload_parse_preserves_real_sql_objects_index_queue(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = parse_api
+    binary = b"Existing conversation dataset source must survive route retirement."
     with Session(env["engine"]) as db:
-        doc = db.get(Document, doc_id)
-        assert doc.kb_id == env["kb"] and doc.name == "conversation.txt" and doc.run == TaskStatus.DONE.value and doc.progress == 1
-        assert doc.chunk_num > 0 and doc.token_num > 0
-        assert db.scalar(sa.select(sa.func.count()).select_from(File2Document).where(File2Document.document_id == doc_id)) == 1
-        assert read_object(env["storage"], env["bucket"], f"{env['kb']}/{doc.location}") == binary
-    assert "chat" in calls and "encode" in calls
-    collection = Collection(env["collection"], using=settings.docStoreConn._using)
-    chunks = collection.query(expr=f'doc_id == "{doc_id}"', output_fields=["pk", "doc_id", "content_with_weight", "q_768_vec"], consistency_level="Strong")
-    assert len(chunks) == doc.chunk_num
-    assert any(binary.decode() in chunk["content_with_weight"] for chunk in chunks)
-    assert all(len(chunk["q_768_vec"]) == 768 for chunk in chunks)
-    assert any("Deterministic document" in chunk["content_with_weight"] for chunk in chunks)
-    keys = list(REDIS_CONN.REDIS.scan_iter(match=env["cache_prefix"] + "*"))
-    assert len(keys) == 1 and "Deterministic document" in REDIS_CONN.REDIS.get(keys[0])
+        errors, files = FileService.upload_document(db, db.get(Knowledgebase, env["kb"]), [(binary, "existing.txt")], env["owners"][0])
+        assert errors == [] and len(files) == 1
+        doc_id = files[0][0]["id"]
+        task_id = uuid4().hex
+        db.add(Task(id=task_id, doc_id=doc_id, task_type="Parse"))
+        db.commit()
+    parent, child = uuid4().hex, uuid4().hex
+    chunks = [
+        {
+            "id": identifier,
+            "pk": identifier,
+            "doc_id": doc_id,
+            "kb_id": env["kb"],
+            "content_with_weight": binary.decode(),
+            "available_int": available,
+            "mom_id": mother,
+            "vector": [0.1] * 768,
+            "q_768_vec": [0.1] * 768,
+        }
+        for identifier, available, mother in [(parent, 0, ""), (child, 1, parent)]
+    ]
+    assert settings.docStoreConn.insert(chunks, env["collection"], env["kb"]) == []
+    assert REDIS_CONN.queue_product(env["queue"], {"id": task_id, "doc_id": doc_id, "task_type": "Parse"})
+    assert len(index_snapshot(env)) == 2 and len(REDIS_CONN.REDIS.xrange(env["queue"])) == 1
+    assert_retired_upload_has_no_work(env, monkeypatch)
+    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+    env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
+    assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 
 def test_write_reference_retains_real_shared_text_parser(parse_api: dict[str, Any]) -> None:

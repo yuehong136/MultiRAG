@@ -382,8 +382,10 @@ SDK 已有 `POST /api/v1/files/upload_info` 继续使用 multipart 字段 `files
 `code=404`、`data=null`，OpenAPI 不再提供该操作。
 `POST /api/v1/datasets/{dataset_id}/documents/parse` 继续接收 JSON `document_ids`，
 调度数据集文档的异步解析任务；它不返回临时文件的文本内容。
-会话文档 `POST /v1/document/upload_and_parse` 仍使用 multipart `conversation_id`
-和 `file`，成功返回 `retcode=0`、`data` 文档 ID 数组。
+会话解析入库入口 `POST /v1/document/upload_and_parse` 已移除，所有请求均返回
+HTTP 404、`code=404`、`data=null`，OpenAPI 不再提供该操作，不上传、解析或调度任务。
+该入口原来把文件写入会话绑定的知识库并同步完成解析入库；这项能力已退役。
+运行时附件入口返回可信附件描述，继续支持聊天内容提取，它不会自动执行上述会话入库流程。
 写作参考资料 `POST /v1/write/api/reference-materials/parse` 仍接收 `chapter_id` 和
 `file`，通过共享文件解析服务生成文本并保存参考资料；成功返回 `retcode=0` 和资料摘要。
 
