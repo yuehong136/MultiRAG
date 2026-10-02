@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 import tiktoken
+from anyio import CancelScope
 from sqlalchemy import and_, asc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -31,7 +32,7 @@ from api.identity.run_context import RunContext
 from api.utils.api_utils import get_data_openai
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
-from core.utils.task_runtime import finish_runtime
+from core.utils.task_runtime import finish_runtime, require_runtime_finish
 
 
 class CanvasTemplateService(CommonService):
@@ -500,11 +501,14 @@ async def completion(
     if run_context is None or run_context.principal is None:
         run_kwargs["user_id"] = legacy_user_id
     terminal_frames: list[dict[str, Any]] = []
+    finish_attempted = False
+    round_persisted = False
 
     def failure_frame(message: str) -> str:
         return "data:" + json.dumps({"event": "error", "code": 100, "message": message, "data": {"error": message}, "session_id": session_id}, ensure_ascii=False) + "\n\n"
 
     async def persist_failure(message: str) -> None:
+        nonlocal round_persisted
         # Keep the attempted user input and failure, without an assistant success.
         conv["message"] = conv["message"][:attempted_message_count]
         conv["errors"] = message
@@ -512,6 +516,7 @@ async def completion(
         written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))
         if written != 1:
             raise RuntimeError("Failed to persist agent failure.")
+        round_persisted = True
 
     try:
         async with aclosing(canvas.run(**run_kwargs)) as run_events:
@@ -522,7 +527,7 @@ async def completion(
                     await persist_failure(failure)
                     yield failure_frame(failure)
                     return
-                if ans.get("event") == "message_end":
+                if ans.get("event") in {"message_end", "workflow_finished"}:
                     terminal_frames.append(ans)
                     continue
                 if ans["event"] == "message":
@@ -547,6 +552,13 @@ async def completion(
             yield failure_frame(str(canvas.error))
             return
 
+        # Resolve the lifecycle race before any successful append. A cancelled
+        # winner follows the failure path once, without an extra session round.
+        finish_attempted = True
+        await asyncio.to_thread(require_runtime_finish, canvas.task_id)
+        # Validate terminal payloads before a successful SQL commit as well.
+        success_frames = ["data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n" for terminal in sorted(terminal_frames, key=lambda frame: frame["event"] == "message_end")]
+
         # 结束：写入 assistant 消息、引用、错误，并更新持久层
         assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
         if a2ui_commands:
@@ -562,17 +574,41 @@ async def completion(
         written = await db.run_sync(lambda s: API4ConversationService.append_message(s, conv["id"], conv))  # TODO(async-phase4)
         if written != 1:
             raise RuntimeError("Failed to persist agent result.")
-        await asyncio.to_thread(finish_runtime, canvas.task_id)
-        for terminal in terminal_frames:
-            yield "data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n"
+        round_persisted = True
+        # Preserve the existing shared API order: workflow end then message end.
+        for frame in success_frames:
+            yield frame
+    except asyncio.CancelledError:
+        if not round_persisted:
+            # Starlette cancels the iterator when the real HTTP client leaves.
+            # Shield the one failed-round write; do not rewrite a committed run.
+            with CancelScope(shield=True):
+                message = "Agent completion disconnected."
+                finish_attempted = True
+                try:
+                    outcome = await asyncio.to_thread(finish_runtime, canvas.task_id)
+                    if outcome == "cancel_requested":
+                        message = "Task canceled while Agent completion disconnected."
+                    elif outcome == "unbound":
+                        message += " Task runtime ownership is unavailable."
+                except Exception:
+                    logging.exception("Failed to finalize disconnected Agent runtime")
+                    message += " Task runtime finalization failed."
+                await db.rollback()
+                await persist_failure(message)
+        raise
     except Exception as error:
-        await persist_failure(str(error))
+        if not round_persisted:
+            await db.rollback()
+            await persist_failure(str(error))
         yield failure_frame(str(error))
     finally:
-        try:
-            await asyncio.to_thread(finish_runtime, canvas.task_id)
-        finally:
-            canvas.cancel_task()
+        with CancelScope(shield=True):
+            try:
+                if not finish_attempted:
+                    await asyncio.to_thread(finish_runtime, canvas.task_id)
+            finally:
+                canvas.cancel_task()
 
 
 async def completion_openai(

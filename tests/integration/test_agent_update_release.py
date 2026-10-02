@@ -714,7 +714,7 @@ def test_published_runtime_failure_has_no_success(release_api: dict[str, Any], m
         events = sse_events(response.text)
         assert events[-1]["event"] == "error" and events[-1]["code"] != 0
         assert not any(event.get("event") in {"message", "message_end", "workflow_finished"} for event in events)
-        assert "data:[DONE]" in response.text
+        assert "[DONE]" not in response.text
     else:
         assert response.json()["retcode"] != 0 and response.json().get("data") is not True
     with Session(env["engine"]) as db:

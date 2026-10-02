@@ -90,6 +90,53 @@ fixture 逐项检查自有 SQL 行、Redis stream/归属/取消 key 和 HTTP lis
 删除 scratch 数据库；不操作业务库，本项没有创建容器/卷。没有运行完整后台 worker 进程、
 远程 LLM/provider 或浏览器，真实 worker 进度和 Pipeline 取消观察不能替代这些验收。
 
+### 同 SHA 收尾竞争补修
+
+根审查发现最后 Canvas 事件后，旧 completion 先成功 append 助手，再调用忽略结果的
+finish_runtime；取消 CAS 即使获胜，仍会保存/发送成功。补修前正式真实 HTTP 回归分别
+复现流式、非流式错误成功（2 failed），不把根的纯内存时序复现当作真实 HTTP 证据。
+
+FINISH_RUNTIME_SCRIPT 现在原子返回 unbound/finished/cancel_requested：先于成功 SQL append
+与终帧判定；active→finished 获胜后到达的取消幂等，cancel_requested 获胜则沿现有失败链
+保存 user/errors，轮数只加一次。missing、Redis 异常/False 不成为成功。版本仍为 1，
+binding 字段、取消/恢复 CAS、授权、TTL、nonce 合同不变；Go 取消服务无需改实现，未新增
+Go Canvas。普通后台任务可得到 unbound 并按现有 finally 清理；DataFlow enqueue 失败与
+背景 finish 调用不把该结果当成功答案。共享 completion 成功登记只尝试一次，避免 Redis
+失败后 finally 重新登记掩盖故障；调试 Agent 同样先判定再写副本/释放缓冲终帧。
+
+共享链先缓冲 workflow_finished/message_end，成功时保留原有 workflow→message 顺序。
+普通 REST error 后不再额外发 DONE；beta 继续无新增 DONE，OpenAI error 继续不发成功终态。
+非流式失败不返回成功答案；已发的流式内容片段无法回收。成功终帧先序列化再提交消息，
+运行登记 finished 不代表 SQL 保存/交付成功。Redis 故障保留明确失败与有限期 active 记录，
+不假造已完成。成功提交后发生传输中断不重复改写该轮。
+
+收尾 SQL 故障回归又复现 PendingRollbackError 导致失败轮次未保存（2 failed）；补修为先
+rollback，再保存一次 user/errors。真实 HTTP socket shutdown 在取消获胜的首次/续跑中
+触发 ASGI CancelledError，使用受保护的失败持久化/清理保留原 nonce、取消状态及一次轮数；
+客户端已断开，不声称错误帧交付。断连 fixture 保留 SSE 迭代器并关闭自有 TCP socket，
+避免临时迭代器被释放而在目标收尾窗口前意外终止请求。
+
+本轮新增真实验收覆盖 REST/beta/OpenAI 首次、续跑、发布快照，stream 真/假；实际
+Canvas Begin→Message 的最后事件后、原子 finish 调用前、成功 SQL append 调度前三个窗口，
+finish/cancel 胜负、Redis 异常/False、真实 SQL flush 故障、真实 TCP 断连及独立兄弟成功。
+SQL messages/errors/round、runtime 状态、nonce/TTL、原定义/版本/副本均独立读回。
+等待只注入实际 Canvas EOF 与持久化调度边界；Redis finish 的异常/False 及 SQL flush 的
+before_cursor_execute 一次失败为故障注入，随后仍实际回滚/写入/读回。鉴权、生命周期
+正常 Lua、组件、存储和业务响应真实，未使用模型/provider 替身或远程模型。
+Go 真实鉴权 HTTP 增加首次/续跑/发布收尾取消和 finish 获胜的 stream 真/假用例。
+
+本轮最终 `make verify` 通过（Ruff、8 条 import contracts、async DB 门禁、mypy 126 文件，
+3698 unit passed）；`make integration` 418 passed，无 skip，含新增 33 个真实 HTTP 与同
+隔离 listener 的实际 smoke；Go 跨端 18 passed，无 skip，含新增 8 个收尾窗口用例。
+全量中三个既有错误流 DONE 断言按根明确合同改为断言不出现 DONE，保留错误码、无成功
+答案及 SQL 读回门禁后复跑通过。Go 生产实现/绑定协议未变，未重复初轮 build/vet/三个
+入口构建，当前真实 Go HTTP 完整矩阵已复跑。原始日志另用 `/tmp/multirag-488-terminal-`
+前缀的 before、sql-before、disconnect-before、http、fault-http、disconnect-http、unit、
+verify、integration、go-http、smoke、cleanup `.log`，原有第十项已完成证据保留。
+fixture 和额外读回检查自有
+SQL/Redis/listener/scratch 库/私有配置清理，最终删除自有 native 链接；仍未运行完整后台
+worker、远程 provider 或浏览器。没有改变 Web 或旧 PUT 的已核实兼容退出条件。
+
 ## 82313020c71b8b91873232c2334c2c1c382f1c49 · 列表操作与 strict 模式
 
 - 上游 #14387；2026-10-02 核对预期 origin 并 fetch，

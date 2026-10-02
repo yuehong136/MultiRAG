@@ -60,7 +60,7 @@ from common.misc_utils import get_uuid, thread_pool_exec
 from core.flow.pipeline import Pipeline
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
-from core.utils.task_runtime import finish_runtime
+from core.utils.task_runtime import finish_runtime, require_runtime_finish
 
 router = APIRouter()
 
@@ -621,12 +621,22 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     # 下方分钟级的 SSE 流式期间以 idle-in-transaction 状态钉死
     await db.rollback()
 
-    async def sse():
+    async def sse() -> AsyncGenerator[str, None]:
         nonlocal canvas, user_id
+        finish_attempted = False
+        terminal_frames: list[dict[str, Any]] = []
         try:
             async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):
+                failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
+                if failure:
+                    raise RuntimeError(failure)
+                if ans.get("event") in {"message_end", "workflow_finished"}:
+                    terminal_frames.append(ans)
+                    continue
                 yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
 
+            finish_attempted = True
+            await asyncio.to_thread(require_runtime_finish, canvas.task_id)
             commit_ok = CanvasReplicaService.commit_after_run(
                 canvas_id=req["id"],
                 tenant_id=tenant_id,
@@ -642,13 +652,17 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                     tenant_id,
                     user_id,
                 )
+                raise RuntimeError("Failed to persist Canvas runtime replica.")
+            for terminal in terminal_frames:
+                yield "data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n"
 
         except Exception as e:
             logging.exception(e)
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
         finally:
             try:
-                await asyncio.to_thread(finish_runtime, canvas.task_id)
+                if not finish_attempted:
+                    await asyncio.to_thread(finish_runtime, canvas.task_id)
             finally:
                 canvas.cancel_task()
 
@@ -759,7 +773,7 @@ async def exp_agent_completion(
                 if failure:
                     ans.update(event="error", code=100, message=failure, data={"error": failure})
                     yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
-                    break
+                    return
                 event = ans.get("event")
                 if event == "node_finished":
                     if return_trace:
@@ -772,9 +786,10 @@ async def exp_agent_completion(
         except Exception:
             logging.exception("Agent stream failed")
             yield "data:" + json.dumps({"event": "error", "code": 100, "message": "Agent completion failed.", "data": {"error": "Agent completion failed."}}) + "\n\n"
+            return
         finally:
             await answers.aclose()
-        # Transport termination only; an error frame remains a failed execution.
+        # Successful completion only. A failed execution ends after its error.
         yield "data:[DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})

@@ -31,6 +31,7 @@ from tests.integration.test_task_cancellation import cancel, persistent_state
 from tests.integration.test_task_cancellation import cancel_api as cancel_api
 from tests.integration.test_task_cancellation import test_agent_run_bound_before_first_frame_cancel_and_sibling_isolation as run_agent_case
 from tests.integration.test_task_cancellation import wait_gate as wait_gate
+from tests.integration.test_task_cancellation_terminal import terminal_case
 
 
 @pytest.fixture
@@ -169,3 +170,11 @@ def test_go_graph_binding_and_terminal_noops(cancel_api: dict[str, Any], go_task
         unknown = uuid4().hex
         assert client.post(go_task_api + f"/api/v1/tasks/{unknown}/cancel", timeout=30).json()["code"] == 0
         assert not REDIS_CONN.REDIS.exists(f"{unknown}-cancel")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "mode,window,winner", [("first", "after_events", "cancel"), ("continued", "after_events", "cancel"), ("published", "finish", "cancel"), ("continued", "persistence", "finish")]
+)
+def test_go_http_at_python_terminal_boundary(cancel_api: dict[str, Any], go_task_api: str, monkeypatch: pytest.MonkeyPatch, mode: str, window: str, winner: str, stream: bool) -> None:
+    terminal_case(cancel_api, monkeypatch, surface="rest", mode=mode, stream=stream, window=window, winner=winner, cancel_base=go_task_api)

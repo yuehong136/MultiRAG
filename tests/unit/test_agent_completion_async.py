@@ -112,6 +112,7 @@ def completion_stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
     monkeypatch.setattr(canvas_service, "bind_canvas_task", bind_task)
     monkeypatch.setattr(canvas_service, "finish_runtime", lambda task_id: None)
+    monkeypatch.setattr(canvas_service, "require_runtime_finish", lambda task_id: None)
     monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: _FakeConv()))
 
     def append_message(cls: type[API4ConversationService], db: Session, cid: str, conv: dict[str, Any]) -> int:
@@ -354,7 +355,7 @@ def test_agent_adapter_preserves_failure_and_closes_generator(agent_route_stubs:
     if stream:
         frames = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:") and "[DONE]" not in line]
         assert len(frames) == 1 and frames[0]["event"] == "error" and frames[0]["code"] != 0
-        assert "data:[DONE]" in response.text
+        assert "[DONE]" not in response.text
     else:
         assert response.json()["retcode"] != 0 and response.json().get("data") is not True
 
@@ -391,6 +392,33 @@ async def test_completion_records_failure_without_success(completion_stubs: dict
     assert not any(frame["event"] == "message_end" for frame in frames)
     assert len(saved) == 1 and saved[0]["errors"]
     assert [message["role"] for message in saved[0]["message"]] == ["user"]
+
+
+@pytest.mark.parametrize("failure", ["cancel", "redis", "unbound"])
+async def test_terminal_decision_precedes_successful_append(completion_stubs: dict[str, object], monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    from copy import deepcopy
+
+    from common.exceptions import TaskCanceledException
+
+    saved: list[dict[str, Any]] = []
+
+    def reject_finish(task_id: str) -> None:
+        assert not saved
+        if failure == "cancel":
+            raise TaskCanceledException("Task canceled before completion")
+        if failure == "redis":
+            raise ConnectionError("terminal Redis failure")
+        raise RuntimeError("Task runtime ownership unavailable")
+
+    def persist(cls: type[API4ConversationService], db: Session, identifier: str, conversation: dict[str, Any]) -> int:
+        saved.append(deepcopy(conversation))
+        return 1
+
+    monkeypatch.setattr(canvas_service, "require_runtime_finish", reject_finish)
+    monkeypatch.setattr(API4ConversationService, "append_message", classmethod(persist))
+    frames = [json.loads(frame[5:]) async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant-unit", "agent-1", session_id="sess-1", query="test")]
+    assert len(saved) == 1 and saved[0]["errors"] and [message["role"] for message in saved[0]["message"]] == ["user"]
+    assert frames[-1]["event"] == "error" and not any(frame["event"] == "message_end" for frame in frames)
 
 
 @pytest.mark.parametrize("stream", [False, True])
