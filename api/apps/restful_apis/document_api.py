@@ -14,12 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
+from api.apps.services.document_image_http import ImageReadRoute, thumbnail_url
 from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
-from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
+from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES
 from api.db.db_models import get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_image_service import list_thumbnails, read_dataset_image, read_runtime_image
 from api.db.services.document_ingest_service import IngestError, ingest_documents
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import batch_document_status, writable_dataset
@@ -43,7 +45,28 @@ from common.metadata_utils import convert_conditions, meta_filter, turn2jsonsche
 MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
+image_router = APIRouter(route_class=ImageReadRoute)
 logger = logging.getLogger(__name__)
+
+
+@image_router.get("/thumbnails", summary="获取已授权文档的缩略图")
+async def thumbnails(doc_ids: list[str] = Query(...), db: AsyncSession = Depends(get_async_db), principal: Principal = Depends(async_current_user)) -> Response:
+    return JSONResponse(content={"code": 0, "message": "success", "data": await list_thumbnails(db, principal, doc_ids)})
+
+
+@image_router.get("/documents/images/{image_id:path}", summary="读取已登记的数据集图片")
+async def dataset_image(image_id: str, db: AsyncSession = Depends(get_async_db), principal: Principal = Depends(async_current_user)) -> Response:
+    result = await read_dataset_image(db, principal, image_id)
+    return Response(content=result.data, media_type=result.media_type)
+
+
+@image_router.get("/documents/runtime/{file_id}/image", summary="读取本人的运行时附件图片")
+async def runtime_image(file_id: str, principal: Principal = Depends(async_current_user)) -> Response:
+    result = await read_runtime_image(principal, file_id)
+    return Response(content=result.data, media_type=result.media_type)
+
+
+router.include_router(image_router)
 
 
 @router.post("/documents/ingest", summary="启动、重置或取消文档解析")
@@ -584,8 +607,7 @@ async def list_documents(
             output_docs = [document_api_service.map_doc_keys(sync_db, doc) for doc in docs]
             for doc in output_docs:
                 thumbnail = doc.get("thumbnail")
-                if thumbnail and not thumbnail.startswith(IMG_BASE64_PREFIX):
-                    doc["thumbnail"] = f"/v1/document/image/{dataset_id}-{thumbnail}"
+                doc["thumbnail"] = thumbnail_url(dataset_id, thumbnail)
                 if doc.get("source_type"):
                     doc["source_type"] = doc["source_type"].split("/")[0]
                 parser_config = doc.get("parser_config") or {}

@@ -8,6 +8,7 @@ import json
 import sys
 from typing import Any
 
+import pytest
 from fastapi.routing import APIRoute, iter_route_contexts
 from sqlalchemy.orm import Session
 
@@ -88,6 +89,27 @@ def _assert_sync_facade(sessions: list[object]) -> None:
     assert all(isinstance(session, Session) for session in sessions)
 
 
+@pytest.mark.parametrize(
+    "thumbnail,expected",
+    [
+        (None, None),
+        ("", ""),
+        ("data:image/jpeg;base64,abc", "data:image/jpeg;base64,abc"),
+        ("data:image/webp;base64,abc", "data:image/webp;base64,abc"),
+        ("a-b 空间%/image.png", "/api/v1/documents/images/kb1-a-b%20%E7%A9%BA%E9%97%B4%25%2Fimage.png"),
+    ],
+)
+def test_list_documents_thumbnail_wire(client, monkeypatch, thumbnail: str | None, expected: str | None) -> None:
+    sessions: list[object] = []
+    calls: list[dict[str, Any]] = []
+    _stub_list(monkeypatch, sessions, calls)
+    monkeypatch.setitem(_RAW_DOC, "thumbnail", thumbnail)
+    response = client.get(_PATH)
+    assert response.status_code == 200 and response.json()["code"] == 0
+    assert response.json()["data"]["docs"][0]["thumbnail"] == expected
+    _assert_sync_facade(sessions)
+
+
 def test_list_documents_maps_fields_and_forwards_filters(client, monkeypatch):
     sessions: list[object] = []
     calls: list[dict[str, Any]] = []
@@ -120,7 +142,7 @@ def test_list_documents_maps_fields_and_forwards_filters(client, monkeypatch):
                 "token_count": 12,
                 "chunk_method": "naive",
                 "run": "DONE",
-                "thumbnail": "/v1/document/image/kb1-thumb.png",
+                "thumbnail": "/api/v1/documents/images/kb1-thumb.png",
                 "source_type": "local",
                 "parser_config": {},
                 "create_time": 200,

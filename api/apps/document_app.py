@@ -21,9 +21,10 @@ from starlette.status import (
 )
 
 from api.apps import manager
+from api.apps.services.document_image_http import thumbnail_url
 from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
-from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
+from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES, FileType
 from api.db.db_models import get_async_db, get_db
 from api.db.services import duplicate_name
@@ -837,7 +838,7 @@ def list_docs_get(kb_id: str, keywords: str = "", page: int = 1, page_size: int 
                     "progress": 100,
                     "chunk_num": 50,
                     "token_num": 15000,
-                    "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
+                    "thumbnail": "/api/v1/documents/images/kb_id-thumbnail_id",
                     "create_time": "2024-01-01 12:00:00",
                     "update_time": "2024-01-01 13:00:00",
                     "created_by": "user_123",
@@ -963,8 +964,7 @@ def list_docs_get(kb_id: str, keywords: str = "", page: int = 1, page_size: int 
         docs = [convert_datetime_to_str(d) for d in docs]
 
         for doc_item in docs:
-            if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
-                doc_item["thumbnail"] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+            doc_item["thumbnail"] = thumbnail_url(kb_id, doc_item["thumbnail"])
             if doc_item.get("source_type"):
                 doc_item["source_type"] = doc_item["source_type"].split("/")[0]
             if doc_item.get("parser_config", {}).get("metadata"):
@@ -1049,7 +1049,7 @@ def list_docs(
                     "progress": 100,
                     "chunk_num": 50,
                     "token_num": 15000,
-                    "thumbnail": "/v1/document/image/kb_id-thumbnail_id",
+                    "thumbnail": "/api/v1/documents/images/kb_id-thumbnail_id",
                     "create_time": "2024-01-01 12:00:00",
                     "update_time": "2024-01-01 13:00:00",
                     "created_by": "user_123",
@@ -1308,8 +1308,7 @@ def list_docs(
             docs = [doc for doc in docs if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)]
         # 处理缩略图路径
         for doc_item in docs:
-            if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
-                doc_item["thumbnail"] = f"/v1/document/image/{kb_id}-{doc_item['thumbnail']}"
+            doc_item["thumbnail"] = thumbnail_url(kb_id, doc_item["thumbnail"])
             if doc_item.get("source_type"):
                 doc_item["source_type"] = doc_item["source_type"].split("/")[0]
             if doc_item.get("parser_config", {}).get("metadata"):
@@ -1631,23 +1630,6 @@ def doc_infos(doc_ids: list[str], db: Session = Depends(get_db), user=Depends(ma
     docs = DocumentService.get_by_ids(db, doc_ids)
     docs_dicts = DocumentService.serialize_documents(db, docs)
     return get_json_result(data=docs_dicts)
-
-
-@router.get("/thumbnails", summary="获取文档缩略图", response_description="成功获取文档缩略图")
-def thumbnails(doc_ids: list[str] = Query(..., description="文档ID列表，例如 ?doc_ids=1&doc_ids=2"), db: Session = Depends(get_db), user=Depends(manager)):
-    if not doc_ids:
-        return construct_json_result(data=False, message='Lack of "Document ID"', code=RetCode.ARGUMENT_ERROR)
-
-    try:
-        docs = DocumentService.get_thumbnails(db, doc_ids)
-
-        for doc_item in docs:
-            if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
-                doc_item["thumbnail"] = f"/v1/document/image/{doc_item['kb_id']}-{doc_item['thumbnail']}"
-
-        return get_json_result(data={d["id"]: d["thumbnail"] for d in docs})
-    except Exception as e:
-        return server_error_response(e)
 
 
 @router.post("/change_auth", summary="更改文档授权", response_description="成功更改文档授权")
@@ -2186,7 +2168,7 @@ def change_parser(request_body: ChangeParserRequest, db: Session = Depends(get_d
         return server_error_response(e)
 
 
-@router.get("/image/{image_id}", summary="获取图片", response_description="成功获取图片")
+@router.get("/image/{image_id}", summary="获取图片（兼容入口）", response_description="成功获取图片", deprecated=True)
 def get_image(
     image_id: str,
     db: Session = Depends(get_db),
