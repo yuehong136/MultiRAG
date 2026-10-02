@@ -131,6 +131,41 @@ Go ES 验收实例的 store 为 nil：只证明当前 service 的 capability 拒
 对象/索引/队列、Infinity 数据库/容器、listener/proxy、私有配置和临时构建产物；共享业务
 资源及 25 项无关改动保留。独立清理读回见本机本轮 review-cleanup 文件。
 
+### 同 SHA 旧母块兼容补修
+
+上轮母块验收只覆盖自身 `mom_id=id` 的新形状。基线 worker 的母块 allowlist 删除
+自身 `mom_id`，但子块保留父 ID：既有 ES/OS 母块缺字段、Infinity 母块默认空字符串。
+只改后续 producer 不能保护这些既有行，启用、同状态修复及失败恢复 SQL=1 都有缺口。
+
+Python ES/OS 现在按可信 dataset/doc 查询完整 scroll 快照，校验超时、分片、精确总数、
+每页及终止行数，重复/未知/部分关系读取失败，不执行 availability 写入；游标始终关闭。
+脚本按同文档父引用与自身标记保持母块 0。Python/Go Infinity 从当前数据集表的同文档
+实际计数和全部 id/doc_id/mom_id 行辨认父块，行数或关系错误时不写；Go 仍使用已有
+独占连接。普通缺/空 mom_id 切片正常启用，其他文档的引用不能跨文档隐藏切片。
+只更新 availability，保留源字段/向量/创建字段/父子关系/数量，不迁移生产旧数据。
+
+隔离真实 Python/Go Infinity 用例同时放入省略 mom_id 的旧母块（独立读回默认空）、
+新自身标记母块、普通空 mom_id 切片、其他文档引用及另一个数据集表。实际 HTTP
+禁用→启用、SQL=1 同状态母块修复和 PG deferred COMMIT 失败补偿后，全部 SQL/
+索引字段保留；available=1 查询排除两类母块、包含普通切片，其他文档/数据集不变。
+受影响真实 HTTP 三例（两栈母块与不同文档 RPC/取消）通过；这些是既有 22 例中的
+受影响复跑，不合算为新增 25 例。ES/OS 仍仅真实 connector/DSL 加受控 transport，
+没有真实 ES/OS 服务验收。Go ES/Milvus 能力边界及旧 change_status 迁移条件保持当前合同。
+
+本轮修后 `make verify` **3792 unit passed**，Ruff、8 import contracts、async DB 和
+mypy 127 文件通过；`REQUIRE_SERVICES=1 make integration` **500 passed，无 skip**，
+包含实际 FastAPI listener 的 smoke。connector/Infinity 专项 **68 passed**，受影响
+真实 HTTP **3 passed，19 deselected**。Go gofmt、build/vet internal、Infinity 父关系及
+handler 严格状态专项、三个独立 cmd main 构建通过。首次 cmd 构建命令误用了旧文件名，
+按当前 server_main.go/admin_server.go/multirag_cli.go 更正后分别通过，未修改生产代码
+规避构建失败；仅现有 m1cpu CGO VLA 警告。原始日志为本机
+`/tmp/multirag-a536-legacy-{verify,integration,unit,http-initial,go-build,go-vet}.log`、
+`legacy-go-targeted-final.log` 和 `legacy-go-cmd-{server,admin,cli}.log`。
+隔离夹具删除本轮 scratch SQL/对象/索引/队列、Infinity 数据库及 listener/proxy/配置；
+独立读回并清理自有 Infinity 容器、native symlink 与三个临时二进制，复用的外部
+Go/native 保留。清理记录为本机 `legacy-cleanup.log` 与 `legacy-cleanup-readback.json`。
+原 25 项无关改动保留，不改 Web、不 push，等待当前项审结。
+
 ## c949096db038f11d44b969902da440a800a75a3f · 本批首项已有等价实现
 
 2026-10-02 只读核目标完整单文件 diff 与当前 Canvas.reset：非 None 显式值保留、类型默认

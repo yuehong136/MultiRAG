@@ -844,7 +844,10 @@ SQL 行锁排序；索引完成后才提交 SQL，失败尝试按当前 SQL 状�
 source 分块按写入前的最新状态插入；母块保持隐藏，图谱/RAPTOR 等产品保留原语义。
 ES/OpenSearch availability 更新要求完整响应：超时、版本冲突、失败项、缺表、未知或部分更新
 都不算成功；全部 updated/noops 与 total 对齐时接受，同状态 no-op 可以成功。
-Infinity 与 ES/OpenSearch 启用及补偿只更改普通子块，母块保持隐藏。
+Infinity 与 ES/OpenSearch 启用、同状态修复及补偿保持母块隐藏。按同数据集、同文档的
+完整父子引用识别旧母块（自身 mom_id 缺失或为空），同时支持新母块自身 mom_id=id；
+普通无 mom_id 切片仍按目标启用。关系读取失败、不完整或重复时不执行启用写入；
+ES/OpenSearch 使用完整 scroll 读回并关闭游标，Infinity 核对关系行数与实际计数。
 这是跨存储补偿合同，进程崩溃和外部直接改写索引不构成分布式原子提交保证。
 
 Go 使用同一路径及响应合同，接受当前 Python HS256 JWT（同服务签名密钥）和

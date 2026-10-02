@@ -17,6 +17,7 @@
 import copy
 import json
 import re
+from typing import Any
 
 import pandas as pd
 from infinity.common import InfinityException, SortType
@@ -484,6 +485,8 @@ class InfinityConnection(InfinityConnectionBase):
             self.connPool.release_conn(inf_conn)
 
     def update(self, condition: dict, new_value: dict, index_name: str, knowledgebase_id: str) -> bool:
+        from common.doc_store.availability import availability_parent_ids
+
         # if 'position_int' in newValue:
         #     logger.info(f"update position_int: {newValue['position_int']}")
         inf_conn = self.connPool.get_conn()
@@ -503,9 +506,23 @@ class InfinityConnection(InfinityConnectionBase):
             if set(new_value) == {"available_int"} and "doc_id" in condition:
                 status = int(new_value["available_int"])
                 if "mom_id" in clmns:
-                    parent = "(mom_id != '' AND mom_id = id)"
-                    table_instance.update(f"({filter}) AND {parent}", {"available_int": 0})
-                    table_instance.update(f"({filter}) AND NOT {parent}", {"available_int": status})
+                    counts = table_instance.output(["count(*)"]).filter(filter).to_result()[0]
+                    count_values = list(counts.values())
+                    if len(count_values) != 1 or len(count_values[0]) != 1:
+                        raise ValueError("Unknown availability relationship count")
+                    count = count_values[0][0]
+                    data = table_instance.output(["id", "doc_id", "mom_id"]).filter(filter).to_result()[0]
+                    if set(data) != {"id", "doc_id", "mom_id"} or any(len(values) != count for values in data.values()):
+                        raise ValueError("Incomplete availability relationships")
+                    rows: list[dict[str, Any]] = [dict(zip(data, values, strict=True)) for values in zip(*data.values(), strict=True)]
+                    parents = availability_parent_ids(rows)
+                    clauses = [self.equivalent_condition_to_str({"doc_id": doc_id, "id": ids}, table_instance) for doc_id, ids in parents.items() if ids]
+                    if clauses:
+                        parent = "(" + " OR ".join(f"({clause})" for clause in clauses) + ")"
+                        table_instance.update(f"({filter}) AND {parent}", {"available_int": 0})
+                        table_instance.update(f"({filter}) AND NOT {parent}", {"available_int": status})
+                    else:
+                        table_instance.update(filter, {"available_int": status})
                 else:
                     table_instance.update(filter, {"available_int": status})
                 return True

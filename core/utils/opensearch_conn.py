@@ -340,7 +340,7 @@ class OSConnection(DocStoreConnection):
         return res
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:
-        from common.doc_store.availability import availability_script, complete_availability_update
+        from common.doc_store.availability import availability_script, availability_search_parents, complete_availability_update
 
         availability = set(newValue) == {"available_int"} and "doc_id" in condition
         if availability:
@@ -407,14 +407,15 @@ class OSConnection(DocStoreConnection):
                 raise Exception(f"newValue `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str.")
         ubq = UpdateByQuery(index=indexName).using(self.os).query(bqry)
         ubq = ubq.script(source="".join(scripts), params=params)
-        if availability:
-            ubq = ubq.script(**availability_script(int(newValue["available_int"])))
         ubq = ubq.params(refresh=True)
         ubq = ubq.params(slices=5)
         ubq = ubq.params(conflicts="proceed")
 
         for _ in range(ATTEMPT_TIME):
             try:
+                if availability:
+                    parents = availability_search_parents(self.os, indexName, bqry.to_dict())
+                    ubq = ubq.script(**availability_script(int(newValue["available_int"]), parents))
                 response = ubq.execute()
                 return complete_availability_update(response) if availability else True
             except Exception as e:
