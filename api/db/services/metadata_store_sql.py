@@ -34,6 +34,30 @@ logger = logging.getLogger(__name__)
 
 
 class SqlMetadataStore(MetadataStore):
+    @staticmethod
+    def upsert_in_transaction(db: Session, doc_id: str, tenant_id: str, kb_id: str, meta_fields: dict) -> None:
+        """Participate in the caller's document transaction; never commit it."""
+        now_ts = current_timestamp()
+        now_dt = get_format_time()
+        statement = (
+            pg_insert(DocumentMetadata)
+            .values(
+                id=doc_id,
+                tenant_id=tenant_id,
+                kb_id=kb_id,
+                meta_fields=meta_fields,
+                create_time=now_ts,
+                create_date=now_dt,
+                update_time=now_ts,
+                update_date=now_dt,
+            )
+            .on_conflict_do_update(index_elements=["id"], set_={"meta_fields": meta_fields, "update_time": now_ts, "update_date": now_dt})
+        )
+        identifiers = list(db.scalars(statement.returning(DocumentMetadata.id)))
+        if identifiers != [doc_id]:
+            raise RuntimeError("Document metadata write could not be confirmed.")
+        db.flush()
+
     def get(self, db: Session, doc_id: str, tenant_id: str, kb_id: str) -> dict:
         row = db.get(DocumentMetadata, doc_id)
         if not row:
@@ -43,30 +67,7 @@ class SqlMetadataStore(MetadataStore):
 
     def upsert(self, db: Session, doc_id: str, tenant_id: str, kb_id: str, meta_fields: dict) -> bool:
         try:
-            now_ts = current_timestamp()
-            now_dt = get_format_time()
-            stmt = (
-                pg_insert(DocumentMetadata)
-                .values(
-                    id=doc_id,
-                    tenant_id=tenant_id,
-                    kb_id=kb_id,
-                    meta_fields=meta_fields,
-                    create_time=now_ts,
-                    create_date=now_dt,
-                    update_time=now_ts,
-                    update_date=now_dt,
-                )
-                .on_conflict_do_update(
-                    index_elements=["id"],
-                    set_={
-                        "meta_fields": meta_fields,
-                        "update_time": now_ts,
-                        "update_date": now_dt,
-                    },
-                )
-            )
-            db.execute(stmt)
+            self.upsert_in_transaction(db, doc_id, tenant_id, kb_id, meta_fields)
             db.commit()
             return True
         except Exception as e:

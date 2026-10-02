@@ -2,10 +2,17 @@ from io import BytesIO
 
 from PIL import Image
 
+from api.db.db_models import db_connection
+from api.db.services.document_image_lock import image_write_locks
 from common import settings
 
 
 def store_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
+    with db_connection() as db, image_write_locks(db.get_bind(), [(bucket, name)]):
+        _store_locked_chunk_image(bucket, name, image_binary)
+
+
+def _store_locked_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
     if settings.STORAGE_IMPL.obj_exist(bucket, name):
         old_binary = settings.STORAGE_IMPL.get(bucket, name)
         old_img = Image.open(BytesIO(old_binary)).convert("RGB")

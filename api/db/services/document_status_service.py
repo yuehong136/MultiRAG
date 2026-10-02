@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, Knowledgebase, Task, UserTenant
+from api.db.services.document_image_lock import image_reference_key, image_write_locks, release_task_images, reserve_task_image
 from api.db.services.document_task_service import account_task_tokens, current_document_task, reconcile_task_chunk_count
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
@@ -222,77 +223,125 @@ def source_document_availability(bind: Engine | Connection, chunks: list[dict[st
 
 def insert_source_chunks(bind: Engine | Connection, chunks: list[dict[str, Any]], index_name: str | list[str], dataset_id: str, task_id: str | None = None) -> list[str]:
     """Keep insertion, task registration and ledger inside its ownership lock."""
-    from api.db.db_models import Task
-    from common.doc_store.document_history import confirm_history_visibility, document_history, restore_document_history
+    from common.doc_store.document_history import document_history
 
     with source_document_availability(bind, chunks, dataset_id, task_id) as db:
         index = index_name[0] if isinstance(index_name, list) else index_name
         document_id = chunks[0]["doc_id"]
         snapshot = document_history(settings.docStoreConn, index, dataset_id, document_id) if task_id is not None and db is not None else None
-        original_task = db.get(Task, task_id) if db is not None and task_id is not None else None
-        original_doc = db.get(Document, document_id) if original_task is not None else None
-        original_task_row = _source_row(original_task) if original_task is not None else None
-        original_doc_row = _source_row(original_doc) if original_doc is not None else None
-        applied_task_row: dict[str, Any] | None = None
-        applied_doc_row: dict[str, Any] | None = None
+        keys = {key for row in [*chunks, *(snapshot or [])] if (key := image_reference_key(row.get("img_id"))) is not None}
+        recovery: dict[str, Any] = {}
         try:
-            errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
-            if not isinstance(errors, list) or errors:
-                raise RuntimeError("Source chunk insertion failed.")
-            confirm_history_visibility(settings.docStoreConn, index)
-            if task_id is not None and db is not None:
-                from api.db.db_models import Task
-
-                task = db.get(Task, task_id)
-                if task is None:
-                    raise RuntimeError("Document task registration unavailable.")
-                identifiers = [str(chunk.get("id", chunk.get("pk"))) for chunk in chunks if chunk.get("mom_id") != chunk.get("id", chunk.get("pk"))]
-                task.chunk_ids = " ".join(dict.fromkeys([*(task.chunk_ids or "").split(), *identifiers]))
-                reconcile_task_chunk_count(db, document_id, dataset_id, index)
-                if any("ingest_tokens_int" in chunk for chunk in chunks):
-                    account_task_tokens(db, task, document_id, dataset_id, sum(chunk.get("ingest_tokens_int", 0) for chunk in chunks))
-            # Commit failures are handled while ownership is checked again.
-            if db is not None:
-                db.flush()
-                if original_task is not None and original_doc is not None:
-                    applied_task_row = copy.deepcopy(dict(db.execute(select(Task.__table__).where(Task.id == task_id)).mappings().one()))
-                    applied_doc_row = copy.deepcopy(dict(db.execute(select(Document.__table__).where(Document.id == document_id)).mappings().one()))
-                db.commit()
-            return errors
+            with image_write_locks(bind, keys):
+                result = _insert_locked_source_chunks(db, chunks, index_name, dataset_id, task_id, index, document_id, recovery)
+                if task_id is not None and db is not None:
+                    release_task_images(task_id, {key for chunk in chunks if (key := image_reference_key(chunk.get("img_id"))) is not None})
+                return result
         except Exception:
-            if snapshot is not None and db is not None and task_id is not None:
-                # A commit exception does not say whether SQL committed. Read
-                # fresh rows under the ownership locks before compensating.
-                db.rollback()
-                with current_document_task(db, task_id, document_id, dataset_id, cleanup=True) as current:
-                    doc = db.get(Document, document_id)
-                    current_task_row = _source_row(current)
-                    current_doc_row = _source_row(doc) if doc is not None else None
-                    unchanged = current_task_row == original_task_row and current_doc_row == original_doc_row
-                    committed = current_task_row == applied_task_row and current_doc_row == applied_doc_row
-                    if not unchanged and not committed:
-                        logger.error(
-                            "Source recovery ownership changed: task_fields=%s document_fields=%s",
-                            [key for key in current_task_row if current_task_row[key] != (applied_task_row or {}).get(key)],
-                            [key for key in current_doc_row or {} if current_doc_row[key] != (applied_doc_row or {}).get(key)],
-                        )
-                        raise RuntimeError("Source chunk recovery no longer owns the current rows.")
-                    restore_document_history(settings.docStoreConn, index, dataset_id, document_id, snapshot, ids=[str(chunk.get("id", chunk.get("pk"))) for chunk in chunks])
-                    if committed and not unchanged and original_doc_row is not None and original_task_row is not None and current_doc_row is not None:
-                        chunk_delta = original_doc_row["chunk_num"] - current_doc_row["chunk_num"]
-                        token_delta = original_doc_row["token_num"] - current_doc_row["token_num"]
-                        restored_doc = db.execute(
-                            Document.__table__.update().where(Document.id == document_id).values(**{key: original_doc_row[key] for key in ["chunk_num", "token_num", "update_time", "update_date"]})
-                        )
-                        restored_task = db.execute(Task.__table__.update().where(Task.id == task_id).values(**{key: value for key, value in original_task_row.items() if key != "id"}))
-                        restored_kb = db.execute(
-                            update(Knowledgebase).where(Knowledgebase.id == dataset_id).values(chunk_num=Knowledgebase.chunk_num + chunk_delta, token_num=Knowledgebase.token_num + token_delta)
-                        )
-                        if any(result.rowcount != 1 for result in [restored_doc, restored_task, restored_kb]):
-                            raise RuntimeError("Source chunk SQL recovery could not be confirmed.")
-                        db.commit()
-                db.rollback()
+            # The dedicated image connection has released its locks before
+            # rollback can release Doc/Task. Recovery always reenters in the
+            # same Doc -> Task -> image order as a current producer.
+            if snapshot is not None and db is not None and task_id is not None and recovery:
+                _recover_source_chunks(db, task_id, document_id, dataset_id, index, chunks, snapshot, keys, recovery)
             raise
+
+
+def _insert_locked_source_chunks(
+    db: Session | None,
+    chunks: list[dict[str, Any]],
+    index_name: str | list[str],
+    dataset_id: str,
+    task_id: str | None,
+    index: str,
+    document_id: str,
+    recovery: dict[str, Any],
+) -> list[str]:
+    from common.doc_store.document_history import confirm_history_visibility
+
+    original_task = db.get(Task, task_id) if db is not None and task_id is not None else None
+    original_doc = db.get(Document, document_id) if original_task is not None else None
+    original_task_row = _source_row(original_task) if original_task is not None else None
+    original_doc_row = _source_row(original_doc) if original_doc is not None else None
+    recovery.update(original_task=original_task_row, original_doc=original_doc_row, applied_task=None, applied_doc=None)
+    if task_id is not None and db is not None:
+        for chunk in chunks:
+            if (key := image_reference_key(chunk.get("img_id"))) is not None:
+                reserve_task_image(task_id, key)
+    errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
+    if not isinstance(errors, list) or errors:
+        raise RuntimeError("Source chunk insertion failed.")
+    confirm_history_visibility(settings.docStoreConn, index)
+    if task_id is not None and db is not None:
+        task = db.get(Task, task_id)
+        if task is None:
+            raise RuntimeError("Document task registration unavailable.")
+        identifiers = [str(chunk.get("id", chunk.get("pk"))) for chunk in chunks if chunk.get("mom_id") != chunk.get("id", chunk.get("pk"))]
+        task.chunk_ids = " ".join(dict.fromkeys([*(task.chunk_ids or "").split(), *identifiers]))
+        reconcile_task_chunk_count(db, document_id, dataset_id, index)
+        if any("ingest_tokens_int" in chunk for chunk in chunks):
+            account_task_tokens(db, task, document_id, dataset_id, sum(chunk.get("ingest_tokens_int", 0) for chunk in chunks))
+    if db is not None:
+        db.flush()
+        if original_task is not None and original_doc is not None:
+            recovery.update(
+                applied_task=copy.deepcopy(dict(db.execute(select(Task.__table__).where(Task.id == task_id)).mappings().one())),
+                applied_doc=copy.deepcopy(dict(db.execute(select(Document.__table__).where(Document.id == document_id)).mappings().one())),
+            )
+        db.commit()
+    return errors
+
+
+def _recover_source_chunks(
+    db: Session,
+    task_id: str,
+    document_id: str,
+    dataset_id: str,
+    index: str,
+    chunks: list[dict[str, Any]],
+    snapshot: list[dict[str, Any]],
+    keys: set[tuple[str, str]],
+    recovery: dict[str, Any],
+) -> None:
+    from common.doc_store.document_history import restore_document_history
+
+    original_task_row, original_doc_row = recovery["original_task"], recovery["original_doc"]
+    applied_task_row, applied_doc_row = recovery["applied_task"], recovery["applied_doc"]
+    db.rollback()
+    with current_document_task(db, task_id, document_id, dataset_id, cleanup=True) as current:
+        with image_write_locks(db.get_bind(), keys):
+            doc = db.get(Document, document_id)
+            current_task_row = _source_row(current)
+            current_doc_row = _source_row(doc) if doc is not None else None
+            unchanged = current_task_row == original_task_row and current_doc_row == original_doc_row
+            committed = current_task_row == applied_task_row and current_doc_row == applied_doc_row
+            if not unchanged and not committed:
+                logger.error(
+                    "Source recovery ownership changed: task_fields=%s document_fields=%s",
+                    [key for key in current_task_row if current_task_row[key] != (applied_task_row or {}).get(key)],
+                    [key for key in current_doc_row or {} if current_doc_row[key] != (applied_doc_row or {}).get(key)],
+                )
+                raise RuntimeError("Source chunk recovery no longer owns the current rows.")
+            # A lost reservation-release reply may have removed it even
+            # though indexing now needs compensation. Protect any retry's
+            # bytes again before removing this attempt's native rows.
+            for chunk in chunks:
+                if (key := image_reference_key(chunk.get("img_id"))) is not None:
+                    reserve_task_image(task_id, key)
+            restore_document_history(settings.docStoreConn, index, dataset_id, document_id, snapshot, ids=[str(chunk.get("id", chunk.get("pk"))) for chunk in chunks])
+            if committed and not unchanged and original_doc_row is not None and original_task_row is not None and current_doc_row is not None:
+                chunk_delta = original_doc_row["chunk_num"] - current_doc_row["chunk_num"]
+                token_delta = original_doc_row["token_num"] - current_doc_row["token_num"]
+                restored_doc = db.execute(
+                    Document.__table__.update().where(Document.id == document_id).values(**{key: original_doc_row[key] for key in ["chunk_num", "token_num", "update_time", "update_date"]})
+                )
+                restored_task = db.execute(Task.__table__.update().where(Task.id == task_id).values(**{key: value for key, value in original_task_row.items() if key != "id"}))
+                restored_kb = db.execute(
+                    update(Knowledgebase).where(Knowledgebase.id == dataset_id).values(chunk_num=Knowledgebase.chunk_num + chunk_delta, token_num=Knowledgebase.token_num + token_delta)
+                )
+                if any(result.rowcount != 1 for result in [restored_doc, restored_task, restored_kb]):
+                    raise RuntimeError("Source chunk SQL recovery could not be confirmed.")
+                db.commit()
+    db.rollback()
 
 
 def _source_row(row: Document | Task) -> dict[str, Any]:

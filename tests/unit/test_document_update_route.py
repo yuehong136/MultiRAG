@@ -1,118 +1,161 @@
-"""document RESTful 更新路由契约测试（Phase 2.5 批次 1：AsyncSession 收口）。
+"""Real route registration, trusted dependencies and PATCH-local error material."""
 
-PATCH /api/v1/datasets/{id}/documents/{id} 走真实 ``api.apps.app`` 的 HTTP 契约式；
-整个更新体运行在单一 run_sync 回调内——service 桩保留真实类型契约（记录并断言
-收到 ``sqlalchemy.orm.Session``），各分支 envelope 在回调内产生后跨 greenlet 返回。
-service 层纯逻辑测试见 test_document_update_api_parity.py，此处只锁路由行为。
-"""
+import sys
+from typing import Any
 
-from types import SimpleNamespace
+import pytest
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy.orm import Session
-
-from api.apps.services import document_api_service
 from api.db.db_models import get_async_db, get_db
-from api.db.services.document_service import DocumentService
-from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import async_current_tenant_id, current_tenant_id
-from common.constants import RetCode
+from api.utils.api_utils import async_current_tenant_id, async_current_user, current_tenant_id
+from api.utils.document_update_contract import DocumentUpdateError, DocumentUpdatePatch
 
 _PATH = "/api/v1/datasets/kb1/documents/doc1"
 
 
-def _stub_happy_chain(monkeypatch, sessions):
-    """铺满主链路桩：kb 存在、有权限、文档属于数据集、字段校验通过。"""
-    kb = SimpleNamespace(id="kb1", tenant_id="tenant-unit")
-    doc = SimpleNamespace(id="doc1", name="old.pdf", kb_id="kb1")
-    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: sessions.append(s) or kb))
-    monkeypatch.setattr(document_api_service, "can_update_dataset", lambda s, tid, k: sessions.append(s) or True)
-    monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: sessions.append(s) or [doc]))
-    monkeypatch.setattr(document_api_service, "validate_document_update_fields", lambda s, r, d, rq: sessions.append(s) or (None, None))
-    monkeypatch.setattr(DocumentService, "get_by_id", classmethod(lambda cls, s, did: sessions.append(s) or doc))
-    monkeypatch.setattr(document_api_service, "map_doc_keys", lambda s, d: {"id": d.id, "chunk_method": "naive"})
-    return doc
+def _writer(monkeypatch: pytest.MonkeyPatch, result: dict[str, Any] | BaseException, calls: list[Any]) -> None:
+    async def save(db: AsyncSession, dataset: str, document: str, actor: str, patch: DocumentUpdatePatch) -> dict[str, Any]:
+        assert isinstance(db, AsyncSession)
+        calls.append((dataset, document, actor, patch.model_dump(exclude_unset=True)))
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setitem(vars(sys.modules["api.apps.restful_apis.document"]), "update_document_parser", save)
 
 
-def _assert_sync_facade(sessions):
-    assert sessions
-    for s in sessions:
-        assert isinstance(s, Session), f"同步 service 收到 {type(s).__name__}，应为 sqlalchemy.orm.Session"
+def _assert_error(response: Any, status: int, numeric: int, code: str, outcome: str = "unchanged") -> None:
+    assert response.status_code == status
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert body["code"] == code and body["retcode"] == numeric
+    assert body["details"] == body["data"] == {"outcome": outcome}
+    assert body["detail"] == body["retmsg"] == body["message"]
+    assert len(body["request_id"]) == 32 and body["request_id"] == response.headers["X-Request-ID"]
+    assert "private" not in response.text and "client-id" not in response.text
 
 
-def test_update_document_renames_and_returns_mapped_doc(client, monkeypatch):
-    sessions: list[object] = []
-    _stub_happy_chain(monkeypatch, sessions)
-    renamed: list[tuple[str, str]] = []
-    monkeypatch.setattr(document_api_service, "update_document_name_only", lambda s, did, name: sessions.append(s) or renamed.append((did, name)) or None)
-
-    resp = client.patch(_PATH, json={"name": "new.pdf"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == 0
-    assert body["data"] == {"id": "doc1", "chunk_method": "naive"}
-    assert renamed == [("doc1", "new.pdf")]
-    _assert_sync_facade(sessions)
-
-
-def test_update_document_missing_dataset(client, monkeypatch):
-    sessions: list[object] = []
-    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: sessions.append(s) or None))
-
-    resp = client.patch(_PATH, json={"name": "new.pdf"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == int(RetCode.DATA_ERROR)
-    assert body["message"] == "Can't find this dataset!"
-    _assert_sync_facade(sessions)
-
-
-def test_update_document_denies_without_permission(client, monkeypatch):
-    sessions: list[object] = []
-    kb = SimpleNamespace(id="kb1", tenant_id="tenant-unit")
-    monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: sessions.append(s) or kb))
-    monkeypatch.setattr(document_api_service, "can_update_dataset", lambda s, tid, k: sessions.append(s) or False)
-
-    resp = client.patch(_PATH, json={"name": "new.pdf"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == int(RetCode.AUTHENTICATION_ERROR)
-    assert body["message"] == "No authorization."
-    _assert_sync_facade(sessions)
+def test_update_returns_full_fresh_document_and_actual_disabled_state(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[Any] = []
+    _writer(
+        monkeypatch,
+        {"id": "doc1", "kb_id": "kb1", "parser_id": "general", "pipeline_id": None, "name": "stored.pdf", "status": "0", "run": "3", "chunk_num": 7, "token_num": 11, "parser_config": {"old": None}},
+        calls,
+    )
+    response = client.patch(_PATH, json={"name": "requested.pdf"})
+    assert response.status_code == 200 and response.json()["code"] == 0
+    assert set(response.json()) == {"code", "message", "data"} and response.json()["message"] == "success"
+    document = response.json()["data"]
+    assert document == {
+        "id": "doc1",
+        "dataset_id": "kb1",
+        "chunk_method": "general",
+        "pipeline_id": None,
+        "name": "stored.pdf",
+        "status": "0",
+        "run": "DONE",
+        "state": "DONE",
+        "enabled": False,
+        "chunk_count": 7,
+        "token_count": 11,
+        "parser_config": {"old": None},
+    }
+    assert calls == [("kb1", "doc1", "user-unit", {"name": "requested.pdf"})]
 
 
-def test_update_document_helper_error_response_passes_through(client, monkeypatch):
-    """service helper 返回的错误 envelope（回调内产生的 Response）原样透出。"""
-    sessions: list[object] = []
-    _stub_happy_chain(monkeypatch, sessions)
-    from api.utils.api_utils import get_error_data_result
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"pipeline_id": None},
+        {"chunk_method": None},
+        {"parser_config": None},
+        {"name": None},
+        {"enabled": None},
+        {"pipeline_id": 1},
+        {"chunk_method": True},
+        {"parser_config": []},
+        {"unknown": 1},
+        {"metadata": {}},
+        {"enabled": 2},
+        {"enabled": "true"},
+        {"meta_fields": {"nested": {"private": "secret"}}},
+        {"parser_config": {"ext": {}}},
+        {"parser_config": {"operator:x": {}}},
+        {"parser_config": {"chunk_token_num": "512"}},
+        {"parser_config": {"pages": None}},
+        {"parser_config": {"raptor": {"use_raptor": None}}},
+    ],
+)
+def test_strict_shape_errors_precede_writer(client: Any, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
+    calls: list[Any] = []
+    _writer(monkeypatch, AssertionError("Writer reached invalid body"), calls)
+    response = client.patch(_PATH, json=payload, headers={"X-Request-ID": "client-id-private"})
+    _assert_error(response, 422, 101, "DOCUMENT_UPDATE_VALIDATION")
+    assert calls == []
 
-    monkeypatch.setattr(document_api_service, "update_document_name_only", lambda s, did, name: get_error_data_result(retmsg="Database error (Document rename)!"))
 
-    resp = client.patch(_PATH, json={"name": "new.pdf"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["code"] == int(RetCode.DATA_ERROR)
-    assert body["message"] == "Database error (Document rename)!"
-    _assert_sync_facade(sessions)
+@pytest.mark.parametrize("payload", [{"chunk_token_num": 8193}, {"pages": [[5, 1]]}, {"mineru_lang": "en"}])
+def test_config_semantic_errors_use_fixed_400_contract(client: Any, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
+    calls: list[Any] = []
+    _writer(monkeypatch, AssertionError("Writer reached invalid config"), calls)
+    _assert_error(client.patch(_PATH, json={"parser_config": payload}), 400, 102, "DOCUMENT_UPDATE_INVALID")
+    assert calls == []
 
 
-def test_update_document_put_alias_is_removed(client):
-    resp = client.put(_PATH, json={"name": "new.pdf"})
+@pytest.mark.parametrize(
+    "status,numeric,code,outcome",
+    [
+        (400, 102, "DOCUMENT_UPDATE_INVALID", "unchanged"),
+        (403, 109, "DOCUMENT_UPDATE_FORBIDDEN", "unchanged"),
+        (404, 102, "DOCUMENT_UPDATE_UNAVAILABLE", "unchanged"),
+        (409, 102, "DOCUMENT_UPDATE_CONFLICT", "unchanged"),
+        (500, 500, "DOCUMENT_UPDATE_FAILED", "unchanged"),
+        (500, 500, "DOCUMENT_UPDATE_OUTCOME_UNKNOWN", "unknown"),
+    ],
+)
+def test_typed_failure_never_returns_document(client: Any, monkeypatch: pytest.MonkeyPatch, status: int, numeric: int, code: str, outcome: Any) -> None:
+    calls: list[Any] = []
+    _writer(monkeypatch, DocumentUpdateError("Safe update error.", status=status, numeric_code=numeric, code=code, outcome=outcome), calls)
+    _assert_error(client.patch(_PATH, json={"name": "new.pdf"}), status, numeric, code, outcome)
+    assert len(calls) == 1
 
-    assert resp.status_code == 405
+
+def test_dependency_authentication_uses_same_bridge_before_handler(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[Any] = []
+    _writer(monkeypatch, AssertionError("Authentication reached writer"), calls)
+
+    async def denied() -> None:
+        raise HTTPException(401, "private credentials", headers={"WWW-Authenticate": "Bearer"})
+
+    client.app.dependency_overrides[async_current_user] = denied
+    response = client.patch(_PATH, json={})
+    _assert_error(response, 401, 401, "DOCUMENT_UPDATE_UNAUTHORIZED")
+    assert response.headers["WWW-Authenticate"] == "Bearer" and not calls
 
 
-def test_update_document_route_has_pure_async_dependency_tree(client, route_dependency_calls):
+def test_unexpected_failure_is_safe_unknown(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _writer(monkeypatch, RuntimeError("private SQL and token"), [])
+    _assert_error(client.patch(_PATH, json={}), 500, 500, "DOCUMENT_UPDATE_OUTCOME_UNKNOWN", "unknown")
+
+
+def test_presence_is_not_expanded_with_defaults(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[Any] = []
+    _writer(monkeypatch, {"id": "doc1", "kb_id": "kb1", "parser_id": "naive", "run": "0", "status": "1"}, calls)
+    for payload in [{}, {"pipeline_id": ""}, {"parser_config": {}}, {"parser_config": {"raptor": {"use_raptor": False}}}]:
+        assert client.patch(_PATH, json=payload).status_code == 200
+        assert calls[-1][-1] == payload
+
+
+def test_put_alias_is_removed_and_legacy_adapter_remains_deprecated(client: Any) -> None:
+    assert client.put(_PATH, json={}).status_code == 405
+    paths = client.get("/openapi.json").json()["paths"]
+    assert paths["/v1/document/change_parser"]["post"]["deprecated"] is True
+
+
+def test_update_route_has_trusted_async_dependency_tree(client: Any, route_dependency_calls: Any) -> None:
     import api.apps as api_apps
 
     calls = route_dependency_calls(client.app, "PATCH", "/api/v1/datasets/{dataset_id}/documents/{document_id}")
-
-    assert get_db not in calls
-    assert current_tenant_id not in calls
-    assert api_apps.manager not in calls
-    assert async_current_tenant_id in calls
-    assert get_async_db in calls
+    assert get_db not in calls and current_tenant_id not in calls and api_apps.manager not in calls
+    assert async_current_tenant_id not in calls and async_current_user in calls and get_async_db in calls

@@ -31,7 +31,13 @@ class RequestContextMiddleware:
 
         async def send_with_request_id(message: Message) -> None:
             if message["type"] == "http.response.start":
-                MutableHeaders(scope=message).append(REQUEST_ID_HEADER, request_id)
+                headers = MutableHeaders(scope=message)
+                if "document_update_request_id" in scope:
+                    # The PATCH-local adapter owns a generated ID for its body
+                    # and response. Preserve that binding through this outer hook.
+                    headers[REQUEST_ID_HEADER] = scope["document_update_request_id"]
+                else:
+                    headers.append(REQUEST_ID_HEADER, request_id)
             await send(message)
 
         try:

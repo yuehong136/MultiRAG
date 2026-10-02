@@ -7,14 +7,15 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
 from api.apps.services.document_image_http import ImageReadRoute, thumbnail_url
+from api.apps.services.document_update_http import DocumentUpdateRoute
 from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT
@@ -23,6 +24,7 @@ from api.db.db_models import get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_image_service import list_thumbnails, read_dataset_image, read_runtime_image
 from api.db.services.document_ingest_service import IngestError, ingest_documents
+from api.db.services.document_parser_service import update_document_parser
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import batch_document_status, writable_dataset
 from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
@@ -38,7 +40,8 @@ from api.utils.api_utils import (
     get_result,
     server_error_response,
 )
-from api.utils.validation_utils import DocumentIngestRequest, UpdateDocumentReq
+from api.utils.document_update_contract import DocumentUpdatePatch
+from api.utils.validation_utils import DocumentIngestRequest
 from common.constants import RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 
@@ -46,6 +49,7 @@ MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 image_router = APIRouter(route_class=ImageReadRoute)
+update_router = APIRouter(route_class=DocumentUpdateRoute)
 logger = logging.getLogger(__name__)
 
 
@@ -123,7 +127,7 @@ async def get_artifact(
         return server_error_response(exc)
 
 
-class UpdateDocumentRequest(UpdateDocumentReq):
+class UpdateDocumentRequest(DocumentUpdatePatch):
     pass
 
 
@@ -217,63 +221,21 @@ async def update_metadata(
     return await db.run_sync(_update)  # TODO(async-phase4)
 
 
-@router.patch("/datasets/{dataset_id}/documents/{document_id}", summary="更新文档")
+@update_router.patch("/datasets/{dataset_id}/documents/{document_id}", summary="更新文档")
 async def update_document(
     dataset_id: str,
     document_id: str,
     request: UpdateDocumentRequest,
     db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
-    req = request.model_dump(exclude_unset=True)
+    principal: Principal = Depends(async_current_user),
+) -> Response:
+    document = await update_document_parser(db, dataset_id, document_id, principal.platform_user_id, request)
+    mapped = document_api_service.map_doc_keys(db.sync_session, document)
+    mapped.update(state=mapped.get("run"), enabled=document.get("status") == "1")
+    return JSONResponse(content=jsonable_encoder({"code": 0, "message": "success", "data": mapped}))
 
-    def _update(s: Session) -> Response:
-        kb = KnowledgebaseService.get_by_id(s, dataset_id)
-        if not kb:
-            return get_error_data_result(retmsg="Can't find this dataset!")
-        if not document_api_service.can_update_dataset(s, tenant_id, kb):
-            return get_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
-        doc = DocumentService.query(s, kb_id=dataset_id, id=document_id)
-        if not doc:
-            return get_error_data_result(retmsg="The dataset doesn't own the document.")
-        doc = doc[0]
-
-        error_msg, error_code = document_api_service.validate_document_update_fields(s, request, doc, req)
-        if error_msg:
-            return get_error_data_result(retmsg=error_msg, retcode=error_code)
-
-        if "meta_fields" in req:
-            if not DocMetadataService.update_document_metadata(s, document_id, req["meta_fields"]):
-                return get_error_data_result(retmsg="Failed to update metadata")
-
-        if "name" in req and req["name"] != doc.name:
-            if error := document_api_service.update_document_name_only(s, document_id, req["name"]):
-                return error
-
-        if "parser_config" in req:
-            DocumentService.update_parser_config(s, doc.id, req["parser_config"])
-
-        if "chunk_method" in req and req["chunk_method"] is not None:
-            if error := document_api_service.update_chunk_method_only(s, req, doc, dataset_id, tenant_id):
-                return error
-
-        if "enabled" in req and req["enabled"] is not None:
-            status = int(req["enabled"])
-            if error := document_api_service.update_document_status_only(s, status, doc, kb):
-                return error
-
-        try:
-            doc = DocumentService.get_by_id(s, doc.id)
-            if not doc:
-                return get_error_data_result(retmsg="Document update failed")
-        except OperationalError as e:
-            logger.exception(e)
-            return get_error_data_result(retmsg="Database operation failed")
-
-        return get_result(data=document_api_service.map_doc_keys(s, doc))
-
-    return await db.run_sync(_update)  # TODO(async-phase4)
+router.include_router(update_router)
 
 
 @router.put("/datasets/{dataset_id}/documents/{document_id}/metadata/config", summary="更新文档元数据配置")

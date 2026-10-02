@@ -14,6 +14,7 @@ from api.apps import manager
 from api.db.db_models import get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_image_lock import image_reference_key, image_write_locks
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
@@ -816,14 +817,14 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         # 更新数据库
         update_condition = {"id": request.chunk_id}  # 主键查询条件
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
-        settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
-
-        # update image
         img_id = request.img_id or ""
-        if request.image_base64 and img_id and "-" in img_id:
-            bkt, name = img_id.split("-", 1)
-            image_binary = base64.b64decode(request.image_base64)
-            settings.STORAGE_IMPL.put(bkt, name, image_binary)
+        key = image_reference_key(img_id)
+        with image_write_locks(db.get_bind(), [key] if key is not None else []):
+            settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
+            if request.image_base64 and key is not None:
+                bkt, name = key
+                image_binary = base64.b64decode(request.image_base64)
+                settings.STORAGE_IMPL.put(bkt, name, image_binary)
 
         return get_json_result(data=True)
     except Exception as e:

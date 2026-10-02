@@ -6,8 +6,8 @@ import hashlib
 import json
 import logging
 from collections import Counter
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -18,11 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, Knowledgebase, Task, UserCanvas, UserTenant, db_connection
+from api.db.services.document_image_lock import image_reference_key, image_write_locks, retire_task_image_reservations
 from api.db.services.document_ingest_recovery import RecoveryOwner, StoredRecovery, recovery_owner_active
 from api.db.services.document_status_service import finish_status_write
 from api.db.services.document_task_service import accounted_tokens, base_task_digest
+from api.db.services.document_update_effects import apply_update_sql, apply_update_store, restore_update_effects, sql_row_version
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.task_service import _task_queue_payload, prepare_parse_tasks, reuse_prev_task_chunks
+from api.utils.document_update_contract import DocumentUpdateError
 from common import settings
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, RetCode
 from common.doc_store.availability import availability_parent_ids
@@ -41,12 +44,32 @@ class IngestError(ValueError):
         self.result = result
 
 
+class IngestConflict(IngestError):
+    """A resource/revision fence lost its write authority."""
+
+
 @dataclass(frozen=True)
 class Selection:
     document_id: str
     dataset_id: str
     task_ids: frozenset[str]
     revision: int | None
+
+
+@dataclass(frozen=True)
+class DocumentMutationPlan:
+    values: dict[str, Any]
+    reset: bool
+    effects: dict[str, Any]
+
+
+MutationPrepare = Callable[[Session, Document, Knowledgebase], DocumentMutationPlan]
+
+
+def _restored_status(doc: Document, data: dict[str, Any], version: str | None = None) -> str:
+    original, applied = data["original_doc"], data.get("applied_doc")
+    effects = data.get("update_effects")
+    return original["status"] if effects and effects["change_status"] and applied and doc.status == applied["status"] and version == data.get("applied_doc_version") else doc.status
 
 
 def writable_kb(db: Session, dataset_id: str, principal_id: str, *, lock: bool = False, lock_dataset: bool = False) -> Knowledgebase | None:
@@ -168,7 +191,7 @@ def _set_document(db: Session, doc: Document, kb: Knowledgebase, values: dict[st
         update(Knowledgebase).where(Knowledgebase.id == kb.id, Knowledgebase.status == "1").values(chunk_num=Knowledgebase.chunk_num + chunk_delta, token_num=Knowledgebase.token_num + token_delta)
     )
     if changed.rowcount != 1 or updated.rowcount != 1:
-        raise IngestError("Document resource changed; retry.")
+        raise IngestConflict("Document resource changed; retry.")
     db.flush()
 
 
@@ -184,10 +207,25 @@ def _restore_kb_configuration(db: Session, kb: Knowledgebase, original: dict[str
         raise RuntimeError("Dataset configuration recovery could not be confirmed.")
 
 
+def _history_image_keys(rows: list[dict[str, Any]], recovery: StoredRecovery | None = None) -> set[tuple[str, str]]:
+    keys = {key for row in rows if (key := image_reference_key(row.get("img_id"))) is not None}
+    if recovery is not None:
+        keys.update(_history_image_keys(recovery.data["snapshot"]))
+        effects = recovery.data.get("update_effects")
+        if effects:
+            keys.update((item["bucket"], item["key"]) for item in effects["objects"])
+    return keys
+
+
 def _recover_history(db: Session, doc: Document, kb: Knowledgebase, tasks: list[Task]) -> tuple[Document, list[Task], bool]:
     recovery = StoredRecovery.load(doc.id)
     if recovery is None:
         return doc, tasks, False
+    with image_write_locks(db.get_bind(), _history_image_keys([], recovery)):
+        return _recover_locked_history(db, doc, kb, tasks, recovery)
+
+
+def _recover_locked_history(db: Session, doc: Document, kb: Knowledgebase, tasks: list[Task], recovery: StoredRecovery) -> tuple[Document, list[Task], bool]:
     data = recovery.data
     actual = _rows(Document, [doc])[0]
     unchanged = _same_document(actual, data["original_doc"]) and _rows(Task, tasks) == data["original_tasks"]
@@ -205,9 +243,12 @@ def _recover_history(db: Session, doc: Document, kb: Knowledgebase, tasks: list[
         return doc, tasks, False
     if data["dataset_id"] != kb.id or data["index_name"] != search.index_name_one(kb.tenant_id, kb.name):
         raise IngestError("Document recovery resource changed; retry after reconciliation.")
-    restore_document_history(settings.docStoreConn, data["index_name"], kb.id, doc.id, _history_for_status(data["snapshot"], doc.status))
+    status = _restored_status(doc, data, sql_row_version(db, Document, doc.id) if data.get("update_effects") else None)
+    restore_document_history(settings.docStoreConn, data["index_name"], kb.id, doc.id, _history_for_status(data["snapshot"], status))
+    if data.get("update_effects"):
+        restore_update_effects(db, doc, kb, data["update_effects"], owned_sql=owned)
     if owned and not unchanged:
-        _set_document(db, doc, kb, {key: value for key, value in data["original_doc"].items() if key not in {"id", "status"}})
+        _set_document(db, doc, kb, {**{key: value for key, value in data["original_doc"].items() if key not in {"id", "status"}}, "status": status})
         _restore_kb_configuration(db, kb, data.get("original_kb_config"), data.get("applied_kb_config"))
         db.execute(delete(Task).where(Task.doc_id == doc.id))
         if data["original_tasks"]:
@@ -216,10 +257,13 @@ def _recover_history(db: Session, doc: Document, kb: Knowledgebase, tasks: list[
         _restore_flags(data["flags"])
     db.commit()
     identifier = data["document_id"]
-    current = db.scalar(select(Document).where(Document.id == identifier).with_for_update().execution_options(populate_existing=True))
-    current_tasks = list(db.scalars(select(Task).where(Task.doc_id == identifier).order_by(Task.id).with_for_update().execution_options(populate_existing=True)))
+    # A new writer can own Document while waiting for our image guard after
+    # COMMIT. Do not wait back on that writer; retain recovery material instead.
+    guarded_images = bool(_history_image_keys([], recovery))
+    current = db.scalar(select(Document).where(Document.id == identifier).with_for_update(nowait=guarded_images).execution_options(populate_existing=True))
+    current_tasks = list(db.scalars(select(Task).where(Task.doc_id == identifier).order_by(Task.id).with_for_update(nowait=guarded_images).execution_options(populate_existing=True)))
     if current is None or not _same_document(_rows(Document, [current])[0], data["original_doc"]) or _rows(Task, current_tasks) != data["original_tasks"]:
-        raise IngestError("Document work changed after recovery; retry.")
+        raise IngestConflict("Document work changed after recovery; retry.")
     recovery.clear()
     return current, current_tasks, True
 
@@ -243,7 +287,7 @@ return 1
             raise RuntimeError("Cancellation recovery could not be confirmed.")
 
 
-def _cancel_flags(tasks: list[Task], flags: list[tuple[str, str, bytes | str | None, int]]) -> None:
+def _cancel_flags(tasks: list[Task], flags: list[tuple[str, str, bytes | str | None, int]], on_record: Callable[[], None] | None = None) -> None:
     for task in tasks:
         if not 0 <= (task.progress or 0) < 1:
             continue
@@ -252,6 +296,8 @@ def _cancel_flags(tasks: list[Task], flags: list[tuple[str, str, bytes | str | N
         expiry = int(datetime.now().timestamp() * 1000) + ttl if ttl > 0 else ttl
         # Record before sending: a failed response may still have reached Redis.
         flags.append((key, nonce, previous, expiry))
+        if on_record is not None:
+            on_record()
         if not REDIS_CONN.REDIS.set(key, nonce, ex=TASK_RUNTIME_TTL):
             raise ConnectionError("Failed to submit document cancellation.")
 
@@ -305,7 +351,7 @@ def submit_task(queue: str, payload: dict[str, Any]) -> bool:
     return False
 
 
-def _operate(selection: Selection, principal_id: str, run: str, clear: bool, apply_kb: bool) -> dict[str, Any]:
+def _operate(selection: Selection, principal_id: str, run: str, clear: bool, apply_kb: bool, mutation_prepare: MutationPrepare | None = None) -> dict[str, Any]:
     """One document owns its transaction, store snapshot and enqueue acknowledgements."""
     flags: list[tuple[str, str, bytes | str | None, int]] = []
     snapshot: list[dict[str, Any]] | None = None
@@ -323,22 +369,87 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
     recovery: StoredRecovery | None = None
     recovery_owner: RecoveryOwner | None = None
     outcome: dict[str, Any] = {}
+    mutation: DocumentMutationPlan | None = None
+    mutation_started = False
+    applied_doc_version: str | None = None
+    image_guard = ExitStack()
+    image_keys: set[tuple[str, str]] = set()
+    completed = False
     with _ingest_connection(selection.document_id, outcome) as db:
         try:
             doc = db.scalar(select(Document).where(Document.id == selection.document_id).with_for_update().execution_options(populate_existing=True))
             if doc is None or doc.kb_id != selection.dataset_id:
+                if mutation_prepare:
+                    raise DocumentUpdateError("Document is unavailable.", status=404, code="DOCUMENT_UPDATE_UNAVAILABLE")
                 raise IngestError("Document resource changed; retry.")
             kb = writable_kb(db, doc.kb_id, principal_id, lock=True)
             if kb is None:
+                if mutation_prepare:
+                    visible_kb = db.scalar(select(Knowledgebase).where(Knowledgebase.id == doc.kb_id, Knowledgebase.status == "1"))
+                    visible = visible_kb is not None and (
+                        visible_kb.tenant_id == principal_id
+                        or db.scalar(select(UserTenant.id).where(UserTenant.tenant_id == visible_kb.tenant_id, UserTenant.user_id == principal_id, UserTenant.status == "1")) is not None
+                    )
+                    if not visible:
+                        raise DocumentUpdateError("Document is unavailable.", status=404, code="DOCUMENT_UPDATE_UNAVAILABLE")
+                    raise DocumentUpdateError("Document is not writable.", status=403, numeric_code=109, code="DOCUMENT_UPDATE_FORBIDDEN")
                 raise IngestError("Document selection unavailable or not writable.", RetCode.AUTHENTICATION_ERROR)
             old_tasks = list(db.scalars(select(Task).where(Task.doc_id == doc.id).order_by(Task.id).with_for_update().execution_options(populate_existing=True)))
             if frozenset(task.id for task in old_tasks) != selection.task_ids or doc.update_time != selection.revision:
+                if mutation_prepare:
+                    raise DocumentUpdateError("Document work changed; retry.", status=409, code="DOCUMENT_UPDATE_CONFLICT")
                 raise IngestError("Document work changed; retry.")
+            if mutation_prepare:
+                # Invalid mixed requests cannot mutate even an older journal.
+                mutation_prepare(db, doc, kb)
+                pending = StoredRecovery.load(doc.id)
+                if pending and recovery_owner_active(db, pending.data.get("owner_lock")):
+                    raise DocumentUpdateError("Document work changed; retry.", status=409, code="DOCUMENT_UPDATE_CONFLICT")
+                mutation_started = pending is not None
+                history = document_history(settings.docStoreConn, search.index_name_one(kb.tenant_id, kb.name), kb.id, doc.id)
+                # Keep every reference, including protected/shared keys, stable
+                # until reset, SQL save and any compensation have finished.
+                image_keys = _history_image_keys(history, pending)
+                image_guard.enter_context(image_write_locks(db.get_bind(), image_keys))
             doc, old_tasks, _ = _recover_history(db, doc, kb, old_tasks)
+            if mutation_prepare:
+                mutation = mutation_prepare(db, doc, kb)
+                clear = mutation.reset
+                run = "0" if clear else "save"
             original_doc = _rows(Document, [doc])[0]
             original_tasks = _rows(Task, old_tasks)
             index_name = search.index_name_one(kb.tenant_id, kb.name)
             values: dict[str, Any] = {"run": run, "progress": 0, "progress_msg": "", "update_time": max(int(datetime.now().timestamp() * 1000), (doc.update_time or 0) + 1)}
+            if mutation:
+                if not clear and mutation.values.keys() == {"status"} and mutation.effects["metadata"] is None:
+                    # Availability is an independent write. Preserve its
+                    # existing timestamp/revision contract, including retries.
+                    values = copy.deepcopy(mutation.values)
+                else:
+                    values = {**mutation.values, "update_time": values["update_time"]}
+                if clear:
+                    values.update(run="0", progress=0, progress_msg="", process_begin_at=None)
+                snapshot = document_history(settings.docStoreConn, index_name, kb.id, doc.id)
+                if clear and not snapshot and (doc.chunk_num or doc.token_num or any(task.chunk_ids for task in old_tasks if (task.task_type or "") in {"", "dataflow", "dataflow_rerun"})):
+                    raise DocumentUpdateError("Document history is unavailable.", status=500, numeric_code=500, code="DOCUMENT_UPDATE_FAILED")
+                recovery_owner = RecoveryOwner(db.get_bind(), uuid4().hex)
+                recovery = StoredRecovery.prepare(
+                    doc.id,
+                    nonce=uuid4().hex,
+                    owner_lock=recovery_owner.key,
+                    queue=settings.get_svr_queue_name(0),
+                    dataset_id=kb.id,
+                    index_name=index_name,
+                    snapshot=snapshot,
+                    original_doc=original_doc,
+                    original_tasks=original_tasks,
+                    original_kb_config=None,
+                    flags=flags,
+                    update_effects=mutation.effects,
+                    original_doc_version=sql_row_version(db, Document, doc.id),
+                )
+                mutation_started = True
+                recovery.create()
             if run == "2":
                 if doc.run not in {"1", "2"} and not any(0 <= (task.progress or 0) < 1 for task in old_tasks):
                     raise IngestError("Document has no active parsing task to cancel.")
@@ -348,7 +459,7 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                         task.progress = -1
                         task.progress_msg = (task.progress_msg or "") + "\n" + TASK_CANCEL_MARKER + " Task stopped by user."
             if run == "0":
-                _cancel_flags(old_tasks, flags)
+                _cancel_flags(old_tasks, flags, (lambda: recovery.update(flags=flags)) if recovery is not None else None)
                 for task in old_tasks:
                     if (task.progress or 0) < 1:
                         db.delete(task)
@@ -360,9 +471,13 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                 doc.parser_config = config
                 values["parser_config"] = config
                 db.flush()
-            if run == "1" or clear:
+            if not mutation and (run == "1" or clear):
                 snapshot = document_history(settings.docStoreConn, index_name, kb.id, doc.id)
-                if not snapshot and (doc.chunk_num or doc.token_num or any(task.chunk_ids for task in old_tasks if (task.task_type or "") in {"", "dataflow", "dataflow_rerun"})):
+                if (
+                    (run == "1" or clear)
+                    and not snapshot
+                    and (doc.chunk_num or doc.token_num or any(task.chunk_ids for task in old_tasks if (task.task_type or "") in {"", "dataflow", "dataflow_rerun"}))
+                ):
                     raise IngestError("Document history is unavailable; restore the index before retrying.")
             obsolete: list[str] = []
             if run == "1":
@@ -398,25 +513,46 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                 retained_children = [row for row in snapshot if row.get("id", row.get("pk")) not in [*parents, *obsolete]]
                 referenced = {row.get("mom_id") for row in retained_children if row.get("mom_id")}
                 obsolete = list(dict.fromkeys([*obsolete, *(identifier for identifier in parents if identifier not in referenced)]))
-            if clear or obsolete:
-                nonce = uuid4().hex
-                recovery_owner = RecoveryOwner(db.get_bind(), nonce)
-                recovery = StoredRecovery.prepare(
-                    doc.id,
-                    nonce=nonce,
-                    owner_lock=recovery_owner.key,
-                    queue=settings.get_svr_queue_name(0),
-                    dataset_id=kb.id,
-                    index_name=index_name,
-                    snapshot=snapshot or [],
-                    original_doc=original_doc,
-                    original_tasks=original_tasks,
-                    original_kb_config=original_kb_config,
-                    flags=flags,
-                )
-                recovery.create()
+            if clear or obsolete or mutation:
+                if not mutation:
+                    image_keys = _history_image_keys(snapshot or [])
+                    image_guard.enter_context(image_write_locks(db.get_bind(), image_keys))
+                if recovery is None:
+                    nonce = uuid4().hex
+                    recovery_owner = RecoveryOwner(db.get_bind(), nonce)
+                    recovery = StoredRecovery.prepare(
+                        doc.id,
+                        nonce=nonce,
+                        owner_lock=recovery_owner.key,
+                        queue=settings.get_svr_queue_name(0),
+                        dataset_id=kb.id,
+                        index_name=index_name,
+                        snapshot=snapshot or [],
+                        original_doc=original_doc,
+                        original_tasks=original_tasks,
+                        original_kb_config=original_kb_config,
+                        flags=flags,
+                    )
+                    recovery.create()
+                if clear or obsolete:
+                    changed_store = True
+                    delete_document_history(settings.docStoreConn, index_name, kb.id, doc.id, ids=None if clear else obsolete)
+            if mutation:
+                apply_update_sql(db, doc, kb, mutation.effects)
+                # The journal precedes every external side effect, including
+                # rename/availability/metadata with no generation reset.
+                if recovery is not None:
+                    recovery.update(update_effects=mutation.effects)
                 changed_store = True
-                delete_document_history(settings.docStoreConn, index_name, kb.id, doc.id, ids=None if clear else obsolete)
+                apply_update_store(
+                    db,
+                    doc,
+                    kb,
+                    mutation.effects,
+                    [] if clear else snapshot or [],
+                    values.get("status", doc.status),
+                    (lambda: recovery.update(update_effects=mutation.effects)) if recovery is not None else None,
+                )
             if run == "1" or clear:
                 retained = [] if clear else [row for row in snapshot or [] if row.get("id", row.get("pk")) not in obsolete]
                 parent_ids = set(availability_parent_ids(retained).get(doc.id, [])) if retained else set()
@@ -437,18 +573,20 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                 values.update(chunk_num=0, token_num=0, process_duration=0)
             _set_document(db, doc, kb, values)
             applied_doc = copy.deepcopy(dict(db.execute(select(Document.__table__).where(Document.id == doc.id)).mappings().one()))
+            if mutation:
+                applied_doc_version = sql_row_version(db, Document, doc.id)
             applied_tasks = [copy.deepcopy(dict(row)) for row in db.execute(select(Task.__table__).where(Task.doc_id == doc.id).order_by(Task.id)).mappings()]
             if original_kb_config is not None:
                 stored_kb = db.execute(select(Knowledgebase.__table__).where(Knowledgebase.id == kb.id)).mappings().one()
                 applied_kb_config = {key: copy.deepcopy(stored_kb[key]) for key in original_kb_config}
             if recovery is not None:
-                recovery.update(applied_doc=applied_doc, applied_tasks=applied_tasks, applied_kb_config=applied_kb_config)
+                recovery.update(applied_doc=applied_doc, applied_tasks=applied_tasks, applied_kb_config=applied_kb_config, **({"applied_doc_version": applied_doc_version} if mutation else {}))
             db.commit()
             if run == "1":
                 # Rows are committed before Redis can expose the task. Reacquire
                 # the same lock order and reject replacement before enqueueing.
-                current = db.scalar(select(Document).where(Document.id == doc.id).with_for_update().execution_options(populate_existing=True))
-                current_tasks = list(db.scalars(select(Task).where(Task.doc_id == doc.id).order_by(Task.id).with_for_update().execution_options(populate_existing=True)))
+                current = db.scalar(select(Document).where(Document.id == doc.id).with_for_update(nowait=bool(image_keys)).execution_options(populate_existing=True))
+                current_tasks = list(db.scalars(select(Task).where(Task.doc_id == doc.id).order_by(Task.id).with_for_update(nowait=bool(image_keys)).execution_options(populate_existing=True)))
                 # The post-commit queue window performs no ledger upgrade;
                 # a shared dataset lock now also holds active status until XADD.
                 kb = writable_kb(db, selection.dataset_id, principal_id, lock=True, lock_dataset=True)
@@ -476,17 +614,31 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                         raise ConnectionError("Document task enqueue could not be confirmed.")
                     acknowledged.append(task["id"])
                 db.commit()
+            if mutation:
+                from api.db.services.document_service import DocumentService
+
+                db.expire_all()
+                current = db.get(Document, selection.document_id)
+                serialized = DocumentService.serialize_document(db, current) if current is not None else None
+                if serialized is None:
+                    raise RuntimeError("Document update readback failed.")
+                if recovery is not None:
+                    recovery.clear()
+                outcome.update(run=run, queued_task_ids=acknowledged)
+                completed = True
+                return {"document": serialized}
             if recovery is not None:
                 recovery.clear()
             outcome.update(run=run, queued_task_ids=acknowledged)
+            completed = True
             return {"run": run}
         except Exception as error:
             logger.exception("Document ingest failed: document_id=%s", selection.document_id)
             recovery_failed = False
             try:
                 db.rollback()
-                current = db.scalar(select(Document).where(Document.id == selection.document_id).with_for_update().execution_options(populate_existing=True))
-                tasks = list(db.scalars(select(Task).where(Task.doc_id == selection.document_id).order_by(Task.id).with_for_update().execution_options(populate_existing=True)))
+                current = db.scalar(select(Document).where(Document.id == selection.document_id).with_for_update(nowait=bool(image_keys)).execution_options(populate_existing=True))
+                tasks = list(db.scalars(select(Task).where(Task.doc_id == selection.document_id).order_by(Task.id).with_for_update(nowait=bool(image_keys)).execution_options(populate_existing=True)))
                 unchanged_sql = current is not None and _same_document(_rows(Document, [current])[0], original_doc) and _rows(Task, tasks) == original_tasks
                 owned_sql = current is not None and _same_document(_rows(Document, [current])[0], applied_doc) and _rows(Task, tasks) == applied_tasks
                 if original_doc is None:
@@ -501,13 +653,23 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                     # SQL commit may have failed before or after reaching the
                     # server. The actual current rows, never the exception,
                     # decide whether this operation still owns compensation.
+                    status = _restored_status(
+                        current,
+                        {"original_doc": original_doc, "applied_doc": applied_doc, "update_effects": mutation.effects if mutation else None, "applied_doc_version": applied_doc_version},
+                        sql_row_version(db, Document, current.id) if mutation else None,
+                    )
                     if changed_store and snapshot is not None:
-                        restore_document_history(settings.docStoreConn, index_name, selection.dataset_id, selection.document_id, _history_for_status(snapshot, current.status))
+                        restore_document_history(settings.docStoreConn, index_name, selection.dataset_id, selection.document_id, _history_for_status(snapshot, status))
+                    if mutation:
+                        kb = db.get(Knowledgebase, selection.dataset_id)
+                        if kb is None:
+                            raise RuntimeError("Document recovery dataset is unavailable.")
+                        restore_update_effects(db, current, kb, mutation.effects, owned_sql=owned_sql)
                     if owned_sql and current is not None:
                         kb = writable_kb(db, current.kb_id, principal_id, lock=True)
                         if kb is None:
                             raise RuntimeError("Document recovery resource unavailable.")
-                        _set_document(db, current, kb, {key: value for key, value in original_doc.items() if key not in {"id", "status"}})
+                        _set_document(db, current, kb, {**{key: value for key, value in original_doc.items() if key not in {"id", "status"}}, "status": status})
                         _restore_kb_configuration(db, kb, original_kb_config, applied_kb_config)
                         db.execute(delete(Task).where(Task.doc_id == current.id))
                         if original_tasks:
@@ -549,10 +711,30 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
             if uncertain:
                 result["uncertain_task_ids"] = uncertain
             outcome.update(result)
+            if mutation_prepare:
+                unknown = recovery_failed or (original_doc is None and mutation_started)
+                if isinstance(error, DocumentUpdateError) and not recovery_failed:
+                    update_error = error
+                elif isinstance(error, IngestConflict) and not unknown:
+                    update_error = DocumentUpdateError("Document work changed; retry.", status=409, code="DOCUMENT_UPDATE_CONFLICT")
+                else:
+                    update_error = DocumentUpdateError(
+                        "Document update recovery could not be confirmed; read back before retrying." if unknown else "Document update failed and was restored.",
+                        status=500,
+                        numeric_code=500,
+                        code="DOCUMENT_UPDATE_OUTCOME_UNKNOWN" if unknown else "DOCUMENT_UPDATE_FAILED",
+                        outcome="unknown" if unknown else "unchanged",
+                    )
+                result["_update_error"] = update_error
             return result
         finally:
+            image_guard.close()
             if recovery_owner is not None:
                 recovery_owner.close()
+            if completed:
+                # Do not retire during compensation: its original Task may
+                # become current again. Confirmed SQL retirement comes first.
+                retire_task_image_reservations(db, selection.task_ids)
 
 
 def ingest_selected(selected: list[Selection], principal_id: str, run: str, clear: bool, apply_kb: bool) -> bool | dict[str, Any]:

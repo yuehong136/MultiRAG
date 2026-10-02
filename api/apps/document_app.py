@@ -10,6 +10,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, Json, ValidationError, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.status import (
@@ -26,11 +27,12 @@ from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES, FileType
-from api.db.db_models import get_async_db, get_db
+from api.db.db_models import Document, get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
 from api.db.services.document_ingest_service import IngestError, ingest_documents
+from api.db.services.document_parser_service import update_document_parser
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -39,12 +41,13 @@ from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
+from api.utils.document_update_contract import DocumentUpdateError, LegacyDocumentParserPatch
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.validation_utils import DocumentIngestRequest
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common import settings
-from common.constants import VALID_TASK_STATUS, ParserType, RetCode, TaskStatus
+from common.constants import VALID_TASK_STATUS, ParserType, RetCode
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.nlp import rag_tokenizer, search
@@ -225,11 +228,8 @@ class RenameRequest(BaseModel):
     name: str = Field(..., description="新的文件名")
 
 
-class ChangeParserRequest(BaseModel):
-    doc_id: str = Field(..., description="文档ID")
-    parser_id: str | None = Field(None, description="解析器ID")
-    parser_config: dict | None = Field(None, description="解析器配置")
-    pipeline_id: str | None = Field(None, description="Pipeline ID")
+class ChangeParserRequest(LegacyDocumentParserPatch):
+    pass
 
 
 class SetMetaRequest(BaseModel):
@@ -2001,171 +2001,31 @@ def download_attachment(attachment_id: str, ext: str = "markdown", user=Depends(
         return construct_error_response(e)
 
 
-@router.post("/change_parser", summary="更改解析器", response_description="成功更改解析器")
-def change_parser(request_body: ChangeParserRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    更改文档的解析器或Pipeline配置
-
-    概要：允许用户修改文档的解析器类型（parser_id）、解析器配置（parser_config）或Pipeline配置（pipeline_id），并重置文档处理状态。
-
-    参数：
-    - **request_body**: 请求体，包含：
-        - doc_id: 文档ID（必填）
-        - parser_id: 解析器ID（可选），如 "naive", "paper", "book", "laws", "presentation", "manual", "qa", "table", "resume", "picture", "one", "knowledge_graph", "email"
-        - parser_config: 解析器配置（可选），JSON对象，包含解析器的各种参数
-        - pipeline_id: Pipeline ID（可选），指定使用哪个Pipeline进行处理
-
-    返回：
-    - dict: 操作结果
-        - data: True 表示更改成功
-
-    功能：
-    1. 验证用户对文档的访问权限
-    2. 获取文档信息
-    3. 根据请求类型执行不同的操作：
-       - 如果包含 pipeline_id：更新Pipeline配置并重置文档
-       - 如果包含 parser_id：更新解析器配置并重置文档
-    4. 重置文档时会：
-       - 清空处理进度和状态
-       - 递减知识库的统计数据（token_num、chunk_num等）
-       - 删除向量数据库中的文档chunks
-
-    内部函数 reset_doc()：
-    - 更新文档的parser_id、进度和状态
-    - 如果文档已有tokens，则：
-      - 递减知识库的token_num、chunk_num和process_duration
-      - 从向量数据库中删除该文档的所有chunks
-
-    业务场景：
-    1. **更换解析器**：
-       - 发现当前解析器效果不佳，切换到更合适的解析器
-       - 例如：从 "naive" 切换到 "paper" 以更好地解析学术论文
-
-    2. **调整解析参数**：
-       - 修改chunk_token_num、delimiter等参数优化分块效果
-       - 调整layout_recognize选择不同的版面识别引擎
-
-    3. **切换Pipeline**：
-       - 更换处理流程（如从简单处理切换到包含GraphRAG的复杂流程）
-       - 适配不同的业务需求
-
-    验证逻辑：
-    - 如果更新Pipeline：检查pipeline_id是否与当前相同，相同则直接返回成功
-    - 如果更新解析器：
-      - 检查parser_id和parser_config是否与当前完全相同
-      - 检查文档类型是否支持指定的解析器
-      - VISUAL类型文档只能使用 "picture" 解析器
-      - PPT/PPTX/Pages文档只能使用 "presentation" 解析器
-
-    权限要求：
-    - 用户必须对该文档有访问权限（accessible检查）
-
-    异常处理：
-    - 如果用户无权限，返回 AUTHENTICATION_ERROR
-    - 如果文档不存在，返回 "Document not found!"
-    - 如果文档类型不支持指定解析器，返回 "Not supported yet!"
-    - 如果租户不存在，返回 "Tenant not found!"
-    - 如果向量数据库删除失败，返回 "Milvus delete failed!"
-    - 其他异常返回服务器错误
-
-    注意：
-    - 更改解析器会清空文档的处理结果，需要重新运行解析任务
-    - 如果文档已经处理过（token_num > 0），会删除所有已生成的chunks
-    - 操作不可逆，请确认后再执行
-    - parser_id和pipeline_id至少需要提供一个
-    - 更新parser_config不会触发文档重置（如果parser_id未变）
-
-    使用示例：
-    1. 更换解析器：{"doc_id": "xxx", "parser_id": "paper"}
-    2. 调整参数：{"doc_id": "xxx", "parser_id": "naive", "parser_config": {"chunk_token_num": 512}}
-    3. 切换Pipeline：{"doc_id": "xxx", "pipeline_id": "yyy"}
-    """
-    req = request_body.model_dump()
-
-    if not DocumentService.accessible(db, req["doc_id"], user.id):
-        return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
-
-    doc = DocumentService.get_by_id(db, req["doc_id"])
-    if not doc:
-        return get_data_error_result(retmsg="Document not found!")
-
-    def reset_doc():
-        """重置文档的处理状态和数据"""
-        update_data = {"parser_id": req.get("parser_id", doc.parser_id), "progress": 0, "progress_msg": "", "run": TaskStatus.UNSTART.value}
-        if req.get("pipeline_id"):
-            update_data["pipeline_id"] = req["pipeline_id"]
-
-        e = DocumentService.update_by_id(db, doc.id, update_data)
-        if not e:
-            return get_data_error_result(retmsg="Document not found!")
-
-        if doc.token_num > 0:
-            e = DocumentService.increment_chunk_num(db, doc.id, doc.kb_id, doc.token_num * -1, doc.chunk_num * -1, doc.process_duration * -1)
-            if not e:
-                return get_data_error_result(retmsg="Document not found!")
-
-            tenant_id = DocumentService.get_tenant_id(db, req["doc_id"])
-            if not tenant_id:
-                return get_data_error_result(retmsg="Tenant not found!")
-
-            document = DocumentService.get_by_doc_id(db, doc.id)
-            kb = KnowledgebaseService.get_by_id(db, document["kb_id"])
-            collection_name = search.index_name_one(tenant_id, kb.name)
-
-            # 删除关联的 chunk 图片
-            DocumentService.delete_chunk_images(doc, collection_name)
-
-            # 删除向量数据库中的数据
-            try:
-                db_type = settings.docStoreConn.db_type()
-                if db_type == "milvus":
-                    delete_result = settings.docStoreConn.delete(condition={"doc_id": doc.id}, index_name=collection_name, dataset_id=kb.id)
-                else:
-                    # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                    delete_result = settings.docStoreConn.delete({"doc_id": doc.id}, collection_name, kb.id)
-                if delete_result is None:
-                    return get_data_error_result(retmsg="Doc store delete failed!")
-            except Exception as e:
-                return get_data_error_result(retmsg=str(e))
-
-        return None
-
+@router.post("/change_parser", summary="更改解析器（兼容入口）", deprecated=True)
+async def change_parser(
+    request_body: ChangeParserRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+) -> Response:
+    """Strict presence adapter to the same authorized atomic document writer."""
+    saving = False
     try:
-        # 处理 pipeline_id 更新（只有当 pipeline_id 有实际值时才处理）
-        if req.get("pipeline_id"):  # 修复：使用 get() 检查是否有实际值，而不是检查 key 是否存在
-            if doc.pipeline_id == req["pipeline_id"]:
-                return get_json_result(data=True)
-
-            DocumentService.update_by_id(db, doc.id, {"pipeline_id": req["pipeline_id"]})
-            error = reset_doc()
-            if error:
-                return error
-            return get_json_result(data=True)
-
-        # 处理 parser_id 更新
-        if req.get("parser_id"):
-            if doc.parser_id.lower() == req["parser_id"].lower():
-                if "parser_config" in req and req["parser_config"] is not None:
-                    if req["parser_config"] == doc.parser_config:
-                        return get_json_result(data=True)
-                else:
-                    return get_json_result(data=True)
-
-            # 检查文档类型是否支持指定的解析器
-            if (doc.type == FileType.VISUAL and req["parser_id"] != "picture") or (re.search(r"\.(ppt|pptx|pages)$", doc.name) and req["parser_id"] != "presentation"):
-                return get_data_error_result(retmsg="Not supported yet!")
-
-            # 更新parser_config（如果提供）
-            if "parser_config" in req and req["parser_config"] is not None:
-                DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-
-            error = reset_doc()
-            if error:
-                return error
-
+        dataset_id = await db.scalar(select(Document.kb_id).where(Document.id == request_body.doc_id))
+        if dataset_id is None:
+            raise DocumentUpdateError("Document is unavailable.", status=404, code="DOCUMENT_UPDATE_UNAVAILABLE")
+        patch = request_body.document_patch()
+        saving = True
+        await update_document_parser(db, dataset_id, request_body.doc_id, user.platform_user_id, patch)
         return get_json_result(data=True)
-    except Exception as e:
-        return server_error_response(e)
+    except DocumentUpdateError as error:
+        return get_json_result(data={"outcome": error.outcome, "code": error.code}, retmsg=str(error), retcode=RetCode(error.numeric_code))
+    except Exception:
+        logging.exception("Unexpected legacy document parser update failure.")
+        return get_json_result(
+            data={"outcome": "unknown" if saving else "unchanged", "code": "DOCUMENT_UPDATE_OUTCOME_UNKNOWN" if saving else "DOCUMENT_UPDATE_FAILED"},
+            retmsg="Document update outcome could not be confirmed." if saving else "Document update preflight failed.",
+            retcode=RetCode.SERVER_ERROR,
+        )
 
 
 @router.get("/image/{image_id}", summary="获取图片（兼容入口）", response_description="成功获取图片", deprecated=True)

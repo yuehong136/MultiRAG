@@ -21,11 +21,11 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.user_service import UserTenantService
 from api.utils import validation_utils
-from api.utils.api_utils import get_error_data_result, get_parser_config
+from api.utils.api_utils import get_error_data_result
 from api.utils.validation_utils import UpdateDocumentReq
 from api.utils.web_utils import html2pdf, is_valid_url
 from common import settings
-from common.constants import RetCode, TaskStatus
+from common.constants import RetCode
 from common.metadata_utils import convert_conditions, meta_filter
 from common.misc_utils import get_uuid
 from core.nlp import rag_tokenizer, search
@@ -116,40 +116,6 @@ def update_document_name_only(db: Session, document_id: str, req_doc_name: str):
     index_name = search.index_name_one(tenant_id, kb.name)
     if settings.docStoreConn.index_exist(index_name, doc.kb_id):
         settings.docStoreConn.update({"doc_id": document_id}, doc_store_body, index_name, doc.kb_id)
-    return None
-
-
-def update_chunk_method_only(db: Session, req: dict[str, Any], doc: Document, dataset_id: str, tenant_id: str):
-    if str(doc.parser_id).lower() != req["chunk_method"].lower():
-        updated = DocumentService.update_by_id(
-            db,
-            doc.id,
-            {
-                "parser_id": req["chunk_method"],
-                "progress": 0,
-                "progress_msg": "",
-                "run": TaskStatus.UNSTART.value,
-            },
-        )
-        if not updated:
-            return get_error_data_result(retmsg="Document not found!")
-
-    if not req.get("parser_config"):
-        req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))
-        DocumentService.update_parser_config(db, doc.id, req["parser_config"])
-
-    if doc.token_num > 0:
-        updated = DocumentService.increment_chunk_num(
-            db,
-            doc.id,
-            doc.kb_id,
-            doc.token_num * -1,
-            doc.chunk_num * -1,
-            doc.process_duration * -1,
-        )
-        if not updated:
-            return get_error_data_result(retmsg="Document not found!")
-        settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
     return None
 
 

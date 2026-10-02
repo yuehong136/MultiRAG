@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
+from api.db.services.document_image_lock import image_reference_key, image_write_locks
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -368,10 +369,12 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
         vectors, _ = model.encode([doc.name, "\n".join(questions) or content])
         vector = vectors[1] if doc.parser_id == ParserType.QA else 0.1 * vectors[0] + 0.9 * vectors[1]
         patch[f"q_{len(vector)}_vec"] = vector.tolist()
-        if not settings.docStoreConn.update({"id": chunk_id}, patch, index_name, dataset_id):
-            return get_error_data_result(retmsg="Index updating failure")
-        if req.get("image_base64"):
-            store_chunk_image(dataset_id, chunk_id, base64.b64decode(req["image_base64"]))
+        keys = {key for row in [current, patch] if (key := image_reference_key(row.get("img_id"))) is not None}
+        with image_write_locks(db.get_bind(), keys):
+            if not settings.docStoreConn.update({"id": chunk_id}, patch, index_name, dataset_id):
+                return get_error_data_result(retmsg="Index updating failure")
+            if req.get("image_base64"):
+                store_chunk_image(dataset_id, chunk_id, base64.b64decode(req["image_base64"]))
         return get_result()
 
 

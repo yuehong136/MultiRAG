@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, Knowledgebase, Task, db_connection
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_image_lock import image_write_locks, reserve_task_image
 from common import settings
 from common.constants import PipelineTaskType
 from common.doc_store.availability import availability_parent_ids
@@ -102,14 +103,28 @@ def account_task_tokens(db: Session, task: Task, document_id: str, dataset_id: s
 def put_task_image(task_id: str, document_id: str, dataset_id: str, tenant_id: str, *, bucket: str, fnm: str, binary: bytes) -> Any:
     """Keep stale parsers from overwriting objects belonging to a replacement."""
     with db_connection() as db, current_document_task(db, task_id, document_id, dataset_id):
-        return settings.STORAGE_IMPL.put(bucket=bucket, fnm=fnm, binary=binary, tenant_id=tenant_id)
+        with image_write_locks(db.get_bind(), [(bucket, fnm)]):
+            kb = db.get(Knowledgebase, dataset_id)
+            if kb is None:
+                raise SupersededDocumentTask("Document task resource disappeared.")
+            # Bytes precede indexing in the real parser lifecycle. Protect
+            # that gap until this task's native reference is confirmed.
+            if not any(row.get("img_id") == f"{bucket}-{fnm}" for row in document_history(settings.docStoreConn, search.index_name_one(kb.tenant_id, kb.name), dataset_id, document_id)):
+                reserve_task_image(task_id, (bucket, fnm))
+            return settings.STORAGE_IMPL.put(bucket=bucket, fnm=fnm, binary=binary, tenant_id=tenant_id)
 
 
 def task_image_writer(canvas: Any) -> partial:
     document_id = getattr(canvas, "_source_document_id", getattr(canvas, "_doc_id", None))
     if document_id:
         return partial(put_task_image, canvas.task_id, document_id, canvas._kb_id or "", canvas._tenant_id)
-    return partial(settings.STORAGE_IMPL.put, tenant_id=canvas._tenant_id)
+    return partial(put_document_image, tenant_id=canvas._tenant_id)
+
+
+def put_document_image(bucket: str, fnm: str, binary: bytes, tenant_id: str | None = None) -> Any:
+    """The non-document pipeline fallback shares the exact image-key guard."""
+    with db_connection() as db, image_write_locks(db.get_bind(), [(bucket, fnm)]):
+        return settings.STORAGE_IMPL.put(bucket=bucket, fnm=fnm, binary=binary, tenant_id=tenant_id)
 
 
 def cleanup_task_chunks(bind: Engine | Connection, task_id: str, document_id: str, dataset_id: str, index_name: str, chunk_ids: list[str] | None = None) -> None:
@@ -119,9 +134,14 @@ def cleanup_task_chunks(bind: Engine | Connection, task_id: str, document_id: st
             with current_document_task(db, task_id, document_id, dataset_id) as task:
                 ids = list(dict.fromkeys(chunk_ids if chunk_ids is not None else (task.chunk_ids or "").split()))
                 if ids:
-                    delete_document_history(settings.docStoreConn, index_name, dataset_id, document_id, ids=ids)
-                    for identifier in ids:
-                        settings.STORAGE_IMPL.delete(dataset_id, identifier)
+                    from api.db.services.document_update_effects import _protected_images
+
+                    with image_write_locks(db.get_bind(), [(dataset_id, identifier) for identifier in ids]):
+                        delete_document_history(settings.docStoreConn, index_name, dataset_id, document_id, ids=ids)
+                        protected = _protected_images(db, db.get(Document, document_id), {f"{dataset_id}-{identifier}" for identifier in ids})
+                        for identifier in ids:
+                            if f"{dataset_id}-{identifier}" not in protected:
+                                settings.STORAGE_IMPL.delete(dataset_id, identifier)
                 db.commit()
         except SupersededDocumentTask:
             # Replacement is authoritative: there is nothing this task may clean.
