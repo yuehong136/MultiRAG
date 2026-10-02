@@ -12,9 +12,9 @@
 
 | 上游 diff | 本项处置 |
 |---|---|
-| 删除 `api/apps/canvas_app.py` | 独立 Web 的 `src/api/agent.ts` 中 Agent/DataFlow 两个取消函数仍 PUT 旧路由，保留此单一路由并共用新授权服务；Web POST 迁移及两类运行验收后删除。 |
+| 删除 `api/apps/canvas_app.py` | 初次移植时因独立 Web 的 Agent/DataFlow 活动 PUT 调用保留单一路由；Web POST 迁移及验收审结后，已删除独占文件和旧路由。初始及补修证据保留在下文，本轮退出结果见“旧 Canvas 取消入口退役”。 |
 | 新增 `api/apps/restful_apis/task_api.py` | FastAPI POST cancel、PATCH action=stop；异步 Principal + AsyncSession，没有 GET。文档和图任务按有效 SQL 资源/已加入成员授权，运行任务另需服务器可信登记。 |
-| `web/src/services/agent-service.ts` 两个取消函数 PUT→POST | 独立 Web 由根聊天另派。本项交接准确路径、业务码及 task/message ID 合同，不复制上游前端，不宣称浏览器验收。 |
+| `web/src/services/agent-service.ts` 两个取消函数 PUT→POST | 独立 Web 由根聊天另派，`f39ccdb5c72236bd99d7b62c09f92535d6a61e2a` 已完成 POST 迁移并审结；后端本轮只消费该完成事实，不重做浏览器验收。 |
 | `web/src/utils/api.ts` 取消 URL→Task REST | 当前稳定合同见 [HTTP 参考](../references/http_api_reference.md#task-api)。本项没有 Web 代码变更。 |
 
 相关后续修复逐项核对：`5885691c683c5cf10954d06087e453e485cef7e2` 的未知/终态幂等采用；
@@ -235,6 +235,61 @@ native 链接移除，29 个本轮 Go 临时目录的控制/log 文件清理，�
 以前已留存的外部工具链/静态库和本轮验收日志供审查。不操作业务库，不创建容器/卷，
 不改 Web 或旧 PUT 退出条件、不 push。完整 worker、远程 provider/模型、浏览器和
 内核缓冲区饱和仍不在已验范围，响应头前断连不声称任何响应帧交付。
+
+### 旧 Canvas 取消入口退役
+
+本轮从 `beee09f17eb52646986e22f8f2f3872f1959533d` 继续同一第十 SHA，仅退出旧
+`PUT /v1/canvas/cancel/{task_id}`。2026-10-02 再核预期 remote、fetch 和目标四文件完整
+diff，`origin/main` 仍为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`；前述后修链保持
+本地实现，没有新批次或重做 finish/close/history/header 修复。
+
+独立 Web 的 `f39ccdb5c72236bd99d7b62c09f92535d6a61e2a` 已由根及独立审查审结：两类
+alias 均使用共享客户端 POST Task REST、编码当前 Task ID、无 body；804 正式测试及
+真实 Python/Go HTTP、SQL/Redis 和 Canvas 读回为此前证据。本轮核对当前调用代码，
+但不把那些结果当成本轮新跑。前端 Pipeline 验收使用同生产 Hook 的临时入口真实入队，
+未验文件上传；浏览器运行在并发依赖升级前，升级后正式测试/build 通过。完整 worker
+或 provider 未启动；这些边界不因接口退出改变。
+
+再次核对 API/SDK、两个 Python SDK worktree、MCP、core/agent 后台、Go internal/cmd、
+停滞 server/admin 与独立 Web，没有旧 URL 的活动消费者或明确兼容承诺。按移植 Skill
+`references/python.md` 的迁移完成判据直接删除 `api/apps/canvas_app.py` 全部 18 行；
+自动扫描注册自然退出该路由，不改集中注册。TaskID、StopTaskRequest、cancel_response、
+授权服务、Redis CAS/nonce/TTL、生产取消观察链、Go POST/PATCH、SDK `/parse/cancel`
+均保留；未注册 Agent helper 不属于此旧 PUT 链，没有顺删共享 Redis 导入或历史数据。
+本轮归属只有路由文件、`test_task_cancellation.py` 与三份合同/进度/映射文档。
+
+正式测试移除成功 helper 的 PUT 分支及两条过时成功参数，原 POST/PATCH、JWT/API key、
+授权、日志、故障补偿、CAS/TTL、幂等、迟到 worker、finish/关闭/history 断言保持。
+新增 10 个退休用例：文档、可信实际 Agent、真实入队 DataFlow 的 active/finished/
+cancel_requested 加未知 ID，各发 owner JWT/API key、外人 JWT/API key、无凭据五类
+真实 HTTP 请求。50 次旧 PUT 全部 404，OpenAPI 无旧路径；取消服务计数为零，并由新
+POST 的真实执行验证计数边界有效。每次独立读回完整 Task/Document/KB、Canvas/版本/
+session 行及 Redis binding、nonce、副本、队列 payload，逐字保持；PTTL 只允许自然
+递减，未知 ID 不生成标志。背景 finished 状态为隔离 SQL/finish fixture，不宣称 worker
+完成；Agent 的等待只控制 VariableAssigner 边界，Canvas、Begin、Message 及存储真实。
+
+删除前正式 document_active 回归失败（旧 PUT HTTP 200），原始日志保留；删除后定向
+128 passed、无 skip，含全部当前 Task 取消及此前终态/关闭/debug 头窗口回归。
+本轮 `make verify` 退出 0：Ruff、8 条 import contracts、async DB 门禁、mypy 127 源文件、
+3711 unit passed。同一隔离 API 的 `make smoke` 通过，检查 ping 与全部 healthz 组件。
+`REQUIRE_SERVICES=1 make integration` 退出 0，475 passed、无 skip（前轮 467 去掉旧
+PUT 两条成功参数，新增 10 条退役回归）。适用 Python 门禁全部为本轮新跑；Go 只核
+当前注册无旧 alias、保留新 POST/PATCH，前轮 native/build/vet/29 个跨端 HTTP 为历史
+证据，本轮没有 Go 生产改动或无理由重建矩阵。
+
+fixture 验证 SQL 行、凭据、队列/键、HTTP 线程和客户端清理。额外只读 pytest 观察器
+在各轮所有 fixture 收尾后独立检查：定向 128 个、全量 222 个 API 用例各自的 scratch
+库、键/队列和 listener 均为 0；另在 pytest 退出后用独立进程再读回两轮资源并确认
+同 smoke listener 已关闭。观察器只记录资源标识和读取状态，不替换鉴权、服务或存储。
+没有落盘临时凭据/config、启动完整 worker/provider、创建容器/卷或修改业务库。
+
+原始证据为 `/tmp/multirag-488-retire-` 前缀：`before.log`、`http.log`、`verify.log`、
+`integration.log`、`smoke.log`、`consumer-audit.log`、`cleanup.log/json`；两轮
+`http-resources.json`、`integration-resources.json` 留存自有资源标识供独立审查。
+本仓原 25 项无关状态和全部无关 tracked diff 保持，ragflow 的无关状态保持；Web
+并行编辑器/工具链任务在此期间继续提交和编辑，本轮未对其状态变化做回滚或纳入提交。
+只提交本项五个路径，无 push，等待根审查；本轮不重做前端浏览器、文件上传、完整
+worker/provider 验收，也不把提交确认 `data: true` 写成后台任务已停止。
 
 ## 82313020c71b8b91873232c2334c2c1c382f1c49 · 列表操作与 strict 模式
 

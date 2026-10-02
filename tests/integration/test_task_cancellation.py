@@ -8,8 +8,12 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import threading
+import time
 from collections.abc import Iterator
+from contextlib import ExitStack
+from math import ceil
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,12 +22,13 @@ import pytest
 import sqlalchemy as sa
 import uvicorn  # noqa: F401 -- load the runner before legacy component nest_asyncio patches
 from requests import Session as HTTPSession
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from agent.component.variable_assigner import VariableAssigner
 from api.apps.services.dataset_api_service import run_index
 from api.db import CanvasCategory, UserTenantRole
-from api.db.db_models import API4Conversation, Document, File, File2Document, Knowledgebase, Task, UserTenant
+from api.db.db_models import API4Conversation, Document, File, File2Document, Knowledgebase, Task, UserCanvas, UserCanvasVersion, UserTenant
 from api.db.services.document_service import DocumentService
 from api.db.services.task_service import TaskService, has_canceled, queue_tasks
 from common import settings
@@ -77,8 +82,6 @@ def cancel_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
 
 def cancel(env: dict[str, Any], task_id: str, *, method: str = "post", principal: int = 0, api_key: bool = False) -> Any:
     path = f"/api/v1/tasks/{task_id}/cancel" if method == "post" else f"/api/v1/tasks/{task_id}"
-    if method == "put":
-        path = f"/v1/canvas/cancel/{task_id}"
     return env["client"].request(
         method,
         env["base"] + path,
@@ -96,7 +99,7 @@ def persistent_state(env: dict[str, Any], task_id: str) -> tuple[float, str | No
         return task.progress, task.progress_msg, doc.run, doc.progress, doc.progress_msg
 
 
-@pytest.mark.parametrize("method", ["post", "patch", "put"])
+@pytest.mark.parametrize("method", ["post", "patch"])
 @pytest.mark.parametrize("api_key", [False, True])
 def test_document_cancel_real_queue_http_and_late_worker(cancel_api: dict[str, Any], method: str, api_key: bool) -> None:
     env, task_id = cancel_api, cancel_api["document_task_id"]
@@ -369,6 +372,153 @@ def test_same_listener_smoke(cancel_api: dict[str, Any]) -> None:
     smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": cancel_api["base"]}, text=True, capture_output=True, timeout=60)
     Path("/tmp/multirag-488-smoke.log").write_text(smoke.stdout + smoke.stderr)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
+
+
+def retirement_state(env: dict[str, Any]) -> tuple[dict[str, Any], dict[str, tuple[bytes, int]]]:
+    """Read full owned SQL rows and Redis payloads independently of HTTP."""
+    with Session(env["engine"]) as db:
+        canvas_ids = list(db.scalars(sa.select(UserCanvas.id).where(UserCanvas.user_id.in_(env["owners"]))))
+        session_ids = list(db.scalars(sa.select(API4Conversation.id).where(API4Conversation.dialog_id.in_(canvas_ids))))
+        scoped = [
+            (Task, Task.id.in_(env["task_ids"])),
+            (Document, Document.id == env["doc_id"]),
+            (Knowledgebase, Knowledgebase.id == env["kb_id"]),
+            (UserCanvas, UserCanvas.id.in_(canvas_ids)),
+            (UserCanvasVersion, UserCanvasVersion.user_canvas_id.in_(canvas_ids)),
+            (API4Conversation, API4Conversation.id.in_(session_ids)),
+        ]
+        sql = {model.__name__: [dict(row) for row in db.execute(sa.select(model.__table__).where(condition).order_by(*model.__table__.primary_key)).mappings()] for model, condition in scoped}
+    redis = REDIS_CONN.REDIS
+    keys = {env["queue"]}
+    for identifier in [*env["owners"], *env["task_ids"], *canvas_ids, *session_ids]:
+        keys.update(redis.scan_iter(match=f"*{identifier}*"))
+    # DUMP includes the complete payload for strings, streams and hashes, but
+    # excludes expiry. Track natural TTL decay separately from byte equality.
+    payloads = {key: (redis.dump(key), redis.pttl(key)) for key in sorted(keys) if redis.exists(key)}
+    return sql, payloads
+
+
+@pytest.mark.parametrize(
+    "kind", ["document_active", "document_finished", "document_cancelled", "agent_active", "agent_finished", "agent_cancelled", "dataflow_active", "dataflow_finished", "dataflow_cancelled", "unknown"]
+)
+def test_retired_canvas_cancel_http_has_no_execution_or_storage_effects(cancel_api: dict[str, Any], wait_gate: dict[str, Any], monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    env = cancel_api
+    created = env["client"].post(env["base"] + "/api/v1/agents", json={"title": f"retirement {uuid4().hex}", "dsl": wait_dsl()}, timeout=30)
+    assert created.status_code == 200 and created.json()["retcode"] == 0
+    canvas_id = created.json()["data"]["id"]
+    update(env, canvas_id, {"release": True})
+    fetched = env["client"].get(env["base"] + f"/api/v1/agents/{canvas_id}", timeout=30)
+    assert fetched.status_code == 200 and fetched.json()["retcode"] == 0
+    created_session = env["client"].post(env["base"] + f"/api/v1/agents/{canvas_id}/sessions", json={"release": True}, timeout=30)
+    assert created_session.status_code == 200 and created_session.json()["retcode"] == 0
+    session_id = created_session.json()["data"]["id"]
+    # Existing definitions, versions, sessions and a real editor replica must
+    # survive every retired request, including cases whose ID is not a Canvas.
+    assert read_state(env, canvas_id)["versions"]
+    assert REDIS_CONN.REDIS.exists(f"canvas:replica:{canvas_id}:{env['owners'][0]}:{env['owners'][0]}")
+    task_id = env["document_task_id"]
+    with ExitStack() as stack:
+        stream = None
+        if kind.startswith("agent"):
+            payload = {"agent_id": canvas_id, "session_id": session_id, "release": True, "query": "retired request must not cancel", "stream": kind != "agent_finished"}
+            if kind == "agent_finished":
+                finished = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json=payload, timeout=30)
+                assert finished.status_code == 200 and finished.json()["retcode"] == 0
+                task_id = env["task_ids"][-1]
+                assert read_binding(task_id)[1]["state"] == "finished"
+            else:
+                wait_gate["enabled"] = True
+                client = stack.enter_context(HTTPSession())
+                client.headers.update(env["client"].headers)
+                stream = stack.enter_context(client.post(env["base"] + "/api/v1/agents/chat/completion", json=payload, stream=True, timeout=30))
+                assert stream.status_code == 200
+                lines = stream.iter_lines()
+                first = json.loads(next(line for line in lines if line.startswith(b"data:"))[5:])
+                task_id = first["task_id"]
+                assert task_id != first["message_id"] and wait_gate["entered"].setdefault(task_id, threading.Event()).wait(10)
+                # Always release the real component before closing its stream.
+                stack.callback(wait_gate["release"][task_id].set)
+                assert read_binding(task_id)[1]["state"] == "active"
+        elif kind.startswith("dataflow"):
+            dsl = {"components": {"File": {"obj": {"component_name": "File", "params": {}}, "downstream": [], "upstream": []}}, "path": []}
+            created_flow = env["client"].post(env["base"] + "/api/v1/agents", json={"title": f"retired flow {uuid4().hex}", "dsl": dsl, "canvas_category": CanvasCategory.DataFlow}, timeout=30)
+            assert created_flow.status_code == 200 and created_flow.json()["retcode"] == 0
+            flow_id = created_flow.json()["data"]["id"]
+            queued = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json={"agent_id": flow_id}, timeout=30)
+            assert queued.status_code == 200 and queued.json()["retcode"] == 0
+            task_id = queued.json()["data"]["message_id"]
+            env["task_ids"].append(task_id)
+            with Session(env["engine"]) as db:
+                assert db.get(Task, task_id).doc_id == "dataflow_x"
+            binding = read_binding(task_id)[1]
+            assert binding["state"] == "active" and binding["resource_id"] == flow_id and binding["principal_id"] == binding["tenant_id"] == env["owners"][0]
+            assert any(json.loads(entry["message"])["id"] == task_id for _, entry in REDIS_CONN.REDIS.xrange(env["queue"]))
+        elif kind == "unknown":
+            task_id = uuid4().hex
+            env["task_ids"].append(task_id)
+            with Session(env["engine"]) as db:
+                assert db.get(Task, task_id) is None
+            assert not REDIS_CONN.REDIS.exists(binding_key(task_id), f"{task_id}-cancel")
+        if kind.endswith("cancelled"):
+            cancelled = cancel(env, task_id, method="patch")
+            assert cancelled.status_code == 200 and cancelled.json() == {"retcode": 0, "retmsg": "success", "data": True}
+            assert REDIS_CONN.REDIS.get(f"{task_id}-cancel") and REDIS_CONN.REDIS.ttl(f"{task_id}-cancel") > 86000
+        elif kind.endswith("finished") and not kind.startswith("agent"):
+            # Terminal background state is a fixture, not a worker completion.
+            with Session(env["engine"]) as db:
+                db.execute(sa.update(Task).where(Task.id == task_id).values(progress=1, progress_msg="completed fixture"))
+                if kind.startswith("document"):
+                    db.execute(sa.update(Document).where(Document.id == env["doc_id"]).values(run=TaskStatus.DONE.value, progress=1, progress_msg="completed fixture"))
+                db.commit()
+            if kind.startswith("dataflow"):
+                assert finish_runtime(task_id) == "finished"
+        service_calls: list[str] = []
+        task_module = sys.modules["api.apps.restful_apis.task"]
+        original_cancel = task_module.cancel_task
+
+        async def record_cancel(db: AsyncSession, identifier: str, principal_id: str) -> None:
+            service_calls.append(identifier)
+            await original_cancel(db, identifier, principal_id)
+
+        with monkeypatch.context() as patch:
+            # Auto-registration and the old compatibility import can load two
+            # modules; both wrappers still execute the original real service.
+            for name in ["api.apps.restful_apis.task", "api.apps.restful_apis.task_api"]:
+                if name in sys.modules:
+                    patch.setattr(sys.modules[name], "cancel_task", record_cancel)
+            started = time.monotonic()
+            before_sql, before_redis = retirement_state(env)
+            credentials = [env["jwts"][0], env["keys"][0], env["jwts"][1], env["keys"][1], None]
+            with HTTPSession() as retired_client:
+                for credential in credentials:
+                    path = f"/v1/canvas/cancel/{task_id}"
+                    response = retired_client.put(env["base"] + path, headers={"Authorization": f"Bearer {credential}"} if credential else {}, timeout=30)
+                    assert response.status_code == 404 and response.json() == {"code": 404, "message": f"Not Found: {path}", "data": None, "error": "Not Found"}
+                    after_sql, after_redis = retirement_state(env)
+                    assert service_calls == [] and after_sql == before_sql and after_redis.keys() == before_redis.keys()
+                    natural_decay = ceil((time.monotonic() - started) * 1000) + 1000
+                    for key, (payload, ttl) in before_redis.items():
+                        after_payload, after_ttl = after_redis[key]
+                        assert after_payload == payload
+                        if ttl < 0:
+                            assert after_ttl == ttl
+                        else:
+                            assert after_ttl > 0 and 0 <= ttl - after_ttl <= natural_decay
+            paths = env["client"].get(env["base"] + "/openapi.json", timeout=30).json()["paths"]
+            assert "/v1/canvas/cancel/{task_id}" not in paths
+            assert "post" in paths["/api/v1/tasks/{task_id}/cancel"] and "patch" in paths["/api/v1/tasks/{task_id}"]
+            # Positive control: prove the recording boundary sees a retained
+            # registered HTTP route without changing any existing resource.
+            probe_id = uuid4().hex
+            env["task_ids"].append(probe_id)
+            probe = cancel(env, probe_id)
+            assert probe.status_code == 200 and probe.json()["retcode"] == 0 and probe.json()["data"] is True
+            assert service_calls == [probe_id] and not REDIS_CONN.REDIS.exists(binding_key(probe_id), f"{probe_id}-cancel")
+        if stream is not None:
+            wait_gate["release"][task_id].set()
+            tail = [json.loads(line[5:]) for line in lines if line.startswith(b"data:") and line[5:].strip() != b"[DONE]"]
+            assert any(event.get("event") == ("error" if kind.endswith("cancelled") else "message_end") for event in tail)
+        print(f"retired Canvas PUT {kind}: 5 credentials HTTP404; cancel service 0 calls; full SQL/Redis payloads unchanged; TTL only natural decay; retained POST positive control passed")
 
 
 def test_simultaneous_cancel_is_idempotent(cancel_api: dict[str, Any]) -> None:

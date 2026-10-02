@@ -11,7 +11,7 @@
 | 消费者的 `settings.X` | `common/settings.py` | 上游同步文件继续照抄访问面，由永久 facade 翻译；不要逐文件改成 DI |
 | Quart/Flask handler | FastAPI router + Pydantic + dependency | 新 service async-first；同一请求不混用同步/异步 session |
 | peewee model/query | `api/db/db_models.py` + SQLAlchemy 2.0 repository | 迁移和真 PostgreSQL 测试固定约束；业务事务放自有 service/repository |
-| `api/apps/restful_apis/task_api.py`、旧 Canvas cancel | `api/apps/restful_apis/task_api.py` + `api/db/services/task_cancellation_service.py` + `core/utils/task_runtime.py`；Go `internal/handler/task.go` + `internal/service/task.go` | SQL 文档/图任务与可信 Agent/DataFlow 运行登记共同授权；Python/Go 共用 Redis v1 归属、CAS、24 小时 TTL 及 SQL 取消标记。活动 Web 迁移到 POST Task 取消并验收后删除旧 PUT；不增加 GET，见 [HTTP API](../references/http_api_reference.md#task-api) |
+| `api/apps/restful_apis/task_api.py`、已退役的旧 Canvas cancel | `api/apps/restful_apis/task_api.py` + `api/db/services/task_cancellation_service.py` + `core/utils/task_runtime.py`；Go `internal/handler/task.go` + `internal/service/task.go` | SQL 文档/图任务与可信 Agent/DataFlow 运行登记共同授权；Python/Go 共用 Redis v1 归属、CAS、24 小时 TTL 及 SQL 取消标记。Web POST 迁移已验收，旧 PUT 路由及独占文件已删除；POST/PATCH 保留，不增加 GET，见 [HTTP API](../references/http_api_reference.md#task-api) |
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
 | `agent/component/list_operations.py` | 同名组件 + `api/db/services/canvas_service.py` 运行适配 | 新合同显式 `operations_version: 2`，缺省/1 保留历史 topN 与 head/tail 单项语义；只在运行副本补版本，不批量改写存储。错误经普通或 OpenAI 协议传递，见 [HTTP API](../references/http_api_reference.md#列表操作组件与历史-dsl) |
 | `deepdoc/parser/pdf_parser.py` 的 bbox 分批与布局选择 | 同名 parser、`deepdoc/vision/layout_recognizer.py`、`common/deepdoc_config.py` | 类型化读取 `deepdoc` section，保留上游环境名；窗口内裁图，返回全局页码。flow 多栏排序读 `bbox_page_width`。DLA 可选客户端协议未提供，缺客户端时明确失败，不复制成功桩 |

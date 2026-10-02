@@ -113,9 +113,9 @@ SQL DSL 的 `history`、`globals.sys.history` 或下次运行的 `get_history` �
 API 取消 nonce 保留 24 小时；无 API nonce 时运行清理的内部标记 `x` 保留 1 小时，
 清理采用 SET NX，不替换 API nonce 或缩短其有效期。
 
-旧 `PUT /v1/canvas/cancel/{task_id}` 暂时保留并标过时，调用同一授权服务。
-现有 Web 的 Agent/DataFlow 取消仍使用它；Web 改为上述 POST 并完成两类真实运行验收后，
-直接删除该路由及专用调用，不把保留旧接口作为默认兼容策略。
+旧 `PUT /v1/canvas/cancel/{task_id}` 已退役，返回 HTTP 404，OpenAPI 不再列出此路径。
+Web 的 Agent/DataFlow 取消均已迁移到上述 POST；PATCH `action: "stop"` 合同继续保留。
+旧路径不执行取消服务，不修改任务、文档、运行登记或取消标志。
 
 ## Agent API
 
