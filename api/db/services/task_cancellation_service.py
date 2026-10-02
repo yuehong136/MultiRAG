@@ -71,7 +71,12 @@ async def cancel_task(db: AsyncSession, task_id: str, principal_id: str) -> None
     flag_written = False
     previous_binding: str | None = None
     try:
-        task = await db.scalar(select(Task).where(Task.id == task_id).with_for_update())
+        task_document_id = await db.scalar(select(Task.doc_id).where(Task.id == task_id))
+        # Document producers/ingest use Doc -> Task. Avoid the inverse lock
+        # order when Task REST cancellation targets a real document.
+        if task_document_id and task_document_id not in {"dataflow_x", "graph_raptor_x"}:
+            await db.scalar(select(Document).where(Document.id == task_document_id).with_for_update())
+        task = await db.scalar(select(Task).where(Task.id == task_id).with_for_update().execution_options(populate_existing=True))
         runtime = await asyncio.to_thread(read_binding, task_id)
         document: Document | None = None
         if task is None:

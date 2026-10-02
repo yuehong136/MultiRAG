@@ -17,7 +17,6 @@ import io
 import logging
 import sys
 from copy import deepcopy
-from functools import partial
 from typing import Any
 
 import numpy as np
@@ -25,6 +24,8 @@ import pdfplumber
 from PIL import Image
 
 from api.db.db_models import db_connection
+from api.db.services.document_status_service import finish_status_write
+from api.db.services.document_task_service import task_image_writer
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from common import settings
@@ -312,7 +313,7 @@ async def restore_pdf_text_previews(chunks, from_upstream, canvas):
         return
 
     preview_cache = {}
-    storage_put = partial(settings.STORAGE_IMPL.put, tenant_id=canvas._tenant_id)
+    storage_put = task_image_writer(canvas)
     for chunk in text_chunks:
         preview_positions = extract_pdf_positions(chunk)
         positions_key = tuple(tuple(pos[:5]) for pos in preview_positions)
@@ -327,6 +328,6 @@ async def restore_pdf_text_previews(chunks, from_upstream, canvas):
             continue
 
         chunk["image"] = preview
-        await image2id(chunk, storage_put, get_uuid())
+        await finish_status_write(image2id(chunk, storage_put, get_uuid()))
         if chunk.get("img_id"):
             preview_cache[positions_key] = chunk["img_id"]

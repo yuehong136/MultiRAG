@@ -455,7 +455,8 @@ async def async_current_user(request: Request, db: AsyncSession = Depends(get_as
     except HTTPException as exc:
         if exc is not manager.not_authenticated_exception:
             raise
-        if os.environ.get("DISABLE_SDK"):
+        if os.environ.get("DISABLE_SDK") or token.count(".") == 2:
+            # A JWT that failed validation must never acquire API-key identity.
             raise
         # Only a credential that failed JWT parsing may enter the SDK-token
         # fallback.  A valid JWT whose user/membership is disabled must remain

@@ -25,7 +25,7 @@ from api.db.db_models import Conversation, Dialog, Document, File, File2Document
 from api.db.services.file_service import FileService
 from api.db.services.reference_service import ReferenceService
 from common import settings
-from common.constants import RetCode, TaskStatus
+from common.constants import TaskStatus
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 from tests.integration.test_runtime_document_upload import read_object
@@ -187,7 +187,7 @@ def test_dataset_parse_real_task_and_redis(parse_api: dict[str, Any]) -> None:
         doc_id = files[0][0]["id"]
     url = f"{env['base']}/api/v1/datasets/{env['kb']}/documents/parse"
     denied = requests.post(url, json={"document_ids": [doc_id]}, timeout=30)
-    assert denied.status_code == 401 and denied.json()["retcode"] == RetCode.AUTHENTICATION_ERROR
+    assert denied.status_code == 401 and denied.json()["code"] == 401
     malformed = requests.post(url, headers=_headers(env), json={"documents": [doc_id]}, timeout=30)
     assert malformed.status_code == 422 and any("document_ids" in error["loc"] for error in malformed.json()["detail"])
     missing = requests.post(url, headers=_headers(env), json={"document_ids": [uuid4().hex]}, timeout=30)

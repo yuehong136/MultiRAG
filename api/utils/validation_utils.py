@@ -27,6 +27,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
+    StrictStr,
     StringConstraints,
     ValidationError,
     field_validator,
@@ -37,6 +39,43 @@ from pydantic_core import PydanticCustomError
 from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from common.constants import RetCode
+
+
+class DocumentIngestRequest(BaseModel):
+    """Strict shared body for ingestion and its retained Web compatibility route."""
+
+    model_config = ConfigDict(extra="forbid")
+    doc_ids: list[StrictStr] = Field(min_length=1)
+    run: Literal["0", "1", "2"]
+    delete: StrictBool = False
+    apply_kb: StrictBool = False
+
+    @field_validator("doc_ids", mode="before")
+    @classmethod
+    def document_array(cls, value: Any) -> Any:
+        if type(value) is not list:
+            raise ValueError("doc_ids must be a nonempty array of document IDs.")
+        return value
+
+    @field_validator("doc_ids")
+    @classmethod
+    def document_ids(cls, value: list[str]) -> list[str]:
+        if any(not identifier.strip() for identifier in value):
+            raise ValueError("Document IDs must be nonempty strings.")
+        return list(dict.fromkeys(value))
+
+    @field_validator("run", mode="before", json_schema_input_type=Literal[0, 1, 2, "0", "1", "2"])
+    @classmethod
+    def operation(cls, value: Any) -> str:
+        if (type(value) is int and value in {0, 1, 2}) or (type(value) is str and value in {"0", "1", "2"}):
+            return str(value)
+        raise ValueError("run must be exactly 0, 1 or 2.")
+
+    @model_validator(mode="after")
+    def metadata_option(self) -> "DocumentIngestRequest":
+        if self.apply_kb and self.run != "1":
+            raise ValueError("apply_kb is only supported when starting parsing.")
+        return self
 
 
 async def validate_and_parse_json_request(

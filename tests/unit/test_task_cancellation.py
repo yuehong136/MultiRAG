@@ -12,14 +12,27 @@ from api.db.services import task_cancellation_service as service
 class CancellationSession(AsyncSession):
     def __init__(self, values: list[Any], fail_commit: bool = False) -> None:
         super().__init__()
-        self.values = iter(values)
+        self.values = values
+        self.offset = 0
+        self.lock_order: list[str] = []
         self.fail_commit = fail_commit
         self.updates: list[Any] = []
         self.commits = 0
         self.rollbacks = 0
 
     async def scalar(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
-        return next(self.values)
+        sql = str(statement)
+        if "SELECT usr_ai.t_ai_tasks.doc_id" in sql:
+            task = self.values[0]
+            return getattr(task, "doc_id", None)
+        if "t_ai_documents" in sql and "FOR UPDATE" in sql and "status" not in sql.split("WHERE", 1)[-1]:
+            self.lock_order.append("document")
+            return self.values[1] if len(self.values) > 1 else None
+        if "t_ai_tasks" in sql and "FOR UPDATE" in sql:
+            self.lock_order.append("task")
+        result = self.values[self.offset]
+        self.offset += 1
+        return result
 
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
         self.updates.append(statement)

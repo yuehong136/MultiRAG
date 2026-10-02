@@ -6,6 +6,7 @@
 @desc:
 """
 
+import copy
 import logging
 import os
 import random
@@ -14,12 +15,14 @@ from typing import Any
 
 import xxhash
 from sqlalchemy import asc, delete, desc, func, select, update
+from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
 from api.db import FileType
 from api.db.db_models import DatabaseLock, Document, File, File2Document, Knowledgebase, Task, Tenant
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
+from api.db.services.document_task_service import accounted_tokens, base_task_digest, token_digest
 from api.utils.db_utils import bulk_insert_into_db
 from common import settings
 from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER, StatusEnum, TaskStatus
@@ -202,9 +205,11 @@ class TaskService(CommonService):
         return [dict(task) for task in tasks]
 
     @classmethod
-    def update_chunk_ids(cls, db: Session, id: str, chunk_ids: str):
+    def update_chunk_ids(cls, db: Session, id: str, chunk_ids: str) -> None:
         stmt = update(cls.model).where(cls.model.id == id).values(chunk_ids=chunk_ids)
-        db.execute(stmt)
+        if db.execute(stmt).rowcount != 1:
+            db.rollback()
+            raise NoResultFound("Document task has been replaced.")
         db.commit()
 
     @classmethod
@@ -396,7 +401,7 @@ class TaskService(CommonService):
             raise e
 
 
-def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int) -> None:
+def prepare_parse_tasks(db: Session, doc: dict[str, Any], bucket: str, name: str, priority: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Create and queue document processing tasks.
 
     This function creates processing tasks for a document based on its type and configuration.
@@ -467,7 +472,9 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int) -
     else:
         parse_task_array.append(new_task())
 
-    chunking_config = DocumentService.get_chunking_config(db, doc["id"])
+    chunking_config = copy.deepcopy(DocumentService.get_chunking_config(db, doc["id"]))
+    if not chunking_config:
+        raise ValueError("Document chunking configuration unavailable.")
     for task in parse_task_array:
         hasher = xxhash.xxh64()
         for field in sorted(chunking_config.keys()):
@@ -483,6 +490,12 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int) -
         task["progress"] = 0.0
         task["priority"] = priority
 
+    return parse_task_array, chunking_config
+
+
+def queue_tasks(db: Session, doc: dict[str, Any], bucket: str, name: str, priority: int) -> None:
+    """Legacy caller: prepare tasks before replacing previous reusable history."""
+    parse_task_array, chunking_config = prepare_parse_tasks(db, doc, bucket, name, priority)
     prev_tasks = TaskService.get_tasks(db, doc["id"])
     ck_num = 0
     if prev_tasks:
@@ -505,11 +518,11 @@ def queue_tasks(db: Session, doc: dict, bucket: str, name: str, priority: int) -
         assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=_task_queue_payload(unfinished_task)), "Can't access Redis. Please check the Redis' status."
 
 
-def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: dict) -> int:
+def reuse_prev_task_chunks(task: dict[str, Any], prev_tasks: list[dict[str, Any]], chunking_config: dict[str, Any]) -> int:
     idx = 0
     while idx < len(prev_tasks):
         prev_task = prev_tasks[idx]
-        if prev_task.get("from_page", 0) == task.get("from_page", 0) and prev_task.get("digest", 0) == task.get("digest", ""):
+        if prev_task.get("from_page", 0) == task.get("from_page", 0) and base_task_digest(prev_task.get("digest")) == base_task_digest(task.get("digest")):
             break
         idx += 1
 
@@ -520,6 +533,9 @@ def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: 
         return 0
     task["chunk_ids"] = prev_task["chunk_ids"]
     task["progress"] = 1.0
+    tokens = accounted_tokens(prev_task.get("digest"))
+    if tokens is not None:
+        task["digest"] = token_digest(task.get("digest"), tokens)
     if "from_page" in task and "to_page" in task and (int(task["to_page"]) - int(task["from_page"]) >= 10**6 or int(task["from_page"]) == int(task["to_page"]) == MAXIMUM_TASK_PAGE_NUMBER):
         task["progress_msg"] = f"Page({task['from_page']}~{task['to_page']}): "
     else:

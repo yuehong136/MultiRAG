@@ -1,4 +1,6 @@
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
@@ -6,8 +8,10 @@ from typing import Any
 import pytest
 from pypdf import PdfWriter
 from reportlab.pdfgen import canvas
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from api.db.services import document_task_service
 from core.app import manual, naive
 from core.svr import task_executor
 
@@ -95,6 +99,13 @@ async def run_build_chunks(
     monkeypatch.setattr(task_executor, "extract_pdf_outlines", lambda binary: extracted)
     monkeypatch.setattr(task_executor.DocMetadataService, "get_document_metadata", get_metadata)
     monkeypatch.setattr(task_executor.DocMetadataService, "update_document_metadata", update_metadata)
+
+    @contextmanager
+    def current_task(db: Session, task_id: str, document_id: str, dataset_id: str) -> Iterator[None]:
+        assert (task_id, document_id, dataset_id) == ("task", "doc", "kb")
+        yield
+
+    monkeypatch.setattr(document_task_service, "current_document_task", current_task)
     task = {
         "id": "task",
         "doc_id": "doc",
@@ -110,7 +121,7 @@ async def run_build_chunks(
         "parser_config": {},
         "kb_parser_config": {},
     }
-    with Session() as db:
+    with Session(create_engine("sqlite://")) as db:
         docs = await task_executor.build_chunks(task, lambda *args, **kwargs: None, db)
     return docs, saved
 

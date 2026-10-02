@@ -8,7 +8,7 @@ from pypdf import PdfWriter
 from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Knowledgebase
+from api.db.db_models import Document, Knowledgebase, Task
 from api.db.services.doc_metadata_service import DocMetadataService
 from common import settings
 from core.svr import task_executor
@@ -71,30 +71,39 @@ async def test_pdf_parse_persists_outline_in_scratch_metadata(
     def progress(*args: Any, **kwargs: Any) -> None:
         pass
 
-    with Session(bootstrapped_engine) as db:
-        db.add(Knowledgebase(id=kb_id, tenant_id=tenant_id, name="outline scratch", created_by=tenant_id, embd_id="test"))
-        db.add(Document(id=doc_id, kb_id=kb_id, parser_id="naive", type="pdf", created_by=tenant_id, name="outline.pdf", size=len(binary)))
-        db.commit()
-        assert DocMetadataService.update_document_metadata(db, doc_id, {"source": "scratch", "tags": ["existing"]})
+    try:
+        with Session(bootstrapped_engine) as db:
+            db.add(Knowledgebase(id=kb_id, tenant_id=tenant_id, name="outline scratch", created_by=tenant_id, embd_id="test"))
+            db.add(Document(id=doc_id, kb_id=kb_id, parser_id="naive", type="pdf", created_by=tenant_id, name="outline.pdf", size=len(binary), run="1"))
+            db.add(Task(id=task["id"], doc_id=doc_id, progress=0))
+            db.commit()
+            assert DocMetadataService.update_document_metadata(db, doc_id, {"source": "scratch", "tags": ["existing"]})
 
-        if path == "standard":
-            chunks = await task_executor.build_chunks(task, progress, db)
-            assert chunks
-            assert all("__outline__" not in chunk for chunk in chunks)
-        else:
-            assert await task_executor._persist_pdf_outline_from_storage(db, doc_id, "outline.pdf") is bookmarked
+            if path == "standard":
+                chunks = await task_executor.build_chunks(task, progress, db)
+                assert chunks
+                assert all("__outline__" not in chunk for chunk in chunks)
+            else:
+                assert await task_executor._persist_pdf_outline_from_storage(db, doc_id, "outline.pdf") is bookmarked
 
-    with Session(bootstrapped_engine) as db:
-        metadata = DocMetadataService.get_document_metadata(db, doc_id)
-        assert metadata["source"] == "scratch"
-        assert metadata["tags"] == ["existing"]
-        if bookmarked:
-            assert metadata["outline"] == [{"title": "Chapter One", "depth": 0}]
-        else:
-            assert "outline" not in metadata
-
-        assert DocMetadataService.delete_document_metadata(db, doc_id, kb_id, tenant_id)
-        db.delete(db.get(Document, doc_id))
-        db.delete(db.get(Knowledgebase, kb_id))
-        db.commit()
-        assert DocMetadataService.get_document_metadata(db, doc_id) == {}
+        with Session(bootstrapped_engine) as db:
+            metadata = DocMetadataService.get_document_metadata(db, doc_id)
+            assert metadata["source"] == "scratch"
+            assert metadata["tags"] == ["existing"]
+            if bookmarked:
+                assert metadata["outline"] == [{"title": "Chapter One", "depth": 0}]
+            else:
+                assert "outline" not in metadata
+    finally:
+        with Session(bootstrapped_engine) as db:
+            assert DocMetadataService.delete_document_metadata(db, doc_id, kb_id, tenant_id)
+            for model_type, identifier in [(Task, task["id"]), (Document, doc_id), (Knowledgebase, kb_id)]:
+                row = db.get(model_type, identifier)
+                if row is not None:
+                    db.delete(row)
+            db.commit()
+        with Session(bootstrapped_engine) as db:
+            assert DocMetadataService.get_document_metadata(db, doc_id) == {}
+            assert db.get(Task, task["id"]) is None
+            assert db.get(Document, doc_id) is None
+            assert db.get(Knowledgebase, kb_id) is None

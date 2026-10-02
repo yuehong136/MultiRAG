@@ -1,9 +1,13 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from api.db.services import document_task_service
 from common.metadata_utils import build_metadata_config, turn2jsonschema, update_metadata_to
 from core.prompts.generator import gen_metadata
 from core.svr import task_executor
@@ -98,7 +102,16 @@ def test_metadata_merge_preserves_json_values_and_existing_string_semantics() ->
 
 
 @pytest.fixture
-def metadata_task(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], MetadataModel, list[dict[str, Any]], list[tuple[str, Any]], list[str]]:
+def metadata_task(monkeypatch: pytest.MonkeyPatch, db: Session) -> tuple[dict[str, Any], MetadataModel, list[dict[str, Any]], list[tuple[str, Any]], list[str]]:
+    db.bind = create_engine("sqlite://")
+
+    @contextmanager
+    def current_task(writer: Session, task_id: str, document_id: str, dataset_id: str) -> Iterator[None]:
+        assert (task_id, document_id, dataset_id) == ("task", "doc", "kb")
+        assert writer is not db
+        yield
+
+    monkeypatch.setattr(document_task_service, "current_document_task", current_task)
     model = MetadataModel('{"author": "Ada", "tags": ["generated"], "year": 2026}')
     saved: list[dict[str, Any]] = []
     cache: dict[str, str] = {}

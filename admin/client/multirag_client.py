@@ -1692,7 +1692,20 @@ class MultiRAGClient:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to search datasets {dataset_names}: {msg}")
 
-    def parse_dataset_docs(self, command: dict):
+    def _submit_document_ingestion(self, document_ids: list[str]) -> bool:
+        """Only a complete, confirmed ingest response acknowledges submission."""
+        try:
+            response = self.http_client.request("POST", "documents/ingest", json_body={"doc_ids": document_ids, "run": 1}, use_api_base=True, auth_kind="web")
+            result = response.json()
+        except Exception:
+            print("Fail to submit parsing: response could not be confirmed")
+            return False
+        if response.status_code != 200 or not isinstance(result, dict) or type(result.get("code")) is not int or result["code"] != 0 or result.get("data") is not True:
+            print("Fail to submit parsing: request was not fully acknowledged")
+            return False
+        return True
+
+    def parse_dataset_docs(self, command: dict[str, Any]) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
@@ -1716,17 +1729,10 @@ class MultiRAGClient:
             return
         if document_names:
             print(f"Documents not found: {document_names}")
-        payload = {"doc_ids": document_ids, "run": 1}
-        response = self.http_client.request("POST", "document/run", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
-            print(f"Success to parse {to_parse} of {dataset_name}")
-        else:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to parse documents: {msg}")
+        if self._submit_document_ingestion(document_ids):
+            print(f"Parsing submitted for {to_parse} of {dataset_name}")
 
-    def parse_dataset(self, command: dict):
+    def parse_dataset(self, command: dict[str, Any]) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
@@ -1739,22 +1745,19 @@ class MultiRAGClient:
         if docs is None:
             return
         document_ids = [doc["id"] for doc in docs]
-        payload = {"doc_ids": document_ids, "run": 1}
-        response = self.http_client.request("POST", "document/run", json_body=payload, use_api_base=False, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if not (response.status_code == 200 and code == 0):
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to start parse dataset {dataset_name}: {msg}")
+        if not document_ids:
+            print(f"No documents found in {dataset_name}")
+            return
+        if not self._submit_document_ingestion(document_ids):
             return
         if method == "async":
-            print(f"Success to start parse dataset {dataset_name}")
+            print(f"Parsing submitted for dataset {dataset_name}")
         else:
             print(f"Start to parse dataset {dataset_name}, please wait...")
-            if self._wait_parse_done(dataset_name, dataset_id):
+            if self._wait_parse_done(dataset_name, dataset_id, document_ids):
                 print(f"Success to parse dataset {dataset_name}")
             else:
-                print(f"Parse dataset {dataset_name} timeout")
+                print(f"Parsing completion could not be confirmed for dataset {dataset_name}")
 
     # Private helper methods
 
@@ -1778,22 +1781,40 @@ class MultiRAGClient:
         print(f"Dataset '{dataset_name}' not found")
         return None
 
-    def _list_documents(self, dataset_name: str, dataset_id: str) -> list | None:
-        response = self.http_client.request(
-            "GET",
-            f"datasets/{dataset_id}/documents",
-            use_api_base=True,
-            auth_kind="web",
-        )
-        res_json = response.json()
-        if response.status_code != 200:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to list files from dataset {dataset_name}: {msg}")
-            return None
-        data = res_json.get("data", {})
-        if isinstance(data, dict):
-            return data.get("docs", [])
-        return data
+    def _list_documents(self, dataset_name: str, dataset_id: str, document_ids: list[str] | None = None) -> list[dict[str, Any]] | None:
+        documents: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        expected: int | None = None
+        page = 1
+        while True:
+            params: dict[str, Any] = {"page": page, "page_size": 100, "orderby": "id", "desc": False}
+            if document_ids is not None:
+                params["ids"] = document_ids
+            try:
+                response = self.http_client.request("GET", f"datasets/{dataset_id}/documents", params=params, use_api_base=True, auth_kind="web")
+                result = response.json()
+                if response.status_code != 200 or not isinstance(result, dict) or type(result.get("code")) is not int or result["code"] != 0:
+                    raise ValueError("Document list was not acknowledged.")
+                data = result.get("data")
+                if not isinstance(data, dict) or type(data.get("total")) is not int or data["total"] < 0 or not isinstance(data.get("docs"), list):
+                    raise ValueError("Document list shape is unavailable.")
+                total, rows = data["total"], data["docs"]
+                if expected is not None and total != expected:
+                    raise ValueError("Document selection changed during pagination.")
+                expected = total
+                for row in rows:
+                    if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] or row["id"] in seen:
+                        raise ValueError("Document list contains invalid or duplicate IDs.")
+                    seen.add(row["id"])
+                documents.extend(rows)
+                if len(documents) > total or (not rows and len(documents) < total):
+                    raise ValueError("Document list is incomplete.")
+                if len(documents) == total:
+                    return documents
+                page += 1
+            except Exception:
+                print(f"Fail to list documents from dataset {dataset_name}: response could not be confirmed")
+                return None
 
     def _get_chat_id_by_name(self, chat_name: str) -> str | None:
         chats = self._list_chats()
@@ -1866,15 +1887,23 @@ class MultiRAGClient:
             msg = res_json.get("message", res_json.get("retmsg", ""))
             print(f"Fail to set {model_type}: {msg}")
 
-    def _wait_parse_done(self, dataset_name: str, dataset_id: str) -> bool:
+    def _wait_parse_done(self, dataset_name: str, dataset_id: str, document_ids: list[str]) -> bool:
+        required = set(document_ids)
+        if not required:
+            return False
         start = time.monotonic()
         while True:
-            docs = self._list_documents(dataset_name, dataset_id)
+            docs = self._list_documents(dataset_name, dataset_id, document_ids)
             if docs is None:
                 return False
-            all_done = all(doc.get("run") == "DONE" for doc in docs)
+            if {doc["id"] for doc in docs} != required or any(doc.get("run") not in {"UNSTART", "RUNNING", "CANCEL", "DONE", "FAIL", "SCHEDULE"} for doc in docs):
+                print(f"Parsing status is unavailable for submitted documents in {dataset_name}")
+                return False
+            all_done = all(doc["run"] == "DONE" for doc in docs)
             if all_done:
                 return True
+            if any(doc["run"] in {"CANCEL", "FAIL"} for doc in docs):
+                return False
             if time.monotonic() - start > 60:
                 return False
             time.sleep(0.5)

@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, Json, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -25,20 +25,22 @@ from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES, FileType
-from api.db.db_models import Task, get_async_db, get_db
+from api.db.db_models import get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
+from api.db.services.document_ingest_service import IngestError, ingest_documents
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
-from api.db.services.task_service import TaskService, cancel_all_task_of
+from api.db.services.task_service import TaskService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
+from api.utils.validation_utils import DocumentIngestRequest
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common import settings
 from common.constants import VALID_TASK_STATUS, ParserType, RetCode, TaskStatus
@@ -213,11 +215,8 @@ class RemoveRequest(BaseModel):
     doc_id: list[str] = Field(..., description="文档ID列表")
 
 
-class RunRequest(BaseModel):
-    doc_ids: list[str] = Field(..., description="文档ID列表")
-    run: int = Field(..., description="运行状态：0=未开始/重置，1=启动/重试，2=取消当前任务")
-    delete: bool = Field(default=False, description="是否删除历史doc记录")
-    apply_kb: bool = Field(default=False, description="是否从知识库同步元数据配置到文档")
+class RunRequest(DocumentIngestRequest):
+    pass
 
 
 class RenameRequest(BaseModel):
@@ -1887,265 +1886,19 @@ def rm(request_body: RemoveRequest, db: Session = Depends(get_db), user=Depends(
     return construct_json_result(data=True)
 
 
-@router.post("/run", summary="运行任务", response_description="成功运行任务")
-def run(request_body: RunRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    ### POST `/run` 运行文档处理任务接口
-
-    **功能描述**:
-    此接口用于启动或停止文档的处理任务，支持批量操作。可以控制文档的解析、向量化等处理流程，并可选择是否清除历史处理数据。
-
-    ---
-
-    ### 请求体 (Request Body)
-
-    | 字段       | 类型          | 必填 | 描述                                                        |
-    |------------|---------------|------|-------------------------------------------------------------|
-    | `doc_ids`  | `list[str]`   | 是   | 要处理的文档ID列表                                          |
-    | `run`      | `int`         | 是   | 任务状态：0=未开始/重置，1=启动/重试，2=取消当前任务         |
-    | `delete`   | `boolean`     | 否   | 是否删除历史处理数据，默认false                             |
-
-    ---
-
-    ### 响应 (Response)
-
-    #### 成功响应 (200)
-    ```json
-    {
-        "retcode": 0,
-        "retmsg": "success",
-        "data": true
-    }
-    ```
-
-    #### 错误响应
-
-    - **403: 权限不足**
-        ```json
-        {
-            "retcode": 403,
-            "retmsg": "No authorization.",
-            "data": false
-        }
-        ```
-
-    - **400: 文档不存在**
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "Document not found!",
-            "data": false
-        }
-        ```
-
-    - **400: 租户不存在**
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "Tenant not found!",
-            "data": false
-        }
-        ```
-
-    - **400: Milvus删除失败**
-        ```json
-        {
-            "retcode": 400,
-            "retmsg": "Milvus delete failed!",
-            "data": false
-        }
-        ```
-
-    ---
-
-    ### 主要流程
-
-    1. **权限验证**:
-        - 验证用户对所有文档的访问权限
-        - 确保用户有操作这些文档的权利
-
-    2. **状态更新**:
-        - 更新文档的运行状态
-        - 重置进度信息（当启动新任务时）
-        - 清零chunk_num和token_num（当delete=true时）
-
-    3. **数据清理**（当delete=true时）:
-        - 删除相关的任务记录
-        - 清除Milvus中的向量数据
-        - 重置文档的处理统计信息
-
-    4. **任务调度**（当run=1时）:
-        - 获取文档的存储信息
-        - 将文档加入处理队列
-        - 处理表格文档的特殊逻辑
-
-    5. **任务取消**（当run=2时）:
-        - 向正在执行的后台任务发送取消信号
-        - 将文档状态更新为已取消
-        - 如果文档当前没有运行中的任务，则返回错误
-
-    ---
-
-    ### 任务状态说明
-
-    #### 运行状态值
-    | 值 | 状态      | 描述                           |
-    |----|-----------|--------------------------------|
-    | 0  | 未开始    | 仅更新文档状态为未开始，不会取消已运行任务 |
-    | 1  | 运行      | 启动或重试文档处理，加入处理队列 |
-    | 2  | 取消      | 取消当前正在执行的任务，并发送停止信号 |
-
-    #### 文档处理状态
-    - `unstart`: 未开始处理
-    - `running`: 正在处理中
-    - `cancel`: 已取消
-    - `done`: 处理完成
-    - `fail`: 处理失败
-
-    ---
-
-    ### 特殊处理逻辑
-
-    #### 表格文档处理 (TABLE类型)
-    - 启动表格文档处理前会检查知识库中的表格文档数量
-    - 如果是首个表格文档，会清理旧的字段映射配置
-    - 确保表格文档的字段映射一致性
-
-    #### 重新处理 (delete=true)
-    - 清除文档在向量数据库中的所有数据
-    - 重置文档的chunk_num、token_num等统计信息
-    - 删除相关的处理任务记录
-    - 适用于文档内容发生变化需要重新处理的场景
-
-    ---
-
-    ### 使用场景
-
-    #### 1. 启动文档处理
-    ```json
-    {
-        "doc_ids": ["doc_123", "doc_456"],
-        "run": 1
-    }
-    ```
-
-    #### 2. 取消当前文档处理
-    ```json
-    {
-        "doc_ids": ["doc_123", "doc_456"],
-        "run": 2
-    }
-    ```
-
-    #### 3. 重置为未开始状态（不取消运行中任务）
-    ```json
-    {
-        "doc_ids": ["doc_123", "doc_456"],
-        "run": 0
-    }
-    ```
-
-    #### 4. 重新处理文档（清除历史数据）
-    ```json
-    {
-        "doc_ids": ["doc_123"],
-        "run": 1,
-        "delete": true
-    }
-    ```
-
-    ---
-
-    ### 处理队列机制
-
-    #### 任务优先级
-    - 按照文档提交顺序进行处理
-    - 支持并发处理多个文档
-    - 自动处理任务失败和重试
-
-    #### 进度跟踪
-    - 实时更新文档处理进度
-    - 记录处理过程中的错误信息
-    - 提供详细的处理状态反馈
-
-    ---
-
-    ### 注意事项
-
-    - **权限控制**: 只有文档所有者才能控制文档的处理状态
-    - **批量操作**: 支持同时处理多个文档，但建议合理控制数量
-    - **数据一致性**: delete操作会彻底清除相关数据，请谨慎使用
-    - **处理时间**: 文档处理时间取决于文档大小和复杂度
-    - **资源占用**: 处理过程会占用系统资源，建议错峰处理大量文档
-    - **状态同步**: 任务状态变更会实时反映在文档列表中
-    - **错误处理**: 处理失败的文档会保留错误信息供调试使用
-    - **向量数据**: 删除操作会同步清理Milvus中的向量数据
-    """
-    req = request_body.model_dump()
-
-    for doc_id in req["doc_ids"]:
-        if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
-
+@router.post("/run", summary="[Deprecated] 运行文档任务", response_description="请求已提交", deprecated=True)
+async def run(request_body: RunRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
+    """Retained for the current Web reparse consumer until its migration is accepted."""
     try:
-        kb_table_num_map = {}
-        for id in req["doc_ids"]:
-            info = {"run": str(req["run"]), "progress": 0}
-            if str(req["run"]) == TaskStatus.RUNNING.value and req.get("delete", False):
-                info["progress_msg"] = ""
-                info["chunk_num"] = 0
-                info["token_num"] = 0
-
-            d = DocumentService.get_by_doc_id(db, id)
-            kb_id = d["kb_id"]
-            kb = KnowledgebaseService.get_by_id(db, kb_id)
-            tenant_id = kb.tenant_id
-            if not tenant_id:
-                return construct_json_result(data=False, message="Tenant not found!", code=RetCode.ARGUMENT_ERROR)
-
-            if str(req["run"]) == TaskStatus.CANCEL.value:
-                tasks = list(TaskService.query(db, doc_id=id))
-                has_unfinished_task = any((task.progress or 0) < 1 for task in tasks)
-                if str(d["run"]) in [TaskStatus.RUNNING.value, TaskStatus.CANCEL.value] or has_unfinished_task:
-                    cancel_all_task_of(db, id)
-                else:
-                    return get_data_error_result(retmsg="Cannot cancel a task that is not in RUNNING status")
-
-            if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value, str(d["run"]) == TaskStatus.DONE.value]):
-                DocumentService.clear_chunk_num_when_rerun(db, d["id"])
-
-            DocumentService.update_by_id(db, id, info)
-
-            # 构建 Milvus 集合名称
-            collection_name = search.index_name_one(tenant_id, kb.name)
-            # 检查集合是否存在并删除向量数据库中的数据
-            if req.get("delete", False):
-                TaskService.filter_delete(db, [Task.doc_id == id])
-                try:
-                    db_type = settings.docStoreConn.db_type()
-                    if db_type == "milvus":
-                        if settings.docStoreConn.has_collection(collection_name):
-                            delete_result = settings.docStoreConn.delete(condition={"doc_id": d["id"]}, index_name=collection_name, dataset_id=kb.id)
-                    else:
-                        if settings.docStoreConn.index_exist(search.index_name(tenant_id, [kb.name]), kb_id):
-                            # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
-                            delete_result = settings.docStoreConn.delete({"doc_id": d["id"]}, collection_name, kb.id)
-                    if delete_result is None:
-                        return construct_json_result(data=False, message="Doc store delete failed!", code=RetCode.ARGUMENT_ERROR)
-                except Exception as e:
-                    return construct_json_result(data=False, message=str(e), code=RetCode.ARGUMENT_ERROR)
-
-            if str(req["run"]) == TaskStatus.RUNNING.value:
-                if req.get("apply_kb"):
-                    d["parser_config"]["llm_id"] = kb.parser_config.get("llm_id")
-                    d["parser_config"]["enable_metadata"] = kb.parser_config.get("enable_metadata", False)
-                    d["parser_config"]["metadata"] = kb.parser_config.get("metadata", {})
-                    DocumentService.update_parser_config(db, id, d["parser_config"])
-                doc = d
-                DocumentService.run(db, tenant_id, doc, kb_table_num_map)
-        return construct_json_result(data=True)
-    except Exception as e:
-        return construct_error_response(e)
+        result = await ingest_documents(db, request_body.doc_ids, user.platform_user_id, request_body.run, request_body.delete, request_body.apply_kb)
+        if result is not True:
+            raise IngestError("Document ingestion effect could not be confirmed.", RetCode.SERVER_ERROR)
+        return construct_json_result(data=result)
+    except IngestError as exc:
+        return JSONResponse(content={"code": exc.code, "message": str(exc), "data": exc.result})
+    except Exception:
+        logging.exception("Legacy document run failed")
+        return JSONResponse(content={"code": RetCode.SERVER_ERROR, "message": "Document ingestion failed; retry to reconcile.", "data": None})
 
 
 @router.post("/rename", summary="[Deprecated] 重命名文档", response_description="成功重命名文档", deprecated=True)

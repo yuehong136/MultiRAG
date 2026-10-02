@@ -34,6 +34,7 @@ class Pipeline(Graph):
         super().__init__(dsl, tenant_id, task_id)
         if doc_id == CANVAS_DEBUG_DOC_ID:
             doc_id = None
+        self._source_document_id = doc_id
         self._doc_id = doc_id
         self._flow_id = flow_id
         self._kb_id = None
@@ -97,7 +98,10 @@ class Pipeline(Graph):
                 t = obj[-1]["trace"][-1]
                 msg += "%s: %s\n" % (t["datetime"], t["message"])
                 with db_connection() as db:
-                    TaskService.update_progress(db, self.task_id, {"progress": finished, "progress_msg": msg})
+                    # Component completion precedes indexing and SQL ledger
+                    # commit. Only the worker's final indexing step is terminal.
+                    indexing_progress = finished * 0.8 if finished >= 0 else finished
+                    TaskService.update_progress(db, self.task_id, {"progress": indexing_progress, "progress_msg": msg})
                     db.commit()
             elif component_name == "END" and not self._doc_id:
                 obj[-1]["trace"][-1]["dsl"] = json.loads(str(self))

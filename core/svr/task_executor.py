@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 import xxhash
 from pymilvus import DataType
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import NoResultFound
 
@@ -34,6 +35,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_type_
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import finish_status_write, insert_source_chunks
+from api.db.services.document_task_service import SupersededDocumentTask, increment_task_document, put_task_image, record_task_pipeline, write_task_metadata
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -454,7 +456,7 @@ def _persist_pdf_outline_metadata(db: Session, doc_id: str, outline: list[dict[s
     return False
 
 
-async def _persist_pdf_outline_from_storage(db: Session, doc_id: str, filename: str) -> bool:
+async def _persist_pdf_outline_from_storage(db: Session, doc_id: str, filename: str, task_id: str | None = None, dataset_id: str | None = None) -> bool:
     if not filename.lower().endswith(".pdf"):
         return False
     try:
@@ -467,7 +469,21 @@ async def _persist_pdf_outline_from_storage(db: Session, doc_id: str, filename: 
     if not raw_outline:
         return False
     outline = [{"title": title, "depth": depth} for title, depth, *_ in raw_outline]
+    if task_id is not None and dataset_id is not None:
+        return await finish_status_write(asyncio.to_thread(_persist_task_pdf_outline, db.get_bind(), task_id, doc_id, dataset_id, outline))
     return _persist_pdf_outline_metadata(db, doc_id, outline)
+
+
+def _persist_task_pdf_outline(bind: Engine | Connection, task_id: str, document_id: str, dataset_id: str, outline: list[dict[str, Any]]) -> bool:
+    try:
+        write_task_metadata(bind, task_id, document_id, dataset_id, {"outline": outline})
+        logging.info("Persisted PDF outline (%d entries) for doc %s", len(outline), document_id)
+        return True
+    except SupersededDocumentTask:
+        raise
+    except Exception:
+        logging.exception("Failed to persist PDF outline for doc %s", document_id)
+        return False
 
 
 @timeout(60 * 80, 1)
@@ -550,7 +566,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
                 d["img_id"] = ""
                 docs.append(d)
                 return
-            await image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=task["tenant_id"]), d["pk"], task["kb_id"])
+            await finish_status_write(image2id(d, partial(put_task_image, task["id"], task["doc_id"], task["kb_id"], task["tenant_id"]), d["pk"], task["kb_id"]))
             docs.append(d)
         except Exception:
             logging.exception("Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["pk"]))
@@ -678,11 +694,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         for doc in docs:
             metadata = update_metadata_to(metadata, doc.pop("metadata_obj", None))
         if metadata:
-            existing_meta = DocMetadataService.get_document_metadata(db, task["doc_id"])
-            existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
-            metadata = update_metadata_to(metadata, existing_meta)
-            if not DocMetadataService.update_document_metadata(db, task["doc_id"], metadata):
-                raise RuntimeError(f"Failed to persist generated metadata for document {task['doc_id']}")
+            await finish_status_write(asyncio.to_thread(write_task_metadata, db.get_bind(), task["id"], task["doc_id"], task["kb_id"], metadata))
         progress_callback(msg=f"Metadata generation {len(docs)} chunks completed in {timer() - st:.2f}s")
 
     if task["kb_parser_config"].get("tag_kb_ids", []):
@@ -751,9 +763,15 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         progress_callback(msg=f"Tagging {len(docs)} chunks completed in {timer() - st:.2f}s")
 
     if outline:
-        _persist_pdf_outline_metadata(db, task["doc_id"], outline)
+        await finish_status_write(asyncio.to_thread(_persist_task_pdf_outline, db.get_bind(), task["id"], task["doc_id"], task["kb_id"], outline))
 
     return docs
+
+
+def _owned_task_progress(task_id: str, from_page: int, to_page: int, prog: float | int | None = None, msg: str = "Processing...") -> None:
+    """Callbacks from the owned TOC thread never borrow the worker's Session."""
+    with db_connection() as callback_db:
+        set_progress(callback_db, task_id, from_page, to_page, prog=prog, msg=msg)
 
 
 def build_TOC(task, docs, progress_callback):
@@ -1093,13 +1111,13 @@ async def run_dataflow(db: Session, task: dict) -> Any:
         return
 
     if not chunks:
-        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, doc_id, task_dataset_id, dataflow_id, str(pipeline)))
         return
 
     chunks, embedding_token_consumption = _normalize_pipeline_output_chunks(chunks)
 
     if not chunks:
-        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, doc_id, task_dataset_id, dataflow_id, str(pipeline)))
         return
 
     keys = [k for o in chunks for k in list(o.keys())]
@@ -1140,7 +1158,7 @@ async def run_dataflow(db: Session, task: dict) -> Any:
             raise
         except Exception as e:
             set_progress(db, task_id, prog=-1, msg=f"[ERROR]: {e}")
-            PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+            await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, doc_id, task_dataset_id, dataflow_id, str(pipeline)))
             return
 
     metadata = {}
@@ -1183,12 +1201,9 @@ async def run_dataflow(db: Session, task: dict) -> Any:
             del ck["positions"]
 
     if metadata:
-        existing_meta = DocMetadataService.get_document_metadata(db, doc_id)
-        existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
-        metadata = update_metadata_to(metadata, existing_meta)
-        DocMetadataService.update_document_metadata(db, doc_id, metadata)
+        await finish_status_write(asyncio.to_thread(write_task_metadata, db.get_bind(), task_id, doc_id, task_dataset_id, metadata))
 
-    await _persist_pdf_outline_from_storage(db, doc_id, task["name"])
+    await _persist_pdf_outline_from_storage(db, doc_id, task["name"], task_id, task_dataset_id)
 
     start_ts = timer()
     set_progress(db, task_id, prog=0.82, msg="[DOC Engine]:\nStart to index...")
@@ -1198,17 +1213,18 @@ async def run_dataflow(db: Session, task: dict) -> Any:
     collection_name = search.index_name_one(task["tenant_id"], kb_name)
     schema = await get_schema(collection_name)
 
+    chunks[0]["ingest_tokens_int"] = embedding_token_consumption
     e = await insert_chunks(db, task_id, task["tenant_id"], task["kb_id"], chunks, partial(set_progress, db, task_id, 0, MAXIMUM_TASK_PAGE_NUMBER), collection_name, schema)
     if not e:
-        PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+        await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, doc_id, task_dataset_id, dataflow_id, str(pipeline)))
         return
 
     time_cost = timer() - start_ts
     task_time_cost = timer() - task_start_ts
+    await finish_status_write(asyncio.to_thread(increment_task_document, db.get_bind(), task_id, doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost))
     set_progress(db, task_id, prog=1.0, msg=f"Indexing done ({time_cost:.2f}s). Task done ({task_time_cost:.2f}s)")
-    DocumentService.increment_chunk_num(db, doc_id, task_dataset_id, embedding_token_consumption, len(chunks), task_time_cost)
     logging.info(f"[Done], chunks({len(chunks)}), token({embedding_token_consumption}), elapsed:{task_time_cost:.2f}")
-    PipelineOperationLogService.create(db, document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))
+    await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, doc_id, task_dataset_id, dataflow_id, str(pipeline)))
 
 
 async def has_raptor_chunks(doc_id: str, tenant_id: str, kb_id: str) -> bool:
@@ -2427,6 +2443,10 @@ async def insert_chunks(
     """
     for chunk_order, ck in enumerate(chunks):
         ck.setdefault("chunk_order_int", chunk_order)
+        # Pipeline chunks carry id; Milvus conversion otherwise supplies an
+        # empty primary key and silently overwrites unrelated pipeline rows.
+        if not ck.get("pk") and ck.get("id"):
+            ck["pk"] = ck["id"]
 
     # 处理 mother chunks (用于 child-parent chunking)
     mothers = []
@@ -2471,7 +2491,7 @@ async def insert_chunks(
         mother_batch = mothers[b : b + settings.DOC_BULK_SIZE]
         converted_batch = [convert_data_types(m, schema) for m in mother_batch]
         try:
-            await finish_status_write(asyncio.create_task(asyncio.to_thread(insert_source_chunks, db.get_bind(), converted_batch, collection_name, task_dataset_id)))
+            await finish_status_write(asyncio.create_task(asyncio.to_thread(insert_source_chunks, db.get_bind(), converted_batch, collection_name, task_dataset_id, task_id)))
         except Exception:
             logging.exception("Insert mother chunks failed")
             progress_callback(-1, msg="Source chunk insertion failed.")
@@ -2501,22 +2521,15 @@ async def insert_chunks(
             for chunk in converted_batch:
                 if "id" not in chunk and "pk" in chunk:
                     chunk["id"] = chunk["pk"]
-            await finish_status_write(asyncio.create_task(asyncio.to_thread(insert_source_chunks, db.get_bind(), converted_batch, collection_name, task_dataset_id)))
+            await finish_status_write(asyncio.create_task(asyncio.to_thread(insert_source_chunks, db.get_bind(), converted_batch, collection_name, task_dataset_id, task_id)))
             successful_inserts.append({"insert_count": len(converted_batch)})
 
         except Exception:
             # 如果出现异常，记录失败并进行删除回滚
             failed_inserts.extend(chunk_batch)
             progress_callback(-1, "Insert chunk error, detail info please check log file. Please check doc store status!")
-            try:
-                if await thread_pool_exec(doc_store_exists, collection_name, task_dataset_id):
-                    # 删除本批次已经尝试插入的记录
-                    for chunk in chunk_batch:
-                        if "doc_id" in chunk:
-                            doc_id = chunk["doc_id"]
-                            await thread_pool_exec(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
-            except Exception as e:
-                logging.exception(f"Failed to rollback inserted chunks: {e}")
+            # The source write owns its full snapshot compensation. An old
+            # worker must never issue a second deletion after that lock ends.
             logging.exception("Insert error:")
             logging.error("Data being inserted: %s", converted_batch)
             return False  # 出错后返回False
@@ -2532,27 +2545,11 @@ async def insert_chunks(
             progress = 0.8 + 0.1 * (b + 1) / len(chunks)
             progress_callback(prog=progress, msg="")
 
-        # 拼接本批次chunk_ids并更新到TaskService
-        chunk_ids = [chunk["pk"] for chunk in chunk_batch]
-        chunk_ids_str = " ".join(chunk_ids)
-        try:
-            TaskService.update_chunk_ids(db, task_id, chunk_ids_str)
-        except NoResultFound:
-            logging.warning(f"insert_chunks update_chunk_ids failed since task {task_id} is unknown.")
-            # 如果TaskService中没有这个task，则删除已插入数据并退出
-            try:
-                if await thread_pool_exec(doc_store_exists, collection_name, task_dataset_id):
-                    for chunk in chunk_batch:
-                        if "doc_id" in chunk:
-                            doc_id = chunk["doc_id"]
-                            await thread_pool_exec(delete_chunks_by_doc_id, collection_name, doc_id, task_dataset_id)
-            except Exception as e:
-                logging.exception(f"Failed to rollback after task not found: {e}")
-            async with asyncio.TaskGroup() as tg:
-                for chunk_id in chunk_ids:
-                    tg.create_task(delete_image(task_dataset_id, chunk_id))
-            progress_callback(-1, msg=f"Chunk updates failed since task {task_id} is unknown.")
-            return False
+        # Ordinary source writes register cumulative chunk IDs and SQL counts
+        # inside the same Doc -> Task lock as insertion. Special products retain
+        # their separate task contract.
+        if all(chunk.get("raptor_kwd") or chunk.get("knowledge_graph_kwd") or chunk.get("compile_kwd") or chunk.get("doc_id") == "graph_raptor_x" for chunk in chunk_batch):
+            TaskService.update_chunk_ids(db, task_id, " ".join(str(chunk["pk"]) for chunk in chunk_batch))
 
     # 统计并记录插入结果
     if successful_inserts:
@@ -2830,9 +2827,11 @@ async def do_handle_task(db: Session, task: Any) -> None:
     try:
         if needs_toc:
             executor = concurrent.futures.ThreadPoolExecutor()
-            toc_thread = asyncio.wrap_future(executor.submit(build_TOC, task, chunks, progress_callback))
+            toc_thread = asyncio.wrap_future(executor.submit(build_TOC, task, chunks, partial(_owned_task_progress, task_id, task_from_page, task_to_page)))
 
         chunk_count = len({chunk["pk"] for chunk in chunks})
+        if task["doc_id"] != "graph_raptor_x":
+            chunks[0]["ingest_tokens_int"] = token_count
         # 记录开始时间
         start_ts = timer()
 
@@ -2851,7 +2850,10 @@ async def do_handle_task(db: Session, task: Any) -> None:
 
         logging.info(f"Indexing doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), elapsed: {timer() - start_ts:.2f}")
 
-        DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
+        if task["doc_id"] == "graph_raptor_x":
+            DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, token_count, chunk_count, 0)
+        else:
+            await finish_status_write(asyncio.to_thread(increment_task_document, db.get_bind(), task_id, task_doc_id, task_dataset_id, token_count, chunk_count, 0))
 
         progress_callback(msg=f"Indexing done ({timer() - start_ts:.2f}s).")
 
@@ -2863,7 +2865,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
             if d:
                 if not await _maybe_insert_chunks([d]):
                     return
-                DocumentService.increment_chunk_num(db, task_doc_id, task_dataset_id, 0, 1, 0)
+                await finish_status_write(asyncio.to_thread(increment_task_document, db.get_bind(), task_id, task_doc_id, task_dataset_id, 0, 1, 0))
 
         if has_canceled(task_id):
             progress_callback(-1, msg="Task has been canceled.")
@@ -2874,26 +2876,10 @@ async def do_handle_task(db: Session, task: Any) -> None:
         logging.info(f"Chunk doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), token({token_count}), elapsed:{task_time_cost:.2f}")
 
     finally:
-        try:
-            if executor is not None:
-                await _shutdown_toc_executor(executor, toc_thread, toc_result_observed)
-        finally:
-            if has_canceled(task_id):
-                try:
-                    exists = await thread_pool_exec(
-                        doc_store_exists,
-                        collection_name,
-                        task_dataset_id,
-                    )
-                    if exists:
-                        await thread_pool_exec(
-                            delete_chunks_by_doc_id,
-                            collection_name,
-                            task_doc_id,
-                            task_dataset_id,
-                        )
-                except Exception as e:
-                    logging.exception(f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}")
+        if executor is not None:
+            await _shutdown_toc_executor(executor, toc_thread, toc_result_observed)
+        # Cancellation retains partial history. A superseded task must never
+        # perform document-wide cleanup after its owned TOC work drains.
 
 
 async def handle_task() -> None:
@@ -2990,14 +2976,12 @@ async def handle_task() -> None:
                     if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
                         referred_document_id = task["doc_ids"][0]
                     if not task.get("dataflow_id", ""):
-                        PipelineOperationLogService.record_pipeline_operation(
-                            db,
-                            document_id=task["doc_id"],
-                            pipeline_id="",
-                            task_type=pipeline_task_type,
-                            task_id=task_id,
-                            referred_document_id=referred_document_id,
-                        )
+                        if task["doc_id"] == "graph_raptor_x":
+                            PipelineOperationLogService.record_pipeline_operation(
+                                db, document_id=task["doc_id"], pipeline_id="", task_type=pipeline_task_type, task_id=task_id, referred_document_id=referred_document_id
+                            )
+                        else:
+                            await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, task["doc_id"], task["kb_id"], "", "{}", task_type=pipeline_task_type))
                 clear_log_context()
 
             redis_msg.ack()

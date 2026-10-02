@@ -2726,24 +2726,28 @@ class DocumentService(CommonService):
         cls._sync_progress(db, docs)
 
     @classmethod
-    def _sync_progress(cls, db: Session, docs: list[dict]):
+    def _sync_progress(cls, db: Session, docs: list[dict[str, Any]]) -> None:
         from api.db.services.task_service import TaskService
 
         for d in docs:
             try:
                 # 从元组中提取文档ID
                 doc_id = d[0] if isinstance(d, tuple) else d["id"]
+                # Ingest replaces tasks under Doc -> Task locks. Poll the
+                # current generation only after acquiring that same first lock.
+                doc = db.scalar(select(Document).where(Document.id == doc_id).with_for_update().execution_options(populate_existing=True))
+                if doc is None or doc.run in {TaskStatus.CANCEL.value, "0"}:
+                    db.rollback()
+                    continue
                 tsks = TaskService.query(db, doc_id=doc_id, order_by="create_time")
                 if not tsks:
+                    db.rollback()
                     continue
                 msg = []
                 prg = 0
                 finished = True
                 bad = 0
-                doc = DocumentService.get_by_id(db, doc_id)
                 status = doc.run  # TaskStatus.RUNNING.value
-                if status == TaskStatus.CANCEL.value:
-                    continue
                 doc_progress = doc.progress if doc and doc.progress else 0.0
                 special_task_running = False
                 priority = 0
@@ -2775,7 +2779,7 @@ class DocumentService(CommonService):
                 # only for special task and parsed docs and unfinished
                 freeze_progress = special_task_running and doc_progress >= 1 and not finished
                 msg = "\n".join(sorted(msg))
-                begin_at = d.get("process_begin_at")
+                begin_at = doc.process_begin_at
                 if not begin_at:
                     begin_at = datetime.now()
                     # fallback
@@ -2795,6 +2799,7 @@ class DocumentService(CommonService):
                 db.execute(update(cls.model).where(cls.model.id == d["id"], or_(cls.model.run.is_(None), cls.model.run != TaskStatus.CANCEL.value)).values(info))
                 db.commit()
             except Exception as e:
+                db.rollback()
                 if str(e).find("'0'") < 0:
                     logging.exception("fetch task exception")
 
@@ -2997,7 +3002,7 @@ class DocumentService(CommonService):
         }
 
     @classmethod
-    def run(cls, db: Session, tenant_id: str, doc: dict, kb_table_num_map: dict):
+    def run(cls, db: Session, tenant_id: str, doc: dict[str, Any], kb_table_num_map: dict[str, Any]) -> None:
         from api.db.services.file2document_service import File2DocumentService
         from api.db.services.task_service import queue_dataflow, queue_tasks
 
@@ -3013,7 +3018,9 @@ class DocumentService(CommonService):
                 if kb_table_num_map[kb_id] <= 0:
                     KnowledgebaseService.delete_field_map(db, kb_id)
         if doc.get("pipeline_id", ""):
-            queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=doc["id"])
+            queued, _ = queue_dataflow(db, tenant_id, flow_id=doc["pipeline_id"], task_id=get_uuid(), doc_id=doc["id"])
+            if not queued:
+                raise ConnectionError("Failed to queue document pipeline.")
         else:
             bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc["id"])
             queue_tasks(db, doc, bucket, name, 0)

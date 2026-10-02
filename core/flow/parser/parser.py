@@ -18,7 +18,6 @@ import json
 import os
 import random
 import re
-from functools import partial
 from typing import Any
 
 import numpy as np
@@ -27,6 +26,8 @@ from PIL import Image
 
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.services.document_status_service import finish_status_write
+from api.db.services.document_task_service import task_image_writer
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import LLMBundle
@@ -1402,7 +1403,7 @@ class Parser(ProcessBase):
         outs = self.output()
         tasks = []
         for d in outs.get("json", []):
-            tasks.append(asyncio.create_task(image2id(d, partial(settings.STORAGE_IMPL.put, tenant_id=self._canvas._tenant_id), get_uuid())))
+            tasks.append(asyncio.create_task(finish_status_write(image2id(d, task_image_writer(self._canvas), get_uuid()))))
 
         try:
             await asyncio.gather(*tasks, return_exceptions=False)

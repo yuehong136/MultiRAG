@@ -11,14 +11,14 @@ from sqlalchemy.orm import Session
 
 from api.common.check_team_permission import check_kb_team_permission
 from api.db import FileType
-from api.db.db_models import Document, Knowledgebase, Task, db_connection
+from api.db.db_models import Document, Knowledgebase, db_connection
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_ingest_service import IngestError, ingest_documents_sync
 from api.db.services.document_service import DocumentService
-from api.db.services.document_status_service import change_document_status_sync
+from api.db.services.document_status_service import change_document_status_sync, finish_status_write
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.db.services.user_service import UserTenantService
 from api.utils import validation_utils
 from api.utils.api_utils import get_error_data_result, get_parser_config
@@ -313,119 +313,60 @@ def _partition_dataset_documents(db: Session, dataset_id: str, document_ids: lis
     return valid_ids, missing_ids
 
 
-def parse_dataset_documents(db: Session, dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
-    """(Re)queue parsing for documents in a dataset.
+def _canonical_result(result: bool | dict[str, Any], document_ids: list[str], errors: list[str]) -> dict[str, Any]:
+    if result is not True:
+        raise DocumentParseError("Parsing request was not submitted.")
+    response: dict[str, Any] = {"success_count": len(document_ids)}
+    if errors:
+        response["errors"] = errors
+    return response
 
-    Re-parsing a finished document drops its previous chunks first, so the run starts clean.
-    """
+
+def parse_dataset_documents(db: Session, dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
+    """Retain the published clear-first default through shared reliable ingestion."""
     valid_ids, missing_ids = _partition_dataset_documents(db, dataset_id, document_ids)
     if missing_ids and not valid_ids:
         raise DocumentParseError(f"Documents not found: {missing_ids}")
-
-    kb_table_num_map: dict[str, Any] = {}
-    success_count = 0
-    for document_id in valid_ids:
-        doc = DocumentService.get_by_id(db, document_id)
-        if not doc:
-            errors.append(f"Document not found: {document_id}")
-            continue
-
-        info: dict[str, Any] = {"run": str(TaskStatus.RUNNING.value), "progress": 0}
-        if str(doc.run) == TaskStatus.DONE.value:
-            DocumentService.clear_chunk_num_when_rerun(db, doc.id)
-            info["progress_msg"] = ""
-            info["chunk_num"] = 0
-            info["token_num"] = 0
-
-        DocumentService.update_by_id(db, document_id, info)
-        TaskService.filter_delete(db, [Task.doc_id == document_id])
-        _drop_document_from_doc_store(db, doc.id, doc.kb_id)
-
-        DocumentService.run(db, tenant_id, doc.to_dict(), kb_table_num_map)
-        success_count += 1
-
+    try:
+        submitted = ingest_documents_sync(db, valid_ids, tenant_id, "1", clear=True, dataset_id=dataset_id)
+        result = _canonical_result(submitted, valid_ids, errors)
+    except IngestError as exc:
+        partial = exc.result.get("results", {}) if exc.result else {}
+        success_count = sum("error" not in item for item in partial.values())
+        raise DocumentParseError(str(exc), {"success_count": success_count, "errors": [str(exc)], **(exc.result or {})}) from exc
     if missing_ids:
-        errors.append(f"Documents not found: {missing_ids}")
-
-    result: dict[str, Any] = {"success_count": success_count}
-    if errors:
-        result["errors"] = errors
-    if missing_ids:
+        result.setdefault("errors", []).append(f"Documents not found: {missing_ids}")
         raise DocumentParseError(f"Documents not found: {missing_ids}", result=result)
     return result
 
 
-def _drop_document_from_doc_store(db: Session, doc_id: str, kb_id: str) -> None:
-    """Clear a document's chunks from whichever doc-store backend is configured.
-
-    Milvus addresses one collection per dataset and has no index_exist; the other
-    backends probe the index first. Mirrors the legacy /document/run branch.
-    """
-    kb = KnowledgebaseService.get_by_id(db, kb_id)
-    if not kb:
-        return
-    collection_name = search.index_name_one(kb.tenant_id, kb.name)
-    if settings.docStoreConn.db_type() == "milvus":
-        if settings.docStoreConn.has_collection(collection_name):
-            settings.docStoreConn.delete(condition={"doc_id": doc_id}, index_name=collection_name, dataset_id=kb.id)
-        return
-    if settings.docStoreConn.index_exist(collection_name, kb_id):
-        settings.docStoreConn.delete({"doc_id": doc_id}, collection_name, kb_id)
-
-
-def stop_dataset_documents(db: Session, dataset_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
-    """Cancel in-flight parsing for documents in a dataset."""
+def stop_dataset_documents(db: Session, dataset_id: str, document_ids: list[str], errors: list[str], *, principal_id: str) -> dict[str, Any]:
+    """Cancel submission keeps partial chunks/counters by default."""
     valid_ids, missing_ids = _partition_dataset_documents(db, dataset_id, document_ids)
     if missing_ids:
         raise DocumentParseError(f"Documents not found: {missing_ids}")
-
-    success_count = 0
-    for document_id in valid_ids:
-        doc = DocumentService.get_by_id(db, document_id)
-        if not doc:
-            errors.append(f"Document not found: {document_id}")
-            continue
-
-        tasks = list(TaskService.query(db, doc_id=document_id))
-        has_unfinished_task = any((task.progress or 0) < 1 for task in tasks)
-        if str(doc.run) not in [TaskStatus.RUNNING.value, TaskStatus.CANCEL.value] and not has_unfinished_task:
-            errors.append("Can't stop parsing document that has not started or already completed")
-            continue
-
-        cancel_all_task_of(db, document_id)
-        DocumentService.update_by_id(db, document_id, {"run": str(TaskStatus.CANCEL.value)})
-        success_count += 1
-
-    result: dict[str, Any] = {"success_count": success_count}
-    if errors:
-        result["errors"] = errors
-    return result
+    try:
+        submitted = ingest_documents_sync(db, valid_ids, principal_id, "2", dataset_id=dataset_id)
+        return _canonical_result(submitted, valid_ids, errors)
+    except IngestError as exc:
+        partial = exc.result.get("results", {}) if exc.result else {}
+        success_count = sum("error" not in item for item in partial.values())
+        raise DocumentParseError(str(exc), {"success_count": success_count, "errors": [str(exc)], **(exc.result or {})}) from exc
 
 
 async def parse_dataset_documents_async(dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
-    """Legacy parsing unit of work: its session and blocking IO stay in one worker.
+    """Blocking PDF/object/queue work and its sync session share one owned worker."""
 
-    Do not pass an AsyncSession facade into this unit: queue_tasks mixes database,
-    object storage, PDF parsing and Redis operations. TODO(async-phase4): migrate
-    that shared queue workflow before replacing this boundary.
-    """
-
-    def _run() -> dict[str, Any]:
+    def worker() -> dict[str, Any]:
         with db_connection() as db:
-            if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
-                raise DocumentParseError(f"You don't own the dataset {dataset_id}.")
             return parse_dataset_documents(db, dataset_id, tenant_id, document_ids, errors)
 
-    return await asyncio.to_thread(_run)
+    return await finish_status_write(asyncio.to_thread(worker))
 
 
 async def stop_dataset_documents_async(dataset_id: str, tenant_id: str, document_ids: list[str], errors: list[str]) -> dict[str, Any]:
-    """Keep the legacy SQL/Redis cancellation unit on a single worker-owned session."""
-
-    def _run() -> dict[str, Any]:
+    def worker() -> dict[str, Any]:
         with db_connection() as db:
-            if not KnowledgebaseService.accessible(db, dataset_id, tenant_id):
-                raise DocumentParseError(f"You don't own the dataset {dataset_id}.")
-            return stop_dataset_documents(db, dataset_id, document_ids, errors)
+            return stop_dataset_documents(db, dataset_id, document_ids, errors, principal_id=tenant_id)
 
-    return await asyncio.to_thread(_run)
+    return await finish_status_write(asyncio.to_thread(worker))

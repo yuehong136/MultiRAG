@@ -128,7 +128,7 @@ async def test_parse_task_metadata_roundtrip_in_scratch_services(bootstrapped_en
         with Session(bootstrapped_engine) as db:
             db.add(Tenant(id=tenant_id, llm_id="fake", embd_id="test", asr_id="test", img2txt_id="test", parser_ids="naive"))
             db.add(Knowledgebase(id=kb_id, tenant_id=tenant_id, name="metadata scratch", created_by=tenant_id, embd_id="test", parser_config=parser_config))
-            db.add(Document(id=doc_id, kb_id=kb_id, parser_id="naive", type="doc", created_by=tenant_id, name=filename, location=filename, size=len(binary), parser_config=parser_config))
+            db.add(Document(id=doc_id, kb_id=kb_id, parser_id="naive", type="doc", created_by=tenant_id, name=filename, location=filename, size=len(binary), parser_config=parser_config, run="1"))
             db.add(Task(id=task_id, doc_id=doc_id))
             db.commit()
             assert DocMetadataService.update_document_metadata(db, doc_id, existing)

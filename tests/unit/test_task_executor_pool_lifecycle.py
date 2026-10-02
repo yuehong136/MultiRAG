@@ -52,6 +52,7 @@ async def lifecycle(db: Session, monkeypatch: pytest.MonkeyPatch) -> AsyncIterat
             "parser_config": {"toc_extraction": True},
         }
     )
+    monkeypatch.setattr(db, "get_bind", lambda *args, **kwargs: None)
     pool_type = concurrent.futures.ThreadPoolExecutor
 
     class OwnedPool(pool_type):
@@ -77,7 +78,7 @@ async def lifecycle(db: Session, monkeypatch: pytest.MonkeyPatch) -> AsyncIterat
         return True
 
     monkeypatch.setattr(task_executor, "insert_chunks", insert)
-    monkeypatch.setattr(task_executor.DocumentService, "increment_chunk_num", lambda *args: state.counts.append(args[3:]))
+    monkeypatch.setattr(task_executor, "increment_task_document", lambda *args: state.counts.append(args[4:]))
 
     @contextmanager
     def connection() -> Iterator[Session]:
@@ -164,7 +165,7 @@ async def test_post_submit_exits_join_threads_and_observe_errors(db: Session, mo
     elif exit_kind == "insert_error":
         monkeypatch.setattr(task_executor, "insert_chunks", AsyncMock(side_effect=RuntimeError("insert")))
     elif exit_kind == "count_error":
-        monkeypatch.setattr(task_executor.DocumentService, "increment_chunk_num", lambda *args: (_ for _ in ()).throw(RuntimeError("count")))
+        monkeypatch.setattr(task_executor, "increment_task_document", lambda *args: (_ for _ in ()).throw(RuntimeError("count")))
     work = asyncio.create_task(task_executor.do_handle_task(db, lifecycle.task))
     try:
         assert await asyncio.to_thread(started.wait, 2)
@@ -238,7 +239,7 @@ async def test_repeated_cancellation_drains_work_before_return(db: Session, monk
         loop.set_exception_handler(old_handler)
 
 
-async def test_business_cancellation_waits_for_toc_before_index_cleanup(db: Session, monkeypatch: pytest.MonkeyPatch, lifecycle: Lifecycle) -> None:
+async def test_business_cancellation_drains_toc_and_preserves_partial_history(db: Session, monkeypatch: pytest.MonkeyPatch, lifecycle: Lifecycle) -> None:
     release = threading.Event()
     started = threading.Event()
     stopped = threading.Event()
@@ -278,7 +279,7 @@ async def test_business_cancellation_waits_for_toc_before_index_cleanup(db: Sess
         release.set()
         await work
         assert lifecycle.inserted == []
-        assert removed == ["doc"]
+        assert removed == []
         lifecycle.assert_closed()
     finally:
         release.set()
@@ -301,13 +302,13 @@ async def test_worker_ack_and_terminal_bookkeeping_follow_toc_shutdown(monkeypat
 
     def log(*args: Any, **kwargs: Any) -> None:
         lifecycle.assert_closed()
-        logged.append(kwargs["task_id"])
+        logged.append(args[1])
 
     if toc_failure:
         monkeypatch.setattr(task_executor, "run_toc_from_text", AsyncMock(side_effect=RuntimeError("worker TOC failure")))
     monkeypatch.setattr(task_executor, "collect", AsyncMock(return_value=(SimpleNamespace(ack=ack), lifecycle.task)))
     monkeypatch.setattr(task_executor, "finish_runtime", finish)
-    monkeypatch.setattr(task_executor.PipelineOperationLogService, "record_pipeline_operation", log)
+    monkeypatch.setattr(task_executor, "record_task_pipeline", log)
     monkeypatch.setattr(task_executor, "DONE_TASKS", 0)
     monkeypatch.setattr(task_executor, "FAILED_TASKS", 0)
     monkeypatch.setattr(task_executor, "CURRENT_TASKS", {})

@@ -20,12 +20,23 @@ from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
 from api.db import VALID_FILE_TYPES
 from api.db.db_models import get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_ingest_service import IngestError, ingest_documents
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import batch_document_status, writable_dataset
 from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.api_utils import Principal, async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_argument_result, get_error_data_result, get_result, server_error_response
-from api.utils.validation_utils import UpdateDocumentReq
+from api.utils.api_utils import (
+    Principal,
+    async_current_tenant_id,
+    async_current_user,
+    check_duplicate_ids,
+    construct_json_result,
+    get_error_argument_result,
+    get_error_data_result,
+    get_result,
+    server_error_response,
+)
+from api.utils.validation_utils import DocumentIngestRequest, UpdateDocumentReq
 from common.constants import RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 
@@ -33,6 +44,25 @@ MAXIMUM_OF_UPLOADING_FILES = 256
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.post("/documents/ingest", summary="启动、重置或取消文档解析")
+async def ingest(
+    request: DocumentIngestRequest,
+    db: AsyncSession = Depends(get_async_db),
+    principal: Principal = Depends(async_current_user),
+) -> Response:
+    """Success acknowledges submission/reuse; it does not assert worker completion."""
+    try:
+        result = await ingest_documents(db, request.doc_ids, principal.platform_user_id, request.run, request.delete, request.apply_kb)
+        if result is not True:
+            raise IngestError("Document ingestion effect could not be confirmed.", RetCode.SERVER_ERROR)
+        return construct_json_result(data=result)
+    except IngestError as exc:
+        return JSONResponse(content={"code": exc.code, "message": str(exc), "data": exc.result})
+    except Exception:
+        logger.exception("Document ingest failed")
+        return JSONResponse(content={"code": RetCode.SERVER_ERROR, "message": "Document ingestion failed; retry to reconcile.", "data": None})
 
 
 @router.post("/documents/upload", summary="上传聊天附件并获取运行时元数据")
@@ -623,11 +653,11 @@ async def delete_documents(
 async def parse_documents(
     dataset_id: str,
     request: DocumentIdsRequest,
-    tenant_id: str = Depends(async_current_tenant_id),
+    principal: Principal = Depends(async_current_user),
 ) -> Response:
     unique_doc_ids, duplicate_messages = check_duplicate_ids(request.document_ids, "document")
     try:
-        result = await document_api_service.parse_dataset_documents_async(dataset_id, tenant_id, unique_doc_ids, list(duplicate_messages))
+        result = await document_api_service.parse_dataset_documents_async(dataset_id, principal.platform_user_id, unique_doc_ids, list(duplicate_messages))
         return get_result(data=result)
     except document_api_service.DocumentParseError as e:
         if e.result is not None:
@@ -642,13 +672,15 @@ async def parse_documents(
 async def stop_parse_documents(
     dataset_id: str,
     request: DocumentIdsRequest,
-    tenant_id: str = Depends(async_current_tenant_id),
+    principal: Principal = Depends(async_current_user),
 ) -> Response:
     unique_doc_ids, duplicate_messages = check_duplicate_ids(request.document_ids, "document")
     try:
-        result = await document_api_service.stop_dataset_documents_async(dataset_id, tenant_id, unique_doc_ids, list(duplicate_messages))
+        result = await document_api_service.stop_dataset_documents_async(dataset_id, principal.platform_user_id, unique_doc_ids, list(duplicate_messages))
         return get_result(data=result)
     except document_api_service.DocumentParseError as e:
+        if e.result is not None:
+            return JSONResponse(content={"code": int(RetCode.DATA_ERROR), "message": str(e), "data": e.result})
         return get_error_data_result(retmsg=str(e))
     except Exception as e:
         logger.exception(e)

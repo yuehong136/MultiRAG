@@ -1,10 +1,12 @@
 """Document availability writes, with per-document SQL serialization."""
 
 import asyncio
+import copy
 import logging
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, update
@@ -12,7 +14,8 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Knowledgebase, UserTenant
+from api.db.db_models import Document, Knowledgebase, Task, UserTenant
+from api.db.services.document_task_service import account_task_tokens, current_document_task, reconcile_task_chunk_count
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
 from core.nlp import search
@@ -174,12 +177,13 @@ async def batch_document_status(db: AsyncSession, document_ids: list[str], statu
 
 
 @contextmanager
-def source_document_availability(bind: Engine | Connection, chunks: list[dict[str, Any]], dataset_id: str) -> Iterator[None]:
+def source_document_availability(bind: Engine | Connection, chunks: list[dict[str, Any]], dataset_id: str, task_id: str | None = None) -> Iterator[Session | None]:
     """Lock fresh source rows only across one store insertion, not callbacks."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for chunk in chunks:
         if chunk.get("raptor_kwd") or chunk.get("knowledge_graph_kwd") or chunk.get("compile_kwd") or chunk.get("doc_id") == "graph_raptor_x":
-            continue
+            if task_id is None or chunk.get("doc_id") == "graph_raptor_x":
+                continue
         identifier = chunk.get("doc_id")
         if not isinstance(identifier, str) or not identifier:
             raise ValueError("Source document ID unavailable.")
@@ -193,18 +197,107 @@ def source_document_availability(bind: Engine | Connection, chunks: list[dict[st
         docs = list(reader.scalars(select(Document).where(Document.id.in_(groups), Document.kb_id == dataset_id).order_by(Document.id).with_for_update()))
         if {doc.id for doc in docs} != groups.keys():
             raise ValueError("Source document status unavailable.")
+        if task_id is not None:
+            from api.db.db_models import Task
+
+            if reader.scalar(select(Task.doc_id).where(Task.id == task_id)) == "graph_raptor_x" and all(
+                chunk.get("raptor_kwd") or chunk.get("knowledge_graph_kwd") or chunk.get("compile_kwd") for chunk in chunks
+            ):
+                yield None
+                reader.commit()
+                return
+            if len(docs) != 1:
+                raise ValueError("A source task must belong to one document.")
+            with current_document_task(reader, task_id, docs[0].id, dataset_id):
+                pass
         for doc in docs:
             for chunk in groups[doc.id]:
+                if chunk.get("raptor_kwd") or chunk.get("knowledge_graph_kwd") or chunk.get("compile_kwd"):
+                    continue
                 parent = bool(chunk.get("mom_id")) and chunk.get("mom_id") == chunk.get("id", chunk.get("pk"))
-                chunk["available_int"] = 0 if parent or doc.status == "0" else 1
-        yield
+                chunk["available_int"] = 0 if parent or chunk.get("toc_kwd") == "toc" or doc.status == "0" else 1
+        yield reader
         reader.commit()
 
 
-def insert_source_chunks(bind: Engine | Connection, chunks: list[dict[str, Any]], index_name: str | list[str], dataset_id: str) -> list[str]:
-    """Read/lock status and perform the store write in the same worker thread."""
-    with source_document_availability(bind, chunks, dataset_id):
-        errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
-        if errors:
-            raise RuntimeError("Source chunk insertion failed.")
-        return errors
+def insert_source_chunks(bind: Engine | Connection, chunks: list[dict[str, Any]], index_name: str | list[str], dataset_id: str, task_id: str | None = None) -> list[str]:
+    """Keep insertion, task registration and ledger inside its ownership lock."""
+    from api.db.db_models import Task
+    from common.doc_store.document_history import confirm_history_visibility, document_history, restore_document_history
+
+    with source_document_availability(bind, chunks, dataset_id, task_id) as db:
+        index = index_name[0] if isinstance(index_name, list) else index_name
+        document_id = chunks[0]["doc_id"]
+        snapshot = document_history(settings.docStoreConn, index, dataset_id, document_id) if task_id is not None and db is not None else None
+        original_task = db.get(Task, task_id) if db is not None and task_id is not None else None
+        original_doc = db.get(Document, document_id) if original_task is not None else None
+        original_task_row = _source_row(original_task) if original_task is not None else None
+        original_doc_row = _source_row(original_doc) if original_doc is not None else None
+        applied_task_row: dict[str, Any] | None = None
+        applied_doc_row: dict[str, Any] | None = None
+        try:
+            errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
+            if not isinstance(errors, list) or errors:
+                raise RuntimeError("Source chunk insertion failed.")
+            confirm_history_visibility(settings.docStoreConn, index)
+            if task_id is not None and db is not None:
+                from api.db.db_models import Task
+
+                task = db.get(Task, task_id)
+                if task is None:
+                    raise RuntimeError("Document task registration unavailable.")
+                identifiers = [str(chunk.get("id", chunk.get("pk"))) for chunk in chunks if chunk.get("mom_id") != chunk.get("id", chunk.get("pk"))]
+                task.chunk_ids = " ".join(dict.fromkeys([*(task.chunk_ids or "").split(), *identifiers]))
+                reconcile_task_chunk_count(db, document_id, dataset_id, index)
+                if any("ingest_tokens_int" in chunk for chunk in chunks):
+                    account_task_tokens(db, task, document_id, dataset_id, sum(chunk.get("ingest_tokens_int", 0) for chunk in chunks))
+            # Commit failures are handled while ownership is checked again.
+            if db is not None:
+                db.flush()
+                if original_task is not None and original_doc is not None:
+                    applied_task_row = copy.deepcopy(dict(db.execute(select(Task.__table__).where(Task.id == task_id)).mappings().one()))
+                    applied_doc_row = copy.deepcopy(dict(db.execute(select(Document.__table__).where(Document.id == document_id)).mappings().one()))
+                db.commit()
+            return errors
+        except Exception:
+            if snapshot is not None and db is not None and task_id is not None:
+                # A commit exception does not say whether SQL committed. Read
+                # fresh rows under the ownership locks before compensating.
+                db.rollback()
+                with current_document_task(db, task_id, document_id, dataset_id, cleanup=True) as current:
+                    doc = db.get(Document, document_id)
+                    current_task_row = _source_row(current)
+                    current_doc_row = _source_row(doc) if doc is not None else None
+                    unchanged = current_task_row == original_task_row and current_doc_row == original_doc_row
+                    committed = current_task_row == applied_task_row and current_doc_row == applied_doc_row
+                    if not unchanged and not committed:
+                        logger.error(
+                            "Source recovery ownership changed: task_fields=%s document_fields=%s",
+                            [key for key in current_task_row if current_task_row[key] != (applied_task_row or {}).get(key)],
+                            [key for key in current_doc_row or {} if current_doc_row[key] != (applied_doc_row or {}).get(key)],
+                        )
+                        raise RuntimeError("Source chunk recovery no longer owns the current rows.")
+                    restore_document_history(settings.docStoreConn, index, dataset_id, document_id, snapshot, ids=[str(chunk.get("id", chunk.get("pk"))) for chunk in chunks])
+                    if committed and not unchanged and original_doc_row is not None and original_task_row is not None and current_doc_row is not None:
+                        chunk_delta = original_doc_row["chunk_num"] - current_doc_row["chunk_num"]
+                        token_delta = original_doc_row["token_num"] - current_doc_row["token_num"]
+                        restored_doc = db.execute(
+                            Document.__table__.update().where(Document.id == document_id).values(**{key: original_doc_row[key] for key in ["chunk_num", "token_num", "update_time", "update_date"]})
+                        )
+                        restored_task = db.execute(Task.__table__.update().where(Task.id == task_id).values(**{key: value for key, value in original_task_row.items() if key != "id"}))
+                        restored_kb = db.execute(
+                            update(Knowledgebase).where(Knowledgebase.id == dataset_id).values(chunk_num=Knowledgebase.chunk_num + chunk_delta, token_num=Knowledgebase.token_num + token_delta)
+                        )
+                        if any(result.rowcount != 1 for result in [restored_doc, restored_task, restored_kb]):
+                            raise RuntimeError("Source chunk SQL recovery could not be confirmed.")
+                        db.commit()
+                db.rollback()
+            raise
+
+
+def _source_row(row: Document | Task) -> dict[str, Any]:
+    result = {column.name: copy.deepcopy(getattr(row, column.name)) for column in row.__table__.columns}
+    for key, value in result.items():
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            result[key] = value.astimezone(UTC).replace(tzinfo=None)
+    return result

@@ -34,7 +34,7 @@ from tests.integration.test_runtime_document_upload import runtime_upload_api as
 @pytest.fixture
 def status_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
     env = parse_api
-    env.update({name: uuid4().hex for name in ["doc", "zero", "second", "other_kb", "foreign_doc", "task"]})
+    env.update({name: uuid4().hex for name in ["doc", "zero", "second", "other_kb", "foreign_doc", "task", "second_task"]})
     env["owner_key"] = f"status-{uuid4().hex}"
     owner = env["owners"][0]
     with Session(env["engine"]) as db:
@@ -43,11 +43,13 @@ def status_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
         for key, kb, count in [("doc", env["kb"], 2), ("zero", env["kb"], 0), ("second", env["kb"], 1), ("foreign_doc", env["other_kb"], 0)]:
             db.add(Document(id=env[key], kb_id=kb, created_by=owner, name=key + ".txt", type="doc", parser_id="naive", parser_config={}, status="1", chunk_num=count, location=key + ".txt"))
         db.add(Task(id=env["task"], doc_id=env["zero"], task_type="Parse"))
+        db.add(Task(id=env["second_task"], doc_id=env["second"], task_type="Parse"))
+        db.execute(sa.update(Document).where(Document.id.in_([env["zero"], env["second"]])).values(run="1"))
         db.commit()
     rows = [chunk(env, env["doc"], "first"), chunk(env, env["doc"], "second"), chunk(env, env["second"], "sibling")]
     assert settings.docStoreConn.insert(rows, env["collection"], env["kb"]) == []
     env["storage_adapter"].put(env["kb"], "doc.txt", b"Owned original source bytes.")
-    env["record"]["status"] = {key: env[key] for key in ["doc", "zero", "second", "other_kb", "foreign_doc", "task"]}
+    env["record"]["status"] = {key: env[key] for key in ["doc", "zero", "second", "other_kb", "foreign_doc", "task", "second_task"]}
     try:
         yield env
     finally:
@@ -384,11 +386,12 @@ def test_zero_disabled_source_rest_legacy_worker_and_mixed_status(status_api: di
     rows = [chunk(env, env["zero"], "worker disabled"), chunk(env, env["second"], "worker enabled")]
     rows[0]["mom"] = "Hidden mother source"
     with Session(env["engine"]) as db:
-        assert asyncio.run(
-            task_executor.insert_chunks(
-                db, env["task"], env["owners"][0], env["kb"], rows, lambda *args, **kwargs: None, env["collection"], settings.docStoreConn._get_connection().describe_collection(env["collection"])
+        for task_id, row in zip([env["task"], env["second_task"]], rows, strict=True):
+            assert asyncio.run(
+                task_executor.insert_chunks(
+                    db, task_id, env["owners"][0], env["kb"], [row], lambda *args, **kwargs: None, env["collection"], settings.docStoreConn._get_connection().describe_collection(env["collection"])
+                )
             )
-        )
     assert all(row["available_int"] == 0 for row in index_rows(env, env["zero"]))
     assert all(row["available_int"] == 1 for row in index_rows(env, env["second"]))
     assert len(index_rows(env, env["zero"])) == 4
