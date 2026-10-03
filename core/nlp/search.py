@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from pymilvus import AnnSearchRequest, WeightedRanker
 
-from api.db.db_models import db_connection
+from api.db.db_models import async_db_connection, db_connection
 from common import settings
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.doc_store.doc_store_base import (
@@ -69,6 +69,16 @@ def index_name(uid, kb_names=None):
 
 def index_name_one(uid, kb_name):
     return f"multirag_{uid}_{kb_name}"
+
+
+def _chunk_scalar(value: object) -> str:
+    if isinstance(value, (list, tuple)):
+        value = value[0] if len(value) == 1 else None
+    return value if isinstance(value, str) else ""
+
+
+def _is_dataset_raptor_chunk(chunk: dict[str, object]) -> bool:
+    return _chunk_scalar(chunk.get("doc_id")) == "graph_raptor_x" and _chunk_scalar(chunk.get("raptor_kwd")) == "raptor" and bool(_chunk_scalar(chunk.get("kb_id")))
 
 
 class Dealer:
@@ -134,6 +144,49 @@ class Dealer:
 
         logging.info(f"使用向量字段: {vector_column_name} 进行查询，维度: {vector_dim}")
         return MatchDenseExpr(vector_column_name, embedding_data, "float", "cosine", topk, {"similarity": similarity})
+
+    async def _existing_doc_ids(self, doc_ids: list[str]) -> set[str]:
+        if not doc_ids:
+            return set()
+        from api.db.services.document_service import DocumentService
+
+        async with async_db_connection() as db:
+            return await DocumentService.get_existing_ids_async(db, doc_ids)
+
+    async def _prune_deleted_chunks(self, sres: SearchResult, kb_ids: list[str] | None = None) -> SearchResult:
+        fields = sres.field or {}
+        doc_ids = [_chunk_scalar(chunk.get("doc_id")) for chunk_id in sres.ids if (chunk := fields.get(chunk_id)) and not _is_dataset_raptor_chunk(chunk) and _chunk_scalar(chunk.get("doc_id"))]
+        summary_kb_ids = [_chunk_scalar(chunk.get("kb_id")) for chunk_id in sres.ids if (chunk := fields.get(chunk_id)) and _is_dataset_raptor_chunk(chunk)]
+        existing = await self._existing_doc_ids(doc_ids)
+        existing_kbs = await self._existing_kb_ids(summary_kb_ids)
+        if kb_ids is not None:
+            existing_kbs.intersection_update(kb_ids)
+        ids = [
+            chunk_id
+            for chunk_id in sres.ids
+            if (chunk := fields.get(chunk_id)) and (_chunk_scalar(chunk.get("kb_id")) in existing_kbs if _is_dataset_raptor_chunk(chunk) else _chunk_scalar(chunk.get("doc_id")) in existing)
+        ]
+        if len(ids) == len(sres.ids):
+            return sres
+        logging.warning("Pruned %s chunks without a live SQL parent.", len(sres.ids) - len(ids))
+        return self.SearchResult(
+            total=sres.total,
+            ids=ids,
+            query_vector=sres.query_vector,
+            field={chunk_id: fields[chunk_id] for chunk_id in ids},
+            highlight={chunk_id: sres.highlight[chunk_id] for chunk_id in ids if chunk_id in sres.highlight} if sres.highlight else sres.highlight,
+            aggregation=sres.aggregation,
+            keywords=sres.keywords,
+            group_docs=sres.group_docs,
+        )
+
+    async def _existing_kb_ids(self, kb_ids: list[str]) -> set[str]:
+        if not kb_ids:
+            return set()
+        from api.db.services.knowledgebase_service import KnowledgebaseService
+
+        async with async_db_connection() as db:
+            return await KnowledgebaseService.get_existing_ids_async(db, kb_ids)
 
     def get_filters(self, req):
         condition = {}
@@ -240,6 +293,7 @@ class Dealer:
             "available_int",
             "content_with_weight",
             "mom_id",
+            "raptor_kwd",
             PAGERANK_FLD,
             TAG_FLD,
         ]
@@ -820,6 +874,10 @@ class Dealer:
         search_kb_ids = kb_ids if kb_ids else kb_names
 
         sres = await self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
+        sres = await self._prune_deleted_chunks(sres, kb_ids)
+        if not sres.ids:
+            ranks["doc_aggs"] = []
+            return ranks
 
         if rerank_mdl and sres.total > 0:
             sim, tsim, vsim = await thread_pool_exec(self.rerank_by_model, rerank_mdl, sres, question, 1 - vector_similarity_weight, vector_similarity_weight, rank_feature=rank_feature)

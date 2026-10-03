@@ -1,5 +1,8 @@
 import asyncio
 import types
+from unittest.mock import AsyncMock
+
+import pytest
 
 from core.nlp import search as search_module
 
@@ -9,10 +12,11 @@ class _FakeDataStore:
         return "milvus"
 
 
-def test_retrieval_exposes_tag_kwd_from_search_result(monkeypatch):
+def test_retrieval_exposes_tag_kwd_from_search_result(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(search_module.settings, "DOC_ENGINE_INFINITY", False)
     dealer = object.__new__(search_module.Dealer)
     dealer.dataStore = _FakeDataStore()
+    monkeypatch.setattr(dealer, "_existing_doc_ids", AsyncMock(return_value={"doc-1"}))
 
     async def fake_search(*args, **kwargs):
         return search_module.Dealer.SearchResult(

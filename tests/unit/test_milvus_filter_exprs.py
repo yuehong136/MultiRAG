@@ -1,5 +1,7 @@
 import logging
+from typing import Any
 
+import pytest
 from pymilvus.orm.types import DataType
 
 import core.utils.milvus_conn as milvus_conn_module
@@ -68,6 +70,17 @@ def test_filter_collection_output_fields_keeps_only_schema_fields() -> None:
     )
 
     assert fields == ["doc_id", "chunk_order_int"]
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_raptor_marker_output_requires_declared_or_dynamic_field(dynamic: bool) -> None:
+    class Connection:
+        def describe_collection(self, _collection_name: str) -> dict[str, Any]:
+            return {"fields": [{"name": "doc_id"}], "enable_dynamic_field": dynamic}
+
+    store = object.__new__(_DummyMilvusStore)
+    store.logger = logging.getLogger("test.milvus")
+    assert store._filter_collection_output_fields(Connection(), "collection", ["doc_id", "raptor_kwd", "missing_old_field"]) == (["doc_id", "raptor_kwd"] if dynamic else ["doc_id"])
 
 
 def test_native_query_order_builder_is_disabled_until_milvus_3_upgrade() -> None:

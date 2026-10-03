@@ -25,6 +25,13 @@ class KnowledgebaseService(CommonService):
     model = Knowledgebase
 
     @classmethod
+    async def get_existing_ids_async(cls, db: AsyncSession, kb_ids: list[str]) -> set[str]:
+        if not kb_ids:
+            return set()
+        stmt = select(cls.model.id).where(cls.model.id.in_(list(dict.fromkeys(kb_ids))), cls.model.status == StatusEnum.VALID.value)
+        return set((await db.scalars(stmt)).all())
+
+    @classmethod
     def ensure_same_embedding_model(cls, kbs: Sequence[Knowledgebase]) -> None:
         """校验一批知识库使用同一 embedding 模型，否则抛 EmbeddingModelMismatchError。
 

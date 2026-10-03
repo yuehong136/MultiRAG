@@ -24,6 +24,7 @@ import logging
 import os
 import re
 from abc import abstractmethod
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -1108,13 +1109,16 @@ class MilvusConnectionBase(DocStoreConnection):
             return None
         return {field.get("name"): field for field in fields if field.get("name")}
 
-    def _filter_collection_output_fields(self, conn, collection_name: str, output_fields: list[str] | None) -> list[str] | None:
+    def _filter_collection_output_fields(self, conn: Any, collection_name: str, output_fields: list[str] | None) -> list[str] | None:
         if not output_fields or output_fields == ["*"]:
             return output_fields
         schema_fields = self._get_collection_schema_fields(conn, collection_name)
         if not schema_fields:
             return output_fields
-        return [field for field in output_fields if field in schema_fields.keys()]
+        fields = [field for field in output_fields if field in schema_fields]
+        if "raptor_kwd" in output_fields and "raptor_kwd" not in fields and conn.describe_collection(collection_name).get("enable_dynamic_field", False):
+            fields.append("raptor_kwd")
+        return fields
 
     def has_collection(self, collection_name: str, timeout: float | None = None, **kwargs):
         conn = self._get_connection()

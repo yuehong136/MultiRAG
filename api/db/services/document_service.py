@@ -11,6 +11,7 @@ from sqlalchemy import and_, asc, func, or_, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import desc as sa_desc
 from sqlalchemy.exc import NoResultFound, OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
@@ -65,6 +66,13 @@ class DeleteDocumentSnapshot:
 
 class DocumentService(CommonService):
     model = Document
+
+    @classmethod
+    async def get_existing_ids_async(cls, db: AsyncSession, doc_ids: list[str]) -> set[str]:
+        if not doc_ids:
+            return set()
+        ids = list(dict.fromkeys(doc_ids))
+        return set((await db.scalars(select(cls.model.id).where(cls.model.id.in_(ids)))).all())
 
     def __init__(self):
         super().__init__(Document)

@@ -3,6 +3,7 @@
 Only embedding output is controlled; ranking, predicates, HTTP and SQL are real.
 """
 
+import asyncio
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,7 +15,9 @@ import pytest
 import requests
 import sqlalchemy as sa
 from pymilvus import DataType, Function, FunctionType, MilvusClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 from api.apps.services import dataset_search_service
 from api.db.db_models import Document, DocumentMetadata, Knowledgebase, Search, UserTenant
@@ -29,6 +32,8 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
     env = runtime_upload_api
     ids = {key: uuid4().hex for key in ("dataset", "second", "foreign", "doc", "second_doc", "foreign_doc", "saved_search")}
     collections = {key: search.index_name_one(env["owners"][0 if key != "foreign" else 1], "search_" + ids[key]) for key in ("dataset", "second", "foreign")}
+    env["record"].update(search_ids=ids, search_collections=collections)
+    env["record_path"].write_text(json.dumps(env["record"]))
     with Session(env["engine"]) as db:
         for key, doc in (("dataset", "doc"), ("second", "second_doc"), ("foreign", "foreign_doc")):
             owner = env["owners"][0 if key != "foreign" else 1]
@@ -44,6 +49,11 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
             yield db
 
     monkeypatch.setattr(search, "db_connection", scratch_db)
+    from api.db import db_models
+
+    async_engine = create_async_engine(env["engine"].url, poolclass=NullPool)
+    sessions = async_sessionmaker(async_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_models, "async_session_factory", sessions)
 
     class Embedding:
         def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
@@ -112,6 +122,7 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
             reader.flush(collection)
         yield {**env, **ids, "collections": collections, "rows": rows, "reader": reader}
     finally:
+        asyncio.run(async_engine.dispose())
         for key, collection in collections.items():
             store.delete_idx(collection, ids[key])
             assert not reader.has_collection(collection)
@@ -125,6 +136,8 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
             ):
                 db.execute(sa.delete(model).where(clause))
             db.commit()
+        env["record"]["search_collections_removed"] = True
+        env["record_path"].write_text(json.dumps(env["record"]))
 
 
 def request(env: dict[str, Any], method: str, suffix: str, *, token: str | None = None, **kwargs: Any) -> requests.Response:
@@ -183,6 +196,96 @@ def test_http_search_multi_dataset_and_auth_matrix(search_api: dict[str, Any]) -
     payload["search_id"] = env["saved_search"]
     assert request(env, "POST", "/search", json=payload).json()["code"] == 109
     assert request(env, "POST", "/search", token="invalid", json=payload).status_code == 401
+
+
+@pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
+def test_http_search_prunes_deleted_documents_before_rerank(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    env = search_api
+    collections = [env["collections"][key] for key in ("dataset", "second")]
+
+    def indexed_rows() -> list[list[dict[str, Any]]]:
+        return [sorted(env["reader"].query(collection, filter="pk != ''", output_fields=["*"], consistency_level="Strong"), key=lambda row: row["pk"]) for collection in collections]
+
+    before = indexed_rows()
+    seen: list[list[str]] = []
+
+    def rerank(_self: search.Dealer, _model: Any, result: search.Dealer.SearchResult, *_args: Any, **_kwargs: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        docs = [result.field[key]["doc_id"] for key in result.ids]
+        assert docs == [env["second_doc"]], docs
+        seen.append(docs)
+        scores = np.ones(len(docs))
+        return scores, scores, scores
+
+    monkeypatch.setattr(search.Dealer, "rerank_by_model", rerank)
+    payload = {
+        "question": "availability",
+        "dataset_ids": [env["dataset"], env["second"]],
+        "search_mode": {"type": mode},
+        "rerank_id": "controlled",
+        "similarity_threshold": 0,
+        "highlight": True,
+        "meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": "=", "value": "match"}]},
+    }
+    # Prime the lookup, then remove only SQL. Index and metadata intentionally
+    # remain stale so both metadata narrowing and repeated requests exercise it.
+    initial = request(env, "POST", "/search", json={**payload, "rerank_id": None})
+    assert initial.status_code == 200 and initial.json()["code"] == 0, initial.text
+    assert initial.json()["data"]["total"] == 2
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(Document).where(Document.id == env["doc"]))
+        db.commit()
+    for _ in range(2):
+        response = request(env, "POST", "/search", json=payload)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["code"] == 0 and body["data"]["total"] == 1, body
+        assert {row["doc_id"] for row in body["data"]["chunks"]} == {env["second_doc"]}, body
+        assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == {env["second_doc"]}, body
+    assert len(seen) == 2
+    # Metadata extends explicit doc_ids in the existing local contract. Test
+    # explicit document narrowing separately rather than changing that contract.
+    payload.pop("meta_data_filter")
+    payload["doc_ids"] = [env["doc"]]
+    deleted_only = request(env, "POST", "/search", json=payload)
+    assert deleted_only.status_code == 200, deleted_only.text
+    assert deleted_only.json()["code"] == 0 and deleted_only.json()["data"]["chunks"] == [], deleted_only.text
+    assert deleted_only.json()["data"]["total"] == 0
+    assert len(seen) == 2
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(Document).where(Document.id == env["second_doc"]))
+        db.commit()
+    payload.pop("doc_ids")
+    all_deleted = request(env, "POST", "/search", json=payload)
+    assert all_deleted.status_code == 200, all_deleted.text
+    assert all_deleted.json()["code"] == 0 and all_deleted.json()["data"]["total"] == 0, all_deleted.text
+    assert all_deleted.json()["data"]["chunks"] == [] and all_deleted.json()["data"]["doc_aggs"] == []
+    assert len(seen) == 2
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["doc"]) is None
+        assert db.get(Document, env["second_doc"]) is None
+        assert db.get(DocumentMetadata, env["doc"]) is not None
+    assert indexed_rows() == before
+
+
+def test_dataset_raptor_requires_live_dataset_but_file_summary_requires_document(search_api: dict[str, Any]) -> None:
+    env = search_api
+    collection = env["collections"]["dataset"]
+    summaries = []
+    for doc_id, marker in (("graph_raptor_x", "raptor"), (env["doc"], "raptor"), ("graph_raptor_x", "")):
+        summaries.append({**env["rows"]["dataset"][1], "id": uuid4().hex, "doc_id": doc_id, "raptor_kwd": marker, "content_with_weight": "availability summary"})
+    assert settings.docStoreConn.insert(summaries, collection, env["dataset"]) == []
+    env["reader"].flush(collection)
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(Document).where(Document.id == env["doc"]))
+        db.commit()
+    response = request(env, "POST", "/search", json={"question": "availability", "similarity_threshold": 0})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["code"] == 0 and body["data"]["total"] == 1, body
+    assert [row["chunk_id"] for row in body["data"]["chunks"]] == [summaries[0]["id"]], body
+    assert body["data"]["chunks"][0]["doc_id"] == "graph_raptor_x"
+    indexed = env["reader"].query(collection, filter="pk in " + json.dumps([row["id"] for row in summaries]), output_fields=["pk"], consistency_level="Strong")
+    assert {row["pk"] for row in indexed} == {row["id"] for row in summaries}
 
 
 def test_http_graph_document_scope_and_hidden_artifacts(search_api: dict[str, Any]) -> None:
