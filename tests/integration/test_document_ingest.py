@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -340,7 +341,7 @@ def test_http_keep_clear_apply_reset_cancel_and_canonical_contracts(ingest_api: 
     assert not tasks(env, env["a"]) and index_snapshot(env) == []
     assert post(env, [env["a"]], 0, delete=True)["code"] == 0
     assert not tasks(env, env["a"]) and index_snapshot(env) == []
-    assert post(env, [env["b"]], 1, path="/v1/document/run")["code"] == 0
+    assert post(env, [env["b"]], 1)["code"] == 0
     tasks(env, env["b"])
     for operation in ["stop", "parse"]:
         response = requests.post(f"{env['base']}/api/v1/datasets/{env['kb']}/documents/{operation}", headers={"Authorization": f"Bearer {env['jwt']}"}, json={"document_ids": [env["b"]]}, timeout=30)
@@ -348,7 +349,11 @@ def test_http_keep_clear_apply_reset_cancel_and_canonical_contracts(ingest_api: 
         assert response.json()["data"]["success_count"] == 1
         tasks(env, env["b"])
     schema = requests.get(env["base"] + "/openapi.json", timeout=30).json()
-    assert schema["paths"]["/v1/document/run"]["post"]["deprecated"] is True
+    assert "/v1/document/run" not in schema["paths"]
+    assert "RunRequest" not in schema["components"]["schemas"]
+    assert "DocumentIngestRequest" in schema["components"]["schemas"]
+    for path in ["/api/v1/documents/ingest", "/api/v1/datasets/{dataset_id}/documents/parse", "/api/v1/datasets/{dataset_id}/documents/stop"]:
+        assert "post" in schema["paths"][path]
     evidence(env, "keep-clear", {"before": before, "after_reuse": after, "partial": partial, "final": snapshot(env)})
     smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     evidence(env, "smoke", {"exit": smoke.returncode, "stdout": smoke.stdout, "stderr": smoke.stderr})
@@ -1616,13 +1621,13 @@ def test_same_source_status_winner_survives_full_history_compensation(ingest_api
 
 
 @pytest.mark.parametrize("fault", ["connection_entry", "session_exit", "owner_close"])
-@pytest.mark.parametrize("path", ["/api/v1/documents/ingest", "/v1/document/run"])
-def test_http_batch_boundary_failure_preserves_real_effects_and_retry(ingest_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, fault: str, path: str) -> None:
+def test_http_batch_boundary_failure_preserves_real_effects_and_retry(ingest_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
     from contextlib import contextmanager
 
     from api.db.services.document_ingest_recovery import RecoveryOwner
 
     env = ingest_api
+    path = "/api/v1/documents/ingest"
     original_connection, original_close = service.db_connection, RecoveryOwner.close
     entries, closes = 0, 0
 
@@ -1744,3 +1749,218 @@ def test_admin_sync_real_poll_errors_selection_and_pagination(ingest_api: dict[s
         assert all(doc["run"] == "DONE" for item in polls for doc in item["body"]["data"]["docs"])
     for identifier in submitted:
         tasks(env, identifier)
+
+
+def test_retired_document_run_http_matrix_has_no_private_execution(ingest_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+    from pymilvus import MilvusClient
+    from redis import Redis
+
+    from api import apps
+    from api.db.db_models import APIToken, User, get_async_db, get_db
+    from api.db.services import llm_service
+    from api.utils.api_utils import async_current_user
+    from common.config_utils import CONFIGS
+
+    env = ingest_api
+    admin_id, membership_id = uuid4().hex, uuid4().hex
+    env["ingest_manifest"]["oldrun_sql_ids"] = {User.__tablename__: [admin_id], UserTenant.__tablename__: [membership_id]}
+    evidence(env, "manifest", env["ingest_manifest"])
+    record: dict[str, Any] = {"requests": [], "controlled_boundary": "Historic task/queue/image fixtures; real HTTP router, credentials, SQL, MinIO, Milvus and Redis; no worker/provider execution."}
+    try:
+        with Session(env["engine"]) as db:
+            db.add(User(id=admin_id, email=f"{admin_id}@upload.test", nickname="Oldrun admin scratch", password="unused", access_token="active"))
+            db.add(UserTenant(id=membership_id, user_id=admin_id, tenant_id=env["owners"][0], role="admin", status="1", invited_by=env["owners"][0]))
+            db.commit()
+        child = completed(env, env["a"])
+        completed(env, env["b"])
+        mother = {**source(env, env["a"], text="Preserved hidden mother"), "available_int": 0}
+        image_key = f"{env['kb']}/history.png"
+        env["ingest_manifest"]["objects"].append(image_key)
+        evidence(env, "manifest", env["ingest_manifest"])
+        binary = BytesIO()
+        Image.new("RGB", (3, 3), "blue").save(binary, format="PNG")
+        env["storage_adapter"].put(env["kb"], "history.png", binary.getvalue())
+        child.update(mom_id=mother["id"], doc_type_kwd="image", img_id=f"{env['kb']}-history.png")
+        assert settings.docStoreConn.insert([child, mother], env["collection"], env["kb"]) == []
+        foreign = {**source(env, env["foreign"], text="Other dataset preserved"), "kb_id": env["other_kb"]}
+        assert settings.docStoreConn.insert([foreign], env["other_collection"], env["other_kb"]) == []
+        task_id = tasks(env, env["b"])[0]["id"]
+        assert REDIS_CONN.REDIS is not None
+        REDIS_CONN.REDIS.set(task_id + "-cancel", "historic cancel flag")
+        REDIS_CONN.REDIS.xadd(env["queue"], {"message": json.dumps({"id": task_id, "doc_id": env["b"]})})
+        REDIS_CONN.REDIS.xgroup_create(env["queue"], "oldrun-history", id="0")
+        assert REDIS_CONN.REDIS.xreadgroup("oldrun-history", "owned-history-consumer", {env["queue"]: ">"}, count=1)
+        cfg = CONFIGS["redis"]
+        host, _, port = cfg["host"].rpartition(":")
+        redis = Redis(host=host, port=int(port), db=int(cfg.get("db", 1)), username=cfg.get("username") or None, password=cfg.get("password") or None)
+        milvus = CONFIGS["milvus"]
+        index = MilvusClient(uri=milvus["hosts"], user=milvus.get("username", ""), password=milvus.get("password", ""), db_name=milvus.get("db_name") or "default")
+        try:
+            for name in ["collection", "other_collection"]:
+                index.flush(env[name])
+
+            def full_snapshot() -> dict[str, Any]:
+                result = snapshot(env)
+                with env["engine"].connect() as db:
+                    for model in [SourceRecoveryRecord, User, UserTenant, APIToken]:
+                        result["sql"][model.__tablename__] = [dict(row) for row in db.execute(sa.select(model.__table__).order_by(*model.__table__.primary_key.columns)).mappings()]
+                    result["advisory_locks"] = list(
+                        db.execute(
+                            sa.text(
+                                "SELECT classid,objid,objsubid,mode,granted FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) ORDER BY classid,objid,objsubid,mode"
+                            )
+                        )
+                    )
+                result["index_details"] = {
+                    name: {"schema": index.describe_collection(env[name]), "stats": index.get_collection_stats(env[name]), "rows": result["index"][name]} for name in ["collection", "other_collection"]
+                }
+                result["redis"] = {}
+                for key in sorted(set(env["ingest_manifest"]["redis_keys"])):
+                    kind, dump = redis.type(key), redis.dump(key)
+                    result["redis"][key] = {"type": kind.decode(), "dump_hex": dump.hex() if dump else None, "pttl": redis.pttl(key)}
+                    if kind == b"stream":
+                        result["redis"][key].update(
+                            entries=redis.xrange(key),
+                            info=redis.xinfo_stream(key),
+                            groups=redis.xinfo_groups(key),
+                            consumers=redis.xinfo_consumers(key, "oldrun-history"),
+                            pending=redis.xpending_range(key, "oldrun-history", "-", "+", 100),
+                        )
+                return result
+
+            def wire_snapshot(value: Any) -> Any:
+                if isinstance(value, bytes):
+                    return {"bytes_hex": value.hex()}
+                if isinstance(value, dict):
+                    return {(f"bytes_hex:{key.hex()}" if isinstance(key, bytes) else key): wire_snapshot(item) for key, item in value.items()}
+                if isinstance(value, (list, tuple)):
+                    return [wire_snapshot(item) for item in value]
+                return value
+
+            def assert_same_stores(before: dict[str, Any], after: dict[str, Any], elapsed: float) -> list[dict[str, Any]]:
+                stable_before, stable_after = copy.deepcopy(before), copy.deepcopy(after)
+                clocks: list[dict[str, Any]] = []
+                for key, prior in before["redis"].items():
+                    if prior["type"] != "stream":
+                        continue
+                    for group, fields in [("consumers", ["idle", "inactive"]), ("pending", ["time_since_delivered"])]:
+                        assert len(prior[group]) == len(after["redis"][key][group])
+                        for ordinal, (old, new) in enumerate(zip(prior[group], after["redis"][key][group], strict=True)):
+                            for field in fields:
+                                if field not in old:
+                                    assert field not in new
+                                    continue
+                                assert 0 <= new[field] - old[field] <= elapsed * 1000 + 5
+                                clocks.append({"key": key, "group": group, "field": field, "before": old[field], "after": new[field]})
+                                stable_before["redis"][key][group][ordinal][field] = stable_after["redis"][key][group][ordinal][field] = 0
+                # Relative age fields advance with wall time; exact stream DUMP,
+                # delivery/ownership metadata and every persisted value remain equal.
+                assert stable_before == stable_after
+                return clocks
+
+            calls: list[str] = []
+
+            def forbidden(*args: Any, **kwargs: Any) -> Any:
+                calls.append("private dependency/business/storage/queue")
+                raise AssertionError("Retired document run entered private execution")
+
+            def forbidden_sql(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, many: bool) -> None:
+                calls.append("SQL execution")
+                raise AssertionError("Retired document run accessed SQL")
+
+            credentials = {
+                "owner_jwt": env["jwt"],
+                "admin_jwt": apps.manager.create_access_token(data={"sub": f"{admin_id}@upload.test"}),
+                "valid_api_key": env["api_key"],
+                "other_jwt": apps.manager.create_access_token(data={"sub": f"{env['owners'][1]}@upload.test"}),
+                "expired_jwt": apps.manager.create_access_token(data={"sub": f"{env['owners'][0]}@upload.test"}, expires=timedelta(minutes=-2)),
+                "invalid": "unregistered-invalid-token",
+                "absent": None,
+            }
+            for principal, credential in credentials.items():
+                cases: list[tuple[str, dict[str, Any]]] = [
+                    ("valid", {"json": {"doc_ids": [env["foreign"] if principal in {"admin_jwt", "valid_api_key"} else env["b"]], "run": 1}}),
+                    ("foreign_document", {"json": {"doc_ids": [env["foreign"]], "run": 1}}),
+                    ("empty", {}),
+                    ("bad_body", {"json": {"doc_ids": [], "run": True, "delete": "true"}}),
+                    ("malformed_json", {"data": "{", "headers": {"Content-Type": "application/json"}}),
+                ]
+                if principal == "owner_jwt":
+                    cases.extend([("trailing_slash", {"path": "/v1/document/run/", "json": {"doc_ids": [env["b"]], "run": 1}}), ("get_method", {"method": "GET"})])
+                for label, payload in cases:
+                    route, method = payload.get("path", "/v1/document/run"), payload.get("method", "POST")
+                    started = time.monotonic()
+                    before = full_snapshot()
+                    with monkeypatch.context() as scoped:
+                        for dependency in [async_current_user, get_db, get_async_db]:
+                            scoped.setitem(apps.app.dependency_overrides, dependency, forbidden)
+                        for target, name in [(service, "ingest_documents"), (service, "preflight"), (DocumentService, "run"), (llm_service, "LLMBundle"), (REDIS_CONN.REDIS, "execute_command")]:
+                            scoped.setattr(target, name, forbidden)
+                        for target, names in [(env["storage_adapter"], ["get", "put", "rm"]), (settings.docStoreConn, ["get", "search", "insert", "delete", "update"])]:
+                            for name in names:
+                                scoped.setattr(target, name, forbidden)
+                        sa.event.listen(sa.engine.Engine, "before_cursor_execute", forbidden_sql)
+                        try:
+                            headers = {"Authorization": f"Bearer {credential}"} if credential else {}
+                            headers.update(payload.get("headers", {}))
+                            response = requests.request(
+                                method,
+                                env["base"] + route,
+                                headers=headers,
+                                timeout=30,
+                                allow_redirects=False,
+                                **{key: value for key, value in payload.items() if key not in {"headers", "path", "method"}},
+                            )
+                        finally:
+                            sa.event.remove(sa.engine.Engine, "before_cursor_execute", forbidden_sql)
+                    after = full_snapshot()
+                    elapsed = time.monotonic() - started
+                    clocks = assert_same_stores(before, after, elapsed)
+                    record["requests"].append(
+                        {
+                            "principal": principal,
+                            "body_case": label,
+                            "method": method,
+                            "path": route,
+                            "request_payload": payload,
+                            "response_headers": dict(response.headers),
+                            "status": response.status_code,
+                            "body": response.json(),
+                            "before": wire_snapshot(before),
+                            "after": wire_snapshot(after),
+                            "relative_clock_observations": clocks,
+                            "snapshot_window_seconds": elapsed,
+                        }
+                    )
+                    evidence(env, "oldrun-retirement", record)
+                    env["record_path"].with_suffix(".ingest-oldrun-retirement.json").chmod(0o600)
+                    assert response.status_code == 404 and response.json() == {"code": 404, "message": f"Not Found: {route}", "data": None, "error": "Not Found"}
+                    assert not calls
+            schema = requests.get(env["base"] + "/openapi.json", timeout=30)
+            assert schema.status_code == 200
+            record["openapi"] = schema.json()
+            assert "/v1/document/run" not in record["openapi"]["paths"] and "RunRequest" not in record["openapi"]["components"]["schemas"]
+            assert "DocumentIngestRequest" in record["openapi"]["components"]["schemas"]
+            for path in ["/api/v1/documents/ingest", "/api/v1/datasets/{dataset_id}/documents/parse", "/api/v1/datasets/{dataset_id}/documents/stop"]:
+                assert "post" in record["openapi"]["paths"][path]
+            record.update(private_calls=calls, all_requests_verified=True)
+            evidence(env, "oldrun-retirement", record)
+        finally:
+            redis.close()
+            index.close()
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(UserTenant).where(UserTenant.id == membership_id))
+            db.execute(sa.delete(User).where(User.id == admin_id))
+            db.commit()
+        with env["engine"].connect() as db:
+            remaining = {
+                "user": db.scalar(sa.select(sa.func.count()).select_from(User).where(User.id == admin_id)),
+                "membership": db.scalar(sa.select(sa.func.count()).select_from(UserTenant).where(UserTenant.id == membership_id)),
+            }
+        assert not any(remaining.values())
+        env["ingest_manifest"]["oldrun_extra_remaining"] = remaining
+        evidence(env, "manifest", env["ingest_manifest"])

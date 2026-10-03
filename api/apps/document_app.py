@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, Json, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,6 @@ from api.db.db_models import Document, get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
-from api.db.services.document_ingest_service import IngestError, ingest_documents
 from api.db.services.document_parser_service import update_document_parser
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
 from api.db.services.file2document_service import File2DocumentService
@@ -44,7 +43,6 @@ from api.utils.api_utils import Principal, async_current_user, construct_error_r
 from api.utils.document_update_contract import DocumentUpdateError, LegacyDocumentParserPatch
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
-from api.utils.validation_utils import DocumentIngestRequest
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
 from common import settings
 from common.constants import VALID_TASK_STATUS, ParserType, RetCode
@@ -217,10 +215,6 @@ class ChangeAuthRequest(BaseModel):
 
 class RemoveRequest(BaseModel):
     doc_id: list[str] = Field(..., description="文档ID列表")
-
-
-class RunRequest(DocumentIngestRequest):
-    pass
 
 
 class RenameRequest(BaseModel):
@@ -1866,21 +1860,6 @@ def rm(request_body: RemoveRequest, db: Session = Depends(get_db), user=Depends(
         return construct_json_result(data=False, message=errors, code=RetCode.SERVER_ERROR)
 
     return construct_json_result(data=True)
-
-
-@router.post("/run", summary="[Deprecated] 运行文档任务", response_description="请求已提交", deprecated=True)
-async def run(request_body: RunRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
-    """Retained for the current Web reparse consumer until its migration is accepted."""
-    try:
-        result = await ingest_documents(db, request_body.doc_ids, user.platform_user_id, request_body.run, request_body.delete, request_body.apply_kb)
-        if result is not True:
-            raise IngestError("Document ingestion effect could not be confirmed.", RetCode.SERVER_ERROR)
-        return construct_json_result(data=result)
-    except IngestError as exc:
-        return JSONResponse(content={"code": exc.code, "message": str(exc), "data": exc.result})
-    except Exception:
-        logging.exception("Legacy document run failed")
-        return JSONResponse(content={"code": RetCode.SERVER_ERROR, "message": "Document ingestion failed; retry to reconcile.", "data": None})
 
 
 @router.post("/rename", summary="[Deprecated] 重命名文档", response_description="成功重命名文档", deprecated=True)

@@ -42,7 +42,7 @@ from common.constants import RetCode
 
 
 class DocumentIngestRequest(BaseModel):
-    """Strict shared body for ingestion and its retained Web compatibility route."""
+    """Strict body for the document ingestion endpoint."""
 
     model_config = ConfigDict(extra="forbid")
     doc_ids: list[StrictStr] = Field(min_length=1)
