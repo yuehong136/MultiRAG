@@ -11,7 +11,7 @@ from api.db.db_models import Document, File, Knowledgebase, UserCanvas
 from api.db.services import document_image_lock as image_lock
 from api.db.services import document_parser_service as service
 from api.utils.document_pipeline_validation import validate_document_pipeline
-from api.utils.document_update_contract import DocumentUpdateError, DocumentUpdatePatch, LegacyDocumentParserPatch
+from api.utils.document_update_contract import DocumentUpdateError, DocumentUpdatePatch
 
 
 @pytest.mark.parametrize(("acknowledged", "confirmed", "valid"), [(1, 1, True), (0, True, True), (1, False, False), (2, 1, False), (True, True, False), (1, 1.0, False), (1, None, False)])
@@ -216,13 +216,9 @@ def test_invalid_canonical_definition_is_rejected(fault: str) -> None:
         validate_document_pipeline(dsl)
 
 
-def test_legacy_presence_mapping_reuses_exact_document_patch() -> None:
-    assert LegacyDocumentParserPatch(doc_id="doc").document_patch().model_dump(exclude_unset=True) == {}
-    assert LegacyDocumentParserPatch(doc_id="doc", parser_id="naive", pipeline_id="", parser_config={}).document_patch().model_dump(exclude_unset=True) == {
-        "chunk_method": "naive",
-        "pipeline_id": "",
-        "parser_config": {},
-    }
-    for fields in [{"parser_id": None}, {"pipeline_id": None}, {"parser_config": None}, {"name": "unknown"}]:
+def test_document_patch_preserves_presence_empty_config_and_pipeline_clear() -> None:
+    assert DocumentUpdatePatch().model_dump(exclude_unset=True) == {}
+    assert DocumentUpdatePatch(chunk_method="naive", pipeline_id="", parser_config={}).model_dump(exclude_unset=True) == {"chunk_method": "naive", "pipeline_id": "", "parser_config": {}}
+    for fields in [{"chunk_method": None}, {"pipeline_id": None}, {"parser_config": None}, {"parser_id": "naive"}, {"doc_id": "doc"}, {"unknown": 1}]:
         with pytest.raises(ValidationError):
-            LegacyDocumentParserPatch.model_validate({"doc_id": "doc", **fields})
+            DocumentUpdatePatch.model_validate(fields)

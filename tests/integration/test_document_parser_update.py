@@ -314,6 +314,263 @@ return {kind, hex, redis.call('PTTL', KEYS[1]), kind == 'string' and redis.call(
     return result
 
 
+def full_readback(env: dict[str, Any]) -> dict[str, Any]:
+    """Independent physical SQL/native/object/Redis reads of the owned scratch."""
+    from minio import Minio
+    from pymilvus import MilvusClient
+    from redis import Redis
+    from sqlalchemy.pool import NullPool
+
+    from tests.integration.test_document_image_read_service import _raw_object
+
+    result = snapshot(env)
+    reader = sa.create_engine(env["engine"].url, poolclass=NullPool)
+    try:
+        with reader.connect() as db:
+            inspector = sa.inspect(db)
+            tables = db.execute(sa.text("SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename")).all()
+            result["physical_sql"] = {}
+            for schema, table in tables:
+                quoted = db.dialect.identifier_preparer.quote_schema(schema) + "." + db.dialect.identifier_preparer.quote(table)
+                result["physical_sql"][quoted] = {
+                    "columns": [{**column, "type": str(column["type"])} for column in inspector.get_columns(table, schema=schema)],
+                    "primary_key": inspector.get_pk_constraint(table, schema=schema),
+                    "foreign_keys": inspector.get_foreign_keys(table, schema=schema),
+                    "indexes": inspector.get_indexes(table, schema=schema),
+                    "rows": [dict(row) for row in db.execute(sa.text(f"SELECT t.*, xmin::text AS _xmin FROM {quoted} t ORDER BY to_jsonb(t)::text")).mappings()],
+                }
+    finally:
+        reader.dispose()
+    cfg = CONFIGS["milvus"]
+    native = MilvusClient(uri=cfg["hosts"], user=cfg.get("username", ""), password=cfg.get("password", ""), db_name=cfg.get("db_name") or "default")
+    try:
+        result["native_index_stats"] = {name: native.get_collection_stats(collection) if native.has_collection(collection) else None for name, collection in env["collections"].items()}
+    finally:
+        native.close()
+    cfg = CONFIGS["minio"]
+    storage = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=str(cfg.get("secure", False)).lower() in {"true", "1", "yes"})
+    result["native_objects"] = {obj.object_name: _raw_object(storage, env["bucket"], obj.object_name) for obj in storage.list_objects(env["bucket"], recursive=True)}
+    redis = Redis(**{**REDIS_CONN.REDIS.connection_pool.connection_kwargs, "decode_responses": False})
+    try:
+        raw = {}
+        for key in env["parser_record"]["manifest"]["redis_keys"]:
+            kind = redis.type(key).decode()
+            item: dict[str, Any] = {"type": kind, "dump": redis.dump(key), "pttl": redis.pttl(key)}
+            if kind == "string":
+                item["value"] = redis.get(key)
+            elif kind == "set":
+                item["members"] = sorted(redis.smembers(key))
+            elif kind == "stream":
+                item.update(entries=redis.xrange(key), stream=redis.xinfo_stream(key), groups=redis.xinfo_groups(key))
+                item["consumers"] = {group["name"].decode(): redis.xinfo_consumers(key, group["name"]) for group in item["groups"]}
+                item["pending"] = {group["name"].decode(): redis.xpending_range(key, group["name"], "-", "+", 100) for group in item["groups"]}
+            elif kind != "none":
+                raise AssertionError(f"Uncaptured Redis type {kind}")
+            raw[key] = item
+        result["native_redis"] = raw
+    finally:
+        redis.close()
+
+    def json_keys(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {(key.decode() if isinstance(key, bytes) else key): json_keys(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_keys(item) for item in value]
+        return value
+
+    return json_keys(result)
+
+
+def assert_full_read_only(before: dict[str, Any], after: dict[str, Any], elapsed: float) -> None:
+    left, right = copy.deepcopy(before), copy.deepcopy(after)
+    for key, item in left["native_redis"].items():
+        other = right["native_redis"][key]
+        if item["pttl"] >= 0:
+            assert 0 <= item["pttl"] - other["pttl"] <= elapsed * 1000 + 1000
+            other["pttl"] = item["pttl"]
+        for category, fields in [("consumers", ["idle", "inactive"]), ("pending", ["time_since_delivered"])]:
+            for group, rows in item.get(category, {}).items():
+                for a, b in zip(rows, other[category][group], strict=True):
+                    for field in fields:
+                        if field in a:
+                            assert 0 <= b[field] - a[field] <= elapsed * 1000 + 1000
+                            b[field] = a[field]
+    assert left == right
+
+
+def assert_nonparser_physical_allowlist(env: dict[str, Any], before: dict[str, Any], after: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Only this Document's explicit config/time/version and own KB version may move."""
+    left, right = copy.deepcopy(before["physical_sql"]), copy.deepcopy(after["physical_sql"])
+    for name, table in left.items():
+        for a, b in zip(table["rows"], right[name]["rows"], strict=True):
+            if a.get("id") == env["docs"]["a"] and name.split(".")[-1].strip('"') == Document.__tablename__:
+                fields = {"update_time", "update_date", "_xmin"}
+                if "parser_config" in payload:
+                    fields.add("parser_config")
+                for field in fields:
+                    b[field] = a[field]
+            elif a.get("id") == env["ids"]["kb"] and name.split(".")[-1].strip('"') == Knowledgebase.__tablename__:
+                b["_xmin"] = a["_xmin"]
+    assert left == right
+
+
+def test_retired_parser_real_http_fullstores_zero_private_calls(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.parse import unquote, urlsplit
+
+    from pymilvus import MilvusClient
+
+    from api.db.db_models import APIToken
+    from api.db.services.file_service import FileService
+
+    env = parser_api
+    env["tokens"]["owner_api"] = "parser-exit-" + uuid4().hex
+    env["tokens"]["invalid_literal"] = "INVALID_"
+    env["parser_record"]["manifest"]["oldparser_api_token"] = {"tenant_id": env["ids"]["owner"], "role": "owner_api"}
+    save(env["parser_record_path"], env["parser_record"])
+    with Session(env["engine"]) as db:
+        db.add(APIToken(tenant_id=env["ids"]["owner"], token=env["tokens"]["owner_api"], name="image-http"))
+        db.commit()
+    group, consumer = "oldparser-retirement", "oldparser-reader"
+    env["parser_record"]["manifest"]["oldparser_stream_group"] = {"key": env["queue"], "group": group, "consumer": consumer}
+    save(env["parser_record_path"], env["parser_record"])
+    assert REDIS_CONN.queue_product(env["queue"], {"id": env["parser_record"]["manifest"]["tasks"][0], "doc_id": env["docs"]["a"], "preserved": True})
+    REDIS_CONN.REDIS.xgroup_create(env["queue"], group, id="0")
+    REDIS_CONN.REDIS.xreadgroup(group, consumer, {env["queue"]: ">"}, count=1)
+    cfg = CONFIGS["milvus"]
+    native = MilvusClient(uri=cfg["hosts"], user=cfg.get("username", ""), password=cfg.get("password", ""), db_name=cfg.get("db_name") or "default")
+    try:
+        for collection in env["collections"].values():
+            if native.has_collection(collection):
+                native.flush(collection, timeout=30)
+    finally:
+        native.close()
+    valid = {"doc_id": env["docs"]["a"], "parser_id": "paper", "parser_config": {"chunk_token_num": 512}}
+    cases: dict[str, list[tuple[str, str, str | None, dict[str, Any]]]] = {
+        "credentials": [
+            ("POST", "/v1/document/change_parser", role, {"json": {**valid, "doc_id": env["docs"]["foreign"] if role == "api" else env["docs"]["a"]}})
+            for role in ["owner", "admin", "normal", "invite", "inactive", "outsider", "other", "owner_api", "api", "disabled", "expired", "malformed", "unknown", "invalid_literal", None]
+        ],
+        "bodies_and_paths": [
+            ("POST", "/v1/document/change_parser", "owner", {"json": body})
+            for body in [
+                {},
+                None,
+                [],
+                {"doc_id": uuid4().hex},
+                {"doc_id": env["docs"]["foreign"]},
+                {"doc_id": env["docs"]["a"], "pipeline_id": env["canvas"]},
+                {"doc_id": env["docs"]["a"], "pipeline_id": ""},
+                {"doc_id": None},
+                {"doc_id": 1},
+                {"parser_config": []},
+                {"parser_config": None},
+                {"doc_id": env["docs"]["a"], "extra": True},
+            ]
+        ]
+        + [
+            ("POST", path, "owner", {"json": valid, "params": {"doc_id": env["docs"]["foreign"], "owner": env["ids"]["other"]}})
+            for path in ["/v1/document/change_parser/", "/v1/document/%63hange_parser", "/v1/document/change_parser/%25汉字"]
+        ]
+        + [("POST", "/v1/document/change_parser", "owner", {"data": raw, "headers": {"Content-Type": "application/json"}}) for raw in [b'{"invalid":', b"null", b'{"parser_config": {"score": NaN}}']],
+        "methods": [(method, "/v1/document/change_parser", "owner", {"json": valid}) for method in ["GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]],
+    }
+    record: dict[str, Any] = {"groups": {}, "private_calls": [], "auth": "real JWT/API tokens; no principal override", "redirects": "disabled"}
+    evidence = env["evidence"] / f"{env['ids']['kb']}.oldparser-retirement.json"
+    save(evidence, record)
+    for label, requests_in_group in cases.items():
+        observation: dict[str, Any] = {"before": full_readback(env), "requests": []}
+        record["groups"][label] = observation
+        start = time.monotonic()
+
+        def forbid(*args: Any, **kwargs: Any) -> Any:
+            record["private_calls"].append("private parser/storage/queue")
+            save(evidence, record)
+            raise AssertionError("retired parser reached private service")
+
+        def sql_guard(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, many: bool) -> None:
+            record["private_calls"].append({"sql": statement})
+            save(evidence, record)
+            raise AssertionError("retired parser reached business SQL")
+
+        with monkeypatch.context() as guard:
+            for module in [parser_service, sys.modules["api.apps.restful_apis.document"]]:
+                guard.setattr(module, "update_document_parser", forbid)
+            for target, attributes in [
+                (env["storage"], ["get", "get_bytes", "put", "rm"]),
+                (settings.docStoreConn, ["search", "insert", "update", "delete"]),
+                (REDIS_CONN, ["queue_product"]),
+                (FileService, ["parse", "parse_docs", "upload_info", "upload_infos"]),
+                (status_service, ["prepare_source_recovery"]),
+                (ingest_service, ["_operate"]),
+            ]:
+                for attr in attributes:
+                    guard.setattr(target, attr, forbid)
+            engines = [env["engine"], env["async_engine"].sync_engine]
+            for engine in engines:
+                sa.event.listen(engine, "before_cursor_execute", sql_guard)
+            try:
+                for method, path, role, payload in requests_in_group:
+                    params = dict(payload)
+                    headers = params.pop("headers", {})
+                    if role:
+                        headers["Authorization"] = "Bearer " + env["tokens"][role]
+                    response = requests.request(method, env["base"] + path, headers=headers, timeout=30, allow_redirects=False, **params)
+                    actual_path = unquote(urlsplit(response.request.url).path)
+                    item = {
+                        "method": method,
+                        "path": path,
+                        "actual_path": actual_path,
+                        "url": response.request.url,
+                        "role": role,
+                        "request_payload": payload,
+                        "status": response.status_code,
+                        "headers": dict(response.headers),
+                        "raw": response.content,
+                    }
+                    observation["requests"].append(item)
+                    save(evidence, record)
+                    assert response.status_code == 404 and "location" not in response.headers and response.headers["content-type"] == "application/json"
+                    if method == "HEAD":
+                        assert response.content == b""
+                    else:
+                        assert response.json() == {"code": 404, "message": "Not Found: " + actual_path, "data": None, "error": "Not Found"}
+                if label == "methods":
+                    response = requests.options(
+                        env["base"] + "/v1/document/change_parser", headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"}, timeout=30, allow_redirects=False
+                    )
+                    observation["cors_preflight"] = {
+                        "status": response.status_code,
+                        "headers": dict(response.headers),
+                        "raw": response.content,
+                        "classification": "existing CORS middleware; not counted as route404",
+                    }
+                    assert response.status_code in {200, 400} and "access-control-allow-methods" in response.headers
+            finally:
+                for engine in engines:
+                    sa.event.remove(engine, "before_cursor_execute", sql_guard)
+        observation["after"] = full_readback(env)
+        observation["elapsed"] = time.monotonic() - start
+        save(evidence, record)
+        assert_full_read_only(observation["before"], observation["after"], observation["elapsed"])
+        observation["unchanged_except_exact_bounded_relative_age"] = True
+        save(evidence, record)
+    assert not record["private_calls"]
+    record["verified_requests"] = sum(len(item["requests"]) for item in record["groups"].values())
+    paths = requests.get(env["base"] + "/openapi.json", timeout=30, allow_redirects=False).json()
+    record["openapi"] = paths
+    assert "/v1/document/change_parser" not in paths["paths"]
+    assert "ChangeParserRequest" not in paths["components"]["schemas"] and "LegacyDocumentParserPatch" not in paths["components"]["schemas"]
+    for payload in [{}, {"chunk_method": "naive"}, {"parser_config": {}}, {"parser_config": {"raptor": {"use_raptor": False}}}]:
+        before = full_readback(env)
+        data = patch(env, payload)["data"]
+        after = full_readback(env)
+        assert data["run"] == "DONE" and data["enabled"] is False and data["chunk_count"] == 2
+        assert_nonparser_physical_allowlist(env, before, after, payload)
+        for name in ["index", "objects", "native_objects", "queue", "redis", "image_reservations"]:
+            assert before[name] == after[name]
+    save(evidence, record)
+
+
 def assert_durable_journal(env: dict[str, Any]) -> None:
     captured = snapshot(env)
     key = recovery_key(env["docs"]["a"])
@@ -327,7 +584,8 @@ def assert_durable_journal(env: dict[str, Any]) -> None:
 
 def patch(env: dict[str, Any], payload: Any, *, role: str | None = "owner", key: str = "a", status: int = 200, dataset: str | None = None) -> dict[str, Any]:
     path = f"/api/v1/datasets/{dataset or env['ids']['kb']}/documents/{env['docs'][key]}"
-    response = requests.patch(env["base"] + path, json=payload, headers={"Authorization": "Bearer " + env["tokens"][role]} if role else {}, timeout=30)
+    before_full = full_readback(env)
+    response = requests.patch(env["base"] + path, json=payload, headers={"Authorization": "Bearer " + env["tokens"][role]} if role else {}, timeout=30, allow_redirects=False)
     body = response.json()
     read_dataset = env["ids"]["foreign" if key == "foreign" else "kb"]
     read_path = f"/api/v1/datasets/{read_dataset}/documents"
@@ -336,6 +594,11 @@ def patch(env: dict[str, Any], payload: Any, *, role: str | None = "owner", key:
     env["parser_record"]["events"].append(
         {
             "path": path,
+            "method": "PATCH",
+            "headers": dict(response.headers),
+            "raw": response.content,
+            "full_stores_before": before_full,
+            "full_stores_after": full_readback(env),
             "payload": payload,
             "role": role,
             "status": response.status_code,
@@ -547,34 +810,21 @@ def test_rename_and_enabled_preserve_full_native_history_and_shared_sources(pars
 
 
 @pytest.mark.parametrize("role", ["owner", "admin"])
-def test_legacy_adapter_same_mode_config_clear_and_pipeline_presence(parser_api: dict[str, Any], role: str) -> None:
+def test_canonical_patch_same_mode_config_clear_and_pipeline_presence(parser_api: dict[str, Any], role: str) -> None:
     env = parser_api
     before = snapshot(env)
-    response = requests.post(
-        env["base"] + "/v1/document/change_parser",
-        json={"doc_id": env["docs"]["a"], "parser_id": "naive", "parser_config": {"chunk_token_num": 512}},
-        headers={"Authorization": "Bearer " + env["tokens"][role]},
-        timeout=30,
-    )
-    assert response.status_code == 200 and response.json() == {"retcode": 0, "retmsg": "success", "data": True}
+    data = patch(env, {"chunk_method": "naive", "parser_config": {"chunk_token_num": 512}}, role=role)["data"]
+    assert data["chunk_method"] == "naive" and data["parser_config"]["chunk_token_num"] == 512
     assert snapshot(env)["index"] == before["index"] and snapshot(env)["objects"] == before["objects"]
     assert patch(env, {"pipeline_id": env["canvas"]}, role=role)["data"]["pipeline_id"] == env["canvas"]
-    response = requests.post(
-        env["base"] + "/v1/document/change_parser",
-        json={"doc_id": env["docs"]["a"], "pipeline_id": "", "parser_config": {"delimiter": ";"}},
-        headers={"Authorization": "Bearer " + env["tokens"][role]},
-        timeout=30,
-    )
-    assert response.status_code == 200 and response.json()["retcode"] == 0
-    with Session(env["engine"]) as db:
-        doc = db.get(Document, env["docs"]["a"])
-        assert doc.pipeline_id == "" and doc.parser_id == "naive" and doc.parser_config["delimiter"] == ";" and doc.status == "0"
+    data = patch(env, {"pipeline_id": "", "parser_config": {"delimiter": ";"}}, role=role)["data"]
+    assert data["pipeline_id"] == "" and data["chunk_method"] == "naive" and data["parser_config"]["delimiter"] == ";" and data["status"] == "0"
     before = snapshot(env)
-    response = requests.post(env["base"] + "/v1/document/change_parser", json={"doc_id": env["docs"]["a"], "pipeline_id": None}, headers={"Authorization": "Bearer " + env["tokens"][role]}, timeout=30)
-    assert response.status_code == 422 and snapshot(env) == before
+    assert patch(env, {"pipeline_id": None}, role=role, status=422)["code"] == "DOCUMENT_UPDATE_VALIDATION"
+    assert snapshot(env) == before
 
 
-def test_legacy_adapter_preserves_unknown_finalization_and_recovers(parser_api: dict[str, Any]) -> None:
+def test_canonical_patch_preserves_unknown_finalization_and_recovers(parser_api: dict[str, Any]) -> None:
     env = parser_api
     before = snapshot(env)
     once = False
@@ -582,26 +832,21 @@ def test_legacy_adapter_preserves_unknown_finalization_and_recovers(parser_api: 
     def before_commit(db: Session) -> None:
         nonlocal once
         if db.bind is env["engine"] and not once and db.scalar(sa.select(Document.parser_id).where(Document.id == env["docs"]["a"])) == "paper":
-            db.info["legacy_lost_commit_response"] = True
+            db.info["parser_lost_commit_response"] = True
             once = True
 
     def after_commit(db: Session) -> None:
-        if db.info.pop("legacy_lost_commit_response", False):
-            raise RuntimeError("Controlled legacy lost COMMIT response")
+        if db.info.pop("parser_lost_commit_response", False):
+            raise RuntimeError("Controlled parser lost COMMIT response")
 
     sa.event.listen(Session, "before_commit", before_commit)
     sa.event.listen(Session, "after_commit", after_commit)
     try:
-        response = requests.post(
-            env["base"] + "/v1/document/change_parser", json={"doc_id": env["docs"]["a"], "parser_id": "paper"}, headers={"Authorization": "Bearer " + env["tokens"]["owner"]}, timeout=30
-        )
+        body = patch(env, {"chunk_method": "paper"}, status=500)
     finally:
         sa.event.remove(Session, "before_commit", before_commit)
         sa.event.remove(Session, "after_commit", after_commit)
-    body = response.json()
-    env["parser_record"]["events"].append({"path": "/v1/document/change_parser", "status": response.status_code, "body": body, "stores": snapshot(env)})
-    save(env["parser_record_path"], env["parser_record"])
-    assert body["retcode"] == 500 and body["data"] == {"outcome": "unknown", "code": "DOCUMENT_UPDATE_OUTCOME_UNKNOWN"}
+    assert body["code"] == "DOCUMENT_UPDATE_OUTCOME_UNKNOWN" and body["retcode"] == 500 and body["data"] == body["details"] == {"outcome": "unknown"}
     assert REDIS_CONN.REDIS.exists(recovery_key(env["docs"]["a"]))
     assert_durable_journal(env)
     with Session(env["engine"]) as db:
@@ -1110,12 +1355,13 @@ def test_missing_native_table_and_failed_availability_ack_are_safe(parser_api: d
 
 
 @pytest.mark.parametrize("stage", ["initial_sql", "unexpected_save"])
-def test_legacy_generic_failure_is_safe_and_keeps_outcome(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+def test_canonical_generic_failure_is_safe_and_keeps_outcome(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
     env = parser_api
     before = snapshot(env)
+    full_before = full_readback(env)
 
     def sql_failure(connection: Any, cursor: Any, statement: str, parameters: Any, context: Any, many: bool) -> None:
-        if statement.startswith("SELECT usr_ai.t_ai_documents.kb_id"):
+        if "FROM usr_ai.t_ai_documents" in statement:
             raise RuntimeError("private SQL bind secret")
 
     async def save_failure(*args: Any, **kwargs: Any) -> Any:
@@ -1124,19 +1370,42 @@ def test_legacy_generic_failure_is_safe_and_keeps_outcome(parser_api: dict[str, 
     if stage == "initial_sql":
         sa.event.listen(env["async_engine"].sync_engine, "before_cursor_execute", sql_failure)
     else:
-        monkeypatch.setattr(sys.modules["api.apps.document"], "update_document_parser", save_failure)
+        monkeypatch.setattr(sys.modules["api.apps.restful_apis.document"], "update_document_parser", save_failure)
     try:
-        response = requests.post(
-            env["base"] + "/v1/document/change_parser", json={"doc_id": env["docs"]["a"], "parser_id": "paper"}, headers={"Authorization": "Bearer " + env["tokens"]["owner"]}, timeout=30
+        # The injected SELECT only affects the mutation; independent readback is
+        # performed after removing the failure event below.
+        response = requests.patch(
+            env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents/{env['docs']['a']}",
+            json={"chunk_method": "paper"},
+            headers={"Authorization": "Bearer " + env["tokens"]["owner"]},
+            timeout=30,
+            allow_redirects=False,
         )
     finally:
         if stage == "initial_sql":
             sa.event.remove(env["async_engine"].sync_engine, "before_cursor_execute", sql_failure)
+    readback = requests.get(env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents", params={"id": env["docs"]["a"]}, headers={"Authorization": "Bearer " + env["tokens"]["owner"]}, timeout=30)
+    assert readback.status_code == 200 and readback.json()["code"] == 0 and len(readback.json()["data"]["docs"]) == 1
     body = response.json()
-    assert body["retcode"] == 500 and "private" not in response.text and "secret" not in response.text
-    assert body["data"] == {"outcome": "unchanged" if stage == "initial_sql" else "unknown", "code": "DOCUMENT_UPDATE_FAILED" if stage == "initial_sql" else "DOCUMENT_UPDATE_OUTCOME_UNKNOWN"}
+    assert response.status_code == 500 and body["retcode"] == 500 and "private" not in response.text and "secret" not in response.text
+    assert body["code"] == ("DOCUMENT_UPDATE_FAILED" if stage == "initial_sql" else "DOCUMENT_UPDATE_OUTCOME_UNKNOWN")
+    assert body["details"] == body["data"] == {"outcome": "unchanged" if stage == "initial_sql" else "unknown"}
+    assert body["detail"] == body["message"] == body["retmsg"] and body["request_id"] == response.headers["X-Request-ID"]
     assert snapshot(env) == before
-    env["parser_record"]["events"].append({"path": "/v1/document/change_parser", "status": response.status_code, "body": body, "stage": stage, "stores": snapshot(env)})
+    env["parser_record"]["events"].append(
+        {
+            "path": response.request.path_url,
+            "status": response.status_code,
+            "body": body,
+            "headers": dict(response.headers),
+            "raw": response.content,
+            "stage": stage,
+            "stores": snapshot(env),
+            "full_stores_before": full_before,
+            "full_stores_after": full_readback(env),
+            "authenticated_list_readback": {"status": readback.status_code, "body": readback.json(), "headers": dict(readback.headers), "raw": readback.content},
+        }
+    )
     save(env["parser_record_path"], env["parser_record"])
 
 

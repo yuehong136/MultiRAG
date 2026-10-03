@@ -705,7 +705,7 @@ def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[st
             paths = get("/openapi.json", feature=False).json()["paths"]
             assert "/v1/document/thumbnails" not in paths and not any(path.startswith("/v1/document/image") for path in paths)
             assert "/v1/document/run" not in paths and "/v1/document/upload_and_parse" not in paths and "/v1/document/change_status" not in paths
-            assert "/v1/document/change_parser" in paths
+            assert "/v1/document/change_parser" not in paths
             for canonical in ["/api/v1/thumbnails", "/api/v1/documents/images/{image_id}", "/api/v1/documents/runtime/{file_id}/image", "/api/v1/documents/ingest"]:
                 assert canonical in paths
             record["openapi"] = paths

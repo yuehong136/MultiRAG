@@ -10,7 +10,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, Json, ValidationError, field_validator
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.status import (
@@ -27,11 +26,10 @@ from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES, FileType
-from api.db.db_models import Document, get_async_db, get_db
+from api.db.db_models import get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
-from api.db.services.document_parser_service import update_document_parser
 from api.db.services.document_service import DocumentService, queue_analyze_v2_task
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -40,7 +38,6 @@ from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
-from api.utils.document_update_contract import DocumentUpdateError, LegacyDocumentParserPatch
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
@@ -220,10 +217,6 @@ class RemoveRequest(BaseModel):
 class RenameRequest(BaseModel):
     doc_id: str = Field(..., description="文档ID")
     name: str = Field(..., description="新的文件名")
-
-
-class ChangeParserRequest(LegacyDocumentParserPatch):
-    pass
 
 
 class SetMetaRequest(BaseModel):
@@ -1978,33 +1971,6 @@ def download_attachment(attachment_id: str, ext: str = "markdown", user=Depends(
         return response
     except Exception as e:
         return construct_error_response(e)
-
-
-@router.post("/change_parser", summary="更改解析器（兼容入口）", deprecated=True)
-async def change_parser(
-    request_body: ChangeParserRequest,
-    db: AsyncSession = Depends(get_async_db),
-    user: Principal = Depends(async_current_user),
-) -> Response:
-    """Strict presence adapter to the same authorized atomic document writer."""
-    saving = False
-    try:
-        dataset_id = await db.scalar(select(Document.kb_id).where(Document.id == request_body.doc_id))
-        if dataset_id is None:
-            raise DocumentUpdateError("Document is unavailable.", status=404, code="DOCUMENT_UPDATE_UNAVAILABLE")
-        patch = request_body.document_patch()
-        saving = True
-        await update_document_parser(db, dataset_id, request_body.doc_id, user.platform_user_id, patch)
-        return get_json_result(data=True)
-    except DocumentUpdateError as error:
-        return get_json_result(data={"outcome": error.outcome, "code": error.code}, retmsg=str(error), retcode=RetCode(error.numeric_code))
-    except Exception:
-        logging.exception("Unexpected legacy document parser update failure.")
-        return get_json_result(
-            data={"outcome": "unknown" if saving else "unchanged", "code": "DOCUMENT_UPDATE_OUTCOME_UNKNOWN" if saving else "DOCUMENT_UPDATE_FAILED"},
-            retmsg="Document update outcome could not be confirmed." if saving else "Document update preflight failed.",
-            retcode=RetCode.SERVER_ERROR,
-        )
 
 
 @router.get("/artifact/{filename}", summary="下载沙箱产物（兼容入口）", response_description="成功获取沙箱产物文件", deprecated=True)

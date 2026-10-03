@@ -147,10 +147,15 @@ def test_presence_is_not_expanded_with_defaults(client: Any, monkeypatch: pytest
         assert calls[-1][-1] == payload
 
 
-def test_put_alias_is_removed_and_legacy_adapter_remains_deprecated(client: Any) -> None:
+def test_put_alias_and_legacy_parser_route_are_removed(client: Any) -> None:
     assert client.put(_PATH, json={}).status_code == 405
     paths = client.get("/openapi.json").json()["paths"]
-    assert paths["/v1/document/change_parser"]["post"]["deprecated"] is True
+    assert "/v1/document/change_parser" not in paths
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert "ChangeParserRequest" not in schemas and "LegacyDocumentParserPatch" not in schemas
+    reference = paths["/api/v1/datasets/{dataset_id}/documents/{document_id}"]["patch"]["requestBody"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+    assert schemas[reference]["title"] == "UpdateDocumentRequest"
+    assert {"chunk_method", "pipeline_id", "parser_config"} <= set(schemas[reference]["properties"])
 
 
 def test_update_route_has_trusted_async_dependency_tree(client: Any, route_dependency_calls: Any) -> None:
@@ -159,3 +164,31 @@ def test_update_route_has_trusted_async_dependency_tree(client: Any, route_depen
     calls = route_dependency_calls(client.app, "PATCH", "/api/v1/datasets/{dataset_id}/documents/{document_id}")
     assert get_db not in calls and current_tenant_id not in calls and api_apps.manager not in calls
     assert async_current_tenant_id not in calls and async_current_user in calls and get_async_db in calls
+
+
+@pytest.mark.parametrize("method", ["POST", "GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+@pytest.mark.parametrize("payload", [{}, {"doc_id": "doc1", "parser_id": "paper"}, {"pipeline_id": None}, {"parser_config": []}])
+def test_old_parser_is_routing_absence_without_private_calls(client: Any, monkeypatch: pytest.MonkeyPatch, method: str, payload: dict[str, Any]) -> None:
+    from types import SimpleNamespace
+
+    from fastapi.routing import iter_route_contexts
+
+    from api.db.services import document_parser_service
+    from common import settings
+
+    def forbid(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("retired parser reached a private dependency")
+
+    for module in [document_parser_service, sys.modules["api.apps.restful_apis.document"]]:
+        monkeypatch.setattr(module, "update_document_parser", forbid)
+    monkeypatch.setattr(settings, "STORAGE_IMPL", SimpleNamespace(get=forbid, get_bytes=forbid, put=forbid, rm=forbid))
+    client.app.dependency_overrides[get_async_db] = forbid
+    client.app.dependency_overrides[get_db] = forbid
+    client.app.dependency_overrides[async_current_user] = forbid
+    assert not any(context.path == "/v1/document/change_parser" for context in iter_route_contexts(client.app.routes))
+    response = client.request(method, "/v1/document/change_parser", json=payload, headers={"Authorization": "Bearer INVALID_"}, follow_redirects=False)
+    assert response.status_code == 404 and "location" not in response.headers and response.headers["content-type"] == "application/json"
+    if method == "HEAD":
+        assert response.content == b""
+    else:
+        assert response.json() == {"code": 404, "message": "Not Found: /v1/document/change_parser", "data": None, "error": "Not Found"}

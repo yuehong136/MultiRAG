@@ -62,23 +62,3 @@ class DocumentUpdateError(ValueError):
         self.numeric_code = numeric_code
         self.code = code
         self.outcome = outcome
-
-
-class LegacyDocumentParserPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    doc_id: StrictStr
-    parser_id: StrictStr | None = None
-    pipeline_id: StrictStr | None = None
-    parser_config: DocumentParserConfigPatch | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_explicit_null(cls, value: Any) -> Any:
-        return _reject_null(value)
-
-    def document_patch(self) -> DocumentUpdatePatch:
-        fields = self.model_dump(exclude_unset=True, exclude={"doc_id"})
-        if "parser_id" in fields:
-            fields["chunk_method"] = fields.pop("parser_id")
-        return DocumentUpdatePatch.model_validate(fields)
