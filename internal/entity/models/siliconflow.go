@@ -382,7 +382,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 
 // EncodeToEmbedding encodes a list of texts into embeddings
 func (m *SiliconFlowModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return nil, fmt.Errorf("%s, no such method", m.Name())
+	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig)
 }
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
@@ -452,4 +452,72 @@ func (m *SiliconFlowModel) CheckConnection(apiConfig *APIConfig) error {
 		return err
 	}
 	return nil
+}
+
+// Encode uses the provider's embedding endpoint with the supplied credentials.
+func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
+	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
+}
+
+func (m *SiliconFlowModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
+	return encodeQuery(m, modelName, query, apiConfig)
+}
+
+func (m *SiliconFlowModel) Rerank(name *string, query string, texts []string, config *APIConfig) ([]float64, error) {
+	if len(texts) == 0 {
+		return []float64{}, nil
+	}
+	if name == nil || *name == "" || config == nil || config.APIKey == nil || *config.APIKey == "" {
+		return nil, fmt.Errorf("rerank model name and API key are required")
+	}
+	if m.URLSuffix.Rerank == "" {
+		return nil, fmt.Errorf("rerank endpoint is not configured")
+	}
+	baseURL, err := resolveModelBaseURL(m.BaseURL, config.Region)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]interface{}{"model": *name, "query": query, "documents": texts, "top_n": len(texts), "return_documents": false, "max_chunks_per_doc": 1024, "overlap_tokens": 80})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(requestContext(config), http.MethodPost, joinModelURL(baseURL, m.URLSuffix.Rerank), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+*config.APIKey)
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("rerank request failed (HTTP %d)", resp.StatusCode)
+	}
+	var result struct {
+		Results []struct {
+			Index *int     `json:"index"`
+			Score *float64 `json:"relevance_score"`
+		} `json:"results"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if len(result.Error) != 0 && string(result.Error) != "null" {
+		return nil, fmt.Errorf("rerank provider returned an error")
+	}
+	if len(result.Results) != len(texts) {
+		return nil, fmt.Errorf("rerank result count mismatch")
+	}
+	scores := make([]float64, len(texts))
+	seen := make([]bool, len(texts))
+	for _, item := range result.Results {
+		if item.Index == nil || *item.Index < 0 || *item.Index >= len(texts) || seen[*item.Index] || item.Score == nil {
+			return nil, fmt.Errorf("invalid rerank result")
+		}
+		seen[*item.Index], scores[*item.Index] = true, *item.Score
+	}
+	return scores, nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"multirag/internal/common"
@@ -64,10 +65,14 @@ func main() {
 	}
 
 	// Override port with command line argument if provided
+	config := server.GetConfig()
 	if portFlag > 0 {
-		config := server.GetConfig()
 		config.Server.Port = portFlag
 		logger.Info("Port overridden by command line argument", zap.Int("port", portFlag))
+	}
+
+	if config.Server.Port == 0 {
+		logger.Fatal("Server port is not configured. Please specify via --port flag or config file.")
 	}
 
 	// Load model providers configuration
@@ -75,11 +80,6 @@ func main() {
 		logger.Fatal("Failed to load model providers", zap.Error(err))
 	}
 	logger.Info("Model providers loaded", zap.Int("count", len(server.GetModelProviders())))
-
-	config := server.GetConfig()
-	if config.Server.Port == 0 {
-		logger.Fatal("Server port is not configured. Please specify via --port flag or config file.")
-	}
 
 	// Reinitialize logger with configured level if different
 	if config.Log.Level != "" && config.Log.Level != "info" {
@@ -233,14 +233,15 @@ func startServer(config *server.Config) {
 		)
 		logger.Info(fmt.Sprintf("MultiRAG Go Version: %s", utility.GetMultiRAGVersion()))
 		logger.Info(fmt.Sprintf("Server starting on port: %d", config.Server.Port))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatal("Failed to start server", zap.Error(err))
 		}
 	}()
 
 	// Get local IP address for heartbeat reporting
-	localIP := utility.GetLocalIP()
-	if localIP == "" {
+	localIP, err := utility.GetLocalIP()
+	if err != nil {
+		logger.Warn("Unable to resolve heartbeat IPv4 address; using loopback", zap.Error(err))
 		localIP = "127.0.0.1"
 	}
 

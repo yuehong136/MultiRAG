@@ -1499,6 +1499,30 @@ JSON 或错误 SSE，取消传到 SDK 请求；空候选/空内容不会伪成�
 余额与旧 channel-only streaming 明确不支持。实际本地验收采用受控身份和 provider
 HTTP，不表示远程 Google 账号、生产身份、完整 worker 或 Web 页面已验收。
 
+Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型绑定接受
+`model@provider`（默认实例名 `default`）和 `model@instance@provider`，空名称按租户对应
+默认模型解析。旧 `tenant_llm` 的模型名、APIKey/APIBase 兼容路径保留；仅新 provider 或
+默认实例记录不存在时可使用旧凭据，显式实例名不会切换凭据。禁用模型、禁用实例、模型
+类型不匹配和数据库错误均失败。每次绑定复制 region URL，不改全局 provider 配置。
+
+VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支持普通文本聊天、
+完整角色历史、sender SSE、模型发现及连接检查。`thinking=true` 且未指定 effort 时用
+`medium`，显式 false 关闭；SSE 同一 delta 的 reasoning/content 均转发，sender 错误、
+取消、异常响应或提前断流不发送成功完成帧。APIKey 可为普通 Ark key，也可为含
+`ark_api_key` 的旧 JSON 形式。embedding/rerank、余额和旧 channel-only streaming
+继续明确不可用；账号权限及远程 Ark 服务仍需实际账号验收。
+
+SiliconFlow embedding 按最多 32 条输入分批，验证数量、索引、维度并按输入顺序返回；
+rerank 请求完整 `top_n`，按文档索引归位，缺失/重复索引和异常响应失败。智谱 embedding
+路径为 `embeddings`。OpenAI 兼容的旧 embedding 能力保留，不据此声明新增 OpenAI Go
+聊天能力。ChatSession 的 `ModelBundle` 保留其调用接口和完整消息历史；其旧 channel
+接口仍返回整段答案，Provider API 的 sender SSE 才是增量流。
+
+Go 驱动测试使用受控 HTTP provider；模型绑定和带斜杠模型名的状态操作使用独立
+PostgreSQL scratch 库及 SQL 读回，不能替代远程供应商、生产身份、完整检索存储或 Web
+页面的验收。Go `cmd` 的独立 main 分别构建；heartbeat 获取 IP 的错误明确报告，仍保留
+无非 loopback IPv4 时的 loopback 回退。
+
 ## 系统 API
 
 系统 API 使用本文档的基础 URL，即 `/api/v1`。旧版 `/v1/system/*` 路由仍可用于兼容历史客户端，并已在 OpenAPI 中标记为 deprecated；新集成应优先使用本节 RESTful 路径。

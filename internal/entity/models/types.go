@@ -24,6 +24,9 @@ type ModelDriver interface {
 	ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
 	// Encode encodes a list of texts into embeddings
 	EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error)
+	Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error)
+	EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error)
+	Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error)
 	// ListModels lists models supported by the configured provider instance.
 	ListModels(apiConfig *APIConfig) ([]string, error)
 

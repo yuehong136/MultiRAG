@@ -765,3 +765,16 @@ func (z *ZhipuAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, er
 func (z *ZhipuAIModel) CheckConnection(apiConfig *APIConfig) error {
 	return checkBearerEndpointConnection(z.httpClient, z.BaseURL, z.URLSuffix.Files, apiConfig, z.Name())
 }
+
+// Encode uses the provider's embedding endpoint with the supplied credentials.
+func (m *ZhipuAIModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
+	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
+}
+
+func (m *ZhipuAIModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
+	return encodeQuery(m, modelName, query, apiConfig)
+}
+
+func (m *ZhipuAIModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
+	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+}

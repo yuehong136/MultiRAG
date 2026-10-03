@@ -33,6 +33,10 @@ func NewModelFactory() *ModelFactory {
 func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string]string, urlSuffix URLSuffix) (ModelDriver, error) {
 	providerLower := strings.ToLower(providerName)
 	switch providerLower {
+	case "volcengine":
+		return NewVolcEngine(baseURL, urlSuffix), nil
+	case "openai", "openai-api-compatible":
+		return NewOpenAIEmbeddingDriver(baseURL, urlSuffix), nil
 	case "google":
 		return NewGoogleModel(baseURL, urlSuffix), nil
 	case "zhipu-ai":

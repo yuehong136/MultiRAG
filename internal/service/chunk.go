@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 	"multirag/internal/server"
 	"strconv"
 	"strings"
@@ -40,7 +41,6 @@ import (
 type ChunkService struct {
 	docEngine      engine.DocEngine
 	engineType     server.EngineType
-	modelProvider  ModelProvider
 	embeddingCache *utility.EmbeddingLRU
 	kbDAO          *dao.KnowledgebaseDAO
 	userTenantDAO  *dao.UserTenantDAO
@@ -53,7 +53,6 @@ func NewChunkService() *ChunkService {
 	return &ChunkService{
 		docEngine:      engine.Get(),
 		engineType:     cfg.DocEngine.Type,
-		modelProvider:  NewModelProvider(),
 		embeddingCache: utility.NewEmbeddingLRU(1000), // default capacity
 		kbDAO:          dao.NewKnowledgebaseDAO(),
 		userTenantDAO:  dao.NewUserTenantDAO(),
@@ -340,17 +339,18 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 	}
 
 	// Get embedding model for the tenant
-	var embeddingModel entity.EmbeddingModel
-	embeddingModel, err = s.modelProvider.GetEmbeddingModel(ctx, tenantIDs[0], embdID)
+	modelProvider := NewModelProviderService()
+	embeddingModel, err := modelProvider.GetEmbeddingModel(tenantIDs[0], embdID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get embedding model: %w", err)
 	}
+	embeddingModel.APIConfig.Context = ctx
 	logger.Info("Fetched embedding model for retrieval",
 		zap.String("tenantID", tenantIDs[0]),
 		zap.String("embdID", embdID))
 
 	// Get rerank model if RerankID is specified
-	var rerankModel nlp.RerankModel
+	var rerankModel *models.RerankModel
 	var rerankCompositeName string
 	if req.TenantRerankID != nil && *req.TenantRerankID != "" {
 		tenantRerankIDInt, parseErr := strconv.ParseInt(*req.TenantRerankID, 10, 64)
@@ -361,7 +361,7 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
 		}
-		rerankModel, err = s.modelProvider.GetRerankModel(ctx, tenantIDs[0], rerankCompositeName)
+		rerankModel, err = modelProvider.GetRerankModel(tenantIDs[0], rerankCompositeName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
 		}
@@ -371,13 +371,14 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model by rerank_id: %w", err)
 		}
-		rerankModel, err = s.modelProvider.GetRerankModel(ctx, tenantIDs[0], rerankCompositeName)
+		rerankModel, err = modelProvider.GetRerankModel(tenantIDs[0], rerankCompositeName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model by rerank_id: %w", err)
 		}
 	}
 
 	if rerankModel != nil {
+		rerankModel.APIConfig.Context = ctx
 		logger.Info("Fetched rerank model",
 			zap.String("tenantID", tenantIDs[0]),
 			zap.String("rerankCompositeName", rerankCompositeName))

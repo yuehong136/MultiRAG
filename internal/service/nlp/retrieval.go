@@ -26,7 +26,7 @@ import (
 
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
-	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 	"multirag/internal/tokenizer"
 
 	"go.uber.org/zap"
@@ -54,8 +54,8 @@ type RetrievalRequest struct {
 	SimilarityThreshold    *float64
 	VectorSimilarityWeight *float64
 	RankFeature            *map[string]float64
-	RerankModel            RerankModel
-	EmbeddingModel         entity.EmbeddingModel
+	RerankModel            *models.RerankModel
+	EmbeddingModel         *models.EmbeddingModel
 	Aggs                   *bool
 	Highlight              *bool
 }
@@ -384,7 +384,7 @@ type RetrievalSearchRequest struct {
 	SimilarityThreshold float64
 	RankFeature         map[string]float64
 	Filter              map[string]interface{}
-	EmbeddingModel      interface{}
+	EmbeddingModel      *models.EmbeddingModel
 }
 
 type RetrievalSearchResult struct {
@@ -492,7 +492,7 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 			if similarityForGetVector <= 0 {
 				similarityForGetVector = 0.1
 			}
-			matchDense, err := s.GetVector(req.Question, req.EmbeddingModel.(entity.EmbeddingModel), topk, similarityForGetVector)
+			matchDense, err := s.GetVector(req.Question, req.EmbeddingModel, topk, similarityForGetVector)
 			if err != nil {
 				return nil, fmt.Errorf("GetVector failed: %w", err)
 			}
@@ -599,7 +599,7 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 }
 
 // GetVector computes query vector and returns MatchDenseExpr for hybrid search
-func (s *RetrievalService) GetVector(txt string, embModel entity.EmbeddingModel, topk int, similarity float64) (*types.MatchDenseExpr, error) {
+func (s *RetrievalService) GetVector(txt string, embModel *models.EmbeddingModel, topk int, similarity float64) (*types.MatchDenseExpr, error) {
 	vector, err := embModel.EncodeQuery(txt)
 	if err != nil {
 		return nil, err

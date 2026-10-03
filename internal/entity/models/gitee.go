@@ -382,7 +382,7 @@ func (m *GiteeModel) ChatStreamlyWithSender(modelName, message *string, apiConfi
 
 // EncodeToEmbedding encodes a list of texts into embeddings
 func (m *GiteeModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return nil, fmt.Errorf("%s, no such method", m.Name())
+	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig)
 }
 
 func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
@@ -537,4 +537,17 @@ func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
 	}
 
 	return nil
+}
+
+// Encode uses the provider's embedding endpoint with the supplied credentials.
+func (m *GiteeModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
+	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
+}
+
+func (m *GiteeModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
+	return encodeQuery(m, modelName, query, apiConfig)
+}
+
+func (m *GiteeModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
+	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
 }

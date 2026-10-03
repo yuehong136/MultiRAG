@@ -200,7 +200,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 	router.POST(base+"/:provider_name/instances", h.CreateProviderInstance)
 	router.GET(base+"/:provider_name/instances/:instance_name/connection", h.CheckProviderConnection)
 	router.GET(base+"/:provider_name/instances/:instance_name/models", h.ListInstanceModels)
-	router.PATCH(base+"/:provider_name/instances/:instance_name/models/:model_name", h.EnableOrDisableModel)
+	router.PATCH(base+"/:provider_name/instances/:instance_name/models/*model_name", h.EnableOrDisableModel)
 	router.POST(base+"/:provider_name/instances/:instance_name/models", h.ChatToModel)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -317,6 +317,16 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 	if code == common.CodeSuccess || !errors.Is(err, callbackFailure) {
 		t.Fatalf("service lost callback error: %v %v", code, err)
 	}
+	// A configured slash-valued model must persist under its complete name.
+	google.Models = append(google.Models, &entity.Model{Name: "models/slash-fixture", ModelTypes: []string{"chat"}})
+	_, body = request("PATCH", path+"/models/models/slash-fixture", map[string]any{"status": "disabled"})
+	assertSuccess(body)
+	var slashCount int
+	if err := readback.QueryRow(`SELECT count(*) FROM tenant_model WHERE model_name='models/slash-fixture' AND status='disabled'`).Scan(&slashCount); err != nil || slashCount != 1 {
+		t.Fatal("slash model independent readback failed")
+	}
+	_, body = request("PATCH", path+"/models/models/slash-fixture", map[string]any{"status": "enabled"})
+	assertSuccess(body)
 	_, body = request("PATCH", path+"/models/gemini-2.5-flash", map[string]any{"status": "disabled"})
 	assertSuccess(body)
 	var count int

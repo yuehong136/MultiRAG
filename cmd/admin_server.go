@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -136,7 +137,7 @@ func main() {
 	go func() {
 		logger.Info(fmt.Sprintf("Admin Go Version: %s", utility.GetMultiRAGVersion()))
 		logger.Info(fmt.Sprintf("Starting MultiRAG admin server on port: %d", cfg.Admin.Port))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatal("Failed to start server", zap.Error(err))
 		}
 	}()

@@ -1,0 +1,244 @@
+// Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+package models
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// VolcEngine implements Ark text chat, reasoning streams and model discovery.
+type VolcEngine struct {
+	*DummyModel
+	httpClient *http.Client
+}
+
+func NewVolcEngine(baseURL map[string]string, suffix URLSuffix) *VolcEngine {
+	return &VolcEngine{DummyModel: NewDummyModel(baseURL, suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
+}
+func (v *VolcEngine) Name() string { return "volcengine" }
+
+func volcEngineBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
+	body, err := aliyunChatBody(name, messages, config, stream)
+	if err != nil {
+		return nil, err
+	}
+	delete(body, "enable_thinking")
+	if config == nil || config.Thinking == nil {
+		return body, nil
+	}
+	mode := "disabled"
+	if *config.Thinking {
+		effort := "medium"
+		if config.Effort != nil {
+			effort = *config.Effort
+		}
+		switch effort {
+		case "none", "minimal":
+			effort = "minimal"
+		case "auto", "default", "":
+			effort, mode = "medium", "enabled"
+		case "low", "medium", "high", "xhigh":
+			mode = "enabled"
+		default:
+			return nil, fmt.Errorf("volcengine: invalid effort level")
+		}
+		body["reasoning_effort"] = effort
+	}
+	body["thinking"] = map[string]string{"type": mode}
+	return body, nil
+}
+
+func (v *VolcEngine) request(method, suffix string, config *APIConfig, body interface{}) (*http.Response, error) {
+	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
+		return nil, fmt.Errorf("volcengine: API key is required")
+	}
+	if suffix == "" {
+		return nil, fmt.Errorf("volcengine: endpoint suffix is missing")
+	}
+	baseURL, err := resolveModelBaseURL(v.BaseURL, config.Region)
+	if err != nil {
+		return nil, err
+	}
+	key := strings.TrimSpace(*config.APIKey)
+	if strings.HasPrefix(key, "{") {
+		var stored struct {
+			ArkAPIKey string `json:"ark_api_key"`
+		}
+		if err := json.Unmarshal([]byte(key), &stored); err != nil || strings.TrimSpace(stored.ArkAPIKey) == "" {
+			return nil, fmt.Errorf("volcengine: invalid stored API key")
+		}
+		key = stored.ArkAPIKey
+	}
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(requestContext(config), method, joinModelURL(baseURL, suffix), reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := v.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("volcengine request: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("volcengine request failed (HTTP %d)", resp.StatusCode)
+	}
+	return resp, nil
+}
+
+func (v *VolcEngine) chat(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	body, err := volcEngineBody(name, messages, config, false)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := v.request(http.MethodPost, v.URLSuffix.Chat, apiConfig, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result aliyunChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("volcengine: decode response: %w", err)
+	}
+	if len(result.Error) != 0 && string(result.Error) != "null" {
+		return nil, fmt.Errorf("volcengine: provider returned an error")
+	}
+	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || *result.Choices[0].Message.Content == "" {
+		return nil, fmt.Errorf("volcengine: no text answer")
+	}
+	message := result.Choices[0].Message
+	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
+}
+func (v *VolcEngine) Chat(name, message *string, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	if name == nil || message == nil {
+		return nil, fmt.Errorf("volcengine: model name and message are required")
+	}
+	return v.chat(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config)
+}
+func (v *VolcEngine) ChatWithMessages(name string, key *string, messages []Message, config *ChatConfig) (string, error) {
+	result, err := v.chat(name, messages, &APIConfig{APIKey: key}, config)
+	if err != nil {
+		return "", err
+	}
+	return *result.Answer, nil
+}
+
+func (v *VolcEngine) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	if name == nil || message == nil || sender == nil {
+		return fmt.Errorf("volcengine: model name, message and sender are required")
+	}
+	body, err := volcEngineBody(*name, []Message{{Role: "user", Content: *message}}, config, true)
+	if err != nil {
+		return err
+	}
+	resp, err := v.request(http.MethodPost, v.URLSuffix.Chat, apiConfig, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	receivedAnswer := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
+		if data == "[DONE]" {
+			if !receivedAnswer {
+				return fmt.Errorf("volcengine: stream returned no text answer")
+			}
+			return sender(&data, nil)
+		}
+		var event struct {
+			Choices []struct {
+				Delta struct {
+					Content   *string `json:"content"`
+					Reasoning *string `json:"reasoning_content"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Error json.RawMessage `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fmt.Errorf("volcengine: decode stream: %w", err)
+		}
+		if len(event.Error) != 0 && string(event.Error) != "null" {
+			return fmt.Errorf("volcengine: provider stream error")
+		}
+		if len(event.Choices) == 0 {
+			continue
+		}
+		delta := event.Choices[0].Delta
+		if delta.Reasoning != nil && *delta.Reasoning != "" {
+			if err := sender(nil, delta.Reasoning); err != nil {
+				return err
+			}
+		}
+		if delta.Content != nil && *delta.Content != "" {
+			if err := sender(delta.Content, nil); err != nil {
+				return err
+			}
+			receivedAnswer = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return io.ErrUnexpectedEOF
+}
+func (v *VolcEngine) ListModels(config *APIConfig) ([]string, error) {
+	resp, err := v.request(http.MethodGet, v.URLSuffix.Models, config, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if len(result.Error) != 0 && string(result.Error) != "null" {
+		return nil, fmt.Errorf("volcengine: model list error")
+	}
+	names := make([]string, 0, len(result.Data))
+	for _, item := range result.Data {
+		if item.ID != "" {
+			names = append(names, item.ID)
+		}
+	}
+	return names, nil
+}
+func (v *VolcEngine) CheckConnection(config *APIConfig) error {
+	resp, err := v.request(http.MethodGet, v.URLSuffix.Files, config, nil)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}

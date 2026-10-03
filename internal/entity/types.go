@@ -55,7 +55,7 @@ type ChatModel interface {
 // RerankModel interface for rerank models
 type RerankModel interface {
 	// Similarity calculates similarity between query and texts
-	Similarity(query string, texts []string) ([]float64, error)
+	Rerank(query string, texts []string) ([]float64, error)
 }
 
 // ModelConfig represents configuration for a model

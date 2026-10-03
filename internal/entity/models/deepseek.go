@@ -385,7 +385,11 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 }
 
 func (m *DeepSeekModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return nil, fmt.Errorf("not implemented")
+	suffix := m.URLSuffix.Embedding
+	if suffix == "" {
+		suffix = "embeddings"
+	}
+	return encodeHTTP(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig)
 }
 
 func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
@@ -446,4 +450,17 @@ func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, er
 		return "", fmt.Errorf("no base URL configured for region %q", regionName)
 	}
 	return baseURL, nil
+}
+
+// Encode uses the provider's embedding endpoint with the supplied credentials.
+func (m *DeepSeekModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
+	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
+}
+
+func (m *DeepSeekModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
+	return encodeQuery(m, modelName, query, apiConfig)
+}
+
+func (m *DeepSeekModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
+	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
 }

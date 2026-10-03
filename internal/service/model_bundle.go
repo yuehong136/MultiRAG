@@ -17,7 +17,6 @@
 package service
 
 import (
-	"context"
 	"fmt"
 
 	"multirag/internal/entity"
@@ -46,22 +45,22 @@ func NewModelBundle(tenantID string, modelType entity.ModelType, modelName ...st
 	}
 
 	// Get model instance based on type
-	provider := NewModelProvider()
+	provider := NewModelProviderService()
 	switch modelType {
 	case entity.ModelTypeEmbedding:
-		embeddingModel, err := provider.GetEmbeddingModel(context.Background(), tenantID, bundle.modelName)
+		embeddingModel, err := provider.GetEmbeddingModel(tenantID, bundle.modelName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get embedding model: %w", err)
 		}
 		bundle.model = embeddingModel
 	case entity.ModelTypeChat:
-		chatModel, err := provider.GetChatModel(context.Background(), tenantID, bundle.modelName)
+		chatModel, err := provider.GetChatModel(tenantID, bundle.modelName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get chat model: %w", err)
 		}
 		bundle.model = chatModel
 	case entity.ModelTypeRerank:
-		rerankModel, err := provider.GetRerankModel(context.Background(), tenantID, bundle.modelName)
+		rerankModel, err := provider.GetRerankModel(tenantID, bundle.modelName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model: %w", err)
 		}
@@ -145,8 +144,8 @@ func (b *ModelBundle) Chat(system string, history []map[string]string, genConf m
 	return response, tokenCount, nil
 }
 
-// Similarity calculates similarity between query and texts
-func (b *ModelBundle) Similarity(query string, texts []string) ([]float64, int64, error) {
+// Rerank calculates similarity between query and texts
+func (b *ModelBundle) Rerank(query string, texts []string) ([]float64, int64, error) {
 	if b.modelType != entity.ModelTypeRerank {
 		return nil, 0, fmt.Errorf("model type %s does not support similarity", b.modelType)
 	}
@@ -156,7 +155,7 @@ func (b *ModelBundle) Similarity(query string, texts []string) ([]float64, int64
 		return nil, 0, fmt.Errorf("model is not a rerank model")
 	}
 
-	similarities, err := rerankModel.Similarity(query, texts)
+	similarities, err := rerankModel.Rerank(query, texts)
 	if err != nil {
 		return nil, 0, err
 	}
