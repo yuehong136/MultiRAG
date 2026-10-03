@@ -1,4 +1,4 @@
-# 聊天模型与工具历史
+# 模型入口与调用契约
 
 正式模型注册由 [`core/llm/__init__.py`](./__init__.py) 扫描
 [`chat.py`](./chat.py) 完成。DeepSeek 使用 `LiteLLMBase` 的异步入口；
@@ -35,4 +35,29 @@ MCP 调用继续使用可信 binding 的原始工具名与既有 session、超�
 
 ```sh
 uv run --no-sync pytest tests/unit/test_agent_tool_result_contract.py tests/unit/test_llm_tool_reasoning_history.py tests/unit/test_llm_stream_reasoning_content.py tests/unit/test_mcp_tool_binding.py -q
+```
+
+## Qwen 文本 rerank
+
+`RerankModel["Tongyi-Qianwen"]` 由注册器扫描 [`rerank.py`](./rerank.py) 构造，
+租户模型服务与模型验证入口均使用该工厂；`rerank_model/qwen_rerank.py` 的拆分副本
+没有接入当前注册或生产调用链。排查时以注册类为准。
+
+模型名以 `qwen3-rerank` 开头时，调用 `dashscope.TextReRank.call` 省略
+`return_documents`；其他模型传 `False`。SDK 1.25.11 对省略参数不会生成对应请求字段。
+这与[官方参数表](https://www.alibabacloud.com/help/zh/model-studio/text-rerank-api)
+列出的支持范围一致：`return_documents` 支持 `gte-rerank-v2`、`qwen3-vl-rerank`，
+后者的多模态接口不属于当前文本接口的验收范围。
+
+构造器保留 `key`、`model_name`、`base_url` 与扩展关键字的兼容入口；Qwen 原生 SDK
+沿用自己的端点配置。显式模型名原样传递，默认及 `None` 仍回退到 `gte-rerank`。
+成功响应按结果 `index` 写回与输入等长的浮点数组，未返回项保留零，返回值仍为
+`(scores, used_tokens)`，供 `LLMBundle.similarity` 与检索混合排序消费。
+
+受控回归覆盖注册类、真实 SDK 参数构造及响应转换、乱序/部分结果映射、token 返回和
+含 `text` 的失败响应传播；网络边界使用替身，没有证明真实云端可用性。
+当前默认模型可用性、请求超时、没有 `text` 的错误响应及畸形成功结果处理仍需分别评估。
+
+```sh
+uv run --no-sync pytest tests/unit/test_qwen_rerank_contract.py -q
 ```
