@@ -2083,3 +2083,36 @@ help 与脚本语法检查均 exit=0，单 head `e1f3a5c7b9d0`；完整上游 di
 实际 OpenAI SDK 与 LiteLLM 对本机 HTTP/SSE fixture 的 12 组合、24 请求通过，
 逐次检查下一轮 wire assistant reasoning、多工具结果与答案；fixture listener 已关闭。
 这是本机协议验证，未调用远程模型或真实外部 MCP，也不代表完整 Agent UI/生产端到端验收。
+
+## 7c25870923988a58cbe1fc99377bbcbbbfa2b51e · Go 租户模型 Extra 持久化
+
+2026-10-03 作为本轮 Go 第一项，按完整双文件 diff 核对冻结的
+`519e7d98a5651564d4e35d6648f006cba4baaf4f`；预期上游 remote 已确认，未 fetch。
+已有 Go owner 确认无重叠；后续模型系列命名工作不修改本项实体。
+
+[TenantModel](../../internal/entity/tenant_model.go) 补齐字符串 `Extra`，映射数据库
+`extra` 和 JSON `extra`，长度 1024、默认 `{}`，与目标提交该文件逐字节一致。
+[TenantModelInstance](../../internal/entity/tenant_model_instance.go) 已有长度 512、默认 `{}`
+的同等字段，无需修改；当前实例创建把 region 编码为 JSON 字符串，查询和模型驱动
+解码 region，空字符串或 `{}` 回退到 `default`，非法 JSON 仍报错。
+模型状态写入继续经现有 DAO，由 GORM 填入 `{}`；现有按 ID、名称及实例查询直接
+映射 `Extra`。本项不新增模型 Extra 的 HTTP 编辑接口或业务解释逻辑。
+
+保留 `InitDB` 对两表的 `autoMigrateSafely`、PostgreSQL pooled search_path 与 MySQL
+连接适配、字符串 `ModelType` 和既有实例索引。后续 `3bc5ed282` 的索引调整及
+`330033d7c` 的整型模型类型属于独立行为，本项不提前移植；冻结快照中 Extra 未回退。
+
+[独立 DAO 回归](../../internal/dao/tenant_model_extra_test.go) 通过
+`MULTIRAG_GO_TENANT_MODEL_DSN` 指向新建且为空的 `multirag_go_tenant_model_*`
+PostgreSQL scratch 库，沿用 `usr_ai,public`。真实验证已有模型表加列后原行、状态和
+类型保留，物理长度及默认值、原生 SQL 和 DAO 的省略字段默认、显式 JSON 字符串
+经 ID/名称/列表读回和 JSON 序列化；另用原生 SQL 读回，库在结束后删除并确认不存在。
+
+验证副本固定为已提交 `45ebc3e1` 加本项两个 Go 文件，避开其他 owner 的未提交输入。
+Go 1.25.14 下 DAO/实体及现有 region 专项全部通过，无 skip；`gofmt`、
+`go build ./internal/...`、`go vet ./internal/...` 和三个独立 main 构建均通过。
+固定副本 `make integration` exit=0，`REQUIRE_SERVICES=1` 下 700 passed、无 skip。
+初次因副本缺少已忽略的本机 DeepDOC 权重缓存，在收集阶段中断且没有运行测试；
+补齐真实缓存引用后完整复跑通过，未修改业务代码或削弱断言。
+未修改 Python 可执行行为，未运行 `make verify`；本项没有路由/启动入口改动，
+未重复 HTTP smoke。MySQL 未做真实数据库验收，未运行生产库迁移或真实模型调用。
