@@ -1056,7 +1056,7 @@ binary 成功响应为完整原始 PNG、JPEG、GIF、WebP 或 BMP 字节，`Con
 
 旧 `GET /v1/document/thumbnails` 与旧 binary
 `GET /v1/document/image/{image_id}` 均已移除，返回全局 routing404；OpenAPI 不再包含旧路径。
-404 JSON 使用整数 `code=404`、`data:null`、`error="Not Found"`，`message` 是实际请求路径，
+404 JSON 使用整数 `code=404`、`data:null`、`error="Not Found"`，`message` 为 `Not Found: <实际请求路径>`，
 无 `Location`；HEAD 返回空 body。它沿用全局路由错误格式，不采用新图片接口的局部错误合同。
 Agent Hub、Web 图片核心以及 Agent history 认证保存/reload 图片链均已完成真实验收；
 列表与引用中的 canonical URL 继续使用上述可信接口。
