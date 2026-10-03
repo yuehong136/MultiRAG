@@ -1774,6 +1774,11 @@ def test_retired_document_run_http_matrix_has_no_private_execution(ingest_api: d
             db.add(User(id=admin_id, email=f"{admin_id}@upload.test", nickname="Oldrun admin scratch", password="unused", access_token="active"))
             db.add(UserTenant(id=membership_id, user_id=admin_id, tenant_id=env["owners"][0], role="admin", status="1", invited_by=env["owners"][0]))
             db.commit()
+            admin_dataset = service.writable_kb(db, env["kb"], admin_id)
+            assert admin_dataset is not None and admin_dataset.tenant_id == env["owners"][0]
+            assert db.scalar(sa.select(Document.kb_id).where(Document.id == env["b"])) == admin_dataset.id
+            assert service.writable_kb(db, env["other_kb"], admin_id) is None
+            record["admin_writable_target"] = {"user_id": admin_id, "membership_id": membership_id, "document_id": env["b"], "dataset_id": admin_dataset.id, "tenant_id": admin_dataset.tenant_id}
         child = completed(env, env["a"])
         completed(env, env["b"])
         mother = {**source(env, env["a"], text="Preserved hidden mother"), "available_int": 0}
@@ -1882,7 +1887,7 @@ def test_retired_document_run_http_matrix_has_no_private_execution(ingest_api: d
             }
             for principal, credential in credentials.items():
                 cases: list[tuple[str, dict[str, Any]]] = [
-                    ("valid", {"json": {"doc_ids": [env["foreign"] if principal in {"admin_jwt", "valid_api_key"} else env["b"]], "run": 1}}),
+                    ("valid", {"json": {"doc_ids": [env["foreign"] if principal == "valid_api_key" else env["b"]], "run": 1}}),
                     ("foreign_document", {"json": {"doc_ids": [env["foreign"]], "run": 1}}),
                     ("empty", {}),
                     ("bad_body", {"json": {"doc_ids": [], "run": True, "delete": "true"}}),
