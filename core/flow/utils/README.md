@@ -190,6 +190,8 @@ parsed = await parse_file(
 
 ### 使用 PaddleOCR 解析
 
+四种算法、模型配置及同步 / 云 Job 协议见 [PaddleOCR 配置](../../../deepdoc/parser/PADDLEOCR.md)。
+
 ```python
 from core.flow.utils import parse_file
 

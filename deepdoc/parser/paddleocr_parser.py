@@ -13,20 +13,24 @@
 #  limitations under the License.
 #
 import base64
+import json
 import logging
 import os
 import re
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from io import BytesIO
 from os import PathLike
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, get_type_hints
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import numpy as np
 import pdfplumber
 import requests
 from PIL import Image
+from pydantic import TypeAdapter, ValidationError
 
 from common.constants import MAXIMUM_PAGE_NUMBER
 
@@ -40,7 +44,8 @@ except Exception:
 
 from deepdoc.parser.utils import extract_pdf_outlines
 
-AlgorithmType = Literal["PaddleOCR-VL"]
+AlgorithmType = Literal["PaddleOCR-VL", "PP-OCRv5", "PP-StructureV3", "PaddleOCR-VL-1.5"]
+SUPPORTED_PADDLEOCR_ALGORITHMS: tuple[AlgorithmType, ...] = ("PaddleOCR-VL", "PP-OCRv5", "PP-StructureV3", "PaddleOCR-VL-1.5")
 SectionTuple = tuple[str, ...]
 TableTuple = tuple[str, ...]
 ParseResult = tuple[list[SectionTuple], list[TableTuple]]
@@ -86,7 +91,7 @@ class PaddleOCRVLConfig:
     use_ocr_for_image_block: bool | None = None
     layout_threshold: float | dict | None = None
     layout_nms: bool | None = None
-    layout_unclip_ratio: float | tuple[float, float] | dict | None = None
+    layout_unclip_ratio: float | tuple[float, float] | list[float] | dict | None = None
     layout_merge_bboxes_mode: str | dict | None = None
     layout_shape_mode: str | None = None
     prompt_label: str | None = None
@@ -106,6 +111,79 @@ class PaddleOCRVLConfig:
 
 
 @dataclass
+class PaddleOCRTextConfig:
+    """Parameters accepted by the general OCR /ocr service."""
+
+    use_doc_orientation_classify: bool | None = False
+    use_doc_unwarping: bool | None = False
+    use_textline_orientation: bool | None = None
+    text_det_limit_side_len: int | None = None
+    text_det_limit_type: str | None = None
+    text_det_thresh: float | None = None
+    text_det_box_thresh: float | None = None
+    text_det_unclip_ratio: float | None = None
+    text_rec_score_thresh: float | None = None
+
+
+@dataclass
+class PaddleOCRStructureConfig(PaddleOCRTextConfig):
+    """Parameters accepted by the PP-StructureV3 layout service."""
+
+    use_seal_recognition: bool | None = None
+    use_table_recognition: bool | None = None
+    use_formula_recognition: bool | None = None
+    use_chart_recognition: bool | None = None
+    use_region_detection: bool | None = None
+    format_block_content: bool | None = True
+    layout_threshold: float | dict | None = None
+    layout_nms: bool | None = None
+    layout_unclip_ratio: float | tuple[float, float] | list[float] | dict | None = None
+    layout_merge_bboxes_mode: str | dict | None = None
+    seal_det_limit_side_len: int | None = None
+    seal_det_limit_type: str | None = None
+    seal_det_thresh: float | None = None
+    seal_det_box_thresh: float | None = None
+    seal_det_unclip_ratio: float | None = None
+    seal_rec_score_thresh: float | None = None
+    use_wired_table_cells_trans_to_html: bool | None = None
+    use_wireless_table_cells_trans_to_html: bool | None = None
+    use_table_orientation_classify: bool | None = None
+    use_ocr_results_with_table_cells: bool | None = None
+    use_e2e_wired_table_rec_model: bool | None = None
+    use_e2e_wireless_table_rec_model: bool | None = None
+    markdown_ignore_labels: list[str] | None = None
+
+
+def _algorithm_config_type(algorithm: str) -> type[PaddleOCRVLConfig] | type[PaddleOCRTextConfig]:
+    if algorithm not in SUPPORTED_PADDLEOCR_ALGORITHMS:
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
+    if algorithm == "PP-OCRv5":
+        return PaddleOCRTextConfig
+    if algorithm == "PP-StructureV3":
+        return PaddleOCRStructureConfig
+    return PaddleOCRVLConfig
+
+
+def _algorithm_defaults(algorithm: str) -> dict[str, Any]:
+    return asdict(_algorithm_config_type(algorithm)())
+
+
+def _api_field_name(name: str) -> str:
+    first, *rest = name.split("_")
+    return first + "".join(part.capitalize() for part in rest)
+
+
+def _uses_job_api(api_url: str) -> bool:
+    return urlsplit(api_url).path.rstrip("/").endswith("/api/v2/ocr/jobs")
+
+
+def _validated_inference_result(response_data: Any) -> dict[str, Any]:
+    if not isinstance(response_data, dict) or type(response_data.get("errorCode")) is not int or response_data.get("errorCode") != 0 or not isinstance(response_data.get("result"), dict):
+        raise RuntimeError("[PaddleOCR] invalid response format")
+    return response_data["result"]
+
+
+@dataclass
 class PaddleOCRConfig:
     """Main configuration for PaddleOCR parser."""
 
@@ -119,26 +197,49 @@ class PaddleOCRConfig:
     additional_params: dict[str, Any] = field(default_factory=dict)
     algorithm_config: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        defaults = _algorithm_defaults(self.algorithm)
+        if not isinstance(self.request_timeout, int) or isinstance(self.request_timeout, bool) or self.request_timeout <= 0:
+            raise ValueError("PaddleOCR request_timeout must be a positive integer")
+        if not isinstance(self.algorithm_config, dict) or not isinstance(self.additional_params, dict):
+            raise ValueError("PaddleOCR algorithm_config and additional_params must be objects")
+        unknown = self.algorithm_config.keys() - defaults.keys()
+        if unknown:
+            raise ValueError(f"Unsupported {self.algorithm} configuration fields: {', '.join(sorted(unknown))}")
+        hints = get_type_hints(_algorithm_config_type(self.algorithm))
+        for name, value in self.algorithm_config.items():
+            try:
+                TypeAdapter(hints[name]).validate_python(value, strict=True)
+            except ValidationError as exc:
+                raise ValueError(f"PaddleOCR {name} has an invalid type") from exc
+        if not isinstance(self.api_url, str) or (self.access_token is not None and not isinstance(self.access_token, str)):
+            raise ValueError("PaddleOCR api_url and access_token must be strings")
+        if self.api_url:
+            parsed_url = urlsplit(self.api_url)
+            if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+                raise ValueError("PaddleOCR api_url must be an HTTP or HTTPS URL")
+            if _uses_job_api(self.api_url) and not (self.access_token and self.access_token.strip()):
+                raise ValueError("PaddleOCR Job API requires an access token")
+        if any(not isinstance(value, bool) for value in (self.prettify_markdown, self.show_formula_number, self.visualize)):
+            raise ValueError("PaddleOCR Markdown and visualize settings must be booleans")
+        self.algorithm_config = defaults | {name: value for name, value in self.algorithm_config.items() if value is not None}
+
     @classmethod
     def from_dict(cls, config: dict[str, Any] | None) -> "PaddleOCRConfig":
         """Create configuration from dictionary."""
-        if not config:
-            return cls()
-
-        cfg = config.copy()
+        cfg = (config or {}).copy()
         algorithm = cfg.get("algorithm", "PaddleOCR-VL")
 
         # Validate algorithm
-        if algorithm not in ("PaddleOCR-VL",):
-            raise ValueError(f"Unsupported algorithm: {algorithm}")
+        _algorithm_defaults(algorithm)
 
         # Extract algorithm-specific configuration
         algorithm_config: dict[str, Any] = {}
-        if algorithm == "PaddleOCR-VL":
-            algorithm_config = asdict(PaddleOCRVLConfig())
         algorithm_config_user = cfg.get("algorithm_config")
-        if isinstance(algorithm_config_user, dict):
-            algorithm_config.update({k: v for k, v in algorithm_config_user.items() if v is not None})
+        if algorithm_config_user is not None:
+            if not isinstance(algorithm_config_user, dict):
+                raise ValueError("PaddleOCR algorithm_config must be an object")
+            algorithm_config.update(algorithm_config_user)
 
         # Remove processed keys
         cfg.pop("algorithm_config", None)
@@ -200,7 +301,10 @@ class PaddleOCRParser(RAGFlowPdfParser):
             "merge_tables": "mergeTables",
             "relevel_titles": "relevelTitles",
         },
+        "PP-OCRv5": {f.name: _api_field_name(f.name) for f in fields(PaddleOCRTextConfig)},
+        "PP-StructureV3": {f.name: _api_field_name(f.name) for f in fields(PaddleOCRStructureConfig)},
     }
+    _ALGORITHM_FIELD_MAPPINGS["PaddleOCR-VL-1.5"] = _ALGORITHM_FIELD_MAPPINGS["PaddleOCR-VL"]
 
     def __init__(
         self,
@@ -209,15 +313,24 @@ class PaddleOCRParser(RAGFlowPdfParser):
         algorithm: AlgorithmType = "PaddleOCR-VL",
         *,
         request_timeout: int = 600,
-    ):
+        algorithm_config: dict[str, Any] | None = None,
+    ) -> None:
         """Initialize PaddleOCR parser."""
-        super().__init__()
+        # Remote OCR does not use DeepDOC's local OCR/layout/table models.
+        config = PaddleOCRConfig.from_kwargs(
+            api_url=api_url if api_url is not None else os.getenv("PADDLEOCR_API_URL", ""),
+            access_token=access_token if access_token is not None else os.getenv("PADDLEOCR_ACCESS_TOKEN"),
+            algorithm=algorithm,
+            request_timeout=request_timeout,
+            algorithm_config=algorithm_config,
+        )
 
         self.outlines = []
-        self.api_url = api_url.rstrip("/") if api_url else os.getenv("PADDLEOCR_API_URL", "")
-        self.access_token = access_token or os.getenv("PADDLEOCR_ACCESS_TOKEN")
+        self.api_url = config.api_url.rstrip("/")
+        self.access_token = config.access_token
         self.algorithm = algorithm
         self.request_timeout = request_timeout
+        self.algorithm_config = config.algorithm_config
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # Force PDF file type
@@ -233,7 +346,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
         if not self.api_url:
             return False, "[PaddleOCR] API URL not configured"
 
-        # TODO [@Bobholamovic]: Check URL availability and token validity
+        # This checks configuration only; inference is verified when parsing.
 
         return True, ""
 
@@ -272,8 +385,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
             config_dict["visualize"] = visualize
         if additional_params is not None:
             config_dict["additional_params"] = additional_params
-        if algorithm_config is not None:
-            config_dict["algorithm_config"] = algorithm_config
+        config_dict["algorithm_config"] = algorithm_config if algorithm_config is not None else (self.algorithm_config if config_dict["algorithm"] == self.algorithm else {})
 
         cfg = PaddleOCRConfig.from_dict(config_dict)
 
@@ -331,6 +443,8 @@ class PaddleOCRParser(RAGFlowPdfParser):
             ("show_formula_number", config.show_formula_number),
             ("visualize", config.visualize),
         ]:
+            if config.algorithm == "PP-OCRv5" and param_key != "visualize":
+                continue
             if param_value is not None:
                 api_param = self._COMMON_FIELD_MAPPING[param_key]
                 payload[api_param] = param_value
@@ -350,6 +464,8 @@ class PaddleOCRParser(RAGFlowPdfParser):
 
     def _send_request(self, data: bytes, config: PaddleOCRConfig, callback: Callable[[float, str], None] | None) -> dict[str, Any]:
         """Send request to PaddleOCR API and parse response."""
+        if _uses_job_api(config.api_url):
+            return self._send_job_request(data, config, callback)
         # Build payload
         payload = self._build_payload(data, self.file_type, config)
 
@@ -364,7 +480,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
 
         # Send request
         try:
-            resp = requests.post(config.api_url, json=payload, headers=headers, timeout=self.request_timeout)
+            resp = requests.post(config.api_url, json=payload, headers=headers, timeout=config.request_timeout)
             resp.raise_for_status()
         except Exception as exc:
             if callback:
@@ -381,46 +497,183 @@ class PaddleOCRParser(RAGFlowPdfParser):
             callback(0.8, "[PaddleOCR] response received")
 
         # Validate response format
-        if response_data.get("errorCode") != 0 or not isinstance(response_data.get("result"), dict):
+        try:
+            return _validated_inference_result(response_data)
+        except RuntimeError:
             if callback:
                 callback(-1, "[PaddleOCR] invalid response format")
-            raise RuntimeError("[PaddleOCR] invalid response format")
+            raise
 
-        return response_data["result"]
+    @staticmethod
+    def _job_data(response: requests.Response, phase: str) -> dict[str, Any]:
+        if response.status_code != 200:
+            try:
+                error = response.json()
+            except ValueError:
+                error = None
+            code = error.get("code") if isinstance(error, dict) else None
+            detail = f" (API code {code})" if type(code) is int and code != 0 else ""
+            raise RuntimeError(f"[PaddleOCR] {phase} failed: HTTP {response.status_code}{detail}")
+        try:
+            envelope = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"[PaddleOCR] {phase} response is not JSON") from exc
+        if not isinstance(envelope, dict) or type(envelope.get("code")) is not int or not isinstance(envelope.get("data"), dict):
+            raise RuntimeError(f"[PaddleOCR] invalid {phase} response")
+        if envelope["code"] != 0:
+            raise RuntimeError(f"[PaddleOCR] {phase} failed: API code {envelope['code']}")
+        return envelope["data"]
+
+    @staticmethod
+    def _merge_job_results(jsonl: str, algorithm: AlgorithmType) -> dict[str, Any]:
+        result_key = "ocrResults" if algorithm == "PP-OCRv5" else "layoutParsingResults"
+        pages: list[dict[str, Any]] = []
+        records = 0
+        for line in jsonl.splitlines():
+            if not line.strip():
+                continue
+            try:
+                result = _validated_inference_result(json.loads(line))
+            except ValueError as exc:
+                raise RuntimeError("[PaddleOCR] result is not valid JSONL") from exc
+            batch = result.get(result_key)
+            if not isinstance(batch, list):
+                raise RuntimeError(f"[PaddleOCR] job result missing {result_key} array")
+            pages.extend(batch)
+            records += 1
+        if not records:
+            raise RuntimeError("[PaddleOCR] empty job result JSONL")
+        return {result_key: pages}
+
+    def _send_job_request(self, data: bytes, config: PaddleOCRConfig, callback: Callable[[float, str], None] | None) -> dict[str, Any]:
+        deadline = time.monotonic() + config.request_timeout
+
+        def remaining() -> float:
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise RuntimeError(f"[PaddleOCR] job timed out after {config.request_timeout}s")
+            return seconds
+
+        payload = self._build_payload(b"", self.file_type, config)
+        payload.pop("file")
+        payload.pop("fileType")
+        headers = {"Authorization": f"Bearer {config.access_token}", "Client-Platform": "ragflow"}
+        if callback:
+            callback(0.1, "[PaddleOCR] submitting job")
+        try:
+            response = requests.post(
+                config.api_url,
+                headers=headers,
+                data={"model": config.algorithm, "optionalPayload": json.dumps(payload)},
+                files={"file": ("document.pdf", data, "application/pdf")},
+                timeout=remaining(),
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"[PaddleOCR] job submission request failed: {type(exc).__name__}") from None
+        job_id = self._job_data(response, "submit").get("jobId")
+        if not isinstance(job_id, str) or not job_id:
+            raise RuntimeError("[PaddleOCR] submit response missing jobId")
+        parsed_url = urlsplit(config.api_url)
+        poll_url = urlunsplit(parsed_url._replace(path=parsed_url.path.rstrip("/") + "/" + quote(job_id, safe="")))
+        if callback:
+            callback(0.2, "[PaddleOCR] job submitted")
+        interval = 3.0
+        while True:
+            try:
+                response = requests.get(poll_url, headers=headers, timeout=remaining())
+            except requests.RequestException as exc:
+                raise RuntimeError(f"[PaddleOCR] job status request failed: {type(exc).__name__}") from None
+            status = self._job_data(response, "poll")
+            state = status.get("state")
+            if state == "done":
+                break
+            if state == "failed":
+                raise RuntimeError("[PaddleOCR] inference job failed")
+            if not isinstance(state, str) or state not in {"pending", "running"}:
+                raise RuntimeError("[PaddleOCR] invalid job state")
+            time.sleep(min(interval, remaining()))
+            interval = min(interval * 1.5, 15.0)
+        result_urls = status.get("resultUrl")
+        result_url = status.get("resultJsonUrl") or (result_urls.get("jsonUrl") if isinstance(result_urls, dict) else None)
+        if not isinstance(result_url, str) or urlsplit(result_url).scheme not in {"http", "https"} or not urlsplit(result_url).hostname:
+            raise RuntimeError("[PaddleOCR] done job missing valid result URL")
+        if callback:
+            callback(0.7, "[PaddleOCR] downloading job result")
+        try:
+            # Result links may point to object storage; never forward the API token.
+            response = requests.get(result_url, timeout=remaining())
+            if response.status_code != 200:
+                raise RuntimeError(f"[PaddleOCR] result download failed: HTTP {response.status_code}")
+        except requests.RequestException as exc:
+            raise RuntimeError(f"[PaddleOCR] result download request failed: {type(exc).__name__}") from None
+        return self._merge_job_results(response.text, config.algorithm)
 
     def _transfer_to_sections(self, result: dict[str, Any], algorithm: AlgorithmType, parse_method: str) -> list[SectionTuple]:
         """Convert API response to section tuples."""
         sections: list[SectionTuple] = []
 
-        if algorithm in ("PaddleOCR-VL",):
-            layout_parsing_results = result.get("layoutParsingResults", [])
+        _algorithm_defaults(algorithm)
+        result_key = "ocrResults" if algorithm == "PP-OCRv5" else "layoutParsingResults"
+        page_results = result.get(result_key)
+        if not isinstance(page_results, list):
+            raise ValueError(f"[PaddleOCR] {algorithm} response missing {result_key} array")
 
-            for page_idx, layout_result in enumerate(layout_parsing_results):
-                pruned_result = layout_result.get("prunedResult", {})
-                parsing_res_list = pruned_result.get("parsing_res_list", [])
+        for page_idx, page_result in enumerate(page_results):
+            if not isinstance(page_result, dict) or not isinstance(page_result.get("prunedResult"), dict):
+                raise ValueError(f"[PaddleOCR] invalid {result_key} page result")
+            pruned_result = page_result["prunedResult"]
+            if algorithm == "PP-OCRv5":
+                blocks = self._ocr_blocks(pruned_result)
+            else:
+                blocks = pruned_result.get("parsing_res_list")
+                if not isinstance(blocks, list):
+                    raise ValueError("[PaddleOCR] response missing parsing_res_list array")
 
-                for block in parsing_res_list:
-                    block_content = block.get("block_content", "").strip()
-                    if not block_content:
-                        continue
+            for block in blocks:
+                if not isinstance(block, dict) or not isinstance(block.get("block_content"), str):
+                    raise ValueError("[PaddleOCR] invalid text block")
+                block_content = block.get("block_content", "").strip()
+                if not block_content:
+                    continue
 
-                    # Remove images
-                    block_content = _remove_images_from_markdown(block_content)
+                # Remove images
+                block_content = _remove_images_from_markdown(block_content)
 
-                    label = block.get("block_label", "")
-                    block_bbox = block.get("block_bbox", [0, 0, 0, 0])
-                    left, top, right, bottom = _normalize_bbox(block_bbox)
+                label = block.get("block_label", "")
+                block_bbox = block.get("block_bbox", [0, 0, 0, 0])
+                left, top, right, bottom = _normalize_bbox(block_bbox)
 
-                    tag = f"@@{page_idx + 1}\t{left // self._ZOOMIN}\t{right // self._ZOOMIN}\t{top // self._ZOOMIN}\t{bottom // self._ZOOMIN}##"
+                tag = f"@@{page_idx + 1}\t{left // self._ZOOMIN}\t{right // self._ZOOMIN}\t{top // self._ZOOMIN}\t{bottom // self._ZOOMIN}##"
 
-                    if parse_method in {"manual", "pipeline"}:
-                        sections.append((block_content, label, tag))
-                    elif parse_method == "paper":
-                        sections.append((block_content + tag, label))
-                    else:
-                        sections.append((block_content, tag))
+                if parse_method in {"manual", "pipeline"}:
+                    sections.append((block_content, label, tag))
+                elif parse_method == "paper":
+                    sections.append((block_content + tag, label))
+                else:
+                    sections.append((block_content, tag))
 
         return sections
+
+    @staticmethod
+    def _ocr_blocks(pruned_result: dict[str, Any]) -> list[dict[str, Any]]:
+        texts = pruned_result.get("rec_texts")
+        if not isinstance(texts, list) or any(not isinstance(text, str) for text in texts):
+            raise ValueError("[PaddleOCR] response missing rec_texts string array")
+        boxes = pruned_result.get("rec_boxes", [])
+        polygons = pruned_result.get("rec_polys", [])
+        if not isinstance(boxes, list) or not isinstance(polygons, list):
+            raise ValueError("[PaddleOCR] invalid OCR coordinates")
+        blocks: list[dict[str, Any]] = []
+        for index, text in enumerate(texts):
+            bbox = boxes[index] if index < len(boxes) else [0, 0, 0, 0]
+            if index >= len(boxes) and index < len(polygons):
+                points = polygons[index]
+                if not isinstance(points, list) or not points or any(not isinstance(point, list) or len(point) != 2 for point in points):
+                    raise ValueError("[PaddleOCR] invalid OCR polygon")
+                xs, ys = zip(*points)
+                bbox = [min(xs), min(ys), max(xs), max(ys)]
+            blocks.append({"block_content": text, "block_label": "text", "block_bbox": bbox})
+        return blocks
 
     def _transfer_to_tables(self, result: dict[str, Any]) -> list[TableTuple]:
         """Convert API response to table tuples."""

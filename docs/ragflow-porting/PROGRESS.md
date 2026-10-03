@@ -2232,6 +2232,80 @@ Web API 205 passed、完整 test:ci 1112 passed；build、lint、文件大小棘
 自有 HTTP listener、scratch SQL/存储资源及临时 Infinity 容器均已清理。
 常驻 8123 服务仍加载旧路由，未重启共享实例；需重启后才会加载本次 REST 入口。
 
+## d532151be06b3fd102a56808a979d059ef8c787d / 926efbd29b9bd5a5fa4c464c45b476efc4c0fbf9 · PaddleOCR 四算法
+
+2026-10-03 核对两项完整 diff，并确认 upstream remote；fetch 后对照快照为
+`98b48a085786fb9e14be8753b5a9a9ea02230ccf`。两个提交作为一项可用功能推进，
+配置、请求与结果适配和前端配置入口已验收；真实云推理三算法通过，VL-1.5 的
+任务仍为 pending 并触发超时。2026-10-04 用户调整完成标准为 RAGFlow 代码对齐，
+不再继续实际推理测试；本项按此标准收尾，VL-1.5 真实云验收保留为未完成。
+
+[解析器](../../deepdoc/parser/paddleocr_parser.py) 与
+[模型入口](../../core/llm/ocr_model.py) 支持完整的 PaddleOCR-VL、PaddleOCR-VL-1.5、
+PP-OCRv5、PP-StructureV3 算法名。保留默认 VL、嵌套/扁平/环境变量配置、token 请求头、
+同步 PDF Base64、四种 parse_method 返回形状及已有页号、坐标和 crop 合同。
+远程解析器初始化不加载本地 DeepDOC 模型；这也是后续 `9aa81e7ca` 修复的必要前置。
+
+上游 `926efbd2` 统一使用 VL 参数和布局返回，不能覆盖通用 OCR 的实际合同。
+本地按算法校验字段类型与名称并构造请求：PP-OCRv5 使用 OCR 参数，读取
+`ocrResults[].prunedResult` 的 `rec_texts`、`rec_boxes` 或 `rec_polys`；
+PP-StructureV3 使用 OCR、布局、表格、公式和印章参数；两个 VL 使用 VL 参数及布局块。
+新增 HTTP/HTTPS 地址、timeout 和响应信封校验；错误结果结构不会作为成功空结果。
+用户提供真实 Token 后，当前官方入口实际使用异步 Job API，故补入后续
+`1235da7093122e6ac1fe493541385e6dd55eafa5` 的云协议行为作为可用云验收的必要适配。
+完整路径以 `/api/v2/ocr/jobs` 结尾时使用 Bearer、multipart、算法参数、任务轮询及
+JSONL；保留网关前缀与 query，结果下载不带 Token。整个请求使用配置的 timeout，
+严格检查业务码、状态及结果结构，不自动重复提交。其余 URL 继续使用同步协议。
+PP-OCRv6/VL-1.6、图像 chunker 和 Python 退役不纳入本项。
+当前配置与云服务获取步骤维护在 [PaddleOCR 使用说明](../../deepdoc/parser/PADDLEOCR.md)。
+
+最新 `make verify` exit=0（4762 unit passed），Ruff、全库格式、mypy、8 项 import
+契约及 async DB 门禁通过。[专项集成](../../tests/integration/test_paddleocr_service_contract.py)
+在最终源码上 11 passed，覆盖四算法的同步和 Job 协议：真实 PostgreSQL scratch
+保存、关闭 session 后原生 SQL 读回、已保存模型重新实例化、真实 HTTP 上传两页
+PDF、页号/位置与 crop；错误算法、非法 URL 和云 Job 缺 Token 拒绝且不持久化。
+算法及 Job 单测 107 passed；上述 HTTP 服务响应受控，不是实际模型推理。
+此前完整 `make integration` exit=2（717 passed、8 errors）；全部错误在
+`test_infinity_available_filter.py` 的连接 fixture，Thrift `TSocket read 0 bytes`，
+未进入其业务断言。云协议适配后的完整门禁以 `-x --ff` 复跑仍在同一 fixture 报错（1 error，
+exit=2）；本项未修改该测试或共享服务，完整集成门禁不计为通过。
+
+2026-10-04 定位到本机没有 Infinity 服务，Docker 内部地址 `infinity:23817` 被
+代理 DNS 解析，TCP 探测成功不代表 Thrift 服务存在。使用与 SDK 对应的
+`infiniflow/infinity:v0.7.0-dev5` 隔离实例，通过 `INFINITY_TEST_URI` 选择本机端口，
+真实 Infinity 专项 8 passed；未修改共享配置或该 owner 的代码。完整集成复跑按
+用户停止测试的指令中止（283 passed、KeyboardInterrupt、exit=2），不计为完整门禁
+通过。自有 Infinity 数据库、容器及端口已清理，独立查询 PostgreSQL scratch 库为 0。
+
+独立 Web 模型设置 owner 已提交 `9f4ccba`：四算法选择、配置构造、中英文说明及表单
+回归，默认值和后端保存合同保持一致。配置校验成功只表示本地参数有效，不表示云服务
+或 token 可用。该提交 Web `test:ci` 1112 passed，lint、build、文件体积及 bundle
+检查通过。原生浏览器挂载实际 ModelProvidersPage，经真实模型 API listener 保存四算法，
+独立 PostgreSQL 连接读回；非法 URL 前端零请求、非零业务码保留草稿与已有模型行。
+中英文、明暗主题、键盘选择及 Token 掩码已核，根任务复查标注 contact sheet。
+此环境使用注入的 scratch 授权 principal，生产登录未验收，OCR 推理请求为零。
+后续 `395e778cca5f5ee670abcc1c83663e57b08f5078` 补齐官方 Job 地址提示、必填 Token
+与同步免 Token 兼容；定向 Node 13、实际弹窗 7、product UI 33 项通过，lint/build/
+size/bundle 通过，未重跑全量 CI。原生页面经真实 API 保存官方、网关 Job 和同步
+配置，独立 SQL 精确读回完整 URL；空 Job Token 前端零请求，verify 不落库。
+根任务再次复查六文件 diff、证据和标注 contact sheet。自有 SQL 行、listener、容器、
+端口和测试入口已清理，浏览器清理入口确认存储 0/0。
+
+真实 Token 与官方 Job API 的云验收独立执行，没有修改业务模型配置。四算法经实际
+add_llm handler 保存到自有 PostgreSQL，关闭 session 后独立 SQL 读回并实例化。
+PaddleOCR-VL、PP-OCRv5、PP-StructureV3 均实际完成两页中英文表格 PDF 推理，得到
+8、18、8 个 sections，中文、两页标识、页号、非零坐标及 crop 验证通过。
+VL-1.5 首次云请求被 queue-full（10010）明确拒绝；后续两页解析触发默认 600 秒
+超时。单页诊断实际提交 HTTP 200 / code 0，但 180 秒内一直 pending；超时后独立
+查询仍为 pending。因此不能把 VL-1.5 或四算法整体记为云验收通过。真实推理保存链路
+使用 scratch principal，未覆盖生产登录或完整后台文档入库。自有数据库已 DROP 并
+独立确认不存在；凭据仅保存在本机私有配置，未入库或写入公开日志。
+
+最后一次最小对照请求去掉所有可选参数，VL-1.5 仍返回 HTTP 400 / code 10010，
+同一单页 PDF 的 VL 请求完成；与官方“任务提交队列已满”的错误码定义一致。
+用户决定停止实际测试后，没有安装本地 OCR 模型，也不再继续云请求。再次复核两个
+目标的完整 diff，四算法枚举、默认模型、模型设置选择入口及配置/请求/解析支持均已
+覆盖；保留上文说明的算法专属合同、同步兼容和官方 Job 协议适配，不宣称逐行复制。
 
 ## 4e5a093ac53db931fe4e8d47b19ec6e0ffd15c8b · Go Moonshot 聊天与推理流
 

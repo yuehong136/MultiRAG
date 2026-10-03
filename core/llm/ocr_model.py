@@ -16,11 +16,13 @@
 import json
 import logging
 import os
-from typing import Any
+from collections.abc import Callable
+from io import BytesIO
+from typing import Any, cast
 
 from deepdoc.parser.mineru_parser import MinerUParser
 from deepdoc.parser.opendataloader_parser import OpenDataLoaderParser
-from deepdoc.parser.paddleocr_parser import PaddleOCRParser
+from deepdoc.parser.paddleocr_parser import AlgorithmType, PaddleOCRParser, ParseResult
 
 
 class Base:
@@ -88,22 +90,24 @@ class MinerUOcrModel(Base, MinerUParser):
 class PaddleOCROcrModel(Base, PaddleOCRParser):
     _FACTORY_NAME = "PaddleOCR"
 
-    def __init__(self, key: str | dict, model_name: str, **kwargs):
+    def __init__(self, key: str | dict, model_name: str, **kwargs: Any) -> None:
         Base.__init__(self, key, model_name, **kwargs)
-        raw_config = {}
+        raw_config: dict[str, Any] = {}
         if key:
             try:
-                raw_config = json.loads(key)
-            except Exception:
-                raw_config = {}
+                raw_config = json.loads(key) if isinstance(key, str) else key
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("PaddleOCR model configuration must be a JSON object") from exc
+        if not isinstance(raw_config, dict):
+            raise ValueError("PaddleOCR model configuration must be an object")
 
         # nested {"api_key": {...}} from UI
         # flat {"PADDLEOCR_*": "..."} payload auto-provisioned from env vars
         config = raw_config.get("api_key", raw_config)
         if not isinstance(config, dict):
-            config = {}
+            raise ValueError("PaddleOCR api_key configuration must be an object")
 
-        def _resolve_config(key: str, env_key: str, default=""):
+        def _resolve_config(key: str, env_key: str, default: Any = "") -> Any:
             # lower-case keys (UI), upper-case PADDLEOCR_* (env auto-provision), env vars
             return config.get(key, config.get(env_key, os.environ.get(env_key, default)))
 
@@ -111,26 +115,35 @@ class PaddleOCROcrModel(Base, PaddleOCRParser):
         self.paddleocr_algorithm = _resolve_config("paddleocr_algorithm", "PADDLEOCR_ALGORITHM", "PaddleOCR-VL")
         self.paddleocr_access_token = _resolve_config("paddleocr_access_token", "PADDLEOCR_ACCESS_TOKEN", None)
 
-        # Redact sensitive config keys before logging
-        redacted_config = {}
-        for k, v in config.items():
-            if any(sensitive_word in k.lower() for sensitive_word in ("key", "password", "token", "secret")):
-                redacted_config[k] = "[REDACTED]"
-            else:
-                redacted_config[k] = v
-        logging.info(f"Parsed PaddleOCR config (sensitive fields redacted): {redacted_config}")
+        timeout = _resolve_config("paddleocr_timeout", "PADDLEOCR_TIMEOUT", 600)
+        if isinstance(timeout, bool) or not isinstance(timeout, (str, int)):
+            raise ValueError("PaddleOCR timeout must be a positive integer")
+        try:
+            request_timeout = int(timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("PaddleOCR timeout must be a positive integer") from exc
+        algorithm_config = config.get("paddleocr_algorithm_config")
 
         PaddleOCRParser.__init__(
             self,
             api_url=self.paddleocr_api_url,
             access_token=self.paddleocr_access_token,
-            algorithm=self.paddleocr_algorithm,
+            algorithm=cast(AlgorithmType, self.paddleocr_algorithm),
+            request_timeout=request_timeout,
+            algorithm_config=algorithm_config,
         )
 
     def check_available(self) -> tuple[bool, str]:
         return self.check_installation()
 
-    def parse_pdf(self, filepath: str, binary=None, callback=None, parse_method: str = "raw", **kwargs):
+    def parse_pdf(
+        self,
+        filepath: str,
+        binary: BytesIO | bytes | None = None,
+        callback: Callable[[float, str], None] | None = None,
+        parse_method: str = "raw",
+        **kwargs: Any,
+    ) -> ParseResult:
         ok, reason = self.check_available()
         if not ok:
             raise RuntimeError(f"PaddleOCR server not accessible: {reason}")
