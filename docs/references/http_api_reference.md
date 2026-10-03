@@ -971,10 +971,16 @@ Document，包含真实 `pipeline_id`、`parser_config`、`run`、`status` 和�
 历史清理与失败恢复保全后来成功结果，未确认的恢复材料会阻止同 Task 隐式重放；
 这不是跨 SQL、索引、对象和队列的分布式原子提交保证。
 
-旧 `POST /v1/document/change_parser` 暂保留 deprecated 适配，与新 PATCH 共用严格配置、
-模式和保存服务。Python SDK 的 async/sync document.update 已完成本接口真实联调；HTTP 200 非零数值 code
-同样视为失败，unknown 先读回且不自动重放。相邻 SDK 方法保持各自既有合同。
-Web parser PATCH 消费迁移已完成真实验收；旧入口独立退出仍待。
+旧 `POST /v1/document/change_parser` 及专用请求模型已移除；不提供转发或兼容适配。
+该旧路径的请求由全局路由处理：HTTP 404、`code=404`、`data=null`、
+`error="Not Found"`、`message="Not Found: "` 加实际 ASGI request path，
+`application/json`、无 `Location`；HEAD 响应体为空。body、query 或凭据不改变该退役合同。
+CORS preflight 仍按现有 middleware 处理，不属于旧 handler 业务调用。
+新 PATCH 与共享 parser/source 恢复服务保留。
+
+Python SDK 的 async/sync document.update 与 Web parser PATCH 消费迁移已完成真实验收。
+HTTP 200 非零数值 code 同样视为失败，unknown 先读回且不自动重放。
+相邻 SDK 方法保持各自既有合同。
 实现见 [字段合同](../../api/utils/document_update_contract.py)、
 [parser service](../../api/db/services/document_parser_service.py) 和
 [局部错误适配](../../api/apps/services/document_update_http.py)。

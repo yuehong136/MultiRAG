@@ -3,20 +3,20 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
-## c81081f8ef1f805fcc44642f35c78c61709dae9e · 文档 PATCH parser/Pipeline API 范围接受
+## c81081f8ef1f805fcc44642f35c78c61709dae9e · 文档 PATCH parser/Pipeline 整项接受
 
 2026-10-03 后端修后范围提交 `d1177243ef6c3cdcbbe2728ddc6c1665560eede6`
 （父提交 `b6e413e995997b77fd3244428c4f8ccfe382ef21`，16 归属路径）已根接受，未 push。
-复用已接受的配置/模式纯模块与 SDK 字段组件；这是 API 功能范围接受，
-SDK 与 Web document PATCH 真实消费均已接受；旧 parser 退出仍待。
-2026-10-03 本次账本更新时，冻结十项整项完成数为 **9/10**；剩余 c810 旧入口独立退出。
+复用已接受的配置/模式纯模块与 SDK 字段组件。API、SDK 与 Web document PATCH
+真实消费和旧 parser 独立退出均已根接受。2026-10-04 最终审结时，
+冻结十项整项完成数为 **10/10**；本冻结批次完成，不开启下一批。
 
 - document PATCH 使用可信 JWT/API Key、严格字段提供语义、刷新后的完整 Document
   和端点局部 typed/numeric 错误。真实模式变化一次 reset/save；同模式、仅配置和非 parser
   更新不 reset，保存不入队。合法保存仍可更新时间或行版本，不要求它完全不写 SQL。
 - DataFlow 按 KB owner、类别、有效权限、当前 SQL DSL 的 File 入口及组件参数预检。
   保全存储中的未知配置、RAPTOR/Graph/metadata、源 File/对象和未请求变更的 enabled；
-  deprecated change_parser 共用正确服务，尚未退出。
+  旧 change_parser 现已退出；独立退出验收见下方小节。
 - source 原生写入前独立保存 SQL 权威恢复材料，Redis 为同 nonce 镜像。
   Doc→Task→image 锁序和完整实际原生行核对保全 SQL 未变化的后来 native winner；
   unknown 阻止同 Task 隐式重放，确认退休后按精确 pair/nonce/wire 清理。
@@ -66,9 +66,46 @@ Web 提交 `52bacb65cd01f649b473760bd8cef7ade5c76747` 的25路径范围已根接
 原失败、受控故障、创建后登记和 children 捕获限制保留；浏览器收尾采用保存的完整材料，
 独立 native fresh 不冒充重新连接浏览器。证据入口：`/tmp/multirag-c810-frontend-root-accepted.md`。
 
-499 oldrun 与 c511 oldbinary 已分别完成独立退出和根接受，两个整项关闭。
-c810 oldparser 的消费者条件已满足，目前只准备 fresh 旧消费复核和完整串行退出任务；
-旧 `change_parser` 仍在。同 API writer 每次只处理一个独立范围，不开启下一批。
+### 旧 parser 入口独立退出接受
+
+六路径范围提交 `0e8fd6ee0217ceec3e438ff2141a6b26def3f183` 已根接受，未 push。
+实际父提交 `b31fa75c2ca5e7f7638f7f75611ef775abc371dc` 包含并行工作；正式验收使用
+已接受的 immutable `79637de57245e4537f9b69c4fdd1c58d97e1e630` 加精确六路径补丁。
+删除旧 POST handler、专用请求模型与独占导入，共享 parser/source/status/image 服务保留。
+
+同固定输入实际 `make verify` **4466 passed**、`REQUIRE_SERVICES=1 make integration`
+**699 passed、零 skip、exit=0**；六份自有 listener smoke 均 **exit=0**。
+39 个旧请求逐项核对实际 method/URL/path/query/body bytes/headers 与 request ID，
+均遵循公开 global404 合同；HEAD 空 bytes，CORS preflight 按现有 middleware 单独分类。
+旧 path/专用 schema 不再出现在 OpenAPI，private calls 为0。
+三组完整 mapped SQL、74 个实际 physical 表结构/全列/xmin、native 双768向量与 payload、
+对象完整 bytes、Redis DUMP/type/value/stream/group/consumer/PEL 支持零写结论；
+只允许每个 exact Redis 相对年龄按该组真实 elapsed 自然推进。
+
+117 项 canonical PATCH 的完整前后存储、886 条 wire、55 个完整 fresh Document 与
+独立 SQL/metadata/list-by-ID 读回已消费。新 PATCH 的字段提供/空值/配置/Pipeline/单次
+reset、不入队及权限语义保留；旧 before_commit/after_commit 和 generic 故障回归已迁移。
+真实 lost-COMMIT、unknown/failed journal、完整原始材料与类型解码、显式 retry、
+后来的 File/metadata/document b/native/image/queue winner 保全均已核实。
+有效用户自己的 KB 仍按真实 owner 条件处理，不按 normal 标签拒绝；
+合法 foreign dataset owner API key 仅写其真实所属目标，普通非 owner/admin 不写他人 KB。
+
+五个 attempt 的失败原材料和 exact ledger 保留；自有 scratch 数据库、集合、对象、Redis、
+PID/临时路径与归档目录经独立新连接/OS 读回核实无残留。最初一次521地址的 lsof
+因100地址上限失败，原失败与派生断言保留并撤销；后来六批独立原返回覆盖全部 exact ports。
+原 native/PID/path 窗口与后来 port 窗口分别绑定，不能倒补 precreation/all-lifetime 证明。
+
+本项运行真实 scratch SQL/Milvus/MinIO/Redis 与进程内 uvicorn，模型/fault fixtures 受控。
+physical SQL 含列/PK/FK/index/xmin，未整体保存 trigger/function/constraint DDL；
+Redis PEL reader 上限100，实际旧 stream 一条 entry/consumer/PEL。两处并发 SourceRecovery
+mapped intent 与随后 physical applied 原值不同，属于两个连接的非原子观察，完整原值保留。
+headers 是实际 parsed maps；完整 body/object bytes 已解码。实际取消排空用例返回 plain500，
+其 SQL 完成及 recovery key/queue 为空已读回，不称 typed 业务成功。
+PID/children 登记为 postallocation，第三方依赖按完整安装版本/lock 绑定，不声称全部文件 hashes。
+独立 source/raw/fresh 审查及根完整消费均已完成；其他任务的代码、文档和未提交改动保留，
+未将其共享门禁、外部任务或生产 provider/worker/browser 纳入本项结论。
+
+499 oldrun、c511 oldbinary 和 c810 oldparser 均已独立退出并完成根接受，冻结整批关闭。
 
 公开合同见 [HTTP API](../references/http_api_reference.md#更新文档解析配置)；
 实现和正式回归见 [parser service](../../api/db/services/document_parser_service.py)、
