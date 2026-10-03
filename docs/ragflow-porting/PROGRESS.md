@@ -2128,6 +2128,40 @@ Extra owner 确认范围；Extra 的租户模型字段和 DAO 改动不纳入本
   实现未改变，未扩展目录未声明的 embedding 能力；token 统计仍为字节长度估算。
   其他任务改动保持，提交仅包含本项 Go 路径及文档 hunk。
 
+## 85575259ac44b926d480ae92969795989e55a757 · Google Web OAuth PKCE
+
+2026-10-03 按完整两文件 diff 核对，继续使用冻结的 `519e7d98`，未 fetch。
+Gmail / Google Drive 在[共享 OAuth 服务](../../api/apps/services/connector_oauth_service.py)
+保存授权 URL 生成时的 `code_verifier`，回调重建 Flow 后显式传入 token exchange。
+新 REST 与旧回调入口共用修复，保留当前用户归属校验、按来源的 state、15 分钟 TTL、
+scope、offline/consent、结果领取和回调渲染合同；Box 流程保持。
+
+必要本地适配是显式开启 verifier 自动生成：本仓锁定的 google-auth-oauthlib 1.2.3
+工厂以 `None` 覆盖构造器的生成默认值，直接保存会得到空值。[该版本 Flow 实现](https://github.com/googleapis/google-auth-library-python-oauthlib/blob/v1.2.3/google_auth_oauthlib/flow.py)
+与实测一致。升级前缺少 verifier 的缓存沿用原交换尝试，不生成一个不匹配的新值。
+冻结范围内没有后续 Python PKCE 修补；`af4651cce` 去除凭证 print 的行为本地已等价，
+后续 Go OAuth 迁移与 Python 路由移除不适用于当前生产后端。Web 现有启动/轮询接口
+无需变化，CLI 的同实例本地服务授权流程不在本项范围内。
+
+本次 `make verify` exit=0（4594 passed）。[专项单测](../../tests/unit/test_connector_google_oauth_pkce.py)
+与既有 connector API 合同共 35 passed，使用真实 Flow/OAuthLib 检查编码后的 token
+请求。[隔离集成](../../tests/integration/test_connector_google_oauth_pkce.py) 6 passed，
+覆盖真实 HTTP、正常 JWT/scratch SQL 用户、Redis、Gmail/Drive 新旧入口、跨用户领取拒绝、
+state 来源错配、TTL、顺序重放、取消/过期/token 拒绝清理及最终凭证重新加载。
+本机 token HTTP 服务验证实际 POST 中 verifier 与授权 challenge 一致；scratch 服务
+`make smoke` exit=0，fixture 清理断言通过。全集成门禁以历史失败优先、首错停止运行
+（`PYTEST_ADDOPTS="-x --ff" make integration`），4 passed、1 error、exit=2：
+`test_infinity_available_filter` 的 fixture 在 `infinity.connect` 初始化时出现 Thrift
+`TSocket read 0 bytes`，尚未进入业务测试。普通顺序的并行全集成在 332 passed 后
+因此停止，不计为通过；
+未修改该独立任务或环境配置。日志分别为 `/tmp/multirag-855-verify.log`、
+`/tmp/multirag-855-integration-focused.log` 与 `/tmp/multirag-855-integration-priority.log`。
+
+上述验收未访问真实 Google 认证或数据 API，不能证明客户端/回调注册、consent 与 scope
+审核、Workspace 策略、refresh token 发放、真实 Gmail/Drive 访问或浏览器弹窗体验。
+原有缓存消费不是原子的，本项仅验证顺序重放；未扩大为完整 OAuth 安全审计，未重启或
+部署共享服务。当前使用合同见[数据连接器](../../common/data_source/README.md#google-web-oauth)。
+
 ## 7c25870923988a58cbe1fc99377bbcbbbfa2b51e · Go 租户模型 Extra 持久化
 
 2026-10-03 作为本轮 Go 第一项，按完整双文件 diff 核对冻结的

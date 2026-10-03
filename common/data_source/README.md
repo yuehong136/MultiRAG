@@ -50,3 +50,25 @@ Milvus 确认索引不存在时跳过索引依赖的图片、chunk 与图谱操�
 
 现有文档删除服务仍将提交后的存储清理视作尽力清理：图片、对象、索引或图谱故障会记录
 日志，不能用 SQL 行已删除推断存储全部已清理。该边界与枚举失败禁止删除的合同分别验证。
+
+## Google Web OAuth
+
+Gmail 和 Google Drive 的 `/api/v1/connectors/...` 与 `/v1/connector/...` OAuth
+入口共用同一服务。启动和结果领取需要登录；回调使用发起流程的随机 state，并按来源
+读取缓存。结果仅允许发起用户领取，领取后清除。state 与结果的缓存有效期均为 15 分钟。
+现有 scope、离线访问、强制 consent 和已注册的旧回调路径继续使用。
+
+启动流程显式生成 PKCE verifier，在授权 URL 中发送 S256 challenge，将 verifier
+保存在服务端 state 缓存。回调重建 Flow 后将同一个 verifier 传入 token exchange；
+不将 verifier 返回浏览器或写入最终凭证。Google Flow 工厂的生成开关需要显式启用，
+不能依赖构造器默认值。升级前的缓存可能没有 verifier，仍按原方式尝试交换；若授权服务
+拒绝，则清除该会话并要求重新授权。
+
+取消授权或 token exchange 失败会清除 state，不生成结果；缺少授权码时保留 state，
+便于在有效期内完成回调。正常完成后清除 state，顺序重复回调不再交换 token。
+回调不要求登录，结果领取仍检查发起用户；PKCE 不替代现有 state 和用户归属检查。
+
+隔离测试覆盖真实 Flow/OAuthLib 编码、HTTP 回调、Redis 缓存及凭证加载，但测试 token
+服务运行在本机。真实 Google 登录、consent、客户端及 redirect URI 注册、Workspace
+授权策略、refresh token 发放与 Gmail/Drive API 访问仍需使用部署环境的 Google 应用和
+测试账号验证；本机模拟成功不能证明这些外部条件已满足。

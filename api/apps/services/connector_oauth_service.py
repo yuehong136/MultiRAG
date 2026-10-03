@@ -126,7 +126,7 @@ def start_google_oauth(user_id: str, source: str, credentials_payload: str | dic
 
     flow_id = str(uuid.uuid4())
     try:
-        flow = Flow.from_client_config(client_config, scopes=scopes)
+        flow = Flow.from_client_config(client_config, scopes=scopes, autogenerate_code_verifier=True)
         flow.redirect_uri = redirect_uri
         authorization_url, _ = flow.authorization_url(
             access_type="offline",
@@ -144,11 +144,24 @@ def start_google_oauth(user_id: str, source: str, credentials_payload: str | dic
             "user_id": user_id,
             "client_config": client_config,
             "redirect_uri": redirect_uri,
+            "code_verifier": flow.code_verifier,
             "created_at": int(time.time()),
         },
         WEB_FLOW_TTL_SECS,
     )
     return True, {"flow_id": flow_id, "authorization_url": authorization_url, "expires_in": WEB_FLOW_TTL_SECS}, None
+
+
+def _exchange_google_web_oauth_code(client_config: dict[str, Any], scopes: list[str], redirect_uri: str, code: str, code_verifier: str | None) -> Flow:
+    """重建授权流程，并传递生成授权 URL 时保存的 PKCE verifier。"""
+    flow = Flow.from_client_config(client_config, scopes=scopes)
+    flow.redirect_uri = redirect_uri
+    fetch_token_kwargs: dict[str, Any] = {"code": code}
+    # 升级前发起的短期缓存可能没有 verifier；保留原来的交换行为。
+    if code_verifier:
+        fetch_token_kwargs["code_verifier"] = code_verifier
+    flow.fetch_token(**fetch_token_kwargs)
+    return flow
 
 
 def handle_google_callback(source: str, state: str | None, code: str | None, error: str | None, error_description: str | None) -> tuple[str, bool, str]:
@@ -168,6 +181,7 @@ def handle_google_callback(source: str, state: str | None, code: str | None, err
     state_obj = json.loads(state_cache)
     client_config = state_obj.get("client_config")
     redirect_uri = state_obj.get("redirect_uri", default_redirect_uri)
+    code_verifier = state_obj.get("code_verifier")
     if not client_config:
         REDIS_CONN.delete(web_state_cache_key(state_id, source))
         return state_id, False, "Authorization session was invalid. Please retry."
@@ -180,9 +194,7 @@ def handle_google_callback(source: str, state: str | None, code: str | None, err
         return state_id, False, "Missing authorization code from Google."
 
     try:
-        flow = Flow.from_client_config(client_config, scopes=scopes)
-        flow.redirect_uri = redirect_uri
-        flow.fetch_token(code=code)
+        flow = _exchange_google_web_oauth_code(client_config, scopes, redirect_uri, code, code_verifier)
     except Exception as exc:
         logger.exception("Failed to exchange Google OAuth code: %s", exc)
         REDIS_CONN.delete(web_state_cache_key(state_id, source))
