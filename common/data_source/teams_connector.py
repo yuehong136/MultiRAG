@@ -94,10 +94,7 @@ class TeamsConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSyn
 
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: Any = None,
     ) -> Any:
         """Retrieve all simplified documents with permission sync"""
-        # Simplified implementation
-        return []
+        raise NotImplementedError("Complete source enumeration is not implemented.")

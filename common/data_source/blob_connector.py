@@ -8,7 +8,7 @@ from typing import Any
 from common.data_source.config import BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE, BlobType, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
 from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector
-from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 from common.data_source.utils import (
     create_s3_client,
     detect_bucket_region,
@@ -101,37 +101,7 @@ class BlobStorageConnector(LoadConnector, PollConnector):
         end: datetime,
     ) -> GenerateDocumentsOutput:
         """Generate bucket objects"""
-        if self.s3_client is None:
-            raise ConnectorMissingCredentialError("Blob storage")
-
-        paginator = self.s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=self.bucket_name, Prefix=self.prefix)
-
-        # Collect all objects first to count filename occurrences
-        all_objects = []
-        extension_type = OnyxExtensionType.Plain | OnyxExtensionType.Document
-        if bool(self._allow_images):
-            extension_type |= OnyxExtensionType.Multimedia
-        for page in pages:
-            if "Contents" not in page:
-                continue
-            for obj in page["Contents"]:
-                key = obj["Key"]
-                if key.endswith("/"):
-                    continue
-                last_modified = obj["LastModified"].replace(tzinfo=UTC)
-                if not (start < last_modified <= end):
-                    continue
-                file_name = os.path.basename(key)
-                if not is_accepted_file_ext(get_file_ext(file_name), extension_type):
-                    continue
-                all_objects.append(obj)
-
-        # Count filename occurrences to determine which need full paths
-        filename_counts: dict[str, int] = {}
-        for obj in all_objects:
-            file_name = os.path.basename(obj["Key"])
-            filename_counts[file_name] = filename_counts.get(file_name, 0) + 1
+        all_objects, filename_counts = self._collect_blob_objects(start, end)
 
         batch: list[Document] = []
         for obj in all_objects:
@@ -176,6 +146,62 @@ class BlobStorageConnector(LoadConnector, PollConnector):
             except Exception:
                 logging.exception(f"Error decoding object {key}")
 
+        if batch:
+            yield batch
+
+    def _collect_blob_objects(
+        self,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        """Exhaust the configured prefix listing, preserving local file filters."""
+        if self.s3_client is None:
+            raise ConnectorMissingCredentialError("Blob storage")
+
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=self.bucket_name, Prefix=self.prefix)
+        extension_type = OnyxExtensionType.Plain | OnyxExtensionType.Document
+        if bool(self._allow_images):
+            extension_type |= OnyxExtensionType.Multimedia
+
+        all_objects: list[dict[str, Any]] = []
+        filename_counts: dict[str, int] = {}
+        for page in pages:
+            if page.get("IsTruncated") and not page.get("NextContinuationToken"):
+                raise ConnectorValidationError("Blob listing is truncated without a continuation token.")
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith("/"):
+                    continue
+                file_name = os.path.basename(key)
+                if not is_accepted_file_ext(get_file_ext(file_name), extension_type):
+                    continue
+                if start is not None or end is not None:
+                    last_modified = obj["LastModified"].replace(tzinfo=UTC)
+                    if start is not None and last_modified <= start:
+                        continue
+                    if end is not None and last_modified > end:
+                        continue
+                all_objects.append(obj)
+                filename_counts[file_name] = filename_counts.get(file_name, 0) + 1
+
+        return all_objects, filename_counts
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        """List existing source IDs without a time window or content download.
+
+        Size and download limits affect ingestion, not source existence: a file
+        that grows beyond the limit must not be mistaken for a deleted file.
+        Listing failures propagate before a snapshot can be used for deletion.
+        """
+        del callback
+        all_objects, _ = self._collect_blob_objects()
+        batch: list[SlimDocument] = []
+        for obj in all_objects:
+            batch.append(SlimDocument(id=f"{self.bucket_type}:{self.bucket_name}:{obj['Key']}"))
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
         if batch:
             yield batch
 

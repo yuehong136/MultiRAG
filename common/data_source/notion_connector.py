@@ -21,16 +21,20 @@ from common.data_source.exceptions import (
     UnexpectedValidationError,
 )
 from common.data_source.interfaces import (
+    IndexingHeartbeatInterface,
     LoadConnector,
     PollConnector,
     SecondsSinceUnixEpoch,
+    SlimConnectorWithPermSync,
 )
 from common.data_source.models import (
     Document,
     GenerateDocumentsOutput,
+    GenerateSlimDocumentOutput,
     NotionBlock,
     NotionPage,
     NotionSearchResponse,
+    SlimDocument,
     TextSection,
 )
 from common.data_source.utils import (
@@ -43,7 +47,7 @@ from common.data_source.utils import (
 )
 
 
-class NotionConnector(LoadConnector, PollConnector):
+class NotionConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """Notion Page connector that reads all Notion pages this integration has access to.
 
     Arguments:
@@ -69,7 +73,7 @@ class NotionConnector(LoadConnector, PollConnector):
         self.page_path_cache: dict[str, str] = {}
 
     @retry(tries=3, delay=1, backoff=2)
-    def _fetch_child_blocks(self, block_id: str, cursor: str | None = None) -> dict[str, Any] | None:
+    def _fetch_child_blocks(self, block_id: str, cursor: str | None = None, strict: bool = False) -> dict[str, Any] | None:
         """Fetch all child blocks via the Notion API."""
         logging.debug(f"[Notion]: Fetching children of block with ID {block_id}")
         block_url = f"https://api.notion.com/v1/blocks/{block_id}/children"
@@ -85,7 +89,7 @@ class NotionConnector(LoadConnector, PollConnector):
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            if hasattr(e, "response") and e.response.status_code == 404:
+            if not strict and hasattr(e, "response") and e.response.status_code == 404:
                 logging.error(f"[Notion]: Unable to access block with ID {block_id}. This is likely due to the block not being shared with the integration.")
                 return None
             else:
@@ -118,7 +122,7 @@ class NotionConnector(LoadConnector, PollConnector):
         return NotionPage(**data, database_name=database_name)
 
     @retry(tries=3, delay=1, backoff=2)
-    def _fetch_database(self, database_id: str, cursor: str | None = None) -> dict[str, Any]:
+    def _fetch_database(self, database_id: str, cursor: str | None = None, strict: bool = False) -> dict[str, Any]:
         """Fetch a database from its ID via the Notion API."""
         logging.debug(f"[Notion]: Fetching database for ID {database_id}")
         block_url = f"https://api.notion.com/v1/databases/{database_id}/query"
@@ -128,7 +132,7 @@ class NotionConnector(LoadConnector, PollConnector):
             data = fetch_notion_data(block_url, self.headers, "POST", body)
             return data
         except Exception as e:
-            if hasattr(e, "response") and e.response.status_code in [404, 400]:
+            if not strict and hasattr(e, "response") and e.response.status_code in [404, 400]:
                 logging.error(f"[Notion]: Unable to access database with ID {database_id}. This is likely due to the database not being shared with the integration.")
                 return {"results": [], "next_cursor": None}
             raise
@@ -433,6 +437,66 @@ class NotionConnector(LoadConnector, PollConnector):
 
         return result_blocks, child_pages, attachments
 
+    @staticmethod
+    def _validate_slim_cursor(cursor: str | None, has_more: bool, seen: set[str]) -> str | None:
+        if has_more and (not cursor or cursor in seen):
+            raise RuntimeError("Notion pagination did not advance.")
+        if cursor:
+            seen.add(cursor)
+        return cursor
+
+    def _read_slim_database(self, database_id: str) -> list[str]:
+        page_ids: list[str] = []
+        cursor = None
+        seen_cursors: set[str] = set()
+        while True:
+            data = self._fetch_database(database_id, cursor, strict=True)
+            for result in data["results"]:
+                if result["object"] == "page":
+                    page_ids.append(result["id"])
+                elif result["object"] == "database":
+                    page_ids.extend(self._read_slim_database(result["id"]))
+            cursor = self._validate_slim_cursor(data["next_cursor"], data.get("has_more", bool(data["next_cursor"])), seen_cursors)
+            if cursor is None:
+                return page_ids
+
+    def _read_slim_blocks(self, base_block_id: str) -> tuple[list[str], list[str]]:
+        child_pages: list[str] = []
+        attachment_ids: list[str] = []
+        cursor = None
+        seen_cursors: set[str] = set()
+
+        while True:
+            data = self._fetch_child_blocks(base_block_id, cursor, strict=True)
+
+            if data is None:
+                raise RuntimeError("Notion block enumeration was incomplete.")
+
+            for result in data["results"]:
+                result_block_id = result["id"]
+                result_type = result["type"]
+
+                if result_type in {"file", "image", "pdf", "video", "audio"}:
+                    attachment_ids.append(result_block_id)
+
+                if result["has_children"]:
+                    if result_type == "child_page":
+                        child_pages.append(result_block_id)
+                    else:
+                        nested_child_pages, nested_attachment_ids = self._read_slim_blocks(result_block_id)
+                        child_pages.extend(nested_child_pages)
+                        attachment_ids.extend(nested_attachment_ids)
+
+                if result_type == "child_database" and self.recursive_index_enabled:
+                    inner_child_pages = self._read_slim_database(result_block_id)
+                    child_pages.extend(inner_child_pages)
+
+            cursor = self._validate_slim_cursor(data["next_cursor"], data.get("has_more", bool(data["next_cursor"])), seen_cursors)
+            if cursor is None:
+                break
+
+        return child_pages, attachment_ids
+
     def _read_page_title(self, page: NotionPage) -> str | None:
         """Extracts the title from a Notion page."""
         if hasattr(page, "database_name") and page.database_name:
@@ -556,6 +620,59 @@ class NotionConnector(LoadConnector, PollConnector):
         logging.info(f"[Notion]: Recursively loading pages from Notion based on root page with ID: {self.root_page_id}")
         pages = [self._fetch_page(page_id=self.root_page_id)]
         yield from batch_generator(self._read_pages(pages, start, end), self.batch_size)
+
+    def _read_pages_for_slim_docs(
+        self,
+        pages: list[NotionPage],
+        slim_indexed_pages: set[str],
+        callback: IndexingHeartbeatInterface | None = None,
+    ) -> Generator[SlimDocument, None, None]:
+        all_child_page_ids: list[str] = []
+
+        for page in pages:
+            if callback and callback.should_stop():
+                raise RuntimeError("Notion source enumeration cancelled.")
+            if isinstance(page, dict):
+                page = NotionPage(**page)
+            if page.id in slim_indexed_pages:
+                continue
+
+            child_page_ids, attachment_ids = self._read_slim_blocks(page.id)
+            all_child_page_ids.extend(child_page_ids)
+            slim_indexed_pages.add(page.id)
+
+            yield SlimDocument(id=page.id)
+            for attachment_id in attachment_ids:
+                yield SlimDocument(id=attachment_id)
+
+        if self.recursive_index_enabled and all_child_page_ids:
+            for child_page_batch_ids in batch_generator(all_child_page_ids, INDEX_BATCH_SIZE):
+                child_page_batch = [self._fetch_page(page_id) for page_id in child_page_batch_ids if page_id not in slim_indexed_pages]
+                yield from self._read_pages_for_slim_docs(
+                    child_page_batch,
+                    slim_indexed_pages,
+                    callback,
+                )
+
+    def retrieve_all_slim_docs_perm_sync(
+        self,
+        callback: IndexingHeartbeatInterface | None = None,
+    ) -> GenerateSlimDocumentOutput:
+        # Search does not guarantee exhaustive results, so it cannot prove deletion.
+        if not self.root_page_id or not self.root_page_id.strip() or not self.recursive_index_enabled:
+            raise ConnectorValidationError("Notion deleted-file synchronization requires an explicit root_page_id and recursive indexing.")
+
+        slim_indexed_pages: set[str] = set()
+        root_pages = [self._fetch_page(page_id=self.root_page_id)]
+        for batch in batch_generator(
+            self._read_pages_for_slim_docs(root_pages, slim_indexed_pages, callback),
+            self.batch_size,
+        ):
+            yield batch
+            if callback:
+                if callback.should_stop():
+                    raise RuntimeError("Notion source enumeration cancelled.")
+                callback.progress("notion_slim_document", 1)
 
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Applies integration token to headers."""

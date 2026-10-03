@@ -475,13 +475,11 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
 
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: IndexingHeartbeatInterface | None = None,
     ) -> GenerateSlimDocumentOutput:
         slim_doc_batch: list[SlimDocument] = []
         if self.content_type == "articles":
-            articles = _get_articles(self.client, start_time=int(start) if start else None)
+            articles = _get_articles(self.client)
             for article in articles:
                 slim_doc_batch.append(
                     SlimDocument(
@@ -492,7 +490,7 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
                     yield slim_doc_batch
                     slim_doc_batch = []
         elif self.content_type == "tickets":
-            tickets = _get_tickets(self.client, start_time=int(start) if start else None)
+            tickets = _get_tickets(self.client)
             for ticket in tickets:
                 slim_doc_batch.append(
                     SlimDocument(

@@ -270,12 +270,10 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
 
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
-        callback=None,
+        callback: Any = None,
     ) -> GenerateSlimDocumentOutput:
         """Retrieve slim documents for permission synchronization."""
-        query = build_time_range_query(start, end)
+        query = build_time_range_query()
         doc_batch = []
 
         for user_email in self._get_all_user_emails():
@@ -288,8 +286,10 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                     userId=user_email,
                     fields=THREAD_LIST_FIELDS,
                     q=query,
-                    continue_on_404_or_403=True,
+                    continue_on_404_or_403=False,
                 ):
+                    if callback and callback.should_stop():
+                        raise RuntimeError("Gmail source enumeration cancelled.")
                     doc_batch.append(
                         SlimDocument(
                             id=thread["id"],
@@ -303,13 +303,7 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                     if len(doc_batch) > SLIM_BATCH_SIZE:
                         yield doc_batch
                         doc_batch = []
-            except HttpError as e:
-                if is_mail_service_disabled_error(e):
-                    logging.warning(
-                        "Skipping slim Gmail sync for %s because the mailbox is disabled.",
-                        user_email,
-                    )
-                    continue
+            except HttpError:
                 raise
 
         if doc_batch:

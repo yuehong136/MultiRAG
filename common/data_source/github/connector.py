@@ -690,9 +690,8 @@ class GithubConnector(CheckpointedConnectorWithPermSyncGH[GithubConnectorCheckpo
                             continue
 
                         try:
-                            test_repo = self.github_client.get_repo(f"{self.repo_owner}/{repo_name}")
+                            self.github_client.get_repo(f"{self.repo_owner}/{repo_name}")
                             logging.info(f"Successfully accessed repository: {self.repo_owner}/{repo_name}")
-                            test_repo.get_contents("")
                             valid_repos = True
                             # If at least one repo is valid, we can proceed
                             break
@@ -705,8 +704,7 @@ class GithubConnector(CheckpointedConnectorWithPermSyncGH[GithubConnectorCheckpo
                         raise ConnectorValidationError(error_msg)
                 else:
                     # Single repository (backward compatibility)
-                    test_repo = self.github_client.get_repo(f"{self.repo_owner}/{self.repositories}")
-                    test_repo.get_contents("")
+                    self.github_client.get_repo(f"{self.repo_owner}/{self.repositories}")
             else:
                 # Try to get organization first
                 try:
@@ -796,11 +794,42 @@ class GithubConnector(CheckpointedConnectorWithPermSyncGH[GithubConnectorCheckpo
 
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: Any = None,
     ) -> GenerateSlimDocumentOutput:
-        yield from self.retrieve_slim_document(start=start, end=end, callback=callback)
+        if self.github_client is None:
+            raise ConnectorMissingCredentialError("GitHub")
+        if self.repositories:
+            # An inaccessible configured repository must invalidate the complete list.
+            repositories = [self.github_client.get_repo(f"{self.repo_owner}/{name.strip()}") for name in self.repositories.split(",") if name.strip()]
+        else:
+            try:
+                owner = self.github_client.get_organization(self.repo_owner)
+            except GithubException as exc:
+                if exc.status != 404:
+                    raise
+                owner = self.github_client.get_user(self.repo_owner)
+            repositories = list(owner.get_repos())
+        batch: list[SlimDocument] = []
+        for repository in repositories:
+            collections = []
+            if self.include_prs:
+                collections.append((self._pull_requests_func(repository)(), False))
+            if self.include_issues:
+                collections.append((self._issues_func(repository)(), True))
+            for items, exclude_prs in collections:
+                for item in items:
+                    if callback and callback.should_stop():
+                        raise RuntimeError("GitHub source enumeration cancelled.")
+                    if exclude_prs and item.pull_request is not None:
+                        continue
+                    batch.append(SlimDocument(id=item.html_url))
+                    if len(batch) >= SLIM_BATCH_SIZE:
+                        yield batch
+                        batch = []
+                        if callback:
+                            callback.progress("github_slim_document", 1)
+        if batch:
+            yield batch
 
     def build_dummy_checkpoint(self) -> GithubConnectorCheckpoint:
         return GithubConnectorCheckpoint(stage=GithubConnectorStage.PRS, curr_page=0, has_more=True, num_retrieved=0)

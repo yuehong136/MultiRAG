@@ -106,7 +106,7 @@ async def test_completion_failure_is_persisted_without_escaping_worker(monkeypat
     monkeypatch.setattr(
         SyncLogsService,
         "fail",
-        classmethod(lambda cls, db, task_id, connector_id, error_msg, full_exception_trace="": calls.append(("fail", task_id, error_msg))),
+        classmethod(lambda cls, db, task_id, connector_id, error_msg, full_exception_trace="", poll_range_start=None: calls.append(("fail", task_id, error_msg))),
     )
 
     await SuccessfulSync({})(

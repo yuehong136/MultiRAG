@@ -18,9 +18,9 @@ from typing import Any
 from box_sdk_gen import AccessToken, BoxOAuth, OAuthConfig
 
 from api.db.db_models import db_connection
-from api.db.services.connector_service import ConnectorService, SyncLogsService
+from api.db.services.connector_service import ConnectorService, SyncLogsService, SyncTaskCancelled, resolve_connector_doc_id
+from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.utils.common import hash128
 from common import settings
 from common.config_utils import show_configs
 from common.constants import FileSource
@@ -48,8 +48,8 @@ from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
-from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput
-from common.data_source.models import ConnectorFailure, SeafileSyncScope
+from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
+from common.data_source.models import ConnectorFailure, SeafileSyncScope, SlimDocument
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
@@ -57,6 +57,10 @@ from common.versions import get_multirag_version
 
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+
+DELETED_FILE_SYNC_SOURCES = frozenset(
+    {FileSource.S3, FileSource.R2, FileSource.OCI_STORAGE, FileSource.GOOGLE_CLOUD_STORAGE, FileSource.CONFLUENCE, FileSource.NOTION, FileSource.JIRA, FileSource.BOX, FileSource.GITHUB}
+)
 
 
 class SyncBase:
@@ -81,6 +85,8 @@ class SyncBase:
                     task["kb_id"],
                     checkpoint,
                 )
+        except SyncTaskCancelled:
+            logging.info("Sync task remains cancelled: task_id=%s", task["id"])
         except TimeoutError:
             self._mark_failed(task, f"Task timeout after {task['timeout_secs']} seconds")
         except Exception as ex:
@@ -102,6 +108,7 @@ class SyncBase:
                     task["connector_id"],
                     error_msg,
                     full_exception_trace,
+                    task.get("poll_range_start"),
                 )
         except Exception:
             logging.exception("Failed to persist sync task failure: task_id=%s", task.get("id"))
@@ -114,9 +121,19 @@ class SyncBase:
             document_batch_generator = generate_output
             file_list = None
 
+        if self.SOURCE_NAME in DELETED_FILE_SYNC_SOURCES and self.conf.get("sync_deleted_files") and task.get("reindex") != "1" and task.get("poll_range_start"):
+            # Listing can block on remote pagination. Cancellation of this await
+            # never hands a partially collected snapshot to the deletion service.
+            file_list = await asyncio.to_thread(collect_slim_document_snapshot, self.connector)
+
+        with db_connection() as db:
+            SyncLogsService.raise_if_cancelled(db, task["id"])
+            existing_doc_ids = {doc["id"] for doc in DocumentService.list_doc_headers_by_kb_and_source_type(db, task["kb_id"], f"{self.SOURCE_NAME}/{task['connector_id']}")}
+
         doc_num = 0
         failed_docs = 0
         removed_docs = 0
+        ingested_source_ids: set[str] = set()
         next_update = datetime(1970, 1, 1, tzinfo=UTC)
 
         if task["poll_range_start"]:
@@ -132,7 +149,7 @@ class SyncBase:
             docs = []
             for doc in document_batch:
                 d = {
-                    "id": hash128(doc.id),
+                    "id": resolve_connector_doc_id(task["kb_id"], task["connector_id"], doc.id, existing_doc_ids),
                     "connector_id": task["connector_id"],
                     "source": self.SOURCE_NAME,
                     "semantic_identifier": doc.semantic_identifier,
@@ -147,12 +164,18 @@ class SyncBase:
 
             try:
                 with db_connection() as db:
+                    SyncLogsService.raise_if_cancelled(db, task["id"])
                     kb = KnowledgebaseService.get_by_id(db, task["kb_id"])
                     err, dids = SyncLogsService.duplicate_and_parse(db, kb, docs, task["tenant_id"], f"{self.SOURCE_NAME}/{task['connector_id']}", task["auto_parse"])
                     SyncLogsService.increase_docs(db, task["id"], max_update, len(docs), "\n".join(err), len(err))
 
                 doc_num += len(docs)
+                failed_docs += len(err)
+                existing_doc_ids.update(dids)
+                ingested_source_ids.update(doc.id for doc in document_batch)
 
+            except SyncTaskCancelled:
+                raise
             except Exception as batch_ex:
                 msg = str(batch_ex)
                 code = getattr(batch_ex, "args", [None])[0]
@@ -166,9 +189,14 @@ class SyncBase:
                 continue
 
         prefix = self._get_source_prefix()
+        if failed_docs > 0:
+            raise RuntimeError(f"{failed_docs} document(s) failed during synchronization; checkpoint was not committed")
         if file_list is not None:
+            # An object can appear after enumeration and before incremental
+            # ingestion. Never prune a source object just imported this run.
+            file_list = (*file_list, *(SlimDocument(id=source_id) for source_id in ingested_source_ids))
             with db_connection() as db:
-                removed_docs, _ = ConnectorService.cleanup_stale_documents_for_task(
+                removed_docs, cleanup_errors = ConnectorService.cleanup_stale_documents_for_task(
                     db,
                     task["id"],
                     task["connector_id"],
@@ -176,13 +204,11 @@ class SyncBase:
                     task["tenant_id"],
                     file_list,
                 )
+            if cleanup_errors:
+                raise RuntimeError("Deleted-file reconciliation failed; retry to reconcile: " + "; ".join(cleanup_errors))
 
         removed_info = f", {removed_docs} deleted" if file_list is not None else ""
-        if failed_docs > 0:
-            logging.info(f"{prefix}{doc_num} docs synchronized till {next_update} ({failed_docs} skipped{removed_info})")
-            raise RuntimeError(f"{failed_docs} document(s) failed during synchronization; checkpoint was not committed")
-        else:
-            logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
+        logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
         return next_update
 
     async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
@@ -333,8 +359,7 @@ class Confluence(SyncBase):
                 doc_generator = wrapper(self.connector.load_from_checkpoint(start_time, end_time, checkpoint))
                 for document, failure, next_checkpoint in doc_generator:
                     if failure is not None:
-                        logging.warning("Confluence connector failure: %s", getattr(failure, "failure_message", failure))
-                        continue
+                        raise RuntimeError(f"Confluence connector failed: {getattr(failure, 'failure_message', failure)}")
                     if document is not None:
                         pending_docs.append(document)
                         if len(pending_docs) >= batch_size:
@@ -777,8 +802,7 @@ class Jira(SyncBase):
                 )
                 for document, failure, next_checkpoint in generator:
                     if failure is not None:
-                        logging.warning(f"[Jira] Jira connector failure: {getattr(failure, 'failure_message', failure)}")
-                        continue
+                        raise RuntimeError(f"Jira connector failed: {getattr(failure, 'failure_message', failure)}")
                     if document is not None:
                         pending_docs.append(document)
                         if len(pending_docs) >= batch_size:
@@ -1033,17 +1057,12 @@ class Github(SyncBase):
 
         self.connector.load_credentials({"github_access_token": credentials["github_access_token"]})
 
-        file_list = None
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             start_time = datetime.fromtimestamp(0, tz=UTC)
             _begin_info = "totally"
         else:
             start_time = task.get("poll_range_start")
             _begin_info = f"from {start_time}"
-            if self.conf.get("sync_deleted_files"):
-                file_list = []
-                for slim_batch in self.connector.retrieve_all_slim_docs_perm_sync():
-                    file_list.extend(slim_batch)
 
         end_time = datetime.now(UTC)
 
@@ -1055,11 +1074,7 @@ class Github(SyncBase):
             while checkpoint.has_more:
                 for doc_batch, failure, next_checkpoint in runner.run(checkpoint):
                     if failure is not None:
-                        logging.warning(
-                            "Github connector failure: %s",
-                            getattr(failure, "failure_message", failure),
-                        )
-                        continue
+                        raise RuntimeError(f"Github connector failed: {getattr(failure, 'failure_message', failure)}")
                     if doc_batch is not None:
                         yield doc_batch
                     if next_checkpoint is not None:
@@ -1075,8 +1090,6 @@ class Github(SyncBase):
             _begin_info,
         )
 
-        if file_list is not None:
-            return wrapper(), file_list
         return wrapper()
 
 

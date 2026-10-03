@@ -1,19 +1,21 @@
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import Session
 
 from api.db.services import connector_service as connector_module
-from api.db.services.connector_service import ConnectorService
-from api.utils.common import hash128
+from api.db.services.connector_service import ConnectorService, connector_doc_id_candidates
 
 
-def test_cleanup_stale_documents_deletes_docs_missing_from_source(monkeypatch):
+@pytest.mark.parametrize("identity_version", [0, 1, 2])
+def test_cleanup_stale_documents_deletes_docs_missing_from_source(monkeypatch: pytest.MonkeyPatch, identity_version: int) -> None:
     db = Session()
+    monkeypatch.setattr(connector_module.SyncLogsService, "raise_if_cancelled", lambda *args: None)
     connector_id = "connector-1"
     kb_id = "kb-1"
     tenant_id = "tenant-1"
     retained_source_id = "github-doc-1"
-    retained_doc_id = hash128(retained_source_id)
+    retained_doc_id = connector_doc_id_candidates(kb_id, connector_id, retained_source_id)[identity_version]
     stale_doc_ids = ["stale-doc-1", "stale-doc-2"]
     delete_calls = []
     increase_calls = []
@@ -79,3 +81,22 @@ def test_cleanup_stale_documents_deletes_docs_missing_from_source(monkeypatch):
     assert errors == []
     assert delete_calls == [["stale-doc-1"], ["stale-doc-2"]]
     assert increase_calls == [("task-1", 2, "", 0)]
+
+
+def test_local_document_headers_paginate_with_stable_tie_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlalchemy.dialects import postgresql
+
+    from api.db.services.document_service import DocumentService
+
+    db = Session()
+    statements: list[str] = []
+    rows = [[{"id": "first"}], [{"id": "second"}], []]
+
+    def execute(statement: object) -> object:
+        statements.append(str(statement.compile(dialect=postgresql.dialect())))
+        page = rows.pop(0)
+        return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: page))
+
+    monkeypatch.setattr(db, "execute", execute)
+    assert DocumentService.list_doc_headers_by_kb_and_source_type(db, "kb", "s3/connector", page_size=1) == [{"id": "first"}, {"id": "second"}]
+    assert all("ORDER BY usr_ai.t_ai_documents.create_time ASC, usr_ai.t_ai_documents.id ASC" in sql for sql in statements)

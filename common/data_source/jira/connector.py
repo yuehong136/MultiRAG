@@ -61,7 +61,7 @@ from common.data_source.utils import is_atlassian_cloud_url, is_atlassian_date_e
 logger = logging.getLogger(__name__)
 
 _DEFAULT_FIELDS = "summary,description,updated,created,status,priority,assignee,reporter,labels,issuetype,project,comment,attachment"
-_SLIM_FIELDS = "key,project"
+_SLIM_FIELDS = "key,project,labels,attachment"
 _MAX_RESULTS_FETCH_IDS = 5000
 _JIRA_SLIM_PAGE_SIZE = 500
 _JIRA_FULL_PAGE_SIZE = 50
@@ -147,7 +147,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
             else:
                 logger.warning("[Jira] Scoped token requested but Jira base URL does not appear to be an Atlassian Cloud domain; scoped token ignored.")
 
-        user_email = credentials.get("jira_user_email") or credentials.get("username")
+        user_email = credentials.get("jira_user_email") or credentials.get("jira_username") or credentials.get("username")
         api_token = credentials.get("jira_api_token") or credentials.get("token") or credentials.get("api_token")
         password = credentials.get("jira_password") or credentials.get("password")
         rest_api_version = credentials.get("rest_api_version")
@@ -375,62 +375,91 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
 
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: Any = None,
     ) -> Generator[list[SlimDocument], None, None]:
         """Return lightweight references to Jira issues (used for permission syncing)."""
         if not self.jira_client:
             raise ConnectorMissingCredentialError("Jira")
 
-        start_ts = start if start is not None else 0
-        end_ts = end if end is not None else datetime.now(UTC).timestamp()
-        jql = self._build_jql(start_ts, end_ts)
+        jql = self._build_jql(None, None)
 
-        checkpoint = self.build_dummy_checkpoint()
-        checkpoint_callback = self._make_checkpoint_callback(checkpoint)
-        prev_offset = 0
-        current_offset = 0
         slim_batch: list[SlimDocument] = []
-
-        while checkpoint.has_more:
-            for issue in self._perform_jql_search(
-                jql=jql,
-                start=current_offset,
-                max_results=_JIRA_SLIM_PAGE_SIZE,
-                fields=self._slim_fields,
-                all_issue_ids=checkpoint.all_issue_ids,
-                checkpoint_callback=checkpoint_callback,
-                next_page_token=checkpoint.cursor,
-                ids_done=checkpoint.ids_done,
-            ):
-                current_offset += 1
-                if should_skip_issue(issue, self.labels_to_skip):
-                    continue
-
-                doc_id = build_issue_url(self.jira_base_url, issue.key)
-                slim_batch.append(SlimDocument(id=doc_id))
-
-                if len(slim_batch) >= _JIRA_SLIM_PAGE_SIZE:
-                    yield slim_batch
-                    slim_batch = []
-
-            self._update_checkpoint_for_next_run(
-                checkpoint=checkpoint,
-                current_offset=current_offset,
-                starting_offset=prev_offset,
-                page_size=_JIRA_SLIM_PAGE_SIZE,
-            )
-            prev_offset = current_offset
-
+        for issue in self._iter_all_slim_issues(jql):
+            if callback and callback.should_stop():
+                raise RuntimeError("Jira source enumeration cancelled.")
+            if should_skip_issue(issue, self.labels_to_skip):
+                continue
+            slim_batch.append(SlimDocument(id=build_issue_url(self.jira_base_url, issue.key)))
+            if self.include_attachments:
+                fields = issue.raw["fields"]
+                if "attachment" not in fields:
+                    raise RuntimeError("Jira attachment enumeration was incomplete.")
+                for attachment in fields["attachment"] or []:
+                    attachment_id = attachment.get("id") or attachment.get("filename")
+                    if not attachment_id:
+                        raise RuntimeError("Jira attachment has no source ID.")
+                    # Keep existing attachments even when downloading is temporarily unavailable.
+                    slim_batch.append(SlimDocument(id=f"{issue.key}::attachment::{attachment_id}"))
+            if len(slim_batch) >= _JIRA_SLIM_PAGE_SIZE:
+                yield slim_batch
+                slim_batch = []
+                if callback:
+                    callback.progress("jira_slim_document", 1)
         if slim_batch:
             yield slim_batch
+
+    def _iter_all_slim_issues(self, jql: str) -> Iterable[Issue]:
+        assert self.jira_client, "Jira client not initialized."
+        seen_issue_ids: set[str] = set()
+        if self._is_cloud_client():
+            cursor = None
+            seen_cursors: set[str] = set()
+            while True:
+                issue_ids, next_cursor = self._enhanced_search_ids(jql, cursor, strict=True)
+                if seen_issue_ids.intersection(issue_ids):
+                    raise RuntimeError("Jira issue enumeration repeated a source ID.")
+                seen_issue_ids.update(issue_ids)
+                for id_batch in self._chunk_issue_ids(issue_ids, _JIRA_SLIM_PAGE_SIZE):
+                    issues = list(self._bulk_fetch_issues(id_batch, self._slim_fields))
+                    if {str(issue.raw["id"]) for issue in issues} != set(id_batch):
+                        raise RuntimeError("Jira bulk enumeration did not return all requested issues.")
+                    yield from issues
+                if next_cursor is None:
+                    return
+                if next_cursor in seen_cursors:
+                    raise RuntimeError("Jira pagination did not advance.")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+        else:
+            offset = 0
+            while True:
+                issues = self.jira_client.search_issues(
+                    jql_str=jql,
+                    startAt=offset,
+                    maxResults=_JIRA_SLIM_PAGE_SIZE,
+                    fields=self._slim_fields,
+                )
+                total = getattr(issues, "total", None)
+                count = len(issues)
+                current_ids = {str(issue.raw["id"]) for issue in issues}
+                if len(current_ids) != count or seen_issue_ids.intersection(current_ids):
+                    raise RuntimeError("Jira issue enumeration repeated a source ID.")
+                seen_issue_ids.update(current_ids)
+                yield from issues
+                offset += count
+                if total is not None:
+                    if offset >= total:
+                        return
+                    if count == 0:
+                        raise RuntimeError("Jira pagination ended before the reported total.")
+                elif count < _JIRA_SLIM_PAGE_SIZE:
+                    return
 
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    def _build_jql(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> str:
+    def _build_jql(self, start: SecondsSinceUnixEpoch | None, end: SecondsSinceUnixEpoch | None) -> str:
         clauses: list[str] = []
         if self.jql_query:
             clauses.append(f"({self.jql_query})")
@@ -784,6 +813,7 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
         self,
         jql: str,
         next_page_token: str | None,
+        strict: bool = False,
     ) -> tuple[list[str], str | None]:
         assert self.jira_client, "Jira client not initialized."
         enhanced_search_path = self.jira_client._get_url("search/jql")
@@ -796,6 +826,8 @@ class JiraConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermSync
         response = self.jira_client._session.get(enhanced_search_path, params=params)
         response.raise_for_status()
         data = response.json()
+        if strict and ("issues" not in data or (data.get("isLast") is not True and not data.get("nextPageToken"))):
+            raise RuntimeError("Jira issue enumeration response was incomplete.")
         return [str(issue["id"]) for issue in data.get("issues", [])], data.get("nextPageToken")
 
     def _bulk_fetch_issues(
@@ -959,7 +991,7 @@ def main(config: dict[str, Any] | None = None) -> None:
 
     if not base_url:
         raise RuntimeError("Jira base URL must be provided via config or CLI arguments.")
-    if not (credentials.get("jira_api_token") or (credentials.get("jira_user_email") and credentials.get("jira_password"))):
+    if not (credentials.get("jira_api_token") or ((credentials.get("jira_user_email") or credentials.get("jira_username") or credentials.get("username")) and credentials.get("jira_password"))):
         raise RuntimeError("Provide either an API token or both email/password for Jira authentication.")
 
     connector_options = {

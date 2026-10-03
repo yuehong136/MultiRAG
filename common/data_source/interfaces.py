@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Iterator
 from enum import IntFlag, auto
 from types import TracebackType
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar
 
 from anthropic import BaseModel
 
@@ -57,12 +57,34 @@ class SlimConnectorWithPermSync(ABC):
     @abstractmethod
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: Any = None,
     ) -> Generator[list[SlimDocument], None, None]:
-        """Retrieve all simplified documents (with permission sync)"""
+        """Enumerate the entire configured scope, without a time window.
+
+        Exhaustion confirms a complete snapshot, including an empty scope.
+        Listing, pagination and permission failures must propagate; a partial
+        snapshot must never be presented as successfully exhausted.
+        """
         pass
+
+
+class SlimSnapshotConnector(Protocol):
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> Iterator[list[SlimDocument]]: ...
+
+
+def collect_slim_document_snapshot(connector: SlimSnapshotConnector) -> tuple[SlimDocument, ...]:
+    """Publish a deletion snapshot only after every page succeeds.
+
+    A successful empty tuple is authoritative. Exceptions and invalid IDs
+    leave the caller without a snapshot, so they cannot trigger pruning.
+    """
+    documents: list[SlimDocument] = []
+    for batch in connector.retrieve_all_slim_docs_perm_sync():
+        for document in batch:
+            if not isinstance(document, SlimDocument) or not document.id.strip():
+                raise ValueError("Invalid document in deleted-file snapshot")
+            documents.append(document)
+    return tuple(documents)
 
 
 class CheckpointedConnectorWithPermSync(ABC):

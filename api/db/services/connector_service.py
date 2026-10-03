@@ -6,8 +6,11 @@
 @desc: 数据源连接器相关服务
 """
 
+from __future__ import annotations
+
 import logging
 import os
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
@@ -24,9 +27,14 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 from api.utils.common import hash128
 from common.constants import TaskStatus
+from common.data_source.models import SlimDocument
 from common.misc_utils import get_uuid
 
 logger = logging.getLogger(__name__)
+
+
+class SyncTaskCancelled(RuntimeError):
+    """A persisted pause/cancellation must survive worker completion or failure."""
 
 
 def _to_utc(value: datetime | None) -> datetime | None:
@@ -41,6 +49,17 @@ def _to_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def connector_doc_id_candidates(kb_id: str, connector_id: str, external_id: str) -> tuple[str, str, str]:
+    """Historical IDs and the current KB-scoped ID for a source document."""
+    return hash128(external_id), hash128(f"{connector_id}:{external_id}"), hash128(f"{kb_id}:{connector_id}:{external_id}")
+
+
+def resolve_connector_doc_id(kb_id: str, connector_id: str, external_id: str, owned_doc_ids: Collection[str]) -> str:
+    """Preserve IDs already owned by this KB; scope all new document IDs."""
+    *legacy_ids, scoped_id = connector_doc_id_candidates(kb_id, connector_id, external_id)
+    return next((candidate for candidate in legacy_ids if candidate in owned_doc_ids), scoped_id)
 
 
 class ConnectorService(CommonService):
@@ -165,12 +184,16 @@ class ConnectorService(CommonService):
         connector_id: str,
         kb_id: str,
         tenant_id: str,
-        file_list,
+        file_list: Sequence[SlimDocument],
         delete_batch_size: int = 100,
-    ):
+    ) -> tuple[int, list[str]]:
         """
         删除源端已不存在、但本地仍保留的连接器文档。
         """
+        if delete_batch_size <= 0:
+            raise ValueError("delete_batch_size must be positive")
+        if any(not file.id.strip() for file in file_list):
+            raise ValueError("Deleted-file snapshot contains an empty source ID")
         if not Connector2KbService.query(db, connector_id=connector_id, kb_id=kb_id):
             return 0, []
 
@@ -179,7 +202,7 @@ class ConnectorService(CommonService):
             return 0, []
 
         source_type = f"{conn.source}/{conn.id}"
-        retain_doc_ids = {hash128(file.id) for file in file_list}
+        retain_doc_ids = {doc_id for file in file_list for doc_id in connector_doc_id_candidates(kb_id, connector_id, file.id)}
         existing_docs = DocumentService.list_doc_headers_by_kb_and_source_type(
             db,
             kb_id,
@@ -191,7 +214,13 @@ class ConnectorService(CommonService):
 
         stale_doc_id_set = set(stale_doc_ids)
         errors = []
+        cancellation: SyncTaskCancelled | None = None
         for offset in range(0, len(stale_doc_ids), delete_batch_size):
+            try:
+                SyncLogsService.raise_if_cancelled(db, task_id)
+            except SyncTaskCancelled as exc:
+                cancellation = exc
+                break
             err = FileService.delete_docs(
                 db,
                 stale_doc_ids[offset : offset + delete_batch_size],
@@ -210,6 +239,8 @@ class ConnectorService(CommonService):
             if doc["id"] in stale_doc_id_set
         }
         removed_count = len(stale_doc_id_set) - len(remaining_doc_ids)
+        if remaining_doc_ids and not errors and cancellation is None:
+            errors.append(f"{len(remaining_doc_ids)} stale document(s) remain after deletion")
         SyncLogsService.increase_removed_docs(
             db,
             task_id,
@@ -217,6 +248,8 @@ class ConnectorService(CommonService):
             "\n".join(errors),
             len(errors),
         )
+        if cancellation is not None:
+            raise cancellation
         return removed_count, errors
 
 
@@ -226,6 +259,11 @@ class SyncLogsService(CommonService):
     """
 
     model = SyncLogs
+
+    @classmethod
+    def raise_if_cancelled(cls, db: Session, task_id: str) -> None:
+        if db.scalar(select(cls.model.status).where(cls.model.id == task_id)) == TaskStatus.CANCEL:
+            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
 
     @classmethod
     def list_sync_tasks(cls, db: Session, connector_id: str | None = None, page_number: int | None = None, items_per_page: int = 15) -> tuple[list[dict], int]:
@@ -305,7 +343,7 @@ class SyncLogsService(CommonService):
         return [dict(row) for row in rows], total
 
     @classmethod
-    def start(cls, db: Session, task_id: str, connector_id: str):
+    def start(cls, db: Session, task_id: str, connector_id: str) -> None:
         """
         开始同步任务
 
@@ -314,6 +352,9 @@ class SyncLogsService(CommonService):
             task_id: 任务ID
             connector_id: 连接器ID
         """
+        current_status = db.scalar(select(cls.model.status).where(cls.model.id == task_id).with_for_update())
+        if current_status == TaskStatus.CANCEL:
+            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
         now = datetime.now(UTC)
         timestamp = cls.current_timestamp()
         db.execute(update(cls.model).where(cls.model.id == task_id).values(status=TaskStatus.RUNNING, time_started=now, update_date=now, update_time=timestamp))
@@ -337,8 +378,11 @@ class SyncLogsService(CommonService):
         db.commit()
 
     @classmethod
-    def fail(cls, db: Session, task_id: str, connector_id: str, error_msg: str, full_exception_trace: str = "") -> None:
-        """Fail a sync task and its connector in one transaction."""
+    def fail(cls, db: Session, task_id: str, connector_id: str, error_msg: str, full_exception_trace: str = "", poll_range_start: datetime | None = None) -> None:
+        """Fail atomically and retain the original window for a complete retry."""
+        current_status = db.scalar(select(cls.model.status).where(cls.model.id == task_id).with_for_update())
+        if current_status == TaskStatus.CANCEL:
+            return
         now = datetime.now(UTC)
         timestamp = cls.current_timestamp()
         db.execute(
@@ -348,6 +392,7 @@ class SyncLogsService(CommonService):
                 status=TaskStatus.FAIL,
                 error_msg=error_msg,
                 full_exception_trace=full_exception_trace,
+                poll_range_start=_to_utc(poll_range_start),
                 update_date=now,
                 update_time=timestamp,
             )
@@ -430,6 +475,8 @@ class SyncLogsService(CommonService):
         current = db.scalar(select(cls.model).where(cls.model.id == task_id).with_for_update())
         if current is None:
             raise RuntimeError(f"Sync task {task_id} no longer exists")
+        if current.status == TaskStatus.CANCEL:
+            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
 
         now = datetime.now(UTC)
         timestamp = cls.current_timestamp()

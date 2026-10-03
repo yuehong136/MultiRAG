@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from api.db import InputType
@@ -68,3 +68,30 @@ def test_checkpoint_and_next_schedule_commit_as_one_timestamptz_flow(bootstrappe
         assert next_task.poll_range_start == latest_update
         assert next_task.total_docs_indexed == 5
         assert connector_status == TaskStatus.SCHEDULE
+
+
+def test_failed_sync_rewinds_batch_checkpoint_and_preserves_cancel(bootstrapped_engine: Engine) -> None:
+    from uuid import uuid4
+
+    original = datetime(2026, 1, 1, tzinfo=UTC)
+    advanced = original + timedelta(days=1)
+    connector_id, task_id = uuid4().hex, uuid4().hex
+    with Session(bootstrapped_engine) as db:
+        db.add(Connector(id=connector_id, tenant_id=uuid4().hex, name="retry checkpoint", source=FileSource.S3, input_type=InputType.POLL, config={}, status=TaskStatus.RUNNING))
+        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=uuid4().hex, status=TaskStatus.RUNNING, poll_range_start=original))
+        db.commit()
+        SyncLogsService.increase_docs(db, task_id, advanced, 1)
+        SyncLogsService.fail(db, task_id, connector_id, "later batch failed", poll_range_start=original)
+        db.expire_all()
+        current = db.get(SyncLogs, task_id)
+        assert current is not None and current.status == TaskStatus.FAIL and current.poll_range_start == original
+        current.status = TaskStatus.CANCEL
+        connector = db.get(Connector, connector_id)
+        assert connector is not None
+        connector.status = TaskStatus.CANCEL
+        db.commit()
+        SyncLogsService.fail(db, task_id, connector_id, "late timeout", poll_range_start=None)
+        db.expire_all()
+        assert db.get(SyncLogs, task_id).status == TaskStatus.CANCEL
+        assert db.get(SyncLogs, task_id).poll_range_start == original
+        assert db.get(Connector, connector_id).status == TaskStatus.CANCEL

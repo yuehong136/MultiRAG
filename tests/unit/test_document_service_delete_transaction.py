@@ -36,6 +36,9 @@ class _FakeMutationResult:
     def __init__(self, rowcount: int) -> None:
         self.rowcount = rowcount
 
+    def all(self) -> list[str]:
+        return ["task-1"]
+
 
 class _PgConflictError(Exception):
     def __init__(self, sqlstate: str) -> None:
@@ -61,6 +64,9 @@ class _SessionDouble(Session):
         if isinstance(effect, Exception):
             raise effect
         return effect
+
+    def scalars(self, statement, *args, **kwargs):
+        return self.execute(statement, *args, **kwargs)
 
     def begin(self):
         return nullcontext()
@@ -165,6 +171,7 @@ def test_delete_document_db_state_deletes_orphan_file_and_locks_rows() -> None:
                 location="doc-1.pdf",
             ),
         ),
+        task_ids=("task-1",),
     )
 
     executed_statements = db.executed_statements[:4]
@@ -259,3 +266,31 @@ def test_dataset_delete_document_route_no_longer_runs_duplicate_db_deletes(monke
     remove_document.assert_called_once_with(db, document, "tenant-1")
     file_delete.assert_not_called()
     relation_delete.assert_not_called()
+
+
+@pytest.mark.parametrize("index_state", [False, True, "unavailable"])
+def test_remove_document_signals_deleted_tasks_and_only_skips_confirmed_missing_index(monkeypatch: pytest.MonkeyPatch, index_state: bool | str) -> None:
+    from api.db.services import document_service as module
+    from api.db.services import task_service
+
+    snapshot = DeleteDocumentSnapshot(doc_id="doc-1", kb_id="kb-1", kb_name="Dataset", tenant_id="tenant-1", thumbnail=None, location=None, task_ids=("running-1", "running-2"))
+    store = MagicMock()
+    store.db_type.return_value = "milvus"
+    if index_state == "unavailable":
+        store.has_collection.side_effect = ConnectionError("offline")
+    else:
+        store.has_collection.return_value = index_state
+    image_cleanup = MagicMock()
+    signals = MagicMock()
+    monkeypatch.setattr(DocumentService, "_delete_document_db_state", lambda *args: snapshot)
+    monkeypatch.setattr(DocumentService, "_resolve_collection_name", lambda *args: "collection")
+    monkeypatch.setattr(DocumentService, "delete_chunk_images", image_cleanup)
+    monkeypatch.setattr(DocMetadataService, "delete_document_metadata", lambda *args: None)
+    monkeypatch.setattr(module.settings, "docStoreConn", store)
+    monkeypatch.setattr(task_service.REDIS_CONN, "set", signals)
+    monkeypatch.setattr(task_service.TaskService, "query", lambda *args, **kwargs: pytest.fail("deleted task IDs must not be queried again"))
+    assert DocumentService.remove_document(_build_session(), Document(id="doc-1"), "tenant-1") is True
+    assert [call.args for call in signals.call_args_list] == [("running-1-cancel", "x"), ("running-2-cancel", "x")]
+    assert image_cleanup.called is (index_state is not False)
+    assert store.search.called is (index_state is not False)
+    assert store.delete.called is (index_state is not False)

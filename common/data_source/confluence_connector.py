@@ -469,6 +469,7 @@ class OnyxConfluence:
         # Called with the next url to use to get the next page
         next_page_callback: Callable[[str], None] | None = None,
         force_offset_pagination: bool = False,
+        strict: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """
         This will paginate through the top level query.
@@ -478,7 +479,11 @@ class OnyxConfluence:
 
         url_suffix = update_param_in_path(url_suffix, "limit", str(limit))
 
+        seen_urls: set[str] = set()
         while url_suffix:
+            if strict and url_suffix in seen_urls:
+                raise RuntimeError("Confluence pagination did not advance.")
+            seen_urls.add(url_suffix)
             logging.debug(f"Making confluence call to {url_suffix}")
             try:
                 raw_response = self.get(
@@ -512,7 +517,7 @@ class OnyxConfluence:
                 # If we fail due to a 500, try one by one.
                 # NOTE: this iterative approach only works for server, since cloud uses cursor-based
                 # pagination
-                if raw_response.status_code == 500 and not self._is_cloud:
+                if raw_response.status_code == 500 and not self._is_cloud and not strict:
                     initial_start = get_start_param_from_url(url_suffix)
                     if initial_start is None:
                         # can't handle this if we don't have offset-based pagination
@@ -543,6 +548,9 @@ class OnyxConfluence:
             except Exception as e:
                 logging.exception(f"Failed to parse response as JSON. Response: {raw_response.__dict__}")
                 raise e
+
+            if strict and "results" not in next_response:
+                raise RuntimeError("Confluence enumeration response was incomplete.")
 
             # Yield the results individually.
             results = cast(list[dict[str, Any]], next_response.get("results", []))
@@ -593,6 +601,8 @@ class OnyxConfluence:
             # 0 results. This is a bug with Confluence, so we need to check for it and
             # stop paginating.
             if url_suffix and not results:
+                if strict:
+                    raise RuntimeError("Confluence returned an empty page with a continuation link.")
                 logging.info(f"No results found for call '{old_url_suffix}' despite next link being present. Stopping pagination.")
                 break
 
@@ -605,12 +615,13 @@ class OnyxConfluence:
         cql: str,
         expand: str | None = None,
         limit: int | None = None,
+        strict: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """
         The content/search endpoint can be used to fetch pages, attachments, and comments.
         """
         cql_url = self.build_cql_url(cql, expand)
-        yield from self._paginate_url(cql_url, limit)
+        yield from self._paginate_url(cql_url, limit, strict=strict)
 
     def paginated_page_retrieval(
         self,
@@ -635,6 +646,7 @@ class OnyxConfluence:
         cql: str,
         expand: str | None = None,
         limit: int | None = None,
+        strict: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """
         This function will paginate through the top level query first, then
@@ -645,7 +657,7 @@ class OnyxConfluence:
             if isinstance(data, dict):
                 next_url = data.get("_links", {}).get("next")
                 if next_url and "results" in data:
-                    data["results"].extend(self._paginate_url(next_url, limit=limit))
+                    data["results"].extend(self._paginate_url(next_url, limit=limit, strict=strict))
 
                 for value in data.values():
                     _traverse_and_update(value)
@@ -653,7 +665,7 @@ class OnyxConfluence:
                 for item in data:
                     _traverse_and_update(item)
 
-        for confluence_object in self.paginated_cql_retrieval(cql, expand, limit):
+        for confluence_object in self.paginated_cql_retrieval(cql, expand, limit, strict=strict):
             _traverse_and_update(confluence_object)
             yield confluence_object
 
@@ -1733,16 +1745,12 @@ class ConfluenceConnector(
         callback: IndexingHeartbeatInterface | None = None,
     ) -> GenerateSlimDocumentOutput:
         return self._retrieve_all_slim_docs(
-            start=start,
-            end=end,
             callback=callback,
             include_permissions=False,
         )
 
     def retrieve_all_slim_docs_perm_sync(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: IndexingHeartbeatInterface | None = None,
     ) -> GenerateSlimDocumentOutput:
         """
@@ -1750,16 +1758,12 @@ class ConfluenceConnector(
         Does not fetch actual text. Used primarily for incremental permission sync.
         """
         return self._retrieve_all_slim_docs(
-            start=start,
-            end=end,
             callback=callback,
             include_permissions=True,
         )
 
     def _retrieve_all_slim_docs(
         self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
         callback: IndexingHeartbeatInterface | None = None,
         include_permissions: bool = True,
     ) -> GenerateSlimDocumentOutput:
@@ -1779,7 +1783,10 @@ class ConfluenceConnector(
             cql=page_query,
             expand=restrictions_expand,
             limit=_SLIM_DOC_BATCH_SIZE,
+            strict=True,
         ):
+            if callback and callback.should_stop():
+                raise RuntimeError("Confluence source enumeration cancelled.")
             page_id = page["id"]
             page_restrictions = page.get("restrictions") or {}
             page_space_key = page.get("space", {}).get("key")
@@ -1799,6 +1806,7 @@ class ConfluenceConnector(
                 cql=attachment_query,
                 expand=restrictions_expand,
                 limit=_SLIM_DOC_BATCH_SIZE,
+                strict=True,
             ):
                 # If you skip images, you'll skip them in the permission sync
                 attachment["metadata"].get("mediaType", "")

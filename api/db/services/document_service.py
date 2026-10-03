@@ -56,6 +56,7 @@ class DeleteDocumentSnapshot:
     location: str | None
     candidate_file_ids: tuple[str, ...] = ()
     orphan_file_payloads: tuple[OrphanFilePayload, ...] = ()
+    task_ids: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -650,7 +651,7 @@ class DocumentService(CommonService):
                 cls.model.kb_id == kb_id,
                 cls.model.source_type == source_type,
             )
-            .order_by(cls.model.create_time.asc())
+            .order_by(cls.model.create_time.asc(), cls.model.id.asc())
         )
 
         offset = 0
@@ -2121,7 +2122,7 @@ class DocumentService(CommonService):
                     .all()
                 }
 
-            db.execute(sa_delete(Task).where(Task.doc_id == doc_id))
+            task_ids = tuple(db.scalars(sa_delete(Task).where(Task.doc_id == doc_id).returning(Task.id)).all())
             db.execute(sa_delete(File2Document).where(File2Document.document_id == doc_id))
 
             for file_id in candidate_file_ids:
@@ -2171,10 +2172,11 @@ class DocumentService(CommonService):
                 location=doc_row["location"],
                 candidate_file_ids=candidate_file_ids,
                 orphan_file_payloads=tuple(orphan_file_payloads),
+                task_ids=task_ids,
             )
 
     @classmethod
-    def remove_document(cls, db: Session, doc: Document, tenant_id: str):
+    def remove_document(cls, db: Session, doc: Document, tenant_id: str) -> bool:
         from api.db.services.task_service import cancel_all_task_of
 
         snapshot = cls._delete_document_db_state(db, doc.id)
@@ -2186,14 +2188,27 @@ class DocumentService(CommonService):
 
         # Cancel all running tasks first — set cancel flag in Redis
         try:
-            cancel_all_task_of(db, doc_id)
+            cancel_all_task_of(db, doc_id, task_ids=snapshot.task_ids)
             logging.info(f"Cancelled all tasks for document {doc_id}")
         except Exception as e:
             logging.warning(f"Failed to cancel tasks for document {doc_id}: {e}")
 
+        # Only a confirmed missing index skips index-dependent cleanup. A probe
+        # failure must not suppress the existing best-effort cleanup attempts.
+        chunk_index_exists: bool | None = None
+        try:
+            # Only Milvus exposes a probe which distinguishes missing indexes
+            # from transport/auth failures. Other backends' index_exist() catches
+            # both and returns False, so preserve their image/graph attempts.
+            if settings.docStoreConn.db_type() == "milvus":
+                chunk_index_exists = settings.docStoreConn.has_collection(collection_name)
+        except Exception:
+            logging.warning("Failed to check chunk index for document %s", doc_id, exc_info=True)
+
         # Delete chunk images (non-critical, log and continue)
         try:
-            cls.delete_chunk_images(snapshot, collection_name)
+            if chunk_index_exists is not False:
+                cls.delete_chunk_images(snapshot, collection_name)
         except Exception as e:
             logging.warning(f"Failed to delete chunk images for document {doc_id}: {e}")
 
@@ -2223,7 +2238,7 @@ class DocumentService(CommonService):
         try:
             db_type = settings.docStoreConn.db_type()
             # 检查集合是否存在并删除向量数据库中的数据
-            if settings.docStoreConn.has_collection(collection_name):
+            if chunk_index_exists is not False and (db_type == "milvus" or settings.docStoreConn.has_collection(collection_name)):
                 if db_type == "milvus":
                     settings.docStoreConn.delete(condition={"doc_id": doc_id}, index_name=collection_name, dataset_id=snapshot.kb_id)
                 else:
@@ -2239,47 +2254,48 @@ class DocumentService(CommonService):
             logging.warning(f"Failed to delete metadata for document {doc_id}: {e}")
 
         try:
-            graph_source = settings.docStoreConn.get_fields(
-                settings.docStoreConn.search(
+            if chunk_index_exists is not False:
+                graph_source = settings.docStoreConn.get_fields(
+                    settings.docStoreConn.search(
+                        ["source_id"],
+                        [],
+                        {"kb_id": snapshot.kb_id, "knowledge_graph_kwd": ["graph"]},
+                        [],
+                        OrderByExpr(),
+                        0,
+                        1,
+                        collection_name,
+                        [snapshot.kb_id],
+                    ),
                     ["source_id"],
-                    [],
-                    {"kb_id": snapshot.kb_id, "knowledge_graph_kwd": ["graph"]},
-                    [],
-                    OrderByExpr(),
-                    0,
-                    1,
-                    collection_name,
-                    [snapshot.kb_id],
-                ),
-                ["source_id"],
-            )
-            graph_source_ids = cls._normalize_graph_source_ids(graph_source)
-            if doc_id in graph_source_ids:
-                settings.docStoreConn.update(
-                    {
-                        "kb_id": snapshot.kb_id,
-                        "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
-                        "source_id": doc_id,
-                    },
-                    {"remove": {"source_id": doc_id}},
-                    collection_name,
-                    snapshot.kb_id,
                 )
-                settings.docStoreConn.update(
-                    {"kb_id": snapshot.kb_id, "knowledge_graph_kwd": ["graph"]},
-                    {"removed_kwd": "Y"},
-                    collection_name,
-                    snapshot.kb_id,
-                )
-                settings.docStoreConn.delete(
-                    {
-                        "kb_id": snapshot.kb_id,
-                        "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
-                        "must_not": {"exists": "source_id"},
-                    },
-                    collection_name,
-                    snapshot.kb_id,
-                )
+                graph_source_ids = cls._normalize_graph_source_ids(graph_source)
+                if doc_id in graph_source_ids:
+                    settings.docStoreConn.update(
+                        {
+                            "kb_id": snapshot.kb_id,
+                            "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
+                            "source_id": doc_id,
+                        },
+                        {"remove": {"source_id": doc_id}},
+                        collection_name,
+                        snapshot.kb_id,
+                    )
+                    settings.docStoreConn.update(
+                        {"kb_id": snapshot.kb_id, "knowledge_graph_kwd": ["graph"]},
+                        {"removed_kwd": "Y"},
+                        collection_name,
+                        snapshot.kb_id,
+                    )
+                    settings.docStoreConn.delete(
+                        {
+                            "kb_id": snapshot.kb_id,
+                            "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"],
+                            "must_not": {"exists": "source_id"},
+                        },
+                        collection_name,
+                        snapshot.kb_id,
+                    )
         except Exception as e:
             logging.warning(f"Failed to cleanup knowledge graph for document {doc_id}: {e}")
 

@@ -546,10 +546,13 @@ def reuse_prev_task_chunks(task: dict[str, Any], prev_tasks: list[dict[str, Any]
     return len(task["chunk_ids"].split())
 
 
-def cancel_all_task_of(db: Session, doc_id: str):
-    for t in TaskService.query(db, doc_id=doc_id):
+def cancel_all_task_of(db: Session, doc_id: str, *, task_ids: tuple[str, ...] | None = None) -> None:
+    """Signal tasks even when their DB rows were atomically removed first."""
+    if task_ids is None:
+        task_ids = tuple(t.id for t in TaskService.query(db, doc_id=doc_id))
+    for task_id in task_ids:
         try:
-            REDIS_CONN.set(f"{t.id}-cancel", "x")
+            REDIS_CONN.set(f"{task_id}-cancel", "x")
         except Exception as e:
             logging.exception(e)
 
