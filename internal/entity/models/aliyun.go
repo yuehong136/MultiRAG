@@ -128,7 +128,7 @@ func (m *AliyunModel) request(method, suffix string, config *APIConfig, body int
 		}
 		requestBody = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, endpoint, requestBody)
+	req, err := http.NewRequestWithContext(requestContext(config), method, endpoint, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("aliyun: create request: %w", err)
 	}
@@ -195,8 +195,8 @@ func (m *AliyunModel) Chat(modelName, message *string, apiConfig *APIConfig, cha
 }
 
 // ChatWithMessages sends role-tagged messages through the same chat endpoint.
-func (m *AliyunModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, chatConfig *ChatConfig) (string, error) {
-	response, err := m.chat(modelName, messages, &APIConfig{APIKey: apiKey}, chatConfig)
+func (m *AliyunModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatConfig *ChatConfig) (string, error) {
+	response, err := m.chat(modelName, messages, apiConfig, chatConfig)
 	if err != nil {
 		return "", err
 	}
@@ -213,13 +213,20 @@ func (m *AliyunModel) ChatStreamlyWithChannel(modelName, apiKey, message *string
 
 // ChatStreamlyWithSender sends content and reasoning deltas to sender.
 func (m *AliyunModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil || sender == nil {
-		return errors.New("aliyun: model name, message and sender are required")
+	if modelName == nil || message == nil {
+		return fmt.Errorf("model name and message are required")
+	}
+	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatConfig, sender)
+}
+
+func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatConfig *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("stream sender is required")
 	}
 	if chatConfig != nil && chatConfig.Stream != nil && !*chatConfig.Stream {
 		return errors.New("aliyun: streaming requires stream=true")
 	}
-	body, err := aliyunChatBody(*modelName, []Message{{Role: "user", Content: *message}}, chatConfig, true)
+	body, err := aliyunChatBody(modelName, messages, chatConfig, true)
 	if err != nil {
 		return err
 	}

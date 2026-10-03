@@ -192,7 +192,7 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 	return chatResponse, nil
 }
 
-func (m *DeepSeekModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
 }
 
@@ -454,4 +454,8 @@ func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, er
 
 func (m *DeepSeekModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+}
+
+func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s: history streaming is unsupported", m.Name())
 }

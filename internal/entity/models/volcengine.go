@@ -134,8 +134,8 @@ func (v *VolcEngine) Chat(name, message *string, apiConfig *APIConfig, config *C
 	}
 	return v.chat(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config)
 }
-func (v *VolcEngine) ChatWithMessages(name string, key *string, messages []Message, config *ChatConfig) (string, error) {
-	result, err := v.chat(name, messages, &APIConfig{APIKey: key}, config)
+func (v *VolcEngine) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
+	result, err := v.chat(name, messages, apiConfig, config)
 	if err != nil {
 		return "", err
 	}
@@ -143,10 +143,17 @@ func (v *VolcEngine) ChatWithMessages(name string, key *string, messages []Messa
 }
 
 func (v *VolcEngine) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if name == nil || message == nil || sender == nil {
-		return fmt.Errorf("volcengine: model name, message and sender are required")
+	if name == nil || message == nil {
+		return fmt.Errorf("model name and message are required")
 	}
-	body, err := volcEngineBody(*name, []Message{{Role: "user", Content: *message}}, config, true)
+	return v.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
+}
+
+func (v *VolcEngine) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("stream sender is required")
+	}
+	body, err := volcEngineBody(name, messages, config, true)
 	if err != nil {
 		return err
 	}

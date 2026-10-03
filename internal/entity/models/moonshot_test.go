@@ -331,7 +331,7 @@ func TestMoonshotChatValidation(t *testing.T) {
 		t.Fatal("nil sender accepted")
 	}
 	for _, messages := range [][]Message{nil, {{Content: "no role"}}} {
-		if _, err := driver.ChatWithMessages(name, &key, messages, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, messages, nil); err == nil {
 			t.Fatal("invalid history accepted")
 		}
 	}

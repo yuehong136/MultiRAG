@@ -417,254 +417,156 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
-func (z *ZhipuAIModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, chatModelConfig *ChatConfig) (string, error) {
-	if apiKey == nil || *apiKey == "" {
-		return "", fmt.Errorf("api key is nil or empty")
-	}
-
-	if len(messages) == 0 {
-		return "", fmt.Errorf("messages is empty")
-	}
-
-	url := fmt.Sprintf("%s/%s", z.BaseURL["default"], z.URLSuffix.Chat)
-
-	// Convert messages to the format expected by API
-	apiMessages := make([]map[string]string, len(messages))
-	for i, msg := range messages {
-		apiMessages[i] = map[string]string{
-			"role":    msg.Role,
-			"content": msg.Content,
-		}
-	}
-
-	// Build request body
-	reqBody := map[string]interface{}{
-		"model":       modelName,
-		"messages":    apiMessages,
-		"stream":      false,
-		"temperature": 1,
-	}
-
-	if chatModelConfig != nil {
-		if chatModelConfig.MaxTokens != nil {
-			reqBody["max_tokens"] = *chatModelConfig.MaxTokens
-		}
-
-		if chatModelConfig.Temperature != nil {
-			reqBody["temperature"] = *chatModelConfig.Temperature
-		}
-
-		if chatModelConfig.TopP != nil {
-			reqBody["top_p"] = *chatModelConfig.TopP
-		}
-	}
-
-	jsonData, err := json.Marshal(reqBody)
+func (z *ZhipuAIModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
+	body, err := z.historyBody(modelName, messages, config, false)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return "", err
 	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	resp, err := z.historyRequest(apiConfig, body)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiKey))
-
-	resp, err := z.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to send request: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+	var result aliyunChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("zhipu-ai: decode response: %w", err)
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+	if len(result.Error) != 0 && string(result.Error) != "null" {
+		return "", fmt.Errorf("zhipu-ai: provider error")
 	}
-
-	// Parse response
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || *result.Choices[0].Message.Content == "" {
+		return "", fmt.Errorf("zhipu-ai: no text answer")
 	}
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
-	}
-
-	firstChoice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid choice format")
-	}
-
-	messageMap, ok := firstChoice["message"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid message format")
-	}
-
-	content, ok := messageMap["content"].(string)
-	if !ok {
-		return "", fmt.Errorf("invalid content format")
-	}
-
-	return content, nil
+	return *result.Choices[0].Message.Content, nil
 }
 
-// ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
-func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if apiConfig == nil || apiConfig.APIKey == nil {
-		return fmt.Errorf("API key is nil")
+func (z *ZhipuAIModel) historyBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
+	body, err := aliyunChatBody(name, messages, config, stream)
+	if err != nil {
+		return nil, err
+	}
+	delete(body, "enable_thinking")
+	if config != nil && config.Thinking != nil {
+		mode := "disabled"
+		if *config.Thinking {
+			mode = "enabled"
+		}
+		body["thinking"] = map[string]string{"type": mode}
+	}
+	return body, nil
+}
+
+func (z *ZhipuAIModel) historyRequest(apiConfig *APIConfig, body map[string]interface{}) (*http.Response, error) {
+	if apiConfig == nil || apiConfig.APIKey == nil || *apiConfig.APIKey == "" {
+		return nil, fmt.Errorf("zhipu-ai: API key is required")
 	}
 	baseURL, err := z.resolveBaseURL(apiConfig.Region)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	url := joinModelURL(baseURL, z.URLSuffix.Chat)
-
-	// Build request body with streaming enabled
-	reqBody := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": *message},
-		},
-		"stream":      false,
-		"temperature": 1,
-	}
-
-	if modelConfig != nil {
-		if modelConfig.Stream != nil {
-			reqBody["stream"] = *modelConfig.Stream
-		}
-
-		if modelConfig.MaxTokens != nil {
-			reqBody["max_tokens"] = *modelConfig.MaxTokens
-		}
-
-		if modelConfig.Temperature != nil {
-			reqBody["temperature"] = *modelConfig.Temperature
-		}
-
-		if modelConfig.DoSample != nil {
-			reqBody["do_sample"] = *modelConfig.DoSample
-		}
-
-		if modelConfig.TopP != nil {
-			reqBody["top_p"] = *modelConfig.TopP
-		}
-
-		if modelConfig.Stop != nil {
-			reqBody["stop"] = *modelConfig.Stop
-		}
-
-		if modelConfig.Thinking != nil {
-			if *modelConfig.Thinking {
-				reqBody["thinking"] = map[string]interface{}{
-					"type": "enabled",
-				}
-			} else {
-				reqBody["thinking"] = map[string]interface{}{
-					"type": "disabled",
-				}
-			}
-		}
-	}
-
-	jsonData, err := json.Marshal(reqBody)
+	data, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return nil, err
 	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), http.MethodPost, joinModelURL(baseURL, z.URLSuffix.Chat), bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
-
+	req.Header.Set("Authorization", "Bearer "+*apiConfig.APIKey)
 	resp, err := z.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("zhipu-ai: request failed (HTTP %d)", resp.StatusCode)
+	}
+	return resp, nil
+}
+
+func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	if modelName == nil || message == nil {
+		return fmt.Errorf("zhipu-ai: model name and message are required")
+	}
+	return z.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
+}
+
+func (z *ZhipuAIModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("zhipu-ai: sender is required")
+	}
+	body, err := z.historyBody(name, messages, config, true)
+	if err != nil {
+		return err
+	}
+	resp, err := z.historyRequest(apiConfig, body)
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// SSE parsing: read line by line
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	receivedAnswer := false
 	for scanner.Scan() {
 		line := scanner.Text()
-
-		// SSE data line starts with "data:"
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-
-		// Extract JSON after "data:"
-		data := strings.TrimSpace(line[5:])
-
-		// [DONE] marks the end of stream
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
 		if data == "[DONE]" {
-			break
+			if !receivedAnswer {
+				return fmt.Errorf("zhipu-ai: no text answer")
+			}
+			return sender(&data, nil)
 		}
-
-		// Parse the JSON event
-		var event map[string]interface{}
+		var event struct {
+			Choices []struct {
+				Delta struct {
+					Content   *string `json:"content"`
+					Reasoning *string `json:"reasoning_content"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Error json.RawMessage `json:"error"`
+		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fmt.Errorf("zhipu-ai: invalid stream: %w", err)
+		}
+		if len(event.Error) != 0 && string(event.Error) != "null" {
+			return fmt.Errorf("zhipu-ai: stream error")
+		}
+		if len(event.Choices) == 0 {
 			continue
 		}
-
-		choices, ok := event["choices"].([]interface{})
-		if !ok || len(choices) == 0 {
-			continue
-		}
-
-		firstChoice, ok := choices[0].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		delta, ok := firstChoice["delta"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		reasoningContent, ok := delta["reasoning_content"].(string)
-		if ok && reasoningContent != "" {
-			if err := sender(nil, &reasoningContent); err != nil {
+		delta := event.Choices[0].Delta
+		if delta.Reasoning != nil && *delta.Reasoning != "" {
+			if err := sender(nil, delta.Reasoning); err != nil {
 				return err
 			}
 		}
-
-		content, ok := delta["content"].(string)
-		if ok && content != "" {
-			if err := sender(&content, nil); err != nil {
+		if delta.Content != nil && *delta.Content != "" {
+			receivedAnswer = true
+			if err := sender(delta.Content, nil); err != nil {
 				return err
 			}
 		}
-
-		finishReason, ok := firstChoice["finish_reason"].(string)
-		if ok && finishReason != "" {
-			break
+		if reason := event.Choices[0].FinishReason; reason != nil && *reason != "" {
+			if !receivedAnswer {
+				return fmt.Errorf("zhipu-ai: no text answer")
+			}
+			done := "[DONE]"
+			return sender(&done, nil)
 		}
+
 	}
-
-	// Send [DONE] marker for OpenAI compatibility
-	endOfStream := "[DONE]"
-	if err := sender(&endOfStream, nil); err != nil {
+	if err := scanner.Err(); err != nil {
 		return err
 	}
-
-	return scanner.Err()
+	return io.ErrUnexpectedEOF
 }
 
 // Encode encodes a list of texts into embeddings

@@ -31,19 +31,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// parseModelName parses a composite model name in format "model_name@provider"
-// Returns modelName and provider separately
-func parseModelName(compositeName string) (modelName, provider string, err error) {
-	parts := strings.Split(compositeName, "@")
-	if len(parts) == 2 {
-		return parts[0], parts[1], nil
-	} else if len(parts) == 1 {
-		return parts[0], "", fmt.Errorf("provider name missing in model name: %s", compositeName)
-	} else {
-		return "", "", fmt.Errorf("invalid model name format: %s", compositeName)
-	}
-}
-
 func NewModelProviderService() *ModelProviderService {
 	return &ModelProviderService{
 		providerManager:      dao.GetModelProviderManager(),
@@ -677,7 +664,7 @@ func (m *ModelProviderService) ChatWithMessagesToModelByAPIKey(providerName, mod
 
 	config := &modelModule.ChatConfig{}
 	applyModelChatDefaults(model, config)
-	response, err := providerInfo.ModelDriver.ChatWithMessages(modelName, &apiKey, messages, config)
+	response, err := providerInfo.ModelDriver.ChatWithMessages(modelName, &modelModule.APIConfig{APIKey: &apiKey}, messages, config)
 	if err != nil {
 		return nil, common.CodeServerError, err
 	}

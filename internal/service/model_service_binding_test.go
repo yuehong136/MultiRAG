@@ -112,11 +112,11 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(vector, [][]float64{{1, 2}}) {
 		t.Fatalf("vector=%v, error=%v", vector, err)
 	}
-	bundle := &ModelBundle{modelType: entity.ModelTypeEmbedding, model: embedding}
-	queryVector, tokens, err := bundle.EncodeQuery("question")
-	if err != nil || tokens != 2 || !reflect.DeepEqual(queryVector, []float64{1, 2}) {
-		t.Fatalf("bound query=%v tokens=%d error=%v", queryVector, tokens, err)
+	queryVectors, err := embedding.Encode([]string{"question"})
+	if err != nil || !reflect.DeepEqual(queryVectors, [][]float64{{1, 2}}) {
+		t.Fatalf("bound query=%v error=%v", queryVectors, err)
 	}
+	queryVector := queryVectors[0]
 	expression, err := nlp.NewRetrievalService(nil).GetVector("question", embedding, 7, 0.4)
 	if err != nil || expression.VectorColumnName != "q_2_vec" || !reflect.DeepEqual(expression.EmbeddingData, queryVector) {
 		t.Fatalf("bound retrieval expression=%v error=%v", expression, err)
@@ -221,7 +221,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	t.Logf("real PostgreSQL + provider HTTP paths: %s", data)
 }
 
-func TestModelBundleUsesResolvedBoundName(t *testing.T) {
+func TestEmbeddingUsesResolvedBoundName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Model string `json:"model"`
@@ -235,9 +235,10 @@ func TestModelBundleUsesResolvedBoundName(t *testing.T) {
 	defer server.Close()
 	key, name := "key", "resolved-name"
 	driver := models.NewSiliconFlowModel(map[string]string{"default": server.URL}, models.URLSuffix{Embedding: "embeddings"})
-	bundle := &ModelBundle{modelType: entity.ModelTypeEmbedding, model: models.NewEmbeddingModel(driver, &name, &models.APIConfig{APIKey: &key})}
-	vector, _, err := bundle.EncodeQuery("q")
-	if err != nil || !reflect.DeepEqual(vector, []float64{1, 2}) {
-		t.Fatalf("vector=%v error=%v", vector, err)
+	bound := models.NewEmbeddingModel(driver, &name, &models.APIConfig{APIKey: &key})
+	vectors, err := bound.Encode([]string{"q"})
+	if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 2}}) {
+		t.Fatalf("vectors=%v error=%v", vectors, err)
 	}
+
 }

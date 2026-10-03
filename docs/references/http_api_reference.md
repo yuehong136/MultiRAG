@@ -1515,11 +1515,23 @@ Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型�
 类型不匹配和数据库错误均失败。每次绑定复制 region URL，不改全局 provider 配置。
 
 Go embedding 驱动只保留 `Encode(modelName, texts, apiConfig, embeddingConfig)`；
-绑定后的模型只需 `Encode(texts)`，检索将查询作为单项批次传入。`ModelBundle` 继续
-提供 `Encode` / `EncodeQuery` 的向量、token 数、error 返回格式；token 数沿用每条文本
-`len(text)/4` 的字节长度估算，尚非供应商 usage。空输入可返回空批次，非空输入的空结果、
-数量不匹配、空向量、维度不一致或非有限数值均失败，检索取首个向量前经过绑定边界校验。
-`EmbeddingConfig` 当前为空配置，默认 nil；重命名不增加新的参数行为或供应商能力。
+绑定后的模型只需 `Encode(texts)`，检索将查询作为单项批次传入。`ModelBundle` 与旧
+entity 模型接口已退出；其 token 估算没有运行时消费者，随旧抽象删除，未替换成供应商
+usage。空输入可返回空批次，非空输入的空结果、数量不匹配、空向量、维度不一致或非有限
+数值均失败，检索取首个向量前经过绑定边界校验。`EmbeddingConfig` 当前为空配置，默认 nil。
+
+Go `/v1/conversation/completion` 的 session 调用直接绑定租户 ChatModel。`stream` 和
+`thinking` 保留缺省/显式 false，配置按模型默认、dialog 设置、请求覆盖的顺序合并；
+角色历史与 dialog system prompt 通过普通请求或历史 sender 发送。`APIConfig` 同时传递
+context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/持久化错误不发送
+成功终帧。stream 保留 `conversation_id`、`message_id`、累计 answer 和 reference 数组，
+并返回累计 `reasoning_content`；正常结束的 `data: true` 在 session 持久化成功之后发送。
+指定 `llm_id` 的临时调用不落库。成功保存完整用户历史及助手答案；错误和取消不保存部分答案。
+
+历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、Zhipu-AI；其他驱动
+保留明确的不支持结果，不将历史压成一个 user 文本。此 Go session 路径仍只执行已有文本
+聊天，未接入 KB/Tavily 检索、附件或多模态能力；image2text 能力不可作为 chat 绑定。
+当前生产 Python session、LLMBundle 和 Web 合同不受本项影响。
 
 VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支持普通文本聊天、
 完整角色历史、sender SSE、模型发现及连接检查。`thinking=true` 且未指定 effort 时用

@@ -2413,3 +2413,38 @@ HTTP + 隔离 PostgreSQL 验收通过，含业务码、SQL 独立读回、默认
 错误、禁用模型及断开请求取消；两个自有 scratch 库已删除。认证组无凭据拒绝测试通过；
 专项 provider HTTP 使用受控身份和响应，不代表真实账号或生产 JWT/API key E2E。
 Go 工具链既有 C/linker 警告保留，未修改依赖。未改 Python；未运行 Python 门禁。
+
+## f3c232cf47626c332d0aa7caee614715afeb214c · Go session 退出 ModelBundle
+
+基准仍为冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f`，在前项模型聊天路由稳定后完成。
+完整六文件 diff 已核；相关后修 `265f92c83` 合并聊天入口、`12af73f2c` 增加历史消息流式、
+`733591686` 复用 GetChatModel 均已检查。仅吸收本项所需的调用合并和历史 sender 思路，
+不扩展上游的图片/附件、多模态或后期 OpenAI/session/RAG 体系，也不修改 Python 模型体系。
+
+- 复用前项已具备的租户 bound models、两段/三段模型名与默认模型解析、region 副本、
+  旧 tenant_llm/APIBase 兼容、模型系列/能力区分；VolcEngine 与 Moonshot 注册和协议保持。
+- session 直接使用 GetChatModel，不再经过 Bundle；stream/thinking 缺省与 false 保留，
+  模型、dialog 与请求配置按优先级合并，ModelClass 仍只来自受信目录。普通历史接口接收
+  APIConfig；五家已有历史能力的驱动复用完整 system/user/assistant 角色，sender 真正增量
+  转发 reasoning 和答案，context 到 provider/SQL 写入。旧 channel 聚合适配已无消费者并删除。
+- 不采用初版把历史拼成单条文本或异步 goroutine 吞错的做法。sender/provider/取消/真实
+  SQL 写入失败返回调用方，不发送成功终帧；持久化检查错误并保存完整历史与助手答案。
+  指定模型的临时调用仍不落库。保留 session SSE 的 conversation_id/message_id/reference。
+- Zhipu 历史路径复用原协议并补 context、thinking、错误/提前 EOF；有答案的 finish_reason
+  或 [DONE] 是有效终态。其他驱动原来未具备的历史能力保持明确不可用。
+- 全仓 Go 搜索确认 Bundle 只剩上述消费者和测试，旧 entity 接口与 ModelConfig 无其他调用。
+  消费者迁完后删除 Bundle、旧接口及死 helper；向量回归迁到 bound Encode，数量、非空、
+  维度、有限值校验与实际检索链保留。token 估算仅测试在调用，无运行时消费者，随旧抽象退出。
+- datasets 的显式实例模型名复用现有严格解析与租户绑定，不用无关旧默认模型凭据授权。
+  两段名的既有 legacy/Builtin 检查保留，不另建模型抽象。
+
+验证：Go 1.25.14，全 `internal/...` race 回归通过（176 个顶层通过、8 个 opt-in skip）；
+随后补核 effort 别名与持久化 JSON 参数的模型专项 race 回归通过。build、vet 和三个独立 main 构建
+通过。另实际启用 5 个相关 opt-in：Google SDK、模型系列、session HTTP/SQL、session 服务
+SQL/HTTP、模型绑定/检索，均零 skip 通过；隔离 SQL 独立读回、失败时不保存部分答案、
+PostgreSQL 触发器真实拒绝写入、HTTP 断开取消均验证。自有 scratch 库及私有配置清理完成。
+先前 fixture 状态缺失和构造参数缺失的失败已修复并复跑，未放宽断言。
+
+保留边界：受控身份与 provider HTTP 不等于远程账号或生产 JWT/API key E2E；Go session
+仍不具备实际 KB/Tavily RAG、附件或多模态，本项未移植后续完整能力。三个无关 live 门禁
+未启用。工具链既有 C/linker 警告保留，未改依赖、共享配置、Python；未 push。

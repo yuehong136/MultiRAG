@@ -44,7 +44,7 @@ func (z *DummyModel) Chat(modelName, message *string, apiConfig *APIConfig, mode
 }
 
 // ChatWithMessages sends multiple role-tagged messages and returns a response.
-func (z *DummyModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+func (z *DummyModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
 
@@ -82,4 +82,8 @@ func (z *DummyModel) CheckConnection(apiConfig *APIConfig) error {
 
 func (m *DummyModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+}
+
+func (z *DummyModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s: history streaming is unsupported", z.Name())
 }

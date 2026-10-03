@@ -37,8 +37,8 @@ func (m *MoonshotModel) Chat(modelName, message *string, apiConfig *APIConfig, m
 	return m.chat(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig)
 }
 
-func (m *MoonshotModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
-	response, err := m.chat(modelName, messages, &APIConfig{APIKey: apiKey}, modelConfig)
+func (m *MoonshotModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
+	response, err := m.chat(modelName, messages, apiConfig, modelConfig)
 	if err != nil {
 		return "", err
 	}
@@ -163,10 +163,17 @@ func (m *MoonshotModel) chat(modelName string, messages []Message, apiConfig *AP
 }
 
 func (m *MoonshotModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if modelName == nil || message == nil || sender == nil {
-		return fmt.Errorf("moonshot: model name, message and sender are required")
+	if modelName == nil || message == nil {
+		return fmt.Errorf("model name and message are required")
 	}
-	body, err := moonshotChatBody(*modelName, []Message{{Role: "user", Content: *message}}, modelConfig, true)
+	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig, sender)
+}
+
+func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil {
+		return fmt.Errorf("stream sender is required")
+	}
+	body, err := moonshotChatBody(modelName, messages, modelConfig, true)
 	if err != nil {
 		return err
 	}

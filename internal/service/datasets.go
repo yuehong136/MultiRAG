@@ -315,7 +315,7 @@ func (s *DatasetsService) CreateDataset(req *CreateDatasetRequest, tenantID stri
 		case "embedding_model", "embd_id":
 			embeddingModelValue, ok := value.(string)
 			if !ok {
-				return nil, common.CodeDataError, errors.New("Embedding model identifier must follow <model_name>@<provider> format")
+				return nil, common.CodeDataError, errors.New("Embedding model identifier must follow <model_name>@<provider> or <model_name>@<instance>@<provider> format")
 			}
 			embeddingModelValue = strings.TrimSpace(embeddingModelValue)
 			if err := validateDatasetEmbeddingModel(embeddingModelValue); err != nil {
@@ -611,12 +611,12 @@ func validateDatasetAvatar(avatar string) error {
 
 func validateDatasetEmbeddingModel(embeddingModel string) error {
 	if embeddingModel == "" {
-		return errors.New("Embedding model identifier must follow <model_name>@<provider> format")
+		return errors.New("Embedding model identifier must follow <model_name>@<provider> or <model_name>@<instance>@<provider> format")
 	}
 
 	modelName, provider, ok := strings.Cut(embeddingModel, "@")
 	if !ok {
-		return errors.New("Embedding model identifier must follow <model_name>@<provider> format")
+		return errors.New("Embedding model identifier must follow <model_name>@<provider> or <model_name>@<instance>@<provider> format")
 	}
 	if strings.TrimSpace(modelName) == "" || strings.TrimSpace(provider) == "" {
 		return errors.New("Both model_name and provider must be non-empty strings")
@@ -671,12 +671,21 @@ func normalizeDatasetUUID1(id string) (string, error) {
 }
 
 func (s *DatasetsService) verifyEmbeddingAvailability(embdID string, tenantID string) (bool, string) {
-	modelName, provider, err := parseModelName(embdID)
+	modelName, _, provider, err := splitModelInstance(embdID)
 	if err != nil {
-		return false, "Embedding model identifier must follow <model_name>@<provider> format"
+		return false, "Embedding model identifier must follow <model_name>@<provider> or <model_name>@<instance>@<provider> format"
 	}
 
 	if provider == "Builtin" {
+		return true, ""
+	}
+
+	// Explicit instances must resolve their own tenant credentials; never authorize
+	// them from an unrelated legacy default-model record.
+	if strings.Count(embdID, "@") == 2 {
+		if _, err := NewModelProviderService().GetEmbeddingModel(tenantID, embdID); err != nil {
+			return false, fmt.Sprintf("Unauthorized model: <%s>", embdID)
+		}
 		return true, ""
 	}
 

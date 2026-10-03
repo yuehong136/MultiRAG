@@ -13,7 +13,7 @@ type modelClassChatDriver struct {
 	class *string
 }
 
-func (d *modelClassChatDriver) ChatWithMessages(_ string, _ *string, _ []Message, config *ChatConfig) (string, error) {
+func (d *modelClassChatDriver) ChatWithMessages(_ string, _ *APIConfig, _ []Message, config *ChatConfig) (string, error) {
 	d.class = config.ModelClass
 	return "answer", nil
 }

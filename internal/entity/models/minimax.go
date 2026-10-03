@@ -30,7 +30,7 @@ func (m *MinimaxModel) Chat(modelName, message *string, apiConfig *APIConfig, mo
 	return nil, fmt.Errorf("chat is not implemented for %s", m.Name())
 }
 
-func (m *MinimaxModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, modelConfig *ChatConfig) (string, error) {
+func (m *MinimaxModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
 }
 
@@ -64,4 +64,8 @@ func (m *MinimaxModel) CheckConnection(apiConfig *APIConfig) error {
 
 func (m *MinimaxModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+}
+
+func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s: history streaming is unsupported", m.Name())
 }

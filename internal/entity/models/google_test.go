@@ -286,7 +286,7 @@ func TestGoogleChatWithMessagesPreservesRolesAndSystemInstruction(t *testing.T) 
 	defer server.Close()
 	g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	_, _, api := googleTestConfig()
-	reply, err := g.ChatWithMessages("gemini-test", api.APIKey, []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "old"}}, nil)
+	reply, err := g.ChatWithMessages("gemini-test", api, []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "old"}}, nil)
 	if err != nil || reply != "reply" {
 		t.Fatalf("reply %q %v", reply, err)
 	}
@@ -313,5 +313,50 @@ func TestGoogleBaseURLRegionAndFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1beta/models/gemini-test:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
+			t.Errorf("history stream URL %s", r.URL)
+		}
+		var body struct {
+			Contents          []struct{ Role string }
+			SystemInstruction struct{ Parts []struct{ Text string } }
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Contents) != 3 || body.Contents[0].Role != "user" || body.Contents[1].Role != "model" || body.Contents[2].Role != "user" || body.SystemInstruction.Parts[0].Text != "rules" {
+			t.Errorf("history %#v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"reply\"}]}}]}\n\n")
+	}))
+	defer server.Close()
+	model := NewGoogleModel(map[string]string{"default": "http://127.0.0.1:1", "fixture": server.URL}, URLSuffix{})
+	_, _, api := googleTestConfig()
+	region := "fixture"
+	api.Region = &region
+	history := []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "old"}, {Role: "assistant", Content: "previous"}, {Role: "user", Content: "question"}}
+	var frames []string
+	err := model.ChatStreamlyWithMessages("gemini-test", history, api, nil, func(content, reason *string) error {
+		if content != nil {
+			frames = append(frames, *content)
+		}
+		return nil
+	})
+	if err != nil || !reflect.DeepEqual(frames, []string{"reply", "[DONE]"}) {
+		t.Fatalf("history frames=%v err=%v", frames, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	api.Context = ctx
+	if _, err := model.ChatWithMessages("gemini-test", api, history, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("history cancellation=%v", err)
+	}
+	if err := model.ChatStreamlyWithMessages("gemini-test", history, api, nil, func(*string, *string) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("history stream cancellation=%v", err)
 	}
 }

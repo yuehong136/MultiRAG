@@ -17,9 +17,10 @@
 package handler
 
 import (
-	"fmt"
+	"encoding/json"
 	"io"
 	"net/http"
+
 	"multirag/internal/common"
 
 	"github.com/gin-gonic/gin"
@@ -200,7 +201,8 @@ type CompletionRequest struct {
 	ConversationID   string                   `json:"conversation_id" binding:"required"`
 	Messages         []map[string]interface{} `json:"messages" binding:"required"`
 	LLMID            string                   `json:"llm_id,omitempty"`
-	Stream           bool                     `json:"stream,omitempty"`
+	Stream           *bool                    `json:"stream,omitempty"`
+	Thinking         *bool                    `json:"thinking,omitempty"`
 	Temperature      float64                  `json:"temperature,omitempty"`
 	TopP             float64                  `json:"top_p,omitempty"`
 	FrequencyPenalty float64                  `json:"frequency_penalty,omitempty"`
@@ -253,6 +255,13 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 		chatModelConfig["max_tokens"] = req.MaxTokens
 	}
 
+	if req.Stream != nil {
+		chatModelConfig["stream"] = *req.Stream
+	}
+	if req.Thinking != nil {
+		chatModelConfig["thinking"] = *req.Thinking
+	}
+
 	// Process messages - filter out system messages and initial assistant messages
 	var processedMessages []map[string]interface{}
 	for i, m := range req.Messages {
@@ -276,39 +285,38 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 	}
 
 	// Call service
-	if req.Stream {
+	if req.Stream != nil && *req.Stream {
 		// Streaming response
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
 		c.Header("X-Accel-Buffering", "no")
 
-		// Create a channel for streaming data
-		streamChan := make(chan string)
-		go func() {
-			defer close(streamChan)
-			err := h.chatSessionService.CompletionStream(userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID, streamChan)
-			if err != nil {
-				streamChan <- fmt.Sprintf("data: %s\n\n", err.Error())
+		c.Writer.WriteHeader(http.StatusOK)
+		c.Writer.Flush()
+		sender := func(data string) error {
+			if err := c.Request.Context().Err(); err != nil {
+				return err
 			}
-		}()
+			if _, err := io.WriteString(c.Writer, data); err != nil {
+				return err
+			}
+			c.Writer.Flush()
+			return c.Request.Context().Err()
+		}
+		err := h.chatSessionService.CompletionStream(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID, sender)
+		if err != nil && c.Request.Context().Err() == nil {
+			data, _ := json.Marshal(gin.H{"code": common.CodeServerError, "message": "Model stream failed", "data": gin.H{"answer": "**ERROR**: Model stream failed", "reference": []interface{}{}}})
+			_ = sender("data: " + string(data) + "\n\n")
+		}
 
-		// Stream data to client
-		c.Stream(func(w io.Writer) bool {
-			data, ok := <-streamChan
-			if !ok {
-				return false
-			}
-			c.Writer.Write([]byte(data))
-			return true
-		})
 	} else {
 		// Non-streaming response
-		result, err := h.chatSessionService.Completion(userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID)
+		result, err := h.chatSessionService.Completion(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
-				"message": err.Error(),
+				"message": "Model request failed",
 			})
 			return
 		}

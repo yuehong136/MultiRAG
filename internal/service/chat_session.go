@@ -17,6 +17,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,21 +28,24 @@ import (
 
 	"multirag/internal/dao"
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 )
 
 // ChatSessionService chat session (conversation) service
 type ChatSessionService struct {
-	chatSessionDAO *dao.ChatSessionDAO
-	chatDAO        *dao.ChatDAO
-	userTenantDAO  *dao.UserTenantDAO
+	chatSessionDAO       *dao.ChatSessionDAO
+	chatDAO              *dao.ChatDAO
+	userTenantDAO        *dao.UserTenantDAO
+	modelProviderService *ModelProviderService
 }
 
 // NewChatSessionService create chat session service
 func NewChatSessionService() *ChatSessionService {
 	return &ChatSessionService{
-		chatSessionDAO: dao.NewChatSessionDAO(),
-		chatDAO:        dao.NewChatDAO(),
-		userTenantDAO:  dao.NewUserTenantDAO(),
+		chatSessionDAO:       dao.NewChatSessionDAO(),
+		chatDAO:              dao.NewChatDAO(),
+		userTenantDAO:        dao.NewUserTenantDAO(),
+		modelProviderService: NewModelProviderService(),
 	}
 }
 
@@ -258,141 +262,125 @@ func (s *ChatSessionService) ListChatSessions(userID string, dialogID string) (*
 	return &ListChatSessionsResponse{Sessions: sessions}, nil
 }
 
-// Completion performs chat completion with full RAG support
-func (s *ChatSessionService) Completion(userID string, conversationID string, messages []map[string]interface{}, llmID string, chatModelConfig map[string]interface{}, messageID string) (map[string]interface{}, error) {
-	// Validate the last message is from user
+// prepareCompletion resolves stored session/dialog and validates the final user turn.
+func (s *ChatSessionService) prepareCompletion(ctx context.Context, conversationID string, messages []map[string]interface{}, llmID string) (*entity.ChatSession, *entity.Chat, []interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
 	if len(messages) == 0 {
-		return nil, errors.New("messages cannot be empty")
+		return nil, nil, nil, errors.New("messages cannot be empty")
 	}
-	lastRole, _ := messages[len(messages)-1]["role"].(string)
-	if lastRole != "user" {
-		return nil, errors.New("the last content of this conversation is not from user")
+	if messages[len(messages)-1]["role"] != "user" {
+		return nil, nil, nil, errors.New("the last content of this conversation is not from user")
 	}
-
-	// Get conversation
 	session, err := s.chatSessionDAO.GetByID(conversationID)
 	if err != nil {
-		return nil, errors.New("Conversation not found")
+		return nil, nil, nil, fmt.Errorf("Conversation not found: %w", err)
 	}
-
-	// Get dialog
 	dialog, err := s.chatSessionDAO.GetDialogByID(session.DialogID)
 	if err != nil {
-		return nil, errors.New("Dialog not found")
+		return nil, nil, nil, fmt.Errorf("Dialog not found: %w", err)
 	}
-
-	// Deep copy messages to session
-	sessionMessages := s.buildSessionMessages(session, messages)
-
-	// Initialize reference if empty
-	reference := s.initializeReference(session)
-
-	// Check if custom LLM is specified and validate API key
-	isEmbedded := llmID != ""
 	if llmID != "" {
-		hasKey, err := s.checkTenantLLMAPIKey(dialog.TenantID, llmID)
-		if err != nil || !hasKey {
-			return nil, fmt.Errorf("Cannot use specified model %s", llmID)
-		}
 		dialog.LLMID = llmID
-		if chatModelConfig != nil {
-			dialog.LLMSetting = chatModelConfig
-		}
 	}
+	return session, dialog, s.initializeReference(session), nil
+}
 
-	// Perform chat completion with RAG
-	result, err := s.asyncChat(dialog, session, messages, chatModelConfig, messageID, reference, false)
+func (s *ChatSessionService) completionModel(ctx context.Context, dialog *entity.Chat) (*models.ChatModel, error) {
+	model, err := s.modelProviderService.GetChatModel(dialog.TenantID, dialog.LLMID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Update conversation if not embedded
-	if !isEmbedded {
-		s.updateSessionMessages(session, sessionMessages, reference)
-	}
-
-	return result, nil
+	model.APIConfig.Context = ctx
+	return model, nil
 }
 
-// CompletionStream performs streaming chat completion with full RAG support
-func (s *ChatSessionService) CompletionStream(userID string, conversationID string, messages []map[string]interface{}, llmID string, chatModelConfig map[string]interface{}, messageID string, streamChan chan<- string) error {
-	// Validate the last message is from user
-	if len(messages) == 0 {
-		streamChan <- fmt.Sprintf("data: %s\n\n", `{"code": 500, "message": "messages cannot be empty", "data": {"answer": "**ERROR**: messages cannot be empty", "reference": []}}`)
-		return errors.New("messages cannot be empty")
-	}
-	lastRole, _ := messages[len(messages)-1]["role"].(string)
-	if lastRole != "user" {
-		streamChan <- fmt.Sprintf("data: %s\n\n", `{"code": 500, "message": "the last content of this conversation is not from user", "data": {"answer": "**ERROR**: the last content of this conversation is not from user", "reference": []}}`)
-		return errors.New("the last content of this conversation is not from user")
-	}
-
-	// Get conversation
-	session, err := s.chatSessionDAO.GetByID(conversationID)
+// Completion uses a tenant-bound text model with complete role-tagged history.
+func (s *ChatSessionService) Completion(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string) (map[string]interface{}, error) {
+	session, dialog, reference, err := s.prepareCompletion(ctx, conversationID, messages, llmID)
 	if err != nil {
-		streamChan <- fmt.Sprintf("data: %s\n\n", `{"code": 500, "message": "Conversation not found", "data": {"answer": "**ERROR**: Conversation not found", "reference": []}}`)
-		return errors.New("Conversation not found")
+		return nil, err
 	}
-
-	// Get dialog
-	dialog, err := s.chatSessionDAO.GetDialogByID(session.DialogID)
+	model, err := s.completionModel(ctx, dialog)
 	if err != nil {
-		streamChan <- fmt.Sprintf("data: %s\n\n", `{"code": 500, "message": "Dialog not found", "data": {"answer": "**ERROR**: Dialog not found", "reference": []}}`)
-		return errors.New("Dialog not found")
+		return nil, err
 	}
-
-	// Deep copy messages to session
-	sessionMessages := s.buildSessionMessages(session, messages)
-
-	// Initialize reference if empty
-	reference := s.initializeReference(session)
-
-	// Check if custom LLM is specified and validate API key
-	isEmbedded := llmID != ""
-	if llmID != "" {
-		hasKey, err := s.checkTenantLLMAPIKey(dialog.TenantID, llmID)
-		if err != nil || !hasKey {
-			errMsg := fmt.Sprintf(`{"code": 500, "message": "Cannot use specified model %s", "data": {"answer": "**ERROR**: Cannot use specified model", "reference": []}}`, llmID)
-			streamChan <- fmt.Sprintf("data: %s\n\n", errMsg)
-			return fmt.Errorf("Cannot use specified model %s", llmID)
-		}
-		dialog.LLMID = llmID
-		if chatModelConfig != nil {
-			dialog.LLMSetting = chatModelConfig
+	answer, err := model.Chat(s.buildSystemPrompt(dialog), s.convertToHistory(s.processMessages(messages, dialog)), s.buildGenConf(dialog, config))
+	if err != nil {
+		return nil, err
+	}
+	if llmID == "" {
+		if err := s.persistCompletion(ctx, session, messages, answer, messageID, reference); err != nil {
+			return nil, err
 		}
 	}
+	return map[string]interface{}{"answer": answer, "reference": reference[len(reference)-1], "final": true, "id": messageID, "session_id": session.ID}, nil
+}
 
-	// Perform streaming chat completion with RAG
-	resultChan, err := s.asyncChatStream(dialog, session, messages, chatModelConfig, messageID, reference)
+// CompletionStream runs the sender synchronously, so its error remains available
+// to the HTTP handler and downstream cancellation never leaves a blocked channel.
+func (s *ChatSessionService) CompletionStream(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string, sender func(string) error) error {
+	if sender == nil {
+		return errors.New("completion sender is required")
+	}
+	session, dialog, reference, err := s.prepareCompletion(ctx, conversationID, messages, llmID)
 	if err != nil {
-		streamChan <- fmt.Sprintf("data: %s\n\n", fmt.Sprintf(`{"code": 500, "message": "%s", "data": {"answer": "**ERROR**: %s", "reference": []}}`, err.Error(), err.Error()))
 		return err
 	}
-
-	// Stream results
-	for result := range resultChan {
-		data, _ := json.Marshal(map[string]interface{}{
-			"code":    0,
-			"message": "",
-			"data":    result,
-		})
-		streamChan <- fmt.Sprintf("data: %s\n\n", string(data))
+	model, err := s.completionModel(ctx, dialog)
+	if err != nil {
+		return err
 	}
-
-	// Send final completion signal
-	finalData, _ := json.Marshal(map[string]interface{}{
-		"code":    0,
-		"message": "",
-		"data":    true,
+	var answer, reasoning strings.Builder
+	sendData := func(data interface{}) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		bytes, err := json.Marshal(map[string]interface{}{"code": 0, "message": "", "data": data})
+		if err != nil {
+			return err
+		}
+		return sender("data: " + string(bytes) + "\n\n")
+	}
+	err = model.ChatStreamlyWithSender(s.buildSystemPrompt(dialog), s.convertToHistory(s.processMessages(messages, dialog)), s.buildGenConf(dialog, config), func(content, thought *string) error {
+		if content != nil && *content == "[DONE]" {
+			return nil
+		}
+		if thought != nil {
+			reasoning.WriteString(*thought)
+		}
+		if content != nil {
+			answer.WriteString(*content)
+		}
+		return sendData(map[string]interface{}{"answer": answer.String(), "reasoning_content": reasoning.String(), "reference": reference, "conversation_id": session.ID, "message_id": messageID})
 	})
-	streamChan <- fmt.Sprintf("data: %s\n\n", string(finalData))
-
-	// Update conversation if not embedded
-	if !isEmbedded {
-		s.updateSessionMessages(session, sessionMessages, reference)
+	if err != nil {
+		return err
 	}
+	if llmID == "" {
+		if err := s.persistCompletion(ctx, session, messages, answer.String(), messageID, reference); err != nil {
+			return err
+		}
+	}
+	return sendData(true)
+}
 
-	return nil
+func (s *ChatSessionService) persistCompletion(ctx context.Context, session *entity.ChatSession, messages []map[string]interface{}, answer, messageID string, reference []interface{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stored := s.buildSessionMessages(session, messages)
+	stored = append(stored, map[string]interface{}{"role": "assistant", "content": answer, "id": messageID})
+	messageJSON, err := json.Marshal(map[string]interface{}{"messages": stored})
+	if err != nil {
+		return err
+	}
+	referenceJSON, err := json.Marshal(reference)
+	if err != nil {
+		return err
+	}
+	return dao.DB.WithContext(ctx).Model(&entity.ChatSession{}).Where("id = ?", session.ID).Updates(map[string]interface{}{"message": messageJSON, "reference": referenceJSON, "update_time": time.Now().UnixMilli(), "update_date": time.Now()}).Error
 }
 
 // Helper methods
@@ -426,286 +414,6 @@ func (s *ChatSessionService) initializeReference(session *entity.ChatSession) []
 		"doc_aggs": []interface{}{},
 	})
 	return filtered
-}
-
-func (s *ChatSessionService) checkTenantLLMAPIKey(tenantID, modelName string) (bool, error) {
-	// Simplified check - in real implementation, check if tenant has API key for this model
-	return true, nil
-}
-
-func (s *ChatSessionService) performChat(dialog *entity.Chat, messages []map[string]interface{}, config map[string]interface{}) (string, error) {
-	// Get system prompt from dialog
-	systemPrompt := ""
-	if dialog.PromptConfig != nil {
-		if sys, ok := dialog.PromptConfig["system"].(string); ok {
-			systemPrompt = sys
-		}
-	}
-
-	// Convert messages to history format
-	history := make([]map[string]string, 0)
-	for _, msg := range messages {
-		role, _ := msg["role"].(string)
-		content, _ := msg["content"].(string)
-		if role != "" && content != "" {
-			history = append(history, map[string]string{
-				"role":    role,
-				"content": content,
-			})
-		}
-	}
-
-	// Use ModelBundle to perform chat
-	bundle, err := NewModelBundle(dialog.TenantID, entity.ModelTypeChat, dialog.LLMID)
-	if err != nil {
-		return "", err
-	}
-
-	// Merge dialog's LLM setting with request config
-	genConf := make(map[string]interface{})
-	if dialog.LLMSetting != nil {
-		for k, v := range dialog.LLMSetting {
-			genConf[k] = v
-		}
-	}
-	for k, v := range config {
-		genConf[k] = v
-	}
-
-	response, _, err := bundle.Chat(systemPrompt, history, genConf)
-	return response, err
-}
-
-func (s *ChatSessionService) performChatStream(dialog *entity.Chat, messages []map[string]interface{}, config map[string]interface{}) (<-chan string, error) {
-	// Get system prompt from dialog
-	systemPrompt := ""
-	if dialog.PromptConfig != nil {
-		if sys, ok := dialog.PromptConfig["system"].(string); ok {
-			systemPrompt = sys
-		}
-	}
-
-	// Convert messages to history format
-	history := make([]map[string]string, 0)
-	for _, msg := range messages {
-		role, _ := msg["role"].(string)
-		content, _ := msg["content"].(string)
-		if role != "" && content != "" {
-			history = append(history, map[string]string{
-				"role":    role,
-				"content": content,
-			})
-		}
-	}
-
-	// Use ModelBundle to perform streaming chat
-	bundle, err := NewModelBundle(dialog.TenantID, entity.ModelTypeChat, dialog.LLMID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Merge dialog's LLM setting with request config
-	genConf := make(map[string]interface{})
-	if dialog.LLMSetting != nil {
-		for k, v := range dialog.LLMSetting {
-			genConf[k] = v
-		}
-	}
-	for k, v := range config {
-		genConf[k] = v
-	}
-
-	// Get chat model and call ChatStreamly
-	chatModel, ok := bundle.GetModel().(entity.ChatModel)
-	if !ok {
-		return nil, fmt.Errorf("model is not a chat model")
-	}
-
-	return chatModel.ChatStreamly(systemPrompt, history, genConf)
-}
-
-func (s *ChatSessionService) structureAnswer(session *entity.ChatSession, answer string, messageID, conversationID string, reference []interface{}) map[string]interface{} {
-	return map[string]interface{}{
-		"answer":          answer,
-		"reference":       reference,
-		"conversation_id": conversationID,
-		"message_id":      messageID,
-	}
-}
-
-func (s *ChatSessionService) updateSessionMessages(session *entity.ChatSession, messages []map[string]interface{}, reference []interface{}) {
-	// Update session with new messages and reference
-	messagesJSON, _ := json.Marshal(map[string]interface{}{
-		"messages": messages,
-	})
-	referenceJSON, _ := json.Marshal(reference)
-
-	updates := map[string]interface{}{
-		"message":     messagesJSON,
-		"reference":   referenceJSON,
-		"update_time": time.Now().UnixMilli(),
-		"update_date": time.Now(),
-	}
-	s.chatSessionDAO.UpdateByID(session.ID, updates)
-}
-
-// asyncChat performs chat with RAG support (non-streaming)
-func (s *ChatSessionService) asyncChat(dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, stream bool) (map[string]interface{}, error) {
-	// Check if we need RAG (knowledge base or tavily)
-	hasKB := len(dialog.KBIDs) > 0
-	hasTavily := false
-	if dialog.PromptConfig != nil {
-		if tavilyKey, ok := dialog.PromptConfig["tavily_api_key"].(string); ok && tavilyKey != "" {
-			hasTavily = true
-		}
-	}
-
-	if !hasKB && !hasTavily {
-		// Simple chat without RAG
-		return s.asyncChatSolo(dialog, session, messages, config, messageID, reference, stream)
-	}
-
-	// TODO: Full RAG implementation with knowledge base retrieval
-	// This would include:
-	// 1. Get embedding model and rerank model
-	// 2. Extract questions from messages
-	// 3. Retrieve chunks from knowledge bases
-	// 4. Rerank chunks
-	// 5. Build prompt with context
-	// 6. Call LLM
-
-	// For now, fall back to solo chat
-	return s.asyncChatSolo(dialog, session, messages, config, messageID, reference, stream)
-}
-
-// asyncChatStream performs streaming chat with RAG support
-func (s *ChatSessionService) asyncChatStream(dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}) (<-chan map[string]interface{}, error) {
-	resultChan := make(chan map[string]interface{})
-
-	go func() {
-		defer close(resultChan)
-
-		// Check if we need RAG
-		hasKB := len(dialog.KBIDs) > 0
-		hasTavily := false
-		if dialog.PromptConfig != nil {
-			if tavilyKey, ok := dialog.PromptConfig["tavily_api_key"].(string); ok && tavilyKey != "" {
-				hasTavily = true
-			}
-		}
-
-		if !hasKB && !hasTavily {
-			// Simple chat without RAG
-			s.asyncChatSoloStream(dialog, session, messages, config, messageID, reference, resultChan)
-			return
-		}
-
-		// TODO: Full RAG streaming implementation
-		// For now, fall back to solo chat
-		s.asyncChatSoloStream(dialog, session, messages, config, messageID, reference, resultChan)
-	}()
-
-	return resultChan, nil
-}
-
-// asyncChatSolo performs simple chat without RAG (non-streaming)
-func (s *ChatSessionService) asyncChatSolo(dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, stream bool) (map[string]interface{}, error) {
-	// Get system prompt
-	systemPrompt := s.buildSystemPrompt(dialog)
-
-	// Process messages - handle attachments and image files
-	processedMessages := s.processMessages(messages, dialog)
-
-	// Get LLM type
-	llmType := s.getLLMType(dialog.LLMID)
-
-	// Build generation config
-	genConf := s.buildGenConf(dialog, config)
-
-	// Create ModelBundle for chat
-	var bundle *ModelBundle
-	var err error
-	if llmType == "image2text" {
-		bundle, err = NewModelBundle(dialog.TenantID, entity.ModelTypeImage2Text, dialog.LLMID)
-	} else {
-		bundle, err = NewModelBundle(dialog.TenantID, entity.ModelTypeChat, dialog.LLMID)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert messages to history format
-	history := s.convertToHistory(processedMessages)
-
-	// Perform chat
-	response, _, err := bundle.Chat(systemPrompt, history, genConf)
-	if err != nil {
-		return nil, err
-	}
-
-	// Structure the answer
-	ans := map[string]interface{}{
-		"answer":    response,
-		"reference": reference[len(reference)-1],
-		"final":     true,
-	}
-
-	return s.structureAnswerWithConv(session, ans, messageID, session.ID, reference), nil
-}
-
-// asyncChatSoloStream performs simple streaming chat without RAG
-func (s *ChatSessionService) asyncChatSoloStream(dialog *entity.Chat, session *entity.ChatSession, messages []map[string]interface{}, config map[string]interface{}, messageID string, reference []interface{}, resultChan chan<- map[string]interface{}) {
-	// Get system prompt
-	systemPrompt := s.buildSystemPrompt(dialog)
-
-	// Process messages
-	processedMessages := s.processMessages(messages, dialog)
-
-	// Get LLM type
-	llmType := s.getLLMType(dialog.LLMID)
-
-	// Build generation config
-	genConf := s.buildGenConf(dialog, config)
-
-	// Create ModelBundle
-	var bundle *ModelBundle
-	var err error
-	if llmType == "image2text" {
-		bundle, err = NewModelBundle(dialog.TenantID, entity.ModelTypeImage2Text, dialog.LLMID)
-	} else {
-		bundle, err = NewModelBundle(dialog.TenantID, entity.ModelTypeChat, dialog.LLMID)
-	}
-	if err != nil {
-		resultChan <- s.structureAnswer(session, "**ERROR**: "+err.Error(), messageID, session.ID, reference)
-		return
-	}
-
-	// Convert messages to history
-	history := s.convertToHistory(processedMessages)
-
-	// Get chat model
-	chatModel, ok := bundle.GetModel().(entity.ChatModel)
-	if !ok {
-		resultChan <- s.structureAnswer(session, "**ERROR**: model is not a chat model", messageID, session.ID, reference)
-		return
-	}
-
-	// Perform streaming chat
-	streamChan, err := chatModel.ChatStreamly(systemPrompt, history, genConf)
-	if err != nil {
-		resultChan <- s.structureAnswer(session, "**ERROR**: "+err.Error(), messageID, session.ID, reference)
-		return
-	}
-
-	// Stream results
-	fullAnswer := ""
-	for chunk := range streamChan {
-		fullAnswer += chunk
-		// Clean up reasoning content
-		fullAnswer = s.removeReasoningContent(fullAnswer)
-		ans := s.structureAnswer(session, fullAnswer, messageID, session.ID, reference)
-		resultChan <- ans
-	}
 }
 
 // buildSystemPrompt builds the system prompt from dialog configuration
@@ -778,116 +486,4 @@ func (s *ChatSessionService) buildGenConf(dialog *entity.Chat, config map[string
 	}
 
 	return genConf
-}
-
-// getLLMType gets the LLM type from model ID
-func (s *ChatSessionService) getLLMType(llmID string) string {
-	// Simplified - would need to query TenantLLMService
-	if strings.Contains(llmID, "image") || strings.Contains(llmID, "vision") {
-		return "image2text"
-	}
-	return "chat"
-}
-
-// removeReasoningContent removes reasoning/thinking content from answer
-func (s *ChatSessionService) removeReasoningContent(answer string) string {
-	// Remove </think> tags
-	if strings.HasSuffix(answer, "</think>") {
-		answer = answer[:len(answer)-len("</think>")]
-	}
-	return answer
-}
-
-// structureAnswerWithConv structures the answer with conversation update (like Python's structure_answer)
-func (s *ChatSessionService) structureAnswerWithConv(session *entity.ChatSession, ans map[string]interface{}, messageID, conversationID string, reference []interface{}) map[string]interface{} {
-	// Extract reference from answer
-	ref, _ := ans["reference"].(map[string]interface{})
-	if ref == nil {
-		ref = map[string]interface{}{
-			"chunks":   []interface{}{},
-			"doc_aggs": []interface{}{},
-		}
-		ans["reference"] = ref
-	}
-
-	// Format chunks
-	chunkList := s.chunksFormat(ref)
-	ref["chunks"] = chunkList
-
-	// Add message ID and session ID
-	ans["id"] = messageID
-	ans["session_id"] = conversationID
-
-	// Update session message
-	content, _ := ans["answer"].(string)
-	if ans["start_to_think"] != nil {
-		content = "<think>"
-	} else if ans["end_to_think"] != nil {
-		content = "</think>"
-	}
-
-	// Parse existing messages
-	var messagesObj map[string]interface{}
-	if len(session.Message) > 0 {
-		json.Unmarshal(session.Message, &messagesObj)
-	}
-	messages, _ := messagesObj["messages"].([]interface{})
-
-	// Update or append assistant message
-	if len(messages) == 0 || s.getLastRole(messages) != "assistant" {
-		messages = append(messages, map[string]interface{}{
-			"role":       "assistant",
-			"content":    content,
-			"created_at": float64(time.Now().Unix()),
-			"id":         messageID,
-		})
-	} else {
-		lastIdx := len(messages) - 1
-		lastMsg, _ := messages[lastIdx].(map[string]interface{})
-		if lastMsg != nil {
-			if ans["final"] == true && ans["answer"] != nil {
-				lastMsg["content"] = ans["answer"]
-			} else {
-				lastMsg["content"] = (lastMsg["content"].(string)) + content
-			}
-			lastMsg["created_at"] = float64(time.Now().Unix())
-			lastMsg["id"] = messageID
-			messages[lastIdx] = lastMsg
-		}
-	}
-
-	// Update reference
-	if len(reference) > 0 {
-		reference[len(reference)-1] = ref
-	}
-
-	return ans
-}
-
-// getLastRole gets the role of the last message
-func (s *ChatSessionService) getLastRole(messages []interface{}) string {
-	if len(messages) == 0 {
-		return ""
-	}
-	lastMsg, _ := messages[len(messages)-1].(map[string]interface{})
-	if lastMsg != nil {
-		role, _ := lastMsg["role"].(string)
-		return role
-	}
-	return ""
-}
-
-// chunksFormat formats chunks for reference (simplified version)
-func (s *ChatSessionService) chunksFormat(reference map[string]interface{}) []interface{} {
-	chunks, _ := reference["chunks"].([]interface{})
-	if chunks == nil {
-		return []interface{}{}
-	}
-
-	// Format each chunk
-	formatted := make([]interface{}, len(chunks))
-	for i, chunk := range chunks {
-		formatted[i] = chunk
-	}
-	return formatted
 }

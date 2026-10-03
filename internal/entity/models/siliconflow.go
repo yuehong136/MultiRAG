@@ -188,7 +188,7 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
-func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, chatModelConfig *ChatConfig) (string, error) {
+func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
 }
 
@@ -510,4 +510,8 @@ func (m *SiliconFlowModel) Rerank(name *string, query string, texts []string, co
 		seen[*item.Index], scores[*item.Index] = true, *item.Score
 	}
 	return scores, nil
+}
+
+func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s: history streaming is unsupported", m.Name())
 }

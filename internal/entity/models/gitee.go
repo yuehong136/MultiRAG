@@ -188,7 +188,7 @@ func (m *GiteeModel) Chat(modelName, message *string, apiConfig *APIConfig, chat
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
-func (m *GiteeModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, chatModelConfig *ChatConfig) (string, error) {
+func (m *GiteeModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (string, error) {
 	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
 }
 
@@ -540,4 +540,8 @@ func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
 
 func (m *GiteeModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+}
+
+func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	return fmt.Errorf("%s: history streaming is unsupported", m.Name())
 }

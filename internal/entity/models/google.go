@@ -171,32 +171,15 @@ func (g *GoogleModel) Chat(modelName, message *string, apiConfig *APIConfig, con
 }
 
 // ChatWithMessages uses the existing text-history interface, without tool or multimodal expansion.
-func (g *GoogleModel) ChatWithMessages(modelName string, apiKey *string, messages []Message, config *ChatConfig) (string, error) {
+func (g *GoogleModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
 	if strings.TrimSpace(modelName) == "" || len(messages) == 0 {
 		return "", errors.New("Google model name and messages are required")
 	}
-	generation := googleGenerationConfig(config)
-	var contents []*genai.Content
-	var system []string
-	for _, message := range messages {
-		switch message.Role {
-		case "system":
-			system = append(system, message.Content)
-		case "user":
-			contents = append(contents, genai.NewContentFromText(message.Content, genai.RoleUser))
-		case "assistant", "model":
-			contents = append(contents, genai.NewContentFromText(message.Content, genai.RoleModel))
-		default:
-			return "", errors.New("Google message role is unsupported")
-		}
+	contents, generation, err := googleHistory(messages, config)
+	if err != nil {
+		return "", err
 	}
-	if len(contents) == 0 {
-		return "", errors.New("Google conversation requires a user or model message")
-	}
-	if len(system) != 0 {
-		generation.SystemInstruction = genai.NewContentFromText(strings.Join(system, "\n"), genai.RoleUser)
-	}
-	response, err := g.generate(modelName, contents, &APIConfig{APIKey: apiKey}, config, generation)
+	response, err := g.generate(modelName, contents, apiConfig, config, generation)
 	if err != nil {
 		return "", err
 	}
@@ -205,6 +188,17 @@ func (g *GoogleModel) ChatWithMessages(modelName string, apiKey *string, message
 
 func (g *GoogleModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	if err := validateGoogleChat(modelName, message); err != nil {
+		return err
+	}
+	return g.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
+}
+
+func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	if strings.TrimSpace(modelName) == "" || len(messages) == 0 {
+		return errors.New("Google model and messages are required")
+	}
+	contents, generation, err := googleHistory(messages, config)
+	if err != nil {
 		return err
 	}
 	if sender == nil {
@@ -217,8 +211,7 @@ func (g *GoogleModel) ChatStreamlyWithSender(modelName, message *string, apiConf
 		return err
 	}
 	receivedAnswer := false
-	for response, err := range client.Models.GenerateContentStream(ctx, *modelName,
-		[]*genai.Content{genai.NewContentFromText(*message, genai.RoleUser)}, googleGenerationConfig(config)) {
+	for response, err := range client.Models.GenerateContentStream(ctx, modelName, contents, generation) {
 		if err != nil {
 			return googleRequestError(ctx, err)
 		}
@@ -296,4 +289,29 @@ func (g *GoogleModel) CheckConnection(apiConfig *APIConfig) error {
 
 func (m *GoogleModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
+}
+
+func googleHistory(messages []Message, config *ChatConfig) ([]*genai.Content, *genai.GenerateContentConfig, error) {
+	generation := googleGenerationConfig(config)
+	var contents []*genai.Content
+	var system []string
+	for _, message := range messages {
+		switch message.Role {
+		case "system":
+			system = append(system, message.Content)
+		case "user":
+			contents = append(contents, genai.NewContentFromText(message.Content, genai.RoleUser))
+		case "assistant", "model":
+			contents = append(contents, genai.NewContentFromText(message.Content, genai.RoleModel))
+		default:
+			return nil, nil, errors.New("Google message role is unsupported")
+		}
+	}
+	if len(contents) == 0 {
+		return nil, nil, errors.New("Google conversation requires a user or model message")
+	}
+	if len(system) != 0 {
+		generation.SystemInstruction = genai.NewContentFromText(strings.Join(system, "\n"), genai.RoleUser)
+	}
+	return contents, generation, nil
 }

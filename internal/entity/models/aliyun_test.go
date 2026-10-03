@@ -42,7 +42,7 @@ func TestAliyunChatAndMessages(t *testing.T) {
 	if err != nil || response.Answer == nil || *response.Answer != "answer" || response.ReasoningContent == nil || *response.ReasoningContent != "reason" {
 		t.Fatalf("Chat() = %#v, %v", response, err)
 	}
-	answer, err := model.ChatWithMessages(name, &key, []Message{{Role: "system", Content: "guide"}, {Role: "user", Content: prompt}}, nil)
+	answer, err := model.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "system", Content: "guide"}, {Role: "user", Content: prompt}}, nil)
 	if err != nil || answer != "answer" {
 		t.Fatalf("ChatWithMessages() = %q, %v", answer, err)
 	}
