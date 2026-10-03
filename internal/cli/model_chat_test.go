@@ -82,7 +82,7 @@ func TestParseCheckProviderConnection(t *testing.T) {
 func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 	var body map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/providers/zhipu-ai/instances/default/models" {
+		if r.URL.Path != "/api/v1/chat/completions" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -107,11 +107,61 @@ func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteUserCommand() error = %v", err)
 	}
-	if body["stream"] != false || body["thinking"] != true || body["model_name"] != "glm-test" || body["effort"] != "high" {
+	if body["provider_name"] != "zhipu-ai" || body["instance_name"] != "default" || body["stream"] != false || body["thinking"] != true || body["model_name"] != "glm-test" || body["effort"] != "high" {
 		t.Fatalf("body = %#v", body)
 	}
 	result, ok := response.(*NonStreamResponse)
 	if !ok || result.Answer != "answer" || result.ReasoningContent != "reason" {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestStreamChatCompletionAndFailure(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		fail       bool
+	}{
+		{"complete", "event: message\ndata: [REASONING]reason\n\nevent: message\ndata: [MESSAGE]answer\n\nevent: done\ndata: [DONE]\n\n", false},
+		{"provider error", "event: error\ndata: Model stream failed\n\n", true},
+		{"partial", "event: message\ndata: [MESSAGE]partial\n\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/chat/completions" || r.Header.Get("Authorization") != "fixture-login" {
+					t.Errorf("route/auth = %s %q", r.URL.Path, r.Header.Get("Authorization"))
+				}
+				var body map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["provider_name"] != "Moonshot" || body["instance_name"] != "default" || body["model_name"] != "kimi-k2.5" || body["stream"] != true || body["thinking"] != false {
+					t.Errorf("body = %#v", body)
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			u, _ := url.Parse(server.URL)
+			port, _ := strconv.Atoi(u.Port())
+			client := NewMultiRAGClient("user")
+			client.HTTPClient.Host = u.Hostname()
+			client.HTTPClient.Port = port
+			client.HTTPClient.LoginToken = "fixture-login"
+			client.CurrentModel = &CurrentModel{Provider: "Moonshot", Instance: "default", Model: "kimi-k2.5"}
+			cmd, err := NewParser(`STREAM CHAT "hello";`).Parse(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.ExecuteUserCommand(cmd)
+			if test.fail {
+				if err == nil {
+					t.Fatalf("false success = %#v", result)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else if result.(*StreamMessageResponse).Message != "answer" {
+				t.Fatalf("answer = %#v", result)
+			}
+		})
 	}
 }

@@ -2393,3 +2393,23 @@ sender 错误原样返回，取消可由 `errors.Is` 识别，错误不回显供
 构建均 exit=0；仅已有 go-m1cpu C 编译告警。日志为 `/tmp/multirag-moonshot-*`。
 本项不改 Python、数据库、路由和启动流程，未运行 Python make verify/integration/smoke；
 受控 provider HTTP 不是实际 Moonshot 账号、生产身份或 Web E2E 验收。
+
+## b493a3331607dac3e254ff04e2638180e409f43f · Go 模型聊天路由与 CLI
+
+按冻结快照 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 核对完整三文件 diff。
+模型聊天改为认证组内的 `POST /api/v1/chat/completions`；provider、instance、model 与
+message 由 body 提供并校验，CLI 普通/流式与当前选中模型均同步，旧 models POST 不再注册。
+保留现有业务码、JSON answer/reasoning、sender SSE、租户凭据与请求 context。
+`stream` 和 `thinking` 用指针保留缺省/false；思考默认继续由受信模型目录决定。
+
+后修核对：`265f92c83`/`12af73f2c`/`733591686` 的调用合并与多模态属于下一项
+session 迁移的相关链；后期 model ID、新 OpenAI 兼容 API 和 Go 全量路由重构不扩纳。
+未带入上游初版布尔值丢失或回显错误正文的行为。CLI 额外修正带空格的 SSE error 解析，
+要求完成帧后才报告成功，避免提前断流产生成功结果，scanner 与现有 provider 上限一致。
+
+验证：Go 1.25.14，CLI/handler/router race 回归通过；`go build ./internal/...`、
+`go vet ./internal/...` 和三个独立 main 构建通过。Google SDK 和模型系列的专项真实
+HTTP + 隔离 PostgreSQL 验收通过，含业务码、SQL 独立读回、默认/false、SSE 顺序、
+错误、禁用模型及断开请求取消；两个自有 scratch 库已删除。认证组无凭据拒绝测试通过；
+专项 provider HTTP 使用受控身份和响应，不代表真实账号或生产 JWT/API key E2E。
+Go 工具链既有 C/linker 警告保留，未修改依赖。未改 Python；未运行 Python 门禁。

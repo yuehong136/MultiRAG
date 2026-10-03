@@ -1485,7 +1485,7 @@ POST /agents/{agent_id}/run
 ## Go Provider API（并行实现）
 
 本节描述 Go `internal/` 的独立实现；当前 Web 模型页仍使用 Python `/v1/llm/*`。
-基础路径为 `/api/v1/providers`，现有认证与用户/tenant 约束继续适用。
+提供商管理基础路径为 `/api/v1/providers`，模型聊天入口为 `/api/v1/chat/completions`；现有认证与用户/tenant 约束继续适用。
 
 Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rerank`）；租户模型
 的 `model_type`、旧 `mdl_type` 和按类型筛选继续使用这些能力值。`class` 表达模型系列
@@ -1497,7 +1497,7 @@ Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rera
 
 | 路径 | 行为 |
 |---|---|
-| `POST /{provider_name}/instances/{instance_name}/models` | 普通 JSON 或 sender SSE；`thinking` 省略时使用所选模型默认，显式 true/false 优先 |
+| `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name`、`message`；普通 JSON 或 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。旧 provider models POST 已退出，CLI 同步使用本入口 |
 | `GET /{provider_name}/instances/{instance_name}/connection` | Google 通过实际模型分页列表检查连接 |
 | `GET /{provider_name}/instances/{instance_name}/models?supported=true` | 返回 provider 支持的模型名；Google 遍历全部页，保留 `models/` 前缀 |
 

@@ -1310,12 +1310,14 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	stream, _ := cmd.Params["stream"].(bool)
 	effort, _ := cmd.Params["effort"].(string)
 	verbosity, _ := cmd.Params["verbosity"].(string)
-	url := fmt.Sprintf("/providers/%s/instances/%s/models", providerName, instanceName)
+	url := "/chat/completions"
 	payload := map[string]interface{}{
-		"model_name": modelName,
-		"message":    message,
-		"stream":     stream,
-		"thinking":   thinking,
+		"provider_name": providerName,
+		"instance_name": instanceName,
+		"model_name":    modelName,
+		"message":       message,
+		"stream":        stream,
+		"thinking":      thinking,
 	}
 	if thinking {
 		payload["effort"] = effort
@@ -1331,12 +1333,17 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		defer reader.Close()
 
 		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		completed := false
 		var fullMessage strings.Builder
 		reasoningPrint, messagePrint := true, true
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "data:") {
 				data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if data == "[DONE]" {
+					completed = true
+				}
 				if strings.HasPrefix(data, "[REASONING]") {
 					data = strings.TrimPrefix(data, "[REASONING]")
 					if reasoningPrint {
@@ -1360,7 +1367,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 					_ = os.Stdout.Sync()
 					fullMessage.WriteString(data)
 				}
-			} else if strings.HasPrefix(line, "event:error") {
+			} else if strings.HasPrefix(line, "event:") && strings.TrimSpace(strings.TrimPrefix(line, "event:")) == "error" {
 				if scanner.Scan() {
 					errData := strings.TrimSpace(strings.TrimPrefix(scanner.Text(), "data:"))
 					return nil, fmt.Errorf("chat error: %s", errData)
@@ -1371,6 +1378,9 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		duration := time.Since(startTime).Seconds()
 		if err := scanner.Err(); err != nil {
 			return nil, fmt.Errorf("error reading stream: %w", err)
+		}
+		if !completed {
+			return nil, fmt.Errorf("chat stream ended before completion")
 		}
 		fmt.Println()
 		return &StreamMessageResponse{Code: 0, Message: fullMessage.String(), Duration: duration}, nil

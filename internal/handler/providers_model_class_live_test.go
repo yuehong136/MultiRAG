@@ -118,7 +118,7 @@ func TestModelClassProviderLiveHTTPAndSQL(t *testing.T) {
 		c.Set("user", &entity.User{ID: "class-user"})
 		c.Next()
 	})
-	router.POST("/api/v1/providers/:provider_name/instances/:instance_name/models", h.ChatToModel)
+	router.POST("/api/v1/chat/completions", h.ChatToModel)
 	apiServer := httptest.NewServer(router)
 	defer apiServer.Close()
 	for _, test := range []struct{ provider, model, class, answer, reasoning string }{
@@ -127,11 +127,11 @@ func TestModelClassProviderLiveHTTPAndSQL(t *testing.T) {
 		{"Gitee", "glm-4.7-flash", "glm", "<think>reason</think>answer", ""},
 	} {
 		t.Run(test.provider+"/"+test.model, func(t *testing.T) {
-			data, err := json.Marshal(map[string]interface{}{"model_name": test.model, "message": "question", "model_class": "gpt", "model_type": "embedding"})
+			data, err := json.Marshal(map[string]interface{}{"provider_name": test.provider, "instance_name": "default", "model_name": test.model, "message": "question", "model_class": "gpt", "model_type": "embedding"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			req, err := http.NewRequest(http.MethodPost, apiServer.URL+"/api/v1/providers/"+test.provider+"/instances/default/models", bytes.NewReader(data))
+			req, err := http.NewRequest(http.MethodPost, apiServer.URL+"/api/v1/chat/completions", bytes.NewReader(data))
 			if err != nil {
 				t.Fatal(err)
 			}

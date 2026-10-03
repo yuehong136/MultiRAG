@@ -201,7 +201,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 	router.GET(base+"/:provider_name/instances/:instance_name/connection", h.CheckProviderConnection)
 	router.GET(base+"/:provider_name/instances/:instance_name/models", h.ListInstanceModels)
 	router.PATCH(base+"/:provider_name/instances/:instance_name/models/*model_name", h.EnableOrDisableModel)
-	router.POST(base+"/:provider_name/instances/:instance_name/models", h.ChatToModel)
+	router.POST("/api/v1/chat/completions", h.ChatToModel)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -272,11 +272,11 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 		t.Fatal("configured model missing")
 	}
 	chat := func(message string, stream bool, thinking *bool) (int, string) {
-		b := map[string]any{"model_name": "gemini-2.5-flash", "message": message, "stream": stream}
+		b := map[string]any{"provider_name": "Google", "instance_name": "controlled", "model_name": "gemini-2.5-flash", "message": message, "stream": stream}
 		if thinking != nil {
 			b["thinking"] = *thinking
 		}
-		return request("POST", path+"/models", b)
+		return request("POST", "/api/v1/chat/completions", b)
 	}
 	_, body = chat("default-thinking", false, nil)
 	assertSuccess(body)
@@ -365,7 +365,7 @@ func TestGoogleProviderLiveHTTPAndSQL(t *testing.T) {
 		t.Fatal("other provider config mutated")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	req, _ := http.NewRequestWithContext(ctx, "POST", "http://"+address+path+"/models", strings.NewReader(`{"model_name":"gemini-2.5-flash","message":"cancel","stream":true}`))
+	req, _ := http.NewRequestWithContext(ctx, "POST", "http://"+address+"/api/v1/chat/completions", strings.NewReader(`{"provider_name": "Google", "instance_name": "controlled", "model_name":"gemini-2.5-flash","message":"cancel","stream":true}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
