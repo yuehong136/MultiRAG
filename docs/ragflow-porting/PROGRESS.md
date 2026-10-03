@@ -2160,3 +2160,42 @@ Go 1.25.14 下 DAO/实体及现有 region 专项全部通过，无 skip；`gofmt
 补齐真实缓存引用后完整复跑通过，未修改业务代码或削弱断言。
 未修改 Python 可执行行为，未运行 `make verify`；本项没有路由/启动入口改动，
 未重复 HTTP smoke。MySQL 未做真实数据库验收，未运行生产库迁移或真实模型调用。
+
+## 4e5a093ac53db931fe4e8d47b19ec6e0ffd15c8b · Go Moonshot 聊天与推理流
+
+2026-10-03 按目标完整单文件 diff 跟进，预期 remote 已核为 `infiniflow/ragflow`，
+fetch 后 `origin/main` 为 `98b48a085786fb9e14be8753b5a9a9ea02230ccf`。
+目标新增普通聊天与 sender 流式聊天，未发现目标行为被撤回；沿当前 ModelDriver
+接口适配 `APIKey` / `ReasoningContent`，复用已存在的工厂注册、模型目录、地域 URL、
+端点后缀、模型 thinking 默认及显式 false 优先级。
+
+[Moonshot driver](../../internal/entity/models/moonshot.go) 实现普通文本响应和推理
+SSE；请求共用 max_tokens、temperature、top_p、do_sample、stop 与 thinking 配置，
+普通调用固定 stream=false，sender 调用固定 stream=true。同步推理字段可选，
+返回时移除首个前导换行；流式推理与答案同 delta 均转发。
+本地历史聊天消费者还需要 `ChatWithMessages`，因此补齐完整 system/user/assistant
+历史。该旧接口只接收 APIKey，地域仍由请求级 driver 绑定，未扩展其 context 合同。
+单消息和 sender 接口使用现有 `APIConfig.Context`，客户端仍为 120 秒超时。
+
+后修 `d63bd81d0` 的请求模式固定和 `04aa8d04e` 的大 SSE 事件修复纳入本次路径；
+已有模型列表/余额的无正文 GET 与结构化解析保持。未引入后续统一 HTTP pipeline、
+工具调用、token usage 或接口整体迁移。按照当前 VolcEngine 的本地流合同，坏 JSON、
+供应商业务错误、空答案及提前断流显式失败；只有实际答案与 `[DONE]` 才发完成帧，
+sender 错误原样返回，取消可由 `errors.Is` 识别，错误不回显供应商正文或记录流内容。
+旧 channel-only streaming 保持明确不可用，embedding/rerank 不在本项扩展范围。
+当前合同见 [Go Provider API](../references/http_api_reference.md#go-provider-api并行实现)。
+
+本次 Go 1.25.14 下 Moonshot 专项 `go test -race -count=1 -run Moonshot`，覆盖
+[driver](../../internal/entity/models/moonshot_test.go) 与
+[实际目录和服务默认](../../internal/service/model_service_moonshot_test.go)，
+44 个测试及子测试通过、无 skip。受控真实 HTTP 检查请求路径、认证、参数、响应、
+大事件、双字段 delta、坏响应、sender 各阶段错误与响应读取中的真实连接取消。
+使用 HEAD 原始 Moonshot 文件的 Go overlay 复跑正常聊天、流式与历史回归，
+均在旧桩明确失败，证明测试覆盖本次缺口。
+
+`go test -count=1 ./internal/entity/... ./internal/service ./internal/handler ./internal/cli`
+209 个测试及子测试通过，5 个既有 opt-in live 用例未启用，不计为集成通过。
+`gofmt`、`go build ./internal/...`、`go vet ./internal/...` 及三个独立 cmd main
+构建均 exit=0；仅已有 go-m1cpu C 编译告警。日志为 `/tmp/multirag-moonshot-*`。
+本项不改 Python、数据库、路由和启动流程，未运行 Python make verify/integration/smoke；
+受控 provider HTTP 不是实际 Moonshot 账号、生产身份或 Web E2E 验收。

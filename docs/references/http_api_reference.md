@@ -1527,6 +1527,17 @@ VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支
 `ark_api_key` 的旧 JSON 形式。embedding/rerank、余额和旧 channel-only streaming
 继续明确不可用；账号权限及远程 Ark 服务仍需实际账号验收。
 
+Moonshot 支持普通文本聊天、完整角色历史和 sender SSE，复用现有注册与
+`configs/models/moonshot.json` 的 URL、端点和模型 thinking 默认。普通调用固定使用
+JSON，sender 调用固定使用 SSE，`ChatConfig.Stream` 不覆盖入口的响应模式。
+`thinking` 省略时不新增请求参数，所选模型默认由服务层传入；显式 false 发送
+`thinking.type=disabled`。同步响应的 `reasoning_content` 为可选字段，有值时移除首个
+前导换行；模型默认开启思考时返回的推理内容同样保留。SSE 同一 delta 的推理与答案
+均转发；只有收到非空答案及 `[DONE]` 才发送完成帧。HTTP/业务错误、无答案、坏 JSON、
+sender 错误和提前断流均失败，聊天错误不回显供应商错误正文；单消息与 sender 请求
+使用 `APIConfig.Context` 传播取消。历史聊天接口仍只接收 APIKey，沿用绑定后的地域 URL
+和 120 秒客户端超时；旧 channel-only streaming 继续明确不可用。
+
 SiliconFlow embedding 按最多 32 条输入分批，验证数量、索引、维度并按输入顺序返回；
 rerank 请求完整 `top_n`，按文档索引归位，缺失/重复索引和异常响应失败。智谱 embedding
 路径为 `embeddings`。OpenAI 兼容的旧 embedding 能力保留，不据此声明新增 OpenAI Go
