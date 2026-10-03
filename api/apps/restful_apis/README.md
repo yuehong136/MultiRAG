@@ -1,10 +1,29 @@
 # Dataset REST API
 
 本目录路由挂载在 `/api/v1`。数据集业务由 `api/apps/services/dataset_api_service.py`
-和 `document_api_service.py` 提供。
+、`dataset_search_service.py` 和 `document_api_service.py` 提供。
 
-图谱读取使用 `GET /datasets/{id}/graph/search`；旧 `/knowledge_graph` 读取和删除
-路径继续作为 deprecated 兼容入口，删除的新路径为 `DELETE /datasets/{id}/graph`。
+图谱读取使用 `GET /datasets/{id}/graph`；不带 `doc_id` 时返回数据集聚合图，
+带 `doc_id` 时返回该数据集文档的子图和思维导图。`/graph/search` 仍返回聚合图；
+旧 REST `/knowledge_graph` 读取和删除继续作为 deprecated 兼容入口。
+`DELETE /datasets/{id}/graph` 删除索引任务及产物，旧删除入口仅删图谱产物，二者语义不同。
+
+## 数据集检索
+
+`POST /datasets/{id}/search` 接收 `question`，返回 REST `code/data` 信封，
+`data` 含 `chunks`、检索总数 `total`、`doc_aggs` 和 `labels`。JWT 与个人 API Key
+共用数据集成员访问校验。默认检索路径中的数据集；本地多数据集消费者可传完整
+`dataset_ids` 列表，必须包含路径 ID，所有选中数据集均须可访问且 embedding 一致。
+联合检索一次完成排序、分页和文档聚合，不把每个数据集的分页结果拼接成联合结果。
+
+保留 `doc_ids`、`page/size`、`top_k`（上限 2048）、相似度/向量权重、
+`search_mode`（sparse/dense/hybrid/fusion）、高亮、跨语言、关键词、rerank 和 KG 参数。
+`search_id` 指定有权访问的搜索应用时沿用其元数据配置，否则使用请求中的
+`meta_data_filter`；手动过滤无匹配仍传递空结果哨兵，不放宽为全文检索。
+普通检索过滤禁用 chunk；图谱读取保留隐藏图谱产物，文档子图还过滤 `removed_kwd=Y`。
+Web 检索工作台、搜索应用和 Python 管理 CLI 已迁入这些 REST 入口；
+旧 `/v1/chunk/retrieval_test`、`/v1/chunk/knowledge_graph` 已移除。
+其他 chunk 管理入口及独立 SDK `/retrieval`、`/searchbots/retrieval_test` 不随之退役。
 
 ## 文档创建
 

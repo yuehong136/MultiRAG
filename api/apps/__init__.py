@@ -292,7 +292,7 @@ class _TokenFallbackLoginManager(LoginManager):
 
     web JWT 由父类解析；当 JWT 解码/查找失败时，把 Authorization 值当作 SDK API token
     （``APIToken`` 表）反查到 owner 用户返回。这样所有 ``Depends(manager)`` 的
-    web 端点（如 ``/v1/chunk/retrieval_test``）既服务前端会话登录，也服务
+    web 端点（如 ``/v1/chunk/list``）既服务前端会话登录，也服务
     SDK / CLI 的 API key —— 与已支持双认的 ``current_tenant_id`` 行为对齐。
 
     注意：父类 ``__call__`` 先 ``_get_payload``（JWT 解码）再 ``_get_current_user``，

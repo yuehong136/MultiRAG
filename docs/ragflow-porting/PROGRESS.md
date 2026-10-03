@@ -2195,6 +2195,44 @@ Go 1.25.14 下 DAO/实体及现有 region 专项全部通过，无 skip；`gofmt
 未修改 Python 可执行行为，未运行 `make verify`；本项没有路由/启动入口改动，
 未重复 HTTP smoke。MySQL 未做真实数据库验收，未运行生产库迁移或真实模型调用。
 
+## 35f6d81b730ff234a3b5a0d228cf647b812fe2ff · Dataset 检索和图谱 REST 迁移
+
+2026-10-03 按完整 11 文件 diff 核对冻结的 `519e7d98`，未 fetch。
+先接收 `7a70a0fd` 的 Infinity 零值过滤与 chunk/list 调用修复，再稳定 Python REST
+契约、迁移独立 Web 和 Python 管理 CLI，最后退出两个旧 chunk 入口。
+
+`POST /api/v1/datasets/{id}/search` 保留本地联合检索、embedding 一致性、搜索模式、
+分页总数、文档聚合、高亮、元数据、rerank、跨语言、关键词和 KG 行为。
+本地 `dataset_ids` 扩展必须包含路径 ID，全部选中数据集先授权；保存搜索配置沿用
+有效状态、owner 状态和成员访问合同，未授权配置不参与检索。普通检索继续过滤禁用 chunk；
+同时修复已有 Milvus sparse 分支漏传过滤表达式的问题，回归在旧实现上明确失败。
+
+`GET /api/v1/datasets/{id}/graph` 不带 doc_id 时复用已有聚合图服务，带 doc_id 时保留
+文档子图与思维导图（包括重复节点 ID 处理），并核对文档所属数据集。
+隐藏图谱产物仍可读取，子图保留 removed 条件。Web 保留原页面 hook 的结果合同，
+多数据集只执行一次联合检索；Python CLI 使用 REST 基址和完整 dataset_ids。
+迁移验收后移除 `/v1/chunk/retrieval_test`、`/v1/chunk/knowledge_graph` 及专用模型，
+其余 chunk 管理、SDK retrieval/searchbots、graph/search 和 REST knowledge_graph
+兼容入口保留；旧图谱删除仅删产物，与新索引删除语义不同，不一并退役。
+
+相关后修：采用 `c5a932ffb` 的关键词分隔符；高亮和总数保留已满足 `66113709c`、
+`fd7cd3289` 的相应行为。`b7e577ce4` 更广的统一检索 API 和后续 Python 架构删除
+不属于本项。没有迁移停滞 Go 后端或复制上游测试 harness。
+
+本次 `make verify` exit=0（4697 passed），`make smoke` exit=0。
+Web API 205 passed、完整 test:ci 1112 passed；build、lint、文件大小棘轮和测试 inventory
+通过。隔离 HTTP 验证真实 JWT/API Key、PostgreSQL 元数据和成员状态、Milvus 四种搜索
+模式、隐藏图谱、跨数据集拒绝及独立 SDK 读回；真实 Web APIClient 对该服务完成检索、
+元数据、聚合/文档图谱与鉴权验证。旧入口实际 HTTP 404、OpenAPI 移除及前后存储快照
+不变已验证。embedding 输出受控，未将本项称为真实模型或上传解析 E2E。
+
+最终完整 `make integration` exit=0：734 passed，无 skip，包含真实 Milvus 四模式
+检索和 Infinity 零值查询、更新、删除回归。此前因补齐新回归的 SDK 查询 limit，
+主动停止过一份已加载旧测试代码的运行；以上为修正后的完整复跑结果。
+自有 HTTP listener、scratch SQL/存储资源及临时 Infinity 容器均已清理。
+常驻 8123 服务仍加载旧路由，未重启共享实例；需重启后才会加载本次 REST 入口。
+
+
 ## 4e5a093ac53db931fe4e8d47b19ec6e0ffd15c8b · Go Moonshot 聊天与推理流
 
 2026-10-03 按目标完整单文件 diff 跟进，预期 remote 已核为 `infiniflow/ragflow`，

@@ -21,9 +21,10 @@ from pydantic import BaseModel
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.services import dataset_api_service
+from api.apps.services import dataset_api_service, dataset_search_service
 from api.db.db_models import get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
+from api.utils.dataset_search import SearchDatasetRequest
 from api.utils.validation_utils import CreateDatasetReq
 from common.constants import RetCode
 
@@ -463,6 +464,43 @@ async def update_auto_metadata(
         return get_error_data_result(retmsg="Database operation failed")
     except Exception as e:
         logger.exception(e)
+        return get_error_data_result(retmsg="Internal server error")
+
+
+@router.post("/datasets/{dataset_id}/search", summary="数据集检索测试")
+async def search_dataset(
+    dataset_id: str,
+    request: SearchDatasetRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    try:
+        success, result, code = await dataset_search_service.search_dataset(db, tenant_id, dataset_id, request)
+        return get_result(data=result) if success else get_error_data_result(retcode=code, retmsg=result)
+    except Exception as exc:
+        logger.exception(exc)
+        message = "No chunk found! Check the chunk status please!" if "not_found" in str(exc) else "Internal server error"
+        return get_error_data_result(retmsg=message)
+
+
+@router.get("/datasets/{dataset_id}/graph", summary="获取数据集或文档知识图谱")
+async def get_graph(
+    dataset_id: str,
+    doc_id: str | None = None,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    try:
+        if doc_id is None:
+            success, result = await dataset_api_service.get_knowledge_graph(db, tenant_id, dataset_id)
+        else:
+            success, result = await dataset_search_service.get_document_graph(db, tenant_id, dataset_id, doc_id)
+        if success:
+            return get_result(data=result)
+        code = RetCode.AUTHENTICATION_ERROR if result == "No authorization." else RetCode.DATA_ERROR
+        return get_error_data_result(retcode=code, retmsg=result)
+    except Exception as exc:
+        logger.exception(exc)
         return get_error_data_result(retmsg="Internal server error")
 
 

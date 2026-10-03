@@ -942,7 +942,7 @@ async def retrieval_test_embedded(
         # tag 特征：同步（tag 缓存 + doc-store 查询）且自开连接——入线程池
         labels = await asyncio.to_thread(_label_question_with_conn, question, kbs)
         # 位置参数必须对齐 Dealer.retrieval(question, filter_exp, embd_mdl, tenant_id, kb_names, page, page_size, ...)：
-        # kb_names 构建索引名，kb_ids 走 kwarg 做过滤（对齐非 embedded 孪生 chunk_app.retrieval_test）
+        # kb_names 构建索引名，kb_ids 走 kwarg 做过滤（对齐非 embedded 孪生 dataset_search_service.search_dataset）
         ranks = await settings.retriever.retrieval(
             question,
             "",

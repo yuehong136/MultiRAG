@@ -14,10 +14,8 @@ api/apps/askdata_app.py::get_hc_dim_values_by_dim_value
 api/apps/askdata_app.py::get_semantic_layer_streaming
 api/apps/askdata_app.py::get_sql_and_table_config
 api/apps/askdata_app.py::re_query
-api/apps/chunk_app.py::knowledge_graph
 api/apps/chunk_app.py::list_chunk
 api/apps/chunk_app.py::query_vector_store
-api/apps/chunk_app.py::retrieval_test
 api/apps/dataset_app.py::parse_document
 api/apps/dataset_app.py::parse_documents
 api/apps/dataset_app.py::stop_parsing_document

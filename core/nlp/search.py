@@ -350,6 +350,7 @@ class Dealer:
                     anns_field="sparse_vector",
                     limit=topk,
                     output_fields=src,
+                    filter=self._build_filter_expr(filters),
                 )
                 return _build_result(results, keywords_raw)
 

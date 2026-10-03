@@ -1,19 +1,15 @@
-"""多知识库 embedding 一致性校验：service 权威 helper + chunk 检索路由契约。
+"""多知识库 embedding 一致性校验：service 权威 helper。
 
 `KnowledgebaseService.ensure_same_embedding_model` 是所有多知识库联合检索/对话
-入口的唯一校验点（dialog_service 四路径、dialog_app、sdk/doc、chat_api、chunk_app）。
+入口的唯一校验点（dialog_service 四路径、dialog_app、sdk/doc、chat_api、dataset search）。
 判定键：tenant_embd_id（provider 实例级）；缺失时回退 embd_id 并剥 @factory 后缀。
 """
-
-from types import SimpleNamespace
 
 import pytest
 
 from api.db.db_models import Knowledgebase
 from api.db.services import tenant_llm_service
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
-from api.db.services.user_service import UserTenantService
-from common.constants import RetCode
 
 
 def _kb(tenant_embd_id=None, embd_id="", **kw):
@@ -50,24 +46,3 @@ def test_fallback_different_model_names_raise_with_detail():
 def test_empty_and_single_kb_pass():
     KnowledgebaseService.ensure_same_embedding_model([])
     KnowledgebaseService.ensure_same_embedding_model([_kb(embd_id="bge-m3")])
-
-
-def test_chunk_retrieval_test_rejects_mismatched_embeddings(client, monkeypatch):
-    """POST /v1/chunk/retrieval_test：embedding 不一致的多知识库必须拒绝（DATA_ERROR）。"""
-    monkeypatch.setattr(UserTenantService, "query", lambda *_a, **_k: [SimpleNamespace(tenant_id="tenant-unit")])
-    monkeypatch.setattr(KnowledgebaseService, "query", lambda *_a, **_k: [object()])
-    monkeypatch.setattr(
-        KnowledgebaseService,
-        "get_by_ids",
-        lambda *_a, **_k: [
-            _kb(id="kb-a", embd_id="bge-m3"),
-            _kb(id="kb-b", embd_id="text-embedding-3"),
-        ],
-    )
-
-    res = client.post("/v1/chunk/retrieval_test", json={"kb_ids": ["kb-a", "kb-b"], "question": "什么是机器学习？"})
-
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["retcode"] == RetCode.DATA_ERROR, body
-    assert "different embedding models" in body["retmsg"], body

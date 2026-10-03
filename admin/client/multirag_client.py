@@ -1666,7 +1666,7 @@ class MultiRAGClient:
             for fh in file_handles:
                 fh.close()
 
-    def search_on_datasets(self, command: dict):
+    def search_on_datasets(self, command: dict) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
@@ -1677,13 +1677,17 @@ class MultiRAGClient:
             if did is None:
                 return
             dataset_ids.append(did)
+        if not dataset_ids:
+            print("Please select at least one dataset")
+            return
         payload = {
             "question": command["question"],
-            "kb_id": dataset_ids,
+            "dataset_ids": dataset_ids,
             "similarity_threshold": 0.2,
             "vector_similarity_weight": 0.3,
         }
-        response = self.http_client.request("POST", "chunk/retrieval_test", json_body=payload, use_api_base=False, auth_kind="web")
+        dataset_path = urllib.parse.quote(dataset_ids[0], safe="")
+        response = self.http_client.request("POST", f"datasets/{dataset_path}/search", json_body=payload, use_api_base=True, auth_kind="web")
         res_json = response.json()
         code = res_json.get("code", res_json.get("retcode", -1))
         if response.status_code == 200 and code == 0:
