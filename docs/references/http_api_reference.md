@@ -1486,6 +1486,14 @@ POST /agents/{agent_id}/run
 本节描述 Go `internal/` 的独立实现；当前 Web 模型页仍使用 Python `/v1/llm/*`。
 基础路径为 `/api/v1/providers`，现有认证与用户/tenant 约束继续适用。
 
+Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rerank`）；租户模型
+的 `model_type`、旧 `mdl_type` 和按类型筛选继续使用这些能力值。`class` 表达模型系列
+（如 `gpt`、`gemini`、`qwen3`），通过 `ChatConfig.ModelClass` 供驱动选择行为，不能
+替代能力值。系列依次取模型显式 `class`、provider 默认 `class`、模型 ID 最后一段的
+首个连字符之前内容，并转为小写；例如 `Qwen/Qwen3-8B` 的系列是 `qwen3`，请求仍
+保留完整原始模型 ID。聊天系列由受信模型目录赋值，调用方字段不参与决定；Go 配置也
+不影响 Python 模型页。
+
 | 路径 | 行为 |
 |---|---|
 | `POST /{provider_name}/instances/{instance_name}/models` | 普通 JSON 或 sender SSE；`thinking` 省略时使用所选模型默认，显式 true/false 优先 |

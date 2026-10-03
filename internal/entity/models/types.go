@@ -61,7 +61,7 @@ type ChatConfig struct {
 	TopP        *float64
 	DoSample    *bool
 	Stop        *[]string
-	ModelClass  *string
+	ModelClass  *string // Model family for provider behavior, not a capability such as chat.
 	Effort      *string
 	Verbosity   *string
 }

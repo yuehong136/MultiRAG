@@ -11,6 +11,22 @@ type providerModelList struct {
 	Models []providerModel `json:"data"`
 }
 
+// ModelClassFromName derives a lowercase family from the model ID, excluding its namespace.
+func ModelClassFromName(name string) string {
+	if separator := strings.LastIndex(name, "/"); separator >= 0 {
+		name = name[separator+1:]
+	}
+	modelClass, _, _ := strings.Cut(name, "-")
+	return strings.ToLower(modelClass)
+}
+
+func chatModelClass(name string, config *ChatConfig) string {
+	if config.ModelClass != nil && *config.ModelClass != "" {
+		return strings.ToLower(*config.ModelClass)
+	}
+	return ModelClassFromName(name)
+}
+
 func normalizeChatConfig(config *ChatConfig) *ChatConfig {
 	if config == nil {
 		config = &ChatConfig{}

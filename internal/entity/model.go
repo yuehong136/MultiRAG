@@ -163,10 +163,10 @@ type ModelThinking struct {
 type Model struct {
 	Name         string         `json:"name"`
 	MaxTokens    int            `json:"max_tokens"`
-	ModelTypes   []string       `json:"model_types"`
+	ModelTypes   []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
 	Features     Features       `json:"features"`
 	Thinking     *ModelThinking `json:"thinking,omitempty"`
-	Class        *string        `json:"class,omitempty"`
+	Class        *string        `json:"class,omitempty"` // Model family, such as gpt or qwen3.
 	ModelTypeMap map[string]bool
 }
 
@@ -178,7 +178,7 @@ type Provider struct {
 	URLSuffix   models.URLSuffix  `json:"url_suffix"`
 	Models      []*Model          `json:"models"`
 	Features    ProviderFeatures  `json:"features"`
-	Class       string            `json:"class,omitempty"`
+	Class       string            `json:"class,omitempty"` // Default model family for this provider.
 	ModelDriver models.ModelDriver
 }
 
@@ -247,12 +247,13 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 				}
 			}
 			modelClass := provider.Class
-			if modelClass == "" {
-				modelClass = model.Name
-				if separator := strings.Index(modelClass, "-"); separator >= 0 {
-					modelClass = modelClass[:separator]
-				}
+			if model.Class != nil && *model.Class != "" {
+				modelClass = *model.Class
 			}
+			if modelClass == "" {
+				modelClass = models.ModelClassFromName(model.Name)
+			}
+			modelClass = strings.ToLower(modelClass)
 			model.Class = &modelClass
 			model.ModelTypeMap = make(map[string]bool)
 			for _, modelType := range model.ModelTypes {

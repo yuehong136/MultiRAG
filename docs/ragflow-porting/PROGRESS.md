@@ -2023,3 +2023,36 @@ help 与脚本语法检查均 exit=0，单 head `e1f3a5c7b9d0`；完整上游 di
 锚点已根核，独立只读审查无阻断，四项操作说明微调后复核文档。未连接数据库或生产，
 未运行升级、备份或恢复；纯文档范围无需 Python/Web 门禁。这是本项文档结论，固定批次
 其他独立实现及相关 Web、旧入口退出仍需分别审结，不因队尾文档先完成而结束整批。
+
+## f670913bb43585f7428b156bf4d6b52d026263f6 · Go 模型系列与能力类型
+
+上游 remote 已核为 `infiniflow/ragflow`，按冻结
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 核对目标 14 文件完整 diff，未 fetch。
+本项复用当前 Go 驱动与租户模型绑定，并与 Extra owner 确认无文件重叠；未扩展 Python 架构。
+
+- 已等价：`Model.Class`、`Provider.Class`、`ChatConfig.ModelClass` 与服务默认赋值、
+  Gitee/SiliconFlow 推理拆分调用已存在；八份指定系列配置中的七份已为 `class`。
+  Aliyun 已无错误的 `series: deepseek`。保留本地显式 provider class 值和无连字符安全推导，
+  不带入上游初版取 provider 名称或负索引截取的错误。
+- 上游缺失迁移：Google 剩余的 `series: gemini` 改为 `class: gemini`；所有 Go provider
+  配置现在一致。`ModelType`、`ModelTypes`、`ModelTypeMap`、租户 `model_type` 和旧
+  `mdl_type` 继续表达 chat/embedding/rerank 等能力，类型筛选与能力校验不改名。
+- 本地适配：尊重模型显式 class、其次 provider 默认、最后模型名推导；统一小写、
+  去掉命名空间后取连字符前缀，保持原始模型 ID 不变。Gitee/SiliconFlow 的端点选择和
+  qwen3 推理拆分使用同一系列；缺少 async suffix 时保持配置的 chat 端点。
+  这补齐当前消费者的系列含义，不移植后续模型 solver、tokenizer 或 provider 名称变更。
+- 消费者：相关 provider HTTP 回归覆盖显式覆盖、命名空间、大小写和异步 suffix；
+  ChatModel 的生成参数转换保留可信 ModelClass。当前独立 Web 的 `src/api/llm.ts`
+  和 `src/stores/model.ts` 消费 Python `/v1/llm/*` 及能力类型，未发现 Go class 消费，无需前端迁移。
+- 验证：Go 1.25.14，`go build ./internal/...`、`go vet ./internal/...` 及三个独立
+  main 构建成功；entity/models/service/handler/CLI 的 race 检查 67 个顶层测试通过。
+  通用包检查中的 5 个 opt-in 集成未启用，不计为通过；本项另外实际运行新系列消费者和
+  既有 Google HTTP/SQL 两组隔离验收，均通过且零 skip。新验收从 Go handler/service 到
+  受控 Gitee/SiliconFlow HTTP，检查业务 code、完整模型 ID、推理/答案分离、ChatModel
+  绑定系列及错误能力拒绝，并通过独立 SQL 连接读回实例。scratch 库和私有配置已清理，
+  数据库不存在已读回确认。首次新 fixture 复用 APIKey 违反现有唯一约束，改为每 provider
+  独立 fixture key 后通过，未调整生产约束。native 编译器/链接器有现存 warning，退出码均为 0。
+- 限制：受控 provider 与 fixture 身份验收不代表远程供应商或完整 Web/检索 E2E；
+  Gitee/SiliconFlow 既有多角色聊天与 channel-only streaming 仍明确不支持，未以本项
+  系列迁移扩展这些后续能力。当前 Python 实现未改变，无需 Python 全库门禁。
+  其他任务的未提交改动保留，提交限定本项路径与文档 hunk。

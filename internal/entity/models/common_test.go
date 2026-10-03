@@ -6,17 +6,17 @@ func TestGetThinkingAndAnswer(t *testing.T) {
 	tests := []struct {
 		name          string
 		content       *string
-		modelSeries   *string
+		modelClass    *string
 		wantReasoning *string
 		wantAnswer    *string
 	}{
-		{name: "nil content", content: nil, modelSeries: stringPtr("qwen3")},
-		{name: "plain answer", content: stringPtr("answer"), modelSeries: stringPtr("gpt"), wantAnswer: stringPtr("answer")},
-		{name: "think tags", content: stringPtr("<think>reason</think>answer"), modelSeries: stringPtr("qwen3"), wantReasoning: stringPtr("reason"), wantAnswer: stringPtr("answer")},
+		{name: "nil content", content: nil, modelClass: stringPtr("qwen3")},
+		{name: "plain answer", content: stringPtr("answer"), modelClass: stringPtr("gpt"), wantAnswer: stringPtr("answer")},
+		{name: "think tags", content: stringPtr("<think>reason</think>answer"), modelClass: stringPtr("qwen3"), wantReasoning: stringPtr("reason"), wantAnswer: stringPtr("answer")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reasoning, answer := GetThinkingAndAnswer(tt.modelSeries, tt.content)
+			reasoning, answer := GetThinkingAndAnswer(tt.modelClass, tt.content)
 			assertStringPointer(t, reasoning, tt.wantReasoning)
 			assertStringPointer(t, answer, tt.wantAnswer)
 		})

@@ -76,9 +76,8 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 
 	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Chat)
 
-	// Use the model class prefix to select the provider's asynchronous endpoint.
-	modelClass := strings.Split(*modelName, "-")[0]
-	if modelClass == "qwen" || modelClass == "glm" {
+	modelClass := chatModelClass(*modelName, chatModelConfig)
+	if (modelClass == "qwen" || modelClass == "glm") && m.URLSuffix.AsyncChat != "" {
 		url = fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.AsyncChat)
 	}
 
@@ -178,7 +177,7 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 		return nil, fmt.Errorf("invalid content format")
 	}
 
-	thinking, answer := GetThinkingAndAnswer(chatModelConfig.ModelClass, &content)
+	thinking, answer := GetThinkingAndAnswer(&modelClass, &content)
 
 	chatResponse := &ChatResponse{
 		Answer:           answer,
