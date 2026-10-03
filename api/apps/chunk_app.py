@@ -175,7 +175,7 @@ class RetrievalTestRequest(BaseModel):
 
 
 @router.post("/list", summary="列出文档块", deprecated=True)
-async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
         ### POST `/list` 列出文档块接口
 
@@ -192,6 +192,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
     | `page`        | `int`         | 是   | 当前页码，用于分页查询。                                                             |
     | `size`        | `int`         | 是   | 每页返回的文档块数量。                                                               |
     | `keywords`    | `string`      | 否   | 搜索关键词，用于高亮匹配文档块的内容。                                               |
+    | `available_int` | `int`       | 否   | 可用性过滤：`0` 仅禁用块，`1` 仅启用块；省略或传 `null` 时不过滤。                     |
 
     ---
 
@@ -378,7 +379,7 @@ async def list_chunk(request: ListChunkRequest, db: Session = Depends(get_db), u
         #     "doc_ids": [request.doc_id], "question": request.keywords,
         #     "sort": True
         # }
-        if request.available_int:
+        if request.available_int is not None:
             query["available_int"] = request.available_int
             # query_count["available_int"] = request["available_int"]
         # total = settings.retriever.count(query_count, search.index_name_one(tenant_id, kb.name)).total

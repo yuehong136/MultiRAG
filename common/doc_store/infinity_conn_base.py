@@ -20,6 +20,7 @@ import os
 import re
 import time
 from abc import abstractmethod
+from typing import Any
 
 import infinity
 import pandas as pd
@@ -155,14 +156,14 @@ class InfinityConnectionBase(DocStoreConnection):
             return lst
         return sep.join(lst)
 
-    def equivalent_condition_to_str(self, condition: dict, table_instance=None) -> str | None:
+    def equivalent_condition_to_str(self, condition: dict[Any, Any], table_instance: Any = None) -> str | None:
         assert "_id" not in condition
         columns = {}
         if table_instance:
             for n, ty, de, _ in table_instance.show_columns().rows():
                 columns[n] = (ty, de)
 
-        def exists(cln):
+        def exists(cln: str) -> str:
             nonlocal columns
             assert cln in columns, f"'{cln}' should be in '{columns}'."
             ty, de = columns[cln]
@@ -174,7 +175,12 @@ class InfinityConnectionBase(DocStoreConnection):
 
         cond = []
         for k, v in condition.items():
-            if not isinstance(k, str) or not v:
+            if not isinstance(k, str):
+                continue
+            if k == "available_int" and v == 0:
+                cond.append("available_int=0")
+                continue
+            if not v:
                 continue
             if self.field_keyword(k):
                 if isinstance(v, list):
