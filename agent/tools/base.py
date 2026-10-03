@@ -91,6 +91,16 @@ class LLMToolPluginCallSession(ToolCallSession):
             else:
                 resp = await thread_pool_exec(tool_obj.invoke, **arguments)
 
+            if resp is None:
+                output = getattr(tool_obj, "output", None)
+                if callable(output):
+                    fallback_output = output()
+                    if isinstance(fallback_output, dict) and fallback_output.get("content") not in (None, ""):
+                        resp = fallback_output["content"]
+                    else:
+                        resp = fallback_output
+                    logging.warning("[ToolCall] void invoke, using component output name=%s", name)
+
         elapsed = timer() - st
         logging.info(f"[ToolCall] done name={name} elapsed={elapsed:.2f}s result={str(resp)[:200]}")
         self.callback(name, arguments, resp, elapsed_time=elapsed)

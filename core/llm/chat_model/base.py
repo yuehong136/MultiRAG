@@ -5,6 +5,7 @@ import random
 import re
 import time
 from abc import ABC
+from collections.abc import Iterator
 from copy import deepcopy
 from enum import StrEnum
 from typing import Any, Protocol
@@ -14,6 +15,7 @@ import openai
 from openai import OpenAI
 
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
+from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.nlp import is_chinese
 
 
@@ -47,7 +49,7 @@ class ToolCallSession(Protocol):
     def tool_call(self, name: str, arguments: dict[str, Any]) -> str: ...
 
 
-class Base(ABC):
+class Base(ToolHistoryMixin, ABC):
     def __init__(self, key, model_name, base_url, **kwargs):
         timeout = int(os.environ.get("LM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
@@ -197,30 +199,6 @@ class Base(ABC):
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def _append_history(self, hist, tool_call, tool_res):
-        hist.append(
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "index": tool_call.index,
-                        "id": tool_call.id,
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments,
-                        },
-                        "type": "function",
-                    },
-                ],
-            }
-        )
-        try:
-            if isinstance(tool_res, dict):
-                tool_res = json.dumps(tool_res, ensure_ascii=False)
-        finally:
-            hist.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_res)})
-        return hist
-
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
             return
@@ -228,7 +206,7 @@ class Base(ABC):
         self.toolcall_sessions = toolcall_session
         self.tools = tools
 
-    def chat_with_tools(self, system: str, history: list, gen_conf: dict | None = None):
+    def chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
         if gen_conf is None:
             gen_conf = {}
         if system:
@@ -239,37 +217,41 @@ class Base(ABC):
         hist = deepcopy(history)
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries + 1):
-            history = hist
+            history = deepcopy(hist)
             try:
                 for _ in range(self.max_rounds + 1):
                     logging.info(f"{self.tools=}")
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, tool_choice="auto", **gen_conf)
                     tk_count += self.total_token_count(response)
-                    if any([not response.choices, not response.choices[0].message]):
+                    if not response.choices or not response.choices[0].message:
                         raise Exception(f"500 response structure error. Response: {response}")
 
-                    if not hasattr(response.choices[0].message, "tool_calls") or not response.choices[0].message.tool_calls:
-                        if hasattr(response.choices[0].message, "reasoning_content") and response.choices[0].message.reasoning_content:
-                            ans += "<think>" + response.choices[0].message.reasoning_content + "</think>"
+                    message = response.choices[0].message
+                    reasoning_content = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
+                    if not hasattr(message, "tool_calls") or not message.tool_calls:
+                        if reasoning_content:
+                            ans += "<think>" + reasoning_content + "</think>"
 
-                        ans += response.choices[0].message.content
+                        ans += message.content or ""
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
 
                         return ans, tk_count
 
-                    for tool_call in response.choices[0].message.tool_calls:
+                    results: list[ToolResult] = []
+                    for tool_call in message.tool_calls:
                         logging.info(f"Response {tool_call=}")
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
                             tool_response = self.toolcall_sessions.tool_call(name, args)
-                            history = self._append_history(history, tool_call, tool_response)
+                            results.append((tool_call, name, args, tool_response, None))
                             ans += self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
                             logging.exception(msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
-                            history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
+                            results.append((tool_call, name, {}, None, e))
                             ans += self._verbose_tool_use(name, {}, str(e))
+                    history = self._append_history_batch(history, results, reasoning_content=reasoning_content if self._need_reasoning_content_back() else None)
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
@@ -315,7 +297,7 @@ class Base(ABC):
 
         return final_tool_calls
 
-    def chat_streamly_with_tools(self, system: str, history: list, gen_conf=None):
+    def chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> Iterator[str | int]:
         if gen_conf is None:
             gen_conf = {}
         gen_conf = self._clean_conf(gen_conf)
@@ -327,16 +309,23 @@ class Base(ABC):
         hist = deepcopy(history)
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries + 1):
-            history = hist
+            history = deepcopy(hist)
             try:
                 for _ in range(self.max_rounds + 1):
                     reasoning_start = False
+                    reasoning_content = ""
                     logging.info(f"{tools=}")
                     response = self.client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **gen_conf)
                     final_tool_calls = {}
                     answer = ""
                     for resp in response:
-                        if resp.choices[0].delta.tool_calls:
+                        if not resp.choices:
+                            continue
+                        delta = resp.choices[0].delta
+                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None) or ""
+                        if self._need_reasoning_content_back():
+                            reasoning_content += _reasoning
+                        if delta.tool_calls:
                             for tool_call in resp.choices[0].delta.tool_calls or []:
                                 index = tool_call.index
 
@@ -346,7 +335,6 @@ class Base(ABC):
                                     final_tool_calls[index] = tool_call
                                 else:
                                     final_tool_calls[index].function.arguments += tool_call.function.arguments if tool_call.function.arguments else ""
-                            continue
 
                         if any([not resp.choices, not resp.choices[0].delta, not hasattr(resp.choices[0].delta, "content")]):
                             raise Exception("500 response structure error.")
@@ -354,13 +342,19 @@ class Base(ABC):
                         if not resp.choices[0].delta.content:
                             resp.choices[0].delta.content = ""
 
-                        if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
+                        if delta.tool_calls and not delta.content and not _reasoning:
+                            continue
+                        if _reasoning:
                             ans = ""
                             if not reasoning_start:
                                 reasoning_start = True
                                 ans = "<think>"
-                            ans += resp.choices[0].delta.reasoning_content + "</think>"
+                            ans += _reasoning + "</think>"
                             yield ans
+                            if delta.content:
+                                reasoning_start = False
+                                answer += delta.content
+                                yield delta.content
                         else:
                             reasoning_start = False
                             answer += resp.choices[0].delta.content
@@ -376,22 +370,24 @@ class Base(ABC):
                         if finish_reason == "length":
                             yield self._length_stop("")
 
-                    if answer:
+                    if answer and not final_tool_calls:
                         yield total_tokens
                         return
 
+                    results = []
                     for tool_call in final_tool_calls.values():
                         name = tool_call.function.name
                         try:
                             args = json_repair.loads(tool_call.function.arguments)
                             yield self._verbose_tool_use(name, args, "Begin to call...")
                             tool_response = self.toolcall_sessions.tool_call(name, args)
-                            history = self._append_history(history, tool_call, tool_response)
+                            results.append((tool_call, name, args, tool_response, None))
                             yield self._verbose_tool_use(name, args, tool_response)
                         except Exception as e:
                             logging.exception(msg=f"Wrong JSON argument format in LLM tool call response: {tool_call}")
-                            history.append({"role": "tool", "tool_call_id": tool_call.id, "content": f"Tool call error: \n{tool_call}\nException:\n" + str(e)})
+                            results.append((tool_call, name, {}, None, e))
                             yield self._verbose_tool_use(name, {}, str(e))
+                    history = self._append_history_batch(history, results, reasoning_content=reasoning_content if self._need_reasoning_content_back() else None)
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})

@@ -2,6 +2,9 @@ from core.llm.chat_model.base import Base
 
 
 class DeepSeekChat(Base):
+    def _need_reasoning_content_back(self) -> bool:
+        return True
+
     def __init__(self, key, model_name="deepseek-chat", base_url="https://api.deepseek.com/v1", **kwargs):
         if not base_url:
             base_url = "https://api.deepseek.com/v1"

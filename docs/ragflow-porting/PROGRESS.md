@@ -2056,3 +2056,30 @@ help 与脚本语法检查均 exit=0，单 head `e1f3a5c7b9d0`；完整上游 di
   Gitee/SiliconFlow 既有多角色聊天与 channel-only streaming 仍明确不支持，未以本项
   系列迁移扩展这些后续能力。当前 Python 实现未改变，无需 Python 全库门禁。
   其他任务的未提交改动保留，提交限定本项路径与文档 hunk。
+
+## e6e80041 · Agent 工具结果、参数 schema 与 DeepSeek 历史
+
+2026-10-03 对照冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 中的
+`e6e80041f549582fd0164afcd5d52c91b3fe861f`，覆盖其三个文件的功能足迹。
+未刷新来源快照；冻结链中的 `8269fa01b` 非流式 tool call 无 `index` 修复作为必要后续适配。
+
+- 本地工具 invoke 返回 `None` 后读取一次组件 output，优先非空 content，再使用整个输出；
+  明确的空值返回保留。callback 同步接收最终结果。输出读取异常交给工具错误链，
+  不吞异常返回假成功；MCP binding 的 canonical name、授权、超时及日志分派保持。
+- Agent user_prompt 放在字符串参数 schema 的 default，保留 type/description/required。
+- 正式 `chat.py::LiteLLMBase` 与包内同步 `DeepSeekChat` 均保全每轮 reasoning；
+  Base 的异步兼容链也覆盖。流式同 delta 的 reasoning/tool_calls 不丢失，
+  兼容 reasoning 字段别名和 non-stream SDK 对象。其他 provider 的既有推理展示保留，
+  不照搬上游非流式展示仅限 DeepSeek 的副作用。
+- 本地包结构适配共用 `chat_model/tool_history.py`；同步多工具与失败结果按一条
+  assistant + 各 tool ID 写入，顺序执行/异步并发及既有同步 session 桥接保持。
+  无前端合同变化、Go 变更或 DB/存储路径修改。当前行为见 [模块说明](../../core/llm/README.md)。
+
+修改前新增回归 70 failed、10 passed；首次修后同组 80 passed，相关现有回归合计
+97 passed。随后补充显式结果不读取 output 属性的回归，最终 `make verify` exit0：
+完整格式、Ruff、import-linter、async DB 门禁与 mypy 通过，单测 **4588 passed**。
+首次 make verify 曾被另一任务临时测试文件
+的格式阻断，后续复跑该阻塞已消失；未修改该文件。新增 helper 单独 mypy 亦通过。
+实际 OpenAI SDK 与 LiteLLM 对本机 HTTP/SSE fixture 的 12 组合、24 请求通过，
+逐次检查下一轮 wire assistant reasoning、多工具结果与答案；fixture listener 已关闭。
+这是本机协议验证，未调用远程模型或真实外部 MCP，也不代表完整 Agent UI/生产端到端验收。

@@ -35,6 +35,7 @@ from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
+from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.nlp import is_chinese, is_english
 
 
@@ -112,7 +113,7 @@ def _apply_model_family_policies(
     return sanitized_gen_conf, sanitized_kwargs
 
 
-class Base(ABC):
+class Base(ToolHistoryMixin, ABC):
     def __init__(self, key, model_name, base_url, **kwargs):
         timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
@@ -308,60 +309,6 @@ class Base(ABC):
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def _append_history(self, hist, tool_call, tool_res):
-        hist.append(
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "index": tool_call.index,
-                        "id": tool_call.id,
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments,
-                        },
-                        "type": "function",
-                    },
-                ],
-            }
-        )
-        try:
-            if isinstance(tool_res, dict):
-                tool_res = json.dumps(tool_res, ensure_ascii=False)
-        finally:
-            hist.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_res)})
-        return hist
-
-    def _append_history_batch(self, hist, results):
-        """
-        Append a batch of tool calls to history following the OpenAI protocol:
-        one assistant message containing all tool_calls, followed by one tool message per call.
-        results: list of (tool_call, name, args, result, error)
-        """
-        hist.append(
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "index": tc.index,
-                        "id": tc.id,
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        "type": "function",
-                    }
-                    for tc, _, _, _, _ in results
-                ],
-            }
-        )
-        for tc, _, _, result, err in results:
-            if err:
-                content = str(err)
-            elif isinstance(result, dict):
-                content = json.dumps(result, ensure_ascii=False)
-            else:
-                content = str(result)
-            hist.append({"role": "tool", "tool_call_id": tc.id, "content": content})
-        return hist
-
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
             return
@@ -369,7 +316,7 @@ class Base(ABC):
         self.toolcall_session = toolcall_session
         self.tools = tools
 
-    async def async_chat_with_tools(self, system: str, history: list, gen_conf: dict = {}):
+    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> tuple[str, int]:
         gen_conf = self._clean_conf(gen_conf)
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
@@ -384,21 +331,22 @@ class Base(ABC):
                     logging.info(f"{self.tools=}")
                     response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, tool_choice="auto", **gen_conf)
                     tk_count += total_token_count_from_response(response)
-                    if any([not response.choices, not response.choices[0].message]):
+                    if not response.choices or not response.choices[0].message:
                         raise Exception(f"500 response structure error. Response: {response}")
 
-                    if not hasattr(response.choices[0].message, "tool_calls") or not response.choices[0].message.tool_calls:
-                        _reasoning = getattr(response.choices[0].message, "reasoning_content", None) or getattr(response.choices[0].message, "reasoning", None)
+                    message = response.choices[0].message
+                    _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
+                    if not hasattr(message, "tool_calls") or not message.tool_calls:
                         if _reasoning:
                             ans += "<think>" + _reasoning + "</think>"
 
-                        ans += response.choices[0].message.content
+                        ans += message.content or ""
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
 
                         return ans, tk_count
 
-                    async def _exec_tool(tc):
+                    async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
                             args = json_repair.loads(tc.function.arguments)
@@ -413,9 +361,9 @@ class Base(ABC):
 
                     logging.info(f"Response tool_calls={response.choices[0].message.tool_calls}")
                     results = await asyncio.gather(*[_exec_tool(tc) for tc in response.choices[0].message.tool_calls])
-                    history = self._append_history_batch(history, results)
+                    history = self._append_history_batch(history, results, reasoning_content=_reasoning if self._need_reasoning_content_back() else None)
                     for tc, name, args, result, err in results:
-                        ans += self._verbose_tool_use(name, args, err if err else result)
+                        ans += self._verbose_tool_use(name, args, str(err) if err else result)
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
@@ -430,7 +378,7 @@ class Base(ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict = {}):
+    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> AsyncIterator[str | int]:
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system and history and history[0].get("role") != "system":
@@ -444,6 +392,7 @@ class Base(ABC):
             try:
                 for _ in range(self.max_rounds + 1):
                     reasoning_start = False
+                    reasoning_content = ""
                     logging.info(f"{tools=}")
 
                     response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **gen_conf)
@@ -457,6 +406,9 @@ class Base(ABC):
                                 continue
 
                             delta = resp.choices[0].delta
+                            _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None) or ""
+                            if self._need_reasoning_content_back():
+                                reasoning_content += _reasoning
 
                             if hasattr(delta, "tool_calls") and delta.tool_calls:
                                 for tool_call in delta.tool_calls:
@@ -467,12 +419,12 @@ class Base(ABC):
                                         final_tool_calls[index] = tool_call
                                     else:
                                         final_tool_calls[index].function.arguments += tool_call.function.arguments or ""
-                                continue
 
                             if not hasattr(delta, "content") or delta.content is None:
                                 delta.content = ""
 
-                            _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                            if getattr(delta, "tool_calls", None) and not delta.content and not _reasoning:
+                                continue
                             if _reasoning:
                                 ans = ""
                                 if not reasoning_start:
@@ -480,6 +432,10 @@ class Base(ABC):
                                     ans = "<think>"
                                 ans += _reasoning + "</think>"
                                 yield ans
+                                if delta.content:
+                                    reasoning_start = False
+                                    answer += delta.content
+                                    yield delta.content
                             else:
                                 reasoning_start = False
                                 answer += delta.content
@@ -499,7 +455,7 @@ class Base(ABC):
                         yield total_tokens
                         return
 
-                    async def _exec_tool(tc):
+                    async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
                             args = json_repair.loads(tc.function.arguments)
@@ -521,9 +477,9 @@ class Base(ABC):
                             args = {}
                         yield self._verbose_tool_use(tc.function.name, args, "Begin to call...")
                     results = await asyncio.gather(*[_exec_tool(tc) for tc in tcs])
-                    history = self._append_history_batch(history, results)
+                    history = self._append_history_batch(history, results, reasoning_content=reasoning_content if self._need_reasoning_content_back() else None)
                     for tc, name, args, result, err in results:
-                        yield self._verbose_tool_use(name, args, err if err else result)
+                        yield self._verbose_tool_use(name, args, str(err) if err else result)
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
@@ -1198,7 +1154,7 @@ class AstraflowCNChat(Base):
         super().__init__(key, model_name, base_url, **kwargs)
 
 
-class LiteLLMBase(ABC):
+class LiteLLMBase(ToolHistoryMixin, ABC):
     _FACTORY_NAME = [
         "Tongyi-Qianwen",
         "Bedrock",
@@ -1297,6 +1253,9 @@ class LiteLLMBase(ABC):
 
         gen_conf.pop("max_tokens", None)
         return gen_conf
+
+    def _need_reasoning_content_back(self) -> bool:
+        return self.provider == SupportedLiteLLMProvider.DeepSeek
 
     async def async_chat(self, system, history, gen_conf, **kwargs):
         hist = list(history) if history else []
@@ -1439,60 +1398,6 @@ class LiteLLMBase(ABC):
     def _verbose_tool_use(self, name, args, res):
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def _append_history(self, hist, tool_call, tool_res):
-        hist.append(
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "index": tool_call.index,
-                        "id": tool_call.id,
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments,
-                        },
-                        "type": "function",
-                    },
-                ],
-            }
-        )
-        try:
-            if isinstance(tool_res, dict):
-                tool_res = json.dumps(tool_res, ensure_ascii=False)
-        finally:
-            hist.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_res)})
-        return hist
-
-    def _append_history_batch(self, hist, results):
-        """
-        Append a batch of tool calls to history following the OpenAI protocol:
-        one assistant message containing all tool_calls, followed by one tool message per call.
-        results: list of (tool_call, name, args, result, error)
-        """
-        hist.append(
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "index": tc.index,
-                        "id": tc.id,
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        "type": "function",
-                    }
-                    for tc, _, _, _, _ in results
-                ],
-            }
-        )
-        for tc, _, _, result, err in results:
-            if err:
-                content = str(err)
-            elif isinstance(result, dict):
-                content = json.dumps(result, ensure_ascii=False)
-            else:
-                content = str(result)
-            hist.append({"role": "tool", "tool_call_id": tc.id, "content": content})
-        return hist
-
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
             return
@@ -1500,7 +1405,7 @@ class LiteLLMBase(ABC):
         self.toolcall_session = toolcall_session
         self.tools = tools
 
-    async def async_chat_with_tools(self, system: str, history: list, gen_conf: dict = {}):
+    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> tuple[str, int]:
         gen_conf = self._clean_conf(gen_conf)
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
@@ -1527,9 +1432,9 @@ class LiteLLMBase(ABC):
                         raise Exception(f"500 response structure error. Response: {response}")
 
                     message = response.choices[0].message
+                    _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
 
                     if not hasattr(message, "tool_calls") or not message.tool_calls:
-                        _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
                         if _reasoning:
                             ans += f"<think>{_reasoning}</think>"
                         ans += message.content or ""
@@ -1537,7 +1442,7 @@ class LiteLLMBase(ABC):
                             ans = self._length_stop(ans)
                         return ans, tk_count
 
-                    async def _exec_tool(tc):
+                    async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
                             args = json_repair.loads(tc.function.arguments)
@@ -1552,9 +1457,9 @@ class LiteLLMBase(ABC):
 
                     logging.info(f"Response tool_calls={message.tool_calls}")
                     results = await asyncio.gather(*[_exec_tool(tc) for tc in message.tool_calls])
-                    history = self._append_history_batch(history, results)
+                    history = self._append_history_batch(history, results, reasoning_content=_reasoning if self._need_reasoning_content_back() else None)
                     for tc, name, args, result, err in results:
-                        ans += self._verbose_tool_use(name, args, err if err else result)
+                        ans += self._verbose_tool_use(name, args, str(err) if err else result)
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
@@ -1585,6 +1490,7 @@ class LiteLLMBase(ABC):
             try:
                 for _ in range(self.max_rounds + 1):
                     reasoning_start = False
+                    reasoning_content = ""
                     logging.info(f"{tools=}")
 
                     completion_args = self._construct_completion_args(history=history, stream=True, tools=True, **gen_conf)
@@ -1602,6 +1508,9 @@ class LiteLLMBase(ABC):
                             continue
 
                         delta = resp.choices[0].delta
+                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None) or ""
+                        if self._need_reasoning_content_back():
+                            reasoning_content += _reasoning
 
                         if hasattr(delta, "tool_calls") and delta.tool_calls:
                             for tool_call in delta.tool_calls:
@@ -1612,12 +1521,12 @@ class LiteLLMBase(ABC):
                                     final_tool_calls[index] = tool_call
                                 else:
                                     final_tool_calls[index].function.arguments += tool_call.function.arguments or ""
-                            continue
 
                         if not hasattr(delta, "content") or delta.content is None:
                             delta.content = ""
 
-                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                        if getattr(delta, "tool_calls", None) and not delta.content and not _reasoning:
+                            continue
                         if _reasoning:
                             ans = ""
                             if not reasoning_start:
@@ -1648,7 +1557,7 @@ class LiteLLMBase(ABC):
                         yield total_tokens
                         return
 
-                    async def _exec_tool(tc):
+                    async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
                             args = json_repair.loads(tc.function.arguments)
@@ -1670,9 +1579,9 @@ class LiteLLMBase(ABC):
                             args = {}
                         yield self._verbose_tool_use(tc.function.name, args, "Begin to call...")
                     results = await asyncio.gather(*[_exec_tool(tc) for tc in tcs])
-                    history = self._append_history_batch(history, results)
+                    history = self._append_history_batch(history, results, reasoning_content=reasoning_content if self._need_reasoning_content_back() else None)
                     for tc, name, args, result, err in results:
-                        yield self._verbose_tool_use(name, args, err if err else result)
+                        yield self._verbose_tool_use(name, args, str(err) if err else result)
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})

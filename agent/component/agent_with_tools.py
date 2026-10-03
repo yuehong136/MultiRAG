@@ -223,7 +223,7 @@ class Agent(LLM, ToolBase):
         self._param.function_name = self._id.split("-->")[-1]
         m = super().get_meta()
         if hasattr(self._param, "user_prompt") and self._param.user_prompt:
-            m["function"]["parameters"]["properties"]["user_prompt"] = self._param.user_prompt
+            m["function"]["parameters"]["properties"]["user_prompt"]["default"] = self._param.user_prompt
         return m
 
     def get_input_form(self) -> dict[str, dict]:
