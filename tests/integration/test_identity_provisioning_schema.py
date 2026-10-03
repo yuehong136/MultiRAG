@@ -825,8 +825,9 @@ def test_i6_downgrade_lock_blocks_concurrent_policy_insert(
                 _I21_REVISION,
             )
             assert contender.result(timeout=5) == "55P03"
-            assert len(lock_statements) == 1
-            lock_sql = lock_statements[0]
+            assert len(lock_statements) == 2
+            assert lock_statements[0] == "lock table usr_ai.t_document_source_recovery in access exclusive mode"
+            lock_sql = lock_statements[1]
             expected_order = (
                 IdentityTenantPolicy.__tablename__,
                 IdentityProviderAccount.__tablename__,

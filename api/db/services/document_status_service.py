@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, Knowledgebase, Task, UserTenant
 from api.db.services.document_image_lock import image_reference_key, image_write_locks, release_task_images, reserve_task_image
+from api.db.services.document_source_recovery import SourceRecovery, prepare_source_recovery, preserve_source_recovery, require_source_recovery_resolved
 from api.db.services.document_task_service import account_task_tokens, current_document_task, reconcile_task_chunk_count
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
@@ -210,7 +211,7 @@ def source_document_availability(bind: Engine | Connection, chunks: list[dict[st
             if len(docs) != 1:
                 raise ValueError("A source task must belong to one document.")
             with current_document_task(reader, task_id, docs[0].id, dataset_id):
-                pass
+                require_source_recovery_resolved(docs[0].id, task_id, bind)
         for doc in docs:
             for chunk in groups[doc.id]:
                 if chunk.get("raptor_kwd") or chunk.get("knowledge_graph_kwd") or chunk.get("compile_kwd"):
@@ -230,18 +231,19 @@ def insert_source_chunks(bind: Engine | Connection, chunks: list[dict[str, Any]]
         document_id = chunks[0]["doc_id"]
         snapshot = document_history(settings.docStoreConn, index, dataset_id, document_id) if task_id is not None and db is not None else None
         keys = {key for row in [*chunks, *(snapshot or [])] if (key := image_reference_key(row.get("img_id"))) is not None}
-        recovery: dict[str, Any] = {}
+        recovery: dict[str, Any] = {"original_native": snapshot}
         try:
             with image_write_locks(bind, keys):
                 result = _insert_locked_source_chunks(db, chunks, index_name, dataset_id, task_id, index, document_id, recovery)
                 if task_id is not None and db is not None:
                     release_task_images(task_id, {key for chunk in chunks if (key := image_reference_key(chunk.get("img_id"))) is not None})
+                    recovery["material"].ready({str(chunk.get("id", chunk.get("pk"))) for chunk in chunks})
                 return result
         except Exception:
             # The dedicated image connection has released its locks before
             # rollback can release Doc/Task. Recovery always reenters in the
             # same Doc -> Task -> image order as a current producer.
-            if snapshot is not None and db is not None and task_id is not None and recovery:
+            if snapshot is not None and db is not None and task_id is not None and recovery.get("native_started"):
                 _recover_source_chunks(db, task_id, document_id, dataset_id, index, chunks, snapshot, keys, recovery)
             raise
 
@@ -256,21 +258,30 @@ def _insert_locked_source_chunks(
     document_id: str,
     recovery: dict[str, Any],
 ) -> list[str]:
-    from common.doc_store.document_history import confirm_history_visibility
+    from common.doc_store.document_history import confirm_history_visibility, document_history
 
     original_task = db.get(Task, task_id) if db is not None and task_id is not None else None
     original_doc = db.get(Document, document_id) if original_task is not None else None
     original_task_row = _source_row(original_task) if original_task is not None else None
     original_doc_row = _source_row(original_doc) if original_doc is not None else None
-    recovery.update(original_task=original_task_row, original_doc=original_doc_row, applied_task=None, applied_doc=None)
+    recovery.update(original_task=original_task_row, original_doc=original_doc_row, applied_task=None, applied_doc=None, applied_native=None)
     if task_id is not None and db is not None:
+        recovery["material"] = prepare_source_recovery(db.get_bind(), document_id, task_id, dataset_id=dataset_id, index=index, chunks=chunks, **recovery)
         for chunk in chunks:
             if (key := image_reference_key(chunk.get("img_id"))) is not None:
                 reserve_task_image(task_id, key)
-    errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
-    if not isinstance(errors, list) or errors:
-        raise RuntimeError("Source chunk insertion failed.")
-    confirm_history_visibility(settings.docStoreConn, index)
+    try:
+        recovery["native_started"] = True
+        errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
+        if not isinstance(errors, list) or errors:
+            raise RuntimeError("Source chunk insertion failed.")
+        confirm_history_visibility(settings.docStoreConn, index)
+    finally:
+        # Capture the actual partial or complete write while Doc/Task/image
+        # locks still exclude native writers, before SQL can release them.
+        if original_task is not None:
+            recovery["applied_native"] = document_history(settings.docStoreConn, index, dataset_id, document_id)
+            recovery["material"].update(phase="applied", applied_native=recovery["applied_native"])
     if task_id is not None and db is not None:
         task = db.get(Task, task_id)
         if task is None:
@@ -287,6 +298,7 @@ def _insert_locked_source_chunks(
                 applied_task=copy.deepcopy(dict(db.execute(select(Task.__table__).where(Task.id == task_id)).mappings().one())),
                 applied_doc=copy.deepcopy(dict(db.execute(select(Document.__table__).where(Document.id == document_id)).mappings().one())),
             )
+            recovery["material"].update(applied_task=recovery["applied_task"], applied_doc=recovery["applied_doc"])
         db.commit()
     return errors
 
@@ -302,7 +314,7 @@ def _recover_source_chunks(
     keys: set[tuple[str, str]],
     recovery: dict[str, Any],
 ) -> None:
-    from common.doc_store.document_history import restore_document_history
+    from common.doc_store.document_history import document_history, restore_document_history
 
     original_task_row, original_doc_row = recovery["original_task"], recovery["original_doc"]
     applied_task_row, applied_doc_row = recovery["applied_task"], recovery["applied_doc"]
@@ -327,7 +339,23 @@ def _recover_source_chunks(
             for chunk in chunks:
                 if (key := image_reference_key(chunk.get("img_id"))) is not None:
                     reserve_task_image(task_id, key)
-            restore_document_history(settings.docStoreConn, index, dataset_id, document_id, snapshot, ids=[str(chunk.get("id", chunk.get("pk"))) for chunk in chunks])
+            identifiers = {str(chunk.get("id", chunk.get("pk"))) for chunk in chunks}
+            material = {
+                "dataset_id": dataset_id,
+                "index": index,
+                "original_native": snapshot,
+                "chunks": chunks,
+                "current_task": current_task_row,
+                "current_doc": current_doc_row,
+            }
+            try:
+                current_native = document_history(settings.docStoreConn, index, dataset_id, document_id)
+            except Exception as error:
+                preserve_source_recovery(recovery["material"], current_native=None, read_error=type(error).__name__, **material)
+            applied_native = recovery["applied_native"]
+            if applied_native is None or _source_native_rows(current_native, identifiers) != _source_native_rows(applied_native, identifiers):
+                preserve_source_recovery(recovery["material"], current_native=current_native, **material)
+            restore_document_history(settings.docStoreConn, index, dataset_id, document_id, snapshot, ids=list(identifiers))
             if committed and not unchanged and original_doc_row is not None and original_task_row is not None and current_doc_row is not None:
                 chunk_delta = original_doc_row["chunk_num"] - current_doc_row["chunk_num"]
                 token_delta = original_doc_row["token_num"] - current_doc_row["token_num"]
@@ -342,6 +370,8 @@ def _recover_source_chunks(
                     raise RuntimeError("Source chunk SQL recovery could not be confirmed.")
                 db.commit()
     db.rollback()
+    durable: SourceRecovery = recovery["material"]
+    durable.restored()
 
 
 def _source_row(row: Document | Task) -> dict[str, Any]:
@@ -350,3 +380,7 @@ def _source_row(row: Document | Task) -> dict[str, Any]:
         if isinstance(value, datetime) and value.tzinfo is not None:
             result[key] = value.astimezone(UTC).replace(tzinfo=None)
     return result
+
+
+def _source_native_rows(rows: list[dict[str, Any]], identifiers: set[str]) -> dict[str, dict[str, Any]]:
+    return {str(row.get("id", row.get("pk"))): row for row in rows if str(row.get("id", row.get("pk"))) in identifiers}

@@ -734,7 +734,7 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
             if completed:
                 # Do not retire during compensation: its original Task may
                 # become current again. Confirmed SQL retirement comes first.
-                retire_task_image_reservations(db, selection.task_ids)
+                retire_task_image_reservations(db, selection.task_ids, document_id=selection.document_id)
 
 
 def ingest_selected(selected: list[Selection], principal_id: str, run: str, clear: bool, apply_kb: bool) -> bool | dict[str, Any]:

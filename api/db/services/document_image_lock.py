@@ -73,17 +73,20 @@ def pending_task_image_references(db: Session, document_id: str, candidates: set
     return protected
 
 
-def retire_task_image_reservations(db: Session, task_ids: Collection[str]) -> None:
+def retire_task_image_reservations(db: Session, task_ids: Collection[str], *, document_id: str | None = None) -> None:
     """SQL retirement is authoritative; never retire a still-current producer."""
     from sqlalchemy import select
 
     from api.db.db_models import Document, Task
+    from api.db.services.document_source_recovery import retire_source_recovery
     from core.utils.task_runtime import TASK_CANCEL_MARKER
 
     for task_id in task_ids:
         row = db.execute(select(Task.progress, Task.progress_msg, Document.run).join(Document, Document.id == Task.doc_id).where(Task.id == task_id)).first()
         if row is None or row.run in {"0", "2"} or not 0 <= (row.progress or 0) < 1 or TASK_CANCEL_MARKER in (row.progress_msg or ""):
             release_task_images(task_id)
+        if row is None and document_id is not None:
+            retire_source_recovery(document_id, task_id, db.get_bind())
 
 
 def image_reference_key(identifier: Any) -> tuple[str, str] | None:

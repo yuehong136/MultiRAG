@@ -7,11 +7,13 @@ from typing import Annotated, Any, Literal
 import numpy as np
 import xxhash
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Discriminator, Field, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.apps import manager
-from api.db.db_models import get_db
+from api.db.db_models import Document, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_image_lock import image_reference_key, image_write_locks
@@ -36,6 +38,10 @@ from core.nlp import rag_tokenizer, search
 from core.prompts.generator import cross_languages, keyword_extraction
 
 router = APIRouter()
+
+
+def _locked_document(db: Session, document_id: str) -> Document | None:
+    return db.scalar(select(Document).where(Document.id == document_id).with_for_update().execution_options(populate_existing=True))
 
 
 class ListChunkRequest(BaseModel):
@@ -666,7 +672,7 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
 
 
 @router.post("/set", summary="设置文档块", deprecated=True)
-def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def set(request: SetChunkRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     ### POST `/set` 更新文档块
 
@@ -785,9 +791,15 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         if not tenant_id:
             return get_data_error_result(retmsg="Tenant not found!")
 
-        doc = DocumentService.get_by_id(db, request.doc_id)
+        doc = _locked_document(db, request.doc_id)
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
+
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        index_name = search.index_name_one(tenant_id, kb.name)
+        current = settings.docStoreConn.get(request.chunk_id, index_name, [doc.kb_id])
+        if not current or str(current.get("doc_id", current.get("document_id"))) != request.doc_id:
+            return get_data_error_result(retmsg="Chunk not found in this document!")
 
         tenant_embd_id = DocumentService.get_tenant_embd_id(db, request.doc_id)
         if tenant_embd_id:
@@ -806,6 +818,8 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
             d = beAdoc(d, q, a, not any(rag_tokenizer.is_chinese(t) for t in q + a))
 
         # 计算向量
+        # Keep the Document lock when LLMBundle releases its read session.
+        embd_mdl.db = None
         v, c = embd_mdl.encode([doc.name, request.content_with_weight if not d["question_kwd"] else "\n".join(d["question_kwd"])])
         v = 0.1 * v[0] + 0.9 * v[1] if doc.parser_id != ParserType.QA else v[1]
 
@@ -815,12 +829,11 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
         d[f"q_{vector_dim}_vec"] = v.tolist()  # 同时保存到维度特定字段
 
         # 更新数据库
-        update_condition = {"id": request.chunk_id}  # 主键查询条件
-        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        update_condition = {"id": request.chunk_id, "doc_id": request.doc_id}
         img_id = request.img_id or ""
         key = image_reference_key(img_id)
         with image_write_locks(db.get_bind(), [key] if key is not None else []):
-            settings.docStoreConn.update(update_condition, d, search.index_name_one(tenant_id, kb.name), doc.kb_id)
+            settings.docStoreConn.update(update_condition, d, index_name, doc.kb_id)
             if request.image_base64 and key is not None:
                 bkt, name = key
                 image_binary = base64.b64decode(request.image_base64)
@@ -832,7 +845,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user=Depends(ma
 
 
 @router.post("/switch", summary="切换文档块状态", deprecated=True)
-def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     ### POST `/switch` 切换文档块状态接口
 
@@ -903,12 +916,17 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
 
     req = request.model_dump()
     try:
-        doc = DocumentService.get_by_id(db, req["doc_id"])
-        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        doc = _locked_document(db, req["doc_id"])
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
+        kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+        index_name = search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name)
         for cid in req["chunk_ids"]:
-            if not settings.docStoreConn.update({"id": cid}, {"available_int": int(req["available_int"])}, search.index_name_one(DocumentService.get_tenant_id(db, req["doc_id"]), kb.name), doc.kb_id):
+            current = settings.docStoreConn.get(cid, index_name, [doc.kb_id])
+            if not current or str(current.get("doc_id", current.get("document_id"))) != req["doc_id"]:
+                return get_data_error_result(retmsg="Chunk not found in this document!")
+        for cid in req["chunk_ids"]:
+            if not settings.docStoreConn.update({"id": cid, "doc_id": req["doc_id"]}, {"available_int": int(req["available_int"])}, index_name, doc.kb_id):
                 return get_data_error_result(retmsg="Index updating failure")
         return get_json_result(data=True)
     except Exception as e:
@@ -916,7 +934,7 @@ def switch(request: SwitchChunkRequest, db: Session = Depends(get_db), user=Depe
 
 
 @router.post("/rm", summary="删除文档块", deprecated=True)
-def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rm(request: RmChunkRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
         ### POST `/rm` 删除文档块接口
 
@@ -1069,7 +1087,7 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
             has_ids = False
         if not has_ids:
             if req.get("delete_all") is True:
-                doc = DocumentService.get_by_id(db, req["doc_id"])
+                doc = _locked_document(db, req["doc_id"])
                 if not doc:
                     return get_data_error_result(retmsg="Document not found!")
                 kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
@@ -1089,7 +1107,7 @@ def rm(request: RmChunkRequest, db: Session = Depends(get_db), user=Depends(mana
                 return get_json_result(data=True)
             return get_json_result(data=True)
 
-        doc = DocumentService.get_by_id(db, req["doc_id"])
+        doc = _locked_document(db, req["doc_id"])
         if not doc:
             return get_data_error_result(retmsg="Document not found!")
         kb = KnowledgebaseService.get_by_id(db, doc.kb_id)

@@ -9,6 +9,7 @@ import builtins
 import json
 import os
 import subprocess
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,9 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from api.db import db_models
-from api.db.db_models import Conversation, Dialog, Document, File, File2Document, Knowledgebase, Task, WritingChapter, WritingProject, WritingReferenceMaterial, get_db
+from api.db.db_models import Conversation, Dialog, Document, File, File2Document, Knowledgebase, SourceRecoveryRecord, Task, WritingChapter, WritingProject, WritingReferenceMaterial, get_db
+from api.db.services import document_status_service as status_service
+from api.db.services.document_source_recovery import SourceRecovery, source_recovery_key
 from api.db.services.file_service import FileService
 from api.db.services.reference_service import ReferenceService
 from common import settings
@@ -70,6 +73,21 @@ def parse_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         db.add(WritingChapter(id=env["chapter"], project_id=env["project"], title="Scratch chapter"))
         db.commit()
     env["record"]["parse"] = {key: env[key] for key in ["kb", "dialog", "conversation", "project", "chapter", "collection", "queue", "cache_prefix"]}
+    manifest = env["record"]["parse"]
+    manifest.update(source_document_ids=[], source_task_ids=[], redis_keys=[])
+    source_lock = threading.RLock()
+    original_prepare = status_service.prepare_source_recovery
+
+    def register_source_material(bind: Any, document_id: str, task_id: str, **data: Any) -> SourceRecovery:
+        assert data["dataset_id"] == env["kb"] or document_id in env.get("ingest_manifest", {}).get("document_ids", [])
+        with source_lock:
+            for field, value in [("source_document_ids", document_id), ("source_task_ids", task_id), ("redis_keys", source_recovery_key(document_id, task_id))]:
+                if value not in manifest[field]:
+                    manifest[field].append(value)
+            env["record_path"].write_text(json.dumps(env["record"]))
+        return original_prepare(bind, document_id, task_id, **data)
+
+    monkeypatch.setattr(status_service, "prepare_source_recovery", register_source_material)
     env["record_path"].write_text(json.dumps(env["record"]))
     try:
         yield env
@@ -82,7 +100,20 @@ def parse_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         assert not list(REDIS_CONN.REDIS.scan_iter(match=env["cache_prefix"] + "*"))
         with Session(env["engine"]) as db:
             doc_ids = list(db.scalars(sa.select(Document.id).where(Document.kb_id == env["kb"])))
+            source_doc_ids = sorted({*doc_ids, *manifest["source_document_ids"]})
+            source_rows = [dict(row) for row in db.execute(sa.select(SourceRecoveryRecord.__table__).where(SourceRecoveryRecord.document_id.in_(source_doc_ids))).mappings()]
+            source_states = {}
+            for key in manifest["redis_keys"]:
+                raw = REDIS_CONN.REDIS.get(key)
+                dump = REDIS_CONN.REDIS.dump(key)
+                source_states[key] = {"value": raw, "dump_hex": dump.hex() if dump is not None else None, "pttl": REDIS_CONN.REDIS.pttl(key), "absent": raw is None}
+            env["record_path"].with_suffix(".source-cleanup-before.json").write_text(
+                json.dumps({"database": env["engine"].url.database, "document_ids": source_doc_ids, "rows": source_rows, "redis_states": source_states}, default=str)
+            )
+            if manifest["redis_keys"]:
+                REDIS_CONN.REDIS.delete(*manifest["redis_keys"])
             scoped = [
+                (SourceRecoveryRecord, SourceRecoveryRecord.document_id.in_(source_doc_ids)),
                 (Task, Task.doc_id.in_(doc_ids)),
                 (File2Document, File2Document.document_id.in_(doc_ids)),
                 (Document, Document.kb_id == env["kb"]),
@@ -101,6 +132,7 @@ def parse_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         with env["engine"].connect() as db:
             remaining = {model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(condition)) for model, condition in scoped}
             assert not any(remaining.values()), remaining
+        assert not any(REDIS_CONN.REDIS.exists(key) for key in manifest["redis_keys"])
         assert index_snapshot(env) == []
         env["record"]["parse"].update(
             documents=doc_ids,

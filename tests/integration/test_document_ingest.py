@@ -22,10 +22,12 @@ import requests
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, DocumentMetadata, File, File2Document, Knowledgebase, PipelineOperationLog, Task, UserCanvas, UserTenant
+from api.db.db_models import Document, DocumentMetadata, File, File2Document, Knowledgebase, PipelineOperationLog, SourceRecoveryRecord, Task, UserCanvas, UserTenant
 from api.db.services import document_ingest_service as service
+from api.db.services import document_status_service as status_service
 from api.db.services.document_ingest_recovery import recovery_key
 from api.db.services.document_service import DocumentService
+from api.db.services.document_source_recovery import SourceRecovery, source_recovery_key
 from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.document_task_service import SupersededDocumentTask, cleanup_task_chunks, increment_task_document, put_task_image, token_digest, write_task_metadata
 from api.db.services.task_service import TaskService, prepare_parse_tasks
@@ -44,7 +46,7 @@ def evidence(env: dict[str, Any], label: str, value: Any) -> None:
 
 
 @pytest.fixture
-def ingest_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
+def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     env = parse_api
     env["evidence_lock"] = threading.RLock()
     env.update({key: uuid4().hex for key in ["a", "b", "c", "foreign", "other_kb", "canvas"]})
@@ -120,6 +122,17 @@ def ingest_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
                     evidence(env, "manifest", manifest)
 
     sa.event.listen(Session, "before_flush", record_tasks)
+    original_prepare = status_service.prepare_source_recovery
+
+    def register_source_material(bind: Any, document_id: str, task_id: str, **data: Any) -> SourceRecovery:
+        assert document_id in env["ingest_manifest"]["document_ids"]
+        key = source_recovery_key(document_id, task_id)
+        if key not in env["ingest_manifest"]["redis_keys"]:
+            env["ingest_manifest"]["redis_keys"].append(key)
+            evidence(env, "manifest", env["ingest_manifest"])
+        return original_prepare(bind, document_id, task_id, **data)
+
+    monkeypatch.setattr(status_service, "prepare_source_recovery", register_source_material)
 
     def record_recovery_owner(connection: Any, cursor: Any, statement: str, parameters: Any, context: Any, many: bool) -> None:
         if "advisory_xact_lock" in statement:
@@ -142,10 +155,20 @@ def ingest_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
         manifest["redis_keys"] = list(dict.fromkeys([*manifest["redis_keys"], *keys]))
         evidence(env, "manifest", manifest)
         evidence(env, "final", snapshot(env))
+        with env["engine"].connect() as db:
+            source_rows = [dict(row) for row in db.execute(sa.select(SourceRecoveryRecord.__table__).where(SourceRecoveryRecord.document_id.in_(manifest["document_ids"]))).mappings()]
+        source_states = {}
+        for key in keys:
+            if key.startswith("document-source-recovery:"):
+                raw = REDIS_CONN.REDIS.get(key)
+                dump = REDIS_CONN.REDIS.dump(key)
+                source_states[key] = {"value": raw, "dump_hex": dump.hex() if dump is not None else None, "pttl": REDIS_CONN.REDIS.pttl(key), "absent": raw is None}
+        evidence(env, "source-recovery-cleanup-before", {"rows": source_rows, "redis_states": source_states})
         REDIS_CONN.REDIS.delete(*keys) if keys else None
         settings.docStoreConn.delete_idx(env["other_collection"], env["other_kb"])
         with Session(env["engine"]) as db:
             for model, condition in [
+                (SourceRecoveryRecord, SourceRecoveryRecord.document_id.in_(manifest["document_ids"])),
                 (DocumentMetadata, DocumentMetadata.id.in_(manifest["document_ids"])),
                 (PipelineOperationLog, PipelineOperationLog.document_id.in_(manifest["document_ids"])),
                 (Task, Task.doc_id == env["foreign"]),
@@ -161,6 +184,7 @@ def ingest_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
         assert not settings.docStoreConn.has_collection(env["other_collection"])
         assert not any(REDIS_CONN.REDIS.exists(key) for key in keys)
         with env["engine"].connect() as db:
+            assert db.scalar(sa.select(sa.func.count()).select_from(SourceRecoveryRecord).where(SourceRecoveryRecord.document_id.in_(manifest["document_ids"]))) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(UserCanvas).where(UserCanvas.id == env["canvas"])) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(File2Document).where(File2Document.id.in_(manifest["link_ids"]))) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(File).where(File.id.in_(manifest["file_ids"]))) == 0
@@ -176,6 +200,8 @@ def ingest_api(parse_api: dict[str, Any]) -> Iterator[dict[str, Any]]:
                     == 0
                 )
         manifest["advisory_locks_remaining"] = 0
+        manifest["source_recovery_remaining"] = 0
+        manifest["source_recovery_keys_removed"] = True
         manifest["extra_resources_removed"] = True
         evidence(env, "manifest", manifest)
 

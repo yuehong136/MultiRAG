@@ -19,13 +19,14 @@ import sqlalchemy as sa
 from alembic import command
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Base, Document, DocumentMetadata, File, File2Document, Knowledgebase, PipelineOperationLog, Task, UserCanvas, UserTenant
+from api.db.db_models import Base, Document, DocumentMetadata, File, File2Document, Knowledgebase, PipelineOperationLog, SourceRecoveryRecord, Task, UserCanvas, UserTenant
 from api.db.services import document_image_lock as image_lock
 from api.db.services import document_ingest_service as ingest_service
 from api.db.services import document_parser_service as parser_service
 from api.db.services import document_status_service as status_service
 from api.db.services import document_task_service as task_service
 from api.db.services.document_ingest_recovery import recovery_key
+from api.db.services.document_source_recovery import source_recovery_key
 from common import resources, settings
 from common.config_utils import CONFIGS
 from common.doc_store.document_history import document_history
@@ -244,6 +245,17 @@ def parser_api(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, 
     for module in [image_lock, status_service, task_service]:
         monkeypatch.setattr(module, "reserve_task_image", reserve)
 
+    original_prepare = status_service.prepare_source_recovery
+
+    def prepare(bind: Any, document_id: str, task_id: str, **data: Any) -> Any:
+        key = source_recovery_key(document_id, task_id)
+        if key not in manifest["redis_keys"]:
+            manifest["redis_keys"].append(key)
+            save(record_path, env["parser_record"])
+        return original_prepare(bind, document_id, task_id, **data)
+
+    monkeypatch.setattr(status_service, "prepare_source_recovery", prepare)
+
     def register_lock(connection: Any, cursor: Any, statement: str, parameters: Any, context: Any, many: bool) -> None:
         if "advisory_xact_lock" in statement:
             manifest["advisory_locks"].append(parameters["key"])
@@ -252,6 +264,8 @@ def parser_api(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, 
     sa.event.listen(Session, "before_flush", register_tasks)
     sa.event.listen(env["engine"], "before_cursor_execute", register_lock)
     try:
+        env["parser_record"]["initial_stores"] = snapshot(env)
+        save(record_path, env["parser_record"])
         yield env
     finally:
         sa.event.remove(Session, "before_flush", register_tasks)
@@ -260,6 +274,7 @@ def parser_api(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, 
         save(record_path, env["parser_record"])
         REDIS_CONN.REDIS.delete(*manifest["redis_keys"])
         with Session(env["engine"]) as db:
+            db.execute(sa.delete(SourceRecoveryRecord).where(SourceRecoveryRecord.document_id.in_(list(env["docs"].values()))))
             db.execute(sa.delete(PipelineOperationLog).where(PipelineOperationLog.document_id.in_(list(env["docs"].values()))))
             db.execute(sa.delete(UserCanvas).where(UserCanvas.id.in_(manifest["canvas"])))
             db.commit()
@@ -273,17 +288,41 @@ def parser_api(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, 
 def snapshot(env: dict[str, Any]) -> dict[str, Any]:
     result = _snapshot(env)
     with env["engine"].connect() as db:
-        for model in [UserCanvas, PipelineOperationLog]:
+        for model in [UserCanvas, PipelineOperationLog, SourceRecoveryRecord]:
             result["sql"][model.__tablename__] = [dict(row) for row in db.execute(sa.select(model.__table__).order_by(model.id)).mappings()]
-    result["redis"] = {
-        key: {"value": REDIS_CONN.REDIS.get(key), "ttl": REDIS_CONN.REDIS.pttl(key)}
-        for key in env["parser_record"]["manifest"]["redis_keys"]
-        if key != env["queue"] and REDIS_CONN.REDIS.type(key) == b"string"
-    }
+    result["redis"], result["redis_states"] = {}, {}
+    script = """
+local kind = redis.call('TYPE', KEYS[1]).ok
+local dump = redis.call('DUMP', KEYS[1])
+local hex = ''
+if dump then hex = string.gsub(dump, '.', function(c) return string.format('%02x', string.byte(c)) end) end
+return {kind, hex, redis.call('PTTL', KEYS[1]), kind == 'string' and redis.call('GET', KEYS[1]) or false}
+"""
+    for key in env["parser_record"]["manifest"]["redis_keys"]:
+        if key == env["queue"]:
+            continue
+        kind, dump, ttl, value = REDIS_CONN.REDIS.eval(script, 1, key)
+        kind = kind.decode() if isinstance(kind, bytes) else kind
+        assert isinstance(kind, str) and isinstance(ttl, int)
+        result["redis_states"][key] = {"type": kind, "dump_hex": dump.decode() if isinstance(dump, bytes) else dump, "ttl": ttl, "absent": kind == "none"}
+        if kind == "string":
+            assert value is not None
+            result["redis"][key] = {"value": value.decode() if isinstance(value, bytes) else value, "ttl": ttl}
     result["image_reservations"] = {
         key: {"members": sorted(REDIS_CONN.REDIS.smembers(key)), "ttl": REDIS_CONN.REDIS.pttl(key)} for key in env["parser_record"]["manifest"]["redis_keys"] if key.startswith("document-task-images:")
     }
     return result
+
+
+def assert_durable_journal(env: dict[str, Any]) -> None:
+    captured = snapshot(env)
+    key = recovery_key(env["docs"]["a"])
+    assert captured["redis"][key]["value"]
+    assert captured["redis_states"][key]["type"] == "string" and captured["redis_states"][key]["dump_hex"]
+    material = json.loads(captured["redis"][key]["value"])["payload"]
+    assert material["document_id"] == env["docs"]["a"] and material["nonce"]
+    env["parser_record"].setdefault("durable_journal_readbacks", []).append(captured)
+    save(env["parser_record_path"], env["parser_record"])
 
 
 def patch(env: dict[str, Any], payload: Any, *, role: str | None = "owner", key: str = "a", status: int = 200, dataset: str | None = None) -> dict[str, Any]:
@@ -472,6 +511,7 @@ def test_failed_restore_retains_durable_material_and_retry_restores_exact_state(
         body = patch(env, {"chunk_method": "paper", "name": "fault-new.txt", "enabled": True}, status=500)
     assert body["code"] == "DOCUMENT_UPDATE_OUTCOME_UNKNOWN" and body["details"]["outcome"] == "unknown"
     assert REDIS_CONN.REDIS.exists(recovery_key(env["docs"]["a"]))
+    assert_durable_journal(env)
     assert env["storage"].get_bytes(env["ids"]["kb"], "history.png") is None
     assert original_set is ingest_service._set_document and original_insert == settings.docStoreConn.insert
     patch(env, {"parser_config": {}})
@@ -563,6 +603,7 @@ def test_legacy_adapter_preserves_unknown_finalization_and_recovers(parser_api: 
     save(env["parser_record_path"], env["parser_record"])
     assert body["retcode"] == 500 and body["data"] == {"outcome": "unknown", "code": "DOCUMENT_UPDATE_OUTCOME_UNKNOWN"}
     assert REDIS_CONN.REDIS.exists(recovery_key(env["docs"]["a"]))
+    assert_durable_journal(env)
     with Session(env["engine"]) as db:
         assert db.get(Document, env["docs"]["a"]).parser_id == "paper"
     data = patch(env, {"parser_config": {}})["data"]
@@ -998,6 +1039,7 @@ def test_committed_unknown_recovery_preserves_later_same_value_fields_and_other_
         sa.event.remove(Session, "before_commit", before_commit)
         sa.event.remove(Session, "after_commit", after_commit)
     assert REDIS_CONN.REDIS.exists(recovery_key(env["docs"]["a"]))
+    assert_durable_journal(env)
     data = patch(env, {"parser_config": {}})["data"]
     assert data["name"] == "a.txt" and data["chunk_method"] == "naive" and data["enabled"] is False and data["chunk_count"] == 2
     assert data["meta_fields"] == {"score": 1}

@@ -3622,6 +3622,18 @@ class Search(BaseModel):
         return self.name
 
 
+class SourceRecoveryRecord(BaseModel):
+    """Durable source intent independent of producer and Redis transactions."""
+
+    __tablename__ = "t_document_source_recovery"
+    __table_args__ = (sa.UniqueConstraint("document_id", "task_id", name="uq_document_source_recovery_task"), {"schema": "usr_ai"})
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    wire: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class PipelineOperationLog(BaseModel):
     __tablename__ = "t_pipeline_operation_log"
     __table_args__ = {"schema": "usr_ai"}

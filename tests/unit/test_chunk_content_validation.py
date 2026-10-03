@@ -2,7 +2,9 @@
 
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Any
 
+import pytest
 from fastapi.routing import APIRoute, iter_route_contexts
 
 from api.db.db_models import get_async_db, get_db
@@ -37,13 +39,13 @@ def test_is_content_empty_truth_table():
     assert not is_content_empty(" x ")
 
 
-def _stub_write_context(monkeypatch, db):
+def _stub_write_context(monkeypatch: pytest.MonkeyPatch, db: Any) -> None:
     module = _chunk_route_module()
     monkeypatch.setattr(module, "db_connection", lambda: nullcontext(db))
     monkeypatch.setattr(
         module,
         "_write_context",
-        lambda _db, _user_id, _dataset_id, _document_id: (
+        lambda _db, _user_id, _dataset_id, _document_id, *, lock_document=False: (
             SimpleNamespace(id="kb1", tenant_id="tenant-unit", name="kb", tenant_embd_id=None, embd_id="embed"),
             SimpleNamespace(id="doc1", kb_id="kb1", name="d.txt", parser_id="naive"),
         ),

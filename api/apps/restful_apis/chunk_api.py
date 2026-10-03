@@ -10,10 +10,11 @@ import xxhash
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import db_connection, get_async_db
+from api.db.db_models import Document, db_connection, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.document_image_lock import image_reference_key, image_write_locks
 from api.db.services.document_service import DocumentService
@@ -131,14 +132,18 @@ def _read_context(db: Session, user_id: str, dataset_id: str, document_id: str) 
     return kb.to_dict(), DocumentService.serialize_document(db, docs[0])
 
 
-def _write_context(db: Session, user_id: str, dataset_id: str, document_id: str) -> tuple[Any, Any] | None:
+def _write_context(db: Session, user_id: str, dataset_id: str, document_id: str, *, lock_document: bool = False) -> tuple[Any, Any] | None:
     if not KnowledgebaseService.accessible(db, dataset_id, user_id):
         return None
     kb = KnowledgebaseService.get_by_id(db, dataset_id)
-    docs = DocumentService.query(db, id=document_id, kb_id=dataset_id)
-    if not kb or not docs:
+    doc = (
+        db.scalar(select(Document).where(Document.id == document_id, Document.kb_id == dataset_id).with_for_update().execution_options(populate_existing=True))
+        if lock_document
+        else next(iter(DocumentService.query(db, id=document_id, kb_id=dataset_id)), None)
+    )
+    if not kb or doc is None:
         return None
-    return kb, docs[0]
+    return kb, doc
 
 
 def _index_name(kb: Any) -> list[str]:
@@ -279,7 +284,7 @@ async def add_chunk(
 
 def _remove_chunks(user_id: str, dataset_id: str, document_id: str, request: DeleteChunksRequest) -> JSONResponse:
     with db_connection() as db:
-        context = _write_context(db, user_id, dataset_id, document_id)
+        context = _write_context(db, user_id, dataset_id, document_id, lock_document=True)
         if context is None:
             return get_error_data_result(retmsg="You don't own the dataset or document.")
         kb, doc = context
@@ -321,7 +326,7 @@ async def remove_chunks(
 
 def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str, request: UpdateChunkRequest) -> JSONResponse:
     with db_connection() as db:
-        context = _write_context(db, user_id, dataset_id, document_id)
+        context = _write_context(db, user_id, dataset_id, document_id, lock_document=True)
         if context is None:
             return get_error_data_result(retmsg="You don't own the dataset or document.")
         kb, doc = context
@@ -366,6 +371,9 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
             patch = beAdoc(patch, parts[0], parts[1], not any(rag_tokenizer.is_chinese(text) for text in question + answer))
         model = _embedding_model(db, kb)
         questions = patch.get("question_kwd", current.get("question_kwd", []))
+        # LLMBundle releases read-only sessions before provider I/O. This
+        # session owns the native write's Document lock through completion.
+        model.db = None
         vectors, _ = model.encode([doc.name, "\n".join(questions) or content])
         vector = vectors[1] if doc.parser_id == ParserType.QA else 0.1 * vectors[0] + 0.9 * vectors[1]
         patch[f"q_{len(vector)}_vec"] = vector.tolist()
@@ -394,7 +402,7 @@ async def update_chunk(
 
 def _switch_chunks(user_id: str, dataset_id: str, document_id: str, request: SwitchChunksRequest) -> JSONResponse:
     with db_connection() as db:
-        context = _write_context(db, user_id, dataset_id, document_id)
+        context = _write_context(db, user_id, dataset_id, document_id, lock_document=True)
         if context is None:
             return get_error_data_result(retmsg="You don't own the dataset or document.")
         kb, _ = context
@@ -403,8 +411,13 @@ def _switch_chunks(user_id: str, dataset_id: str, document_id: str, request: Swi
         if request.available_int is None and request.available is None:
             return get_error_data_result(retmsg="`available_int` or `available` is required.")
         available = request.available_int if request.available_int is not None else int(bool(request.available))
+        index_name = _index_name(kb)
         for chunk_id in request.chunk_ids:
-            if not settings.docStoreConn.update({"id": chunk_id}, {"available_int": available}, _index_name(kb), dataset_id):
+            current = settings.docStoreConn.get(chunk_id, index_name, [dataset_id])
+            if not current or str(current.get("doc_id", current.get("document_id"))) != document_id:
+                return get_error_data_result(retmsg=f"Can't find this chunk {chunk_id}")
+        for chunk_id in request.chunk_ids:
+            if not settings.docStoreConn.update({"id": chunk_id, "doc_id": document_id}, {"available_int": available}, index_name, dataset_id):
                 return get_error_data_result(retmsg="Index updating failure")
         return get_result(data=True)
 
