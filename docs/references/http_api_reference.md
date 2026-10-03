@@ -974,7 +974,7 @@ Document，包含真实 `pipeline_id`、`parser_config`、`run`、`status` 和�
 旧 `POST /v1/document/change_parser` 暂保留 deprecated 适配，与新 PATCH 共用严格配置、
 模式和保存服务。Python SDK 的 async/sync document.update 已完成本接口真实联调；HTTP 200 非零数值 code
 同样视为失败，unknown 先读回且不自动重放。相邻 SDK 方法保持各自既有合同。
-Web parser 消费迁移及旧入口退出仍分别验收。
+Web parser PATCH 消费迁移已完成真实验收；旧入口独立退出仍待。
 实现见 [字段合同](../../api/utils/document_update_contract.py)、
 [parser service](../../api/db/services/document_parser_service.py) 和
 [局部错误适配](../../api/apps/services/document_update_http.py)。
@@ -1024,8 +1024,8 @@ SQL、队列归属和当前状态协调，后来任务世代的写入不会被�
 `documents/stop` 默认保留历史。admin 两个实际解析调用已迁至 ingest，SYNC 仅在
 本次提交 ID 全部读回 DONE 时完成。Web 普通解析/停止继续使用 dataset canonical 接口，
 显式重新解析的保留/清理历史分支统一使用 ingest，并传递用户选择的 `apply_kb`；
-部分失败保留失败文档的选择和选项。Web 与 admin 迁移已完成真实验收，旧
-`POST /v1/document/run` 仍保留 deprecated，待全部消费者复核后单独退出。
+部分失败保留失败文档的选择和选项。Web 与 admin 迁移及旧入口独立退出已完成真实验收。
+旧 `POST /v1/document/run` 已移除，返回全局 routing404；OpenAPI 不再包含该旧路径或专属请求模型。
 
 ### 读取缩略图和图片
 
@@ -1054,11 +1054,12 @@ binary 成功响应为完整原始 PNG、JPEG、GIF、WebP 或 BMP 字节，`Con
 | 415 | 102 | 实际内容不是完整受支持的 raster 图片 |
 | 500 | 500 | 存储或服务器读取失败 |
 
-旧 `GET /v1/document/thumbnails` 已移除，返回 routing404。旧 binary
-`GET /v1/document/image/{image_id}` 暂保留 deprecated 的原有公开读取、JPEG MIME 和错误格式，
-Agent Hub 已完成新接口的真实认证、完整字节和页面迁移验收；Web 图片核心范围已接受，
-Agent history 类型补修及同 Web 认证保存/reload 图片链仍待完成。旧 binary 待完整 Web 消费
-接受及全部消费者复核后单独退出，不能据新接口或核心验收声称旧入口已经退出。
+旧 `GET /v1/document/thumbnails` 与旧 binary
+`GET /v1/document/image/{image_id}` 均已移除，返回全局 routing404；OpenAPI 不再包含旧路径。
+404 JSON 使用整数 `code=404`、`data:null`、`error="Not Found"`，`message` 是实际请求路径，
+无 `Location`；HEAD 返回空 body。它沿用全局路由错误格式，不采用新图片接口的局部错误合同。
+Agent Hub、Web 图片核心以及 Agent history 认证保存/reload 图片链均已完成真实验收；
+列表与引用中的 canonical URL 继续使用上述可信接口。
 
 ### 下载代码沙箱产物
 

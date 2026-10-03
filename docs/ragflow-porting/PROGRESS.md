@@ -8,7 +8,8 @@
 2026-10-03 后端修后范围提交 `d1177243ef6c3cdcbbe2728ddc6c1665560eede6`
 （父提交 `b6e413e995997b77fd3244428c4f8ccfe382ef21`，16 归属路径）已根接受，未 push。
 复用已接受的配置/模式纯模块与 SDK 字段组件；这是 API 功能范围接受，
-SDK document PATCH 真实联调也已接受；Web 消费与旧 parser 退出仍待。冻结十项整项完成数仍为 **7/10**。
+SDK 与 Web document PATCH 真实消费均已接受；旧 parser 退出仍待。
+2026-10-03 本次账本更新时，冻结十项整项完成数为 **9/10**；剩余 c810 旧入口独立退出。
 
 - document PATCH 使用可信 JWT/API Key、严格字段提供语义、刷新后的完整 Document
   和端点局部 typed/numeric 错误。真实模式变化一次 reset/save；同模式、仅配置和非 parser
@@ -54,10 +55,20 @@ Pipeline/builtin ingest验证Task digest和queue分支，不声明 worker DONE�
 审计、框架目录run后登记、资源下载产生的非加载文件差量和children捕获界限均保留；
 本范围未扩大确认相邻SDK接口的一般兼容性。
 
-Agent history 类型后端补修仍独立进行。该类型补修后由原 Web owner 完成认证
-history 保存/reload 图片链；完整 c511 Web 接受后
-再迁移 c810 Web。499 oldrun、c511 oldbinary、c810 oldparser 按消费者接受和 fresh 旧消费
-复核分别退出，同 API writer 每次只处理一个独立范围。三个整项仍未关闭，不开启下一批。
+### Web parser PATCH 消费接受
+
+Web 提交 `52bacb65cd01f649b473760bd8cef7ade5c76747` 的25路径范围已根接受。
+四条正式测试 lane 共 **1095 passed、零 skip**；build、类型、lint、大小和 bundle 门禁实际通过。
+纯提交投影另完成 build 与15个 modal 场景，不能把 stacked tree 六门禁计为纯提交投影结果。
+280个真实 HTTP 记录、17次原生 PATCH 及67组完整 stores 支持配置保存、切换、拒绝、恢复
+与后来 revision winner 保全；73张物理表及映射列/xmin、完整向量、对象字节和 Redis 原值已审结。
+真实浏览器草稿、权限目录、迟到响应和重新读回闭环成立；解析提交仅证明 Task/queue，未声明 worker DONE。
+原失败、受控故障、创建后登记和 children 捕获限制保留；浏览器收尾采用保存的完整材料，
+独立 native fresh 不冒充重新连接浏览器。证据入口：`/tmp/multirag-c810-frontend-root-accepted.md`。
+
+499 oldrun 与 c511 oldbinary 已分别完成独立退出和根接受，两个整项关闭。
+c810 oldparser 的消费者条件已满足，目前只准备 fresh 旧消费复核和完整串行退出任务；
+旧 `change_parser` 仍在。同 API writer 每次只处理一个独立范围，不开启下一批。
 
 公开合同见 [HTTP API](../references/http_api_reference.md#更新文档解析配置)；
 实现和正式回归见 [parser service](../../api/db/services/document_parser_service.py)、
@@ -70,13 +81,15 @@ history 保存/reload 图片链；完整 c511 Web 接受后
 
 2026-10-03 后端范围提交 `4a4604c43c784ffe0d8a1933d1d5a6dac3c6e4e2`（6 路径）
 完成根审结，未 push。复用已接受的5个 image service/storage 文件，没有改写组件；
-Agent Hub 真实消费已另行审结；整项仍待 Web 迁移和旧 binary 必要退出，固定批次与原25路径改动保持。
+Agent Hub、完整 Web 消费及旧 binary 独立退出均已另行根接受，whole c511 已关闭。
+下列后端 HTTP 材料保留其原接受窗口，不能当作后续所有改动的门禁结果。
 
 - 三个可信异步读取接口提供 thumbnails、知识库登记图片和 owner runtime 附件；局部
   adapter 覆盖依赖鉴权、query422及安全 typed errors，raw raster MIME、no-store/nosniff
   和已解码 slash 保持。三个实际列表 producer 返回的新 URL 已经真实 listener 取回。
-- 无活动消费者的旧 thumbnails JSON 已删除并验证 routing404/OpenAPI absence；旧
-  binary 有活动 Web 消费者，保留原有行为并 deprecated，没有宣称全部图片访问已迁移。
+- 此次后端 HTTP 接线窗口已删除无活动消费者的旧 thumbnails JSON 并验证
+  routing404/OpenAPI absence；当时旧 binary 仍有 Web 消费者，保留 deprecated 行为。
+  后来的完整消费者迁移与独立 binary 退出见下文。
 - 最终固定输入 `make verify` **4224 passed**、`REQUIRE_SERVICES=1 make integration`
   **602 passed、无 skip**，自有 listener smoke **exit0**。三次 HTTP fixture/路由/旧协议
   断言失败留存并有修后回归，未修改认证、共享配置或放宽门禁。
@@ -108,8 +121,36 @@ fresh 精确清理已审结；954 CI tests、API176/affected62 和11项正式命
 浏览器初始模型失败后使用捕获的真实请求与另一实际上传 file ID，经正常认证 completion
 重放保存并 reload；不称原 SSE 成功、真实 provider 读图或 worker DONE。完整原生/浏览器材料
 与历史登记、逐 tab/session 捕获不足的边界保留，未补造历史 raw。
-整项仍待 Agent history 类型后端补修及同 Web 认证保存/reload 图片链，
-不据核心范围接受提前释放 c810 Web 或删除旧 binary。
+此处为核心范围的历史接受窗口；后续 Agent history 类型与认证保存/reload 闭环已另行接受。
+
+### Agent history 图片闭环与旧 binary 退出
+
+后端三路径 `cebf5e2010e21c55b22d59c1efd76f6df22d288e` 保留来源中已有的
+`doc_type/doc_type_kwd`，不从 image_id 猜类型。verify **4340 passed**、服务集成
+**702 passed、零 skip** 与自有 listener smoke 实际通过；两种生产消息保存/get/list及
+完整图片读回和两种 setup 故障收尾已审结。原14表材料为完整 ORM 映射列，未导出其物理 DDL/xmin。
+
+Web 两路径 `fd287dadf7000d0d7e8ff87419e04ccf8be4f439` 完成认证 Agent 消息保存、
+history reload、图片预览与独立引用详情，保全切换/退出后的迟到响应和 Blob 收尾。
+正式四 lane **1057 passed、零 skip**，30次真实图片 GET、原生页面解码及7组完整 stores
+已审结。参考 producer 受控；不称真实 provider 读图、worker DONE 或任意未知历史兼容。
+独立浏览器 provider 不可用时，收尾结论来自完整已保存的 tab/storage/Blob 材料。
+
+旧 binary 退出提交 `79637de57245e4537f9b69c4fdd1c58d97e1e630` 只含三个指定文件，
+在已接受 `2b2581b7` 加本项精确 patch 上完成 verify **4438 passed**、服务集成
+**698 passed、零 skip** 与自有 listener smoke；均有实际 exit0。
+28个旧请求验证 global routing404（HEAD 空 body）、OpenAPI absence、private guards0
+与三个独立组的完整存储零写；新接口25个完整 raster及三类 URL producer 保全。
+74张物理表结构 metadata/全列/xmin、全部原生向量、完整对象字节和 Redis 原值支持旧入口零写；
+未保存完整 literal CREATE/check/trigger DDL，新 GET 保全另限10张映射表和 SQL 写 guard。
+新连接逐项核查全部尝试资源，并确认隔离 checkout 已归档且不存在；两处复用的 pytest
+路径只证明旧登记身份已替换，不称所有 pathname absent，也不清当前目录。
+历史创建前登记、进程 children 和 wire helper 字节绑定不足如实保留，当前 absence 不倒补历史。
+
+独立源码/raw/fresh 审查及根完整消费均已完成，结合 Web/AH/新接口关闭 whole c511。
+证据入口：`/tmp/multirag-c511-agent-history-type-root-accepted.md`、
+`/tmp/multirag-c511-frontend-agent-history-root-accepted.md`、
+`/tmp/multirag-c511-oldbinary-exit-root-accepted.md`。
 
 ### Agent Hub 关联真实消费验收
 
@@ -124,13 +165,13 @@ fresh 精确清理已审结；954 CI tests、API176/affected62 和11项正式命
 历史SQL ID/namespace/OSstarttime/private写前登记及browser关闭捕获不足如实保留；不补称
 生产daemon/worker、模型质量或512 sniff后的所有stream均完整。没有新功能、持久写或漏清阻断。
 独立代码/raw报告及根绑定见 `/tmp/multirag-c511-agenthub-live-root-accepted.md`。
-此验收不关闭Web迁移或旧binary退出，不改变整批完成状态。
+此处只记录 Agent Hub 独立范围；whole c511 后来由完整 Web 消费和旧 binary 退出共同关闭。
 
 ## 49912a156e3fb072d3e897b4f107e4ccae52fb15 · 文档 ingest 后端验收
 
 2026-10-03 后端范围提交 `7faf1dcb3974239a472822602a880dcbd95eb549`（30 路径）
-完成根审结，未 push。关联 Web 迁移已另行审结；整项仍待旧 run 必要退出，
-不将后端与Web交付写成整项完成。固定批次与其他 25 路径改动保持。
+完成根审结，未 push。关联 Web 迁移与旧 run 独立退出均已另行根接受，whole499 已关闭。
+以下后端材料保留原接受窗口；其他任务改动按各自范围处理。
 
 - 新全局 POST `/api/v1/documents/ingest` 采用可信异步 Principal、全请求预检、
   严格 run=0/1/2、delete/apply_kb 布尔值和完整逐文档结果。保留 canonical
@@ -158,8 +199,15 @@ fresh 精确清理已审结；954 CI tests、API176/affected62 和11项正式命
 均使用 `/tmp/multirag-49912a-` 前缀）；独立报告为
 `/tmp/multirag-499-evidence-delivery-review.md` 和 `/tmp/multirag-499-api-final-delta-review.md`。
 稳定公开合同见 [HTTP API](../references/http_api_reference.md#批量提交取消或重置文档解析)。
-旧 `/v1/document/run` 暂保留 deprecated；Web/admin 实际迁移已验，待fresh全部消费者核对后
-由原APIwriter独立退出，不混当前parser/PATCH实现范围。本项没有新增MultiRAG Go ingestion接口。
+旧 `/v1/document/run` 已独立移除，退役实现 `a10f0b72b33093f8020ed5e20210bd4aa823529f`
+与合法 admin/API Key 目标夹具修正 `2b2581b7a76cdf2ca0483c1aac24f3b8fabbd53b` 已根接受。
+最终 verify **4402 passed**、服务集成 **698 passed、零 skip** 与自有 listener smoke 实际 exit0；
+37个退役请求的完整业务404、private calls0、OpenAPI absence、独立 stores 零写及
+canonical/admin 保全已审结。固定源码/配置、实际加载、运行读回与正常局部提交完整绑定；
+全部尝试资源经新连接独立核查，无自有残留。原 HTTP 解析体/headers 已保存，但未逐项
+保存 response.content；SQL 为完整映射列，未包含物理 DDL/xmin/未映射列。自然 stream
+年龄仅按精确字段与 elapsed 界限比较，历史登记和进程身份不足不倒补。
+证据入口：`/tmp/multirag-499-oldrun-exit-root-accepted.md`。本项未新增 MultiRAG Go ingestion 接口。
 
 ### 499 关联 Web 最终验收
 
@@ -174,7 +222,7 @@ canonical parse/stop、显式ingest两delete分支/apply选项、完整partial�
 前两browser超时、已解锁的旧意图标签、Milvus异步stats、成功移除opener后BODY、旧关闭原始捕获不足仍保留；
 新keyboard listener期间后端5路径合法变化只归已启动实例，两初始dirty文件没有精确bytes备份。
 成功为queued Task/queue0→1，不称workerDONE或替新parser后端最终输入验收。根与独立最后差量报告入口
-`/tmp/multirag-499-frontend-root-accepted.md`；旧run仍活动，故whole499未完成。
+`/tmp/multirag-499-frontend-root-accepted.md`；后续旧 run 独立退出已接受，whole499 已完成。
 
 ## 965717c4fbbcaece97cd68ff08c12174cec60a04 · Google provider 与模型推理默认值
 
