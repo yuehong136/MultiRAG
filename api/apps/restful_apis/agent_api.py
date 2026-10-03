@@ -187,6 +187,7 @@ def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
                 "dataset_id": chunk.get("kb_id", chunk.get("dataset_id")),
                 "image_id": chunk.get("image_id", chunk.get("img_id")),
                 "positions": chunk.get("positions", chunk.get("position_int")),
+                **{key: chunk[key] for key in ("doc_type", "doc_type_kwd") if key in chunk},
             }
             for chunk in reference.get("chunks", [])
             if isinstance(chunk, dict)
