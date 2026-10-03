@@ -2007,22 +2007,6 @@ async def change_parser(
         )
 
 
-@router.get("/image/{image_id}", summary="获取图片（兼容入口）", response_description="成功获取图片", deprecated=True)
-def get_image(
-    image_id: str,
-    db: Session = Depends(get_db),
-):
-    try:
-        arr = image_id.split("-")
-        if len(arr) != 2:
-            return get_data_error_result(retmsg="Image not found.")
-        bkt, nm = arr
-        file_content = settings.STORAGE_IMPL.get(bkt, nm)
-        return Response(content=file_content, media_type="image/jpeg")
-    except Exception as e:
-        return construct_error_response(e)
-
-
 @router.get("/artifact/{filename}", summary="下载沙箱产物（兼容入口）", response_description="成功获取沙箱产物文件", deprecated=True)
 async def get_artifact(
     filename: str,

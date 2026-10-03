@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -133,10 +134,10 @@ def test_image_missing_query_validation_is_feature_local(client: Any, monkeypatc
     assert ordinary.status_code == 422 and "cache-control" not in ordinary.headers
 
 
-def test_image_openapi_removal_and_legacy_binary_retention(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_image_openapi_removal(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     paths = client.get("/openapi.json").json()["paths"]
     assert "/v1/document/thumbnails" not in paths
-    assert paths["/v1/document/image/{image_id}"]["get"]["deprecated"] is True
+    assert not any(path.startswith("/v1/document/image") for path in paths)
     assert "/api/v1/documents/images/{image_id}" in paths
     assert paths["/api/v1/thumbnails"]["get"]["parameters"][0]["schema"]["type"] == "array"
     from api.db.services.document_service import DocumentService
@@ -148,6 +149,31 @@ def test_image_openapi_removal_and_legacy_binary_retention(client: Any, monkeypa
     response = client.get("/v1/document/thumbnails", params={"doc_ids": "private"})
     assert response.status_code == 404 and response.json()["code"] == 404
     assert "cache-control" not in response.headers
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "HEAD"])
+@pytest.mark.parametrize("path", ["/v1/document/image/kb-key.png", "/v1/document/image/kb-a-b%20%E7%A9%BA%25%2Fimage.png", "/v1/document/image/", "/v1/document/image"])
+@pytest.mark.parametrize("authorization", [None, "Bearer malformed.jwt", "Bearer old-api-key"])
+def test_retired_binary_image_is_routing_absence(client: Any, monkeypatch: pytest.MonkeyPatch, method: str, path: str, authorization: str | None) -> None:
+    from urllib.parse import unquote, urlsplit
+
+    from common import settings
+
+    def forbid(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("retired image route reached a private dependency")
+
+    for name in ["list_thumbnails", "read_dataset_image", "read_runtime_image"]:
+        monkeypatch.setattr(_module(), name, forbid)
+    monkeypatch.setattr(settings, "STORAGE_IMPL", SimpleNamespace(get=forbid, get_bytes=forbid))
+    client.app.dependency_overrides[get_async_db] = forbid
+    headers = {"Authorization": authorization} if authorization else {}
+    response = client.request(method, path, headers=headers, params={"owner": "untrusted"}, follow_redirects=False)
+    assert response.status_code == 404 and "location" not in response.headers
+    assert response.headers["content-type"] == "application/json"
+    if method == "HEAD":
+        assert response.content == b""
+    else:
+        assert response.json() == {"code": 404, "message": "Not Found: " + unquote(urlsplit(str(response.request.url)).path), "data": None, "error": "Not Found"}
 
 
 @pytest.mark.parametrize("value", [None, "", "data:image/png;base64,abc", "data:image/jpeg;base64,abc", "data:image/webp;base64,abc"])

@@ -315,9 +315,202 @@ def _setup(env: dict[str, Any]) -> dict[str, Any]:
     return {"cases": cases, "chunks": chunks, "runtimes": runtimes, "encrypted": encrypted}
 
 
+def _retirement_snapshot(env: dict[str, Any]) -> dict[str, Any]:
+    """Read every physical scratch SQL column/xmin and all owned native stores."""
+    from minio import Minio
+    from pymilvus import MilvusClient
+    from redis import Redis
+
+    from common.config_utils import CONFIGS
+
+    with env["engine"].connect() as db:
+        tables = db.execute(sa.text("SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename")).all()
+        physical = {}
+        inspector = sa.inspect(db)
+        for schema, table in tables:
+            quoted = db.dialect.identifier_preparer.quote_schema(schema) + "." + db.dialect.identifier_preparer.quote(table)
+            rows = db.execute(sa.text(f"SELECT t.*, xmin::text AS _xmin FROM {quoted} t ORDER BY to_jsonb(t)::text")).mappings()
+            physical[quoted] = {
+                "columns": [{**column, "type": str(column["type"])} for column in inspector.get_columns(table, schema=schema)],
+                "primary_key": inspector.get_pk_constraint(table, schema=schema),
+                "foreign_keys": inspector.get_foreign_keys(table, schema=schema),
+                "indexes": inspector.get_indexes(table, schema=schema),
+                "rows": [dict(row) for row in rows],
+            }
+    cfg = CONFIGS["milvus"]
+    index = MilvusClient(uri=cfg["hosts"], user=cfg.get("username", ""), password=cfg.get("password", ""), db_name=cfg.get("db_name") or "default")
+    try:
+        indexes = {
+            name: {
+                "schema": index.describe_collection(collection),
+                "count": index.query(collection, filter='pk != ""', output_fields=["count(*)"], consistency_level="Strong"),
+                "stats": index.get_collection_stats(collection),
+                "rows": sorted(index.query(collection, filter='pk != ""', output_fields=["*", "vector", "q_768_vec"], consistency_level="Strong"), key=lambda row: row["pk"]),
+            }
+            for name, collection in env["collections"].items()
+        }
+    finally:
+        index.close()
+    cfg = CONFIGS["minio"]
+    storage = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=str(cfg.get("secure", False)).lower() in {"true", "1", "yes"})
+    objects = {obj.object_name: _raw_object(storage, env["bucket"], obj.object_name) for obj in storage.list_objects(env["bucket"], recursive=True)}
+    kwargs = {**REDIS_CONN.REDIS.connection_pool.connection_kwargs, "decode_responses": False}
+    redis = Redis(**kwargs)
+    try:
+        key = env["queue"]
+        queue: dict[str, Any] = {
+            "type": redis.type(key),
+            "dump": redis.dump(key),
+            "pttl": redis.pttl(key),
+            "entries": redis.xrange(key),
+            "stream": redis.xinfo_stream(key),
+            "groups": redis.xinfo_groups(key),
+        }
+        queue["consumers"] = {group["name"].decode(): redis.xinfo_consumers(key, group["name"]) for group in queue["groups"]}
+        queue["pending"] = {group["name"].decode(): redis.xpending_range(key, group["name"], "-", "+", 100) for group in queue["groups"]}
+    finally:
+        redis.close()
+
+    # JSON object keys must be strings; raw byte values remain complete base64.
+    def json_keys(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {(key.decode() if isinstance(key, bytes) else key): json_keys(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_keys(item) for item in value]
+        return value
+
+    return json_keys({"sql": physical, "index": indexes, "objects": objects, "redis": queue})
+
+
+def _assert_retirement_unchanged(before: dict[str, Any], after: dict[str, Any], elapsed: float) -> None:
+    """Only Redis's documented relative ages may increase with elapsed time."""
+    import copy
+
+    left, right = copy.deepcopy(before), copy.deepcopy(after)
+    for category, fields in [("consumers", ["idle", "inactive"]), ("pending", ["time_since_delivered"])]:
+        for group, rows in left["redis"][category].items():
+            for a, b in zip(rows, right["redis"][category][group], strict=True):
+                for field in fields:
+                    if field in a:
+                        assert 0 <= b[field] - a[field] <= elapsed * 1000 + 1000, (category, field, a[field], b[field], elapsed)
+                        b[field] = a[field]
+    assert left == right
+
+
+def _retired_binary_matrix(env: dict[str, Any]) -> None:
+    """Actual listener absence, with private-call guards and fresh native readback."""
+    import sys
+    from urllib.parse import unquote, urlsplit
+
+    from api.db.services import document_image_service
+
+    group, consumer = "oldbinary-retirement", "oldbinary-reader"
+    env["manifest"]["retirement_stream_group"] = {"key": env["queue"], "group": group, "consumer": consumer}
+    env["register"]()
+    REDIS_CONN.REDIS.xgroup_create(env["queue"], group, id="0")
+    REDIS_CONN.REDIS.xreadgroup(group, consumer, {env["queue"]: ">"}, count=1)
+    docs, kb = env["manifest"]["documents"], env["ids"]["kb"]
+    cases = {
+        "credentials": [
+            ("GET", f"/v1/document/image/{kb}-legacy.png", role, {})
+            for role in ["owner", "admin", "normal", "invite", "inactive", "outsider", "other", "api", "disabled", "expired", "malformed", "unknown", None]
+        ],
+        "paths_and_payloads": [
+            ("GET", path, "owner", {"params": {"owner": env["ids"]["other"], "doc_ids": docs["legacy"]}, "json": {"image_id": "private", "created_by": env["ids"]["other"]}})
+            for path in [
+                f"/v1/document/image/{kb}-a-b%20%E7%A9%BA%E9%97%B4%25%2Fimage.jpg",
+                f"/v1/document/image/{kb}-chunk-key.png",
+                "/v1/document/image/nohyphen",
+                "/v1/document/image/",
+                "/v1/document/image",
+                "/v1/document/image//",
+                "/v1/document/image/%2F",
+                "/v1/document/image/%25",
+                "/v1/document/image/%ZZ",
+                "/v1/document/image/汉字",
+                f"/v1/document/image/{kb}-legacy.png/",
+            ]
+        ],
+        "methods": [(method, f"/v1/document/image/{kb}-legacy.png", "owner", {"json": {"image_id": "private"}}) for method in ["POST", "HEAD", "PATCH", "DELETE"]],
+    }
+    record: dict[str, Any] = {"boundary": "real JWT/API tokens; actual route removal; native readers outside guarded request boundaries; HEAD has empty wire body", "groups": {}, "private_calls": []}
+    path = env["evidence"] / f"{kb}.oldbinary-retirement.json"
+    _save(path, record)
+    for label, requests_in_group in cases.items():
+        observation: dict[str, Any] = {"before": _retirement_snapshot(env), "requests": []}
+        record["groups"][label] = observation
+        _save(path, record)
+        start = time.monotonic()
+
+        def forbid(*args: Any, **kwargs: Any) -> Any:
+            record["private_calls"].append("private read/write")
+            _save(path, record)
+            raise AssertionError("retired binary route reached a private dependency")
+
+        def sql_guard(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+            record["private_calls"].append({"sql": statement})
+            _save(path, record)
+            raise AssertionError("retired binary route reached business SQL")
+
+        with pytest.MonkeyPatch.context() as guard:
+            targets = (
+                [(env["storage"], name) for name in ["get", "get_bytes", "put", "rm"]]
+                + [(env["adapter"], name) for name in ["get", "get_bytes", "put", "rm"]]
+                + [(env["client"], name) for name in ["get_object", "put_object", "remove_object"]]
+            )
+            targets += [(settings.docStoreConn, name) for name in ["search", "insert", "update", "delete"]]
+            targets += [(DocumentService, "get_thumbnails"), (REDIS_CONN, "queue_product")]
+            targets += [(FileService, name) for name in ["parse", "parse_docs", "upload_info", "upload_infos", "resolve_runtime_uploads"]]
+            targets += [(tempfile, name) for name in ["NamedTemporaryFile", "mkstemp", "mkdtemp"]]
+            for module in [document_image_service, sys.modules["api.apps.restful_apis.document"]]:
+                targets += [(module, name) for name in ["list_thumbnails", "read_dataset_image", "read_runtime_image"]]
+            for target, attr in targets:
+                guard.setattr(target, attr, forbid)
+            engines = [env["engine"], env["async_engine"].sync_engine]
+            for engine in engines:
+                sa.event.listen(engine, "before_cursor_execute", sql_guard)
+            try:
+                for method, url, role, payload in requests_in_group:
+                    headers = {"Authorization": "Bearer " + env["tokens"][role]} if role else {}
+                    response = requests.request(method, env["base"] + url, headers=headers, allow_redirects=False, timeout=30, **payload)
+                    actual_path = unquote(urlsplit(response.request.url).path)
+                    item = {
+                        "method": method,
+                        "path": url,
+                        "request_url": response.request.url,
+                        "actual_path": actual_path,
+                        "principal": role,
+                        "payload": payload,
+                        "status": response.status_code,
+                        "headers": dict(response.headers),
+                        "body": response.content,
+                    }
+                    observation["requests"].append(item)
+                    _save(path, record)
+                    assert response.status_code == 404 and "location" not in response.headers, item
+                    assert response.headers["content-type"] == "application/json"
+                    if method == "HEAD":
+                        assert response.content == b""
+                    else:
+                        assert response.json() == {"code": 404, "message": "Not Found: " + actual_path, "data": None, "error": "Not Found"}, item
+            finally:
+                for engine in engines:
+                    sa.event.remove(engine, "before_cursor_execute", sql_guard)
+        observation["after"] = _retirement_snapshot(env)
+        observation["elapsed_monotonic_seconds"] = time.monotonic() - start
+        _save(path, record)
+        _assert_retirement_unchanged(observation["before"], observation["after"], observation["elapsed_monotonic_seconds"])
+        observation["unchanged_except_bounded_redis_relative_age"] = True
+        _save(path, record)
+    assert not record["private_calls"]
+    record["verified_request_count"] = sum(len(value["requests"]) for value in record["groups"].values())
+    _save(path, record)
+
+
 def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env, ids = image_http_api, image_http_api["ids"]
     setup = _setup(env)
+    _retired_binary_matrix(env)
     record: dict[str, Any] = {
         "chunks": setup["chunks"],
         "runtimes": setup["runtimes"],
@@ -350,7 +543,7 @@ def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[st
         url: str, role: str | None = "owner", params: Any = None, status: int = 200, code: int | None = None, binary: bytes | None = None, mime: str | None = None, feature: bool = True
     ) -> requests.Response:
         headers = {"Authorization": "Bearer " + env["tokens"][role]} if role else {}
-        response = requests.get(env["base"] + url, headers=headers, params=params, timeout=40)
+        response = requests.get(env["base"] + url, headers=headers, params=params, timeout=40, allow_redirects=False)
         item = {"path": url, "principal": role, "status": response.status_code, "headers": dict(response.headers), "body": response.content}
         record["calls"].append(item)
         _save(path, record)
@@ -510,11 +703,12 @@ def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[st
                 fault.setattr(settings.docStoreConn, "search", unexpected)
                 image("chunk-key.png", status=500, code=500)
             paths = get("/openapi.json", feature=False).json()["paths"]
-            assert "/v1/document/thumbnails" not in paths and paths["/v1/document/image/{image_id}"]["get"]["deprecated"] is True
-            # Retained public/hard-JPEG compatibility is not secured access.
-            get(f"/v1/document/image/{ids['kb']}-legacy.png", None, binary=_image("PNG"), mime="image/jpeg", feature=False)
-            legacy = get(f"/v1/document/image/{ids['kb']}-chunk-key.png", None, feature=False)
-            assert legacy.json() == {"retcode": 102, "retmsg": "Image not found."}
+            assert "/v1/document/thumbnails" not in paths and not any(path.startswith("/v1/document/image") for path in paths)
+            assert "/v1/document/run" not in paths and "/v1/document/upload_and_parse" not in paths and "/v1/document/change_status" not in paths
+            assert "/v1/document/change_parser" in paths
+            for canonical in ["/api/v1/thumbnails", "/api/v1/documents/images/{image_id}", "/api/v1/documents/runtime/{file_id}/image", "/api/v1/documents/ingest"]:
+                assert canonical in paths
+            record["openapi"] = paths
         finally:
             sa.event.remove(env["async_engine"].sync_engine, "before_cursor_execute", sql_guard)
             sa.event.remove(env["engine"], "before_cursor_execute", sql_guard)
