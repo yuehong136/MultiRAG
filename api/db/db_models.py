@@ -3222,6 +3222,26 @@ class API4Conversation(BaseModel):
     version_title: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True, doc="canvas version title when session created")
 
 
+class AgentExecutionOrigin(BaseModel):
+    """MultiRAG-owned immutable execution provenance for a Web Agent session."""
+
+    __tablename__ = "t_ai_agent_execution_origins"
+    __table_args__ = (
+        sa.CheckConstraint("execution_mode IN ('draft', 'published')", name="ck_agent_execution_origin_mode"),
+        sa.CheckConstraint("(execution_mode = 'published' AND agent_revision_id IS NOT NULL) OR (execution_mode = 'draft' AND agent_revision_id IS NULL)", name="ck_agent_execution_origin_revision"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), sa.ForeignKey("usr_ai.t_ai_api4conversations.id", ondelete="CASCADE"), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    platform_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    agent_revision_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    snapshot_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot_dsl: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
 class ChannelCanvasCandidate(BaseModel):
     """MultiRAG-owned ownership metadata for a private Canvas execution."""
 

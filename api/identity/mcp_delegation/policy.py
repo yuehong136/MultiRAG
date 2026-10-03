@@ -18,6 +18,8 @@ from api.identity.mcp_delegation.contracts import (
     DelegatedToolPolicy,
     DelegationErrorCode,
     DelegationGrant,
+    DevelopmentGrant,
+    DevelopmentGrantKey,
     GrantKey,
     GrantPolicySnapshot,
     McpDelegationError,
@@ -230,16 +232,20 @@ def load_grant_policy_snapshot(
     tool_policy: ToolPolicySnapshot,
 ) -> GrantPolicySnapshot:
     document = _load_document(path)
-    if set(document) != {
+    snapshot_format = document.get("snapshot_format")
+    expected_fields = {
         "bindings",
         "credential_generation",
         "grant_revision",
         "grants",
         "policy_revision",
         "snapshot_format",
-    }:
+    }
+    if snapshot_format == 2:
+        expected_fields.add("development_grants")
+    if type(snapshot_format) is not int or snapshot_format not in {1, 2} or set(document) != expected_fields:
         raise _reject()
-    if document["snapshot_format"] != 1 or document["policy_revision"] != tool_policy.policy_revision:
+    if document["policy_revision"] != tool_policy.policy_revision:
         raise _reject()
     generation = document["credential_generation"]
     if type(generation) is not int or not 1 <= generation <= (1 << 63) - 1:
@@ -267,7 +273,7 @@ def load_grant_policy_snapshot(
         resources.add(resource_name)
 
     raw_grants = document["grants"]
-    if type(raw_grants) is not list or not raw_grants or len(raw_grants) > 100_000:
+    if type(raw_grants) is not list or (snapshot_format == 1 and not raw_grants) or len(raw_grants) > 100_000:
         raise _reject()
     grants: dict[GrantKey, DelegationGrant] = {}
     expected_grant_fields = {
@@ -298,12 +304,34 @@ def load_grant_policy_snapshot(
             resource_name=resource_name,
             allowed_scopes=allowed_scopes,
         )
+    raw_development_grants = document.get("development_grants", [])
+    if type(raw_development_grants) is not list or len(raw_development_grants) + len(raw_grants) > 100_000 or not (raw_development_grants or raw_grants):
+        raise _reject()
+    development_grants: dict[DevelopmentGrantKey, DevelopmentGrant] = {}
+    for raw_grant in raw_development_grants:
+        if type(raw_grant) is not dict or set(raw_grant) != {"tenant_id", "platform_user_id", "agent_id", "resource_name", "allowed_scopes", "allowed_tools"}:
+            raise _reject()
+        tenant_id = _text(raw_grant["tenant_id"])
+        platform_user_id = _text(raw_grant["platform_user_id"])
+        agent_id = _text(raw_grant["agent_id"])
+        resource_name = _text(raw_grant["resource_name"], max_length=64)
+        allowed_scopes = _scope_list(raw_grant["allowed_scopes"])
+        allowed_tools = _scope_list(raw_grant["allowed_tools"])
+        development_key = (tenant_id, platform_user_id, agent_id, resource_name)
+        if resource_name not in resources or not allowed_scopes.issubset(tool_policy.scope_registry) or development_key in development_grants:
+            raise _reject()
+        for tool_name in allowed_tools:
+            policy = tool_policy.tools.get(tool_name)
+            if policy is None or policy.effect != "read" or policy.replay_mode != "reusable" or not policy.required_scopes.issubset(allowed_scopes):
+                raise _reject()
+        development_grants[development_key] = DevelopmentGrant(tenant_id, platform_user_id, agent_id, resource_name, allowed_scopes, allowed_tools)
     return GrantPolicySnapshot.frozen(
         grant_revision=grant_revision,
         policy_revision=tool_policy.policy_revision,
         credential_generation=generation,
         bindings=bindings,
         grants=grants,
+        development_grants=development_grants,
     )
 
 

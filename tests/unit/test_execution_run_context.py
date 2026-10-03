@@ -154,8 +154,10 @@ def test_graph_rejects_run_context_from_another_tenant() -> None:
         )
 
 
+@pytest.mark.parametrize("supports_interactions", [True, False])
 def test_agent_passes_the_same_run_context_into_mcp_session(
     monkeypatch: pytest.MonkeyPatch,
+    supports_interactions: bool,
 ) -> None:
     principal = _principal()
     run_context = RunContext(tenant_id=principal.tenant_id, principal=principal)
@@ -175,6 +177,7 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
             return True
 
     provider = _Provider()
+    provider.supports_interactions = supports_interactions
 
     class _DBContext:
         def __enter__(self) -> object:
@@ -273,22 +276,25 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
         {
             "call_context": run_context,
             "credential_provider": provider,
-            "interaction_handler": interaction_handler,
-            "legacy_interaction_tools": frozenset({"search"}),
-            "tool_output_schemas": {"search": tool_meta["outputSchema"]},
+            "interaction_handler": interaction_handler if supports_interactions else None,
+            "legacy_interaction_tools": frozenset({"search"}) if supports_interactions else frozenset(),
+            "tool_output_schemas": {"search": tool_meta["outputSchema"]} if supports_interactions else None,
         },
         {
             "call_context": run_context,
             "credential_provider": provider,
-            "interaction_handler": interaction_handler,
-            "legacy_interaction_tools": frozenset({"search"}),
-            "tool_output_schemas": {"search": tool_meta["outputSchema"]},
+            "interaction_handler": interaction_handler if supports_interactions else None,
+            "legacy_interaction_tools": frozenset({"search"}) if supports_interactions else frozenset(),
+            "tool_output_schemas": {"search": tool_meta["outputSchema"]} if supports_interactions else None,
         },
     ]
     assert set(agent.tools) == {"search_0", "search_1"}
     assert {binding.original_name for binding in agent.tools.values()} == {"search"}
     assert {binding.mcp_server_id for binding in agent.tools.values()} == {"mcp-1", "mcp-2"}
-    assert isinstance(agent.toolcall_session, SerializedInteractionToolCallSession)
+    if supports_interactions:
+        assert isinstance(agent.toolcall_session, SerializedInteractionToolCallSession)
+    else:
+        assert type(agent.toolcall_session) is LLMToolPluginCallSession
 
     monkeypatch.setattr(
         "agent.component.agent_with_tools.resolve_mcp_interaction_handler",

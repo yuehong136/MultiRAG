@@ -23,11 +23,14 @@ from sqlalchemy.sql import desc as sa_desc
 from agent.a2ui import validate_client_a2ui_messages
 from agent.canvas import Canvas
 from api.db import CanvasCategory, TenantPermission, UserTenantRole
-from api.db.db_models import API4Conversation, CanvasTemplate, User, UserCanvas, UserCanvasVersion, UserTenant
+from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTemplate, User, UserCanvas, UserCanvasVersion, UserTenant
+from api.db.services.agent_execution_service import execution_context, principal_for_resource_tenant, restore_execution_snapshot, save_agent_session, snapshot_digest
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
 from api.db.services.task_cancellation_service import bind_canvas_task
 from api.db.services.user_canvas_version import UserCanvasVersionService
+from api.identity.mcp_delegation.contracts import McpDelegationError
+from api.identity.principal import Principal
 from api.identity.run_context import RunContext
 from api.utils.api_utils import get_data_openai
 from common.constants import StatusEnum
@@ -289,18 +292,21 @@ class PreparedAgentRun:
     dsl: str
     version_title: str | None
     conversation: dict[str, Any] | None = None
+    run_context: RunContext | None = None
 
 
 class PublishedAgentVersionUnavailable(LookupError):
     """The authorized Agent has no published snapshot to run."""
 
 
-async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, session_id: str | None = None, release_mode: bool = False) -> PreparedAgentRun:
+async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, session_id: str | None = None, release_mode: bool = False, principal: Principal | None = None) -> PreparedAgentRun:
     """Authorize the REST run and select its exact DSL before any stream starts.
 
     Require active, joined TEAM members for non-owner runs. The owner-only SDK
     and canvas update helpers retain their separate authorization contracts.
     """
+    if principal is not None and principal.platform_user_id != caller_id:
+        raise PermissionError("Authenticated run identity is inconsistent.")
     canvas = await db.scalar(select(UserCanvas).join(User, UserCanvas.user_id == User.id).where(UserCanvas.id == agent_id))
     if canvas is None:
         raise LookupError("Agent not found.")
@@ -318,14 +324,36 @@ async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, 
         if canvas.permission != TenantPermission.TEAM.value or membership is None:
             raise PermissionError("Only authorized users can run this agent.")
     conversation = None
+    run_context = None
+    revision_id = None
     if session_id:
         conv = await db.get(API4Conversation, session_id)
         if conv is None:
             raise LookupError("Session not found!")
-        if conv.dialog_id != agent_id:
+        if conv.dialog_id != agent_id or conv.source != "agent":
             raise PermissionError("Session does not belong to the requested agent.")
         conversation = copy.deepcopy(conv.to_dict())
         dsl, version_title = conv.dsl, conv.version_title
+        if principal is not None:
+            origin = await db.get(AgentExecutionOrigin, session_id)
+            if origin is not None:
+                if origin.agent_id != agent_id or origin.tenant_id != canvas.user_id or origin.platform_user_id != caller_id:
+                    raise PermissionError("Session execution origin does not belong to the caller.")
+                if snapshot_digest(origin.snapshot_dsl) != origin.snapshot_digest:
+                    raise PermissionError("Session execution snapshot is inconsistent.")
+                if origin.execution_mode == "draft" and canvas.user_id != caller_id:
+                    raise PermissionError("Only the owner can run a draft agent.")
+                if origin.execution_mode == "published":
+                    version = await db.get(UserCanvasVersion, origin.agent_revision_id)
+                    if version is None or version.user_canvas_id != agent_id or not version.release:
+                        raise PublishedAgentVersionUnavailable("The session's published version is unavailable.")
+                    revision_id = origin.agent_revision_id
+                dsl = restore_execution_snapshot(origin.snapshot_dsl, conv.dsl)
+                run_context = execution_context(principal=principal, tenant_id=canvas.user_id, agent_id=agent_id, dsl=origin.snapshot_dsl, published_revision_id=revision_id)
+            else:
+                # No historical title/DSL/latest-release inference can prove
+                # a delegated session's original execution authority.
+                run_context = RunContext(tenant_id=canvas.user_id, principal=principal_for_resource_tenant(principal, canvas.user_id), mcp_read_only=True)
     elif release_mode:
         version = await db.scalar(
             select(UserCanvasVersion).where(UserCanvasVersion.user_canvas_id == agent_id, UserCanvasVersion.release.is_(True)).order_by(UserCanvasVersion.create_time.desc()).limit(1)
@@ -333,9 +361,17 @@ async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, 
         if version is None:
             raise PublishedAgentVersionUnavailable("No available published version")
         dsl, version_title = version.dsl, version.title
+        revision_id = version.id
     else:
+        if principal is not None and canvas.user_id != caller_id:
+            raise PermissionError("Only the owner can run a draft agent.")
         dsl, version_title = canvas.dsl, None
-    return PreparedAgentRun(agent_id, caller_id, canvas.user_id, dsl if isinstance(dsl, str) else json.dumps(dsl, ensure_ascii=False), version_title, conversation)
+        if principal is not None:
+            latest = await db.scalar(select(UserCanvasVersion).where(UserCanvasVersion.user_canvas_id == agent_id).order_by(UserCanvasVersion.create_time.desc()).limit(1))
+            version_title = latest.title if latest is not None else None
+    if principal is not None and run_context is None:
+        run_context = execution_context(principal=principal, tenant_id=canvas.user_id, agent_id=agent_id, dsl=dsl, published_revision_id=revision_id)
+    return PreparedAgentRun(agent_id, caller_id, canvas.user_id, dsl if isinstance(dsl, str) else json.dumps(dsl, ensure_ascii=False), version_title, conversation, run_context)
 
 
 def agent_event_error(event: dict[str, Any]) -> str | None:
@@ -372,7 +408,12 @@ async def completion(
     inputs = kwargs.get("inputs", {}) or {}
     a2ui_messages = validate_client_a2ui_messages(kwargs.get("a2ui"))
     metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
-    if run_context is not None and run_context.tenant_id != tenant_id:
+    if prepared_run is not None and prepared_run.run_context is not None:
+        if run_context is not None and run_context != prepared_run.run_context:
+            raise PermissionError("Prepared run context is inconsistent.")
+        run_context = prepared_run.run_context
+    runtime_tenant_id = prepared_run.runtime_tenant_id if prepared_run is not None else tenant_id
+    if run_context is not None and run_context.tenant_id != runtime_tenant_id:
         raise PermissionError("run identity context is inconsistent")
     legacy_user_id = kwargs.get("user_id", "") or ""
     user_id = run_context.platform_user_id if run_context is not None and run_context.principal is not None else legacy_user_id
@@ -466,10 +507,29 @@ async def completion(
     # 组件 __init__ 各自开连接查模型配置（reset 还打 Redis）——整体入线程池
     canvas = await asyncio.to_thread(_build_canvas)
     task_principal_id = prepared_run.caller_id if prepared_run is not None else run_context.platform_user_id if run_context is not None and run_context.principal is not None else tenant_id
-    await bind_canvas_task(db, canvas.task_id, task_principal_id, canvas_id)
-    if prepared_run is not None and is_new_session:
-        # Invalid Canvas construction must not leave a successful session row.
-        conv = await db.run_sync(lambda s: API4ConversationService.save(s, **conv).to_dict())
+    task_bound = False
+    try:
+        await bind_canvas_task(db, canvas.task_id, task_principal_id, canvas_id)
+        task_bound = True
+        if prepared_run is not None and is_new_session:
+            # Invalid Canvas construction must not leave a successful session.
+            if run_context is not None:
+                conv = await save_agent_session(db, conv, context=run_context, snapshot=json.loads(str(canvas)))
+            else:
+                conv = await db.run_sync(lambda s: API4ConversationService.save(s, **conv).to_dict())  # TODO(async-phase4)
+    except BaseException:
+        with CancelScope(shield=True):
+            try:
+                await db.rollback()
+            finally:
+                try:
+                    await asyncio.to_thread(finish_runtime, canvas.task_id)
+                finally:
+                    # Execution has not started. A rejected registration must
+                    # not create an orphan cancellation marker.
+                    if task_bound:
+                        canvas.cancel_task()
+        raise
     conv["message"] = conv.get("message") or []
 
     # setup 产物已全是纯 dict/str（无 ORM 对象存活、save 自带 commit）——此处安全结束
@@ -638,10 +698,13 @@ async def completion_openai(
     prompt_tokens = len(tiktoken_encoder.encode(str(question)))
     run_kwargs = {**kwargs, "query": question}
     run_kwargs.setdefault("user_id", "")
+    received_event = False
 
     async def responses() -> AsyncGenerator[dict[str, Any], None]:
+        nonlocal received_event
         async with aclosing(completion(db=db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id, **run_kwargs)) as answers:
             async for answer in answers:
+                received_event = True
                 parsed = json.loads(answer[5:]) if isinstance(answer, str) else answer
                 if not isinstance(parsed, dict):
                     raise ValueError("Invalid agent completion event.")
@@ -678,6 +741,8 @@ async def completion_openai(
             yield "data: [DONE]\n\n"
 
         except Exception as e:
+            if isinstance(e, McpDelegationError) and not received_event:
+                raise
             logging.exception(e)
             yield "data: " + json.dumps(error_payload(e), ensure_ascii=False) + "\n\n"
 
@@ -708,5 +773,7 @@ async def completion_openai(
 
             yield openai_data
         except Exception as e:
+            if isinstance(e, McpDelegationError) and not received_event:
+                raise
             logging.exception(e)
             yield error_payload(e)

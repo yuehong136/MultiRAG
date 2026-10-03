@@ -131,7 +131,7 @@ class Agent(LLM, ToolBase):
             if credential_provider is not None:
                 session_kwargs["credential_provider"] = credential_provider
                 interaction_handler = resolve_mcp_interaction_handler()
-                if interaction_handler is not None:
+                if interaction_handler is not None and credential_provider.supports_interactions:
                     interaction_tool_gate_enabled = True
                     session_kwargs["interaction_handler"] = interaction_handler
                     session_kwargs["tool_output_schemas"] = {

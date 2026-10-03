@@ -309,6 +309,60 @@ def test_canvas_run_rejects_non_owner(client, monkeypatch):
     assert "authorized" in body["retmsg"]
 
 
+@pytest.mark.parametrize("release", [False, True])
+@pytest.mark.parametrize("openai_compatible", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+def test_restful_agent_delegation_refusal_is_not_an_unhandled_error(
+    agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, release: bool, openai_compatible: bool, stream: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    from api.db import CanvasCategory
+    from api.db.db_models import get_async_db
+    from api.identity.mcp_delegation.contracts import DelegationErrorCode, McpDelegationError
+    from api.utils.api_utils import async_current_user
+
+    module = _route_module("api.apps.restful_apis.agent")
+    principal = agent_route_stubs.app.dependency_overrides[async_current_user]()
+
+    class DebugDB(_RecordingAsyncSession):
+        async def execute(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(one=lambda: (CanvasCategory.Agent, principal.id))
+
+    def reject_canvas(*args: Any, **kwargs: Any) -> None:
+        raise McpDelegationError(DelegationErrorCode.CONTEXT_REQUIRED)
+
+    async def reject_completion(**kwargs: Any) -> AsyncGenerator[str, None]:
+        reject_canvas()
+        yield "unreachable"
+
+    async def authorized(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    db = DebugDB({})
+    agent_route_stubs.app.dependency_overrides[get_async_db] = lambda: db
+    monkeypatch.setattr(module.CanvasReplicaService, "load_for_run", lambda **kwargs: {"dsl": {}, "title": "debug"})
+    monkeypatch.setattr(module, "require_canvas", authorized)
+    monkeypatch.setattr(module, "Canvas", reject_canvas)
+    monkeypatch.setattr(module, "agent_completion", reject_completion)
+    monkeypatch.setattr(canvas_service, "completion", reject_completion)
+
+    response = agent_route_stubs.post(
+        "/api/v1/agents/chat/completion",
+        json={"agent_id": "agent-1", "query": "hi", "release": release, "openai-compatible": openai_compatible, "stream": stream, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert body["retcode"] != 0
+    assert body["data"] is False
+    assert body["error_code"] == "context_required"
+    assert response.headers["cache-control"] == "no-store"
+    assert "authenticated run context" in body["retmsg"]
+    assert "published Agent revision" in body["retmsg"]
+    assert "rollback" in db.calls
+    assert not any(record.exc_info for record in caplog.records)
+
+
 @pytest.mark.parametrize("window", ["header_error", "header_cancel", "body_error", "success", "setup_cancel"])
 async def test_registered_debug_response_owns_bound_runtime(client: TestClient, monkeypatch: pytest.MonkeyPatch, window: str) -> None:
     from starlette.requests import ClientDisconnect

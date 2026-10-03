@@ -487,3 +487,100 @@ def test_concurrent_principals_never_share_a_bearer_or_decision_key(tmp_path: Pa
     assert credentials[0].bearer.startswith("opaque-user-a-")
     assert credentials[1].bearer.startswith("opaque-user-b-")
     assert credentials[0].bearer != credentials[1].bearer
+
+
+def _development_service(tmp_path: Path, *, user_ids: tuple[str, ...] = ("user-a",)) -> tuple[McpDelegationService, _RecordingIssuer]:
+    tool_path, grant_path, _ = _write_snapshots(tmp_path, user_ids=user_ids)
+    document = json.loads(grant_path.read_text())
+    document["snapshot_format"] = 2
+    document["development_grants"] = [
+        {"tenant_id": "tenant-a", "platform_user_id": user_id, "agent_id": "agent-a", "resource_name": "ofmcp_gateway", "allowed_scopes": ["leave:read"], "allowed_tools": ["leave_get_balance"]}
+        for user_id in user_ids
+    ]
+    document["grant_revision"] = _canonical_revision(document, "grant_revision")
+    grant_path.write_text(json.dumps(document))
+    policy = load_tool_policy_snapshot(tool_path)
+    issuer = _RecordingIssuer()
+    return McpDelegationService(tool_policy=policy, grant_policy=load_grant_policy_snapshot(grant_path, tool_policy=policy), issuer=issuer), issuer
+
+
+def _development_server() -> SimpleNamespace:
+    return SimpleNamespace(id="server-a", tenant_id="tenant-a", server_type=MCPServerType.STREAMABLE_HTTP, url="https://gateway.ofmcp.example/mcp", headers={})
+
+
+def test_development_is_read_only_and_does_not_issue_during_visibility(tmp_path: Path) -> None:
+    from api.identity.run_context import DraftExecutionTarget
+
+    service, issuer = _development_service(tmp_path)
+    provider = service.bind(mcp_server=_development_server(), run_context=RunContext(tenant_id="tenant-a", principal=_principal(), draft_target=DraftExecutionTarget("agent-a", "a" * 64)))
+    assert provider is not None and provider.is_authorized("leave_get_balance")
+    assert not provider.is_authorized("leave_submit_leave") and issuer.requests == []
+    with pytest.raises(McpDelegationError) as denied:
+        provider.credential_for("leave_submit_leave")
+    assert denied.value.code is DelegationErrorCode.DEVELOPMENT_TOOL_DENIED and issuer.requests == []
+    assert provider.credential_for("leave_get_balance").bearer != provider.credential_for("leave_get_balance").bearer
+    with pytest.raises(McpDelegationError) as interaction:
+        provider.interaction_authorization("leave_get_balance")
+    assert interaction.value.code is DelegationErrorCode.DEVELOPMENT_INTERACTION_DENIED
+
+
+def test_development_never_inherits_published_authority(tmp_path: Path) -> None:
+    from api.identity.run_context import DraftExecutionTarget
+
+    tool_path, grant_path, _ = _write_snapshots(tmp_path)
+    policy = load_tool_policy_snapshot(tool_path)
+    service = McpDelegationService(tool_policy=policy, grant_policy=load_grant_policy_snapshot(grant_path, tool_policy=policy), issuer=_RecordingIssuer())
+    with pytest.raises(McpDelegationError) as denied:
+        service.bind(mcp_server=_development_server(), run_context=RunContext(tenant_id="tenant-a", principal=_principal(), draft_target=DraftExecutionTarget("agent-a", "b" * 64)))
+    assert denied.value.code is DelegationErrorCode.GRANT_NOT_FOUND
+
+
+def test_development_shared_agent_uses_each_callers_credential(tmp_path: Path) -> None:
+    from api.identity.run_context import DraftExecutionTarget
+
+    service, issuer = _development_service(tmp_path, user_ids=("user-a", "user-b"))
+    for user_id in ("user-a", "user-b"):
+        provider = service.bind(mcp_server=_development_server(), run_context=RunContext(tenant_id="tenant-a", principal=_principal(user_id), draft_target=DraftExecutionTarget("agent-a", "c" * 64)))
+        assert provider is not None
+        provider.credential_for("leave_get_balance")
+    assert [request.principal.platform_user_id for request, _ in issuer.requests] == ["user-a", "user-b"]
+    with pytest.raises(McpDelegationError) as denied:
+        service.bind(mcp_server=_development_server(), run_context=RunContext(tenant_id="tenant-a", principal=_principal("user-c"), draft_target=DraftExecutionTarget("agent-a", "d" * 64)))
+    assert denied.value.code is DelegationErrorCode.GRANT_NOT_FOUND
+
+
+@pytest.mark.parametrize("change", ["write", "unknown", "scope", "duplicate", "revision", "empty"])
+def test_development_artifact_rejects_unsafe_or_malformed_grants(tmp_path: Path, change: str) -> None:
+    _development_service(tmp_path)
+    grant_path = tmp_path / "mcp-grants.json"
+    document = json.loads(grant_path.read_text())
+    grant = document["development_grants"][0]
+    if change == "write":
+        grant.update(allowed_tools=["leave_submit_leave"], allowed_scopes=["leave:submit"])
+    elif change == "unknown":
+        grant["allowed_tools"] = ["unregistered_tool"]
+    elif change == "scope":
+        grant["allowed_scopes"] = ["leave:submit"]
+    elif change == "duplicate":
+        document["development_grants"].append(grant.copy())
+    elif change == "revision":
+        grant["agent_revision_id"] = "release-a"
+    else:
+        document["development_grants"] = []
+        document["grants"] = []
+    document["grant_revision"] = _canonical_revision(document, "grant_revision")
+    grant_path.write_text(json.dumps(document))
+    policy = load_tool_policy_snapshot(tmp_path / "tool-policies.json")
+    with pytest.raises(McpDelegationError) as denied:
+        load_grant_policy_snapshot(grant_path, tool_policy=policy)
+    assert denied.value.code is DelegationErrorCode.SNAPSHOT_INVALID
+
+
+def test_web_published_context_does_not_expose_side_effects(tmp_path: Path) -> None:
+    service, issuer = _development_service(tmp_path)
+    provider = service.bind(
+        mcp_server=_development_server(), run_context=RunContext(tenant_id="tenant-a", principal=_principal(), agent_id="agent-a", agent_revision_id="release-a", mcp_read_only=True)
+    )
+    assert provider is not None and provider.is_authorized("leave_get_balance")
+    assert not provider.is_authorized("leave_submit_leave")
+    assert issuer.requests == []

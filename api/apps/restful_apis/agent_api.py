@@ -35,6 +35,7 @@ from api.apps import manager
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
 from api.db.db_models import Task, UserCanvas, get_async_db, get_db
+from api.db.services.agent_execution_service import execution_context, save_agent_session
 from api.db.services.canvas_service import (
     API4ConversationService,
     CanvasTemplateService,
@@ -55,6 +56,7 @@ from api.db.services.task_cancellation_service import bind_canvas_task, require_
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, TaskService, queue_dataflow
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService
+from api.identity.mcp_delegation.contracts import DelegationErrorCode, McpDelegationError
 from api.utils.agent_streaming import AgentStreamingResponse
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common import settings
@@ -66,6 +68,19 @@ from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import finish_runtime, require_runtime_finish
 
 router = APIRouter()
+
+
+def _mcp_delegation_error_response(error: McpDelegationError) -> JSONResponse:
+    """Report a safe delegation refusal before sending streaming headers."""
+    message = "MCP delegation rejected."
+    if error.code is DelegationErrorCode.CONTEXT_REQUIRED:
+        message = "This MCP server requires an authenticated run context with a verified published Agent revision or an authorized development snapshot; this run has no complete delegation context."
+    unavailable = error.code in {DelegationErrorCode.SNAPSHOT_INVALID, DelegationErrorCode.TOKEN_ISSUANCE_FAILED}
+    return JSONResponse(
+        status_code=503 if unavailable else 403,
+        headers={"Cache-Control": "no-store"},
+        content={"retcode": RetCode.EXCEPTION_ERROR if unavailable else RetCode.OPERATING_ERROR, "retmsg": message, "data": False, "error_code": error.code.value},
+    )
 
 
 # ==================== Pydantic Models ====================
@@ -518,20 +533,14 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     - 支持文件上传和多轮对话
     """
     req = dict(request_body)
+    req.pop("run_context", None)
+    req.pop("prepared_run", None)
     agent_id = req.pop("agent_id", None)
     openai_compatible = bool(req.pop("openai-compatible", False))
     if not agent_id:
         return get_data_error_result(retmsg="`agent_id` is required.")
 
     session_id = req.get("session_id")
-    if session_id and openai_compatible:
-        conversation = await db.run_sync(lambda session: API4ConversationService.get_by_id(session, session_id))  # TODO(async-phase4)
-        if conversation is None:
-            return get_data_error_result(retmsg="Session not found!")
-        if conversation.dialog_id != agent_id:
-            return get_json_result(data=False, retmsg="Session does not belong to the requested agent.", retcode=RetCode.OPERATING_ERROR)
-        if not await db.run_sync(lambda session: UserCanvasService.accessible(session, agent_id, user.id)):  # TODO(async-phase4)
-            return get_json_result(data=False, retmsg="Only authorized users can access this agent session.", retcode=RetCode.OPERATING_ERROR)
 
     if openai_compatible:
         messages = req.pop("messages", [])
@@ -539,6 +548,17 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             return get_data_error_result(retmsg="You must provide at least one message.")
         question = next((message.get("content", "") for message in reversed(messages) if message.get("role") == "user"), "")
         stream = bool(req.pop("stream", False))
+        try:
+            prepared = await prepare_agent_run(db, agent_id, user.id, session_id=req.get("session_id"), release_mode=str(req.get("release", "")).strip().lower() == "true", principal=user)
+        except PermissionError as error:
+            await db.rollback()
+            return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
+        except PublishedAgentVersionUnavailable as error:
+            await db.rollback()
+            return JSONResponse(status_code=409, content={"retcode": RetCode.DATA_ERROR, "retmsg": str(error), "data": False})
+        except LookupError as error:
+            await db.rollback()
+            return JSONResponse(status_code=404, content={"retcode": RetCode.DATA_ERROR, "retmsg": str(error), "data": False})
         completion = completion_openai(
             db,
             user.id,
@@ -546,17 +566,34 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             question,
             session_id=req.pop("session_id", None),
             stream=stream,
+            prepared_run=prepared,
             **req,
         )
+        try:
+            first = await anext(completion)
+        except McpDelegationError as error:
+            await db.rollback()
+            return _mcp_delegation_error_response(error)
+        except StopAsyncIteration:
+            return get_data_error_result(retmsg="Agent completion returned no response.")
+
+        async def openai_events() -> AsyncGenerator[str, None]:
+            try:
+                yield str(first)
+                async for event in completion:
+                    yield str(event)
+            finally:
+                await completion.aclose()
+
         if stream:
             return AgentStreamingResponse(
-                completion,
+                openai_events(),
+                close_callback=completion.aclose,
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
             )
-        async for response in completion:
-            return response
-        return get_data_error_result(retmsg="Agent completion returned no response.")
+        await completion.aclose()
+        return JSONResponse(content=first)
 
     if session_id or str(req.get("release", "")).strip().lower() == "true":
         return await exp_agent_completion(agent_id, req, db, user)
@@ -608,6 +645,9 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
 
     # Agent模式 - SSE流式响应
     try:
+        if resource_owner_id != tenant_id:
+            raise PermissionError("Only the owner can run a draft agent.")
+        run_context = execution_context(principal=user, tenant_id=resource_owner_id, agent_id=req["id"], dsl=dsl_str)
         # 组件 __init__ 各自开连接查模型配置——整体入线程池
         canvas = await asyncio.to_thread(
             Canvas,
@@ -615,7 +655,15 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             resource_owner_id,
             task_id=uuid4().hex,
             canvas_id=req["id"],
+            run_context=run_context,
         )
+        canvas.globals["sys.user_id"] = ""
+    except PermissionError as error:
+        await db.rollback()
+        return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
+    except McpDelegationError as error:
+        await db.rollback()
+        return _mcp_delegation_error_response(error)
     except Exception as e:
         return server_error_response(e)
     await bind_canvas_task(db, canvas.task_id, tenant_id, req["id"])
@@ -647,7 +695,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         nonlocal canvas, user_id, finish_attempted
         terminal_frames: list[dict[str, Any]] = []
         try:
-            async with aclosing(canvas.run(query=query, files=files, user_id=user_id, inputs=inputs)) as run_events:
+            async with aclosing(canvas.run(query=query, files=files, inputs=inputs)) as run_events:
                 async for ans in run_events:
                     failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
                     if failure:
@@ -697,6 +745,7 @@ async def exp_agent_completion(
     req = dict(request_body)
     # Only the authenticated route can supply this internal preparation value.
     req.pop("prepared_run", None)
+    req.pop("run_context", None)
     req.setdefault("user_id", user.id)
     return_trace = bool(req.get("return_trace", False))
 
@@ -710,11 +759,15 @@ async def exp_agent_completion(
             user.id,
             session_id=req.get("session_id"),
             release_mode=str(req.get("release", "")).strip().lower() == "true",
+            principal=user,
         )
         answers = agent_completion(db=db, tenant_id=user.id, agent_id=canvas_id, prepared_run=prepared, **req)
         # Setup and Canvas construction run before sending SSE headers. The
         # generator consumes the prepared snapshot, without selecting it again.
         first = await anext(answers)
+    except McpDelegationError as error:
+        await db.rollback()
+        return _mcp_delegation_error_response(error)
     except PermissionError as error:
         await db.rollback()
         return preparation_error(str(error), RetCode.OPERATING_ERROR, 403)
@@ -1696,51 +1749,52 @@ def sessions(
 
 
 @router.post("/agents/{canvas_id}/sessions", summary="创建Canvas会话", response_description="成功创建会话")
-def set_session(
+async def set_session(
     canvas_id: str,
     request_body: dict[str, Any],
-    db: Session = Depends(get_db),
-    user=Depends(manager),
-):
-    """
-    为指定Canvas创建一个新的会话。
-
-    参数：
-    - **canvas_id**: Canvas ID
-    - **name**: 可选，会话名称
-
-    返回：
-    - dict: 新建会话的完整信息
-    """
-    tenant_id = user.id
-    session_user_id = request_body.get("user_id") or tenant_id
-    release_mode = bool(request_body.get("release", False))
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+) -> Response:
+    """Create a session with a server-selected immutable execution origin."""
     try:
-        cvs, dsl = UserCanvasService.get_agent_dsl_with_release(db, canvas_id, release_mode, tenant_id)
-    except LookupError:
-        return get_data_error_result(retmsg="Agent not found.")
-    except PermissionError as error:
-        return get_data_error_result(retmsg=str(error))
+        prepared = await prepare_agent_run(db, canvas_id, user.id, release_mode=str(request_body.get("release", "")).strip().lower() == "true", principal=user)
+        if prepared.runtime_tenant_id != user.id:
+            raise PermissionError("Only the owner can create an agent session here.")
 
-    session_id = get_uuid()
-    canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
-    canvas.reset()
-    normalized_dsl = json.loads(str(canvas))
-    version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode)
-    conv = {
-        "id": session_id,
-        "name": request_body.get("name", ""),
-        "dialog_id": cvs.id,
-        "user_id": session_user_id,
-        "exp_user_id": session_user_id,
-        "message": [{"role": "assistant", "content": canvas.get_prologue()}],
-        "source": "agent",
-        "dsl": normalized_dsl,
-        "reference": [],
-        "version_title": version_title,
-    }
-    API4ConversationService.save(db, **conv)
-    return get_json_result(data=_normalize_agent_session(conv))
+        def build_canvas() -> Canvas:
+            canvas = Canvas(prepared.dsl, prepared.runtime_tenant_id, canvas_id=canvas_id, run_context=prepared.run_context)
+            canvas.reset()
+            canvas.globals["sys.user_id"] = ""
+            return canvas
+
+        canvas = await asyncio.to_thread(build_canvas)
+        conv = {
+            "id": get_uuid(),
+            "name": request_body.get("name", ""),
+            "dialog_id": canvas_id,
+            "user_id": user.id,
+            "exp_user_id": request_body.get("user_id") or user.id,
+            "message": [{"role": "assistant", "content": canvas.get_prologue()}],
+            "source": "agent",
+            "dsl": json.loads(str(canvas)),
+            "reference": [],
+            "version_title": prepared.version_title,
+        }
+        assert prepared.run_context is not None
+        saved = await save_agent_session(db, conv, context=prepared.run_context, snapshot=conv["dsl"])
+        return get_json_result(data=_normalize_agent_session(saved))
+    except McpDelegationError as error:
+        await db.rollback()
+        return _mcp_delegation_error_response(error)
+    except PermissionError as error:
+        await db.rollback()
+        return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
+    except PublishedAgentVersionUnavailable as error:
+        await db.rollback()
+        return JSONResponse(status_code=409, content={"retcode": RetCode.DATA_ERROR, "retmsg": str(error), "data": False})
+    except LookupError as error:
+        await db.rollback()
+        return JSONResponse(status_code=404, content={"retcode": RetCode.DATA_ERROR, "retmsg": str(error), "data": False})
 
 
 @router.get("/agents/{canvas_id}/sessions/{session_id}", summary="获取单个Canvas会话", response_description="成功获取会话详情")

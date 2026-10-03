@@ -650,3 +650,31 @@ private key；public keyset 独立列出并必须包含与 active private key �
 `max token TTL + 30s skew + verifier JWKS cache TTL`，默认即 630 秒，之后才允许移除。A2 用 provider
 snapshot/rotation contract 测试这个顺序；真实多副本配置发布与演练属于 O1，不能因单进程测试通过就
 宣称生产换钥完成。
+
+
+---
+
+## EIM-ADR-28：Web 发布运行与只读草稿开发授权分离
+
+**状态**：Accepted
+
+**日期**：2026-10-03
+
+Web 运行使用当前认证 Principal，发布目标由服务端选择精确 `UserCanvasVersion.id`；草稿目标使用
+独立 `DraftExecutionTarget`，摘要覆盖真正执行的完整配置。草稿摘要不进入 `agent_revision_id`，
+也不借用最新发布版本的 grant。团队运行先重查有效 membership，不继承 Agent 创建者凭据。
+
+发布 grant 保持精确 tenant/user/agent/revision/resource 语义。format-2 grant 制品另设
+`development_grants`，按 tenant、真实开发者、Agent、resource、scope 与 canonical tool allowlist
+授权；草稿委托还要求当前 owner 编辑权限。首期 Web 委托限 read/reusable，prepare/side_effect、
+Web 敏感确认与 MRTR 暂停恢复留在后续独立能力，ADR-18 的发布版本恢复约束继续生效。
+
+新 Web 会话在自有来源表绑定运行用户、tenant、模式、精确发布 revision 与不可变配置快照。
+会话与来源原子落库；续聊重查权限并恢复原配置和服务端会话状态。旧会话无可靠来源时不推断
+发布授权。标题和客户端 `user_id` 仍可服务于展示/既有 replica，但不能构造 Principal 或授权目标。
+
+实现放在自有 identity/service/table 层；Agent 仅复用现有 credential/interaction composition seam，
+Canvas/Agent loop、DSL 结构和事件协议保持现有接口。迁移、grant 制品发布和 API rollout 分别核验，
+本地代码和门禁通过不代表真实环境已部署。
+
+当前行为、制品格式和迁移说明集中在 [MCP delegation README](../../api/identity/mcp_delegation/README.md)。

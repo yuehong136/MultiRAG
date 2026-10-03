@@ -458,7 +458,7 @@ def test_source_recovery_migration_requires_exact_durable_schema(parser_database
                 cfg.attributes["connection"] = db
                 command.downgrade(cfg, "e1f3a5c7b9d0")
             with parser_database.connect() as db:
-                assert db.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == "a9c810f1d2e3"
+                assert db.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == record["before"]["version"]
                 assert db.execute(sa.select(table.c.id, table.c.wire).where(table.c.document_id == document_id)).one() == (nonce, "protected source recovery material")
                 record["after"] = {
                     "rows": [dict(row) for row in db.execute(sa.select(table).order_by(table.c.id)).mappings()],
@@ -566,7 +566,9 @@ def test_source_recovery_migration_requires_exact_durable_schema(parser_database
             table.drop(db, checkfirst=True)
             table.create(db)
             cfg.attributes["connection"] = db
-            command.stamp(cfg, "head")
+            # Restore later migration tables too, rather than stamping a
+            # revision whose schema the fixture has not actually recreated.
+            command.upgrade(cfg, "head")
         record["cleanup"] = {"fixture_table_restored": True, "fixture_rows_absent": True}
         save(path, record)
 

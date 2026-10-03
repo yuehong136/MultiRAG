@@ -9,7 +9,8 @@ from api.db.db_models import McpInteraction, McpInteractionResumeJob
 _SCHEMA = "usr_ai"
 _U15_REVISION = "d8f0a2b4c6e8"
 _IDENTITY_RECONCILIATION_REVISION = "e1f3a5c7b9d0"
-_CURRENT_HEAD_REVISION = "a9c810f1d2e3"
+_SOURCE_RECOVERY_REVISION = "a9c810f1d2e3"
+_CURRENT_HEAD_REVISION = "b0d2e4f6a8c0"
 
 
 def test_u15_remains_on_the_single_alembic_head_lineage(alembic_cfg) -> None:
@@ -18,7 +19,8 @@ def test_u15_remains_on_the_single_alembic_head_lineage(alembic_cfg) -> None:
     script = ScriptDirectory.from_config(alembic_cfg)
 
     assert script.get_heads() == [_CURRENT_HEAD_REVISION]
-    assert script.get_revision(_CURRENT_HEAD_REVISION).down_revision == _IDENTITY_RECONCILIATION_REVISION
+    assert script.get_revision(_CURRENT_HEAD_REVISION).down_revision == _SOURCE_RECOVERY_REVISION
+    assert script.get_revision(_SOURCE_RECOVERY_REVISION).down_revision == _IDENTITY_RECONCILIATION_REVISION
     assert script.get_revision(_IDENTITY_RECONCILIATION_REVISION).down_revision == _U15_REVISION
 
 

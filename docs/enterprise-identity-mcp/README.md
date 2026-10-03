@@ -408,6 +408,9 @@ apply 的受控企业连接 CLI。C3 消息侧 verified consume 已完成源码�
   credential generation。只缓存有界授权决定，ACR/AMR/enterprise subject 每次重验；模型 alias 不进入
   wire/authorization。每次逻辑 `tools/call` 新签 token/JTI，同一 operation 的 initialize/call/retry 复用
   一个 bearer，完成即关闭 client。功能默认 disabled，尚未配置制品/key、重启、部署或做真实 MCP 调用。
+- Web 的发布/会话/OpenAI 入口已接可信 Principal 和精确执行来源；草稿使用独立开发 grant，首期
+  Web delegated 工具限 read/reusable。来源表迁移、制品与部署仍需环境验收，具体行为集中在
+  [delegation README](../../api/identity/mcp_delegation/README.md)，决策见 [ADR-28](DECISIONS.md#eim-adr-28web-发布运行与只读草稿开发授权分离)。
 - 出站旧串行队列已删除，并发调用不再形成 HOL；超时会取消本地 task，但远端取消仍是
   协作式，不能由本地超时推断业务未执行。
 - EIM-U14 已把 `InputRequiredResult` 从模型可见旁路升级为默认关闭的持久

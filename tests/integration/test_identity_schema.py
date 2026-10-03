@@ -36,7 +36,7 @@ from api.db.db_models import (
 )
 
 _I6_REVISION = "b4c6d8e0f2a4"
-_CURRENT_HEAD_REVISION = "a9c810f1d2e3"
+_CURRENT_HEAD_REVISION = "b0d2e4f6a8c0"
 _I21_REVISION = "9a3b5c7d8e0f"
 _I2_REVISION = "8f2c4d6e7a9b"
 _PRE_I2_REVISION = "7c8d9e0f1a2b"

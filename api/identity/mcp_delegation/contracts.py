@@ -21,6 +21,8 @@ class DelegationErrorCode(StrEnum):
     TOOL_POLICY_NOT_FOUND = "tool_policy_not_found"
     SCOPE_DENIED = "scope_denied"
     ASSURANCE_DENIED = "assurance_denied"
+    DEVELOPMENT_TOOL_DENIED = "development_tool_denied"
+    DEVELOPMENT_INTERACTION_DENIED = "development_interaction_denied"
     TOKEN_ISSUANCE_FAILED = "token_issuance_failed"
 
 
@@ -47,6 +49,19 @@ class DelegationGrant:
     agent_revision_id: str
     resource_name: str
     allowed_scopes: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentGrant:
+    tenant_id: str = field(repr=False)
+    platform_user_id: str = field(repr=False)
+    agent_id: str
+    resource_name: str
+    allowed_scopes: frozenset[str]
+    allowed_tools: frozenset[str]
+
+
+DevelopmentGrantKey = tuple[str, str, str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +129,7 @@ class GrantPolicySnapshot:
     credential_generation: int
     bindings: Mapping[str, DelegatedServerBinding]
     grants: Mapping[GrantKey, DelegationGrant]
+    development_grants: Mapping[DevelopmentGrantKey, DevelopmentGrant] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def frozen(
@@ -124,6 +140,7 @@ class GrantPolicySnapshot:
         credential_generation: int,
         bindings: dict[str, DelegatedServerBinding],
         grants: dict[GrantKey, DelegationGrant],
+        development_grants: dict[DevelopmentGrantKey, DevelopmentGrant] | None = None,
     ) -> GrantPolicySnapshot:
         return cls(
             grant_revision=grant_revision,
@@ -131,6 +148,7 @@ class GrantPolicySnapshot:
             credential_generation=credential_generation,
             bindings=MappingProxyType(dict(bindings)),
             grants=MappingProxyType(dict(grants)),
+            development_grants=MappingProxyType(dict(development_grants or {})),
         )
 
 
@@ -142,6 +160,8 @@ __all__ = [
     "DelegatedToolPolicy",
     "DelegationErrorCode",
     "DelegationGrant",
+    "DevelopmentGrant",
+    "DevelopmentGrantKey",
     "GrantKey",
     "GrantPolicySnapshot",
     "McpDelegationError",

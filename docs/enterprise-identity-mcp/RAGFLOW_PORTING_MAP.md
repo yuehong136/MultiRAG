@@ -43,6 +43,12 @@
 | `api/db/db_models.py` + Alembic | 共享模型文件 + MultiRAG 自有表 | 仅 additive model；表名和约束不依赖 Canvas/LLM 内核 | 上游若提供通用 interaction ledger，先迁移/等价验证再退役 |
 | `api/channel_*` / Provider renderer | MultiRAG 自有 | U14 不修改；U15 才接飞书 renderer | 不随 RAGFlow Canvas 提交回卷 Provider 语义 |
 
+Web execution 的上下文准备与来源快照位于 `api/db/services/agent_execution_service.py`，发布/开发
+授权位于 `api/identity/mcp_delegation/`；`AgentExecutionOrigin` 是 additive 自有表。同步 MCP/Canvas
+变更时保留这两个外层接缝。Agent 的 interaction composition 只读取 provider 的 capability，不增加
+Web/Channel/草稿/发布权限判断；退出条件仍是上游提供等价 context/interceptor 接口。
+当前授权语义见 [EIM-ADR-28](DECISIONS.md#eim-adr-28web-发布运行与只读草稿开发授权分离)。
+
 ## 3. 每个上游 commit 的 U14 回归判据
 
 移植涉及 MCP、Agent、Canvas、chat model 或数据库模型时，除常规 `make verify` 外，必须检查：

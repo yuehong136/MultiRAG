@@ -7,11 +7,14 @@ from ssl import SSLContext
 from threading import Lock
 from typing import Any, Protocol
 
+from opentelemetry import trace
+
 from api.identity.mcp_delegation.contracts import (
     DelegatedServerBinding,
     DelegatedToolPolicy,
     DelegationErrorCode,
     DelegationGrant,
+    DevelopmentGrant,
     GrantPolicySnapshot,
     McpDelegationError,
     ToolPolicySnapshot,
@@ -24,7 +27,7 @@ from api.identity.mcp_issuer.contracts import (
     McpTokenIssuanceError,
 )
 from api.identity.principal import IdentityAssurance, Principal
-from api.identity.run_context import RunContext
+from api.identity.run_context import DraftExecutionTarget, RunContext
 from common.constants import MCPServerType
 from common.mcp_tool_call_conn import MCPRequestCredential
 
@@ -42,7 +45,7 @@ class _TokenIssuer(Protocol):
 @dataclass(frozen=True, slots=True)
 class _AuthorizationDecision:
     policy: DelegatedToolPolicy
-    grant: DelegationGrant = field(repr=False)
+    grant: DelegationGrant | DevelopmentGrant = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +66,9 @@ class BoundMcpCredentialProvider:
     _binding: DelegatedServerBinding
     _principal: Principal = field(repr=False)
     _agent_id: str
-    _agent_revision_id: str
+    _agent_revision_id: str | None
+    _draft_target: DraftExecutionTarget | None = field(default=None, repr=False)
+    _read_only: bool = field(default=False, repr=False)
     _tls_ssl_context: SSLContext | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -71,34 +76,48 @@ class BoundMcpCredentialProvider:
         return self._binding.resource_name
 
     @property
+    def supports_interactions(self) -> bool:
+        return self._draft_target is None and not self._read_only
+
+    @property
     def tls_ssl_context(self) -> SSLContext | None:
         """Optional deployment trust anchor for this delegated resource."""
 
         return self._tls_ssl_context
 
+    def _authorize(self, canonical_tool_name: str) -> _AuthorizationDecision:
+        if self._draft_target is not None:
+            return self._service.authorize_development(principal=self._principal, target=self._draft_target, binding=self._binding, canonical_tool_name=canonical_tool_name)
+        if self._agent_revision_id is None:
+            raise McpDelegationError(DelegationErrorCode.CONTEXT_REQUIRED)
+        decision = self._service.authorize(
+            principal=self._principal, agent_id=self._agent_id, agent_revision_id=self._agent_revision_id, binding=self._binding, canonical_tool_name=canonical_tool_name
+        )
+        if self._read_only and (decision.policy.effect != "read" or decision.policy.replay_mode != "reusable"):
+            raise McpDelegationError(DelegationErrorCode.DEVELOPMENT_TOOL_DENIED)
+        return decision
+
     def is_authorized(self, canonical_tool_name: str) -> bool:
         """Evaluate model visibility without issuing or retaining a bearer."""
-
         try:
-            self._service.authorize(
-                principal=self._principal,
-                agent_id=self._agent_id,
-                agent_revision_id=self._agent_revision_id,
-                binding=self._binding,
-                canonical_tool_name=canonical_tool_name,
-            )
+            self._authorize(canonical_tool_name)
         except McpDelegationError:
             return False
         return True
 
     def credential_for(self, canonical_tool_name: str) -> MCPRequestCredential:
-        decision = self._service.authorize(
-            principal=self._principal,
-            agent_id=self._agent_id,
-            agent_revision_id=self._agent_revision_id,
-            binding=self._binding,
-            canonical_tool_name=canonical_tool_name,
-        )
+        decision = self._authorize(canonical_tool_name)
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attributes(
+                {
+                    "mcp.execution.mode": "draft" if self._draft_target is not None else "published",
+                    "mcp.grant.revision": self._service.grant_policy.grant_revision,
+                    "mcp.policy.revision": self._service.tool_policy.policy_revision,
+                }
+            )
+            if self._draft_target is not None:
+                span.set_attribute("mcp.execution.snapshot_digest", self._draft_target.snapshot_digest)
         requested_claims: set[str] = set()
         if decision.policy.enterprise_subject is not None:
             requested_claims.add("enterprise_subject")
@@ -131,13 +150,9 @@ class BoundMcpCredentialProvider:
         self,
         canonical_tool_name: str,
     ) -> McpInteractionAuthorization:
-        decision = self._service.authorize(
-            principal=self._principal,
-            agent_id=self._agent_id,
-            agent_revision_id=self._agent_revision_id,
-            binding=self._binding,
-            canonical_tool_name=canonical_tool_name,
-        )
+        if not self.supports_interactions:
+            raise McpDelegationError(DelegationErrorCode.DEVELOPMENT_INTERACTION_DENIED)
+        decision = self._authorize(canonical_tool_name)
         return McpInteractionAuthorization(
             effect=decision.policy.effect,
             replay_mode=decision.policy.replay_mode,
@@ -176,7 +191,7 @@ class McpDelegationService:
         binding = self.grant_policy.bindings.get(server_id)
         if binding is None:
             return None
-        if run_context is None or run_context.principal is None or run_context.agent_id is None or run_context.agent_revision_id is None:
+        if run_context is None or run_context.principal is None or (run_context.draft_target is None and (run_context.agent_id is None or run_context.agent_revision_id is None)):
             raise McpDelegationError(DelegationErrorCode.CONTEXT_REQUIRED)
         if getattr(mcp_server, "tenant_id", None) != run_context.tenant_id:
             raise McpDelegationError(DelegationErrorCode.SERVER_TENANT_MISMATCH)
@@ -188,23 +203,51 @@ class McpDelegationService:
         issuer_audience = self.issuer.resource_audience(binding.resource_name)
         if issuer_audience != binding.audience or str(getattr(mcp_server, "url", "")).strip() != binding.audience:
             raise McpDelegationError(DelegationErrorCode.SERVER_AUDIENCE_MISMATCH)
-        grant_key = (
-            run_context.tenant_id,
-            run_context.principal.platform_user_id,
-            run_context.agent_id,
-            run_context.agent_revision_id,
-            binding.resource_name,
-        )
-        if grant_key not in self.grant_policy.grants:
-            raise McpDelegationError(DelegationErrorCode.GRANT_NOT_FOUND)
+        target = run_context.draft_target
+        agent_id = target.agent_id if target is not None else run_context.agent_id
+        assert agent_id is not None
+        if target is not None:
+            development_key = (run_context.tenant_id, run_context.principal.platform_user_id, agent_id, binding.resource_name)
+            if development_key not in self.grant_policy.development_grants:
+                raise McpDelegationError(DelegationErrorCode.GRANT_NOT_FOUND)
+        else:
+            grant_key = (run_context.tenant_id, run_context.principal.platform_user_id, agent_id, run_context.agent_revision_id or "", binding.resource_name)
+            if grant_key not in self.grant_policy.grants:
+                raise McpDelegationError(DelegationErrorCode.GRANT_NOT_FOUND)
         return BoundMcpCredentialProvider(
             _service=self,
             _binding=binding,
             _principal=run_context.principal,
-            _agent_id=run_context.agent_id,
+            _agent_id=agent_id,
+            _draft_target=target,
+            _read_only=run_context.mcp_read_only,
             _agent_revision_id=run_context.agent_revision_id,
             _tls_ssl_context=self._tls_ssl_context,
         )
+
+    def authorize_development(
+        self,
+        *,
+        principal: Principal,
+        target: DraftExecutionTarget,
+        binding: DelegatedServerBinding,
+        canonical_tool_name: str,
+    ) -> _AuthorizationDecision:
+        """Explicit developer authority; never borrow a published grant."""
+        if self.grant_policy.bindings.get(binding.mcp_server_id) != binding:
+            raise McpDelegationError(DelegationErrorCode.SERVER_NOT_BOUND)
+        grant = self.grant_policy.development_grants.get((principal.tenant_id, principal.platform_user_id, target.agent_id, binding.resource_name))
+        if grant is None:
+            raise McpDelegationError(DelegationErrorCode.GRANT_NOT_FOUND)
+        policy = self.tool_policy.tools.get(canonical_tool_name)
+        if policy is None:
+            raise McpDelegationError(DelegationErrorCode.TOOL_POLICY_NOT_FOUND)
+        if canonical_tool_name not in grant.allowed_tools or policy.effect != "read" or policy.replay_mode != "reusable":
+            raise McpDelegationError(DelegationErrorCode.DEVELOPMENT_TOOL_DENIED)
+        if not policy.required_scopes.issubset(grant.allowed_scopes):
+            raise McpDelegationError(DelegationErrorCode.SCOPE_DENIED)
+        self._verify_assurance(principal=principal, policy=policy)
+        return _AuthorizationDecision(policy=policy, grant=grant)
 
     def authorize(
         self,
