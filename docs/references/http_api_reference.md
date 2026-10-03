@@ -1513,6 +1513,13 @@ Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型�
 默认实例记录不存在时可使用旧凭据，显式实例名不会切换凭据。禁用模型、禁用实例、模型
 类型不匹配和数据库错误均失败。每次绑定复制 region URL，不改全局 provider 配置。
 
+Go embedding 驱动只保留 `Encode(modelName, texts, apiConfig, embeddingConfig)`；
+绑定后的模型只需 `Encode(texts)`，检索将查询作为单项批次传入。`ModelBundle` 继续
+提供 `Encode` / `EncodeQuery` 的向量、token 数、error 返回格式；token 数沿用每条文本
+`len(text)/4` 的字节长度估算，尚非供应商 usage。空输入可返回空批次，非空输入的空结果、
+数量不匹配、空向量、维度不一致或非有限数值均失败，检索取首个向量前经过绑定边界校验。
+`EmbeddingConfig` 当前为空配置，默认 nil；重命名不增加新的参数行为或供应商能力。
+
 VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支持普通文本聊天、
 完整角色历史、sender SSE、模型发现及连接检查。`thinking=true` 且未指定 effort 时用
 `medium`，显式 false 关闭；SSE 同一 delta 的 reasoning/content 均转发，sender 错误、

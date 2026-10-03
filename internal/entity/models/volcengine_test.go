@@ -54,7 +54,7 @@ func TestVolcEngineChatAndDiscovery(t *testing.T) {
 	if err := driver.CheckConnection(config); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver.EncodeQuery(&name, "q", config); err == nil {
+	if _, err := driver.Encode(&name, []string{"q"}, config, nil); err == nil {
 		t.Fatal("unsupported embedding succeeded")
 	}
 }

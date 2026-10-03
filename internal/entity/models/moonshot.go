@@ -46,7 +46,7 @@ func (m *MoonshotModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 	return fmt.Errorf("not implemented")
 }
 
-func (m *MoonshotModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *MoonshotModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	suffix := m.URLSuffix.Embedding
 	if suffix == "" {
 		suffix = "embeddings"
@@ -137,15 +137,6 @@ func (m *MoonshotModel) Balance(apiConfig *APIConfig) (map[string]interface{}, e
 func (m *MoonshotModel) CheckConnection(apiConfig *APIConfig) error {
 	_, err := m.ListModels(apiConfig)
 	return err
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *MoonshotModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *MoonshotModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *MoonshotModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {

@@ -63,8 +63,8 @@ func (z *DummyModel) ChatStreamlyWithSender(modelName, message *string, apiConfi
 	return fmt.Errorf("not implemented")
 }
 
-// EncodeToEmbedding encodes a list of texts into embeddings
-func (z *DummyModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+// Encode encodes a list of texts into embeddings
+func (z *DummyModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
@@ -78,15 +78,6 @@ func (z *DummyModel) Balance(apiConfig *APIConfig) (map[string]interface{}, erro
 
 func (z *DummyModel) CheckConnection(apiConfig *APIConfig) error {
 	return fmt.Errorf("connection check is not implemented for %s", z.Name())
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *DummyModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *DummyModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *DummyModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {

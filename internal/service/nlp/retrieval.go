@@ -600,11 +600,13 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 
 // GetVector computes query vector and returns MatchDenseExpr for hybrid search
 func (s *RetrievalService) GetVector(txt string, embModel *models.EmbeddingModel, topk int, similarity float64) (*types.MatchDenseExpr, error) {
-	vector, err := embModel.EncodeQuery(txt)
+	embeddings, err := embModel.Encode([]string{txt})
 	if err != nil {
 		return nil, err
 	}
 
+	// Bound Encode validates exactly one nonempty vector before indexing.
+	vector := embeddings[0]
 	vectorSize := len(vector)
 	vectorColumnName := fmt.Sprintf("q_%d_vec", vectorSize)
 

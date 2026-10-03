@@ -279,7 +279,7 @@ func (m *AliyunModel) ChatStreamlyWithSender(modelName, message *string, apiConf
 	return io.ErrUnexpectedEOF
 }
 
-func (m *AliyunModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *AliyunModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	return nil, errors.New("aliyun: embeddings are not configured")
 }
 
@@ -328,15 +328,6 @@ func (m *AliyunModel) Balance(apiConfig *APIConfig) (map[string]interface{}, err
 func (m *AliyunModel) CheckConnection(apiConfig *APIConfig) error {
 	_, err := m.ListModels(apiConfig)
 	return err
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *AliyunModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *AliyunModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *AliyunModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {

@@ -54,8 +54,8 @@ func TestSiliconFlowBoundEmbeddingsBatchOrderAndRerank(t *testing.T) {
 	if err != nil || len(vectors) != 33 || !reflect.DeepEqual(vectors[0], []float64{1, 2}) || !reflect.DeepEqual(batches, []int{32, 1}) {
 		t.Fatalf("vectors=%v batches=%v error=%v", vectors, batches, err)
 	}
-	query, err := model.EncodeQuery("question")
-	if err != nil || !reflect.DeepEqual(query, []float64{1, 2}) {
+	query, err := model.Encode([]string{"question"})
+	if err != nil || !reflect.DeepEqual(query, [][]float64{{1, 2}}) {
 		t.Fatalf("query=%v error=%v", query, err)
 	}
 	rerank := NewRerankModel(driver, &name, config)
@@ -66,7 +66,7 @@ func TestSiliconFlowBoundEmbeddingsBatchOrderAndRerank(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	config.Context = ctx
-	if _, err := model.EncodeQuery("q"); !errors.Is(err, context.Canceled) {
+	if _, err := model.Encode([]string{"q"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error=%v", err)
 	}
 }
@@ -92,7 +92,7 @@ func TestSiliconFlowMalformedEmbeddingAndRerank(t *testing.T) {
 			config := &APIConfig{APIKey: &key}
 			var err error
 			if test.path == "embeddings" {
-				_, err = driver.Encode(&name, []string{"q"}, config)
+				_, err = driver.Encode(&name, []string{"q"}, config, nil)
 			} else {
 				_, err = driver.Rerank(&name, "q", []string{"doc"}, config)
 			}
@@ -143,7 +143,7 @@ func TestSiliconFlowRejectsDuplicateIndexesAndDimensions(t *testing.T) {
 			config := &APIConfig{APIKey: &key}
 			var err error
 			if test.path == "embeddings" {
-				_, err = driver.Encode(&name, []string{"a", "b"}, config)
+				_, err = driver.Encode(&name, []string{"a", "b"}, config, nil)
 			} else {
 				_, err = driver.Rerank(&name, "q", []string{"a", "b"}, config)
 			}

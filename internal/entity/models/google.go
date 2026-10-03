@@ -252,7 +252,7 @@ func (g *GoogleModel) ChatStreamly(modelName, apiKey, message *string, genConf m
 func (g *GoogleModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
 	return errors.New("Google channel-only streaming is unsupported; use the sender interface")
 }
-func (g *GoogleModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (g *GoogleModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
 	return nil, errors.New("Google embeddings are unsupported by this text-chat provider")
 }
 func (g *GoogleModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
@@ -292,15 +292,6 @@ func (g *GoogleModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 func (g *GoogleModel) CheckConnection(apiConfig *APIConfig) error {
 	_, err := g.ListModels(apiConfig)
 	return err
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *GoogleModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *GoogleModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *GoogleModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {

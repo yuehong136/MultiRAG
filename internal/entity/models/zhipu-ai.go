@@ -667,8 +667,8 @@ func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, message *string, apiCon
 	return scanner.Err()
 }
 
-// EncodeToEmbedding encodes a list of texts into embeddings
-func (z *ZhipuAIModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+// Encode encodes a list of texts into embeddings
+func (z *ZhipuAIModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	if apiConfig == nil || apiConfig.APIKey == nil {
 		return nil, fmt.Errorf("API key is nil")
 	}
@@ -751,6 +751,9 @@ func (z *ZhipuAIModel) EncodeToEmbedding(modelName *string, texts []string, apiC
 		embeddings[i] = embedding
 	}
 
+	if err := ValidateEmbeddings(embeddings, len(texts)); err != nil {
+		return nil, err
+	}
 	return embeddings, nil
 }
 
@@ -764,15 +767,6 @@ func (z *ZhipuAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, er
 
 func (z *ZhipuAIModel) CheckConnection(apiConfig *APIConfig) error {
 	return checkBearerEndpointConnection(z.httpClient, z.BaseURL, z.URLSuffix.Files, apiConfig, z.Name())
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *ZhipuAIModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *ZhipuAIModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *ZhipuAIModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {

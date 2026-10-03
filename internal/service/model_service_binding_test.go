@@ -15,6 +15,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
+	"multirag/internal/service/nlp"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -107,9 +108,18 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vector, err := embedding.EncodeQuery("q")
-	if err != nil || !reflect.DeepEqual(vector, []float64{1, 2}) {
+	vector, err := embedding.Encode([]string{"q"})
+	if err != nil || !reflect.DeepEqual(vector, [][]float64{{1, 2}}) {
 		t.Fatalf("vector=%v, error=%v", vector, err)
+	}
+	bundle := &ModelBundle{modelType: entity.ModelTypeEmbedding, model: embedding}
+	queryVector, tokens, err := bundle.EncodeQuery("question")
+	if err != nil || tokens != 2 || !reflect.DeepEqual(queryVector, []float64{1, 2}) {
+		t.Fatalf("bound query=%v tokens=%d error=%v", queryVector, tokens, err)
+	}
+	expression, err := nlp.NewRetrievalService(nil).GetVector("question", embedding, 7, 0.4)
+	if err != nil || expression.VectorColumnName != "q_2_vec" || !reflect.DeepEqual(expression.EmbeddingData, queryVector) {
+		t.Fatalf("bound retrieval expression=%v error=%v", expression, err)
 	}
 	rerank, err := svc.GetRerankModel("tenant", "BAAI/bge-reranker-v2-m3@fixture@SiliconFlow")
 	if err != nil {
@@ -161,7 +171,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := legacy.EncodeQuery("q"); err != nil {
+	if _, err := legacy.Encode([]string{"q"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&entity.TenantModelProvider{ID: "legacy-openai", TenantID: "legacy", ProviderName: "OpenAI"}).Error; err != nil {
@@ -171,7 +181,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing default instance compatibility: %v", err)
 	}
-	if _, err := legacy.EncodeQuery("q"); err != nil {
+	if _, err := legacy.Encode([]string{"q"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.GetEmbeddingModel("legacy", legacyName+"@missing@OpenAI"); err == nil {
@@ -199,7 +209,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err := db.Exec("ALTER TABLE hidden_tenant_model RENAME TO tenant_model").Error; err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(paths, []string{"/fixture/embeddings", "/fixture/rerank", "/fixture/chat/completions", "/legacy/embeddings", "/legacy/embeddings"}) {
+	if !reflect.DeepEqual(paths, []string{"/fixture/embeddings", "/fixture/embeddings", "/fixture/embeddings", "/fixture/rerank", "/fixture/chat/completions", "/legacy/embeddings", "/legacy/embeddings"}) {
 		t.Fatalf("paths=%v", paths)
 	}
 	// Independent SQL readback verifies the persisted denial record.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -11,6 +12,24 @@ import (
 
 	"multirag/internal/entity/models"
 )
+
+type retrievalEmbeddingDriver struct {
+	models.ModelDriver
+	vectors [][]float64
+}
+
+func (d *retrievalEmbeddingDriver) Encode(_ *string, _ []string, _ *models.APIConfig, _ *models.EmbeddingConfig) ([][]float64, error) {
+	return d.vectors, nil
+}
+
+func TestRetrievalVectorRejectsMalformedResults(t *testing.T) {
+	for _, vectors := range [][][]float64{nil, {{}}, {{1}, {2}}, {{math.Inf(1)}}} {
+		model := models.NewEmbeddingModel(&retrievalEmbeddingDriver{vectors: vectors}, nil, nil)
+		if expression, err := NewRetrievalService(nil).GetVector("question", model, 7, 0.4); err == nil || expression != nil {
+			t.Fatalf("malformed vector=%v expression=%v error=%v", vectors, expression, err)
+		}
+	}
+}
 
 func TestRetrievalVectorUsesBoundDriver(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -22,10 +22,8 @@ type ModelDriver interface {
 	ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error
 	// ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
 	ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
-	// Encode encodes a list of texts into embeddings
-	EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error)
-	Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error)
-	EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error)
+	// Encode encodes a list of texts into embeddings with the selected configuration.
+	Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error)
 	Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error)
 	// ListModels lists models supported by the configured provider instance.
 	ListModels(apiConfig *APIConfig) ([]string, error)

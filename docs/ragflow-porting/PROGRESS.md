@@ -2084,6 +2084,50 @@ help 与脚本语法检查均 exit=0，单 head `e1f3a5c7b9d0`；完整上游 di
 逐次检查下一轮 wire assistant reasoning、多工具结果与答案；fixture listener 已关闭。
 这是本机协议验证，未调用远程模型或真实外部 MCP，也不代表完整 Agent UI/生产端到端验收。
 
+## dcce864d4c9fc939e4a75bfdd1d8ffec64e31a4f · Go embedding Encode 接口
+
+按冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 核对目标完整 14 文件 diff，
+上游 remote 已核、未 fetch。该项在 Go 模型系列迁移提交之后串行开展，并与模型绑定及
+Extra owner 确认范围；Extra 的租户模型字段和 DAO 改动不纳入本项。
+
+- 已等价并复用：Go 已只有 `internal/entity/models` 一套工厂，模型服务绑定实际模型名、
+  tenant 凭据、region 和请求上下文，保留新实例与旧 APIBase 兼容路径；批量 HTTP 编码已
+  按 32 条分批、按索引归位并检查响应数量、维度和非有限值。未重写这些协议实现。
+- 缺失迁移：`ModelDriver` 及所有具体驱动统一为四参数 `Encode`，移除重复的
+  `EncodeToEmbedding`、三参数 driver `Encode` 和 driver `EncodeQuery`；VolcEngine
+  通过既有 DummyModel 嵌入继承新签名，继续明确不支持 embedding。绑定模型与
+  `entity.EmbeddingModel` 只保留批量 `Encode(texts)`，传递当前为空的 `EmbeddingConfig`。
+- 消费者：全仓 Go 实现、接口、factory、ModelBundle、检索 GetVector、ChunkService
+  及直接测试调用均已核对；检索将 query 作为单项批次。ModelBundle 保留两个公开入口和
+  向量/token/error 返回格式，EncodeQuery 复用 Encode；token 数仍是逐文本字节长度
+  `len(text)/4` 估算，失败返回 0，不冒称 provider usage。兄弟 SDK checkout 是同仓
+  历史 worktree，不是本接口的外部 Go 消费者；当前独立 Web 消费 Python `/v1/llm/*`，
+  Agent Hub 没有 import 此 Go internal 包，无前端或跨仓接口迁移。
+- 本地安全适配：绑定模型和 ModelBundle 共用批量结果校验，拒绝非空输入的空结果、
+  数量不符、空向量、维度不一致及非有限值；单项查询在校验后取首个向量，补齐上游检索
+  直接索引空结果的防护。智谱保留逐条请求协议，补齐其聚合结果非空/维度检查。空输入保留空批次。
+- Provider 覆盖：受控 HTTP 验证 OpenAI、OpenAI-API-Compatible、DeepSeek、Moonshot、
+  Gitee、SiliconFlow、ZHIPU-AI 的已有编码入口、模型名、凭据、顺序和空输入；DeepSeek/
+  Moonshot 的旧兼容路径不改变模型目录中的能力声明。Aliyun、Google、MiniMax、
+  VolcEngine 和 Dummy fallback（含当前 xAI）仍返回不支持错误，不扩成假成功。
+- 后续链：冻结快照中 `f3c232cf4` 移除 ModelBundle、`c55e23e7e` 再次拆分 embedding
+  接口，均未回退目标的重复接口清理；其后模型 wrapper、tokenizer、维度元数据及使用量
+  架构不属于本项。本地按当前消费者保留 ModelBundle 和 token 估算，不跳到快照的新架构。
+- 验证：Go 1.25.14，gofmt、`go build ./internal/...`、`go vet ./internal/...` 和
+  三个独立 main 构建通过；models/entity/service/nlp/handler/CLI race 检查 128 个顶层
+  测试通过。通用检查 5 个 opt-in skip 不计通过；另实际运行 PostgreSQL scratch +
+  provider HTTP 的模型绑定、ModelBundle query、检索向量表达式及旧 APIBase 回归，
+  exit0、零 skip，独立 SQL 读回与 scratch 库删除后不存在断言通过。仅本项 Go 文件覆盖
+  HEAD 的固定副本也通过相关检查；初次副本遗漏被忽略的 WordNet resource 导致 NLP
+  环境失败，补齐本地只读资源后 NLP 全包通过，未改测试或共享配置。
+- 通用集成：以 `bf379bd5` 为基准、仅覆盖本项 23 个 Go 文件的固定副本实际运行
+  `make integration`，exit0，700 passed、零失败/skip，1757.33s。首次收集因缺少被忽略
+  的 DeepDoc 模型缓存触发下载，主动中断时未运行测试，不计为通过；复制本机已有
+  DeepDoc/tokenizer 缓存后按相同命令完整复跑。未调整测试、门禁或共享配置。
+- 限制：受控 provider 验证不代表远程账号、完整检索存储或 Web E2E。当前 Python 模型
+  实现未改变，未扩展目录未声明的 embedding 能力；token 统计仍为字节长度估算。
+  其他任务改动保持，提交仅包含本项 Go 路径及文档 hunk。
+
 ## 7c25870923988a58cbe1fc99377bbcbbbfa2b51e · Go 租户模型 Extra 持久化
 
 2026-10-03 作为本轮 Go 第一项，按完整双文件 diff 核对冻结的

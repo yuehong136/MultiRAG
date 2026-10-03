@@ -11,15 +11,29 @@ import (
 	"time"
 )
 
-func encodeQuery(driver ModelDriver, name *string, query string, config *APIConfig) ([]float64, error) {
-	embeddings, err := driver.Encode(name, []string{query}, config)
-	if err != nil {
-		return nil, err
+// ValidateEmbeddings checks the batch contract before consumers index vectors or use their dimension.
+func ValidateEmbeddings(embeddings [][]float64, textCount int) error {
+	if len(embeddings) != textCount {
+		return fmt.Errorf("embedding count: got %d, want %d", len(embeddings), textCount)
 	}
-	if len(embeddings) != 1 || len(embeddings[0]) == 0 {
-		return nil, fmt.Errorf("%s: query embedding is empty or has invalid count", driver.Name())
+	dimension := 0
+	for _, vector := range embeddings {
+		if len(vector) == 0 {
+			return fmt.Errorf("empty embedding")
+		}
+		if dimension == 0 {
+			dimension = len(vector)
+		}
+		if len(vector) != dimension {
+			return fmt.Errorf("inconsistent embedding dimensions")
+		}
+		for _, value := range vector {
+			if math.IsInf(value, 0) || math.IsNaN(value) {
+				return fmt.Errorf("invalid embedding value")
+			}
+		}
 	}
-	return embeddings[0], nil
+	return nil
 }
 
 func requestContext(config *APIConfig) context.Context {
@@ -129,12 +143,6 @@ func NewOpenAIEmbeddingDriver(baseURLs map[string]string, suffix URLSuffix) *Ope
 	return &OpenAIEmbeddingDriver{DummyModel: NewDummyModel(baseURLs, suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
 }
 func (m *OpenAIEmbeddingDriver) Name() string { return "openai-compatible" }
-func (m *OpenAIEmbeddingDriver) EncodeToEmbedding(name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *OpenAIEmbeddingDriver) Encode(name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, name, texts, config)
-}
-func (m *OpenAIEmbeddingDriver) Encode(name *string, texts []string, config *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(name, texts, config, nil)
-}
-func (m *OpenAIEmbeddingDriver) EncodeQuery(name *string, query string, config *APIConfig) ([]float64, error) {
-	return encodeQuery(m, name, query, config)
 }

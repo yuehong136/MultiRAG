@@ -379,8 +379,8 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 	return scanner.Err()
 }
 
-// EncodeToEmbedding encodes a list of texts into embeddings
-func (m *SiliconFlowModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+// Encode encodes a list of texts into embeddings
+func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig)
 }
 
@@ -451,15 +451,6 @@ func (m *SiliconFlowModel) CheckConnection(apiConfig *APIConfig) error {
 		return err
 	}
 	return nil
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *SiliconFlowModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *SiliconFlowModel) Rerank(name *string, query string, texts []string, config *APIConfig) ([]float64, error) {

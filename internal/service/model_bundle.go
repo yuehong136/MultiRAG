@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 )
 
 // ModelBundle provides a unified interface for various model operations
@@ -88,9 +89,11 @@ func (b *ModelBundle) Encode(texts []string) ([][]float64, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	if err := models.ValidateEmbeddings(embeddings, len(texts)); err != nil {
+		return nil, 0, err
+	}
 
-	// TODO: Calculate actual token count
-	// For now, return a dummy token count
+	// Preserve the existing byte-length estimate until provider usage is available.
 	tokenCount := int64(0)
 	for _, text := range texts {
 		tokenCount += int64(len(text) / 4) // rough approximation
@@ -102,24 +105,12 @@ func (b *ModelBundle) Encode(texts []string) ([][]float64, int64, error) {
 // EncodeQuery encodes a single query string into embedding
 // Returns embedding and token count
 func (b *ModelBundle) EncodeQuery(query string) ([]float64, int64, error) {
-	if b.modelType != entity.ModelTypeEmbedding {
-		return nil, 0, fmt.Errorf("model type %s does not support encode query", b.modelType)
-	}
-
-	embeddingModel, ok := b.model.(entity.EmbeddingModel)
-	if !ok {
-		return nil, 0, fmt.Errorf("model is not an embedding model")
-	}
-
-	embedding, err := embeddingModel.EncodeQuery(query)
+	embeddings, tokenCount, err := b.Encode([]string{query})
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// TODO: Calculate actual token count
-	tokenCount := int64(len(query) / 4)
-
-	return embedding, tokenCount, nil
+	return embeddings[0], tokenCount, nil
 }
 
 // Chat sends a chat message and returns response

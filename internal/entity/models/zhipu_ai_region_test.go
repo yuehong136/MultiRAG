@@ -90,17 +90,17 @@ func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
 	modelName := "embedding-test"
 	apiKey := "test-key"
 
-	embeddings, err := model.EncodeToEmbedding(
+	embeddings, err := model.Encode(
 		&modelName,
 		[]string{"hello"},
 		&APIConfig{APIKey: &apiKey, Region: &region},
 		&EmbeddingConfig{},
 	)
 	if err != nil {
-		t.Fatalf("EncodeToEmbedding() error = %v", err)
+		t.Fatalf("Encode() error = %v", err)
 	}
 	if len(embeddings) != 1 || len(embeddings[0]) != 2 || embeddings[0][0] != 1.5 {
-		t.Fatalf("EncodeToEmbedding() = %#v", embeddings)
+		t.Fatalf("Encode() = %#v", embeddings)
 	}
 }
 

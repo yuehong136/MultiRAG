@@ -46,7 +46,7 @@ func (m *MinimaxModel) ChatStreamlyWithSender(modelName, message *string, apiCon
 	return fmt.Errorf("streaming chat is not implemented for %s", m.Name())
 }
 
-func (m *MinimaxModel) EncodeToEmbedding(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *MinimaxModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	return nil, fmt.Errorf("embedding is not implemented for %s", m.Name())
 }
 
@@ -60,15 +60,6 @@ func (m *MinimaxModel) Balance(apiConfig *APIConfig) (map[string]interface{}, er
 
 func (m *MinimaxModel) CheckConnection(apiConfig *APIConfig) error {
 	return checkBearerEndpointConnection(m.httpClient, m.BaseURL, m.URLSuffix.Files, apiConfig, m.Name())
-}
-
-// Encode uses the provider's embedding endpoint with the supplied credentials.
-func (m *MinimaxModel) Encode(modelName *string, texts []string, apiConfig *APIConfig) ([][]float64, error) {
-	return m.EncodeToEmbedding(modelName, texts, apiConfig, nil)
-}
-
-func (m *MinimaxModel) EncodeQuery(modelName *string, query string, apiConfig *APIConfig) ([]float64, error) {
-	return encodeQuery(m, modelName, query, apiConfig)
 }
 
 func (m *MinimaxModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {

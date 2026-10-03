@@ -255,7 +255,7 @@ func TestGoogleValidationAndUnsupportedCapabilities(t *testing.T) {
 	if err := g.ChatStreamlyWithSender(name, message, api, nil, nil); err == nil {
 		t.Fatal("nil sender accepted")
 	}
-	if values, err := g.EncodeToEmbedding(name, []string{"hello"}, api, nil); err == nil || values != nil {
+	if values, err := g.Encode(name, []string{"hello"}, api, nil); err == nil || values != nil {
 		t.Fatal("unsupported embeddings succeeded")
 	}
 	if values, err := g.Balance(api); err == nil || values != nil {

@@ -8,19 +8,24 @@ import (
 // Bound models hold a request-scoped driver, resolved name and credentials.
 // Retrieval and ChatSession use the same provider implementation as the API.
 type EmbeddingModel struct {
-	ModelDriver ModelDriver
-	ModelName   *string
-	APIConfig   *APIConfig
+	ModelDriver     ModelDriver
+	ModelName       *string
+	APIConfig       *APIConfig
+	EmbeddingConfig *EmbeddingConfig
 }
 
 func NewEmbeddingModel(driver ModelDriver, name *string, config *APIConfig) *EmbeddingModel {
-	return &EmbeddingModel{driver, name, config}
+	return &EmbeddingModel{ModelDriver: driver, ModelName: name, APIConfig: config}
 }
 func (m *EmbeddingModel) Encode(texts []string) ([][]float64, error) {
-	return m.ModelDriver.Encode(m.ModelName, texts, m.APIConfig)
-}
-func (m *EmbeddingModel) EncodeQuery(query string) ([]float64, error) {
-	return m.ModelDriver.EncodeQuery(m.ModelName, query, m.APIConfig)
+	embeddings, err := m.ModelDriver.Encode(m.ModelName, texts, m.APIConfig, m.EmbeddingConfig)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateEmbeddings(embeddings, len(texts)); err != nil {
+		return nil, err
+	}
+	return embeddings, nil
 }
 
 type RerankModel struct {
