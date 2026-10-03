@@ -18,92 +18,88 @@ package storage
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
-	"log"
+	"io"
+	"net/http"
 	"os"
-	"multirag/internal/utility"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/minio/minio-go/v7"
 
 	"multirag/internal/server"
 )
 
-// getMinioConfig returns MinIO configuration for testing
-// Configuration can be loaded from environment variables or config file
+// Test credentials are explicit and separate from the application's storage.
+// Keep this file outside Git and restrict its permissions to the current user.
 func getMinioConfig() (*server.MinioConfig, error) {
-
-	// Initialize configuration
-	if err := server.Init(""); err != nil {
-		return nil, err
+	path := os.Getenv("MULTIRAG_GO_TEST_MINIO_CONFIG")
+	if path == "" {
+		return nil, fmt.Errorf("set MULTIRAG_GO_TEST_MINIO_CONFIG to a private JSON test configuration")
 	}
-
-	// Try to get configuration from environment variables first
-	config := server.GetConfig().StorageEngine.Minio
-
-	log.Printf("MinioConfig: %+v", config)
-	return config, nil
-}
-
-// getEnv gets environment variable or returns default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getEnvBool gets environment variable as bool or returns default value
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		return value == "true" || value == "1" || value == "yes"
-	}
-	return defaultValue
-}
-
-// newTestMinioStorage creates a new MinIO storage instance for testing
-func newTestMinioStorage(t *testing.T) *MinioStorage {
-	rootDir := utility.GetProjectRoot()
-	t.Chdir(rootDir)
-	t.Chdir(rootDir)
-
-	config, err := getMinioConfig()
-
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("Skipping test: failed to get MinIO configuration: %v", err)
-		return nil
+		return nil, fmt.Errorf("read MinIO test config: %w", err)
+	}
+	var config server.MinioConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("decode MinIO test config: %w", err)
+	}
+	if config.Host == "" || config.User == "" || config.Password == "" {
+		return nil, fmt.Errorf("MinIO test config requires Host, User and Password")
+	}
+	if config.Bucket != "" || config.PrefixPath != "" {
+		return nil, fmt.Errorf("MinIO test config must not bind a shared bucket or prefix")
+	}
+	return &config, nil
+}
+
+func newTestMinioStorage(t *testing.T) *MinioStorage {
+	t.Helper()
+	config, err := getMinioConfig()
+	if err != nil {
+		t.Fatal(err)
 	}
 	storage, err := NewMinioStorage(config)
 	if err != nil {
-		t.Skipf("Skipping test: failed to connect to MinIO: %v", err)
+		t.Fatalf("create MinIO test client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	// Client construction does not perform I/O. Authenticate before any writes.
+	if _, err := storage.client.ListBuckets(ctx); err != nil {
+		t.Fatalf("authenticate MinIO test endpoint: %v", err)
 	}
 	return storage
 }
 
+// Every bucket is owned by this test, including failed tests. Never delete a
+// configured application bucket or another test run's objects.
+func testMinioBucket(t *testing.T, storage *MinioStorage) string {
+	t.Helper()
+	bucket := "multirag-go-test-" + strings.ToLower(rand.Text())
+	t.Cleanup(func() {
+		if err := storage.RemoveBucket(bucket); err != nil {
+			response := minio.ToErrorResponse(err)
+			if response.Code != "NoSuchBucket" {
+				t.Errorf("cleanup owned MinIO bucket: %v", err)
+			}
+		}
+		if storage.BucketExists(bucket) {
+			t.Errorf("owned MinIO bucket remains after cleanup")
+		}
+	})
+	return bucket
+}
+
 func TestNewMinioStorage(t *testing.T) {
-	rootDir := utility.GetProjectRoot()
-	t.Chdir(rootDir)
-
-	config, err := getMinioConfig()
-	if err != nil {
-		t.Skipf("Skipping test: failed to get MinIO configuration: %v", err)
-		return
-	}
-
-	storage, err := NewMinioStorage(config)
-	if err != nil {
-		t.Skipf("Skipping test: failed to connect to MinIO: %v", err)
-	}
-
-	if storage == nil {
-		t.Error("Expected storage to be non-nil")
-	}
-
-	if storage.client == nil {
-		t.Error("Expected client to be non-nil")
-	}
-
-	if storage.config == nil {
-		t.Error("Expected config to be non-nil")
+	storage := newTestMinioStorage(t)
+	if storage.client == nil || storage.config == nil {
+		t.Fatal("MinIO client and config are required")
 	}
 }
 
@@ -138,7 +134,7 @@ func TestMinioStorage_Health(t *testing.T) {
 func TestMinioStorage_PutAndGet(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "test-file.txt"
 	content := []byte("Hello, MinIO Test!")
 
@@ -168,7 +164,7 @@ func TestMinioStorage_PutAndGet(t *testing.T) {
 func TestMinioStorage_Put_EmptyData(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "empty-file.txt"
 	content := []byte{}
 
@@ -190,7 +186,7 @@ func TestMinioStorage_Put_EmptyData(t *testing.T) {
 func TestMinioStorage_Put_LargeData(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "large-file.bin"
 	// Create 1MB of data
 	content := make([]byte, 1024*1024)
@@ -219,7 +215,7 @@ func TestMinioStorage_Put_LargeData(t *testing.T) {
 func TestMinioStorage_Get_NonExistent(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "non-existent-file.txt"
 
 	_, err := storage.Get(bucket, key)
@@ -231,7 +227,7 @@ func TestMinioStorage_Get_NonExistent(t *testing.T) {
 func TestMinioStorage_Remove(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "file-to-delete.txt"
 	content := []byte("Delete me")
 
@@ -263,7 +259,7 @@ func TestMinioStorage_Remove(t *testing.T) {
 func TestMinioStorage_Remove_NonExistent(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "non-existent-file.txt"
 
 	// Removing a non-existent object should not error
@@ -276,7 +272,7 @@ func TestMinioStorage_Remove_NonExistent(t *testing.T) {
 func TestMinioStorage_ObjExist(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "existence-test.txt"
 	content := []byte("Test content")
 
@@ -305,7 +301,7 @@ func TestMinioStorage_ObjExist(t *testing.T) {
 func TestMinioStorage_GetPresignedURL(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "presigned-test.txt"
 	content := []byte("Presigned URL test content")
 
@@ -325,9 +321,15 @@ func TestMinioStorage_GetPresignedURL(t *testing.T) {
 		t.Error("Expected presigned URL to be non-empty")
 	}
 
-	// Verify URL contains expected components
-	if len(url) > 0 {
-		t.Logf("Generated presigned URL (first 100 chars): %s...", url[:min(100, len(url))])
+	// Validate the signature and actual readback without logging the signed URL.
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Get(url)
+	if err != nil {
+		t.Fatal("presigned object request failed")
+	}
+	defer response.Body.Close()
+	actual, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK || !bytes.Equal(actual, content) {
+		t.Fatalf("presigned readback failed: status %d, read error %v", response.StatusCode, err)
 	}
 
 	// Cleanup
@@ -337,7 +339,7 @@ func TestMinioStorage_GetPresignedURL(t *testing.T) {
 func TestMinioStorage_GetPresignedURL_NonExistent(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "non-existent-presigned.txt"
 
 	_, err := storage.GetPresignedURL(bucket, key, 5*time.Minute)
@@ -349,7 +351,7 @@ func TestMinioStorage_GetPresignedURL_NonExistent(t *testing.T) {
 func TestMinioStorage_BucketExists(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := fmt.Sprintf("test-bucket-exists-%d", time.Now().Unix())
+	bucket := testMinioBucket(t, storage)
 
 	// Check non-existent bucket
 	exists := storage.BucketExists(bucket)
@@ -376,7 +378,7 @@ func TestMinioStorage_BucketExists(t *testing.T) {
 func TestMinioStorage_RemoveBucket(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := fmt.Sprintf("test-bucket-remove-%d", time.Now().Unix())
+	bucket := testMinioBucket(t, storage)
 
 	// Create bucket with some objects
 	err := storage.Put(bucket, "file1.txt", []byte("content1"))
@@ -411,9 +413,9 @@ func TestMinioStorage_RemoveBucket(t *testing.T) {
 func TestMinioStorage_Copy(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	srcBucket := "test-bucket-src"
+	srcBucket := testMinioBucket(t, storage)
 	srcKey := "source-file.txt"
-	destBucket := "test-bucket-dest"
+	destBucket := testMinioBucket(t, storage)
 	destKey := "copied-file.txt"
 	content := []byte("Content to copy")
 
@@ -453,9 +455,9 @@ func TestMinioStorage_Copy(t *testing.T) {
 func TestMinioStorage_Copy_NonExistentSource(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	srcBucket := "test-bucket-src"
+	srcBucket := testMinioBucket(t, storage)
 	srcKey := "non-existent-source.txt"
-	destBucket := "test-bucket-dest"
+	destBucket := testMinioBucket(t, storage)
 	destKey := "should-not-exist.txt"
 
 	success := storage.Copy(srcBucket, srcKey, destBucket, destKey)
@@ -474,9 +476,9 @@ func TestMinioStorage_Copy_NonExistentSource(t *testing.T) {
 func TestMinioStorage_Move(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	srcBucket := "test-bucket-src"
+	srcBucket := testMinioBucket(t, storage)
 	srcKey := "file-to-move.txt"
-	destBucket := "test-bucket-dest"
+	destBucket := testMinioBucket(t, storage)
 	destKey := "moved-file.txt"
 	content := []byte("Content to move")
 
@@ -521,9 +523,9 @@ func TestMinioStorage_Move(t *testing.T) {
 func TestMinioStorage_Move_NonExistentSource(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	srcBucket := "test-bucket-src"
+	srcBucket := testMinioBucket(t, storage)
 	srcKey := "non-existent-source.txt"
-	destBucket := "test-bucket-dest"
+	destBucket := testMinioBucket(t, storage)
 	destKey := "should-not-exist.txt"
 
 	success := storage.Move(srcBucket, srcKey, destBucket, destKey)
@@ -535,7 +537,7 @@ func TestMinioStorage_Move_NonExistentSource(t *testing.T) {
 func TestMinioStorage_MultipleObjectsInBucket(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := fmt.Sprintf("test-multi-%d", time.Now().Unix())
+	bucket := testMinioBucket(t, storage)
 	numObjects := 10
 
 	// Create multiple objects
@@ -581,7 +583,7 @@ func TestMinioStorage_MultipleObjectsInBucket(t *testing.T) {
 func TestMinioStorage_SpecialCharactersInKey(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	specialKeys := []string{
 		"file with spaces.txt",
 		"file-with-dashes.txt",
@@ -618,7 +620,7 @@ func TestMinioStorage_SpecialCharactersInKey(t *testing.T) {
 func TestMinioStorage_TenantID(t *testing.T) {
 	storage := newTestMinioStorage(t)
 
-	bucket := "test-bucket"
+	bucket := testMinioBucket(t, storage)
 	key := "tenant-test.txt"
 	content := []byte("Tenant test content")
 	tenantID := "tenant-123"
@@ -649,10 +651,34 @@ func TestMinioStorage_TenantID(t *testing.T) {
 	storage.Remove(bucket, key, tenantID)
 }
 
-// min is a helper function to get the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
+func TestMinioTestConfigIsolation(t *testing.T) {
+	config := server.MinioConfig{Host: "localhost:9000", User: "test-user", Password: "test-password"}
+	for _, field := range []string{"Bucket", "PrefixPath"} {
+		t.Run(field, func(t *testing.T) {
+			invalid := config
+			if field == "Bucket" {
+				invalid.Bucket = "business-data"
+			} else {
+				invalid.PrefixPath = "shared"
+			}
+			data, err := json.Marshal(invalid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := t.TempDir() + "/minio.json"
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("MULTIRAG_GO_TEST_MINIO_CONFIG", path)
+			if _, err := getMinioConfig(); err == nil {
+				t.Fatal("test config accepted shared storage binding")
+			}
+		})
 	}
-	return b
+	t.Run("missing config", func(t *testing.T) {
+		t.Setenv("MULTIRAG_GO_TEST_MINIO_CONFIG", "")
+		if _, err := getMinioConfig(); err == nil {
+			t.Fatal("test config fell back to application credentials")
+		}
+	})
 }

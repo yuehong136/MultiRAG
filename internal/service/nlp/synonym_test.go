@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -101,10 +102,10 @@ func TestNewSynonymWithMockFile(t *testing.T) {
 
 	// Create mock synonym.json
 	synonymData := map[string]interface{}{
-		"happy":    []string{"joyful", "cheerful", "glad"},
-		"sad":      []string{"unhappy", "sorrowful"},
-		"test":     "single", // Test string value
-		"UPPER":    []string{"lower"}, // Test case conversion
+		"happy": []string{"joyful", "cheerful", "glad"},
+		"sad":   []string{"unhappy", "sorrowful"},
+		"test":  "single",          // Test string value
+		"UPPER": []string{"lower"}, // Test case conversion
 	}
 	data, _ := json.Marshal(synonymData)
 	if err := os.WriteFile(filepath.Join(tmpDir, "synonym.json"), data, 0644); err != nil {
@@ -237,7 +238,7 @@ func TestSynonymLoad(t *testing.T) {
 	s := NewSynonym(redis, tmpDir, testSynonymWordNetDir)
 
 	// Simulate multiple lookups to trigger load
-	s.lookupNum = 200 // Set above threshold
+	s.lookupNum.Store(200)                         // Set above threshold
 	s.loadTm = time.Now().Add(-4000 * time.Second) // Set load time > 1 hour ago
 
 	// Call load directly
@@ -257,9 +258,9 @@ func TestSynonymLoadNoRedis(t *testing.T) {
 	s.load()
 
 	// Lookup num should remain unchanged
-	originalNum := s.lookupNum
+	originalNum := s.lookupNum.Load()
 	s.load()
-	if s.lookupNum != originalNum {
+	if s.lookupNum.Load() != originalNum {
 		t.Error("Lookup num should not change when Redis is nil")
 	}
 }
@@ -270,7 +271,7 @@ func TestSynonymLoadNotTriggered(t *testing.T) {
 	s := NewSynonym(redis, "", "")
 
 	// Set conditions that should prevent load
-	s.lookupNum = 50 // Below threshold
+	s.lookupNum.Store(50) // Below threshold
 	s.loadTm = time.Now()
 
 	// Call load
@@ -278,7 +279,7 @@ func TestSynonymLoadNotTriggered(t *testing.T) {
 
 	// Should not attempt to load from Redis
 	// (indirect check: lookupNum should not reset)
-	if s.lookupNum != 50 {
+	if s.lookupNum.Load() != 50 {
 		t.Error("Load should not be triggered when lookupNum < 100")
 	}
 }
@@ -440,5 +441,29 @@ func BenchmarkLookupNotFound(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		s.Lookup("nonexistent", 8)
+	}
+}
+
+// Lookup is shared by concurrent retrievals; lost increments must not change
+// the counter or make race builds fail.
+func TestLookupNumConcurrent(t *testing.T) {
+	s := NewSynonym(nil, t.TempDir(), "")
+	initial := s.GetLookupNum()
+	const workers, lookups = 16, 100
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range lookups {
+				s.Lookup("missing", 8)
+				s.GetLookupNum()
+			}
+		}()
+	}
+	wg.Wait()
+	s.Lookup("", 8)
+	if got, want := s.GetLookupNum(), initial+workers*lookups; got != want {
+		t.Fatalf("lookup count: got %d, want %d", got, want)
 	}
 }

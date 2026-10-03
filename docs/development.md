@@ -53,6 +53,43 @@ uv run python -m core.svr.task_executor
 部署与恢复见 [docker/README.md](../docker/README.md)，工具钩子以 `.claude/settings.json` 和实际脚本为准，不能替代交付验证。
 数据库启动引导、schema 升级和备份恢复边界见 [数据库迁移指南](database-migration.md)。
 
+## Go 并行实现的本地验证
+
+Go 使用 `go.mod` 声明的版本，CGO 分词需要真实 native 静态库
+`internal/cpp/cmake-build-release/librag_tokenizer_c_api.a`，不能用空桩替代。
+现有 Linux 构建入口为 `./build.sh --cpp`；需 CMake 4、C/C++ 编译器、PCRE2 和 SIMDe
+头文件。Apple Silicon 的 PCRE2 链接路径为 `/opt/homebrew/lib/libpcre2-8.a`。
+工具链和 native 产物属于本机环境，不提交。
+
+分词测试从 `RAG_DICT_PATH` 读取资源路径，未设置时使用仓库根下 `resource/`；
+路径应包含 `rag/huqie.txt`、`rag/pos-id.def`、`opencc/` 与完整 `wordnet/`。
+NLP WordNet 测试使用 `resource/wordnet/`。资源可从 Dockerfile 使用的
+`infiniflow/resource` 仓库获取，放在已忽略的 `resource/`，不在测试期间自动下载，
+也无需写入 `/usr/share`。
+
+MinIO Go 测试通过 `MULTIRAG_GO_TEST_MINIO_CONFIG` 指向私有 JSON 文件，
+不读取应用存储配置。文件字段对应 `server.MinioConfig`，例如：
+
+```json
+{"Host":"127.0.0.1:9000","User":"<test-access-key>","Password":"<test-secret-key>","Secure":false,"Verify":true}
+```
+
+该文件放在仓库外并设为 `0600`，不得提交。`Bucket` 和 `PrefixPath` 必须为空。
+测试先做认证探测，再使用随机 `multirag-go-test-*` 桶；成功或失败都会清理本次桶，
+不会清理应用桶。配置缺失或认证失败直接失败，不以 skip 充当通过。
+
+```bash
+export MULTIRAG_GO_TEST_MINIO_CONFIG=/absolute/path/to/private-minio.json
+go test -count=1 ./internal/...
+go test -race -count=1 ./internal/service/nlp ./internal/tokenizer ./internal/storage
+go build ./internal/...
+go vet ./internal/...
+```
+
+`cmd/` 包含多个独立 main，应逐个构建。Python integration 若卡住，先用
+`pytest -vv -o faulthandler_timeout=60 <selected-test>` 获取停顿位置并隔离复现；
+不要启动多份全套测试，或终止其他任务的进程。单例通过不等于全套通过。
+
 ## 维护协作指令
 
 修改 AGENTS、Skills 或派工示例时，只保留会改变本项目决策的约束；描述写实际触发条件，

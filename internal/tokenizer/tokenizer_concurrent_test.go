@@ -18,6 +18,8 @@ package tokenizer
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,7 @@ import (
 	"go.uber.org/zap"
 
 	"multirag/internal/logger"
+	"multirag/internal/utility"
 )
 
 func init() {
@@ -36,11 +39,19 @@ func init() {
 	}
 }
 
+// Keep the real native analyzer tests runnable outside the Linux image.
+func testDictionaryPath() string {
+	if path := os.Getenv("RAG_DICT_PATH"); path != "" {
+		return path
+	}
+	return filepath.Join(utility.GetProjectRoot(), "resource")
+}
+
 // TestConcurrentTokenize tests concurrent tokenization with dynamic pool expansion and shrinking
 func TestConcurrentTokenize(t *testing.T) {
 	// Use small pool to test expansion
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        2,
 		MaxSize:        10,
 		IdleTimeout:    5 * time.Second,
@@ -176,7 +187,7 @@ func TestConcurrentTokenize(t *testing.T) {
 // TestConcurrentTokenizeWithPosition tests concurrent tokenization with position info
 func TestConcurrentTokenizeWithPosition(t *testing.T) {
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        2,
 		MaxSize:        8,
 		IdleTimeout:    3 * time.Second,
@@ -237,7 +248,7 @@ func TestConcurrentTokenizeWithPosition(t *testing.T) {
 func TestPoolExhaustion(t *testing.T) {
 	// Very small pool to test exhaustion
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        1,
 		MaxSize:        2,
 		IdleTimeout:    10 * time.Second,
@@ -300,7 +311,7 @@ func TestPoolExhaustion(t *testing.T) {
 // TestFineGrainedTokenizeConcurrent tests concurrent fine-grained tokenization
 func TestFineGrainedTokenizeConcurrent(t *testing.T) {
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        2,
 		MaxSize:        6,
 		IdleTimeout:    3 * time.Second,
@@ -347,7 +358,7 @@ func TestFineGrainedTokenizeConcurrent(t *testing.T) {
 // TestTermFreqAndTagConcurrent tests concurrent term frequency and tag lookups
 func TestTermFreqAndTagConcurrent(t *testing.T) {
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        2,
 		MaxSize:        6,
 		IdleTimeout:    3 * time.Second,
@@ -393,7 +404,7 @@ func TestTermFreqAndTagConcurrent(t *testing.T) {
 // BenchmarkTokenize benchmarks the tokenization performance
 func BenchmarkTokenize(b *testing.B) {
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        runtime.NumCPU() * 2,
 		MaxSize:        runtime.NumCPU() * 4,
 		IdleTimeout:    5 * time.Minute,
@@ -429,7 +440,7 @@ func BenchmarkTokenize(b *testing.B) {
 // BenchmarkTokenizeWithPosition benchmarks position-aware tokenization
 func BenchmarkTokenizeWithPosition(b *testing.B) {
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        runtime.NumCPU() * 2,
 		MaxSize:        runtime.NumCPU() * 4,
 		IdleTimeout:    5 * time.Minute,
@@ -457,7 +468,7 @@ func BenchmarkTokenizeWithPosition(b *testing.B) {
 // ExampleGetPoolStats demonstrates getting pool statistics
 func ExampleGetPoolStats() {
 	cfg := &PoolConfig{
-		DictPath:       "/usr/share/infinity/resource",
+		DictPath:       testDictionaryPath(),
 		MinSize:        2,
 		MaxSize:        10,
 		IdleTimeout:    5 * time.Minute,
