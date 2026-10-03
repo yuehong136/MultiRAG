@@ -3,6 +3,69 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## c81081f8ef1f805fcc44642f35c78c61709dae9e · 文档 PATCH parser/Pipeline API 范围接受
+
+2026-10-03 后端修后范围提交 `d1177243ef6c3cdcbbe2728ddc6c1665560eede6`
+（父提交 `b6e413e995997b77fd3244428c4f8ccfe382ef21`，16 归属路径）已根接受，未 push。
+复用已接受的配置/模式纯模块与 SDK 字段组件；这是 API 功能范围接受，
+SDK document PATCH 真实联调也已接受；Web 消费与旧 parser 退出仍待。冻结十项整项完成数仍为 **7/10**。
+
+- document PATCH 使用可信 JWT/API Key、严格字段提供语义、刷新后的完整 Document
+  和端点局部 typed/numeric 错误。真实模式变化一次 reset/save；同模式、仅配置和非 parser
+  更新不 reset，保存不入队。合法保存仍可更新时间或行版本，不要求它完全不写 SQL。
+- DataFlow 按 KB owner、类别、有效权限、当前 SQL DSL 的 File 入口及组件参数预检。
+  保全存储中的未知配置、RAPTOR/Graph/metadata、源 File/对象和未请求变更的 enabled；
+  deprecated change_parser 共用正确服务，尚未退出。
+- source 原生写入前独立保存 SQL 权威恢复材料，Redis 为同 nonce 镜像。
+  Doc→Task→image 锁序和完整实际原生行核对保全 SQL 未变化的后来 native winner；
+  unknown 阻止同 Task 隐式重放，确认退休后按精确 pair/nonce/wire 清理。
+  chunk 整批 ID/doc_id 错配在写前拒绝，实际更新也限定 id/doc_id。
+  恢复表迁移核验兼容唯一约束/索引；非空 downgrade 先锁后拒删材料，未执行生产迁移。
+- 最终固定输入上 `make verify` **4297 passed**、`REQUIRE_SERVICES=1 make integration`
+  **691 passed、零 skip**，自有 listener smoke **exit=0**。
+  81 parser 场、115 HTTP 事件、8 schema 场及后来赢家、首次 Redis 拒写/回复丢失、
+  exact sameDoc SQL authority/Redis wire/DUMP/nonce、真实 PG 阻塞和同 Doc 双 Task 退休材料
+  经独立源码/raw审查及根复核。完整业务体、SQL 生产映射列、native payload/全部向量、
+  object bytes 和 Redis/queue 实际材料共同支持结论。
+- 已登记精确资源及遗漏 runtime keys 经根独立 fresh 读回均无残留。
+  当时 1481 输入、16 gate/commit/current 路径、14 保留路径和941当前材料稳定；
+  index 空、原25无关改动保留。这是接受窗口，不声明后续外部修改仍全仓稳定。
+- 部分逐场完整 HTTP headers/网络原字节、物理 schema/xmin、历史创建前登记与
+  PID OS-start/children 捕获不完整。SQL intent/Redis applied 的连续观察不是原子快照；
+  静止后的后来赢家材料一致。旧失败、fixture 归因和 wire 仅 hash 的当时界限保留，
+  本轮通过与当前 absence 不倒补历史。未声称全仓 clean、生产 provider、worker DONE/ACK
+  或 Web 整项消费通过。
+
+SDK document PATCH 本地范围提交 `ed38de7f4f5ec58dc0d8c4375d2bc9c473b924c8`
+（父 `bdd3b7e9`，五个归属路径）现已根接受，未 push。局部业务码检查在绑定
+Document 前拒绝 HTTP 200 非零数值 code；async/sync 同行为，原 transport、重试及
+mutation 不自动重放语义保持。Python 3.12/3.13 SDK 门禁各 **151 passed**，
+SDK 仓库 verify **2956 passed**；真实四测试 **50 PATCH、4 ingest、零 skip**。
+四个实际 listener 各 623 backend/10 SDK 已加载模块及 12989 shared dependency 文件
+与私有接受运行时/当前29 SDK输入相等；306保存材料、完整物理73表列/xmin/schema、
+native双向量、object bytes、Redis/queue经独立审查与根核验。
+20场认证/写前拒绝零副作用、全部 PATCH queue保全；同模式只允许精确 targetDoc
+时间/行版本及所属KB行版本变化。409后来Task winner、首次存储负确认后的实际恢复、
+unknown同Doc Redis journal与独立读回后显式reconcile均有完整实际材料。
+Pipeline/builtin ingest验证Task digest和queue分支，不声明 worker DONE。
+登记的5 DB、11 buckets/60 objects、44 collections、125 Redis DB1 keys及11队列、
+10 ports、5 PID和61私有/临时路径经根独立fresh读回均absent。
+200非零业务码反例为正式受控transport；fault为明确边界注入。历史失败、早期薄SQL
+审计、框架目录run后登记、资源下载产生的非加载文件差量和children捕获界限均保留；
+本范围未扩大确认相邻SDK接口的一般兼容性。
+
+Agent history 类型后端补修仍独立进行。该类型补修后由原 Web owner 完成认证
+history 保存/reload 图片链；完整 c511 Web 接受后
+再迁移 c810 Web。499 oldrun、c511 oldbinary、c810 oldparser 按消费者接受和 fresh 旧消费
+复核分别退出，同 API writer 每次只处理一个独立范围。三个整项仍未关闭，不开启下一批。
+
+公开合同见 [HTTP API](../references/http_api_reference.md#更新文档解析配置)；
+实现和正式回归见 [parser service](../../api/db/services/document_parser_service.py)、
+[source recovery](../../api/db/services/document_source_recovery.py)、
+[恢复表迁移](../../configs/alembic/versions/a9c810f1d2e3_add_document_source_recovery.py)、
+[parser HTTP 回归](../../tests/integration/test_document_parser_update.py) 和
+[source recovery 回归](../../tests/integration/test_document_source_recovery.py)。
+
 ## c5116b90e5399d0eb6cf473a100e2467b44ca5ed · 图片读取 HTTP 接线
 
 2026-10-03 后端范围提交 `4a4604c43c784ffe0d8a1933d1d5a6dac3c6e4e2`（6 路径）
@@ -34,6 +97,19 @@ Agent Hub 真实消费已另行审结；整项仍待 Web 迁移和旧 binary 必
 `root-runtime-cleanup.json`（后五项使用 `/tmp/multirag-c511-http-` 前缀），独立报告
 `/tmp/multirag-c511-api-wiring-code-review.md` 与 `/tmp/multirag-c511-http-evidence-review.md`。
 公开合同见 [HTTP API](../references/http_api_reference.md#读取缩略图和图片)。
+
+### Web 图片核心范围接受
+
+2026-10-03 Web 提交 `0da15321d033fca85fe00db03ef0d13d7184fa67`（父提交 `66f3424`）
+的36路径核心范围已根接受。最终16路径修复差量、独立完整 raw、源码/门禁/提交绑定及
+fresh 精确清理已审结；954 CI tests、API176/affected62 和11项正式命令实际通过。
+认证、完整 binary/native decode、迟到响应、文档/知识库归属和 GET 全 stores 零写有实际材料。
+
+浏览器初始模型失败后使用捕获的真实请求与另一实际上传 file ID，经正常认证 completion
+重放保存并 reload；不称原 SSE 成功、真实 provider 读图或 worker DONE。完整原生/浏览器材料
+与历史登记、逐 tab/session 捕获不足的边界保留，未补造历史 raw。
+整项仍待 Agent history 类型后端补修及同 Web 认证保存/reload 图片链，
+不据核心范围接受提前释放 c810 Web 或删除旧 binary。
 
 ### Agent Hub 关联真实消费验收
 

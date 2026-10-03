@@ -17,7 +17,7 @@ http://<your-server>:8123/api/v1
 
 ### 认证
 
-所有 API 请求都需要在 `Authorization` 头中提供 API 密钥：
+受保护接口通过 `Authorization: Bearer` 提供该端点支持的 API Key 或会话 JWT，具体见各小节：
 
 ```
 Authorization: Bearer <your-api-key>
@@ -30,7 +30,7 @@ Authorization: Bearer <your-api-key>
 
 ### 响应格式
 
-所有响应均为 JSON 格式。成功响应结构：
+多数业务端点使用 JSON 信封。二进制响应和端点专用错误格式以各小节为准。常见成功响应结构：
 
 ```json
 {
@@ -40,7 +40,7 @@ Authorization: Bearer <your-api-key>
 }
 ```
 
-错误响应结构：
+常见错误响应示例；文档 PATCH 的专用格式见[更新文档解析配置](#更新文档解析配置)：
 
 ```json
 {
@@ -905,6 +905,80 @@ Web 单条/批量启停已迁至上述 dataset REST 并完成真实请求与存�
 任何凭据均返回 HTTP 404、`code=404`、`data=null`，OpenAPI 不再提供该操作。
 新 batch、PATCH enabled 与共享状态/source 服务继续使用上述合同。
 
+### 更新文档解析配置
+
+`PATCH /api/v1/datasets/{dataset_id}/documents/{document_id}` 使用 JWT 或 API Key。
+有效知识库的 owner/admin 可写，文档必须属于路径中的数据集；禁用文档仍可保存。
+输入、权限、源文件类型及 Pipeline 定义均在写入前检查，混合请求不会先保存其中的合法字段。
+
+| 字段 | 请求语义 |
+|---|---|
+| `chunk_method` | 支持的内置解析方法。省略保持当前值；显式选择内置方法会退出现有 Pipeline。历史 `general` 可保留，但不能作为新方法提交。 |
+| `pipeline_id` | 当前可执行 DataFlow 的 32 位小写十六进制 Canvas ID。省略保持原值，包括历史 SQL NULL；`""` 明确清除。非空 ID 不能与 `chunk_method` 同时提交。 |
+| `parser_config` | 严格局部配置，只合并明确提供的字段。省略或 `{}` 不补默认值；`[]` 可清空相应列表。保留既有 RAPTOR、GraphRAG、metadata 和历史未知配置。 |
+| `name` | 非空名称，须满足字节长度、同数据集唯一及原扩展名约束；重命名不改变源文件的解析类型。 |
+| `enabled` | 布尔值或整数 0/1；省略保持当前启用状态。 |
+| `meta_fields` | metadata 对象，值为 JSON 标量或标量列表；不提供 `metadata` 别名。 |
+
+显式 null、未知字段和非法类型均拒绝。`chunk_count`、`token_count`、`progress`
+由服务器维护，不能借 PATCH 改为不同值。不必把完整存储配置回传为新输入。
+
+只改分块大小：
+
+```json
+{"parser_config":{"chunk_token_num":768}}
+```
+
+退出 Pipeline 并选择内置方法：
+
+```json
+{"chunk_method":"naive","pipeline_id":""}
+```
+
+图片、音频、演示文件和邮件的内置方法仍受实际源文件类型约束。
+DataFlow 必须属于知识库 owner，类别为 `dataflow_canvas`。知识库 owner 可选自己的
+private/team Canvas；有效 admin/owner member 只可选该 owner 的 team Canvas。
+目录可见不代表可执行。服务端验证当前 SQL DSL 的 File 入口、组件参数和引用，保存时不运行 DSL。
+
+同内置模式、同 Pipeline、仅配置或非 parser 字段更新不重置历史，也不排队。
+合法保存可更新 Document 时间和数据库行版本，不能等同于完全不写 SQL。
+只有真实模式变化才在同一受控写单元中重置历史并保存一次；保留 Document、源 File/对象
+和未请求变更的启用状态。保存成功不表示已提交解析或后台 DONE，解析操作见
+[文档解析操作](#批量提交取消或重置文档解析)。
+
+成功为 HTTP 200、整数 `code=0`、`message="success"`，`data` 是刷新后的完整
+Document，包含真实 `pipeline_id`、`parser_config`、`run`、`status` 和计数。
+本 PATCH 另返回 `state`（同真实 run 映射）与 `enabled`（status 等于 `"1"`），
+不能用请求值或客户端默认值推断持久化结果。
+
+本 PATCH 失败为真实非 2xx、`application/json` 局部信封：
+字符串 `code`、`detail`、`details`、`request_id` 供 typed 客户端读取；
+数值 `retcode` 及对应的 `retmsg`、`data` 供现有 Web 读取，两组携带相同安全材料。
+响应包含 `X-Request-ID`；此格式只适用于本 PATCH。
+
+| HTTP | retcode | 含义 |
+|---|---|---|
+| 422 | 101 | 请求形状、字段或类型无效 |
+| 400 | 102 | 方法、配置或 Pipeline 语义无效 |
+| 401 / 403 | 401 / 109 | 未认证或不能写该知识库；认证失败保留安全 challenge |
+| 404 | 102 | 文档或 Canvas 不可用，包括跨数据集或不可见资源 |
+| 409 | 102 | 当前运行、任务世代或写入冲突 |
+| 500 | 500 | 服务器/存储失败，或结果不能确认 |
+
+`details.outcome` 与 `data.outcome` 为 `unchanged` 或 `unknown`。
+不能确认结果时，字符串 code 为 `DOCUMENT_UPDATE_OUTCOME_UNKNOWN`；
+先独立读回，不自动重放。失败后读回合法 Document 不代表本次保存成功。
+历史清理与失败恢复保全后来成功结果，未确认的恢复材料会阻止同 Task 隐式重放；
+这不是跨 SQL、索引、对象和队列的分布式原子提交保证。
+
+旧 `POST /v1/document/change_parser` 暂保留 deprecated 适配，与新 PATCH 共用严格配置、
+模式和保存服务。Python SDK 的 async/sync document.update 已完成本接口真实联调；HTTP 200 非零数值 code
+同样视为失败，unknown 先读回且不自动重放。相邻 SDK 方法保持各自既有合同。
+Web parser 消费迁移及旧入口退出仍分别验收。
+实现见 [字段合同](../../api/utils/document_update_contract.py)、
+[parser service](../../api/db/services/document_parser_service.py) 和
+[局部错误适配](../../api/apps/services/document_update_http.py)。
+
 ### 批量提交、取消或重置文档解析
 
 `POST /api/v1/documents/ingest` 使用 JWT 或 API Key 鉴权。每个目标文档须属于
@@ -982,8 +1056,9 @@ binary 成功响应为完整原始 PNG、JPEG、GIF、WebP 或 BMP 字节，`Con
 
 旧 `GET /v1/document/thumbnails` 已移除，返回 routing404。旧 binary
 `GET /v1/document/image/{image_id}` 暂保留 deprecated 的原有公开读取、JPEG MIME 和错误格式，
-Agent Hub 已完成新接口的真实认证、完整字节和页面迁移验收；Web 消费者迁移仍在进行。
-旧 binary 待双方迁移接受及全部消费者复核后单独退出，不能据新接口鉴权声称旧入口已经退出。
+Agent Hub 已完成新接口的真实认证、完整字节和页面迁移验收；Web 图片核心范围已接受，
+Agent history 类型补修及同 Web 认证保存/reload 图片链仍待完成。旧 binary 待完整 Web 消费
+接受及全部消费者复核后单独退出，不能据新接口或核心验收声称旧入口已经退出。
 
 ### 下载代码沙箱产物
 
