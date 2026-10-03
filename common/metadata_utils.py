@@ -29,11 +29,12 @@ def convert_conditions(metadata_condition):
     return [{"op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]), "key": cond["name"], "value": cond["value"]} for cond in metadata_condition.get("conditions", [])]
 
 
-def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
+def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str = "and") -> list[str]:
+    """Match metadata, ignoring string case in lists only for in/not in."""
     doc_ids: set[str] = set()
 
-    def filter_out(v2docs, operator, value):
-        ids = []
+    def filter_out(v2docs: dict[Any, list[str]], operator: str, value: Any) -> list[str]:
+        ids: list[str] = []
         for input, docids in v2docs.items():
             if operator in ["=", "≠", ">", "<", "≥", "≤"]:
                 # Check if input is in YYYY-MM-DD date format
@@ -73,8 +74,12 @@ def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
                 # Non-comparison operators: maintain original logic
                 if isinstance(input, str):
                     input = input.lower()
+                elif operator in ("in", "not in") and isinstance(input, list):
+                    input = [item.lower() if isinstance(item, str) else item for item in input]
                 if isinstance(value, str):
                     value = value.lower()
+                elif operator in ("in", "not in") and isinstance(value, list):
+                    value = [item.lower() if isinstance(item, str) else item for item in value]
 
             matched = False
             try:
