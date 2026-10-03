@@ -25,6 +25,21 @@ Web 检索工作台、搜索应用和 Python 管理 CLI 已迁入这些 REST 入
 旧 `/v1/chunk/retrieval_test`、`/v1/chunk/knowledge_graph` 已移除。
 其他 chunk 管理入口及独立 SDK `/retrieval`、`/searchbots/retrieval_test` 不随之退役。
 
+普通文档检索的[公共检索器](../../../core/nlp/search.py)在索引候选返回后、rerank 前，
+用短异步 SQL 会话批量核对文档是否存在。SQL 行已删除、缺少文档 ID 或缺少候选字段的
+普通 chunk 会被剔除，高亮随候选同步过滤；存活状态不跨查询缓存。`Document.status=0`
+是禁用状态，禁用 chunk 仍沿用索引的 `available_int` 过滤，不把禁用误判成物理删除。
+
+这是索引清理不完整时的检索兜底，不能替代[文档删除](../../db/services/document_service.py)
+对索引的清理，也不会在检索时执行删除。索引结果的后端 `total` 保留原值；响应中的
+`total` 和 `doc_aggs` 按当前候选窗口内存活且通过现有相似度规则的结果，在分页前计算，
+不代表全索引的精确匹配数。候选窗口与分页偏移保持原语义，剔除后不补取，可能出现短页。
+该检查观察查询时已经提交的 SQL 删除，不提供 SQL、索引和并发删除之间的原子快照；
+全库 RAPTOR 摘要只有保留虚拟 ID `graph_raptor_x`、`raptor_kwd=raptor` 且绑定
+有效的所选 SQL 数据集时才保留；文件级 RAPTOR 仍检查 SQL 文档。Milvus 动态集合
+会读取该摘要标记。全库摘要及显式 KG 派生结果沿用独立生命周期：源文档删除后的
+派生产物重建、删除不由本兜底负责。
+
 ## 文档创建
 
 `POST /datasets/{id}/documents` 的 `type` 查询参数选择创建方式：省略或 `local` 使用

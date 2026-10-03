@@ -150,10 +150,18 @@ class Dealer:
             return set()
         from api.db.services.document_service import DocumentService
 
+        # Recheck SQL on each retrieval; a cached positive result could keep
+        # serving a document after its row has been deleted.
         async with async_db_connection() as db:
             return await DocumentService.get_existing_ids_async(db, doc_ids)
 
     async def _prune_deleted_chunks(self, sres: SearchResult, kb_ids: list[str] | None = None) -> SearchResult:
+        # Fallback for residual index chunks after their document SQL row is
+        # removed. Physical cleanup still belongs to the document delete path;
+        # retrieval only filters candidates with no verifiable parent. Dataset
+        # RAPTOR summaries have a reserved virtual document ID; they require
+        # their marker and a live selected SQL dataset instead of a Document row.
+        # Preserve the backend total; public counts are rebuilt after filtering.
         fields = sres.field or {}
         doc_ids = [_chunk_scalar(chunk.get("doc_id")) for chunk_id in sres.ids if (chunk := fields.get(chunk_id)) and not _is_dataset_raptor_chunk(chunk) and _chunk_scalar(chunk.get("doc_id"))]
         summary_kb_ids = [_chunk_scalar(chunk.get("kb_id")) for chunk_id in sres.ids if (chunk := fields.get(chunk_id)) and _is_dataset_raptor_chunk(chunk)]
@@ -874,6 +882,7 @@ class Dealer:
         search_kb_ids = kb_ids if kb_ids else kb_names
 
         sres = await self.search(req, idxnms, search_kb_ids, embd_mdl, highlight=highlight, rank_feature=rank_feature)
+        # Prune before either local scoring or an external reranker sees text.
         sres = await self._prune_deleted_chunks(sres, kb_ids)
         if not sres.ids:
             ranks["doc_aggs"] = []
