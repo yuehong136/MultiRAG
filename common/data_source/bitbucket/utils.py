@@ -145,12 +145,20 @@ def paginate(
     # If resuming from a next URL, do not pass params again
     query = params.copy() if params else None
     query = None if start_url else query
+    visited_urls: set[str] = set()
     while next_url:
+        if next_url in visited_urls:
+            raise ValueError("Bitbucket pagination repeated a page")
+        visited_urls.add(next_url)
         resp = bitbucket_get(client, next_url, params=query)
         data = resp.json()
-        values = data.get("values", [])
+        if not isinstance(data, dict) or not isinstance(data.get("values"), list) or any(not isinstance(item, dict) for item in data["values"]):
+            raise ValueError("Incomplete Bitbucket collection response")
+        values = data["values"]
         yield from values
         next_url = data.get("next")
+        if next_url is not None and (not isinstance(next_url, str) or not next_url):
+            raise ValueError("Invalid Bitbucket pagination link")
         if on_page is not None:
             on_page(next_url)
         # only include params on first call, next_url will contain all necessary params

@@ -3,7 +3,8 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage。首次导入与重建不执行删除核对；后续同步启用
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket。
+首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
 ## 清单合同
@@ -32,6 +33,23 @@ Notion 删除同步要求有效的 `config.root_page_id`，并使用该根页面
 源服务若返回成功但静默隐藏失去权限的对象，清单接口无法区分该对象已删除还是不再
 可见。启用开关意味着按当前凭证和配置范围核对；缩小范围或权限也可能导致本地删除。
 显式的权限错误会阻断整份清单。
+
+Airtable 按所选 base/table 的全部记录分页枚举附件，使用与入库相同的
+`airtable:{record_id}:{attachment_id}`。多选、关联记录和协作者字段不作为附件。
+清单不下载附件，不因尺寸阈值或下载链接暂时不可用而漏掉已存在的附件；缺失附件身份、
+缺失记录集合、失效分页或内容下载失败会中断同步。增量内容仍沿用记录创建时间窗口。
+
+Google Drive 按现有 OAuth/服务账号配置遍历个人 Drive、Shared Drive 和指定文件夹，
+清单只保存文档 ID，不下载正文、不读取权限。文件身份沿用入库 URL/回退 ID，
+所有清单查询不加增量时间窗口。完整空 Drive/文件夹可核对删除；`incompleteSearch`、
+权限拒绝、失效分页或未遍历完指定范围均失败。文件夹访问先验证根存在，再递归子文件夹。
+清单的遍历状态不影响后续内容检查点；内容窗口终点在清单前捕获，刷新凭据仍按原服务持久化。
+OAuth 的 `my_drive_emails` 模式当前内容链不支持，删除同步明确拒绝；该模式应使用服务账号。
+
+Bitbucket 清单覆盖配置 workspace、repository 或 project 内的全部 OPEN、MERGED、DECLINED
+Pull Request，使用与入库相同的来源 ID，无 `updated_on` 时间窗口。现有轻量 PR 枚举被复用；
+缺失仓库/PR 身份、异常集合、分页循环及显式权限错误均失败。PR 映射失败不会确认检查点
+或继续删除；正常内容同步保留原检查点和更新时间窗口。
 
 ## 文档身份与删除链
 

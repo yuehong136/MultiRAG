@@ -77,6 +77,7 @@ def _execute_paginated_retrieval(
     list_key: str | None = None,
     continue_on_404_or_403: bool = False,
     max_num_pages: int | None = None,
+    require_complete: bool = False,
     **kwargs: Any,
 ) -> Iterator[GoogleDriveFileType | str]:
     """Execute a paginated retrieval from Google Drive API
@@ -100,13 +101,30 @@ def _execute_paginated_retrieval(
         request_kwargs = kwargs.copy()
         if next_page_token:
             request_kwargs[PAGE_TOKEN_KEY] = next_page_token
-        results = _execute_single_retrieval(
-            retrieval_function,
-            continue_on_404_or_403,
-            **request_kwargs,
-        )
+        if require_complete:
+            # A deletion inventory must never restart a bad page token, suppress
+            # permission errors, or accept an unexecuted retry as an empty page.
+            results = retrieval_function(**request_kwargs).execute()
+            if not isinstance(results, dict) or results.get("incompleteSearch"):
+                raise RuntimeError("Incomplete Google Drive deletion inventory")
+            collection_kinds = {"files": "drive#fileList", "drives": "drive#driveList", "users": "admin#directory#users"}
+            identity_fields = {"files": ("id", "mimeType"), "drives": ("id",), "users": ("primaryEmail",)}
+            if list_key not in collection_kinds or results.get("kind") != collection_kinds[list_key]:
+                raise ValueError("Invalid Google inventory collection response")
+            if list_key in results and not isinstance(results[list_key], list):
+                raise ValueError("Invalid Google paginated collection")
+            if any(not isinstance(item, dict) or any(not isinstance(item.get(field), str) or not item[field].strip() for field in identity_fields[list_key]) for item in results.get(list_key, [])):
+                raise ValueError("Invalid Google inventory identity")
+        else:
+            results = _execute_single_retrieval(
+                retrieval_function,
+                continue_on_404_or_403,
+                **request_kwargs,
+            )
 
         next_page_token = results.get(NEXT_PAGE_TOKEN_KEY)
+        if require_complete and next_page_token is not None and (not isinstance(next_page_token, str) or not next_page_token or next_page_token == request_kwargs.get(PAGE_TOKEN_KEY)):
+            raise ValueError("Invalid Google pagination progress")
         if list_key:
             yield from results.get(list_key, [])
         else:

@@ -21,18 +21,19 @@ from tests.integration.test_document_parse_retirement import parse_api as parse_
 from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
 
 
+@pytest.mark.parametrize("source_key", [FileSource.S3, FileSource.AIRTABLE, FileSource.GOOGLE_DRIVE, FileSource.BITBUCKET])
 @pytest.mark.parametrize("missing_index", [False, True])
-async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_file(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, missing_index: bool) -> None:
+async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_file(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, missing_index: bool, source_key: str) -> None:
     env = parse_api
     owner, kb_id = env["owners"][0], env["kb"]
     connector_id, task_id, link_id = uuid4().hex, uuid4().hex, uuid4().hex
-    source = f"s3/{connector_id}"
+    source = f"{source_key}/{connector_id}"
     retained_id = connector_doc_id_candidates(kb_id, connector_id, "retained")[0]
     removed_id = connector_doc_id_candidates(kb_id, connector_id, "removed")[-1]
     neighbor_id, running_id = uuid4().hex, uuid4().hex
     key = f"{running_id}-cancel"
     with Session(env["engine"]) as db:
-        db.add(Connector(id=connector_id, tenant_id=owner, name="snapshot scratch", source=FileSource.S3, input_type="poll", config={"sync_deleted_files": True}, status=TaskStatus.SCHEDULE))
+        db.add(Connector(id=connector_id, tenant_id=owner, name="snapshot scratch", source=source_key, input_type="poll", config={"sync_deleted_files": True}, status=TaskStatus.SCHEDULE))
         db.add(Connector2Kb(id=link_id, connector_id=connector_id, kb_id=kb_id))
         db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, status=TaskStatus.SCHEDULE, from_beginning="0"))
         db.commit()
@@ -84,7 +85,7 @@ async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_
                 raise PermissionError("later page denied")
 
     class Driver(sync_data_source.SyncBase):
-        SOURCE_NAME = FileSource.S3
+        SOURCE_NAME = source_key
 
         async def _generate(self, task: dict[str, Any]) -> Iterator[list[Any]]:
             return iter(())

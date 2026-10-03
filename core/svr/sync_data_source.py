@@ -12,6 +12,7 @@ import signal
 import sys
 import threading
 import traceback
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -49,7 +50,7 @@ from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
 from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
-from common.data_source.models import ConnectorFailure, SeafileSyncScope, SlimDocument
+from common.data_source.models import ConnectorFailure, Document, SeafileSyncScope, SlimDocument
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
@@ -59,7 +60,20 @@ MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
-    {FileSource.S3, FileSource.R2, FileSource.OCI_STORAGE, FileSource.GOOGLE_CLOUD_STORAGE, FileSource.CONFLUENCE, FileSource.NOTION, FileSource.JIRA, FileSource.BOX, FileSource.GITHUB}
+    {
+        FileSource.AIRTABLE,
+        FileSource.GOOGLE_DRIVE,
+        FileSource.BITBUCKET,
+        FileSource.S3,
+        FileSource.R2,
+        FileSource.OCI_STORAGE,
+        FileSource.GOOGLE_CLOUD_STORAGE,
+        FileSource.CONFLUENCE,
+        FileSource.NOTION,
+        FileSource.JIRA,
+        FileSource.BOX,
+        FileSource.GITHUB,
+    }
 )
 
 
@@ -652,7 +666,7 @@ class Dropbox(SyncBase):
 class GoogleDrive(SyncBase):
     SOURCE_NAME: str = FileSource.GOOGLE_DRIVE
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         connector_kwargs = {
             "include_shared_drives": self.conf.get("include_shared_drives", False),
             "include_my_drives": self.conf.get("include_my_drives", False),
@@ -690,9 +704,9 @@ class GoogleDrive(SyncBase):
         if batch_size <= 0:
             batch_size = INDEX_BATCH_SIZE
 
-        def document_batches():
+        def document_batches() -> Iterator[list[Document]]:
             checkpoint = self.connector.build_dummy_checkpoint()
-            pending_docs = []
+            pending_docs: list[Document] = []
             iterations = 0
             iteration_limit = 100_000
 
@@ -701,8 +715,7 @@ class GoogleDrive(SyncBase):
                 doc_generator = wrapper(self.connector.load_from_checkpoint(start_time, end_time, checkpoint))
                 for document, failure, next_checkpoint in doc_generator:
                     if failure is not None:
-                        logging.warning("Google Drive connector failure: %s", getattr(failure, "failure_message", failure))
-                        continue
+                        raise RuntimeError(f"Google Drive ingestion failed: {failure.failure_message}")
                     if document is not None:
                         pending_docs.append(document)
                         if len(pending_docs) >= batch_size:
@@ -1134,7 +1147,7 @@ class Gitlab(SyncBase):
 class Bitbucket(SyncBase):
     SOURCE_NAME: str = FileSource.BITBUCKET
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         self.connector = BitbucketConnector(
             workspace=self.conf.get("workspace"),
             repositories=self.conf.get("repository_slugs"),
@@ -1157,7 +1170,7 @@ class Bitbucket(SyncBase):
 
         end_time = datetime.now(UTC)
 
-        def document_batches():
+        def document_batches() -> Iterator[list[Document]]:
             checkpoint = self.connector.build_dummy_checkpoint()
 
             while checkpoint.has_more:
@@ -1167,14 +1180,13 @@ class Bitbucket(SyncBase):
                     try:
                         item = next(gen)
                         if isinstance(item, ConnectorFailure):
-                            logging.exception("Bitbucket connector failure: %s", item.failure_message)
-                            break
+                            raise RuntimeError(f"Bitbucket ingestion failed: {item.failure_message}")
                         yield [item]
                     except StopIteration as e:
                         checkpoint = e.value
                         break
 
-        def wrapper():
+        def wrapper() -> Iterator[list[Document]]:
             yield from document_batches()
 
         logging.info(

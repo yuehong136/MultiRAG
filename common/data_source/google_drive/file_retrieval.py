@@ -24,6 +24,7 @@ FOLDER_FIELDS = "nextPageToken, files(id, name, permissions, modifiedTime, webVi
 class DriveFileFieldType(Enum):
     """Enum to specify which fields to retrieve from Google Drive files"""
 
+    DELETION = "deletion"  # Identity-only, fail-closed inventory
     SLIM = "slim"  # Minimal fields for basic file info
     STANDARD = "standard"  # Standard fields including content metadata
     WITH_PERMISSIONS = "with_permissions"  # Full fields including permissions
@@ -51,6 +52,7 @@ def generate_time_range_filter(
 def _get_folders_in_parent(
     service: Resource,
     parent_id: str | None = None,
+    require_complete: bool = False,
 ) -> Iterator[GoogleDriveFileType]:
     # Follow shortcuts to folders
     query = f"(mimeType = '{DRIVE_FOLDER_TYPE}' or mimeType = '{DRIVE_SHORTCUT_TYPE}')"
@@ -62,17 +64,20 @@ def _get_folders_in_parent(
     yield from execute_paginated_retrieval(
         retrieval_function=service.files().list,
         list_key="files",
-        continue_on_404_or_403=True,
+        continue_on_404_or_403=not require_complete,
         corpora="allDrives",
         supportsAllDrives=True,
         includeItemsFromAllDrives=True,
-        fields=FOLDER_FIELDS,
+        fields="kind,nextPageToken,incompleteSearch,files(id,name,mimeType,shortcutDetails)" if require_complete else FOLDER_FIELDS,
+        require_complete=require_complete,
         q=query,
     )
 
 
 def _get_fields_for_file_type(field_type: DriveFileFieldType) -> str:
     """Get the appropriate fields string based on the field type enum"""
+    if field_type == DriveFileFieldType.DELETION:
+        return "kind,nextPageToken,incompleteSearch,files(id,mimeType,name,webViewLink)"
     if field_type == DriveFileFieldType.SLIM:
         return SLIM_FILE_FIELDS
     elif field_type == DriveFileFieldType.WITH_PERMISSIONS:
@@ -90,14 +95,16 @@ def _get_files_in_parent(
 ) -> Iterator[GoogleDriveFileType]:
     query = f"mimeType != '{DRIVE_FOLDER_TYPE}' and '{parent_id}' in parents"
     query += " and trashed = false"
-    query += generate_time_range_filter(start, end)
+    if field_type != DriveFileFieldType.DELETION:
+        query += generate_time_range_filter(start, end)
 
     kwargs = {ORDER_BY_KEY: GoogleFields.MODIFIED_TIME.value}
 
     yield from execute_paginated_retrieval(
         retrieval_function=service.files().list,
         list_key="files",
-        continue_on_404_or_403=True,
+        continue_on_404_or_403=field_type != DriveFileFieldType.DELETION,
+        require_complete=field_type == DriveFileFieldType.DELETION,
         corpora="allDrives",
         supportsAllDrives=True,
         includeItemsFromAllDrives=True,
@@ -120,6 +127,13 @@ def crawl_folders_for_files(
     """
     This function starts crawling from any folder. It is slower though.
     """
+    require_complete = field_type == DriveFileFieldType.DELETION
+    if require_complete:
+        if parent_id in traversed_parent_ids:
+            return
+        parent = service.files().get(fileId=parent_id, fields="id,mimeType", supportsAllDrives=True).execute()
+        if parent.get("id") != parent_id or parent.get("mimeType") != DRIVE_FOLDER_TYPE:
+            raise ValueError("Google Drive deletion scope is not an accessible folder")
     logging.info("Entered crawl_folders_for_files with parent_id: " + parent_id)
     if parent_id not in traversed_parent_ids:
         logging.info("Parent id not in traversed parent ids, getting files")
@@ -146,9 +160,11 @@ def crawl_folders_for_files(
             # In cases where this never happens, most likely the folder owner is
             # not part of the Google Workspace in question (or for oauth, the authenticated
             # user doesn't own the folder)
-            if found_files:
+            if found_files or require_complete:
                 update_traversed_ids_func(parent_id)
         except Exception as e:
+            if require_complete:
+                raise
             if isinstance(e, HttpError) and e.status_code == 403:
                 # don't yield an error here because this is expected behavior
                 # when a user doesn't have access to a folder
@@ -168,7 +184,15 @@ def crawl_folders_for_files(
     for subfolder in _get_folders_in_parent(
         service=service,
         parent_id=parent_id,
+        require_complete=require_complete,
     ):
+        if require_complete and subfolder.get("mimeType") == DRIVE_SHORTCUT_TYPE:
+            details = subfolder.get("shortcutDetails")
+            if not isinstance(details, dict) or any(not isinstance(details.get(key), str) or not details[key].strip() for key in ("targetId", "targetMimeType")):
+                raise ValueError("Incomplete Google Drive folder shortcut")
+            if details["targetMimeType"] != DRIVE_FOLDER_TYPE:
+                continue
+            subfolder = {**subfolder, "id": details["targetId"]}
         logging.info("Fetching all files in subfolder: " + subfolder["name"])
         yield from crawl_folders_for_files(
             service=service,
@@ -198,7 +222,7 @@ def get_files_in_shared_drive(
         logging.info(f"Using page token: {page_token}")
         kwargs[PAGE_TOKEN_KEY] = page_token
 
-    if cache_folders:
+    if cache_folders and field_type != DriveFileFieldType.DELETION:
         # If we know we are going to folder crawl later, we can cache the folders here
         # Get all folders being queried and add them to the traversed set
         folder_query = f"mimeType = '{DRIVE_FOLDER_TYPE}'"
@@ -206,7 +230,8 @@ def get_files_in_shared_drive(
         for folder in execute_paginated_retrieval(
             retrieval_function=service.files().list,
             list_key="files",
-            continue_on_404_or_403=True,
+            continue_on_404_or_403=field_type != DriveFileFieldType.DELETION,
+            require_complete=field_type == DriveFileFieldType.DELETION,
             corpora="drive",
             driveId=drive_id,
             supportsAllDrives=True,
@@ -219,13 +244,15 @@ def get_files_in_shared_drive(
     # Get all files in the shared drive
     file_query = f"mimeType != '{DRIVE_FOLDER_TYPE}'"
     file_query += " and trashed = false"
-    file_query += generate_time_range_filter(start, end)
+    if field_type != DriveFileFieldType.DELETION:
+        file_query += generate_time_range_filter(start, end)
 
     for file in execute_paginated_retrieval_with_max_pages(
         retrieval_function=service.files().list,
         max_num_pages=max_num_pages,
         list_key="files",
-        continue_on_404_or_403=True,
+        continue_on_404_or_403=field_type != DriveFileFieldType.DELETION,
+        require_complete=field_type == DriveFileFieldType.DELETION,
         corpora="drive",
         driveId=drive_id,
         supportsAllDrives=True,
@@ -240,8 +267,12 @@ def get_files_in_shared_drive(
         # NOTE: ^^ the above is not actually true due to folder restrictions:
         # https://support.google.com/a/users/answer/12380484?hl=en
         # So we may have to change this logic for people who use folder restrictions.
-        update_traversed_ids_func(drive_id)
+        if field_type != DriveFileFieldType.DELETION:
+            update_traversed_ids_func(drive_id)
         yield file
+        if isinstance(file, str):
+            return
+    update_traversed_ids_func(drive_id)
 
 
 def get_all_files_in_my_drive_and_shared(
@@ -260,7 +291,7 @@ def get_all_files_in_my_drive_and_shared(
         logging.info(f"Using page token: {page_token}")
         kwargs[PAGE_TOKEN_KEY] = page_token
 
-    if cache_folders:
+    if cache_folders and field_type != DriveFileFieldType.DELETION:
         # If we know we are going to folder crawl later, we can cache the folders here
         # Get all folders being queried and add them to the traversed set
         folder_query = f"mimeType = '{DRIVE_FOLDER_TYPE}'"
@@ -285,12 +316,14 @@ def get_all_files_in_my_drive_and_shared(
     file_query += " and trashed = false"
     if not include_shared_with_me:
         file_query += " and 'me' in owners"
-    file_query += generate_time_range_filter(start, end)
+    if field_type != DriveFileFieldType.DELETION:
+        file_query += generate_time_range_filter(start, end)
     yield from execute_paginated_retrieval_with_max_pages(
         retrieval_function=service.files().list,
         max_num_pages=max_num_pages,
         list_key="files",
         continue_on_404_or_403=False,
+        require_complete=field_type == DriveFileFieldType.DELETION,
         corpora="user",
         fields=_get_fields_for_file_type(field_type),
         q=file_query,
@@ -320,7 +353,8 @@ def get_all_files_for_oauth(
 
     file_query = f"mimeType != '{DRIVE_FOLDER_TYPE}'"
     file_query += " and trashed = false"
-    file_query += generate_time_range_filter(start, end)
+    if field_type != DriveFileFieldType.DELETION:
+        file_query += generate_time_range_filter(start, end)
 
     if not should_get_all:
         if include_files_shared_with_me and not include_my_drives:
@@ -333,6 +367,7 @@ def get_all_files_for_oauth(
         retrieval_function=service.files().list,
         list_key="files",
         continue_on_404_or_403=False,
+        require_complete=field_type == DriveFileFieldType.DELETION,
         corpora=corpora,
         includeItemsFromAllDrives=should_get_all,
         supportsAllDrives=should_get_all,

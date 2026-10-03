@@ -2448,3 +2448,33 @@ PostgreSQL 触发器真实拒绝写入、HTTP 断开取消均验证。自有 scr
 保留边界：受控身份与 provider HTTP 不等于远程账号或生产 JWT/API key E2E；Go session
 仍不具备实际 KB/Tavily RAG、附件或多模态，本项未移植后续完整能力。三个无关 live 门禁
 未启用。工具链既有 C/linker 警告保留，未改依赖、共享配置、Python；未 push。
+
+## 0d18b293 / 74fa54f1 / 3b7a6eaa · 三连接器源端删除同步
+
+2026-10-04 依次核对冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 中
+Airtable、Google Drive、Bitbucket 三项完整 diff、相关后修和当前 Python/Web 消费者。
+同一 agent 顺序适配，共享入口沿用 `42d0f153` 的可信完整快照、知识库/连接器身份隔离与
+事务后存储清理；Google PKCE 沿用 `f8e45761`。未 fetch 或移植后续 Go 架构替换。
+
+- `0d18b293`：Airtable 新增全量附件身份清单，复用入库来源 ID；直接校验 SDK 原始分页，
+  避免缺失 records 被默认为空。清单不下载正文，附件下载失败阻断本轮成功。
+- `74fa54f1`：Drive 使用身份字段清单，拒绝权限错误、incompleteSearch、异常分页和
+  未覆盖的指定范围；清单缓存独立于内容检查点，补回 Shared Drive 续页 token 传递。
+  已有内容窗口终点前置捕获和刷新凭据持久化等价复用。相关缓存后修 `e0b307001`、
+  空清单修复 `5fd4579a2`/`911671cef` 及身份后修链均已核对。
+- `3b7a6eaa`：Bitbucket 已有无时间窗口的轻量 PR 枚举等价于上游 connector 部分；
+  接入 worker/Web 开关，并拒绝异常集合、来源身份和分页循环，内容映射失败不推进成功。
+
+三个开关默认关闭；首次导入和重建跳过删除。当前模式、完整清单合同、配置范围与外部
+存储清理限制统一见 [连接器 README](../../common/data_source/README.md)，不重复维护。
+Web 提交 `02681e3` 接入开关及 Bitbucket 账号邮箱，`06e0039` 补充 Drive 服务账号/OAuth
+范围提示；原有配置序列化沿用。Drive 邮箱范围为可选，OAuth 留空，指定邮箱使用服务账号。
+
+验证：共享最终 `make verify` exit=0，4875 个 unit 通过；`make integration` exit=0，753 项通过、无 skip（2517.23 秒）。
+门禁前后输入 hash 无漂移，日志 `/tmp/multirag-a7ce-final-gates/`。
+默认 Infinity 实例与当前 SDK 的握手不兼容；最终集成仅用测试进程 `INFINITY_TEST_URI`
+指向独立 loopback 兼容实例，未修改业务配置或依赖。连接器专项采用受控 SaaS 页响应，
+真实隔离 SQL/Milvus/MinIO/Redis 存储验证；失败清单、取消、成功空清单、过期清理与
+相邻连接器保留均覆盖，不代表真实 SaaS 凭据端到端验收。
+Web 表单 13 项通过，build/lint/file-size exit=0（lint 保留既有告警）；三源明暗主题、
+键盘开关与中英文 Drive 帮助已在当前页面验收，未创建真实数据源。未 push。

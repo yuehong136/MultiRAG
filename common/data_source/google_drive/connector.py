@@ -18,7 +18,7 @@ from googleapiclient.errors import HttpError  # type: ignore  # type: ignore
 
 from common.data_source.config import GOOGLE_DRIVE_CONNECTOR_SIZE_THRESHOLD, GOOGLE_DRIVE_SYNC_TIME_BUFFER_SECONDS, INDEX_BATCH_SIZE, SLIM_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
-from common.data_source.google_drive.doc_conversion import PermissionSyncContext, build_slim_document, convert_drive_item_to_document, onyx_document_id_from_drive_file
+from common.data_source.google_drive.doc_conversion import PermissionSyncContext, convert_drive_item_to_document, onyx_document_id_from_drive_file
 from common.data_source.google_drive.file_retrieval import (
     DriveFileFieldType,
     crawl_folders_for_files,
@@ -38,7 +38,7 @@ from common.data_source.interfaces import (
     IndexingHeartbeatInterface,
     SlimConnectorWithPermSync,
 )
-from common.data_source.models import CheckpointOutput, ConnectorFailure, Document, EntityFailure, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch
+from common.data_source.models import CheckpointOutput, ConnectorFailure, Document, EntityFailure, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 from common.data_source.utils import datetime_from_string, parallel_yield, run_functions_tuples_in_parallel
 
 MAX_DRIVE_WORKERS = int(os.environ.get("MAX_DRIVE_WORKERS", 4))
@@ -158,6 +158,8 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
 
         self._creds: OAuthCredentials | ServiceAccountCredentials | None = None
         self._creds_dict: dict[str, Any] | None = None
+        self._all_drive_ids_cache: set[str] | None = None
+        self._deletion_snapshot = False
 
         # ids of folders and shared drives that have been traversed
         self._retrieved_folder_and_drive_ids: set[str] = set()
@@ -210,6 +212,7 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             self.include_files_shared_with_me = True
 
         self._creds_dict = new_creds_dict
+        self._all_drive_ids_cache = None
 
         return new_creds_dict
 
@@ -238,7 +241,8 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             for user in execute_paginated_retrieval(
                 retrieval_function=admin_service.users().list,
                 list_key="users",
-                fields=USER_FIELDS,
+                require_complete=self._deletion_snapshot,
+                fields=f"kind,{USER_FIELDS}" if self._deletion_snapshot else USER_FIELDS,
                 domain=self.google_domain,
                 query=query,
             ):
@@ -248,7 +252,9 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
         return user_emails
 
     def get_all_drive_ids(self) -> set[str]:
-        return self._get_all_drives_for_user(self.primary_admin_email)
+        if self._all_drive_ids_cache is None:
+            self._all_drive_ids_cache = self._get_all_drives_for_user(self.primary_admin_email)
+        return set(self._all_drive_ids_cache)
 
     def _get_all_drives_for_user(self, user_email: str) -> set[str]:
         drive_service = get_drive_service(self.creds, user_email)
@@ -258,8 +264,9 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
         for drive in execute_paginated_retrieval(
             retrieval_function=drive_service.drives().list,
             list_key="drives",
+            require_complete=self._deletion_snapshot,
             useDomainAdminAccess=is_service_account,
-            fields="drives(id),nextPageToken",
+            fields="kind,drives(id),nextPageToken" if self._deletion_snapshot else "drives(id),nextPageToken",
         ):
             all_drive_ids.add(drive["id"])
 
@@ -345,6 +352,8 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             self.logger.debug(f"Getting root folder id for user {user_email}")
             get_root_folder_id(drive_service)
         except HttpError as e:
+            if field_type == DriveFileFieldType.DELETION:
+                raise
             if e.status_code == 401:
                 # fail gracefully, let the other impersonations continue
                 # one user without access shouldn't block the entire connector
@@ -355,6 +364,8 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
                 return
             raise
         except RefreshError as e:
+            if field_type == DriveFileFieldType.DELETION:
+                raise
             self.logger.warning(f"User '{user_email}' could not refresh their token. Error: {e}")
             # mark this user as done so we don't try to retrieve anything for them
             # again
@@ -532,6 +543,9 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
                 raise ValueError("user emails not set")
             all_org_emails = checkpoint.user_emails
 
+        if field_type == DriveFileFieldType.DELETION and self._requested_my_drive_emails - set(all_org_emails):
+            raise PermissionError("Google Drive inventory cannot cover the requested user drives")
+
         sorted_drive_ids, sorted_folder_ids = self._determine_retrieval_ids(checkpoint, DriveRetrievalStage.MY_DRIVE_FILES)
 
         # Setup initial completion map on first connector run
@@ -595,6 +609,8 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
         if any(checkpoint.completion_map[user_email].stage != DriveRetrievalStage.DONE for user_email in all_org_emails):
             self.logger.info("some users did not complete retrieval, returning checkpoint for another run")
             return
+        if remaining_folders and field_type == DriveFileFieldType.DELETION:
+            raise PermissionError("Google Drive inventory did not cover the configured folders/drives")
         checkpoint.completion_stage = DriveRetrievalStage.DONE
 
     def _determine_retrieval_ids(
@@ -668,6 +684,7 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             for file_or_token in _yield_from_drive(drive_id, resume_start):
                 if isinstance(file_or_token, str):
                     checkpoint.completion_map[self.primary_admin_email].next_page_token = file_or_token
+                    yield file_or_token
                     return  # done with the max num pages, return checkpoint
                 yield file_or_token
             checkpoint.completion_map[self.primary_admin_email].next_page_token = None
@@ -680,6 +697,7 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             for file_or_token in _yield_from_drive(drive_id, start):
                 if isinstance(file_or_token, str):
                     checkpoint.completion_map[self.primary_admin_email].next_page_token = file_or_token
+                    yield file_or_token
                     return  # done with the max num pages, return checkpoint
                 yield file_or_token
             checkpoint.completion_map[self.primary_admin_email].next_page_token = None
@@ -734,6 +752,8 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             yield from _yield_from_folder_crawl(folder_id, start)
 
         remaining_folders = (drive_ids_to_retrieve | folder_ids_to_retrieve) - self._retrieved_folder_and_drive_ids
+        if remaining_folders and field_type == DriveFileFieldType.DELETION:
+            raise PermissionError("Google Drive inventory did not cover the configured folders/drives")
         if remaining_folders:
             self.logger.warning(f"Some folders/drives were not retrieved. IDs: {remaining_folders}")
 
@@ -794,11 +814,16 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
         )
 
         for file in drive_files:
+            if file.error is not None:
+                if field_type == DriveFileFieldType.DELETION:
+                    raise file.error
+                yield file
+                continue
             document_id = onyx_document_id_from_drive_file(file.drive_file)
             logging.debug(f"Updating checkpoint for file: {file.drive_file.get('name')}. Seen: {document_id in checkpoint.all_retrieved_file_ids}")
             checkpoint.completion_map[file.user_email].update(
                 stage=file.completion_stage,
-                completed_until=datetime_from_string(file.drive_file[GoogleFields.MODIFIED_TIME.value]).timestamp(),
+                completed_until=0 if field_type == DriveFileFieldType.DELETION else datetime_from_string(file.drive_file[GoogleFields.MODIFIED_TIME.value]).timestamp(),
                 current_folder_or_drive_id=file.parent_id,
             )
             if document_id not in checkpoint.all_retrieved_file_ids:
@@ -1053,25 +1078,16 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
     ) -> GenerateSlimDocumentOutput:
         slim_batch = []
         for file in self._fetch_drive_items(
-            field_type=DriveFileFieldType.SLIM,
+            field_type=DriveFileFieldType.DELETION,
             checkpoint=checkpoint,
             start=start,
             end=end,
         ):
+            if callback and callback.should_stop():
+                raise RuntimeError("Google Drive deletion inventory cancelled")
             if file.error is not None:
                 raise file.error
-            if doc := build_slim_document(
-                self.creds,
-                file.drive_file,
-                # for now, always fetch permissions for slim runs
-                # TODO: move everything to load_from_checkpoint
-                # and only fetch permissions if needed
-                PermissionSyncContext(
-                    primary_admin_email=self.primary_admin_email,
-                    google_domain=self.google_domain,
-                ),
-            ):
-                slim_batch.append(doc)
+            slim_batch.append(SlimDocument(id=onyx_document_id_from_drive_file(file.drive_file)))
             if len(slim_batch) >= SLIM_BATCH_SIZE:
                 yield slim_batch
                 slim_batch = []
@@ -1085,19 +1101,25 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
         self,
         callback: IndexingHeartbeatInterface | None = None,
     ) -> GenerateSlimDocumentOutput:
+        if isinstance(self.creds, OAuthCredentials) and self._requested_my_drive_emails:
+            raise ValueError("Google Drive deletion sync for my_drive_emails requires a service account")
+        previous_parents = self._retrieved_folder_and_drive_ids
+        self._retrieved_folder_and_drive_ids = set()
+        self._all_drive_ids_cache = None
+        self._deletion_snapshot = True
         try:
             checkpoint = self.build_dummy_checkpoint()
             while checkpoint.completion_stage != DriveRetrievalStage.DONE:
-                yield from self._extract_slim_docs_from_google_drive(
-                    checkpoint=checkpoint,
-                    callback=callback,
-                )
-            self.logger.info("Drive perm sync: Slim doc retrieval complete")
-
+                yield from self._extract_slim_docs_from_google_drive(checkpoint=checkpoint, callback=callback)
+            self.logger.info("Drive deletion inventory complete")
         except Exception as e:
             if MISSING_SCOPES_ERROR_STR in str(e):
                 raise PermissionError() from e
-            raise e
+            raise
+        finally:
+            self._deletion_snapshot = False
+            self._retrieved_folder_and_drive_ids = previous_parents
+            self._all_drive_ids_cache = None
 
     def validate_connector_settings(self) -> None:
         if self._creds is None:

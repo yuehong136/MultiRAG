@@ -8,8 +8,8 @@ from pyairtable import Api as AirtableApi
 
 from common.data_source.config import AIRTABLE_CONNECTOR_SIZE_THRESHOLD, INDEX_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError
-from common.data_source.interfaces import LoadConnector, PollConnector
-from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
+from common.data_source.interfaces import IndexingHeartbeatInterface, LoadConnector, PollConnector, SlimConnectorWithPermSync
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 from common.data_source.utils import extract_size_bytes, get_file_ext
 
 
@@ -18,7 +18,7 @@ class AirtableClientNotSetUpError(PermissionError):
         super().__init__("Airtable client is not set up. Did you forget to call load_credentials()?")
 
 
-class AirtableConnector(LoadConnector, PollConnector):
+class AirtableConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """
     Lightweight Airtable connector.
 
@@ -37,6 +37,57 @@ class AirtableConnector(LoadConnector, PollConnector):
         self.batch_size = batch_size
         self._airtable_client: AirtableApi | None = None
         self.size_threshold = AIRTABLE_CONNECTOR_SIZE_THRESHOLD
+
+    def _iter_attachment_entries(self) -> Generator[tuple[str, dict[str, Any], str | None], None, None]:
+        """Share source identities between ingestion and complete, paginated listing."""
+        if not self._airtable_client:
+            raise ConnectorMissingCredentialError("Airtable credentials not loaded")
+        table = self.airtable_client.table(self.base_id, self.table_name_or_id)
+        seen_offsets: set[str] = set()
+        received_page = False
+        # Table.iterate() defaults missing records to []; retain the raw envelope
+        # so an incomplete response cannot authorize source deletions.
+        for page in table.api.iterate_requests(method="get", url=table.urls.records, fallback=("post", table.urls.records_post)):
+            received_page = True
+            if not isinstance(page, dict) or not isinstance(page.get("records"), list):
+                raise ValueError("Incomplete Airtable records page")
+            offset = page.get("offset")
+            if offset is not None:
+                if not isinstance(offset, str) or not offset.strip() or offset in seen_offsets:
+                    raise ValueError("Invalid Airtable pagination progress")
+                seen_offsets.add(offset)
+            for record in page["records"]:
+                if not isinstance(record, dict):
+                    raise ValueError("Incomplete Airtable record during attachment enumeration")
+                record_id, fields = record.get("id"), record.get("fields")
+                if not isinstance(record_id, str) or not record_id.strip() or not isinstance(fields, dict):
+                    raise ValueError("Incomplete Airtable record during attachment enumeration")
+                for value in fields.values():
+                    if not isinstance(value, list):
+                        continue
+                    for attachment in value:
+                        # Multi-select/link fields contain strings; collaborator fields
+                        # contain dictionaries, but have no attachment metadata.
+                        if not isinstance(attachment, dict) or not (any(key in attachment for key in ("filename", "url")) or str(attachment.get("id", "")).startswith("att")):
+                            continue
+                        attachment_id = attachment.get("id")
+                        if not isinstance(attachment_id, str) or not attachment_id.strip():
+                            raise ValueError("Incomplete Airtable attachment identity")
+                        yield f"airtable:{record_id}:{attachment_id}", attachment, record.get("createdTime")
+        if not received_page:
+            raise ValueError("Airtable inventory did not receive a records page")
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: IndexingHeartbeatInterface | None = None) -> GenerateSlimDocumentOutput:
+        batch: list[SlimDocument] = []
+        for doc_id, _, _ in self._iter_attachment_entries():
+            if callback and callback.should_stop():
+                raise RuntimeError("Airtable attachment enumeration cancelled")
+            batch.append(SlimDocument(id=doc_id))
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
 
     # -------------------------
     # Credentials
@@ -63,57 +114,41 @@ class AirtableConnector(LoadConnector, PollConnector):
         if not self._airtable_client:
             raise ConnectorMissingCredentialError("Airtable credentials not loaded")
 
-        table = self.airtable_client.table(self.base_id, self.table_name_or_id)
-        records = table.all()
-
-        logging.info(f"Starting Airtable blob ingestion for table {self.table_name_or_id}, {len(records)} records found.")
-
         batch: list[Document] = []
+        for doc_id, attachment, created_time in self._iter_attachment_entries():
+            url = attachment.get("url")
+            filename = attachment.get("filename")
+            attachment_id = attachment.get("id")
 
-        for record in records:
-            record_id = record.get("id")
-            fields = record.get("fields", {})
-            created_time = record.get("createdTime")
+            if not url or not filename or not attachment_id or not created_time:
+                raise ValueError("Incomplete Airtable attachment content metadata")
 
-            for field_value in fields.values():
-                # We only care about attachment fields (lists of dicts with url/filename)
-                if not isinstance(field_value, list):
-                    continue
+            try:
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                content = resp.content
+            except Exception:
+                logging.exception("Failed to download Airtable attachment %s", doc_id)
+                raise
+            size_bytes = extract_size_bytes(attachment)
+            if self.size_threshold is not None and isinstance(size_bytes, int) and size_bytes > self.size_threshold:
+                logging.warning(f"{filename} exceeds size threshold of {self.size_threshold}. Skipping.")
+                continue
+            batch.append(
+                Document(
+                    id=doc_id,
+                    blob=content,
+                    source=DocumentSource.AIRTABLE,
+                    semantic_identifier=filename,
+                    extension=get_file_ext(filename),
+                    size_bytes=size_bytes if size_bytes else 0,
+                    doc_updated_at=datetime.strptime(created_time, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC),
+                )
+            )
 
-                for attachment in field_value:
-                    url = attachment.get("url")
-                    filename = attachment.get("filename")
-                    attachment_id = attachment.get("id")
-
-                    if not url or not filename or not attachment_id:
-                        continue
-
-                    try:
-                        resp = requests.get(url, timeout=30)
-                        resp.raise_for_status()
-                        content = resp.content
-                    except Exception:
-                        logging.exception(f"Failed to download attachment {filename} (record={record_id})")
-                        continue
-                    size_bytes = extract_size_bytes(attachment)
-                    if self.size_threshold is not None and isinstance(size_bytes, int) and size_bytes > self.size_threshold:
-                        logging.warning(f"{filename} exceeds size threshold of {self.size_threshold}. Skipping.")
-                        continue
-                    batch.append(
-                        Document(
-                            id=f"airtable:{record_id}:{attachment_id}",
-                            blob=content,
-                            source=DocumentSource.AIRTABLE,
-                            semantic_identifier=filename,
-                            extension=get_file_ext(filename),
-                            size_bytes=size_bytes if size_bytes else 0,
-                            doc_updated_at=datetime.strptime(created_time, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC),
-                        )
-                    )
-
-                    if len(batch) >= self.batch_size:
-                        yield batch
-                        batch = []
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
 
         if batch:
             yield batch

@@ -152,11 +152,15 @@ class BitbucketConnector(
                     slug_val = repo.get("slug")
                     if isinstance(slug_val, str) and slug_val:
                         yield slug_val
+                    else:
+                        raise ValueError("Incomplete Bitbucket repository identity")
             return
         for repo in list_repositories(client, self.workspace, None):
             slug_val = repo.get("slug")
             if isinstance(slug_val, str) and slug_val:
                 yield slug_val
+            else:
+                raise ValueError("Incomplete Bitbucket repository identity")
 
     @override
     def load_from_checkpoint(
@@ -253,6 +257,8 @@ class BitbucketConnector(
             for slug in self._iter_target_repositories(client):
                 for pr in self._iter_pull_requests_for_repo(client, slug, params=params):
                     pr_id = pr["id"]
+                    if not isinstance(pr_id, int) or isinstance(pr_id, bool) or pr_id <= 0:
+                        raise ValueError("Invalid Bitbucket pull request identity")
                     doc_id = f"{DocumentSource.BITBUCKET.value}:{self.workspace}:{slug}:pr:{pr_id}"
                     batch.append(SlimDocument(id=doc_id))
                     if len(batch) >= self.batch_size:
