@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -45,6 +45,32 @@ Google Drive 按现有 OAuth/服务账号配置遍历个人 Drive、Shared Drive
 权限拒绝、失效分页或未遍历完指定范围均失败。文件夹访问先验证根存在，再递归子文件夹。
 清单的遍历状态不影响后续内容检查点；内容窗口终点在清单前捕获，刷新凭据仍按原服务持久化。
 OAuth 的 `my_drive_emails` 模式当前内容链不支持，删除同步明确拒绝；该模式应使用服务账号。
+
+Gmail 清单按当前可读邮箱完整分页枚举线程 ID，不读取正文、不加入增量时间窗口。
+开启删除同步时 OAuth 只枚举配置的自身邮箱；Workspace 服务账号必须完整读取域用户，
+且包含配置的主邮箱，再完整读取每个邮箱。目录/邮箱拒绝访问、禁用邮箱、异常响应、
+失效分页、循环 token 或任一正文读取失败都使本轮失败，不能降级成单邮箱或跳过后删除。
+开关关闭时保留原内容读取和错误跳过行为；首次导入与重建仍不执行删除核对。
+
+Gmail 不返回 Drive 的 `kind`，清单请求显式读取 `resultSizeEstimate` 并校验其非负整数形状；
+缺少线程集合或集合为空的终页须明确报告零结果，否则拒绝作为完整空清单。
+该字段是估算值，不用于判断收集的线程总数；完整性由正常耗尽全部分页确认。
+入库身份继续使用原线程 ID。清单与正文沿用默认排除 Spam/Trash 的范围；清单保留已存在
+但没有落在内容增量窗口的旧线程。[Gmail threads.list 合同](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads/list)
+说明分页与 Spam/Trash 范围。
+
+Gmail 当前内容增量使用时间查询，检查点来自邮件 `Date` 头，不是邮箱变更历史。
+因此旧邮件移入 Trash 后被本地核对删除，随后还原时，仅出现在完整清单并不会自动补回
+正文；应全量重建。需要可靠追踪还原、标签变化及线程内邮件删除时，建议另行设计
+[History API 同步](https://developers.google.com/workspace/gmail/api/guides/sync)，包括游标过期
+404 后全量同步。它涉及检查点和历史身份兼容，不在当前删除清单接线中自动迁移。
+服务账号切换为 OAuth 或缩小域权限也可能改变可见范围；应先关闭开关，确认邮箱范围
+并重建再开启。Workspace 含不可读/禁用邮箱时按安全合同阻断整轮；若需跳过，应先设计
+显式邮箱范围及范围迁移，不能把读取失败当成删除。
+
+Google 服务构建显式设置 `cache_discovery=False`，OAuth 与服务账号（含主体代理）均适用。
+Drive 的 Shared Drive ID 缓存、防御性副本、加载新凭据及清单前后失效继续复用现有实现。
+刷新后的 Google 凭据仍由现有同步 driver 保存，不新增第二条缓存或凭据持久化链。
 
 Bitbucket 清单覆盖配置 workspace、repository 或 project 内的全部 OPEN、MERGED、DECLINED
 Pull Request，使用与入库相同的来源 ID，无 `updated_on` 时间窗口。现有轻量 PR 枚举被复用；

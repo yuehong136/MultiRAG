@@ -55,7 +55,10 @@ class Source:
         return SimpleNamespace(has_more=False)
 
 
-@pytest.mark.parametrize("driver_type,constructor", [(sync_module.Airtable, "AirtableConnector"), (sync_module.GoogleDrive, "GoogleDriveConnector"), (sync_module.Bitbucket, "BitbucketConnector")])
+@pytest.mark.parametrize(
+    "driver_type,constructor",
+    [(sync_module.Airtable, "AirtableConnector"), (sync_module.GoogleDrive, "GoogleDriveConnector"), (sync_module.Gmail, "GmailConnector"), (sync_module.Bitbucket, "BitbucketConnector")],
+)
 @pytest.mark.parametrize("mode", ["incremental", "disabled", "first", "reindex", "content-failure"])
 async def test_real_driver_deletion_gate_and_failed_ingestion(sync_env: dict[str, Any], driver_type: Any, constructor: str, mode: str) -> None:
     monkeypatch = sync_env["monkeypatch"]
@@ -78,12 +81,13 @@ async def test_real_driver_deletion_gate_and_failed_ingestion(sync_env: dict[str
         assert sync_env["calls"] == ["start", "complete"]
 
 
-async def test_drive_rotated_credentials_persist_with_existing_configuration(sync_env: dict[str, Any]) -> None:
+@pytest.mark.parametrize("driver_type,constructor", [(sync_module.GoogleDrive, "GoogleDriveConnector"), (sync_module.Gmail, "GmailConnector")])
+async def test_google_rotated_credentials_persist_with_existing_configuration(sync_env: dict[str, Any], driver_type: Any, constructor: str) -> None:
     monkeypatch = sync_env["monkeypatch"]
     source = Source(rotated=True)
     writes: list[Any] = []
-    monkeypatch.setattr(sync_module, "GoogleDriveConnector", lambda **kwargs: source)
+    monkeypatch.setattr(sync_module, constructor, lambda **kwargs: source)
     monkeypatch.setattr(sync_module.ConnectorService, "update_by_id", lambda *args: writes.append(args[-1]))
-    driver = sync_module.GoogleDrive({"sync_deleted_files": True, "include_my_drives": True, "custom": "keep", "credentials": {"refresh_token": "keep"}})
+    driver = driver_type({"sync_deleted_files": True, "include_my_drives": True, "custom": "keep", "credentials": {"refresh_token": "keep"}})
     await driver(task())
     assert writes == [{"config": {"sync_deleted_files": True, "include_my_drives": True, "custom": "keep", "credentials": {"refresh_token": "keep", "access_token": "rotated"}}}]

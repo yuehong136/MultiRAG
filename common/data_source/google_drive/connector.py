@@ -271,7 +271,11 @@ class GoogleDriveConnector(SlimConnectorWithPermSync, CheckpointedConnectorWithP
             all_drive_ids.add(drive["id"])
 
         if not all_drive_ids:
-            self.logger.warning("No drives found even though indexing shared drives was requested.")
+            if self._requested_shared_drive_ids:
+                self.logger.warning("No shared drives found for user %s while resolving requested shared drives.", user_email)
+            elif self.include_shared_drives:
+                log_fn = self.logger.warning if is_service_account else self.logger.info
+                log_fn("No shared drives found for user %s.", user_email)
 
         return all_drive_ids
 

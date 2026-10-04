@@ -21,7 +21,7 @@ from tests.integration.test_document_parse_retirement import parse_api as parse_
 from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
 
 
-@pytest.mark.parametrize("source_key", [FileSource.S3, FileSource.AIRTABLE, FileSource.GOOGLE_DRIVE, FileSource.BITBUCKET])
+@pytest.mark.parametrize("source_key", [FileSource.S3, FileSource.AIRTABLE, FileSource.GOOGLE_DRIVE, FileSource.BITBUCKET, FileSource.GMAIL])
 @pytest.mark.parametrize("missing_index", [False, True])
 async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_file(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, missing_index: bool, source_key: str) -> None:
     env = parse_api
@@ -223,7 +223,7 @@ async def test_notion_workspace_search_cannot_authorize_deletion(parse_api: dict
             db.commit()
 
 
-@pytest.mark.parametrize("source", ["s3", "jira"])
+@pytest.mark.parametrize("source", ["s3", "jira", "gmail"])
 def test_connector_configuration_http_save_and_independent_readback(parse_api: dict[str, Any], source: str) -> None:
     import requests
 

@@ -93,10 +93,15 @@ def _execute_paginated_retrieval(
         raise ValueError("fields must contain nextPageToken for execute_paginated_retrieval")
     next_page_token = kwargs.get(PAGE_TOKEN_KEY, "")
     num_pages = 0
+    seen_page_tokens: set[str] = set()
     while next_page_token is not None:
         if max_num_pages is not None and num_pages >= max_num_pages:
             yield next_page_token
             return
+        if require_complete and next_page_token:
+            if next_page_token in seen_page_tokens:
+                raise ValueError("Invalid Google pagination progress")
+            seen_page_tokens.add(next_page_token)
         num_pages += 1
         request_kwargs = kwargs.copy()
         if next_page_token:
@@ -108,8 +113,14 @@ def _execute_paginated_retrieval(
             if not isinstance(results, dict) or results.get("incompleteSearch"):
                 raise RuntimeError("Incomplete Google Drive deletion inventory")
             collection_kinds = {"files": "drive#fileList", "drives": "drive#driveList", "users": "admin#directory#users"}
-            identity_fields = {"files": ("id", "mimeType"), "drives": ("id",), "users": ("primaryEmail",)}
-            if list_key not in collection_kinds or results.get("kind") != collection_kinds[list_key]:
+            identity_fields = {"files": ("id", "mimeType"), "drives": ("id",), "users": ("primaryEmail",), "threads": ("id",)}
+            if list_key == "threads":
+                # Gmail has no collection kind. A missing threads field is only
+                # an empty mailbox when the API explicitly reports zero results.
+                estimate = results.get("resultSizeEstimate")
+                if type(estimate) is not int or estimate < 0 or (not results.get("threads") and estimate != 0 and not results.get(NEXT_PAGE_TOKEN_KEY)):
+                    raise ValueError("Invalid Gmail inventory collection response")
+            elif list_key not in collection_kinds or results.get("kind") != collection_kinds[list_key]:
                 raise ValueError("Invalid Google inventory collection response")
             if list_key in results and not isinstance(results[list_key], list):
                 raise ValueError("Invalid Google paginated collection")
@@ -134,9 +145,12 @@ def _execute_paginated_retrieval(
 def _execute_single_retrieval(
     retrieval_function: Callable,
     continue_on_404_or_403: bool = False,
+    require_success: bool = False,
     **request_kwargs: Any,
 ) -> GoogleDriveFileType:
     """Execute a single retrieval from Google Drive API"""
+    if require_success:
+        return retrieval_function(**request_kwargs).execute()
     try:
         results = retrieval_function(**request_kwargs).execute()
 

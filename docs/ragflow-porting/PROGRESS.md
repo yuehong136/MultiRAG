@@ -2648,3 +2648,45 @@ fixture 的 storage 健康项为可选 NOK，其他必需健康项及 ping 正�
 共享验证窗口释放后按原始差异应用，当前仓库 Ruff 与 format check 通过，
 23 项 scope unit、10 项真实 HTTP/SQL 集成再次通过；相关输入无漂移且与隔离
 验证副本一致。Dataset service、document PATCH 配置模型及执行消费者未改动。
+
+## e0b3070012b7f9cda16e06812ac165bef1f5bea0 · Gmail 删除同步与 Google discovery
+
+冻结上限为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`，目标提交在其祖先链中。
+Python 后续只见 validation/格式化与最终 `670e68872` 移除 Python；没有把冻结树中移除
+Python 的架构迁移带入本仓现行生产后端。
+
+| 上游差量 | 本地结果与依据 |
+|---|---|
+| Gmail driver 收集 slim 清单并返回 tuple | 接入现有 `SyncBase` 的可信完整清单合同，不新增第二次清单收集或 tuple 分支。默认关闭；首次导入/重建不删除。清单无时间窗口且正常耗尽后才交付；完整空清单可删除最后一份。分页/目录/邮箱读取及本轮入库失败阻断删除，失败保留开始检查点。 |
+| Drive ID 缓存、凭据加载失效和返回副本 | 已由 `b31fa75c2` 等价交付；本次没有重写缓存。现有清单前后缓存失效也保留。Google driver 仍按原路径保存刷新凭据；新增 Gmail driver 配置保留回归。 |
+| Drive 空 shared-drive 日志 | 按指定 Drive / 全 shared-drive 配置及凭据类型区分告警和 info，移除未请求时的误报警。上游同步器删除的额外开头日志在本地共享枚举入口没有对应重复项。 |
+| Google service build 关闭 discovery cache | OAuth 与服务账号两条构建分支均显式 `cache_discovery=False`；Gmail、Drive、Docs、Admin 公用工厂回归。 |
+| Web Gmail 删除开关 | 独立 Web 复用可信来源 registry、默认值合并及现有中英文案；布尔值创建/编辑保存、未知配置及凭据保留。提交 `b5e0df815f06230ad92f541384c5067afdc9db3b`，未 push。 |
+
+Gmail 特有的适配：OAuth 仅自身邮箱，Workspace 服务账号完整枚举域用户且须包含主邮箱。
+使用 Gmail 的 `resultSizeEstimate` 形状确认明确空响应，不套 Drive 的 `kind`，不以估算
+数量证明总数。循环 token、异常空响应、权限/禁用邮箱错误及正文读取错误都中断删除。
+关闭开关时保留历史内容读取行为。源 ID、Spam/Trash 范围及时间查询合同继续沿用，
+长期兼容性、重建办法和 History API 建议统一见 [连接器说明](../../common/data_source/README.md)。
+
+验证：共享窗口实际源码 `make verify` 退出 0，lint/import-linter/async DB/mypy 通过，unit `4955 passed in 45.93s`，输入无漂移；候选源码同样通过（4932 unit）；不可变候选的 `make integration` 退出 0，`763 passed, 1 skipped in 2605.85s`，输入无漂移；其中唯一 skip 是隔离目录默认路径找不到独立 Web checkout，显式 `WEB_DATASET_CHECKOUT=/Users/xldu/project/web` 补跑该项 `1 passed`，未将 skip 计作通过。
+当前 SDK 对 Gmail、Drive、Docs、Admin 的 OAuth 和主体代理服务账号两种凭据均完成
+离线 Resource 构建（8 项）；未发出 token 或 Google API 请求。
+仓外候选受控回归 `9 passed`，无 skip：真实 Google discovery Resource/httplib2 对本机
+Gmail HTTP 服务，全分页/完整空、后页权限失败、异常空响应、正文失败与入库失败；
+真实 scratch SQL、Milvus、MinIO 独立读回，配置 HTTP 业务 retcode=0 并 SQL 读回。
+9 份资源记录确认自有 SQL 行、collection、对象桶、缓存/队列和 listener 清理，scratch
+库关闭后不存在。完整集成使用自有 PostgreSQL/Valkey/MinIO/Infinity 容器和 Milvus
+自有 collection；结束后四容器及两卷清理，183 个 collection 独立读回均不存在。
+初次集成 fixture 缺少 connector-KB 绑定导致 2 个删除断言失败，补齐
+真实绑定后回归通过；没有放宽删除断言或改业务成功判据。
+
+Web 两份 datasource 测试 `15 passed`，product UI `3 + 30 passed`；lint、file-size、build
+及提交 hook 正常通过（lint 保留现有 warning）。浏览器实际检查中英、明暗主题、默认
+关闭及键盘 Space 切换，未保存测试连接器到业务库；截图见本机
+`/tmp/web-e0b30700-ui/contact-sheet.png`。
+
+完整门禁的源码、资源与退出证据见本机 `/tmp/multirag-e0b30700-full-integration/`、
+`/tmp/multirag-e0b30700-shared-verify/`。受控服务不是 Google 真凭据验收：未验证实际
+Google consent、Workspace 域委派、权限策略、token 刷新或真实 Gmail 邮箱。未部署，
+未 push，保留其他 owner 的改动。

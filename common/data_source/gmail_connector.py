@@ -17,6 +17,7 @@ from common.data_source.utils import build_time_range_query, clean_email_and_ext
 
 # Constants for Gmail API fields
 THREAD_LIST_FIELDS = "nextPageToken, threads(id)"
+COMPLETE_THREAD_LIST_FIELDS = f"{THREAD_LIST_FIELDS}, resultSizeEstimate"
 PARTS_FIELDS = "parts(body(data), mimeType)"
 PAYLOAD_FIELDS = f"payload(headers, {PARTS_FIELDS})"
 MESSAGES_FIELDS = f"messages(id, {PAYLOAD_FIELDS})"
@@ -144,8 +145,9 @@ def thread_to_document(full_thread: dict[str, Any], email_used_to_fetch_thread: 
 class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """Gmail connector for synchronizing emails from Gmail accounts."""
 
-    def __init__(self, batch_size: int = INDEX_BATCH_SIZE) -> None:
+    def __init__(self, batch_size: int = INDEX_BATCH_SIZE, *, require_complete: bool = False) -> None:
         self.batch_size = batch_size
+        self.require_complete = require_complete
         self._creds: OAuthCredentials | ServiceAccountCredentials | None = None
         self._primary_admin_email: str | None = None
 
@@ -181,22 +183,27 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         )
         return new_creds_dict
 
-    def _get_all_user_emails(self) -> list[str]:
+    def _get_all_user_emails(self, *, require_complete: bool = False) -> list[str]:
         """Get all user emails for Google Workspace domain."""
+        if require_complete and isinstance(self.creds, OAuthCredentials):
+            return [self.primary_admin_email]
         try:
             admin_service = get_admin_service(self.creds, self.primary_admin_email)
             emails = []
             for user in execute_paginated_retrieval(
                 retrieval_function=admin_service.users().list,
                 list_key="users",
-                fields=USER_FIELDS,
+                fields=f"kind,{USER_FIELDS}" if require_complete else USER_FIELDS,
+                require_complete=require_complete,
                 domain=self.google_domain,
             ):
                 if email := user.get("primaryEmail"):
                     emails.append(email)
+            if require_complete and self.primary_admin_email not in emails:
+                raise PermissionError("Configured Gmail primary mailbox missing from complete Workspace directory")
             return emails
         except HttpError as e:
-            if e.resp.status == 404:
+            if e.resp.status == 404 and not require_complete:
                 logging.warning("Received 404 from Admin SDK; this may indicate a personal Gmail account with no Workspace domain. Falling back to single user.")
                 return [self.primary_admin_email]
             raise
@@ -212,26 +219,32 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         query = build_time_range_query(time_range_start, time_range_end)
         doc_batch = []
 
-        for user_email in self._get_all_user_emails():
+        for user_email in self._get_all_user_emails(require_complete=self.require_complete):
             gmail_service = get_gmail_service(self.creds, user_email)
             try:
                 for thread in execute_paginated_retrieval(
                     retrieval_function=gmail_service.users().threads().list,
                     list_key="threads",
                     userId=user_email,
-                    fields=THREAD_LIST_FIELDS,
+                    fields=COMPLETE_THREAD_LIST_FIELDS if self.require_complete else THREAD_LIST_FIELDS,
+                    require_complete=self.require_complete,
                     q=query,
-                    continue_on_404_or_403=True,
+                    continue_on_404_or_403=not self.require_complete,
                 ):
                     full_thread = _execute_single_retrieval(
                         retrieval_function=gmail_service.users().threads().get,
                         userId=user_email,
                         fields=THREAD_FIELDS,
                         id=thread["id"],
-                        continue_on_404_or_403=True,
+                        continue_on_404_or_403=not self.require_complete,
+                        require_success=self.require_complete,
                     )
+                    if self.require_complete and (not isinstance(full_thread, dict) or full_thread.get("id") != thread["id"]):
+                        raise ValueError("Invalid Gmail thread content identity")
                     doc = thread_to_document(full_thread, user_email)
                     if doc is None:
+                        if self.require_complete:
+                            raise ValueError("Missing Gmail thread messages")
                         continue
 
                     doc_batch.append(doc)
@@ -239,7 +252,7 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                         yield doc_batch
                         doc_batch = []
             except HttpError as e:
-                if is_mail_service_disabled_error(e):
+                if not self.require_complete and is_mail_service_disabled_error(e):
                     logging.warning(
                         "Skipping Gmail sync for %s because the mailbox is disabled.",
                         user_email,
@@ -272,11 +285,11 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         self,
         callback: Any = None,
     ) -> GenerateSlimDocumentOutput:
-        """Retrieve slim documents for permission synchronization."""
+        """Enumerate all readable threads; any failed mailbox invalidates the snapshot."""
         query = build_time_range_query()
         doc_batch = []
 
-        for user_email in self._get_all_user_emails():
+        for user_email in self._get_all_user_emails(require_complete=True):
             logging.info(f"Fetching slim threads for user: {user_email}")
             gmail_service = get_gmail_service(self.creds, user_email)
             try:
@@ -284,7 +297,8 @@ class GmailConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                     retrieval_function=gmail_service.users().threads().list,
                     list_key="threads",
                     userId=user_email,
-                    fields=THREAD_LIST_FIELDS,
+                    fields=COMPLETE_THREAD_LIST_FIELDS,
+                    require_complete=True,
                     q=query,
                     continue_on_404_or_403=False,
                 ):

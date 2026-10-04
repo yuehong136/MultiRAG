@@ -63,6 +63,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
     {
         FileSource.AIRTABLE,
         FileSource.GOOGLE_DRIVE,
+        FileSource.GMAIL,
         FileSource.BITBUCKET,
         FileSource.S3,
         FileSource.R2,
@@ -582,7 +583,7 @@ class Discord(SyncBase):
 class Gmail(SyncBase):
     SOURCE_NAME: str = FileSource.GMAIL
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         # Gmail sync reuses the generic LoadConnector/PollConnector interface
         # implemented by common.data_source.gmail_connector.GmailConnector.
         #
@@ -591,7 +592,7 @@ class Gmail(SyncBase):
         #   batch_size:  optional, defaults to INDEX_BATCH_SIZE
         batch_size = self.conf.get("batch_size", INDEX_BATCH_SIZE)
 
-        self.connector = GmailConnector(batch_size=batch_size)
+        self.connector = GmailConnector(batch_size=batch_size, require_complete=bool(self.conf.get("sync_deleted_files")))
 
         credentials = self.conf.get("credentials")
         if not credentials:
