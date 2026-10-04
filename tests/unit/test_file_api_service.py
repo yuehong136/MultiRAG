@@ -356,3 +356,9 @@ def test_movereq_valid_combinations():
     assert MoveFileReq(src_file_ids=["f1"], new_name="x.txt").dest_file_id is None
     both = MoveFileReq(src_file_ids=["f1"], dest_file_id="d", new_name="x.txt")
     assert both.dest_file_id == "d" and both.new_name == "x.txt"
+
+
+@pytest.fixture(autouse=True)
+def ordinary_file_skill_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing fixtures model ordinary files; managed-tree SQL is tested separately."""
+    monkeypatch.setattr(svc, "is_skill_managed", lambda *args, **kwargs: False)

@@ -19,6 +19,11 @@ def test_parent_tables_are_created_before_their_children() -> None:
         if child is None:
             continue
         for fk in table.foreign_keys:
+            if fk.constraint.use_alter:
+                # Deferred cycle references are installed only after every table exists.
+                assert fk.constraint.name
+                assert fk.constraint.deferrable and fk.constraint.initially == "DEFERRED"
+                continue
             parent = order.get(fk.column.table.name)
             if parent is None:
                 continue

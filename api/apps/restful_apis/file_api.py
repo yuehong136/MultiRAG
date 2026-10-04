@@ -147,6 +147,8 @@ async def list_files(
     try:
         success, result = await db.run_sync(lambda s: file_api_service.list_files(s, tenant_id, args))  # TODO(async-phase4)
         return _respond(success, result)
+    except file_api_service.ManagedFileHiddenError:
+        return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -267,6 +269,8 @@ async def download(
         response.headers["Content-Disposition"] = f"attachment; filename={encoded_filename}"
         apply_safe_file_response_headers(response, content_type, ext)
         return response
+    except file_api_service.ManagedFileHiddenError:
+        return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -281,6 +285,8 @@ async def parent_folder(
     try:
         success, result = await db.run_sync(lambda s: file_api_service.get_parent_folder(s, file_id, user_id=tenant_id))  # TODO(async-phase4)
         return _respond(success, result)
+    except file_api_service.ManagedFileHiddenError:
+        return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -295,6 +301,8 @@ async def ancestors(
     try:
         success, result = await db.run_sync(lambda s: file_api_service.get_all_parent_folders(s, file_id, user_id=tenant_id))  # TODO(async-phase4)
         return _respond(success, result)
+    except file_api_service.ManagedFileHiddenError:
+        return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")

@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 
 import requests
 import xxhash
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.skills.file_guard import SKILL_SOURCES
 from api.utils.file_utils import filename_type, read_potential_broken_pdf, sanitize_path, thumbnail_img
 from common import settings
 from common.constants import MAXIMUM_PAGE_NUMBER, FileSource, ParserType, TaskStatus
@@ -56,7 +57,9 @@ class FileService(CommonService):
 
     @classmethod
     def get_by_pf_id(cls, db: Session, tenant_id: str, pf_id: str, page_number: int, items_per_page: int, orderby: str, desc: bool, keywords: str | None = None) -> tuple[list[dict], int]:
-        query = db.query(cls.model).filter(cls.model.tenant_id == tenant_id, cls.model.parent_id == pf_id, cls.model.id != pf_id)
+        query = db.query(cls.model).filter(
+            cls.model.tenant_id == tenant_id, cls.model.parent_id == pf_id, cls.model.id != pf_id, or_(cls.model.source_type.is_(None), cls.model.source_type.not_in(SKILL_SOURCES))
+        )
 
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
@@ -76,7 +79,16 @@ class FileService(CommonService):
                 file["size"] = cls.get_folder_size(db, file["id"])
                 file["kbs_info"] = []
                 # 检查该文件夹是否有子文件夹
-                children = db.query(cls.model).filter(cls.model.tenant_id == tenant_id, cls.model.parent_id == file["id"], cls.model.id != file["id"]).all()
+                children = (
+                    db.query(cls.model)
+                    .filter(
+                        cls.model.tenant_id == tenant_id,
+                        cls.model.parent_id == file["id"],
+                        cls.model.id != file["id"],
+                        or_(cls.model.source_type.is_(None), cls.model.source_type.not_in(SKILL_SOURCES)),
+                    )
+                    .all()
+                )
 
                 file["has_child_folder"] = any(child.to_dict()["type"] == FileType.FOLDER.value for child in children)
             else:
@@ -182,7 +194,7 @@ class FileService(CommonService):
 
     @classmethod
     def get_root_folder(cls, db: Session, tenant_id: str) -> dict:
-        root_folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).first()
+        root_folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).filter(or_(cls.model.source_type.is_(None), cls.model.source_type.not_in(SKILL_SOURCES))).first()
         if root_folder:
             return root_folder.to_dict()
 
@@ -315,9 +327,9 @@ class FileService(CommonService):
     def get_folder_size(cls, db: Session, folder_id: str) -> int:
         size = 0
 
-        def dfs(parent_id):
+        def dfs(parent_id: str) -> None:
             nonlocal size
-            for f in db.query(cls.model).filter_by(parent_id=parent_id).all():
+            for f in db.query(cls.model).filter_by(parent_id=parent_id).filter(or_(cls.model.source_type.is_(None), cls.model.source_type.not_in(SKILL_SOURCES))).all():
                 size += f.size
                 if f.type == FileType.FOLDER.value:
                     dfs(f.id)

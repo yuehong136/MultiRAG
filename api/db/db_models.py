@@ -4048,6 +4048,207 @@ class SystemSettings(BaseModel):
 """
 
 
+class SkillSpace(BaseModel):
+    __tablename__ = "t_ai_skill_spaces"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "id", name="uq_skill_space_tenant_id"),
+        sa.Index("uq_skill_space_live_name", "tenant_id", "name_key", unique=True, postgresql_where=sa.text("deleted_at IS NULL")),
+        sa.CheckConstraint("state IN ('active','deleting','delete_failed','deleted')", name="ck_skill_space_state"),
+        sa.CheckConstraint("(state = 'deleted') = (deleted_at IS NOT NULL)", name="ck_skill_space_tombstone"),
+        sa.CheckConstraint("backend_owner IN ('python','go')", name="ck_skill_space_owner"),
+        sa.CheckConstraint("revision > 0", name="ck_skill_space_revision"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "id", "active_generation_id"],
+            ["usr_ai.t_ai_skill_index_generations.tenant_id", "usr_ai.t_ai_skill_index_generations.space_id", "usr_ai.t_ai_skill_index_generations.id"],
+            name="fk_skill_space_generation",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(384), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    root_folder_id: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    backend_owner: Mapped[str] = mapped_column(String(8), nullable=False)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
+    active_generation_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Skill(BaseModel):
+    __tablename__ = "t_ai_skills"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "id", name="uq_skill_tenant_id"),
+        sa.Index("uq_skill_live_name", "space_id", "name", unique=True, postgresql_where=sa.text("deleted_at IS NULL")),
+        sa.ForeignKeyConstraint(["tenant_id", "space_id"], ["usr_ai.t_ai_skill_spaces.tenant_id", "usr_ai.t_ai_skill_spaces.id"], name="fk_skill_space"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "id", "active_version_id"],
+            ["usr_ai.t_ai_skill_versions.tenant_id", "usr_ai.t_ai_skill_versions.skill_id", "usr_ai.t_ai_skill_versions.id"],
+            name="fk_skill_active_version",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.CheckConstraint("state IN ('active','deleting','delete_failed','deleted')", name="ck_skill_state"),
+        sa.CheckConstraint("(state = 'deleted') = (deleted_at IS NOT NULL)", name="ck_skill_tombstone"),
+        sa.CheckConstraint("revision > 0", name="ck_skill_revision"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    folder_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    active_version_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SkillVersion(BaseModel):
+    __tablename__ = "t_ai_skill_versions"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "id", name="uq_skill_version_tenant_id"),
+        sa.UniqueConstraint("tenant_id", "skill_id", "id", name="uq_skill_version_binding"),
+        sa.UniqueConstraint("skill_id", "version", name="uq_skill_version_name"),
+        sa.ForeignKeyConstraint(["tenant_id", "skill_id"], ["usr_ai.t_ai_skills.tenant_id", "usr_ai.t_ai_skills.id"], name="fk_skill_version_skill"),
+        sa.CheckConstraint("state IN ('staging','installed','install_failed','deleting','delete_failed','deleted')", name="ck_skill_version_state"),
+        sa.CheckConstraint("(state = 'deleted') = (deleted_at IS NOT NULL)", name="ck_skill_version_tombstone"),
+        sa.CheckConstraint("index_state IN ('unindexed','indexing','ready','failed')", name="ck_skill_version_index_state"),
+        sa.CheckConstraint("file_count >= 0 AND file_count <= 1000 AND total_size >= 0 AND total_size <= 52428800", name="ck_skill_version_size"),
+        sa.CheckConstraint("source_kind = 'local'", name="ck_skill_version_source"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    skill_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    folder_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_digest: Mapped[str] = mapped_column(sa.CHAR(64), nullable=False)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    source_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    index_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total_size: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SkillVersionFile(BaseModel):
+    __tablename__ = "t_ai_skill_version_files"
+    __table_args__ = (
+        sa.UniqueConstraint("version_id", "relative_path", name="uq_skill_version_file_path"),
+        sa.UniqueConstraint("file_id", name="uq_skill_version_file_id"),
+        sa.ForeignKeyConstraint(["tenant_id", "version_id"], ["usr_ai.t_ai_skill_versions.tenant_id", "usr_ai.t_ai_skill_versions.id"], name="fk_skill_file_version"),
+        sa.CheckConstraint("size >= 0 AND size <= 5242880", name="ck_skill_file_size"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    version_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    relative_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_digest: Mapped[str] = mapped_column(sa.CHAR(64), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class SkillSearchConfig(BaseModel):
+    __tablename__ = "t_ai_skill_search_configs"
+    __table_args__ = (
+        sa.UniqueConstraint("space_id", name="uq_skill_config_space"),
+        sa.ForeignKeyConstraint(["tenant_id", "space_id"], ["usr_ai.t_ai_skill_spaces.tenant_id", "usr_ai.t_ai_skill_spaces.id"], name="fk_skill_config_space"),
+        sa.CheckConstraint("top_k BETWEEN 1 AND 100 AND vector_weight BETWEEN 0 AND 1 AND similarity_threshold BETWEEN 0 AND 1 AND revision > 0", name="ck_skill_config_values"),
+        sa.CheckConstraint(
+            "jsonb_typeof(fields) = 'object' AND fields ?& ARRAY['name','tags','description','content'] AND fields - ARRAY['name','tags','description','content'] = '{}'::jsonb AND (jsonb_typeof(fields->'name') = 'object' AND jsonb_typeof(fields->'name'->'enabled') = 'boolean' AND jsonb_typeof(fields->'name'->'weight') = 'number' AND (fields->'name'->>'weight')::numeric BETWEEN 0 AND 10) AND (jsonb_typeof(fields->'tags') = 'object' AND jsonb_typeof(fields->'tags'->'enabled') = 'boolean' AND jsonb_typeof(fields->'tags'->'weight') = 'number' AND (fields->'tags'->>'weight')::numeric BETWEEN 0 AND 10) AND (jsonb_typeof(fields->'description') = 'object' AND jsonb_typeof(fields->'description'->'enabled') = 'boolean' AND jsonb_typeof(fields->'description'->'weight') = 'number' AND (fields->'description'->>'weight')::numeric BETWEEN 0 AND 10) AND (jsonb_typeof(fields->'content') = 'object' AND jsonb_typeof(fields->'content'->'enabled') = 'boolean' AND jsonb_typeof(fields->'content'->'weight') = 'number' AND (fields->'content'->>'weight')::numeric BETWEEN 0 AND 10) AND (((fields->'name'->>'enabled')::boolean AND (fields->'name'->>'weight')::numeric > 0) OR ((fields->'tags'->>'enabled')::boolean AND (fields->'tags'->>'weight')::numeric > 0) OR ((fields->'description'->>'enabled')::boolean AND (fields->'description'->>'weight')::numeric > 0) OR ((fields->'content'->>'enabled')::boolean AND (fields->'content'->>'weight')::numeric > 0))",
+            name="ck_skill_config_fields",
+        ),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    embedding_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    rerank_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    vector_weight: Mapped[float] = mapped_column(Float, nullable=False)
+    similarity_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    fields: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
+
+
+class SkillIndexGeneration(BaseModel):
+    __tablename__ = "t_ai_skill_index_generations"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "space_id", "id", name="uq_skill_generation_binding"),
+        sa.ForeignKeyConstraint(["tenant_id", "space_id"], ["usr_ai.t_ai_skill_spaces.tenant_id", "usr_ai.t_ai_skill_spaces.id"], name="fk_skill_generation_space"),
+        sa.CheckConstraint("state IN ('building','active','retired','failed','cleanup_failed','deleted')", name="ck_skill_generation_state"),
+        sa.CheckConstraint("dimension >= 0 AND config_revision > 0 AND source_revision > 0", name="ck_skill_generation_values"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    config_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    index_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class SkillOperation(BaseModel):
+    __tablename__ = "t_ai_skill_operations"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "kind", "idempotency_key", name="uq_skill_operation_key"),
+        sa.ForeignKeyConstraint(["tenant_id", "space_id"], ["usr_ai.t_ai_skill_spaces.tenant_id", "usr_ai.t_ai_skill_spaces.id"], name="fk_skill_operation_space"),
+        sa.CheckConstraint("backend_owner IN ('python','go')", name="ck_skill_operation_owner"),
+        sa.CheckConstraint("state IN ('pending','running','succeeded','partial','failed')", name="ck_skill_operation_state"),
+        sa.CheckConstraint("kind IN ('install','activate','reindex','delete_version','delete_skill','delete_space','delete_skills','delete_spaces')", name="ck_skill_operation_kind"),
+        sa.CheckConstraint("phase IN ('staging','sealed','indexing','cleaning','done')", name="ck_skill_operation_phase"),
+        sa.CheckConstraint("attempts >= 0 AND revision > 0", name="ck_skill_operation_values"),
+        sa.Index("ix_skill_operation_claim", "backend_owner", "state", "next_attempt_at"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    space_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    resource_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    backend_owner: Mapped[str] = mapped_column(String(8), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(sa.CHAR(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    progress: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
+
+
+def ensure_skill_deferred_constraints(bind: Any) -> None:
+    """Install the two circular references after single-table bootstrap has finished."""
+    for model in (SkillSpace, Skill):
+        present = {fk["name"] for fk in sa.inspect(bind).get_foreign_keys(model.__tablename__, schema="usr_ai")}
+        for constraint in model.__table__.foreign_key_constraints:
+            if constraint.use_alter and constraint.name not in present:
+                bind.execute(sa.schema.AddConstraint(constraint))
+
+
 def models_in_fk_creation_order() -> list[type[BaseModel]]:
     """按外键拓扑序返回全部映射模型类——父表一定排在引用它的子表之前。
 
@@ -4129,6 +4330,9 @@ def init_database_tables():
         error_msg = f"Failed to create tables: {create_failed_list}"
         logging.error(error_msg)
         raise Exception(error_msg)
+
+    with engine.begin() as skill_connection:
+        ensure_skill_deferred_constraints(skill_connection)
 
     logging.info("Database table initialization completed successfully")
     return "Success"

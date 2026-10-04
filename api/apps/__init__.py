@@ -127,7 +127,13 @@ async def lifespan(app: FastAPI):
     logging.info("FastAPI application is ready to accept requests")
     logging.info("=" * 80)
 
+    from api.skills.runtime import start_skill_worker, stop_skill_worker
+
+    await start_skill_worker()
+
     yield  # 这里暂停执行，等待应用程序运行
+
+    await stop_skill_worker()
 
     # ============ 关闭时执行的代码 ============
     logging.info("=" * 80)

@@ -31,12 +31,17 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.skills.file_guard import is_skill_managed
 from api.utils.file_utils import filename_type
 from common import settings
 from common.constants import FileSource
 from common.misc_utils import get_uuid
 
 logger = logging.getLogger(__name__)
+
+
+class ManagedFileHiddenError(Exception):
+    """Managed assets are only visible through their state-aware Skills API."""
 
 
 def upload_file(db: Session, tenant_id: str, pf_id: str | None, file_contents: list[tuple[bytes, str]]) -> tuple[bool, Any]:
@@ -55,6 +60,9 @@ def upload_file(db: Session, tenant_id: str, pf_id: str | None, file_contents: l
     pf_folder = FileService.get_by_id(db, pf_id)
     if not pf_folder:
         return False, "Can't find this folder!"
+
+    if is_skill_managed(db, pf_id):
+        return False, "Use the Skills API to modify managed assets."
 
     file_res = []
     for blob, filename in file_contents:
@@ -125,6 +133,8 @@ def create_folder(db: Session, tenant_id: str, name: str, pf_id: str | None = No
         root_folder = FileService.get_root_folder(db, tenant_id)
         pf_id = root_folder["id"]
 
+    if is_skill_managed(db, pf_id):
+        return False, "Use the Skills API to modify managed assets."
     if not FileService.is_parent_folder_exist(db, pf_id):
         return False, "Parent Folder Doesn't Exist!"
     if FileService.query(db, name=name, parent_id=pf_id):
@@ -169,6 +179,8 @@ def list_files(db: Session, tenant_id: str, args: dict) -> tuple[bool, Any]:
         pf_id = root_folder["id"]
         FileService.init_knowledgebase_docs(db, pf_id, tenant_id)
 
+    if is_skill_managed(db, pf_id):
+        raise ManagedFileHiddenError
     file = FileService.get_by_id(db, pf_id)
     if not file:
         return False, "Folder not found!"
@@ -184,6 +196,8 @@ def list_files(db: Session, tenant_id: str, args: dict) -> tuple[bool, Any]:
 
 def get_parent_folder(db: Session, file_id: str, user_id: str | None = None) -> tuple[bool, Any]:
     """获取某个文件的父文件夹（带团队权限校验）。"""
+    if is_skill_managed(db, file_id):
+        raise ManagedFileHiddenError
     file = FileService.get_by_id(db, file_id)
     if not file:
         return False, "Folder not found!"
@@ -197,6 +211,8 @@ def get_parent_folder(db: Session, file_id: str, user_id: str | None = None) -> 
 
 def get_all_parent_folders(db: Session, file_id: str, user_id: str | None = None) -> tuple[bool, Any]:
     """获取某个文件的全部祖先文件夹（带团队权限校验）。"""
+    if is_skill_managed(db, file_id):
+        raise ManagedFileHiddenError
     file = FileService.get_by_id(db, file_id)
     if not file:
         return False, "Folder not found!"
@@ -212,7 +228,7 @@ class _FileDeletionError(Exception):
     """Safe, caller-facing file deletion rejection."""
 
 
-def delete_files(db: Session, uid: str, file_ids: list[str]) -> tuple[bool, Any]:
+def delete_files(db: Session, uid: str, file_ids: list[str], *, allow_skill_assets: bool = False) -> tuple[bool, Any]:
     """Best-effort batch deletion; count each fully deleted file/folder once.
 
     Failed children keep their ancestors. External cleanup is not transactional;
@@ -234,6 +250,8 @@ def delete_files(db: Session, uid: str, file_ids: list[str]) -> tuple[bool, Any]
                 raise _FileDeletionError(f"Tenant not found for file {file_id}")
             if not check_file_team_permission(db, file, uid):
                 raise _FileDeletionError(f"No authorization for file {file_id}")
+            if not allow_skill_assets and is_skill_managed(db, file_id):
+                raise _FileDeletionError(f"Use the Skills API to delete managed file {file_id}")
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 raise _FileDeletionError(f"Use the dataset documents API to delete file {file_id}")
 
@@ -284,12 +302,14 @@ def delete_files(db: Session, uid: str, file_ids: list[str]) -> tuple[bool, Any]
     return not errors, {"success_count": len(completed), "errors": errors}
 
 
-async def delete_files_async(uid: str, file_ids: list[str]) -> tuple[bool, Any]:
+async def delete_files_async(uid: str, file_ids: list[str], *, allow_skill_assets: bool = False) -> tuple[bool, Any]:
     """delete_files 的异步入口：存储 rm 与 remove_document（内混 Redis 取消/存储/doc-store）
     逐文件交错在共享 helper 内，整块进工作线程 + 自开短会话。"""
 
     def _run() -> tuple[bool, Any]:
         with db_connection() as s:
+            if allow_skill_assets:
+                return delete_files(s, uid, file_ids, allow_skill_assets=True)
             return delete_files(s, uid, file_ids)
 
     return await asyncio.to_thread(_run)
@@ -306,6 +326,11 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
     files = FileService.get_by_ids(db, src_file_ids)
     if not files:
         return False, "Source files not found!"
+
+    if any(is_skill_managed(db, identity, descendants=True) or is_skill_managed(db, identity) for identity in src_file_ids):
+        return False, "Use the Skills API to modify managed assets."
+    if dest_file_id and is_skill_managed(db, dest_file_id):
+        return False, "Use the Skills API to modify managed assets."
 
     files_dict = {f.id: f for f in files}
 
@@ -426,6 +451,8 @@ def get_file_content(db: Session, uid: str, file_id: str) -> tuple[bool, Any]:
 
     :return: (True, File 对象) 或 (False, error_message)
     """
+    if is_skill_managed(db, file_id):
+        raise ManagedFileHiddenError
     file = FileService.get_by_id(db, file_id)
     if not file:
         return False, "Document not found!"
