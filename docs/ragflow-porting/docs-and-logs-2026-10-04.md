@@ -67,3 +67,26 @@ pipeline 说明文本，符合当前产品用语。
 已有字符串显示与本地上传图标保留。无需修改组件或重复增加测试框架。
 后续上游 `7c0584a2b` 修复图谱图标、`0cfa30087` 增加 wiki 图标属独立展示扩展，
 本项不引入上游图标注册表。仅提交结论；未连接外部连接器产生真实摄取日志。
+
+## d4147efc66688d2118f17bf1d867bf64faec0752
+
+结论：没有需要新增的本地版本发布说明，仅保留审计结论。上游此提交新增 **RAGFlow
+v0.25.1** 发布记录，不能作为 MultiRAG 版本号或整版交付声明。后续 `8aaf0942b` 将
+“新增连接器”更正为“同步源端删除”，并去除大 PDF 优化的重复表述，本次按其含义核对。
+
+下面基于本仓已提交快照 `2ebc41b2` 核对；未提交的连接器/配置等并行改动不作为已交付依据。
+
+| 上游发布条目 | 本地证据与采用边界 |
+|---|---|
+| 全部 Web API REST 化、统一创建/索引、保留兼容 | [REST API](../../api/apps/restful_apis/) 已存在；[文档旧入口](../../api/apps/document_app.py) 仍有活动路由与 deprecated 兼容路由。不能将部分完成写成全部端点迁移完成，既有逐接口账本继续有效。 |
+| OpenDataLoader、Docling 路由 | [General 解析器](../../core/app/naive.py) 和 [流程 Parser](../../core/flow/parser/parser.py) 有实际路由，[解析实现](../../deepdoc/parser/) 已存在。本项只静态核对入口，未调用远程解析服务。 |
+| 大 PDF 懒加载/分批降低内存 | [PDF parser](../../deepdoc/parser/pdf_parser.py) 的 `parse_into_bboxes` 按窗口加载并释放，[DeepDOC 配置](../../common/deepdoc_config.py) 默认窗口 50 页。不是所有 PDF 入口的统一保证，也没有本次内存基准；不照搬“显著降低”效果或固定大于 50 页阈值。 |
+| Bitbucket、Gmail、Google Drive、Airtable 删除同步 | 已提交 [连接器 README](../../common/data_source/README.md) 明确默认关闭、完整清单、权限失败阻断和存储尽力清理等合同。沿用已有实现与验证记录，不将其写成新增四个连接器或云端实际删除已验收。 |
+| DeepSeek v4 | [模型目录](../../configs/llm_factories.json) 存在 `deepseek-v4-flash/pro`，但目录可选不等于全部接口或真实供应商验收。本次不作新的模型运行能力声明。 |
+| UCloud | 已提交提供商配置和 Python 模型实现中未找到 UCloud 专用接入；通用兼容入口不能替代专用支持证明，不写为完成。 |
+| v0.24→v0.25 元数据升级可见性 | 本地使用 SQLAlchemy/Alembic schema 和独立版本，无对应上游版本升级声明可直接复用。元数据接口存在不足以证明所有历史数据迁移，继续引用本地数据库指南。 |
+| 重复聊天输出 | [OpenAI SSE](../../api/apps/restful_apis/openai_api.py) 已将最终全文放在 `final_content`，正文走增量输出；既有逐提交记录包含对应修复。不扩大成所有聊天渠道均无重复输出的保证。 |
+
+验证为完整 diff、冻结范围内后续修订、已提交源文件与文档路径核对。没有修改生产代码、
+版本文件或模型目录；未执行生产迁移、云端连接器、真实模型、内存基准或全量聊天 E2E。
+此文是适用性审计，不是发布公告；既有运行验收记录不能充当本次新增运行证据。
