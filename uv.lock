@@ -1278,15 +1278,14 @@ wheels = [
 
 [[package]]
 name = "cn2an"
-version = "0.5.22"
+version = "0.5.24"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "proces" },
-    { name = "setuptools" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/a1/5c/f565259e568316e5fde4dba292e2ca9cff0619657e4ec9f254f415543f59/cn2an-0.5.22.tar.gz", hash = "sha256:27ae5b56441d7329ed2ececffa026bfa8fc353dcf1fb0d9146b303b9cce3ac37" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/4e/07/b45328cc4a4b88adea7b24d84d82f569e362773d4a4b69aba6e2350b058a/cn2an-0.5.24.tar.gz", hash = "sha256:c276cfc4b3c9e758214841de597502eb178de50b8da2633ed345564f90705f0e" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/1c/3d/3e04a822b8615904269f7126d8b019ae5c3b5c3c78397ec8bab056b02099/cn2an-0.5.22-py3-none-any.whl", hash = "sha256:cba4c8f305b43da01f50696047cca3116c727424ac62338da6a3426e01454f3e" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8c/e6/f3436a83c6dddc306ee8d6cf7dc1b90a5a3496ae66d9392100c0c5c3f578/cn2an-0.5.24-py3-none-any.whl", hash = "sha256:3d57d862a56133070ba6a737b8095bfc94716b41b7684e7a98d2d5b049495db7" },
 ]
 
 [[package]]
@@ -4592,7 +4591,7 @@ requires-dist = [
     { name = "bs4", specifier = ">=0.0.2" },
     { name = "captcha", specifier = ">=0.7.1" },
     { name = "chardet", specifier = ">=5.2.0,<6.0.0" },
-    { name = "cn2an", specifier = "==0.5.22" },
+    { name = "cn2an", specifier = "==0.5.24" },
     { name = "cohere", specifier = "==5.6.2" },
     { name = "crawl4ai", specifier = ">=0.8.0,<1.0.0" },
     { name = "cryptography", specifier = ">=46.0.3,<49.0.0" },
