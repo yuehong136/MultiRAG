@@ -561,14 +561,37 @@ class Notion(SyncBase):
 class Discord(SyncBase):
     SOURCE_NAME: str = FileSource.DISCORD
 
-    async def _generate(self, task: dict):
-        server_ids: str | None = self.conf.get("server_ids", None)
-        # "channel1,channel2"
-        channel_names: str | None = self.conf.get("channel_names", None)
+    @staticmethod
+    def _coerce_str_list(raw: Any) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            items = raw.split(",")
+        elif isinstance(raw, list | tuple | set):
+            items = list(raw)
+        else:
+            raise ValueError("Discord scope must be a list or comma-separated string")
+        cleaned: list[str] = []
+        for item in items:
+            if item is None:
+                continue
+            if isinstance(item, bool) or not isinstance(item, str | int):
+                raise ValueError("Discord scope entries must be strings or integer IDs")
+            if value := str(item).strip():
+                cleaned.append(value)
+        return cleaned
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        server_ids = self._coerce_str_list(self.conf.get("server_ids"))
+        channels = self.conf.get("channels")
+        if channels in (None, "", []):
+            channels = self.conf.get("channel_names")
+        channel_names = self._coerce_str_list(channels)
 
         self.connector = DiscordConnector(
-            server_ids=server_ids.split(",") if server_ids else [],
-            channel_names=channel_names.split(",") if channel_names else [],
+            # Invalid IDs must fail; dropping them could widen the configured scope.
+            server_ids=server_ids,
+            channel_names=channel_names,
             start_date=datetime(1970, 1, 1, tzinfo=UTC).strftime("%Y-%m-%d"),
             batch_size=self.conf.get("batch_size", 1024),
         )

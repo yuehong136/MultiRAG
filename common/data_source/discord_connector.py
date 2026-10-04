@@ -1,10 +1,12 @@
-"""Discord connector"""
+"""Discord connector. See discord.md for batching and deletion-sync limitations."""
 
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncGenerator, AsyncIterable, Generator
+from contextlib import closing
 from datetime import UTC, datetime
+from threading import Thread as WorkerThread
 from typing import Any
 
 from discord import Client, MessageType
@@ -166,6 +168,44 @@ async def _fetch_documents_from_channel(
             yield _convert_message_to_document(thread_message, sections)
 
 
+def _iterate_async_documents(documents: AsyncGenerator[Document, None]) -> Generator[Document, None, None]:
+    """Pull documents on a dedicated loop, including from an async sync worker."""
+    loop = asyncio.new_event_loop()
+
+    def run_loop() -> None:
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                loop.close()
+
+    async def next_document() -> Document:
+        return await anext(documents)
+
+    async def close_documents() -> None:
+        await documents.aclose()
+
+    worker = WorkerThread(target=run_loop, name="discord-connector-retrieval", daemon=True)
+    worker.start()
+    try:
+        while True:
+            try:
+                document = asyncio.run_coroutine_threadsafe(next_document(), loop).result()
+            except StopAsyncIteration:
+                break
+            yield document
+    finally:
+        try:
+            asyncio.run_coroutine_threadsafe(close_documents(), loop).result()
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            worker.join()
+
+
 def _manage_async_retrieval(
     token: str,
     requested_start_date_string: str,
@@ -173,7 +213,7 @@ def _manage_async_retrieval(
     server_ids: list[int],
     start: datetime | None = None,
     end: datetime | None = None,
-) -> Iterable[Document]:
+) -> Generator[Document, None, None]:
     # parse requested_start_date_string to datetime
     pull_date: datetime | None = datetime.strptime(requested_start_date_string, "%Y-%m-%d").replace(tzinfo=UTC) if requested_start_date_string else None
 
@@ -185,47 +225,44 @@ def _manage_async_retrieval(
     if proxy_url:
         logging.info(f"Using proxy for Discord: {proxy_url}")
 
-    async def _async_fetch() -> AsyncIterable[Document]:
+    async def _async_fetch() -> AsyncGenerator[Document, None]:
         intents = Intents.default()
         intents.message_content = True
         async with Client(intents=intents, proxy=proxy_url) as cli:
-            asyncio.create_task(coro=cli.start(token))
-            await cli.wait_until_ready()
+            client_task = asyncio.create_task(cli.start(token))
+            ready_task = asyncio.create_task(cli.wait_until_ready())
+            try:
+                # A rejected login can finish start() without ever signalling ready.
+                done, _ = await asyncio.wait((client_task, ready_task), return_when=asyncio.FIRST_COMPLETED)
+                if client_task in done:
+                    await client_task
+                    raise RuntimeError("Discord client stopped before becoming ready")
+                await ready_task
 
-            filtered_channels: list[TextChannel] = await _fetch_filtered_channels(
-                discord_client=cli,
-                server_ids=server_ids,
-                channel_names=channel_names,
-            )
+                filtered_channels: list[TextChannel] = await _fetch_filtered_channels(
+                    discord_client=cli,
+                    server_ids=server_ids,
+                    channel_names=channel_names,
+                )
 
-            for channel in filtered_channels:
-                async for doc in _fetch_documents_from_channel(
-                    channel=channel,
-                    start_time=start_time,
-                    end_time=end_time,
-                ):
-                    yield doc
-
-    def run_and_yield() -> Iterable[Document]:
-        loop = asyncio.new_event_loop()
-        try:
-            # Get the async generator
-            async_gen = _async_fetch()
-            # Convert to AsyncIterator
-            async_iter = async_gen.__aiter__()
-            while True:
+                for channel in filtered_channels:
+                    async for doc in _fetch_documents_from_channel(
+                        channel=channel,
+                        start_time=start_time,
+                        end_time=end_time,
+                    ):
+                        yield doc
+                if client_task.done():
+                    await client_task
+            finally:
                 try:
-                    # Create a coroutine by calling anext with the async iterator
-                    next_coro = anext(async_iter)
-                    # Run the coroutine to get the next document
-                    doc = loop.run_until_complete(next_coro)
-                    yield doc
-                except StopAsyncIteration:
-                    break
-        finally:
-            loop.close()
+                    await cli.close()
+                finally:
+                    ready_task.cancel()
+                    client_task.cancel()
+                    await asyncio.gather(ready_task, client_task, return_exceptions=True)
 
-    return run_and_yield()
+    return _iterate_async_documents(_async_fetch())
 
 
 class DiscordConnector(LoadConnector, PollConnector):
@@ -238,7 +275,7 @@ class DiscordConnector(LoadConnector, PollConnector):
         # YYYY-MM-DD
         start_date: str | None = None,
         batch_size: int = INDEX_BATCH_SIZE,
-    ):
+    ) -> None:
         self.batch_size = batch_size
         self.channel_names: list[str] = channel_names if channel_names else []
         self.server_ids: list[int] = [int(server_id) for server_id in server_ids] if server_ids else []
@@ -258,7 +295,7 @@ class DiscordConnector(LoadConnector, PollConnector):
     ) -> GenerateDocumentsOutput:
         doc_batch = []
 
-        def merge_batch():
+        def merge_batch() -> Document:
             nonlocal doc_batch
             id = doc_batch[0].id
             min_updated_at = doc_batch[0].doc_updated_at
@@ -281,18 +318,21 @@ class DiscordConnector(LoadConnector, PollConnector):
                 size_bytes=size_bytes,
             )
 
-        for doc in _manage_async_retrieval(
-            token=self.discord_bot_token,
-            requested_start_date_string=self.requested_start_date_string,
-            channel_names=self.channel_names,
-            server_ids=self.server_ids,
-            start=start,
-            end=end,
-        ):
-            doc_batch.append(doc)
-            if len(doc_batch) >= self.batch_size:
-                yield [merge_batch()]
-                doc_batch = []
+        with closing(
+            _manage_async_retrieval(
+                token=self.discord_bot_token,
+                requested_start_date_string=self.requested_start_date_string,
+                channel_names=self.channel_names,
+                server_ids=self.server_ids,
+                start=start,
+                end=end,
+            )
+        ) as documents:
+            for doc in documents:
+                doc_batch.append(doc)
+                if len(doc_batch) >= self.batch_size:
+                    yield [merge_batch()]
+                    doc_batch = []
 
         if doc_batch:
             yield [merge_batch()]
@@ -302,18 +342,18 @@ class DiscordConnector(LoadConnector, PollConnector):
         return None
 
     def validate_connector_settings(self) -> None:
-        """Validate Discord connector settings"""
-        if not self.discord_client:
+        """Validate token presence; remote authentication happens during retrieval."""
+        if not self.discord_bot_token:
             raise ConnectorMissingCredentialError("Discord")
 
-    def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> Any:
+    def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> GenerateDocumentsOutput:
         """Poll Discord for recent messages"""
         return self._manage_doc_batching(
             datetime.fromtimestamp(start, tz=UTC),
             datetime.fromtimestamp(end, tz=UTC),
         )
 
-    def load_from_state(self) -> Any:
+    def load_from_state(self) -> GenerateDocumentsOutput:
         """Load messages from Discord state"""
         return self._manage_doc_batching(None, None)
 
