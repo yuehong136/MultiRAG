@@ -43,7 +43,7 @@ func TestVLLMModelChatAndDiscovery(t *testing.T) {
 	}
 	key, name, message, region, thinking := "key", "doubao", "question", "fixture", true
 	config := &APIConfig{APIKey: &key, Region: &region}
-	response, err := driver.Chat(&name, &message, config, &ChatConfig{Thinking: &thinking})
+	response, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: &thinking})
 	if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 		t.Fatalf("response = %#v, %v", response, err)
 	}

@@ -75,16 +75,16 @@ func aliyunChatBody(modelName string, messages []Message, config *ChatConfig, st
 	if modelName == "" {
 		return nil, errors.New("aliyun: model name is required")
 	}
-	if len(messages) == 0 {
-		return nil, errors.New("aliyun: at least one message is required")
+	if err := ValidateMessages(messages); err != nil {
+		return nil, err
 	}
-	apiMessages := make([]map[string]string, 0, len(messages))
-	for _, message := range messages {
-		if message.Role == "" {
-			return nil, errors.New("aliyun: message role is required")
+	if stream {
+		if err := ValidateTextMessages(messages); err != nil {
+			return nil, err
 		}
-		apiMessages = append(apiMessages, map[string]string{"role": message.Role, "content": message.Content})
 	}
+	apiMessages := messages
+
 	body := map[string]interface{}{
 		"model":       modelName,
 		"messages":    apiMessages,
@@ -195,12 +195,8 @@ func (m *AliyunModel) Chat(modelName, message *string, apiConfig *APIConfig, cha
 }
 
 // ChatWithMessages sends role-tagged messages through the same chat endpoint.
-func (m *AliyunModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatConfig *ChatConfig) (string, error) {
-	response, err := m.chat(modelName, messages, apiConfig, chatConfig)
-	if err != nil {
-		return "", err
-	}
-	return *response.Answer, nil
+func (m *AliyunModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatConfig *ChatConfig) (*ChatResponse, error) {
+	return m.chat(modelName, messages, apiConfig, chatConfig)
 }
 
 func (m *AliyunModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {

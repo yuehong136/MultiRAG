@@ -59,8 +59,8 @@ func TestHistoryChatProtocolsAndCancellation(t *testing.T) {
 			key, name, region, off, zero := "fixture-key", "model", "region", false, 0.0
 			api := &APIConfig{APIKey: &key, Region: &region}
 			answer, err := driver.ChatWithMessages(name, api, history, &ChatConfig{Thinking: &off, Temperature: &zero})
-			if err != nil || answer != "answer" {
-				t.Fatalf("history chat=%s err=%v", answer, err)
+			if err != nil || answer == nil || answer.Answer == nil || *answer.Answer != "answer" {
+				t.Fatalf("history chat=%v err=%v", answer, err)
 			}
 			var events []string
 			err = driver.ChatStreamlyWithMessages(name, history, api, &ChatConfig{Thinking: &off, Temperature: &zero}, func(content, reason *string) error {

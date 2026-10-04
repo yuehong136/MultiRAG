@@ -296,7 +296,7 @@ func (s *ChatSessionService) completionModel(ctx context.Context, dialog *entity
 	return model, nil
 }
 
-// Completion uses a tenant-bound text model with complete role-tagged history.
+// Completion uses a tenant-bound chat model with complete text or image history.
 func (s *ChatSessionService) Completion(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string) (map[string]interface{}, error) {
 	session, dialog, reference, err := s.prepareCompletion(ctx, conversationID, messages, llmID)
 	if err != nil {
@@ -306,16 +306,20 @@ func (s *ChatSessionService) Completion(ctx context.Context, userID string, conv
 	if err != nil {
 		return nil, err
 	}
-	answer, err := model.Chat(s.buildSystemPrompt(dialog), s.convertToHistory(s.processMessages(messages, dialog)), s.buildGenConf(dialog, config))
+	history, err := s.modelMessages(s.processMessages(messages, dialog), s.buildSystemPrompt(dialog))
+	if err != nil {
+		return nil, err
+	}
+	response, err := model.ChatWithMessages(history, s.buildGenConf(dialog, config))
 	if err != nil {
 		return nil, err
 	}
 	if llmID == "" {
-		if err := s.persistCompletion(ctx, session, messages, answer, messageID, reference); err != nil {
+		if err := s.persistCompletion(ctx, session, messages, *response.Answer, messageID, reference); err != nil {
 			return nil, err
 		}
 	}
-	return map[string]interface{}{"answer": answer, "reference": reference[len(reference)-1], "final": true, "id": messageID, "session_id": session.ID}, nil
+	return map[string]interface{}{"answer": *response.Answer, "reasoning_content": response.ReasoningContent, "reference": reference[len(reference)-1], "final": true, "id": messageID, "session_id": session.ID}, nil
 }
 
 // CompletionStream runs the sender synchronously, so its error remains available
@@ -343,7 +347,11 @@ func (s *ChatSessionService) CompletionStream(ctx context.Context, userID string
 		}
 		return sender("data: " + string(bytes) + "\n\n")
 	}
-	err = model.ChatStreamlyWithSender(s.buildSystemPrompt(dialog), s.convertToHistory(s.processMessages(messages, dialog)), s.buildGenConf(dialog, config), func(content, thought *string) error {
+	history, err := s.modelMessages(s.processMessages(messages, dialog), s.buildSystemPrompt(dialog))
+	if err != nil {
+		return err
+	}
+	err = model.ChatStreamlyWithMessages(history, s.buildGenConf(dialog, config), func(content, thought *string) error {
 		if content != nil && *content == "[DONE]" {
 			return nil
 		}
@@ -453,20 +461,35 @@ func (s *ChatSessionService) cleanContent(content string) string {
 	return content
 }
 
-// convertToHistory converts messages to history format for LLM
-func (s *ChatSessionService) convertToHistory(messages []map[string]interface{}) []map[string]string {
-	history := make([]map[string]string, 0)
-	for _, msg := range messages {
-		role, _ := msg["role"].(string)
-		content, _ := msg["content"].(string)
-		if role != "" && content != "" && role != "system" {
-			history = append(history, map[string]string{
-				"role":    role,
-				"content": content,
-			})
-		}
+// modelMessages retains every conversational content value for validation by the model.
+// The configured system prompt remains authoritative, as in the legacy session path.
+func (s *ChatSessionService) modelMessages(messages []map[string]interface{}, system string) ([]models.Message, error) {
+	history := []models.Message{}
+	if system != "" {
+		history = append(history, models.Message{Role: "system", Content: system})
 	}
-	return history
+	for _, msg := range messages {
+		role, ok := msg["role"].(string)
+		if !ok || role == "" {
+			return nil, errors.New("message role is required")
+		}
+		if role == "system" {
+			continue
+		}
+		item := models.Message{Role: role, Content: msg["content"]}
+		if value, present := msg["reasoning_content"]; present && value != nil {
+			text, ok := value.(string)
+			if !ok {
+				return nil, errors.New("invalid reasoning_content")
+			}
+			item.ReasoningContent = &text
+		}
+		history = append(history, item)
+	}
+	if err := models.ValidateMessages(history); err != nil {
+		return nil, err
+	}
+	return history, nil
 }
 
 // buildGenConf builds generation config from dialog and request

@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,6 +69,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 		}
 	}
 	var calls [2]atomic.Int32
+	var received [2]atomic.Value
 	fixtures := make([]*httptest.Server, 2)
 	for i := range fixtures {
 		fixtures[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +93,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Error(err)
 			}
+			received[i].Store(body["messages"])
 			if body["model"] != "Qwen/custom" {
 				t.Errorf("model %v", body)
 			}
@@ -209,6 +213,44 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 		if result["code"] != float64(0) || result["answer"] != fmt.Sprintf("answer-%d", i) {
 			t.Fatalf("chat %v", result)
 		}
+
+		multimodal := []map[string]interface{}{{"role": "system", "content": "rules"}, {"role": "assistant", "content": "previous", "reasoning_content": "thought"}, {"role": "user", "content": []interface{}{map[string]interface{}{"type": "text", "text": "describe"}, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}}}}}
+		delete(body, "message")
+		body["messages"] = multimodal
+		_, result = request("POST", "/api/v1/chat/completions", "owner", body)
+		encoded, _ := json.Marshal(multimodal)
+		var expected interface{}
+		json.Unmarshal(encoded, &expected)
+		if result["code"] != float64(0) || result["answer"] != fmt.Sprintf("answer-%d", i) || !reflect.DeepEqual(received[i].Load(), expected) {
+			t.Fatalf("multimodal history/response lost: %v %v", result, received[i].Load())
+		}
+		body["stream"] = true
+		before := calls[i].Load()
+		httpStatus, rejected := request("POST", "/api/v1/chat/completions", "owner", body)
+		if httpStatus != http.StatusBadRequest || rejected["code"] != float64(common.CodeBadRequest) || calls[i].Load() != before {
+			t.Fatalf("multimodal stream reached provider: %d %v", httpStatus, rejected)
+		}
+		textHistory := []map[string]interface{}{{"role": "system", "content": "rules"}, {"role": "assistant", "content": "previous"}, {"role": "user", "content": "next"}}
+		body["messages"] = textHistory
+		raw, _ := json.Marshal(body)
+		streamRequest, _ := http.NewRequest("POST", api.URL+"/api/v1/chat/completions", bytes.NewReader(raw))
+		streamRequest.Header.Set("Content-Type", "application/json")
+		streamRequest.Header.Set("X-Fixture-User", "owner")
+		streamResponse, err := http.DefaultClient.Do(streamRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		streamBody, err := io.ReadAll(streamResponse.Body)
+		streamResponse.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, _ = json.Marshal(textHistory)
+		json.Unmarshal(encoded, &expected)
+		if streamResponse.StatusCode != 200 || !strings.Contains(string(streamBody), "[DONE]") || !strings.Contains(string(streamBody), fmt.Sprintf("answer-%d", i)) || !reflect.DeepEqual(received[i].Load(), expected) {
+			t.Fatalf("stream history lost: %s %v", streamBody, received[i].Load())
+		}
+		body["stream"] = false
 		_, result = request("POST", "/api/v1/chat/completions", "other", body)
 		if result["code"] == float64(0) {
 			t.Fatal("cross-tenant chat allowed")
@@ -313,7 +355,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 	if dao.GetModelProviderManager().FindProvider("vllm").URL["default"] != "" {
 		t.Fatal("global provider URLs polluted")
 	}
-	if calls[0].Load() != 5 || calls[1].Load() != 5 {
+	if calls[0].Load() != 7 || calls[1].Load() != 7 {
 		t.Fatalf("unexpected provider calls %d %d", calls[0].Load(), calls[1].Load())
 	}
 	if err := dao.DB.Model(&entity.TenantModel{}).Where("model_name = ?", "Qwen/custom").Update("extra", "invalid").Error; err != nil {

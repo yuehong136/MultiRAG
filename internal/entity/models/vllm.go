@@ -111,12 +111,8 @@ func (v *VLLMModel) Chat(name, message *string, apiConfig *APIConfig, config *Ch
 	}
 	return v.chat(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config)
 }
-func (v *VLLMModel) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
-	result, err := v.chat(name, messages, apiConfig, config)
-	if err != nil {
-		return "", err
-	}
-	return *result.Answer, nil
+func (v *VLLMModel) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+	return v.chat(name, messages, apiConfig, config)
 }
 
 func (v *VLLMModel) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {

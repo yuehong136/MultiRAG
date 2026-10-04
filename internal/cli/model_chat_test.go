@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -110,6 +111,13 @@ func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 	if body["provider_name"] != "zhipu-ai" || body["instance_name"] != "default" || body["stream"] != false || body["thinking"] != true || body["model_name"] != "glm-test" || body["effort"] != "high" {
 		t.Fatalf("body = %#v", body)
 	}
+	if _, present := body["message"]; present {
+		t.Fatal("legacy message still emitted")
+	}
+	messages, ok := body["messages"].([]interface{})
+	if !ok || len(messages) != 1 || messages[0].(map[string]interface{})["content"] != "hello" {
+		t.Fatalf("messages %#v", body)
+	}
 	result, ok := response.(*NonStreamResponse)
 	if !ok || result.Answer != "answer" || result.ReasoningContent != "reason" {
 		t.Fatalf("response = %#v", response)
@@ -163,5 +171,75 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 				t.Fatalf("answer = %#v", result)
 			}
 		})
+	}
+}
+
+func TestChatCLIContentArray(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Messages []struct {
+				Role    string
+				Content []map[string]interface{}
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 1 || body.Messages[0].Role != "user" || len(body.Messages[0].Content) != 2 || body.Messages[0].Content[1]["type"] != "image_url" {
+			t.Fatalf("content lost %#v", body)
+		}
+		fmt.Fprint(w, `{"code":0,"answer":"image answer"}`)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	port, _ := strconv.Atoi(u.Port())
+	client := NewMultiRAGClient("user")
+	client.HTTPClient.Host = u.Hostname()
+	client.HTTPClient.Port = port
+	client.CurrentModel = &CurrentModel{Provider: "vllm", Instance: "fixture", Model: "vision"}
+	message := `[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]`
+	cmd := &Command{Params: map[string]interface{}{"message": message}}
+	result, err := client.ChatToModel(cmd)
+	if err != nil || result.(*NonStreamResponse).Answer != "image answer" {
+		t.Fatalf("result %v %v", result, err)
+	}
+	for _, input := range []string{`[42]`, `[{"type":"text","text":42}]`} {
+		cmd.Params["message"] = input
+		if _, err := client.ChatToModel(cmd); err == nil {
+			t.Fatalf("accepted %s", input)
+		}
+	}
+	cmd.Params["message"] = message
+	cmd.Params["stream"] = true
+	if _, err := client.ChatToModel(cmd); err == nil {
+		t.Fatal("accepted multimodal stream")
+	}
+	if calls != 1 {
+		t.Fatalf("invalid content reached server: %d", calls)
+	}
+}
+
+func TestChatCLIPreservesBracketText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Messages []struct{ Content string } }
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 1 || body.Messages[0].Content != "[todo] explain this" {
+			t.Fatalf("text changed %#v", body)
+		}
+		fmt.Fprint(w, `{"code":0,"answer":"answer"}`)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	port, _ := strconv.Atoi(u.Port())
+	client := NewMultiRAGClient("user")
+	client.HTTPClient.Host = u.Hostname()
+	client.HTTPClient.Port = port
+	client.CurrentModel = &CurrentModel{Provider: "vllm", Instance: "fixture", Model: "test"}
+	if _, err := client.ChatToModel(&Command{Params: map[string]interface{}{"message": "[todo] explain this"}}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2,20 +2,19 @@ package models
 
 import "context"
 
-// Message represents a chat message with role.
+// Message carries text or OpenAI-style text/image_url content parts.
 type Message struct {
-	Role    string
-	Content string
+	Role             string  `json:"role"`
+	Content          any     `json:"content"`
+	ReasoningContent *string `json:"reasoning_content,omitempty"`
 }
 
 // EmbeddingModel interface for embedding models
 type ModelDriver interface {
 	Name() string
 
-	// Chat sends a message and returns response
-	Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error)
 	// ChatWithMessages sends multiple role-tagged messages and returns a response.
-	ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error)
+	ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error)
 	// ChatStreamly sends a message and streams response
 	ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error)
 	// ChatStreamlyWithChannel sends a message and streams response to channel (better performance)

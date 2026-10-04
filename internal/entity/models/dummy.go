@@ -44,8 +44,8 @@ func (z *DummyModel) Chat(modelName, message *string, apiConfig *APIConfig, mode
 }
 
 // ChatWithMessages sends multiple role-tagged messages and returns a response.
-func (z *DummyModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
-	return "", fmt.Errorf("not implemented")
+func (z *DummyModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 // ChatStreamly sends a message and streams response

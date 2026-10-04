@@ -223,6 +223,41 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 	if model, err := svc.modelProviderService.GetChatModel("session-tenant", ""); err != nil || model.ModelConfig.Thinking == nil || !*model.ModelConfig.Thinking {
 		t.Fatalf("default model/thinking %v %v", model, err)
 	}
+
+	// Verify array content survives provider transport and independent persisted readback.
+	imageParts := []interface{}{map[string]interface{}{"type": "text", "text": "describe"}, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/image.png"}}}
+	imageHistory := []map[string]interface{}{{"role": "assistant", "content": "previous", "reasoning_content": "old reasoning"}, {"role": "user", "content": imageParts, "id": "image-msg"}}
+	var imageCalls atomic.Int32
+	imageProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		imageCalls.Add(1)
+		var body struct{ Messages []models.Message }
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 3 || body.Messages[0].Content != "rules" || body.Messages[1].ReasoningContent == nil || *body.Messages[1].ReasoningContent != "old reasoning" || !reflect.DeepEqual(body.Messages[2].Content, imageParts) {
+			t.Fatalf("image history lost %#v", body)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"image answer","reasoning_content":"image thought"}}]}`)
+	}))
+	defer imageProvider.Close()
+	provider.URL["fixture"] = imageProvider.URL
+	result, err = svc.Completion(context.Background(), "session-user", "sync-session", imageHistory, "", config, "image-msg")
+	if err != nil || result["answer"] != "image answer" {
+		t.Fatalf("image completion %v %v", result, err)
+	}
+	if err := json.Unmarshal([]byte(readStored("sync-session")), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Messages) != 3 || !reflect.DeepEqual(stored.Messages[1]["content"], imageParts) || stored.Messages[0]["reasoning_content"] != "old reasoning" || stored.Messages[2]["content"] != "image answer" {
+		t.Fatalf("image persistence lost %#v", stored)
+	}
+	before = readStored("sync-session")
+	if err := svc.CompletionStream(context.Background(), "session-user", "sync-session", imageHistory, "", streamConfig, "image-msg", func(string) error { t.Fatal("multimodal stream emitted data"); return nil }); err == nil {
+		t.Fatal("multimodal session stream accepted")
+	}
+	if readStored("sync-session") != before || imageCalls.Load() != 1 {
+		t.Fatal("rejected stream changed state or contacted provider")
+	}
 	if _, err := models.NewDummyModel(nil, models.URLSuffix{}).ChatWithMessages("m", nil, nil, nil); err == nil {
 		t.Fatal("unsupported model succeeded")
 	}

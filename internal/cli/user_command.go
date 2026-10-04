@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"multirag/internal/entity/models"
 	"net/http"
 	"net/url"
 	"os"
@@ -1299,12 +1300,28 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	stream, _ := cmd.Params["stream"].(bool)
 	effort, _ := cmd.Params["effort"].(string)
 	verbosity, _ := cmd.Params["verbosity"].(string)
+	var content any = message
+	if strings.HasPrefix(strings.TrimSpace(message), "[") {
+		var parts []any
+		if err := json.Unmarshal([]byte(message), &parts); err == nil {
+			content = parts
+		}
+	}
+	messages := []models.Message{{Role: "user", Content: content}}
+	if err := models.ValidateMessages(messages); err != nil {
+		return nil, err
+	}
+	if stream {
+		if err := models.ValidateTextMessages(messages); err != nil {
+			return nil, err
+		}
+	}
 	url := "/chat/completions"
 	payload := map[string]interface{}{
 		"provider_name": providerName,
 		"instance_name": instanceName,
 		"model_name":    modelName,
-		"message":       message,
+		"messages":      messages,
 		"stream":        stream,
 		"thinking":      thinking,
 	}

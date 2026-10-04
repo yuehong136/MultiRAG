@@ -73,123 +73,13 @@ func (z *ZhipuAIModel) Name() string {
 }
 
 // Chat sends a message and returns response
-func (z *ZhipuAIModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
-	if message == nil {
-		return nil, fmt.Errorf("message is nil")
+func (z *ZhipuAIModel) Chat(modelName, message *string, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	if modelName == nil || message == nil {
+		return nil, fmt.Errorf("model and message are required")
 	}
-	if apiConfig == nil || apiConfig.APIKey == nil {
-		return nil, fmt.Errorf("API key is nil")
-	}
-
-	baseURL, err := z.resolveBaseURL(apiConfig.Region)
-	if err != nil {
-		return nil, err
-	}
-	url := joinModelURL(baseURL, z.URLSuffix.Chat)
-
-	// Build request body
-	reqBody := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": *message},
-		},
-		"stream":      false,
-		"temperature": 1,
-	}
-
-	if modelConfig != nil {
-		if modelConfig.Stream != nil {
-			reqBody["stream"] = *modelConfig.Stream
-		}
-		if modelConfig.MaxTokens != nil {
-			reqBody["max_tokens"] = *modelConfig.MaxTokens
-		}
-		if modelConfig.Temperature != nil {
-			reqBody["temperature"] = *modelConfig.Temperature
-		}
-		if modelConfig.TopP != nil {
-			reqBody["top_p"] = *modelConfig.TopP
-		}
-		if modelConfig.Stop != nil {
-			reqBody["stop"] = *modelConfig.Stop
-		}
-		if modelConfig.Thinking != nil {
-			thinkingType := "disabled"
-			if *modelConfig.Thinking {
-				thinkingType = "enabled"
-			}
-			reqBody["thinking"] = map[string]interface{}{"type": thinkingType}
-		}
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
-
-	resp, err := z.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse response
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
-	}
-
-	firstChoice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid choice format")
-	}
-
-	messageMap, ok := firstChoice["message"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid message format")
-	}
-
-	content, ok := messageMap["content"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid content format")
-	}
-
-	reasoningContent := ""
-	if modelConfig != nil && modelConfig.Thinking != nil && *modelConfig.Thinking {
-		var ok bool
-		reasoningContent, ok = messageMap["reasoning_content"].(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid reasoning content format")
-		}
-		reasoningContent = strings.TrimPrefix(reasoningContent, "\n")
-	}
-
-	return &ChatResponse{Answer: &content, ReasoningContent: &reasoningContent}, nil
+	return z.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, config)
 }
 
-// ChatStreamly sends a message and streams response
 func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
 	baseURL, err := z.resolveBaseURL(nil)
 	if err != nil {
@@ -417,27 +307,32 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
-func (z *ZhipuAIModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
+func (z *ZhipuAIModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
 	body, err := z.historyBody(modelName, messages, config, false)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := z.historyRequest(apiConfig, body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	var result aliyunChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("zhipu-ai: decode response: %w", err)
+		return nil, fmt.Errorf("zhipu-ai: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return "", fmt.Errorf("zhipu-ai: provider error")
+		return nil, fmt.Errorf("zhipu-ai: provider error")
 	}
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || *result.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("zhipu-ai: no text answer")
+		return nil, fmt.Errorf("zhipu-ai: no text answer")
 	}
-	return *result.Choices[0].Message.Content, nil
+	message := result.Choices[0].Message
+	if message.ReasoningContent != nil {
+		reason := strings.TrimPrefix(*message.ReasoningContent, "\n")
+		message.ReasoningContent = &reason
+	}
+	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
 }
 
 func (z *ZhipuAIModel) historyBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {

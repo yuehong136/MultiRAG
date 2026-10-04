@@ -531,12 +531,22 @@ func (m *ModelProviderService) UpdateModelStatus(providerName, instanceName, mod
 }
 
 func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig) (*modelModule.ChatResponse, common.ErrorCode, error) {
+	return m.ChatToModelWithMessages(providerName, instanceName, modelName, userID, []modelModule.Message{{Role: "user", Content: message}}, apiConfig, modelConfig)
+}
+
+func (m *ModelProviderService) ChatToModelWithMessages(providerName, instanceName, modelName, userID string, messages []modelModule.Message, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig) (*modelModule.ChatResponse, common.ErrorCode, error) {
+	if err := modelModule.ValidateMessages(messages); err != nil {
+		return nil, common.CodeBadRequest, err
+	}
 	bound, code, err := m.userInstanceChatModel(providerName, instanceName, modelName, userID, apiConfig, modelConfig)
 	if err != nil {
 		return nil, code, err
 	}
-	response, err := bound.ModelDriver.Chat(bound.ModelName, &message, bound.APIConfig, &bound.ModelConfig)
+	response, err := bound.ChatWithMessages(messages, nil)
 	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+	if err := modelModule.ValidateChatResponse(response); err != nil {
 		return nil, common.CodeServerError, err
 	}
 	return response, common.CodeSuccess, nil
@@ -555,8 +565,11 @@ func (m *ModelProviderService) ChatToModelByAPIKey(providerName, modelName, apiK
 	config := &modelModule.ChatConfig{}
 	applyModelChatDefaults(model, config)
 	apiConfig := &modelModule.APIConfig{APIKey: &apiKey}
-	response, err := providerInfo.ModelDriver.Chat(&modelName, &message, apiConfig, config)
+	response, err := providerInfo.ModelDriver.ChatWithMessages(modelName, apiConfig, []modelModule.Message{{Role: "user", Content: message}}, config)
 	if err != nil {
+		return nil, common.CodeServerError, err
+	}
+	if err := modelModule.ValidateChatResponse(response); err != nil {
 		return nil, common.CodeServerError, err
 	}
 	return response.Answer, common.CodeSuccess, nil
@@ -579,7 +592,10 @@ func (m *ModelProviderService) ChatWithMessagesToModelByAPIKey(providerName, mod
 	if err != nil {
 		return nil, common.CodeServerError, err
 	}
-	return &response, common.CodeSuccess, nil
+	if err := modelModule.ValidateChatResponse(response); err != nil {
+		return nil, common.CodeServerError, err
+	}
+	return response.Answer, common.CodeSuccess, nil
 }
 
 // ChatToModelStream streams chat response via a channel (better performance)
@@ -613,11 +629,18 @@ func applyModelChatDefaults(model *entity.Model, config *modelModule.ChatConfig)
 
 // ChatToModelStreamWithSender streams chat response directly via sender function (best performance, no channel)
 func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
+	return m.ChatToModelStreamWithMessages(providerName, instanceName, modelName, userID, []modelModule.Message{{Role: "user", Content: message}}, apiConfig, modelConfig, sender)
+}
+
+func (m *ModelProviderService) ChatToModelStreamWithMessages(providerName, instanceName, modelName, userID string, messages []modelModule.Message, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
+	if err := modelModule.ValidateTextMessages(messages); err != nil {
+		return common.CodeBadRequest, err
+	}
 	bound, code, err := m.userInstanceChatModel(providerName, instanceName, modelName, userID, apiConfig, modelConfig)
 	if err != nil {
 		return code, err
 	}
-	if err := bound.ModelDriver.ChatStreamlyWithSender(bound.ModelName, &message, bound.APIConfig, &bound.ModelConfig, sender); err != nil {
+	if err := bound.ChatStreamlyWithMessages(messages, nil, sender); err != nil {
 		return common.CodeServerError, err
 	}
 	return common.CodeSuccess, nil

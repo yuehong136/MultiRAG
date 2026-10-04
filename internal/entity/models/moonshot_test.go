@@ -76,7 +76,7 @@ func TestMoonshotChatRequestModesAndConfiguration(t *testing.T) {
 						t.Fatalf("frames = %v, %v", frames, err)
 					}
 				} else {
-					response, err := driver.Chat(&name, &message, apiConfig, config)
+					response, err := driver.ChatWithMessages(name, apiConfig, []Message{{Role: "user", Content: message}}, config)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -155,7 +155,7 @@ func TestMoonshotChatResponses(t *testing.T) {
 			defer server.Close()
 			driver := NewMoonshotModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			key, name, message := "key", "kimi-k2.6", "question"
-			response, err := driver.Chat(&name, &message, &APIConfig{APIKey: &key}, &ChatConfig{Thinking: moonshotPtr(true)})
+			response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: moonshotPtr(true)})
 			if test.wantErr {
 				if err == nil || response != nil || strings.Contains(err.Error(), "secret-key-and-prompt") {
 					t.Fatalf("response = %#v, %v", response, err)
@@ -277,7 +277,7 @@ func TestMoonshotCancellationReachesTransport(t *testing.T) {
 						return nil
 					})
 				} else {
-					_, err := driver.Chat(&name, &message, apiConfig, nil)
+					_, err := driver.ChatWithMessages(name, apiConfig, []Message{{Role: "user", Content: message}}, nil)
 					result <- err
 				}
 			}()
@@ -318,7 +318,7 @@ func TestMoonshotChatValidation(t *testing.T) {
 	driver := NewMoonshotModel(map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{Chat: "chat"})
 	key, name, message := "key", "kimi-k2.6", "question"
 	for _, config := range []*APIConfig{nil, {}, {APIKey: moonshotPtr("")}, {APIKey: moonshotPtr(" ")}, {APIKey: &key, Region: moonshotPtr("unknown")}} {
-		if _, err := driver.Chat(&name, &message, config, nil); err == nil {
+		if _, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, nil); err == nil {
 			t.Fatal("invalid API config accepted")
 		}
 	}
@@ -336,11 +336,11 @@ func TestMoonshotChatValidation(t *testing.T) {
 		}
 	}
 	driver.URLSuffix.Chat = ""
-	if _, err := driver.Chat(&name, &message, &APIConfig{APIKey: &key}, nil); err == nil {
+	if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
 		t.Fatal("missing chat endpoint accepted")
 	}
 	driver.URLSuffix.Chat = "chat"
-	if _, err := driver.Chat(&name, &message, &APIConfig{APIKey: &key}, &ChatConfig{Temperature: moonshotPtr(math.NaN())}); err == nil {
+	if _, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, &ChatConfig{Temperature: moonshotPtr(math.NaN())}); err == nil {
 		t.Fatal("invalid JSON number accepted")
 	}
 }

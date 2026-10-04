@@ -170,20 +170,16 @@ func (g *GoogleModel) Chat(modelName, message *string, apiConfig *APIConfig, con
 	return g.generate(*modelName, []*genai.Content{genai.NewContentFromText(*message, genai.RoleUser)}, apiConfig, config, googleGenerationConfig(config))
 }
 
-// ChatWithMessages uses the existing text-history interface, without tool or multimodal expansion.
-func (g *GoogleModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
-	if strings.TrimSpace(modelName) == "" || len(messages) == 0 {
-		return "", errors.New("Google model name and messages are required")
+// ChatWithMessages preserves roles, system instructions and text/image content.
+func (g *GoogleModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return nil, errors.New("Google model name is required")
 	}
 	contents, generation, err := googleHistory(messages, config)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	response, err := g.generate(modelName, contents, apiConfig, config, generation)
-	if err != nil {
-		return "", err
-	}
-	return *response.Answer, nil
+	return g.generate(modelName, contents, apiConfig, config, generation)
 }
 
 func (g *GoogleModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
@@ -194,6 +190,9 @@ func (g *GoogleModel) ChatStreamlyWithSender(modelName, message *string, apiConf
 }
 
 func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	if err := ValidateTextMessages(messages); err != nil {
+		return err
+	}
 	if strings.TrimSpace(modelName) == "" || len(messages) == 0 {
 		return errors.New("Google model and messages are required")
 	}
@@ -292,26 +291,56 @@ func (m *GoogleModel) Rerank(modelName *string, query string, texts []string, ap
 }
 
 func googleHistory(messages []Message, config *ChatConfig) ([]*genai.Content, *genai.GenerateContentConfig, error) {
+	if err := ValidateMessages(messages); err != nil {
+		return nil, nil, err
+	}
 	generation := googleGenerationConfig(config)
 	var contents []*genai.Content
-	var system []string
+	var system []*genai.Part
 	for _, message := range messages {
+		var parts []*genai.Part
+		if text, ok := message.Content.(string); ok {
+			parts = append(parts, genai.NewPartFromText(text))
+		} else {
+			items, err := ContentParts(message.Content)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, part := range items {
+				if part["type"] == "text" {
+					parts = append(parts, genai.NewPartFromText(part["text"].(string)))
+					continue
+				}
+				if message.Role == "system" {
+					return nil, nil, errors.New("Google system instructions only support text")
+				}
+				img := part["image_url"].(map[string]any)
+				raw := img["url"].(string)
+				if strings.HasPrefix(raw, "data:") {
+					mime, data, err := imageData(raw)
+					if err != nil {
+						return nil, nil, err
+					}
+					parts = append(parts, genai.NewPartFromBytes(data, mime))
+				} else {
+					parts = append(parts, &genai.Part{FileData: &genai.FileData{FileURI: raw}})
+				}
+			}
+		}
 		switch message.Role {
 		case "system":
-			system = append(system, message.Content)
+			system = append(system, parts...)
 		case "user":
-			contents = append(contents, genai.NewContentFromText(message.Content, genai.RoleUser))
+			contents = append(contents, genai.NewContentFromParts(parts, genai.RoleUser))
 		case "assistant", "model":
-			contents = append(contents, genai.NewContentFromText(message.Content, genai.RoleModel))
-		default:
-			return nil, nil, errors.New("Google message role is unsupported")
+			contents = append(contents, genai.NewContentFromParts(parts, genai.RoleModel))
 		}
 	}
 	if len(contents) == 0 {
 		return nil, nil, errors.New("Google conversation requires a user or model message")
 	}
 	if len(system) != 0 {
-		generation.SystemInstruction = genai.NewContentFromText(strings.Join(system, "\n"), genai.RoleUser)
+		generation.SystemInstruction = genai.NewContentFromParts(system, genai.RoleUser)
 	}
 	return contents, generation, nil
 }

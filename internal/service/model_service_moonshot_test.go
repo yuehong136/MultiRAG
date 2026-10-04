@@ -60,7 +60,7 @@ func TestMoonshotConfiguredDriverAndThinkingDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			key, message := "key", "question"
-			if _, err := driver.Chat(&test.name, &message, &models.APIConfig{APIKey: &key}, config); err != nil {
+			if _, err := driver.ChatWithMessages(test.name, &models.APIConfig{APIKey: &key}, []models.Message{{Role: "user", Content: message}}, config); err != nil {
 				t.Fatal(err)
 			}
 		})

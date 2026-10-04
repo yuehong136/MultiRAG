@@ -43,7 +43,7 @@ func TestVolcEngineChatAndDiscovery(t *testing.T) {
 	}
 	key, name, message, region, thinking := `{"ark_api_key":"key","endpoint_id":"ep"}`, "doubao", "question", "fixture", true
 	config := &APIConfig{APIKey: &key, Region: &region}
-	response, err := driver.Chat(&name, &message, config, &ChatConfig{Thinking: &thinking})
+	response, err := driver.ChatWithMessages(name, config, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: &thinking})
 	if err != nil || response == nil || *response.Answer != "answer" || *response.ReasoningContent != "reason" {
 		t.Fatalf("response = %#v, %v", response, err)
 	}
@@ -128,7 +128,7 @@ func TestVolcEngineValidationSenderErrorAndCancellation(t *testing.T) {
 	if _, err := driver.Chat(nil, &message, nil, nil); err == nil {
 		t.Fatal("nil arguments accepted")
 	}
-	if _, err := driver.Chat(&name, &message, nil, nil); err == nil {
+	if _, err := driver.ChatWithMessages(name, nil, []Message{{Role: "user", Content: message}}, nil); err == nil {
 		t.Fatal("missing key accepted")
 	}
 	if _, err := volcEngineBody(name, []Message{{Role: "user", Content: message}}, &ChatConfig{Thinking: func() *bool { v := true; return &v }(), Effort: func() *string { v := "invalid"; return &v }()}, false); err == nil {

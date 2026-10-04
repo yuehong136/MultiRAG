@@ -134,12 +134,8 @@ func (v *VolcEngine) Chat(name, message *string, apiConfig *APIConfig, config *C
 	}
 	return v.chat(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config)
 }
-func (v *VolcEngine) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (string, error) {
-	result, err := v.chat(name, messages, apiConfig, config)
-	if err != nil {
-		return "", err
-	}
-	return *result.Answer, nil
+func (v *VolcEngine) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+	return v.chat(name, messages, apiConfig, config)
 }
 
 func (v *VolcEngine) ChatStreamlyWithSender(name, message *string, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {

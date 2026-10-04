@@ -13,9 +13,9 @@ type modelClassChatDriver struct {
 	class *string
 }
 
-func (d *modelClassChatDriver) ChatWithMessages(_ string, _ *APIConfig, _ []Message, config *ChatConfig) (string, error) {
+func (d *modelClassChatDriver) ChatWithMessages(_ string, _ *APIConfig, _ []Message, config *ChatConfig) (*ChatResponse, error) {
 	d.class = config.ModelClass
-	return "answer", nil
+	return &ChatResponse{Answer: stringPtr("answer")}, nil
 }
 
 func TestBoundChatPreservesModelClass(t *testing.T) {
@@ -76,7 +76,7 @@ func TestChatConsumersUseModelClass(t *testing.T) {
 					config.ModelClass = &test.class
 				}
 				key, message := "fixture-key", "question"
-				response, err := driver.Chat(&test.model, &message, &APIConfig{APIKey: &key}, config)
+				response, err := driver.ChatWithMessages(test.model, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, config)
 				if err != nil {
 					t.Fatal(err)
 				}

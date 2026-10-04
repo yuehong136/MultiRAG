@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"multirag/internal/logger"
 	"net/http"
 	"strings"
 	"time"
@@ -58,11 +57,17 @@ func (m *SiliconFlowModel) Name() string {
 
 // Chat sends a message and returns response
 func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
-	if modelName == nil {
-		return nil, fmt.Errorf("model name is nil")
+	if modelName == nil || message == nil {
+		return nil, fmt.Errorf("model and message are required")
 	}
-	if message == nil {
-		return nil, fmt.Errorf("message is nil")
+	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
+}
+func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if err := ValidateMessages(messages); err != nil {
+		return nil, err
 	}
 	if apiConfig == nil || apiConfig.APIKey == nil {
 		return nil, fmt.Errorf("API key is nil")
@@ -76,23 +81,17 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 
 	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Chat)
 
-	modelClass := chatModelClass(*modelName, chatModelConfig)
+	modelClass := chatModelClass(modelName, chatModelConfig)
 	if (modelClass == "qwen" || modelClass == "glm") && m.URLSuffix.AsyncChat != "" {
 		url = fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.AsyncChat)
 	}
 
 	// Build request body
 	reqBody := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": *message},
-		},
+		"model":       modelName,
+		"messages":    messages,
 		"stream":      false,
 		"temperature": 1,
-	}
-
-	if chatModelConfig.Stream != nil {
-		reqBody["stream"] = *chatModelConfig.Stream
 	}
 
 	if chatModelConfig.MaxTokens != nil {
@@ -128,7 +127,7 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -173,11 +172,22 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 	}
 
 	content, ok := messageMap["content"].(string)
-	if !ok {
+	if !ok || content == "" {
 		return nil, fmt.Errorf("invalid content format")
 	}
 
 	thinking, answer := GetThinkingAndAnswer(&modelClass, &content)
+	if value, present := messageMap["reasoning_content"]; present && value != nil {
+		reason, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning content")
+		}
+		if reason != "" {
+			reason = strings.TrimPrefix(reason, "\n")
+			thinking = &reason
+			answer = &content
+		}
+	}
 
 	chatResponse := &ChatResponse{
 		Answer:           answer,
@@ -188,9 +198,6 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
-func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (string, error) {
-	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
-}
 
 func (m *SiliconFlowModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
 	return nil, fmt.Errorf("streaming chat is not implemented for %s", m.Name())
@@ -202,8 +209,17 @@ func (m *SiliconFlowModel) ChatStreamlyWithChannel(modelName, apiKey, message *s
 
 // ChatStreamlyWithSender sends a message and streams response via sender function (best performance, no channel)
 func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if message == nil || apiConfig == nil || apiConfig.APIKey == nil {
+	if modelName == nil || message == nil {
+		return fmt.Errorf("model and message are required")
+	}
+	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
+}
+func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
+	}
+	if err := ValidateTextMessages(messages); err != nil {
+		return err
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 	var region = "default"
@@ -215,16 +231,10 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": *message},
-		},
-		"stream":      false,
+		"model":       modelName,
+		"messages":    messages,
+		"stream":      true,
 		"temperature": 1,
-	}
-
-	if chatModelConfig.Stream != nil {
-		reqBody["stream"] = *chatModelConfig.Stream
 	}
 
 	if chatModelConfig.MaxTokens != nil {
@@ -264,7 +274,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -283,15 +293,12 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	reserveText := ""
-	thinkingPhase := false
-	answerPhase := false
-
 	// SSE parsing: read line by line
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	completed, receivedAnswer := false, false
 	for scanner.Scan() {
 		line := scanner.Text()
-		logger.Info(line)
 
 		// SSE data line starts with "data:"
 		if !strings.HasPrefix(line, "data:") {
@@ -303,15 +310,19 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 
 		// [DONE] marks the end of stream
 		if data == "[DONE]" {
+			completed = true
 			break
 		}
 
 		// Parse the JSON event
 		var event map[string]interface{}
 		if err = json.Unmarshal([]byte(data), &event); err != nil {
-			continue
+			return fmt.Errorf("invalid stream event: %w", err)
 		}
 
+		if event["error"] != nil {
+			return fmt.Errorf("provider stream error")
+		}
 		choices, ok := event["choices"].([]interface{})
 		if !ok || len(choices) == 0 {
 			continue
@@ -329,47 +340,36 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 
 		content, ok := delta["content"].(string)
 		if ok && content != "" {
-			if content == "<think>" {
-				thinkingPhase = true
-				continue
-
-			} else if content == "</think>" {
-				thinkingPhase = false
-				answerPhase = true
-				continue
-			}
-
-			if thinkingPhase {
-				if err = sender(nil, &content); err != nil {
-					return err
-				}
-				reserveText = ""
-			} else if answerPhase {
-				if err = sender(&content, nil); err != nil {
-					return err
-				}
-				reserveText = ""
-			} else {
-				content = strings.Trim(content, "\n")
-				content = strings.Trim(content, " ")
-				if content != "" {
-					reserveText += content
-				}
+			receivedAnswer = true
+			if err := sender(&content, nil); err != nil {
+				return err
 			}
 		}
 
+		if reasoning, ok := delta["reasoning_content"].(string); ok && reasoning != "" {
+			if err := sender(nil, &reasoning); err != nil {
+				return err
+			}
+		}
 		finishReason, ok := firstChoice["finish_reason"].(string)
 		if ok && finishReason != "" {
+			completed = true
 			break
 		}
 	}
 
-	if reserveText != "" {
-		if err = sender(&reserveText, nil); err != nil {
-			return err
-		}
+	if err := scanner.Err(); err != nil {
+		return err
 	}
-
+	if err := requestContext(apiConfig).Err(); err != nil {
+		return err
+	}
+	if !completed {
+		return fmt.Errorf("stream ended before completion")
+	}
+	if !receivedAnswer {
+		return fmt.Errorf("stream returned no text answer")
+	}
 	// Send [DONE] marker for OpenAI compatibility
 	endOfStream := "[DONE]"
 	if err = sender(&endOfStream, nil); err != nil {
@@ -510,8 +510,4 @@ func (m *SiliconFlowModel) Rerank(name *string, query string, texts []string, co
 		seen[*item.Index], scores[*item.Index] = true, *item.Score
 	}
 	return scores, nil
-}
-
-func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	return fmt.Errorf("%s: history streaming is unsupported", m.Name())
 }

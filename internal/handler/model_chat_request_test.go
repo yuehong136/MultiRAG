@@ -43,3 +43,32 @@ func TestModelChatRejectsInvalidBodyBeforeService(t *testing.T) {
 		t.Fatalf("authentication = %d", w.Code)
 	}
 }
+
+func TestModelChatMessageContracts(t *testing.T) {
+	for _, test := range []struct {
+		body  string
+		valid bool
+		count int
+	}{
+		{`{"message":"legacy"}`, true, 1},
+		{`{"messages":[{"role":"system","content":"rules"},{"role":"assistant","content":"old","reasoning_content":"thought"},{"role":"user","content":"next"}],"stream":true}`, true, 3},
+		{`{"messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`, true, 1},
+		{`{"messages":[]}`, false, 0}, {`{"messages":[{}]}`, false, 0},
+		{`{"message":"legacy","messages":[]}`, false, 0},
+		{`{"messages":[{"role":"user","content":42}]}`, false, 0},
+		{`{"messages":[{"role":"user","content":{"text":"x"}}]}`, false, 0},
+		{`{"messages":[{"role":"user","content":[{"type":"text","text":"x"}]}],"stream":true}`, false, 0},
+	} {
+		var req ChatToModelRequest
+		if err := json.Unmarshal([]byte(test.body), &req); err != nil {
+			t.Fatal(err)
+		}
+		messages, err := req.chatMessages()
+		if (err == nil) != test.valid || (test.valid && len(messages) != test.count) {
+			t.Fatalf("%s: %#v %v", test.body, messages, err)
+		}
+		if test.valid && test.count == 3 && (messages[1].ReasoningContent == nil || *messages[1].ReasoningContent != "thought") {
+			t.Fatal("reasoning history lost")
+		}
+	}
+}

@@ -37,12 +37,8 @@ func (m *MoonshotModel) Chat(modelName, message *string, apiConfig *APIConfig, m
 	return m.chat(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig)
 }
 
-func (m *MoonshotModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
-	response, err := m.chat(modelName, messages, apiConfig, modelConfig)
-	if err != nil {
-		return "", err
-	}
-	return *response.Answer, nil
+func (m *MoonshotModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error) {
+	return m.chat(modelName, messages, apiConfig, modelConfig)
 }
 
 func (m *MoonshotModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
@@ -57,16 +53,16 @@ func moonshotChatBody(modelName string, messages []Message, config *ChatConfig, 
 	if strings.TrimSpace(modelName) == "" {
 		return nil, fmt.Errorf("moonshot: model name is required")
 	}
-	if len(messages) == 0 {
-		return nil, fmt.Errorf("moonshot: at least one message is required")
+	if err := ValidateMessages(messages); err != nil {
+		return nil, err
 	}
-	apiMessages := make([]map[string]string, 0, len(messages))
-	for _, message := range messages {
-		if message.Role == "" {
-			return nil, fmt.Errorf("moonshot: message role is required")
+	if stream {
+		if err := ValidateTextMessages(messages); err != nil {
+			return nil, err
 		}
-		apiMessages = append(apiMessages, map[string]string{"role": message.Role, "content": message.Content})
 	}
+	apiMessages := messages
+
 	// The entry point determines the response protocol, regardless of config.Stream.
 	body := map[string]interface{}{"model": modelName, "messages": apiMessages, "stream": stream}
 	if config == nil {

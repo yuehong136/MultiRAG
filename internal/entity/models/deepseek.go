@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"multirag/internal/logger"
 	"net/http"
 	"strings"
 	"time"
@@ -32,8 +31,17 @@ func (m *DeepSeekModel) Name() string {
 }
 
 func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig) (*ChatResponse, error) {
-	if message == nil {
-		return nil, fmt.Errorf("message is nil")
+	if modelName == nil || message == nil {
+		return nil, fmt.Errorf("model and message are required")
+	}
+	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
+}
+func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if err := ValidateMessages(messages); err != nil {
+		return nil, err
 	}
 	if apiConfig == nil || apiConfig.APIKey == nil {
 		return nil, fmt.Errorf("API key is nil")
@@ -49,16 +57,10 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 
 	// Build request body
 	reqBody := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": *message},
-		},
+		"model":       modelName,
+		"messages":    messages,
 		"stream":      false,
 		"temperature": 1,
-	}
-
-	if chatModelConfig.Stream != nil {
-		reqBody["stream"] = *chatModelConfig.Stream
 	}
 
 	if chatModelConfig.MaxTokens != nil {
@@ -123,7 +125,7 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -168,15 +170,15 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 	}
 
 	content, ok := messageMap["content"].(string)
-	if !ok {
+	if !ok || content == "" {
 		return nil, fmt.Errorf("invalid content format")
 	}
 
 	var reasonContent string
-	if chatModelConfig.Thinking != nil && *chatModelConfig.Thinking {
-		reasonContent, ok = messageMap["reasoning_content"].(string)
+	if value, present := messageMap["reasoning_content"]; present && value != nil {
+		reasonContent, ok = value.(string)
 		if !ok {
-			return nil, fmt.Errorf("invalid content format")
+			return nil, fmt.Errorf("invalid reasoning content format")
 		}
 		// if first char of reasonContent is \n remove the '\n'
 		if reasonContent != "" && reasonContent[0] == '\n' {
@@ -192,10 +194,6 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 	return chatResponse, nil
 }
 
-func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (string, error) {
-	return "", fmt.Errorf("%s, ChatWithMessages not implemented", m.Name())
-}
-
 func (m *DeepSeekModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -205,8 +203,17 @@ func (m *DeepSeekModel) ChatStreamlyWithChannel(modelName, apiKey, message *stri
 }
 
 func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
-	if message == nil || apiConfig == nil || apiConfig.APIKey == nil {
+	if modelName == nil || message == nil {
+		return fmt.Errorf("model and message are required")
+	}
+	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
+}
+func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
+	}
+	if err := ValidateTextMessages(messages); err != nil {
+		return err
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 	var region = "default"
@@ -218,16 +225,10 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
-		"model": modelName,
-		"messages": []map[string]string{
-			{"role": "user", "content": *message},
-		},
-		"stream":      false,
+		"model":       modelName,
+		"messages":    messages,
+		"stream":      true,
 		"temperature": 1,
-	}
-
-	if chatModelConfig.Stream != nil {
-		reqBody["stream"] = *chatModelConfig.Stream
 	}
 
 	if chatModelConfig.MaxTokens != nil {
@@ -296,7 +297,7 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -317,9 +318,10 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 	// SSE parsing: read line by line
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	completed, receivedAnswer := false, false
 	for scanner.Scan() {
 		line := scanner.Text()
-		logger.Info(line)
 
 		// SSE data line starts with "data:"
 		if !strings.HasPrefix(line, "data:") {
@@ -331,15 +333,19 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 		// [DONE] marks the end of stream
 		if data == "[DONE]" {
+			completed = true
 			break
 		}
 
 		// Parse the JSON event
 		var event map[string]interface{}
 		if err = json.Unmarshal([]byte(data), &event); err != nil {
-			continue
+			return fmt.Errorf("invalid stream event: %w", err)
 		}
 
+		if event["error"] != nil {
+			return fmt.Errorf("provider stream error")
+		}
 		choices, ok := event["choices"].([]interface{})
 		if !ok || len(choices) == 0 {
 			continue
@@ -357,6 +363,7 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 		content, ok := delta["content"].(string)
 		if ok && content != "" {
+			receivedAnswer = true
 			if err := sender(&content, nil); err != nil {
 				return err
 			}
@@ -371,10 +378,23 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 
 		finishReason, ok := firstChoice["finish_reason"].(string)
 		if ok && finishReason != "" {
+			completed = true
 			break
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if err := requestContext(apiConfig).Err(); err != nil {
+		return err
+	}
+	if !completed {
+		return fmt.Errorf("stream ended before completion")
+	}
+	if !receivedAnswer {
+		return fmt.Errorf("stream returned no text answer")
+	}
 	// Send [DONE] marker for OpenAI compatibility
 	endOfStream := "[DONE]"
 	if err = sender(&endOfStream, nil); err != nil {
@@ -454,8 +474,4 @@ func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, er
 
 func (m *DeepSeekModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
-}
-
-func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
-	return fmt.Errorf("%s: history streaming is unsupported", m.Name())
 }

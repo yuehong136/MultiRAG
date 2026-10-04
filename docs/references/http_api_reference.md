@@ -1500,7 +1500,7 @@ Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rera
 
 | 路径 | 行为 |
 |---|---|
-| `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name`、`message`；普通 JSON 或 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。CLI 同步使用本入口；原 provider models POST 现用于模型声明，旧聊天载荷不再接受 |
+| `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name` 和非空 `messages`；兼容旧字符串 `message`，两者不能同时传。普通 JSON 或文本 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。CLI 同步使用本入口；原 provider models POST 现用于模型声明，旧聊天载荷不再接受 |
 | `POST /{provider_name}/instances` | body 为 instance_name、api_key（vLLM 可省略）、base_url、region。自定义 URL 以 HTTP(S) API 根目录为准；region 为空归一为 default，base_url 优先于 provider 地域目录；同 provider 的重复实例名返回冲突 |
 | `POST /{provider_name}/instances/{instance_name}/models` | 声明自定义 model_name、model_types（兼容旧 model_type）、正整数 max_tokens 与可选 thinking；路由身份为准，body 的 provider/instance 若传入须一致。仅租户 owner 可操作，重复声明返回业务冲突 |
 | `DELETE /{provider_name}/instances/{instance_name}/models` | body 为非空 `models` 名称数组；只删除当前 owner 租户内的自定义模型声明，重复名称合并；任一不存在或 SQL 失败则整批回滚。目录模型须使用启停接口，DELETE 不删除禁用标记 |
@@ -1538,9 +1538,23 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 并返回累计 `reasoning_content`；正常结束的 `data: true` 在 session 持久化成功之后发送。
 指定 `llm_id` 的临时调用不落库。成功保存完整用户历史及助手答案；错误和取消不保存部分答案。
 
-历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、MiniMax、Zhipu-AI、vLLM；其他驱动
-保留明确的不支持结果，不将历史压成一个 user 文本。此 Go session 路径仍只执行已有文本
-聊天，未接入 KB/Tavily 检索、附件或多模态能力；仅声明 image2text 的模型不可作为 chat 绑定。
+历史聊天及文本历史 SSE 支持 Google、Aliyun、VolcEngine、Moonshot、MiniMax、Zhipu-AI、vLLM、
+DeepSeek、Gitee、SiliconFlow。驱动统一使用 `ChatWithMessages(modelName, apiConfig, messages, config)`，
+返回 `ChatResponse`（answer/reasoning_content）；旧单文本 Go helper 委托消息接口。
+非流式 provider API 与 session 保留每条消息的角色和 content；content 接受非空字符串或
+`text`/`image_url` 对象数组，`image_url.url` 接受 HTTP(S) 或 base64 image data URL。
+空 messages、空/非法 content、未知 part/role、空答案均报错；assistant 的 `reasoning_content`
+可随输入历史传给兼容 OpenAI 格式的 provider。Google 将 system 独立为 system instruction，
+图片 data URL 解码为含原始 MIME 的 inline data，HTTP(S) URL 作为 file URI，不在本机下载。
+Google system content 仅支持文本；image detail 仅透传给兼容 OpenAI 格式的 provider。
+
+本阶段**所有 content 数组均不支持流式**（包括只有 text part 的数组）：provider API 在发送
+SSE header 前返回 HTTP 400，session/驱动返回明确错误；字符串流式发送完整历史，不截取首条。
+CLI 普通文本改发单项 messages；有效 JSON 数组按 content parts 校验，非法 part 报错；
+非 JSON 的方括号文本继续作为字符串发送，保留旧文本输入习惯。
+旧 message 的 HTTP 请求仍受相同身份、实例和模型能力校验。真实图片理解取决于所选远程模型，
+本地 HTTP 合同通过不等同于远程多模态能力已验收。
+此 Go session 路径未接入 KB/Tavily 检索或附件文件转换；仅声明 image2text 的模型不可作为 chat 绑定。
 当前生产 Python session、LLMBundle 和 Web 合同不受本项影响。
 
 VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支持普通文本聊天、

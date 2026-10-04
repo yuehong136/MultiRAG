@@ -287,8 +287,8 @@ func TestGoogleChatWithMessagesPreservesRolesAndSystemInstruction(t *testing.T) 
 	g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	_, _, api := googleTestConfig()
 	reply, err := g.ChatWithMessages("gemini-test", api, []Message{{Role: "system", Content: "rules"}, {Role: "user", Content: "hello"}, {Role: "assistant", Content: "old"}}, nil)
-	if err != nil || reply != "reply" {
-		t.Fatalf("reply %q %v", reply, err)
+	if err != nil || reply == nil || reply.Answer == nil || *reply.Answer != "reply" {
+		t.Fatalf("reply %v %v", reply, err)
 	}
 }
 
