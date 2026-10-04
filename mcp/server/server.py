@@ -2,25 +2,30 @@ import hashlib
 import json
 import logging
 import random
+import re
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from enum import StrEnum
 from importlib import metadata as importlib_metadata
 from typing import Annotated
+from urllib.parse import quote, unquote
 
 import click
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.resources.base import Resource
 from fastmcp.server.auth import StaticTokenVerifier
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
+from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.lifespan import combine_lifespans
-from pydantic import BaseModel, ConfigDict, Field
+from fastmcp.utilities.versions import VersionSpec
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
@@ -53,6 +58,7 @@ ALLOWED_ORIGINS: list[str] = []
 # 每客户端每秒请求上限（host 模式按 token 哈希区分租户；进程内计数，
 # 多 worker 部署时各 worker 独立）
 RATE_LIMIT_RPS = 10.0
+SKILLS_RESOURCES_ENABLED = False
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +147,9 @@ def _resolve_api_key() -> str:
     """
     if MODE == LaunchMode.SELF_HOST:
         return HOST_API_KEY
-    headers = get_http_headers()
+    # FastMCP strips Authorization by default. This is an explicit inbound
+    # credential exchange with our own backend, not generic header forwarding.
+    headers = get_http_headers(include={"authorization"})
     token = _extract_token_from_headers(headers)
     if not token:
         raise ToolError("MultiRAG API key or Bearer token is required.")
@@ -569,12 +577,139 @@ def _server_version() -> str:
         return "0.0.0-dev"
 
 
-def _rate_limit_client_id(_context) -> str:
+def _rate_limit_client_id(_context: object) -> str:
     """host 模式按 token 哈希区分租户限流；self-host 单租户共用一个桶。"""
     if MODE == LaunchMode.SELF_HOST:
         return "self-host"
-    token = _extract_token_from_headers(get_http_headers())
+    token = _extract_token_from_headers(get_http_headers(include={"authorization"}))
     return hashlib.sha256(token.encode()).hexdigest()[:16] if token else "anonymous"
+
+
+async def _skill_asset_json(path: str, api_key: str, params: dict[str, object] | None = None) -> dict[str, object]:
+    """Use the asset API's authorization and lifecycle checks on every access."""
+    response = await _get_connector()._get("/skill-assets" + path, api_key, params)
+    if response is None or response.status_code != 200:
+        raise ToolError("Skill asset is unavailable or access was denied.")
+    payload = response.json()
+    if payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
+        raise ToolError("Skill asset request failed.")
+    return payload["data"]
+
+
+async def _skill_asset_rows(path: str, field: str, api_key: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    page = 1
+    total: int | None = None
+    while True:
+        payload = await _skill_asset_json(path, api_key, {"page": page, "page_size": 100})
+        batch, count = payload.get(field), payload.get("total")
+        if not isinstance(batch, list) or not isinstance(count, int) or count < 0 or (total is not None and count != total):
+            raise ToolError("Skill catalog changed or returned invalid pagination; retry discovery.")
+        total = count
+        for row in batch:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] in seen:
+                raise ToolError("Skill catalog returned duplicate or invalid assets.")
+            seen.add(row["id"])
+            rows.append(row)
+        if len(rows) == total:
+            return rows
+        if not batch or len(rows) > total or len(rows) > 100_000:
+            raise ToolError("Skill catalog pagination is incomplete.")
+        page += 1
+
+
+class SkillAssetResource(Resource):
+    """Fixed-version, tenant-authorized resource with no filesystem cache."""
+
+    space_id: str
+    skill_id: str
+    version_id: str
+    asset_path: str
+    literal_path: str | None = None
+
+    async def read(self) -> str | bytes:
+        api_key = _resolve_api_key()
+        detail = await _skill_asset_json(f"/spaces/{self.space_id}/skills/{self.skill_id}", api_key)
+        skill, versions = detail.get("skill"), detail.get("versions")
+        if not isinstance(skill, dict) or skill.get("state") != "active" or not isinstance(versions, list):
+            raise ToolError("Skill asset is unavailable.")
+        if not any(isinstance(v, dict) and v.get("id") == self.version_id and v.get("state") == "installed" for v in versions):
+            raise ToolError("Skill version is unavailable.")
+        base = f"/spaces/{self.space_id}/versions/{self.version_id}"
+        files = (await _skill_asset_json(base + "/files", api_key)).get("files")
+        if not isinstance(files, list):
+            raise ToolError("Invalid skill manifest.")
+        if self.asset_path == "_manifest":
+            if any(f.get("path") == "_manifest" for f in files):
+                raise ToolError("This package contains the reserved MCP path _manifest; use its asset ZIP or rename that attachment in a new version.")
+            return json.dumps({"skill": str(self.uri).split("/")[2], "files": [{"path": f["path"], "size": f["size"], "hash": f["sha256"]} for f in files]})
+        # FastMCP's downloader appends manifest paths without URI quoting.
+        # Prefer that exact filename, then accept an explicitly encoded URI.
+        entry = next((f for f in files if f.get("path") == self.literal_path), None)
+        if entry is None:
+            entry = next((f for f in files if f.get("path") == self.asset_path), None)
+        if entry is None:
+            raise ToolError("Skill file is unavailable.")
+        response = await _get_connector()._get("/skill-assets" + base + "/file", api_key, {"path": entry["path"]})
+        if response is None or response.status_code != 200:
+            raise ToolError("Skill file is unavailable.")
+        content = response.content
+        if len(content) != entry["size"] or hashlib.sha256(content).hexdigest() != entry["sha256"]:
+            raise ToolError("Skill file did not match its manifest.")
+        if entry["path"] == "SKILL.md":
+            return content.decode("utf-8")
+        return content
+
+
+class SkillAssetProvider(Provider):
+    """Discover active publications, then read bodies and attachments on demand."""
+
+    async def get_tasks(self) -> list[Resource]:
+        # Resources are read-only and request scoped. Startup task discovery
+        # has no tenant credentials and must not enumerate the asset catalog.
+        return []
+
+    @staticmethod
+    def _resource(space: str, skill: str, version: str, path: str, description: str = "") -> SkillAssetResource:
+        key = f"{space}-{skill}-{version}"
+        mime = "application/json" if path == "_manifest" else "text/markdown" if path == "SKILL.md" else "application/octet-stream"
+        return SkillAssetResource(
+            uri=AnyUrl(f"skill://{key}/{quote(path, safe='/')}"),
+            name=f"{key}/{path}",
+            description=description,
+            mime_type=mime,
+            space_id=space,
+            skill_id=skill,
+            version_id=version,
+            asset_path=path,
+        )
+
+    async def _list_resources(self) -> list[Resource]:
+        if not SKILLS_RESOURCES_ENABLED:
+            return []
+        api_key = _resolve_api_key()
+        resources: list[Resource] = []
+        for space in await _skill_asset_rows("/spaces", "spaces", api_key):
+            for skill in await _skill_asset_rows(f"/spaces/{space['id']}/skills", "skills", api_key):
+                version = skill.get("active_version_id")
+                if skill.get("state") == "active" and isinstance(version, str):
+                    resources.append(self._resource(str(space["id"]), str(skill["id"]), version, "SKILL.md", str(skill.get("description", ""))))
+        return resources
+
+    async def _get_resource(self, uri: str, version: VersionSpec | None = None) -> Resource | None:
+        if not SKILLS_RESOURCES_ENABLED:
+            return None
+        match = re.fullmatch(r"skill://([a-f0-9]{32})-([a-f0-9]{32})-([a-f0-9]{32})/(.+)", uri)
+        if match is None:
+            return None
+        space, skill, identity, encoded = match.groups()
+        path = unquote(encoded)
+        if any(part in ("", ".", "..") for part in path.split("/")) or "\\" in path or any(ord(c) < 32 for c in path):
+            return None
+        resource = self._resource(space, skill, identity, path)
+        resource.literal_path = encoded
+        return resource
 
 
 def create_mcp_server() -> FastMCP:
@@ -596,6 +731,8 @@ def create_mcp_server() -> FastMCP:
         auth=auth,
         mask_error_details=True,
     )
+    # A failed tenant catalog request must not become a successful empty list.
+    mcp.provider_error_strategy = "raise"
     # MCP 级中间件（先加=最外层）。刻意不加 ResponseCachingMiddleware：其 cache key
     # 只含操作名+参数、不含用户身份，host 多租户下会跨租户泄漏检索结果。
     mcp.add_middleware(ErrorHandlingMiddleware())
@@ -603,6 +740,7 @@ def create_mcp_server() -> FastMCP:
     mcp.add_middleware(TimingMiddleware())
     mcp.add_middleware(StructuredLoggingMiddleware(include_payloads=False))
     _register_tools(mcp)
+    mcp.add_provider(SkillAssetProvider())
     return mcp
 
 
@@ -847,7 +985,19 @@ def create_starlette_app() -> Starlette:
     default=10.0,
     help="Per-client requests-per-second cap (host mode buckets by token hash; in-process counter)",
 )
-def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_streamable_http_enabled, json_response, allowed_hosts, allowed_origins, rate_limit_rps):
+def main(
+    base_url: str,
+    host: str,
+    port: int,
+    mode: str,
+    api_key: str,
+    transport_sse_enabled: bool,
+    transport_streamable_http_enabled: bool,
+    json_response: bool,
+    allowed_hosts: str,
+    allowed_origins: str,
+    rate_limit_rps: float,
+) -> None:
     import os
 
     import uvicorn
@@ -864,6 +1014,8 @@ def main(base_url, host, port, mode, api_key, transport_sse_enabled, transport_s
         return [item.strip() for item in val.split(",") if item.strip()]
 
     global BASE_URL, HOST, PORT, MODE, HOST_API_KEY, TRANSPORT_SSE_ENABLED, TRANSPORT_STREAMABLE_HTTP_ENABLED, JSON_RESPONSE, ALLOWED_HOSTS, ALLOWED_ORIGINS, RATE_LIMIT_RPS
+    global SKILLS_RESOURCES_ENABLED
+    SKILLS_RESOURCES_ENABLED = parse_bool_flag("MULTIRAG_MCP_SKILLS_RESOURCES_ENABLED", False)
     BASE_URL = os.environ.get("MULTIRAG_MCP_BASE_URL", base_url)
     HOST = os.environ.get("MULTIRAG_MCP_HOST", host)
     PORT = os.environ.get("MULTIRAG_MCP_PORT", str(port))

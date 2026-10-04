@@ -1,8 +1,10 @@
 """Isolated authenticated Skills HTTP with real SQL, object and index stores."""
 
 import asyncio
+import io
 import json
 import threading
+import zipfile
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -154,3 +156,20 @@ def skill_complete(env: dict[str, Any], accepted: dict[str, Any], *, state: str 
     operation = skill_request(env, "GET", "/operations/" + accepted["operation_id"])
     assert operation["state"] == state, operation
     return operation
+
+
+def install(env: dict[str, Any], space: str, version: str, *, description: str = "orange version", activate: bool = True) -> dict[str, Any]:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("SKILL.md", f"---\nname: orange\ndescription: {description}\ntags: [fruit]\n---\nOrange manual")
+        archive.writestr("nested/中文.txt", "orange nested bytes")
+        archive.writestr("image.bin", b"\xff\x00")
+    return skill_request(
+        env,
+        "POST",
+        f"/spaces/{space}/versions",
+        data={"manifest": json.dumps({"name": "orange", "version": version, "activate": activate})},
+        files={"archive": ("package.zip", output.getvalue(), "application/zip")},
+        key="install-" + version,
+        expected=202,
+    )

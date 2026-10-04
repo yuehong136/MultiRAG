@@ -125,3 +125,24 @@ make mcp-compat
 任何实现任务完成前仍必须按仓库根 [`AGENTS.md`](../AGENTS.md) 执行 `make verify`；改到 DB、存储或
 检索路径时另跑 `make integration`。版本、身份、授权或 MRTR 任务还必须执行对应 ROADMAP 行声明的
 现代/legacy、正反授权和跨仓契约测试。
+
+## 只读 Skills resources
+
+设置 `MULTIRAG_MCP_SKILLS_RESOURCES_ENABLED=true` 启用 Python 资产扩展分发，默认关闭。
+后端需提供 `/api/v1/skill-assets`；独立的 Go 核心能力不会被伪装成资产发布协议。
+
+`resources/list` 只发现已发布活动版本的元数据。URI
+`skill://<space-id>-<skill-id>-<version-id>/SKILL.md` 固定一个不可变版本；`_manifest`
+返回path/size/SHA256，附件按需读取。可用FastMCP的`list_skills`、`get_skill_manifest`、
+`download_skill`直接消费。版本仍存在且有权限时，固定URI可继续读取；删除中立即不可读。
+没有跨租户全局目录或正文缓存。host模式每次从当前请求显式提取Authorization，再由
+资产API验证租户；self-host沿用单独配置的静态身份。读取逐项验证内容摘要，错误不转成
+成功的空列表。资源只负责分发，不执行包中的脚本或自动接入Agent。
+
+MCP 协议保留根路径 `_manifest`。若原始包有同名附件，manifest/客户端下载明确拒绝，
+以免用合成 JSON 替换真实文件；原始资产和 ZIP 下载不受影响，可另发改名后的版本。
+普通百分号、空格和中文路径保留原始文件名与字节，不当成其他附件返回。
+
+专项验收：`tests/integration/test_mcp_skill_distribution.py` 使用真实HTTP MCP与隔离
+PostgreSQL/MinIO，验证官方客户端下载、中文/二进制附件、租户拒绝及删除后拒绝；
+`make mcp-compat`继续覆盖现有入站/出站与modern/legacy协议矩阵。

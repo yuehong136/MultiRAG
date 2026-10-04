@@ -1,7 +1,6 @@
 """JWT/API-key consumer contract with independent database/object/index evidence."""
 
 import io
-import json
 import zipfile
 from typing import Any
 
@@ -13,25 +12,8 @@ from tests.support.skills_http import bootstrapped_engine as bootstrapped_engine
 from tests.support.skills_http import image_http_api as image_http_api
 from tests.support.skills_http import image_http_database as image_http_database
 from tests.support.skills_http import image_resources as image_resources
-from tests.support.skills_http import skill_complete, skill_request
+from tests.support.skills_http import install, skill_complete, skill_request
 from tests.support.skills_http import skill_http as skill_http
-
-
-def install(env: dict[str, Any], space: str, version: str, *, description: str = "orange version", activate: bool = True) -> dict[str, Any]:
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("SKILL.md", f"---\nname: orange\ndescription: {description}\ntags: [fruit]\n---\nOrange manual")
-        archive.writestr("nested/中文.txt", "orange nested bytes")
-        archive.writestr("image.bin", b"\xff\x00")
-    return skill_request(
-        env,
-        "POST",
-        f"/spaces/{space}/versions",
-        data={"manifest": json.dumps({"name": "orange", "version": version, "activate": activate})},
-        files={"archive": ("package.zip", output.getvalue(), "application/zip")},
-        key="install-" + version,
-        expected=202,
-    )
 
 
 def test_authenticated_skill_lifecycle_real_stores(skill_http: dict[str, Any]) -> None:
