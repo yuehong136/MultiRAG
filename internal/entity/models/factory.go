@@ -33,6 +33,8 @@ func NewModelFactory() *ModelFactory {
 func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string]string, urlSuffix URLSuffix) (ModelDriver, error) {
 	providerLower := strings.ToLower(providerName)
 	switch providerLower {
+	case "vllm":
+		return NewVLLMModel(baseURL, urlSuffix), nil
 	case "volcengine":
 		return NewVolcEngine(baseURL, urlSuffix), nil
 	case "openai", "openai-api-compatible":

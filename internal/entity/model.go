@@ -233,7 +233,7 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		if err = json.Unmarshal(data, &provider); err != nil {
 			return nil, fmt.Errorf("error parsing JSON from file %s: %w", filePath, err)
 		}
-		if provider.URL["default"] == "" {
+		if provider.URL["default"] == "" && !strings.EqualFold(provider.Name, "vllm") {
 			return nil, fmt.Errorf("provider %s has no default URL", provider.Name)
 		}
 
@@ -335,10 +335,6 @@ func (pm *ProviderManager) ListModels(providerName string) ([]map[string]interfa
 			"features":    getFeatureNames(model),
 		}
 		models = append(models, modelData)
-	}
-
-	if len(models) == 0 {
-		return nil, fmt.Errorf("no models found")
 	}
 
 	return models, nil

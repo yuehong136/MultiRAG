@@ -49,11 +49,11 @@ func NewHTTPClient() *HTTPClient {
 		Port:           9382,
 		APIVersion:     "v1",
 		ConnectTimeout: 5 * time.Second,
-		ReadTimeout:    60 * time.Second,
+		ReadTimeout:    300 * time.Second,
 		VerifySSL:      false,
 		client: &http.Client{
 			Transport: transport,
-			Timeout:   60 * time.Second,
+			Timeout:   300 * time.Second,
 		},
 	}
 }

@@ -2767,3 +2767,38 @@ none/minimal 关闭，现有 xhigh 兼容保留。模型目录与两种请求模
 验证：Go 1.25.14，相关 entity/models、service、handler 的 race 回归通过
 （208 个通过，7 个既有 opt-in 未配置而 skip；未把这些 skip 记为验收）。
 `go build ./internal/...`、`go vet ./internal/...` 与三个独立 main 构建均 exit 0。
+
+## bb05a8bd · Go 实例 URL 与自定义模型声明
+
+冻结基准仍为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。完整 diff 涉及的 CLI
+语法/lexer/执行/300 秒 timeout、实例 API、自定义模型 API/路由、Extra、模型列表与
+实例 driver 已覆盖。已有 TenantModel.Extra、ModelType 与绑定模型接口复用；目录
+features 保留。普通/历史/sender 调用均使用实例 driver，禁用、数据库错误、取消和
+租户归属继续失败关闭。自定义启停保留元数据；重复模型声明在实例行锁事务内只产生一个赢家，
+实例名重复通过 provider 行锁事务拒绝，避免相同名称绑定到不同 URL/凭据。
+
+vLLM 的必要后修仅取标准端点、真实发现/流式和实例 URL 隔离，未复制返回 nil 的
+NewInstance 或未实现成功桩；其他 provider 由本地 factory 构造独立实例。只补 vLLM
+文本/历史/SSE/发现，不扩到其他本地 provider、多模态、embedding、rerank 或语音批次。
+本地上游对照：93f3b9012 的动态 URL/标准端点及流式修复，94f82acd0 的全局污染修复；
+未刷新冻结上限之外的历史。能力别名、状态值与既有 api_key 唯一索引限制见
+[Go Provider API](../references/http_api_reference.md#go-provider-api并行实现)。
+
+验证：Go 1.25.14，相关 CLI/entity/models/service/handler 的最终 race 回归为
+245 个通过、8 个既有/新增 opt-in skip；随后补核 CLI 的空 URL/region 组合并复跑
+CLI race 通过。其中本项实例 SQL/HTTP 与五组既有 Google、
+模型系列、模型绑定、session SQL/HTTP 专项另启用真实 scratch，均零 skip 通过。
+`go build ./internal/...`、`go vet ./internal/...`、三个独立 main 构建 exit 0。
+并发模型声明只有一个 SQL 赢家、Extra 独立读回、跨租户/无认证拒绝、角色历史与
+中途取消无成功终帧通过；所有自有 scratch 数据库和含凭据临时配置已移除。
+本项独立工作树 `make integration` exit 0，750 项通过、1 项 Web checkout 缺失而 skip
+（2577.65 秒）；显式指定 `WEB_DATASET_CHECKOUT` 后，该真实 Web 客户端/scratch HTTP
+用例另跑 1 项通过、零 skip（46.68 秒），补齐缺失验收。两轮源码输入 hash 均无漂移，
+记录在 `/tmp/multirag-provider-python-integration/`；未使用其他任务门禁作为本项结果。
+自有临时 Infinity 容器和私有覆盖配置已清理。
+合入 main 前加跑全 `internal/...` race：507 项通过、10 项未配置 opt-in skip；六组
+相关 SQL/HTTP 专项另启用均零 skip，build、vet 与三个独立 main 构建 exit 0。
+初跑暴露旧路由测试把模型声明路径当作聊天入口，以及存储测试缺少私有 MinIO 配置；
+现核验该路径实际绑定 AddCustomModel、两个入口的无认证 401，以及旧聊天载荷拒绝、
+零 provider 调用和独立 SQL 零声明。私有 MinIO 提供真实存储验证，测试桶、容器与配置已清理。
+未改 Python；未执行 MySQL、生产认证、远程 Ark/vLLM 或 Web 页面验收。

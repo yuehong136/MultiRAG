@@ -955,6 +955,8 @@ func (c *MultiRAGClient) CreateProviderInstance(cmd *Command) (ResponseIf, error
 	payload := map[string]interface{}{
 		"instance_name": instanceName,
 		"api_key":       apiKey,
+		"base_url":      cmd.Params["base_url"],
+		"region":        cmd.Params["region"],
 	}
 
 	resp, err := c.HTTPClient.Request("POST", url, true, "web", nil, payload)

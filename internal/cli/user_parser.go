@@ -236,6 +236,8 @@ func (p *Parser) parseAddCommand() (*Command, error) {
 	switch p.curToken.Type {
 	case TokenProvider:
 		return p.parseAddProvider()
+	case TokenModel:
+		return p.parseAddModel()
 	default:
 		return nil, fmt.Errorf("unknown ADD target: %s", p.curToken.Value)
 	}
@@ -1028,20 +1030,53 @@ func (p *Parser) parseCreateProviderInstance() (*Command, error) {
 	}
 
 	p.nextToken()
+	// Keep the legacy positional API key and accept the explicit KEY grammar.
+	if p.curToken.Type == TokenKey {
+		p.nextToken()
+	}
 	apiKey, err := p.parseQuotedString()
 	if err != nil {
 		return nil, fmt.Errorf("expected API key: %w", err)
 	}
-
-	cmd := NewCommand("create_provider_instance")
-	cmd.Params["provider_name"] = providerName
-	cmd.Params["instance_name"] = instanceName
-	cmd.Params["api_key"] = apiKey
-
 	p.nextToken()
-	// Semicolon is optional
-	if p.curToken.Type == TokenSemicolon {
+	cmd := NewCommand("create_provider_instance")
+	cmd.Params["provider_name"], cmd.Params["instance_name"], cmd.Params["api_key"] = providerName, instanceName, apiKey
+	seen := make(map[int]bool)
+	for p.curToken.Type == TokenURL || p.curToken.Type == TokenRegion {
+		option := p.curToken.Type
+		if seen[option] {
+			return nil, fmt.Errorf("duplicate instance option")
+		}
+		seen[option] = true
 		p.nextToken()
+		value, err := p.parseQuotedString()
+		if err != nil {
+			return nil, err
+		}
+		p.nextToken()
+		if option == TokenURL {
+			cmd.Params["base_url"] = value
+		} else {
+			cmd.Params["region"] = value
+		}
+	}
+	baseURL, _ := cmd.Params["base_url"].(string)
+	region, _ := cmd.Params["region"].(string)
+	if strings.TrimSpace(baseURL) != "" && strings.TrimSpace(region) == "" {
+		cmd.Params["region"] = instanceName
+	}
+	if p.curToken.Type == TokenEOF {
+		return cmd, nil
+	}
+	if p.curToken.Type != TokenSemicolon {
+		return nil, fmt.Errorf("expected semicolon after options")
+	}
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenEOF {
+		return nil, fmt.Errorf("unexpected trailing instance option")
 	}
 	return cmd, nil
 }

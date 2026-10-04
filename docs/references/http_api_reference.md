@@ -1496,8 +1496,11 @@ Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rera
 
 | 路径 | 行为 |
 |---|---|
-| `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name`、`message`；普通 JSON 或 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。旧 provider models POST 已退出，CLI 同步使用本入口 |
-| `GET /{provider_name}/instances/{instance_name}/connection` | Google 通过实际模型分页列表检查连接 |
+| `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name`、`message`；普通 JSON 或 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。CLI 同步使用本入口；原 provider models POST 现用于模型声明，旧聊天载荷不再接受 |
+| `POST /{provider_name}/instances` | body 为 instance_name、api_key（vLLM 可省略）、base_url、region。自定义 URL 以 HTTP(S) API 根目录为准；region 为空归一为 default，base_url 优先于 provider 地域目录；同 provider 的重复实例名返回冲突 |
+| `POST /{provider_name}/instances/{instance_name}/models` | 声明自定义 model_name、model_type、正整数 max_tokens 与可选 thinking；路由身份为准，body 的 provider/instance 若传入须一致。仅租户 owner 可操作，重复声明返回业务冲突 |
+| `GET /{provider_name}/instances/{instance_name}/models` | 合并目录与实例自定义模型，status 为 active/inactive；自定义模型保留 model_types、max_tokens、thinking 与原始 extra，目录 features 保留。active 表示启用声明，不代表已通过远程连接或推理检查 |
+| `GET /{provider_name}/instances/{instance_name}/connection` | Google 通过实际模型分页列表检查连接；vLLM 通过真实非空模型列表检查连接 |
 | `GET /{provider_name}/instances/{instance_name}/models?supported=true` | 返回 provider 支持的模型名；Google 遍历全部页，保留 `models/` 前缀 |
 
 Google 使用 Gemini genai SDK，BaseURL 依次按 region/空 region 与 default 选择。
@@ -1511,7 +1514,9 @@ Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型�
 `model@provider`（默认实例名 `default`）和 `model@instance@provider`，空名称按租户对应
 默认模型解析。旧 `tenant_llm` 的模型名、APIKey/APIBase 兼容路径保留；仅新 provider 或
 默认实例记录不存在时可使用旧凭据，显式实例名不会切换凭据。禁用模型、禁用实例、模型
-类型不匹配和数据库错误均失败。每次绑定复制 region URL，不改全局 provider 配置。
+类型不匹配和数据库错误均失败。每次绑定创建独立 driver，自定义 base_url 优先，否则复制 region/default URL；不改全局 provider 配置。
+模型实例列表/详情同时保留 region 和持久化原始 extra；自定义模型的启停保留 Extra。
+模型 max_tokens 声明表示容量元数据，不自动作为本次生成的 max_tokens；生成配置仍由调用方传入。
 
 Go embedding 驱动只保留 `Encode(modelName, texts, apiConfig, embeddingConfig)`；
 绑定后的模型只需 `Encode(texts)`，检索将查询作为单项批次传入。`ModelBundle` 与旧
@@ -1527,7 +1532,7 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 并返回累计 `reasoning_content`；正常结束的 `data: true` 在 session 持久化成功之后发送。
 指定 `llm_id` 的临时调用不落库。成功保存完整用户历史及助手答案；错误和取消不保存部分答案。
 
-历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、Zhipu-AI；其他驱动
+历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、Zhipu-AI、vLLM；其他驱动
 保留明确的不支持结果，不将历史压成一个 user 文本。此 Go session 路径仍只执行已有文本
 聊天，未接入 KB/Tavily 检索、附件或多模态能力；image2text 能力不可作为 chat 绑定。
 当前生产 Python session、LLMBundle 和 Web 合同不受本项影响。
@@ -1541,6 +1546,29 @@ SSE 同一 delta 的 reasoning/content 均转发，sender 错误、
 取消、异常响应或提前断流不发送成功完成帧。APIKey 可为普通 Ark key，也可为含
 `ark_api_key` 的旧 JSON 形式。embedding/rerank、余额和旧 channel-only streaming
 继续明确不可用；账号权限及远程 Ark 服务仍需实际账号验收。
+
+vLLM 使用实例的 API 根 URL，标准 GET models 与 POST chat/completions，不根据 Qwen/GLM
+名称改成异步端点。支持文本、完整历史、推理/正文 sender 和请求取消；thinking 显式值
+通过 chat_template_kwargs.enable_thinking 发送。空 key 不发送 Authorization。非空文本与
+[DONE] 才构成成功完成，provider/JSON/传输/sender 错误均传播；embedding、rerank、
+多模态、语音、OCR、余额及旧 channel-only streaming 尚未实现，调用返回明确错误。
+
+CLI 支持以下声明（旧实例命令的位置式 key 与省略分号仍兼容）：
+
+```sql
+CREATE PROVIDER 'vllm' INSTANCE 'local' KEY '' URL 'http://localhost:8000/v1' REGION 'local';
+ADD MODEL 'Qwen/Qwen2-0.5B' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 131072 CHAT THINK;
+```
+
+ADD MODEL 的能力选项为 chat、vision、embedding、rerank、asr、tts、ocr；vision/asr
+分别映射为现有 ModelType 的 image2text/speech2text。thinking 只允许 chat/image2text。
+非空 URL 配合缺省或空 region 时 CLI 使用实例名；API 的空 region 使用 default。CLI HTTP 请求
+超时为 300 秒；provider 的文本请求仍沿用 120 秒上限与请求 context 取消。
+
+现有实例 api_key 的全局唯一索引仍保留，因此重复凭据或第二个空 key 实例可能被数据库
+拒绝；需要多个无 key/同 key 本地实例时，建议另做迁移到 provider/instance 归属的唯一约束，
+并核查旧重复数据与调用方，而非以占位凭据绕过。PostgreSQL scratch 和受控身份/HTTP
+验收不代表 MySQL、远程 vLLM、生产认证或 Web 模型页验收。
 
 Moonshot 支持普通文本聊天、完整角色历史和 sender SSE，复用现有注册与
 `configs/models/moonshot.json` 的 URL、端点和模型 thinking 默认。普通调用固定使用

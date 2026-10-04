@@ -241,7 +241,8 @@ func (h *ProviderHandler) ShowModel(c *gin.Context) {
 
 type CreateProviderInstanceRequest struct {
 	InstanceName string `json:"instance_name" binding:"required"`
-	APIKey       string `json:"api_key" binding:"required"`
+	APIKey       string `json:"api_key"`
+	BaseURL      string `json:"base_url"`
 	Region       string `json:"region"`
 }
 
@@ -273,12 +274,17 @@ func (h *ProviderHandler) CreateProviderInstance(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetString("user_id")
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": code, "message": message})
+		return
+	}
+	userID := user.ID
 
-	_, err := h.modelProviderService.CreateProviderInstance(providerName, req.InstanceName, req.APIKey, userID, req.Region)
+	errorCode, err := h.modelProviderService.CreateProviderInstance(providerName, req.InstanceName, req.APIKey, userID, req.Region, req.BaseURL)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeServerError,
+			"code":    errorCode,
 			"message": err.Error(),
 		})
 		return
