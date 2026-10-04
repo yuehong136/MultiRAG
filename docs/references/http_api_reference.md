@@ -1532,7 +1532,7 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 并返回累计 `reasoning_content`；正常结束的 `data: true` 在 session 持久化成功之后发送。
 指定 `llm_id` 的临时调用不落库。成功保存完整用户历史及助手答案；错误和取消不保存部分答案。
 
-历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、Zhipu-AI、vLLM；其他驱动
+历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、MiniMax、Zhipu-AI、vLLM；其他驱动
 保留明确的不支持结果，不将历史压成一个 user 文本。此 Go session 路径仍只执行已有文本
 聊天，未接入 KB/Tavily 检索、附件或多模态能力；image2text 能力不可作为 chat 绑定。
 当前生产 Python session、LLMBundle 和 Web 合同不受本项影响。
@@ -1569,6 +1569,13 @@ ADD MODEL 的能力选项为 chat、vision、embedding、rerank、asr、tts、oc
 拒绝；需要多个无 key/同 key 本地实例时，建议另做迁移到 provider/instance 归属的唯一约束，
 并核查旧重复数据与调用方，而非以占位凭据绕过。PostgreSQL scratch 和受控身份/HTTP
 验收不代表 MySQL、远程 vLLM、生产认证或 Web 模型页验收。
+
+MiniMax 支持非流式文本、完整角色历史、正文/推理 sender SSE 与模型发现（无请求体的
+`GET /v1/models`）。模型 thinking 缺省来自目录，显式 false 可覆盖；请求编码为
+`thinking.type=adaptive/disabled`，开启时设置 `reasoning_split=true`。聊天入口固定
+JSON/SSE 协议，不受反向 stream 配置影响；取消、sender 错误、非法事件、截断及
+`base_resp.status_code` 非零均返回失败，不发成功结束标记，也不记录原始响应。
+原有 files 连接检查保持不变；本驱动不支持 embedding、语音或其他未实现能力。
 
 Moonshot 支持普通文本聊天、完整角色历史和 sender SSE，复用现有注册与
 `configs/models/moonshot.json` 的 URL、端点和模型 thinking 默认。普通调用固定使用
