@@ -754,12 +754,19 @@ async def list_ingestion_logs(
     operation_status: list[str] | None = None,
     create_date_from: datetime | None = None,
     create_date_to: datetime | None = None,
+    log_type: str = "dataset",
+    keywords: str | None = None,
+    types: list[str] | None = None,
+    suffix: list[str] | None = None,
 ) -> tuple[bool, Any]:
-    """列出数据集级（graph/raptor/mindmap）摄取日志。"""
+    """列出文件或数据集级摄取日志，保留各自字段及筛选合同。"""
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
     if not await KnowledgebaseService.accessible_async(db, dataset_id, tenant_id):
         return False, "No authorization."
+
+    if log_type not in {"file", "dataset"}:
+        return False, 'Invalid "log_type", expected "dataset" or "file"'
 
     # PostgreSQL create_date is a UTC timestamp without timezone. Normalize
     # explicit offsets before comparing/filtering, including mixed inputs.
@@ -771,8 +778,16 @@ async def list_ingestion_logs(
         return False, "create_date_from must not be later than create_date_to"
 
     model = PipelineOperationLogService.model
-    fields = PipelineOperationLogService.get_dataset_logs_fields()
-    stmt = select(*fields).where(model.kb_id == dataset_id, model.document_id == GRAPH_RAPTOR_FAKE_DOC_ID)
+    fields = PipelineOperationLogService.get_file_logs_fields() if log_type == "file" else PipelineOperationLogService.get_dataset_logs_fields()
+    document_scope = model.document_id != GRAPH_RAPTOR_FAKE_DOC_ID if log_type == "file" else model.document_id == GRAPH_RAPTOR_FAKE_DOC_ID
+    stmt = select(*fields).where(model.kb_id == dataset_id, document_scope)
+    if keywords:
+        stmt = stmt.where(func.lower(model.document_name).contains(keywords.lower(), autoescape=True))
+    if log_type == "file":
+        if types:
+            stmt = stmt.where(model.document_type.in_(types))
+        if suffix:
+            stmt = stmt.where(model.document_suffix.in_(suffix))
     if operation_status:
         stmt = stmt.where(model.operation_status.in_(operation_status))
     if create_date_from:

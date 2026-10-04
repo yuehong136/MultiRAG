@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
@@ -140,7 +140,7 @@ class SearchBotRetrievalTestRequest(BaseModel):
     similarity_threshold: float | None = 0.0
     vector_similarity_weight: float | None = 0.3
     use_kg: bool | None = False
-    top_k: int | None = 1024
+    top_k: int = Field(default=1024, ge=1)
     cross_languages: list[str] | None = []
     search_id: str | None = ""
     doc_ids: list[str] | None = []

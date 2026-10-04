@@ -283,6 +283,10 @@ async def list_ingestion_logs(
     operation_status: list[str] | None = Query(None, description="按操作状态过滤，可重复"),
     create_date_from: datetime | None = Query(None, description="创建日期起始"),
     create_date_to: datetime | None = Query(None, description="创建日期结束"),
+    log_type: str = Query("dataset", description="日志类别：file 或 dataset"),
+    keywords: str | None = Query(None, description="文件或任务名称关键词"),
+    types: list[str] | None = Query(None, description="文件类型，可重复"),
+    suffix: list[str] | None = Query(None, description="文件后缀，可重复"),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
@@ -298,6 +302,10 @@ async def list_ingestion_logs(
             operation_status,
             create_date_from,
             create_date_to,
+            log_type,
+            keywords,
+            types,
+            suffix,
         )
         return _respond(success, result)
     except Exception as e:

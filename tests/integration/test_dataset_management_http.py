@@ -282,3 +282,70 @@ def test_ingestion_logs_real_errors_scope_and_smoke(management_api: dict[str, An
     env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print("Actual metadata/ingestion HTTP auth and SQL contracts; same listener make smoke passed; exact owned IDs/readback cleanup recorded")
+
+
+@pytest.mark.parametrize("kind,positions", [("file", [3]), ("dataset", [0, 1, 2])])
+def test_ingestion_split_search_fields_and_permissions(management_api: dict[str, Any], kind: str, positions: list[int]) -> None:
+    import sqlalchemy as sa
+
+    env = management_api
+    path = f"/datasets/{env['datasets'][0]}/ingestions"
+    # Change only owned scratch rows; mixed case, Unicode and literal SQL wildcards.
+    with env["engine"].begin() as db:
+        db.execute(sa.update(PipelineOperationLog).where(PipelineOperationLog.id.in_(env["logs"])).values(document_name="Report_100%报告"))
+    before = sql_state(env)
+    params = {"log_type": kind, "keywords": "REPORT_100%报告", "desc": "false"}
+    for credential in [env["keys"][0], env["jwt"][0]]:
+        response = request_api(env, "GET", path, credential=credential, params=params)
+        assert response.status_code == 200 and response.json()["code"] == 0
+        result = response.json()["data"]
+        assert result["total"] == len(positions)
+        assert [row["id"] for row in result["logs"]] == [env["logs"][i] for i in positions]
+        for row in result["logs"]:
+            assert ("document_name" in row) is (kind == "file")
+            if kind == "file":
+                assert row["document_name"] == "Report_100%报告" and row["document_id"] == env["documents"][0]
+                assert row["document_suffix"] == "txt" and row["document_type"] == "txt"
+                assert {"pipeline_id", "pipeline_title", "dsl", "parser_id", "source_from"} <= row.keys()
+        missing = request_api(env, "GET", path, credential=credential, params={**params, "keywords": "REPORT_100_报告"}).json()
+        assert missing["data"] == {"total": 0, "logs": []}
+        page = request_api(env, "GET", path, credential=credential, params={**params, "page": 1, "page_size": 1}).json()["data"]
+        assert page["total"] == len(positions) and len(page["logs"]) == 1
+    denied = request_api(env, "GET", path, credential=env["keys"][1], params=params).json()
+    assert denied == {"code": 102, "message": "No authorization."}
+    if kind == "file":
+        for extra, count in [
+            ({"types": ["pdf", "txt"], "suffix": ["txt"]}, 1),
+            ({"types": ["pdf"]}, 0),
+            ({"suffix": ["pdf"]}, 0),
+            ({"create_date_from": "2025-01-04T08:00:00+08:00", "create_date_to": "2025-01-04"}, 1),
+            ({"create_date_to": "2025-01-03"}, 0),
+            ({"operation_status": ["success"]}, 0),
+        ]:
+            result = request_api(env, "GET", path, credential=env["keys"][0], params={**params, **extra}).json()
+            assert result["code"] == 0 and result["data"]["total"] == count
+    assert sql_state(env) == before
+
+
+@pytest.mark.external_consumer
+def test_ingestion_actual_web_consumer(management_api: dict[str, Any]) -> None:
+    import json
+    from pathlib import Path
+
+    env = management_api
+    root = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
+    runner = root / "node_modules/.bin/tsx"
+    script = root / "scripts/verify-ingestion-logs.ts"
+    assert runner.exists() and script.exists(), "Web checkout required for consumer acceptance"
+    before = sql_state(env)
+    result = subprocess.run(
+        [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env={**os.environ, "INGESTION_BASE": env["base"], "INGESTION_TOKEN": env["jwt"][0], "INGESTION_DATASET": env["datasets"][0], "INGESTION_LOG_IDS": json.dumps(env["logs"])},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ingestion Web acceptance passed" in result.stdout
+    assert sql_state(env) == before

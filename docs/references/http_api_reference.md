@@ -830,9 +830,13 @@ HTTP 状态与对应业务码。
 
 ### 数据集摄取日志
 
-`GET /api/v1/datasets/{dataset_id}/ingestions` 按现行数据集访问权限读取数据集级
-GraphRAG/RAPTOR/MindMap 日志，成功返回 `{"code":0,"data":{"total":0,"logs":[]}}`。
-它与 Web 文件日志 `POST /v1/kb/list_pipeline_logs` 的筛选范围不同。
+`GET /api/v1/datasets/{dataset_id}/ingestions` 按现行数据集访问权限读取摄取日志，
+成功返回 `{"code":0,"data":{"total":0,"logs":[]}}`。Web 文件和数据集日志均使用此接口。
+默认 `log_type=dataset` 返回 GraphRAG/RAPTOR/MindMap 日志；`file` 返回真实文档日志，
+额外保留 document_id、document_name、document_type、document_suffix、pipeline_id、
+pipeline_title、parser_id、source_from 和 dsl 等文件字段。非法 log_type 返回 `code:102`。
+`keywords` 按 document_name 做不区分大小写的字面子串匹配，适用于两类日志；
+`types` 和 `suffix` 是可重复的文件筛选参数，仅在 file 模式生效。
 
 | Query 参数 | 含义 |
 |---|---|
