@@ -10,9 +10,9 @@ import pytest
 import requests
 from PIL import Image
 
-from tests.integration.test_runtime_document_upload import read_object
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
 from tests.runtime_attachment_support import capture_chat_model, sse_frames
+from tests.support.runtime_upload import read_object
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 def test_real_http_mcp_attachment_consumption_and_failures(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:

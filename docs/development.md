@@ -15,6 +15,7 @@
 
 - 单元测试不得依赖真实外部服务。使用 [unit conftest](../tests/unit/conftest.py) 提供的 `db`、`async_db`、`client` 等假件与覆盖，不新增 `sys.modules` 整包伪造。
 - SQL 语义用真库验证；[integration conftest](../tests/integration/conftest.py) 提供一次性 scratch 库，不操作配置中的业务数据。
+- 集成测试入口、资源所有权、分组与证据格式见 [测试说明](../tests/README.md)。公共 fixture 放 `tests/support/`；用例只替换明确的外部模型或故障边界，存储结果需独立读回。
 - 异步测试直接写 `async def test_*`；marker 和收集规则以 `pyproject.toml` 为准。手工性能脚本放 `tests/manual/`。
 
 ## 配置与资源

@@ -2,14 +2,9 @@
 
 import asyncio
 import base64
-import copy
 import json
 import os
-import socket
 import subprocess
-import threading
-import time
-from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
@@ -20,123 +15,15 @@ import pytest
 import redis
 import requests
 import sqlalchemy as sa
-import uvicorn
-from minio import Minio, S3Error
+from minio import S3Error
 from PIL import Image
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import NullPool
 
-from api.db.db_models import APIToken, Document, File, Tenant, User, UserTenant, get_async_db
+from api.db.db_models import Document, File, UserTenant
 from api.db.services.dialog_service import split_file_attachments
-from common import resources, settings
 from common.config_utils import CONFIGS
-
-
-@pytest.fixture
-def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
-    from api.apps import app, manager
-
-    owner_ids = [uuid4().hex, uuid4().hex]
-    api_key = f"upload-test-{uuid4().hex}"
-    with Session(bootstrapped_engine) as db:
-        for user_id in owner_ids:
-            db.add(User(id=user_id, email=f"{user_id}@upload.test", nickname="Upload test", password="unused", access_token="active"))
-            db.add(Tenant(id=user_id, name="Upload scratch", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
-            db.add(UserTenant(id=uuid4().hex, user_id=user_id, tenant_id=user_id, role="owner", invited_by=user_id))
-        db.add(APIToken(tenant_id=owner_ids[1], token=api_key, name="upload-test"))
-        db.commit()
-
-    cfg = CONFIGS["minio"]
-    storage_client = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=str(cfg.get("secure", False)).lower() in {"true", "1", "yes"})
-    bucket = f"upload-test-{uuid4().hex}"
-    storage_client.make_bucket(bucket)
-    # Exercise production MinIO key-mapping decorators, using only this bucket.
-    storage = copy.copy(settings.STORAGE_IMPL)
-    storage.conn, storage.bucket, storage.prefix_path = storage_client, bucket, ""
-    monkeypatch.setitem(resources._state, "storage", storage)
-    async_engine = create_async_engine(bootstrapped_engine.url, poolclass=NullPool)
-    sessions = async_sessionmaker(async_engine, expire_on_commit=False)
-
-    async def scratch_db() -> AsyncIterator[AsyncSession]:
-        async with sessions() as db:
-            yield db
-
-    monkeypatch.setitem(app.dependency_overrides, get_async_db, scratch_db)
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    base = f"http://127.0.0.1:{listener.getsockname()[1]}"
-    server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
-    record = {
-        "database": bootstrapped_engine.url.database,
-        "owners": owner_ids,
-        "api_token_owner": owner_ids[1],
-        "api_token_name": "upload-test",
-        "bucket": bucket,
-        "port": listener.getsockname()[1],
-    }
-    evidence = Path(os.environ.get("MULTIRAG_343BDA_EVIDENCE_DIR", str(tmp_path)))
-    evidence.mkdir(parents=True, exist_ok=True)
-    record_path = evidence / (owner_ids[0] + ".json")
-    record_path.write_text(json.dumps(record))
-    thread.start()
-    try:
-        deadline = time.monotonic() + 30
-        while not server.started and thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert server.started, "scratch HTTP API failed to start"
-        env = {
-            "base": base,
-            "owners": owner_ids,
-            "jwt": manager.create_access_token(data={"sub": f"{owner_ids[0]}@upload.test"}),
-            "api_key": api_key,
-            "storage": storage_client,
-            "bucket": bucket,
-            "engine": bootstrapped_engine,
-            "storage_adapter": storage,
-            "record": record,
-            "record_path": record_path,
-        }
-        yield env
-    finally:
-        server.should_exit = True
-        thread.join(timeout=15)
-        listener.close()
-        asyncio.run(async_engine.dispose())
-        objects = list(storage_client.list_objects(bucket, recursive=True))
-        record["objects"] = [item.object_name for item in objects]
-        for item in objects:
-            storage_client.remove_object(bucket, item.object_name)
-        assert not list(storage_client.list_objects(bucket, recursive=True))
-        storage_client.remove_bucket(bucket)
-        with Session(bootstrapped_engine) as db:
-            db.execute(sa.delete(APIToken).where(APIToken.token == api_key))
-            db.execute(sa.delete(UserTenant).where(UserTenant.user_id.in_(owner_ids)))
-            db.execute(sa.delete(Tenant).where(Tenant.id.in_(owner_ids)))
-            db.execute(sa.delete(User).where(User.id.in_(owner_ids)))
-            db.commit()
-        assert not thread.is_alive()
-        with bootstrapped_engine.connect() as db:
-            remaining = {
-                model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(column.in_(owner_ids)))
-                for model, column in [(APIToken, APIToken.tenant_id), (UserTenant, UserTenant.user_id), (Tenant, Tenant.id), (User, User.id)]
-            }
-            assert not any(remaining.values()), remaining
-        assert not storage_client.bucket_exists(bucket)
-        with socket.socket() as client:
-            assert client.connect_ex(("127.0.0.1", record["port"])) != 0
-        record.update(base_remaining=remaining, bucket_removed=True, listener_closed=True)
-        record_path.write_text(json.dumps(record))
-
-
-def read_object(client: Minio, bucket: str, key: str) -> bytes:
-    response = client.get_object(bucket, key)
-    try:
-        return response.read()
-    finally:
-        response.close()
-        response.release_conn()
+from tests.support.runtime_upload import read_object
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict[str, Any]) -> None:

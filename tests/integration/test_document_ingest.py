@@ -37,7 +37,7 @@ from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 from tests.integration.test_document_parse_retirement import object_snapshot, sql_snapshot
 from tests.integration.test_document_parse_retirement import parse_api as parse_api
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 def evidence(env: dict[str, Any], label: str, value: Any) -> None:

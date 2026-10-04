@@ -21,7 +21,7 @@ from common.constants import RetCode
 from common.data_source.config import DocumentSource
 from common.data_source.google_util.auth import get_google_oauth_creds
 from common.data_source.google_util.constant import GOOGLE_SCOPES
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 @pytest.fixture

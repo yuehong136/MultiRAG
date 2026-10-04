@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Conversation, Dialog
 from common.constants import RetCode
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 @pytest.mark.parametrize("credential", ["jwt", "api_key"])

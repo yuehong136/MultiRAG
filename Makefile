@@ -2,8 +2,11 @@
 # 分层验证体系说明见 AGENTS.md。日常门禁：make verify
 .DEFAULT_GOAL := help
 UV := uv run --no-sync
+TESTS ?=
+PYTEST_ARGS ?= -q
+INTEGRATION_SUITE ?= core
 
-.PHONY: help install fix lint typecheck test test-all coverage integration smoke mcp-compat verify
+.PHONY: help install fix lint typecheck test test-all coverage integration integration-db integration-system integration-infinity integration-consumer integration-all smoke mcp-compat verify
 
 help: ## 列出全部可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -27,15 +30,30 @@ typecheck: ## Tier 1：mypy 渐进式类型检查（范围见 pyproject [tool.my
 test: ## Tier 2：单元测试（无需外部服务）
 	$(UV) pytest tests/unit -q
 
-test-all: ## Tier 2+3：单元 + 集成（服务缺失时集成测试自动跳过）
-	$(UV) pytest tests -q
+test-all: ## Tier 2+3：单元和核心集成在独立进程运行
+	$(UV) pytest tests/unit -q
+	$(MAKE) integration
 
 coverage: ## 单元测试 + 覆盖率报告
 	$(UV) pytest tests/unit -q --cov --cov-branch --cov-report=term-missing --cov-report=xml
 
-integration: ## Tier 3：集成测试（需要 docker compose base 服务）
-	@$(UV) python scripts/check_services.py || (echo "" && echo "服务未就绪。启动方式：" && echo "  docker compose -f docker/docker-compose-base.yml up -d" && exit 1)
-	REQUIRE_SERVICES=1 $(UV) pytest tests/integration -q
+integration: ## Tier 3：核心集成；按 TESTS 依赖准备服务并保存证据
+	$(UV) python scripts/run_integration.py --suite $(INTEGRATION_SUITE) -- $(TESTS) $(PYTEST_ARGS)
+
+integration-db: ## 仅 PostgreSQL 契约（不收集 HTTP/模型/向量库测试）
+	$(MAKE) integration INTEGRATION_SUITE=db
+
+integration-system: ## 独立进程退出与恢复契约
+	$(MAKE) integration INTEGRATION_SUITE=system
+
+integration-infinity: ## Infinity 后端契约（所选服务缺失必须失败）
+	$(MAKE) integration INTEGRATION_SUITE=infinity
+
+integration-consumer: ## 独立 Web 客户端验收（需要 WEB_DATASET_CHECKOUT）
+	$(MAKE) integration INTEGRATION_SUITE=consumer
+
+integration-all: ## 核心 + Infinity + 独立 Web 客户端；不允许意外 skip
+	$(MAKE) integration INTEGRATION_SUITE=all
 
 smoke: ## Tier 4：冒烟测试（对运行中的服务器打健康端点；启动：uv run python -m api.multirag_server）
 	$(UV) python scripts/smoke.py

@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import pytest
 import requests
 
-from tests.integration.test_runtime_document_upload import read_object, runtime_upload_api  # noqa: F401
+from tests.support.runtime_upload import read_object, runtime_upload_api  # noqa: F401
 
 
 @pytest.fixture

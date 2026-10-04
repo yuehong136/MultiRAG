@@ -27,8 +27,8 @@ from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
 from tests.integration.test_document_parse_retirement import _ModelOutput, assert_retired_upload_has_no_work, object_snapshot, sql_snapshot
 from tests.integration.test_document_parse_retirement import parse_api as parse_api
-from tests.integration.test_runtime_document_upload import read_object
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import read_object
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 @pytest.fixture

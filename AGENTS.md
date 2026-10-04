@@ -41,7 +41,7 @@ MultiRAG 的当前生产后端使用 Python、FastAPI、SQLAlchemy 和 uv。
 
 - 无 `make` 时运行目标内的等价命令。Ruff 局部修复用 `uv run --no-sync ruff check --fix <paths>` 和 `uv run --no-sync ruff format <paths>`；`make fix` 会修改全库，不作为局部任务的默认步骤。
 - 不要求开工跑全套基线；只在复杂重构或失败归因需要时建立本机对照。适用检查通过后，仅在新改动、失败或未解决疑点需要时扩大或重复验证。
-- `make integration` 检查服务并以 `REQUIRE_SERVICES=1` 运行。使用隔离资源，禁止对业务库做破坏性测试；直接 pytest 的 testcontainers 回退可用 `INTEGRATION_NO_TESTCONTAINERS=1` 关闭。
+- `make integration` 在收集前准备核心套件所需服务，以 `REQUIRE_SERVICES=1` 运行并保存证据；分组、后端与独立消费者验收见 [测试说明](tests/README.md)。使用隔离资源，禁止对业务库做破坏性测试；Testcontainers 回退可用 `INTEGRATION_NO_TESTCONTAINERS=1` 关闭。
 - 交付写清实际结果、本次回归、已有问题与环境阻塞。集成 skip 不算通过，历史通过数不能充当本次证据；阻塞时完成其余可验证部分并说明限制。
 
 ## UI 快照审阅

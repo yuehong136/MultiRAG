@@ -221,6 +221,7 @@ dev = [
     "pytest-asyncio>=0.25",
     "pytest-cov>=6.0.0",
     "pytest-playwright>=0.7.2",
+    "pytest-xdist>=3.8,<4",
     # EIM-A1 contract oracle: direct test dependency rather than relying on
     # the MCP SDK's transitive dependency. A2 may promote it to runtime later.
     "PyJWT[crypto]==2.13.0",

@@ -24,7 +24,7 @@ from common.constants import FileSource, TaskStatus
 from common.data_source import gmail_connector as gmail
 from core.svr import sync_data_source
 from tests.integration.test_document_parse_retirement import parse_api as parse_api
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 @pytest.fixture

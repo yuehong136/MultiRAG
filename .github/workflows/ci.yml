@@ -34,7 +34,7 @@ jobs:
         with:
           # 与本地工具链、uv.lock 产出版本对齐（pyproject [tool.uv] required-version
           # 同区间）。CI 浮动装新版 uv 会让 `uv lock --check` 因锁格式重写而误报漂移。
-          # 升级 uv 时本地、此处四个 pin、重锁 uv.lock 三者必须同一提交内完成。
+          # 升级 uv 时本地、此文件各处 pin、重锁 uv.lock 三者必须同一提交内完成。
           version: "0.12.5"
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -154,14 +154,34 @@ jobs:
         ports: ["6379:6379"]
     steps:
       - uses: actions/checkout@v5
+      - name: Init postgres schema (mirror docker/postgres/init.sql)
+        run: |
+          PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
+            -c 'CREATE SCHEMA IF NOT EXISTS usr_ai; GRANT ALL ON SCHEMA usr_ai TO usr_ai;'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.5"  # 与 uv.lock 同源，见 lint job 注释
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: uv sync (retry)
+        run: |
+          for i in 1 2 3; do
+            uv sync --python 3.12 --group dev --frozen && exit 0
+            echo "uv sync failed (attempt $i), retrying..." >&2
+            sleep 15
+          done
+          exit 1
       # GH services 无法覆盖容器 CMD，MinIO 需要 `server /data`，用 docker run
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
-            minio/minio:latest server /data
+            "$(uv run --no-sync python -c 'from tests.support.services import service_images; print(service_images()["minio"])')" server /data
       # 与 docker-compose-base.yml 同版本；CI 采用官方 embedded-etcd 单容器形态，
-      # 省去独立 etcd/minio 依赖。尽早启动，让它在 uv sync 期间完成冷启动。
+      # 省去独立 etcd/minio 依赖；镜像从 Compose 读取，避免版本漂移。
       - name: Start Milvus (standalone, embedded etcd)
         run: |
           cat > embedEtcd.yaml <<'EOF'
@@ -179,44 +199,15 @@ jobs:
             -e COMMON_STORAGETYPE=local \
             -v "$PWD/embedEtcd.yaml":/milvus/configs/embedEtcd.yaml \
             -p 19530:19530 -p 9091:9091 \
-            milvusdb/milvus:v2.6.7 milvus run standalone
-      - name: Init postgres schema (mirror docker/postgres/init.sql)
-        run: |
-          PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
-            -c 'CREATE SCHEMA IF NOT EXISTS usr_ai; GRANT ALL ON SCHEMA usr_ai TO usr_ai;'
-      # 服务器 import 链在 core/app/picture.py 顶层实例化 OCR()，缺模型直接崩。
-      # runner 裸 IP 跑 snapshot_download 会被 HF 429，这里 curl 定点拉 3 个小文件（~16MB）
-      - name: Provision deepdoc OCR models (det/rec/ocr.res)
-        run: |
-          mkdir -p core/res/deepdoc
-          for f in det.onnx rec.onnx ocr.res; do
-            [ -f "core/res/deepdoc/$f" ] && continue
-            for base in https://huggingface.co https://hf-mirror.com; do
-              if curl -sSfL --retry 3 --retry-delay 5 -o "core/res/deepdoc/$f" \
-                  "$base/InfiniFlow/deepdoc/resolve/main/$f"; then
-                break
-              fi
-              echo "download $f from $base failed" >&2
-            done
-            [ -f "core/res/deepdoc/$f" ] || { echo "cannot fetch $f" >&2; exit 1; }
-          done
-          ls -la core/res/deepdoc
-      - uses: actions/setup-python@v6
+            "$(uv run --no-sync python -c 'from tests.support.services import service_images; print(service_images()["milvus"])')" milvus run standalone
+      - name: Cache verified OCR assets
+        uses: actions/cache@v4
         with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: "0.12.5"  # 与 uv.lock 同源，见 lint job 注释
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: uv sync (retry)
-        run: |
-          for i in 1 2 3; do
-            uv sync --python 3.12 --group dev --frozen && exit 0
-            echo "uv sync failed (attempt $i), retrying..." >&2
-            sleep 15
-          done
-          exit 1
+          path: core/res/deepdoc
+          key: deepdoc-test-${{ hashFiles('scripts/provision_test_assets.py') }}
+      - name: Provision immutable OCR assets
+        run: uv run --no-sync python scripts/provision_test_assets.py
+
       - name: Install Chromium for browser SSRF integration regression
         run: uv run --no-sync playwright install chromium --only-shell --with-deps
 
@@ -252,8 +243,6 @@ jobs:
             prefix_path: ''
             workflow_bucket: 'multirag-workflow'
           EOF
-      - name: Integration tests
-        run: REQUIRE_SERVICES=1 uv run --no-sync pytest tests/integration -q
       # 服务器 bootstrap 对 Milvus 只等 10s，必须先确认健康再起服务器
       - name: Wait for Milvus healthy
         run: |
@@ -267,6 +256,8 @@ jobs:
           echo "Milvus not healthy in time"
           docker logs milvus 2>&1 | tail -50
           exit 1
+      - name: Integration tests
+        run: make integration
       - name: Smoke (boot server, hit health endpoints)
         run: |
           uv run --no-sync python -m api.multirag_server > server.log 2>&1 &
@@ -276,3 +267,54 @@ jobs:
       - name: Server log on failure
         if: failure()
         run: tail -200 server.log || true
+
+      - name: Collect service diagnostics
+        if: failure()
+        run: |
+          mkdir -p .test-results/services
+          for name in minio milvus; do
+            docker logs --tail 300 "$name" > ".test-results/services/$name.log" 2>&1 || true
+          done
+          cp server.log .test-results/services/ 2>/dev/null || true
+      - name: Upload integration evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-evidence
+          path: .test-results/
+          retention-days: 7
+          include-hidden-files: true
+
+  # 独立后端契约无需 PostgreSQL/Redis/MinIO/Milvus。入口按 Compose 版本
+  # 自动供给一次性 Infinity，协议不兼容或用例 skip 均使门禁失败。
+  integration-infinity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: uv sync (retry)
+        run: |
+          for i in 1 2 3; do
+            uv sync --python 3.12 --group dev --frozen && exit 0
+            echo "uv sync failed (attempt $i), retrying..." >&2
+            sleep 15
+          done
+          exit 1
+      - name: Infinity contracts
+        run: make integration-infinity
+      - name: Upload Infinity evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-infinity-evidence
+          path: .test-results/
+          retention-days: 7
+          include-hidden-files: true

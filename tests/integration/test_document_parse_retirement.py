@@ -31,8 +31,8 @@ from common import settings
 from common.constants import TaskStatus
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
-from tests.integration.test_runtime_document_upload import read_object
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import read_object
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 @pytest.fixture

@@ -6,6 +6,7 @@ Only embedding output is controlled; ranking, predicates, HTTP and SQL are real.
 import asyncio
 import json
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 from uuid import uuid4
@@ -24,7 +25,7 @@ from api.db.db_models import Document, DocumentMetadata, Knowledgebase, Search, 
 from common import settings
 from common.config_utils import CONFIGS
 from core.nlp import search
-from tests.integration.test_runtime_document_upload import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
 @pytest.fixture
@@ -68,30 +69,37 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
     cfg = CONFIGS["milvus"]
     reader = MilvusClient(uri=cfg["hosts"], user=cfg.get("username", ""), password=cfg.get("password", ""), db_name=cfg.get("db_name") or "default")
     rows: dict[str, list[dict[str, Any]]] = {}
+    text_fields = ["content_with_weight", "title_tks", "title_sm_tks", "important_kwd", "important_tks", "question_tks", "content_ltks", "content_sm_ltks"]
+
+    def create_collection(collection: str) -> None:
+        # Seed the supported retrieval schema directly. Generic create_idx
+        # currently creates ingestion-only fields (no q_768_vec/BM25 fields).
+        schema = reader.create_schema(auto_id=False, enable_dynamic_field=True)
+        schema.add_field("pk", DataType.VARCHAR, is_primary=True, max_length=512)
+        for field in ("kb_id", "doc_id", "docnm_kwd", "knowledge_graph_kwd", "removed_kwd", "mom_id"):
+            schema.add_field(field, DataType.VARCHAR, max_length=512)
+        schema.add_field("available_int", DataType.INT64)
+        schema.add_field("source_id", DataType.VARCHAR, max_length=65535)
+        for field in ("vector", "q_768_vec"):
+            schema.add_field(field, DataType.FLOAT_VECTOR, dim=768)
+        for field in text_fields:
+            schema.add_field(field, DataType.VARCHAR, max_length=65535, enable_analyzer=True, analyzer_params={"tokenizer": "standard"})
+            sparse = "sparse_vector" if field == "content_with_weight" else field + "_sparse"
+            schema.add_field(sparse, DataType.SPARSE_FLOAT_VECTOR)
+            schema.add_function(Function(name="bm25_" + field, function_type=FunctionType.BM25, input_field_names=[field], output_field_names=[sparse]))
+        indexes = reader.prepare_index_params()
+        for field in ("vector", "q_768_vec"):
+            indexes.add_index(field, index_type="AUTOINDEX", metric_type="COSINE")
+        for field in text_fields:
+            indexes.add_index("sparse_vector" if field == "content_with_weight" else field + "_sparse", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25")
+        reader.create_collection(collection, schema=schema, index_params=indexes, consistency_level="Strong", timeout=60)
+
     try:
+        # Each case retains three unique collections and all real indexes.
+        # Overlap their independent creation/loading RPCs, then seed and verify.
+        with ThreadPoolExecutor(max_workers=len(collections)) as pool:
+            list(pool.map(create_collection, collections.values()))
         for key, doc in (("dataset", "doc"), ("second", "second_doc"), ("foreign", "foreign_doc")):
-            # Seed the supported retrieval schema directly. Generic create_idx
-            # currently creates ingestion-only fields (no q_768_vec/BM25 fields).
-            schema = reader.create_schema(auto_id=False, enable_dynamic_field=True)
-            schema.add_field("pk", DataType.VARCHAR, is_primary=True, max_length=512)
-            for field in ("kb_id", "doc_id", "docnm_kwd", "knowledge_graph_kwd", "removed_kwd", "mom_id"):
-                schema.add_field(field, DataType.VARCHAR, max_length=512)
-            schema.add_field("available_int", DataType.INT64)
-            schema.add_field("source_id", DataType.VARCHAR, max_length=65535)
-            for field in ("vector", "q_768_vec"):
-                schema.add_field(field, DataType.FLOAT_VECTOR, dim=768)
-            text_fields = ["content_with_weight", "title_tks", "title_sm_tks", "important_kwd", "important_tks", "question_tks", "content_ltks", "content_sm_ltks"]
-            for field in text_fields:
-                schema.add_field(field, DataType.VARCHAR, max_length=65535, enable_analyzer=True, analyzer_params={"tokenizer": "standard"})
-                sparse = "sparse_vector" if field == "content_with_weight" else field + "_sparse"
-                schema.add_field(sparse, DataType.SPARSE_FLOAT_VECTOR)
-                schema.add_function(Function(name="bm25_" + field, function_type=FunctionType.BM25, input_field_names=[field], output_field_names=[sparse]))
-            indexes = reader.prepare_index_params()
-            for field in ("vector", "q_768_vec"):
-                indexes.add_index(field, index_type="AUTOINDEX", metric_type="COSINE")
-            for field in text_fields:
-                indexes.add_index("sparse_vector" if field == "content_with_weight" else field + "_sparse", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25")
-            reader.create_collection(collections[key], schema=schema, index_params=indexes, consistency_level="Strong")
             rows[key] = []
             for available in (0, 1):
                 row = {
@@ -119,7 +127,7 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
             artifacts.append({**rows["dataset"][0], "id": uuid4().hex, "source_id": [ids["doc"]], "knowledge_graph_kwd": kind, "removed_kwd": removed, "content_with_weight": json.dumps(content)})
         assert store.insert(artifacts, collections["dataset"], ids["dataset"]) == []
         for collection in collections.values():
-            reader.flush(collection)
+            reader.flush(collection, timeout=60)
         yield {**env, **ids, "collections": collections, "rows": rows, "reader": reader}
     finally:
         asyncio.run(async_engine.dispose())
@@ -300,6 +308,7 @@ def test_http_graph_document_scope_and_hidden_artifacts(search_api: dict[str, An
     assert request(env, "GET", "/graph", token=env["api_key"], params={"doc_id": env["doc"]}).json()["code"] == 109
 
 
+@pytest.mark.external_consumer
 def test_actual_web_client_against_scratch_http(search_api: dict[str, Any]) -> None:
     import os
     import subprocess

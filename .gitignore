@@ -289,3 +289,6 @@ internal/cpp/cmake-build-debug/
 # 注释必须独占一行——gitignore 不支持行尾注释，写成 `.dmypy.json  # 说明`
 # 会把整行当成模式，于是这条规则从来没生效过。
 .dmypy.json
+
+# Local test evidence (may include owned fixture payloads).
+.test-results/
