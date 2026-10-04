@@ -75,6 +75,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
         FileSource.BOX,
         FileSource.GITHUB,
         FileSource.GITLAB,
+        FileSource.DROPBOX,
     }
 )
 
@@ -649,7 +650,7 @@ class Gmail(SyncBase):
 class Dropbox(SyncBase):
     SOURCE_NAME: str = FileSource.DROPBOX
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         self.connector = DropboxConnector(batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE))
         self.connector.load_credentials(self.conf["credentials"])
 

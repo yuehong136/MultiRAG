@@ -1,7 +1,7 @@
 """Dropbox connector"""
 
 import logging
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from dropbox import Dropbox
@@ -14,17 +14,19 @@ from common.data_source.exceptions import (
     ConnectorValidationError,
     InsufficientPermissionsError,
 )
-from common.data_source.interfaces import LoadConnector, PollConnector, SecondsSinceUnixEpoch
-from common.data_source.models import Document, GenerateDocumentsOutput
+from common.data_source.interfaces import LoadConnector, PollConnector, SecondsSinceUnixEpoch, SlimConnectorWithPermSync
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SlimDocument
 from common.data_source.utils import get_file_ext
 
 logger = logging.getLogger(__name__)
 
 
-class DropboxConnector(LoadConnector, PollConnector):
+class DropboxConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """Dropbox connector for accessing Dropbox files and folders"""
 
     def __init__(self, batch_size: int = INDEX_BATCH_SIZE) -> None:
+        if batch_size < 1:
+            raise ValueError("Dropbox batch_size must be positive")
         self.batch_size = batch_size
         self.dropbox_client: Dropbox | None = None
 
@@ -59,7 +61,10 @@ class DropboxConnector(LoadConnector, PollConnector):
         if self.dropbox_client is None:
             raise ConnectorMissingCredentialError("Dropbox")
         _, resp = self.dropbox_client.files_download(path)
-        return resp.content
+        try:
+            return resp.content
+        finally:
+            resp.close()
 
     def _get_shared_link(self, path: str) -> str:
         """Create a shared link for a file in Dropbox."""
@@ -88,39 +93,29 @@ class DropboxConnector(LoadConnector, PollConnector):
             raise ConnectorMissingCredentialError("Dropbox")
 
         # Collect all files first to count filename occurrences
-        all_files = []
-        self._collect_files_recursive(path, start, end, all_files)
+        all_files: list[FileMetadata] = []
+        self._collect_file_entries_recursive(path, start, end, all_files)
 
         # Count filename occurrences
         filename_counts: dict[str, int] = {}
-        for entry, _ in all_files:
+        for entry in all_files:
             filename_counts[entry.name] = filename_counts.get(entry.name, 0) + 1
 
         # Process files in batches
         batch: list[Document] = []
-        for entry, downloaded_file in all_files:
-            modified_time = entry.client_modified
-            if modified_time.tzinfo is None:
-                modified_time = modified_time.replace(tzinfo=UTC)
-            else:
-                modified_time = modified_time.astimezone(UTC)
-
-            # Use full path only if filename appears multiple times
-            if filename_counts.get(entry.name, 0) > 1:
-                # Remove leading slash and replace slashes with ' / '
-                relative_path = entry.path_display.lstrip("/")
-                semantic_id = relative_path.replace("/", " / ") if relative_path else entry.name
-            else:
-                semantic_id = entry.name
+        for entry in all_files:
+            # Download by stable identity: a path can be replaced after enumeration.
+            # Any read failure aborts the run before deletion reconciliation.
+            downloaded_file = self._download_file(entry.id)
 
             batch.append(
                 Document(
                     id=f"dropbox:{entry.id}",
                     blob=downloaded_file,
                     source=DocumentSource.DROPBOX,
-                    semantic_identifier=semantic_id,
+                    semantic_identifier=self._get_semantic_identifier(entry, filename_counts),
                     extension=get_file_ext(entry.name),
-                    doc_updated_at=modified_time,
+                    doc_updated_at=self._normalize_modified_time(entry.client_modified),
                     size_bytes=entry.size if getattr(entry, "size", None) is not None else len(downloaded_file),
                 )
             )
@@ -132,52 +127,70 @@ class DropboxConnector(LoadConnector, PollConnector):
         if batch:
             yield batch
 
-    def _collect_files_recursive(
+    @staticmethod
+    def _normalize_modified_time(modified_time: datetime) -> datetime:
+        if modified_time.tzinfo is None:
+            return modified_time.replace(tzinfo=UTC)
+        return modified_time.astimezone(UTC)
+
+    @staticmethod
+    def _get_semantic_identifier(entry: FileMetadata, filename_counts: dict[str, int]) -> str:
+        if filename_counts[entry.name] <= 1:
+            return entry.name
+        relative_path = entry.path_display.lstrip("/")
+        return relative_path.replace("/", " / ") if relative_path else entry.name
+
+    def _collect_file_entries_recursive(
         self,
         path: str,
         start: SecondsSinceUnixEpoch | None,
         end: SecondsSinceUnixEpoch | None,
-        all_files: list,
+        all_files: list[FileMetadata],
+        *,
+        visited: set[str] | None = None,
     ) -> None:
-        """Recursively collect all files matching time criteria."""
+        """Enumerate metadata completely; never download a body here."""
         if self.dropbox_client is None:
             raise ConnectorMissingCredentialError("Dropbox")
-
-        result = self.dropbox_client.files_list_folder(
-            path,
-            recursive=False,
-            include_non_downloadable_files=False,
-        )
-
+        visited = set() if visited is None else visited
+        if path in visited:
+            raise ValueError("Dropbox listing repeated a folder")
+        visited.add(path)
+        result = self.dropbox_client.files_list_folder(path, recursive=False, include_non_downloadable_files=False, include_deleted=False)
+        cursors: set[str] = set()
         while True:
+            if not isinstance(result.entries, list) or not isinstance(result.has_more, bool):
+                raise ValueError("Incomplete Dropbox listing")
             for entry in result.entries:
                 if isinstance(entry, FileMetadata):
-                    modified_time = entry.client_modified
-                    if modified_time.tzinfo is None:
-                        modified_time = modified_time.replace(tzinfo=UTC)
-                    else:
-                        modified_time = modified_time.astimezone(UTC)
-
-                    time_as_seconds = modified_time.timestamp()
-                    if start is not None and time_as_seconds <= start:
-                        continue
-                    if end is not None and time_as_seconds > end:
-                        continue
-
-                    try:
-                        downloaded_file = self._download_file(entry.path_display)
-                        all_files.append((entry, downloaded_file))
-                    except Exception:
-                        logger.exception(f"[Dropbox]: Error downloading file {entry.path_display}")
-                        continue
-
+                    if not isinstance(entry.id, str) or not entry.id.strip():
+                        raise ValueError("Dropbox file has no identity")
+                    if start is not None or end is not None:
+                        modified = self._normalize_modified_time(entry.client_modified).timestamp()
+                        if start is not None and modified <= start:
+                            continue
+                        if end is not None and modified > end:
+                            continue
+                    all_files.append(entry)
                 elif isinstance(entry, FolderMetadata):
-                    self._collect_files_recursive(entry.path_lower, start, end, all_files)
-
+                    if not isinstance(entry.path_lower, str) or not entry.path_lower:
+                        raise ValueError("Dropbox folder has no path")
+                    self._collect_file_entries_recursive(entry.path_lower, start, end, all_files, visited=visited)
+                else:
+                    raise ValueError("Unexpected Dropbox metadata entry")
             if not result.has_more:
                 break
+            cursor = result.cursor
+            if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                raise ValueError("Invalid Dropbox pagination cursor")
+            cursors.add(cursor)
+            result = self.dropbox_client.files_list_folder_continue(cursor)
 
-            result = self.dropbox_client.files_list_folder_continue(result.cursor)
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        all_files: list[FileMetadata] = []
+        self._collect_file_entries_recursive("", None, None, all_files)
+        for offset in range(0, len(all_files), self.batch_size):
+            yield [SlimDocument(id=f"dropbox:{entry.id}") for entry in all_files[offset : offset + self.batch_size]]
 
     def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> GenerateDocumentsOutput:
         """Poll Dropbox for recent file changes"""

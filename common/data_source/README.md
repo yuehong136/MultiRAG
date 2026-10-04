@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -84,6 +84,15 @@ GitLab 清单覆盖配置的代码文件、MR 和 issue；代码按默认分支�
 空仓库须由项目明确标记 `empty_repo`，缺失默认分支不能被默认为空清单。
 默认分支、项目路径或状态过滤变化会改变可见身份/范围；应关闭删除同步并确认范围后重建。
 GitLab 的嵌套目录与分页依赖 [Repository Tree API](https://docs.gitlab.com/api/repositories/#list-repository-tree)。
+
+Dropbox 清单与正文共用递归元数据枚举，完整耗尽各文件夹分页；清单不下载正文，
+不使用 `client_modified` 时间窗口。源身份保持 `dropbox:{Dropbox 文件 ID}`，下载使用文件 ID，
+防止枚举后同一路径被另一文件占用；重复名称沿用包含目录的展示名。内容增量仍按
+`client_modified` 过滤，首次导入和全量重建仍读取全部正文且不执行删除核对。
+文件夹、分页、权限、元数据或正文下载失败会中断同步；无效/循环 cursor、缺失文件身份
+或目录路径不能成为可信清单。范围仍排除不可下载文件和已删除条目，参见
+[Dropbox 列表 API](https://dropbox-sdk-python.readthedocs.io/en/latest/api/dropbox.html#dropbox.dropbox_client.Dropbox.files_list_folder)。
+历史文件若恢复但修改时间未进入增量窗口，需要全量重建以补回正文。
 
 ## 文档身份与删除链
 
