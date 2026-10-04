@@ -380,6 +380,13 @@ class GptV4(Base):
         return res.choices[0].message.content.strip(), total_token_count_from_response(res)
 
 
+class FuturMixCV(GptV4):
+    _FACTORY_NAME = "FuturMix"
+
+    def __init__(self, key: str, model_name: str, lang: str = "Chinese", base_url: str | None = None, **kwargs: Any) -> None:
+        super().__init__(key, model_name, lang=lang, base_url=base_url or "https://futurmix.ai/v1", **kwargs)
+
+
 class AzureGptV4(GptV4):
     _FACTORY_NAME = "Azure-OpenAI"
 

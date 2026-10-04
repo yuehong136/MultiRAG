@@ -1154,6 +1154,13 @@ class AstraflowCNChat(Base):
         super().__init__(key, model_name, base_url, **kwargs)
 
 
+class FuturMixChat(Base):
+    _FACTORY_NAME = "FuturMix"
+
+    def __init__(self, key: str, model_name: str, base_url: str | None = None, **kwargs: Any) -> None:
+        super().__init__(key, model_name, base_url or "https://futurmix.ai/v1", **kwargs)
+
+
 class LiteLLMBase(ToolHistoryMixin, ABC):
     _FACTORY_NAME = [
         "Tongyi-Qianwen",

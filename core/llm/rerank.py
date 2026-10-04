@@ -43,6 +43,22 @@ class Base(ABC):
     def similarity(self, query: str, texts: list):
         raise NotImplementedError("Please implement encode method!")
 
+    @staticmethod
+    def _normalize_rank(rank: np.ndarray) -> np.ndarray:
+        """
+        Normalize rank values to the range 0 to 1.
+        Avoids division by zero if all ranks are identical.
+        """
+        min_rank = np.min(rank)
+        max_rank = np.max(rank)
+
+        if not np.isclose(min_rank, max_rank, atol=1e-3):
+            rank = (rank - min_rank) / (max_rank - min_rank)
+        else:
+            rank = np.zeros_like(rank)
+
+        return rank
+
 
 class DefaultRerank(Base):
     _FACTORY_NAME = "BAAI"
@@ -136,22 +152,6 @@ class DefaultRerank(Base):
         batch_size = 4096
         res = self._process_batch(pairs, max_batch_size=batch_size)
         return np.array(res), token_count
-
-    @staticmethod
-    def _normalize_rank(rank: np.ndarray) -> np.ndarray:
-        """
-        Normalize rank values to the range 0 to 1.
-        Avoids division by zero if all ranks are identical.
-        """
-        min_rank = np.min(rank)
-        max_rank = np.max(rank)
-
-        if not np.isclose(min_rank, max_rank, atol=1e-3):
-            rank = (rank - min_rank) / (max_rank - min_rank)
-        else:
-            rank = np.zeros_like(rank)
-
-        return rank
 
 
 class JinaRerank(Base):
@@ -351,6 +351,13 @@ class OpenAI_APIRerank(Base):
         rank = Base._normalize_rank(rank)
 
         return rank, token_count
+
+
+class FuturMixRerank(OpenAI_APIRerank):
+    _FACTORY_NAME = "FuturMix"
+
+    def __init__(self, key: str, model_name: str, base_url: str | None = None) -> None:
+        super().__init__(key, model_name, base_url or "https://futurmix.ai/v1")
 
 
 class CoHereRerank(Base):

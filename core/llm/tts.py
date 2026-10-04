@@ -236,6 +236,13 @@ class OpenAITTS(HTTPBasedTTS):
         super().__init__(key, model_name, base_url)
 
 
+class FuturMixTTS(OpenAITTS):
+    _FACTORY_NAME = "FuturMix"
+
+    def __init__(self, key: str, model_name: str = "tts-1", base_url: str | None = None) -> None:
+        super().__init__(key, model_name, (base_url or "https://futurmix.ai/v1").rstrip("/"))
+
+
 class SparkTTS(Base):
     _FACTORY_NAME = "XunFei Spark"
     STATUS_FIRST_FRAME = 0

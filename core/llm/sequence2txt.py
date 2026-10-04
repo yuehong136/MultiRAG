@@ -19,6 +19,7 @@ import json
 import os
 import re
 from abc import ABC
+from typing import Any
 
 import requests
 from openai import OpenAI
@@ -56,6 +57,13 @@ class GPTSeq2txt(Base):
             base_url = "https://api.openai.com/v1"
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
+
+
+class FuturMixSeq2txt(GPTSeq2txt):
+    _FACTORY_NAME = "FuturMix"
+
+    def __init__(self, key: str, model_name: str = "whisper-1", base_url: str | None = None, **kwargs: Any) -> None:
+        super().__init__(key, model_name, base_url=base_url or "https://futurmix.ai/v1", **kwargs)
 
 
 class StepFunSeq2txt(GPTSeq2txt):

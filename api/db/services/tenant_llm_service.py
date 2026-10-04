@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
 
 from langfuse import Langfuse
 from sqlalchemy import select, update
@@ -172,7 +173,7 @@ class TenantLLMService(CommonService):
         return model_config
 
     @classmethod
-    def model_instance(cls, db: Session, tenant_id: str, model_config: dict, lang="Chinese", **kwargs):
+    def model_instance(cls, db: Session, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
         if not model_config:
             raise LookupError("Model config is required")
         model_type = model_config.get("mdl_type") or model_config.get("model_type")
@@ -206,7 +207,9 @@ class TenantLLMService(CommonService):
         elif model_type == LLMType.SPEECH2TEXT.value:
             if model_config["llm_factory"] not in Seq2txtModel:
                 return None
-            return Seq2txtModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"])
+            # Preserve existing providers while forwarding the gateway URL for FuturMix.
+            speech_kwargs = {"base_url": model_config["api_base"]} if model_config["llm_factory"] == "FuturMix" else {}
+            return Seq2txtModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], **speech_kwargs)
 
         elif model_type == LLMType.TTS.value:
             if model_config["llm_factory"] not in TTSModel:
