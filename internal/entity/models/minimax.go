@@ -191,7 +191,7 @@ func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Mes
 	defer resp.Body.Close()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	receivedAnswer := false
+	receivedAnswer, finished := false, false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -214,6 +214,7 @@ func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Mes
 					Content          *string `json:"content"`
 					ReasoningContent *string `json:"reasoning_content"`
 				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Error json.RawMessage `json:"error"`
 		}
@@ -228,6 +229,9 @@ func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Mes
 		}
 		if len(event.Choices) == 0 {
 			continue
+		}
+		if reason := event.Choices[0].FinishReason; reason != nil && *reason != "" {
+			finished = true
 		}
 		delta := event.Choices[0].Delta
 		if delta.ReasoningContent != nil && *delta.ReasoningContent != "" {
@@ -244,6 +248,15 @@ func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Mes
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("minimax: read stream: %w", err)
+	}
+	// Native MiniMax may terminate after finish_reason without an OpenAI [DONE].
+	// Wait for EOF so a later provider/transport error still wins over completion.
+	if finished && receivedAnswer {
+		if err := requestContext(apiConfig).Err(); err != nil {
+			return err
+		}
+		done := "[DONE]"
+		return sender(&done, nil)
 	}
 	return io.ErrUnexpectedEOF
 }
