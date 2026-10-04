@@ -59,6 +59,8 @@ def exercise_skill_core(env: dict[str, Any], directory: Path) -> str:
             files=[("file", ("SKILL.md", source.encode(), "text/markdown")), ("file", ("references/中文.txt", b"orange attachment", "text/plain"))],
         )
     assert len(children(versions["2.0.0"])) == 2
+    unindexed = call("POST", core + "/search", json={"space_id": sid, "query": ""})
+    assert unindexed["total"] == 0  # Files, not index search, lists unindexed directories.
     rebuilt = call("POST", core + "/reindex", json={"space_id": sid})
     assert rebuilt["indexed_count"] == 1 and rebuilt.get("failed_count", 0) == 0
     hits = call("POST", core + "/search", json={"space_id": sid, "query": "orange", "page": 1, "page_size": 20})
@@ -66,6 +68,7 @@ def exercise_skill_core(env: dict[str, Any], directory: Path) -> str:
     assert hits["skills"][0]["folder_id"] == skill_folder
     call("DELETE", core + "/index", params={"space_id": sid, "skill_id": "orange"})
     assert call("POST", core + "/search", json={"space_id": sid, "query": "orange"})["total"] == 0
+    assert call("POST", core + "/search", json={"space_id": sid, "query": ""})["total"] == 0
     assert len(children(skill_folder)) == 2
     call("POST", core + "/reindex", json={"space_id": sid})
     call("DELETE", "/files", json={"file_ids": [versions["2.0.0"]]})
