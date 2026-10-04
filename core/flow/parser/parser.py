@@ -36,6 +36,13 @@ from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER, LLMT
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.app.naive import Docx
 from core.flow.base import ProcessBase, ProcessParamBase
+from core.flow.parser.header_footer import (
+    is_header_footer_layout,
+    parser_flag,
+    remove_header_footer_docx_blob,
+    remove_header_footer_html_blob,
+    word_content_lines,
+)
 from core.flow.parser.pdf_chunk_metadata import (
     extract_pdf_positions,
     normalize_pdf_items_metadata,
@@ -59,7 +66,7 @@ from deepdoc.parser.tcadp_parser import TCADPParser
 
 
 class ParserParam(ProcessParamBase):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.allowed_output_format = {
             "pdf": [
@@ -109,6 +116,7 @@ class ParserParam(ProcessParamBase):
                 "lang": "Chinese",
                 "flatten_media_to_text": False,
                 "remove_toc": False,
+                "remove_header_footer": False,
                 "suffix": [
                     "pdf",
                 ],
@@ -126,6 +134,7 @@ class ParserParam(ProcessParamBase):
             },
             "doc": {
                 "remove_toc": False,
+                "remove_header_footer": False,
                 "suffix": [
                     "doc",
                 ],
@@ -134,6 +143,7 @@ class ParserParam(ProcessParamBase):
             "docx": {
                 "flatten_media_to_text": False,
                 "remove_toc": False,
+                "remove_header_footer": False,
                 "suffix": [
                     "docx",
                 ],
@@ -166,7 +176,8 @@ class ParserParam(ProcessParamBase):
             },
             "html": {
                 "suffix": ["htm", "html"],
-                "remove_toc": "false",
+                "remove_toc": False,
+                "remove_header_footer": False,
                 "output_format": "json",
             },
             "slides": {
@@ -207,7 +218,12 @@ class ParserParam(ProcessParamBase):
             },
         }
 
-    def check(self):
+    def check(self) -> None:
+        for file_type, setup in self.setups.items():
+            if file_type in {"pdf", "doc", "docx", "html", "markdown"}:
+                setup["remove_toc"] = parser_flag(setup.get("remove_toc"))
+            if file_type in {"pdf", "doc", "docx", "html"}:
+                setup["remove_header_footer"] = parser_flag(setup.get("remove_header_footer"))
         pdf_config = self.setups.get("pdf", {})
         if pdf_config:
             pdf_parse_method = pdf_config.get("parse_method", "")
@@ -363,7 +379,7 @@ class Parser(ProcessBase):
 
         return {txt for level, txt in normalized_lines if level <= h2_level}
 
-    def _pdf(self, name, blob, **kwargs):
+    def _pdf(self, name: str, blob: bytes, **kwargs: Any) -> None:
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a PDF.")
         conf = self._param.setups["pdf"]
         self.set_output("output_format", conf["output_format"])
@@ -662,7 +678,7 @@ class Parser(ProcessBase):
 
         outlines = getattr(pdf_parser, "outlines", []) if pdf_parser else []
         self.set_output("file", {**kwargs.get("file", {}), "outlines": outlines})
-        if conf.get("remove_toc"):
+        if parser_flag(conf.get("remove_toc")):
             if not outlines:
                 bboxes, _ = remove_toc(bboxes)
             elif outlines[0][2] == 1:
@@ -681,6 +697,9 @@ class Parser(ProcessBase):
                         break
                 toc_bboxes, _ = remove_toc(bboxes[:split_at])
                 bboxes = toc_bboxes + bboxes[split_at:]
+
+        if parser_flag(conf.get("remove_header_footer")):
+            bboxes = [box for box in bboxes if not is_header_footer_layout(box.get("layout_type"))]
 
         layout_counters = {}
         for b in bboxes:
@@ -867,7 +886,7 @@ class Parser(ProcessBase):
             elif conf.get("output_format") == "markdown":
                 self.set_output("markdown", spreadsheet_parser.markdown(blob))
 
-    def _doc(self, name, blob, **kwargs):
+    def _doc(self, name: str, blob: bytes, **kwargs: Any) -> None:
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a DOC document")
         conf = self._param.setups["doc"]
         self.set_output("output_format", conf["output_format"])
@@ -881,7 +900,8 @@ class Parser(ProcessBase):
             logging.warning(f"{msg} for {name}.")
             return
 
-        doc_parsed = tika_parser.from_buffer(io.BytesIO(blob))
+        remove_header_footer = parser_flag(conf.get("remove_header_footer"))
+        doc_parsed = tika_parser.from_buffer(io.BytesIO(blob), **({"xmlContent": True} if remove_header_footer else {}))
         content = doc_parsed.get("content")
         if content is None:
             msg = f"tika.parser got empty content from {name}."
@@ -889,8 +909,8 @@ class Parser(ProcessBase):
             logging.warning(msg)
             return
 
-        sections = [line.strip() for line in content.splitlines() if line and line.strip()]
-        if conf.get("remove_toc"):
+        sections = word_content_lines(content, remove_header_footer=remove_header_footer)
+        if parser_flag(conf.get("remove_toc")):
             sections = remove_toc_word(sections, [])
 
         if conf.get("output_format") == "json":
@@ -904,7 +924,7 @@ class Parser(ProcessBase):
 
         self.callback(0.8, "Finish parsing.")
 
-    def _docx(self, name, blob, **kwargs):
+    def _docx(self, name: str, blob: bytes, **kwargs: Any) -> None:
         self.callback(random.randint(1, 5) / 100.0, "Start to work on a DOCX document")
         conf = self._param.setups["docx"]
         self.set_output("output_format", conf["output_format"])
@@ -921,7 +941,8 @@ class Parser(ProcessBase):
                 logging.warning(f"{msg} for {name}.")
                 return
 
-            doc_parsed = tika_parser.from_buffer(io.BytesIO(blob))
+            remove_header_footer = parser_flag(conf.get("remove_header_footer"))
+            doc_parsed = tika_parser.from_buffer(io.BytesIO(blob), **({"xmlContent": True} if remove_header_footer else {}))
             content = doc_parsed.get("content")
             if content is None:
                 msg = f"tika.parser got empty content from {name}."
@@ -929,8 +950,8 @@ class Parser(ProcessBase):
                 logging.warning(msg)
                 return
 
-            sections = [line.strip() for line in content.splitlines() if line and line.strip()]
-            if conf.get("remove_toc"):
+            sections = word_content_lines(content, remove_header_footer=remove_header_footer)
+            if parser_flag(conf.get("remove_toc")):
                 sections = remove_toc_word(sections, [])
 
             if conf.get("output_format") == "json":
@@ -945,13 +966,15 @@ class Parser(ProcessBase):
             self.callback(0.8, "Finish parsing.")
             return
 
+        if parser_flag(conf.get("remove_header_footer")):
+            blob = remove_header_footer_docx_blob(blob)
         docx_parser = Docx()
         outlines = extract_word_outlines(name, blob)
         self.set_output("file", {**kwargs.get("file", {}), "outlines": outlines})
 
         if conf.get("output_format") == "json":
             main_sections = docx_parser(name, binary=blob)
-            if conf.get("remove_toc"):
+            if parser_flag(conf.get("remove_toc")):
                 main_sections = remove_toc_word(main_sections, outlines)
             sections = []
             for text, image, html in main_sections:
@@ -980,7 +1003,7 @@ class Parser(ProcessBase):
             self.set_output("json", sections)
         elif conf.get("output_format") == "markdown":
             markdown_text = docx_parser.to_markdown(name, binary=blob)
-            if conf.get("remove_toc"):
+            if parser_flag(conf.get("remove_toc")):
                 markdown_text = "\n".join(remove_toc_word(markdown_text.split("\n"), outlines))
             self.set_output("markdown", markdown_text)
 
@@ -1117,13 +1140,15 @@ class Parser(ProcessBase):
 
         self.set_output("text", "\n".join([section[0] for section in sections if section[0]]))
 
-    def _html(self, name, blob, **kwargs):
+    def _html(self, name: str, blob: bytes, **kwargs: Any) -> None:
         self.callback(random.randint(1, 5) / 100.0, "Start to work on an HTML document.")
         conf = self._param.setups["html"]
         self.set_output("output_format", conf["output_format"])
 
+        if parser_flag(conf.get("remove_header_footer")):
+            blob = remove_header_footer_html_blob(blob)
         sections = HtmlParser()(name, blob, int(conf.get("chunk_token_num", 512)))
-        if conf.get("remove_toc") == "true":
+        if parser_flag(conf.get("remove_toc")):
             sections, _ = remove_toc(sections)
         if conf.get("output_format") == "json":
             self.set_output("json", [{"text": section, "doc_type_kwd": "text"} for section in sections if section])
