@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,7 @@ from api.apps.services import dataset_api_service, dataset_search_service
 from api.db.db_models import get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
 from api.utils.dataset_search import SearchDatasetRequest
-from api.utils.validation_utils import CreateDatasetReq
+from api.utils.validation_utils import CreateDatasetReq, validate_dataset_raptor_scope
 from common.constants import RetCode
 
 router = APIRouter()
@@ -53,6 +53,13 @@ class UpdateDatasetRequest(BaseModel):
     auto_metadata_config: dict[str, Any] | None = None
     # ext：承接前端塞进来的旧 web 扩展参数
     ext: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def validate_raptor_scope(self) -> UpdateDatasetRequest:
+        # Validate only an explicitly patched scope; retain unknown fields and
+        # avoid filling parser defaults into a partial update.
+        validate_dataset_raptor_scope(self.ext.get("parser_config", self.parser_config))
+        return self
 
 
 class DeleteDatasetRequest(BaseModel):

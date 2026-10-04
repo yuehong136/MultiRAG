@@ -2605,3 +2605,46 @@ change_parser 与未恢复的 rename 实际 routing404，隔离对象清单保�
 共享 `8123` listener 的健康 smoke 通过，但未重启它；只读 OpenAPI 仍列旧
 change_parser、尚无本项 session PUT，说明其进程未重载退出提交。当前源码的退出路径
 与新增别名已在隔离 listener 实际验证；不把共享健康结果当作本项已部署的证明。
+
+
+## Dataset RAPTOR scope 持久化与扩展配置
+
+2026-10-04，核对上游 `a0f9ae16d2d84660bc5ee7db8acf7a89a697c3e3`，
+冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。本次行为合同见
+[Dataset RAPTOR scope](dataset-raptor-scope.md)。
+
+后端创建模型补齐 scope 与 parser/RAPTOR ext；Dataset PUT 对有效配置中的
+显式 scope 做同一 Literal 校验，保留局部合并和旧 ext 覆盖顺序。Web 的
+`scope` 字段、radio 控件及提交顶层字段已等价，本次 Web 提交
+`8690b4e45ef1909d3e646d7edce3bcac92cfde26` 修复 Zod 剥离未知配置、ext
+及 metadata 限制字段的问题。document PATCH 已由 DocumentRaptorPatch 声明
+同一 scope，并使用 exclude_unset 的严格局部合同，本次未改它。现有详情读取
+透传 parser_config，RAPTOR 消费者读取顶层 scope、缺省使用 file，均无需重复实现。
+
+上游该 diff 的 query ext JSON 失败日志只影响诊断；当前 Dataset 保存走
+FastAPI body 校验，不经过该 query helper，本项保留其现有合同，不复制格式改动。
+冻结范围内的后续 `6ec9c6a73` 已移除上游 Python Dataset RAPTOR 设置；本次按
+明确目标保留本地 Dataset、document PATCH 和索引语义。建议知识编译/API 迁移
+作为独立兼容性评估，不在本项撤掉现有用户设置。
+
+浏览器使用生产 RAPTOR 控件、schema 和 Dataset API，实际保存 file/dataset，
+包括显式关闭和启用状态，GET 重载及整页刷新后选择保持；独立 SQL 读回核对
+扩展字段及自动元数据限制。raptor_task_id 为空、chunk_num=0，配置保存不代表
+解析或索引执行完成。专用资源与证据位于本机 `/tmp/multirag-a0f9ae16/`；
+不修改共享配置，不 push，不把其他 owner 的输入、提交或验证结果计为本项证明。
+
+本次固定输入的隔离副本 `make verify` 通过（4909 unit）；`make integration`
+退出 0（764 passed、1 skipped）。唯一 skip 为真实 Web client 测试，隔离副本
+缺少相邻 Web 目录；显式指定 `/Users/xldu/project/web` 后该项独立补跑 1 passed。
+执行前后输入哈希无漂移，本项真实 HTTP/SQL 集成 10 项通过。Web 相关表单测试
+9 项及 API 测试 205 项通过，build、lint、文件体积棘轮和提交钩子通过；lint
+有 1454 条既有 warning、0 error，build 仍提示大 bundle。`make smoke` 通过，
+fixture 的 storage 健康项为可选 NOK，其他必需健康项及 ping 正常。
+
+验收使用生产表单控件、schema 和真实 API 的隔离页，不是完整生产设置页 E2E；
+数据库保存使用隔离 PostgreSQL，未验 MySQL、生产数据或真实模型的 RAPTOR
+解析执行。上述限制不影响本项配置保存与重载证明。
+
+共享验证窗口释放后按原始差异应用，当前仓库 Ruff 与 format check 通过，
+23 项 scope unit、10 项真实 HTTP/SQL 集成再次通过；相关输入无漂移且与隔离
+验证副本一致。Dataset service、document PATCH 配置模型及执行消费者未改动。

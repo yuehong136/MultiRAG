@@ -379,7 +379,16 @@ class RaptorConfig(Base):
     threshold: Annotated[float, Field(default=0.1, ge=0.0, le=1.0)]
     max_cluster: Annotated[int, Field(default=64, ge=1, le=1024)]
     random_seed: Annotated[int, Field(default=0, ge=0)]
+    scope: Annotated[Literal["file", "dataset"], Field(default="file")]
     auto_disable_for_structured_data: Annotated[bool, Field(default=True)]
+    ext: Annotated[dict[str, Any], Field(default_factory=dict)]
+
+
+def validate_dataset_raptor_scope(config: Any) -> None:
+    """Check an explicit scope without defaulting or filtering a partial config."""
+    raptor = config.get("raptor") if isinstance(config, dict) else None
+    if isinstance(raptor, dict) and "scope" in raptor:
+        RaptorConfig.model_validate({"scope": raptor["scope"]})
 
 
 class GraphragConfig(Base):
@@ -427,6 +436,7 @@ class ParserConfig(Base):
     filename_embd_weight: Annotated[float | None, Field(default=0.1, ge=0.0, le=1.0)]
     task_page_size: Annotated[int | None, Field(default=None, ge=1)]
     pages: Annotated[list[list[int]] | None, Field(default=None)]
+    ext: Annotated[dict[str, Any], Field(default_factory=dict)]
 
 
 VALID_UPDATE_CHUNK_METHODS = {
@@ -706,6 +716,8 @@ class CreateDatasetReq(Base):
         Raises:
             PydanticCustomError with code 'dependency_error' on violation.
         """
+        # Legacy ext may override the typed parser_config in the service.
+        validate_dataset_raptor_scope(self.ext.get("parser_config"))
         # Omitted chunk_method (not in fields) logic
         if self.chunk_method is None and "chunk_method" not in self.model_fields_set:
             # All three absent → default naive
