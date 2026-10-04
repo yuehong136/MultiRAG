@@ -2515,3 +2515,55 @@ Web 提交 `02681e3` 接入开关及 Bitbucket 账号邮箱，`06e0039` 补充 D
 相邻连接器保留均覆盖，不代表真实 SaaS 凭据端到端验收。
 Web 表单 13 项通过，build/lint/file-size exit=0（lint 保留既有告警）；三源明暗主题、
 键盘开关与中英文 Drive 帮助已在当前页面验收，未创建真实数据源。未 push。
+
+## b684c899 · 旧 API 兼容入口评估与会话 PUT 适配
+
+2026-10-04 按 `b684c899501ce6b7236d3027f66b75d1097e4873` 完整七文件 diff 与冻结
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 内相关后修核对。上游 remote 正确；
+本地 `origin/main` 已移动到 `98b48a08`，本项未 fetch、未改变来源边界。开工 HEAD
+为 `bea3a899`，已复核旧 run、图片和 change_parser 的接受状态与实际注册。
+
+| 原始行为 | 本次处置与依据 |
+|---|---|
+| 注册集中 Quart 兼容 Blueprint | 不复制；FastAPI 当前自动发现已加载 REST/SDK，新增别名直接复用现有 router，避免同 path/method 抢占。 |
+| 旧聊天补全与 related_questions 转发 | SDK `question/session_id` 及 `industry` 仍是公开本地合同；前者无 session 创建开场白，后者使用 API key。不能以 messages 转发或 search_id 推荐接口替换；现有行为保留。 |
+| 旧 OpenAI 聊天路径 | 已等价：同一 handler 的 deprecated 别名、API key、默认流式与当前非流式合同保留。 |
+| 会话 PUT → PATCH | HTTP 参考仍公开 PUT，属于已有兼容承诺；增加 deprecated 别名，复用同一异步处理器、Pydantic、当前聊天归属和业务错误语义。文档正式入口改为 PATCH。 |
+| DELETE chats 的 chat_id body | 不恢复；当前 Web dialogAPI 用单项 path 或批量 ids。独立 SDK worktree 同样用 path。上游直接 update_by_id 的分支未核归属，不导入。 |
+| file/get/list/ancestors/parent/root/create/upload/mv/rename/rm | 当前 Web、SDK、MCP、Agent Hub 未发现这些旧入口消费者；现有 files REST 和显式 files/root 提供替代合同。不上游 root → list 的形状变化或绕过 rename 校验。 |
+| chunk PUT | Web、Agent Hub 及 SDK worktree 均用 PATCH，不恢复无消费者入口。 |
+| 旧 file/upload_info | Web 使用 documents/upload，SDK files/upload_info 保留 files 字段；不恢复旧网关。 |
+| file 三个同步 handler 改 async | 当前早已为 async，复用 AsyncSession/run_sync 及现有阻塞 IO 边界。 |
+| 上游两处测试调整与文档 notices | 不复制 Quart 测试 harness；本仓追加完整 HTTP/SQL 回归，修正会话补全 URL、认证归属和 SDK 响应示例。 |
+
+后修 `c11650bb4` 文件祖先归属、`0c93161a1` 会话认证身份与
+`d3542463c` recommendation 拼写在现有实现中已有对应。其余后续 Agent/Graph/文档兼容扩展、
+legacy stream 模式和 Python 架构退出不扩纳；尤其不恢复已接受退出的 run、图片、
+change_parser、upload_info 等入口。本项的长期合同与退出条件见
+[REST README](../../api/apps/restful_apis/README.md#聊天会话兼容)，映射表已更新。
+
+消费者核查为当前源码审计；两个独立 SDK 目录属于同仓未合并 worktree，其中旧的
+session-scoped completion 路径与当前 production 路由不符。用户明确选择记录为 SDK
+后续迁移；未据此恢复相邻接口，不声明这些分支已完成聊天端到端迁移。
+Web/Agent Hub/MCP 没有本项新增客户端代码。
+
+SDK 后续入口：两个 worktree 的 `sdk/python/src/multirag_sdk/_resources.py` 中
+`SessionsManager.complete/stream`。迁移时优先核对现有 question 接口与 body 中的
+session_id，再校验 Completion 模型、SSE 收尾、错误帧及历史读回；不能只更换 URL
+便声明兼容。当前分支头分别为 `ed38de7f` 与 `d0d34818`，属本次核查时点。
+
+验证：相关 unit 69 passed；真实 JWT/API key 两组 HTTP/SQL 专项通过。最终共享
+`make verify` exit=0（4886 unit），`make integration` exit=0（755 passed，无 skip，
+2515.37 秒）；1697 个源/配置输入 hash 前后无漂移。默认 Infinity 握手不兼容，
+本轮仅用 `INFINITY_TEST_URI` 指向自有 loopback 兼容实例，未修改共享配置或依赖。
+新 PUT/PATCH 分别实际更新、GET 与独立 Session 读回；伪造归属、跨会话、missing、
+保护字段、非法 body、无/坏认证拒绝，拒绝前后完整会话读回相等。旧 run/image/
+change_parser 与未恢复的 rename 实际 routing404，隔离对象清单保持不变。
+日志与固定输入证据位于 `/tmp/multirag-b684-final-gates/`。
+没有远程模型或生产写入验收；SDK/OpenAI 的 provider/service 为受控回归，
+新增别名的真实 HTTP/JWT/API key、隔离 SQL 与独立读回未替换业务层。未 push。
+首轮自有集成为补齐测试返回类型注解而主动中断，不作为通过证据。
+
+共享 `8123` listener 的健康 smoke 通过，但未重启它；只读 OpenAPI 仍列旧
+change_parser、尚无本项 session PUT，说明其进程未重载退出提交。当前源码的退出路径
+与新增别名已在隔离 listener 实际验证；不把共享健康结果当作本项已部署的证明。

@@ -8,6 +8,23 @@
 旧 REST `/knowledge_graph` 读取和删除继续作为 deprecated 兼容入口。
 `DELETE /datasets/{id}/graph` 删除索引任务及产物，旧删除入口仅删图谱产物，二者语义不同。
 
+## 聊天会话兼容
+
+聊天会话更新以 `PATCH /api/v1/chats/{chat_id}/sessions/{session_id}` 为正式入口。
+此前 HTTP 参考公开的 PUT 路径保留为 deprecated 别名，共用同一处理器、JWT/API key
+认证、聊天归属校验和请求验证；迁移到 PATCH 后可退出该兼容承诺。
+`message`/`messages`/`reference` 不可改，客户端不能改写会话 ID、聊天 ID 或用户归属。
+
+`POST /api/v1/chat/completions` 接收 `messages` 和 body 中的 `chat_id`/`session_id`。
+SDK 的 `POST /api/v1/chats/{chat_id}/completions` 仍接收 `question`，无 session 时返回
+开场白并创建会话；它不是 messages 转发入口。SDK 的 `/sessions/related_questions`
+保留 API key 和 `industry`，REST `/chat/recommendation` 使用 `search_id`。
+OpenAI 新旧补全路径继续由同一处理器提供，详见 [HTTP API](../../../docs/references/http_api_reference.md)。
+
+无活动消费者或兼容承诺的 `/api/v1/file/{get,list,create,upload,mv,rename,rm,...}`、
+chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files REST、chunk PATCH
+以及单项 path/批量 `ids`。旧 run、图片、change_parser 与 upload_info 的退出合同保持。
+
 ## 数据集检索
 
 `POST /datasets/{id}/search` 接收 `question`，返回 REST `code/data` 信封，

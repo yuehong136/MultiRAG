@@ -993,13 +993,14 @@ async def get_session(
 
 
 @router.patch("/chats/{chat_id}/sessions/{session_id}", summary="Update chat session")
+@router.put("/chats/{chat_id}/sessions/{session_id}", summary="Update chat session (legacy)", deprecated=True)
 async def update_session(
     chat_id: str,
     session_id: str,
     request: UpdateSessionRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     def _update(s: Session) -> Response:
         if not _owned_chat_exists(s, tenant_id, chat_id):
             return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)

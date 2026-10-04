@@ -416,7 +416,7 @@ POST /chats/{chat_id}/sessions
 |------|------|------|------|
 | chat_id | string | 是 | 聊天助手 ID |
 | name | string | 否 | 会话名称，默认 `New session` |
-| user_id | string | 否 | 业务侧用户标识，默认空字符串 |
+| user_id | string | 否 | 兼容字段；创建时忽略客户端值，归属取认证用户 |
 
 **响应**
 
@@ -475,7 +475,7 @@ GET /chats/{chat_id}/sessions/{session_id}
 **请求**
 
 ```
-PUT /chats/{chat_id}/sessions/{session_id}
+PATCH /chats/{chat_id}/sessions/{session_id}
 ```
 
 **请求体**
@@ -486,7 +486,9 @@ PUT /chats/{chat_id}/sessions/{session_id}
 }
 ```
 
-`messages` 和 `reference` 不允许通过该接口修改。
+`message`、`messages` 和 `reference` 不允许通过该接口修改，客户端不能更改会话归属。
+旧 `PUT /chats/{chat_id}/sessions/{session_id}` 因此前公开文档的兼容承诺保留为
+deprecated 别名，使用同一处理器、认证、请求校验和业务码；新客户端应使用 PATCH。
 
 ### 删除聊天会话
 
@@ -543,13 +545,15 @@ PUT /chats/{chat_id}/sessions/{session_id}/messages/{msg_id}/feedback
 **请求**
 
 ```
-POST /chats/{chat_id}/sessions/{session_id}/completions
+POST /chat/completions
 ```
 
 **请求体**
 
 ```json
 {
+  "chat_id": "chat-uuid",
+  "session_id": "session-uuid",
   "messages": [
     {
       "role": "user",
@@ -598,28 +602,17 @@ POST /chats/{chat_id}/completions
 {
   "code": 0,
   "data": {
-    "id": "completion-uuid",
-    "choices": [
-      {
-        "index": 0,
-        "message": {
-          "role": "assistant",
-          "content": "I'm doing well, thank you!"
-        },
-        "finish_reason": "stop"
-      }
-    ],
-    "references": [
-      {
-        "chunk_id": "chunk-uuid",
-        "content": "Referenced content...",
-        "document_name": "document.pdf",
-        "score": 0.85
-      }
-    ]
+    "answer": "I'm doing well, thank you!",
+    "reference": {"chunks": [], "doc_aggs": []},
+    "id": "message-uuid",
+    "session_id": "session-uuid"
   }
 }
 ```
+
+旧会话路径 `/chats/{chat_id}/sessions/{session_id}/completions` 已退出，messages 请求应使用
+上面的统一 `/chat/completions`。`/chats/{chat_id}/completions` 保持 SDK question 合同，
+无 `session_id` 时创建会话并返回开场白，不把客户端 messages 静默转换为 question。
 
 **OpenAI 兼容补全**
 
