@@ -1,92 +1,113 @@
-# 技能资产库交付状态
+# Skills 调整交付状态
 
-2026-10-04 架构调整决定：Go跟上游源码，Python兼容核心并可提供更强能力；两者各自管理
-数据、可替换部署。见[调整计划](REALIGNMENT.md)。该调整尚未实施；以下提交与测试是
-原七表共享方案的历史验收，不代表新的源码收敛、兼容层或迁移已经完成。
+2026-10-04。本轮按“Go 跟源码、Python 跟核心行为并可增强”调整，核心及消费者已实现并验证。
+按阶段记录，不把后续远程来源或旧实现退役标记完成。
+未 push、未部署、未迁移业务库。其他工作线改动保留。
+当前合同见 [核心](CORE_CONTRACT.md)、[Python 资产扩展](CONTRACT.md)，
+部署和消费方式见 [README](README.md)，后续阶段见 [调整计划](REALIGNMENT.md)。
 
-2026-10-04：用户确认的本地独立资产库已实现，Python/Go原生后端与共用Web/CLI已提交。
-本期不含远程技能源和Agent自动执行。行为真值见[合同](CONTRACT.md)，
-部署顺序与故障恢复见[运行说明](README.md)。
+## 已确认边界
 
-| 单元 | owner | 状态/依赖 |
+- 双后端独立数据库、对象前缀和索引命名空间，不再共用七表或跨读对方资产。
+- 核心每次明确指定已创建、已授权的空间，无隐式 default。Go 在入口加最小校验。
+- 固定 `/skill-core`、`/skill-assets` 协议；`/skills` 仅由部署配置指定别名。
+- Go 核心保留实体、DAO、服务、handler 和 CLI provider 的来源对应关系；PostgreSQL、
+  模型精确身份、原生 Files、Milvus 和必要清理恢复在局部边界适配。
+- Python 核心使用私有两表与 Files；七表资产、不可变发布、持久任务、真实 rerank 留作增强。
+- 不执行技能，不接 Agent 自动执行。远程来源、自动更新和全空间迁移工具不属于本次实现。
+- 普通 Files move/rename 不得绕过核心生命周期；本期明确拒绝受管树操作。
+
+## 本轮提交
+
+| 单元 | 本地提交 | 当前状态 |
 |---|---|---|
-| 共同合同、集成、CLI | root | 合同c8087791；CLI0342420b，test/vet/build及两端真实HTTP消费通过 |
-| Python/schema/migration | backend_space + root | c2a7d344，已实现，最终真实集成30项通过 |
-| Go backend/Milvus | search_models | a940e8a3，已实现，真实集成8项及SQL故障回归1项通过 |
-| 双端101项分页验收 | search_models | bc1c9ccd，纯测试补充，真实HTTP通过 |
-| Web | web_cli | 326f474897150ce7ccb5111ab6438910bbac6c9b，完整门禁与Python浏览器闭环通过 |
-| 文件批删前置 | 独立批删工作线 | 正式bdbe93e0、c039e005已接收；见文件删除合同与验收记录 |
-| Go模型前置 | 独立模型工作线 | 已交接4ba652f3，GetEmbeddingModel/GetRerankModel保持签名；本功能精确按tenant_llm ID绑定 |
+| CLI 资产固定协议 | `9c186373` | 已提交，消费者不猜测 `/skills` 别名 |
+| CLI 核心与共同黑盒合同 | `5360a355` | 已提交，真实 Python/Go HTTP 消费通过 |
+| 空查询索引语义回归 | `eadc547e` | 已提交，两端同一黑盒断言通过 |
+| Web 资产固定协议 | `fb461b8`（Web 仓） | 已提交 |
+| Go 核心与引擎适配 | `e7f3492c` | 已提交，源码主体、隔离存储、大文档和故障恢复验证通过 |
+| Python 核心与隔离 | `7fcdc6da` | 已提交，真实核心/资产、故障恢复及worker生命周期通过 |
+| Web 核心与体验 | `8ed5d2c`（Web 仓） | 已提交，三种模式真实浏览器与完整CI通过 |
+| Python MCP 只读分发 | `ec937885` | 已提交，官方 SDK 真实 HTTP、隔离与完整MCP回归通过 |
 
-## 范围
+## 本轮实际证据
 
-首期：本地目录/ZIP、不可变版本、显式活动版本、空间CRUD、目录/下载、安装卸载、
-配置/索引/检索、Web/CLI。外部技能源后续独立处理；不接Agent自动执行。
-每个可交付单元独立验证和提交。未push、未部署、未操作生产数据；其他工作线改动保留。
+- 选定 Python 核心、故障恢复、资产、搜索、HTTP、MCP、文件批删、DB bootstrap 正式
+  `make integration`：**42 passed，0 skip，131.74s**；
+  `.test-results/20261004-231508-80408`，日志 `/tmp/skills-realignment-integration.log`。
+  评分及公共搜索钩子修正后，受影响核心/恢复/搜索/HTTP/MCP/批删复跑 **14 passed，
+  0 skip，133.74s**，`.test-results/20261004-232216-96325`；包括worker实际启动/停止、
+  默认threshold0.2的关键词命中及weight0不调用embedding。
+- Go 核心独立数据库、真实 SQL/MinIO/Milvus/CLI：最终完整 **7 passed，344.45s**；
+  `.test-results/20261004-233519-26170`。覆盖共同合同、失败保留旧索引、文件清理恢复、
+  101目录与索引分页、18种缺失/空白空间请求无副作用、5MiB多字节正文/大元数据/全片删除、
+  未发布片段不影响旧keyword结果、Put后SQL失败/重启/迟到写入清理。
+  删除计划误认新请求、配置SQL失败吞错修正后，新增两项及原删除恢复 **3 passed，53.74s**；
+  `.test-results/20261004-234022-27972`。DAO及Search最后SQL错误传播修正专项
+  **1 passed，23.34s**，`.test-results/20261004-234221-28784`；255个中文字符标识的
+  最后索引字段边界修正 **1 passed，33.77s**，`.test-results/20261004-234435-29139`。
+  不同代码时点分开记录。
+- `make smoke` 对隔离完整 FastAPI 路由：ping200、healthz200，数据库、Redis、索引、
+  存储均 ok；`/tmp/skills-realignment-smoke.log`。该 HTTP fixture 禁用完整应用 lifespan，
+  新增 worker 的启动/停止与真实HTTP恢复由上面核心集成独立验证。
+- MCP 真实 HTTP + FastMCP 官方 list/manifest/download、中文/二进制、租户拒绝及删除
+  后拒绝已纳入上述集成；单独运行证据 `.test-results/20261004-225649-53488`。
+  `make mcp-compat` modern/legacy 双方向矩阵全 PASS，日志 `/tmp/skills-mcp-compat.log`。
+  Skills与既有MCP入站单测 **19 passed**，其中Skills **5 passed**，补百分号路径与
+  `_manifest` 附件冲突明确拒绝。
+- 核心空查询保留索引语义：未建索引、DELETE index后返回空，Files目录仍可读。
+  Python最新共同合同 **1 passed，80.86s**，`.test-results/20261004-232923-11841`；
+  Go最终suite已复验相同脚本。
+- Go全部 `internal` build/vet和三个独立main构建通过；engine/server/service/handler/skills
+  五个改动包测试通过。全量Go测试仍有既存 `entity.TestModelLevelThinkingAndGoogleFactory`
+  MiniMax目录断言失败（model_test.go:236），在无本次Go补丁的 `ec937885` Git归档源码
+  独立复现，未修改该无关目录或放宽断言；不能宣称Go全库测试全绿。构建/定向测试日志
+  `/tmp/multirag-skills-go-final-checks.log`，独立基线日志保留于本机临时
+  `multirag-skills-head-baseline-*/evidence.txt`。
+- CLI `go test ./internal/cli/... -count=1`、`go vet ./internal/cli/...` 通过；
+  `/tmp/skills-core-cli-final.log`、`/tmp/skills-core-cli-vet.log`。
+- 第一轮 `make verify` 为 **5425 passed / 15 failed**：14项普通文件批删测试替身缺新增
+  核心识别边界，1项禁止测试间导入。根因已修，原断言和门禁保留。最终 `make verify`
+  **exit0、5440 passed（52.62s）**，Ruff、import、async DB门禁及mypy137源文件均通过；
+  `/tmp/skills-realignment-verify-final.log`。
+- 用户授权的隔离 Playwright Chromium 三种模式全部通过：Python资产增强、Python核心、
+  Go核心，页面错误均0；两个核心另验Files未索引目录可浏览。1440明暗主题与390px布局
+  两张标注拼图已独立审阅：`/tmp/skills-realign-contact-sheet.jpg`、
+  `/tmp/skills-realign-states-contact-sheet.jpg`。安全验收摘要 `/tmp/skills-realign-verification.md`。
+  Go通过Vite同源真实反代，未验证跨源CORS。
+  消费者预检发现并修正模型列表端点、Go 空默认配置 ID、Files 布尔/批删结果联合合同，
+  以及 Python 核心默认关键词评分；不会只以共同脚本通过代替真实 Web 消费。
 
-| 能力 | 复用与新增 | 验收重点 |
-|---|---|---|
-| 空间CRUD/权限 | 复用JWT/APIkey；新增独立租户空间、固定owner与revision | 租户隐藏、跨owner拒写、重名/并发、混合owner批删 |
-| 目录/版本/上传下载 | 复用File/MinIO；新增不可变manifest、SemVer、活动版本、路径规范化 | 根SKILL.md、大小/hash、嵌套同名文件、二进制和ZIP精确读回 |
-| 安装/卸载/删除 | 接正式文件批删；新增持久operation、幂等别名、lease/fencing和对象快照 | 隐藏先于清理，丢File行、半上传、失败重试、父子删除及失租恢复 |
-| 索引/检索 | 复用模型接入；新增独立Milvus generation、实际SDK、严格验证/CAS | 三种模式、字段权重、换维、旧generation保护、孤儿回收 |
-| 模型配置 | 复用租户模型表；精确BIGINT ID绑定且JSON始终字符串 | 超2^53 ID、真实HTTP模型协议、rerank坏200不可假成功 |
-| Web | 复用共享UI/Query/i18n/APIClient；新增/skills资产库 | EN/ZH、明暗主题、390px、键盘、上传检索删除、原失败任务Retry |
-| CLI | 复用鉴权/HTTP/参数入口；新增skills命令 | 参数中空格、目录manifest、状态等待、错误退出、下载不覆盖 |
-| 架构与部署 | 两端共用Python管理的7表；原生实现、空间单owner写 | 双向跨读索引/对象/AES字节，Python生产入口无需Go |
+- Web完整CI **1203 passed**（699 Node、413 DOM、81 desktop、10 tooling）；
+  build、产品UI30、体积及i18n通过。lint0 errors、1454存量warning。临时开发服务已停止，
+  Vite验收配置已删除，Web工作区干净。中间既有MCP时序测试偶发失败，独立与最终完整
+  复跑均通过，未修改该无关测试。
+- Python UI fixture已正常退出，端口和私有handoff关闭/删除，已证明归属的索引集合不存在。
+  三个早期疑似测试集合无法由留存记录证明归属，未擅自删除；证据
+  `.test-results/skills-core-residual-audit-20261004.json` 与 `skills-python-ui-cleanup-20261004.json`。
 
-原有Web“技能”是MCP工具选择，不是SKILL.md资产库。现有File、模型与CLI基础设施
-可复用；空间领域、版本状态、搜索generation和恢复账本均需新增。
-不复制跨后端HTTP转发、混合nginx分流或上游filesystem命令重构。
+真实基础设施为隔离 PostgreSQL、MinIO、Milvus；模型 provider 使用本地 HTTP 替身。
+该证据不等同于真实付费 provider、生产切换或所有检索引擎认证。
+最后Go验收脚本调整后，`make lint`及测试harness单测27项再次通过。
 
-## 证据
+## 尚未实现或未验证的范围
 
-- 最终`make verify` exit0：Ruff/import/async DB门禁、mypy137源文件及
-  **5433 unit passed**（51.87s）。日志`/tmp/multirag-skills-verified-delivery.log`。
-  中间一次因并行FuturMix测试/目录未同步失败2项；该owner提交788c0b19后复跑全绿，
-  本任务未改写其测试或目录，也未以忽略门禁替代。
-- `make integration INTEGRATION_WORKERS=0`选定Skills、File批删、DB bootstrap：
-  **30 passed，0 skip**（65.44s），证据`.test-results/20261004-214917-18776/`。
-  包含后台start/stop与HTTP轮询，该生命周期用例不靠手动run_once推进。
-- Go正式集成**8 passed，0 skip**（113.47s），证据
-  `.test-results/20261004-214925-18887/`；最后SQL错误不得伪装空结果的故障注入
-  **1 passed**（30.87s），证据`.test-results/20261004-215207-21098/`。
-- 双端101项资产分页**1 passed**（22.21s），证据
-  `.test-results/20261004-215657-22957/`：GET列表及空keyword query均100/1/0、total101，
-  deleting和其他租户不计入，不受top_k10影响。该SQL seed只测元数据分页，上传另由端到端用例验证。
-- Go四包测试、全部internal vet/build、三个独立main构建通过；CLI定向test/vet/build
-  通过，工具链Go1.25.14。仅已有go-m1cpu C编译warning。
-- `make smoke`对隔离完整FastAPI监听端口：ping200、healthz200，DB/Redis/索引/存储均ok；
-  日志`/tmp/multirag-skills-smoke.log`。业务码与读回由上述HTTP用例验证。
-- Web `test:ci` **1187 passed**（688 Node、408 Vitest、81 Desktop、10 tooling）；
-  API211、产品UI33、build、i18n、file-size、bundle budget通过。全库lint0 errors，
-  1454项存量warning；新增代码scoped lint干净。
-- 浏览器真实Python+JWT+隔离SQL/MinIO/Milvus闭环通过。先删非活动版本再卸载暴露的
-  子版本状态回退已修；原失败operation点击Retry后attempts=2/succeeded，检索total0、
-  已删版本files404。下载/ZIP逐字节一致，模型ID无精度丢失，页面错误0。
-  `/tmp/skills-web-contact-sheet-final.png`已拼图审阅，HTTP记录
-  `/tmp/skills-web-ui-evidence.json`不含token；fixture已退出并删除私有凭证文件。
+Go 的 Elasticsearch/Infinity 核心适配尚未实现、未注册；显式核心模式拒绝不支持的引擎，
+默认资产模式中核心入口明确503。Go核心只保存 rerank 配置，不执行 rerank。
+大正文 Milvus 分片、整文逻辑身份与失败可见性已经实测；评分不承诺与其他引擎数值一致。
 
-真实基础设施为PostgreSQL17.11、MinIO、Milvus服务自报3.0-beta（Python SDK2.5.11）；
-仅使用隔离资源且fixture验证清理。此证据不等同于Milvus3.0.2或生产集群认证。
+Python 只读 MCP 默认关闭；原始包如含根 `_manifest` 附件，MCP分发明确拒绝，原始 ZIP
+下载仍可用。未升级 FastMCP 依赖，未实现完整 Skills 规范认证、远程来源治理或 Agent 沙箱。
 
-文件删除前置合同见[文件删除](../references/file-deletion.md)，正式证据见
-[删除验收](../ragflow-porting/file-deletion-acceptance.md)。该能力跨存储非原子，
-Skills独立保存对象地址和索引generation清理记录，不能仅靠重发File ID判断恢复。
+现无技能版本需要历史迁移；本机一个空空间保持原样。未执行跨部署全空间迁移、旧 Go
+七表删除或生产数据清理。旧 Go 资产实现仅在核心模式只读并排空既存任务，退役另行处理。
 
-## 剩余限制与风险
+## 前置与历史记录
 
-GitHub/ClawHub/skills.sh、远程下载和信任策略、force覆盖、Agent自动执行另立范围；
-无技能执行沙箱承诺。空间owner不支持在线迁移。
+文件批删正式合同 `bdbe93e0`、`c039e005` 已接收，见[删除合同](../references/file-deletion.md)
+及[验收](../ragflow-porting/file-deletion-acceptance.md)。Go 模型前置 `4ba652f3` 已交接，
+保持 `model_service.go` 的现有公开签名；新技能绑定在边界适配。
 
-已验收组合为PostgreSQL+MinIO+Milvus。ES/Infinity、无严格对象缺失读回的存储明确不可用。
-Go支持AES128/256跨读，SM4明确不可用。rerank仅严格验证的OpenAI-compatible/VLLM协议；
-Go embedding仅已有实际Encode驱动的provider。
-
-外部模型使用本地HTTP协议替身，含错误注入和真实请求，不代表真实付费provider验收。
-完整浏览器流程针对Python；Go通过HTTP/CLI及双向跨读，未另跑Go浏览器全流程。
-集成为上述选定范围，不声称跑遍全库所有集成文件。
-
-SQL、对象和索引间无分布式事务。失败保持隐藏、持久恢复地址并显式重试；故障可能
-已部分生效，不能根据HTTP202判定完成。部署先迁移并核对能力，非空技能表/operation
-禁止破坏性downgrade。
+原共享方案的提交为 `c8087791`、`0342420b`、`c2a7d344`、`a940e8a3`、`bc1c9ccd`、
+`5419f954`，Web 为 `326f4748`；调整计划为 `eaec4e23`。这些历史测试不能证明本轮收敛完成，
+旧共享数据库/跨读方案已被本轮独立部署合同替代。

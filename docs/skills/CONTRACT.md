@@ -1,11 +1,9 @@
 # 技能资产库合同 v1
 
-本文件描述已实现的资产协议v1。后续目标已调整为Go源码跟进、Python兼容与增强、
-后端数据独立，见[调整计划](REALIGNMENT.md)；下文共享schema/owner要求将在迁移中退出，
-当前实现尚未切换，不能据计划直接删除数据或变更消费者。
-
-本合同约束 Python/FastAPI 与 Go 后端，以及共用 Web、CLI 消费者。
-当前状态：合同v1已落地；已验能力与剩余限制见[交付状态](PROGRESS.md)。
+本文件约束 `multirag-assets-v1` 资产扩展协议；显式入口为 `/api/v1/skill-assets`。
+Python 的版本、活动发布、任务与索引增强继续使用此协议。
+RAGFlow 兼容核心另见 [CORE_CONTRACT](CORE_CONTRACT.md)，不得把两种协议混合解释。
+当前验证及部署限制见 [PROGRESS](PROGRESS.md)。
 
 ## 范围与所有权
 
@@ -13,12 +11,12 @@
 显式活动版本、模型配置、索引/检索、重建、卸载及空间删除。不执行技能代码，
 不把技能自动注入 Agent。GitHub 固定 revision、其他外部来源为后续独立阶段。
 
-Python 继续是当前生产入口。两端使用相同 PostgreSQL `usr_ai` schema；
-schema 只由 Python 模型引导和 Alembic 管理，Go 不 AutoMigrate 技能表。
-每个空间的 `backend_owner` 固定为创建端 `python` 或 `go`，客户端不可指定。
-两端可以读同一空间；只有 owner 能写入和认领该空间操作。非 owner 写请求返回
-409/`BACKEND_OWNER_MISMATCH`，不做跨后端 HTTP 转发。不支持在线转移 owner。
-同一部署多个 worker 通过数据库租约竞争；两种后端不竞争同一任务。
+Python 继续是当前生产入口。Python 与 Go 使用独立数据库和文件、对象、索引命名空间，
+不再直接跨端读写资产或共用任务。下述七表与物理索引格式是 Python 扩展实现，
+由 Python 模型与 Alembic 管理；Go 新核心不依赖这些表。
+已有 `backend_owner` 字段和约束保留，Python 只访问 Python owner 数据，不迁移或删除旧数据。
+旧 Go 资产协议仅用于过渡：核心模式下只读，worker 排空已存在任务，响应能力给出
+`writable:false`。客户端必须遵循该字段，不能仅用 owner 相同判断可写。
 
 首期空间仅属于鉴权得到的 tenant；不提供跨 tenant 分享、公共库或 KB 权限继承。
 Python 复用 `async_current_tenant_id`；Go 必须保持 JWT/API-key 对 tenant 的等价映射，
@@ -50,7 +48,7 @@ content_digest = SHA256(每项 `path + NUL + sha256 + NUL + decimal(size) + LF` 
 
 ## HTTP 约定
 
-根路径 `/api/v1/skills`。成功 JSON 为 `{code:0,message:"success",data:...}`。
+根路径 `/api/v1/skill-assets`。`/api/v1/skills` 只按显式部署配置绑定协议，消费者不探测猜测。成功 JSON 为 `{code:0,message:"success",data:...}`。
 同步成功 HTTP 200；异步受理 HTTP 202。错误 HTTP 400/401/404/409/413/422/503，
 body 为 `{code:<相同HTTP整数>,message:<安全说明>,data:{error_code:<稳定字符串>}}`。
 日志与对外错误不得包含 API key、DSN、源凭据或包正文。所有列表 page 从 1 开始、
@@ -68,7 +66,7 @@ space锁，统一operation→space顺序，避免上传去重与worker死锁。
 
 | 方法与路径 | 输入 | data |
 |---|---|---|
-| GET /capabilities | — | backend、schema_version=1、sources=[local]、search_modes、search_available、storage_available |
+| GET /capabilities | — | backend、writable、schema_version=1、sources=[local]、search_modes、search_available、storage_available |
 | GET /models | — | models: `{id,name,provider,type,max_tokens,available,reason}`，仅当前 tenant 已启用 embedding/rerank；不含凭证；reason为安全能力码或null |
 | GET /spaces | page/page_size/keywords | spaces,total,page,page_size |
 | POST /spaces | name,description(默认空) | space |
@@ -138,11 +136,11 @@ rerank在配置后必须实际执行；故障返回明确错误，不能悄悄�
 在SQL读回中过滤，即使索引物理删除失败也不能泄漏已删除版本。索引不可用返回503，
 不能回退成全部资产或伪装为空结果。
 
-## 共享 schema
+## Python 资产私有 schema
 
 所有新表包含 create_time/update_time BIGINT 毫秒、create_date/update_date TIMESTAMP，
 沿用本地 BaseModel；租约、删除时间为 TIMESTAMPTZ。IDs为VARCHAR(32)，revision为BIGINT。
-以下是双方实现的字段真值，新增字段必须同步此表及消费者测试。
+以下描述 Python 私有持久结构；新增公开字段须同步消费者测试，不要求 Go 核心复制内部模型。
 
 | 表（usr_ai下） | 字段（除共同时间字段） |
 |---|---|
@@ -183,7 +181,7 @@ metadata与operation先在同一短SQL事务登记，再执行外部副作用。
 上传的staging不可认领；只有全部字节、manifest验证通过后才能sealed。崩溃半包标记失败
 并精确清理，不能假装成完整安装。写回还须lease_expires_at>数据库now；失租停止写入。
 每个attempt使用新generation/不可变对象地址；旧worker不能覆盖新attempt输出。
-混合owner的批量删除按项返回BACKEND_OWNER_MISMATCH，任务只处理当前owner资源。
+任务只处理当前后端拥有的资源；不能以批量接口绕过 owner 或 tenant 隔离。
 
 索引构建使用全新generation和独立集合，以immutable skill/version ID作pk。
 完成逐项计数、维度、hash和检索读回后，以space revision CAS切换active_generation。
@@ -201,11 +199,11 @@ skill.active_version_id、space.active_generation_id及revision，不能先改ac
 count为完整删除的唯一File行（含目录），不存在ID报错，失败后代保留祖先，合法兄弟继续。
 跨存储非原子，errors不意味着零副作用。Skills内部清理适配此领域合同，不调用HTTP回环，
 不在外层包事务，不解析errors字符串猜资源结果；结合操作记录按已授权绑定独立读回。
-Go实现相同清理保证，不复用假成功engine Delete。正式交接证据记录在PROGRESS。
+Go核心的独立删除保证见CORE_CONTRACT，不复用假成功engine Delete。正式交接证据记录在PROGRESS。
 
 ## 验收
 
-### Milvus共享物理格式
+### Python 资产 Milvus 物理格式
 
 集合为`skill_<generation_id>`，与知识库索引独立。每个启用字段按UTF-8完整字符分块，
 每块最多`min(8192, floor(max_tokens*0.8))`字节；不丢弃空白或截断文件尾部。
