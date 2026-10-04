@@ -14,7 +14,7 @@ from tests.integration.test_runtime_document_upload import runtime_upload_api as
 
 
 @pytest.mark.parametrize("credential", ["jwt", "api_key"])
-def test_legacy_session_update_and_denials(runtime_upload_api: dict[str, Any], credential: str) -> None:
+def test_session_patch_and_retired_put(runtime_upload_api: dict[str, Any], credential: str) -> None:
     env = runtime_upload_api
     owner = env["owners"][0 if credential == "jwt" else 1]
     foreign = env["owners"][1 if credential == "jwt" else 0]
@@ -39,7 +39,7 @@ def test_legacy_session_update_and_denials(runtime_upload_api: dict[str, Any], c
         return requests.request(method, f"{env['base']}/api/v1/chats/{chat}/sessions/{session}", headers={"Authorization": f"Bearer {token or env[credential]}"}, json=body, timeout=30)
 
     try:
-        for method, expected in (("PUT", "legacy name"), ("PATCH", "current name")):
+        for method, expected in (("PATCH", "first name"), ("PATCH", "current name")):
             result = update(method, {"name": f"  {expected}  ", "user_id": foreign, "dialog_id": other_chat_id}).json()
             assert result["code"] == 0 and result["data"]["name"] == expected
             actual = readback()[session_id]
@@ -49,22 +49,29 @@ def test_legacy_session_update_and_denials(runtime_upload_api: dict[str, Any], c
             assert body["code"] == 0 and body["data"]["name"] == expected
 
         before = readback()
-        for method in ("PUT", "PATCH"):
-            for payload in ({"messages": []}, {"message": []}, {"reference": []}, {"name": " "}):
-                response = update(method, payload)
-                assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR
-            assert update(method, {"name": []}).status_code == 422
-            assert update(method, {"name": "denied"}, token="invalid-token").status_code == 401
-            absent = requests.request(method, f"{env['base']}/api/v1/chats/{chat_id}/sessions/{session_id}", json={"name": "denied"}, timeout=30)
-            assert absent.status_code == 401
-            assert update(method, {"name": "denied"}, chat=other_chat_id, session=other_session_id).json()["code"] == RetCode.AUTHENTICATION_ERROR
-            assert update(method, {"name": "denied"}, session=other_session_id).json()["code"] == RetCode.DATA_ERROR
-            assert update(method, {"name": "denied"}, session=uuid4().hex).json()["code"] == RetCode.DATA_ERROR
+        for payload in ({"messages": []}, {"message": []}, {"reference": []}, {"name": " "}):
+            response = update("PATCH", payload)
+            assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR
+        assert update("PATCH", {"name": []}).status_code == 422
+        assert update("PATCH", {"name": "denied"}, token="invalid-token").status_code == 401
+        absent = requests.request("PATCH", f"{env['base']}/api/v1/chats/{chat_id}/sessions/{session_id}", json={"name": "denied"}, timeout=30)
+        assert absent.status_code == 401
+        assert update("PATCH", {"name": "denied"}, chat=other_chat_id, session=other_session_id).json()["code"] == RetCode.AUTHENTICATION_ERROR
+        assert update("PATCH", {"name": "denied"}, session=other_session_id).json()["code"] == RetCode.DATA_ERROR
+        assert update("PATCH", {"name": "denied"}, session=uuid4().hex).json()["code"] == RetCode.DATA_ERROR
+        assert readback() == before
+
+        for payload in ({"name": "retired"}, {"messages": []}, {"name": []}):
+            response = update("PUT", payload)
+            assert response.status_code == 405
             assert readback() == before
+        unauthenticated_put = requests.put(f"{env['base']}/api/v1/chats/{chat_id}/sessions/{session_id}", json={"name": "retired"}, timeout=30)
+        assert unauthenticated_put.status_code == 405
+        assert readback() == before
 
         paths = requests.get(f"{env['base']}/openapi.json", timeout=30).json()["paths"]
         path = paths["/api/v1/chats/{chat_id}/sessions/{session_id}"]
-        assert path["put"]["deprecated"] is True and not path["patch"].get("deprecated", False)
+        assert "put" not in path and not path["patch"].get("deprecated", False)
         for retired in (
             "/api/v1/file/list",
             "/api/v1/file/root_folder",

@@ -11,8 +11,9 @@
 ## 聊天会话兼容
 
 聊天会话更新以 `PATCH /api/v1/chats/{chat_id}/sessions/{session_id}` 为正式入口。
-此前 HTTP 参考公开的 PUT 路径保留为 deprecated 别名，共用同一处理器、JWT/API key
-认证、聊天归属校验和请求验证；迁移到 PATCH 后可退出该兼容承诺。
+旧 PUT 已在聊天路由迁移中退出，当前无活动消费者；此前 HTTP 参考中的 PUT 是漏更新，
+不据此恢复接口。同一会话路径的 PUT 请求返回 405，不进入更新处理器。PATCH 保留
+JWT/API key 认证、聊天归属校验和请求验证。
 `message`/`messages`/`reference` 不可改，客户端不能改写会话 ID、聊天 ID 或用户归属。
 
 `POST /api/v1/chat/completions` 接收 `messages` 和 body 中的 `chat_id`/`session_id`。

@@ -2554,7 +2554,7 @@ Web 表单 13 项通过，build/lint/file-size exit=0（lint 保留既有告警�
 未做 MySQL、生产库、真实外部 provider 或 Elasticsearch/Milvus 完整检索验收；
 provider 使用真实 HTTP 协议替身。Python `a7ce1b16` 生产实现未改动。
 
-## b684c899 · 旧 API 兼容入口评估与会话 PUT 适配
+## b684c899 · 旧 API 兼容入口等价评估与文档校正
 
 2026-10-04 按 `b684c899501ce6b7236d3027f66b75d1097e4873` 完整七文件 diff 与冻结
 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 内相关后修核对。上游 remote 正确；
@@ -2563,10 +2563,10 @@ provider 使用真实 HTTP 协议替身。Python `a7ce1b16` 生产实现未改�
 
 | 原始行为 | 本次处置与依据 |
 |---|---|
-| 注册集中 Quart 兼容 Blueprint | 不复制；FastAPI 当前自动发现已加载 REST/SDK，新增别名直接复用现有 router，避免同 path/method 抢占。 |
+| 注册集中 Quart 兼容 Blueprint | 不复制；FastAPI 当前自动发现已加载 REST/SDK，不新增重复 router，避免同 path/method 抢占。 |
 | 旧聊天补全与 related_questions 转发 | SDK `question/session_id` 及 `industry` 仍是公开本地合同；前者无 session 创建开场白，后者使用 API key。不能以 messages 转发或 search_id 推荐接口替换；现有行为保留。 |
 | 旧 OpenAI 聊天路径 | 已等价：同一 handler 的 deprecated 别名、API key、默认流式与当前非流式合同保留。 |
-| 会话 PUT → PATCH | HTTP 参考仍公开 PUT，属于已有兼容承诺；增加 deprecated 别名，复用同一异步处理器、Pydantic、当前聊天归属和业务错误语义。文档正式入口改为 PATCH。 |
+| 会话 PUT → PATCH | 已等价；本地 `09442a59` 明确因无生产消费者而直接退出 PUT，路由测试也断言不存在。原 HTTP 参考漏更新，修正为 PATCH，不恢复 PUT。 |
 | DELETE chats 的 chat_id body | 不恢复；当前 Web dialogAPI 用单项 path 或批量 ids。独立 SDK worktree 同样用 path。上游直接 update_by_id 的分支未核归属，不导入。 |
 | file/get/list/ancestors/parent/root/create/upload/mv/rename/rm | 当前 Web、SDK、MCP、Agent Hub 未发现这些旧入口消费者；现有 files REST 和显式 files/root 提供替代合同。不上游 root → list 的形状变化或绕过 rename 校验。 |
 | chunk PUT | Web、Agent Hub 及 SDK worktree 均用 PATCH，不恢复无消费者入口。 |
@@ -2577,7 +2577,7 @@ provider 使用真实 HTTP 协议替身。Python `a7ce1b16` 生产实现未改�
 后修 `c11650bb4` 文件祖先归属、`0c93161a1` 会话认证身份与
 `d3542463c` recommendation 拼写在现有实现中已有对应。其余后续 Agent/Graph/文档兼容扩展、
 legacy stream 模式和 Python 架构退出不扩纳；尤其不恢复已接受退出的 run、图片、
-change_parser、upload_info 等入口。本项的长期合同与退出条件见
+change_parser、upload_info 等入口。本项的当前合同见
 [REST README](../../api/apps/restful_apis/README.md#聊天会话兼容)，映射表已更新。
 
 消费者核查为当前源码审计；两个独立 SDK 目录属于同仓未合并 worktree，其中旧的
@@ -2590,21 +2590,29 @@ SDK 后续入口：两个 worktree 的 `sdk/python/src/multirag_sdk/_resources.p
 session_id，再校验 Completion 模型、SSE 收尾、错误帧及历史读回；不能只更换 URL
 便声明兼容。当前分支头分别为 `ed38de7f` 与 `d0d34818`，属本次核查时点。
 
-验证：相关 unit 69 passed；真实 JWT/API key 两组 HTTP/SQL 专项通过。最终共享
-`make verify` exit=0（4886 unit），`make integration` exit=0（755 passed，无 skip，
-2515.37 秒）；1697 个源/配置输入 hash 前后无漂移。默认 Infinity 握手不兼容，
-本轮仅用 `INFINITY_TEST_URI` 指向自有 loopback 兼容实例，未修改共享配置或依赖。
-新 PUT/PATCH 分别实际更新、GET 与独立 Session 读回；伪造归属、跨会话、missing、
-保护字段、非法 body、无/坏认证拒绝，拒绝前后完整会话读回相等。旧 run/image/
-change_parser 与未恢复的 rename 实际 routing404，隔离对象清单保持不变。
-日志与固定输入证据位于 `/tmp/multirag-b684-final-gates/`。
-没有远程模型或生产写入验收；SDK/OpenAI 的 provider/service 为受控回归，
-新增别名的真实 HTTP/JWT/API key、隔离 SQL 与独立读回未替换业务层。未 push。
-首轮自有集成为补齐测试返回类型注解而主动中断，不作为通过证据。
+复核纠正：首轮 `1e7ab115` 把滞后文档误判为兼容承诺并恢复 PUT；经用户指出、
+核对本地 `09442a59` 的明确退出说明、路由 diff 与测试后，用户同意撤销别名。
+保留 PATCH 请求校验、真实写入与独立 SQL 读回回归，补 PUT 实际 HTTP 405、
+不进入业务层及会话读回零变化断言；其他等价评估和 SDK 后续迁移记录保留。
 
-共享 `8123` listener 的健康 smoke 通过，但未重启它；只读 OpenAPI 仍列旧
-change_parser、尚无本项 session PUT，说明其进程未重载退出提交。当前源码的退出路径
-与新增别名已在隔离 listener 实际验证；不把共享健康结果当作本项已部署的证明。
+首轮历史验证：`make verify` 4886 unit、`make integration` 755 passed 无 skip，
+1697 个源/配置输入无漂移；证据 `/tmp/multirag-b684-final-gates/`。
+其中新增 PUT 的通过仅说明当时实现可运行，不构成应恢复该接口的依据，也不作为
+撤销后的本次验证结果。
+
+纠正验证：`make verify` exit=0（4969 unit）；
+`make integration TESTS=tests/integration/test_chat_session_compat.py` exit=0（2 passed，无 skip）；
+`make smoke` exit=0。1714 个源/配置输入前后 hash 无漂移，证据位于
+`/tmp/multirag-b684-correction/gates/`。真实 JWT/API key 的 PATCH 两次更新、GET 与独立
+SQL Session 读回通过，归属/保护字段/非法 body/无坏认证继续拒绝且零写入；PUT 对
+有效、保护字段、非法 body 和无认证均返回 405，完整会话读回不变，OpenAPI 不注册 PUT。
+旧 run/image/change_parser 与未恢复 rename 实际 HTTP 404，SQL 与隔离对象清单不变。
+本轮未重跑此前完整集成套件；仅撤销路由别名，未修改 DB/事务/存储业务实现。
+其他任务的 fixture 导入迁移保留，提交只包含本项逻辑与账本段落。未 push。
+
+共享 `8123` listener 的首轮健康 smoke 通过，未重启它；只读 OpenAPI 仍列旧
+change_parser，说明进程未重载相关退出提交。当前源码的退出路径由隔离 listener 验证；
+不把共享健康结果当作相关退出已部署的证明。未做生产写入或真实远程模型验收。
 
 
 ## Dataset RAPTOR scope 持久化与扩展配置

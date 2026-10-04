@@ -993,7 +993,6 @@ async def get_session(
 
 
 @router.patch("/chats/{chat_id}/sessions/{session_id}", summary="Update chat session")
-@router.put("/chats/{chat_id}/sessions/{session_id}", summary="Update chat session (legacy)", deprecated=True)
 async def update_session(
     chat_id: str,
     session_id: str,

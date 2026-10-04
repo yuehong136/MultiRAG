@@ -505,16 +505,13 @@ def test_chat_restful_routes_cover_ragflow_6baf74af_endpoints() -> None:
     assert ("/chat/completions", "POST") in routes
     assert ("/chats/{chat_id}/sessions/{session_id}", "PATCH") in routes
 
-    # 无消费者的旧路由保持退出；会话 PUT 因公开文档兼容承诺恢复为别名。
+    # 无消费者的旧路由（含会话 PUT）保持退出；滞后文档不构成恢复依据。
     assert ("/chats/tts", "POST") not in routes
     assert ("/chats/transcriptions", "POST") not in routes
     assert ("/chats/mindmap", "POST") not in routes
     assert ("/chats/related_questions", "POST") not in routes
     assert ("/chats/ask", "POST") not in routes
-    assert ("/chats/{chat_id}/sessions/{session_id}", "PUT") in routes
-    legacy_update = next(route for route in chat_api.router.routes if route.path == "/chats/{chat_id}/sessions/{session_id}" and "PUT" in route.methods)
-    assert legacy_update.deprecated is True
-    assert legacy_update.endpoint is chat_api.update_session
+    assert ("/chats/{chat_id}/sessions/{session_id}", "PUT") not in routes
     assert ("/chats/{chat_id}/sessions/{session_id}/completions", "POST") not in routes
 
 

@@ -38,7 +38,7 @@
 | `api/apps/document_app.py` 的会话 `upload_and_parse` | 旧 route、`doc_upload_and_parse` 与专属线程 Session helper 已删除 | 当前没有活动产品消费者，会话同步解析入库能力正式退役；运行时附件上传与内容提取继续提供，其行为与会话入库不同。Web 死方法/专用测试已清理，两页附件状态由生产 hook 单独管理，真实取消/迟到/取件验收完成；共享文件上传/解析、dataset 任务与 source 状态继承保留，见 [HTTP API](../references/http_api_reference.md#上传运行时附件) |
 | `api/apps/document_app.py` 的沙箱产物下载 | `api/apps/restful_apis/document_api.py` + `api/apps/services/sandbox_artifact_service.py` + `core/utils/sandbox_artifact_registry.py` | CodeExec 生成带 `run_id`、可选 `session_id` 的 REST 链接并登记精确文件归属；旧 `/v1/document/artifact/{filename}` 保留 deprecated 兼容层，两者共用登记核验 |
 | `api/apps/restful_apis/openai_api.py` 的聊天补全 | `api/apps/restful_apis/openai_api.py` | 新入口为 `/api/v1/openai/{chat_id}/chat/completions`；旧 `/api/v1/chats_openai/{chat_id}/chat/completions` 由同一 handler 保留 deprecated 别名，待客户端迁移后退役 |
-| `api/apps/backward_compat.py` 的旧聊天、会话、文件与 chunk 请求 | 现有 `restful_apis/chat_api.py`、`openai_api.py` 与 `sdk/session.py` | 已公开的会话 PUT 为 deprecated PATCH 别名；SDK question/industry 合同与现有 OpenAI 别名保持，不新增重复网关。无消费者的旧 file、chunk PUT、chat_id 删除请求不恢复；详情与退出条件见 [REST README](../../api/apps/restful_apis/README.md#聊天会话兼容) |
+| `api/apps/backward_compat.py` 的旧聊天、会话、文件与 chunk 请求 | 现有 `restful_apis/chat_api.py`、`openai_api.py` 与 `sdk/session.py` | 会话 PUT 已退出，滞后文档已修正为 PATCH；SDK question/industry 合同与现有 OpenAI 别名保持，不新增重复网关。无消费者的旧 file、chunk PUT、chat_id 删除请求不恢复；详情与退出条件见 [REST README](../../api/apps/restful_apis/README.md#聊天会话兼容) |
 
 ## 2. EIM-U14 Interaction 所有权
 

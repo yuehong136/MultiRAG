@@ -487,8 +487,8 @@ PATCH /chats/{chat_id}/sessions/{session_id}
 ```
 
 `message`、`messages` 和 `reference` 不允许通过该接口修改，客户端不能更改会话归属。
-旧 `PUT /chats/{chat_id}/sessions/{session_id}` 因此前公开文档的兼容承诺保留为
-deprecated 别名，使用同一处理器、认证、请求校验和业务码；新客户端应使用 PATCH。
+旧 `PUT /chats/{chat_id}/sessions/{session_id}` 已退出；此前文档残留的 PUT 为漏更新，
+当前仅提供 PATCH。向同一会话路径发送 PUT 返回 HTTP 405，不更新会话。
 
 ### 删除聊天会话
 
