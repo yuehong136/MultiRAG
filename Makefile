@@ -5,6 +5,7 @@ UV := uv run --no-sync
 TESTS ?=
 PYTEST_ARGS ?= -q
 INTEGRATION_SUITE ?= core
+INTEGRATION_WORKERS ?= 2
 
 .PHONY: help install fix lint typecheck test test-all coverage integration integration-db integration-system integration-infinity integration-consumer integration-all smoke mcp-compat verify
 
@@ -38,7 +39,7 @@ coverage: ## 单元测试 + 覆盖率报告
 	$(UV) pytest tests/unit -q --cov --cov-branch --cov-report=term-missing --cov-report=xml
 
 integration: ## Tier 3：核心集成；按 TESTS 依赖准备服务并保存证据
-	$(UV) python scripts/run_integration.py --suite $(INTEGRATION_SUITE) -- $(TESTS) $(PYTEST_ARGS)
+	$(UV) python scripts/run_integration.py --suite $(INTEGRATION_SUITE) --workers $(INTEGRATION_WORKERS) -- $(TESTS) $(PYTEST_ARGS)
 
 integration-db: ## 仅 PostgreSQL 契约（不收集 HTTP/模型/向量库测试）
 	$(MAKE) integration INTEGRATION_SUITE=db
@@ -64,3 +65,14 @@ mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议�
 	$(UV) python scripts/check_mcp_compat.py
 
 verify: lint typecheck test ## Python 编码交付门禁（Tier 0+1+2；适用范围见 AGENTS.md）
+
+.PHONY: eval eval-assets eval-generation
+# Install the optional eval group explicitly; normal integration never downloads models.
+eval-assets: ## 显式准备并校验固定版本 OCR 与中文向量模型
+	$(UV) python scripts/provision_eval_assets.py
+
+eval: ## 独立本地 OCR / 中文检索质量回归（需安装 eval 依赖组）
+	$(UV) python scripts/run_integration.py --suite eval -- $(PYTEST_ARGS)
+
+eval-generation: ## 显式真实模型评测（需专用模型配置，缺失即失败）
+	$(UV) python scripts/run_integration.py --suite eval-generation -- $(PYTEST_ARGS)

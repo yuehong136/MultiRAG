@@ -34,7 +34,7 @@ def split_address(value: str, default_port: int) -> tuple[str, int]:
     return parsed.hostname or "127.0.0.1", parsed.port or default_port
 
 
-def probe(service: str, configs: dict[str, Any]) -> None:
+def probe(service: str, configs: dict[str, Any]) -> str | None:
     """Check protocol/authentication, not just an open TCP port. Do not write data."""
     conf = configs.get(service)
     if not conf:
@@ -47,6 +47,7 @@ def probe(service: str, configs: dict[str, Any]) -> None:
         try:
             with engine.connect() as connection:
                 assert connection.scalar(sa.text("SELECT 1")) == 1
+                return str(connection.scalar(sa.text("SHOW server_version")))
         finally:
             engine.dispose()
     elif service == "redis":
@@ -72,7 +73,7 @@ def probe(service: str, configs: dict[str, Any]) -> None:
 
         client = MilvusClient(uri=conf["hosts"], user=conf.get("username", ""), password=conf.get("password", ""), db_name=conf.get("db_name") or "default", token=conf.get("token", ""), timeout=3)
         try:
-            client.get_server_version(timeout=3)
+            return str(client.get_server_version(timeout=3))
         finally:
             client.close()
     elif service == "infinity":
@@ -98,6 +99,7 @@ def probe(service: str, configs: dict[str, Any]) -> None:
             raise ConnectionError("Infinity protocol handshake failed")
     else:
         raise ValueError(f"Unknown test service: {service}")
+    return None
 
 
 class ServiceManager:
@@ -119,7 +121,7 @@ class ServiceManager:
         started = time.monotonic()
         source = "existing"
         try:
-            probe(service, self.configs)
+            version = probe(service, self.configs)
         except Exception as exc:
             if not self.allow_containers or service == "milvus" or (service == "infinity" and os.environ.get("INFINITY_TEST_URI")):
                 # Never include exception text: drivers often include credentials.
@@ -132,13 +134,13 @@ class ServiceManager:
             deadline = time.monotonic() + 60
             while True:
                 try:
-                    probe(service, self.configs)
+                    version = probe(service, self.configs)
                     break
                 except Exception as error:
                     if time.monotonic() >= deadline:
                         raise ServiceError(f"Test container {service} is not ready ({type(error).__name__})") from None
                     time.sleep(0.25)
-        self.ready[service] = {"source": source, "seconds": round(time.monotonic() - started, 4)}
+        self.ready[service] = {"source": source, "version": version, "seconds": round(time.monotonic() - started, 4)}
 
     def _start(self, service: str) -> None:
         images = service_images()

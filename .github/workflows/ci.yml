@@ -169,7 +169,7 @@ jobs:
       - name: uv sync (retry)
         run: |
           for i in 1 2 3; do
-            uv sync --python 3.12 --group dev --frozen && exit 0
+            uv sync --python 3.12 --group dev --group eval --frozen && exit 0
             echo "uv sync failed (attempt $i), retrying..." >&2
             sleep 15
           done
@@ -205,8 +205,13 @@ jobs:
         with:
           path: core/res/deepdoc
           key: deepdoc-test-${{ hashFiles('scripts/provision_test_assets.py') }}
-      - name: Provision immutable OCR assets
-        run: uv run --no-sync python scripts/provision_test_assets.py
+      - name: Cache verified Chinese embedding assets
+        uses: actions/cache@v4
+        with:
+          path: .cache/evals
+          key: chinese-eval-${{ hashFiles('scripts/provision_eval_assets.py') }}
+      - name: Provision immutable OCR and embedding assets
+        run: make eval-assets
 
       - name: Install Chromium for browser SSRF integration regression
         run: uv run --no-sync playwright install chromium --only-shell --with-deps
@@ -258,6 +263,8 @@ jobs:
           exit 1
       - name: Integration tests
         run: make integration
+      - name: Local OCR and Chinese retrieval quality regression
+        run: make eval
       - name: Smoke (boot server, hit health endpoints)
         run: |
           uv run --no-sync python -m api.multirag_server > server.log 2>&1 &

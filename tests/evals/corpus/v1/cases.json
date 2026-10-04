@@ -1,0 +1,162 @@
+{
+  "version": "1.0.0",
+  "provenance": "Repository-authored synthetic Chinese business documents. Facts are grounded in checked-in sources; production-domain human calibration is not claimed.",
+  "cases": [
+    {
+      "id": "purchase-small",
+      "query": "采购 3000 元的设备需要谁审批？",
+      "documents": [
+        "purchase.md"
+      ],
+      "facts": [
+        "部门负责人"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "purchase-middle",
+      "query": "采购金额为 12000 元时，需要哪两位负责人批准？",
+      "documents": [
+        "purchase.md"
+      ],
+      "facts": [
+        "部门负责人",
+        "财务负责人"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "purchase-large",
+      "query": "购买 25000 元的设备，必须先获得谁的批准？",
+      "documents": [
+        "purchase.md"
+      ],
+      "facts": [
+        "院长"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "retention-normal",
+      "query": "普通项目的数据应该保存多少天？",
+      "documents": [
+        "retention.md"
+      ],
+      "facts": [
+        "180"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "retention-clinical",
+      "query": "临床协作项目的原始数据保留时间是多少？",
+      "documents": [
+        "retention.md"
+      ],
+      "facts": [
+        "365"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "deletion-cooling",
+      "query": "提交数据删除申请后，有几天可以撤回？",
+      "documents": [
+        "retention.md"
+      ],
+      "facts": [
+        "7"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "plan-team",
+      "query": "团队版提供多少 GB 存储和多少小时月度计算？",
+      "documents": [
+        "plans.md"
+      ],
+      "facts": [
+        "512",
+        "240"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "plan-research",
+      "query": "研究版允许同时运行多少个作业？",
+      "documents": [
+        "plans.md"
+      ],
+      "facts": [
+        "32"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "support-first",
+      "query": "一级故障的首次响应承诺是多少分钟？",
+      "documents": [
+        "support.md"
+      ],
+      "facts": [
+        "15"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "cross-document",
+      "query": "采购 12000 元设备需要谁审批，一级故障多久首次响应？",
+      "documents": [
+        "purchase.md",
+        "support.md"
+      ],
+      "facts": [
+        "部门负责人",
+        "财务负责人",
+        "15"
+      ],
+      "abstain": false,
+      "tools": []
+    },
+    {
+      "id": "unknown-price",
+      "query": "数据恢复服务每次收费多少元？",
+      "documents": [],
+      "facts": [],
+      "abstain": true,
+      "tools": []
+    },
+    {
+      "id": "unknown-person",
+      "query": "青禾研究院院长的私人手机号码是多少？",
+      "documents": [],
+      "facts": [],
+      "abstain": true,
+      "tools": []
+    },
+    {
+      "id": "tool-status",
+      "query": "请查询工单 QH-2048 当前状态。",
+      "documents": [],
+      "facts": [
+        "处理中"
+      ],
+      "abstain": false,
+      "tools": [
+        "ticket_status"
+      ],
+      "tool_arguments": {
+        "ticket_id": "QH-2048"
+      }
+    }
+  ]
+}

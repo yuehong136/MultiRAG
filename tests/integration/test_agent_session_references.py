@@ -31,13 +31,13 @@ from api.db.db_models import AgentExecutionOrigin, API4Conversation, APIToken, U
 from api.db.services.api_service import API4ConversationService
 from common.config_utils import CONFIGS
 from core.utils.redis_conn import REDIS_CONN
-from tests.integration.test_agent_update_release import message_dsl
-from tests.integration.test_document_image_http import _save, _setup
-from tests.integration.test_document_image_http import bootstrapped_engine as bootstrapped_engine
-from tests.integration.test_document_image_http import image_http_api as image_http_api
-from tests.integration.test_document_image_http import image_http_database as image_http_database
-from tests.integration.test_document_image_read_service import _snapshot
-from tests.integration.test_document_image_read_service import image_resources as image_resources
+from tests.support.agent_update_release import message_dsl
+from tests.support.document_image_http import _save, _setup
+from tests.support.document_image_http import bootstrapped_engine as bootstrapped_engine
+from tests.support.document_image_http import image_http_api as image_http_api
+from tests.support.document_image_http import image_http_database as image_http_database
+from tests.support.document_image_read_service import _snapshot
+from tests.support.document_image_read_service import image_resources as image_resources
 
 
 @contextmanager

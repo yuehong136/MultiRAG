@@ -17,7 +17,7 @@ from common.data_source.models import NotionSearchResponse, SlimDocument
 from common.data_source.notion_connector import NotionConnector
 from core.svr import sync_data_source
 from core.utils.redis_conn import REDIS_CONN
-from tests.integration.test_document_parse_retirement import parse_api as parse_api
+from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 

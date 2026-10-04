@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from scripts.run_integration import main, selected_paths
+from scripts.run_integration import main, parallel_arguments, selected_paths
 from tests.support import services
 from tests.support.integration_suites import DATABASE_TESTS, INTEGRATION, ROOT, required_services, suite_paths
 
@@ -31,6 +31,18 @@ def test_explicit_node_selection_prepares_only_its_dependencies() -> None:
         selected_paths("core", [str(INTEGRATION)])
 
 
+def test_consumer_suite_contains_every_external_consumer_module() -> None:
+    """A newly added Web contract cannot be silently omitted from its suite."""
+    import ast
+
+    consumers = set()
+    for path in INTEGRATION.glob("test_*.py"):
+        tree = ast.parse(path.read_text())
+        if any(isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute) and node.value.attr == "mark" and node.attr == "external_consumer" for node in ast.walk(tree)):
+            consumers.add(path)
+    assert set(suite_paths("consumer")) == consumers
+
+
 def test_pytest_filter_and_ignore_values_are_not_mistaken_for_targets() -> None:
     assert selected_paths("db", ["-k", "api", "--ignore", str(INTEGRATION / "test_async_engine.py")]) == suite_paths("db")
 
@@ -38,15 +50,40 @@ def test_pytest_filter_and_ignore_values_are_not_mistaken_for_targets() -> None:
 @pytest.mark.parametrize("option", ["-nauto", "-n2", "--numprocesses=2"])
 def test_parallel_options_cannot_bypass_storage_isolation_guard(option: str) -> None:
     with pytest.raises(SystemExit) as result:
-        main(["--", str(INTEGRATION / "test_runtime_document_upload.py"), option])
+        main(["--", str(INTEGRATION / "test_infinity_available_filter.py"), option])
     assert result.value.code == 2
 
 
 def test_inherited_parallel_option_cannot_bypass_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PYTEST_ADDOPTS", "-nauto")
     with pytest.raises(SystemExit) as result:
-        main(["--", str(INTEGRATION / "test_runtime_document_upload.py")])
+        main(["--", str(INTEGRATION / "test_infinity_available_filter.py")])
     assert result.value.code == 2
+
+
+def test_default_parallelism_requires_audited_multiple_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    audited = [INTEGRATION / "test_async_engine.py", INTEGRATION / "test_document_status.py"]
+    args, workers = parallel_arguments(audited, ["-q"], 2)
+    assert workers == "2" and args[-3:] == ["-n", "2", "--dist=worksteal"]
+    for paths in [suite_paths("infinity"), suite_paths("eval"), [INTEGRATION / "future_test.py"], suite_paths("core") + [INTEGRATION / "future_test.py"]]:
+        args, workers = parallel_arguments(paths, ["-q"], 2)
+        assert workers == "0" and args == ["-q"]
+
+
+@pytest.mark.parametrize("option", [["-n", "0"], ["-n0"], ["--numprocesses=0"]])
+def test_explicit_serial_mode_is_allowed_for_every_suite(monkeypatch: pytest.MonkeyPatch, option: list[str]) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n 2")
+    args, workers = parallel_arguments(suite_paths("infinity"), option, 2)
+    assert workers == "0" and args == option
+
+
+def test_inherited_scheduler_and_collection_only_are_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n 2 --dist=loadfile")
+    args, workers = parallel_arguments(suite_paths("db"), ["-q"], 2)
+    assert workers == "2" and args == ["-q"]
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    assert parallel_arguments(suite_paths("core"), ["--collect-only"], 2) == (["--collect-only"], "0")
 
 
 def test_read_only_service_check_has_working_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,3 +245,52 @@ def test_integration_marker_does_not_capture_unit_tests() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "tests/integration/test_services_connectivity.py: 3" in result.stdout
     assert "tests/unit/test_app_config.py:" not in result.stdout
+
+
+def test_integration_modules_do_not_import_other_test_modules() -> None:
+    """A fixture move must not silently reintroduce collection/order dependencies."""
+    import ast
+
+    violations = []
+    for path in INTEGRATION.glob("test_*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module.startswith("tests.integration.test_") or (node.level and module.startswith("test_")):
+                    violations.append(f"{path.name}:{node.lineno}: {module}")
+            elif isinstance(node, ast.Import):
+                violations.extend(f"{path.name}:{node.lineno}: {alias.name}" for alias in node.names if alias.name.startswith("tests.integration.test_"))
+    assert not violations, "Move shared fixtures/helpers to tests/support:\n" + "\n".join(violations)
+
+
+def test_network_allowlist_excludes_model_endpoints() -> None:
+    from scripts.run_integration import service_hosts
+
+    hosts = service_hosts({"postgresql": {"host": "pg.test"}, "redis": {"host": "cache.test:6379"}, "milvus": {"hosts": "http://vector.test:19530"}, "llm": {"base_url": "https://model.test"}})
+    assert "pg.test" in hosts and "cache.test" in hosts and "vector.test" in hosts
+    assert "127.0.0.1" in hosts and "model.test" not in hosts
+
+
+def test_python_socket_guard_blocks_external_provider_before_connection(tmp_path: Path) -> None:
+    source = """
+import socket
+import pytest
+from pytest_socket import SocketConnectBlockedError
+
+def test_provider():
+    with socket.socket() as client, pytest.raises(SocketConnectBlockedError):
+        client.connect(('203.0.113.17', 443))
+"""
+    result = _pytest(tmp_path, source, "-p", "pytest_socket", "--allow-hosts=127.0.0.1", "--allow-unix-socket")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_reordering_is_reproducible_without_dropping_cases(tmp_path: Path) -> None:
+    source = "\n".join(f"def test_case_{index}(): pass" for index in range(8))
+    selected = []
+    for seed in [13, 13, 14]:
+        result = _pytest(tmp_path, source, "--integration-seed", str(seed))
+        assert result.returncode == 0, result.stdout + result.stderr
+        selected.append(json.loads((tmp_path / "reports/execution-main.json").read_text())["selected"])
+    assert selected[0] == selected[1] and selected[0] != selected[2]
+    assert set(selected[0]) == set(selected[2])

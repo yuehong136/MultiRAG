@@ -278,7 +278,7 @@ def set_progress(db: Session, task_id, from_page=0, to_page=-1, prog=None, msg="
         logging.exception(f"set_progress({task_id}), progress: {prog}, progress_msg: {msg}, got exception: {e}")
 
 
-async def collect(db: Session):
+async def collect(db: Session) -> tuple[Any, Any]:
     global CONSUMER_NAME, DONE_TASKS, FAILED_TASKS
     global UNACKED_ITERATOR
 
@@ -308,6 +308,16 @@ async def collect(db: Session):
 
     canceled = False
     task_type = msg.get("task_type", "")
+
+    # A worker can die after committing its result but before XACK. Reading a
+    # completed document task through get_task() would reset progress and run
+    # parsing/index writes again. Preserve the committed result on redelivery.
+    if task_type not in {"analyze_v2", PipelineTaskType.MEMORY.lower()}:
+        completed = TaskService.get_by_id(db, msg["id"])
+        if completed is not None and completed.progress >= 1:
+            redis_msg.ack()
+            DONE_TASKS += 1
+            return None, None
 
     if msg.get("doc_id", "") in [GRAPH_RAPTOR_FAKE_DOC_ID, CANVAS_DEBUG_DOC_ID]:
         # Redis消息已包含fake_doc_id和doc_ids，先使用它

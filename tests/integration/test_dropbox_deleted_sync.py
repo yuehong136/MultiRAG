@@ -20,7 +20,7 @@ from api.db.services.connector_service import SyncLogsService, connector_doc_id_
 from common import settings
 from common.constants import FileSource, TaskStatus
 from core.svr import sync_data_source
-from tests.integration.test_document_parse_retirement import parse_api as parse_api
+from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 

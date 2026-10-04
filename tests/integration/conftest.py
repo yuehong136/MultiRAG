@@ -11,7 +11,6 @@ import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,9 +18,10 @@ import sqlalchemy as sa
 
 from common.config_utils import CONFIGS
 from tests.support import services
+from tests.support.database import _alembic_config as _alembic_config
+from tests.support.database import _pg_role_can_create_db as _pg_role_can_create_db
+from tests.support.database import _pg_url as _pg_url
 from tests.support.integration_suites import required_services
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _docker_usable() -> bool:
@@ -96,42 +96,9 @@ def _require_services(request: pytest.FixtureRequest, service_manager: services.
         _ensure_service(service_manager, service)
 
 
-def _alembic_config() -> Any:
-    """cwd 无关的 alembic 配置（script_location 锚定仓库根）。"""
-    from alembic.config import Config
-
-    cfg = Config(str(_REPO_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(_REPO_ROOT / "configs" / "alembic"))
-    return cfg
-
-
 @pytest.fixture(scope="session")
 def alembic_cfg() -> Any:
     return _alembic_config()
-
-
-def _pg_url(dbname: str) -> sa.engine.URL:
-    pg = CONFIGS["postgresql"]
-    return sa.engine.URL.create(
-        "postgresql+psycopg",
-        username=pg["user"],
-        password=str(pg["password"]),
-        host=pg["host"],
-        port=int(pg["port"]),
-        database=dbname,
-    )
-
-
-def _pg_role_can_create_db(url: sa.engine.URL) -> bool:
-    """只读探测：配置的 PG 角色是否有 CREATEDB/superuser 权限。"""
-    engine = sa.create_engine(url)
-    try:
-        with engine.connect() as conn:
-            return bool(conn.execute(sa.text("SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user")).scalar())
-    except Exception:
-        return False
-    finally:
-        engine.dispose()
 
 
 @pytest.fixture(scope="session")

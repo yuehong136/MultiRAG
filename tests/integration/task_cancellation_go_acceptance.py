@@ -26,14 +26,14 @@ from common.exceptions import TaskCanceledException
 from core.flow.pipeline import Pipeline
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import read_binding
-from tests.integration.test_agent_completion_close import close_case
-from tests.integration.test_agent_update_release import release_api as release_api
-from tests.integration.test_debug_response_start import debug_start_case
-from tests.integration.test_task_cancellation import cancel, persistent_state
-from tests.integration.test_task_cancellation import cancel_api as cancel_api
 from tests.integration.test_task_cancellation import test_agent_run_bound_before_first_frame_cancel_and_sibling_isolation as run_agent_case
-from tests.integration.test_task_cancellation import wait_gate as wait_gate
-from tests.integration.test_task_cancellation_terminal import terminal_case
+from tests.support.agent_completion_close import close_case
+from tests.support.agent_update_release import release_api as release_api
+from tests.support.debug_response_start import debug_start_case
+from tests.support.task_cancellation import cancel, persistent_state
+from tests.support.task_cancellation import cancel_api as cancel_api
+from tests.support.task_cancellation import wait_gate as wait_gate
+from tests.support.task_cancellation_terminal import terminal_case
 
 
 @pytest.fixture

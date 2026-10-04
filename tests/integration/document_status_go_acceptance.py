@@ -20,12 +20,12 @@ from api.db.db_models import Document, Tenant, User, UserTenant
 from common import settings
 from common.config_utils import CONFIGS
 from tests.integration.document_status_rpc_proxy import StatusRPCProxy
-from tests.integration.test_document_status import chunk as chunk
-from tests.integration.test_document_status import index_rows as index_rows
-from tests.integration.test_document_status import parse_api as parse_api
-from tests.integration.test_document_status import runtime_upload_api as runtime_upload_api
-from tests.integration.test_document_status import sql_rows as sql_rows
-from tests.integration.test_document_status import status_api as status_api
+from tests.support.document_status import chunk as chunk
+from tests.support.document_status import index_rows as index_rows
+from tests.support.document_status import parse_api as parse_api
+from tests.support.document_status import runtime_upload_api as runtime_upload_api
+from tests.support.document_status import sql_rows as sql_rows
+from tests.support.document_status import status_api as status_api
 
 
 @pytest.fixture(params=["infinity", "milvus", "elasticsearch"])
@@ -397,7 +397,7 @@ def test_real_infinity_mothers_retry_and_commit_recovery(go_status_api: dict[str
     import logging
 
     from core.utils.infinity_conn import InfinityConnection
-    from tests.integration.test_document_status import change
+    from tests.support.document_status import change
 
     env = go_status_api
     table = env["infinity_table"]

@@ -22,8 +22,8 @@ from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID
 from common import settings
 from common.config_utils import CONFIGS
 from core.nlp import search
-from tests.integration.test_dataset_management_http import management_api as management_api
-from tests.integration.test_dataset_management_http import request_api, sql_state
+from tests.support.dataset_management_http import management_api as management_api
+from tests.support.dataset_management_http import request_api, sql_state
 
 CASES = [("graph", "graphrag", "graphrag"), ("raptor", "raptor", "raptor"), ("mindmap", "mindmap", "mindmap")]
 

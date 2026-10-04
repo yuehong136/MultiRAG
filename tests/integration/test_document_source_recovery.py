@@ -25,12 +25,12 @@ from api.db.services.document_source_recovery import SourceRecovery, SourceRecov
 from api.db.services.llm_service import LLMBundle
 from common import settings
 from core.utils.redis_conn import REDIS_CONN
-from tests.integration.test_document_parser_update import bootstrapped_engine as bootstrapped_engine
-from tests.integration.test_document_parser_update import image_http_api as image_http_api
-from tests.integration.test_document_parser_update import image_resources as image_resources
-from tests.integration.test_document_parser_update import parser_api as parser_api
-from tests.integration.test_document_parser_update import parser_database as parser_database
-from tests.integration.test_document_parser_update import patch, save, snapshot
+from tests.support.document_parser_update import bootstrapped_engine as bootstrapped_engine
+from tests.support.document_parser_update import image_http_api as image_http_api
+from tests.support.document_parser_update import image_resources as image_resources
+from tests.support.document_parser_update import parser_api as parser_api
+from tests.support.document_parser_update import parser_database as parser_database
+from tests.support.document_parser_update import patch, save, snapshot
 
 
 def business_sql(stores: dict[str, Any]) -> dict[str, Any]:

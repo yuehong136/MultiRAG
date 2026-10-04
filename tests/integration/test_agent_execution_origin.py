@@ -17,8 +17,8 @@ from api.db.db_models import AgentExecutionOrigin, API4Conversation
 from api.db.services.agent_execution_service import save_agent_session, snapshot_digest
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
 from api.identity.run_context import RunContext
-from tests.integration.test_agent_update_release import join_member, message_dsl, read_state, update
-from tests.integration.test_agent_update_release import release_api as release_api
+from tests.support.agent_update_release import join_member, message_dsl, read_state, update
+from tests.support.agent_update_release import release_api as release_api
 
 
 def create_agent(env: dict[str, Any]) -> str:

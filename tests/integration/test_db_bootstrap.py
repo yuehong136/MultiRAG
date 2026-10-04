@@ -10,6 +10,7 @@
 """
 
 import uuid
+from collections.abc import Iterator
 
 import pytest
 import sqlalchemy as sa
@@ -22,10 +23,18 @@ from sqlalchemy.orm import Session
 from api.db import UserAccountKind
 from api.db.db_models import Base, User
 from api.db.services.user_service import UserService
+from tests.support.database import scratch_database
 
 _USER_ACCOUNT_REVISION = "7c8d9e0f1a2b"
 _PRE_USER_ACCOUNT_REVISION = "e4f6a8b0c2d4"
 _NON_SECRET_PLACEHOLDER = "x"
+
+
+@pytest.fixture(scope="module")
+def bootstrapped_engine(postgres_service: None, tmp_path_factory: pytest.TempPathFactory) -> Iterator[sa.Engine]:
+    """Old-schema reconstruction must not include other modules' committed users."""
+    with scratch_database(tmp_path_factory.mktemp("bootstrap_migrations")) as engine:
+        yield engine
 
 
 @pytest.fixture

@@ -14,9 +14,9 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import API4Conversation, APIToken
 from core.utils.redis_conn import REDIS_CONN
-from tests.integration.test_agent_list_operations import assert_runtime, create, list_dsl, replica_key, session_state
-from tests.integration.test_agent_update_release import read_state, sse_events, update
-from tests.integration.test_agent_update_release import release_api as release_api
+from tests.support.agent_list_operations import assert_runtime, create, list_dsl, replica_key, session_state
+from tests.support.agent_update_release import read_state, sse_events, update
+from tests.support.agent_update_release import release_api as release_api
 
 
 @pytest.fixture

@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_api_service
 from api.db.db_models import Knowledgebase, Task
-from tests.integration.test_dataset_management_http import management_api as management_api
-from tests.integration.test_dataset_management_http import request_api, sql_state
+from tests.support.dataset_management_http import management_api as management_api
+from tests.support.dataset_management_http import request_api, sql_state
 
 
 @pytest.fixture
