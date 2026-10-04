@@ -73,4 +73,5 @@ type APIConfig struct {
 	Region  *string
 }
 
-type EmbeddingConfig struct{}
+// EmbeddingConfig distinguishes retrieval queries from stored documents.
+type EmbeddingConfig struct{ Query bool }

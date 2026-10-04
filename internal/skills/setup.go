@@ -32,7 +32,15 @@ func Attach(engine *gin.Engine, cfg *server.Config) func() {
 		}
 	}
 	s := New(dao.DB, blobs, index, &LegacyModels{DB: dao.DB, Providers: dao.GetModelProviderManager()})
-	s.Register(engine, func() string { return server.GetVariables().SecretKey })
+	protocol, e := server.SkillsProtocol()
+	if e != nil {
+		panic(e)
+	}
+	secret := func() string { return server.GetVariables().SecretKey }
+	s.RegisterAt(engine, secret, "/api/v1/skill-assets", protocol == server.SkillsCoreProtocol)
+	if protocol == server.SkillsAssetsProtocol {
+		s.RegisterAt(engine, secret, "/api/v1/skills", false)
+	}
 	finished := make(chan struct{})
 	go func() { defer close(finished); s.Run(ctx) }()
 	return func() {

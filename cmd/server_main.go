@@ -215,6 +215,21 @@ func startServer(config *server.Config) {
 
 	// Setup routes
 	r.Setup(ginEngine)
+	coreBlobs, blobErr := skills.NewObjectStore(config.StorageEngine.Minio)
+	if blobErr != nil {
+		coreBlobs = nil
+	}
+	var coreStore service.SkillBlobStore
+	if coreBlobs != nil {
+		coreStore = coreBlobs
+	}
+	stopCore, coreErr := handler.AttachSkillCore(ginEngine, config, skills.New(dao.DB, nil, nil, nil).Authenticate, func(ctx context.Context, tenant string) (any, error) {
+		return (&skills.LegacyModels{DB: dao.DB, Providers: dao.GetModelProviderManager()}).List(ctx, tenant)
+	}, coreStore)
+	if coreErr != nil {
+		panic(coreErr)
+	}
+	defer stopCore()
 	stopSkills := skills.Attach(ginEngine, config)
 	defer stopSkills()
 

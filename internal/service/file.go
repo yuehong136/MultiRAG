@@ -38,7 +38,7 @@ import (
 
 // FileService file service
 type FileService struct {
-	fileDAO         *dao.FileDAO
+	fileDAO          *dao.FileDAO
 	file2DocumentDAO *dao.File2DocumentDAO
 }
 
@@ -60,9 +60,9 @@ type FileInfo struct {
 
 // ListFilesResponse list files response
 type ListFilesResponse struct {
-	Total          int64              `json:"total"`
-	Files          []map[string]interface{} `json:"files"`
-	ParentFolder   map[string]interface{}   `json:"parent_folder"`
+	Total        int64                    `json:"total"`
+	Files        []map[string]interface{} `json:"files"`
+	ParentFolder map[string]interface{}   `json:"parent_folder"`
 }
 
 // GetRootFolder gets or creates root folder for tenant
@@ -97,7 +97,8 @@ func (s *FileService) ListFiles(tenantID, pfID string, page, pageSize int, order
 	}
 
 	// Check if parent folder exists
-	if _, err := s.fileDAO.GetByID(pfID); err != nil {
+	folder, err := s.fileDAO.GetByID(pfID)
+	if err != nil || folder.TenantID != tenantID {
 		return nil, fmt.Errorf("Folder not found!")
 	}
 
@@ -157,22 +158,22 @@ func (s *FileService) initDatasetDocs(rootID, tenantID string) error {
 // toFileResponse converts file model to response format
 func (s *FileService) toFileResponse(file *entity.File) map[string]interface{} {
 	result := map[string]interface{}{
-		"id":         file.ID,
-		"parent_id":  file.ParentID,
-		"tenant_id":  file.TenantID,
-		"created_by": file.CreatedBy,
-		"name":       file.Name,
-		"size":       file.Size,
-		"type":       file.Type,
+		"id":          file.ID,
+		"parent_id":   file.ParentID,
+		"tenant_id":   file.TenantID,
+		"created_by":  file.CreatedBy,
+		"name":        file.Name,
+		"size":        file.Size,
+		"type":        file.Type,
 		"create_time": file.CreateTime,
 		"update_time": file.UpdateTime,
 	}
-	
+
 	if file.Location != nil {
 		result["location"] = *file.Location
 	}
 	result["source_type"] = file.SourceType
-	
+
 	return result
 }
 
@@ -282,6 +283,11 @@ func (s *FileService) GetDocCount(tenantID string) (int64, error) {
 
 // UploadFile uploads files to a folder
 func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.FileHeader) ([]map[string]interface{}, error) {
+	release, lockErr := lockCoreFileMutation(context.Background(), tenantID, parentID)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if err := dao.GuardSkillFile(parentID); err != nil {
 		return nil, err
 	}
@@ -293,8 +299,9 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 		parentID = rootFolder.ID
 	}
 
-	if _, err := s.fileDAO.GetByID(parentID); err != nil {
-		return nil, fmt.Errorf("Can't find this folder!")
+	parent, err := s.fileDAO.GetByID(parentID)
+	if err != nil || parent.TenantID != tenantID {
+		return nil, fmt.Errorf("folder not found")
 	}
 
 	storageImpl := storage.GetStorageFactory().GetStorage()
@@ -375,7 +382,26 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 		}
 		src.Close()
 
-		if err := storageImpl.Put(lastFolder.ID, location, data); err != nil {
+		var putErr error
+		coreSpaceID := ""
+		if core, lookupErr := dao.FindSkillCoreSpace(parentID); lookupErr != nil {
+			return nil, lookupErr
+		} else if core != nil {
+			_, blobs := skillCoreResources()
+			if blobs == nil {
+				return nil, fmt.Errorf("storage unavailable")
+			}
+			coreSpaceID = core.ID
+			// Fresh keys are never reused, including after a late provider write.
+			location = s.generateUUID()
+			if err := beginCoreUpload(core.ID, lastFolder.ID, location); err != nil {
+				return nil, err
+			}
+			putErr = blobs.Put(lastFolder.ID, location, data)
+		} else {
+			putErr = storageImpl.Put(lastFolder.ID, location, data)
+		}
+		if err := putErr; err != nil {
 			return nil, fmt.Errorf("failed to store file: %w", err)
 		}
 
@@ -394,9 +420,17 @@ func (s *FileService) UploadFile(tenantID, parentID string, files []*multipart.F
 		}
 
 		if err := s.fileDAO.Insert(fileRecord); err != nil {
+			if coreSpaceID != "" {
+				return nil, fmt.Errorf("UPLOAD_METADATA_FAILED")
+			}
 			return nil, fmt.Errorf("failed to insert file record: %w", err)
 		}
 
+		if coreSpaceID != "" {
+			if err := claimCoreUpload(coreSpaceID); err != nil {
+				return nil, err
+			}
+		}
 		result = append(result, s.toFileResponse(fileRecord))
 	}
 
@@ -453,6 +487,11 @@ func (s *FileService) generateUUID() string {
 
 // CreateFolder creates a new folder or virtual file
 func (s *FileService) CreateFolder(tenantID, name, parentID, fileType string) (map[string]interface{}, error) {
+	release, lockErr := lockCoreFileMutation(context.Background(), tenantID, parentID)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
 	if err := dao.GuardSkillFile(parentID); err != nil {
 		return nil, err
 	}
@@ -490,6 +529,14 @@ func (s *FileService) CreateFolder(tenantID, name, parentID, fileType string) (m
 // DeleteFiles deletes files by IDs
 // Returns (success, message) where success is true if all files were deleted
 func (s *FileService) DeleteFiles(ctx context.Context, uid string, fileIDs []string) (bool, string) {
+	if handled, err := deleteSkillCoreFiles(ctx, uid, fileIDs); handled {
+		if err != nil {
+			return false, err.Error()
+		}
+		return true, ""
+	} else if err != nil {
+		return false, err.Error()
+	}
 	for _, id := range fileIDs {
 		if err := dao.GuardSkillFileTree(id); err != nil {
 			return false, err.Error()
@@ -726,6 +773,15 @@ func (s *FileService) deleteFolderRecursive(ctx context.Context, folder *entity.
 // - dest_file_id only: move to new folder (keep names)
 // - both: move and rename simultaneously
 func (s *FileService) MoveFiles(uid string, srcFileIDs []string, destFileID string, newName string) (bool, string) {
+	for _, id := range append(append([]string{}, srcFileIDs...), destFileID) {
+		space, e := dao.FindSkillCoreSpace(id)
+		if e != nil {
+			return false, e.Error()
+		}
+		if space != nil {
+			return false, "SKILL_CORE_MOVE_UNAVAILABLE: move and rename require a Skills domain operation"
+		}
+	}
 	if err := dao.GuardSkillFile(destFileID); err != nil {
 		return false, err.Error()
 	}

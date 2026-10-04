@@ -60,6 +60,12 @@ func (dao *FileDAO) GetByPfID(tenantID, pfID string, page, pageSize int, orderby
 		return nil, 0, err
 	}
 
+	// Keep ORDER BY identifiers out of user-controlled SQL (upstream allowlist fix).
+	switch orderby {
+	case "name", "create_time", "update_time", "size", "type":
+	default:
+		orderby = "create_time"
+	}
 	// Apply ordering
 	orderDirection := "ASC"
 	if desc {

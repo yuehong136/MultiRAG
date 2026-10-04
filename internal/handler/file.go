@@ -18,6 +18,7 @@ package handler
 
 import (
 	"errors"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -338,6 +339,15 @@ func (h *FileHandler) UploadFile(c *gin.Context) {
 		}
 
 		for _, fileHeader := range files {
+			// net/multipart normalizes Filename with filepath.Base; retain the raw
+			// filename parameter so the documented directory upload is not flattened.
+			if _, params, parseErr := mime.ParseMediaType(fileHeader.Header.Get("Content-Disposition")); parseErr == nil && params["filename"] != "" {
+				fileHeader.Filename = params["filename"]
+			}
+			if err := service.ValidateSkillUploadPath(fileHeader.Filename); err != nil {
+				jsonError(c, common.CodeBadRequest, err.Error())
+				return
+			}
 			if fileHeader.Filename == "" {
 				jsonError(c, common.CodeBadRequest, "No file selected!")
 				return
@@ -401,7 +411,8 @@ func (h *FileHandler) UploadFile(c *gin.Context) {
 }
 
 type DeleteFileRequest struct {
-	IDs []string `json:"ids" binding:"required,min=1"`
+	IDs     []string `json:"ids"`
+	FileIDs []string `json:"file_ids"`
 }
 
 // DeleteFiles deletes files
@@ -426,6 +437,17 @@ func (h *FileHandler) DeleteFiles(c *gin.Context) {
 		return
 	}
 
+	if len(req.IDs) > 0 && len(req.FileIDs) > 0 {
+		jsonError(c, common.CodeBadRequest, "Use only file_ids or ids")
+		return
+	}
+	if len(req.FileIDs) > 0 {
+		req.IDs = req.FileIDs
+	}
+	if len(req.IDs) == 0 {
+		jsonError(c, common.CodeBadRequest, "file_ids required")
+		return
+	}
 	success, message := h.fileService.DeleteFiles(c.Request.Context(), user.ID, req.IDs)
 	if !success {
 		jsonError(c, common.CodeBadRequest, message)
@@ -531,6 +553,15 @@ func (h *FileHandler) Download(c *gin.Context) {
 		return
 	}
 
+	if handled, data, readErr := service.ReadSkillCoreFile(file); handled {
+		if readErr != nil {
+			jsonError(c, common.CodeOperatingError, "File unavailable")
+			return
+		}
+		c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(file.Name))
+		c.Data(http.StatusOK, "application/octet-stream", data)
+		return
+	}
 	// Get storage
 	storageImpl := storage.GetStorageFactory().GetStorage()
 	if storageImpl == nil {

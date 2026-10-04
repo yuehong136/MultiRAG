@@ -102,7 +102,16 @@ func pagination(c *gin.Context) (int, int, error) {
 	return page, size, nil
 }
 func (s *Service) Register(engine *gin.Engine, secret func() string) {
-	group := engine.Group("/api/v1/skills")
+	s.RegisterAt(engine, secret, "/api/v1/skills", false)
+}
+func (s *Service) RegisterAt(engine *gin.Engine, secret func() string, base string, readOnly bool) {
+	group := engine.Group(base)
+	group.Use(func(c *gin.Context) {
+		if readOnly && c.Request.Method != "GET" && !(c.Request.Method == "POST" && strings.HasSuffix(c.Request.URL.Path, "/search")) {
+			respond(c, 0, nil, fault(503, "PROTOCOL_READ_ONLY"))
+			c.Abort()
+		}
+	})
 	group.Use(func(c *gin.Context) {
 		tenant, e := s.Authenticate(c.Request.Context(), c.GetHeader("Authorization"), secret())
 		if e != nil {
@@ -127,7 +136,7 @@ func (s *Service) Register(engine *gin.Engine, secret func() string) {
 		})
 	}
 	add("GET", "/capabilities", 200, func(c *gin.Context, t string) (any, error) {
-		return JSON{"backend": "go", "schema_version": 1, "sources": []string{"local"}, "search_modes": []string{"keyword", "vector", "hybrid"}, "search_available": s.Index != nil, "storage_available": s.Blobs != nil}, nil
+		return JSON{"backend": "go", "writable": !readOnly, "schema_version": 1, "sources": []string{"local"}, "search_modes": []string{"keyword", "vector", "hybrid"}, "search_available": s.Index != nil, "storage_available": s.Blobs != nil}, nil
 	})
 	add("GET", "/models", 200, func(c *gin.Context, t string) (any, error) {
 		if s.Models == nil {
