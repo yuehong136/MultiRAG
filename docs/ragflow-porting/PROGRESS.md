@@ -2868,3 +2868,41 @@ Web build、lint、file-size、API 测试和完整 test:ci 通过，后者含 67
 `consumer-readback.json`、`smoke.log`、亮暗 contact sheet。
 仅验证 scratch PostgreSQL/Milvus/Redis/MinIO；未验证生产、MySQL、真实 LLM
 供应商输出或 SDK 全部路由。没有 push。
+
+## f45ce00347f56052a8690e4380b1b812a8cc509b · ES 排序跳过 text id
+
+2026-10-04 在第一项独立提交后串行核对完整两文件 diff；基准冻结于
+`519e7d98a5651564d4e35d6648f006cba4baaf4f`，未 fetch。
+[core](../../core/utils/es_conn.py) 与 [memory](../../memory/utils/es_conn.py)
+的 search 排序均跳过 `id`；不改映射、不启用 fielddata、不替换为 `_id`。
+其他字段顺序、升降序、unmapped_type、core 数组页码/top 的 avg/double 行为保留。
+memory 的 forgotten/missing-field 辅助查询分别固定按 forget_at/valid_at 排序，
+并不接收任意排序字段，本次保留并补回归。
+
+本地适配：core 的 search_after 条件基于实际保留的排序项；只有 id 时退回原本的
+无显式排序路径，避免无排序游标造成空结果。id 与合法排序混用时，合法字段仍进入
+search_after，游标从返回的 sort 数组延续。没有新增默认排序或突破 ES result window
+限制：只有 id 的超窗请求仍可能被真实 ES 拒绝，深分页应提供支持的排序字段。
+
+冻结范围内 `efe6d23d6` 增补 keyword 映射并改其他字段的 unmapped_type，是后续独立
+行为，仍保留 id 跳过逻辑；本项遵照其他排序行为不变的范围不一并移植。
+`6a4b9be42` 为格式化，`670e68872` 删除 Python 实现不适用于当前生产链。
+
+[新增排序回归](../../tests/unit/test_es_conn_sorting.py) 15 项，加既有字段/ID 查询
+7 项，共 22 passed。真实 DSL 序列化和 ES 调用边界捕获覆盖 id 升降序、混合/空排序、
+两页 search_after 的实际游标、dense 原分页和 memory 辅助查询；不连接 ES 服务。
+
+本次门禁：首轮 `make verify` 静态检查通过，unit 5198 passed / 2 failed，
+失败来自其他任务新增的存储删除测试直接实例化 singleton 装饰器。对应工作修正后，
+复跑 `make verify` 全部通过（格式、Ruff、8 条 import contracts、async DB、mypy，
+unit **5230 passed**）。本项未修改失败文件；此轮也重新覆盖第一项 OceanBase 回归。
+
+`make integration` 完整执行，**791 passed / 11 failed / 2 deselected，零 skip**：
+8 个 source recovery 迁移用例降级时访问缺失的 `usr_ai.t_ai_skill_operations`；
+identity schema 与 MCP interaction schema 两项仍期望旧 head `b0d2e4f6a8c0`，
+实际为 `c5e7f9a1b3d5`；runtime upload 一项仍期望旧错误消息，实际报告无法确认清理。
+这些失败不经过本项 ES 排序路径，未跨任务修改或放宽断言，通用集成门禁未全绿。
+证据目录 `.test-results/20261004-203041-23655/`；日志
+`/tmp/multirag-f45c-{unit,verify,verify-rerun,integration}.log`。
+未运行真实 ES/OceanBase，不声明真实映射兼容性、查询计划或性能已验收。
+未改变启动、路由或健康检查，无新增 smoke 要求。

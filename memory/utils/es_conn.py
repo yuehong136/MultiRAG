@@ -22,6 +22,7 @@ import copy
 import json
 import re
 import time
+from typing import Any
 
 from elastic_transport import ConnectionTimeout
 from elasticsearch import NotFoundError
@@ -128,7 +129,7 @@ class ESConnection(ESConnectionBase):
         agg_fields: list[str] | None = None,
         rank_feature: dict | None = None,
         hide_forgotten: bool = True,
-    ):
+    ) -> tuple[Any, int]:
         """
         Refers to https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html
         """
@@ -220,6 +221,9 @@ class ESConnection(ESConnectionBase):
                 order = "asc" if order == 0 else "desc"
                 if field.endswith("_int") or field.endswith("_flt"):
                     order_info = {"order": order, "unmapped_type": "float"}
+                elif field == "id":
+                    # Existing indices may map id as text, which cannot be sorted.
+                    continue
                 else:
                     order_info = {"order": order, "unmapped_type": "text"}
                 orders.append({field: order_info})
