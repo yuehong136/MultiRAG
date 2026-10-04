@@ -27,6 +27,7 @@ from api.utils.api_utils import async_current_tenant_id, get_error_data_result, 
 from api.utils.dataset_search import SearchDatasetRequest
 from api.utils.validation_utils import CreateDatasetReq, validate_dataset_raptor_scope
 from common.constants import RetCode
+from common.metadata_config import MetadataConfig, validate_parser_metadata
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ class UpdateDatasetRequest(BaseModel):
     language: str | None = None
     connectors: list[dict] | None = None
     parser_config: dict[str, Any] | None = None
-    auto_metadata_config: dict[str, Any] | None = None
+    auto_metadata_config: MetadataConfig | None = None
     # ext：承接前端塞进来的旧 web 扩展参数
     ext: dict[str, Any] = {}
 
@@ -59,6 +60,7 @@ class UpdateDatasetRequest(BaseModel):
         # Validate only an explicitly patched scope; retain unknown fields and
         # avoid filling parser defaults into a partial update.
         validate_dataset_raptor_scope(self.ext.get("parser_config", self.parser_config))
+        validate_parser_metadata(self.ext.get("parser_config", self.parser_config))
         return self
 
 
@@ -67,9 +69,8 @@ class DeleteDatasetRequest(BaseModel):
     delete_all: bool = False
 
 
-class AutoMetadataConfigRequest(BaseModel):
-    enabled: bool = True
-    fields: list[dict[str, Any]] = []
+class AutoMetadataConfigRequest(MetadataConfig):
+    pass
 
 
 class DeleteTagsRequest(BaseModel):
@@ -417,7 +418,7 @@ async def get_metadata_config(
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.get_auto_metadata(s, tenant_id, dataset_id))  # TODO(async-phase4)
+        success, result = await db.run_sync(lambda s: dataset_api_service.get_auto_metadata(s, tenant_id, dataset_id, canonical=True))  # TODO(async-phase4)
         return _respond(success, result)
     except OperationalError as e:
         logger.exception(e)
@@ -435,7 +436,7 @@ async def update_metadata_config(
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump()))  # TODO(async-phase4)
+        success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump(exclude_unset=True)))  # TODO(async-phase4)
         return _respond(success, result)
     except OperationalError as e:
         logger.exception(e)
@@ -472,7 +473,7 @@ async def update_auto_metadata(
     tenant_id: str = Depends(async_current_tenant_id),
 ):
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump()))  # TODO(async-phase4)
+        success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump(exclude_unset=True)))  # TODO(async-phase4)
         return _respond(success, result)
     except OperationalError as e:
         logger.exception(e)

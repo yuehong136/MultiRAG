@@ -39,6 +39,7 @@ from pydantic_core import PydanticCustomError
 from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from common.constants import RetCode
+from common.metadata_config import MetadataConfig, MetadataField
 
 
 class DocumentIngestRequest(BaseModel):
@@ -404,24 +405,18 @@ class ParentChildConfig(Base):
     children_delimiter: Annotated[str, Field(default=r"\n", min_length=1)]
 
 
-class AutoMetadataField(Base):
-    """Schema for a single auto-metadata field configuration."""
-
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255), Field(...)]
-    type: Annotated[Literal["string", "list", "time"], Field(...)]
-    description: Annotated[str | None, Field(default=None, max_length=65535)]
-    examples: Annotated[list[str] | None, Field(default=None)]
-    restrict_values: Annotated[bool, Field(default=False)]
+class AutoMetadataField(MetadataField):
+    """Shared metadata field contract, including legacy names."""
 
 
-class AutoMetadataConfig(Base):
-    """Top-level auto-metadata configuration attached to a dataset."""
-
-    enabled: Annotated[bool, Field(default=True)]
-    fields: Annotated[list[AutoMetadataField], Field(default_factory=list)]
+class AutoMetadataConfig(MetadataConfig):
+    """Dataset metadata configuration."""
 
 
 class ParserConfig(Base):
+    metadata: list[MetadataField] | dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
+    built_in_metadata: list[MetadataField] | None = Field(default=None, exclude_if=lambda value: value is None)
+    enable_metadata: bool | None = Field(default=None, exclude_if=lambda value: value is None)
     auto_keywords: Annotated[int, Field(default=0, ge=0, le=32)]
     auto_questions: Annotated[int, Field(default=0, ge=0, le=10)]
     chunk_token_num: Annotated[int, Field(default=512, ge=1, le=2048)]

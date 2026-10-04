@@ -11,6 +11,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_validator, model_validator
 
+from common.metadata_config import MetadataField, MetadataType
+
 NonNegativeInt = Annotated[int, Field(ge=0)]
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 UnitFloat = Annotated[float, Field(ge=0, le=1)]
@@ -50,7 +52,15 @@ class DocumentMetadataField(_Patch):
     key: NonEmptyString
     description: str = ""
     descriptions: str = ""
-    enum: list[str] = Field(default_factory=list)
+    enum: list[str | int | float] = Field(default_factory=list)
+    type: MetadataType | None = None
+    examples: list[str | int | float] | None = None
+    restrict_values: bool = False
+
+    @model_validator(mode="after")
+    def validate_metadata_field(self) -> "DocumentMetadataField":
+        MetadataField.model_validate(self.model_dump(exclude_unset=True))
+        return self
 
 
 MinerULanguage = Literal[

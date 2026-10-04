@@ -50,7 +50,7 @@ class ScratchStorage:
             response.release_conn()
 
 
-@pytest.mark.parametrize("kind", ["schema", "legacy_list", "invalid_properties", "builtin_only", "empty"])
+@pytest.mark.parametrize("kind", ["schema", "legacy_list", "typed_list", "invalid_properties", "builtin_only", "empty"])
 async def test_parse_task_metadata_roundtrip_in_scratch_services(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
     """Real task/config, MinIO text parsing, Redis cache and SQL writes; model is fake."""
     tenant_id, kb_id, doc_id, task_id = (uuid4().hex for _ in range(4))
@@ -64,6 +64,7 @@ async def test_parse_task_metadata_roundtrip_in_scratch_services(bootstrapped_en
     configs: dict[str, Any] = {
         "schema": schema,
         "legacy_list": [{"key": "author", "description": None, "enum": None}],
+        "typed_list": [{"key": "author", "type": "string"}, {"key": "year", "type": "number", "enum": ["2026"]}],
         "invalid_properties": {"type": "object", "properties": None},
         "builtin_only": None,
         "empty": {"properties": None},
@@ -145,10 +146,12 @@ async def test_parse_task_metadata_roundtrip_in_scratch_services(bootstrapped_en
             expected = {**existing}
             if kind != "empty":
                 expected["source"] = "Paper"
-                if kind in {"schema", "legacy_list"}:
+                if kind in {"schema", "legacy_list", "typed_list"}:
                     expected["author"] = "Ada"
                 if kind == "schema":
                     expected.update(year=2026, active=False)
+                elif kind == "typed_list":
+                    expected["year"] = 2026
             assert DocMetadataService.get_document_metadata(db, doc_id) == expected
             assert db.get(DocumentMetadata, doc_id).meta_fields == expected
             assert db.get(Document, doc_id).parser_config == original_config
@@ -158,6 +161,9 @@ async def test_parse_task_metadata_roundtrip_in_scratch_services(bootstrapped_en
             assert not any(operation == "set" for operation, _ in cache_calls)
         else:
             assert len(model.schemas) == 1  # second parse hit the actual Redis cache
+            if kind == "typed_list":
+                assert model.schemas[0]["properties"]["year"]["type"] == "number"
+                assert model.schemas[0]["properties"]["year"]["enum"] == [2026]
             effective = build_metadata_config(original_config)
             assert cache_calls == [("get", effective), ("set", effective), ("get", effective)]
             if kind == "schema":

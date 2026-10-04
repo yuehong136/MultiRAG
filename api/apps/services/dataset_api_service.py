@@ -37,6 +37,7 @@ from api.utils.api_utils import deep_merge, flatten_parent_child_config, get_par
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common import settings
 from common.constants import PAGERANK_FLD, FileSource, StatusEnum, TaskStatus
+from common.metadata_config import apply_metadata_config, metadata_config_view
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 
@@ -76,7 +77,7 @@ def _tag_chunk_method_guard(parser_id: str | None) -> str | None:
     return None
 
 
-def _normalize_metadata_fields(raw_fields: list, *, skip_non_dict: bool = False) -> list[dict]:
+def _normalize_metadata_fields(raw_fields: list | dict, *, skip_non_dict: bool = False) -> list[dict]:
     """将原始元数据字段列表规范化为统一结构。"""
     fields = []
     for f in raw_fields:
@@ -94,6 +95,7 @@ def _normalize_metadata_fields(raw_fields: list, *, skip_non_dict: bool = False)
                 "description": f.get("description"),
                 "examples": f.get("examples"),
                 "restrict_values": f.get("restrict_values", False),
+                **f,
             }
         )
     return fields
@@ -111,10 +113,10 @@ def create_dataset(db: Session, tenant_id: str, req: dict) -> tuple[bool, Any]:
 
     # auto_metadata_config -> parser_config.metadata
     auto_meta = req.pop("auto_metadata_config", None)
-    if auto_meta:
-        parser_cfg = req.get("parser_config") or {}
-        parser_cfg["metadata"] = _normalize_metadata_fields(auto_meta.get("fields", []))
-        parser_cfg["enable_metadata"] = auto_meta.get("enabled", True)
+    if auto_meta is not None:
+        parser_cfg = apply_metadata_config(req.get("parser_config") or {}, auto_meta)
+        if "fields" in auto_meta and "metadata" not in auto_meta:
+            parser_cfg["metadata"] = _normalize_metadata_fields(parser_cfg["metadata"])
         req["parser_config"] = parser_cfg
 
     req.update(ext_fields)
@@ -256,10 +258,10 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
 
     # auto_metadata_config -> parser_config
     auto_meta = req.pop("auto_metadata_config", None)
-    if auto_meta:
-        parser_cfg = req.get("parser_config") or {}
-        parser_cfg["metadata"] = _normalize_metadata_fields(auto_meta.get("fields", []))
-        parser_cfg["enable_metadata"] = auto_meta.get("enabled", True)
+    if auto_meta is not None:
+        parser_cfg = apply_metadata_config(req.get("parser_config") or {}, auto_meta)
+        if "fields" in auto_meta and "metadata" not in auto_meta:
+            parser_cfg["metadata"] = _normalize_metadata_fields(parser_cfg["metadata"])
         req["parser_config"] = parser_cfg
 
     req.update(ext_fields)
@@ -425,7 +427,7 @@ def list_datasets(db: Session, tenant_id: str, args: dict) -> tuple[bool, Any]:
     return True, {"data": response_data_list, "total": total}
 
 
-def get_auto_metadata(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
+def get_auto_metadata(db: Session, tenant_id: str, dataset_id: str, *, canonical: bool = False) -> tuple[bool, Any]:
     """获取数据集的自动元数据配置。"""
     kb = KnowledgebaseService.get_or_none(db, id=dataset_id, tenant_id=tenant_id)
     if kb is None:
@@ -435,7 +437,11 @@ def get_auto_metadata(db: Session, tenant_id: str, dataset_id: str) -> tuple[boo
     metadata = parser_cfg.get("metadata") or []
     enabled = parser_cfg.get("enable_metadata", bool(metadata))
     fields = _normalize_metadata_fields(metadata, skip_non_dict=True)
-    return True, {"enabled": enabled, "fields": fields}
+    result = {"enabled": enabled, "fields": fields}
+    if canonical:
+        result.update(metadata_config_view(parser_cfg))
+        result["enabled"] = parser_cfg.get("enable_metadata", False)
+    return True, result
 
 
 def update_auto_metadata(db: Session, tenant_id: str, dataset_id: str, cfg: dict) -> tuple[bool, Any]:
@@ -444,15 +450,20 @@ def update_auto_metadata(db: Session, tenant_id: str, dataset_id: str, cfg: dict
     if kb is None:
         return False, f"User '{tenant_id}' lacks permission for dataset '{dataset_id}'"
 
-    parser_cfg = kb.parser_config or {}
-    fields = _normalize_metadata_fields(cfg.get("fields", []))
-    parser_cfg["metadata"] = fields
-    parser_cfg["enable_metadata"] = cfg.get("enabled", True)
+    parser_cfg = apply_metadata_config(kb.parser_config or {}, cfg)
+    canonical = "metadata" in cfg or "built_in_metadata" in cfg
+    if not canonical:
+        parser_cfg["metadata"] = _normalize_metadata_fields(parser_cfg["metadata"])
+    fields = _normalize_metadata_fields(parser_cfg.get("metadata") or [], skip_non_dict=True)
 
     if not KnowledgebaseService.update_by_id(db, kb.id, {"parser_config": parser_cfg}):
         return False, "Update auto-metadata error.(Database error)"
 
-    return True, {"enabled": parser_cfg["enable_metadata"], "fields": fields}
+    result = {"enabled": parser_cfg.get("enable_metadata", bool(parser_cfg.get("metadata"))), "fields": fields}
+    if canonical:
+        result.update(metadata_config_view(parser_cfg))
+        result["enabled"] = parser_cfg.get("enable_metadata", False)
+    return True, result
 
 
 async def get_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:

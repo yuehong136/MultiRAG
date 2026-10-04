@@ -43,6 +43,7 @@ from api.utils.api_utils import (
 from api.utils.document_update_contract import DocumentUpdatePatch
 from api.utils.validation_utils import DocumentIngestRequest
 from common.constants import RetCode, TaskStatus
+from common.metadata_config import MetadataField
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 
 MAXIMUM_OF_UPLOADING_FILES = 256
@@ -140,7 +141,7 @@ class UpdateMetadataConfigRequest(BaseModel):
     # 元数据模板既可以是字段定义数组（前端保存时发的形状：[{key, type, description, enum}, ...]），
     # 也可以是 JSON schema 对象（{type, properties, ...}，历史数据与 turn2jsonschema 的产物）。
     # 读侧两种都吃，写侧就不能只收其中一种——只标 dict 会让数组载荷 422。
-    metadata: list[dict[str, Any]] | dict[str, Any]
+    metadata: list[MetadataField] | dict[str, Any]
 
 
 class MetadataBatchUpdateRequest(BaseModel):
@@ -261,13 +262,11 @@ async def update_metadata_config(
         doc = doc[0]
 
         try:
-            config = {"metadata": request.metadata}
-            # The general parser updater treats omitted RAPTOR as removal.
-            # This endpoint only changes metadata, so retain the current value.
-            parser_config = doc.parser_config or {}
-            if "raptor" in parser_config:
-                config["raptor"] = parser_config["raptor"]
-            DocumentService.update_parser_config(s, doc.id, config)
+            config = {**(doc.parser_config or {}), "metadata": request.model_dump(exclude_unset=True)["metadata"]}
+            # This PUT replaces the template, including deleted schema properties.
+            # The general document PATCH retains its separate partial-merge contract.
+            if not DocumentService.update_by_id(s, doc.id, {"parser_config": config}):
+                return get_error_data_result(retmsg="Failed to update metadata config", retcode=RetCode.EXCEPTION_ERROR)
             doc = DocumentService.get_by_id(s, doc.id)
         except Exception as e:
             logger.exception(e)

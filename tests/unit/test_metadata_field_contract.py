@@ -1,0 +1,85 @@
+from copy import deepcopy
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from api.apps.restful_apis.dataset_api import CreateDatasetRequest, UpdateDatasetRequest
+from api.utils.document_parser_config import merge_document_parser_config
+from common.metadata_config import MetadataConfig, apply_metadata_config
+from common.metadata_utils import build_metadata_config, turn2jsonschema
+
+
+def test_typed_fields_reach_extraction_without_losing_examples() -> None:
+    fields = [
+        {"key": "score", "type": "number", "enum": ["0", "1.25", 9007199254740993]},
+        {"key": "tags", "type": "list", "enum": ["A", "B"]},
+        {"name": "year", "type": "time", "examples": ["2026"], "restrict_values": False},
+        {"name": "category", "type": "string", "examples": ["book"], "restrict_values": True},
+    ]
+    original = deepcopy(fields)
+    config = MetadataConfig.model_validate({"metadata": fields, "built_in_metadata": [{"key": "source", "type": "string"}]})
+    schema = turn2jsonschema(build_metadata_config(config.model_dump(exclude_unset=True)))
+    assert schema["properties"] == {
+        "score": {"description": "", "type": "number", "enum": [0, 1.25, 9007199254740993]},
+        "tags": {"description": "", "type": "array", "items": {"type": "string", "enum": ["A", "B"]}},
+        "year": {"description": "", "type": "string", "examples": ["2026"]},
+        "category": {"description": "", "type": "string", "enum": ["book"]},
+        "source": {"description": "", "type": "string"},
+    }
+    assert fields == original
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "", "not-number", True])
+def test_invalid_numeric_enums_rejected(bad: Any) -> None:
+    with pytest.raises(ValidationError):
+        MetadataConfig.model_validate({"metadata": [{"key": "score", "type": "number", "enum": [bad]}]})
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"metadata": None},
+        {"built_in_metadata": None},
+        {"enabled": None},
+        {"metadata": [], "fields": [{"name": "x"}]},
+        {"metadata": [{"key": "a", "name": "b"}]},
+        {"metadata": [{"key": "x", "type": "unknown"}]},
+    ],
+)
+def test_invalid_or_ambiguous_envelopes_rejected(config: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        MetadataConfig.model_validate(config)
+
+
+def test_new_partial_config_preserves_switch_schema_and_unknown_settings() -> None:
+    stored = {
+        "enable_metadata": False,
+        "metadata": {"type": "object", "properties": {"year": {"type": "integer"}}, "required": ["year"]},
+        "built_in_metadata": [{"key": "source"}],
+        "future": {"unknown": 1},
+    }
+    original = deepcopy(stored)
+    assert apply_metadata_config(stored, {"built_in_metadata": []}) == {**stored, "built_in_metadata": []}
+    assert apply_metadata_config(stored, {"metadata": []}) == {**stored, "metadata": []}
+    assert apply_metadata_config(stored, {"metadata": [], "enabled": True})["enable_metadata"] is True
+    assert stored == original
+    assert apply_metadata_config(stored, {}) == {**stored, "metadata": [], "enable_metadata": True}
+
+
+@pytest.mark.parametrize("key", ["auto_metadata_config", "parser_config"])
+def test_dataset_create_and_update_preserve_explicit_fields(key: str) -> None:
+    config = {"metadata": [{"key": "score", "type": "number"}], "built_in_metadata": [{"key": "source", "type": "string"}]}
+    create = CreateDatasetRequest.model_validate({"name": "sample", key: config}).model_dump(exclude_unset=True)
+    update = UpdateDatasetRequest.model_validate({key: config}).model_dump(exclude_unset=True)
+    assert create[key] == update[key] == config
+
+
+def test_document_patch_accepts_types_without_filling_defaults_or_changing_unknowns() -> None:
+    stored = {"enable_metadata": False, "metadata": [{"key": "old"}], "built_in_metadata": [{"key": "source"}], "future": {"unknown": 1}}
+    fields = [{"key": "score", "type": "number", "enum": ["1.5"]}]
+    assert merge_document_parser_config(stored, {"metadata": fields}) == {**stored, "metadata": fields}
+    assert merge_document_parser_config(stored, {"metadata": []}) == {**stored, "metadata": []}
+    assert merge_document_parser_config(stored, {}) == stored
+    with pytest.raises(ValidationError):
+        merge_document_parser_config(stored, {"metadata": [{"key": "x", "unsupported": 1}]})

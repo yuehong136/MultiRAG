@@ -310,7 +310,7 @@ def test_metadata_config_and_legacy_auto_metadata_share_the_service(client, monk
     """新路径与 deprecated 旧路径必须同源，否则前端迁移期两边会漂移。"""
     calls: list[str] = []
 
-    monkeypatch.setattr(dataset_api_service, "get_auto_metadata", lambda s, t, d: calls.append(d) or (True, {"enabled": True, "fields": []}))
+    monkeypatch.setattr(dataset_api_service, "get_auto_metadata", lambda s, t, d, **kwargs: calls.append(d) or (True, {"enabled": True, "fields": []}))
 
     new = client.get("/api/v1/datasets/kb1/metadata/config")
     legacy = client.get("/api/v1/datasets/kb1/auto_metadata")

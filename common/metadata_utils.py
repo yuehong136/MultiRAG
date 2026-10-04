@@ -21,6 +21,8 @@ from typing import Any
 
 import json_repair
 
+from common.metadata_config import canonical_field, field_schema
+
 
 def convert_conditions(metadata_condition):
     if metadata_condition is None:
@@ -264,16 +266,11 @@ def metadata_schema(metadata: dict | list | None) -> dict[str, Any]:
     properties = {}
 
     for item in metadata:
-        key = item.get("key")
+        key = item.get("key") or item.get("name")
         if not key:
             continue
 
-        prop_schema = {"description": item.get("description", "")}
-        if item.get("enum"):
-            prop_schema["enum"] = item["enum"]
-            prop_schema["type"] = "string"
-
-        properties[key] = prop_schema
+        properties[key] = field_schema(item)
 
     json_schema: dict[str, Any] = {
         "type": "object",
@@ -298,7 +295,7 @@ def _is_metadata_list(obj: list[Any]) -> bool:
     for item in obj:
         if not isinstance(item, dict):
             return False
-        key = item.get("key")
+        key = item.get("key") or item.get("name")
         if not isinstance(key, str) or not key:
             return False
         if item.get("enum") is not None and not isinstance(item["enum"], list):
@@ -314,17 +311,7 @@ def turn2jsonschema(obj: dict[str, Any] | list[Any]) -> dict[str, Any]:
     if isinstance(obj, dict) and _is_json_schema(obj):
         return obj
     if isinstance(obj, list) and _is_metadata_list(obj):
-        normalized = []
-        for item in obj:
-            description = item.get("description") or item.get("descriptions") or ""
-            normalized_item = {
-                "key": item.get("key"),
-                "description": description,
-            }
-            if item.get("enum") is not None:
-                normalized_item["enum"] = item["enum"]
-            normalized.append(normalized_item)
-        return metadata_schema(normalized)
+        return metadata_schema([canonical_field(item) for item in obj])
     return {}
 
 

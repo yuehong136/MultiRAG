@@ -818,8 +818,8 @@ DELETE /datasets/{dataset_id}
 
 | 方法与路径（均以 `/api/v1` 开头） | 请求及权限 |
 |---|---|
-| `GET /datasets/{dataset_id}/metadata/config` | 数据集 owner；返回 `data.enabled` 和 `data.fields` |
-| `PUT /datasets/{dataset_id}/metadata/config` | 数据集 owner；`{"enabled":true,"fields":[{"key":"author","description":"作者"}]}`；空 fields 合法，`{}` 使用 enabled=true、fields=[] 的默认值 |
+| `GET /datasets/{dataset_id}/metadata/config` | 数据集 owner；返回 `data.metadata`、`data.built_in_metadata`、`data.enabled` 及兼容别名 `data.fields` |
+| `PUT /datasets/{dataset_id}/metadata/config` | 数据集 owner；新信封 `metadata/built_in_metadata` 按显式项更新；兼容 `enabled/fields`。清空、开关与字段类型见[模板配置合同](metadata-configuration.md) |
 | `PUT /datasets/{dataset_id}/documents/{document_id}/metadata/config` | 当前数据集 owner/admin；`{"metadata":[{"key":"author"}]}`，也接受 JSON schema 对象；`{"metadata":[]}` 清空模板 |
 
 文档必须属于路径中的数据集。成功为 HTTP 200、`code:0`；不存在/跨数据集为

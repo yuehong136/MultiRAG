@@ -2837,3 +2837,34 @@ CLI race 通过。其中本项实例 SQL/HTTP 与五组既有 Google、
 `/tmp/multirag-e992-{verify,verify-remaining,integration,unit,optimized}.log`。
 未运行真实 OceanBase 或 ES；SQL 捕获不证明真实后端 SQL 模式、执行或查询计划。
 本项未改变路由、启动或健康检查，不触发 smoke。
+
+### 2026-10-04：元数据模板类型与兼容信封
+
+按冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 核对
+`5018459112460a584c48c6f0d086590ee80e958b` 的完整 diff；将
+`metadata/built_in_metadata`、`key/type/enum` 和 number 类型落实到 Python
+存储、解析 Schema 与 Web 消费者，并包含 `67a3ed755` 的类型重载修复。
+新旧信封并存，旧 name/examples/restrict_values 继续接受，保留开关、明确清空、
+未知配置及 Pipeline 分支。没有照搬上游删除 SDK 测试。
+完整本地合同见[元数据模板配置](../references/metadata-configuration.md)。
+
+已等价部分：模板与抽取结果分离、内建字段合并与开关控制、普通解析和 Pipeline
+执行分支均已有实现，保留而不重写。SDK 当前 v1 的 document PATCH 使用通用
+parser_config 映射，真实请求及独立 SQL 验证能够传递新类型，无需制造 SDK 提交。
+SDK 的单文档 GET 与 dataset.update 路由差异不属于本次元数据合同迁移。
+
+验证：最终 `make verify`（lint、8 条 import contracts、async DB、mypy 与 unit）
+通过，unit 5377 passed；最终定向 `make integration` 13 passed、零 skip，
+覆盖真实 HTTP/业务码/独立 PostgreSQL、number Schema 抽取、文档模板替换与 KB
+配置复制；真实 SDK + Web 消费者验收 1 passed，`make smoke` 全组件 200。
+Web build、lint、file-size、API 测试和完整 test:ci 通过，后者含 678 Node、
+404 DOM 用例；亮暗主题实际编辑、保存、重载后 Number/2027 保留，开关 false、
+内建模板和未知字段由独立 SQL 再确认。
+
+较大集成回归取得 106 passed / 2 failed / 1 deselected：本项新 fixture 的独立
+事务接线及合法索引名已修复，最终 13 项复跑通过；另一个失败是并行 embedding
+任务的 dataflow 向量期望值 1、实际值 0，未修改该任务或降低断言。
+本机完整证据在 `/tmp/multirag-50184591-implementation/`，包含门禁日志、
+`consumer-readback.json`、`smoke.log`、亮暗 contact sheet。
+仅验证 scratch PostgreSQL/Milvus/Redis/MinIO；未验证生产、MySQL、真实 LLM
+供应商输出或 SDK 全部路由。没有 push。

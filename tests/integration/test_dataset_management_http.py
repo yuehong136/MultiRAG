@@ -175,12 +175,12 @@ def test_dataset_metadata_real_roundtrip_and_empty_fields(management_api: dict[s
     env = management_api
     key, path = env[kind][0], metadata_path(env)
     before = sql_state(env)
-    assert request_api(env, "GET", path, credential=key).json() == {"code": 0, "data": {"enabled": False, "fields": []}}
+    assert request_api(env, "GET", path, credential=key).json() == {"code": 0, "data": {"enabled": False, "fields": [], "metadata": [], "built_in_metadata": []}}
     for config in [{"enabled": True, "fields": FIELDS}, {"enabled": False, "fields": []}, {}]:
         expected = {"enabled": config.get("enabled", True), "fields": config.get("fields", [])}
         response = request_api(env, "PUT", path, credential=key, payload=config)
         assert response.status_code == 200 and response.json() == {"code": 0, "data": expected}
-        assert request_api(env, "GET", path, credential=key).json() == response.json()
+        assert request_api(env, "GET", path, credential=key).json() == {"code": 0, "data": {**expected, "metadata": expected["fields"], "built_in_metadata": []}}
         after = sql_state(env)
         target = after[Knowledgebase.__tablename__][env["datasets"][0]]
         assert target["parser_config"] == {**PARSER, "metadata": expected["fields"], "enable_metadata": expected["enabled"]}

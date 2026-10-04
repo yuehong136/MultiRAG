@@ -77,7 +77,7 @@ def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> It
         )
         kb = db.get(Knowledgebase, env["kb"])
         assert kb is not None
-        kb.parser_config = {"llm_id": "kb-chat", "enable_metadata": True, "metadata": {"origin": "kb"}}
+        kb.parser_config = {"llm_id": "kb-chat", "enable_metadata": True, "metadata": {"origin": "kb"}, "built_in_metadata": [{"key": "source", "type": "string"}]}
         db.add(UserCanvas(id=env["canvas"], user_id=env["owners"][0], title="Ingest pipeline", dsl={"components": {}, "path": []}))
         for key in ["a", "b", "c", "foreign"]:
             doc_id = env[key]
@@ -325,7 +325,13 @@ def test_http_keep_clear_apply_reset_cancel_and_canonical_contracts(ingest_api: 
         doc, kb = db.get(Document, env["a"]), db.get(Knowledgebase, env["kb"])
         assert doc is not None and kb is not None
         assert (doc.chunk_num, doc.token_num, kb.chunk_num, kb.token_num, doc.status) == (0, 0, 0, 0, "0")
-        assert doc.parser_config == {**before["sql"][Document.__tablename__][0]["parser_config"], "llm_id": "kb-chat", "enable_metadata": True, "metadata": {"origin": "kb"}}
+        assert doc.parser_config == {
+            **before["sql"][Document.__tablename__][0]["parser_config"],
+            "llm_id": "kb-chat",
+            "enable_metadata": True,
+            "metadata": {"origin": "kb"},
+            "built_in_metadata": [{"key": "source", "type": "string"}],
+        }
     row = source(env, env["a"], text="Disabled partial source")
     insert_source_chunks(env["engine"], [row], env["collection"], env["kb"], queued[0]["id"])
     increment_task_document(env["engine"], queued[0]["id"], env["a"], env["kb"], 7, 1, 0)

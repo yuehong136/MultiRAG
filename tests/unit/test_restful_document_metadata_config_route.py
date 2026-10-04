@@ -46,11 +46,12 @@ def _stub_chain(
     monkeypatch.setattr(document_api_service, "can_update_dataset", lambda s, user_id, kb: sessions.append(s) or can_update)
     monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: sessions.append(s) or list(docs)))
 
-    def _update_parser_config(cls: type[DocumentService], s: Session, doc_id: str, config: dict[str, Any]) -> None:
+    def _update_parser_config(cls: type[DocumentService], s: Session, doc_id: str, config: dict[str, Any]) -> bool:
         sessions.append(s)
-        config_calls.append((doc_id, config))
+        config_calls.append((doc_id, config["parser_config"]))
+        return True
 
-    monkeypatch.setattr(DocumentService, "update_parser_config", classmethod(_update_parser_config))
+    monkeypatch.setattr(DocumentService, "update_by_id", classmethod(_update_parser_config))
     monkeypatch.setattr(DocumentService, "get_by_id", classmethod(lambda cls, s, doc_id: sessions.append(s) or SimpleNamespace(id=doc_id)))
     monkeypatch.setattr(document_api_service, "map_doc_keys", lambda s, doc: {"id": doc.id, "dataset_id": "kb1"})
     return config_calls

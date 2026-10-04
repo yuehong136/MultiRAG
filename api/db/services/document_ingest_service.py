@@ -466,7 +466,12 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
             if run == "1" and apply_kb:
                 config = copy.deepcopy(doc.parser_config or {})
                 config.update(
-                    {"llm_id": kb.parser_config.get("llm_id"), "enable_metadata": kb.parser_config.get("enable_metadata", False), "metadata": copy.deepcopy(kb.parser_config.get("metadata", {}))}
+                    {
+                        "llm_id": kb.parser_config.get("llm_id"),
+                        "enable_metadata": kb.parser_config.get("enable_metadata", False),
+                        "metadata": copy.deepcopy(kb.parser_config.get("metadata", {})),
+                        "built_in_metadata": copy.deepcopy(kb.parser_config.get("built_in_metadata", [])),
+                    }
                 )
                 doc.parser_config = config
                 values["parser_config"] = config
