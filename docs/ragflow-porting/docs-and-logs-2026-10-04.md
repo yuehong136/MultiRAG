@@ -34,3 +34,19 @@ Lint 有既有 warning，build 有大包 warning，未放宽门禁。pre-commit 
 Group 模式隐藏两个开关并显示分组说明、H5 可选均已读回，控制台无 warning/error。
 截图先组成带文件名、路由、视口的 contact sheet 后审阅，临时入口已删除。该证据不代表
 生产业务页的真实日志请求、流程保存或完整解析入库 E2E。
+
+## 1692f0928ff2bade2f553e010653064bc0d9cbf7
+
+结论：已等价，无需改共享文案或日志组件。Web 当前
+`src/pages/knowledge/logs/LogTable.tsx` 表头使用独立 key
+`knowledge.logs.table.pipeline`；对应 `locales/en-US/knowledge-logs.ts` 为 `Pipeline`，
+`locales/zh-CN/knowledge-logs.ts` 为“数据管道”。两者都是标题，不使用设置界面的
+pipeline 说明文本，符合当前产品用语。
+
+完整上游 diff 还删除了列表转换时的 `console.log`；本地日志页面和列表 hook 没有对应
+调试输出，无需机械增删。后续 `0ae1c0aef` 继续区分说明与标题，不影响本地结论。
+
+验证：静态追踪表头到实际 locale；前述真实 LogTable 合成数据页已在中英和明暗主题下
+渲染，表头分别读回 `Pipeline` / “数据管道”，未泄漏说明文本或 key。没有修改日志请求、
+分页、操作和 pipeline 名称显示。仅提交核对结论，不新增无行为差量的业务代码；真实 API
+日志加载未在本项验收。
