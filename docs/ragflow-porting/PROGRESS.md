@@ -2755,3 +2755,15 @@ KB 绑定、独立 Redis queue/取消键，以及独立 Milvus 读回的完整�
 PostgreSQL、Redis、Milvus 与隔离 HTTP，其他索引存储后端及完整社区报告删除未验收。共享 Python freeze 期间使用隔离副本
 和独立 worktree，不修改主检出的门禁输入；最终范围提交位于 `codex/dataset-index-types`，
 精确暂存五个本任务文件并使用短 index 锁，主检出和其他任务 WIP 保留，未 push。
+
+## decf6730 · Go Ark thinking 默认与 effort
+
+冻结基准为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。已有 Ark 普通聊天、完整角色
+历史、正文/推理 sender、模型发现、取消与安全失败实现复用；仅补模型级 thinking /
+clear_thinking 默认。已有 effort 映射等价：未指定时 enabled/medium，
+none/minimal 关闭，现有 xhigh 兼容保留。模型目录与两种请求模式的 effort 回归见 Go entity/models 测试。
+未迁移 Python 模型体系，未执行远程 Ark 账号或生产验收。
+
+验证：Go 1.25.14，相关 entity/models、service、handler 的 race 回归通过
+（208 个通过，7 个既有 opt-in 未配置而 skip；未把这些 skip 记为验收）。
+`go build ./internal/...`、`go vet ./internal/...` 与三个独立 main 构建均 exit 0。

@@ -158,3 +158,28 @@ func TestVolcEngineLargeStreamDelta(t *testing.T) {
 		t.Fatal("empty messages accepted")
 	}
 }
+
+func TestVolcEngineEffortMapping(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, test := range []struct{ effort, mode, mapped string }{
+			{"", "enabled", "medium"}, {"auto", "enabled", "medium"}, {"default", "enabled", "medium"},
+			{"none", "disabled", "minimal"}, {"minimal", "disabled", "minimal"},
+			{"low", "enabled", "low"}, {"medium", "enabled", "medium"}, {"high", "enabled", "high"}, {"xhigh", "enabled", "xhigh"},
+		} {
+			thinking := true
+			config := &ChatConfig{Thinking: &thinking}
+			if test.effort != "" {
+				config.Effort = &test.effort
+			}
+			body, err := volcEngineBody("doubao", []Message{{Role: "user", Content: "q"}}, config, stream)
+			if err != nil || body["thinking"].(map[string]string)["type"] != test.mode || body["reasoning_effort"] != test.mapped {
+				t.Fatalf("effort %q: %v, %v", test.effort, body, err)
+			}
+		}
+		thinking := false
+		body, err := volcEngineBody("doubao", []Message{{Role: "user", Content: "q"}}, &ChatConfig{Thinking: &thinking}, stream)
+		if err != nil || body["thinking"].(map[string]string)["type"] != "disabled" || body["reasoning_effort"] != nil {
+			t.Fatalf("disabled: %v %v", body, err)
+		}
+	}
+}

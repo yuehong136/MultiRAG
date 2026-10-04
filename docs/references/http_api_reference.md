@@ -1534,7 +1534,10 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 
 VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支持普通文本聊天、
 完整角色历史、sender SSE、模型发现及连接检查。`thinking=true` 且未指定 effort 时用
-`medium`，显式 false 关闭；SSE 同一 delta 的 reasoning/content 均转发，sender 错误、
+`medium` 并启用思考；`doubao-seed-2-0-pro-260215` 默认开启 thinking，配置同时保留
+`clear_thinking=true`。effort 的 none/minimal 关闭思考并映射 minimal，auto/default 映射
+medium，low/medium/high 保留值；已有 xhigh 支持保留，显式 false 关闭思考。
+SSE 同一 delta 的 reasoning/content 均转发，sender 错误、
 取消、异常响应或提前断流不发送成功完成帧。APIKey 可为普通 Ark key，也可为含
 `ark_api_key` 的旧 JSON 形式。embedding/rerank、余额和旧 channel-only streaming
 继续明确不可用；账号权限及远程 Ark 服务仍需实际账号验收。

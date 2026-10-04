@@ -267,3 +267,14 @@ func TestExplicitModelThinkingTakesPrecedenceOverLegacyProviderDefaults(t *testi
 		t.Fatalf("explicit model default overwritten: %v %v", model, err)
 	}
 }
+
+func TestVolcEngineModelThinkingDefaults(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := manager.GetModelByName("VolcEngine", "doubao-seed-2-0-pro-260215")
+	if err != nil || model.Thinking == nil || !model.Thinking.DefaultValue || !model.Thinking.ClearThinking {
+		t.Fatalf("thinking: %v %v", model, err)
+	}
+}
