@@ -397,6 +397,8 @@ func (p *Parser) parseDropCommand() (*Command, error) {
 		return p.parseDropMetadataTable()
 	case TokenInstance:
 		return p.parseDropInstance()
+	case TokenModel:
+		return p.parseDropInstanceModel()
 	default:
 		return nil, fmt.Errorf("unknown DROP target: %s", p.curToken.Value)
 	}

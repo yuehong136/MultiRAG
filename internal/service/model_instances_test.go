@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
+	"reflect"
 	"testing"
 )
 
@@ -60,5 +61,33 @@ func TestCustomModelTypesAndExtra(t *testing.T) {
 	raw, err := json.Marshal(extra)
 	if err != nil || string(raw) != `{"max_tokens":2048,"thinking":false}` {
 		t.Fatalf("%s %v", raw, err)
+	}
+}
+
+func TestCustomModelMultipleCapabilities(t *testing.T) {
+	for _, test := range []struct {
+		primary string
+		types   []string
+		want    []string
+	}{
+		{"chat", nil, []string{"chat"}},
+		{"", []string{"vision", "chat", "asr"}, []string{"image2text", "chat", "speech2text"}},
+		{"vision", []string{"image2text", "chat"}, []string{"image2text", "chat"}},
+	} {
+		got, err := normalizeCustomModelTypes(test.primary, test.types)
+		if err != nil || !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("%v %v", got, err)
+		}
+	}
+	for _, test := range []struct {
+		primary string
+		types   []string
+	}{
+		{"", nil}, {"", []string{}}, {"chat", []string{}}, {"chat", []string{"embedding", "chat"}},
+		{"", []string{"vision", "image2text"}}, {"", []string{"qwen"}}, {"", []string{""}},
+	} {
+		if _, err := normalizeCustomModelTypes(test.primary, test.types); err == nil {
+			t.Fatalf("invalid declaration accepted: %v", test)
+		}
 	}
 }

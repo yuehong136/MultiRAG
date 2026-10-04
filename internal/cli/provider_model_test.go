@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func TestCustomModelGrammarAndCapabilities(t *testing.T) {
 			t.Fatalf("%s: %v %v", option, cmd, err)
 		}
 	}
-	for _, option := range []string{"tokens 1 chat vision", "tokens 1 embedding think", "tokens 1 tokens 2 chat", "chat", "tokens 0 chat", "tokens 1.5 chat", "tokens 1 chat garbage", "tokens 1 chat think think"} {
+	for _, option := range []string{"tokens 1 chat chat", "tokens 1 embedding think", "tokens 1 tokens 2 chat", "chat", "tokens 0 chat", "tokens 1.5 chat", "tokens 1 chat garbage", "tokens 1 chat think think"} {
 		if _, err := NewParser(`ADD MODEL 'm' TO PROVIDER 'vllm' INSTANCE 'i' WITH ` + option + `;`).Parse(false); err == nil {
 			t.Fatalf("accepted %s", option)
 		}
@@ -65,7 +66,7 @@ func TestCustomModelClientPayloadAndBusinessError(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Error(err)
 		}
-		if payload["max_tokens"] != float64(1024) || payload["thinking"] != true || payload["model_name"] != "Qwen/test" {
+		if payload["max_tokens"] != float64(1024) || payload["thinking"] != true || payload["model_name"] != "Qwen/test" || payload["model_type"] != "chat" || !reflect.DeepEqual(payload["model_types"], []interface{}{"chat", "image2text"}) {
 			t.Errorf("%v", payload)
 		}
 		if fail {
@@ -81,7 +82,7 @@ func TestCustomModelClientPayloadAndBusinessError(t *testing.T) {
 	client.HTTPClient.Host = u.Hostname()
 	client.HTTPClient.Port = port
 	client.HTTPClient.LoginToken = "fixture"
-	cmd, err := NewParser(`ADD MODEL 'Qwen/test' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 1024 CHAT THINK;`).Parse(false)
+	cmd, err := NewParser(`ADD MODEL 'Qwen/test' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 1024 CHAT VISION THINK;`).Parse(false)
 	if err != nil {
 		t.Fatal(err)
 	}

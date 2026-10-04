@@ -1498,7 +1498,9 @@ Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rera
 |---|---|
 | `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name`、`message`；普通 JSON 或 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。CLI 同步使用本入口；原 provider models POST 现用于模型声明，旧聊天载荷不再接受 |
 | `POST /{provider_name}/instances` | body 为 instance_name、api_key（vLLM 可省略）、base_url、region。自定义 URL 以 HTTP(S) API 根目录为准；region 为空归一为 default，base_url 优先于 provider 地域目录；同 provider 的重复实例名返回冲突 |
-| `POST /{provider_name}/instances/{instance_name}/models` | 声明自定义 model_name、model_type、正整数 max_tokens 与可选 thinking；路由身份为准，body 的 provider/instance 若传入须一致。仅租户 owner 可操作，重复声明返回业务冲突 |
+| `POST /{provider_name}/instances/{instance_name}/models` | 声明自定义 model_name、model_types（兼容旧 model_type）、正整数 max_tokens 与可选 thinking；路由身份为准，body 的 provider/instance 若传入须一致。仅租户 owner 可操作，重复声明返回业务冲突 |
+| `DELETE /{provider_name}/instances/{instance_name}/models` | body 为非空 `models` 名称数组；只删除当前 owner 租户内的自定义模型声明，重复名称合并；任一不存在或 SQL 失败则整批回滚。目录模型须使用启停接口，DELETE 不删除禁用标记 |
+| `DELETE /{provider_name}/instances` | body 为非空 `instances` 名称数组；同一事务清理所有指定实例及其模型，任一失败整批回滚 |
 | `GET /{provider_name}/instances/{instance_name}/models` | 合并目录与实例自定义模型，status 为 active/inactive；自定义模型保留 model_types、max_tokens、thinking 与原始 extra，目录 features 保留。active 表示启用声明，不代表已通过远程连接或推理检查 |
 | `GET /{provider_name}/instances/{instance_name}/connection` | Google 通过实际模型分页列表检查连接；vLLM 通过真实非空模型列表检查连接 |
 | `GET /{provider_name}/instances/{instance_name}/models?supported=true` | 返回 provider 支持的模型名；Google 遍历全部页，保留 `models/` 前缀 |
@@ -1534,7 +1536,7 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 
 历史聊天及历史 SSE 支持现有 Google、Aliyun、VolcEngine、Moonshot、MiniMax、Zhipu-AI、vLLM；其他驱动
 保留明确的不支持结果，不将历史压成一个 user 文本。此 Go session 路径仍只执行已有文本
-聊天，未接入 KB/Tavily 检索、附件或多模态能力；image2text 能力不可作为 chat 绑定。
+聊天，未接入 KB/Tavily 检索、附件或多模态能力；仅声明 image2text 的模型不可作为 chat 绑定。
 当前生产 Python session、LLMBundle 和 Web 合同不受本项影响。
 
 VolcEngine 使用 Ark 的 `chat/completions`、`models` 和 `files` 端点，支持普通文本聊天、
@@ -1557,11 +1559,22 @@ CLI 支持以下声明（旧实例命令的位置式 key 与省略分号仍兼�
 
 ```sql
 CREATE PROVIDER 'vllm' INSTANCE 'local' KEY '' URL 'http://localhost:8000/v1' REGION 'local';
-ADD MODEL 'Qwen/Qwen2-0.5B' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 131072 CHAT THINK;
+ADD MODEL 'Qwen/Qwen2-0.5B' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 131072 CHAT VISION THINK;
+DROP MODEL 'Qwen/Qwen2-0.5B' FROM 'vllm' 'local';
 ```
 
 ADD MODEL 的能力选项为 chat、vision、embedding、rerank、asr、tts、ocr；vision/asr
-分别映射为现有 ModelType 的 image2text/speech2text。thinking 只允许 chat/image2text。
+分别映射为现有 ModelType 的 image2text/speech2text；可声明多个能力，但不允许重复。
+完整列表写入 Extra.model_types，首项继续写入 model_type；旧请求和无列表的旧记录
+保持单能力语义。两字段同时传入时 model_type 必须等于列表首项；空列表和冲突报错。
+实例列表及模型绑定读取完整能力集；仍只消费 model_type 的旧调用方只看到首项。
+thinking 需要列表包含 chat/image2text。声明能力不会实现驱动尚未支持的能力；
+ChatConfig.Vision 为可选布尔配置，保留缺省和显式 false，不据此开启图片输入。
+DROP MODEL 也接受 FROM PROVIDER 'p' INSTANCE 'i'，仅 USER 模式可用。
+旧 ADMIN 的 DROP MODEL PROVIDER 只有 parser、没有 executor，已移除该无效语法。
+删除后的重复请求返回 not found；不存在项不会静默忽略。相关 CLI 写操作要求响应含
+显式 code=0，错误不回显服务端原始正文。删除与声明、启停通过实例锁串行化，
+避免删除后出现孤儿模型。
 非空 URL 配合缺省或空 region 时 CLI 使用实例名；API 的空 region 使用 default。CLI HTTP 请求
 超时为 300 秒；provider 的文本请求仍沿用 120 秒上限与请求 context 取消。
 

@@ -124,6 +124,8 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 	router.PATCH("/api/v1/providers/:provider_name/instances/:instance_name/models/*model_name", h.EnableOrDisableModel)
 	router.GET("/api/v1/providers/:provider_name/instances/:instance_name/models", h.ListInstanceModels)
 	router.POST("/api/v1/chat/completions", h.ChatToModel)
+	router.DELETE("/api/v1/providers/:provider_name/instances/:instance_name/models", h.DropInstanceModels)
+	router.DELETE("/api/v1/providers/:provider_name/instances", h.DropProviderInstance)
 	api := httptest.NewServer(router)
 	defer api.Close()
 	request := func(method, path, user string, body map[string]interface{}) (int, map[string]interface{}) {
@@ -320,6 +322,11 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 	if _, err := svc.GetChatModel("owner-tenant", "Qwen/custom@local-0@vllm"); err == nil {
 		t.Fatal("corrupt model extra accepted")
 	}
+	if err := dao.DB.Model(&entity.TenantModel{}).Where("model_name = ?", "Qwen/custom").Update("extra", `{"max_tokens":131072,"thinking":true}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	exerciseModelDeletion(t, svc, readback, request)
+	exerciseCatalogDeletionRace(t, svc, readback)
 	if err := pool.Close(); err != nil {
 		t.Fatal(err)
 	}

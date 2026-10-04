@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -1182,28 +1183,14 @@ func (c *MultiRAGClient) DropProviderInstance(cmd *Command) (ResponseIf, error) 
 		"instances": []string{instanceName},
 	}
 
-	url := fmt.Sprintf("/providers/%s/instances", providerName)
+	path := fmt.Sprintf("/providers/%s/instances", url.PathEscape(providerName))
 
-	resp, err := c.HTTPClient.Request("DELETE", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("DELETE", path, true, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop instance: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to drop instance: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
-	}
-
-	var result SimpleResponse
-	if err = json.Unmarshal(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("drop instance failed: invalid JSON (%w)", err)
-	}
-
-	if result.Code != 0 {
-		return nil, fmt.Errorf("%s", result.Message)
-	}
-
-	result.Duration = 0
-	return &result, nil
+	return modelMutationResponse(resp.StatusCode, resp.Body, "drop instance")
 }
 
 func (c *MultiRAGClient) ListInstanceModels(cmd *Command) (ResponseIf, error) {

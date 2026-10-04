@@ -474,39 +474,26 @@ type DropProviderInstanceRequest struct {
 }
 
 func (h *ProviderHandler) DropProviderInstance(c *gin.Context) {
-	providerName := c.Param("provider_name")
-	if providerName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "Provider name is required",
-		})
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": code, "message": message})
 		return
 	}
-
 	var req DropProviderInstanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeBadRequest,
-			"message": err.Error(),
-		})
+		jsonError(c, common.CodeBadRequest, "Invalid instance deletion request")
 		return
 	}
-
-	userID := c.GetString("user_id")
-
-	_, err := h.modelProviderService.DropProviderInstances(providerName, userID, req.Instances)
+	code, err := h.modelProviderService.DropProviderInstances(c.Param("provider_name"), user.ID, req.Instances)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeServerError,
-			"message": err.Error(),
-		})
+		message := err.Error()
+		if code == common.CodeServerError {
+			message = "Unable to delete provider instances"
+		}
+		jsonError(c, code, message)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	jsonResponse(c, common.CodeSuccess, nil, "success")
 }
 
 func (h *ProviderHandler) ListInstanceModels(c *gin.Context) {

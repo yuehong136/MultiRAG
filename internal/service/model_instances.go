@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"gorm.io/gorm"
@@ -78,8 +79,9 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 }
 
 type customModelExtra struct {
-	MaxTokens int   `json:"max_tokens"`
-	Thinking  *bool `json:"thinking,omitempty"`
+	MaxTokens  int      `json:"max_tokens"`
+	Thinking   *bool    `json:"thinking,omitempty"`
+	ModelTypes []string `json:"model_types,omitempty"`
 }
 
 func decodeCustomModelExtra(raw string) (*customModelExtra, error) {
@@ -111,20 +113,21 @@ var errCustomModelExists = errors.New("model already exists")
 var errProviderInstanceExists = errors.New("provider instance already exists")
 
 type AddCustomModelRequest struct {
-	ProviderName string `json:"provider_name"`
-	InstanceName string `json:"instance_name"`
-	ModelName    string `json:"model_name" binding:"required"`
-	ModelType    string `json:"model_type" binding:"required"`
-	MaxTokens    int    `json:"max_tokens"`
-	Thinking     *bool  `json:"thinking"`
+	ProviderName string   `json:"provider_name"`
+	InstanceName string   `json:"instance_name"`
+	ModelName    string   `json:"model_name" binding:"required"`
+	ModelType    string   `json:"model_type"`
+	ModelTypes   []string `json:"model_types"`
+	MaxTokens    int      `json:"max_tokens"`
+	Thinking     *bool    `json:"thinking"`
 }
 
 func (m *ModelProviderService) AddCustomModel(request *AddCustomModelRequest, userID string) (common.ErrorCode, error) {
-	typ, err := normalizeCustomModelType(request.ModelType)
+	types, err := normalizeCustomModelTypes(request.ModelType, request.ModelTypes)
 	if err != nil || request.MaxTokens <= 0 || strings.TrimSpace(request.ModelName) == "" || strings.Contains(request.ModelName, "@") {
 		return common.CodeBadRequest, fmt.Errorf("valid model name, type and positive max_tokens are required")
 	}
-	if request.Thinking != nil && typ != entity.ModelTypeChat && typ != entity.ModelTypeImage2Text {
+	if request.Thinking != nil && !slices.Contains(types, string(entity.ModelTypeChat)) && !slices.Contains(types, string(entity.ModelTypeImage2Text)) {
 		return common.CodeBadRequest, fmt.Errorf("thinking requires chat or image2text")
 	}
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
@@ -155,11 +158,11 @@ func (m *ModelProviderService) AddCustomModel(request *AddCustomModelRequest, us
 	if err != nil {
 		return common.CodeServerError, err
 	}
-	extra, err := json.Marshal(customModelExtra{MaxTokens: request.MaxTokens, Thinking: request.Thinking})
+	extra, err := json.Marshal(customModelExtra{MaxTokens: request.MaxTokens, Thinking: request.Thinking, ModelTypes: types})
 	if err != nil {
 		return common.CodeServerError, err
 	}
-	model := &entity.TenantModel{ID: id, ModelName: request.ModelName, ProviderID: provider.ID, InstanceID: instance.ID, ModelType: string(typ), Status: "active", Extra: string(extra)}
+	model := &entity.TenantModel{ID: id, ModelName: request.ModelName, ProviderID: provider.ID, InstanceID: instance.ID, ModelType: types[0], Status: "active", Extra: string(extra)}
 	err = dao.DB.Transaction(func(tx *gorm.DB) error {
 		// Serialize declarations for this owned instance without changing the schema.
 		var locked entity.TenantModelInstance
@@ -206,12 +209,12 @@ func (m *ModelProviderService) instanceModelDefinition(provider *entity.Provider
 	if err != nil {
 		return nil, err
 	}
-	typ, err := normalizeCustomModelType(stored.ModelType)
+	types, err := normalizeCustomModelTypes(stored.ModelType, extra.ModelTypes)
 	if err != nil {
 		return nil, err
 	}
 	class := provider.Class
-	model := &entity.Model{Name: name, MaxTokens: extra.MaxTokens, ModelTypes: []string{string(typ)}, Class: &class}
+	model := &entity.Model{Name: name, MaxTokens: extra.MaxTokens, ModelTypes: types, Class: &class}
 	if extra.Thinking != nil {
 		model.Thinking = &entity.ModelThinking{DefaultValue: *extra.Thinking}
 	}
@@ -267,4 +270,37 @@ func createProviderInstanceRow(providerID string, instance *entity.TenantModelIn
 		}
 		return tx.Create(instance).Error
 	})
+}
+
+// Keep the first capability in ModelType for existing single-type consumers.
+// Older rows without Extra.model_types retain their original capability.
+func normalizeCustomModelTypes(primary string, declared []string) ([]string, error) {
+	if declared == nil {
+		typ, err := normalizeCustomModelType(primary)
+		if err != nil {
+			return nil, err
+		}
+		return []string{string(typ)}, nil
+	}
+	if len(declared) == 0 {
+		return nil, fmt.Errorf("model_types must not be empty")
+	}
+	result := make([]string, 0, len(declared))
+	for _, raw := range declared {
+		typ, err := normalizeCustomModelType(raw)
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(result, string(typ)) {
+			return nil, fmt.Errorf("duplicate model capability")
+		}
+		result = append(result, string(typ))
+	}
+	if primary != "" {
+		typ, err := normalizeCustomModelType(primary)
+		if err != nil || string(typ) != result[0] {
+			return nil, fmt.Errorf("model_type must match first model_types capability")
+		}
+	}
+	return result, nil
 }

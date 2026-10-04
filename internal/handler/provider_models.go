@@ -35,3 +35,30 @@ func (h *ProviderHandler) AddCustomModel(c *gin.Context) {
 	}
 	jsonResponse(c, common.CodeSuccess, nil, "success")
 }
+
+type DropInstanceModelsRequest struct {
+	Models []string `json:"models" binding:"required"`
+}
+
+func (h *ProviderHandler) DropInstanceModels(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": code, "message": message})
+		return
+	}
+	var req DropInstanceModelsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeBadRequest, "Invalid model deletion request")
+		return
+	}
+	code, err := h.modelProviderService.DropInstanceModels(c.Param("provider_name"), c.Param("instance_name"), user.ID, req.Models)
+	if err != nil {
+		message := err.Error()
+		if code == common.CodeServerError {
+			message = "Unable to delete instance models"
+		}
+		jsonError(c, code, message)
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, nil, "success")
+}

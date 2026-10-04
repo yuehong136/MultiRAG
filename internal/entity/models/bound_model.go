@@ -59,6 +59,7 @@ func chatGenerationConfig(values map[string]interface{}, defaults ChatConfig) (*
 		return nil, err
 	}
 	var parsed struct {
+		Vision      *bool     `json:"vision"`
 		Stream      *bool     `json:"stream"`
 		Thinking    *bool     `json:"thinking"`
 		MaxTokens   *int      `json:"max_tokens"`
@@ -74,6 +75,9 @@ func chatGenerationConfig(values map[string]interface{}, defaults ChatConfig) (*
 		return nil, fmt.Errorf("invalid generation config: %w", err)
 	}
 	result := defaults
+	if parsed.Vision != nil {
+		result.Vision = parsed.Vision
+	}
 	if parsed.Stream != nil {
 		result.Stream = parsed.Stream
 	}

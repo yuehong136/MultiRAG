@@ -1,6 +1,9 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // parseAddModel parses a custom model declaration using the established capability names.
 func (p *Parser) parseAddModel() (*Command, error) {
@@ -38,7 +41,7 @@ func (p *Parser) parseAddModel() (*Command, error) {
 	p.nextToken()
 	cmd := NewCommand("add_custom_model")
 	cmd.Params["model_name"], cmd.Params["provider_name"], cmd.Params["instance_name"] = name, provider, instance
-	typ := ""
+	var types []string
 	tokens := 0
 	thinking := false
 	for p.curToken.Type != TokenSemicolon && p.curToken.Type != TokenEOF {
@@ -77,17 +80,17 @@ func (p *Parser) parseAddModel() (*Command, error) {
 			return nil, fmt.Errorf("unknown model option: %s", p.curToken.Value)
 		}
 		if selected != "" {
-			if typ != "" {
-				return nil, fmt.Errorf("model type already given")
+			if slices.Contains(types, selected) {
+				return nil, fmt.Errorf("duplicate model capability")
 			}
-			typ = selected
+			types = append(types, selected)
 		}
 		p.nextToken()
 	}
-	if typ == "" || tokens == 0 {
+	if len(types) == 0 || tokens == 0 {
 		return nil, fmt.Errorf("model type and token limit required")
 	}
-	if thinking && typ != "chat" && typ != "image2text" {
+	if thinking && !slices.Contains(types, "chat") && !slices.Contains(types, "image2text") {
 		return nil, fmt.Errorf("THINK requires chat or vision")
 	}
 	if p.curToken.Type != TokenSemicolon {
@@ -100,9 +103,49 @@ func (p *Parser) parseAddModel() (*Command, error) {
 	if p.curToken.Type != TokenEOF {
 		return nil, fmt.Errorf("unexpected trailing model option")
 	}
-	cmd.Params["model_type"], cmd.Params["max_tokens"] = typ, tokens
+	cmd.Params["model_type"], cmd.Params["max_tokens"] = types[0], tokens
+	cmd.Params["model_types"] = types
 	if thinking {
 		cmd.Params["support_think"] = true
 	}
+	return cmd, nil
+}
+
+// DROP MODEL 'name' FROM 'provider' 'instance'; also accepts explicit keywords.
+func (p *Parser) parseDropInstanceModel() (*Command, error) {
+	p.nextToken()
+	model, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenFrom {
+		return nil, fmt.Errorf("expected FROM")
+	}
+	p.nextToken()
+	if p.curToken.Type == TokenProvider {
+		p.nextToken()
+	}
+	provider, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+	p.nextToken()
+	if p.curToken.Type == TokenInstance {
+		p.nextToken()
+	}
+	instance, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+	p.nextToken()
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	if p.curToken.Type != TokenEOF {
+		return nil, fmt.Errorf("unexpected trailing DROP MODEL input")
+	}
+	cmd := NewCommand("drop_instance_model")
+	cmd.Params["model_name"], cmd.Params["provider_name"], cmd.Params["instance_name"] = model, provider, instance
 	return cmd, nil
 }

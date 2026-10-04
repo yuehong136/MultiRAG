@@ -28,6 +28,7 @@ import (
 	modelModule "multirag/internal/entity/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func NewModelProviderService() *ModelProviderService {
@@ -414,39 +415,6 @@ func (m *ModelProviderService) CheckProviderConnection(providerName, instanceNam
 func (m *ModelProviderService) AlterProviderInstance(providerName, instanceName, newInstanceName, apiKey, userID string) (common.ErrorCode, error) {
 	return common.CodeSuccess, nil
 }
-func (m *ModelProviderService) DropProviderInstances(providerName, userID string, instances []string) (common.ErrorCode, error) {
-
-	// Get tenant ID from user
-	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
-	if err != nil {
-		return common.CodeServerError, err
-	}
-
-	if len(tenants) == 0 {
-		return common.CodeNotFound, errors.New("user has no tenants")
-	}
-
-	tenantID := tenants[0].TenantID
-
-	// Check if provider exists
-	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
-	if err != nil {
-		return common.CodeServerError, err
-	}
-
-	for _, instanceName := range instances {
-		count, err := m.modelInstanceDAO.DeleteByProviderIDAndInstanceName(provider.ID, instanceName)
-		if err != nil {
-			return common.CodeServerError, err
-		}
-
-		if count == 0 {
-			return common.CodeNotFound, errors.New("provider instance not found")
-		}
-	}
-
-	return common.CodeSuccess, nil
-}
 
 func (m *ModelProviderService) ListInstanceModels(providerName, instanceName, userID string) ([]map[string]interface{}, error) {
 	// Get tenant ID from user
@@ -503,6 +471,12 @@ func (m *ModelProviderService) ListInstanceModels(providerName, instanceName, us
 			if err != nil {
 				return nil, err
 			}
+			types, err := normalizeCustomModelTypes(stored.ModelType, extra.ModelTypes)
+			if err != nil {
+				return nil, err
+			}
+			data["model_types"] = types
+			data["model_type"] = types[0]
 			data["max_tokens"] = extra.MaxTokens
 			data["extra"] = stored.Extra
 			if extra.Thinking != nil {
@@ -514,69 +488,46 @@ func (m *ModelProviderService) ListInstanceModels(providerName, instanceName, us
 }
 
 func (m *ModelProviderService) UpdateModelStatus(providerName, instanceName, modelName, userID, status string) (common.ErrorCode, error) {
-
-	// Get tenant ID from user
-	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
-	if err != nil {
-		return common.CodeServerError, err
-	}
-
-	if len(tenants) == 0 {
-		return common.CodeNotFound, errors.New("user has no tenants")
-	}
-
-	tenantID := tenants[0].TenantID
-
-	// Check if provider exists
-	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
-	if err != nil {
-		return common.CodeServerError, err
-	}
-
-	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, instanceName)
-	if err != nil {
-		return common.CodeServerError, err
-	}
-
 	active := status == "enable" || status == "enabled" || status == "active"
 	if !active && status != "disable" && status != "disabled" && status != "inactive" {
 		return common.CodeBadRequest, fmt.Errorf("invalid model status")
 	}
-	model, err := m.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(provider.ID, instance.ID, modelName)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return common.CodeServerError, err
-	}
-	if err == nil {
-		if model.Extra != "" && model.Extra != "{}" {
-			state := "inactive"
-			if active {
-				state = "active"
+	return m.mutateOwnedModelResources(providerName, userID, func(tx *gorm.DB, provider *entity.TenantModelProvider) error {
+		var instance entity.TenantModelInstance
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id = ? AND instance_name = ?", provider.ID, instanceName).First(&instance).Error; err != nil {
+			return err
+		}
+		var model entity.TenantModel
+		err := tx.Where("provider_id = ? AND instance_id = ? AND model_name = ?", provider.ID, instance.ID, modelName).First(&model).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err == nil {
+			if model.Extra != "" && model.Extra != "{}" {
+				state := "inactive"
+				if active {
+					state = "active"
+				}
+				return tx.Model(&model).Update("status", state).Error
 			}
-			err = dao.DB.Model(model).Update("status", state).Error
-		} else if active {
-			_, err = m.modelDAO.DeleteByModelID(model.ID)
+			if active {
+				return tx.Unscoped().Delete(&model).Error
+			}
+			return nil
 		}
+		schema, err := m.providerManager.GetModelByName(providerName, modelName)
 		if err != nil {
-			return common.CodeServerError, err
+			return gorm.ErrRecordNotFound
 		}
-		return common.CodeSuccess, nil
-	}
-	schema, err := m.providerManager.GetModelByName(providerName, modelName)
-	if err != nil {
-		return common.CodeNotFound, err
-	}
-	if active {
-		return common.CodeSuccess, nil
-	}
-	id, err := generateUUID1Hex()
-	if err != nil {
-		return common.CodeServerError, err
-	}
-	model = &entity.TenantModel{ID: id, ProviderID: provider.ID, InstanceID: instance.ID, ModelName: modelName, ModelType: schema.ModelTypes[0], Status: status}
-	if err := m.modelDAO.Create(model); err != nil {
-		return common.CodeServerError, err
-	}
-	return common.CodeSuccess, nil
+		if active {
+			return nil
+		}
+		id, err := generateUUID1Hex()
+		if err != nil {
+			return err
+		}
+		return tx.Create(&entity.TenantModel{ID: id, ProviderID: provider.ID, InstanceID: instance.ID, ModelName: modelName, ModelType: schema.ModelTypes[0], Status: status}).Error
+	})
 }
 
 func (m *ModelProviderService) ChatToModel(providerName, instanceName, modelName, userID, message string, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig) (*modelModule.ChatResponse, common.ErrorCode, error) {

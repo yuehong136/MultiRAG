@@ -229,6 +229,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.CheckProviderConnection(cmd)
 	case "alter_provider_instance":
 		return c.AlterProviderInstance(cmd)
+	case "drop_instance_model":
+		return c.DropInstanceModel(cmd)
 	case "drop_provider_instance":
 		return c.DropProviderInstance(cmd)
 	case "enable_model":
