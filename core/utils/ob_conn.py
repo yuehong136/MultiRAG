@@ -211,7 +211,8 @@ def get_metadata_filter_expression(metadata_filtering_conditions: dict) -> str:
         if not all([name, comparison_operator]):
             continue
 
-        expr = f"JSON_EXTRACT(metadata, '$.{name}')"
+        # JSON paths are SQL values, not column identifiers; retain dotted-path semantics.
+        expr = f"JSON_EXTRACT(metadata, {get_value_str(f'$.{name}')})"
         value_str = get_value_str(value)
 
         # Convert comparison operator to MySQL JSON path syntax
@@ -260,6 +261,9 @@ def get_metadata_filter_expression(metadata_filtering_conditions: dict) -> str:
     return f"({f' {logical_operator} '.join(metadata_filters)})"
 
 
+_VALID_FILTER_COLUMNS: set[str] = set(column_names) | set(doc_meta_column_names)
+
+
 def get_filters(condition: dict) -> list[str]:
     filters: list[str] = []
     for k, v in condition.items():
@@ -267,9 +271,12 @@ def get_filters(condition: dict) -> list[str]:
             continue
 
         if k == "exists":
-            filters.append(f"{v} IS NOT NULL")
+            if isinstance(v, str) and v in _VALID_FILTER_COLUMNS:
+                filters.append(f"{v} IS NOT NULL")
         elif k == "must_not" and isinstance(v, dict) and "exists" in v:
-            filters.append(f"{v.get('exists')} IS NULL")
+            col = v.get("exists")
+            if isinstance(col, str) and col in _VALID_FILTER_COLUMNS:
+                filters.append(f"{col} IS NULL")
         elif k == "metadata_filtering_conditions":
             # Handle metadata filtering conditions
             metadata_filter = get_metadata_filter_expression(v)
@@ -284,14 +291,12 @@ def get_filters(condition: dict) -> list[str]:
                 filters.append(f"({array_filter})")
             else:
                 filters.append(f"array_contains({k}, {get_value_str(v)})")
-        elif isinstance(v, list):
-            values: list[str] = []
-            for item in v:
-                values.append(get_value_str(item))
-            value = ", ".join(values)
-            filters.append(f"{k} IN ({value})")
-        else:
-            filters.append(f"{k} = {get_value_str(v)}")
+        elif k in _VALID_FILTER_COLUMNS:
+            if isinstance(v, list):
+                values = ", ".join(get_value_str(item) for item in v)
+                filters.append(f"{k} IN ({values})")
+            else:
+                filters.append(f"{k} = {get_value_str(v)}")
     return filters
 
 
@@ -492,11 +497,12 @@ class OBConnection(OBConnectionBase):
         knowledgebase_ids: list[str],
         agg_fields: list[str] = [],
         rank_feature: dict | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> SearchResult:
         if isinstance(index_names, str):
             index_names = index_names.split(",")
-        assert isinstance(index_names, list) and len(index_names) > 0
+        if not (isinstance(index_names, list) and len(index_names) > 0):
+            raise ValueError("index_names must be a non-empty list")
         index_names = list(set(index_names))
 
         if len(match_expressions) == 3:
@@ -543,12 +549,13 @@ class OBConnection(OBConnectionBase):
             vector_similarity_weight = 0.5
             for m in match_expressions:
                 if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
-                    assert (
+                    if not (
                         len(match_expressions) == 3
                         and isinstance(match_expressions[0], MatchTextExpr)
                         and isinstance(match_expressions[1], MatchDenseExpr)
                         and isinstance(match_expressions[2], FusionExpr)
-                    )
+                    ):
+                        raise ValueError("match_expressions must contain MatchTextExpr, MatchDenseExpr, and FusionExpr")
                     weights = m.fusion_params["weights"]
                     vector_similarity_weight = get_float(weights.split(",")[1])
             for m in match_expressions:
@@ -560,7 +567,8 @@ class OBConnection(OBConnectionBase):
                     bqry.boost = 1.0 - vector_similarity_weight
 
                 elif isinstance(m, MatchDenseExpr):
-                    assert bqry is not None
+                    if bqry is None:
+                        raise ValueError("bqry must not be None")
                     similarity = 0.0
                     if "similarity" in m.extra_options:
                         similarity = m.extra_options["similarity"]
@@ -657,7 +665,8 @@ class OBConnection(OBConnectionBase):
 
         for m in match_expressions:
             if isinstance(m, MatchTextExpr):
-                assert "original_query" in m.extra_options, "'original_query' is missing in extra_options."
+                if "original_query" not in m.extra_options:
+                    raise ValueError("'original_query' is missing in extra_options.")
                 fulltext_query = m.extra_options["original_query"]
                 fulltext_query = escape_string(fulltext_query.strip())
                 fulltext_topn = m.topn
@@ -667,11 +676,12 @@ class OBConnection(OBConnectionBase):
                     fulltext_search_idx_list.append(fulltext_index_name_template % column_name)
 
             elif isinstance(m, MatchDenseExpr):
-                assert m.embedding_data_type == "float", f"embedding data type '{m.embedding_data_type}' is not float."
+                if m.embedding_data_type != "float":
+                    raise ValueError(f"embedding data type '{m.embedding_data_type}' is not float.")
                 vector_column_name = m.vector_column_name
                 vector_data = m.embedding_data
                 vector_topn = m.topn
-                vector_similarity_threshold = m.extra_options.get("similarity", 0.0)
+                vector_similarity_threshold = float(m.extra_options.get("similarity", 0.0))
             elif isinstance(m, FusionExpr):
                 weights = m.fusion_params["weights"]
                 vector_similarity_weight = get_float(weights.split(",")[1])
@@ -894,7 +904,8 @@ class OBConnection(OBConnectionBase):
                     result.chunks.append(self._row_to_entity(row, output_fields))
             elif search_type == "aggregation":
                 # aggregation search
-                assert len(agg_fields) == 1, "Only one aggregation field is supported in OceanBase."
+                if len(agg_fields) != 1:
+                    raise ValueError("Only one aggregation field is supported in OceanBase.")
                 agg_field = agg_fields[0]
                 if agg_field in array_columns:
                     res = self.client.perform_raw_text_sql(f"SELECT {agg_field} FROM {index_name} WHERE {agg_field} IS NOT NULL AND {filters_expr}")
@@ -1111,17 +1122,22 @@ class OBConnection(OBConnectionBase):
                 if isinstance(v, str):
                     set_values.append(f"{v} = NULL")
                 else:
-                    assert isinstance(v, dict), f"Expected str or dict for 'remove', got {type(new_value[k])}."
+                    if not isinstance(v, dict):
+                        raise ValueError(f"Expected str or dict for 'remove', got {type(new_value[k])}.")
                     for kk, vv in v.items():
-                        assert kk in array_columns, f"Column '{kk}' is not an array column."
+                        if kk not in array_columns:
+                            raise ValueError(f"Column '{kk}' is not an array column.")
                         set_values.append(f"{kk} = array_remove({kk}, {get_value_str(vv)})")
             elif k == "add":
-                assert isinstance(v, dict), f"Expected str or dict for 'add', got {type(new_value[k])}."
+                if not isinstance(v, dict):
+                    raise ValueError(f"Expected str or dict for 'add', got {type(new_value[k])}.")
                 for kk, vv in v.items():
-                    assert kk in array_columns, f"Column '{kk}' is not an array column."
+                    if kk not in array_columns:
+                        raise ValueError(f"Column '{kk}' is not an array column.")
                     set_values.append(f"{kk} = array_append({kk}, {get_value_str(vv)})")
             elif k == "metadata":
-                assert isinstance(v, dict), f"Expected dict for 'metadata', got {type(new_value[k])}"
+                if not isinstance(v, dict):
+                    raise ValueError(f"Expected dict for 'metadata', got {type(new_value[k])}")
                 set_values.append(f"{k} = {get_value_str(v)}")
                 if v and "doc_id" in condition:
                     group_id = v.get("_group_id")

@@ -2802,3 +2802,38 @@ CLI race 通过。其中本项实例 SQL/HTTP 与五组既有 Google、
 现核验该路径实际绑定 AddCustomModel、两个入口的无认证 401，以及旧聊天载荷拒绝、
 零 provider 调用和独立 SQL 零声明。私有 MinIO 提供真实存储验证，测试桶、容器与配置已清理。
 未改 Python；未执行 MySQL、生产认证、远程 Ark/vLLM 或 Web 页面验收。
+
+## e992fe39b2d9968982973bb16069f6f5993f6df4 · OceanBase 过滤字段与显式校验
+
+2026-10-04 按完整单文件 diff 适配；上游 remote 已核为 `infiniflow/ragflow`，
+基准冻结在 `519e7d98a5651564d4e35d6648f006cba4baaf4f`，未 fetch。
+对应 [OceanBase connector](../../core/utils/ob_conn.py)。
+
+- 过滤键只接受当前 chunk 与 doc_meta 列定义；保留本地 `_order_id`、`group_id`、
+  `mom_id`、`chunk_data` 和 `meta_fields`。未知键及无效 exists/must_not 操作数沿目标
+  行为忽略；列表仍为普通列 IN、数组列 array_contains 的 OR，原有空值跳过行为不变。
+- 字段约束不替代 SQL 值编码：标量、列表元素、数组元素和 JSON 仍使用现有
+  `get_value_str`。metadata 条件保留逻辑/比较操作符和点路径语义，JSON 路径也作为
+  SQL 字符串值编码，避免路径内引号直接进入 SQL。未改成新的参数化查询系统。
+- 完整覆盖 search 的非空索引、混合表达式顺序、bqry 非空、original_query、float
+  embedding 和单聚合限制，以及 update 的 remove/add 类型、两处数组列校验、
+  metadata 字典类型：共 11 处 assert 改为 ValueError。向量阈值先 float 转换再入 SQL。
+- 冻结范围内后修 `3a9b84495` 涉及基础 connector 和 update 写入字段名，是独立范围；
+  本项不将其合并，不声明修复所有动态 SQL 入口。`6a4b9be42` 为格式化；
+  `670e68872` 删除上游 Python 实现不适用于本仓生产链。
+
+[查询回归](../../tests/unit/test_ob_conn_filters.py) 69 passed；Python 优化模式同为
+69 passed。捕获生产 search/update 输出，核对 ID/KB 条件、metadata 表更新、数组
+修改和相似度阈值；异常在 SQL 调用前抛出。bqry 防御分支已静态对齐，正常构造中
+始终存在，未通过伪造 DSL 状态触发。
+
+本次门禁：`make verify` 被并行修改的 `file_api_service.py` 格式阻断；
+`make -k verify` 继续取得 mypy 136 文件通过、unit 5130 passed / 5 failed。
+其中四项是文件删除服务合同，一项是新增 ingestion log 集成文件跨测试模块导入，
+均不经过本项 OceanBase 路径。另行执行 ruff check、8 条 import contracts、async DB
+门禁均通过，本项两文件格式通过。`make integration` 为 800 passed / 1 failed /
+2 deselected，零 skip；失败是 runtime upload 清理错误消息与原断言不一致，未改动。
+证据目录 `.test-results/20261004-180943-79709/`；完整日志
+`/tmp/multirag-e992-{verify,verify-remaining,integration,unit,optimized}.log`。
+未运行真实 OceanBase 或 ES；SQL 捕获不证明真实后端 SQL 模式、执行或查询计划。
+本项未改变路由、启动或健康检查，不触发 smoke。
