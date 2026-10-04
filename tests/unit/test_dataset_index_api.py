@@ -1,9 +1,11 @@
 """Unified index API, explicit compatibility routes and dataset contracts."""
 
 import types
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi.testclient import TestClient
 
 from api.apps.services import dataset_api_service
 from api.db.db_models import Knowledgebase
@@ -276,19 +278,32 @@ def test_collection_paths_require_dataset_ids(client):
     assert resp.json()["message"] == "Lack of dataset_ids in query parameters"
 
 
-def test_index_routes_pass_the_type_query_through(client, monkeypatch):
+@pytest.mark.parametrize("index_type", ["graph", "Graph", "GRAPH", "raptor", "RAPTOR", "RaPtOr", "mindmap", "MindMap", "MINDMAP"])
+def test_index_routes_normalize_legal_type_queries(client: TestClient, monkeypatch: pytest.MonkeyPatch, index_type: str) -> None:
     seen: list[str] = []
 
-    async def _run(tenant_id, dataset_id, index_type):
-        seen.append(f"run:{index_type}")
+    async def run(tenant_id: str, dataset_id: str, type_name: str) -> tuple[bool, Any]:
+        seen.append(f"run:{type_name}")
         return True, {"task_id": "t1"}
 
-    monkeypatch.setattr(dataset_api_service, "run_index_async", _run)
-    monkeypatch.setattr(dataset_api_service, "trace_index", AsyncMock(side_effect=lambda s, t, d, index_type: seen.append(f"trace:{index_type}") or (True, {})))
+    async def trace(db: Any, tenant_id: str, dataset_id: str, type_name: str) -> tuple[bool, Any]:
+        seen.append(f"trace:{type_name}")
+        return True, {"id": "t1", "task_type": "graphrag" if type_name == "graph" else type_name}
 
-    assert client.post("/api/v1/datasets/kb1/index?type=mindmap").json()["data"] == {"task_id": "t1"}
-    assert client.get("/api/v1/datasets/kb1/index?type=raptor").status_code == 200
-    assert seen == ["run:mindmap", "trace:raptor"]
+    async def delete(tenant_id: str, dataset_id: str, type_name: str) -> tuple[bool, Any]:
+        seen.append(f"delete:{type_name}")
+        return True, {}
+
+    monkeypatch.setattr(dataset_api_service, "run_index_async", run)
+    monkeypatch.setattr(dataset_api_service, "trace_index", trace)
+    monkeypatch.setattr(dataset_api_service, "delete_index_async", delete)
+    path = f"/api/v1/datasets/kb1/index?type={index_type}"
+    assert client.post(path).json() == {"code": 0, "data": {"task_id": "t1"}}
+    body = client.get(path).json()
+    assert body["code"] == 0 and body["data"]["id"] == "t1"
+    assert body["data"]["task_type"] == ("graphrag" if index_type.lower() == "graph" else index_type.lower())
+    assert client.delete(path).json() == {"code": 0, "data": {}}
+    assert seen == [f"{operation}:{index_type.lower()}" for operation in ["run", "trace", "delete"]]
 
 
 def test_metadata_config_and_legacy_auto_metadata_share_the_service(client, monkeypatch):

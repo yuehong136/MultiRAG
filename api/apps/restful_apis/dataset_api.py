@@ -371,7 +371,7 @@ async def run_index(
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
     try:
-        success, result = await dataset_api_service.run_index_async(tenant_id, dataset_id, type)
+        success, result = await dataset_api_service.run_index_async(tenant_id, dataset_id, type.lower())
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -386,7 +386,7 @@ async def trace_index(
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
     try:
-        success, result = await dataset_api_service.trace_index(db, tenant_id, dataset_id, type)
+        success, result = await dataset_api_service.trace_index(db, tenant_id, dataset_id, type.lower())
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)

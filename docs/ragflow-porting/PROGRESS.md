@@ -2698,3 +2698,60 @@ Web 两份 datasource 测试 `15 passed`，product UI `3 + 30 passed`；lint、f
 `/tmp/multirag-e0b30700-shared-verify/`。受控服务不是 Google 真凭据验收：未验证实际
 Google consent、Workspace 域委派、权限策略、token 刷新或真实 Gmail 邮箱。未部署，
 未 push，保留其他 owner 的改动。
+
+## 96909235 / 6afb1957 / 3991bdfa / 1b84892e · 索引类型与图谱删除调用链
+
+2026-10-04 按顺序核对四个目标的完整 diff，上游 remote 为 `infiniflow/ragflow`，
+冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`，四项均在上限内，未 fetch。
+目标为 Python 后端及独立 Web，统一维护共享调用链。
+
+| 目标 | 本次结论 |
+|---|---|
+| `96909235167edc0d1a9b5ed4cc104efea92f522b` | 已等价。Web 既有 `75db9786` 的 `DatasetIndexType` 只允许 `graph/raptor/mindmap`，生成任务 hook 显式映射 UI 类型，删除统一调用 `/index?type=`；后端 `_delete_index` 已转小写，不恢复任意类型路径。 |
+| `6afb1957d88d8473334d0f994dd93d3e3d4fa2af` | 补齐 run/trace 网关的 `type.lower()`，与现有 DELETE 一致。service 的严格合法集合、JWT/API Key 与数据集成员权限不变；空、未知、GraphRAG、空白或 NUL 类型仍拒绝。 |
+| `3991bdfaf57dafcca398295f399d88f8dc78aad2` | 已等价。UI 标签为 `GraphRAG`，请求为 `graph`，真实 queue/Task/trace 为 `graphrag`，绑定列为 `graphrag_task_id`，worker 日志映射为 `PipelineTaskType.GRAPH_RAG`（值 `GraphRAG`）；前端日志枚举与当前生产者匹配，不机械改为 Graph。 |
+| `1b84892e3ab5be550381530b574afbae57a2f11b` | 删除地址已等价。前端生成任务删除复用统一 index DELETE，另一个 graph API 只负责读取。本次增加真实删除及独立读回，保留取消信号、任务解绑、特定产物和日志的生命周期。 |
+
+后续链：`ff685d313` 移除上游重复 DELETE graph 路由并添加 query index DELETE，
+支持复用本地统一契约；本地明确的三个路径别名不改。`e8f19aa33` 带来的
+`wipe=false` 与阶段缓存是独立恢复能力，本地当前没有阶段缓存生产者，不在本次追加。
+`670e68872` 整体移除上游 Python 后端不作为本地撤回。
+
+实际证据：四文件相关 unit **60 passed**；隔离副本 `make verify` **4894 passed**，
+Ruff、8 条 import contracts、async DB gate、mypy **132 files** 均 exit=0。
+独立 worktree 最终 `make verify` exit=0，**4849 passed**（不含其他任务尚未入库的新增测试）。
+[真实 HTTP 回归](../../tests/integration/test_dataset_index_http.py) 在最终 worktree **4 passed、零 skip**：
+JWT/API Key 各执行三类索引、三种大小写的 run/trace/delete，检查业务码、SQL Task 类型与
+KB 绑定、独立 Redis queue/取消键，以及独立 Milvus 读回的完整夹具行（含向量）。
+同物理索引的兄弟数据集、跨租户索引、普通块、mind_map、Document 与摄取日志保全；
+重复运行仍拒绝，删除后 task/绑定/完成时间清空、trace 为空。非法类型、未认证及跨租户
+拒绝零写入；自有 listener 上 `make smoke` exit=0；夹具 SQL/Redis/collection/端口清理读回通过。
+专项结束后另开新连接确认 scratch 库、8 个 Milvus collection、测试 Redis 键及 4 个监听端口均已消失。
+首次夹具缺 File→Document 关系，第二次把生产字符串 `raptor_kwd` 错建为数组，修正夹具后
+按真实生产字段重跑通过，没有放宽断言或替换生产服务。Web 现有 API 合同 **205 passed**、
+生成任务生命周期 **6 passed**，没有 Web 源码改动或人为等价提交。
+最终 worktree 指定 `WEB_DATASET_CHECKOUT=/Users/xldu/project/web` 的实际 Web→隔离 HTTP 消费者回归 **1 passed**。
+完整 `make integration` 在开工隔离快照执行（含当时其他任务 WIP），exit=0，
+**758 passed、1 skipped**，2649.12 秒；唯一 skip 是快照兄弟目录没有 Web checkout，
+已由上述最终 worktree 的指定路径消费者回归补跑通过，skip 本身不计通过。
+完整门禁前后输入 hash 无漂移；索引入口/service、鉴权、Task/queue、存储适配器、夹具和依赖
+共 16 个相关文件与最终 worktree 对照一致，最终 worktree 另有完整 unit 和专项真实 HTTP 验收。
+默认 Infinity 实例握手不兼容，完整门禁仅通过测试进程 `INFINITY_TEST_URI=127.0.0.1:63316`
+选择既有隔离兼容实例，未改共享配置或依赖。日志与读回账本在 `/tmp/multirag-index-port-evidence/`。
+
+### 单列后续修复
+
+- **Graph 社区报告残留**：本地 `with_community` 生成 `knowledge_graph_kwd=community_report`，
+  GraphRAG 检索会消费；现有 index DELETE 的四类过滤未覆盖它，上游后修已包含该类。
+  用户明确选择保持本批范围，本次不扩大删除集合。后续应把社区报告纳入 graph 删除，
+  验证目标报告消失、兄弟/跨租户报告保全，并独立读回检索行为；本次正常删除验收只覆盖现有四类。
+- **存储失败/取消失败反馈**：现有 Milvus `delete()` 发生后端错误可返回 0，取消 `set()`
+  也可返回 False，index service 未核对这些返回值，Task 删除与产物删除不是跨存储事务。
+  本次错误 schema 夹具实际观察到存储错误未传播为非零业务结果，产物残留，正常生产 schema 读回通过。
+  后续应先让存储/取消异常进入明确失败状态，并定义可重试的成功判据，保留任务/恢复材料和故障注入；
+  不能把删除计数 0 一律判错（也可能已无产物），需区分后端错误与幂等空删除。本次不改变该兼容行为。
+
+未运行真实 GraphRAG/RAPTOR worker、LLM 或生产数据验收；本项生命周期验收使用本机
+PostgreSQL、Redis、Milvus 与隔离 HTTP，其他索引存储后端及完整社区报告删除未验收。共享 Python freeze 期间使用隔离副本
+和独立 worktree，不修改主检出的门禁输入；最终范围提交位于 `codex/dataset-index-types`，
+精确暂存五个本任务文件并使用短 index 锁，主检出和其他任务 WIP 保留，未 push。
