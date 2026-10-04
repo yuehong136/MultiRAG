@@ -18,12 +18,19 @@ from core.llm import chat as chat_module
 DEFAULT = "https://futurmix.ai/v1"
 
 
+def test_catalog_keys_match_database_primary_key() -> None:
+    data = json.loads((Path(__file__).parents[2] / "configs/llm_factories.json").read_text())
+    keys = [(f["name"], m["llm_name"]) for f in data["factory_llm_infos"] for m in f["llm"]]
+    assert len(keys) == len(set(keys)), "Model types must not duplicate the (fid, llm_name) primary key"
+
+
 def test_catalog_and_litellm_metadata() -> None:
     data = json.loads((Path(__file__).parents[2] / "configs/llm_factories.json").read_text())
     entries = [f for f in data["factory_llm_infos"] if f["name"] == "FuturMix"]
     assert len(entries) == 1
     assert entries[0]["url"] == DEFAULT
-    assert len(entries[0]["llm"]) == 15
+    assert len(entries[0]["llm"]) == 14
+    assert next(m for m in entries[0]["llm"] if m["llm_name"] == "gpt-4o")["mdl_type"] == "image2text"
     assert {m["mdl_type"] for m in entries[0]["llm"]} == {"chat", "embedding", "image2text", "rerank", "speech2text", "tts"}
     assert all("model_type" not in m for m in entries[0]["llm"])
     assert FACTORY_DEFAULT_BASE_URL[SupportedLiteLLMProvider.FuturMix] == DEFAULT
@@ -82,6 +89,7 @@ async def test_tenant_adapters_send_and_consume_protocol(monkeypatch: pytest.Mon
     assert vision.describe(b"image") == ("response", 9)
     vision_body = json.loads(calls[-1].content)
     assert "image_url" in json.dumps(vision_body)
+    assert await vision.async_chat("system", [{"role": "user", "content": "question"}], {}) == ("response", 9)
     embed = model("embedding", "text-embedding-3-small")
     vectors, tokens = embed.encode(["a", "bb"])
     np.testing.assert_array_equal(vectors, [[0, 1], [1, 2]])

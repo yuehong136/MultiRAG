@@ -11,6 +11,7 @@
 
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
@@ -104,6 +105,59 @@ def test_fresh_install_is_stamped_to_head(bootstrapped_engine, alembic_cfg):
     with bootstrapped_engine.connect() as conn:
         version = conn.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one()
     assert version == head
+
+
+@pytest.fixture
+def llm_catalog_engine(postgres_service: None, tmp_path: Path) -> Iterator[sa.Engine]:
+    """Catalog initialization commits globally, so each case owns a database."""
+    with scratch_database(tmp_path) as engine:
+        yield engine
+
+
+@pytest.mark.parametrize("existing_chat", [False, True], ids=["fresh", "partial-catalog"])
+def test_futurmix_catalog_initialization_is_complete_and_repeatable(llm_catalog_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, existing_chat: bool) -> None:
+    """Exercise startup commits and chat/vision lookup against real composite keys."""
+    import json
+
+    from api.db.db_models import LLM, TenantLLM
+    from api.db.init_data import init_llm_factory
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+    from common import settings
+
+    catalog = json.loads((Path(__file__).parents[2] / "configs/llm_factories.json").read_text())
+    factory = next(f for f in catalog["factory_llm_infos"] if f["name"] == "FuturMix")
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [factory])
+    tenant_id = uuid.uuid4().hex
+    # Reproduce a partially initialized environment whose first chat row survived.
+    with Session(llm_catalog_engine) as db:
+        if existing_chat:
+            db.add(LLM(fid="FuturMix", llm_name="gpt-4o", mdl_type="chat", tags="CHAT"))
+        db.add(TenantLLM(tenant_id=tenant_id, llm_factory="FuturMix", llm_name="gpt-4o", mdl_type="chat", api_key="fixture-key", used_tokens=37))
+        db.commit()
+
+    for _ in range(2):
+        caplog.clear()
+        with Session(llm_catalog_engine) as db:
+            init_llm_factory(db)
+        assert not [r.message for r in caplog.records if "初始化 LLM" in r.message and "失败" in r.message]
+        # A separate connection reads the initializer's committed results.
+        with Session(llm_catalog_engine) as db:
+            rows = list(db.scalars(sa.select(LLM).where(LLM.fid == "FuturMix")))
+            assert len(rows) == 14
+            assert {r.mdl_type for r in rows} == {"chat", "image2text", "embedding", "rerank", "speech2text", "tts"}
+            assert next(r for r in rows if r.llm_name == "gpt-4o").mdl_type == "image2text"
+            existing = db.scalars(sa.select(TenantLLM).where(TenantLLM.tenant_id == tenant_id)).one()
+            assert (existing.mdl_type, existing.api_key, existing.used_tokens) == ("chat", "fixture-key", 37)
+
+    # New registrations use one multimodal row; existing chat tenants stay intact.
+    multimodal_tenant = uuid.uuid4().hex
+    with Session(llm_catalog_engine) as db:
+        db.add(TenantLLM(tenant_id=multimodal_tenant, llm_factory="FuturMix", llm_name="gpt-4o", mdl_type="image2text", api_key="fixture-key"))
+        db.commit()
+    with Session(llm_catalog_engine) as db:
+        configs = [get_model_config_by_type_and_name(db, multimodal_tenant, kind, "gpt-4o@FuturMix") for kind in ("chat", "image2text")]
+        assert configs[0]["id"] == configs[1]["id"]
+        assert all(c["mdl_type"] == "image2text" and c["llm_factory"] == "FuturMix" and c["is_tools"] for c in configs)
 
 
 def test_model_first_existing_database_can_upgrade_candidate_revision(
