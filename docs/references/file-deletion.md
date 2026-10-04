@@ -73,3 +73,20 @@ Skills Space 应在自己的持久 operation 中维护授权后的资源清单�
 
 真实后端验收覆盖 PostgreSQL/MinIO/Milvus；S3 故障传播有单元测试；OSS/GCS/Azure
 未做真实云端验收。Web 暂无对应页面，刷新/分页规则尚未进行浏览器验收。
+
+## Dataset 文档删除的整批预检
+
+`DELETE /api/v1/datasets/{dataset_id}/documents` 保留独立合同：
+`ids` 与 `delete_all=true` 必须提供其一，非空 `ids` 与 `delete_all=true` 互斥。
+先检查 dataset 可访问性，再将整批 ID 与该 dataset 的文档集合比较；包含任一不存在、
+同 owner 的其他 dataset 或其他 owner 的文档 ID，整批 `code=102`，不进入删除链。
+此预检拒绝没有文件/对象/关联文档/索引/任务/元数据/计数的删除副作用。
+
+合法 `delete_all=true` 仅使用当前 dataset 的 ID 集合；空 dataset 返回
+`{"code":0,"data":{"deleted":0}}`。重复指定 ID 在预检后去重。
+该预检合同不等于后续合法请求中的跨存储删除原子性保证。
+
+`tests/integration/test_document_delete_scope.py` 使用真实 JWT 请求，比较拒绝前后的
+完整 SQL、物理对象字节、Milvus payload/向量以及专用 Redis 队列；并读回合法
+`delete_all` 后的目标清理与其他 dataset 保留。现有路由单测
+`tests/unit/test_restful_document_delete_route.py` 覆盖归属、去重、互斥与业务码。
