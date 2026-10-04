@@ -47,7 +47,7 @@ func TestSkillsStrictResponseAndCredentials(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer test-credential" || r.Header.Get("Idempotency-Key") != "same-key" {
 					t.Error("missing credentials/key")
 				}
-				if r.URL.Path != "/api/v1/skills/spaces/id/reindex" {
+				if r.URL.Path != "/api/v1/skill-assets/spaces/id/reindex" {
 					t.Error(r.URL.Path)
 				}
 				w.WriteHeader(test.status)

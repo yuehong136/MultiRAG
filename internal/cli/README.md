@@ -152,8 +152,11 @@ The parser structure follows the grammar defined in the Python version, ensuring
 
 ## Skills asset library
 
-`skills help` lists the standalone asset commands. The same CLI works against
-Python and Go `/api/v1/skills` endpoints; space writes must go to its owner.
+`skills help` lists the standalone asset commands (`multirag-assets-v1`). These
+commands use the explicit `/api/v1/skill-assets` namespace. Upgrade the backend
+to expose that namespace before upgrading the CLI. `/api/v1/skills` is a deployment
+alias and is never probed to guess its protocol. Python and Go own independent
+data; the legacy Go asset protocol may be read-only during source convergence.
 The first release accepts local directories and ZIP archives and never executes
 package code. It does not connect the existing MCP tool selector to skills.
 

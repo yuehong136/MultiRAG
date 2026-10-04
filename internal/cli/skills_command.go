@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const skillsUsage = `skills commands (IDs are immutable; output is JSON):
+const skillsUsage = `skills commands (multirag-assets-v1; /api/v1/skill-assets; output is JSON):
   capabilities | models | spaces [page]
   create-space NAME [DESCRIPTION] | space SPACE
   rename-space SPACE REVISION NAME | delete-space SPACE [--key KEY]

@@ -19,7 +19,13 @@ type skillsEnvelope struct {
 }
 
 func (c *HTTPClient) skillsRequest(ctx context.Context, method, path, contentType, key string, body io.Reader, expected int, binary bool) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.BuildURL("/skills"+path, true), body)
+	// The asset protocol has its own stable namespace. /skills is a deployment
+	// alias and may serve the RAGFlow core contract instead.
+	return c.skillProtocolRequest(ctx, method, "/skill-assets"+path, contentType, key, body, expected, binary)
+}
+
+func (c *HTTPClient) skillProtocolRequest(ctx context.Context, method, path, contentType, key string, body io.Reader, expected int, binary bool) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.BuildURL(path, true), body)
 	if err != nil {
 		return nil, err
 	}
