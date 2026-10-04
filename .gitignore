@@ -248,6 +248,7 @@ docs/*
 !docs/enterprise-identity-mcp/
 !docs/ragflow-porting/
 !docs/run-platform/
+!docs/skills/
 temp/
 
 .hypothesis
