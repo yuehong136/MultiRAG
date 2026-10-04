@@ -50,3 +50,20 @@ pipeline 说明文本，符合当前产品用语。
 渲染，表头分别读回 `Pipeline` / “数据管道”，未泄漏说明文本或 key。没有修改日志请求、
 分页、操作和 pipeline 名称显示。仅提交核对结论，不新增无行为差量的业务代码；真实 API
 日志加载未在本项验收。
+
+## c4d0b0ebcfd87c033bd4c671e189037c11a21629
+
+结论：已等价，保留现有来源显示。Web `log-table-row.tsx` 对缺省、空串和 `local`
+使用 `MonitorUp` 图标，其他字符串直接作为 React 文本显示，没有访问
+`dataSourceInfo[source_from].icon` 这类不安全的映射。未知和新增来源可读且不会因查不到
+配置崩溃，不替换成会丢失来源身份的统一图标。
+
+详情 `log-detail-sections.tsx` 同样以 `source_from || 'local'` 回退，来源文本由 React
+渲染。`source_from` 的 API 类型为可选字符串；这里的等价结论覆盖协议内新增字符串和
+缺省值，不把任意对象等协议外载荷视作合法来源。
+
+验证：真实 LogTable 的合成行覆盖 `local`、空串、缺省、`s3`、`gmail`、
+`future_connector`、`knowledge_graph`，中英文和明暗主题下均完成渲染，控制台无错误；
+已有字符串显示与本地上传图标保留。无需修改组件或重复增加测试框架。
+后续上游 `7c0584a2b` 修复图谱图标、`0cfa30087` 增加 wiki 图标属独立展示扩展，
+本项不引入上游图标注册表。仅提交结论；未连接外部连接器产生真实摄取日志。
