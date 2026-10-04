@@ -124,3 +124,4 @@ def test_all_linked_documents_authorized_before_first_write(batch: SimpleNamespa
 def ordinary_file_skill_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Existing fixtures model ordinary files; managed-tree SQL is tested separately."""
     monkeypatch.setattr(svc, "is_skill_managed", lambda *args, **kwargs: False)
+    monkeypatch.setattr(svc, "is_python_core", lambda *args, **kwargs: False)

@@ -4048,6 +4048,40 @@ class SystemSettings(BaseModel):
 """
 
 
+class PythonSkillCoreSpace(BaseModel):
+    """Python-owned upstream-compatible directory space; independent from Go."""
+
+    __tablename__ = "t_ai_python_skill_spaces"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "id", name="uq_python_skill_core_tenant"),
+        sa.Index("uq_python_skill_core_name", "tenant_id", "name", unique=True, postgresql_where=sa.text("state::text <> 'deleted'::text")),
+        sa.CheckConstraint("state IN ('active','deleting','delete_failed','deleted')", name="ck_python_skill_core_state"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    folder_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    state: Mapped[str] = mapped_column(String(24), nullable=False, default="active", server_default="active")
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")
+    cleanup: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class PythonSkillCoreConfig(BaseModel):
+    __tablename__ = "t_ai_python_skill_search_configs"
+    __table_args__ = (
+        sa.UniqueConstraint("space_id", name="uq_python_skill_core_config"),
+        sa.ForeignKeyConstraint(["tenant_id", "space_id"], ["usr_ai.t_ai_python_skill_spaces.tenant_id", "usr_ai.t_ai_python_skill_spaces.id"], name="fk_python_skill_core_config"),
+        {"schema": "usr_ai"},
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    index_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
 class SkillSpace(BaseModel):
     __tablename__ = "t_ai_skill_spaces"
     __table_args__ = (

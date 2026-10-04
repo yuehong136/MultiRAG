@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
-from api.db.db_models import Document, File, File2Document, Knowledgebase
+from api.db.db_models import Document, File, File2Document, Knowledgebase, PythonSkillCoreSpace
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -60,6 +60,8 @@ class FileService(CommonService):
         query = db.query(cls.model).filter(
             cls.model.tenant_id == tenant_id, cls.model.parent_id == pf_id, cls.model.id != pf_id, or_(cls.model.source_type.is_(None), cls.model.source_type.not_in(SKILL_SOURCES))
         )
+
+        query = query.filter(cls.model.id.not_in(select(PythonSkillCoreSpace.folder_id).where(PythonSkillCoreSpace.state != "active")))
 
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
@@ -194,7 +196,12 @@ class FileService(CommonService):
 
     @classmethod
     def get_root_folder(cls, db: Session, tenant_id: str) -> dict:
-        root_folder = db.query(cls.model).filter_by(tenant_id=tenant_id, parent_id=cls.model.id).filter(or_(cls.model.source_type.is_(None), cls.model.source_type.not_in(SKILL_SOURCES))).first()
+        root_folder = (
+            db.query(cls.model)
+            .filter_by(tenant_id=tenant_id, parent_id=cls.model.id)
+            .filter(or_(cls.model.source_type.is_(None), cls.model.source_type.not_in((*SKILL_SOURCES, "python_skill_space_core"))))
+            .first()
+        )
         if root_folder:
             return root_folder.to_dict()
 

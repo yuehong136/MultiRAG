@@ -16,6 +16,7 @@ from api.skills.schemas import ActivateVersion, CreateSpace, SkillError, UploadM
 from api.skills.service import SkillService
 from api.skills.storage import SkillStorage
 from api.skills.worker import SkillWorker
+from tests.support.skill_objects import MemoryObjects
 
 
 @pytest.fixture(autouse=True)
@@ -32,26 +33,6 @@ async def isolate_worker_queue(bootstrapped_async_engine: Any) -> AsyncIterator[
     async with sessions() as db:
         await db.execute(sa.delete(SkillOperation).where(SkillOperation.id.not_in(previous)))
         await db.commit()
-
-
-class MemoryObjects:
-    def __init__(self) -> None:
-        self.objects: dict[tuple[str, str], bytes] = {}
-
-    def put(self, bucket: str, key: str, data: bytes) -> None:
-        self.objects[bucket, key] = data
-
-    def get(self, bucket: str, key: str) -> bytes:
-        return self.objects[bucket, key]
-
-    def get_bytes(self, bucket: str, key: str) -> bytes | None:
-        return self.objects.get((bucket, key))
-
-    def rm(self, bucket: str, key: str) -> None:
-        self.objects.pop((bucket, key), None)
-
-    def obj_exist(self, bucket: str, key: str) -> bool:
-        return (bucket, key) in self.objects
 
 
 class NoModels:
@@ -718,3 +699,42 @@ async def test_generic_file_listing_preserves_legacy_null_source(bootstrapped_as
         assert count == 1 and [file["id"] for file in files] == [identity]
         assert await db.run_sync(lambda session: FileService.get_folder_size(session, tenant)) == 7
         await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_python_assets_never_read_legacy_go_owned_rows(bootstrapped_async_engine: Any) -> None:
+    sessions = async_sessionmaker(bootstrapped_async_engine, expire_on_commit=False)
+    tenant = uuid.uuid4().hex
+    identity, operation_id = uuid.uuid4().hex, uuid.uuid4().hex
+    async with sessions() as db:
+        db.add(
+            SkillSpace(id=identity, tenant_id=tenant, created_by=tenant, name="Preserved legacy Go", name_key=identity, root_folder_id=uuid.uuid4().hex, state="active", backend_owner="go", revision=1)
+        )
+        db.add(
+            SkillOperation(
+                id=operation_id,
+                tenant_id=tenant,
+                backend_owner="go",
+                kind="delete_space",
+                state="pending",
+                phase="sealed",
+                idempotency_key=uuid.uuid4().hex,
+                request_hash="0" * 64,
+                payload={},
+                progress={},
+                result={},
+                attempts=0,
+                revision=1,
+            )
+        )
+        await db.commit()
+        service = SkillService(db, SkillStorage(MemoryObjects()), NoModels())
+        assert (await service.list_spaces(tenant, 1, 20, ""))["total"] == 0
+        with pytest.raises(SkillError) as hidden_space:
+            await service.space(tenant, identity)
+        assert hidden_space.value.status == 404
+        with pytest.raises(SkillError) as hidden_operation:
+            await service.operation(tenant, operation_id)
+        assert hidden_operation.value.status == 404
+        assert (await db.get(SkillSpace, identity)).state == "active"
+        assert (await db.get(SkillOperation, operation_id)).state == "pending"

@@ -115,6 +115,13 @@ class SkillSearchRuntime:
         await self._io(self.store.seal, index_name, rows)
         return dimension
 
+    def keyword_part(self, raw_score: float, weight: float, total_weight: float) -> float:
+        normalized = max(0.0, raw_score) / (1 + max(0.0, raw_score))
+        return weight * normalized / total_weight
+
+    def keyword_total(self, score: float) -> float:
+        return score
+
     async def query(self, index_name: str, tenant_id: str, config: dict[str, Any], query: str, mode: str, limit: int) -> SkillSearchHits:
         self._require_store()
         if mode not in ("keyword", "vector", "hybrid") or not query.strip() or not 1 <= limit <= 10000:
@@ -143,11 +150,12 @@ class SkillSearchRuntime:
                     candidate = candidates.setdefault(match.version_id, {"skill_id": match.skill_id, "text": match.text, "text_score": -1.0, "keyword": 0.0, "vector": 0.0})
                     if normalized > candidate["text_score"]:
                         candidate.update(text=match.text, text_score=normalized)
-                    best[match.version_id] = max(best.get(match.version_id, 0.0), normalized)
+                    best[match.version_id] = max(best.get(match.version_id, 0.0), match.score if search_mode == "keyword" else normalized)
                 for version_id, score in best.items():
-                    candidates[version_id][search_mode] += weight * score / total_weight
+                    candidates[version_id][search_mode] += self.keyword_part(score, weight, total_weight) if search_mode == "keyword" else weight * score / total_weight
         hits: list[SkillSearchHit] = []
         for version_id, candidate in candidates.items():
+            candidate["keyword"] = self.keyword_total(candidate["keyword"])
             score = candidate[mode] if mode != "hybrid" else (1 - config["vector_weight"]) * candidate["keyword"] + config["vector_weight"] * candidate["vector"]
             if score >= config["similarity_threshold"]:
                 hits.append(SkillSearchHit(version_id, candidate["skill_id"], score, candidate["text"]))

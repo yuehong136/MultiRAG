@@ -61,7 +61,7 @@ class SkillService:
         self.search = search
 
     async def space(self, tenant: str, identity: str, *, write: bool = False, hidden: bool = False) -> SkillSpace:
-        query = select(SkillSpace).where(SkillSpace.id == identity, SkillSpace.tenant_id == tenant)
+        query = select(SkillSpace).where(SkillSpace.id == identity, SkillSpace.tenant_id == tenant, SkillSpace.backend_owner == BACKEND)
         if write:
             query = query.with_for_update()
         row = await self.db.scalar(query)
@@ -91,7 +91,7 @@ class SkillService:
         return row
 
     async def operation(self, tenant: str, identity: str) -> SkillOperation:
-        row = await self.db.scalar(select(SkillOperation).where(SkillOperation.id == identity, SkillOperation.tenant_id == tenant))
+        row = await self.db.scalar(select(SkillOperation).where(SkillOperation.id == identity, SkillOperation.tenant_id == tenant, SkillOperation.backend_owner == BACKEND))
         if row is None:
             raise SkillError(404, "NOT_FOUND", "Operation not found")
         return row
@@ -142,7 +142,7 @@ class SkillService:
         return public(row)
 
     async def list_spaces(self, tenant: str, page: int, page_size: int, keywords: str) -> dict[str, Any]:
-        where = [SkillSpace.tenant_id == tenant, SkillSpace.state == "active"]
+        where = [SkillSpace.tenant_id == tenant, SkillSpace.state == "active", SkillSpace.backend_owner == BACKEND]
         if keywords:
             where.append(SkillSpace.name.icontains(keywords, autoescape=True))
         total = await self.db.scalar(select(func.count()).select_from(SkillSpace).where(*where))

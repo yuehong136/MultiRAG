@@ -13,7 +13,9 @@ link-to-datasets 使用独立的 ``restful_apis/file2document_api.py`` 网关。
 import sys
 import threading
 from types import SimpleNamespace
+from typing import Any
 
+import pytest
 from sqlalchemy.orm import Session
 
 from api.apps import deps
@@ -24,6 +26,20 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import async_current_tenant_id, current_tenant_id
 from common.constants import RetCode
+
+
+@pytest.fixture(autouse=True)
+def ordinary_file_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.skills import core_files
+
+    async def no_core(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def ordinary_delete(svc: Any, tenant: str, ids: list[str]) -> Any:
+        return await file_api_service.delete_files_async(tenant, ids)
+
+    monkeypatch.setattr(core_files, "resolve", no_core)
+    monkeypatch.setattr(core_files, "delete_files", ordinary_delete)
 
 
 def _record(records, s):

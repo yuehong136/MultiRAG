@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from api.apps.deps import get_storage
 from api.db.db_models import Skill, SkillIndexGeneration, SkillVersion, get_async_db
 from api.skills.package import MAX_FILE_SIZE, MAX_TOTAL_SIZE, read_archive, validate_package
+from api.skills.protocol import ASSETS_PROTOCOL, PROTOCOL, response_protocol
 from api.skills.runtime import get_search_runtime
 from api.skills.schemas import ActivateVersion, CreateSpace, DeleteMany, SearchRequest, SkillError, UpdateConfig, UpdateSpace, UploadManifest
 from api.skills.search import SkillSearchRuntime
@@ -66,10 +67,15 @@ class SkillRoute(APIRoute):
             except IntegrityError:
                 return failure(409, "RESOURCE_CONFLICT", "Resource name, version or request conflicts with existing state")
 
-        return handle
+        async def with_protocol(request: Request) -> Response:
+            response = await handle(request)
+            response.headers["X-Skills-Protocol"] = response_protocol(request.url.path)
+            return response
+
+        return with_protocol
 
 
-router = APIRouter(prefix="/skills", route_class=SkillRoute)
+router = APIRouter(route_class=SkillRoute)
 Tenant = Annotated[str, Depends(async_current_tenant_id)]
 DB = Annotated[AsyncSession, Depends(get_async_db)]
 Key = Annotated[str | None, Header(alias="Idempotency-Key", pattern=r"^[!-~]{1,128}$")]
@@ -92,6 +98,7 @@ async def capabilities(tenant: Tenant, svc: Service) -> JSONResponse:
     return success(
         {
             "backend": "python",
+            "writable": True,
             "schema_version": 1,
             "sources": ["local"],
             "search_modes": ["keyword", "vector", "hybrid"] if supported else [],
@@ -318,3 +325,10 @@ async def retry(operation_id: str, tenant: Tenant, svc: Service, key: Key = None
 
     idempotency_key(key)
     return success(await svc.retry(tenant, operation_id, key), 202)
+
+
+asset_router = router
+router = APIRouter()
+router.include_router(asset_router, prefix="/skill-assets")
+if PROTOCOL == ASSETS_PROTOCOL:
+    router.include_router(asset_router, prefix="/skills")

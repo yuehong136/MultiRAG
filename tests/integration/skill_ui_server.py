@@ -13,17 +13,36 @@ import time
 from pathlib import Path
 from typing import Any
 
-from tests.integration.test_skill_http import install
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
 from tests.support.skills_http import bootstrapped_engine as bootstrapped_engine
 from tests.support.skills_http import image_http_api as image_http_api
 from tests.support.skills_http import image_http_database as image_http_database
 from tests.support.skills_http import image_resources as image_resources
-from tests.support.skills_http import skill_complete, skill_request
+from tests.support.skills_http import install, skill_complete, skill_request
 from tests.support.skills_http import skill_http as skill_http
 
 
-def test_browser_session(skill_http: dict[str, Any]) -> None:
+def test_browser_session(skill_http: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps import app
+    from api.skills import core_runtime
+    from api.skills.core_runtime import PythonCoreSearch, PythonCoreStore, get_core_search
+    from api.skills.storage import SkillStorage
+
     env = skill_http
+    core = PythonCoreSearch(PythonCoreStore(env["skill_reader"]), env["skill_runtime"].model_runtime)
+    monkeypatch.setitem(app.dependency_overrides, get_core_search, lambda: core)
+    monkeypatch.setattr(core_runtime, "_search", core)
+    sessions = async_sessionmaker(env["async_engine"], expire_on_commit=False)
+    core_names: list[str] = []
+    create = core.store.create
+
+    def tracked_create(name: str, dimension: int) -> None:
+        core_names.append(name)
+        create(name, dimension)
+
+    monkeypatch.setattr(core.store, "create", tracked_create)
     handoff = Path(os.environ["SKILL_UI_HANDOFF_PATH"])
     done = Path(str(handoff) + ".done")
     assert not handoff.exists() and not done.exists(), "Choose a fresh private handoff path"
@@ -36,6 +55,7 @@ def test_browser_session(skill_http: dict[str, Any]) -> None:
     def run_worker() -> None:
         while not stop.wait(0.2):
             asyncio.run(env["skill_worker"].run_once())
+            asyncio.run(core_runtime.sweep(sessions, SkillStorage(env["storage"]), core))
 
     thread = threading.Thread(target=run_worker, daemon=True)
     thread.start()
@@ -62,5 +82,8 @@ def test_browser_session(skill_http: dict[str, Any]) -> None:
         stop.set()
         thread.join(timeout=120)
         assert not thread.is_alive()
+        for name in core_names:
+            core.store.delete(name)
+            assert not env["skill_reader"].has_collection(name)
         handoff.unlink(missing_ok=True)
         done.unlink(missing_ok=True)

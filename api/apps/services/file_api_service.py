@@ -31,7 +31,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.skills.file_guard import is_skill_managed
+from api.skills.file_guard import is_python_core, is_skill_managed
 from api.utils.file_utils import filename_type
 from common import settings
 from common.constants import FileSource
@@ -61,7 +61,7 @@ def upload_file(db: Session, tenant_id: str, pf_id: str | None, file_contents: l
     if not pf_folder:
         return False, "Can't find this folder!"
 
-    if is_skill_managed(db, pf_id):
+    if is_skill_managed(db, pf_id) or is_python_core(db, pf_id):
         return False, "Use the Skills API to modify managed assets."
 
     file_res = []
@@ -133,7 +133,7 @@ def create_folder(db: Session, tenant_id: str, name: str, pf_id: str | None = No
         root_folder = FileService.get_root_folder(db, tenant_id)
         pf_id = root_folder["id"]
 
-    if is_skill_managed(db, pf_id):
+    if is_skill_managed(db, pf_id) or is_python_core(db, pf_id):
         return False, "Use the Skills API to modify managed assets."
     if not FileService.is_parent_folder_exist(db, pf_id):
         return False, "Parent Folder Doesn't Exist!"
@@ -250,7 +250,7 @@ def delete_files(db: Session, uid: str, file_ids: list[str], *, allow_skill_asse
                 raise _FileDeletionError(f"Tenant not found for file {file_id}")
             if not check_file_team_permission(db, file, uid):
                 raise _FileDeletionError(f"No authorization for file {file_id}")
-            if not allow_skill_assets and is_skill_managed(db, file_id):
+            if not allow_skill_assets and (is_skill_managed(db, file_id) or is_python_core(db, file_id)):
                 raise _FileDeletionError(f"Use the Skills API to delete managed file {file_id}")
             if file.source_type == FileSource.KNOWLEDGEBASE:
                 raise _FileDeletionError(f"Use the dataset documents API to delete file {file_id}")
@@ -327,9 +327,12 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
     if not files:
         return False, "Source files not found!"
 
-    if any(is_skill_managed(db, identity, descendants=True) or is_skill_managed(db, identity) for identity in src_file_ids):
+    if any(
+        is_skill_managed(db, identity, descendants=True) or is_skill_managed(db, identity) or is_python_core(db, identity) or is_python_core(db, identity, descendants=True)
+        for identity in src_file_ids
+    ):
         return False, "Use the Skills API to modify managed assets."
-    if dest_file_id and is_skill_managed(db, dest_file_id):
+    if dest_file_id and (is_skill_managed(db, dest_file_id) or is_python_core(db, dest_file_id)):
         return False, "Use the Skills API to modify managed assets."
 
     files_dict = {f.id: f for f in files}

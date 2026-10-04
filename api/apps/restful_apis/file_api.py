@@ -29,11 +29,15 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from api.apps.deps import get_storage
+from api.apps.restful_apis.skill_api import failure
 from api.apps.services import file_api_service
 from api.db import FileType
 from api.db.db_models import get_async_db
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
+from api.skills import core_files
+from api.skills.package import MAX_FILE_SIZE, MAX_FILES, MAX_TOTAL_SIZE
+from api.skills.schemas import SkillError
 from api.utils.api_utils import async_current_tenant_id, construct_json_result, get_error_argument_result, get_error_data_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common.constants import RetCode
@@ -54,6 +58,15 @@ class CreateFolderReq(BaseModel):
 
 class DeleteFileReq(BaseModel):
     ids: list[str] = Field(..., min_length=1, description="待删除的文件ID列表")
+
+    @model_validator(mode="before")
+    @classmethod
+    def aliases(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "file_ids" in value:
+            if "ids" in value:
+                raise ValueError("Supply ids or file_ids, not both")
+            return {**value, "ids": value["file_ids"]}
+        return value
 
 
 class MoveFileReq(BaseModel):
@@ -101,13 +114,24 @@ async def create_or_upload(
             if not file_objs:
                 return get_error_argument_result("No file part!")
 
+            core = await core_files.resolve(db, tenant_id, str(pf_id) if pf_id else None)
+            await db.rollback()
+            if core is not None and len(file_objs) > MAX_FILES:
+                raise SkillError(413, "PACKAGE_TOO_LARGE", "Too many upload files")
+            total_size = 0
             file_contents = []
             for file_obj in file_objs:
                 if getattr(file_obj, "filename", "") == "":
                     return get_error_argument_result("No file selected!")
-                blob = await file_obj.read()
+                blob = await file_obj.read(MAX_FILE_SIZE + 1) if core is not None else await file_obj.read()
+                total_size += len(blob)
+                if core is not None and (len(blob) > MAX_FILE_SIZE or total_size > MAX_TOTAL_SIZE):
+                    raise SkillError(413, "PACKAGE_TOO_LARGE", "Upload exceeds limits")
                 file_contents.append((blob, file_obj.filename))
 
+            if core is not None:
+                return get_result(data=await core.upload(tenant_id, str(pf_id), file_contents))
+            await db.rollback()
             # DB 与存储写逐文件交错：整块在工作线程 + 自开短会话执行
             success, result = await file_api_service.upload_file_async(tenant_id, pf_id, file_contents)
             return _respond(success, result)
@@ -118,8 +142,13 @@ async def create_or_upload(
         except ValidationError as ve:
             return get_error_argument_result(str(ve))
 
+        core = await core_files.resolve(db, tenant_id, req.parent_id)
+        if core is not None:
+            return get_result(data=await core.create_folder(tenant_id, req.parent_id or "", req.name))
         success, result = await db.run_sync(lambda s: file_api_service.create_folder(s, tenant_id, req.name, req.parent_id, req.type))  # TODO(async-phase4)
         return _respond(success, result)
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -145,10 +174,15 @@ async def list_files(
         "desc": desc,
     }
     try:
+        core = await core_files.resolve(db, tenant_id, parent_id)
+        if core is not None:
+            return get_result(data=await core_files.listing(core, tenant_id, parent_id or "", args))
         success, result = await db.run_sync(lambda s: file_api_service.list_files(s, tenant_id, args))  # TODO(async-phase4)
         return _respond(success, result)
     except file_api_service.ManagedFileHiddenError:
         return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -189,6 +223,8 @@ async def get_root_folder(
     try:
         root_folder = await db.run_sync(lambda s: FileService.get_root_folder(s, tenant_id))  # TODO(async-phase4)
         return get_result(data={"root_folder": root_folder})
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         return server_error_response(e)
 
@@ -196,16 +232,19 @@ async def get_root_folder(
 @router.delete("/files", summary="删除文件或文件夹")
 async def delete(
     request_body: DeleteFileReq,
+    db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> JSONResponse:
     try:
         # 存储 rm 与 remove_document（内混 Redis/存储/doc-store）交错：整块在工作线程 + 自开短会话执行
-        success, result = await file_api_service.delete_files_async(tenant_id, request_body.ids)
+        success, result = await core_files.delete_files(core_files.service(db), tenant_id, request_body.ids)
         return construct_json_result(
             code=RetCode.SUCCESS if success else RetCode.DATA_ERROR,
             message="success" if success else f"Deleted {result['success_count']} files with {len(result['errors'])} errors",
             data=result,
         )
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -225,6 +264,8 @@ async def move(
         # 跨文件夹移动时存储 obj_exist/move 与 DB 更新交错：整块在工作线程 + 自开短会话执行
         success, result = await file_api_service.move_files_async(tenant_id, request_body.src_file_ids, request_body.dest_file_id, request_body.new_name)
         return _respond(success, result)
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -245,6 +286,26 @@ async def download(
                 return None, result
             return {"parent_id": result.parent_id, "location": result.location, "name": result.name, "type": result.type}, ""
 
+        core = await core_files.resolve(db, tenant_id, file_id)
+        if core is not None:
+            from api.db.db_models import File as FileModel
+
+            row = await db.get(FileModel, file_id)
+            if row is None or row.type == "folder":
+                raise SkillError(404, "NOT_FOUND", "File not found")
+            meta = {"parent_id": row.parent_id, "location": row.location, "name": row.name, "type": row.type}
+            size = row.size
+            await db.rollback()
+            core.storage.require_supported()
+            blob = await asyncio.to_thread(core.storage.storage.get_bytes, meta["parent_id"], meta["location"])
+            if blob is None or len(blob) != size:
+                raise SkillError(503, "CONTENT_INTEGRITY", "File readback failed")
+            if await core.file_space(tenant_id, file_id) is None:
+                raise SkillError(404, "NOT_FOUND", "File not found")
+            response = StreamingResponse(BytesIO(blob), media_type="application/octet-stream")
+            response.headers["Content-Disposition"] = f"attachment; filename={quote(meta['name'])}"
+            apply_safe_file_response_headers(response, "application/octet-stream", None)
+            return response
         meta, err = await db.run_sync(_file_meta)  # TODO(async-phase4)
         if meta is None:
             return get_error_data_result(retmsg=err)
@@ -271,6 +332,8 @@ async def download(
         return response
     except file_api_service.ManagedFileHiddenError:
         return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -287,6 +350,8 @@ async def parent_folder(
         return _respond(success, result)
     except file_api_service.ManagedFileHiddenError:
         return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -303,6 +368,8 @@ async def ancestors(
         return _respond(success, result)
     except file_api_service.ManagedFileHiddenError:
         return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found", "data": None})
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
@@ -322,5 +389,7 @@ async def download_attachment(
         response = StreamingResponse(BytesIO(data), media_type=content_type)
         apply_safe_file_response_headers(response, content_type, ext)
         return response
+    except SkillError as exc:
+        return failure(exc.status, exc.code, exc.message)
     except Exception as e:
         return server_error_response(e)

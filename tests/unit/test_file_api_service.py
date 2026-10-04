@@ -14,6 +14,13 @@ import pytest
 import api.apps.services.file_api_service as svc
 
 
+@pytest.fixture(autouse=True)
+def ordinary_files_have_no_core_ancestry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # This module exercises the ordinary Files service orchestration. Core SQL
+    # ancestry and its guarded mutation path have scratch-PG acceptance tests.
+    monkeypatch.setattr(svc, "is_python_core", lambda *args, **kwargs: False)
+
+
 def _file(**kw):
     """构造一个 File 风格的假对象（带 to_dict）。"""
     defaults = {

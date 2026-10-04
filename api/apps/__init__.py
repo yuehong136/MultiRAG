@@ -85,6 +85,9 @@ async def lifespan(app: FastAPI):
     - 测试环境：TestClient 创建时
     - 多进程：每个 worker 进程启动时
     """
+    from api.skills.protocol import selected_protocol
+
+    selected_protocol()
     # ============ 启动时执行的代码 ============
     logging.info("=" * 80)
     logging.info("FastAPI application lifecycle starting...")
@@ -127,12 +130,15 @@ async def lifespan(app: FastAPI):
     logging.info("FastAPI application is ready to accept requests")
     logging.info("=" * 80)
 
+    from api.skills.core_runtime import start_core_worker, stop_core_worker
     from api.skills.runtime import start_skill_worker, stop_skill_worker
 
     await start_skill_worker()
+    await start_core_worker()
 
     yield  # 这里暂停执行，等待应用程序运行
 
+    await stop_core_worker()
     await stop_skill_worker()
 
     # ============ 关闭时执行的代码 ============
