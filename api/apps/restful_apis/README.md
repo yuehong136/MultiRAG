@@ -63,6 +63,11 @@ HTML、SVG 作为附件下载；其他允许的类型按文件类型返回。
 ## 索引与兼容接口
 
 `POST/GET/DELETE /datasets/{id}/index?type=graph|raptor|mindmap` 分别执行、查询和删除索引任务。
+查询参数 `type` 对上述三种合法类型忽略大小写；空值、其他类型、`GraphRAG` 和含空白的值仍拒绝。
+UI 标签 `GraphRAG` 由前端映射为请求 `graph`；入队/trace 的真实任务类型为 `graphrag`，
+知识库保存到 `graphrag_task_id`，摄取日志类型为 `GraphRAG`。RAPTOR 对应请求/任务 `raptor`、日志 `RAPTOR`。
+DELETE 发送取消信号、删除任务行、解绑任务 ID/完成时间，并仅删除该数据集的 Graph `graph/subgraph/entity/relation` 或 RAPTOR `raptor` 产物；
+普通文档和摄取日志保留，mindmap 当前不删除产物。前端删除统一使用 `/index?type=`。
 删除操作另有三个明确的路径别名：`/graph`、`/raptor`、`/mindmap`。
 不注册任意 `{index_type}` 路径，避免跨 router 抢占 `/documents` 的 DELETE。
 
