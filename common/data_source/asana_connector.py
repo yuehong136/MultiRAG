@@ -1,15 +1,15 @@
 import logging
 import time
-from collections.abc import Iterator
-from datetime import datetime
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 import asana
 import requests
 
 from common.data_source.config import CONTINUE_ON_CONNECTOR_FAILURE, INDEX_BATCH_SIZE, DocumentSource
-from common.data_source.interfaces import LoadConnector, PollConnector
-from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
+from common.data_source.interfaces import LoadConnector, PollConnector, SlimConnectorWithPermSync
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 from common.data_source.utils import extract_size_bytes, get_file_ext
 
 
@@ -60,14 +60,40 @@ class AsanaAPI:
     def get_tasks(self, project_gids: list[str] | None, start_date: str) -> Iterator[AsanaTask]:
         """Get all tasks from the projects with the given gids that were modified since the given date.
         If project_gids is None, get all tasks from all projects in the workspace."""
+        for project_gid in self._get_project_gids_to_process(project_gids):
+            yield from self._get_tasks_for_project(project_gid, start_date, int(time.time()))
+
+    @staticmethod
+    def _iter_list(fetch: Callable[..., Any], *args: Any, opts: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        """Require explicit terminal pagination; SDK item iteration hides malformed cursors."""
+        options = {**opts, "limit": 100}
+        seen: set[str] = set()
+        while True:
+            page = fetch(*args, opts=options, full_payload=True)
+            if not isinstance(page, dict) or not isinstance(page.get("data"), list) or "next_page" not in page:
+                raise ValueError("Incomplete Asana page")
+            for item in page["data"]:
+                if not isinstance(item, dict) or not isinstance(item.get("gid"), str) or not item["gid"]:
+                    raise ValueError("Missing Asana object identity")
+                yield item
+            next_page = page["next_page"]
+            if next_page is None:
+                return
+            offset = next_page.get("offset") if isinstance(next_page, dict) else None
+            if not isinstance(offset, str) or not offset or offset in seen:
+                raise ValueError("Invalid or repeated Asana pagination offset")
+            seen.add(offset)
+            options = {**options, "offset": offset}
+
+    def _get_project_gids_to_process(self, project_gids: list[str] | None) -> list[str]:
         logging.info("Starting to fetch Asana projects")
-        projects = self.project_api.get_projects(
+        projects = self._iter_list(
+            self.project_api.get_projects,
             opts={
                 "workspace": self.workspace_gid,
                 "opt_fields": "gid,name,archived,modified_at",
-            }
+            },
         )
-        start_seconds = int(time.mktime(datetime.now().timetuple()))
         projects_list = []
         project_count = 0
         for project_info in projects:
@@ -80,14 +106,14 @@ class AsanaAPI:
             if project_count % 100 == 0:
                 logging.info(f"Processed {project_count} projects")
         logging.info(f"Found {len(projects_list)} projects to process")
-        for project_gid in projects_list:
-            yield from self._get_tasks_for_project(project_gid, start_date, start_seconds)
-        logging.info(f"Completed fetching {self.task_count} tasks from Asana")
-        if self.api_error_count > 0:
-            logging.warning(f"Encountered {self.api_error_count} API errors during task fetching")
+        if project_gids is not None and set(project_gids) - set(projects_list):
+            raise PermissionError("Configured Asana projects are not all visible in the workspace")
+        return projects_list
 
-    def _get_tasks_for_project(self, project_gid: str, start_date: str, start_seconds: int) -> Iterator[AsanaTask]:
-        project = self.project_api.get_project(project_gid, opts={})
+    def _get_project_to_process(self, project_gid: str) -> dict[str, Any] | None:
+        project = self.project_api.get_project(project_gid, opts={"opt_fields": "gid,name,archived,team.gid,privacy_setting"})
+        if not isinstance(project, dict) or project.get("gid") != project_gid or not isinstance(project.get("archived"), bool) or "team" not in project or "privacy_setting" not in project:
+            raise ValueError("Incomplete Asana project scope metadata")
         project_name = project.get("name", project_gid)
         team = project.get("team") or {}
         team_gid = team.get("gid")
@@ -104,6 +130,24 @@ class AsanaAPI:
                 return
             logging.info(f"Processing private project in configured team: {project_name} ({project_gid})")
 
+        return project
+
+    def get_task_ids(self, project_gids: list[str] | None) -> Iterator[str]:
+        for project_gid in self._get_project_gids_to_process(project_gids):
+            if self._get_project_to_process(project_gid) is None:
+                continue
+            for item in self._iter_list(self.tasks_api.get_tasks_for_project, project_gid, opts={"opt_fields": "gid"}):
+                yield item["gid"]
+
+    def get_attachment_ids(self, task_gid: str) -> Iterator[str]:
+        for item in self._iter_list(self.attachments_api.get_attachments_for_object, task_gid, opts={"opt_fields": "gid"}):
+            yield item["gid"]
+
+    def _get_tasks_for_project(self, project_gid: str, start_date: str, start_seconds: int) -> Iterator[AsanaTask]:
+        project = self._get_project_to_process(project_gid)
+        if project is None:
+            return
+        project_name = project.get("name", project_gid)
         simple_start_date = start_date.split(".")[0].split("+")[0]
         logging.info(f"Fetching tasks modified since {simple_start_date} for project: {project_name} ({project_gid})")
 
@@ -112,13 +156,16 @@ class AsanaAPI:
             "created_by,custom_fields,dependencies,due_at,due_on,external,html_notes,liked,likes,"
             "modified_at,notes,num_hearts,parent,projects,resource_subtype,resource_type,start_on,"
             "workspace,permalink_url",
-            "modified_since": start_date,
         }
-        tasks_from_api = self.tasks_api.get_tasks_for_project(project_gid, opts)
+        tasks_from_api = self._iter_list(self.tasks_api.get_tasks_for_project, project_gid, opts=opts)
         for data in tasks_from_api:
+            modified = datetime.fromisoformat(data["modified_at"])
+            modified = modified.replace(tzinfo=UTC) if modified.tzinfo is None else modified.astimezone(UTC)
+            if modified < datetime.fromisoformat(start_date):
+                continue
             self.task_count += 1
             if self.task_count % 10 == 0:
-                end_seconds = time.mktime(datetime.now().timetuple())
+                end_seconds = time.time()
                 runtime_seconds = end_seconds - start_seconds
                 if runtime_seconds > 0:
                     logging.info(f"Processed {self.task_count} tasks in {runtime_seconds:.0f} seconds ({self.task_count / runtime_seconds:.2f} tasks/second)")
@@ -149,6 +196,7 @@ class AsanaAPI:
                     exc_info=True,
                 )
                 self.api_error_count += 1
+                raise
 
     def _construct_task_text(self, data: dict) -> str:
         text = f"{data['name']}\n\n"
@@ -199,29 +247,12 @@ class AsanaAPI:
         Fetch full attachment info (including download_url) for a task.
         """
         attachments: list[dict] = []
-
-        try:
-            # Step 1: list attachment compact records
-            for att in self.attachments_api.get_attachments_for_object(parent=task_gid, opts={}):
-                gid = att.get("gid")
-                if not gid:
-                    continue
-
-                try:
-                    # Step 2: expand to full attachment
-                    full = self.attachments_api.get_attachment(attachment_gid=gid, opts={"opt_fields": "name,download_url,size,created_at"})
-
-                    if full.get("download_url"):
-                        attachments.append(full)
-
-                except Exception:
-                    logging.exception(f"Failed to fetch attachment detail {gid} for task {task_gid}")
-                    self.api_error_count += 1
-
-        except Exception:
-            logging.exception(f"Failed to list attachments for task {task_gid}")
-            self.api_error_count += 1
-
+        for gid in self.get_attachment_ids(task_gid):
+            full = self.attachments_api.get_attachment(attachment_gid=gid, opts={"opt_fields": "gid,name,download_url,size,created_at"})
+            if not isinstance(full, dict) or full.get("gid") != gid or "download_url" not in full:
+                raise ValueError("Incomplete Asana attachment detail")
+            if full["download_url"]:
+                attachments.append(full)
         return attachments
 
     def get_accessible_emails(
@@ -229,7 +260,7 @@ class AsanaAPI:
         workspace_id: str,
         project_ids: list[str] | None,
         team_id: str | None,
-    ):
+    ) -> set[str]:
 
         ws_users = self.users_api.get_users(opts={"workspace": workspace_id, "opt_fields": "gid,name,email"})
 
@@ -277,7 +308,7 @@ class AsanaAPI:
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
 
-class AsanaConnector(LoadConnector, PollConnector):
+class AsanaConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     def __init__(
         self,
         asana_workspace_id: str,
@@ -286,9 +317,15 @@ class AsanaConnector(LoadConnector, PollConnector):
         batch_size: int = INDEX_BATCH_SIZE,
         continue_on_failure: bool = CONTINUE_ON_CONNECTOR_FAILURE,
     ) -> None:
-        self.workspace_id = asana_workspace_id
+        if not isinstance(asana_workspace_id, str) or not asana_workspace_id.strip():
+            raise ValueError("Asana workspace ID is required")
+        self.workspace_id = asana_workspace_id.strip()
         self.project_ids_to_index: list[str] | None = [project_id.strip() for project_id in asana_project_ids.split(",") if project_id.strip()] if asana_project_ids else None
+        if asana_project_ids and not self.project_ids_to_index:
+            raise ValueError("Asana project scope must contain at least one ID")
         self.asana_team_id = asana_team_id.strip() if asana_team_id and asana_team_id.strip() else None
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("Asana batch_size must be a positive integer")
         self.batch_size = batch_size
         self.continue_on_failure = continue_on_failure
         self.size_threshold = None
@@ -306,11 +343,14 @@ class AsanaConnector(LoadConnector, PollConnector):
         return None
 
     def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch | None) -> GenerateDocumentsOutput:
-        start_time = datetime.fromtimestamp(start).isoformat()
+        start_time = datetime.fromtimestamp(start, tz=UTC).isoformat()
         logging.info(f"Starting Asana poll from {start_time}")
         docs_batch: list[Document] = []
         tasks = self.asana_client.get_tasks(self.project_ids_to_index, start_time)
         for task in tasks:
+            task.last_modified = task.last_modified.replace(tzinfo=UTC) if task.last_modified.tzinfo is None else task.last_modified.astimezone(UTC)
+            if task.last_modified.timestamp() < start or (end is not None and task.last_modified.timestamp() >= end):
+                continue
             docs = self._task_to_documents(task)
             docs_batch.extend(docs)
 
@@ -328,6 +368,17 @@ class AsanaConnector(LoadConnector, PollConnector):
     def load_from_state(self) -> GenerateDocumentsOutput:
         logging.info("Starting full index of all Asana tasks")
         return self.poll_source(start=0, end=None)
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        batch: list[SlimDocument] = []
+        for task_id in self.asana_client.get_task_ids(self.project_ids_to_index):
+            for attachment_id in self.asana_client.get_attachment_ids(task_id):
+                batch.append(SlimDocument(id=f"asana:{task_id}:{attachment_id}"))
+                if len(batch) >= self.batch_size:
+                    yield batch
+                    batch = []
+        if batch:
+            yield batch
 
     def _task_to_documents(self, task: AsanaTask) -> list[Document]:
         docs: list[Document] = []
@@ -358,6 +409,7 @@ class AsanaConnector(LoadConnector, PollConnector):
                 )
             except Exception:
                 logging.exception(f"Failed to download attachment {att.get('gid')} for task {task.id}")
+                raise
 
         return docs
 

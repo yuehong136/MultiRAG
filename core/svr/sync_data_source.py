@@ -77,6 +77,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
         FileSource.GITLAB,
         FileSource.DROPBOX,
         FileSource.SEAFILE,
+        FileSource.ASANA,
     }
 )
 
@@ -1014,11 +1015,12 @@ class Airtable(SyncBase):
 class Asana(SyncBase):
     SOURCE_NAME: str = FileSource.ASANA
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         self.connector = AsanaConnector(
             self.conf.get("asana_workspace_id"),
             self.conf.get("asana_project_ids"),
             self.conf.get("asana_team_id"),
+            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
         )
         credentials = self.conf.get("credentials", {})
         if "asana_api_token_secret" not in credentials:

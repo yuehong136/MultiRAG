@@ -1,45 +1,13 @@
-import importlib.util
-import sys
-import types
-from pathlib import Path
+from typing import Any
 
 import pytest
 
+from common.data_source import asana_connector
+
 
 @pytest.fixture
-def asana_module(monkeypatch):
-    data_source_pkg = types.ModuleType("common.data_source")
-    data_source_pkg.__path__ = [str(Path(__file__).parents[2] / "common" / "data_source")]
-    monkeypatch.setitem(sys.modules, "common.data_source", data_source_pkg)
-
-    config = types.ModuleType("common.data_source.config")
-    config.CONTINUE_ON_CONNECTOR_FAILURE = True
-    config.INDEX_BATCH_SIZE = 10
-    config.DocumentSource = types.SimpleNamespace(ASANA="asana")
-    monkeypatch.setitem(sys.modules, "common.data_source.config", config)
-
-    interfaces = types.ModuleType("common.data_source.interfaces")
-    interfaces.LoadConnector = type("LoadConnector", (), {})
-    interfaces.PollConnector = type("PollConnector", (), {})
-    monkeypatch.setitem(sys.modules, "common.data_source.interfaces", interfaces)
-
-    models = types.ModuleType("common.data_source.models")
-    models.Document = type("Document", (), {})
-    models.GenerateDocumentsOutput = object
-    models.SecondsSinceUnixEpoch = int
-    monkeypatch.setitem(sys.modules, "common.data_source.models", models)
-
-    utils = types.ModuleType("common.data_source.utils")
-    utils.extract_size_bytes = lambda attachment: attachment.get("size")
-    utils.get_file_ext = lambda filename: filename.rsplit(".", 1)[-1] if "." in filename else ""
-    monkeypatch.setitem(sys.modules, "common.data_source.utils", utils)
-
-    module_path = Path(__file__).parents[2] / "common" / "data_source" / "asana_connector.py"
-    spec = importlib.util.spec_from_file_location("asana_connector_under_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+def asana_module() -> Any:
+    return asana_connector
 
 
 class FakeUsersAPI:

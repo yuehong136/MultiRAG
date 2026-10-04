@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -99,6 +99,15 @@ SeaFile 清单与正文共用 account/library/directory 范围、共享库过滤
 异常响应、缺失身份、库 token 对应其他库、正文下载失败均中断本轮，不能视为空清单。
 成功的空账户/库/目录可核对删除。权限或配置范围收窄、文件超过尺寸上限会改变索引范围；
 开启删除同步前应确认范围，恢复旧文件且修改时间未进入增量窗口时需要重建。
+
+Asana 清单与正文共用 workspace、显式 project 列表，以及归档、team 和 private 项目范围。
+显式配置的项目未出现在 workspace 全部分页中会失败，不默认为已删除。所有任务和附件清单
+使用显式终页及非循环 offset，身份保持 `asana:{task_id}:{attachment_id}`；任务本身不单独入库。
+清单不读取评论、附件详情或正文，也不以临时下载 URL、尺寸或增量时间过滤存在的附件。
+正文附件详情或下载失败会阻断本轮。项目任务端点按完整分页读取，正文在本地使用 UTC
+`start <= modified_at < end` 窗口；终点在清单开始前捕获，不因未来任务截断后续任务。
+参见 [Asana 分页合同](https://developers.asana.com/docs/pagination) 与
+[项目任务端点](https://developers.asana.com/reference/gettasksforproject)。
 
 ## 文档身份与删除链
 
