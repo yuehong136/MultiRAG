@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"context"
 	"fmt"
 	"gorm.io/gorm"
 	"multirag/internal/entity"
@@ -55,6 +56,17 @@ func (dao *DocumentDAO) GetByID(id string) (*entity.Document, error) {
 		return nil, err
 	}
 	return &document, nil
+}
+
+// GetByIDs checks SQL parent existence for retrieval, including disabled rows.
+// No status predicate: availability is enforced by the existing index filters.
+func (dao *DocumentDAO) GetByIDs(ctx context.Context, ids []string) ([]*entity.Document, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var documents []*entity.Document
+	err := DB.WithContext(ctx).Select("id", "kb_id").Where("id IN ?", ids).Find(&documents).Error
+	return documents, err
 }
 
 // GetByAuthorID get documents by author ID

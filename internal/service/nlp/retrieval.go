@@ -24,8 +24,10 @@ import (
 	"sort"
 	"strings"
 
+	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
+	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"multirag/internal/tokenizer"
 
@@ -34,12 +36,22 @@ import (
 
 // RetrievalService provides retrieval search functionality
 type RetrievalService struct {
-	docEngine engine.DocEngine
+	docEngine   engine.DocEngine
+	documentDAO documentReader
+	kbDAO       knowledgebaseReader
+}
+
+type documentReader interface {
+	GetByIDs(context.Context, []string) ([]*entity.Document, error)
+}
+
+type knowledgebaseReader interface {
+	GetExistingIDs(context.Context, []string) ([]string, error)
 }
 
 // NewRetrievalService creates a new RetrievalService with the given doc engine
 func NewRetrievalService(docEngine engine.DocEngine) *RetrievalService {
-	return &RetrievalService{docEngine: docEngine}
+	return &RetrievalService{docEngine: docEngine, documentDAO: dao.NewDocumentDAO(), kbDAO: dao.NewKnowledgebaseDAO()}
 }
 
 // RetrievalRequest request for retrieval search
@@ -144,6 +156,14 @@ func (s *RetrievalService) Retrieval(ctx context.Context, req *RetrievalRequest)
 	searchResult, err := s.Search(ctx, searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("Search failed: %w", err)
+	}
+
+	searchResult, err = s.pruneDeletedChunks(ctx, searchResult, req.KbIDs)
+	if err != nil {
+		return nil, fmt.Errorf("prune deleted chunks: %w", err)
+	}
+	if len(searchResult.IDs) == 0 {
+		return &RetrievalResult{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}}, nil
 	}
 
 	// Perform reranking
@@ -430,6 +450,7 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 		"doc_id", "chunk_order_int", "page_num_int", "top_int", "create_timestamp_flt", "knowledge_graph_kwd",
 		"question_kwd", "question_tks", "doc_type_kwd",
 		"available_int", "content_with_weight", "mom_id", "pagerank_fea", "tag_feas",
+		"raptor_kwd",
 	}
 	if engine.GetEngineType() == engine.EngineInfinity {
 		src = append(src, "row_id()")
@@ -652,12 +673,16 @@ func RetrievalByChildren(chunks []map[string]interface{}, tenantIDs []string, do
 		return chunks
 	}
 
-	// Group child chunks by mom_id
+	// Group children by parent ID and their verified SQL document/dataset.
 	type childChunk struct {
 		chunk map[string]interface{}
+	}
+	type parentKey struct {
+		momID string
+		docID string
 		kbID  string
 	}
-	momChunks := make(map[string][]childChunk)
+	momChunks := make(map[parentKey][]childChunk)
 	remainingChunks := make([]map[string]interface{}, 0, len(chunks))
 
 	for _, ck := range chunks {
@@ -666,8 +691,8 @@ func RetrievalByChildren(chunks []map[string]interface{}, tenantIDs []string, do
 			remainingChunks = append(remainingChunks, ck)
 			continue
 		}
-		kbID, _ := ck["kb_id"].(string)
-		momChunks[momID] = append(momChunks[momID], childChunk{chunk: ck, kbID: kbID})
+		key := parentKey{momID: momID, docID: chunkScalar(ck["doc_id"]), kbID: chunkScalar(ck["kb_id"])}
+		momChunks[key] = append(momChunks[key], childChunk{chunk: ck})
 	}
 
 	if len(momChunks) == 0 {
@@ -677,16 +702,9 @@ func RetrievalByChildren(chunks []map[string]interface{}, tenantIDs []string, do
 
 	// Fetch parent chunks and aggregate
 	vectorSize := 1024
-	for momID, childList := range momChunks {
-		kbIDs := make([]string, 0, len(childList))
-		for _, c := range childList {
-			if c.kbID != "" {
-				kbIDs = append(kbIDs, c.kbID)
-			}
-		}
-		if len(kbIDs) == 0 {
-			kbIDs = append(kbIDs, "")
-		}
+	for key, childList := range momChunks {
+		momID := key.momID
+		kbIDs := []string{key.kbID}
 
 		parent, err := docEngine.GetChunk(ctx, indexNames[0], momID, kbIDs)
 		if err != nil {
@@ -695,6 +713,14 @@ func RetrievalByChildren(chunks []map[string]interface{}, tenantIDs []string, do
 		}
 		parentMap, ok := parent.(map[string]interface{})
 		if !ok {
+			continue
+		}
+		// Candidates already passed the SQL check. A residual or legacy parent
+		// belonging to another document must not reintroduce unverified text.
+		if key.docID == "" || chunkScalar(parentMap["doc_id"]) != key.docID || chunkScalar(parentMap["kb_id"]) != key.kbID {
+			for _, child := range childList {
+				remainingChunks = append(remainingChunks, child.chunk)
+			}
 			continue
 		}
 
@@ -780,6 +806,120 @@ func RetrievalByChildren(chunks []map[string]interface{}, tenantIDs []string, do
 
 	logger.Info("RetrievalByChildren finished", zap.Int("momChunks", len(momChunks)), zap.Int("resultChunks", len(remainingChunks)))
 	return remainingChunks
+}
+
+// chunkScalar accepts the scalar and singleton-list forms used by index engines.
+func chunkScalar(value interface{}) string {
+	switch value := value.(type) {
+	case string:
+		return value
+	case []string:
+		if len(value) == 1 {
+			return value[0]
+		}
+	case []interface{}:
+		if len(value) == 1 {
+			text, _ := value[0].(string)
+			return text
+		}
+	}
+	return ""
+}
+
+func isDatasetRaptorChunk(chunk map[string]interface{}) bool {
+	return chunkScalar(chunk["doc_id"]) == "graph_raptor_x" &&
+		chunkScalar(chunk["raptor_kwd"]) == "raptor" && chunkScalar(chunk["kb_id"]) != ""
+}
+
+// pruneDeletedChunks checks each candidate's SQL parent before its text reaches
+// scoring. Dataset RAPTOR summaries use a live selected dataset as their parent;
+// file RAPTOR uses a document. Explicit KG retrieval keeps its separate lifecycle.
+// Keep the backend total and candidate-window offsets; pruning can yield short pages.
+func (s *RetrievalService) pruneDeletedChunks(ctx context.Context, result *RetrievalSearchResult, kbIDs []string) (*RetrievalSearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	docIDs, summaryKBIDs := []string{}, []string{}
+	seenDocs, seenKBs := map[string]bool{}, map[string]bool{}
+	selectedKBs := map[string]bool{}
+	for _, id := range kbIDs {
+		selectedKBs[id] = true
+	}
+	for _, id := range result.IDs {
+		chunk := result.Field[id]
+		kbID := chunkScalar(chunk["kb_id"])
+		if chunk == nil || (len(kbIDs) > 0 && !selectedKBs[kbID]) {
+			continue
+		}
+		if isDatasetRaptorChunk(chunk) {
+			if selectedKBs[kbID] && !seenKBs[kbID] {
+				seenKBs[kbID] = true
+				summaryKBIDs = append(summaryKBIDs, kbID)
+			}
+		} else if docID := chunkScalar(chunk["doc_id"]); docID != "" && !seenDocs[docID] {
+			seenDocs[docID] = true
+			docIDs = append(docIDs, docID)
+		}
+	}
+	existingDocs := map[string]string{}
+	if len(docIDs) > 0 {
+		if s.documentDAO == nil {
+			return nil, fmt.Errorf("document reader is not initialized")
+		}
+		docs, err := s.documentDAO.GetByIDs(ctx, docIDs)
+		if err != nil {
+			return nil, fmt.Errorf("document existence lookup: %w", err)
+		}
+		for _, doc := range docs {
+			if doc != nil {
+				existingDocs[doc.ID] = doc.KbID
+			}
+		}
+	}
+	existingKBs := map[string]bool{}
+	if len(summaryKBIDs) > 0 {
+		if s.kbDAO == nil {
+			return nil, fmt.Errorf("dataset reader is not initialized")
+		}
+		ids, err := s.kbDAO.GetExistingIDs(ctx, summaryKBIDs)
+		if err != nil {
+			return nil, fmt.Errorf("dataset existence lookup: %w", err)
+		}
+		for _, id := range ids {
+			existingKBs[id] = true
+		}
+	}
+	filtered := *result
+	filtered.IDs = make([]string, 0, len(result.IDs))
+	filtered.Chunks = make([]map[string]interface{}, 0, len(result.IDs))
+	filtered.Field = make(map[string]map[string]interface{}, len(result.IDs))
+	if result.Highlight != nil {
+		filtered.Highlight = make(map[string]string)
+	}
+	for _, id := range result.IDs {
+		chunk := result.Field[id]
+		kbID := chunkScalar(chunk["kb_id"])
+		if chunk == nil || (len(kbIDs) > 0 && !selectedKBs[kbID]) {
+			continue
+		}
+		if isDatasetRaptorChunk(chunk) {
+			if !selectedKBs[kbID] || !existingKBs[kbID] {
+				continue
+			}
+		} else if parentKB, ok := existingDocs[chunkScalar(chunk["doc_id"])]; !ok || parentKB != kbID {
+			continue
+		}
+		filtered.IDs = append(filtered.IDs, id)
+		filtered.Chunks = append(filtered.Chunks, chunk)
+		filtered.Field[id] = chunk
+		if text, ok := result.Highlight[id]; ok {
+			filtered.Highlight[id] = text
+		}
+	}
+	if removed := len(result.IDs) - len(filtered.IDs); removed > 0 {
+		logger.Warn("Pruned chunks without a live SQL parent", zap.Int("removed", removed))
+	}
+	return &filtered, nil
 }
 
 // buildIndexNames creates index names for the given tenant IDs

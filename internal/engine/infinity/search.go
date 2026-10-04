@@ -104,7 +104,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 			"title_tks", "docnm_kwd", "img_id", "available_int", "important_kwd",
 			"position_int", "page_num_int", "top_int", "chunk_order_int",
 			"create_timestamp_flt", "knowledge_graph_kwd", "question_kwd", "question_tks",
-			"doc_type_kwd", "mom_id", "tag_kwd", "pagerank_fea", "tag_feas",
+			"doc_type_kwd", "mom_id", "tag_kwd", "pagerank_fea", "tag_feas", "raptor_kwd",
 		}
 		outputColumns = convertSelectFields(outputColumns)
 	}

@@ -70,7 +70,9 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 			Stream      bool
 			Thinking    map[string]string
 			Temperature float64
-			TopP        float64 `json:"top_p"`
+			TopP        float64  `json:"top_p"`
+			MaxTokens   int      `json:"max_tokens"`
+			Stop        []string `json:"stop"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -81,6 +83,13 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 		}
 		if body.Thinking["type"] != "disabled" {
 			t.Errorf("explicit thinking false lost %#v", body)
+		}
+		wantMaxTokens, wantStop := 128, []string{"END", "DONE"}
+		if body.Stream {
+			wantMaxTokens, wantStop = 256, []string{"stored"}
+		}
+		if body.MaxTokens != wantMaxTokens || !reflect.DeepEqual(body.Stop, wantStop) {
+			t.Errorf("JSON generation settings lost: max_tokens=%d stop=%v", body.MaxTokens, body.Stop)
 		}
 		if body.Stream {
 			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"reason\",\"content\":\"part\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" two\"}}]}\n\ndata: [DONE]\n\n")
@@ -103,7 +112,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 	if err := db.Create(&entity.Tenant{ID: "session-tenant", LLMID: name, Status: &active}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&entity.Chat{ID: "session-dialog", Status: &active, TenantID: "session-tenant", LLMID: name, LLMSetting: entity.JSONMap{"temperature": 0.7, "top_p": 0.8, "thinking": true}, PromptConfig: entity.JSONMap{"system": "rules"}, KBIDs: entity.JSONSlice{}}).Error; err != nil {
+	if err := db.Create(&entity.Chat{ID: "session-dialog", Status: &active, TenantID: "session-tenant", LLMID: name, LLMSetting: entity.JSONMap{"temperature": 0.7, "top_p": 0.8, "thinking": true, "max_tokens": 256, "stop": []string{"stored"}}, PromptConfig: entity.JSONMap{"system": "rules"}, KBIDs: entity.JSONSlice{}}).Error; err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"sync-session", "stream-session", "embedded-session", "failed-session"} {
@@ -115,6 +124,9 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 	svc.modelProviderService.providerManager = manager
 	messages := []map[string]interface{}{{"role": "user", "content": "old"}, {"role": "assistant", "content": "previous"}, {"role": "user", "content": "question", "id": "msg"}}
 	config := map[string]interface{}{"thinking": false, "temperature": 0.0, "stream": false}
+	if err := json.Unmarshal([]byte(`{"max_tokens":128,"stop":["END","DONE"]}`), &config); err != nil {
+		t.Fatal(err)
+	}
 	result, err := svc.Completion(context.Background(), "session-user", "sync-session", messages, "", config, "msg")
 	if err != nil || result["answer"] != "answer" {
 		t.Fatalf("completion %#v %v", result, err)

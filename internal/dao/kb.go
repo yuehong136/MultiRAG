@@ -17,8 +17,9 @@
 package dao
 
 import (
-	"path"
+	"context"
 	"multirag/internal/entity"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,17 @@ func (dao *KnowledgebaseDAO) GetByIDs(ids []string) ([]*entity.Knowledgebase, er
 	var kbs []*entity.Knowledgebase
 	err := DB.Where("id IN ? AND status = ?", ids, string(entity.StatusValid)).Find(&kbs).Error
 	return kbs, err
+}
+
+// GetExistingIDs checks the SQL lifecycle of dataset-owned retrieval summaries.
+func (dao *KnowledgebaseDAO) GetExistingIDs(ctx context.Context, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var existing []string
+	err := DB.WithContext(ctx).Model(&entity.Knowledgebase{}).
+		Where("id IN ? AND status = ?", ids, string(entity.StatusValid)).Pluck("id", &existing).Error
+	return existing, err
 }
 
 // GetByName retrieves a knowledge base by name and tenant ID

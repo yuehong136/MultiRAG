@@ -2516,6 +2516,44 @@ Web 提交 `02681e3` 接入开关及 Bitbucket 账号邮箱，`06e0039` 补充 D
 Web 表单 13 项通过，build/lint/file-size exit=0（lint 保留既有告警）；三源明暗主题、
 键盘开关与中英文 Drive 帮助已在当前页面验收，未创建真实数据源。未 push。
 
+## 486ca463aadf1a5ff088e6879efa4ac1f54ae2b2 · Go 删除残留检索过滤
+
+对照完整四文件 diff；上游 remote 已核为 `infiniflow/ragflow`，目标为冻结
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 的祖先，未 fetch 或越过冻结上限。
+已向 Go provider owner 发送接口边界交接；本项保持 `ChatConfig`、绑定模型和 provider 接口。
+
+- 实际缺口：公共 Go `Retrieval` 在评分前批量查询 SQL 文档；缺少字段、缺少文档 ID、
+  物理删除或不匹配 SQL 数据集的候选被剔除；SQL 错误传播，不让未验证正文进入 rerank。
+  构造器绑定 DAO，现有 `ChunkService.RetrievalTest` 自动消费，无需新增旧的 ModelBundle 链。
+- 本地生命周期适配：禁用文档不是删除。全库 RAPTOR 的 `graph_raptor_x` 与 `raptor_kwd`
+  标记需要有效的所选 SQL 数据集；文件 RAPTOR 仍查文档。Infinity 固定投影补读标记。
+  保持已接受的派生产物生命周期；未重复 Python `a7ce1b16` 的实现。
+- 消费者补充：parent 展开在过滤后再次读索引，按文档/数据集分组并校验同源；旧 parent ID
+  碰撞或跨文档残留保留已验证 child，避免重引入未验证正文。完整 `8afebbb67` 的存储查询、
+  多租户和其他合并行为不随本项移植。
+- 已等价：session 的 `buildGenConf → ChatModel → chatGenerationConfig` 用 typed JSON
+  unmarshal 转换整数 `max_tokens` 和字符串数组 `stop`，覆盖存储设置、请求覆盖和流式请求。
+  不恢复已删除的 `buildChatConfig`，不为等价部分新增生产代码提交。保留本地对小数/溢出
+  token 数及数字 stop 元素的错误；上游截断/静默丢弃会削弱现有校验，建议继续保留本地契约。
+- 相关后修：采用 `a78a3fdd4` 的空 IDs 查询短路；沿当前 session/模型重构和 context 适配。
+  不复制 `5bb5ba221` 之后的全索引计数机制，不扩展到冻结末端的整套 Go pipeline。
+
+当前行为、count 边界和专项运行方式见 [Go 检索说明](../go-retrieval.md)。
+本次使用 Go 1.25.14 与实际 C++ tokenizer 库验证：
+
+- `go test -count=1 -json ./internal/...`：12 个测试包通过，182 个顶层用例通过
+  （含子用例 484 passed）；9 个 opt-in 用例跳过，未把 skip 计作验收。
+- 本项检索与 session 两个 scratch 用例另行启用并通过，无 skip。真实 PostgreSQL 删除
+  独立 SQL 回读、Infinity 删除残留索引、rerank 入参、parent 消费者、有效/失效全库 RAPTOR
+  及存储/请求/流式 JSON 配置均验证；SQL/Infinity 自有库删除后回读不存在。
+- `go build ./internal/...`、`go vet ./internal/...`、DAO/检索/session/Infinity
+  race 检查、三个独立 cmd main 的构建均 exit=0，验证期间 Go 输入未漂移。
+- 本次 `make integration`：755 passed、无 skip，exit=0；1697 个 Python/配置验证
+  输入前后哈希一致，自有 Infinity 测试容器及监听端口已清理。
+
+未做 MySQL、生产库、真实外部 provider 或 Elasticsearch/Milvus 完整检索验收；
+provider 使用真实 HTTP 协议替身。Python `a7ce1b16` 生产实现未改动。
+
 ## b684c899 · 旧 API 兼容入口评估与会话 PUT 适配
 
 2026-10-04 按 `b684c899501ce6b7236d3027f66b75d1097e4873` 完整七文件 diff 与冻结
