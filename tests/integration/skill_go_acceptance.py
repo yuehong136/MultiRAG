@@ -336,3 +336,113 @@ def test_go_staging_crash_cleans_exact_objects(go_skills: dict[str, Any]) -> Non
         assert db.scalar(sa.select(sa.func.count()).select_from(SkillVersionFile).where(SkillVersionFile.version_id == version)) == 0
     assert all(env["storage"].get_bytes(bucket, key) is None for bucket, key in addresses)
     complete(env, skill_request(env, "DELETE", f"/spaces/{sid}", key=uuid4().hex, expected=202))
+
+
+def test_go_python_asset_pagination_over_100(go_skills: dict[str, Any]) -> None:
+    """Metadata-only seed tests SQL pagination, not upload validation or object storage."""
+    from api.db.db_models import Skill, SkillVersion
+
+    env = go_skills
+    py = {**env, "base": env["python_base"]}
+    sid = skill_request(env, "POST", "/spaces", body={"name": "Pagination " + uuid4().hex})["id"]
+    foreign_space = uuid4().hex
+    foreign_tenant = env["ids"]["outsider"]
+    expected_ids: list[str] = []
+    hidden_id = ""
+    foreign_id = ""
+    try:
+        with Session(env["engine"]) as db:
+            db.add(
+                SkillSpace(
+                    id=foreign_space,
+                    tenant_id=foreign_tenant,
+                    created_by=foreign_tenant,
+                    name="Foreign pagination",
+                    name_key="foreign pagination",
+                    root_folder_id=uuid4().hex,
+                    state="active",
+                    backend_owner="go",
+                    revision=1,
+                )
+            )
+            db.flush()
+            for space_id, tenant, count in ((sid, env["ids"]["owner"], 102), (foreign_space, foreign_tenant, 1)):
+                skills: list[Skill] = []
+                versions: list[SkillVersion] = []
+                for index in range(count):
+                    skill_id, version_id = uuid4().hex, uuid4().hex
+                    deleting = space_id == sid and index == 101
+                    skills.append(
+                        Skill(
+                            id=skill_id,
+                            tenant_id=tenant,
+                            space_id=space_id,
+                            folder_id=uuid4().hex,
+                            name=f"asset-{index:03}",
+                            description="Pagination seed",
+                            tags=[],
+                            state="deleting" if deleting else "active",
+                            revision=1,
+                        )
+                    )
+                    # Zero-file installed versions are schema-valid isolated seeds. They
+                    # deliberately do not exercise SKILL.md validation or downloads.
+                    versions.append(
+                        SkillVersion(
+                            id=version_id,
+                            tenant_id=tenant,
+                            skill_id=skill_id,
+                            folder_id=uuid4().hex,
+                            version="1.0.0",
+                            content_digest=hashlib.sha256(b"").hexdigest(),
+                            manifest={"files": []},
+                            source_kind="local",
+                            state="installed",
+                            index_state="unindexed",
+                            file_count=0,
+                            total_size=0,
+                        )
+                    )
+                    if space_id == foreign_space:
+                        foreign_id = skill_id
+                    elif deleting:
+                        hidden_id = skill_id
+                    else:
+                        expected_ids.append(skill_id)
+                db.add_all(skills)
+                db.flush()
+                db.add_all(versions)
+                db.flush()
+                for skill, version in zip(skills, versions, strict=True):
+                    skill.active_version_id = version.id
+            db.commit()
+        assert len(expected_ids) == 101
+        assert skill_request(env, "GET", f"/spaces/{sid}/config")["top_k"] == 10
+        for backend in (env, py):
+            for search in (False, True):
+                received: list[str] = []
+                for page, length in ((1, 100), (2, 1), (3, 0)):
+                    if search:
+                        result = skill_request(backend, "POST", f"/spaces/{sid}/search", body={"query": "", "mode": "keyword", "page": page, "page_size": 100})
+                        assert result["total_relation"] == "eq"
+                        ids = [item["skill_id"] for item in result["skills"]]
+                    else:
+                        result = skill_request(backend, "GET", f"/spaces/{sid}/skills?page={page}&page_size=100&sort=name&desc=false")
+                        assert (result["page"], result["page_size"]) == (page, 100)
+                        ids = [item["id"] for item in result["skills"]]
+                    assert result["total"] == 101
+                    assert len(ids) == length
+                    assert hidden_id not in ids and foreign_id not in ids
+                    received.extend(ids)
+                assert received == expected_ids
+                assert len(set(received)) == 101
+            assert skill_request(backend, "GET", f"/spaces/{foreign_space}/skills", expected=404)["error_code"] == "NOT_FOUND"
+            assert skill_request(backend, "POST", f"/spaces/{sid}/search", token=env["tokens"]["outsider"], body={"query": "", "mode": "keyword"}, expected=404)["error_code"] == "NOT_FOUND"
+    finally:
+        # The shared fixture cleans its owner tenant; remove only this extra seed.
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(Skill).where(Skill.space_id == foreign_space).values(active_version_id=None))
+            db.execute(sa.delete(SkillVersion).where(SkillVersion.skill_id.in_(sa.select(Skill.id).where(Skill.space_id == foreign_space))))
+            db.execute(sa.delete(Skill).where(Skill.space_id == foreign_space))
+            db.execute(sa.delete(SkillSpace).where(SkillSpace.id == foreign_space))
+            db.commit()
