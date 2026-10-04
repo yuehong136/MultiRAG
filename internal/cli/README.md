@@ -149,3 +149,31 @@ The parser uses a hand-written recursive descent approach instead of go-yacc for
 - No code generation step required
 
 The parser structure follows the grammar defined in the Python version, ensuring full syntax compatibility.
+
+## Skills asset library
+
+`skills help` lists the standalone asset commands. The same CLI works against
+Python and Go `/api/v1/skills` endpoints; space writes must go to its owner.
+The first release accepts local directories and ZIP archives and never executes
+package code. It does not connect the existing MCP tool selector to skills.
+
+```bash
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skills create-space "Team skills"
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skills install SPACE_ID ./my-skill my-skill 1.0.0 --activate --key install-1
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skills wait OPERATION_ID
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skills list SPACE_ID
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skills download SPACE_ID VERSION_ID ./skill-1.0.0.zip
+```
+
+Commands print JSON with decimal-string model IDs. Long operations print their
+idempotency key to stderr before sending and return an accepted operation ID;
+acceptance is not successful completion. `wait` returns nonzero for failed or
+partial operations. After an uncertain request, reuse `--key` or inspect the
+operation; synchronous creates require a list/readback before retrying.
+Downloads publish only complete bytes and refuse to overwrite existing files.
+
+Configure exact embedding/rerank model IDs using `skills models`, `skills config
+SPACE_ID`, and `skills set-config SPACE_ID config.json` (include the current
+`revision`). Explicit `skills reindex SPACE_ID` publishes the new configuration
+only after index verification. Search supports keyword/vector/hybrid; empty
+queries require keyword mode. See [the shared contract](../../docs/skills/CONTRACT.md).

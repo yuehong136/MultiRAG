@@ -303,7 +303,7 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 	if len(nonFlagArgs) > 0 {
 		// Use the joined command so the "search ... ON DATASETS" disambiguation
 		// (inside looksLikeContextEngine) sees the whole command, not just the verb.
-		if looksLikeContextEngine(strings.Join(nonFlagArgs, " ")) {
+		if strings.EqualFold(nonFlagArgs[0], "skills") || looksLikeContextEngine(strings.Join(nonFlagArgs, " ")) {
 			// Context Engine command (ls/search/cat): keep the args split so the
 			// subcommand flag parser (-d/-q/-k/-t/-n) sees them, and do not append
 			// a trailing semicolon.
@@ -539,6 +539,12 @@ func (c *CLI) execute(input string) error {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil
+	}
+	if words := parseContextEngineArgs(input); len(words) > 0 && strings.EqualFold(words[0], "skills") {
+		if c.args != nil && len(c.args.CommandArgs) > 0 {
+			words = c.args.CommandArgs
+		}
+		return c.executeSkills(words[1:])
 	}
 
 	// Meta commands start with a backslash.
