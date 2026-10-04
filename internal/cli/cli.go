@@ -303,7 +303,7 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 	if len(nonFlagArgs) > 0 {
 		// Use the joined command so the "search ... ON DATASETS" disambiguation
 		// (inside looksLikeContextEngine) sees the whole command, not just the verb.
-		if strings.EqualFold(nonFlagArgs[0], "skills") || looksLikeContextEngine(strings.Join(nonFlagArgs, " ")) {
+		if isSkillCommand(nonFlagArgs[0]) || looksLikeContextEngine(strings.Join(nonFlagArgs, " ")) {
 			// Context Engine command (ls/search/cat): keep the args split so the
 			// subcommand flag parser (-d/-q/-k/-t/-n) sees them, and do not append
 			// a trailing semicolon.
@@ -465,6 +465,7 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 	engine := contextengine.NewEngine()
 	engine.RegisterProvider(contextengine.NewDatasetProvider(&httpClientAdapter{client: client.HTTPClient}))
 	engine.RegisterProvider(contextengine.NewFileProvider(&httpClientAdapter{client: client.HTTPClient}))
+	engine.RegisterProvider(contextengine.NewSkillProvider(&skillCoreClient{client: client.HTTPClient, ctx: context.Background()}))
 
 	return &CLI{
 		prompt:        prompt,
@@ -540,11 +541,14 @@ func (c *CLI) execute(input string) error {
 	if input == "" {
 		return nil
 	}
-	if words := parseContextEngineArgs(input); len(words) > 0 && strings.EqualFold(words[0], "skills") {
+	if words := parseContextEngineArgs(input); len(words) > 0 && isSkillCommand(words[0]) {
 		if c.args != nil && len(c.args.CommandArgs) > 0 {
 			words = c.args.CommandArgs
 		}
-		return c.executeSkills(words[1:])
+		if strings.EqualFold(words[0], "skills") {
+			return c.executeSkills(words[1:])
+		}
+		return c.executeSkillCore(strings.ToLower(words[0]), words[1:])
 	}
 
 	// Meta commands start with a backslash.

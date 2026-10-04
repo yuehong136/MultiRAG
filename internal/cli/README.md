@@ -180,3 +180,31 @@ SPACE_ID`, and `skills set-config SPACE_ID config.json` (include the current
 `revision`). Explicit `skills reindex SPACE_ID` publishes the new configuration
 only after index verification. Search supports keyword/vector/hybrid; empty
 queries require keyword mode. See [the shared contract](../../docs/skills/CONTRACT.md).
+
+## Skills core
+
+`skill-core` and the Skills context provider use the fixed `/api/v1/skill-core`
+protocol on either backend. Every operation names a real space; there is no
+implicit default. IDs are decimal strings for models and opaque strings for
+spaces. Use an existing unique space name or its ID in context paths.
+
+```bash
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skill-core create-space "Team skills"
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skill-core set-config SPACE_ID config.json
+./multirag_cli -t "$MULTIRAG_API_TOKEN" install-skill SPACE_ID ./my-skill --version 1.0.0
+./multirag_cli -t "$MULTIRAG_API_TOKEN" ls skills/SPACE_ID
+./multirag_cli -t "$MULTIRAG_API_TOKEN" cat skills/SPACE_ID/my-skill/SKILL.md
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skill-core search SPACE_ID "matching query"
+./multirag_cli -t "$MULTIRAG_API_TOKEN" skill-core reindex SPACE_ID
+./multirag_cli -t "$MULTIRAG_API_TOKEN" uninstall-skill SPACE_ID my-skill
+```
+
+Core installation accepts a local directory with a root SKILL.md; remote sources,
+force replacement and ZIP installation belong to separate commands or future
+scope. Core versions are directories: reindex selects the highest numeric
+three-part version. No immutable version ID or operation ID is fabricated.
+Listing uses the complete Files tree even before indexing, with pagination.
+An upload followed by indexing failure returns an error explaining that files
+remain saved and reindex is needed. Uninstall issues one Files delete request;
+the backend coordinates index cleanup. A delete-space 202 remains pending until
+the space becomes unavailable. See [the core contract](../../docs/skills/CORE_CONTRACT.md).
