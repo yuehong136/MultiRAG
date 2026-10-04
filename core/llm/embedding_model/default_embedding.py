@@ -50,18 +50,14 @@ class DefaultEmbedding(Base):
         self._model = DefaultEmbedding._model
         self._model_name = DefaultEmbedding._model_name
 
-    def encode(self, texts: list):
+    def encode(self, texts: list[str]) -> tuple[np.ndarray | None, int]:
         batch_size = 16
         texts = [truncate(t, 2048) for t in texts]
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
-        ress = None
-        for i in range(0, len(texts), batch_size):
-            if ress is None:
-                ress = self._model.encode(texts[i : i + batch_size], convert_to_numpy=True)
-            else:
-                ress = np.concatenate((ress, self._model.encode(texts[i : i + batch_size], convert_to_numpy=True)), axis=0)
+        batches = [self._model.encode(texts[i : i + batch_size], convert_to_numpy=True) for i in range(0, len(texts), batch_size)]
+        ress = np.concatenate(batches, axis=0) if len(batches) > 1 else (batches[0] if batches else None)
         return ress, token_count
 
     def encode_queries(self, text: str):

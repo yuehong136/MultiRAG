@@ -1969,3 +1969,64 @@ def test_retired_document_run_http_matrix_has_no_private_execution(ingest_api: d
         assert not any(remaining.values())
         env["ingest_manifest"]["oldrun_extra_remaining"] = remaining
         evidence(env, "manifest", env["ingest_manifest"])
+
+
+@pytest.mark.parametrize("path", ["classic", "dataflow"])
+def test_embedding_batches_preserve_stored_vectors_and_token_ledgers(ingest_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    import numpy as np
+
+    from core.flow.pipeline import Pipeline
+    from core.svr import task_executor as worker
+
+    env = ingest_api
+    doc_id = env["b"]
+    if path == "dataflow":
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(Document).where(Document.id == doc_id).values(pipeline_id=env["canvas"]))
+            db.commit()
+    assert post(env, [doc_id])["code"] == 0
+    task_id = tasks(env, doc_id)[0]["id"]
+    calls: list[list[str]] = []
+
+    class Encoder:
+        max_length = 128
+
+        def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+            calls.append(list(texts))
+            return np.array([[float(t) if t.isdigit() else 10.0] * 768 for t in texts], dtype=np.float32), len(texts) * 3
+
+    async def parsed(*args: Any) -> list[dict[str, Any]]:
+        return [source(env, doc_id, text=str(i)) for i in range(5)]
+
+    async def pipeline_output(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"chunks": [{"text": str(i)} for i in range(5)], "embedding_token_consumption": 7}
+
+    monkeypatch.setattr(worker.settings, "EMBEDDING_BATCH_SIZE", 2)
+    monkeypatch.setattr(worker, "get_model_config_by_type_and_name", lambda *args: {})
+    monkeypatch.setattr(worker, "LLMBundle", lambda *args, **kwargs: Encoder())
+    monkeypatch.setattr(worker, "build_chunks", parsed)
+    monkeypatch.setattr(Pipeline, "run", pipeline_output)
+    settings.docStoreConn.create_idx(env["collection"], env["kb"], 768)
+    with Session(env["engine"]) as db:
+        task = TaskService.get_task(db, task_id)
+        assert task is not None
+        task.update(task_type="dataflow" if path == "dataflow" else "", dataflow_id=env["canvas"], file=None, parser_config={"filename_embd_weight": 0.25})
+        asyncio.run(worker.do_handle_task(db, task))
+    rows = sorted(index_snapshot(env), key=lambda row: row["chunk_order_int"])
+    assert len(rows) == 5
+    assert [row["content_with_weight"] for row in rows] == [str(i) for i in range(5)]
+    for i, row in enumerate(rows):
+        expected = 2.5 + 0.75 * i if path == "classic" else i
+        np.testing.assert_allclose(row["q_768_vec"], [expected] * 768)
+        # Baseline dataflow writes q_*_vec only; convert_data_types fills the
+        # standard vector with zeros. Preserve and expose that existing storage
+        # contract here; changing it is separate from accumulation parity.
+        np.testing.assert_allclose(row["vector"], [expected if path == "classic" else 0.0] * 768)
+    assert calls[-3:] == [["0", "1"], ["2", "3"], ["4"]]
+    tokens = 18 if path == "classic" else 22
+    with Session(env["engine"]) as db:
+        doc, kb, task_row = db.get(Document, doc_id), db.get(Knowledgebase, env["kb"]), db.get(Task, task_id)
+        assert doc is not None and kb is not None and task_row is not None
+        assert (doc.chunk_num, doc.token_num, kb.chunk_num, kb.token_num) == (5, tokens, 5, tokens)
+        assert task_row.progress == 1
+    evidence(env, "embedding-batches", {"path": path, "calls": calls, "tokens": tokens, "readback": rows})

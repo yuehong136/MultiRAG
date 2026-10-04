@@ -15,6 +15,7 @@
 import logging
 import random
 import re
+from typing import Any
 
 import numpy as np
 
@@ -53,7 +54,7 @@ class TokenizerParam(ProcessParamBase):
 class Tokenizer(ProcessBase):
     component_name = "Tokenizer"
 
-    async def _embedding(self, name, chunks):
+    async def _embedding(self, name: str, chunks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
         # Tokenization may legitimately produce zero chunks; embedding should be a no-op.
         if not chunks:
             return [], 0
@@ -93,29 +94,27 @@ class Tokenizer(ProcessBase):
 
         vts, c = embedding_model.encode([name])
         token_count += c
-        tts = np.concatenate([vts[0] for _ in range(len(texts))], axis=0)
+        # Keep the existing flattened title layout and weighting behavior.
+        tts = np.tile(vts[0], len(texts))
 
         @timeout(60)
-        def batch_encode(txts):
+        def batch_encode(txts: list[str]) -> tuple[np.ndarray, int]:
             nonlocal embedding_model
             return embedding_model.encode([truncate(c, embedding_model.max_length - 10) for c in txts])
 
-        cnts_ = np.array([])
+        cnts_batches = []
         for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
             async with embed_limiter:
                 vts, c = await thread_pool_exec(
                     batch_encode,
                     texts[i : i + settings.EMBEDDING_BATCH_SIZE],
                 )
-            if len(cnts_) == 0:
-                cnts_ = vts
-            else:
-                cnts_ = np.concatenate((cnts_, vts), axis=0)
+            cnts_batches.append(vts)
             token_count += c
             if i % 33 == 32:
                 self.callback(i * 1.0 / len(texts) / parts / settings.EMBEDDING_BATCH_SIZE + 0.5 * (parts - 1))
 
-        cnts = cnts_
+        cnts = np.concatenate(cnts_batches, axis=0) if len(cnts_batches) > 1 else cnts_batches[0]
         title_w = float(self._param.filename_embd_weight)
         vects = (title_w * tts + (1 - title_w) * cnts) if len(tts) == len(cnts) else cnts
 
