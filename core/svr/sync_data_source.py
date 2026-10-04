@@ -78,6 +78,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
         FileSource.DROPBOX,
         FileSource.SEAFILE,
         FileSource.ASANA,
+        FileSource.ZENDESK,
     }
 )
 
@@ -474,8 +475,8 @@ class IMAP(SyncBase):
 class Zendesk(SyncBase):
     SOURCE_NAME: str = FileSource.ZENDESK
 
-    async def _generate(self, task: dict):
-        self.connector = ZendeskConnector(content_type=self.conf.get("zendesk_content_type"))
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        self.connector = ZendeskConnector(content_type=self.conf.get("zendesk_content_type", "articles"))
         self.connector.load_credentials(self.conf["credentials"])
 
         end_time = datetime.now(UTC).timestamp()
@@ -495,7 +496,7 @@ class Zendesk(SyncBase):
         if batch_size <= 0:
             batch_size = INDEX_BATCH_SIZE
 
-        def document_batches():
+        def document_batches() -> GenerateDocumentsOutput:
             checkpoint = self.connector.build_dummy_checkpoint()
             pending_docs = []
             iterations = 0
@@ -507,11 +508,7 @@ class Zendesk(SyncBase):
 
                 for document, failure, next_checkpoint in doc_generator:
                     if failure is not None:
-                        logging.warning(
-                            "Zendesk connector failure: %s",
-                            getattr(failure, "failure_message", failure),
-                        )
-                        continue
+                        raise RuntimeError(f"Zendesk content failed: {failure.failure_message}")
 
                     if document is not None:
                         pending_docs.append(document)
@@ -529,7 +526,7 @@ class Zendesk(SyncBase):
             if pending_docs:
                 yield pending_docs
 
-        def wrapper():
+        def wrapper() -> GenerateDocumentsOutput:
             yield from document_batches()
 
         logging.info(

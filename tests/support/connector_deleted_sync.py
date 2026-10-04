@@ -107,7 +107,7 @@ async def assert_deleted_sync(env: dict[str, Any], monkeypatch: pytest.MonkeyPat
     current = {"id": task_id, "connector_id": connector_id, "kb_id": kb_id, "tenant_id": owner, "poll_range_start": original, "reindex": "0", "auto_parse": False, "timeout_secs": 30}
     try:
         await driver(current)
-        success = mode in {"complete", "empty"}
+        success = mode in {"complete", "empty", "disabled"}
         expected = {ids["retained"]} if mode == "complete" else set() if mode == "empty" else set(ids.values())
         with Session(env["engine"]) as db:
             log = db.get(SyncLogs, task_id)

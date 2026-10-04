@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator
 from typing import Any, override
 
 import requests
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from requests.exceptions import HTTPError
 
 from common.data_source.config import ZENDESK_CONNECTOR_SKIP_ARTICLE_LABELS, DocumentSource
@@ -32,7 +32,7 @@ class ZendeskClient:
         email: str,
         token: str,
         calls_per_minute: int | None = None,
-    ):
+    ) -> None:
         self.base_url = f"https://{subdomain}.zendesk.com/api/v2"
         self.auth = (f"{email}/token", token)
         self.make_request = request_with_rate_limit(self, calls_per_minute)
@@ -42,7 +42,7 @@ def request_with_rate_limit(client: ZendeskClient, max_calls_per_minute: int | N
     @retry_builder()
     @(rate_limit_builder(max_calls=max_calls_per_minute, period=60) if max_calls_per_minute else lambda x: x)
     def make_request(endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = requests.get(f"{client.base_url}/{endpoint}", auth=client.auth, params=params)
+        response = requests.get(f"{client.base_url}/{endpoint}", auth=client.auth, params=params, timeout=60)
 
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
@@ -65,90 +65,96 @@ class ZendeskPageResponse(BaseModel):
     has_more: bool
 
 
+def _cursor_page(client: ZendeskClient, endpoint: str, key: str, params: dict[str, Any]) -> ZendeskPageResponse:
+    data = client.make_request(endpoint, params)
+    meta = data.get("meta")
+    if not isinstance(data.get(key), list) or not isinstance(meta, dict) or type(meta.get("has_more")) is not bool:
+        raise ValueError("Incomplete Zendesk cursor page")
+    if any(not isinstance(item, dict) for item in data[key]):
+        raise ValueError("Invalid Zendesk page records")
+    if meta["has_more"] and (not isinstance(meta.get("after_cursor"), str) or not meta["after_cursor"]):
+        raise ValueError("Missing Zendesk next cursor")
+    return ZendeskPageResponse(data=data[key], meta=meta, has_more=meta["has_more"])
+
+
+def _cursor_records(client: ZendeskClient, endpoint: str, key: str, params: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    params = {"page[size]": MAX_PAGE_SIZE, **params}
+    seen: set[str] = set()
+    while True:
+        page = _cursor_page(client, endpoint, key, params)
+        yield from page.data
+        if not page.has_more:
+            return
+        cursor = page.meta["after_cursor"]
+        if cursor in seen:
+            raise ValueError("Repeated Zendesk pagination cursor")
+        seen.add(cursor)
+        params["page[after]"] = cursor
+
+
 def _get_content_tag_mapping(client: ZendeskClient) -> dict[str, str]:
-    content_tags: dict[str, str] = {}
-    params = {"page[size]": MAX_PAGE_SIZE}
-
-    try:
-        while True:
-            data = client.make_request("guide/content_tags", params)
-
-            for tag in data.get("records", []):
-                content_tags[tag["id"]] = tag["name"]
-
-            # Check if there are more pages
-            if data.get("meta", {}).get("has_more", False):
-                params["page[after]"] = data["meta"]["after_cursor"]
-            else:
-                break
-
-        return content_tags
-    except Exception as e:
-        raise Exception(f"Error fetching content tags: {e!s}")
+    return {tag["id"]: tag["name"] for tag in _cursor_records(client, "guide/content_tags", "records", {})}
 
 
 def _get_articles(client: ZendeskClient, start_time: int | None = None, page_size: int = MAX_PAGE_SIZE) -> Iterator[dict[str, Any]]:
-    params = {"page[size]": page_size, "sort_by": "updated_at", "sort_order": "asc"}
+    params: dict[str, Any] = {"page[size]": page_size, "sort_by": "updated_at", "sort_order": "asc"}
     if start_time is not None:
         params["start_time"] = start_time
-
-    while True:
-        data = client.make_request("help_center/articles", params)
-        yield from data["articles"]
-
-        if not data.get("meta", {}).get("has_more"):
-            break
-        params["page[after]"] = data["meta"]["after_cursor"]
+    yield from _cursor_records(client, "help_center/articles", "articles", params)
 
 
-def _get_article_page(
-    client: ZendeskClient,
-    start_time: int | None = None,
-    after_cursor: str | None = None,
-    page_size: int = MAX_PAGE_SIZE,
-) -> ZendeskPageResponse:
-    params = {"page[size]": page_size, "sort_by": "updated_at", "sort_order": "asc"}
+def _get_article_page(client: ZendeskClient, start_time: int | None = None, after_cursor: str | None = None, page_size: int = MAX_PAGE_SIZE) -> ZendeskPageResponse:
+    params: dict[str, Any] = {"page[size]": page_size, "sort_by": "updated_at", "sort_order": "asc"}
     if start_time is not None:
         params["start_time"] = start_time
     if after_cursor is not None:
         params["page[after]"] = after_cursor
-
-    data = client.make_request("help_center/articles", params)
-    return ZendeskPageResponse(
-        data=data["articles"],
-        meta=data["meta"],
-        has_more=bool(data["meta"].get("has_more", False)),
-    )
+    return _cursor_page(client, "help_center/articles", "articles", params)
 
 
 def _get_tickets(client: ZendeskClient, start_time: int | None = None) -> Iterator[dict[str, Any]]:
-    params = {"start_time": start_time or 0}
-
     while True:
-        data = client.make_request("incremental/tickets.json", params)
-        yield from data["tickets"]
-
-        if not data.get("end_of_stream", False):
-            params["start_time"] = data["end_time"]
-        else:
-            break
+        page = _get_tickets_page(client, start_time)
+        yield from page.data
+        if not page.has_more:
+            return
+        start_time = page.meta["end_time"]
 
 
-# TODO: maybe these don't need to be their own functions?
 def _get_tickets_page(client: ZendeskClient, start_time: int | None = None) -> ZendeskPageResponse:
-    params = {"start_time": start_time or 0}
+    data = client.make_request("incremental/tickets.json", {"start_time": start_time or 0})
+    if not isinstance(data.get("tickets"), list) or type(data.get("end_of_stream")) is not bool or type(data.get("end_time")) is not int:
+        raise ValueError("Incomplete Zendesk ticket export")
+    if any(not isinstance(ticket, dict) for ticket in data["tickets"]):
+        raise ValueError("Invalid Zendesk ticket records")
+    if not data["end_of_stream"] and data["end_time"] <= (start_time or 0):
+        raise ValueError("Zendesk ticket pagination did not advance")
+    return ZendeskPageResponse(data=data["tickets"], meta={"end_time": data["end_time"]}, has_more=not data["end_of_stream"])
 
-    # NOTE: for some reason zendesk doesn't seem to be respecting the start_time param
-    # in my local testing with very few tickets. We'll look into it if this becomes an
-    # issue in larger deployments
-    data = client.make_request("incremental/tickets.json", params)
-    if data.get("error") == "SupportProductInactive":
-        raise ValueError("Zendesk Support Product is not active for this account, No tickets to index")
-    return ZendeskPageResponse(
-        data=data["tickets"],
-        meta={"end_time": data["end_time"]},
-        has_more=not bool(data.get("end_of_stream", False)),
-    )
+
+def _require_source_id(record: dict[str, Any]) -> None:
+    identity = record.get("id")
+    if isinstance(identity, bool) or not isinstance(identity, str | int) or not str(identity).strip():
+        raise ValueError("Missing Zendesk source identity")
+
+
+def _is_indexable_article(article: dict[str, Any]) -> bool:
+    _require_source_id(article)
+    if "body" not in article or type(article.get("draft")) is not bool or "label_names" not in article:
+        raise ValueError("Incomplete Zendesk article eligibility")
+    body, labels = article["body"], article["label_names"]
+    if labels is None:
+        labels = []
+    if (body is not None and not isinstance(body, str)) or not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+        raise ValueError("Invalid Zendesk article eligibility")
+    return bool(body and parse_html_page_basic(body).strip()) and not article["draft"] and not any(label in ZENDESK_CONNECTOR_SKIP_ARTICLE_LABELS for label in labels)
+
+
+def _is_indexable_ticket(ticket: dict[str, Any]) -> bool:
+    _require_source_id(ticket)
+    if ticket.get("status") not in {"new", "open", "pending", "hold", "solved", "closed", "deleted"}:
+        raise ValueError("Invalid Zendesk ticket status")
+    return ticket["status"] != "deleted"
 
 
 def _fetch_author(client: ZendeskClient, author_id: str | int) -> BasicExpertInfo | None:
@@ -187,8 +193,8 @@ def _article_to_document(
     blob = text.encode("utf-8", errors="replace")
     # Build metadata
     metadata: dict[str, str | list[str]] = {
-        "labels": [str(label) for label in article.get("label_names", []) if label],
-        "content_tags": [content_tags[tag_id] for tag_id in article.get("content_tag_ids", []) if tag_id in content_tags],
+        "labels": [str(label) for label in article.get("label_names") or [] if label],
+        "content_tags": [content_tags[tag_id] for tag_id in article.get("content_tag_ids") or [] if tag_id in content_tags],
     }
 
     # Remove empty values
@@ -253,8 +259,7 @@ def _ticket_to_document(
         metadata["ticket_type"] = ticket_type
 
     # Fetch comments for the ticket
-    comments_data = client.make_request(f"tickets/{ticket.get('id')}/comments", {})
-    comments = comments_data.get("comments", [])
+    comments = _cursor_records(client, f"tickets/{ticket['id']}/comments", "comments", {})
 
     comment_texts = []
     for comment in comments:
@@ -285,6 +290,7 @@ def _ticket_to_document(
 class ZendeskConnectorCheckpoint(ConnectorCheckpoint):
     # We use cursor-based paginated retrieval for articles
     after_cursor_articles: str | None
+    seen_article_cursors: list[str] = Field(default_factory=list)
 
     # We use timestamp-based paginated retrieval for tickets
     next_start_time_tickets: int | None
@@ -299,6 +305,8 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
         content_type: str = "articles",
         calls_per_minute: int | None = None,
     ) -> None:
+        if content_type not in {"articles", "tickets"}:
+            raise ValueError(f"Unsupported content_type: {content_type}")
         self.content_type = content_type
         self.subdomain = ""
         # Fetch all tags ahead of time
@@ -328,7 +336,7 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
         if self.client is None:
             raise ZendeskCredentialsNotSetUpError()
         if checkpoint.cached_content_tags is None:
-            checkpoint.cached_content_tags = _get_content_tag_mapping(self.client)
+            checkpoint.cached_content_tags = _get_content_tag_mapping(self.client) if self.content_type == "articles" else {}
             return checkpoint  # save the content tags to the checkpoint
         self.content_tags = checkpoint.cached_content_tags
 
@@ -361,8 +369,12 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
         articles = response.data
         has_more = response.has_more
         after_cursor = response.meta.get("after_cursor")
+        if has_more:
+            if after_cursor in checkpoint.seen_article_cursors:
+                raise ValueError("Repeated Zendesk article cursor")
+            checkpoint.seen_article_cursors.append(after_cursor)
         for article in articles:
-            if article.get("body") is None or article.get("draft") or any(label in ZENDESK_CONNECTOR_SKIP_ARTICLE_LABELS for label in article.get("label_names", [])):
+            if not _is_indexable_article(article):
                 continue
 
             try:
@@ -426,7 +438,7 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
         has_more = ticket_response.has_more
         next_start_time = ticket_response.meta["end_time"]
         for ticket in tickets:
-            if ticket.get("status") == "deleted":
+            if not _is_indexable_ticket(ticket):
                 continue
 
             try:
@@ -481,6 +493,8 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
         if self.content_type == "articles":
             articles = _get_articles(self.client)
             for article in articles:
+                if not _is_indexable_article(article):
+                    continue
                 slim_doc_batch.append(
                     SlimDocument(
                         id=f"article:{article['id']}",
@@ -490,16 +504,11 @@ class ZendeskConnector(SlimConnectorWithPermSync, CheckpointedConnector[ZendeskC
                     yield slim_doc_batch
                     slim_doc_batch = []
         elif self.content_type == "tickets":
-            tickets = _get_tickets(self.client)
-            for ticket in tickets:
-                slim_doc_batch.append(
-                    SlimDocument(
-                        id=f"zendesk_ticket_{ticket['id']}",
-                    )
-                )
-                if len(slim_doc_batch) >= _SLIM_BATCH_SIZE:
-                    yield slim_doc_batch
-                    slim_doc_batch = []
+            # Incremental exports omit the most recent minute even when start_time=0.
+            # A normally exhausted export cannot authorize absence-based deletion.
+            raise ConnectorValidationError(
+                "Zendesk ticket deletion sync is unavailable: incremental exports omit the most recent minute and cannot provide a complete snapshot. Disable sync_deleted_files for tickets."
+            )
         else:
             raise ValueError(f"Unsupported content_type: {self.content_type}")
         if slim_doc_batch:

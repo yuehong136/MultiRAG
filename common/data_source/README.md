@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -108,6 +108,19 @@ Asana 清单与正文共用 workspace、显式 project 列表，以及归档、t
 `start <= modified_at < end` 窗口；终点在清单开始前捕获，不因未来任务截断后续任务。
 参见 [Asana 分页合同](https://developers.asana.com/docs/pagination) 与
 [项目任务端点](https://developers.asana.com/reference/gettasksforproject)。
+
+Zendesk articles 的正文与清单共用索引资格：排除 null/空正文、无可提取文字的 HTML、draft
+和配置的排除标签。清单不加增量时间条件；未知资格字段、权限错误、不完整或循环分页均失败。
+正文映射失败通过统一协调器阻断删除，不再跳过失败后完成本轮。文章身份保持 `article:{id}`。
+
+Zendesk ticket 正文保持 `zendesk_ticket_{id}`，排除 `status=deleted`，完整读取评论分页，
+不要求 Guide 内容标签权限。**Ticket 删除同步暂不支持**：`incremental/tickets.json` 即使
+从 `start_time=0` 导出并到达 `end_of_stream`，仍不返回最近一分钟的数据，不能证明完整。
+因此 tickets 的清单接口在发起请求前明确失败；启用 `sync_deleted_files` 的后续同步失败、
+保留原检查点与全部本地文档，关闭开关仍可同步正文。首次导入/重建遵循统一规则，不核对删除。
+该限制见 [Zendesk Incremental Exports](https://developer.zendesk.com/api-reference/ticketing/ticket-management/incremental_exports/)。
+后续需要源 ID 持久映射及删除候选的源端存在性复核；不能用搜索索引或不含归档记录的 tickets
+列表直接替换导出来宣称完整。UI 仅在 articles 模式展示删除开关，改为 tickets 时提交关闭值。
 
 ## 文档身份与删除链
 
