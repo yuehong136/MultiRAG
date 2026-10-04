@@ -47,7 +47,7 @@ func (dao *FileDAO) GetByPfID(tenantID, pfID string, page, pageSize int, orderby
 	var files []*entity.File
 	var total int64
 
-	query := DB.Model(&entity.File{}).
+	query := ExcludeSkillFiles(DB.Model(&entity.File{})).
 		Where("tenant_id = ? AND parent_id = ? AND id != ?", tenantID, pfID, pfID)
 
 	// Apply keyword filter
@@ -85,7 +85,7 @@ func (dao *FileDAO) GetByPfID(tenantID, pfID string, page, pageSize int, orderby
 // GetRootFolder gets or creates root folder for tenant
 func (dao *FileDAO) GetRootFolder(tenantID string) (*entity.File, error) {
 	var file entity.File
-	err := DB.Where("tenant_id = ? AND parent_id = id", tenantID).First(&file).Error
+	err := ExcludeSkillFiles(DB).Where("tenant_id = ? AND parent_id = id", tenantID).First(&file).Error
 	if err == nil {
 		return &file, nil
 	}
@@ -139,7 +139,7 @@ func (dao *FileDAO) GetFolderSize(folderID string) (int64, error) {
 	var dfs func(parentID string) error
 	dfs = func(parentID string) error {
 		var files []*entity.File
-		if err := DB.Select("id", "size", "type").
+		if err := ExcludeSkillFiles(DB).Select("id", "size", "type").
 			Where("parent_id = ? AND id != ?", parentID, parentID).
 			Find(&files).Error; err != nil {
 			return err
@@ -165,7 +165,7 @@ func (dao *FileDAO) GetFolderSize(folderID string) (int64, error) {
 // HasChildFolder checks if folder has child folders
 func (dao *FileDAO) HasChildFolder(folderID string) (bool, error) {
 	var count int64
-	err := DB.Model(&entity.File{}).
+	err := ExcludeSkillFiles(DB.Model(&entity.File{})).
 		Where("parent_id = ? AND id != ? AND type = ?", folderID, folderID, "folder").
 		Count(&count).Error
 	return count > 0, err

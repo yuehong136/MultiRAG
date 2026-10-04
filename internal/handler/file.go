@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"multirag/internal/common"
+	"multirag/internal/dao"
 	"multirag/internal/service"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
@@ -110,6 +112,10 @@ func (h *FileHandler) ListFiles(c *gin.Context) {
 
 	result, err := h.fileService.ListFiles(userID, parentID, page, pageSize, orderby, desc, keywords)
 	if err != nil {
+		if errors.Is(err, dao.ErrSkillManagedFile) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+			return
+		}
 		jsonError(c, common.CodeServerError, err.Error())
 		return
 	}
@@ -178,6 +184,10 @@ func (h *FileHandler) GetParentFolder(c *gin.Context) {
 	// Get parent folder with permission check
 	parentFolder, err := h.fileService.GetParentFolder(userID, fileID)
 	if err != nil {
+		if errors.Is(err, dao.ErrSkillManagedFile) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+			return
+		}
 		jsonError(c, common.CodeServerError, err.Error())
 		return
 	}
@@ -216,6 +226,10 @@ func (h *FileHandler) GetAllParentFolders(c *gin.Context) {
 	// Get all parent folders with permission check
 	parentFolders, err := h.fileService.GetAllParentFolders(userID, fileID)
 	if err != nil {
+		if errors.Is(err, dao.ErrSkillManagedFile) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+			return
+		}
 		jsonError(c, common.CodeServerError, err.Error())
 		return
 	}
@@ -253,6 +267,10 @@ func (h *FileHandler) GetFileAncestors(c *gin.Context) {
 	// Get all parent folders with permission check
 	parentFolders, err := h.fileService.GetAllParentFolders(userID, fileID)
 	if err != nil {
+		if errors.Is(err, dao.ErrSkillManagedFile) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+			return
+		}
 		jsonError(c, common.CodeServerError, err.Error())
 		return
 	}
@@ -328,6 +346,10 @@ func (h *FileHandler) UploadFile(c *gin.Context) {
 
 		result, err := h.fileService.UploadFile(userID, parentID, files)
 		if err != nil {
+			if errors.Is(err, dao.ErrSkillManagedFile) {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+				return
+			}
 			jsonError(c, common.CodeBadRequest, err.Error())
 			return
 		}
@@ -359,6 +381,10 @@ func (h *FileHandler) UploadFile(c *gin.Context) {
 
 		result, err := h.fileService.CreateFolder(userID, req.Name, parentID, req.Type)
 		if err != nil {
+			if errors.Is(err, dao.ErrSkillManagedFile) {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+				return
+			}
 			jsonError(c, common.CodeBadRequest, err.Error())
 			return
 		}
@@ -497,6 +523,10 @@ func (h *FileHandler) Download(c *gin.Context) {
 	// Get file metadata and check permission
 	file, err := h.fileService.GetFileContent(userID, fileID)
 	if err != nil {
+		if errors.Is(err, dao.ErrSkillManagedFile) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+			return
+		}
 		jsonError(c, common.CodeUnauthorized, err.Error())
 		return
 	}
@@ -519,6 +549,10 @@ func (h *FileHandler) Download(c *gin.Context) {
 	if len(blob) == 0 {
 		storageAddr, err := h.fileService.GetStorageAddress(fileID)
 		if err != nil {
+			if errors.Is(err, dao.ErrSkillManagedFile) {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+				return
+			}
 			jsonError(c, common.CodeServerError, "Failed to get file storage address: "+err.Error())
 			return
 		}

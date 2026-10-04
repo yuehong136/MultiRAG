@@ -8,6 +8,7 @@ import (
 	"multirag/internal/common"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
+	"multirag/internal/skills"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
 	"net/http"
@@ -214,6 +215,8 @@ func startServer(config *server.Config) {
 
 	// Setup routes
 	r.Setup(ginEngine)
+	stopSkills := skills.Attach(ginEngine, config)
+	defer stopSkills()
 
 	// Create HTTP server
 	addr := fmt.Sprintf(":%d", config.Server.Port)
