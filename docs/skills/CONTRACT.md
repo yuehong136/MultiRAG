@@ -1,7 +1,7 @@
 # 技能资产库合同 v1
 
 本合同约束 Python/FastAPI 与 Go 后端，以及共用 Web、CLI 消费者。
-当前状态：合同 v1 已冻结，尚未实现或验收。落地证据见 [交付状态](PROGRESS.md)。
+当前状态：合同v1已落地；已验能力与剩余限制见[交付状态](PROGRESS.md)。
 
 ## 范围与所有权
 
@@ -27,12 +27,13 @@ Python 复用 `async_current_tenant_id`；Go 必须保持 JWT/API-key 对 tenant
 空间名 trim 后为 1–128 字符，name_key 为 Unicode NFC + casefold 后值。
 技能名为 1–64 位 `[a-z0-9]+(?:-[a-z0-9]+)*`；名称和 SKILL.md frontmatter name 必须相同。
 版本为完整 SemVer（包括合法 prerelease/build）；版本字符串精确唯一。
-同版本同内容摘要重试返回已有结果，不同摘要返回 409/`VERSION_CONFLICT`。
+同版本同内容摘要且activate相同的重试返回已有结果，不同摘要返回409/`VERSION_CONFLICT`。
+相同版本但activate不同返回409/`VERSION_ALREADY_INSTALLED`；改用显式活动版本端点。
 已发布版本不可原位编辑；内容变化创建新版本。不存在破坏性 force 或跳过服务端校验。
 
 根目录必须有 UTF-8 `SKILL.md`，包含 YAML mapping frontmatter 的 name、description；
 不执行 YAML 标签或模板，description 最长 4096 字符，tags 为最多 32 个字符串。
-文件路径为 NFC POSIX 相对路径（最多 512 字符），禁止绝对路径、反斜线、空段、`.`、
+文件路径为 NFC POSIX 相对路径（最多512个Unicode字符，每段最多255字符），禁止绝对路径、反斜线、空段、`.`、
 `..`、NUL、控制字符、重复规范路径、软链及特殊文件。ZIP 不自动剥离任意顶层目录，
 拒绝加密包。最多 1000 个文件、单文件 5 MiB、总展开字节 50 MiB；压缩上传也受
 50 MiB 限制。边读边检查上限，不能仅信任 ZIP header、Content-Length 或客户端 manifest。
@@ -50,9 +51,16 @@ content_digest = SHA256(每项 `path + NUL + sha256 + NUL + decimal(size) + LF` 
 body 为 `{code:<相同HTTP整数>,message:<安全说明>,data:{error_code:<稳定字符串>}}`。
 日志与对外错误不得包含 API key、DSN、源凭据或包正文。所有列表 page 从 1 开始、
 page_size 默认 20、最大 100；排序有稳定 ID 次序兜底。时间字段 create_time/update_time
-均为 UTC Unix 毫秒。所有修改接受 `Idempotency-Key`（1–128 ASCII 可见字符）；
-长操作要求提供。同 tenant+kind+key 但不同规范请求摘要返回 409/`IDEMPOTENCY_CONFLICT`。
+均为 UTC Unix 毫秒。`Idempotency-Key` 为 1–128 ASCII 可见字符；长操作要求提供并保证
+幂等重放。同步创建/更新不维护幂等账本；更新使用 revision，创建重名返回冲突并由客户端
+读回确认。同 tenant+kind+key 的长操作不同规范请求摘要返回 409/`IDEMPOTENCY_CONFLICT`。
 终态失败不会因重复同键请求偷偷重新执行；使用 retry 端点。
+
+同内容去重使用新幂等键时，将键与规范请求摘要绑定至原operation的
+`payload.idempotency_aliases`，不增设第八张表。主键与别名均在事务级advisory lock
+`hashtextextended('skills-request:'+tenant+':'+kind+':'+key,0)`下查验；同键其他请求仍409。
+写别名与worker更新payload必须合并，不能覆盖彼此字段。需要重新锁定operation时先释放
+space锁，统一operation→space顺序，避免上传去重与worker死锁。
 
 | 方法与路径 | 输入 | data |
 |---|---|---|
@@ -192,6 +200,36 @@ count为完整删除的唯一File行（含目录），不存在ID报错，失败
 Go实现相同清理保证，不复用假成功engine Delete。正式交接证据记录在PROGRESS。
 
 ## 验收
+
+### Milvus共享物理格式
+
+集合为`skill_<generation_id>`，与知识库索引独立。每个启用字段按UTF-8完整字符分块，
+每块最多`min(8192, floor(max_tokens*0.8))`字节；不丢弃空白或截断文件尾部。
+行主键为`SHA256(version_id + NUL + field + NUL + decimal(从0开始块序号))`前32位hex；
+字段为id、version_id、skill_id、field、text、content_digest、vector、sparse。
+前三个ID为VARCHAR(32)，field为VARCHAR(16)，text为VARCHAR(32768)，摘要为VARCHAR(64)；
+vector为实际维度FLOAT_VECTOR/COSINE/AUTOINDEX，sparse由text的standard analyzer和BM25
+函数生成，SPARSE_INVERTED_INDEX的k1=1.2、b=0.75。每块摘要为版本包摘要。
+空集合通过所选模型对`skills`编码获取真实维度，不伪造向量。
+
+每个字段按版本取最高块分；keyword归一为`max(0,BM25)/(1+max(0,BM25))`，vector为
+`clamp(COSINE,0,1)`，按字段权重加权并除以全部启用正权重总和。hybrid按vector_weight
+混合两种分数；先应用similarity_threshold，后对候选实际rerank。rerank使用每版本最高分
+代表块，保留provider原始有限分数，不将单候选强制归零。结果分数降序、skill/version ID兜底。
+每字段原始候选上限`min(16384,max(limit*4,100))`；原始或唯一候选达到截断条件时返回gte。
+top_k为固定候选预算（1–100）；分页只切片同一候选池，不能随page扩大再rerank造成页间漂移。
+候选窗口截断时标gte，不能据此请求无限下一页；资产列表分页与总量来自SQL，不受top_k限制。
+
+当前首个适配后端为Milvus；其他引擎返回明确不可用。rerank先适配已严格验证的
+OpenAI-API-Compatible/VLLM `/rerank`协议，要求完整唯一的results[index,relevance_score]；
+其他provider的available=false，不将旧helper吞错返回零的行为视为支持。
+
+对象存储首期支持具备严格get_bytes读回的MinIO适配器；包装层与底层均须满足此能力。
+无此能力时storage_available=false，上传、读取和删除明确503，不用吞错的get判断对象不存在。
+两端共读的加密格式支持既有RAGF AES-128-CBC/AES-256-CBC；须配置相同密钥与算法。
+Go暂不支持SM4，显式不可用；不得向Python加密空间写入另一种明文字节格式。
+
+### 验收矩阵
 
 两端运行相同黑盒合同：JWT/API-key、租户隔离、CRUD、并发重名、不可变版本、ZIP与
 目录摘要、嵌套文件读回/下载、活动版本、模型配置清空及换维、超过100项分页、三种检索
