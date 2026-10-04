@@ -10,8 +10,8 @@ from gitlab.v4.objects import Project
 
 from common.data_source.config import INDEX_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError, UnexpectedValidationError
-from common.data_source.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector, SecondsSinceUnixEpoch
-from common.data_source.models import BasicExpertInfo, Document
+from common.data_source.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector, SecondsSinceUnixEpoch, SlimConnectorWithPermSync
+from common.data_source.models import BasicExpertInfo, Document, GenerateSlimDocumentOutput, SlimDocument
 from common.data_source.utils import get_file_ext
 
 T = TypeVar("T")
@@ -76,11 +76,15 @@ def _convert_issue_to_document(issue: Any) -> Document:
         primary_owners=[get_author(issue.author)],
         metadata={
             "state": issue.state,
-            "type": issue.type if issue.type else "Issue",
+            "type": getattr(issue, "type", None) or getattr(issue, "issue_type", None) or "Issue",
             "web_url": issue.web_url,
         },
     )
     return doc
+
+
+def _code_file_id(url: str, owner: str, name: str, branch: str, path: str) -> str:
+    return f"{url}/{owner}/{name}/-/blob/{branch}/{path}"
 
 
 def _convert_code_to_document(project: Project, file: Any, url: str, projectName: str, projectOwner: str) -> Document:
@@ -95,27 +99,16 @@ def _convert_code_to_document(project: Project, file: Any, url: str, projectName
     )
     # BoxConnector uses raw bytes for blob. Keep the same here.
     file_content_bytes = file_content_obj.decode()
-    file_url = f"{url}/{projectOwner}/{projectName}/-/blob/{default_branch}/{file['path']}"
+    file_url = _code_file_id(url, projectOwner, projectName, default_branch, file["path"])
 
-    # Try to use the last commit timestamp for incremental sync.
-    # Falls back to "now" if the commit lookup fails.
-    last_commit_at = None
-    try:
-        # Query commit history for this file on the default branch.
-        commits = project.commits.list(
-            ref_name=default_branch,
-            path=file["path"],
-            per_page=1,
-        )
-        if commits:
-            # committed_date is ISO string like "2024-01-01T00:00:00.000+00:00"
-            committed_date = commits[0].committed_date
-            if isinstance(committed_date, str):
-                last_commit_at = datetime.strptime(committed_date, "%Y-%m-%dT%H:%M:%S.%f%z").astimezone(UTC)
-            elif isinstance(committed_date, datetime):
-                last_commit_at = committed_date.astimezone(UTC)
-    except Exception:
-        last_commit_at = None
+    # A failed timestamp read must not silently move the file outside the
+    # captured polling window and permit deletion reconciliation to continue.
+    # `path` is the SDK's endpoint override; send the repository path as a query.
+    commits = project.commits.list(ref_name=default_branch, query_parameters={"path": file["path"]}, per_page=1, get_all=False)
+    if not commits:
+        raise ValueError("GitLab code file has no commit timestamp")
+    committed_date = commits[0].committed_date
+    last_commit_at = datetime.fromisoformat(committed_date) if isinstance(committed_date, str) else committed_date
 
     # Create and return a Document object
     doc = Document(
@@ -125,7 +118,7 @@ def _convert_code_to_document(project: Project, file: Any, url: str, projectName
         source=DocumentSource.GITLAB,
         semantic_identifier=file.get("name"),
         extension=get_file_ext(file.get("name")),
-        doc_updated_at=last_commit_at or datetime.now(tz=UTC),
+        doc_updated_at=last_commit_at.astimezone(UTC),
         size_bytes=len(file_content_bytes) if file_content_bytes is not None else 0,
         primary_owners=[],  # Add owners if needed
         metadata={
@@ -144,7 +137,7 @@ def _should_exclude(path: str) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in exclude_patterns)
 
 
-class GitlabConnector(LoadConnector, PollConnector):
+class GitlabConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     def __init__(
         self,
         project_owner: str,
@@ -155,6 +148,8 @@ class GitlabConnector(LoadConnector, PollConnector):
         include_issues: bool = True,
         include_code_files: bool = False,
     ) -> None:
+        if batch_size < 1:
+            raise ValueError("GitLab batch_size must be positive")
         self.project_owner = project_owner
         self.project_name = project_name
         self.batch_size = batch_size
@@ -191,6 +186,31 @@ class GitlabConnector(LoadConnector, PollConnector):
         except Exception as e:
             raise UnexpectedValidationError(f"Unexpected error while validating GitLab settings: {e}") from e
 
+    def _iter_code_files(self, project: Project) -> Iterator[dict[str, Any]]:
+        """Share the exact branch, exclusions and recursive scope with the snapshot."""
+        if not project.default_branch:
+            if project.empty_repo is True:
+                return
+            raise ValueError("GitLab repository has no default branch")
+        queue = deque([""])
+        visited: set[str] = set()
+        while queue:
+            current_path = queue.popleft()
+            if current_path in visited:
+                raise ValueError("GitLab repository listing repeated a directory")
+            visited.add(current_path)
+            for file in project.repository_tree(path=current_path, ref=project.default_branch, iterator=True):
+                if not isinstance(file, dict) or not isinstance(file.get("path"), str) or not file["path"]:
+                    raise ValueError("Incomplete GitLab repository entry")
+                if _should_exclude(file["path"]):
+                    continue
+                if file["type"] == "tree":
+                    queue.append(file["path"])
+                elif file["type"] == "blob":
+                    yield file
+                elif file["type"] != "commit":
+                    raise ValueError("Unknown GitLab repository entry type")
+
     def _fetch_from_gitlab(self, start: datetime | None = None, end: datetime | None = None) -> GenerateDocumentsOutput:
         if self.gitlab_client is None:
             raise ConnectorMissingCredentialError("Gitlab")
@@ -201,38 +221,17 @@ class GitlabConnector(LoadConnector, PollConnector):
 
         # Fetch code files
         if self.include_code_files:
-            # Fetching using BFS as project.report_tree with recursion causing slow load
-            queue = deque([""])  # Start with the root directory
-            while queue:
-                current_path = queue.popleft()
-                files = project.repository_tree(path=current_path, all=True)
-                for file_batch in _batch_gitlab_objects(files, self.batch_size):
-                    code_doc_batch: list[Document] = []
-                    for file in file_batch:
-                        if _should_exclude(file["path"]):
-                            continue
-
-                        if file["type"] == "blob":
-                            doc = _convert_code_to_document(
-                                project,
-                                file,
-                                self.gitlab_client.url,
-                                self.project_name,
-                                self.project_owner,
-                            )
-
-                            # Apply incremental window filtering for code files too.
-                            if start_utc is not None and doc.doc_updated_at <= start_utc:
-                                continue
-                            if end_utc is not None and doc.doc_updated_at > end_utc:
-                                continue
-
-                            code_doc_batch.append(doc)
-                        elif file["type"] == "tree":
-                            queue.append(file["path"])
-
-                    if code_doc_batch:
-                        yield code_doc_batch
+            for file_batch in _batch_gitlab_objects(self._iter_code_files(project), self.batch_size):
+                code_doc_batch: list[Document] = []
+                for file in file_batch:
+                    doc = _convert_code_to_document(project, file, self.gitlab_client.url, self.project_name, self.project_owner)
+                    if start_utc is not None and doc.doc_updated_at <= start_utc:
+                        continue
+                    if end_utc is not None and doc.doc_updated_at > end_utc:
+                        continue
+                    code_doc_batch.append(doc)
+                if code_doc_batch:
+                    yield code_doc_batch
 
         if self.include_mrs:
             merge_requests = project.mergerequests.list(
@@ -245,26 +244,24 @@ class GitlabConnector(LoadConnector, PollConnector):
             for mr_batch in _batch_gitlab_objects(merge_requests, self.batch_size):
                 mr_doc_batch: list[Document] = []
                 for mr in mr_batch:
-                    mr.updated_at = datetime.strptime(mr.updated_at, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    mr.updated_at = datetime.fromisoformat(mr.updated_at).astimezone(UTC)
                     if start_utc is not None and mr.updated_at <= start_utc:
-                        yield mr_doc_batch
-                        return
+                        continue
                     if end_utc is not None and mr.updated_at > end_utc:
                         continue
                     mr_doc_batch.append(_convert_merge_request_to_document(mr))
                 yield mr_doc_batch
 
         if self.include_issues:
-            issues = project.issues.list(state=self.state_filter, iterator=True)
+            issues = project.issues.list(state=self.state_filter, order_by="updated_at", sort="desc", iterator=True)
 
             for issue_batch in _batch_gitlab_objects(issues, self.batch_size):
                 issue_doc_batch: list[Document] = []
                 for issue in issue_batch:
-                    issue.updated_at = datetime.strptime(issue.updated_at, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    issue.updated_at = datetime.fromisoformat(issue.updated_at).astimezone(UTC)
                     # Avoid re-syncing the last-seen item.
                     if start_utc is not None and issue.updated_at <= start_utc:
-                        yield issue_doc_batch
-                        return
+                        continue
                     if end_utc is not None and issue.updated_at > end_utc:
                         continue
                     issue_doc_batch.append(_convert_issue_to_document(issue))
@@ -272,6 +269,26 @@ class GitlabConnector(LoadConnector, PollConnector):
 
     def load_from_state(self) -> GenerateDocumentsOutput:
         return self._fetch_from_gitlab()
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        """Enumerate the configured scope without reading file bodies or a time window."""
+        if self.gitlab_client is None:
+            raise ConnectorMissingCredentialError("Gitlab")
+        project = self.gitlab_client.projects.get(f"{self.project_owner}/{self.project_name}")
+
+        def identifiers() -> Iterator[str]:
+            if self.include_code_files:
+                for file in self._iter_code_files(project):
+                    yield _code_file_id(self.gitlab_client.url, self.project_owner, self.project_name, project.default_branch, file["path"])
+            if self.include_mrs:
+                for mr in project.mergerequests.list(state=self.state_filter, iterator=True):
+                    yield mr.web_url
+            if self.include_issues:
+                for issue in project.issues.list(state=self.state_filter, iterator=True):
+                    yield issue.web_url
+
+        for ids in _batch_gitlab_objects(identifiers(), self.batch_size):
+            yield [SlimDocument(id=identifier) for identifier in ids]
 
     def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> GenerateDocumentsOutput:
         start_datetime = datetime.fromtimestamp(start, tz=UTC)

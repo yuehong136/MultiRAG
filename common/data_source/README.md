@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -76,6 +76,14 @@ Bitbucket 清单覆盖配置 workspace、repository 或 project 内的全部 OPE
 Pull Request，使用与入库相同的来源 ID，无 `updated_on` 时间窗口。现有轻量 PR 枚举被复用；
 缺失仓库/PR 身份、异常集合、分页循环及显式权限错误均失败。PR 映射失败不会确认检查点
 或继续删除；正常内容同步保留原检查点和更新时间窗口。
+
+GitLab 清单覆盖配置的代码文件、MR 和 issue；代码按默认分支递归分页，沿用内容导入的
+路径排除规则与文件 URL，MR/issue 沿用 `web_url` 和 `state_filter`（默认 `all`）。
+清单不下载代码正文、不读取提交历史、不加入增量时间过滤。正文或提交时间读取失败、
+目录/对象分页失败都会阻断本轮；旧 MR 不会截断后续 MR/issue 的增量读取。
+空仓库须由项目明确标记 `empty_repo`，缺失默认分支不能被默认为空清单。
+默认分支、项目路径或状态过滤变化会改变可见身份/范围；应关闭删除同步并确认范围后重建。
+GitLab 的嵌套目录与分页依赖 [Repository Tree API](https://docs.gitlab.com/api/repositories/#list-repository-tree)。
 
 ## 文档身份与删除链
 

@@ -74,6 +74,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
         FileSource.JIRA,
         FileSource.BOX,
         FileSource.GITHUB,
+        FileSource.GITLAB,
     }
 )
 
@@ -1110,7 +1111,7 @@ class Github(SyncBase):
 class Gitlab(SyncBase):
     SOURCE_NAME: str = FileSource.GITLAB
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         """
         Sync files from GitLab attachments.
         """
@@ -1118,6 +1119,8 @@ class Gitlab(SyncBase):
         self.connector = GitlabConnector(
             project_owner=self.conf.get("project_owner"),
             project_name=self.conf.get("project_name"),
+            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
+            state_filter=self.conf.get("state_filter", "all"),
             include_mrs=self.conf.get("include_mrs", False),
             include_issues=self.conf.get("include_issues", False),
             include_code_files=self.conf.get("include_code_files", False),
