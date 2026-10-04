@@ -239,6 +239,7 @@ def test_remove_document_swallows_post_commit_cleanup_failures(monkeypatch: pyte
     monkeypatch.setattr("api.db.services.document_service.settings.docStoreConn", _ExplodingDocStore())
 
     assert DocumentService.remove_document(_build_session(), Document(id="doc-1"), "tenant-x") is True
+    assert DocumentService.remove_document(_build_session(), Document(id="doc-1"), "tenant-x", strict=True) is False
 
 
 def test_dataset_delete_document_route_no_longer_runs_duplicate_db_deletes(monkeypatch: pytest.MonkeyPatch) -> None:

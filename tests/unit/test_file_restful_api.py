@@ -150,14 +150,14 @@ def test_file_delete_runs_off_loop(client, monkeypatch):
     def _delete(s, uid, file_ids):
         _record(records, s)
         assert (uid, file_ids) == ("tenant-unit", ["f-1", "f-2"])
-        return True, True
+        return True, {"success_count": 2, "errors": []}
 
     monkeypatch.setattr(file_api_service, "delete_files", _delete)
 
     body = client.request("DELETE", "/api/v1/files", json={"ids": ["f-1", "f-2"]}).json()
 
     assert body["code"] == 0
-    assert body["data"] is True
+    assert body["data"] == {"success_count": 2, "errors": []}
     _assert_sync_facade(records, off_loop=True)
 
 
@@ -343,3 +343,11 @@ def test_file_routes_have_pure_async_dependency_tree(client, route_dependency_ca
         assert current_tenant_id not in calls, f"{method} {path} 依赖树含同步 current_tenant_id"
         assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
         assert async_current_tenant_id in calls, f"{method} {path} 缺异步鉴权依赖"
+
+
+def test_file_delete_partial_failure_keeps_payload(client, monkeypatch) -> None:
+    monkeypatch.setattr(file_api_service, "delete_files", lambda *args: (False, {"success_count": 1, "errors": ["No authorization for file f-2"]}))
+    response = client.request("DELETE", "/api/v1/files", json={"ids": ["f-1", "f-2"]})
+    assert response.status_code == 200
+    assert response.json()["code"] == int(RetCode.DATA_ERROR)
+    assert response.json()["data"] == {"success_count": 1, "errors": ["No authorization for file f-2"]}

@@ -34,7 +34,7 @@ from api.db import FileType
 from api.db.db_models import get_async_db
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService, UploadInfoArgumentError, UploadInfoCleanupError
-from api.utils.api_utils import async_current_tenant_id, get_error_argument_result, get_error_data_result, get_result, server_error_response
+from api.utils.api_utils import async_current_tenant_id, construct_json_result, get_error_argument_result, get_error_data_result, get_result, server_error_response
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common.constants import RetCode
 from common.misc_utils import thread_pool_exec
@@ -195,11 +195,15 @@ async def get_root_folder(
 async def delete(
     request_body: DeleteFileReq,
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> JSONResponse:
     try:
         # 存储 rm 与 remove_document（内混 Redis/存储/doc-store）交错：整块在工作线程 + 自开短会话执行
         success, result = await file_api_service.delete_files_async(tenant_id, request_body.ids)
-        return _respond(success, result)
+        return construct_json_result(
+            code=RetCode.SUCCESS if success else RetCode.DATA_ERROR,
+            message="success" if success else f"Deleted {result['success_count']} files with {len(result['errors'])} errors",
+            data=result,
+        )
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")

@@ -86,7 +86,7 @@ class MultiRAGGCS:
                 time.sleep(1)
         return False
 
-    def rm(self, bucket, fnm, tenant_id=None):
+    def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         # RENAMED PARAMETER: bucket_name -> bucket
         try:
             bucket_obj = self.client.bucket(self.bucket_name)
@@ -97,6 +97,7 @@ class MultiRAGGCS:
             pass
         except Exception:
             logging.exception(f"Fail to remove {bucket}/{fnm}:")
+            raise
 
     def get(self, bucket, filename, tenant_id=None):
         # RENAMED PARAMETER: bucket_name -> bucket

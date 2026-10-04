@@ -134,11 +134,12 @@ class MultiRAGS3:
 
     @use_prefix_path
     @use_default_bucket
-    def rm(self, bucket, fnm, *args, **kwargs):
+    def rm(self, bucket: str, fnm: str, *args: object, **kwargs: object) -> None:
         try:
             self.conn[0].delete_object(Bucket=bucket, Key=fnm)
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
+            raise
 
     @use_prefix_path
     @use_default_bucket

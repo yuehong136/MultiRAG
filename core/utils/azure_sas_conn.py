@@ -47,11 +47,12 @@ class MultiRAGAzureSasBlob:
                 self.__open__()
                 time.sleep(1)
 
-    def rm(self, bucket, fnm):
+    def rm(self, bucket: str, fnm: str) -> None:
         try:
             self.conn.delete_blob(fnm)
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
+            raise
 
     def get(self, bucket, fnm):
         for _ in range(1):

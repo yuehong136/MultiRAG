@@ -2184,12 +2184,14 @@ class DocumentService(CommonService):
             )
 
     @classmethod
-    def remove_document(cls, db: Session, doc: Document, tenant_id: str) -> bool:
+    def remove_document(cls, db: Session, doc: Document, tenant_id: str, *, strict: bool = False) -> bool:
+        """Delete owned state; strict reports cleanup failures after SQL commit."""
         from api.db.services.task_service import cancel_all_task_of
 
         snapshot = cls._delete_document_db_state(db, doc.id)
         if snapshot is None:
             return True
+        cleanup_ok = True
         doc_id = snapshot.doc_id
         tenant_id = snapshot.tenant_id or tenant_id
         collection_name = cls._resolve_collection_name(tenant_id, snapshot.kb_name)
@@ -2199,6 +2201,7 @@ class DocumentService(CommonService):
             cancel_all_task_of(db, doc_id, task_ids=snapshot.task_ids)
             logging.info(f"Cancelled all tasks for document {doc_id}")
         except Exception as e:
+            cleanup_ok = False
             logging.warning(f"Failed to cancel tasks for document {doc_id}: {e}")
 
         # Only a confirmed missing index skips index-dependent cleanup. A probe
@@ -2218,6 +2221,7 @@ class DocumentService(CommonService):
             if chunk_index_exists is not False:
                 cls.delete_chunk_images(snapshot, collection_name)
         except Exception as e:
+            cleanup_ok = False
             logging.warning(f"Failed to delete chunk images for document {doc_id}: {e}")
 
         # Delete thumbnail (non-critical, log and continue)
@@ -2226,6 +2230,7 @@ class DocumentService(CommonService):
                 if settings.STORAGE_IMPL.obj_exist(snapshot.kb_id, snapshot.thumbnail):
                     settings.STORAGE_IMPL.rm(snapshot.kb_id, snapshot.thumbnail)
         except Exception as e:
+            cleanup_ok = False
             logging.warning(f"Failed to delete thumbnail for document {doc_id}: {e}")
 
         for orphan_file in snapshot.orphan_file_payloads:
@@ -2234,6 +2239,7 @@ class DocumentService(CommonService):
             try:
                 settings.STORAGE_IMPL.rm(orphan_file.bucket, orphan_file.location)
             except Exception as e:
+                cleanup_ok = False
                 logging.warning(
                     "Failed to delete orphan file object %s/%s for document %s: %s",
                     orphan_file.bucket,
@@ -2253,12 +2259,15 @@ class DocumentService(CommonService):
                     # ES/OpenSearch/Infinity 使用位置参数: condition, index_name, knowledgebase_id
                     settings.docStoreConn.delete({"doc_id": doc_id}, collection_name, snapshot.kb_id)
         except Exception as e:
+            cleanup_ok = False
             logging.error(f"Failed to delete chunks from doc store for document {doc_id}: {e}")
 
         # Delete document metadata (non-critical, log and continue)
         try:
-            DocMetadataService.delete_document_metadata(db, doc_id, snapshot.kb_id, tenant_id)
+            if DocMetadataService.delete_document_metadata(db, doc_id, snapshot.kb_id, tenant_id) is False:
+                cleanup_ok = False
         except Exception as e:
+            cleanup_ok = False
             logging.warning(f"Failed to delete metadata for document {doc_id}: {e}")
 
         try:
@@ -2305,9 +2314,10 @@ class DocumentService(CommonService):
                         snapshot.kb_id,
                     )
         except Exception as e:
+            cleanup_ok = False
             logging.warning(f"Failed to cleanup knowledge graph for document {doc_id}: {e}")
 
-        return True
+        return cleanup_ok if strict else True
 
     @classmethod
     def get_newly_uploaded(cls, db: Session):

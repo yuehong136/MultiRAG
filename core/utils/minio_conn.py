@@ -164,11 +164,12 @@ class MultiRAGMinio:
 
     @use_default_bucket
     @use_prefix_path
-    def rm(self, bucket, fnm, tenant_id=None):
+    def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
             self.conn.remove_object(bucket, fnm)
         except Exception:
             logging.exception(f"Fail to remove {bucket}/{fnm}:")
+            raise
 
     @use_default_bucket
     @use_prefix_path

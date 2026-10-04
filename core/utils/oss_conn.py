@@ -131,11 +131,12 @@ class MultiRAGOSS:
 
     @use_prefix_path
     @use_default_bucket
-    def rm(self, bucket, fnm, tenant_id=None):
+    def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
             self.conn.delete_object(Bucket=bucket, Key=fnm)
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
+            raise
 
     @use_prefix_path
     @use_default_bucket

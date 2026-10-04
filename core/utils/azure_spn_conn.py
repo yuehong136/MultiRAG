@@ -66,11 +66,12 @@ class MultiRAGAzureSpnBlob:
                 return None
         return None
 
-    def rm(self, bucket, fnm):
+    def rm(self, bucket: str, fnm: str) -> None:
         try:
             self.conn.delete_file(fnm)
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
+            raise
 
     def get(self, bucket, fnm):
         for _ in range(1):

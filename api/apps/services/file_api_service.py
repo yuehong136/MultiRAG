@@ -9,7 +9,7 @@
 
 约定：所有函数统一返回 (success: bool, result | error_message)：
     - success=True  -> result 为数据载荷（dict / list / File 对象 / bool / None）
-    - success=False -> result 为错误信息字符串
+    - success=False -> result 为错误信息字符串，或批删的 success_count/errors 载荷
   本层不返回 HTTP 响应对象（HTTP 包装交由 restful_apis/file_api.py 网关层完成）。
 """
 
@@ -23,13 +23,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.common.check_team_permission import check_file_team_permission
+from api.common.check_team_permission import check_file_team_permission, check_kb_team_permission
 from api.db import FileType
 from api.db.db_models import db_connection
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
+from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.file_utils import filename_type
 from common import settings
 from common.constants import FileSource
@@ -207,59 +208,80 @@ def get_all_parent_folders(db: Session, file_id: str, user_id: str | None = None
     return True, {"parent_folders": [pf.to_dict() for pf in parent_folders]}
 
 
+class _FileDeletionError(Exception):
+    """Safe, caller-facing file deletion rejection."""
+
+
 def delete_files(db: Session, uid: str, file_ids: list[str]) -> tuple[bool, Any]:
-    """删除文件/文件夹（带团队权限校验与递归删除）。
+    """Best-effort batch deletion; count each fully deleted file/folder once.
 
-    :return: (True, True) 或 (False, error_message)
+    Failed children keep their ancestors. External cleanup is not transactional;
+    failures are reported even when earlier document cleanup already committed.
     """
+    errors: list[str] = []
+    completed: set[str] = set()
+    visited: set[str] = set()
 
-    def _delete_single_file(file):
+    def _delete(file_id: str) -> bool:
+        if file_id in visited:
+            return file_id in completed
+        visited.add(file_id)
         try:
-            if file.location:
-                settings.STORAGE_IMPL.rm(file.parent_id, file.location)
-        except Exception as e:
-            logging.exception(f"Fail to remove object: {file.parent_id}/{file.location}, error: {e}")
+            file = FileService.get_by_id(db, file_id)
+            if file is None:
+                raise _FileDeletionError(f"File or Folder not found: {file_id}")
+            if not file.tenant_id:
+                raise _FileDeletionError(f"Tenant not found for file {file_id}")
+            if not check_file_team_permission(db, file, uid):
+                raise _FileDeletionError(f"No authorization for file {file_id}")
+            if file.source_type == FileSource.KNOWLEDGEBASE:
+                raise _FileDeletionError(f"Use the dataset documents API to delete file {file_id}")
 
-        informs = File2DocumentService.get_by_file_id(db, file.id)
-        for inform in informs:
-            doc_id = inform.document_id
-            doc = DocumentService.get_by_id(db, doc_id)
-            if doc:
-                tenant_id = DocumentService.get_tenant_id(db, doc_id)
-                if tenant_id:
-                    DocumentService.remove_document(db, doc, tenant_id)
-            File2DocumentService.delete_by_file_id(db, file.id)
-
-        FileService.delete(db, file)
-
-    def _delete_folder_recursive(folder, tenant_id):
-        sub_files = FileService.list_all_files_by_parent_id(db, folder.id)
-        for sub_file in sub_files:
-            if sub_file.type == FileType.FOLDER.value:
-                _delete_folder_recursive(sub_file, tenant_id)
+            if file.type == FileType.FOLDER.value:
+                children = [child.id for child in FileService.list_all_files_by_parent_id(db, file_id)]
+                # Evaluate every child, including siblings after a failed child.
+                results = [_delete(child_id) for child_id in children]
+                if not all(results):
+                    raise _FileDeletionError(f"Folder retained because children could not be deleted: {file_id}")
             else:
-                _delete_single_file(sub_file)
-        FileService.delete(db, folder)
+                # Authorize every linked dataset before making any changes.
+                doc_ids = list(dict.fromkeys(link.document_id for link in File2DocumentService.get_by_file_id(db, file_id)))
+                for doc_id in doc_ids:
+                    doc = DocumentService.get_by_id(db, doc_id)
+                    if doc is None:
+                        raise _FileDeletionError(f"Document not found for file {file_id}: {doc_id}")
+                    kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
+                    if kb is None or not check_kb_team_permission(db, kb, uid):
+                        raise _FileDeletionError(f"No authorization for document {doc_id} of file {file_id}")
+                if file.location and settings.STORAGE_IMPL.rm(file.parent_id, file.location) is False:
+                    raise RuntimeError(f"Failed to remove object for file {file_id}")
+                for doc_id in doc_ids:
+                    # remove_document owns its transaction and expires ORM objects.
+                    doc = DocumentService.get_by_id(db, doc_id)
+                    if doc is None:
+                        raise RuntimeError(f"Document disappeared while deleting file {file_id}: {doc_id}")
+                    tenant_id = DocumentService.get_tenant_id(db, doc_id)
+                    if not tenant_id or not DocumentService.remove_document(db, doc, tenant_id, strict=True):
+                        raise RuntimeError(f"Failed to remove document {doc_id} for file {file_id}")
+                File2DocumentService.delete_by_file_id(db, file_id)
+                if File2DocumentService.get_by_file_id(db, file_id):
+                    raise RuntimeError(f"Failed to remove file-document relations for file {file_id}")
 
-    for file_id in file_ids:
-        file = FileService.get_by_id(db, file_id)
-        if not file:
-            return False, "File or Folder not found!"
-        if not file.tenant_id:
-            return False, "Tenant not found!"
-        if not check_file_team_permission(db, file, uid):
-            return False, "No authorization."
+            if FileService.delete_by_id(db, file_id) != 1:
+                raise RuntimeError(f"Failed to delete file record {file_id}")
+            completed.add(file_id)
+            return True
+        except Exception as exc:
+            db.rollback()
+            logger.exception("Failed to delete file %s", file_id)
+            # Do not expose backend exception text (which may contain credentials).
+            message = str(exc) if isinstance(exc, _FileDeletionError) else f"Failed to delete file {file_id}"
+            errors.append(message)
+            return False
 
-        if file.source_type == FileSource.KNOWLEDGEBASE:
-            continue
-
-        if file.type == FileType.FOLDER.value:
-            _delete_folder_recursive(file, uid)
-            continue
-
-        _delete_single_file(file)
-
-    return True, True
+    for file_id in dict.fromkeys(file_ids):
+        _delete(file_id)
+    return not errors, {"success_count": len(completed), "errors": errors}
 
 
 async def delete_files_async(uid: str, file_ids: list[str]) -> tuple[bool, Any]:

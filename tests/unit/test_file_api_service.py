@@ -165,7 +165,7 @@ def test_delete_file_not_found(monkeypatch, db):
     monkeypatch.setattr(svc.FileService, "get_by_id", lambda d, fid: None)
     ok, msg = svc.delete_files(db, "t1", ["f1"])
     assert ok is False
-    assert "File or Folder not found" in msg
+    assert "File or Folder not found" in msg["errors"][0]
 
 
 def test_delete_no_permission(monkeypatch, db):
@@ -173,7 +173,7 @@ def test_delete_no_permission(monkeypatch, db):
     monkeypatch.setattr(svc, "check_file_team_permission", lambda d, f, uid: False)
     ok, msg = svc.delete_files(db, "t1", ["f1"])
     assert ok is False
-    assert "No authorization" in msg
+    assert "No authorization" in msg["errors"][0]
 
 
 def test_delete_knowledgebase_source_skipped(monkeypatch, db):
@@ -184,7 +184,7 @@ def test_delete_knowledgebase_source_skipped(monkeypatch, db):
     deleted = []
     monkeypatch.setattr(svc.FileService, "delete", lambda d, f: deleted.append(f))
     ok, res = svc.delete_files(db, "t1", ["f1"])
-    assert ok is True and res is True
+    assert ok is False and res["success_count"] == 0
     assert deleted == []  # 跳过，未删除
 
 
@@ -195,11 +195,12 @@ def test_delete_single_file_success(monkeypatch, db):
     rm_calls, del_calls = [], []
     monkeypatch.setattr(svc.settings, "STORAGE_IMPL", types.SimpleNamespace(rm=lambda b, n: rm_calls.append((b, n))))
     monkeypatch.setattr(svc.File2DocumentService, "get_by_file_id", lambda d, fid: [])
-    monkeypatch.setattr(svc.FileService, "delete", lambda d, fo: del_calls.append(fo))
+    monkeypatch.setattr(svc.FileService, "delete_by_id", lambda d, fid: del_calls.append(fid) or 1)
+    monkeypatch.setattr(svc.File2DocumentService, "delete_by_file_id", lambda d, fid: 0)
     ok, res = svc.delete_files(db, "t1", ["f1"])
-    assert ok is True and res is True
+    assert ok is True and res == {"success_count": 1, "errors": []}
     assert rm_calls == [("pf1", "old.txt")]
-    assert del_calls == [f]
+    assert del_calls == ["f1"]
 
 
 # ============================ move_files (mv 语义) ============================
