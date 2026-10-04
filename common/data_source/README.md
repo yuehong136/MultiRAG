@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -93,6 +93,12 @@ Dropbox 清单与正文共用递归元数据枚举，完整耗尽各文件夹分
 或目录路径不能成为可信清单。范围仍排除不可下载文件和已删除条目，参见
 [Dropbox 列表 API](https://dropbox-sdk-python.readthedocs.io/en/latest/api/dropbox.html#dropbox.dropbox_client.Dropbox.files_list_folder)。
 历史文件若恢复但修改时间未进入增量窗口，需要全量重建以补回正文。
+
+SeaFile 清单与正文共用 account/library/directory 范围、共享库过滤、递归目录和尺寸上限，
+身份保持 `seafile:{repo_id}:{file_id}`。清单不加修改时间条件、不下载文件；库或目录读取失败、
+异常响应、缺失身份、库 token 对应其他库、正文下载失败均中断本轮，不能视为空清单。
+成功的空账户/库/目录可核对删除。权限或配置范围收窄、文件超过尺寸上限会改变索引范围；
+开启删除同步前应确认范围，恢复旧文件且修改时间未进入增量窗口时需要重建。
 
 ## 文档身份与删除链
 

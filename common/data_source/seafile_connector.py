@@ -17,12 +17,14 @@ from common.data_source.exceptions import (
     CredentialExpiredError,
     InsufficientPermissionsError,
 )
-from common.data_source.interfaces import LoadConnector, PollConnector
+from common.data_source.interfaces import LoadConnector, PollConnector, SlimConnectorWithPermSync
 from common.data_source.models import (
     Document,
     GenerateDocumentsOutput,
+    GenerateSlimDocumentOutput,
     SeafileSyncScope,
     SecondsSinceUnixEpoch,
+    SlimDocument,
 )
 from common.data_source.utils import (
     get_file_ext,
@@ -32,7 +34,7 @@ from common.data_source.utils import (
 logger = logging.getLogger(__name__)
 
 
-class SeaFileConnector(LoadConnector, PollConnector):
+class SeaFileConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """SeaFile connector supporting account-, library- and directory-level sync.
 
     API endpoints used:
@@ -59,6 +61,8 @@ class SeaFileConnector(LoadConnector, PollConnector):
         sync_path: str | None = None,
     ) -> None:
         self.seafile_url = seafile_url.rstrip("/")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("SeaFile batch_size must be a positive integer")
         self.batch_size = batch_size
         self.include_shared = include_shared
         self.sync_scope = SeafileSyncScope(sync_scope)
@@ -82,7 +86,7 @@ class SeaFileConnector(LoadConnector, PollConnector):
         return path.rstrip("/") or "/"
 
     @staticmethod
-    def _parse_mtime(raw_mtime) -> datetime:
+    def _parse_mtime(raw_mtime: Any) -> datetime:
         """Parse mtime from SeaFile API response.
 
         Handles:
@@ -298,8 +302,14 @@ class SeaFileConnector(LoadConnector, PollConnector):
         resp = self._account_get("/repos/")
         resp.raise_for_status()
         libraries = resp.json()
+        if not isinstance(libraries, list) or any(not isinstance(lib, dict) or not lib.get("id") for lib in libraries):
+            raise ValueError("Invalid SeaFile library listing")
+        if not self.include_shared and not self.current_user_email:
+            raise ValueError("SeaFile owner identity is required to exclude shared libraries")
 
         if not self.include_shared and self.current_user_email:
+            if any(not (lib.get("owner") or lib.get("owner_email")) for lib in libraries):
+                raise ValueError("Missing SeaFile library owner")
             libraries = [lib for lib in libraries if lib.get("owner") == self.current_user_email or lib.get("owner_email") == self.current_user_email]
 
         return libraries
@@ -307,24 +317,16 @@ class SeaFileConnector(LoadConnector, PollConnector):
     @retry(tries=3, delay=1, backoff=2)
     def _get_repo_info_via_account(self, repo_id: str) -> dict | None:
         """GET /api2/repos/{repo_id}/ — account token."""
-        try:
-            resp = self._account_get(f"/repos/{repo_id}/")
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning("Error fetching repo info for %s: %s", repo_id, e)
-            return None
+        resp = self._account_get(f"/repos/{repo_id}/")
+        resp.raise_for_status()
+        return resp.json()
 
     @retry(tries=3, delay=1, backoff=2)
     def _get_repo_info_via_repo_token(self) -> dict | None:
         """GET /api/v2.1/via-repo-token/repo-info/ — repo token."""
-        try:
-            resp = self._repo_token_get("repo-info/")
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning("Error fetching repo info via repo token: %s", e)
-            return None
+        resp = self._repo_token_get("repo-info/")
+        resp.raise_for_status()
+        return resp.json()
 
     def _get_repo_info(self) -> dict | None:
         """Get repo info using whichever token is available."""
@@ -333,7 +335,7 @@ class SeaFileConnector(LoadConnector, PollConnector):
             if info:
                 # Normalise keys to match account-token response shape
                 return {
-                    "id": info.get("repo_id", self.repo_id),
+                    "id": info.get("repo_id"),
                     "name": info.get("repo_name", self.repo_id),
                 }
             return None
@@ -342,54 +344,42 @@ class SeaFileConnector(LoadConnector, PollConnector):
     @retry(tries=3, delay=1, backoff=2)
     def _get_directory_entries(self, repo_id: str, path: str = "/") -> list[dict]:
         """List directory contents using the appropriate endpoint."""
-        try:
-            if self._use_repo_token:
-                # GET /api/v2.1/via-repo-token/dir/?path=/foo
-                resp = self._repo_token_get("dir/", params={"path": path})
-            else:
-                # GET /api2/repos/{repo_id}/dir/?p=/foo
-                resp = self._account_get(
-                    f"/repos/{repo_id}/dir/",
-                    params={"p": path},
-                )
-            resp.raise_for_status()
-            data = resp.json()
-
-            # v2.1 wraps entries in {"dirent_list": [...]}
-            if isinstance(data, dict) and "dirent_list" in data:
-                return data["dirent_list"]
-            return data
-
-        except Exception as e:
-            logger.warning(
-                "Error fetching directory %s in repo %s: %s",
-                path,
-                repo_id,
-                e,
+        if self._use_repo_token:
+            # GET /api/v2.1/via-repo-token/dir/?path=/foo
+            resp = self._repo_token_get("dir/", params={"path": path})
+        else:
+            # GET /api2/repos/{repo_id}/dir/?p=/foo
+            resp = self._account_get(
+                f"/repos/{repo_id}/dir/",
+                params={"p": path},
             )
-            return []
+        resp.raise_for_status()
+        data = resp.json()
+
+        # v2.1 wraps entries in {"dirent_list": [...]}
+        if isinstance(data, dict) and "dirent_list" in data:
+            data = data["dirent_list"]
+        if not isinstance(data, list) or any(not isinstance(entry, dict) for entry in data):
+            raise ValueError("Invalid SeaFile directory listing")
+        return data
 
     @retry(tries=3, delay=1, backoff=2)
     def _get_file_download_link(self, repo_id: str, path: str) -> str | None:
         """Get a temporary download URL for a file."""
-        try:
-            if self._use_repo_token:
-                # GET /api/v2.1/via-repo-token/download-link/?path=/foo.pdf
-                resp = self._repo_token_get(
-                    "download-link/",
-                    params={"path": path},
-                )
-            else:
-                # GET /api2/repos/{repo_id}/file/?p=/foo.pdf&reuse=1
-                resp = self._account_get(
-                    f"/repos/{repo_id}/file/",
-                    params={"p": path, "reuse": 1},
-                )
-            resp.raise_for_status()
-            return resp.text.strip('"')
-        except Exception as e:
-            logger.warning("Error getting download link for %s: %s", path, e)
-            return None
+        if self._use_repo_token:
+            # GET /api/v2.1/via-repo-token/download-link/?path=/foo.pdf
+            resp = self._repo_token_get(
+                "download-link/",
+                params={"path": path},
+            )
+        else:
+            # GET /api2/repos/{repo_id}/file/?p=/foo.pdf&reuse=1
+            resp = self._account_get(
+                f"/repos/{repo_id}/file/",
+                params={"p": path, "reuse": 1},
+            )
+        resp.raise_for_status()
+        return resp.text.strip('"')
 
     def _list_files_recursive(
         self,
@@ -398,6 +388,8 @@ class SeaFileConnector(LoadConnector, PollConnector):
         path: str,
         start: datetime,
         end: datetime,
+        *,
+        filter_by_mtime: bool = True,
     ) -> list[tuple[str, dict, dict]]:
         files = []
         entries = self._get_directory_entries(repo_id, path)
@@ -405,6 +397,10 @@ class SeaFileConnector(LoadConnector, PollConnector):
         for entry in entries:
             entry_type = entry.get("type")
             entry_name = entry.get("name", "")
+            if entry_type not in {"dir", "file"} or not isinstance(entry_name, str) or not entry_name or "/" in entry_name or entry_name in {".", ".."}:
+                raise ValueError("Invalid SeaFile directory entry")
+            if entry_type == "file" and (not isinstance(entry.get("id"), str) or not entry["id"]):
+                raise ValueError("Missing SeaFile file identity")
             entry_path = f"{path.rstrip('/')}/{entry_name}"
 
             if entry_type == "dir":
@@ -415,11 +411,11 @@ class SeaFileConnector(LoadConnector, PollConnector):
                         entry_path,
                         start,
                         end,
+                        filter_by_mtime=filter_by_mtime,
                     )
                 )
             elif entry_type == "file":
-                modified = self._parse_mtime(entry.get("mtime"))
-                if start < modified <= end:
+                if not filter_by_mtime or start < self._parse_mtime(entry.get("mtime")) <= end:
                     files.append((entry_path, entry, {"id": repo_id, "name": repo_name}))
 
         return files
@@ -429,9 +425,9 @@ class SeaFileConnector(LoadConnector, PollConnector):
             return [{"id": lib["id"], "name": lib.get("name", "Unknown")} for lib in self._get_libraries() if lib.get("id")]
 
         info = self._get_repo_info()
-        if info:
-            return [{"id": info.get("id", self.repo_id), "name": info.get("name", self.repo_id)}]
-        return [{"id": self.repo_id, "name": self.repo_id}]
+        if not isinstance(info, dict) or info.get("id") != self.repo_id:
+            raise ValueError("SeaFile library identity does not match the configured scope")
+        return [{"id": info["id"], "name": info.get("name", self.repo_id)}]
 
     def _root_path_for_repo(self, repo_id: str) -> str:
         if self.sync_scope == SeafileSyncScope.DIRECTORY and repo_id == self.repo_id:
@@ -454,18 +450,14 @@ class SeaFileConnector(LoadConnector, PollConnector):
         for lib in libraries:
             root = self._root_path_for_repo(lib["id"])
             logger.debug("Scanning %s starting at %s", lib["name"], root)
-            try:
-                files = self._list_files_recursive(
-                    lib["id"],
-                    lib["name"],
-                    root,
-                    start,
-                    end,
-                )
-                all_files.extend(files)
-            except Exception as e:
-                logger.error("Error in library %s: %s", lib["name"], e)
-
+            files = self._list_files_recursive(
+                lib["id"],
+                lib["name"],
+                root,
+                start,
+                end,
+            )
+            all_files.extend(files)
         logger.info("Found %d file(s) matching criteria", len(all_files))
 
         batch: list[Document] = []
@@ -482,35 +474,31 @@ class SeaFileConnector(LoadConnector, PollConnector):
                 logger.warning("Skipping large file: %s (%d B)", file_path, file_size)
                 continue
 
-            try:
-                download_link = self._get_file_download_link(repo_id, file_path)
-                if not download_link:
-                    continue
+            download_link = self._get_file_download_link(repo_id, file_path)
+            if not download_link:
+                raise ValueError("Missing SeaFile download link")
 
-                resp = rl_requests.get(download_link, timeout=120)
-                resp.raise_for_status()
-                blob = resp.content
-                if not blob:
-                    continue
+            resp = rl_requests.get(download_link, timeout=120)
+            resp.raise_for_status()
+            blob = resp.content
+            if not blob:
+                continue
 
-                batch.append(
-                    Document(
-                        id=f"seafile:{repo_id}:{file_id}",
-                        blob=blob,
-                        source=DocumentSource.SEAFILE,
-                        semantic_identifier=f"{repo_name}{file_path}",
-                        extension=get_file_ext(file_name),
-                        doc_updated_at=modified,
-                        size_bytes=len(blob),
-                    )
+            batch.append(
+                Document(
+                    id=f"seafile:{repo_id}:{file_id}",
+                    blob=blob,
+                    source=DocumentSource.SEAFILE,
+                    semantic_identifier=f"{repo_name}{file_path}",
+                    extension=get_file_ext(file_name),
+                    doc_updated_at=modified,
+                    size_bytes=len(blob),
                 )
+            )
 
-                if len(batch) >= self.batch_size:
-                    yield batch
-                    batch = []
-
-            except Exception as e:
-                logger.error("Error downloading %s: %s", file_path, e)
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
 
         if batch:
             yield batch
@@ -529,3 +517,24 @@ class SeaFileConnector(LoadConnector, PollConnector):
         start_dt = datetime.fromtimestamp(start, tz=UTC)
         end_dt = datetime.fromtimestamp(end, tz=UTC)
         yield from self._yield_seafile_documents(start_dt, end_dt)
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        """Enumerate the complete configured tree, without a time filter or downloads."""
+        batch: list[SlimDocument] = []
+        for library in self._resolve_libraries_to_scan():
+            for _, entry, _ in self._list_files_recursive(
+                library["id"],
+                library["name"],
+                self._root_path_for_repo(library["id"]),
+                datetime.min.replace(tzinfo=UTC),
+                datetime.max.replace(tzinfo=UTC),
+                filter_by_mtime=False,
+            ):
+                if entry.get("size", 0) > self.size_threshold:
+                    continue
+                batch.append(SlimDocument(id=f"seafile:{library['id']}:{entry['id']}"))
+                if len(batch) >= self.batch_size:
+                    yield batch
+                    batch = []
+        if batch:
+            yield batch

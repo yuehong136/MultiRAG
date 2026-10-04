@@ -76,6 +76,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
         FileSource.GITHUB,
         FileSource.GITLAB,
         FileSource.DROPBOX,
+        FileSource.SEAFILE,
     }
 )
 
@@ -1206,7 +1207,7 @@ class Bitbucket(SyncBase):
 class SeaFile(SyncBase):
     SOURCE_NAME: str = FileSource.SEAFILE
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         conf = self.conf
         self.connector = SeaFileConnector(
             seafile_url=conf["seafile_url"],
