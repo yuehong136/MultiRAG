@@ -296,3 +296,13 @@ def test_retired_chunk_routes_absent_and_other_contracts_retained(client: TestCl
     assert client.get("/v1/chunk/knowledge_graph?doc_id=doc").status_code == 404
     for path in ("/v1/chunk/list", "/v1/chunk/set", "/v1/chunk/switch", "/api/v1/retrieval", "/api/v1/datasets/{dataset_id}/graph/search", "/api/v1/datasets/{dataset_id}/knowledge_graph"):
         assert path in paths
+
+
+def test_search_route_exposes_storage_exception_as_business_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "search_dataset", AsyncMock(side_effect=RuntimeError("storage unavailable")))
+    response = client.post("/api/v1/datasets/a/search", json={"question": "q", "search_mode": {"type": "dense"}})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == RetCode.DATA_ERROR
+    assert "data" not in body
+    assert body["message"] == "Internal server error"

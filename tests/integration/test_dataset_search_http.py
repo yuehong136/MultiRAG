@@ -27,6 +27,7 @@ from api.apps.services import dataset_search_service
 from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, UserTenant, get_db
 from common import settings
 from common.config_utils import CONFIGS
+from common.constants import RetCode
 from core.nlp import search
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
@@ -560,3 +561,26 @@ def test_http_modes_have_distinct_candidates_weights_and_pages(search_api: dict[
     for weights in ("nan,1", "-1,2", "0,0"):
         response = request(env, "POST", "/search", json={"question": "rivet", "search_mode": {"type": "fusion", "weights": weights}})
         assert response.status_code == 422, response.text
+
+
+def test_http_vector_schema_failure_is_business_error(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+
+    embedded: list[str] = []
+
+    class WrongDimensionEmbedding:
+        def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+            embedded.append(text)
+            return np.array([1.0, 0.0]), 0
+
+    async def bundle(*args: Any, **kwargs: Any) -> Any:
+        return WrongDimensionEmbedding()
+
+    monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
+    response = request(env, "POST", "/search", json={"question": "availability", "search_mode": {"type": "dense"}})
+    body = response.json()
+    assert response.status_code == 200 and body["code"] == RetCode.DATA_ERROR, body
+    assert "data" not in body, body
+    assert embedded == ["availability"]
+    raw = env["reader"].query(env["collections"]["dataset"], filter="pk in " + json.dumps([row["id"] for row in env["rows"]["dataset"]]), output_fields=["pk", "doc_id"], consistency_level="Strong")
+    assert {row["pk"] for row in raw} == {row["id"] for row in env["rows"]["dataset"]}

@@ -849,7 +849,7 @@ class MilvusConnectionBase(DocStoreConnection):
         select_fields: list[str],
         limit: int,
         offset: int,
-    ):
+    ) -> tuple[list[dict[str, Any]], dict[str, float], int]:
         """Execute BM25 text search queries."""
         if not text_exprs:
             return [], {}, 0
@@ -874,6 +874,12 @@ class MilvusConnectionBase(DocStoreConnection):
 
                 for collection in collection_names:
                     try:
+                        # Full-text schemas may legitimately omit some boosted
+                        # fields. Skip those explicitly; actual RPC failures must
+                        # reach the request error boundary instead of partial hits.
+                        schema = self._get_collection_schema_fields(conn, collection)
+                        if schema is not None and sparse_field not in schema:
+                            continue
                         collection_select_fields = self._filter_collection_output_fields(conn, collection, select_fields)
                         query_payload = expr.raw_text if hasattr(expr, "raw_text") else expr.matching_text
                         res = conn.search(
@@ -887,7 +893,7 @@ class MilvusConnectionBase(DocStoreConnection):
                         )
                     except Exception as e:
                         self.logger.warning(f"BM25 search failed field={field_name}, collection={collection}: {e}")
-                        continue
+                        raise
 
                     hits = res[0] if res else []
                     total_hits += len(hits)
@@ -946,7 +952,7 @@ class MilvusConnectionBase(DocStoreConnection):
         select_fields: list[str],
         limit: int,
         offset: int,
-    ):
+    ) -> tuple[list[dict[str, Any]], dict[str, float], int]:
         """Execute vector search queries."""
         if dense_expr is None:
             return [], {}, 0
@@ -983,7 +989,7 @@ class MilvusConnectionBase(DocStoreConnection):
                 )
             except Exception as e:
                 self.logger.warning(f"Vector search failed collection={collection}: {e}")
-                continue
+                raise
 
             hits = res[0] if res else []
             total_hits += len(hits)

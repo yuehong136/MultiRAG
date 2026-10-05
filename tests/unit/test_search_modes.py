@@ -166,3 +166,24 @@ async def test_es_postranking_preserves_mode_weights(mode_dealer: Dealer, mode: 
     assert mode_dealer.rerank.call_args.args[2:] == expected_weights
     assert result["chunks"][0]["chunk_id"] == expected_first
     assert result["total"] == 2
+
+
+@pytest.mark.parametrize("dense_only", [False, True])
+def test_milvus_candidate_failure_is_not_empty_success(dense_only: bool) -> None:
+    from unittest.mock import MagicMock
+
+    from core.utils.milvus_conn import MilvusConnection
+
+    cls = next(cell.cell_contents for cell in MilvusConnection.__closure__ if isinstance(cell.cell_contents, type))
+    store = object.__new__(cls)
+    store.logger = MagicMock()
+    rpc = MagicMock()
+    rpc.describe_collection.return_value = {"fields": [{"name": "sparse_vector"}]}
+    rpc.search.side_effect = RuntimeError("candidate RPC failed")
+    store._get_connection = lambda: rpc
+    store.search_field_configs = {"content_ltks": {"sparse_field": "sparse_vector"}}
+    with pytest.raises(RuntimeError, match="candidate RPC failed"):
+        if dense_only:
+            store._execute_dense_query(["scratch"], MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine", 10), "doc_id == 'selected'", [], 10, 0)
+        else:
+            store._execute_text_queries(["scratch"], [MatchTextExpr(["content_ltks"], "keywords", 10)], "doc_id == 'selected'", [], 10, 0)
