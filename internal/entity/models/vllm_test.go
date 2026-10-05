@@ -28,6 +28,9 @@ func TestVLLMModelChatAndDiscovery(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"}}]}`)
 		case "/api/models":
+			if r.Method != http.MethodGet || r.ContentLength > 0 {
+				t.Error("model discovery requires GET without a body")
+			}
 			fmt.Fprint(w, `{"data":[{"id":"doubao"}]}`)
 		case "/api/files":
 			fmt.Fprint(w, `{"data":[]}`)
@@ -176,5 +179,16 @@ func TestVLLMModelKeylessAndThinkingFalse(t *testing.T) {
 	_, err := driver.ChatWithMessages("Qwen/test", nil, []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "q"}}, &ChatConfig{Thinking: &thinking})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVLLMDiscoveryErrors(t *testing.T) {
+	for _, payload := range []string{`not-json`, `{"error":{"message":"failure"}}`, `{"data":"invalid"}`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, payload) }))
+		driver := NewVLLMModel(map[string]string{"default": server.URL}, URLSuffix{Models: "models"})
+		if _, err := driver.ListModels(nil); err == nil {
+			t.Errorf("accepted malformed discovery: %s", payload)
+		}
+		server.Close()
 	}
 }
