@@ -119,11 +119,20 @@ def metadata_config_view(stored: dict[str, Any]) -> dict[str, Any]:
 
 def field_schema(field: dict[str, Any]) -> dict[str, Any]:
     field = canonical_field(field)
-    result: dict[str, Any] = {"description": field.get("description") or field.get("descriptions") or ""}
+    # MetadataField accepts extension attributes. Keep them through both GET's
+    # projection and PATCH's array-to-Schema conversion; only UI control fields
+    # are consumed by the projection below.
+    controls = {*MetadataField.model_fields, "descriptions"}
+    result = {key: deepcopy(value) for key, value in field.items() if key not in controls}
+    result["description"] = field.get("description") or field.get("descriptions") or ""
     kind = field.get("type")
     values = field.get("enum")
     if kind == "list":
-        result.update(type="array", items={"type": "string"})
+        items = result.get("items", {})
+        if not isinstance(items, dict):
+            raise ValueError("list metadata items must be an object schema")
+        items.setdefault("type", "string")
+        result.update(type="array", items=items)
         if values:
             result["items"]["enum"] = deepcopy(values)
     else:

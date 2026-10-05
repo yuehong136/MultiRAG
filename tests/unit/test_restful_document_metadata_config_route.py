@@ -16,7 +16,9 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from api.apps.services import document_api_service
 from api.db.services.document_service import DocumentService
@@ -40,19 +42,37 @@ def _assert_sync_facade(sessions):
 def _stub_chain(
     monkeypatch: pytest.MonkeyPatch, sessions: list[object], *, can_update: bool = True, docs: tuple[SimpleNamespace, ...] = (SimpleNamespace(id="doc1", parser_config={}),)
 ) -> list[tuple[str, dict[str, Any]]]:
-    config_calls: list[tuple[str, dict]] = []
+    config_calls: list[tuple[str, dict[str, Any]]] = []
 
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kb_id: sessions.append(s) or SimpleNamespace(id=kb_id, tenant_id="tenant-unit")))
     monkeypatch.setattr(document_api_service, "can_update_dataset", lambda s, user_id, kb: sessions.append(s) or can_update)
-    monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: sessions.append(s) or list(docs)))
 
-    def _update_parser_config(cls: type[DocumentService], s: Session, doc_id: str, config: dict[str, Any]) -> bool:
-        sessions.append(s)
-        config_calls.append((doc_id, config["parser_config"]))
-        return True
+    async def locked_document(db: AsyncSession, statement: Select[Any]) -> SimpleNamespace | None:
+        sessions.append(db.sync_session)
+        assert statement._for_update_arg is not None
+        assert statement.get_execution_options()["populate_existing"] is True
+        params = statement.compile().params
+        assert set(params.values()) == {"doc1", "kb1"}
+        if not docs:
+            return None
+        doc = docs[0]
+        doc.update_time = 0
+        return doc
 
-    monkeypatch.setattr(DocumentService, "update_by_id", classmethod(_update_parser_config))
-    monkeypatch.setattr(DocumentService, "get_by_id", classmethod(lambda cls, s, doc_id: sessions.append(s) or SimpleNamespace(id=doc_id)))
+    async def commit(db: AsyncSession) -> None:
+        sessions.append(db.sync_session)
+        assert docs
+        doc = docs[0]
+        assert doc.update_time > 0
+        config_calls.append((doc.id, doc.parser_config))
+
+    async def refresh(db: AsyncSession, doc: SimpleNamespace) -> None:
+        sessions.append(db.sync_session)
+        assert doc is docs[0]
+
+    monkeypatch.setattr(AsyncSession, "scalar", locked_document)
+    monkeypatch.setattr(AsyncSession, "commit", commit)
+    monkeypatch.setattr(AsyncSession, "refresh", refresh)
     monkeypatch.setattr(document_api_service, "map_doc_keys", lambda s, doc: {"id": doc.id, "dataset_id": "kb1"})
     return config_calls
 

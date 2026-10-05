@@ -1,5 +1,6 @@
 """Owned listener and complete PostgreSQL/Milvus/MinIO/Redis PATCH readbacks."""
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -15,6 +16,7 @@ from uuid import uuid4
 import pytest
 import requests
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, DocumentMetadata, File, File2Document, Knowledgebase, Task, UserCanvas, UserTenant
@@ -150,6 +152,144 @@ def test_metadata_overlapping_edit_conflict_then_raw_patch_retry_preserves_both(
     assert _read_metadata_document(env)["parser_config"] == retried
     with Session(env["engine"]) as db:
         assert db.get(Document, env["docs"]["a"]).parser_config == retried
+
+
+def _put_metadata(env: dict[str, Any], metadata: Any) -> dict[str, Any]:
+    response = requests.put(
+        env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents/{env['docs']['a']}/metadata/config",
+        json={"metadata": metadata},
+        headers={"Authorization": "Bearer " + env["tokens"]["owner"]},
+        timeout=30,
+    )
+    body = response.json()
+    env["parser_record"]["events"].append({"method": "PUT", "payload": metadata, "status": response.status_code, "body": body})
+    save(env["parser_record_path"], env["parser_record"])
+    assert response.status_code == 200 and body["code"] == 0, body
+    return body
+
+
+def test_metadata_accepted_extensions_survive_put_get_partial_patch_and_sql(parser_api: dict[str, Any]) -> None:
+    env = parser_api
+    fields = [{"key": "a", "type": "number", "enum": ["1", "2"], "minimum": 1, "future": {"keep": True}}, {"key": "b", "type": "string"}]
+    _put_metadata(env, fields)
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["docs"]["a"]).parser_config["metadata"] == fields
+    expected = {"description": "", "type": "number", "enum": [1, 2], "minimum": 1, "future": {"keep": True}}
+    assert _read_metadata_document(env)["parser_config"]["metadata"]["properties"]["a"] == expected
+    patch(env, {"parser_config": {"metadata": {"properties": {"b": {"description": "Changed b"}}}}})
+    listed = _read_metadata_document(env)["parser_config"]
+    with Session(env["engine"]) as db:
+        stored = db.get(Document, env["docs"]["a"]).parser_config
+        assert listed == stored
+        assert stored["metadata"]["properties"]["a"] == expected
+        assert stored["metadata"]["properties"]["b"]["description"] == "Changed b"
+    # Complete PUT removes omitted properties; [] is still an explicit clear.
+    replacement = {"type": "object", "properties": {"b": {"type": "string"}}}
+    for value in [replacement, []]:
+        _put_metadata(env, value)
+        with Session(env["engine"]) as db:
+            actual = db.get(Document, env["docs"]["a"]).parser_config
+            assert actual == {**stored, "metadata": value}
+        assert _read_metadata_document(env)["parser_config"]["metadata"] == value
+
+
+def _wait_metadata_writer_lock(env: dict[str, Any]) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with env["engine"].connect() as db:
+            # pg_stat_activity can truncate a wide ORM SELECT before its
+            # trailing FOR UPDATE. Confirm real blocking PIDs on this table.
+            blocked = (
+                db.execute(
+                    sa.text(
+                        "SELECT pid, wait_event, pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND cardinality(pg_blocking_pids(pid)) > 0 AND query ILIKE '%t_ai_documents%'"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        if blocked:
+            env["parser_record"]["events"].append({"postgresql_blocked_writers": [dict(row) for row in blocked]})
+            return
+        time.sleep(0.02)
+    raise AssertionError("Concurrent writer never waited on the PostgreSQL document row lock")
+
+
+@pytest.mark.parametrize("first_writer", ["patch", "put"])
+def test_metadata_put_and_parser_patch_serialize_without_lost_fields(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, first_writer: str) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    env = parser_api
+    with Session(env["engine"]) as db:
+        doc = db.get(Document, env["docs"]["a"])
+        doc.parser_config = {**doc.parser_config, "auto_questions": 0}
+        db.commit()
+    original_config = _read_metadata_document(env)["parser_config"]
+    entered, second_selected, release = threading.Event(), threading.Event(), threading.Event()
+    original_scalar = AsyncSession.scalar
+    original_set = ingest_service._set_document
+    original_preflight = parser_service.preflight_document_update
+    cached: list[Document] = []
+
+    async def hold_put(db: AsyncSession, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        if getattr(statement, "_for_update_arg", None) is None or statement.column_descriptions[0].get("entity") is not Document:
+            return await original_scalar(db, statement, *args, **kwargs)
+        if first_writer == "patch":
+            # Force a stale identity-map entry before the locked SELECT. The
+            # writer must compose from the refreshed row after PATCH commits.
+            old = await db.get(Document, env["docs"]["a"])
+            assert old is not None and old.parser_config["auto_questions"] == 0
+            cached.append(old)
+            second_selected.set()
+        doc = await original_scalar(db, statement, *args, **kwargs)
+        if first_writer == "put":
+            entered.set()
+            assert await asyncio.to_thread(release.wait, 20)
+        return doc
+
+    def hold_patch(db: Session, doc: Document, kb: Knowledgebase, values: dict[str, Any]) -> None:
+        if first_writer == "patch" and doc.id == env["docs"]["a"] and values.get("parser_config", {}).get("auto_questions") == 2:
+            entered.set()
+            assert release.wait(20)
+        original_set(db, doc, kb, values)
+
+    def preflight(*args: Any, **kwargs: Any) -> Any:
+        selection = original_preflight(*args, **kwargs)
+        if first_writer == "put" and args[2] == env["docs"]["a"]:
+            second_selected.set()
+        return selection
+
+    replacement = {"type": "object", "properties": {"author": {"type": "string"}}}
+    patch_body = {"parser_config": {"auto_questions": 2}}
+    with monkeypatch.context() as scope:
+        scope.setattr(AsyncSession, "scalar", hold_put)
+        scope.setattr(ingest_service, "_set_document", hold_patch)
+        scope.setattr(parser_service, "preflight_document_update", preflight)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(patch, env, patch_body) if first_writer == "patch" else pool.submit(_put_metadata, env, replacement)
+            try:
+                assert entered.wait(10)
+                second = pool.submit(_put_metadata, env, replacement) if first_writer == "patch" else pool.submit(patch, env, patch_body, status=409)
+                assert second_selected.wait(10)
+                _wait_metadata_writer_lock(env)
+                assert not second.done()
+            finally:
+                release.set()
+            assert first.result(30)["code"] == 0
+            second_body = second.result(30)
+            if first_writer == "put":
+                assert second_body["code"] == "DOCUMENT_UPDATE_CONFLICT"
+                assert second_body["data"] == {"outcome": "unchanged"}
+            else:
+                assert second_body["code"] == 0
+                assert cached and cached[0].parser_config["auto_questions"] == 2
+    if first_writer == "put":
+        # Existing PATCH conflict semantics remain; retry the same raw patch.
+        assert patch(env, patch_body)["code"] == 0
+    expected_config = {**original_config, "auto_questions": 2, "metadata": replacement}
+    assert _read_metadata_document(env)["parser_config"] == expected_config
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["docs"]["a"]).parser_config == expected_config
 
 
 @pytest.mark.parametrize("role,key,status", [("normal", "a", 403), ("outsider", "a", 404), ("owner", "foreign", 404)])

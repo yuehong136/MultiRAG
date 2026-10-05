@@ -316,3 +316,24 @@ def test_historical_property_names_match_get_projection() -> None:
     expected = deepcopy(turn2jsonschema(fields))
     expected["properties"][" a "]["description"] = "Updated"
     assert result["metadata"] == expected
+
+
+def test_array_schema_patch_preserves_accepted_extensions_and_constraints() -> None:
+    fields = [
+        {"key": "a", "type": "number", "enum": ["1", "2"], "minimum": 1, "future": {"keep": [True]}},
+        {"key": "b", "type": "string", "format": "date"},
+        {"key": "c", "type": "list", "items": {"maxLength": 10}, "minItems": 1},
+    ]
+    stored = {"metadata": fields}
+    before = deepcopy(stored)
+    projected = turn2jsonschema(fields)
+    result = merge_document_parser_config(stored, {"metadata": {"properties": {"b": {"description": "Changed b"}}}})
+    expected = deepcopy(projected)
+    expected["properties"]["b"]["description"] = "Changed b"
+    assert result["metadata"] == expected
+    assert expected["properties"]["a"] == {"type": "number", "description": "", "enum": [1, 2], "minimum": 1, "future": {"keep": [True]}}
+    assert expected["properties"]["b"]["format"] == "date"
+    assert expected["properties"]["c"] == {"type": "array", "description": "", "items": {"type": "string", "maxLength": 10}, "minItems": 1}
+    result["metadata"]["properties"]["a"]["future"]["keep"].append(False)
+    assert stored == before
+    assert projected["properties"]["a"]["future"] == {"keep": [True]}

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, Up
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,7 @@ from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES
-from api.db.db_models import get_async_db
+from api.db.db_models import Document, get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_image_service import list_thumbnails, read_dataset_image, read_runtime_image
 from api.db.services.document_ingest_service import IngestError, ingest_documents
@@ -249,34 +250,36 @@ async def update_metadata_config(
 ) -> Response:
     """更新单个文档的元数据模板配置（写入 parser_config.metadata）。"""
 
-    def _update_config(s: Session) -> Response:
+    def _authorize_config(s: Session) -> Response | None:
         kb = KnowledgebaseService.get_by_id(s, dataset_id)
         if not kb:
             return get_error_data_result(retmsg=f"You don't own the dataset {dataset_id}.")
         if not document_api_service.can_update_dataset(s, tenant_id, kb):
             return get_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
-        doc = DocumentService.query(s, kb_id=dataset_id, id=document_id)
-        if not doc:
+        return None
+
+    error = await db.run_sync(_authorize_config)  # TODO(async-phase4): existing permission helpers.
+    if error is not None:
+        return error
+    try:
+        # Share PATCH's document row lock and refresh any dependency-loaded
+        # identity-map snapshot before composing this metadata-only change.
+        doc = await db.scalar(select(Document).where(Document.id == document_id, Document.kb_id == dataset_id).with_for_update().execution_options(populate_existing=True))
+        if doc is None:
             return get_error_data_result(retmsg=f"Document {document_id} not found in dataset {dataset_id}")
-        doc = doc[0]
-
-        try:
-            config = {**(doc.parser_config or {}), "metadata": request.model_dump(exclude_unset=True)["metadata"]}
-            # This PUT replaces the template, including deleted schema properties.
-            # The general document PATCH retains its separate partial-merge contract.
-            if not DocumentService.update_by_id(s, doc.id, {"parser_config": config}):
-                return get_error_data_result(retmsg="Failed to update metadata config", retcode=RetCode.EXCEPTION_ERROR)
-            doc = DocumentService.get_by_id(s, doc.id)
-        except Exception as e:
-            logger.exception(e)
-            return get_error_data_result(retmsg="Failed to update metadata config", retcode=RetCode.EXCEPTION_ERROR)
-        if not doc:
-            return get_error_data_result(retmsg="Document not found!")
-
-        return get_result(data=document_api_service.map_doc_keys(s, doc))
-
-    return await db.run_sync(_update_config)  # TODO(async-phase4)
+        # PUT replaces the complete template, including deleted properties/[],
+        # while all other parser fields come from the current locked row.
+        doc.parser_config = {**(doc.parser_config or {}), "metadata": request.model_dump(exclude_unset=True)["metadata"]}
+        doc.update_time = max(DocumentService.current_timestamp(), (doc.update_time or 0) + 1)
+        doc.update_date = DocumentService.current_datetime()
+        await db.commit()
+        await db.refresh(doc)
+    except Exception as e:
+        await db.rollback()
+        logger.exception(e)
+        return get_error_data_result(retmsg="Failed to update metadata config", retcode=RetCode.EXCEPTION_ERROR)
+    return await db.run_sync(lambda s: get_result(data=document_api_service.map_doc_keys(s, doc)))  # TODO(async-phase4): existing serialization helper.
 
 
 @router.get("/datasets/{dataset_id}/metadata/summary", summary="获取元数据汇总")
