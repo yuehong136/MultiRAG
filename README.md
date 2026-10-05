@@ -27,7 +27,7 @@
   <a href="#-multirag-是什么">项目介绍</a> |
   <a href="#-版本重点">版本重点</a> |
   <a href="#-核心能力">核心能力</a> |
-  <a href="#-快速开始">快速开始</a> |
+  <a href="#self-hosting">自主托管</a> |
   <a href="#-源码部署开发">源码开发</a> |
   <a href="#-api-与文档">API与文档</a>
 </p>
@@ -40,7 +40,7 @@
 - [核心能力](#-核心能力)
 - [系统架构](#-系统架构)
 - [项目结构](#-项目结构)
-- [快速开始](#-快速开始)
+- [自主托管](#self-hosting)
 - [Docker Profiles](#-docker-profiles)
 - [Docker 镜像构建](#-docker-镜像构建)
 - [配置说明](#-配置说明)
@@ -190,7 +190,13 @@ multirag/
 - [`common/data_source`](./common/data_source) 提供企业级连接器与同步逻辑
 - [`common/doc_store`](./common/doc_store) 提供向量与检索后端适配
 
-## 🚀 快速开始
+<a id="-快速开始"></a>
+<a id="self-hosting"></a>
+
+## 🚀 自主托管
+
+使用下面的 Docker Compose 步骤部署 MultiRAG 后端；更多部署参数见 [Docker 说明](./docker/README.md)。
+本机开发入口见 [源码部署开发](#-源码部署开发)，接入方式见 [API 与文档](#-api-与文档)。
 
 ### 环境要求
 
@@ -554,18 +560,18 @@ ruff format
 | `/api/v1/agents` | POST | Agent 执行 |
 | `/api/v1/mcp/*` | GET/POST | MCP 相关接口 |
 
-OpenAPI 文档默认可通过 `/docs` 访问（服务启动后）。
+服务启动后可通过 `/openapi.json` 获取 OpenAPI schema；当前 [FastAPI 入口](./api/apps/__init__.py) 关闭了内置 `/docs` 和 `/redoc` 页面。
 
 ### 文档导航
 
 - Run Platform（远程 Run API、事件、状态机与灰度）：[`docs/run-platform/README.md`](./docs/run-platform/README.md)
 - 知识库使用指南：[`docs/knowledge-base-guide.md`](./docs/knowledge-base-guide.md)
-- 快速开始：[`docs/get_started.md`](./docs/get_started.md)
-- 部署说明：[`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)
-- 架构说明：[`docs/architecture.md`](./docs/architecture.md)
+- 自主托管：[Docker Compose 快速开始](#self-hosting)
+- 数据库升级与恢复：[`docs/database-migration.md`](./docs/database-migration.md)
+- 系统架构：[本页架构概览](#-系统架构)
 - HTTP API：[`docs/references/http_api_reference.md`](./docs/references/http_api_reference.md)
-- Python API：[`docs/references/python_api_reference.md`](./docs/references/python_api_reference.md)
-- 支持模型：[`docs/references/supported_models.md`](./docs/references/supported_models.md)
+- 开发与运行：[`docs/development.md`](./docs/development.md)
+- 模型目录：[`configs/llm_factories.json`](./configs/llm_factories.json)
 - Docker 说明：[`docker/README.md`](./docker/README.md)
 
 ## 🛠️ 适用场景
@@ -582,7 +588,7 @@ OpenAPI 文档默认可通过 `/docs` 访问（服务启动后）。
 
 开始开发前建议先阅读：
 
-- [`docs/architecture.md`](./docs/architecture.md)
+- [`docs/development.md`](./docs/development.md)
 - [`docker/README.md`](./docker/README.md)
 - [`AGENTS.md`](./AGENTS.md)
 

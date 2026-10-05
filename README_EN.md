@@ -27,7 +27,7 @@
   <a href="#-what-is-multirag">Overview</a> |
   <a href="#-release-focus">Release Focus</a> |
   <a href="#-core-capabilities">Capabilities</a> |
-  <a href="#-quick-start">Quick Start</a> |
+  <a href="#self-hosting">Self-Hosting</a> |
   <a href="#-development-from-source">Development</a> |
   <a href="#-api-and-documentation">API & Docs</a>
 </p>
@@ -40,7 +40,7 @@
 - [Core Capabilities](#-core-capabilities)
 - [System Architecture](#-system-architecture)
 - [Project Structure](#-project-structure)
-- [Quick Start](#-quick-start)
+- [Self-Hosting](#self-hosting)
 - [Docker Profiles](#-docker-profiles)
 - [Docker Image Build](#-docker-image-build)
 - [Configuration](#-configuration)
@@ -190,7 +190,13 @@ multirag/
 - [`common/data_source`](./common/data_source) contains enterprise connectors and sync logic
 - [`common/doc_store`](./common/doc_store) contains vector/search backend adapters
 
-## 🚀 Quick Start
+<a id="-quick-start"></a>
+<a id="self-hosting"></a>
+
+## 🚀 Self-Hosting
+
+Deploy the MultiRAG backend with Docker Compose below; see the [Docker guide](./docker/README.md) for deployment options.
+For local development, see [Development from Source](#-development-from-source); for integration, see [API and Documentation](#-api-and-documentation).
 
 ### Requirements
 
@@ -562,17 +568,17 @@ Main API domains include:
 | `/api/v1/agents` | POST | Agent execution |
 | `/api/v1/mcp/*` | GET/POST | MCP-related APIs |
 
-OpenAPI docs are available at `/docs` after service startup.
+After startup, the OpenAPI schema is available at `/openapi.json`; the current [FastAPI entrypoint](./api/apps/__init__.py) disables the built-in `/docs` and `/redoc` pages.
 
 ### Documentation index
 
 - Run Platform (remote Run API, events, state machine, and rollout): [`docs/run-platform/README.md`](./docs/run-platform/README.md)
-- Getting started: [`docs/get_started.md`](./docs/get_started.md)
-- Deployment guide: [`docs/DEPLOYMENT_GUIDE.md`](./docs/DEPLOYMENT_GUIDE.md)
-- Architecture: [`docs/architecture.md`](./docs/architecture.md)
+- Self-hosting: [Docker Compose quick start](#self-hosting)
+- Database upgrades and recovery: [`docs/database-migration.md`](./docs/database-migration.md)
+- System architecture: [overview on this page](#-system-architecture)
 - HTTP API reference: [`docs/references/http_api_reference.md`](./docs/references/http_api_reference.md)
-- Python API reference: [`docs/references/python_api_reference.md`](./docs/references/python_api_reference.md)
-- Supported models: [`docs/references/supported_models.md`](./docs/references/supported_models.md)
+- Development and operations: [`docs/development.md`](./docs/development.md)
+- Model catalog: [`configs/llm_factories.json`](./configs/llm_factories.json)
 - Docker guide: [`docker/README.md`](./docker/README.md)
 
 ## 🛠️ Typical Use Cases
@@ -589,7 +595,7 @@ Issues and pull requests are welcome.
 
 Before contributing, review:
 
-- [`docs/architecture.md`](./docs/architecture.md)
+- [`docs/development.md`](./docs/development.md)
 - [`docker/README.md`](./docker/README.md)
 - [`AGENTS.md`](./AGENTS.md)
 
