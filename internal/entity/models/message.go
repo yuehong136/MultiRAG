@@ -35,6 +35,20 @@ func ContentParts(content any) ([]map[string]any, error) {
 			if !ok || text == "" {
 				return nil, fmt.Errorf("text part requires nonempty text")
 			}
+		case "video_url", "file_url":
+			kind := part["type"].(string)
+			item, ok := part[kind].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s must be an object", kind)
+			}
+			raw, ok := item["url"].(string)
+			if !ok {
+				return nil, fmt.Errorf("%s requires a URL", kind)
+			}
+			u, err := url.Parse(raw)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+				return nil, fmt.Errorf("%s requires an HTTP(S) URL", kind)
+			}
 		case "image_url":
 			img, ok := part["image_url"].(map[string]any)
 			if !ok {

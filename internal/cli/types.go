@@ -138,6 +138,10 @@ const (
 	TokenOCR
 	TokenRegion
 	TokenURL
+	TokenMessage
+	TokenImage
+	TokenVideo
+	TokenAudio
 	TokenLog
 	TokenLevel
 	TokenDebug

@@ -1295,17 +1295,14 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("model name not provided and no current model set. Use 'use model' command first")
 	}
 
-	message := cmd.Params["message"].(string)
+	message, _ := cmd.Params["message"].(string)
 	thinking, _ := cmd.Params["thinking"].(bool)
 	stream, _ := cmd.Params["stream"].(bool)
 	effort, _ := cmd.Params["effort"].(string)
 	verbosity, _ := cmd.Params["verbosity"].(string)
-	var content any = message
-	if strings.HasPrefix(strings.TrimSpace(message), "[") {
-		var parts []any
-		if err := json.Unmarshal([]byte(message), &parts); err == nil {
-			content = parts
-		}
+	content, err := chatContent(message, cmd.Params["content_inputs"])
+	if err != nil {
+		return nil, err
 	}
 	messages := []models.Message{{Role: "user", Content: content}}
 	if err := models.ValidateMessages(messages); err != nil {

@@ -221,7 +221,7 @@ func (p *Parser) expectSemicolon() error {
 }
 
 func isKeyword(tokenType int) bool {
-	return tokenType >= TokenLogin && tokenType <= TokenURL
+	return tokenType >= TokenLogin && tokenType <= TokenPanic
 }
 
 // isCECommand reports whether the given word selects a Context Engine command.

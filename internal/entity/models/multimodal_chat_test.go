@@ -173,3 +173,19 @@ func TestBoundChatRejectsEmptyResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestURLMediaValidationAndGoogleBoundary(t *testing.T) {
+	for _, kind := range []string{"video_url", "file_url"} {
+		messages := []Message{{Role: "user", Content: []any{map[string]any{"type": kind, kind: map[string]any{"url": "https://example.com/media"}}}}}
+		if err := ValidateMessages(messages); err != nil {
+			t.Fatal(err)
+		}
+		body, err := vllmBody("vision", messages, nil, true)
+		if err != nil || !reflect.DeepEqual(body["messages"], messages) {
+			t.Fatal("media payload changed", err)
+		}
+		if _, _, err := googleHistory(messages, nil); err == nil {
+			t.Fatal("Google silently accepted unsupported media")
+		}
+	}
+}

@@ -1542,7 +1542,9 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 DeepSeek、Gitee、SiliconFlow。驱动统一使用 `ChatWithMessages(modelName, apiConfig, messages, config)`，
 返回 `ChatResponse`（answer/reasoning_content）；旧单文本 Go helper 委托消息接口。
 普通与流式 provider API、session 保留每条消息的角色和 content；content 接受非空字符串或
-`text`/`image_url` 对象数组，`image_url.url` 接受 HTTP(S) 或 base64 image data URL。
+`text`/`image_url`/`video_url`/`file_url` 对象数组，图片接受 HTTP(S) 或 base64 image data URL，
+video/file 只接受 HTTP(S) URL。后两种 URL 原样交给兼容 provider；Google adapter 明确拒绝，
+不会丢弃或降成文本。是否支持具体媒体仍取决于供应商模型。
 空 messages、空/非法 content、未知 part/role、空答案均报错；assistant 的 `reasoning_content`
 可随输入历史传给兼容 OpenAI 格式的 provider。Google 将 system 独立为 system instruction，
 图片 data URL 解码为含原始 MIME 的 inline data，HTTP(S) URL 作为 file URI，不在本机下载。
@@ -1552,6 +1554,11 @@ Google system content 仅支持文本；image detail 仅透传给兼容 OpenAI �
 Google 必须收到供应商结束标记，异常 EOF 不发送成功终帧；assistant reasoning 映射为 thought part。
 CLI 普通文本改发单项 messages；有效 JSON 数组按 content parts 校验，非法 part 报错；
 非 JSON 的方括号文本继续作为字符串发送，保留旧文本输入习惯。
+CLI 同时接受 `CHAT WITH "model@instance@provider" MESSAGE "问题" IMAGE "https://host/a.png"
+"/path/local.png" VIDEO "https://host/a.mp4" FILE "https://host/a.pdf";`，可加 `STREAM THINK` 前缀
+和 `EFFORT HIGH` / `WITH VERBOSITY LOW`。旧 `CHAT "问题"` 与位置式模型参数保留。
+本地图片按实际 MIME 转 base64 data URL（最大 20 MiB），video/file 不读取本地文件。
+`AUDIO` 明确报未支持，Skills 与 context engine 命令分流不变。
 旧 message 的 HTTP 请求仍受相同身份、实例和模型能力校验。真实图片理解取决于所选远程模型，
 本地 HTTP 合同通过不等同于远程多模态能力已验收。
 此 Go session 路径未接入 KB/Tavily 检索或附件文件转换；仅声明 image2text 的模型不可作为 chat 绑定。

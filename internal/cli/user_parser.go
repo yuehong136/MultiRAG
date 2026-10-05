@@ -1345,84 +1345,77 @@ func (p *Parser) parseDisableCommand() (*Command, error) {
 }
 
 func (p *Parser) parseChatCommand() (*Command, error) {
-	p.nextToken() // consume CHAT
-
-	var modelName string
-	var message string
-
-	// Format: 'model@instance@provider' or just 'message'.
-	if p.curToken.Type == TokenQuotedString {
-		firstArg := p.curToken.Value
-
-		if strings.Count(firstArg, "@") == 2 {
-			// This is likely a model identifier, expect another quoted string for message
-			modelName = firstArg
-			p.nextToken()
-
-			// After model name, expect message
+	p.nextToken()
+	cmd := NewCommand("chat_to_model")
+	cmd.Params["thinking"], cmd.Params["stream"] = false, false
+	cmd.Params["effort"], cmd.Params["verbosity"] = "default", "low"
+	var inputs []chatInput
+	// Retain positional model/message and unquoted single-message syntax.
+	if p.curToken.Type == TokenQuotedString || p.curToken.Type == TokenIdentifier {
+		first := p.curToken.Value
+		p.nextToken()
+		if strings.Count(first, "@") == 2 {
+			cmd.Params["model_name"] = first
 			if p.curToken.Type != TokenQuotedString {
 				return nil, fmt.Errorf("expected message after model name")
 			}
-			message = p.curToken.Value
-			p.nextToken()
-		} else {
-			// This is just a message, use current model
-			message = firstArg
+			first = p.curToken.Value
 			p.nextToken()
 		}
-	} else if p.curToken.Type == TokenIdentifier {
-		// Context engine style: chat <message>
-		message = p.curToken.Value
-		p.nextToken()
-	} else {
-		return nil, fmt.Errorf("expected model name (quoted string) or message")
+		cmd.Params["message"] = first
 	}
-
-	effort := "default"
-	verbosity := "low"
-	if p.curToken.Type == TokenWith {
-		p.nextToken()
+	for p.curToken.Type != TokenEOF && p.curToken.Type != TokenSemicolon {
 		switch p.curToken.Type {
-		case TokenEffort:
+		case TokenWith:
 			p.nextToken()
-			effortLevels := map[int]string{
-				TokenNone: "none", TokenMinimal: "minimal", TokenLow: "low",
-				TokenMedium: "medium", TokenHigh: "high", TokenMax: "max",
+			if p.curToken.Type == TokenQuotedString {
+				if _, set := cmd.Params["model_name"]; set {
+					return nil, fmt.Errorf("model already set")
+				}
+				cmd.Params["model_name"] = p.curToken.Value
+				p.nextToken()
+			} else if p.curToken.Type != TokenEffort && p.curToken.Type != TokenVerbosity {
+				return nil, fmt.Errorf("expected model, EFFORT or VERBOSITY after WITH")
 			}
-			level, ok := effortLevels[p.curToken.Type]
-			if !ok {
-				return nil, fmt.Errorf("invalid effort level")
-			}
-			effort = level
+		case TokenMessage, TokenImage, TokenVideo, TokenFile:
+			kind := map[int]string{TokenMessage: "text", TokenImage: "image_url", TokenVideo: "video_url", TokenFile: "file_url"}[p.curToken.Type]
 			p.nextToken()
-		case TokenVerbosity:
-			p.nextToken()
-			verbosityLevels := map[int]string{TokenLow: "low", TokenMedium: "medium", TokenHigh: "high"}
-			level, ok := verbosityLevels[p.curToken.Type]
-			if !ok {
-				return nil, fmt.Errorf("invalid verbosity level")
+			if p.curToken.Type != TokenQuotedString {
+				return nil, fmt.Errorf("%s requires a quoted value", kind)
 			}
-			verbosity = level
+			for p.curToken.Type == TokenQuotedString {
+				inputs = append(inputs, chatInput{Kind: kind, Value: p.curToken.Value})
+				p.nextToken()
+			}
+		case TokenAudio:
+			return nil, fmt.Errorf("audio chat input is not supported")
+		case TokenEffort, TokenVerbosity:
+			option := p.curToken.Type
+			p.nextToken()
+			levels := map[int]string{TokenNone: "none", TokenMinimal: "minimal", TokenLow: "low", TokenMedium: "medium", TokenHigh: "high", TokenMax: "max"}
+			level, ok := levels[p.curToken.Type]
+			if !ok || (option == TokenVerbosity && level != "low" && level != "medium" && level != "high") {
+				return nil, fmt.Errorf("invalid chat generation option")
+			}
+			key := "effort"
+			if option == TokenVerbosity {
+				key = "verbosity"
+			}
+			cmd.Params[key] = level
 			p.nextToken()
 		default:
-			return nil, fmt.Errorf("expected EFFORT or VERBOSITY")
+			return nil, fmt.Errorf("unexpected chat argument %q", p.curToken.Value)
 		}
 	}
-
-	// Semicolon is optional
 	if p.curToken.Type == TokenSemicolon {
 		p.nextToken()
 	}
-
-	cmd := NewCommand("chat_to_model")
-	if modelName != "" {
-		cmd.Params["model_name"] = modelName
+	if len(inputs) > 0 {
+		cmd.Params["content_inputs"] = inputs
 	}
-	cmd.Params["message"] = message
-	cmd.Params["thinking"] = false
-	cmd.Params["stream"] = false
-	cmd.Params["effort"] = effort
-	cmd.Params["verbosity"] = verbosity
+	if _, ok := cmd.Params["message"]; !ok && len(inputs) == 0 {
+		return nil, fmt.Errorf("chat content is required")
+	}
 	return cmd, nil
 }
 

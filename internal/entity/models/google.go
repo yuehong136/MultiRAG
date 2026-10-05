@@ -328,6 +328,9 @@ func googleHistory(messages []Message, config *ChatConfig) ([]*genai.Content, *g
 				if message.Role == "system" {
 					return nil, nil, errors.New("Google system instructions only support text")
 				}
+				if part["type"] != "image_url" {
+					return nil, nil, fmt.Errorf("Google does not support %s content in this adapter", part["type"])
+				}
 				img := part["image_url"].(map[string]any)
 				raw := img["url"].(string)
 				if strings.HasPrefix(raw, "data:") {
