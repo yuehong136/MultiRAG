@@ -31,7 +31,7 @@ def test_routes_registered_once_and_legacy_alias_deprecated(client: Any) -> None
 @pytest.fixture
 def openai_route(client: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]]:
     route = sys.modules["api.apps.restful_apis.openai"]
-    dialog = SimpleNamespace(id="dlg-1", tenant_id="tenant-unit", llm_id="configured-model", tenant_llm_id=1, kb_ids=["kb-1"])
+    dialog = SimpleNamespace(id="dlg-1", tenant_id="tenant-unit", llm_id="configured-model", tenant_llm_id=1, kb_ids=["kb-1"], prompt_config={})
     calls: list[dict[str, Any]] = []
     client.app.dependency_overrides[async_token_required] = lambda: "tenant-unit"
     monkeypatch.setattr(DialogService, "query", classmethod(lambda cls, db, **kwargs: [dialog]))

@@ -50,6 +50,7 @@ from api.utils.api_utils import (
     server_error_response,
     token_required,
 )
+from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata_async, resolve_reference_metadata_preferences
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum
@@ -76,6 +77,7 @@ class DeleteSessionsRequest(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str | None = ""
     session_id: str | None = None
     stream: bool | None = True
@@ -110,6 +112,7 @@ class AgentCompletionRequest(BaseModel):
 
 
 class AskRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str
     dataset_ids: list[str]
 
@@ -120,6 +123,7 @@ class RelatedQuestionsRequest(BaseModel):
 
 
 class ChatbotCompletionRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str | None = ""
     stream: bool | None = True
     internet: bool | None = None
@@ -127,12 +131,14 @@ class ChatbotCompletionRequest(BaseModel):
 
 
 class SearchBotAskRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str
     kb_ids: list[str]
     search_id: str | None = ""
 
 
 class SearchBotRetrievalTestRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     kb_id: str | list[str]
     question: str
     page: int | None = 1
@@ -552,7 +558,7 @@ async def ask_about(request: AskRequest, db: AsyncSession = Depends(get_async_db
     async def stream():
         nonlocal req, uid, db
         try:
-            async for ans in async_ask(db, req["question"], req["kb_ids"], uid):
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config={"reference_metadata": req.get("reference_metadata")}):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -839,7 +845,9 @@ async def ask_about_embedded(
     async def stream():
         nonlocal req, uid, db
         try:
-            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
+            include, fields = resolve_reference_metadata_preferences(req, search_config)
+            effective_config = {**search_config, "reference_metadata": {"include": include, "fields": None if fields is None else sorted(fields)}}
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=effective_config):
                 yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
@@ -878,24 +886,7 @@ async def retrieval_test_embedded(
     rerank_id = req.get("rerank_id", "")
     tenant_ids = []
 
-    if req.get("search_id", ""):
-        search_config = (await db.run_sync(lambda s: SearchService.get_detail(s, req.get("search_id", "")))).get("search_config", {})  # TODO(async-phase4)
-        meta_data_filter = search_config.get("meta_data_filter", {})
-        if meta_data_filter:
-            metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
-            chat_mdl = None
-            if meta_data_filter.get("method") in ["auto", "semi_auto"]:
-                chat_mdl = await build_named_bundle_async(tenant_id, LLMType.CHAT.value, search_config.get("chat_id", ""))
-            doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
-        # Apply search_config settings if not explicitly provided in request
-        if not req.get("similarity_threshold"):
-            similarity_threshold = float(search_config.get("similarity_threshold", similarity_threshold))
-        if not req.get("vector_similarity_weight"):
-            vector_similarity_weight = float(search_config.get("vector_similarity_weight", vector_similarity_weight))
-        if not req.get("top_k"):
-            top = int(search_config.get("top_k", top))
-        if not req.get("rerank_id"):
-            rerank_id = search_config.get("rerank_id", "")
+    search_config = {}
 
     try:
 
@@ -915,6 +906,31 @@ async def retrieval_test_embedded(
         if owned_tenants is None:
             return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
         tenant_ids = owned_tenants
+
+        if req.get("search_id", ""):
+            detail = await db.run_sync(lambda s: SearchService.get_detail(s, req["search_id"]))  # TODO(async-phase4)
+            if not detail:
+                return get_error_data_result(retmsg="Search app not found!")
+            membership = await db.run_sync(lambda s: UserTenantService.get_membership(s, tenant_id=detail["tenant_id"], user_id=tenant_id))  # TODO(async-phase4)
+            if membership is None or not UserTenantService.can_access_tenant_resources(membership.role):
+                return get_error_data_result(retmsg="No authorization.")
+            search_config = detail.get("search_config") or {}
+            meta_data_filter = search_config.get("meta_data_filter", {})
+            if meta_data_filter:
+                metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
+                chat_mdl = None
+                if meta_data_filter.get("method") in ["auto", "semi_auto"]:
+                    chat_mdl = await build_named_bundle_async(tenant_id, LLMType.CHAT.value, search_config.get("chat_id", ""))
+                doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
+            # Apply search_config settings if not explicitly provided in request
+            if not req.get("similarity_threshold"):
+                similarity_threshold = float(search_config.get("similarity_threshold", similarity_threshold))
+            if not req.get("vector_similarity_weight"):
+                vector_similarity_weight = float(search_config.get("vector_similarity_weight", vector_similarity_weight))
+            if not req.get("top_k"):
+                top = int(search_config.get("top_k", top))
+            if not req.get("rerank_id"):
+                rerank_id = search_config.get("rerank_id", "")
 
         kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
         if not kbs:
@@ -968,6 +984,7 @@ async def retrieval_test_embedded(
 
         for c in ranks["chunks"]:
             c.pop("vector", None)
+        await enrich_reference_metadata_async(db, ranks["chunks"], resolve_reference_metadata_preferences(req, search_config))
         ranks["labels"] = labels
 
         return get_json_result(data=ranks)

@@ -34,6 +34,7 @@ from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result
+from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import LLMType, RetCode, StatusEnum
 from common.misc_utils import get_uuid
@@ -113,6 +114,7 @@ class MindmapRequest(BaseModel):
 
 
 class SessionCompletionRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     model_config = ConfigDict(extra="allow")
 
     messages: list[dict[str, Any]]
@@ -374,6 +376,10 @@ def _prepare_create_payload(db: Session, tenant_id: str, req: dict[str, Any]) ->
 
     if req.get("prompt_config") is not None and not isinstance(req["prompt_config"], dict):
         return False, "`prompt_config` should be an object."
+    try:
+        resolve_reference_metadata_preferences(None, req.get("prompt_config"))
+    except ValueError as exc:
+        return False, str(exc)
     _apply_prompt_defaults(req)
 
     if DialogService.query(db, name=req["name"], tenant_id=tenant_id, status=StatusEnum.VALID.value):
@@ -436,6 +442,10 @@ def _prepare_update_payload(
     if "prompt_config" in req:
         if req["prompt_config"] is not None and not isinstance(req["prompt_config"], dict):
             return False, "`prompt_config` should be an object."
+        try:
+            resolve_reference_metadata_preferences(None, req["prompt_config"])
+        except ValueError as exc:
+            return False, str(exc)
         if merge_nested:
             prompt_config = deepcopy(current.get("prompt_config") or {})
             prompt_config.update(req.get("prompt_config") or {})

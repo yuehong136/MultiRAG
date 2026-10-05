@@ -19,6 +19,7 @@ from api.db.services.dialog_service import DialogService, async_chat
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils.api_utils import async_token_required, get_error_data_result
+from api.utils.reference_metadata import enrich_reference_metadata_async, resolve_reference_metadata_preferences
 from common.constants import RetCode, StatusEnum
 from common.metadata_utils import convert_conditions, meta_filter
 from common.token_utils import num_tokens_from_string
@@ -82,24 +83,7 @@ async def _build_reference_chunks(
     metadata_fields: list[str] | None,
 ) -> list[dict[str, Any]]:
     chunks = chunks_format(reference)
-    if not include_metadata:
-        return chunks
-    doc_ids_by_kb: dict[str, set[str]] = {}
-    for chunk in chunks:
-        if chunk.get("dataset_id") and chunk.get("document_id"):
-            doc_ids_by_kb.setdefault(chunk["dataset_id"], set()).add(chunk["document_id"])
-    meta_by_doc: dict[str, dict[str, Any]] = {}
-    for kb_id, doc_ids in doc_ids_by_kb.items():
-        meta_by_doc.update(
-            await db.run_sync(lambda s: DocMetadataService.get_metadata_for_documents(s, list(doc_ids), kb_id))  # TODO(async-phase4)
-        )
-    selected_fields = set(metadata_fields) if metadata_fields is not None else None
-    for chunk in chunks:
-        meta = meta_by_doc.get(chunk.get("document_id"), {})
-        if selected_fields is not None:
-            meta = {key: value for key, value in meta.items() if key in selected_fields}
-        if meta:
-            chunk["document_metadata"] = meta
+    await enrich_reference_metadata_async(db, chunks, (include_metadata, None if metadata_fields is None else set(metadata_fields)), kb_field="dataset_id", doc_field="document_id")
     return chunks
 
 
@@ -253,7 +237,12 @@ async def openai_chat_completions(
     prompt = messages[-1]["content"]
     completion_id = f"chatcmpl-{chat_id}"
     need_reference = bool(extra_body.get("reference", False))
-    include_reference_metadata = bool(reference_metadata.get("include", False))
+    try:
+        include_reference_metadata, selected_fields = resolve_reference_metadata_preferences(extra_body, dia.prompt_config)
+    except ValueError as exc:
+        return _argument_error(str(exc))
+    metadata_fields = None if selected_fields is None else sorted(selected_fields)
+    chat_kwargs["reference_metadata"] = {"include": include_reference_metadata, "fields": metadata_fields}
     legacy = "/chats_openai/" in http_request.url.path
     stream_mode = req["stream"] if req["stream"] is not None else legacy
     if stream_mode:

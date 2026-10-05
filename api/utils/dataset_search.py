@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator, Field, model_validator
 
+from api.utils.reference_metadata import ReferenceMetadata
+
 
 class SparseSearchMode(BaseModel):
     type: Literal["sparse"] = "sparse"
@@ -47,6 +49,7 @@ SearchMode = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | F
 
 
 class SearchDatasetRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str = Field(min_length=1)
     # Local multi-dataset consumers retain one retrieval, ranking and pagination.
     # When supplied, the path dataset must be part of this complete selection.

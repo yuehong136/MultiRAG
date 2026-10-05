@@ -14,6 +14,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.dataset_search import SearchDatasetRequest
+from api.utils.reference_metadata import enrich_reference_metadata_async, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum
 from common.doc_store.doc_store_base import OrderByExpr
@@ -118,6 +119,7 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
     ranks["chunks"] = await asyncio.to_thread(settings.retriever.retrieval_by_children, ranks["chunks"], tenant_ids)
     for chunk in ranks["chunks"]:
         chunk.pop("vector", None)
+    await enrich_reference_metadata_async(db, ranks["chunks"], resolve_reference_metadata_preferences(request.model_dump(), search_config))
     ranks["labels"] = labels
     # Preserve the retrieval total, not the count of the current page/children.
     return True, ranks, RetCode.SUCCESS

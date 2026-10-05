@@ -26,6 +26,7 @@ from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.run_context import RunContext
+from api.utils.reference_metadata import enrich_reference_metadata, enrich_reference_metadata_async, reference_dataset_id, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, ParserType, StatusEnum
 from common.metadata_utils import apply_meta_data_filter
@@ -708,6 +709,7 @@ def chat(
         attachments_ = "\n\n".join(text_attachments)
 
     prompt_config = dialog.prompt_config
+    metadata_preferences = resolve_reference_metadata_preferences(kwargs, prompt_config)
     field_map = KnowledgebaseService.get_field_map(db, dialog.kb_ids)
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
@@ -791,6 +793,7 @@ def chat(
                         yield _deep_research_event_payload(message)
             finally:
                 research_events.close()
+            enrich_reference_metadata(db, kbinfos["chunks"], metadata_preferences)
             knowledges = kb_prompt(kbinfos, max_tokens)
         else:
             if embd_mdl:
@@ -830,6 +833,7 @@ def chat(
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
+            enrich_reference_metadata(db, kbinfos["chunks"], metadata_preferences)
             knowledges = kb_prompt(kbinfos, max_tokens)
 
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
@@ -1067,6 +1071,7 @@ async def async_chat(
         attachments_ = "\n\n".join(text_attachments)
 
     prompt_config = dialog.prompt_config
+    metadata_preferences = resolve_reference_metadata_preferences(kwargs, prompt_config)
     field_map = await db.run_sync(lambda s: KnowledgebaseService.get_field_map(s, dialog.kb_ids))  # TODO(async-phase4)
     logging.debug(f"field_map retrieved: {field_map}")
     # 如果字段映射存在，尝试使用SQL检索答案
@@ -1075,6 +1080,8 @@ async def async_chat(
         ans = await use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         # For aggregate queries (COUNT, SUM, etc.), chunks may be empty but answer is still valid
         if ans and (ans.get("reference", {}).get("chunks") or ans.get("answer")):
+            await enrich_reference_metadata_async(db, ans.get("reference", {}).get("chunks", []), metadata_preferences)
+            ans["final"] = True
             yield ans
             return
         else:
@@ -1188,6 +1195,7 @@ async def async_chat(
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
+    await enrich_reference_metadata_async(db, kbinfos["chunks"], metadata_preferences)
     knowledges = kb_prompt(kbinfos, max_tokens)
 
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
@@ -1331,7 +1339,21 @@ async def async_chat(
     return
 
 
-async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True, kb_ids=None):
+def _sql_reference_chunk(columns: list[dict[str, Any]], row: list[Any], kb_ids: list[str] | None) -> dict[str, Any]:
+    values = {column["name"].lower(): value for column, value in zip(columns, row, strict=False)}
+    chunk = {"doc_id": values.get("doc_id"), "docnm_kwd": values.get("docnm_kwd", values.get("docnm"))}
+    source_kb = values.get("kb_id", values.get("kb_id_kwd"))
+    kb_id = reference_dataset_id(source_kb)
+    if source_kb is None and len(kb_ids or []) == 1:
+        kb_id = kb_ids[0]
+    if kb_id and kb_id in (kb_ids or []):
+        chunk["kb_id"] = kb_id
+    return chunk
+
+
+async def use_sql(
+    question: str, field_map: dict[str, str], tenant_id: str | list[str], kb_names: list[str], chat_mdl: Any, quota: bool = True, kb_ids: list[str] | None = None
+) -> dict[str, Any] | None:
     logging.debug(f"use_sql: Question: {question}")
 
     doc_engine = settings.DOC_ENGINE.lower()
@@ -1347,9 +1369,9 @@ async def use_sql(question, field_map, tenant_id, kb_names, chat_mdl, quota=True
 
     expected_doc_name_column = "docnm" if doc_engine == "infinity" else "docnm_kwd"
 
-    def has_source_columns(columns):
+    def has_source_columns(columns: list[dict[str, Any]]) -> bool:
         normalized_names = {str(col.get("name", "")).lower() for col in columns}
-        return "doc_id" in normalized_names and bool({"docnm_kwd", "docnm"} & normalized_names)
+        return "doc_id" in normalized_names and bool({"docnm_kwd", "docnm"} & normalized_names) and (len(kb_ids or []) <= 1 or bool({"kb_id", "kb_id_kwd"} & normalized_names))
 
     def is_aggregate_sql(sql_text):
         return bool(re.search(r"(count|sum|avg|max|min|distinct)\s*\(", (sql_text or "").lower()))
@@ -1493,6 +1515,9 @@ Write SQL using exact field names above. Include doc_id, docnm_kwd for data quer
 
     tried_times = 0
 
+    if len(kb_ids or []) > 1:
+        sys_prompt += "\nFor non-aggregate queries, include kb_id in SELECT to identify each source dataset."
+
     async def get_table(custom_user_prompt=None):
         nonlocal sys_prompt, user_prompt, question, tried_times, row_count_override
         if row_count_override and custom_user_prompt is None:
@@ -1554,6 +1579,8 @@ Previous SQL:
 The previous SQL result is missing required source columns for citations.
 Rewrite SQL to keep the same query intent and include doc_id and docnm_kwd in the SELECT list.
 Return ONLY SQL.""".format(table_name, "\n".join([f"  - {k} ({v})" for k, v in field_map.items()]), question, previous_sql)
+        if len(kb_ids or []) > 1:
+            repair_prompt += "\nAlso include kb_id in SELECT to identify each source dataset."
         return await get_table(custom_user_prompt=repair_prompt)
 
     try:
@@ -1627,7 +1654,8 @@ Please correct the error and write SQL again using the exact field names above, 
     logging.debug(f"use_sql: All columns: {[(i, c['name']) for i, c in enumerate(tbl['columns'])]}")
     logging.debug(f"use_sql: docid_idx={docid_idx}, doc_name_idx={doc_name_idx}")
 
-    column_idx = [ii for ii in range(len(tbl["columns"])) if ii not in (docid_idx | doc_name_idx)]
+    kb_id_idx = {ii for ii, c in enumerate(tbl["columns"]) if c["name"].lower() in {"kb_id", "kb_id_kwd"}}
+    column_idx = [ii for ii in range(len(tbl["columns"])) if ii not in (docid_idx | doc_name_idx | kb_id_idx)]
 
     # Helper: map column names to display names
     def map_column_name(col_name):
@@ -1684,7 +1712,8 @@ Please correct the error and write SQL again using the exact field names above, 
             if where_match:
                 where_clause = where_match.group(1).strip()
                 docnm_field = "docnm" if doc_engine == "infinity" else "docnm_kwd"
-                chunks_sql = f"select doc_id, {docnm_field} from {table_name} where {where_clause}"
+                kb_column = ", kb_id" if len(kb_ids or []) != 1 else ""
+                chunks_sql = f"select doc_id, {docnm_field}{kb_column} from {table_name} where {where_clause}"
                 if "limit" not in chunks_sql.lower():
                     chunks_sql += " limit 20"
                 logging.debug(f"use_sql: Fetching chunks with SQL: {chunks_sql}")
@@ -1694,7 +1723,7 @@ Please correct the error and write SQL again using the exact field names above, 
                         chunks_did_idx = next((i for i, c in enumerate(chunks_tbl["columns"]) if c["name"].lower() == "doc_id"), None)
                         chunks_dn_idx = next((i for i, c in enumerate(chunks_tbl["columns"]) if c["name"].lower() in ["docnm_kwd", "docnm"]), None)
                         if chunks_did_idx is not None and chunks_dn_idx is not None:
-                            chunks = [{"doc_id": r[chunks_did_idx], "docnm_kwd": r[chunks_dn_idx]} for r in chunks_tbl["rows"]]
+                            chunks = [_sql_reference_chunk(chunks_tbl["columns"], r, kb_ids) for r in chunks_tbl["rows"]]
                             doc_aggs = {}
                             for r in chunks_tbl["rows"]:
                                 did, dn = r[chunks_did_idx], r[chunks_dn_idx]
@@ -1720,7 +1749,7 @@ Please correct the error and write SQL again using the exact field names above, 
     result = {
         "answer": "\n".join([columns, line, rows]),
         "reference": {
-            "chunks": [{"doc_id": r[docid_idx], "docnm_kwd": r[doc_name_idx]} for r in tbl["rows"]],
+            "chunks": [_sql_reference_chunk(tbl["columns"], r, kb_ids) for r in tbl["rows"]],
             "doc_aggs": [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in doc_aggs.items()],
         },
         "prompt": sys_prompt,
@@ -2011,6 +2040,7 @@ async def _stream_with_think_delta(
 def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
     if search_config is None:
         search_config = {}
+    metadata_preferences = resolve_reference_metadata_preferences(None, search_config)
     doc_ids = search_config.get("doc_ids", [])
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
@@ -2072,6 +2102,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
                 search_mode=None,  # todo 无法传递应用里的配置，所以只能使用一种默认检索模式
             )
         )
+    enrich_reference_metadata(db, kbinfos["chunks"], metadata_preferences)
     knowledges = kb_prompt(kbinfos, max_tokens)
     sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 
@@ -2106,6 +2137,7 @@ async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name
     """异步版本的 ask（AsyncSession；遗留同步 service 经 run_sync 桥接）"""
     if search_config is None:
         search_config = {}
+    metadata_preferences = resolve_reference_metadata_preferences(None, search_config)
     doc_ids = search_config.get("doc_ids", [])
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
@@ -2173,6 +2205,7 @@ async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name
             search_mode=None,
         )
 
+    await enrich_reference_metadata_async(db, kbinfos["chunks"], metadata_preferences)
     knowledges = kb_prompt(kbinfos, max_tokens)
     sys_prompt = PROMPT_JINJA_ENV.from_string(ASK_SUMMARY).render(knowledge="\n".join(knowledges))
 

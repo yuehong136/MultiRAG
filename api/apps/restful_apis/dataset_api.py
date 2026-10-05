@@ -230,6 +230,33 @@ async def aggregate_tags(
         return get_error_data_result(retmsg="Internal server error")
 
 
+@router.get("/datasets/metadata/keys", summary="List document metadata keys across datasets")
+async def get_metadata_keys(
+    dataset_ids: str = Query(...),
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    from api.db.services.doc_metadata_service import DocMetadataService
+    from api.db.services.knowledgebase_service import KnowledgebaseService
+
+    ids = _parse_dataset_ids(dataset_ids)
+    if not ids:
+        return get_error_data_result(retmsg="Lack of dataset_ids in query parameters")
+    for kb_id in ids:
+        if not await KnowledgebaseService.accessible_async(db, kb_id, tenant_id):
+            return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg="No authorization.")
+    try:
+        keys: set[str] = set()
+        for kb_id in ids:
+            metadata = await DocMetadataService.get_metadata_for_documents_async(db, None, kb_id)
+            for fields in metadata.values():
+                keys.update(fields)
+        return get_result(data=sorted(keys))
+    except Exception:
+        logger.exception("Unable to read document metadata keys")
+        return get_error_data_result(retcode=RetCode.SERVER_ERROR, retmsg="Unable to read document metadata keys.")
+
+
 @router.get("/datasets/metadata/flattened", summary="跨数据集获取拉平的文档元数据")
 async def get_flattened_metadata(
     dataset_ids: str | None = Query(None, description="数据集ID列表，逗号分隔"),

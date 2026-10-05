@@ -17,6 +17,7 @@ from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, K
 from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
+from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, RetCode, TaskStatus
 from common.metadata_utils import convert_conditions, meta_filter
@@ -82,6 +83,7 @@ class StopParsingRequest(BaseModel):
 
 
 class RetrievalTestRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str
     dataset_ids: list[str]
     document_ids: list[str] = Field(default_factory=list)
@@ -476,6 +478,8 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         # 移除向量数据
         for c in ranks["chunks"]:
             c.pop("vector", None)
+
+        enrich_reference_metadata(db, ranks["chunks"], resolve_reference_metadata_preferences(req))
 
         # 重命名键名
         renamed_chunks = []

@@ -31,6 +31,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
+from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from common.constants import RetCode, StatusEnum
 from common.misc_utils import get_uuid
 
@@ -52,6 +53,7 @@ class UpdateSearchRequest(BaseModel):
 
 
 class SearchCompletionRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str
     kb_ids: list[str] | None = None
 
@@ -95,6 +97,10 @@ def _create_search(db: Session, tenant_id: str, req: dict[str, Any]) -> tuple[bo
     req["tenant_id"] = tenant_id
     req["created_by"] = tenant_id
 
+    try:
+        resolve_reference_metadata_preferences(None, req.get("search_config"))
+    except ValueError as exc:
+        return False, str(exc), RetCode.DATA_ERROR
     if not SearchService.save(db, **req):
         return False, "Sorry! Data missing!", RetCode.DATA_ERROR
     return True, {"search_id": req["id"]}, None
@@ -175,6 +181,10 @@ def _update_search(
     new_config = req.get("search_config")
     if not isinstance(new_config, dict):
         return False, "search_config must be a JSON object", RetCode.DATA_ERROR
+    try:
+        resolve_reference_metadata_preferences(None, new_config)
+    except ValueError as exc:
+        return False, str(exc), RetCode.DATA_ERROR
     req["search_config"] = {**current_config, **new_config}
 
     for field in ("search_id", "tenant_id", "created_by", "update_time", "id"):
@@ -302,6 +312,8 @@ async def completions(
         return get_error_data_result(retmsg=f"Cannot find search {search_id}")
 
     search_config = search_app.get("search_config", {})
+    include, fields = resolve_reference_metadata_preferences(request.model_dump(), search_config)
+    search_config = {**search_config, "reference_metadata": {"include": include, "fields": None if fields is None else sorted(fields)}}
     kb_ids = search_config.get("kb_ids") or request.kb_ids or []
     if not kb_ids:
         return get_error_data_result(retmsg="`kb_ids` is required.")

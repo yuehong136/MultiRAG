@@ -94,10 +94,12 @@ class SqlMetadataStore(MetadataStore):
                 result.append((row["id"], meta))
         return result
 
-    def list_by_doc_ids(self, db: Session, doc_ids: list[str]) -> dict[str, dict]:
+    def list_by_doc_ids(self, db: Session, doc_ids: list[str], kb_id: str | None = None) -> dict[str, dict]:
         if not doc_ids:
             return {}
         stmt = select(DocumentMetadata.id, DocumentMetadata.meta_fields).where(DocumentMetadata.id.in_(doc_ids))
+        if kb_id is not None:
+            stmt = stmt.where(DocumentMetadata.kb_id == kb_id)
         result: dict[str, dict] = {}
         for row in db.execute(stmt).mappings():
             meta = row["meta_fields"] or {}

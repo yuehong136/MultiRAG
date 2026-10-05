@@ -25,6 +25,7 @@ from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
+from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from common.constants import LLMType, RetCode
 from common.misc_utils import get_uuid
 from core.prompts.generator import chunks_format
@@ -118,6 +119,7 @@ class SetConversationRequest(BaseModel):
 
 
 class CompletionRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     conversation_id: str
     """会话的唯一标识符。"""
 
@@ -205,6 +207,7 @@ class ASRRequest(BaseModel):
 
 
 class AskAboutRequest(BaseModel):
+    reference_metadata: ReferenceMetadata | None = None
     question: str
     """用户提出的问题"""
 
@@ -817,7 +820,9 @@ async def ask_about(request: AskAboutRequest, db: AsyncSession = Depends(get_asy
 
     async def stream():
         try:
-            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=search_config):
+            include, fields = resolve_reference_metadata_preferences(req, search_config)
+            effective_config = {**search_config, "reference_metadata": {"include": include, "fields": None if fields is None else sorted(fields)}}
+            async for ans in async_ask(db, req["question"], req["kb_ids"], uid, search_config=effective_config):
                 yield "data:" + json.dumps({"retcode": 0, "retmsg": "", "data": ans}, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data:" + json.dumps({"retcode": 500, "retmsg": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"

@@ -24,16 +24,19 @@ Storage is delegated to MetadataStore implementations:
 - ES/Infinity     → EngineMetadataStore (docStoreConn sidecar index)
 """
 
+import asyncio
 import json
 import logging
 import re
 from copy import deepcopy
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document, Knowledgebase
 from api.db.services.metadata_store import MetadataStore
+from api.db.services.metadata_store_sql import SqlMetadataStore
 from common import settings
 from common.metadata_utils import dedupe_list
 
@@ -175,12 +178,8 @@ class DocMetadataService:
             return dict(store.list_by_kb_ids(db, tenant_id, [kb_id]))
         if not doc_ids:
             return {}
-        # SqlMetadataStore supports direct doc_ids lookup
-        if hasattr(store, "list_by_doc_ids") and not isinstance(store, type) and callable(getattr(store, "list_by_doc_ids", None)):
-            try:
-                return store.list_by_doc_ids(db, doc_ids)
-            except NotImplementedError:
-                pass
+        if isinstance(store, SqlMetadataStore):
+            return store.list_by_doc_ids(db, doc_ids, kb_id=kb_id)
         # Fallback: list by kb_ids and filter
         tenant_id = cls._kb_tenant(db, kb_id)
         if not tenant_id:
@@ -191,6 +190,26 @@ class DocMetadataService:
             if did in doc_ids_set:
                 result[did] = meta
         return result
+
+    @classmethod
+    async def get_metadata_for_documents_async(cls, db: AsyncSession, doc_ids: list[str] | None, kb_id: str) -> dict[str, dict]:
+        store = cls._store()
+        if isinstance(store, SqlMetadataStore):
+            # TODO(async-phase4): the SQL store uses only the supplied session.
+            return await db.run_sync(lambda session: cls.get_metadata_for_documents(session, doc_ids, kb_id))
+        tenant_id = await db.run_sync(lambda session: cls._kb_tenant(session, kb_id))  # TODO(async-phase4)
+        if not tenant_id or doc_ids == []:
+            return {}
+
+        def read_engine() -> dict[str, dict]:
+            # Engine stores do not use SQL, but the shared interface accepts a
+            # session. Keep it local to the worker; never share the request one.
+            with Session() as session:
+                rows = store.list_by_kb_ids(session, tenant_id, [kb_id])
+            wanted = None if doc_ids is None else set(doc_ids)
+            return {doc_id: meta for doc_id, meta in rows if wanted is None or doc_id in wanted}
+
+        return await asyncio.to_thread(read_engine)
 
     # ── aggregate reads ────────────────────────────────────────────────────────
 
@@ -217,6 +236,14 @@ class DocMetadataService:
                         continue
                     meta.setdefault(k, {}).setdefault(str(vv), []).append(doc_id)
         return meta
+
+    @classmethod
+    def get_metadata_keys_by_kbs(cls, db: Session, kb_ids: list[str]) -> list[str]:
+        keys: set[str] = set()
+        for kb_id in dict.fromkeys(kb_ids):
+            for meta in cls.get_metadata_for_documents(db, None, kb_id).values():
+                keys.update(meta)
+        return sorted(keys)
 
     @classmethod
     def get_metadata_summary(cls, db: Session, kb_id: str, doc_ids: list[str] | None = None) -> dict:

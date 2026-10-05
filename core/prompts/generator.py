@@ -34,7 +34,7 @@ def normalize_prompt_kb_id(raw_kb_id):
     return raw_kb_id or ""
 
 
-def chunks_format(reference):
+def chunks_format(reference: Any) -> list[dict[str, Any]]:
     if not reference or not isinstance(reference, dict):
         return []
     raw_chunks = reference.get("chunks", [])
@@ -55,6 +55,7 @@ def chunks_format(reference):
             "term_similarity": chunk.get("term_similarity"),
             "row_id": chunk.get("row_id"),
             "doc_type": get_value(chunk, "doc_type_kwd", "doc_type"),
+            **({"document_metadata": chunk["document_metadata"]} if chunk.get("document_metadata") else {}),
         }
         for chunk in raw_chunks
         if isinstance(chunk, dict)
@@ -98,11 +99,9 @@ def message_fit_in(msg, max_length=4000):
     return max_length, msg
 
 
-def kb_prompt(kbinfos, max_tokens, hash_id=False):
-    from api.db.services.doc_metadata_service import DocMetadataService
-
+def kb_prompt(kbinfos: dict[str, Any], max_tokens: int | float, hash_id: bool = False) -> list[str]:
     # 兼容不同字段名
-    def get_text(ck):
+    def get_text(ck: dict[str, Any]) -> str:
         return ck.get("text") or ck.get("content_with_weight") or ""
 
     # knowledges = [get_text(ck) for ck in kbinfos["chunks"]]
@@ -119,15 +118,8 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
             knowledges = knowledges[:i]
             logging.warning(f"Not all the retrieval into prompt: {len(knowledges)}/{kwlg_len}")
             break
-    with db_connection() as db:
-        doc_ids = list(dict.fromkeys(get_value(ck, "doc_id", "document_id") for ck in kbinfos["chunks"][:chunks_num] if get_value(ck, "doc_id", "document_id")))
-        docs = DocMetadataService.get_metadata_for_documents(
-            db,
-            doc_ids,
-            normalize_prompt_kb_id(get_value(kbinfos["chunks"][0], "kb_id", "dataset_id")) if kbinfos["chunks"][:chunks_num] else "",
-        )
 
-    def draw_node(k, line):
+    def draw_node(k: str, line: Any) -> str:
         if line is not None and not isinstance(line, str):
             line = str(line)
         if not line:
@@ -139,7 +131,7 @@ def kb_prompt(kbinfos, max_tokens, hash_id=False):
         cnt = "\nID: {}".format(i if not hash_id else hash_str2int(get_value(ck, "id", "chunk_id"), 500))
         cnt += draw_node("Title", get_value(ck, "docnm_kwd", "document_name"))
         cnt += draw_node("URL", ck["url"]) if "url" in ck else ""
-        for k, v in docs.get(get_value(ck, "doc_id", "document_id"), {}).items():
+        for k, v in (ck.get("document_metadata") or {}).items():
             cnt += draw_node(k, v)
         cnt += "\n└── Content:\n"
         cnt += get_text(ck) or get_value(ck, "content", "content_with_weight")
