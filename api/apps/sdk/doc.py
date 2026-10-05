@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_
 from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, RetCode, TaskStatus
-from common.metadata_utils import convert_conditions, meta_filter
+from common.metadata_utils import apply_meta_data_filter, convert_conditions
 from core.app.tag import label_question
 from core.nlp import search
 from core.prompts.generator import cross_languages, keyword_extraction
@@ -313,7 +313,7 @@ def stop_parsing_documents(dataset_id: str, request: StopParsingRequest, db: Ses
 
 
 @router.post("/retrieval", summary="检索测试")
-async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)) -> JSONResponse:
     """
     测试检索功能
 
@@ -380,20 +380,20 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             if doc_id not in doc_ids_list:
                 return get_error_data_result(retmsg=f"The datasets don't own the document {doc_id}")
 
-    # 处理元数据过滤
-    if not doc_ids:
-        metadata_condition = req.get("metadata_condition")
-        if metadata_condition:
+    # Metadata conditions narrow the validated document selection, too.
+    metadata_condition = req.get("metadata_condition")
+    if metadata_condition:
+        conditions = convert_conditions(metadata_condition)
+        if conditions:
             metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
-            doc_ids = meta_filter(metas, convert_conditions(metadata_condition), metadata_condition.get("logic", "and"))
-            # If metadata_condition has conditions but no docs match, return empty result
-            if not doc_ids and metadata_condition.get("conditions"):
+            doc_ids = await apply_meta_data_filter({"method": "manual", "manual": conditions, "logic": metadata_condition.get("logic", "and")}, metas, question, base_doc_ids=doc_ids)
+            if doc_ids == ["-999"]:
                 return get_result(data={"total": 0, "chunks": [], "doc_aggs": {}})
-            if metadata_condition and not doc_ids:
-                doc_ids = ["-999"]
-        else:
-            # If doc_ids is None all documents of the datasets are used
-            doc_ids = None
+        elif not doc_ids:
+            doc_ids = ["-999"]
+    elif not doc_ids:
+        # If doc_ids is None all documents of the datasets are used.
+        doc_ids = None
     similarity_threshold = float(req.get("similarity_threshold", 0.2))
     vector_similarity_weight = float(req.get("vector_similarity_weight", 0.3))
     top = int(req.get("top_k", 1024))

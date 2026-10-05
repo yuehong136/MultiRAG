@@ -94,14 +94,16 @@ async def test_search_rejects_mixed_embedding_before_model_io(search_env: Search
 
 
 @pytest.mark.parametrize(
-    "method,conditions,expected", [("manual", [{"key": "category", "op": "=", "value": "absent"}], ["-999"]), ("manual", [{"key": "category", "op": "=", "value": "match"}], ["selected", "matched"])]
+    ("value", "selected", "expected"),
+    [("absent", None, ["-999"]), ("absent", ["selected"], ["-999"]), ("match", ["selected"], ["-999"]), ("match", ["selected", "matched"], ["matched"]), ("match", None, ["matched"])],
 )
-async def test_search_keeps_metadata_no_match_and_selected_docs(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, method: str, conditions: list[dict[str, Any]], expected: list[str]) -> None:
+async def test_search_intersects_metadata_and_selected_docs(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, value: str, selected: list[str] | None, expected: list[str]) -> None:
     db, rows, retrieval = search_env
     rows.pop()
     monkeypatch.setattr(service.DocMetadataService, "get_flatted_meta_by_kbs", lambda *_: {"category": {"match": ["matched"]}})
-    selected = ["selected"] if "matched" in expected else None
-    await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", doc_ids=selected, meta_data_filter={"method": method, "manual": conditions}))
+    await service.search_dataset(
+        db, "user", "a", SearchDatasetRequest(question="q", doc_ids=selected, meta_data_filter={"method": "manual", "manual": [{"key": "category", "op": "is", "value": value}]})
+    )
     assert retrieval.call_args.args[10] == expected
 
 

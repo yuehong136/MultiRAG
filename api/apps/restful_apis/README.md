@@ -37,7 +37,13 @@ chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files 
 保留 `doc_ids`、`page/size`、`top_k`（上限 2048）、相似度/向量权重、
 `search_mode`（sparse/dense/hybrid/fusion）、高亮、跨语言、关键词、rerank 和 KG 参数。
 `search_id` 指定有权访问的搜索应用时沿用其元数据配置，否则使用请求中的
-`meta_data_filter`；手动过滤无匹配仍传递空结果哨兵，不放宽为全文检索。
+`meta_data_filter`。非空 `doc_ids` 与元数据命中求交；`doc_ids=[]` 沿用未限定文档的语义。
+manual 及 auto/semi_auto 生成的非空条件均保留 AND/OR 空集，条件无匹配时传递空结果哨兵，
+不放宽为全文检索。未设置过滤、manual 零条件或生成零条件时沿用原有文档范围与回退；
+semi_auto 只使用选中的已有字段。`is/not is/>=/<=/!=` 与 `=/≠/≥/≤/≠` 等价，
+缺字段视为无匹配（包括否定及 empty 条件）。独立 SDK `/retrieval` 的
+`document_ids` 和非空 `metadata_condition.conditions` 也求交，保留原请求及响应字段。
+上述范围约束针对普通文档检索；`use_kg` 的图谱聚合增强仍为库级输出，未提供文档范围隔离。
 普通检索过滤禁用 chunk；图谱读取保留隐藏图谱产物，文档子图还过滤 `removed_kwd=Y`。
 Web 检索工作台、搜索应用和 Python 管理 CLI 已迁入这些 REST 入口；
 旧 `/v1/chunk/retrieval_test`、`/v1/chunk/knowledge_graph` 已移除。

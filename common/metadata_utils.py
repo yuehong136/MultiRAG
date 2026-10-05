@@ -23,19 +23,21 @@ import json_repair
 
 from common.metadata_config import canonical_field, field_schema
 
+_OPERATOR_ALIASES = {"is": "=", "not is": "≠", ">=": "≥", "<=": "≤", "!=": "≠"}
 
-def convert_conditions(metadata_condition):
+
+def convert_conditions(metadata_condition: dict[str, Any] | None) -> list[dict[str, Any]]:
     if metadata_condition is None:
         metadata_condition = {}
-    op_mapping = {"is": "=", "not is": "≠", ">=": "≥", "<=": "≤", "!=": "≠"}
-    return [{"op": op_mapping.get(cond["comparison_operator"], cond["comparison_operator"]), "key": cond["name"], "value": cond["value"]} for cond in metadata_condition.get("conditions", [])]
+    return [{"op": _OPERATOR_ALIASES.get(cond["comparison_operator"], cond["comparison_operator"]), "key": cond["name"], "value": cond["value"]} for cond in metadata_condition.get("conditions", [])]
 
 
 def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str = "and") -> list[str]:
     """Match metadata, ignoring string case in lists only for in/not in."""
-    doc_ids: set[str] = set()
+    doc_ids: set[str] | None = None
 
     def filter_out(v2docs: dict[Any, list[str]], operator: str, value: Any) -> list[str]:
+        operator = _OPERATOR_ALIASES.get(operator, operator)
         ids: list[str] = []
         for input, docids in v2docs.items():
             if operator in ["=", "≠", ">", "<", "≥", "≤"]:
@@ -129,7 +131,7 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
             v2docs = metas[k]
             ids = filter_out(v2docs, f["op"], f["value"])
 
-        if not doc_ids:
+        if doc_ids is None:
             doc_ids = set(ids)
         else:
             if logic == "and":
@@ -138,19 +140,19 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
                     return []
             else:
                 doc_ids = doc_ids | set(ids)
-    return list(doc_ids)
+    return list(doc_ids or [])
 
 
 async def apply_meta_data_filter(
-    meta_data_filter: dict | None,
-    metas: dict,
+    meta_data_filter: dict[str, Any] | None,
+    metas: dict[str, Any],
     question: str,
     chat_mdl: Any = None,
     base_doc_ids: list[str] | None = None,
-    manual_value_resolver: Callable[[dict], dict] | None = None,
+    manual_value_resolver: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> list[str] | None:
     """
-    Apply metadata filtering rules and return the filtered doc_ids.
+    Intersect metadata matches with a nonempty base document selection.
 
     meta_data_filter supports three modes:
     - auto: generate filter conditions via LLM (gen_meta_filter)
@@ -158,8 +160,10 @@ async def apply_meta_data_filter(
     - manual: directly filter based on provided conditions
 
     Returns:
-        list of doc_ids, ["-999"] when manual filters yield no result, or None
-        when auto/semi_auto filters return empty.
+        Matching doc_ids, or ["-999"] when conditions yield no matches. An empty
+        base selection means unrestricted retrieval, as it does without filters.
+        No conditions preserve the base selection; generated empty conditions
+        without a base selection retain the existing None fallback.
     """
     from core.prompts.generator import gen_meta_filter  # move from the top of the file to avoid circular import
 
@@ -169,12 +173,10 @@ async def apply_meta_data_filter(
         return doc_ids
 
     method = meta_data_filter.get("method")
+    filter_metas = metas
 
     if method == "auto":
-        filters: dict = await gen_meta_filter(chat_mdl, metas, question)
-        doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-        if not doc_ids:
-            return None
+        filters = await gen_meta_filter(chat_mdl, metas, question)
     elif method == "semi_auto":
         selected_keys = []
         constraints = {}
@@ -190,22 +192,26 @@ async def apply_meta_data_filter(
                 if op:
                     constraints[key] = op
 
-        if selected_keys:
-            filtered_metas = {key: metas[key] for key in selected_keys if key in metas}
-            if filtered_metas:
-                filters = await gen_meta_filter(chat_mdl, filtered_metas, question, constraints=constraints)
-                doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
-                if not doc_ids:
-                    return None
+        filter_metas = {key: metas[key] for key in selected_keys if key in metas}
+        if not filter_metas:
+            return doc_ids
+        filters = await gen_meta_filter(chat_mdl, filter_metas, question, constraints=constraints)
     elif method == "manual":
         manual_filters = meta_data_filter.get("manual", [])
         if manual_value_resolver:
-            manual_filters = [manual_value_resolver(flt) for flt in manual_filters]
-        doc_ids.extend(meta_filter(metas, manual_filters, meta_data_filter.get("logic", "and")))
-        if manual_filters and not doc_ids:
-            doc_ids = ["-999"]
+            manual_filters = [manual_value_resolver(deepcopy(flt)) for flt in manual_filters]
+        filters = {"conditions": manual_filters, "logic": meta_data_filter.get("logic", "and")}
+    else:
+        return doc_ids
 
-    return doc_ids
+    if not filters["conditions"]:
+        return (doc_ids or None) if method in ("auto", "semi_auto") else doc_ids
+    matches = meta_filter(filter_metas, filters["conditions"], filters.get("logic", "and"))
+    if doc_ids:
+        matched_ids = set(matches)
+        matches = list(dict.fromkeys(doc_id for doc_id in doc_ids if doc_id in matched_ids))
+    # Empty lists/None remove the document predicate in retrieval backends.
+    return matches or ["-999"]
 
 
 def dedupe_list(values: list) -> list:

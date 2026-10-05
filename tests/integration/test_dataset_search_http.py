@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from api.apps.services import dataset_search_service
-from api.db.db_models import Document, DocumentMetadata, Knowledgebase, Search, UserTenant
+from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, UserTenant, get_db
 from common import settings
 from common.config_utils import CONFIGS
 from core.nlp import search
@@ -32,6 +32,7 @@ from tests.support.runtime_upload import runtime_upload_api as runtime_upload_ap
 def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     env = runtime_upload_api
     ids = {key: uuid4().hex for key in ("dataset", "second", "foreign", "doc", "second_doc", "foreign_doc", "saved_search")}
+    ids["sdk_token"] = "search-" + uuid4().hex
     collections = {key: search.index_name_one(env["owners"][0 if key != "foreign" else 1], "search_" + ids[key]) for key in ("dataset", "second", "foreign")}
     env["record"].update(search_ids=ids, search_collections=collections)
     env["record_path"].write_text(json.dumps(env["record"]))
@@ -42,6 +43,7 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
             db.add(Document(id=ids[doc], kb_id=ids[key], created_by=owner, name=doc + ".txt", type="txt", parser_id="naive", parser_config={}))
             db.add(DocumentMetadata(id=ids[doc], tenant_id=owner, kb_id=ids[key], meta_fields={"category": "match"}))
         db.add(Search(id=ids["saved_search"], tenant_id=env["owners"][1], created_by=env["owners"][1], name="private", search_config={"meta_data_filter": {"method": "manual"}}))
+        db.add(APIToken(tenant_id=env["owners"][0], token=ids["sdk_token"], name="search-scope"))
         db.commit()
 
     @contextmanager
@@ -50,8 +52,18 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
             yield db
 
     monkeypatch.setattr(search, "db_connection", scratch_db)
+    from api.apps import app
+
+    def sdk_db() -> Iterator[Session]:
+        with Session(env["engine"]) as db:
+            yield db
+
+    monkeypatch.setitem(app.dependency_overrides, get_db, sdk_db)
     from api.db import db_models
 
+    # Legacy APIToken.query opens SessionLocal itself; keep that real SQL lookup
+    # inside the same scratch database as the request dependency.
+    monkeypatch.setattr(db_models, "SessionLocal", sa.orm.sessionmaker(env["engine"], expire_on_commit=False))
     async_engine = create_async_engine(env["engine"].url, poolclass=NullPool)
     sessions = async_sessionmaker(async_engine, expire_on_commit=False)
     monkeypatch.setattr(db_models, "async_session_factory", sessions)
@@ -64,6 +76,11 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
         return Embedding()
 
     monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
+    from api.apps.sdk import doc as sdk
+
+    monkeypatch.setattr(sdk, "LLMBundle", lambda *_: Embedding())
+    monkeypatch.setattr(sdk, "get_model_config_by_type_and_name", lambda *_: {})
+    monkeypatch.setattr(sdk, "label_question", lambda *_: {})
     store = settings.docStoreConn
     assert store.db_type() == "milvus", "This regression targets the supported local Milvus environment"
     cfg = CONFIGS["milvus"]
@@ -137,6 +154,7 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
         reader.close()
         with Session(env["engine"]) as db:
             for model, clause in (
+                (APIToken, APIToken.token == ids["sdk_token"]),
                 (DocumentMetadata, DocumentMetadata.id.in_([ids["doc"], ids["second_doc"], ids["foreign_doc"]])),
                 (Document, Document.kb_id.in_([ids["dataset"], ids["second"], ids["foreign"]])),
                 (Knowledgebase, Knowledgebase.id.in_([ids["dataset"], ids["second"], ids["foreign"]])),
@@ -177,6 +195,64 @@ def test_http_search_filters_disabled_chunks_and_metadata(search_api: dict[str, 
     raw = env["reader"].query(
         env["collections"]["dataset"], filter="pk in " + json.dumps([row["id"] for row in env["rows"]["dataset"]]), output_fields=["pk", "available_int"], consistency_level="Strong"
     )
+    assert {row["available_int"] for row in raw} == {0, 1}
+
+
+@pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
+def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    from unittest.mock import AsyncMock
+
+    env = search_api
+    with Session(env["engine"]) as db:
+        for doc, version in (("doc", "v1"), ("second_doc", "v2")):
+            metadata = db.get(DocumentMetadata, env[doc])
+            assert metadata is not None
+            metadata.meta_fields = {"category": "match", "version": version}
+        db.commit()
+    # A new connection proves the filter reads persisted metadata.
+    with Session(env["engine"]) as db:
+        assert db.get(DocumentMetadata, env["doc"]).meta_fields["version"] == "v1"
+        assert db.get(DocumentMetadata, env["second_doc"]).meta_fields["version"] == "v2"
+
+    both = [env["doc"], env["second_doc"]]
+    payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "search_mode": {"type": mode}, "similarity_threshold": 0}
+
+    def check(documents: list[str] | None, conditions: list[dict[str, Any]], logic: str, expected: set[str]) -> None:
+        for method in ("manual", "auto", "semi_auto"):
+            monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": conditions, "logic": logic}))
+            config = {"method": method, "manual": conditions, "logic": logic, "semi_auto": ["category", "version"]}
+            body = request(env, "POST", "/search", json={**payload, "doc_ids": documents, "meta_data_filter": config}).json()
+            assert body["code"] == 0, body
+            assert {row["doc_id"] for row in body["data"]["chunks"]} == expected, (method, body)
+            assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == expected, body
+            assert body["data"]["total"] == len(expected), body
+
+        legacy = {"conditions": [{"name": c["key"], "comparison_operator": c["op"], "value": c["value"]} for c in conditions], "logic": logic}
+        response = requests.post(
+            env["base"] + "/api/v1/retrieval", headers={"Authorization": "Bearer " + env["sdk_token"]}, json={**payload, "document_ids": documents or [], "metadata_condition": legacy}, timeout=30
+        )
+        body = response.json()
+        assert response.status_code == 200 and body["code"] == 0, body
+        assert {row["document_id"] for row in body["data"]["chunks"]} == expected, body
+        assert body["data"]["total"] == len(expected), body
+
+    current = {"key": "version", "op": "is", "value": "v2"}
+    ready = {"key": "category", "op": "is", "value": "match"}
+    missing = {"key": "missing", "op": "is", "value": "x"}
+    absent = {"key": "version", "op": "is", "value": "absent"}
+    check(both, [current], "and", {env["second_doc"]})
+    check([env["doc"]], [current], "and", set())
+    check(both, [absent], "and", set())
+    check(both, [missing, ready], "and", set())
+    check(both, [missing, current], "or", {env["second_doc"]})
+    check(None, [current], "and", {env["second_doc"]})
+    check([], [current], "and", {env["second_doc"]})
+
+    for documents, expected in ((None, set(both)), ([], set(both)), ([env["doc"]], {env["doc"]})):
+        body = request(env, "POST", "/search", json={**payload, "doc_ids": documents}).json()
+        assert body["code"] == 0 and {row["doc_id"] for row in body["data"]["chunks"]} == expected, body
+    raw = env["reader"].query(env["collections"]["dataset"], filter="knowledge_graph_kwd == ''", output_fields=["doc_id", "available_int"], consistency_level="Strong")
+    assert {row["doc_id"] for row in raw} == {env["doc"]}
     assert {row["available_int"] for row in raw} == {0, 1}
 
 
@@ -250,15 +326,14 @@ def test_http_search_prunes_deleted_documents_before_rerank(search_api: dict[str
         assert {row["doc_id"] for row in body["data"]["chunks"]} == {env["second_doc"]}, body
         assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == {env["second_doc"]}, body
     assert len(seen) == 2
-    # Metadata extends explicit doc_ids in the existing local contract. Test
-    # explicit document narrowing separately rather than changing that contract.
-    payload.pop("meta_data_filter")
+    # Stale metadata must not reopen an explicitly selected deleted document.
     payload["doc_ids"] = [env["doc"]]
     deleted_only = request(env, "POST", "/search", json=payload)
     assert deleted_only.status_code == 200, deleted_only.text
     assert deleted_only.json()["code"] == 0 and deleted_only.json()["data"]["chunks"] == [], deleted_only.text
     assert deleted_only.json()["data"]["total"] == 0
     assert len(seen) == 2
+    payload.pop("meta_data_filter")
     with Session(env["engine"]) as db:
         db.execute(sa.delete(Document).where(Document.id == env["second_doc"]))
         db.commit()
