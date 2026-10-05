@@ -714,8 +714,10 @@ def chat(
     # 如果字段映射存在，尝试使用SQL检索答案
     if field_map:
         logging.debug(f"Use SQL to retrieval:{questions[-1]}")
-        ans = use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
+        ans = asyncio.run(use_sql(questions[-1], field_map, kb_tenant_ids, kb_names, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids))
         if ans:
+            enrich_reference_metadata(db, ans.get("reference", {}).get("chunks", []), metadata_preferences)
+            ans["final"] = True
             yield ans
             return
 

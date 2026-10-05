@@ -799,3 +799,21 @@ async def test_async_chat_reasoner_receives_explicit_web_search_decision(
         "internet_enabled": enabled,
         "tavily_api_key": "tavily-key",
     }
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_sync_sql_chat_resolves_and_enriches_reference(monkeypatch: pytest.MonkeyPatch, db: Session, dialog_pipeline_stubs: _PipelineProbe, stream: bool) -> None:
+    from api.db.services.doc_metadata_service import DocMetadataService
+
+    probe = dialog_pipeline_stubs
+    probe.dialog.prompt_config["reference_metadata"] = {"include": True, "fields": ["author"]}
+    monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_field_map", lambda *a: {"value": "Value"})
+
+    async def sql(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"answer": "SQL answer", "reference": {"chunks": [{"kb_id": "kb-1", "doc_id": "doc"}]}}
+
+    monkeypatch.setattr(dialog_service, "use_sql", sql)
+    monkeypatch.setattr(DocMetadataService, "get_metadata_for_documents", lambda *a: {"doc": {"author": "Alice", "secret": "hidden"}})
+    result = list(dialog_service.chat(probe.dialog, probe.messages, db, stream=stream))
+    assert len(result) == 1 and result[0]["final"] is True
+    assert result[0]["reference"]["chunks"][0]["document_metadata"] == {"author": "Alice"}
