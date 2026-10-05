@@ -15,6 +15,7 @@
 #
 import ast
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any
@@ -33,7 +34,19 @@ def convert_conditions(metadata_condition: dict[str, Any] | None) -> list[dict[s
 
 
 def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str = "and") -> list[str]:
-    """Match metadata, ignoring string case in lists only for in/not in."""
+    """Match metadata; unusable list operands invalidate the complete filter."""
+    # Validate before evaluating AND/OR. Ignoring a malformed exclusion, or
+    # comparing scalar values to null/object/nested-list members, can make a
+    # negative predicate true for every document (including an OR branch).
+    for condition in filters:
+        value = condition.get("value")
+        if isinstance(value, (list, tuple)):
+            if any(not isinstance(item, (str, bool, int, float)) or (isinstance(item, float) and not math.isfinite(item)) for item in value):
+                return []
+        elif condition.get("op") in ("in", "not in") and not isinstance(value, str):
+            return []
+        elif isinstance(value, float) and not math.isfinite(value):
+            return []
     doc_ids: set[str] | None = None
 
     def filter_out(v2docs: dict[Any, list[str]], operator: str, value: Any) -> list[str]:

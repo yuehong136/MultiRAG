@@ -653,3 +653,40 @@ def test_http_semi_auto_field_selection_and_deletion_races(search_api: dict[str,
     raced.assert_awaited_once()
     raw = env["reader"].query(env["collections"]["dataset"], filter="available_int == 1", output_fields=["doc_id"], consistency_level="Strong")
     assert {row["doc_id"] for row in raw} == {env["doc"]}
+
+
+def test_http_invalid_manual_membership_is_not_unrestricted(search_api: dict[str, Any]) -> None:
+    env = search_api
+    payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "similarity_threshold": 0}
+    operands: list[Any] = [[None], [{}], [["match"]], [float("inf")], [float("-inf")], [float("nan")], ["match", None], {"match": True}]
+
+    def post(path: str, body: dict[str, Any], token: str) -> dict[str, Any]:
+        # 1e400 is a JSON number that overflows to infinity in the body parser;
+        # NaN also tests the parser's permissive non-finite input handling.
+        encoded = json.dumps(body).replace("Infinity", "1e400")
+        response = requests.post(env["base"] + path, data=encoded, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, timeout=30)
+        result = response.json()
+        assert response.status_code == 200 and result["code"] == 0, result
+        return result["data"]
+
+    for operator in ("in", "not in"):
+        for logic in ("and", "or"):
+            for value in operands:
+                conditions = [{"key": "category", "op": "is", "value": "match"}, {"key": "category", "op": operator, "value": value}]
+                body = post("/api/v1/datasets/" + env["dataset"] + "/search", {**payload, "meta_data_filter": {"method": "manual", "logic": logic, "manual": conditions}}, env["jwt"])
+                assert body["total"] == 0 and body["chunks"] == [] and body["doc_aggs"] == [], (operator, logic, value, body)
+                legacy = [{"name": c["key"], "comparison_operator": c["op"], "value": c["value"]} for c in conditions]
+                body = post("/api/v1/retrieval", {**payload, "metadata_condition": {"logic": logic, "conditions": legacy}}, env["sdk_token"])
+                assert body["total"] == 0 and body["chunks"] == [], (operator, logic, value, body)
+    for operator, values in (("in", ["MATCH", True, 1.5]), ("not in", ["other", False, 1.5])):
+        body = post(
+            "/api/v1/datasets/" + env["dataset"] + "/search", {**payload, "meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": operator, "value": values}]}}, env["jwt"]
+        )
+        assert {row["doc_id"] for row in body["chunks"]} == {env["doc"], env["second_doc"]}, body
+    # Independent SQL/Milvus reads prove metadata/chunks stayed present; the
+    # empty response came from operand validation rather than missing sources.
+    with Session(env["engine"]) as db:
+        assert all(db.get(DocumentMetadata, env[doc]).meta_fields == {"category": "match"} for doc in ("doc", "second_doc"))
+    for dataset, doc in (("dataset", "doc"), ("second", "second_doc")):
+        raw = env["reader"].query(env["collections"][dataset], filter="available_int == 1", output_fields=["doc_id"], consistency_level="Strong")
+        assert {row["doc_id"] for row in raw} == {env[doc]}
