@@ -706,7 +706,7 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 		return nil, "", nil, err
 	}
 	if instance.Status != "active" {
-		return nil, "", nil, fmt.Errorf("model instance is disabled")
+		return nil, "", nil, errModelInstanceDisabled
 	}
 	model, err := m.instanceModelDefinition(providerInfo, provider.ID, instance.ID, name)
 	if err != nil {
@@ -737,7 +737,7 @@ func (m *ModelProviderService) getLegacyModelConfig(tenantID, providerName, name
 		return nil, "", nil, err
 	}
 	if legacy.Status == "0" {
-		return nil, "", nil, fmt.Errorf("model is disabled")
+		return nil, "", nil, errModelDisabled
 	}
 	if legacy.ModelType != nil && *legacy.ModelType != string(modelType) {
 		return nil, "", nil, fmt.Errorf("model type mismatch")

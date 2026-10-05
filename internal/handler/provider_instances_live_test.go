@@ -289,6 +289,9 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 		if _, err := svc.GetChatModel("owner-tenant", "Qwen/custom@"+instance+"@vllm"); err == nil {
 			t.Fatal("disabled custom model resolved")
 		}
+		if _, _, name, enabled, err := service.NewTenantService().GetModelInfo("owner-tenant", "Qwen/custom@"+instance+"@vllm", "chat"); err != nil || enabled || name == nil || *name != "Qwen/custom" {
+			t.Fatalf("disabled default display: name=%v enabled=%v err=%v", name, enabled, err)
+		}
 		_, result = request("GET", path, "owner", nil)
 		if result["data"].([]interface{})[0].(map[string]interface{})["status"] != "inactive" {
 			t.Fatal("disabled list status incorrect")

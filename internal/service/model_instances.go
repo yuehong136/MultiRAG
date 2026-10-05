@@ -16,6 +16,11 @@ import (
 	"multirag/internal/entity/models"
 )
 
+var (
+	errModelDisabled         = errors.New("model is disabled")
+	errModelInstanceDisabled = errors.New("model instance is disabled")
+)
+
 type providerInstanceExtra struct {
 	Region  string `json:"region"`
 	BaseURL string `json:"base_url,omitempty"`
@@ -55,7 +60,7 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 		return nil, nil, fmt.Errorf("provider not found")
 	}
 	if instance.Status != "active" {
-		return nil, nil, fmt.Errorf("model instance is disabled")
+		return nil, nil, errModelInstanceDisabled
 	}
 	extra, err := decodeProviderInstanceExtra(instance.Extra)
 	if err != nil {
@@ -146,7 +151,7 @@ func (m *ModelProviderService) AddCustomModel(request *AddCustomModelRequest, us
 		return common.CodeNotFound, err
 	}
 	if instance.Status != "active" {
-		return common.CodeDataError, fmt.Errorf("model instance is disabled")
+		return common.CodeDataError, errModelInstanceDisabled
 	}
 	if m.providerManager.FindProvider(request.ProviderName) == nil {
 		return common.CodeNotFound, fmt.Errorf("provider not found")
@@ -170,7 +175,7 @@ func (m *ModelProviderService) AddCustomModel(request *AddCustomModelRequest, us
 			return err
 		}
 		if locked.Status != "active" {
-			return fmt.Errorf("model instance is disabled")
+			return errModelInstanceDisabled
 		}
 		var existing entity.TenantModel
 		err := tx.Where("provider_id = ? AND instance_id = ? AND model_name = ?", provider.ID, instance.ID, request.ModelName).First(&existing).Error
@@ -199,11 +204,11 @@ func (m *ModelProviderService) instanceModelDefinition(provider *entity.Provider
 		return m.providerManager.GetModelByName(provider.Name, name)
 	}
 	if stored.Status != "active" {
-		return nil, fmt.Errorf("model is disabled")
+		return nil, errModelDisabled
 	}
 	// Old rows are catalog disable markers regardless of their legacy status value.
 	if stored.Extra == "" || stored.Extra == "{}" {
-		return nil, fmt.Errorf("model is disabled")
+		return nil, errModelDisabled
 	}
 	extra, err := decodeCustomModelExtra(stored.Extra)
 	if err != nil {

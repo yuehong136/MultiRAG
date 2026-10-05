@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -337,6 +338,9 @@ func (s *TenantService) GetModelInfo(tenantID, defaultModel, modelType string) (
 		return nil, nil, nil, false, err
 	}
 	_, _, _, err = NewModelProviderService().getModelConfig(tenantID, defaultModel, typ)
+	if errors.Is(err, errModelDisabled) || errors.Is(err, errModelInstanceDisabled) {
+		return &provider, &instance, &name, false, nil
+	}
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
