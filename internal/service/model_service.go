@@ -193,7 +193,7 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 	if strings.TrimSpace(instanceName) == "" || strings.Contains(instanceName, "@") {
 		return common.CodeBadRequest, fmt.Errorf("invalid instance name")
 	}
-	if strings.TrimSpace(apiKey) == "" && !strings.EqualFold(providerName, "vllm") {
+	if strings.TrimSpace(apiKey) == "" && !strings.EqualFold(providerName, "vllm") && !strings.EqualFold(providerName, "ollama") {
 		return common.CodeBadRequest, fmt.Errorf("API key is required")
 	}
 

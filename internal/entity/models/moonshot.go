@@ -59,7 +59,7 @@ func moonshotChatBody(modelName string, messages []Message, config *ChatConfig, 
 	apiMessages := messages
 
 	// The entry point determines the response protocol, regardless of config.Stream.
-	body := map[string]interface{}{"model": modelName, "messages": apiMessages, "stream": stream}
+	body := map[string]interface{}{"model": modelName, "messages": apiMessages, "stream": stream, "temperature": 0.6}
 	if config == nil {
 		return body, nil
 	}

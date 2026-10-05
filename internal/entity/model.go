@@ -233,7 +233,7 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		if err = json.Unmarshal(data, &provider); err != nil {
 			return nil, fmt.Errorf("error parsing JSON from file %s: %w", filePath, err)
 		}
-		if provider.URL["default"] == "" && !strings.EqualFold(provider.Name, "vllm") {
+		if provider.URL["default"] == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") {
 			return nil, fmt.Errorf("provider %s has no default URL", provider.Name)
 		}
 

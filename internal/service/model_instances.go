@@ -71,7 +71,7 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, nil, fmt.Errorf("model base URL is missing")
 	}
-	if instance.APIKey == "" && !strings.EqualFold(provider.Name, "vllm") {
+	if instance.APIKey == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") {
 		return nil, nil, fmt.Errorf("model API key is missing")
 	}
 	driver, err := models.NewModelFactory().CreateModelDriver(provider.Name, map[string]string{"default": baseURL, extra.Region: baseURL}, provider.URLSuffix)

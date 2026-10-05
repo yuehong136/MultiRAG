@@ -1501,7 +1501,7 @@ Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rera
 | 路径 | 行为 |
 |---|---|
 | `POST /api/v1/chat/completions` | body 必须包含 `provider_name`、`instance_name`、`model_name` 和非空 `messages`；兼容旧字符串 `message`，两者不能同时传。普通 JSON 或文本 sender SSE。`stream` 省略与 false 都选择 JSON，但配置保留是否传值；`thinking` 省略时使用模型默认，显式 true/false 优先。CLI 同步使用本入口；原 provider models POST 现用于模型声明，旧聊天载荷不再接受 |
-| `POST /{provider_name}/instances` | body 为 instance_name、api_key（vLLM 可省略）、base_url、region。自定义 URL 以 HTTP(S) API 根目录为准；region 为空归一为 default，base_url 优先于 provider 地域目录；同 provider 的重复实例名返回冲突 |
+| `POST /{provider_name}/instances` | body 为 instance_name、api_key（vLLM/Ollama 可省略）、base_url、region。自定义 URL 以 HTTP(S) API 根目录为准；region 为空归一为 default，base_url 优先于 provider 地域目录；同 provider 的重复实例名返回冲突 |
 | `POST /{provider_name}/instances/{instance_name}/models` | 声明自定义 model_name、model_types（兼容旧 model_type）、正整数 max_tokens 与可选 thinking；路由身份为准，body 的 provider/instance 若传入须一致。仅租户 owner 可操作，重复声明返回业务冲突 |
 | `DELETE /{provider_name}/instances/{instance_name}/models` | body 为非空 `models` 名称数组；只删除当前 owner 租户内的自定义模型声明，重复名称合并；任一不存在或 SQL 失败则整批回滚。目录模型须使用启停接口，DELETE 不删除禁用标记 |
 | `DELETE /{provider_name}/instances` | body 为非空 `instances` 名称数组；同一事务清理所有指定实例及其模型，任一失败整批回滚 |
@@ -1915,3 +1915,13 @@ http://<your-server>:8123/redoc
 ---
 
 有关 Python SDK 的使用，请参阅 [Python API 参考](./python_api_reference.md)。
+
+
+Go Ollama driver 使用原生 `POST /api/chat` 与 `GET /api/tags`，实例 base_url 为服务根 URL
+（例如 `http://localhost:11434`）。非流式要求 done=true；流式逐条解析 NDJSON，保留 thinking
+和正文，并在 done=true 且有正文时发送 `[DONE]`。空列表可证明服务连通，但不代表已安装模型。
+聊天历史的多段文本和 base64 图片映射到原生 content/images；远程图片 URL、video/file、audio
+明确报不支持，不在服务端下载或静默降成文本。请求取消传至 HTTP，长流无总时长上限，普通调用
+有 120 秒请求超时。Encode/Rerank 明确未实现，模型目录没有声明这些能力。
+协议参考 [Ollama chat](https://docs.ollama.com/api/chat) 与 [模型发现](https://docs.ollama.com/api/tags)。
+Moonshot 普通/流式聊天未显式配置 temperature 时使用 0.6，显式 0 保留。

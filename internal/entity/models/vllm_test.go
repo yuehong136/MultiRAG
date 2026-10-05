@@ -128,7 +128,7 @@ func TestVLLMModelValidationSenderErrorAndCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error = %v", err)
 	}
-	if _, err := driver.Chat(nil, &message, nil, nil); err == nil {
+	if _, err := driver.ChatWithMessages("", nil, []Message{{Role: "user", Content: message}}, nil); err == nil {
 		t.Fatal("nil arguments accepted")
 	}
 
