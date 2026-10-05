@@ -352,6 +352,9 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             retcode=RetCode.DATA_ERROR,
         )
 
+    if request.use_kg and (request.document_ids or request.metadata_condition):
+        return get_result(retcode=RetCode.BAD_REQUEST, retmsg="Knowledge graph enhancement cannot be combined with document or metadata filters.")
+
     if "question" not in req:
         return get_error_data_result(retmsg="`question` is required.")
 

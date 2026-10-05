@@ -146,6 +146,46 @@ async def test_kg_result_and_children_do_not_replace_total(search_env: SearchEnv
     assert all("vector" not in chunk for chunk in result["chunks"])
 
 
+@pytest.mark.parametrize("constraint", [{"doc_ids": ["doc"]}, {"meta_data_filter": {"method": "manual", "manual": []}}, {"meta_data_filter": {"method": "auto"}}, {"search_id": "saved"}])
+async def test_kg_rejects_constraints_before_model_and_metadata_io(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, constraint: dict[str, Any]) -> None:
+    db, rows, retrieval = search_env
+    rows.pop()
+    metadata = AsyncMock()
+    graph = AsyncMock()
+    monkeypatch.setattr(service, "apply_meta_data_filter", metadata)
+    monkeypatch.setattr(settings, "kg_retriever", SimpleNamespace(retrieval=graph))
+    result = await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", use_kg=True, **constraint))
+    assert result[0] is False and result[2] == RetCode.BAD_REQUEST
+    assert "cannot be combined" in result[1]
+    service._bundle.assert_not_called()
+    metadata.assert_not_called()
+    graph.assert_not_called()
+    retrieval.assert_not_called()
+
+
+@pytest.mark.parametrize("constraint", [{"doc_ids": ["doc"]}, {"meta_data_filter": {"method": "manual", "manual": [{"key": "missing", "op": "is", "value": "none"}]}}, {"search_id": "saved"}])
+def test_kg_constraint_http_rejection(client: TestClient, search_env: SearchEnv, constraint: dict[str, Any]) -> None:
+    from api.db.db_models import get_async_db
+
+    db, rows, retrieval = search_env
+    rows.pop()
+    client.app.dependency_overrides[get_async_db] = lambda: db
+    response = client.post("/api/v1/datasets/a/search", json={"question": "q", "use_kg": True, **constraint})
+    assert response.status_code == 200 and response.json()["code"] == 400, response.text
+    assert "cannot be combined" in response.json()["message"]
+    retrieval.assert_not_called()
+
+
+async def test_kg_accepts_empty_document_and_metadata_selection(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, rows, _ = search_env
+    rows.pop()
+    graph = AsyncMock(return_value={"content_with_weight": "graph"})
+    monkeypatch.setattr(settings, "kg_retriever", SimpleNamespace(retrieval=graph))
+    success, result, code = await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", use_kg=True, doc_ids=[], meta_data_filter={}))
+    assert success and code == RetCode.SUCCESS and len(result["chunks"]) == 2
+    graph.assert_awaited_once()
+
+
 async def test_bundle_detaches_sync_facade(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
 
     def build(self: LLMBundle, db: Session, *args: Any) -> None:

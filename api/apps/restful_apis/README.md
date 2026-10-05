@@ -43,7 +43,10 @@ manual 及 auto/semi_auto 生成的非空条件均保留 AND/OR 空集，条件�
 semi_auto 只使用选中的已有字段。`is/not is/>=/<=/!=` 与 `=/≠/≥/≤/≠` 等价，
 缺字段视为无匹配（包括否定及 empty 条件）。独立 SDK `/retrieval` 的
 `document_ids` 和非空 `metadata_condition.conditions` 也求交，保留原请求及响应字段。
-上述范围约束针对普通文档检索；`use_kg` 的图谱聚合增强仍为库级输出，未提供文档范围隔离。
+`use_kg` 的图谱聚合增强为库级输出：与非空 `doc_ids`、非空 `meta_data_filter` 或
+`search_id` 组合时返回业务 `code=400`，在模型、元数据和图谱检索前拒绝。
+SDK `/retrieval` 对 `document_ids`、非空 `metadata_condition` 与 `use_kg` 的组合也返回
+业务 `code=400`。未限定文档、元数据或搜索应用时保留 KG 增强；`doc_ids=[]` 不限定文档。
 普通检索过滤禁用 chunk；图谱读取保留隐藏图谱产物，文档子图还过滤 `removed_kwd=Y`。
 Web 检索工作台、搜索应用和 Python 管理 CLI 已迁入这些 REST 入口；
 旧 `/v1/chunk/retrieval_test`、`/v1/chunk/knowledge_graph` 已移除。

@@ -67,3 +67,29 @@ def test_legacy_http_validates_documents_before_filtering(sdk_retrieval: tuple[T
     )
     assert response.json()["code"] != 0 and "don't own" in response.json()["message"]
     retrieval.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "constraint", [{"document_ids": ["old"]}, {"metadata_condition": {"conditions": []}}, {"metadata_condition": {"conditions": [{"name": "version", "comparison_operator": "is", "value": "absent"}]}}]
+)
+@pytest.mark.parametrize("question", ["q", " "])
+def test_legacy_http_rejects_kg_with_constraints(sdk_retrieval: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, constraint: dict[str, Any], question: str) -> None:
+    client, retrieval = sdk_retrieval
+    graph = AsyncMock()
+    monkeypatch.setattr(settings, "kg_retriever", SimpleNamespace(retrieval=graph))
+    response = client.post("/api/v1/retrieval", json={"dataset_ids": ["dataset"], "question": question, "use_kg": True, **constraint})
+    assert response.status_code == 200 and response.json()["code"] == 400, response.text
+    assert "cannot be combined" in response.json()["message"]
+    retrieval.assert_not_called()
+    graph.assert_not_called()
+
+
+def test_legacy_http_preserves_unrestricted_kg(sdk_retrieval: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, retrieval = sdk_retrieval
+    monkeypatch.setattr(sdk, "get_tenant_default_model_by_type", lambda *_: {})
+    graph = AsyncMock(return_value={"doc_id": "", "content_with_weight": "graph"})
+    monkeypatch.setattr(settings, "kg_retriever", SimpleNamespace(retrieval=graph))
+    response = client.post("/api/v1/retrieval", json={"dataset_ids": ["dataset"], "question": "q", "use_kg": True, "document_ids": [], "metadata_condition": {}})
+    assert response.json()["code"] == 0 and response.json()["data"]["chunks"][0]["content"] == "graph", response.text
+    assert retrieval.call_args.args[10] is None
+    graph.assert_awaited_once()

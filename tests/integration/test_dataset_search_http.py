@@ -1,6 +1,7 @@
 """Real JWT/API-key, SQL metadata and Milvus readback for dataset search/graph.
 
-Only embedding output is controlled; ranking, predicates, HTTP and SQL are real.
+Model/filter generation and KG output are controlled; document ranking,
+predicates, HTTP/auth and SQL metadata are real.
 """
 
 import asyncio
@@ -8,7 +9,9 @@ import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import numpy as np
@@ -200,8 +203,6 @@ def test_http_search_filters_disabled_chunks_and_metadata(search_api: dict[str, 
 
 @pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
 def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
-    from unittest.mock import AsyncMock
-
     env = search_api
     with Session(env["engine"]) as db:
         for doc, version in (("doc", "v1"), ("second_doc", "v2")):
@@ -254,6 +255,59 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
     raw = env["reader"].query(env["collections"]["dataset"], filter="knowledge_graph_kwd == ''", output_fields=["doc_id", "available_int"], consistency_level="Strong")
     assert {row["doc_id"] for row in raw} == {env["doc"]}
     assert {row["available_int"] for row in raw} == {0, 1}
+
+
+def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps.sdk import doc as sdk
+
+    env = search_api
+    graph = AsyncMock(return_value={"doc_id": "", "content_with_weight": "unrestricted graph"})
+    metadata = Mock(side_effect=AssertionError("KG constraints must be rejected before reading metadata"))
+    models = AsyncMock(wraps=dataset_search_service._bundle)
+    sdk_models = Mock(wraps=sdk.LLMBundle)
+    monkeypatch.setattr(settings, "kg_retriever", SimpleNamespace(retrieval=graph))
+    monkeypatch.setattr(dataset_search_service.DocMetadataService, "get_flatted_meta_by_kbs", metadata)
+    monkeypatch.setattr(dataset_search_service, "_bundle", models)
+    monkeypatch.setattr(sdk, "LLMBundle", sdk_models)
+    monkeypatch.setattr(sdk, "get_tenant_default_model_by_type", lambda *_: {})
+    for constraint in (
+        {"doc_ids": [env["doc"]]},
+        {"meta_data_filter": {"method": "manual", "manual": [{"key": "missing", "op": "is", "value": "absent"}]}},
+        {"meta_data_filter": {"method": "auto"}},
+        {"search_id": env["saved_search"]},
+    ):
+        response = request(env, "POST", "/search", json={"question": "availability", "use_kg": True, **constraint})
+        assert response.status_code == 200 and response.json()["code"] == 400, response.text
+        assert "cannot be combined" in response.json()["message"]
+    for constraint in (
+        {"document_ids": [env["doc"]]},
+        {"metadata_condition": {"conditions": []}},
+        {"metadata_condition": {"conditions": [{"name": "category", "comparison_operator": "is", "value": "absent"}]}},
+    ):
+        response = requests.post(
+            env["base"] + "/api/v1/retrieval",
+            headers={"Authorization": "Bearer " + env["sdk_token"]},
+            json={"question": "availability", "dataset_ids": [env["dataset"]], "use_kg": True, **constraint},
+            timeout=30,
+        )
+        assert response.status_code == 200 and response.json()["code"] == 400, response.text
+        assert "cannot be combined" in response.json()["message"]
+    metadata.assert_not_called()
+    models.assert_not_called()
+    sdk_models.assert_not_called()
+    graph.assert_not_called()
+
+    payload = {"question": "availability", "use_kg": True, "doc_ids": [], "meta_data_filter": {}}
+    unrestricted = request(env, "POST", "/search", json=payload).json()
+    assert unrestricted["code"] == 0 and unrestricted["data"]["chunks"][0]["content_with_weight"] == "unrestricted graph", unrestricted
+    legacy = requests.post(
+        env["base"] + "/api/v1/retrieval",
+        headers={"Authorization": "Bearer " + env["sdk_token"]},
+        json={"question": "availability", "dataset_ids": [env["dataset"]], "use_kg": True, "document_ids": [], "metadata_condition": {}},
+        timeout=30,
+    ).json()
+    assert legacy["code"] == 0 and legacy["data"]["chunks"][0]["content"] == "unrestricted graph", legacy
+    assert graph.await_count == 2
 
 
 def test_http_search_multi_dataset_and_auth_matrix(search_api: dict[str, Any]) -> None:

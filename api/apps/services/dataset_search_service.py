@@ -59,6 +59,10 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
         return False, str(exc), RetCode.DATA_ERROR
     kb = kbs[0]
     tenant_ids = list(dict.fromkeys(item.tenant_id for item in kbs))
+    # KG aggregates are dataset-wide and cannot honor document predicates.
+    # Saved searches may supply filters even when the request has none.
+    if request.use_kg and (request.doc_ids or request.meta_data_filter or request.search_id):
+        return False, "Knowledge graph enhancement cannot be combined with document filters, metadata filters, or a saved search.", RetCode.BAD_REQUEST
     metadata_filter = request.meta_data_filter or {}
     search_config: dict[str, Any] = {}
     if request.search_id:
