@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tests.support.integration_suites import EVALS, INTEGRATION
+from tests.support.integration_suites import ACCEPTANCE, EVALS, INTEGRATION
 
 _STATE = pytest.StashKey[dict[str, Any]]()
 
@@ -52,7 +52,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 @pytest.hookimpl(wrapper=True)
 def pytest_make_collect_report(collector: pytest.Collector) -> Generator[None, pytest.CollectReport, pytest.CollectReport]:
     report = yield
-    if report.skipped and (collector.path.is_relative_to(INTEGRATION) or collector.path.is_relative_to(EVALS)) and os.environ.get("REQUIRE_SERVICES"):
+    if report.skipped and any(collector.path.is_relative_to(path) for path in (INTEGRATION, EVALS, ACCEPTANCE)) and os.environ.get("REQUIRE_SERVICES"):
         report.outcome = "failed"
         report.longrepr = f"Selected integration module skipped under REQUIRE_SERVICES=1: {report.longrepr}"
     collector.config.stash[_STATE]["collection"].append({"nodeid": collector.nodeid, "outcome": report.outcome})
@@ -63,7 +63,7 @@ def pytest_make_collect_report(collector: pytest.Collector) -> Generator[None, p
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     excluded = []
     for item in list(items):
-        if item.path.is_relative_to(INTEGRATION):
+        if item.path.is_relative_to(INTEGRATION) or item.path.is_relative_to(ACCEPTANCE):
             item.add_marker(pytest.mark.integration)
         elif item.path.is_relative_to(EVALS):
             item.add_marker(pytest.mark.quality)

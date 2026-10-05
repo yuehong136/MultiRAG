@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tests.support import services
-from tests.support.integration_suites import EVALS, INTEGRATION, PARALLEL_TESTS, SUITES, required_services, suite_paths
+from tests.support.integration_suites import ACCEPTANCE, EVALS, INTEGRATION, PARALLEL_TESTS, SUITES, required_services, suite_paths
 
 
 def target_arguments(args: list[str]) -> list[str]:
@@ -66,7 +66,7 @@ def selected_paths(suite: str, args: list[str]) -> list[Path]:
     if any(Path(arg).is_dir() for arg in targets):
         raise ValueError("Use --suite or individual test files; directory targets obscure service dependencies")
     explicit = [Path(arg.split("::", 1)[0]).resolve() for arg in targets if arg.split("::", 1)[0].endswith(".py")]
-    boundary = EVALS if suite.startswith("eval") else INTEGRATION
+    boundary = ACCEPTANCE if suite == "acceptance" else EVALS if suite.startswith("eval") else INTEGRATION
     if any(not path.is_relative_to(boundary) or not path.is_file() for path in explicit):
         raise ValueError(f"Test targets must be existing files under {boundary.relative_to(ROOT)}")
     return explicit or suite_paths(suite)

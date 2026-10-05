@@ -7,7 +7,7 @@ PYTEST_ARGS ?= -q
 INTEGRATION_SUITE ?= core
 INTEGRATION_WORKERS ?= 2
 
-.PHONY: help install fix lint typecheck test test-all coverage integration integration-db integration-system integration-infinity integration-consumer integration-all smoke mcp-compat verify
+.PHONY: help install fix lint typecheck test test-all coverage integration integration-db integration-system integration-infinity integration-consumer integration-all smoke mcp-compat verify acceptance acceptance-api
 
 help: ## 列出全部可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -58,6 +58,12 @@ integration-all: ## 核心 + Infinity + 独立 Web 客户端；不允许意外 s
 
 smoke: ## Tier 4：冒烟测试（对运行中的服务器打健康端点；启动：uv run python -m api.multirag_server）
 	$(UV) python scripts/smoke.py
+
+acceptance: ## 隔离产品验收：上传、解析、分块、检索、保存读回及明暗主题截图
+	$(UV) python scripts/run_product_acceptance.py
+
+acceptance-api: ## 仅隔离 API 产品验收（不代表页面或视觉检查通过）
+	$(UV) python scripts/run_product_acceptance.py --api-only
 
 mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议兼容矩阵
 	uv lock --check --script tests/compat/mcp/legacy_server.py

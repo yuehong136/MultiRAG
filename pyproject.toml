@@ -533,6 +533,7 @@ addopts = [
     "--color=yes",
     "--ignore=tests/manual",
     "--ignore=tests/evals",
+    "--ignore=tests/acceptance",
     "--allow-hosts=localhost,127.0.0.1,::1",
     "--allow-unix-socket",
 ]

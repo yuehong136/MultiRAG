@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 INTEGRATION = ROOT / "tests" / "integration"
 EVALS = ROOT / "tests" / "evals"
+ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
         "test_async_engine.py",
@@ -94,7 +95,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
 )
 PARALLEL_TESTS = DATABASE_TESTS | ISOLATED_STORAGE_TESTS
 
-SUITES = ("core", "db", "system", "infinity", "consumer", "all", "eval", "eval-generation")
+SUITES = ("core", "db", "system", "infinity", "consumer", "all", "eval", "eval-generation", "acceptance")
 
 
 def suite_paths(suite: str) -> list[Path]:
@@ -105,6 +106,8 @@ def suite_paths(suite: str) -> list[Path]:
         return [EVALS / "test_quality.py"]
     if suite == "eval-generation":
         return [EVALS / "test_generation.py"]
+    if suite == "acceptance":
+        return [ACCEPTANCE / "test_product.py"]
     if suite == "db":
         return [path for path in files if path.name in DATABASE_TESTS]
     if suite == "system":

@@ -28,6 +28,42 @@
 临时端点时使用 Makefile 入口。混合收集时 `integration` 标签仅作用于集成目录。
 质量评测不被普通 pytest 递归收集，使用以上显式入口运行。
 
+## 可重复的产品验收
+
+```sh
+make acceptance      # 完整流程 + 真实 Chromium + 明暗主题截图
+make acceptance-api  # 显式只跑 API，报告不宣称已检查页面
+```
+
+完整入口自动启动相邻 `../web` 的已安装 Vite 项目，使用独立端口；其他目录可用
+`uv run --no-sync python scripts/run_product_acceptance.py --web-checkout /path/to/web`。
+`--web-base-url http://127.0.0.1:5173` 复用已运行的前端，`--headed` 显示浏览器操作。
+需要 dev 依赖和 Playwright Chromium（首次准备：`uv run --no-sync playwright install chromium`），
+基础服务由既有集成框架探测/准备；缺失依赖或选中项失败使命令非零退出，不以 skip 计成功。
+
+验收创建独立 PostgreSQL scratch 库、MinIO 桶、Milvus 集合、Redis 队列和测试身份。
+直接运行当前 API 代码，不使用常驻服务的登录态；前端请求仅转发到本次 scratch API，
+保留真实请求体、鉴权和业务响应，不伪造接口成功。结束时读回 SQL 行、对象、索引及队列清理结果。
+临时 worker 配置只写权限受限的临时目录，用后删除；不修改共享配置。
+
+当前锁定的行为：上传后独立读取名称/大小，生产 worker 解析后完成状态与非零分块，
+分块保留合成文件内容，检索返回该文档与预期文本；配置保存后独立 GET，比对省略字段保留、
+显式空数组清空及父子分块关闭。真实页面执行上传、开始解析、配置保存/重载和 Enter 提交检索。
+检索还打开详情核对完整原文。知识库列表、文档列表、分块、检索、数据集设置、个人设置与
+API 文档在明暗主题、1440×1000 和 1024×768 视口检查路由、脚本/接口错误、页面横向溢出
+及键盘焦点，并截图。切页取消的过时请求另列记录，当前操作仍须返回真实成功响应并通过内容断言。
+
+证据保存在每次独立 `.test-results/<运行标识>/product/`：`acceptance.json`、
+`acceptance.md`、完整 PNG、带文件名/路由/视口/主题的 `contact-sheet-*.jpg`。
+脚本逐项写入结果，前置失败会标记依赖项 blocked；截图保留失败状态，清理结束前整体状态仍为 running。
+自动检查通过后，`visual_review` 仍为 `pending_human_review`，最终视觉判断由人完成；
+本入口不使用像素基线自动批准设计。报告目录可用 `--report-dir` 指定，必须为空，避免混入旧证据。
+
+首版用合成 TXT 与受控 768 维 embedding；解析、后台进程及存储/检索实现均为生产代码。
+它验证流程契约，不证明真实模型的召回质量，也不覆盖 PDF/OCR、生产部署或任意文件格式。
+真实模型质量仍用下文的 `make eval` / `make eval-generation`。产品验收为显式独立套件，
+不替代 `make verify`、适用 `make integration` 或消费者专项门禁。
+
 ## 服务与隔离
 
 入口先做协议就绪检查，再导入应用。PG、Redis、MinIO 探测包含认证；Milvus 查询版本；
