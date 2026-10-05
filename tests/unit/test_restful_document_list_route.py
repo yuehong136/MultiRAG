@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from fastapi.routing import APIRoute, iter_route_contexts
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_async_db, get_db
@@ -322,6 +323,37 @@ def test_list_documents_ids_intersects_metadata_filter(client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["code"] == 0
     assert calls[0]["doc_ids"] == ["doc1"]
+    _assert_sync_facade(sessions)
+
+
+@pytest.mark.parametrize(
+    "metadata,expected_ids",
+    [
+        ({"score": 0}, ["doc1"]),
+        ({"approved": False}, ["doc1"]),
+        ({"score": [0]}, ["doc1"]),
+        ({"approved": [False]}, ["doc1"]),
+        ({"missing": 0}, []),
+        ({"missing": False}, []),
+        ({"score": []}, None),
+        ({"score": None}, None),
+        ({"score": [], "author": "Ada"}, ["doc1"]),
+        ({"score": None, "author": "Ada"}, ["doc1"]),
+        ({"approved": False, "author": "nobody"}, []),
+    ],
+)
+def test_list_documents_distinguishes_falsy_scalars_from_empty_selections(client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata: dict[str, Any], expected_ids: list[str] | None) -> None:
+    sessions: list[object] = []
+    calls: list[dict[str, Any]] = []
+    _stub_list(monkeypatch, sessions, calls)
+    flattened = {"score": {"0": ["doc1"]}, "approved": {"False": ["doc1"]}, "author": {"Ada": ["doc1"]}}
+    monkeypatch.setattr(DocMetadataService, "get_flatted_meta_by_kbs", classmethod(lambda cls, db, kb_ids: flattened))
+
+    response = client.get(_PATH, params={"metadata": json.dumps(metadata)})
+
+    assert response.status_code == 200 and response.json()["code"] == 0
+    assert calls[0]["doc_ids"] == expected_ids
+    assert response.json()["data"]["total"] == (0 if expected_ids == [] else 1)
     _assert_sync_facade(sessions)
 
 

@@ -441,7 +441,7 @@ def _metadata_document_ids(
     if metadata:
         metadata_doc_ids: set[str] | None = None
         for key, raw_values in metadata.items():
-            if not raw_values:
+            if raw_values is None:
                 continue
             values = raw_values if isinstance(raw_values, list) else [raw_values]
             normalized_values = [str(value) for value in values if value is not None and str(value).strip()]
