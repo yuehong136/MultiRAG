@@ -193,6 +193,59 @@ def test_metadata_accepted_extensions_survive_put_get_partial_patch_and_sql(pars
         assert _read_metadata_document(env)["parser_config"]["metadata"] == value
 
 
+@pytest.mark.parametrize("items", [False, True])
+def test_metadata_put_boolean_item_schema_stays_readable_in_whole_and_filtered_lists(parser_api: dict[str, Any], items: bool) -> None:
+    env = parser_api
+    for values in [None, ["one"]]:
+        fields: list[dict[str, Any]] = [{"key": "values", "type": "list", "items": items}, {"key": "b", "type": "string"}]
+        if values is not None:
+            fields[0]["enum"] = values
+        _put_metadata(env, fields)
+        expected = {"type": "string", "enum": values} if items and values else items
+        with Session(env["engine"]) as db:
+            assert db.get(Document, env["docs"]["a"]).parser_config["metadata"] == fields
+        listed = _read_metadata_document(env)
+        assert listed["parser_config"]["metadata"]["properties"]["values"]["items"] == expected
+        for params in [{}, {"keywords": "a.txt"}]:
+            response = requests.get(
+                env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents",
+                params=params,
+                headers={"Authorization": "Bearer " + env["tokens"]["owner"]},
+                timeout=30,
+            )
+            body = response.json()
+            env["parser_record"]["events"].append({"method": "GET", "params": params, "status": response.status_code, "body": body})
+            save(env["parser_record_path"], env["parser_record"])
+            assert response.status_code == 200 and body["code"] == 0, body
+            docs = {doc["id"]: doc for doc in body["data"]["docs"]}
+            assert env["docs"]["a"] in docs
+            assert docs[env["docs"]["a"]]["parser_config"]["metadata"]["properties"]["values"]["items"] == expected
+        saved = patch(env, {"parser_config": {"metadata": {"properties": {"b": {"description": "Changed b"}}}}})["data"]["parser_config"]
+        assert saved["metadata"]["properties"]["values"]["items"] == expected
+        assert _read_metadata_document(env)["parser_config"] == saved
+        with Session(env["engine"]) as db:
+            assert db.get(Document, env["docs"]["a"]).parser_config == saved
+
+
+def test_metadata_put_unsupported_item_shape_rejected_without_poisoning_list(parser_api: dict[str, Any]) -> None:
+    env = parser_api
+    before = _read_metadata_document(env)["parser_config"]
+    for items in [None, "string", 0, 1.5, []]:
+        response = requests.put(
+            env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents/{env['docs']['a']}/metadata/config",
+            json={"metadata": [{"key": "values", "type": "list", "items": items}]},
+            headers={"Authorization": "Bearer " + env["tokens"]["owner"]},
+            timeout=30,
+        )
+        body = response.json()
+        env["parser_record"]["events"].append({"method": "PUT", "invalid_items": items, "status": response.status_code, "body": body})
+        save(env["parser_record_path"], env["parser_record"])
+        assert response.status_code == 422, body
+        with Session(env["engine"]) as db:
+            assert db.get(Document, env["docs"]["a"]).parser_config == before
+        assert _read_metadata_document(env)["parser_config"] == before
+
+
 def _wait_metadata_writer_lock(env: dict[str, Any]) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:

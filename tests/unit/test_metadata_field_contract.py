@@ -129,3 +129,34 @@ def test_document_patch_accepts_types_without_filling_defaults_or_changing_unkno
     assert merge_document_parser_config(stored, {}) == stored
     with pytest.raises(ValidationError):
         merge_document_parser_config(stored, {"metadata": [{"key": "x", "unsupported": 1}]})
+
+
+@pytest.mark.parametrize("items", [False, True])
+@pytest.mark.parametrize("values", [None, [], ["one"]])
+def test_boolean_item_schemas_remain_readable_and_keep_constraints(items: bool, values: list[str] | None) -> None:
+    from jsonschema import Draft202012Validator
+
+    fields: list[dict[str, Any]] = [{"key": "values", "type": "list", "items": items, "future": {"keep": True}}, {"key": "b", "type": "string"}]
+    if values is not None:
+        fields[0]["enum"] = values
+    before = deepcopy(fields)
+    config = MetadataConfig.model_validate({"metadata": fields}).model_dump(exclude_unset=True)
+    assert config["metadata"] == fields
+    projected = turn2jsonschema(fields)
+    Draft202012Validator.check_schema(projected)
+    schema = projected["properties"]["values"]
+    assert schema["items"] == ({"type": "string", "enum": values} if items and values else items)
+    assert schema["future"] == {"keep": True}
+    validator = Draft202012Validator(projected)
+    assert validator.is_valid({"values": []})
+    assert validator.is_valid({"values": ["one"]}) is items
+    assert validator.is_valid({"values": ["two"]}) is (items and not bool(values))
+    merged = merge_document_parser_config(config, {"metadata": {"properties": {"b": {"description": "Changed b"}}}})
+    assert merged["metadata"]["properties"]["values"] == schema
+    assert fields == before
+
+
+@pytest.mark.parametrize("items", [None, "string", 0, 1.5, []])
+def test_unsupported_list_item_shapes_are_rejected_before_storage(items: Any) -> None:
+    with pytest.raises(ValidationError, match="object or boolean schema"):
+        MetadataConfig.model_validate({"metadata": [{"key": "values", "type": "list", "items": items}]})

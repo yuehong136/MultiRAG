@@ -61,6 +61,8 @@ class MetadataField(BaseModel):
             raise ValueError("metadata field requires key or name")
         if self.key and self.name and self.key != self.name:
             raise ValueError("metadata key and name conflict")
+        if self.type == "list" and not isinstance((self.model_extra or {}).get("items", {}), (dict, bool)):
+            raise ValueError("list metadata items must be an object or boolean schema")
         for values in (self.enum, self.examples):
             if values is None:
                 continue
@@ -129,11 +131,15 @@ def field_schema(field: dict[str, Any]) -> dict[str, Any]:
     values = field.get("enum")
     if kind == "list":
         items = result.get("items", {})
-        if not isinstance(items, dict):
-            raise ValueError("list metadata items must be an object schema")
-        items.setdefault("type", "string")
+        if not isinstance(items, (dict, bool)):
+            raise ValueError("list metadata items must be an object or boolean schema")
+        if isinstance(items, dict):
+            items.setdefault("type", "string")
+        elif items is True and values:
+            items = {"type": "string"}
         result.update(type="array", items=items)
-        if values:
+        # A false item schema already disallows every item, including enums.
+        if values and isinstance(items, dict):
             result["items"]["enum"] = deepcopy(values)
     else:
         if kind:
