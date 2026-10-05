@@ -1925,3 +1925,11 @@ Go Ollama driver 使用原生 `POST /api/chat` 与 `GET /api/tags`，实例 base
 有 120 秒请求超时。Encode/Rerank 明确未实现，模型目录没有声明这些能力。
 协议参考 [Ollama chat](https://docs.ollama.com/api/chat) 与 [模型发现](https://docs.ollama.com/api/tags)。
 Moonshot 普通/流式聊天未显式配置 temperature 时使用 0.6，显式 0 保留。
+
+
+Go xAI factory 使用真实 driver，实例 API key 与 base_url 独立绑定。普通请求强制 stream=false，
+流式强制 stream=true；保留完整消息、content parts 和 reasoning_content，结束以 `[DONE]`
+或非空 finish_reason 为准，且必须已收到正文。非法 JSON/字段、供应商错误、HTTP 非 200、
+未收到结束标记的 EOF、取消和 sender 错误均返回失败。模型发现使用无请求体的 `GET /models`，
+连接检查要求有效且非空的模型列表。非流式调用 120 秒超时，SSE 使用请求 context，无总超时。
+本地验证使用受控 HTTP/SSE 与独立数据库，不表示已通过真实 xAI 凭据或远程模型验收。
