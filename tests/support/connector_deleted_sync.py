@@ -107,22 +107,40 @@ async def assert_deleted_sync(env: dict[str, Any], monkeypatch: pytest.MonkeyPat
     current = {"id": task_id, "connector_id": connector_id, "kb_id": kb_id, "tenant_id": owner, "poll_range_start": original, "reindex": "0", "auto_parse": False, "timeout_secs": 30}
     try:
         await driver(current)
-        success = mode in {"complete", "empty", "disabled"}
+        success = mode in {"complete", "empty", "disabled", "concurrent"}
         expected = {ids["retained"]} if mode == "complete" else set() if mode == "empty" else set(ids.values())
+        original_expected = expected.copy()
+        if mode == "concurrent":
+            expected = {connector_doc_id_candidates(kb_id, connector_id, source_ids["new"])[-1]}
+            original_expected = set()
         with Session(env["engine"]) as db:
             log = db.get(SyncLogs, task_id)
             assert log is not None and log.status == (TaskStatus.DONE if success else TaskStatus.FAIL), log.full_exception_trace if log else "missing log"
-            assert log.docs_removed_from_index == (2 - len(expected) if success else 0)
+            assert log.docs_removed_from_index == (2 - len(original_expected) if success else 0)
             if not success:
                 assert log.poll_range_start == original
                 assert db.scalar(sa.select(sa.func.count()).select_from(SyncLogs).where(SyncLogs.connector_id == connector_id)) == 1
             assert set(db.scalars(sa.select(Document.id).where(Document.source_type == source))) == expected
             assert db.scalar(sa.select(Knowledgebase.doc_num).where(Knowledgebase.id == kb_id)) == len(expected)
-            assert set(db.scalars(sa.select(File2Document.document_id).where(File2Document.document_id.in_(ids.values())))) == expected
+            assert set(db.scalars(sa.select(File2Document.document_id).where(File2Document.document_id.in_(ids.values())))) == original_expected
         indexed = settings.docStoreConn.query(env["collection"], filter=f'kb_id == "{kb_id}"', output_fields=["doc_id"], consistency_level="Strong")
-        assert {row["doc_id"] for row in indexed} == expected
+        assert {row["doc_id"] for row in indexed} == original_expected
         objects = {obj.object_name for obj in env["storage"].list_objects(env["bucket"], recursive=True)}
-        assert objects == {name for name in before_objects if any(locations[identifier] in name for identifier in expected)}
+        assert objects & before_objects == {name for name in before_objects if any(locations[identifier] in name for identifier in original_expected)}
+        if mode == "concurrent":
+            with Session(env["engine"]) as db:
+                new_doc = db.get(Document, next(iter(expected)))
+                assert new_doc is not None
+                response = env["storage"].get_object(env["bucket"], f"{kb_id}/{new_doc.location}")
+                try:
+                    assert response.read() == b"new body"
+                finally:
+                    response.close()
+                    response.release_conn()
+                assert db.scalar(sa.select(File2Document.id).where(File2Document.document_id == new_doc.id))
+            assert len(objects) == 1
+        else:
+            assert objects <= before_objects
     finally:
         with Session(env["engine"]) as db:
             db.execute(sa.delete(SyncLogs).where(SyncLogs.connector_id == connector_id))
