@@ -13,7 +13,6 @@ class _FakeDataStore:
 
 
 def test_retrieval_exposes_tag_kwd_from_search_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(search_module.settings, "DOC_ENGINE_INFINITY", False)
     dealer = object.__new__(search_module.Dealer)
     dealer.dataStore = _FakeDataStore()
     monkeypatch.setattr(dealer, "_existing_doc_ids", AsyncMock(return_value={"doc-1"}))

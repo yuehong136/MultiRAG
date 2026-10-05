@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from common.doc_store.doc_store_base import MatchDenseExpr
+from common.doc_store.doc_store_base import MatchDenseExpr, MatchTextExpr
 from core.nlp.search import Dealer
 
 
@@ -24,7 +24,7 @@ async def test_zero_hit_retry_keeps_document_scope(backend: str, documents: list
         return {}
 
     dealer = Dealer.__new__(Dealer)
-    dealer.qryr = SimpleNamespace(question=lambda *_a, **_k: (None, ["keywords"]))
+    dealer.qryr = SimpleNamespace(question=lambda *_a, **_k: (MatchTextExpr(["content_ltks"], "keywords", 100), ["keywords"]))
     dealer.get_vector = AsyncMock(return_value=MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine", 100, {"similarity": 0.5}))
     dealer.dataStore = SimpleNamespace(
         db_type=lambda: backend,

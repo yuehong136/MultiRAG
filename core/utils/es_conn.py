@@ -188,7 +188,10 @@ class ESConnection(ESConnectionBase):
                 raise Exception(f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
 
         s = Search()
-        vector_similarity_weight = 0.5
+        # kNN filtering is independent of the lexical retrieval branch.
+        scalar_filter = bool_query.to_dict()
+        vector_similarity_weight = 1.0
+        text_similarity_weight = 1.0
         for m in match_expressions:
             if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
                 assert (
@@ -198,14 +201,14 @@ class ESConnection(ESConnectionBase):
                     and isinstance(match_expressions[2], FusionExpr)
                 )
                 weights = m.fusion_params["weights"]
-                vector_similarity_weight = get_float(weights.split(",")[1])
+                text_similarity_weight, vector_similarity_weight = (get_float(value) for value in weights.split(","))
         for m in match_expressions:
             if isinstance(m, MatchTextExpr):
                 minimum_should_match = m.extra_options.get("minimum_should_match", 0.0)
                 if isinstance(minimum_should_match, float):
                     minimum_should_match = str(int(minimum_should_match * 100)) + "%"
                 bool_query.must.append(Q("query_string", fields=m.fields, type="best_fields", query=m.matching_text, minimum_should_match=minimum_should_match, boost=1))
-                bool_query.boost = 1.0 - vector_similarity_weight
+                bool_query.boost = text_similarity_weight
 
             elif isinstance(m, MatchDenseExpr):
                 assert bool_query is not None
@@ -217,8 +220,9 @@ class ESConnection(ESConnectionBase):
                     m.topn,
                     m.topn * 2,
                     query_vector=list(m.embedding_data),
-                    filter=bool_query.to_dict(),
+                    filter=scalar_filter,
                     similarity=similarity,
+                    boost=vector_similarity_weight,
                 )
 
         if bool_query and rank_feature:
@@ -227,7 +231,9 @@ class ESConnection(ESConnectionBase):
                     fld = f"{TAG_FLD}.{fld}"
                 bool_query.should.append(Q("rank_feature", field=fld, linear={}, boost=sc))
 
-        if bool_query:
+        # Top-level query and kNN are OR-ed by Elasticsearch. A filter-only
+        # query alongside dense-only search would return non-vector matches.
+        if bool_query and (any(isinstance(expr, MatchTextExpr) for expr in match_expressions) or not any(isinstance(expr, MatchDenseExpr) for expr in match_expressions)):
             s = s.query(bool_query)
         for field in highlight_fields:
             s = s.highlight(field)

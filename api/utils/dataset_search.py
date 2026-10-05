@@ -1,5 +1,6 @@
 """Request contract shared by REST dataset search and its service."""
 
+import math
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator, Field, model_validator
@@ -33,15 +34,18 @@ class HybridSearchMode(BaseModel):
 
 class FusionSearchMode(BaseModel):
     type: Literal["fusion"] = "fusion"
-    weights: str = "0.05,0.95"
+    weights: str = Field(default="0.05,0.95", description="Comma-separated sparse,dense weights; finite and nonnegative, with a positive sum. Normalized before retrieval.")
 
     @model_validator(mode="after")
     def validate_weights(self) -> "FusionSearchMode":
         parts = self.weights.split(",")
         if len(parts) != 2:
             raise ValueError("weights must contain exactly two comma-separated values")
-        for part in parts:
-            float(part.strip())
+        sparse, dense = (float(part.strip()) for part in parts)
+        total = sparse + dense
+        if not all(math.isfinite(value) and value >= 0 for value in (sparse, dense)) or not math.isfinite(total) or total <= 0:
+            raise ValueError("weights must be finite, nonnegative and have a positive sum")
+        self.weights = f"{sparse / total:g},{dense / total:g}"
         return self
 
 
@@ -65,7 +69,9 @@ class SearchDatasetRequest(BaseModel):
     tenant_rerank_id: int | None = None
     highlight: bool = False
     keyword: bool = False
-    search_mode: SearchMode | None = None
+    search_mode: SearchMode | None = Field(
+        default=None, description="Defaults to dense vector retrieval. Sparse uses full text; hybrid and fusion combine independent text and vector candidates with the selected weights."
+    )
     cross_languages: list[str] | None = None
     search_id: str | None = None
     meta_data_filter: dict[str, Any] | None = None

@@ -269,21 +269,23 @@ def test_graph_route_selects_document_or_aggregate(client: TestClient, monkeypat
 
 
 async def test_sparse_search_passes_availability_and_document_predicates(monkeypatch: pytest.MonkeyPatch) -> None:
+    from common.doc_store.doc_store_base import MatchTextExpr
     from core.nlp.search import Dealer
 
     calls = []
 
-    def query_store(**kwargs: Any) -> list[dict[str, Any]]:
-        calls.append(kwargs)
+    def query_store(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        calls.append(args)
         return []
 
     dealer = object.__new__(Dealer)
-    dealer.qryr = SimpleNamespace(question=lambda *_a, **_k: (None, []))
+    dealer.qryr = SimpleNamespace(question=lambda *_a, **_k: (MatchTextExpr(["content_ltks"], "query", 10), []))
     dealer.dataStore = SimpleNamespace(
-        db_type=lambda: "milvus", search_by_milvus=query_store, get_total=lambda _: 0, get_doc_ids=lambda _: [], get_highlight=lambda *_: {}, get_aggregation=lambda *_: {}, get_fields=lambda *_: {}
+        db_type=lambda: "milvus", search=query_store, get_total=lambda _: 0, get_doc_ids=lambda _: [], get_highlight=lambda *_: {}, get_aggregation=lambda *_: {}, get_fields=lambda *_: {}
     )
     await dealer.search({"question": "query", "available_int": 1, "doc_ids": ["-999"], "search_mode": {"sparse": {}}}, ["scratch"], ["dataset"])
-    assert calls[0]["filter"] == "(doc_id == '-999') && available_int != 0"
+    assert calls[0][2] == {"doc_id": ["-999"], "available_int": 1}
+    assert isinstance(calls[0][3][0], MatchTextExpr)
 
 
 def test_retired_chunk_routes_absent_and_other_contracts_retained(client: TestClient) -> None:

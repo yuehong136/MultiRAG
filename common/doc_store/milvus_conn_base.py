@@ -1025,14 +1025,14 @@ class MilvusConnectionBase(DocStoreConnection):
         limit: int,
         offset: int,
         rank_boost: dict,
-    ):
+    ) -> tuple[list[dict[str, Any]], int]:
         """Perform hybrid search combining text and vector search."""
         text_results, text_scores, _ = self._execute_text_queries(index_names, text_exprs, filter_expr, select_fields, limit, offset)
 
         vector_results, vector_scores, _ = self._execute_dense_query(index_names, dense_expr, filter_expr, select_fields, limit, offset)
 
         combined_results = []
-        if text_results and vector_results:
+        if fusion_expr is not None or (text_results and vector_results):
             text_weight, vector_weight = self._fusion_weights(fusion_expr)
             norm_text = self._normalize_scores(text_scores, reverse=False)
 
@@ -1041,7 +1041,7 @@ class MilvusConnectionBase(DocStoreConnection):
             norm_vector = self._normalize_scores(vector_scores, reverse=is_l2)
 
             final_scores = {}
-            for doc_id in set(norm_text.keys()) | set(norm_vector.keys()):
+            for doc_id in sorted(set(norm_text.keys()) | set(norm_vector.keys())):
                 final_scores[doc_id] = text_weight * norm_text.get(doc_id, 0.0) + vector_weight * norm_vector.get(doc_id, 0.0)
 
             lookup = {}

@@ -504,3 +504,59 @@ def test_saved_search_status_and_metadata_contract(search_api: dict[str, Any]) -
         db.commit()
     retired = request(env, "POST", "/search", json=payload).json()
     assert retired["code"] == 102 and retired["message"] == "Search app not found!", retired
+
+
+def test_http_modes_have_distinct_candidates_weights_and_pages(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+    query_vector = [1.0] + [0.0] * 767
+    lexical_vector = [0.0, 1.0] + [0.0] * 766
+
+    class Embedding:
+        def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+            return np.array(query_vector), 0
+
+    async def bundle(*args: Any, **kwargs: Any) -> Any:
+        return Embedding()
+
+    monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
+    lexical = {**env["rows"]["dataset"][1], "content_with_weight": "rivet rivet rivet", "content_ltks": "rivet rivet rivet", "vector": lexical_vector, "q_768_vec": lexical_vector}
+    semantic = {**lexical, "id": uuid4().hex, "content_with_weight": "unrelated wording", "content_ltks": "unrelated wording", "vector": query_vector, "q_768_vec": query_vector}
+    store = settings.docStoreConn
+    assert store.delete({"id": lexical["id"]}, env["collections"]["dataset"], env["dataset"]) == 1
+    assert store.insert([lexical, semantic], env["collections"]["dataset"], env["dataset"]) == []
+    env["reader"].flush(env["collections"]["dataset"], timeout=60)
+    raw = env["reader"].query(
+        env["collections"]["dataset"], filter="pk in " + json.dumps([lexical["id"], semantic["id"]]), output_fields=["pk", "doc_id", "content_with_weight", "q_768_vec"], consistency_level="Strong"
+    )
+    assert {row["pk"]: row["content_with_weight"] for row in raw} == {lexical["id"]: "rivet rivet rivet", semantic["id"]: "unrelated wording"}
+    assert {row["doc_id"] for row in raw} == {env["doc"]}
+
+    def run(mode: dict[str, Any] | None, threshold: float = 0.0, page: int = 1, size: int = 10, documents: list[str] | None = None) -> dict[str, Any]:
+        payload = {"question": "rivet", "similarity_threshold": threshold, "page": page, "size": size, "doc_ids": documents}
+        if mode is not None:
+            payload["search_mode"] = mode
+        response = request(env, "POST", "/search", json=payload)
+        body = response.json()
+        assert response.status_code == 200 and body["code"] == 0, body
+        return body["data"]
+
+    for mode in (None, {"type": "dense"}):
+        body = run(mode, threshold=0.2)
+        assert [row["chunk_id"] for row in body["chunks"]] == [semantic["id"]], body
+    sparse = run({"type": "sparse"})
+    assert [row["chunk_id"] for row in sparse["chunks"]] == [lexical["id"]], sparse
+    for mode, expected in (
+        ({"type": "fusion", "weights": "0.9,0.1"}, [lexical["id"], semantic["id"]]),
+        ({"type": "fusion", "weights": "0.1,0.9"}, [semantic["id"], lexical["id"]]),
+        ({"type": "hybrid", "weight_dense": 0.8, "weight_sparse": 0.2}, [semantic["id"], lexical["id"]]),
+    ):
+        body = run(mode)
+        assert [row["chunk_id"] for row in body["chunks"]] == expected, body
+        pages = [run(mode, page=page, size=1) for page in (1, 2)]
+        assert [chunk["chunk_id"] for body in pages for chunk in body["chunks"]] == expected, pages
+        assert all(body["total"] == 2 for body in pages), pages
+        missing = run(mode, documents=[env["second_doc"]])
+        assert missing["total"] == 0 and missing["chunks"] == [] and missing["doc_aggs"] == [], missing
+    for weights in ("nan,1", "-1,2", "0,0"):
+        response = request(env, "POST", "/search", json={"question": "rivet", "search_mode": {"type": "fusion", "weights": weights}})
+        assert response.status_code == 422, response.text

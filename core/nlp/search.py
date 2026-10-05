@@ -3,13 +3,13 @@ import logging
 import math
 import re
 from collections import OrderedDict, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
-from pymilvus import AnnSearchRequest, WeightedRanker
 
 from api.db.db_models import async_db_connection, db_connection
-from common import settings
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.doc_store.doc_store_base import (
     DocStoreConnection,
@@ -81,9 +81,33 @@ def _is_dataset_raptor_chunk(chunk: dict[str, object]) -> bool:
     return _chunk_scalar(chunk.get("doc_id")) == "graph_raptor_x" and _chunk_scalar(chunk.get("raptor_kwd")) == "raptor" and bool(_chunk_scalar(chunk.get("kb_id")))
 
 
-class Dealer:
-    ARRAY_FILTER_FIELDS = {"important_kwd", "question_kwd", "entities_kwd"}
+def _mode_weights(search_mode: dict[str, Any] | None) -> tuple[str, float, float]:
+    """Return normalized lexical/vector weights for the selected candidate mode."""
+    if not search_mode:
+        return "dense", 0.0, 1.0
+    if len(search_mode) != 1:
+        raise ValueError("Select exactly one search mode")
+    mode, params = next(iter(search_mode.items()))
+    if mode == "dense":
+        return mode, 0.0, 1.0
+    if mode == "sparse":
+        return mode, 1.0, 0.0
+    if mode == "hybrid":
+        sparse, dense = float(params.get("weight_sparse", 0.3)), float(params.get("weight_dense", 0.7))
+    elif mode == "fusion":
+        parts = params.get("weights", "0.05,0.95").split(",")
+        if len(parts) != 2:
+            raise ValueError("Fusion weights must contain lexical and vector values")
+        sparse, dense = (float(part) for part in parts)
+    else:
+        raise ValueError(f"Unsupported search mode: {mode}")
+    total = sparse + dense
+    if not all(math.isfinite(weight) and weight >= 0 for weight in (sparse, dense)) or not math.isfinite(total) or total <= 0:
+        raise ValueError("Search weights must be finite, nonnegative and have a positive sum")
+    return mode, sparse / total, dense / total
 
+
+class Dealer:
     def __init__(self, dataStore: DocStoreConnection):
         self.qryr = query.FulltextQueryer()
         self.dataStore = dataStore
@@ -215,64 +239,13 @@ class Dealer:
                 condition["auth"] = exp
         return condition
 
-    # 构建过滤表达式的辅助方法
-    def _build_filter_expr(self, filters):
-        """
-        将过滤条件字典转换为Milvus过滤表达式
-
-        Args:
-            filters: 过滤条件字典
-
-        Returns:
-            str: Milvus过滤表达式
-        """
-        if not filters:
-            return ""
-
-        filter_parts = []
-        for k, v in filters.items():
-            # 跳过 pk 字段和空值
-            if k == "pk" or not v:
-                continue
-
-            if k == "doc_id":
-                # doc_id 字段特殊处理
-                if isinstance(v, list):
-                    kb_exprs = [f"doc_id == '{kb}'" for kb in v]
-                    filter_parts.append(f"({' || '.join(kb_exprs)})")
-                else:
-                    filter_parts.append(f"doc_id == '{v}'")
-            elif k == "available_int":
-                # available_int 字段特殊处理
-                filter_parts.append(f"available_int != {v - 1}")  # 为了兼容老版本不存在available_int字段才这么写
-            elif k == "auth":
-                # auth 字段特殊处理 - 直接使用值作为表达式
-                filter_parts.append(f"{v}")
-            elif k in self.ARRAY_FILTER_FIELDS:
-                if isinstance(v, list):
-                    values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
-                    filter_parts.append(f"ARRAY_CONTAINS_ANY({k}, [{','.join(values)}])")
-                else:
-                    value = f"'{v}'" if isinstance(v, str) else str(v)
-                    filter_parts.append(f"ARRAY_CONTAINS({k}, {value})")
-            elif isinstance(v, list):
-                # 其他字段按类型处理 - 列表
-                values = [f"'{item}'" if isinstance(item, str) else str(item) for item in v]
-                filter_parts.append(f"{k} in [{','.join(values)}]")
-            elif isinstance(v, str):
-                # 其他字段按类型处理 - 字符串
-                filter_parts.append(f"{k} == '{v}'")
-            elif isinstance(v, (int, float)):
-                # 其他字段按类型处理 - 数值
-                filter_parts.append(f"{k} == {v}")
-
-        return " && ".join(filter_parts) if filter_parts else ""
-
-    async def search(self, req, idx_names: str | list[str], kb_ids: list[str], emb_mdl=None, highlight: bool | list | None = False, rank_feature: dict | None = None):
+    async def search(
+        self, req: dict[str, Any], idx_names: str | list[str], kb_ids: list[str], emb_mdl: Any = None, highlight: bool | list | None = False, rank_feature: dict | None = None
+    ) -> SearchResult:
         if highlight is None:
             highlight = False
 
-        """Milvus‑backend search (single‑method refactor)."""
+        """Retrieve candidates through the selected engine's shared contract."""
         # ---------- 通用预处理 ----------
         filters = self.get_filters(req)
         pg = int(req.get("page", 1)) - 1
@@ -322,7 +295,7 @@ class Dealer:
         kwds: set[str] = set()
 
         # 内部工具: 关键词扩展 & SearchResult 构造
-        def _process_keywords(raw_kw: list[str]):
+        def _process_keywords(raw_kw: list[str]) -> list[str]:
             for k in raw_kw:
                 kwds.add(k)
                 for tok in rag_tokenizer.fine_grained_tokenize(k).split():
@@ -330,7 +303,7 @@ class Dealer:
                         kwds.add(tok)
             return list(kwds)
 
-        def _build_result(results, kwds: list[str] | None = None):
+        def _build_result(results: Any, kwds: list[str]) -> Dealer.SearchResult:
             total = self.dataStore.get_total(results)
             keywords = _process_keywords(kwds)
             ids = self.dataStore.get_doc_ids(results)
@@ -356,142 +329,45 @@ class Dealer:
             keywords_raw: list[str] = []
             return _build_result(res, keywords_raw)
 
-        # ---------- 有 query ----------
-        search_mode = req.get("search_mode", "")
-        keywords_raw: list[str] = []
-
-        # 公共文本匹配表达式
+        # Build backend-neutral expressions so all modes share filters,
+        # candidate ranking and global pagination instead of Milvus-only APIs.
+        configured_mode = req.get("search_mode")
+        if not configured_mode and emb_mdl is None:
+            configured_mode = {"sparse": {}}
+        mode, weight_sparse, weight_dense = _mode_weights(configured_mode)
         match_text, keywords_raw = self.qryr.question(qst, min_match=0.3)
-
-        try:
-            # === Hybrid 模式 ===
-            if "hybrid" in search_mode and emb_mdl:
-                logging.info("执行混合检索…")
-                hybrid_params = search_mode["hybrid"]
-                weight_dense = hybrid_params.get("weight_dense", 0.7)
-                weight_sparse = hybrid_params.get("weight_sparse", 0.3)
-
-                match_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
-                q_vec = match_dense.embedding_data
-                vector_field = f"q_{len(q_vec)}_vec"
-                src.append(vector_field)
-
-                dense_req = AnnSearchRequest(
-                    data=[q_vec],
-                    anns_field=vector_field,
-                    param={"metric_type": "COSINE", "params": {"nprobe": 10}},
-                    limit=topk,
-                    expr=self._build_filter_expr(filters) if filters else "",
-                )
-                sparse_req = AnnSearchRequest(
-                    data=[qst],
-                    anns_field="sparse_vector",
-                    param={"metric_type": "BM25", "params": {"drop_ratio_search": 0.1}},
-                    limit=topk,
-                    expr=self._build_filter_expr(filters) if filters else "",
-                )
-                ranker = WeightedRanker(weight_dense, weight_sparse)
-                results = await thread_pool_exec(
-                    self.dataStore.hybrid_search,
-                    collection_name=idx_names,
-                    reqs=[dense_req, sparse_req],
-                    ranker=ranker,
-                    limit=topk,
-                    output_fields=src,
-                    offset=offset,
-                )
-                return _build_result(results, keywords_raw)
-
-            # === Sparse 模式 ===
-            if "sparse" in search_mode:
-                logging.info("执行全文检索…")
-                results = await thread_pool_exec(
-                    self.dataStore.search_by_milvus,
-                    collection_name=idx_names,
-                    data=[qst],
-                    anns_field="sparse_vector",
-                    limit=topk,
-                    output_fields=src,
-                    filter=self._build_filter_expr(filters),
-                )
-                return _build_result(results, keywords_raw)
-
-            # # === Dense 模式 ===
-            # if "dense" in search_mode and emb_mdl:
-            #     logging.info("执行向量检索…")
-            #     match_dense = self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
-            #     q_vec = match_dense.embedding_data
-            #     vector_field = f"q_{len(q_vec)}_vec"
-            #     src.append(vector_field)
-            #
-            #     results = self.dataStore.search_by_milvus(
-            #         collection_name=idx_names,
-            #         data=[q_vec],
-            #         anns_field=vector_field,
-            #         limit=topk,
-            #         output_fields=src,
-            #         param={"metric_type": "COSINE", "params": {"nprobe": 10}},
-            #     )
-            #     return _build_result(results, keywords_raw)
-
-            # === Fusion / Text-only 模式 ===
-            order_by = OrderByExpr()
-            match_exprs = [match_text]
-            logging.info("执行向量融合检索「默认」")
-            if emb_mdl:
-                match_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
-                q_vec = match_dense.embedding_data
-                if not settings.DOC_ENGINE_INFINITY:
-                    src.append(f"q_{len(q_vec)}_vec")
-                fusion_expr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
-                match_exprs = [match_text, match_dense, fusion_expr]
-
-            res = await thread_pool_exec(
-                self.dataStore.search,
-                src,
-                highlight_fields,
-                filters,
-                match_exprs,
-                order_by,
-                offset,
-                limit,
-                idx_names,
-                kb_ids,
-                rank_feature=rank_feature,
-            )
-            total = self.dataStore.get_total(res)
-
-            # 若召回为 0 且使用嵌入，放宽阈值重试一次
-            if emb_mdl and total == 0:
+        if match_text is not None:
+            match_text.topn = topk
+        elif weight_sparse > 0:
+            raise ValueError("Search question does not produce lexical terms")
+        match_dense = None
+        if weight_dense > 0:
+            if emb_mdl is None:
+                raise ValueError(f"{mode} search requires an embedding model")
+            match_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
+            q_vec = match_dense.embedding_data
+            if self.dataStore.db_type() != "infinity":
+                src.append(match_dense.vector_column_name)
+        match_exprs = []
+        if weight_sparse > 0:
+            match_exprs.append(match_text)
+        if match_dense is not None:
+            match_exprs.append(match_dense)
+        if weight_sparse > 0 and weight_dense > 0:
+            match_exprs.append(FusionExpr("weighted_sum", topk, {"weights": f"{weight_sparse:g},{weight_dense:g}"}))
+        order_by = OrderByExpr()
+        logging.info("Executing %s retrieval", mode)
+        res = await thread_pool_exec(self.dataStore.search, src, highlight_fields, filters.copy(), deepcopy(match_exprs), order_by, offset, limit, idx_names, kb_ids, rank_feature=rank_feature)
+        # Relax relevance only; document, availability and permission predicates
+        # remain identical. Copy expressions because adapters may rewrite them.
+        if match_dense is not None and self.dataStore.get_total(res) == 0:
+            if weight_sparse > 0:
                 match_text_low, _ = self.qryr.question(qst, min_match=0.1)
-                match_dense.extra_options["similarity"] = 0.17
-                res = await thread_pool_exec(
-                    self.dataStore.search,
-                    src,
-                    highlight_fields,
-                    filters,
-                    [match_text_low, match_dense, fusion_expr],
-                    order_by,
-                    offset,
-                    limit,
-                    idx_names,
-                    kb_ids,
-                    rank_feature=rank_feature,
-                )
-            return _build_result(res, keywords_raw)
-
-        except Exception as exc:
-            logging.error("Search failed: %s", exc, exc_info=True)
-            # 极端情况 fallback 为空结果，保持返回格式
-            return self.SearchResult(
-                total=0,
-                ids=[],
-                query_vector=q_vec,
-                aggregation={},
-                highlight={},
-                field={},
-                keywords=list(kwds),
-            )
+                match_text_low.topn = topk
+                match_exprs[0] = match_text_low
+            match_dense.extra_options["similarity"] = min(float(req.get("similarity", 0.1)), 0.17)
+            res = await thread_pool_exec(self.dataStore.search, src, highlight_fields, filters.copy(), deepcopy(match_exprs), order_by, offset, limit, idx_names, kb_ids, rank_feature=rank_feature)
+        return _build_result(res, keywords_raw)
 
     def get_aggregation(self, res, g):
         if "aggregations" not in res or "aggs_" + g not in res["aggregations"]:
@@ -805,24 +681,24 @@ class Dealer:
 
     async def retrieval(
         self,
-        question,
-        filter_exp,
-        embd_mdl,
-        tenant_id,
-        kb_names,
-        page,
-        page_size,
-        similarity_threshold=0.2,
-        vector_similarity_weight=0.3,
-        top=1024,
-        doc_ids=None,
-        aggs=True,
-        rerank_mdl=None,
-        highlight=False,
-        rank_feature=None,
-        search_mode=None,
-        kb_ids=None,
-    ):
+        question: str | None,
+        filter_exp: str | None,
+        embd_mdl: Any,
+        tenant_id: str | list[str],
+        kb_names: str | list[str],
+        page: int,
+        page_size: int,
+        similarity_threshold: float = 0.2,
+        vector_similarity_weight: float = 0.3,
+        top: int = 1024,
+        doc_ids: list[str] | None = None,
+        aggs: bool = True,
+        rerank_mdl: Any = None,
+        highlight: bool | list | None = False,
+        rank_feature: dict | None = None,
+        search_mode: dict[str, Any] | None = None,
+        kb_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Args:
             kb_names: 知识库名称列表，用于构建索引名称
@@ -831,21 +707,8 @@ class Dealer:
         if rank_feature is None:
             rank_feature = {PAGERANK_FLD: 10}
         if search_mode is None:
-            # 密集检索（向量检索）
             search_mode = {"dense": {}}
-
-            # # 稀疏检索（全文检索）
-            # search_mode = {
-            #     "sparse": {}
-            # }
-            #
-            # # 混合检索
-            # search_mode = {
-            #     "hybrid": {
-            #         "weight_dense": 0.7,
-            #         "weight_sparse": 0.3
-            #     }
-            # }
+        _, weight_sparse, weight_dense = _mode_weights(search_mode)
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
             return ranks
@@ -893,7 +756,7 @@ class Dealer:
             # 使用实际的数据库类型判断
             db_type = self.dataStore.db_type()
             logging.info(f"db_type: {db_type}, sres.total: {sres.total}, query_vector len: {len(sres.query_vector) if sres.query_vector else 0}")
-            if settings.DOC_ENGINE_INFINITY:
+            if db_type == "infinity":
                 # Don't need rerank here since Infinity normalizes each way score before fusion.
                 sim = [sres.field[id].get("_score", 0.0) for id in sres.ids]
                 sim = [s if s is not None else 0.0 for s in sim]
@@ -916,7 +779,7 @@ class Dealer:
             elif db_type in ["elasticsearch", "opensearch"]:
                 # ElasticSearch doesn't normalize each way score before fusion.
                 logging.info("进入 ES rerank 分支")
-                sim, tsim, vsim = self.rerank(sres, question, 1 - vector_similarity_weight, vector_similarity_weight, rank_feature=rank_feature)
+                sim, tsim, vsim = self.rerank(sres, question, weight_sparse, weight_dense, rank_feature=rank_feature)
                 logging.info(f"rerank 返回: sim={sim[:3] if len(sim) > 0 else []}, tsim={tsim[:3] if len(tsim) > 0 else []}, vsim={vsim[:3] if len(vsim) > 0 else []}")
             else:
                 # 其它已归一化的引擎
@@ -935,10 +798,10 @@ class Dealer:
             ranks["doc_aggs"] = []
             return ranks
 
-        sorted_idx = np.argsort(sim_np * -1)
+        sorted_idx = np.argsort(sim_np * -1, kind="stable")
 
         # When vector_similarity_weight is 0, similarity_threshold is not meaningful for term-only scores.
-        post_threshold = 0.0 if vector_similarity_weight <= 0 else similarity_threshold
+        post_threshold = 0.0 if weight_dense <= 0 else similarity_threshold
 
         # When doc_ids is explicitly provided (metadata or document filtering), bypass threshold
         # User wants those specific documents regardless of their relevance score
