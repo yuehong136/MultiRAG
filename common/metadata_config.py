@@ -105,7 +105,7 @@ def canonical_field(field: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_metadata_config(stored: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    """New envelopes patch explicit fields; old envelopes retain their defaults."""
+    """Patch explicit fields or the switch; legacy field envelopes keep defaults."""
     MetadataConfig.model_validate(config)
     result = deepcopy(stored)
     canonical = "metadata" in config or "built_in_metadata" in config
@@ -117,6 +117,8 @@ def apply_metadata_config(stored: dict[str, Any], config: dict[str, Any]) -> dic
             result["metadata"] = deepcopy(config["fields"])
         if "enabled" in config:
             result["enable_metadata"] = config["enabled"]
+    elif "enabled" in config and "fields" not in config:
+        result["enable_metadata"] = config["enabled"]
     else:
         result["metadata"] = deepcopy(config.get("fields", []))
         result["enable_metadata"] = config.get("enabled", True)

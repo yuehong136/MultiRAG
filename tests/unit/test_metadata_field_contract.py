@@ -42,6 +42,9 @@ def test_invalid_numeric_enums_rejected(bad: Any) -> None:
         {"metadata": None},
         {"built_in_metadata": None},
         {"enabled": None},
+        {"fields": None},
+        {"enabled": "false"},
+        {"enabled": False, "unknown": []},
         {"metadata": [], "fields": [{"name": "x"}]},
         {"metadata": [{"key": "a", "name": "b"}]},
         {"metadata": [{"key": "x", "type": "unknown"}]},
@@ -65,6 +68,45 @@ def test_new_partial_config_preserves_switch_schema_and_unknown_settings() -> No
     assert apply_metadata_config(stored, {"metadata": [], "enabled": True})["enable_metadata"] is True
     assert stored == original
     assert apply_metadata_config(stored, {}) == {**stored, "metadata": [], "enable_metadata": True}
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [{"name": "author", "examples": ["Ada"], "future": {"keep": True}}],
+        {"type": "object", "properties": {"year": {"type": "integer"}}, "required": ["year"]},
+    ],
+)
+def test_enabled_only_preserves_definitions_without_mutating_inputs(enabled: bool, metadata: list[dict[str, Any]] | dict[str, Any]) -> None:
+    stored = {"metadata": metadata, "built_in_metadata": [{"key": "source"}], "future": {"keep": [1]}}
+    original = deepcopy(stored)
+    result = apply_metadata_config(stored, {"enabled": enabled})
+    assert result == {**stored, "enable_metadata": enabled}
+    result["built_in_metadata"][0]["key"] = "changed"
+    result["future"]["keep"].append(2)
+    assert stored == original
+
+
+@pytest.mark.parametrize("config", [{"enabled": None}, {"fields": None}, {"enabled": 0}, {"enabled": False, "unknown": []}])
+def test_invalid_toggle_leaves_stored_config_untouched(config: dict[str, Any]) -> None:
+    stored = {"enable_metadata": False, "metadata": [{"key": "author"}], "built_in_metadata": [{"key": "source"}]}
+    original = deepcopy(stored)
+    with pytest.raises(ValidationError):
+        apply_metadata_config(stored, config)
+    assert stored == original
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("fields", [[], [{"name": "author", "type": "string"}]])
+def test_legacy_fields_and_switch_remain_a_replacement(enabled: bool, fields: list[dict[str, Any]]) -> None:
+    stored = {"enable_metadata": not enabled, "metadata": [{"key": "old"}], "built_in_metadata": [{"key": "source"}]}
+    assert apply_metadata_config(stored, {"fields": fields, "enabled": enabled}) == {**stored, "metadata": fields, "enable_metadata": enabled}
+    assert apply_metadata_config(stored, {"fields": fields}) == {**stored, "metadata": fields, "enable_metadata": True}
+
+
+def test_enabled_only_does_not_add_omitted_definitions() -> None:
+    assert apply_metadata_config({"future": {"keep": 1}}, {"enabled": False}) == {"future": {"keep": 1}, "enable_metadata": False}
 
 
 @pytest.mark.parametrize("key", ["auto_metadata_config", "parser_config"])

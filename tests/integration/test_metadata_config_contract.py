@@ -20,6 +20,62 @@ BUILTIN = [{"key": "source", "type": "string", "enum": ["Paper"]}]
 
 
 @pytest.mark.parametrize("kind", ["jwt", "keys"])
+@pytest.mark.parametrize("route", ["metadata/config", "auto_metadata"])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [{"name": "author", "examples": ["Ada"], "future": {"keep": True}}],
+        {"type": "object", "properties": {"year": {"type": "integer"}}, "required": ["year"], "additionalProperties": False},
+    ],
+)
+def test_enabled_only_roundtrip_preserves_all_definitions(management_api: dict[str, Any], kind: str, route: str, metadata: list[dict[str, Any]] | dict[str, Any]) -> None:
+    env = management_api
+    dataset, key = env["datasets"][0], env[kind][0]
+    original = {"metadata": metadata, "built_in_metadata": BUILTIN, "unknown": {"keep": 3}}
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(parser_config=original))
+    before = sql_state(env)
+    for enabled in [False, True, False]:
+        response = request_api(env, "PUT", f"/datasets/{dataset}/{route}", credential=key, payload={"enabled": enabled})
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        assert response.json()["data"]["enabled"] is enabled
+        readback = request_api(env, "GET", metadata_path(env), credential=key)
+        assert readback.status_code == 200 and readback.json()["code"] == 0, readback.text
+        assert readback.json()["data"]["enabled"] is enabled
+        expected_metadata = [{"key": "author", "examples": ["Ada"], "future": {"keep": True}}] if isinstance(metadata, list) else metadata
+        assert readback.json()["data"]["metadata"] == expected_metadata
+        assert readback.json()["data"]["built_in_metadata"] == BUILTIN
+        after = sql_state(env)
+        assert after[Knowledgebase.__tablename__][dataset]["parser_config"] == {**original, "enable_metadata": enabled}
+        assert after[Document.__tablename__] == before[Document.__tablename__]
+
+
+@pytest.mark.parametrize("route", ["metadata/config", "auto_metadata"])
+def test_toggle_validation_and_legacy_empty_envelope_contract(management_api: dict[str, Any], route: str) -> None:
+    env = management_api
+    dataset, key = env["datasets"][0], env["keys"][0]
+    original = {"enable_metadata": False, "metadata": FIELDS, "built_in_metadata": BUILTIN, "unknown": {"keep": 3}}
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(parser_config=original))
+    path = f"/datasets/{dataset}/{route}"
+    before = sql_state(env)
+    for payload in [{"enabled": None}, {"fields": None}, {"enabled": "false"}, {"enabled": False, "unknown": []}]:
+        response = request_api(env, "PUT", path, credential=key, payload=payload)
+        assert response.status_code == 422, response.text
+        assert sql_state(env) == before
+    for patch, enabled in [({"fields": [], "enabled": False}, False), ({"fields": FIELDS, "enabled": False}, False), ({"fields": FIELDS}, True)]:
+        response = request_api(env, "PUT", path, credential=key, payload=patch)
+        assert response.status_code == 200 and response.json() == {"code": 0, "data": {"enabled": enabled, "fields": patch["fields"]}}, response.text
+        assert sql_state(env)[Knowledgebase.__tablename__][dataset]["parser_config"] == {**original, "metadata": patch["fields"], "enable_metadata": enabled}
+    # Retain the historical empty legacy replacement contract; this fix only
+    # changes envelopes that explicitly contain the switch and omit fields.
+    response = request_api(env, "PUT", path, credential=key, payload={})
+    assert response.status_code == 200 and response.json() == {"code": 0, "data": {"enabled": True, "fields": []}}, response.text
+    stored = sql_state(env)[Knowledgebase.__tablename__][dataset]["parser_config"]
+    assert stored == {**original, "metadata": [], "enable_metadata": True}
+
+
+@pytest.mark.parametrize("kind", ["jwt", "keys"])
 def test_new_config_roundtrip_partial_clear_and_legacy_consumer(management_api: dict[str, Any], kind: str) -> None:
     env = management_api
     dataset, key = env["datasets"][0], env[kind][0]

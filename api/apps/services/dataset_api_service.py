@@ -452,7 +452,7 @@ def update_auto_metadata(db: Session, tenant_id: str, dataset_id: str, cfg: dict
 
     parser_cfg = apply_metadata_config(kb.parser_config or {}, cfg)
     canonical = "metadata" in cfg or "built_in_metadata" in cfg
-    if not canonical:
+    if not canonical and ("fields" in cfg or not cfg):
         parser_cfg["metadata"] = _normalize_metadata_fields(parser_cfg["metadata"])
     fields = _normalize_metadata_fields(parser_cfg.get("metadata") or [], skip_non_dict=True)
 
