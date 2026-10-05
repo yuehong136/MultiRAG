@@ -32,8 +32,8 @@
       automerge: true,
     },
     {
-      description: "numpy 生态红线：numpy 停 1.26.4，fastembed>=0.5/pillow>=11 需 numpy>=2.1（被 graspologic fork pin<2 挡死，§6.4 勿再试清单）——升级只随 numpy>=2 专项批次人工做",
-      matchPackageNames: ["numpy", "fastembed", "fastembed-gpu", "pillow", "onnx"],
+      description: "numpy 生态红线：Infinity SDK、infinity-emb 和 graspologic 仍约束 numpy<2；NumPy 大版本升级需专项验证。FastEmbed 已退役，Pillow 独立更新。",
+      matchPackageNames: ["numpy"],
       enabled: false,
     },
     {

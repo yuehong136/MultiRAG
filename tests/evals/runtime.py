@@ -27,11 +27,11 @@ def quality_runtime(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPa
     from common.bootstrap import ensure_initialized
     from common.config_utils import CONFIGS
     from core.app import naive
-    from core.llm.embedding import FastEmbed
+    from core.llm.embedding import DefaultEmbedding
     from core.nlp import rag_tokenizer, search
 
     ensure_initialized()
-    model = FastEmbed(model_name=MODEL, cache_dir=str(DIRECTORY.parent), threads=2, local_files_only=True)
+    model = DefaultEmbedding(None, MODEL, model_path=str(DIRECTORY), local_files_only=True, query_instruction="")
     owner, dataset = uuid4().hex, uuid4().hex
     name = f"eval_{uuid4().hex}"
     collection = search.index_name_one(owner, name)

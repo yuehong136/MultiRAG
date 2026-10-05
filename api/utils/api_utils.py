@@ -966,7 +966,7 @@ async def is_strong_enough(chat_model, embedding_model):
         raise
 
 
-def get_allowed_llm_factories(db) -> list:
+def get_allowed_llm_factories(db: Session) -> list[Any]:
     """
     获取允许的LLM工厂列表
 
@@ -979,7 +979,8 @@ def get_allowed_llm_factories(db) -> list:
     Returns:
         list: 允许的LLM工厂对象列表
     """
-    factories = list(LLMFactoriesService.get_all(db, reverse=True, order_by="rank"))
+    # Retired runtimes can remain in an existing catalog; do not offer them again.
+    factories = [factory for factory in LLMFactoriesService.get_all(db, reverse=True, order_by="rank") if factory.name != "FastEmbed"]
     if settings.ALLOWED_LLM_FACTORIES is None:
         return factories
 

@@ -2,7 +2,8 @@
 
 当前生产注册表使用 `core/llm/embedding.py`，其中 `BuiltinEmbed` 包装内建 TEI，
 `DefaultEmbedding` 对应 BAAI。本地 `embedding_model/default_embedding.py` 的兼容
-工厂入口也保留相同累积实现；FastEmbed 自身已一次构造数组，无需修改。
+工厂入口重导出同一实现。进程内模型加载及 FastEmbed 退役边界见
+[进程内 embedding](in-process-embedding.md)。
 
 Builtin/default、tokenizer、普通任务及 dataflow 均先收集批次，最后沿 axis 0 合并
 一次。单批次直接返回原数组，保留 dtype、shape 和顺序，token 统计与截断规则不变。

@@ -31,18 +31,6 @@ ignore = true
 reason = "1.82.x 锁定（pyproject ~=1.82.0）：CVE 集中在 litellm proxy server 组件，我方仅用 SDK 路由不部署 proxy；升级与 provider 收编评估（批次 4）同期决策。复查：批次 4。"
 
 [[PackageOverrides]]
-name = "onnx"
-ecosystem = "PyPI"
-ignore = true
-reason = "1.19.0 锁定：1.21 修复线被 fastembed<0.5 约束挡死，fastembed≥0.5 需 numpy≥2.1（graspologic pin <2）。复查：numpy≥2 迁移批次（批次 3 主轴）。"
-
-[[PackageOverrides]]
-name = "pillow"
-ecosystem = "PyPI"
-ignore = true
-reason = "10.4.0 锁定：修复线在 12.x，被 fastembed<11 pin 挡死，与 onnx 同属 numpy≥2 解锁链。复查：numpy≥2 迁移批次。"
-
-[[PackageOverrides]]
 name = "pdfminer-six"
 ecosystem = "PyPI"
 ignore = true

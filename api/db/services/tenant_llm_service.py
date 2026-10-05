@@ -182,6 +182,8 @@ class TenantLLMService(CommonService):
 
         kwargs.update({"provider": model_config["llm_factory"]})
         if model_type == LLMType.EMBEDDING.value:
+            if model_config["llm_factory"] == "FastEmbed":
+                raise ValueError("FastEmbed is retired; configure a supported BAAI model and rebuild its vector index before switching")
             if model_config["llm_factory"] not in EmbeddingModel:
                 logging.info(f"Debug: Embedding model factory not supported: {model_config['llm_factory']}")
                 return None

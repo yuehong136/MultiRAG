@@ -836,7 +836,6 @@ router = APIRouter()
 def factories(db: Session = Depends(get_db), user=Depends(manager)):
     try:
         fac = get_allowed_llm_factories(db)
-        # fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI", "Builtin"]]
         fac = [f.to_dict() for f in fac if f.name not in ["siliconflow_intl"]]
         llms = LLMService.get_all(db)
         mdl_types = {}
@@ -1750,9 +1749,9 @@ curl -X POST "/v1/llm/embeddings" \\
 
 
 @router.get("/list", summary="列出所有模型", response_description="成功列出所有模型")
-def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user=Depends(manager)):
-    self_deployed = ["Youdao", "FastEmbed", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
-    weighted = ["Youdao", "FastEmbed", "BAAI"] if settings.LIGHTEN != 0 else []
+def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user: Any = Depends(manager)) -> dict[str, Any]:
+    self_deployed = ["Youdao", "BAAI", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
+    weighted = ["Youdao", "BAAI"] if settings.LIGHTEN != 0 else []
     tenant_id = user.id
     try:
         TenantLLMService.ensure_mineru_from_env(db, tenant_id)

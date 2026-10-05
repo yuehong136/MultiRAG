@@ -57,66 +57,62 @@ class Base(ABC):
 
 
 class DefaultEmbedding(Base):
+    """In-process BAAI embedding with an explicit model identity and local cache."""
+
     _FACTORY_NAME = "BAAI"
-    _model = None
+    _model: Any = None
     _model_name = ""
+    _model_key: tuple[str, str, str] | None = None
     _model_lock = threading.Lock()
 
-    def __init__(self, key, model_name, **kwargs):
-        """
-        If you have trouble downloading HuggingFace models, -_^ this might help!!
+    def __init__(
+        self,
+        key: str | None,
+        model_name: str,
+        *,
+        model_path: str | None = None,
+        cache_dir: str | None = None,
+        local_files_only: bool = False,
+        query_instruction: str = "为这个句子生成表示以用于检索相关文章：",
+        **kwargs: Any,
+    ) -> None:
+        if settings.LIGHTEN:
+            raise RuntimeError("In-process BAAI embedding is disabled by LIGHTEN")
+        if not model_name:
+            raise ValueError("An explicit embedding model name is required")
+        import torch
+        from FlagEmbedding import FlagModel
 
-        For Linux:
-        export HF_ENDPOINT=https://hf-mirror.com
-
-        For Windows:
-        Good luck
-        ^_-
-
-        """
-        if not settings.LIGHTEN:
-            input_cuda_visible_devices = None
-            with DefaultEmbedding._model_lock:
-                import torch
-                from FlagEmbedding import FlagModel
-
-                if "CUDA_VISIBLE_DEVICES" in os.environ:
-                    input_cuda_visible_devices = os.environ["CUDA_VISIBLE_DEVICES"]
-                    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # handle some issues with multiple GPUs when initializing the model
-
-                if not DefaultEmbedding._model or model_name != DefaultEmbedding._model_name:
-                    try:
-                        DefaultEmbedding._model = FlagModel(
-                            os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)),
-                            query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：",
-                            use_fp16=torch.cuda.is_available(),
-                        )
-                        DefaultEmbedding._model_name = model_name
-                    except Exception:
-                        model_dir = snapshot_download(
-                            repo_id="BAAI/bge-large-zh-v1.5", local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), local_dir_use_symlinks=False
-                        )
-                        DefaultEmbedding._model = FlagModel(model_dir, query_instruction_for_retrieval="为这个句子生成表示以用于检索相关文章：", use_fp16=torch.cuda.is_available())
-                    finally:
-                        if input_cuda_visible_devices:
-                            # restore CUDA_VISIBLE_DEVICES
-                            os.environ["CUDA_VISIBLE_DEVICES"] = input_cuda_visible_devices
-        self._model = DefaultEmbedding._model
-        self._model_name = DefaultEmbedding._model_name
+        with DefaultEmbedding._model_lock:
+            directory = model_path or os.path.join(cache_dir or get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name))
+            if model_path is not None and not os.path.isfile(os.path.join(directory, "config.json")):
+                raise FileNotFoundError(f"Local embedding model is incomplete: {directory}")
+            if not os.path.isfile(os.path.join(directory, "config.json")):
+                directory = snapshot_download(repo_id=model_name, cache_dir=cache_dir, local_files_only=local_files_only)
+            model_key = (model_name, os.path.realpath(directory), query_instruction)
+            if DefaultEmbedding._model is None or DefaultEmbedding._model_key != model_key:
+                # A load failure propagates; never substitute a different model.
+                model = FlagModel(directory, query_instruction_for_retrieval=query_instruction, use_fp16=torch.cuda.is_available())
+                DefaultEmbedding._model = model
+                DefaultEmbedding._model_name = model_name
+                DefaultEmbedding._model_key = model_key
+            # Bind while holding the lock so concurrent model loads cannot cross-bind.
+            self._model = DefaultEmbedding._model
+            self._model_name = model_name
 
     def encode(self, texts: list[str]) -> tuple[np.ndarray | None, int]:
         batch_size = 16
         texts = [truncate(t, 2048) for t in texts]
-        token_count = 0
-        for t in texts:
-            token_count += num_tokens_from_string(t)
+        token_count = sum(num_tokens_from_string(t) for t in texts)
         batches = [self._model.encode(texts[i : i + batch_size], convert_to_numpy=True) for i in range(0, len(texts), batch_size)]
-        ress = np.concatenate(batches, axis=0) if len(batches) > 1 else (batches[0] if batches else None)
-        return ress, token_count
+        vectors = np.concatenate(batches, axis=0) if len(batches) > 1 else (batches[0] if batches else None)
+        return vectors, token_count
 
-    def encode_queries(self, text: str):
-        token_count = num_tokens_from_string(text)
-        return self._model.encode_queries([text], convert_to_numpy=False)[0][0].cpu().numpy(), token_count
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors = self._model.encode_queries([text], convert_to_numpy=True)
+        if vectors.ndim != 2 or vectors.shape[0] != 1:
+            raise ValueError("Embedding query must produce exactly one vector")
+        return vectors[0], num_tokens_from_string(text)
 
 
 class BuiltinEmbed(Base):
@@ -415,51 +411,6 @@ class OllamaEmbed(Base):
         except Exception as _e:
             log_exception(_e, res)
             raise Exception(f"Error: {res}")
-
-
-class FastEmbed(DefaultEmbedding):
-    _FACTORY_NAME = "FastEmbed"
-
-    def __init__(
-        self,
-        key: str | None = None,
-        model_name: str = "BAAI/bge-small-en-v1.5",
-        cache_dir: str | None = None,
-        threads: int | None = None,
-        **kwargs,
-    ):
-        if not settings.LIGHTEN:
-            with FastEmbed._model_lock:
-                from fastembed import TextEmbedding
-
-                if not DefaultEmbedding._model or model_name != DefaultEmbedding._model_name:
-                    try:
-                        DefaultEmbedding._model = TextEmbedding(model_name, cache_dir, threads, **kwargs)
-                        DefaultEmbedding._model_name = model_name
-                    except Exception:
-                        cache_dir = snapshot_download(
-                            repo_id="BAAI/bge-small-en-v1.5", local_dir=os.path.join(get_home_cache_dir(), re.sub(r"^[a-zA-Z0-9]+/", "", model_name)), local_dir_use_symlinks=False
-                        )
-                        DefaultEmbedding._model = TextEmbedding(model_name, cache_dir, threads, **kwargs)
-        self._model = DefaultEmbedding._model
-        self._model_name = model_name
-
-    def encode(self, texts: list):
-        # Using the internal tokenizer to encode the texts and get the total
-        # number of tokens
-        encodings = self._model.model.tokenizer.encode_batch(texts)
-        total_tokens = sum(len(e) for e in encodings)
-
-        embeddings = [e.tolist() for e in self._model.embed(texts, batch_size=16)]
-
-        return np.array(embeddings), total_tokens
-
-    def encode_queries(self, text: str):
-        # Using the internal tokenizer to encode the texts and get the total
-        # number of tokens
-        encoding = self._model.model.tokenizer.encode(text)
-        embedding = next(self._model.query_embed(text))
-        return np.array(embedding), len(encoding.ids)
 
 
 class XinferenceEmbed(Base):

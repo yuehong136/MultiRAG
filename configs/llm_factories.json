@@ -778,13 +778,6 @@
             ]
         },
         {
-            "name": "FastEmbed",
-            "logo": "",
-            "tags": "TEXT EMBEDDING",
-            "status": "1",
-            "llm": []
-        },
-        {
             "name": "Xinference",
             "logo": "",
             "tags": "LLM,TEXT EMBEDDING,TTS,SPEECH2TEXT,MODERATION,TEXT RE-RANK",
