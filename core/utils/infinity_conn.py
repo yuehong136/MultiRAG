@@ -162,11 +162,16 @@ class InfinityConnection(InfinityConnectionBase):
                         # Empty kb_id means use the index_name directly (metadata tables)
                         table_name = indexName if not kb_id else f"{indexName}_{kb_id}"
                         try:
-                            filter_cond = self.equivalent_condition_to_str(condition, db_instance.get_table(table_name))
-                            table_found = True
-                            break
-                        except Exception:
-                            pass
+                            table_instance = db_instance.get_table(table_name)
+                        except InfinityException as exc:
+                            if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                                raise
+                            continue
+                        # Only a confirmed absent table represents an unparsed
+                        # dataset. Schema/transport failures must reach callers.
+                        filter_cond = self.equivalent_condition_to_str(condition, table_instance)
+                        table_found = True
+                        break
                     if table_found:
                         break
                 if not table_found:
@@ -233,7 +238,9 @@ class InfinityConnection(InfinityConnectionBase):
                     table_name = indexName if not knowledgebaseId else f"{indexName}_{knowledgebaseId}"
                     try:
                         table_instance = db_instance.get_table(table_name)
-                    except Exception:
+                    except InfinityException as exc:
+                        if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                            raise
                         continue
                     table_list.append(table_name)
                     builder = table_instance.output(output)

@@ -4,6 +4,7 @@ import logging
 import os
 import socket
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -162,3 +163,56 @@ def test_fusion_weights_reverse_lexical_vector_ranking(infinity_scratch: tuple[A
     result = store.search(["id", "doc_id"], [], {"doc_id": ["doc"], "available_int": 1}, expressions, OrderByExpr(), 0, 10, ["chunks"], ["kb"])
     assert store.get_doc_ids(result) == (["visible", "semantic"] if weights == "0.9,0.1" else ["semantic", "visible"])
     assert set(reader.output(["id"]).to_result()[0]["id"]) == {"hidden", "visible", "foreign", "semantic"}
+
+
+@pytest.mark.parametrize("phase", ["table", "schema", "scatter", "query"])
+def test_search_rpc_failure_is_not_empty_with_independent_readback(infinity_scratch: tuple[Any, Any], monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    store, reader = infinity_scratch
+    source = reader.output(["id", "doc_id", "available_int", "q_2_vec"]).to_result()[0]
+    pool = store.connPool
+    database = pool.get_conn().get_database(store.dbName)
+    failure = ConnectionError(f"injected {phase} RPC transport failure")
+    lookups = 0
+    releases = []
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise failure
+
+    def get_table(name: str) -> Any:
+        nonlocal lookups
+        lookups += 1
+        if phase == "table" or (phase == "scatter" and lookups == 2):
+            raise failure
+        table = database.get_table(name)
+        if phase == "schema":
+            return SimpleNamespace(show_columns=fail)
+        if phase == "query":
+
+            def output(fields: list[str]) -> Any:
+                builder = table.output(fields)
+                monkeypatch.setattr(builder, "to_df", fail)
+                return builder
+
+            return SimpleNamespace(show_columns=table.show_columns, output=output)
+        return table
+
+    connection = SimpleNamespace(get_database=lambda _: SimpleNamespace(get_table=get_table))
+    monkeypatch.setattr(store, "connPool", SimpleNamespace(get_conn=lambda: connection, release_conn=releases.append))
+
+    with pytest.raises(ConnectionError) as caught:
+        store.search(["id"], [], {"doc_id": ["doc"], "available_int": 1}, [MatchDenseExpr("q_2_vec", [0.0, 1.0], "float", "cosine", 10)], OrderByExpr(), 0, 10, ["chunks"], ["kb"])
+
+    assert caught.value is failure
+    assert releases == [connection]
+    assert reader.output(["id", "doc_id", "available_int", "q_2_vec"]).to_result()[0] == source
+
+
+def test_dense_zero_matches_remain_successful_with_independent_readback(infinity_scratch: tuple[Any, Any]) -> None:
+    store, reader = infinity_scratch
+    source = reader.output(["id", "doc_id", "available_int"]).to_result()[0]
+
+    result = store.search(["id"], [], {"doc_id": ["absent"], "available_int": 1}, [MatchDenseExpr("q_2_vec", [0.0, 1.0], "float", "cosine", 10)], OrderByExpr(), 0, 10, ["chunks"], ["kb"])
+
+    assert store.get_total(result) == 0
+    assert store.get_doc_ids(result) == []
+    assert reader.output(["id", "doc_id", "available_int"]).to_result()[0] == source
