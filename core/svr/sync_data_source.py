@@ -61,6 +61,7 @@ task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
     {
+        FileSource.RSS,
         FileSource.WEBDAV,
         FileSource.AIRTABLE,
         FileSource.GOOGLE_DRIVE,
@@ -298,7 +299,7 @@ class GOOGLE_CLOUD_STORAGE(_BlobLikeBase):
 class RSS(SyncBase):
     SOURCE_NAME: str = FileSource.RSS
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         self.connector = RSSConnector(
             feed_url=self.conf["feed_url"],
             batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),

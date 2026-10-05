@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV、RSS（当前 feed 成员镜像）。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -135,6 +135,22 @@ WebDAV 的正文与 slim 清单共用 `remote_path` 递归范围、扩展名、�
 缩小路径范围、关闭图片或文件增长到大小上限之外会改变索引资格；开启删除同步前应确认。
 恢复旧文件但修改时间未进入增量窗口时，需重建以补回正文。服务器成功响应却静默隐藏
 对象的权限行为仍无法识别；需要在实际 Nextcloud/ownCloud 等部署中验证凭据和可见范围。
+
+RSS 开启 `sync_deleted_files` 后，以本次成功解析的单份 feed 的全部条目作为保留清单，
+正文和清单共用 `rss:md5(id 或 link 或 title 或 feed_url)`，不按正文增量时间过滤清单。
+HTTP 结果在本轮缓存，清单与正文使用同一份 feed。此模式镜像当前 feed 成员：**条目因
+窗口滚动而移出 feed，也会删除本地历史文档，即使原文章仍然存在**。开关默认关闭，
+首次导入与重建仍不核对删除；缩小 feed 范围前应确认此语义。
+
+RSS 不验证 `fh:complete`，不遍历 `next` 或 `prev-archive`，不能宣称覆盖网站全部文章。
+[RFC 5005](https://www.rfc-editor.org/info/rfc5005/) 区分完整、分页与归档 feed；普通分页
+本身不保证一致快照。标题回退会随改名变化，缺少身份的多条目可能共享回退 ID；本次保留
+既有身份算法，避免改写历史 ID。需要保留长期历史的订阅应关闭删除同步。
+
+网络失败或部分解析（即使已取得若干条目）会阻断删除。清单接口本身允许成功空结果，
+但当前 RSS driver 的连接验证要求至少一条记录：空 feed 会使本轮失败并保留文档，
+不会进入清单核对。全局协调器的成功空快照合同不变。若以后允许 RSS 空 feed 清理，
+需单独调整连接验证并验证“最后一条”场景，不能把解析失败当作空 feed。
 
 ## 文档身份与删除链
 

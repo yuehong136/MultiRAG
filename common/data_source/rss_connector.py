@@ -10,14 +10,14 @@ import feedparser
 import requests
 
 from common.data_source.config import INDEX_BATCH_SIZE, REQUEST_TIMEOUT_SECONDS, DocumentSource
-from common.data_source.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector
-from common.data_source.models import Document, SecondsSinceUnixEpoch
+from common.data_source.interfaces import GenerateDocumentsOutput, LoadConnector, PollConnector, SlimConnectorWithPermSync
+from common.data_source.models import Document, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 from common.ssrf_guard import assert_url_is_safe, pin_dns
 
 _MAX_REDIRECTS = 10
 
 
-class RSSConnector(LoadConnector, PollConnector):
+class RSSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     def __init__(self, feed_url: str, batch_size: int = INDEX_BATCH_SIZE) -> None:
         self.feed_url = feed_url.strip()
         self.batch_size = batch_size
@@ -39,6 +39,23 @@ class RSSConnector(LoadConnector, PollConnector):
 
     def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> GenerateDocumentsOutput:
         yield from self._load_entries(start=start, end=end)
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        """Mirror the current feed document, including entries outside the poll window.
+
+        Absence means removal from this feed, not necessarily deletion of the article.
+        """
+        feed = self._read_feed(require_entries=False)
+        if getattr(feed, "bozo", False):
+            raise ValueError("Cannot reconcile RSS deletions from a partially parsed feed")
+        batch: list[SlimDocument] = []
+        for entry in feed.entries:
+            batch.append(SlimDocument(id=self._build_document_id(entry)))
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
 
     def _load_entries(
         self,
@@ -121,7 +138,7 @@ class RSSConnector(LoadConnector, PollConnector):
     def _build_document(self, entry: Any, updated_at: datetime) -> Document:
         link = (entry.get("link") or "").strip()
         title = (entry.get("title") or "").strip()
-        stable_key = (entry.get("id") or link or title or self.feed_url).strip()
+        stable_key = self._resolve_stable_key(entry)
         semantic_identifier = title or link or stable_key
         content = self._build_content(entry, semantic_identifier)
         blob = content.encode("utf-8")
@@ -143,7 +160,7 @@ class RSSConnector(LoadConnector, PollConnector):
             metadata["categories"] = categories
 
         return Document(
-            id=f"rss:{hashlib.md5(stable_key.encode('utf-8')).hexdigest()}",
+            id=self._build_document_id(entry),
             source=DocumentSource.RSS,
             semantic_identifier=semantic_identifier,
             extension=".txt",
@@ -152,6 +169,15 @@ class RSSConnector(LoadConnector, PollConnector):
             size_bytes=len(blob),
             metadata=metadata,
         )
+
+    def _build_document_id(self, entry: Any) -> str:
+        stable_key = self._resolve_stable_key(entry)
+        return f"rss:{hashlib.md5(stable_key.encode('utf-8')).hexdigest()}"
+
+    def _resolve_stable_key(self, entry: Any) -> str:
+        link = (entry.get("link") or "").strip()
+        title = (entry.get("title") or "").strip()
+        return (entry.get("id") or link or title or self.feed_url).strip()
 
     def _build_content(self, entry: Any, semantic_identifier: str) -> str:
         parts = [semantic_identifier]
