@@ -162,7 +162,7 @@ async def test_es_postranking_preserves_mode_weights(mode_dealer: Dealer, mode: 
         return sparse_weight * lexical + dense_weight * dense, lexical, dense
 
     mode_dealer.rerank = Mock(side_effect=rank)
-    result = await mode_dealer.retrieval("keywords", "", object(), "tenant", ["kb"], 1, 10, similarity_threshold=0.0, vector_similarity_weight=0.3, rank_feature={}, search_mode=mode)
+    result = await mode_dealer.retrieval("keywords", "", object(), "tenant", ["kb"], 1, 10, similarity_threshold=0, vector_similarity_weight=0.3, rank_feature={}, search_mode=mode)
     assert mode_dealer.rerank.call_args.args[2:] == expected_weights
     assert result["chunks"][0]["chunk_id"] == expected_first
     assert result["total"] == 2
