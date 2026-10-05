@@ -173,6 +173,37 @@ PDF、DOCX、EXCEL和PPT四种文档格式都有相应的解析器。最复杂�
   - 带有PDF裁剪图像的表格，以及已经翻译成自然语言句子的内容。
   - 图中带标题和文字的图。
   
+### MinerU 输出目录
+
+MinerU 的 ZIP 解包后，解析器按原始文件名和净化文件名寻找 `*_content_list.json`。
+优先保留根目录原名、根目录净化名、净化名同名子目录的既有顺序，再递归查找精确文件名，
+优先使用当前 method/backend 目录（pipeline 的 `auto` / `ocr` / `txt`、hybrid 的
+`hybrid_<method>`、VLM 的 `vlm`）。目录识别不代表新增 backend 的远程调用支持。
+
+精确文件不存在时，支持以下回退：
+
+- 原始或净化文档名目录本身，以及它直属的当前 method/backend 目录内，接受
+  `content_list.json` 或改名前缀的 `*_content_list.json`；通用文件优先。
+- 其他目录内，带前缀文件必须以原始或净化文档名加 `_`、`-`、`.` 分隔符开头，
+  避免将 `report2`、`reporting` 误认为 `report`。
+- 根目录或根目录直属的当前 method/backend 目录中的通用 `content_list.json`，
+  仅当整个解包目录只有这一份内容结果时接受。其他文档目录下的通用文件不兜底读取。
+
+例如 `wrapper/report/vlm/content_list.json` 中的 `images/a.png`，解析到
+`wrapper/report/vlm/images/a.png`。`img_path`、`table_img_path` 和
+`equation_img_path` 均以实际选中 JSON 的父目录为基准，返回绝对路径。
+日志中的 `Reading output file` 记录该文件；同优先级存在多份结果时报
+`Ambiguous output files`，不依赖文件系统遍历顺序；找不到归属明确的结果时报
+`Missing output file`。
+
+本地回归会实际写入 JSON 和资源文件，并以模拟 HTTP ZIP 响应走真实保存、解包和读取路径：
+
+```bash
+uv run --no-sync pytest tests/unit/test_mineru_parser_output.py tests/unit/test_mineru_output_fallback.py -q
+```
+
+这些测试不调用远程 MinerU，也不验证其模型推理、真实服务版本或生产 PDF 解析质量。
+
 ### 简历
 
 简历是一种非常复杂的文档。由各种格式的非结构化文本构成的简历可以被解析为包含近百个字段的结构化数据。我们还没有启用解析器，因为在解析过程之后才会启动处理方法。

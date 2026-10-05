@@ -498,10 +498,6 @@ class MinerUParser(RAGFlowPdfParser):
         return poss
 
     def _read_output(self, output_dir: Path, file_stem: str, method: str = "auto", backend: str = "pipeline") -> list[dict[str, Any]]:
-        json_file = None
-        subdir = None
-        attempted = []
-
         # mirror MinerU's sanitize_filename to align ZIP naming
         def _sanitize_filename(name: str) -> str:
             sanitized = re.sub(r"[/\\\.]{2,}|[/\\]", "", name)
@@ -511,56 +507,65 @@ class MinerUParser(RAGFlowPdfParser):
             return sanitized or "unnamed"
 
         safe_stem = _sanitize_filename(file_stem)
-        content_names = (f"{file_stem}_content_list.json", f"{safe_stem}_content_list.json")
-        allowed_names = set(content_names)
-        self.logger.info(f"[MinerU] Expected output files: {', '.join(sorted(allowed_names))}")
+        stem_dirs = tuple(dict.fromkeys((file_stem, safe_stem)))
+        content_names = tuple(f"{stem}_content_list.json" for stem in stem_dirs)
+        parse_subdir = None
+        if backend.startswith("pipeline"):
+            parse_subdir = method
+        elif backend.startswith("hybrid"):
+            parse_subdir = f"hybrid_{method}"
+        elif backend.startswith("vlm"):
+            parse_subdir = "vlm"
+
+        self.logger.info(f"[MinerU] Expected output files: {', '.join(content_names)}")
         self.logger.info(f"[MinerU] Searching output in: {output_dir}")
+        preferred = list(dict.fromkeys([*(output_dir / name for name in content_names), output_dir / safe_stem / f"{safe_stem}_content_list.json"]))
+        json_file = next((path for path in preferred if path.is_file()), None)
+        if json_file is None:
+            # Use a constant glob: document names may contain literal [] or ?.
+            candidates = sorted(path for path in output_dir.rglob("*content_list.json") if path.is_file() and (path.name == "content_list.json" or path.name.endswith("_content_list.json")))
 
-        jf = output_dir / f"{file_stem}_content_list.json"
-        self.logger.info(f"[MinerU] Trying original path: {jf}")
-        attempted.append(jf)
-        if jf.exists():
-            subdir = output_dir
-            json_file = jf
-        else:
-            alt = output_dir / f"{safe_stem}_content_list.json"
-            self.logger.info(f"[MinerU] Trying sanitized filename: {alt}")
-            attempted.append(alt)
-            if alt.exists():
-                subdir = output_dir
-                json_file = alt
-            else:
-                nested_alt = output_dir / safe_stem / f"{safe_stem}_content_list.json"
-                self.logger.info(f"[MinerU] Trying sanitized nested path: {nested_alt}")
-                attempted.append(nested_alt)
-                if nested_alt.exists():
-                    subdir = nested_alt.parent
-                    json_file = nested_alt
+            def priority(candidate: Path) -> tuple[int, int] | None:
+                parent = candidate.relative_to(output_dir).parent
+                in_method = parse_subdir is not None and parent.name == parse_subdir
+                # A distant ancestor is not enough: report/other/auto belongs
+                # to another document, even though "report" occurs in the path.
+                in_document = parent.name in stem_dirs or (in_method and parent.parent.name in stem_dirs)
+                if candidate.name in content_names:
+                    return (0 if in_method else 1, content_names.index(candidate.name))
+                if in_document:
+                    return (2 if in_method else 3, 0 if candidate.name == "content_list.json" else 1)
+                if candidate.name != "content_list.json":
+                    prefix = candidate.name.removesuffix("_content_list.json")
+                    # Require a name boundary; report2/reporting are not report.
+                    if any(prefix.startswith(f"{stem}{separator}") for stem in stem_dirs for separator in ("_", "-", ".")):
+                        return (4 if in_method else 5, 0)
+                # After ZIP root stripping, the document directory may be gone.
+                # Only accept a generic file in root/method when it is the sole
+                # result. Arbitrary recursive generic files have no identity.
+                elif len(candidates) == 1 and (parent == Path(".") or (in_method and parent.parent == Path("."))):
+                    return (6, 0)
+                return None
 
-        if not json_file:
-            parse_subdir = None
-            if backend.startswith("pipeline"):
-                parse_subdir = method
-            elif backend.startswith("hybrid"):
-                parse_subdir = f"hybrid_{method}"
-            elif backend.startswith("vlm"):
-                parse_subdir = "vlm"
+            ranked: dict[tuple[int, int], list[Path]] = {}
+            for candidate in candidates:
+                rank = priority(candidate)
+                if rank is None:
+                    self.logger.info(f"[MinerU] Skip unrelated fallback candidate: {candidate}")
+                    continue
+                ranked.setdefault(rank, []).append(candidate)
+            if ranked:
+                matches = ranked[min(ranked)]
+                if len(matches) > 1:
+                    raise ValueError(f"[MinerU] Ambiguous output files for {file_stem!r}: {', '.join(str(path) for path in matches)}")
+                json_file = matches[0]
 
-            if parse_subdir:
-                for content_name in content_names:
-                    for candidate in output_dir.glob(f"**/{parse_subdir}/{content_name}"):
-                        self.logger.info(f"[MinerU] Trying parse-method path: {candidate}")
-                        attempted.append(candidate)
-                        if candidate.exists():
-                            subdir = candidate.parent
-                            json_file = candidate
-                            break
-                    if json_file:
-                        break
+        if json_file is None:
+            raise FileNotFoundError(f"[MinerU] Missing output file for {file_stem!r}, tried: {', '.join(str(path) for path in preferred)}; searched recursively in {output_dir}")
 
-        if not json_file:
-            raise FileNotFoundError(f"[MinerU] Missing output file, tried: {', '.join(str(p) for p in attempted)}")
-
+        # All resource paths are relative to the actual selected JSON file.
+        subdir = json_file.parent
+        self.logger.info(f"[MinerU] Reading output file: {json_file}")
         with open(json_file, encoding="utf-8") as f:
             data = json.load(f)
 
