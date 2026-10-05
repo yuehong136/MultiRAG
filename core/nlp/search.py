@@ -464,7 +464,6 @@ class Dealer:
             # 若召回为 0 且使用嵌入，放宽阈值重试一次
             if emb_mdl and total == 0:
                 match_text_low, _ = self.qryr.question(qst, min_match=0.1)
-                filters.pop("doc_ids", None)
                 match_dense.extra_options["similarity"] = 0.17
                 res = await thread_pool_exec(
                     self.dataStore.search,

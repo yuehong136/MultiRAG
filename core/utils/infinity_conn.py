@@ -149,7 +149,6 @@ class InfinityConnection(InfinityConnectionBase):
 
             # Prepare expressions common to all tables
             filter_cond = None
-            filter_fulltext = ""
             if condition:
                 # For metadata table (ragflow_doc_meta_), keep kb_id filter
                 # For chunk tables, remove kb_id filter as they use table separation per KB
@@ -179,10 +178,6 @@ class InfinityConnection(InfinityConnectionBase):
                     if filter_cond and "filter" not in matchExpr.extra_options:
                         matchExpr.extra_options.update({"filter": filter_cond})
                     matchExpr.fields = [self.convert_matching_field(field) for field in matchExpr.fields]
-                    fields = ",".join(matchExpr.fields)
-                    filter_fulltext = f"filter_fulltext('{fields}', '{matchExpr.matching_text}')"
-                    if filter_cond:
-                        filter_fulltext = f"({filter_cond}) AND {filter_fulltext}"
                     minimum_should_match = matchExpr.extra_options.get("minimum_should_match", 0.0)
                     if isinstance(minimum_should_match, float):
                         str_minimum_should_match = str(int(minimum_should_match * 100)) + "%"
@@ -204,8 +199,10 @@ class InfinityConnection(InfinityConnectionBase):
                             matchExpr.extra_options[k] = str(v)
                     self.logger.debug(f"INFINITY search MatchTextExpr: {json.dumps(matchExpr.__dict__)}")
                 elif isinstance(matchExpr, MatchDenseExpr):
-                    if filter_fulltext and "filter" not in matchExpr.extra_options:
-                        matchExpr.extra_options.update({"filter": filter_fulltext})
+                    # Dense candidates share scalar/document constraints, but
+                    # must not require a lexical hit in hybrid/fusion searches.
+                    if filter_cond and "filter" not in matchExpr.extra_options:
+                        matchExpr.extra_options.update({"filter": filter_cond})
                     for k, v in matchExpr.extra_options.items():
                         if not isinstance(v, str):
                             matchExpr.extra_options[k] = str(v)

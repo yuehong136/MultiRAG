@@ -13,7 +13,7 @@ from infinity.common import ConflictType, NetworkAddress
 from infinity.index import IndexInfo, IndexType
 
 from common.config_utils import CONFIGS
-from common.doc_store.doc_store_base import MatchTextExpr, OrderByExpr
+from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchTextExpr, OrderByExpr
 from core.utils.infinity_conn import InfinityConnection
 
 
@@ -53,6 +53,7 @@ def infinity_scratch() -> Iterator[tuple[Any, Any]]:
                 "doc_id": {"type": "varchar"},
                 "available_int": {"type": "integer"},
                 "content": {"type": "varchar"},
+                "q_2_vec": {"type": "vector,2,float"},
                 "pagerank_fea": {"type": "float", "default": 0.0},
                 "marker": {"type": "varchar", "default": "original"},
             },
@@ -61,9 +62,9 @@ def infinity_scratch() -> Iterator[tuple[Any, Any]]:
         table.create_index("ft_content_rag_coarse", IndexInfo("content", IndexType.FullText, {"ANALYZER": "rag"}), ConflictType.Error)
         table.insert(
             [
-                {"id": "hidden", "doc_id": "doc", "available_int": 0, "content": "availability regression"},
-                {"id": "visible", "doc_id": "doc", "available_int": 1, "content": "availability regression"},
-                {"id": "foreign", "doc_id": "other", "available_int": 0, "content": "availability regression"},
+                {"id": "hidden", "doc_id": "doc", "available_int": 0, "content": "availability regression", "q_2_vec": [0.0, 1.0]},
+                {"id": "visible", "doc_id": "doc", "available_int": 1, "content": "availability regression", "q_2_vec": [0.0, 1.0]},
+                {"id": "foreign", "doc_id": "other", "available_int": 0, "content": "availability regression", "q_2_vec": [0.0, 1.0]},
             ]
         )
         cls = next(cell.cell_contents for cell in InfinityConnection.__closure__ if isinstance(cell.cell_contents, type))
@@ -107,3 +108,22 @@ def test_delete_only_matching_disabled_rows_with_independent_readback(infinity_s
     store, table = infinity_scratch
     assert store.delete({"doc_id": ["doc"], "available_int": 0}, "chunks", "kb") == 1
     assert set(table.output(["id"]).to_result()[0]["id"]) == {"visible", "foreign"}
+
+
+@pytest.mark.parametrize("fusion", [False, True])
+def test_vector_scope_does_not_require_a_lexical_match(infinity_scratch: tuple[Any, Any], fusion: bool) -> None:
+    store, reader = infinity_scratch
+    writer = store.connPool.get_conn().get_database(store.dbName).get_table("chunks_kb")
+    writer.insert(
+        [
+            {"id": "semantic", "doc_id": "doc", "available_int": 1, "content": "different words", "q_2_vec": [0.8, 0.6]},
+            {"id": "outside", "doc_id": "other", "available_int": 1, "content": "availability regression", "q_2_vec": [1.0, 0.0]},
+            {"id": "disabled-vector", "doc_id": "doc", "available_int": 0, "content": "availability regression", "q_2_vec": [1.0, 0.0]},
+        ]
+    )
+    dense = MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine", 10, {"similarity": 0.75})
+    expressions = [MatchTextExpr(["content_ltks"], "regression", 10), dense, FusionExpr("weighted_sum", 10, {"weights": "0.5,0.5"})] if fusion else [dense]
+    result = store.search(["id", "doc_id", "available_int"], [], {"doc_id": ["doc"], "available_int": 1}, expressions, OrderByExpr(), 0, 10, ["chunks"], ["kb"])
+    assert set(store.get_doc_ids(result)) == ({"semantic", "visible"} if fusion else {"semantic"})
+    raw = reader.output(["id", "doc_id", "available_int"]).to_result()[0]
+    assert set(raw["id"]) == {"hidden", "visible", "foreign", "semantic", "outside", "disabled-vector"}
