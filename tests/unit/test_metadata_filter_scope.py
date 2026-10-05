@@ -53,34 +53,34 @@ def test_missing_field_is_no_match_even_for_negative_or_empty_operators(operator
 
 @pytest.mark.parametrize("method", ["manual", "auto", "semi_auto"])
 @pytest.mark.parametrize(
-    ("conditions", "logic", "base", "expected"),
+    ("conditions", "logic", "base", "expected", "semi_expected"),
     [
-        ([{"key": "version", "op": "is", "value": "v2"}], "and", ["new", "old", "unknown"], {"new"}),
-        ([{"key": "version", "op": "is", "value": "v2"}], "and", ["old"], {"-999"}),
-        ([{"key": "version", "op": "is", "value": "absent"}], "and", ["old"], {"-999"}),
-        ([{"key": "missing", "op": "is", "value": "x"}, {"key": "status", "op": "is", "value": "ready"}], "and", None, {"-999"}),
-        ([{"key": "missing", "op": "is", "value": "x"}, {"key": "status", "op": "is", "value": "ready"}], "or", ["new", "draft"], {"new"}),
-        ([{"key": "version", "op": "is", "value": "v2"}], "and", None, {"new", "draft"}),
-        ([{"key": "version", "op": "is", "value": "v2"}], "and", [], {"new", "draft"}),
-        ([{"key": "version", "op": "is", "value": "absent"}], "and", None, {"-999"}),
-        ([{"key": "version", "op": "is", "value": "absent"}], "and", [], {"-999"}),
+        ([{"key": "version", "op": "is", "value": "v2"}], "and", ["new", "old", "unknown"], {"new"}, None),
+        ([{"key": "version", "op": "is", "value": "v2"}], "and", ["old"], {"-999"}, None),
+        ([{"key": "version", "op": "is", "value": "absent"}], "and", ["old"], {"-999"}, None),
+        ([{"key": "missing", "op": "is", "value": "x"}, {"key": "status", "op": "is", "value": "ready"}], "and", None, {"-999"}, None),
+        ([{"key": "missing", "op": "is", "value": "x"}, {"key": "status", "op": "is", "value": "ready"}], "or", ["new", "draft"], {"new"}, {"-999"}),
+        ([{"key": "version", "op": "is", "value": "v2"}], "and", None, {"new", "draft"}, None),
+        ([{"key": "version", "op": "is", "value": "v2"}], "and", [], {"new", "draft"}, None),
+        ([{"key": "version", "op": "is", "value": "absent"}], "and", None, {"-999"}, None),
+        ([{"key": "version", "op": "is", "value": "absent"}], "and", [], {"-999"}, None),
     ],
 )
 async def test_conditions_intersect_base_in_every_mode(
-    metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, method: str, conditions: list[dict[str, Any]], logic: str, base: list[str] | None, expected: set[str]
+    metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, method: str, conditions: list[dict[str, Any]], logic: str, base: list[str] | None, expected: set[str], semi_expected: set[str] | None
 ) -> None:
     config = {"method": method, "manual": conditions, "semi_auto": ["version", "status"], "logic": logic}
     generated = AsyncMock(return_value={"conditions": conditions, "logic": logic})
     monkeypatch.setattr("core.prompts.generator.gen_meta_filter", generated)
     original = deepcopy((config, metas, base))
-    assert set(await apply_meta_data_filter(config, metas, "question", base_doc_ids=base) or []) == expected
+    assert set(await apply_meta_data_filter(config, metas, "question", base_doc_ids=base) or []) == (semi_expected if method == "semi_auto" and semi_expected is not None else expected)
     assert (config, metas, base) == original
     if method == "manual":
         generated.assert_not_called()
 
 
 @pytest.mark.parametrize("base", [None, [], ["new", "old", "new", "without-metadata"]])
-@pytest.mark.parametrize("config", [None, {}, {"method": "manual", "manual": []}, {"method": "unknown"}, {"method": "semi_auto", "semi_auto": []}, {"method": "semi_auto", "semi_auto": ["missing"]}])
+@pytest.mark.parametrize("config", [None, {}, {"method": "manual", "manual": []}, {"method": "unknown"}])
 async def test_no_filter_preserves_base(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, config: dict[str, Any] | None, base: list[str] | None) -> None:
     generated = AsyncMock()
     monkeypatch.setattr("core.prompts.generator.gen_meta_filter", generated)
@@ -88,11 +88,10 @@ async def test_no_filter_preserves_base(metas: dict[str, Any], monkeypatch: pyte
     generated.assert_not_called()
 
 
-@pytest.mark.parametrize("method", ["auto", "semi_auto"])
 @pytest.mark.parametrize("base", [None, [], ["old", "without-metadata"]])
-async def test_no_generated_conditions_preserve_fallback(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, method: str, base: list[str] | None) -> None:
+async def test_auto_no_generated_conditions_preserve_fallback(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, base: list[str] | None) -> None:
     monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": []}))
-    assert await apply_meta_data_filter({"method": method, "semi_auto": ["version"]}, metas, "", base_doc_ids=base) == (base or None)
+    assert await apply_meta_data_filter({"method": "auto"}, metas, "", base_doc_ids=base) == (base or None)
 
 
 async def test_semi_auto_does_not_match_unselected_keys(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:

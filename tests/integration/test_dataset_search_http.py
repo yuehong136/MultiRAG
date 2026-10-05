@@ -219,15 +219,16 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
     both = [env["doc"], env["second_doc"]]
     payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "search_mode": {"type": mode}, "similarity_threshold": 0}
 
-    def check(documents: list[str] | None, conditions: list[dict[str, Any]], logic: str, expected: set[str]) -> None:
+    def check(documents: list[str] | None, conditions: list[dict[str, Any]], logic: str, expected: set[str], semi_expected: set[str] | None = None) -> None:
         for method in ("manual", "auto", "semi_auto"):
             monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": conditions, "logic": logic}))
             config = {"method": method, "manual": conditions, "logic": logic, "semi_auto": ["category", "version"]}
             body = request(env, "POST", "/search", json={**payload, "doc_ids": documents, "meta_data_filter": config}).json()
             assert body["code"] == 0, body
-            assert {row["doc_id"] for row in body["data"]["chunks"]} == expected, (method, body)
-            assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == expected, body
-            assert body["data"]["total"] == len(expected), body
+            mode_expected = semi_expected if method == "semi_auto" and semi_expected is not None else expected
+            assert {row["doc_id"] for row in body["data"]["chunks"]} == mode_expected, (method, body)
+            assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == mode_expected, body
+            assert body["data"]["total"] == len(mode_expected), body
 
         legacy = {"conditions": [{"name": c["key"], "comparison_operator": c["op"], "value": c["value"]} for c in conditions], "logic": logic}
         response = requests.post(
@@ -246,7 +247,7 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
     check([env["doc"]], [current], "and", set())
     check(both, [absent], "and", set())
     check(both, [missing, ready], "and", set())
-    check(both, [missing, current], "or", {env["second_doc"]})
+    check(both, [missing, current], "or", {env["second_doc"]}, semi_expected=set())
     check(None, [current], "and", {env["second_doc"]})
     check([], [current], "and", {env["second_doc"]})
 
@@ -584,3 +585,71 @@ def test_http_vector_schema_failure_is_business_error(search_api: dict[str, Any]
     assert embedded == ["availability"]
     raw = env["reader"].query(env["collections"]["dataset"], filter="pk in " + json.dumps([row["id"] for row in env["rows"]["dataset"]]), output_fields=["pk", "doc_id"], consistency_level="Strong")
     assert {row["pk"] for row in raw} == {row["id"] for row in env["rows"]["dataset"]}
+
+
+def test_http_semi_auto_field_selection_and_deletion_races(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+    documents = [env["doc"], env["second_doc"]]
+    payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "similarity_threshold": 0, "search_mode": {"type": "dense"}}
+    conditions = {"conditions": [{"key": "category", "op": "is", "value": "match"}]}
+    generate = AsyncMock(return_value=conditions)
+    monkeypatch.setattr("core.prompts.generator.gen_meta_filter", generate)
+
+    def run(config: dict[str, Any], scope: list[str] | None = None) -> dict[str, Any]:
+        response = request(env, "POST", "/search", json={**payload, "meta_data_filter": config, "doc_ids": scope})
+        body = response.json()
+        assert response.status_code == 200 and body["code"] == 0, body
+        return body["data"]
+
+    def zero(body: dict[str, Any]) -> None:
+        assert body["total"] == 0 and body["chunks"] == [] and body["doc_aggs"] == [], body
+
+    for scope in (None, [env["doc"]]):
+        for selection in ([], ["retired_key"], ["category", "retired_key"], [{"key": "retired_key", "op": "is"}]):
+            zero(run({"method": "semi_auto", "semi_auto": selection}, scope))
+    generate.assert_not_called()
+    assert {row["doc_id"] for row in run({"method": "semi_auto", "semi_auto": ["category"]})["chunks"]} == set(documents)
+    monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": []}))
+    zero(run({"method": "semi_auto", "semi_auto": ["category"]}))
+    for no_filter in ({}, {"method": "manual", "manual": []}, {"method": "auto"}):
+        assert {row["doc_id"] for row in run(no_filter)["chunks"]} == set(documents)
+
+    # An independent HTTP directory read succeeds; a subsequent committed delete
+    # makes that selection stale before the retrieval POST, like the UI race.
+    response = requests.get(
+        env["base"] + "/api/v1/datasets/metadata/keys", params={"dataset_ids": ",".join([env["dataset"], env["second"]])}, headers={"Authorization": "Bearer " + env["jwt"]}, timeout=30
+    )
+    assert response.status_code == 200 and response.json()["code"] == 0 and "category" in response.json()["data"], response.text
+
+    def replace_metadata(fields: dict[str, Any]) -> None:
+        with Session(env["engine"]) as db:
+            for doc in documents:
+                metadata = db.get(DocumentMetadata, doc)
+                assert metadata is not None
+                metadata.meta_fields = fields.copy()
+            db.commit()
+        with Session(env["engine"]) as reader:
+            assert all(reader.get(DocumentMetadata, doc).meta_fields == fields for doc in documents)
+
+    replace_metadata({"stable": "match"})
+    generate.reset_mock()
+    monkeypatch.setattr("core.prompts.generator.gen_meta_filter", generate)
+    zero(run({"method": "semi_auto", "semi_auto": ["category"]}))
+    zero(run({"method": "semi_auto", "semi_auto": ["stable", "category"]}))
+    generate.assert_not_called()
+
+    # Also commit a deletion while the request awaits model inference. The
+    # production service must reload metadata after that await before matching.
+    replace_metadata({"stable": "match", "category": "match"})
+
+    async def delete_during_generation(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert "category" in args[1]
+        await asyncio.to_thread(replace_metadata, {"stable": "match"})
+        return conditions
+
+    raced = AsyncMock(side_effect=delete_during_generation)
+    monkeypatch.setattr("core.prompts.generator.gen_meta_filter", raced)
+    zero(run({"method": "semi_auto", "semi_auto": ["category"]}))
+    raced.assert_awaited_once()
+    raw = env["reader"].query(env["collections"]["dataset"], filter="available_int == 1", output_fields=["doc_id"], consistency_level="Strong")
+    assert {row["doc_id"] for row in raw} == {env["doc"]}

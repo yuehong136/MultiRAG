@@ -39,8 +39,11 @@ chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files 
 `search_id` 指定有权访问的搜索应用时沿用其元数据配置，否则使用请求中的
 `meta_data_filter`。非空 `doc_ids` 与元数据命中求交；`doc_ids=[]` 沿用未限定文档的语义。
 manual 及 auto/semi_auto 生成的非空条件均保留 AND/OR 空集，条件无匹配时传递空结果哨兵，
-不放宽为全文检索。未设置过滤、manual 零条件或生成零条件时沿用原有文档范围与回退；
-semi_auto 只使用选中的已有字段。`is/not is/>=/<=/!=` 与 `=/≠/≥/≤/≠` 等价，
+不放宽为全文检索。未设置过滤、manual 零条件或 auto 生成零条件时沿用原有文档范围与回退。
+semi_auto 的全部选中字段必须存在且有可匹配文档值；空选择、任一未知/已删除字段、
+空候选、空推断条件或推断使用未选中字段均返回确定零命中，不忽略无效字段后扩大范围。
+REST 检索在推断后重新读取元数据并按该快照匹配，覆盖目录读取或模型等待期间的字段删除。
+`is/not is/>=/<=/!=` 与 `=/≠/≥/≤/≠` 等价，
 缺字段视为无匹配（包括否定及 empty 条件）。独立 SDK `/retrieval` 的
 `document_ids` 和非空 `metadata_condition.conditions` 也求交，保留原请求及响应字段。
 `use_kg` 的图谱聚合增强为库级输出：与非空 `doc_ids`、非空 `meta_data_filter` 或

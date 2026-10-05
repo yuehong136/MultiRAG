@@ -15,7 +15,7 @@
 #
 import ast
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any
 
@@ -143,6 +143,28 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
     return list(doc_ids or [])
 
 
+def _semi_auto_candidates(meta_data_filter: dict[str, Any], metas: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]] | None:
+    """Validate the complete selected field set against available document values."""
+    selection = meta_data_filter.get("semi_auto")
+    if not isinstance(selection, list) or not selection:
+        return None
+    selected = {}
+    constraints = {}
+    for item in selection:
+        key = item if isinstance(item, str) else item.get("key") if isinstance(item, dict) else None
+        if not isinstance(key, str) or not key.strip():
+            return None
+        values = metas.get(key)
+        if not isinstance(values, dict) or not any(isinstance(documents, list) and documents for documents in values.values()):
+            return None
+        selected[key] = values
+        if isinstance(item, dict) and item.get("op"):
+            if not isinstance(item["op"], str):
+                return None
+            constraints[key] = item["op"]
+    return selected, constraints
+
+
 async def apply_meta_data_filter(
     meta_data_filter: dict[str, Any] | None,
     metas: dict[str, Any],
@@ -150,6 +172,7 @@ async def apply_meta_data_filter(
     chat_mdl: Any = None,
     base_doc_ids: list[str] | None = None,
     manual_value_resolver: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    metadata_refresher: Callable[[], Awaitable[dict[str, Any]]] | None = None,
 ) -> list[str] | None:
     """
     Intersect metadata matches with a nonempty base document selection.
@@ -162,8 +185,10 @@ async def apply_meta_data_filter(
     Returns:
         Matching doc_ids, or ["-999"] when conditions yield no matches. An empty
         base selection means unrestricted retrieval, as it does without filters.
-        No conditions preserve the base selection; generated empty conditions
-        without a base selection retain the existing None fallback.
+        Explicit no-filter and manual empty conditions preserve the selection;
+        auto empty conditions retain the existing fallback. Semi-auto requires
+        usable selected fields and generated predicates; stale/empty selections
+        return the no-match sentinel. A refresher rechecks metadata after LLM IO.
     """
     from core.prompts.generator import gen_meta_filter  # move from the top of the file to avoid circular import
 
@@ -178,24 +203,20 @@ async def apply_meta_data_filter(
     if method == "auto":
         filters = await gen_meta_filter(chat_mdl, metas, question)
     elif method == "semi_auto":
-        selected_keys = []
-        constraints = {}
-        for item in meta_data_filter.get("semi_auto", []):
-            if isinstance(item, str):
-                selected_keys.append(item)
-            elif isinstance(item, dict):
-                key = item.get("key")
-                if not key:
-                    continue
-                op = item.get("op")
-                selected_keys.append(key)
-                if op:
-                    constraints[key] = op
-
-        filter_metas = {key: metas[key] for key in selected_keys if key in metas}
-        if not filter_metas:
-            return doc_ids
+        candidates = _semi_auto_candidates(meta_data_filter, metas)
+        if candidates is None:
+            return ["-999"]
+        filter_metas, constraints = candidates
         filters = await gen_meta_filter(chat_mdl, filter_metas, question, constraints=constraints)
+        # The selected directory/values may change while model generation awaits.
+        # Use fresh values for matching, never drop a now-missing selected key.
+        if metadata_refresher is not None:
+            candidates = _semi_auto_candidates(meta_data_filter, await metadata_refresher())
+            if candidates is None:
+                return ["-999"]
+            filter_metas, _ = candidates
+        if not filters["conditions"] or any(condition.get("key") not in filter_metas for condition in filters["conditions"]):
+            return ["-999"]
     elif method == "manual":
         manual_filters = meta_data_filter.get("manual", [])
         if manual_value_resolver:
