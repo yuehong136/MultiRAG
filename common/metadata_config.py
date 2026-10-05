@@ -79,17 +79,11 @@ class MetadataConfig(BaseModel):
     metadata: list[MetadataField] | dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     built_in_metadata: list[MetadataField] | None = Field(default=None, exclude_if=lambda value: value is None)
     enabled: bool | None = Field(default=None, exclude_if=lambda value: value is None)
-    fields: list[MetadataField] | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_config(self) -> "MetadataConfig":
         if any(getattr(self, key) is None for key in self.model_fields_set):
             raise ValueError("metadata configuration fields cannot be null; use [] to clear")
-        if self.metadata is not None and self.fields is not None:
-            canonical = [canonical_field(field.model_dump(exclude_unset=True)) for field in self.fields]
-            other = [canonical_field(field.model_dump(exclude_unset=True)) for field in self.metadata] if isinstance(self.metadata, list) else self.metadata
-            if canonical != other:
-                raise ValueError("metadata and fields conflict")
         if isinstance(self.metadata, dict) and self.metadata and (self.metadata.get("type", "object") != "object" or not isinstance(self.metadata.get("properties"), dict)):
             raise ValueError("metadata schema must have object properties")
         return self
@@ -105,23 +99,14 @@ def canonical_field(field: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_metadata_config(stored: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    """Patch explicit fields or the switch; legacy field envelopes keep defaults."""
+    """Patch only submitted templates and the switch; omissions preserve data."""
     MetadataConfig.model_validate(config)
     result = deepcopy(stored)
-    canonical = "metadata" in config or "built_in_metadata" in config
-    if canonical:
-        for key in ("metadata", "built_in_metadata"):
-            if key in config:
-                result[key] = deepcopy(config[key])
-        if "fields" in config and "metadata" not in config:
-            result["metadata"] = deepcopy(config["fields"])
-        if "enabled" in config:
-            result["enable_metadata"] = config["enabled"]
-    elif "enabled" in config and "fields" not in config:
+    for key in ("metadata", "built_in_metadata"):
+        if key in config:
+            result[key] = deepcopy(config[key])
+    if "enabled" in config:
         result["enable_metadata"] = config["enabled"]
-    else:
-        result["metadata"] = deepcopy(config.get("fields", []))
-        result["enable_metadata"] = config.get("enabled", True)
     return result
 
 

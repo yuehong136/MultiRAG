@@ -306,17 +306,21 @@ def test_index_routes_normalize_legal_type_queries(client: TestClient, monkeypat
     assert seen == [f"{operation}:{index_type.lower()}" for operation in ["run", "trace", "delete"]]
 
 
-def test_metadata_config_and_legacy_auto_metadata_share_the_service(client, monkeypatch):
-    """新路径与 deprecated 旧路径必须同源，否则前端迁移期两边会漂移。"""
-    calls: list[str] = []
+def test_retired_auto_metadata_routes_are_absent_and_do_not_call_services(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("retired route must not dispatch to a metadata service")
 
-    monkeypatch.setattr(dataset_api_service, "get_auto_metadata", lambda s, t, d, **kwargs: calls.append(d) or (True, {"enabled": True, "fields": []}))
-
-    new = client.get("/api/v1/datasets/kb1/metadata/config")
-    legacy = client.get("/api/v1/datasets/kb1/auto_metadata")
-
-    assert new.json()["data"] == legacy.json()["data"] == {"enabled": True, "fields": []}
-    assert calls == ["kb1", "kb1"]
+    monkeypatch.setattr(dataset_api_service, "get_auto_metadata", unexpected)
+    monkeypatch.setattr(dataset_api_service, "update_auto_metadata", unexpected)
+    path = "/api/v1/datasets/kb1/auto_metadata"
+    assert client.get(path).status_code == 404
+    assert client.put(path, json={"enabled": True, "fields": []}).status_code == 404
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "/api/v1/datasets/{dataset_id}/auto_metadata" not in paths
+    assert {"get", "put"} <= paths["/api/v1/datasets/{dataset_id}/metadata/config"].keys()
+    schema = paths["/api/v1/datasets/{dataset_id}/metadata/config"]["put"]["requestBody"]["content"]["application/json"]["schema"]
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert "fields" not in schemas[schema["$ref"].rsplit("/", 1)[1]]["properties"]
 
 
 def test_rename_tag_rejects_blank_names(client):

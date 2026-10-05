@@ -23,7 +23,7 @@ def test_management_real_auth_rejection(management_api: dict[str, Any], route: s
         actual = ".".join([header, payload_segment, signature])
     suffix = f"/datasets/{env['datasets'][0]}/ingestions" if route == "ingestions" else metadata_path(env, route == "document-put")
     method = "PUT" if route.endswith("put") else "GET"
-    payload = {"metadata": FIELDS} if route == "document-put" else {"fields": FIELDS}
+    payload = {"metadata": FIELDS}
     response = request_api(env, method, suffix, credential=actual, payload=payload if method == "PUT" else None)
     message = "`Authorization` can't be empty" if credential is None else "Authentication error: invalid credentials!"
     assert response.status_code == 401 and response.json() == {"retcode": 109, "retmsg": message, "data": False}
@@ -35,15 +35,19 @@ def test_dataset_metadata_real_roundtrip_and_empty_fields(management_api: dict[s
     env = management_api
     key, path = env[kind][0], metadata_path(env)
     before = sql_state(env)
-    assert request_api(env, "GET", path, credential=key).json() == {"code": 0, "data": {"enabled": False, "fields": [], "metadata": [], "built_in_metadata": []}}
-    for config in [{"enabled": True, "fields": FIELDS}, {"enabled": False, "fields": []}, {}]:
-        expected = {"enabled": config.get("enabled", True), "fields": config.get("fields", [])}
+    assert request_api(env, "GET", path, credential=key).json() == {"code": 0, "data": {"enabled": False, "metadata": [], "built_in_metadata": []}}
+    stored = dict(PARSER)
+    for config in [{"enabled": True, "metadata": FIELDS}, {}, {"enabled": False}, {"metadata": []}]:
+        stored.update({key: value for key, value in config.items() if key != "enabled"})
+        if "enabled" in config:
+            stored["enable_metadata"] = config["enabled"]
+        expected = {"enabled": stored["enable_metadata"], "metadata": stored["metadata"], "built_in_metadata": []}
         response = request_api(env, "PUT", path, credential=key, payload=config)
         assert response.status_code == 200 and response.json() == {"code": 0, "data": expected}
-        assert request_api(env, "GET", path, credential=key).json() == {"code": 0, "data": {**expected, "metadata": expected["fields"], "built_in_metadata": []}}
+        assert request_api(env, "GET", path, credential=key).json() == response.json()
         after = sql_state(env)
         target = after[Knowledgebase.__tablename__][env["datasets"][0]]
-        assert target["parser_config"] == {**PARSER, "metadata": expected["fields"], "enable_metadata": expected["enabled"]}
+        assert target["parser_config"] == stored
         for dataset in env["datasets"][1:]:
             assert after[Knowledgebase.__tablename__][dataset] == before[Knowledgebase.__tablename__][dataset]
         assert after[Document.__tablename__] == before[Document.__tablename__] and after[PipelineOperationLog.__tablename__] == before[PipelineOperationLog.__tablename__]
@@ -72,11 +76,11 @@ def test_metadata_real_invalid_ownership_and_body(management_api: dict[str, Any]
     key, dataset, doc = env["keys"][0], env["datasets"][0], env["documents"][0]
     for method, path, credential, payload, code in [
         ("GET", "/datasets/missing/metadata/config", key, None, 102),
-        ("PUT", "/datasets/missing/metadata/config", key, {"fields": []}, 102),
+        ("PUT", "/datasets/missing/metadata/config", key, {"metadata": []}, 102),
         ("GET", metadata_path(env), env["jwt"][1], None, 102),
-        ("PUT", metadata_path(env), env["keys"][1], {"fields": FIELDS}, 102),
+        ("PUT", metadata_path(env), env["keys"][1], {"metadata": FIELDS}, 102),
         ("GET", metadata_path(env), env["keys"][2], None, 102),
-        ("PUT", metadata_path(env), env["jwt"][2], {"fields": FIELDS}, 102),
+        ("PUT", metadata_path(env), env["jwt"][2], {"metadata": FIELDS}, 102),
         ("PUT", f"/datasets/missing/documents/{doc}/metadata/config", key, {"metadata": FIELDS}, 102),
         ("PUT", f"/datasets/{dataset}/documents/missing/metadata/config", key, {"metadata": FIELDS}, 102),
         ("PUT", f"/datasets/{dataset}/documents/{env['documents'][1]}/metadata/config", key, {"metadata": FIELDS}, 102),

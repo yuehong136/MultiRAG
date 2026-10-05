@@ -101,7 +101,7 @@ def test_scope_create_save_and_independent_reload(management_api: dict[str, Any]
         payload={
             "name": "scope_" + uuid4().hex,
             "parser_config": {"raptor": raptor, "ext": {"future_parser": 7}},
-            "auto_metadata_config": {"enabled": True, "fields": [{"name": "author", "type": "string"}]},
+            "auto_metadata_config": {"enabled": True, "metadata": [{"key": "author", "type": "string"}]},
         },
     )
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
@@ -111,7 +111,7 @@ def test_scope_create_save_and_independent_reload(management_api: dict[str, Any]
     assert stored["raptor"]["scope"] == (scope or "file")
     assert stored["raptor"]["use_raptor"] is False
     assert stored["raptor"]["ext"] == raptor["ext"] and stored["ext"] == {"future_parser": 7}
-    assert stored["enable_metadata"] is True and stored["metadata"][0]["name"] == "author"
+    assert stored["enable_metadata"] is True and stored["metadata"][0]["key"] == "author"
     reloaded = request_api(env, "GET", f"/datasets/{dataset}", credential=env["keys"][0])
     assert reloaded.status_code == 200 and reloaded.json()["code"] == 0
     assert reloaded.json()["data"]["parser_config"] == stored

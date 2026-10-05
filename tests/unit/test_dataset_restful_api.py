@@ -1,7 +1,7 @@
 """dataset RESTful API 契约测试（Phase 2.5 批次 2：AsyncSession 收口）。
 
 11 条路由分三种形态，测试按形态锁类型契约：
-- 纯 DB 路由（create/list/auto_metadata/trace×2）：路由层 run_sync——桩断言
+- 纯 DB 路由（create/list/metadata/config/trace×2）：路由层 run_sync——桩断言
   service 收到同步 facade（``sqlalchemy.orm.Session``）；
 - 混轨路由（delete/update/run_graphrag/run_raptor）：service 层 ``*_async`` 包装
   整块进工作线程 + ``db_connection`` 自开短会话——桩断言在非主线程收到同步 Session；
@@ -94,17 +94,17 @@ def test_dataset_list_envelope_with_total(client, monkeypatch):
     _assert_sync_facade(records)
 
 
-def test_dataset_auto_metadata_roundtrip(client, monkeypatch):
+def test_dataset_metadata_config_roundtrip(client, monkeypatch):
     records: list[dict] = []
-    cfg = {"enabled": True, "fields": [{"name": "author", "type": "str", "description": None, "examples": None, "restrict_values": False}]}
+    cfg = {"enabled": True, "metadata": [{"key": "author", "type": "string"}], "built_in_metadata": []}
     monkeypatch.setattr(dataset_api_service, "get_auto_metadata", lambda s, t, d: _record(records, s) or (True, cfg))
-    monkeypatch.setattr(dataset_api_service, "update_auto_metadata", lambda s, t, d, c: _record(records, s) or (True, {"enabled": c["enabled"], "fields": c["fields"]}))
+    monkeypatch.setattr(dataset_api_service, "update_auto_metadata", lambda s, t, d, c: _record(records, s) or (True, {**cfg, **c}))
 
-    got = client.get("/api/v1/datasets/kb-1/auto_metadata").json()
-    put = client.put("/api/v1/datasets/kb-1/auto_metadata", json={"enabled": False, "fields": []}).json()
+    got = client.get("/api/v1/datasets/kb-1/metadata/config").json()
+    put = client.put("/api/v1/datasets/kb-1/metadata/config", json={"enabled": False, "metadata": []}).json()
 
     assert got["code"] == 0 and got["data"] == cfg
-    assert put["code"] == 0 and put["data"] == {"enabled": False, "fields": []}
+    assert put["code"] == 0 and put["data"] == {"enabled": False, "metadata": [], "built_in_metadata": []}
     _assert_sync_facade(records)
 
 
@@ -228,8 +228,8 @@ def test_dataset_routes_have_pure_async_dependency_tree(client, route_dependency
         ("DELETE", "/api/v1/datasets"),
         ("GET", "/api/v1/datasets"),
         ("PUT", "/api/v1/datasets/{dataset_id}"),
-        ("GET", "/api/v1/datasets/{dataset_id}/auto_metadata"),
-        ("PUT", "/api/v1/datasets/{dataset_id}/auto_metadata"),
+        ("GET", "/api/v1/datasets/{dataset_id}/metadata/config"),
+        ("PUT", "/api/v1/datasets/{dataset_id}/metadata/config"),
         ("GET", "/api/v1/datasets/{dataset_id}/knowledge_graph"),
         ("GET", "/api/v1/datasets/{dataset_id}/graph/search"),
         ("DELETE", "/api/v1/datasets/{dataset_id}/knowledge_graph"),

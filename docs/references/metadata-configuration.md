@@ -7,7 +7,6 @@
 
 `GET /api/v1/datasets/{id}/metadata/config` 返回业务信封 `code=0`，
 `data.metadata`、`data.built_in_metadata` 是当前模板，`data.enabled` 是自动抽取开关。
-兼容读字段 `data.fields` 继续提供历史字段列表。
 
 `PUT` 同路径接受：
 
@@ -23,11 +22,14 @@
 `enabled` 映射到 `parser_config.enable_metadata`，省略不会开启自动抽取。
 其他 parser 配置、Pipeline 绑定及已保存的未知字段保留。
 
-兼容旧信封 `enabled/fields`、旧 `/auto_metadata` 路径以及创建/更新数据集的
-`auto_metadata_config`。仅用旧信封时保留历史默认：省略 enabled 为 true，省略
-fields 为空列表，因此 `{}` 仍表示旧式清空并开启。新旧字段同时出现且内容冲突，
-或显式 null，返回 422，不写入。调用方要只调整开关且保留模板时，应同时提交当前
-`metadata`，不要依赖旧信封的省略规则。
+创建/更新数据集的 `auto_metadata_config` 使用相同信封。只调整开关时可提交
+`{"enabled": false}`，模板保持不变；`{}` 不修改模板或开关。显式 null 和未知字段
+返回 422，不写入。旧 `fields` 信封已移除，`GET/PUT .../auto_metadata` 返回 404，
+响应不再提供 `data.fields` 别名。
+
+旧信封的移除对齐 RAGFlow `501845911`；刷新后的 `origin/main`（`2400ca8e`）
+也只注册 `/metadata/config`，配置使用 `enabled/metadata/built_in_metadata`。
+本仓保留现有 Python 存储结构、Schema 对象和显式项更新语义；省略项不清空模板。
 
 ## 字段与迁移
 
@@ -42,8 +44,8 @@ fields 为空列表，因此 `{}` 仍表示旧式清空并开启。新旧字段�
 - Web 编辑器保存小写 type，重载同时读取字段列表和 Schema 的 type；取消限制值
   后写为 examples，不继续发送 enum。仅保存模板不会擅自打开自动抽取。
 
-迁移顺序为先升级后端双读写合同，再升级 Web。SDK 通用 parser_config 映射无需
-改名；调用方如继续使用旧信封，保留其既有默认行为。无需数据库迁移或全量回填。
+Web 与 Hub 已使用 `/metadata/config` 和新信封。SDK 通用 parser_config 映射无需
+改名；旧调用方需改用 `metadata` 替代 `fields`。无需数据库迁移或全量回填。
 
 ## 文档与执行边界
 

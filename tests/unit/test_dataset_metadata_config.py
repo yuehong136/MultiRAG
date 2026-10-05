@@ -18,7 +18,7 @@ def test_config_roundtrip_preserves_extraction_fields(db: Session, monkeypatch: 
 
     monkeypatch.setattr(KnowledgebaseService, "update_by_id", update)
     fields = [{"key": "author", "description": "Author", "enum": ["Alice"], "restrictDefinedValues": True}]
-    config = {"enabled": True, "fields": fields}
+    config = {"enabled": True, "metadata": fields, "built_in_metadata": []}
     assert dataset_api_service.update_auto_metadata(db, "tenant", "kb", config) == (True, config)
     assert dataset_api_service.get_auto_metadata(db, "tenant", "kb") == (True, config)
     assert kb.parser_config["chunk_token_num"] == 128

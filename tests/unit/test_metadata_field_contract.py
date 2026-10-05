@@ -67,7 +67,7 @@ def test_new_partial_config_preserves_switch_schema_and_unknown_settings() -> No
     assert apply_metadata_config(stored, {"metadata": []}) == {**stored, "metadata": []}
     assert apply_metadata_config(stored, {"metadata": [], "enabled": True})["enable_metadata"] is True
     assert stored == original
-    assert apply_metadata_config(stored, {}) == {**stored, "metadata": [], "enable_metadata": True}
+    assert apply_metadata_config(stored, {}) == stored
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -97,12 +97,16 @@ def test_invalid_toggle_leaves_stored_config_untouched(config: dict[str, Any]) -
     assert stored == original
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-@pytest.mark.parametrize("fields", [[], [{"name": "author", "type": "string"}]])
-def test_legacy_fields_and_switch_remain_a_replacement(enabled: bool, fields: list[dict[str, Any]]) -> None:
-    stored = {"enable_metadata": not enabled, "metadata": [{"key": "old"}], "built_in_metadata": [{"key": "source"}]}
-    assert apply_metadata_config(stored, {"fields": fields, "enabled": enabled}) == {**stored, "metadata": fields, "enable_metadata": enabled}
-    assert apply_metadata_config(stored, {"fields": fields}) == {**stored, "metadata": fields, "enable_metadata": True}
+@pytest.mark.parametrize("config", [{"fields": []}, {"fields": [{"name": "author"}], "enabled": False}, {"metadata": [], "fields": []}])
+def test_legacy_fields_envelopes_are_rejected(config: dict[str, Any]) -> None:
+    stored = {"enable_metadata": False, "metadata": [{"key": "author"}]}
+    with pytest.raises(ValidationError):
+        apply_metadata_config(stored, config)
+    assert stored == {"enable_metadata": False, "metadata": [{"key": "author"}]}
+    with pytest.raises(ValidationError):
+        CreateDatasetRequest.model_validate({"name": "sample", "auto_metadata_config": config})
+    with pytest.raises(ValidationError):
+        UpdateDatasetRequest.model_validate({"auto_metadata_config": config})
 
 
 def test_enabled_only_does_not_add_omitted_definitions() -> None:

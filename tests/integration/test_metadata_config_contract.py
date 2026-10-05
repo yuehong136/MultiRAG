@@ -20,7 +20,6 @@ BUILTIN = [{"key": "source", "type": "string", "enum": ["Paper"]}]
 
 
 @pytest.mark.parametrize("kind", ["jwt", "keys"])
-@pytest.mark.parametrize("route", ["metadata/config", "auto_metadata"])
 @pytest.mark.parametrize(
     "metadata",
     [
@@ -28,7 +27,7 @@ BUILTIN = [{"key": "source", "type": "string", "enum": ["Paper"]}]
         {"type": "object", "properties": {"year": {"type": "integer"}}, "required": ["year"], "additionalProperties": False},
     ],
 )
-def test_enabled_only_roundtrip_preserves_all_definitions(management_api: dict[str, Any], kind: str, route: str, metadata: list[dict[str, Any]] | dict[str, Any]) -> None:
+def test_enabled_only_roundtrip_preserves_all_definitions(management_api: dict[str, Any], kind: str, metadata: list[dict[str, Any]] | dict[str, Any]) -> None:
     env = management_api
     dataset, key = env["datasets"][0], env[kind][0]
     original = {"metadata": metadata, "built_in_metadata": BUILTIN, "unknown": {"keep": 3}}
@@ -36,7 +35,7 @@ def test_enabled_only_roundtrip_preserves_all_definitions(management_api: dict[s
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(parser_config=original))
     before = sql_state(env)
     for enabled in [False, True, False]:
-        response = request_api(env, "PUT", f"/datasets/{dataset}/{route}", credential=key, payload={"enabled": enabled})
+        response = request_api(env, "PUT", metadata_path(env), credential=key, payload={"enabled": enabled})
         assert response.status_code == 200 and response.json()["code"] == 0, response.text
         assert response.json()["data"]["enabled"] is enabled
         readback = request_api(env, "GET", metadata_path(env), credential=key)
@@ -50,33 +49,51 @@ def test_enabled_only_roundtrip_preserves_all_definitions(management_api: dict[s
         assert after[Document.__tablename__] == before[Document.__tablename__]
 
 
-@pytest.mark.parametrize("route", ["metadata/config", "auto_metadata"])
-def test_toggle_validation_and_legacy_empty_envelope_contract(management_api: dict[str, Any], route: str) -> None:
+def test_toggle_validation_legacy_rejection_and_empty_noop(management_api: dict[str, Any]) -> None:
     env = management_api
     dataset, key = env["datasets"][0], env["keys"][0]
     original = {"enable_metadata": False, "metadata": FIELDS, "built_in_metadata": BUILTIN, "unknown": {"keep": 3}}
     with env["engine"].begin() as db:
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(parser_config=original))
-    path = f"/datasets/{dataset}/{route}"
+    path = metadata_path(env)
     before = sql_state(env)
-    for payload in [{"enabled": None}, {"fields": None}, {"enabled": "false"}, {"enabled": False, "unknown": []}]:
+    for payload in [
+        {"enabled": None},
+        {"fields": None},
+        {"enabled": "false"},
+        {"enabled": False, "unknown": []},
+        {"fields": []},
+        {"fields": FIELDS, "enabled": False},
+        {"metadata": FIELDS, "fields": FIELDS},
+    ]:
         response = request_api(env, "PUT", path, credential=key, payload=payload)
         assert response.status_code == 422, response.text
         assert sql_state(env) == before
-    for patch, enabled in [({"fields": [], "enabled": False}, False), ({"fields": FIELDS, "enabled": False}, False), ({"fields": FIELDS}, True)]:
-        response = request_api(env, "PUT", path, credential=key, payload=patch)
-        assert response.status_code == 200 and response.json() == {"code": 0, "data": {"enabled": enabled, "fields": patch["fields"]}}, response.text
-        assert sql_state(env)[Knowledgebase.__tablename__][dataset]["parser_config"] == {**original, "metadata": patch["fields"], "enable_metadata": enabled}
-    # Retain the historical empty legacy replacement contract; this fix only
-    # changes envelopes that explicitly contain the switch and omit fields.
+    for method, endpoint, payload in [
+        ("POST", "/datasets", {"name": "rejected_" + uuid4().hex, "auto_metadata_config": {"fields": FIELDS, "enabled": True}}),
+        ("PUT", f"/datasets/{dataset}", {"auto_metadata_config": {"fields": FIELDS}}),
+    ]:
+        response = request_api(env, method, endpoint, credential=key, payload=payload)
+        assert response.status_code == 422, response.text
+        assert sql_state(env) == before
     response = request_api(env, "PUT", path, credential=key, payload={})
-    assert response.status_code == 200 and response.json() == {"code": 0, "data": {"enabled": True, "fields": []}}, response.text
+    assert response.status_code == 200 and response.json() == {"code": 0, "data": {"enabled": False, "metadata": FIELDS, "built_in_metadata": BUILTIN}}, response.text
     stored = sql_state(env)[Knowledgebase.__tablename__][dataset]["parser_config"]
-    assert stored == {**original, "metadata": [], "enable_metadata": True}
+    assert stored == original
+
+
+def test_retired_metadata_routes_return_404_without_writes(management_api: dict[str, Any]) -> None:
+    env = management_api
+    before = sql_state(env)
+    path = f"/datasets/{env['datasets'][0]}/auto_metadata"
+    for method in ["GET", "PUT"]:
+        response = request_api(env, method, path, credential=env["keys"][0], payload={"enabled": True, "fields": []} if method == "PUT" else None)
+        assert response.status_code == 404, response.text
+        assert sql_state(env) == before
 
 
 @pytest.mark.parametrize("kind", ["jwt", "keys"])
-def test_new_config_roundtrip_partial_clear_and_legacy_consumer(management_api: dict[str, Any], kind: str) -> None:
+def test_new_config_roundtrip_partial_and_explicit_clear(management_api: dict[str, Any], kind: str) -> None:
     env = management_api
     dataset, key = env["datasets"][0], env[kind][0]
     original = {
@@ -105,8 +122,6 @@ def test_new_config_roundtrip_partial_clear_and_legacy_consumer(management_api: 
         assert after[Document.__tablename__] == before[Document.__tablename__]
         with env["engine"].connect() as db:
             assert db.scalar(sa.select(sa.func.count()).select_from(Task).where(Task.doc_id.in_(env["documents"]))) == 0
-    legacy = request_api(env, "GET", f"/datasets/{dataset}/auto_metadata", credential=key).json()
-    assert legacy == {"code": 0, "data": {"enabled": False, "fields": FIELDS}}
     schema = turn2jsonschema(build_metadata_config(original))
     assert schema["properties"]["score"]["type"] == "number"
     assert schema["properties"]["score"]["enum"] == [1.5, 2]

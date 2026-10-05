@@ -2869,6 +2869,23 @@ Web build、lint、file-size、API 测试和完整 test:ci 通过，后者含 67
 仅验证 scratch PostgreSQL/Milvus/Redis/MinIO；未验证生产、MySQL、真实 LLM
 供应商输出或 SDK 全部路由。没有 push。
 
+### 2026-10-05：收敛元数据配置接口
+
+按用户要求取消旧信封兼容，复核 `501845911` 的删除链，并刷新上游
+`origin/main` 至 `2400ca8eb51432b1d304266d0de9ca232d9b53fa`。当前上游仅注册
+`/metadata/config`，配置使用 `enabled/metadata/built_in_metadata`；Web、Hub
+均已使用该路径与信封。本仓删除 `/auto_metadata` 路由、`fields` 请求与响应别名、
+旧字段规范化 helper 和隐式清空/开启默认。旧路由返回 404，旧请求返回 422；
+只调整开关和 `{}` 均保留模板，`[]` 明确清空。该状态取代上节的新旧信封并存结论。
+
+保留现有 Python 存储结构、历史模板读取、Schema 对象与显式项更新语义，
+不移植当前上游 Go 的组件存储重构。最终 `make verify` 通过，unit 5856 passed；
+针对性 unit 83 passed；隔离真实 HTTP 与
+独立 PostgreSQL 读回 integration 50 passed、零 skip，覆盖 OpenAPI 移除、旧路由
+零写入、旧信封拒绝、启停与清空；同一隔离监听端口的 `make smoke` 通过。
+证据目录 `.test-results/20261005-194337-89663/`。没有修改共享 8123 服务，
+未运行生产或真实 LLM 供应商验收；没有 push。
+
 ## f45ce00347f56052a8690e4380b1b812a8cc509b · ES 排序跳过 text id
 
 2026-10-04 在第一项独立提交后串行核对完整两文件 diff；基准冻结于

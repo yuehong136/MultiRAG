@@ -69,10 +69,6 @@ class DeleteDatasetRequest(BaseModel):
     delete_all: bool = False
 
 
-class AutoMetadataConfigRequest(MetadataConfig):
-    pass
-
-
 class DeleteTagsRequest(BaseModel):
     tags: list[str]
 
@@ -445,7 +441,7 @@ async def get_metadata_config(
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
     try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.get_auto_metadata(s, tenant_id, dataset_id, canonical=True))  # TODO(async-phase4)
+        success, result = await db.run_sync(lambda s: dataset_api_service.get_auto_metadata(s, tenant_id, dataset_id))  # TODO(async-phase4)
         return _respond(success, result)
     except OperationalError as e:
         logger.exception(e)
@@ -458,47 +454,10 @@ async def get_metadata_config(
 @router.put("/datasets/{dataset_id}/metadata/config", summary="更新数据集自动元数据配置")
 async def update_metadata_config(
     dataset_id: str,
-    request: AutoMetadataConfigRequest,
+    request: MetadataConfig,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
-    try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump(exclude_unset=True)))  # TODO(async-phase4)
-        return _respond(success, result)
-    except OperationalError as e:
-        logger.exception(e)
-        return get_error_data_result(retmsg="Database operation failed")
-    except Exception as e:
-        logger.exception(e)
-        return get_error_data_result(retmsg="Internal server error")
-
-
-# @deprecated —— 由 GET /datasets/{dataset_id}/metadata/config 取代；生产前端仍在调用。
-@router.get("/datasets/{dataset_id}/auto_metadata", summary="获取数据集自动元数据配置", deprecated=True)
-async def get_auto_metadata(
-    dataset_id: str,
-    db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
-    try:
-        success, result = await db.run_sync(lambda s: dataset_api_service.get_auto_metadata(s, tenant_id, dataset_id))  # TODO(async-phase4)
-        return _respond(success, result)
-    except OperationalError as e:
-        logger.exception(e)
-        return get_error_data_result(retmsg="Database operation failed")
-    except Exception as e:
-        logger.exception(e)
-        return get_error_data_result(retmsg="Internal server error")
-
-
-# @deprecated —— 由 PUT /datasets/{dataset_id}/metadata/config 取代；生产前端仍在调用。
-@router.put("/datasets/{dataset_id}/auto_metadata", summary="更新数据集自动元数据配置", deprecated=True)
-async def update_auto_metadata(
-    dataset_id: str,
-    request: AutoMetadataConfigRequest,
-    db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
     try:
         success, result = await db.run_sync(lambda s: dataset_api_service.update_auto_metadata(s, tenant_id, dataset_id, request.model_dump(exclude_unset=True)))  # TODO(async-phase4)
         return _respond(success, result)

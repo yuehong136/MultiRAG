@@ -101,7 +101,8 @@ DELETE 发送取消信号、删除任务行、解绑任务 ID/完成时间，并
 旧 `run_graphrag` / `run_raptor` 复用 `run_index`，只将 `task_id` 映射回
 `graphrag_task_id` / `raptor_task_id`；旧 trace 接口复用 `trace_index`。
 旧 RAPTOR trace 在任务 ID 已设置、任务行已丢失时仍返回历史错误，新 trace 返回空对象。
-旧 `auto_metadata` 与新 `metadata/config` 共用配置服务。上述旧接口保留 deprecated 标记。
+上述索引旧接口保留 deprecated 标记。元数据配置统一使用 `/metadata/config`；
+旧 `/auto_metadata` 路由与 `fields` 信封已移除，详见[模板配置合同](../../../docs/references/metadata-configuration.md)。
 
 ## 元数据与标签契约
 
