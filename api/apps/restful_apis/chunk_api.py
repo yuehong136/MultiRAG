@@ -23,7 +23,7 @@ from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result, server_error_response
-from api.utils.image_utils import replace_chunk_image, store_chunk_image
+from api.utils.image_utils import read_chunk_image, replace_chunk_image, store_chunk_image
 from common import settings
 from common.constants import LLMType, ParserType, RetCode
 from common.string_utils import is_content_empty, remove_redundant_spaces
@@ -401,16 +401,56 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
         patch[f"q_{len(vector)}_vec"] = vector.tolist()
         keys = {key for row in [current, patch] if (key := image_reference_key(row.get("img_id"))) is not None}
         with image_write_locks(db.get_bind(), keys):
-            if not settings.docStoreConn.update({"id": chunk_id}, patch, index_name, dataset_id):
-                return get_error_data_result(retmsg="Index updating failure")
-            if image_binary is not None:
-                # Index and object storage are not transactional together. A
-                # storage failure reports failure but can leave the index patch.
+            if image_binary is None:
+                if not settings.docStoreConn.update({"id": chunk_id}, patch, index_name, dataset_id):
+                    return get_error_data_result(retmsg="Index updating failure")
+                return get_result()
+            try:
+                previous_image = read_chunk_image(dataset_id, chunk_id)
+            except Exception:
+                return _chunk_image_update_failure(dataset_id, chunk_id, stage="image_read", index="not_attempted", image="not_attempted", outcome="unchanged")
+            try:
+                indexed = settings.docStoreConn.update({"id": chunk_id}, patch, index_name, dataset_id)
+            except Exception:
+                indexed = False
+            if not indexed:
+                # False/exception may follow a native delete or a lost reply.
+                return _chunk_image_update_failure(dataset_id, chunk_id, stage="index_write", index="unknown", image="not_attempted", outcome="unknown")
+            try:
                 if request.image_update_mode == "replace":
                     replace_chunk_image(dataset_id, chunk_id, image_binary)
                 else:
-                    store_chunk_image(dataset_id, chunk_id, image_binary)
+                    store_chunk_image(dataset_id, chunk_id, image_binary, verify=True)
+            except Exception:
+                image_state = "unknown"
+                try:
+                    observed = read_chunk_image(dataset_id, chunk_id)
+                    if previous_image is not None and observed == previous_image:
+                        image_state = "unchanged"
+                    elif observed is not None:
+                        image_state = "changed"
+                except Exception:
+                    image_state = "unknown"  # Never claim rollback or a safe retry.
+                return _chunk_image_update_failure(dataset_id, chunk_id, stage="image_write", index="acknowledged", image=image_state, outcome="partial")
         return get_result()
+
+
+def _chunk_image_update_failure(dataset_id: str, chunk_id: str, *, stage: str, index: str, image: str, outcome: str) -> JSONResponse:
+    """Report observed boundaries without treating native stores as a transaction."""
+    messages = {
+        "image_read": "图片读取未确认；本次未写入切片索引或图片。请刷新切片和图片核对后再重试。",
+        "index_write": "切片索引写入未确认，内容可能已改变；尚未写入图片。请刷新切片和图片核对后再决定是否重试，不要盲目重发 append。",
+        "image_write": "图片写入未确认；切片索引更新已获确认。请刷新切片和图片核对后再决定是否重试，不要盲目重发 append；需重发图片时使用 replace。",
+    }
+    # get_result intentionally drops data on failure; this route's envelope
+    # carries recovery observations for clients that preserve error payloads.
+    return JSONResponse(
+        content={
+            "code": int(RetCode.EXCEPTION_ERROR),
+            "message": messages[stage],
+            "data": {"outcome": outcome, "stage": stage, "index": index, "image": image, "image_id": f"{dataset_id}-{chunk_id}", "retry_safe": False},
+        }
+    )
 
 
 @router.patch("/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}", summary="更新文档分块")

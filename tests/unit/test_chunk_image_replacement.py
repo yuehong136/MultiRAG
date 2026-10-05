@@ -70,6 +70,21 @@ def test_silent_storage_failure_is_not_success(image_storage: ImageStorage) -> N
     assert image_storage.data == old
 
 
+def test_confirmed_append_detects_silent_storage_failure(image_storage: ImageStorage) -> None:
+    old = image_storage.data
+    image_storage.drop_write = True
+    with pytest.raises(RuntimeError, match="could not be confirmed"):
+        image_utils.store_chunk_image("kb", "chunk", _image("blue", (2, 3)), verify=True)
+    assert image_storage.data == old
+
+
+def test_confirmed_append_uses_strict_bytes_despite_false_stat(image_storage: ImageStorage, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(image_storage, "obj_exist", lambda *_args: False)
+    image_utils.store_chunk_image("kb", "chunk", _image("blue", (2, 3)), verify=True)
+    with Image.open(BytesIO(image_storage.data)) as image:
+        assert image.size == (4, 8)
+
+
 def test_chunk_get_strips_native_vector(client: Any) -> None:
     module = sys.modules["api.apps.restful_apis.chunk"]
     payload = module._strip_chunk_runtime_fields({"img_id": "kb-c", "vector": np.ones(3, dtype=np.float32), "q_3_vec": [1, 2, 3], "create_timestamp_flt": np.float32(1234)})
@@ -136,3 +151,18 @@ def test_invalid_mode_or_missing_image_has_no_mutation(chunk_patch: tuple[Any, d
     if status == 200:
         assert response.json()["code"] == int(RetCode.DATA_ERROR)
     assert row == before and not image_storage.writes
+
+
+@pytest.mark.parametrize("mode", [None, "replace"])
+def test_patch_reports_partial_index_and_unchanged_image_on_silent_put(chunk_patch: tuple[Any, dict[str, Any]], image_storage: ImageStorage, mode: str | None) -> None:
+    client, row = chunk_patch
+    old = image_storage.data
+    image_storage.drop_write = True
+    payload = {"content": "new content", "image_base64": base64.b64encode(_image("blue", (2, 3))).decode()}
+    if mode:
+        payload["image_update_mode"] = mode
+    response = client.patch("/api/v1/datasets/kb1/documents/doc1/chunks/c1", json=payload)
+    assert response.status_code == 200 and response.json()["code"] == int(RetCode.EXCEPTION_ERROR)
+    assert "索引更新已获确认" in response.json()["message"] and "不要盲目重发 append" in response.json()["message"]
+    assert response.json()["data"] == {"outcome": "partial", "stage": "image_write", "index": "acknowledged", "image": "unchanged", "image_id": "kb1-c1", "retry_safe": False}
+    assert row["content_with_weight"] == "new content" and image_storage.data == old

@@ -119,25 +119,82 @@ def test_default_patch_keeps_append_compatibility(chunk_api: dict[str, Any]) -> 
     _readback(env, data, "new", "image/jpeg")
 
 
-@pytest.mark.parametrize("stage", ["index", "storage"])
-def test_failed_patch_does_not_acknowledge_and_exposes_nonatomic_boundary(chunk_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+@pytest.mark.parametrize("mode", ["append", "replace"])
+@pytest.mark.parametrize("stage", ["index", "index_after_write", "storage", "storage_after_write", "image_read", "image_confirm"])
+def test_failed_image_patch_reports_actual_boundaries(chunk_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stage: str, mode: str) -> None:
     env = chunk_api
     new = _image("blue", (3, 4))
     before = _snapshot(env)
+    original_put, original_read, original_update = env["storage"].put, env["storage"].get_bytes, settings.docStoreConn.update
+    written = False
+
+    def write_then_fault(*args: Any, **kwargs: Any) -> Any:
+        nonlocal written
+        result = original_put(*args, **kwargs)
+        written = True
+        if stage == "storage_after_write":
+            raise RuntimeError("controlled lost storage acknowledgement")
+        return result
+
+    def read_fault(*args: Any, **kwargs: Any) -> Any:
+        if stage == "image_read" or written:
+            raise RuntimeError("controlled storage read failure")
+        return original_read(*args, **kwargs)
+
+    def index_after_write(*args: Any, **kwargs: Any) -> None:
+        assert original_update(*args, **kwargs)
+        raise RuntimeError("controlled lost index acknowledgement")
+
+    payload = _payload(new)
+    if mode == "append":
+        del payload["image_update_mode"]
     with monkeypatch.context() as fault:
         if stage == "index":
             fault.setattr(settings.docStoreConn, "update", lambda *_args: False)
-        else:
+        elif stage == "index_after_write":
+            fault.setattr(settings.docStoreConn, "update", index_after_write)
+        elif stage == "storage":
             # Production MinIO may return without raising after failed retries.
             fault.setattr(env["storage"], "put", lambda *_args: None)
-        body = _patch(env, _payload(new))
-    assert "code" in body or "retcode" in body
-    assert body.get("code", body.get("retcode")) != 0
-    after = _readback(env, env["old"], "old" if stage == "index" else "new")
-    assert after["objects"] == before["objects"] and after["sql"] == before["sql"]
-    if stage == "index":
-        assert after["index"] == before["index"]
-    _save(Path(env["evidence"]) / f"chunk-{stage}-failure.json", {"body": body, "before": before, "after": after, "atomic": False})
+        elif stage in {"storage_after_write", "image_confirm"}:
+            fault.setattr(env["storage"], "put", write_then_fault)
+        if stage in {"image_read", "image_confirm"}:
+            fault.setattr(env["storage"], "get_bytes", read_fault)
+        body = _patch(env, payload)
+    assert body["code"] == 100 and body["data"]["retry_safe"] is False
+    assert body["data"]["image_id"] == env["ids"]["kb"] + "-" + env["chunk"]
+    if stage == "image_read":
+        assert body["data"] == {
+            "outcome": "unchanged",
+            "stage": "image_read",
+            "index": "not_attempted",
+            "image": "not_attempted",
+            "image_id": env["ids"]["kb"] + "-" + env["chunk"],
+            "retry_safe": False,
+        }
+        assert "未写入切片索引或图片" in body["message"]
+    elif stage.startswith("index"):
+        assert body["data"]["outcome"] == "unknown" and body["data"]["index"] == "unknown" and body["data"]["image"] == "not_attempted"
+        assert "内容可能已改变" in body["message"] and "尚未写入图片" in body["message"]
+    else:
+        assert body["data"]["outcome"] == "partial" and body["data"]["index"] == "acknowledged"
+        assert body["data"]["image"] == {"storage": "unchanged", "storage_after_write": "changed", "image_confirm": "unknown"}[stage]
+        assert "索引更新已获确认" in body["message"] and "不要盲目重发 append" in body["message"]
+    stored = env["storage"].get_bytes(env["ids"]["kb"], env["chunk"])
+    content = "old" if stage in {"index", "image_read"} else "new"
+    if stage in {"storage_after_write", "image_confirm"}:
+        if mode == "replace":
+            assert stored == new
+        else:
+            with Image.open(BytesIO(stored)) as image:
+                assert image.size == (8, 13)
+    else:
+        assert stored == env["old"]
+    after = _readback(env, stored, content, "image/jpeg" if written and mode == "append" else "image/png")
+    assert after["sql"] == before["sql"] and after["queue"] == before["queue"]
+    if stage in {"index", "image_read"}:
+        assert after == before
+    _save(Path(env["evidence"]) / f"chunk-{mode}-{stage}-failure.json", {"body": body, "before": before, "after": after, "atomic": False})
 
 
 def test_concurrent_patch_serializes_and_last_acknowledged_image_is_exact(chunk_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:

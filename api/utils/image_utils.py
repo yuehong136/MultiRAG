@@ -7,6 +7,22 @@ from api.db.services.document_image_lock import image_write_locks
 from common import settings
 
 
+def read_chunk_image(bucket: str, name: str) -> bytes | None:
+    """Read actual object bytes with strict adapters when available."""
+    storage = settings.STORAGE_IMPL
+    read = getattr(storage, "get_bytes", None) or storage.get
+    data = read(bucket, name)
+    if data is not None and not isinstance(data, bytes):
+        raise RuntimeError("Chunk image bytes could not be read.")
+    return data
+
+
+def _confirm_chunk_image(bucket: str, name: str, expected: bytes) -> None:
+    # Legacy put adapters may swallow errors; confirmation preserves decryption.
+    if read_chunk_image(bucket, name) != expected:
+        raise RuntimeError("Chunk image write could not be confirmed.")
+
+
 def replace_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
     """Replace exact bytes under the shared key lock and confirm storage readback.
 
@@ -14,23 +30,30 @@ def replace_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
     Creation callers retain the append behavior of ``store_chunk_image``.
     """
     with db_connection() as db, image_write_locks(db.get_bind(), [(bucket, name)]):
-        storage = settings.STORAGE_IMPL
-        storage.put(bucket, name, image_binary)
-        # Legacy put adapters can swallow errors, so their return alone cannot
-        # acknowledge a replacement. Strict reads also preserve decryption.
-        read = getattr(storage, "get_bytes", None) or storage.get
-        if read(bucket, name) != image_binary:
-            raise RuntimeError("Chunk image replacement could not be confirmed.")
+        settings.STORAGE_IMPL.put(bucket, name, image_binary)
+        _confirm_chunk_image(bucket, name, image_binary)
 
 
-def store_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
+def store_chunk_image(bucket: str, name: str, image_binary: bytes, *, verify: bool = False) -> None:
+    """Append by default; REST PATCH also requires exact stored-byte confirmation."""
     with db_connection() as db, image_write_locks(db.get_bind(), [(bucket, name)]):
-        _store_locked_chunk_image(bucket, name, image_binary)
+        expected = _store_locked_chunk_image(bucket, name, image_binary, verify=verify)
+        if verify:
+            _confirm_chunk_image(bucket, name, expected)
 
 
-def _store_locked_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
-    if settings.STORAGE_IMPL.obj_exist(bucket, name):
-        old_binary = settings.STORAGE_IMPL.get(bucket, name)
+def _store_locked_chunk_image(bucket: str, name: str, image_binary: bytes, *, verify: bool = False) -> bytes:
+    # Confirmed REST writes must not interpret a swallowed stat/get error as an
+    # absent old image. Other callers retain their existing storage semantics.
+    if verify:
+        old_binary = read_chunk_image(bucket, name)
+        exists = old_binary is not None
+    else:
+        exists = settings.STORAGE_IMPL.obj_exist(bucket, name)
+        old_binary = settings.STORAGE_IMPL.get(bucket, name) if exists else None
+    if exists:
+        if old_binary is None:
+            raise RuntimeError("Existing chunk image bytes could not be read.")
         old_img = Image.open(BytesIO(old_binary)).convert("RGB")
         new_img = Image.open(BytesIO(image_binary)).convert("RGB")
         width = max(old_img.width, new_img.width)
@@ -40,7 +63,9 @@ def _store_locked_chunk_image(bucket: str, name: str, image_binary: bytes) -> No
         combined.paste(new_img, (0, old_img.height))
         buf = BytesIO()
         combined.save(buf, format="JPEG")
-        settings.STORAGE_IMPL.put(bucket, name, buf.getvalue())
-        return
+        combined_binary = buf.getvalue()
+        settings.STORAGE_IMPL.put(bucket, name, combined_binary)
+        return combined_binary
 
     settings.STORAGE_IMPL.put(bucket, name, image_binary)
+    return image_binary
