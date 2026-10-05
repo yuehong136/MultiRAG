@@ -127,3 +127,38 @@ def test_vector_scope_does_not_require_a_lexical_match(infinity_scratch: tuple[A
     assert set(store.get_doc_ids(result)) == ({"semantic", "visible"} if fusion else {"semantic"})
     raw = reader.output(["id", "doc_id", "available_int"]).to_result()[0]
     assert set(raw["id"]) == {"hidden", "visible", "foreign", "semantic", "outside", "disabled-vector"}
+
+
+def test_vector_pagination_merges_tables_before_offset(infinity_scratch: tuple[Any, Any]) -> None:
+    store, _ = infinity_scratch
+    database = store.connPool.get_conn().get_database(store.dbName)
+    other = database.create_table(
+        "chunks_second",
+        {"id": {"type": "varchar"}, "doc_id": {"type": "varchar"}, "available_int": {"type": "integer"}, "q_2_vec": {"type": "vector,2,float"}, "pagerank_fea": {"type": "float", "default": 0.0}},
+    )
+    database.get_table("chunks_kb").insert([{"id": "best", "doc_id": "doc", "available_int": 1, "content": "different words", "q_2_vec": [1.0, 0.0]}])
+    other.insert(
+        [
+            {"id": "second", "doc_id": "doc", "available_int": 1, "q_2_vec": [0.9, 0.4358899]},
+            {"id": "third", "doc_id": "doc", "available_int": 1, "q_2_vec": [0.8, 0.6]},
+        ]
+    )
+    pages = []
+    for offset in (0, 1):
+        result = store.search(
+            ["id", "doc_id"], [], {"doc_id": ["doc"], "available_int": 1}, [MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine", 10)], OrderByExpr(), offset, 1, ["chunks"], ["kb", "second"]
+        )
+        pages.extend(store.get_doc_ids(result))
+    assert pages == ["best", "second"]
+    assert set(other.output(["id"]).to_result()[0]["id"]) == {"second", "third"}
+
+
+@pytest.mark.parametrize("weights", ["0.9,0.1", "0.1,0.9"])
+def test_fusion_weights_reverse_lexical_vector_ranking(infinity_scratch: tuple[Any, Any], weights: str) -> None:
+    store, reader = infinity_scratch
+    writer = store.connPool.get_conn().get_database(store.dbName).get_table("chunks_kb")
+    writer.insert([{"id": "semantic", "doc_id": "doc", "available_int": 1, "content": "different words", "q_2_vec": [1.0, 0.0]}])
+    expressions = [MatchTextExpr(["content_ltks"], "regression", 10), MatchDenseExpr("q_2_vec", [1.0, 0.0], "float", "cosine", 10), FusionExpr("weighted_sum", 10, {"weights": weights})]
+    result = store.search(["id", "doc_id"], [], {"doc_id": ["doc"], "available_int": 1}, expressions, OrderByExpr(), 0, 10, ["chunks"], ["kb"])
+    assert store.get_doc_ids(result) == (["visible", "semantic"] if weights == "0.9,0.1" else ["semantic", "visible"])
+    assert set(reader.output(["id"]).to_result()[0]["id"]) == {"hidden", "visible", "foreign", "semantic"}

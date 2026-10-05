@@ -264,7 +264,12 @@ class InfinityConnection(InfinityConnectionBase):
                             builder.filter(filter_cond)
                     if order_by.fields:
                         builder.sort(order_by_expr_list)
-                    builder.offset(offset).limit(limit)
+                    # Fetch enough candidates from every table, then apply
+                    # the caller's offset once after the global score merge.
+                    if match_expressions:
+                        builder.offset(0).limit(offset + limit)
+                    else:
+                        builder.offset(offset).limit(limit)
                     kb_res, extra_result = builder.option({"total_hits_count": True}).to_df()
                     if extra_result:
                         total_hits_count += int(extra_result["total_hits_count"])
@@ -275,8 +280,8 @@ class InfinityConnection(InfinityConnectionBase):
         res = self.concat_dataframes(df_list, output)
         if match_expressions and score_column:
             res["_score"] = res[score_column] + res[PAGERANK_FLD]
-            res = res.sort_values(by="_score", ascending=False).reset_index(drop=True)
-            res = res.head(limit)
+            res = res.sort_values(by=["_score", "id"], ascending=[False, True]).reset_index(drop=True)
+            res = res.iloc[offset : offset + limit].reset_index(drop=True)
         self.logger.debug(f"INFINITY search final result: {res!s}")
         return res, total_hits_count
 
