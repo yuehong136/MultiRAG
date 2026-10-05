@@ -5,13 +5,19 @@ from PIL import Image
 from api.db.db_models import db_connection
 from api.db.services.document_image_lock import image_write_locks
 from common import settings
+from core.utils.encrypted_storage import EncryptedStorageWrapper
 
 
 def read_chunk_image(bucket: str, name: str) -> bytes | None:
-    """Read actual object bytes with strict adapters when available."""
+    """Return absence only when the underlying adapter supports strict reads."""
     storage = settings.STORAGE_IMPL
     read = getattr(storage, "get_bytes", None) or storage.get
     data = read(bucket, name)
+    adapter = storage.storage_impl if isinstance(storage, EncryptedStorageWrapper) else storage
+    # The encryption wrapper exposes get_bytes even for legacy adapters whose
+    # get() swallows failures. Its None cannot establish that an object is absent.
+    if data is None and not callable(getattr(adapter, "get_bytes", None)):
+        raise RuntimeError("Chunk image absence could not be confirmed.")
     if data is not None and not isinstance(data, bytes):
         raise RuntimeError("Chunk image bytes could not be read.")
     return data

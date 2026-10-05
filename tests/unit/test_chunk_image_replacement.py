@@ -85,6 +85,20 @@ def test_confirmed_append_uses_strict_bytes_despite_false_stat(image_storage: Im
         assert image.size == (4, 8)
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_legacy_none_is_not_absence_even_through_encryption(image_storage: ImageStorage, monkeypatch: pytest.MonkeyPatch, wrapped: bool) -> None:
+    from core.utils.encrypted_storage import EncryptedStorageWrapper
+
+    monkeypatch.setattr(image_storage, "get", lambda *_args: None)
+    if wrapped:
+        for method in ["rm", "health"]:
+            monkeypatch.setattr(image_storage, method, lambda *_args: None, raising=False)
+        monkeypatch.setattr(settings, "STORAGE_IMPL", EncryptedStorageWrapper(image_storage, key="test-image-key"))
+    with pytest.raises(RuntimeError, match="absence could not be confirmed"):
+        image_utils.store_chunk_image("kb", "chunk", _image("blue", (2, 3)), verify=True)
+    assert not image_storage.writes
+
+
 def test_chunk_get_strips_native_vector(client: Any) -> None:
     module = sys.modules["api.apps.restful_apis.chunk"]
     payload = module._strip_chunk_runtime_fields({"img_id": "kb-c", "vector": np.ones(3, dtype=np.float32), "q_3_vec": [1, 2, 3], "create_timestamp_flt": np.float32(1234)})
@@ -166,3 +180,24 @@ def test_patch_reports_partial_index_and_unchanged_image_on_silent_put(chunk_pat
     assert "索引更新已获确认" in response.json()["message"] and "不要盲目重发 append" in response.json()["message"]
     assert response.json()["data"] == {"outcome": "partial", "stage": "image_write", "index": "acknowledged", "image": "unchanged", "image_id": "kb1-c1", "retry_safe": False}
     assert row["content_with_weight"] == "new content" and image_storage.data == old
+
+
+@pytest.mark.parametrize("first_failed_read", [1, 2])
+def test_append_never_overwrites_old_image_after_legacy_none(chunk_patch: tuple[Any, dict[str, Any]], image_storage: ImageStorage, monkeypatch: pytest.MonkeyPatch, first_failed_read: int) -> None:
+    client, row = chunk_patch
+    before, old = dict(row), image_storage.data
+    reads = 0
+
+    def intermittent_get(*_args: Any) -> bytes | None:
+        nonlocal reads
+        reads += 1
+        return None if first_failed_read <= reads < first_failed_read + 2 else image_storage.data
+
+    monkeypatch.setattr(image_storage, "get", intermittent_get)
+    response = client.patch("/api/v1/datasets/kb1/documents/doc1/chunks/c1", json={"content": "new", "image_base64": base64.b64encode(_image("blue", (2, 3))).decode()})
+    body = response.json()
+    assert body["code"] == int(RetCode.EXCEPTION_ERROR) and not image_storage.writes and image_storage.data == old
+    if first_failed_read == 1:
+        assert row == before and body["data"]["stage"] == "image_read" and body["data"]["outcome"] == "unchanged"
+    else:
+        assert row["content_with_weight"] == "new" and body["data"]["stage"] == "image_write" and body["data"]["image"] == "unknown"

@@ -21,7 +21,8 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Document
-from common import settings
+from common import resources, settings
+from core.utils.encrypted_storage import EncryptedStorageWrapper
 from tests.support.document_image_http import _save
 from tests.support.document_image_http import bootstrapped_engine as bootstrapped_engine
 from tests.support.document_image_http import image_http_api as image_http_api
@@ -117,6 +118,56 @@ def test_default_patch_keeps_append_compatibility(chunk_api: dict[str, Any]) -> 
         assert image.size == (8, 13) and image.format == "JPEG"
         assert image.getpixel((0, 0))[0] > 200 and image.getpixel((0, 12))[2] > 200
     _readback(env, data, "new", "image/jpeg")
+
+
+def test_append_can_create_image_after_strict_not_found(chunk_api: dict[str, Any]) -> None:
+    env = chunk_api
+    env["storage"].rm(env["ids"]["kb"], env["chunk"])
+    assert env["storage"].get_bytes(env["ids"]["kb"], env["chunk"]) is None
+    new = _image("blue", (3, 4))
+    payload = _payload(new)
+    del payload["image_update_mode"]
+    assert _patch(env, payload)["code"] == 0
+    _readback(env, new, "new")
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("first_failed_read", [1, 2])
+def test_legacy_read_none_cannot_overwrite_real_old_image(chunk_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, wrapped: bool, first_failed_read: int) -> None:
+    env = chunk_api
+    before = _snapshot(env)
+    reads, writes = 0, 0
+
+    def legacy_get(*args: Any, **kwargs: Any) -> bytes | None:
+        nonlocal reads
+        reads += 1
+        if first_failed_read <= reads < first_failed_read + 2:
+            return None  # Legacy S3/OSS/GCS swallow operational read failures.
+        return env["storage"].get_bytes(*args, **kwargs)
+
+    def legacy_put(*args: Any, **kwargs: Any) -> Any:
+        nonlocal writes
+        writes += 1
+        return env["storage"].put(*args, **kwargs)
+
+    legacy = SimpleNamespace(get=legacy_get, put=legacy_put, obj_exist=lambda *_args: False, rm=env["storage"].rm, health=lambda: True)
+    storage = EncryptedStorageWrapper(legacy, key="test-image-key") if wrapped else legacy
+    if wrapped:
+        storage.encryption_enabled = False  # Delegate transparent bytes to the configured real storage.
+    payload = _payload(_image("blue", (3, 4)))
+    del payload["image_update_mode"]
+    with monkeypatch.context() as fault:
+        fault.setitem(resources._state, "storage", storage)
+        body = _patch(env, payload)
+    assert body["code"] == 100 and body["data"]["retry_safe"] is False and writes == 0
+    assert body["data"]["stage"] == ("image_read" if first_failed_read == 1 else "image_write")
+    assert env["storage"].get_bytes(env["ids"]["kb"], env["chunk"]) == env["old"]
+    after = _readback(env, env["old"], "old" if first_failed_read == 1 else "new")
+    if first_failed_read == 1:
+        assert after == before and reads == 1
+    else:
+        assert after["sql"] == before["sql"] and after["queue"] == before["queue"]
+    _save(Path(env["evidence"]) / f"chunk-legacy-none-{first_failed_read}-{wrapped}.json", {"body": body, "before": before, "after": after, "writes": writes, "reads": reads})
 
 
 @pytest.mark.parametrize("mode", ["append", "replace"])
