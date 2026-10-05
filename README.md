@@ -111,6 +111,7 @@ MultiRAG 是一个面向企业场景的 AI 后端项目，围绕 RAG、GraphRAG�
 - 支持 OpenAI、Anthropic、Gemini、Tongyi、DashScope、Volcengine、Groq、Ollama、Vertex AI 等体系
 - 支持 Chat、Embedding、Rerank、Vision、TTS、Sequence2Text
 - 支持模型路由、工厂配置、启停控制和 OpenAI 兼容访问
+- [模型目录](./configs/llm_factories.json)已收录 DeepSeek v4 的 `deepseek-v4-flash` 与 `deepseek-v4-pro`，使用现有 [Python LiteLLM 调用链](./core/llm/chat.py)。实际可用性需在目标部署中配置凭据并验证；目录收录不代表真实供应商验收。
 
 ### 工程化与运维
 

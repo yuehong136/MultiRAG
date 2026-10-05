@@ -111,6 +111,7 @@ Current repository version is `v0.9.9`. Compared with older docs, the project sc
 - Integrates with OpenAI, Anthropic, Gemini, Tongyi, DashScope, Volcengine, Groq, Ollama, Vertex AI, and more
 - Supports Chat, Embedding, Rerank, Vision, TTS, and Sequence2Text
 - Supports provider routing, factory configuration, enable/disable controls, and OpenAI-compatible access
+- The [model catalog](./configs/llm_factories.json) includes DeepSeek v4 `deepseek-v4-flash` and `deepseek-v4-pro`, routed through the existing [Python LiteLLM adapter](./core/llm/chat.py). Availability requires credentials and validation in the target deployment; catalog entries do not establish live provider acceptance.
 
 ### Operations and engineering
 
