@@ -337,6 +337,21 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 	if err != nil || defaultModel.ModelConfig.Thinking == nil || !*defaultModel.ModelConfig.Thinking {
 		t.Fatalf("default custom model %v %v", defaultModel, err)
 	}
+	tenantSvc := service.NewTenantService()
+	if err := tenantSvc.SetTenantDefaultModels("owner", "vllm", "local-1", "Qwen/custom", "chat"); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := tenantSvc.GetDefaultModelName("owner-tenant", entity.ModelTypeChat)
+	if err != nil || saved != "Qwen/custom@local-1@vllm" {
+		t.Fatalf("saved default %q %v", saved, err)
+	}
+	if _, _, _, enabled, err := tenantSvc.GetModelInfo("owner-tenant", saved, "chat"); err != nil || !enabled {
+		t.Fatalf("custom default not available: %v", err)
+	}
+	if tts, err := tenantSvc.GetDefaultModelName("owner-tenant", entity.ModelTypeTTS); err != nil || tts != "" {
+		t.Fatal("nil TTS failed", err)
+	}
+
 	instances, code, err := svc.ListProviderInstances("vllm", "owner")
 	if code != common.CodeSuccess || err != nil || len(instances) != 2 || instances[0]["extra"] == nil || instances[0]["region"] != "private" {
 		t.Fatalf("instance extras %v %v", instances, err)
@@ -351,6 +366,28 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 	if calls[0].Load() != 7 || calls[1].Load() != 7 {
 		t.Fatalf("unexpected provider calls %d %d", calls[0].Load(), calls[1].Load())
 	}
+	if code, err := svc.CreateProviderInstance("vllm", "default", "fixture-key-default", "owner", "", fixtures[0].URL+"/v1"); err != nil || code != common.CodeSuccess {
+		t.Fatalf("default instance %v", err)
+	}
+	if code, err := svc.AddCustomModel(&service.AddCustomModelRequest{ProviderName: "vllm", InstanceName: "default", ModelName: "default-model", ModelType: "chat", MaxTokens: 1024}, "owner"); err != nil || code != common.CodeSuccess {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetChatModel("owner-tenant", "default-model@vllm"); err != nil {
+		t.Fatal("two part default reference failed", err)
+	}
+	if _, err := svc.GetChatModel("owner-tenant", "default-model@default@vllm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dao.DB.Model(&entity.Tenant{}).Where("id = ?", "owner-tenant").Update("llm_id", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetChatModel("owner-tenant", ""); err == nil || !strings.Contains(err.Error(), "no default") {
+		t.Fatal("empty default not explicit", err)
+	}
+	if code, err := svc.AlterProviderInstance("vllm", "default", "renamed", "", "owner"); err == nil || code == common.CodeSuccess {
+		t.Fatal("unsupported rename succeeded")
+	}
+
 	if err := dao.DB.Model(&entity.TenantModel{}).Where("model_name = ?", "Qwen/custom").Update("extra", "invalid").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -358,6 +395,9 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 		t.Fatal("corrupt model extra accepted")
 	}
 	if err := dao.DB.Model(&entity.TenantModel{}).Where("model_name = ?", "Qwen/custom").Update("extra", `{"max_tokens":131072,"thinking":true}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if code, err := svc.DropProviderInstances("vllm", "owner", []string{"default"}); err != nil || code != common.CodeSuccess {
 		t.Fatal(err)
 	}
 	exerciseModelDeletion(t, svc, readback, request)

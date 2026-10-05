@@ -19,7 +19,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -28,8 +27,6 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
-
-	"gorm.io/gorm"
 )
 
 // TenantService tenant service
@@ -299,41 +296,51 @@ type ModelItem struct {
 	Enable        bool    `json:"enable"`
 }
 
+// GetDefaultModelName returns the stored reference unchanged, or empty when unset.
+func (s *TenantService) GetDefaultModelName(tenantID string, modelType entity.ModelType) (string, error) {
+	tenant, err := s.tenantDAO.GetByID(tenantID)
+	if err != nil {
+		return "", err
+	}
+	return tenantDefaultModelName(tenant, modelType)
+}
+func tenantDefaultModelName(tenant *entity.Tenant, modelType entity.ModelType) (string, error) {
+	switch modelType {
+	case entity.ModelTypeChat:
+		return tenant.LLMID, nil
+	case entity.ModelTypeEmbedding:
+		return tenant.EmbdID, nil
+	case entity.ModelTypeRerank:
+		return tenant.RerankID, nil
+	case entity.ModelTypeSpeech2Text:
+		return tenant.ASRID, nil
+	case entity.ModelTypeImage2Text:
+		return tenant.Img2TxtID, nil
+	case entity.ModelTypeTTS:
+		if tenant.TTSID != nil {
+			return *tenant.TTSID, nil
+		}
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported default model type: %s", modelType)
+	}
+}
+
 // GetModelInfo parses and validates a stored tenant default-model identifier.
 func (s *TenantService) GetModelInfo(tenantID, defaultModel, modelType string) (*string, *string, *string, bool, error) {
-	parts := strings.Split(defaultModel, "@")
-	var providerName, instanceName, modelName string
-	switch len(parts) {
-	case 3:
-		modelName, instanceName, providerName = parts[0], parts[1], parts[2]
-	case 2:
-		modelName, instanceName, providerName = parts[0], "default", parts[1]
-	default:
-		return nil, nil, nil, false, fmt.Errorf("invalid model string: %s", defaultModel)
-	}
-
-	modelProvider, err := s.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
+	name, instance, provider, err := splitModelInstance(defaultModel)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
-	modelInstance, err := s.modelInstanceDAO.GetByProviderIDAndInstanceName(modelProvider.ID, instanceName)
+	typ, err := normalizeCustomModelType(modelType)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
-	modelSchema, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
+	_, _, _, err = NewModelProviderService().getModelConfig(tenantID, defaultModel, typ)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
-	if !modelSchema.ModelTypeMap[modelType] {
-		return nil, nil, nil, false, fmt.Errorf("model %s does not support model type %s", modelName, modelType)
-	}
-
-	_, err = s.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(modelProvider.ID, modelInstance.ID, modelName)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, nil, false, err
-	}
-	enabled := errors.Is(err, gorm.ErrRecordNotFound)
-	return &providerName, &instanceName, &modelName, enabled, nil
+	return &provider, &instance, &name, true, nil
 }
 
 // ListTenantDefaultModels lists the valid default models of the user's owned tenant.
@@ -374,30 +381,12 @@ func (s *TenantService) ListTenantDefaultModels(userID string) ([]ModelItem, err
 }
 
 func (s *TenantService) checkModelAvailable(tenantID, providerName, instanceName, modelName, modelType string) error {
-	modelProvider, err := s.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
+	typ, err := normalizeCustomModelType(modelType)
 	if err != nil {
 		return err
 	}
-	modelInstance, err := s.modelInstanceDAO.GetByProviderIDAndInstanceName(modelProvider.ID, instanceName)
-	if err != nil {
-		return err
-	}
-	modelSchema, err := dao.GetModelProviderManager().GetModelByName(providerName, modelName)
-	if err != nil {
-		return err
-	}
-	if !modelSchema.ModelTypeMap[modelType] {
-		return fmt.Errorf("model %s does not support model type %s", modelName, modelType)
-	}
-
-	_, err = s.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(modelProvider.ID, modelInstance.ID, modelName)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return fmt.Errorf("model %s is disabled", modelName)
+	_, _, _, err = NewModelProviderService().getModelConfig(tenantID, modelName+"@"+instanceName+"@"+providerName, typ)
+	return err
 }
 
 // SetTenantDefaultModels validates and stores one default model selection.

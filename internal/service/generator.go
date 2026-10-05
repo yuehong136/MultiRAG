@@ -24,7 +24,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"multirag/internal/entity"
 	modelModule "multirag/internal/entity/models"
 	"multirag/internal/logger"
 )
@@ -32,11 +31,11 @@ import (
 // KeywordExtraction extracts keywords from content using LLM.
 // Corresponds to rag/prompts/generator.py:keyword_extraction().
 //
-// Uses ChatToModelByAPIKey via ModelCredentials to call the LLM with a keyword extraction prompt.
+// Uses the tenant-bound model, preserving instance URL and generation defaults.
 // Returns comma-separated top N important keywords/phrases from the content.
-func KeywordExtraction(ctx context.Context, creds *entity.ModelCredentials, content string, topN int) (string, error) {
-	if creds == nil {
-		return "", fmt.Errorf("model credentials is nil")
+func KeywordExtraction(ctx context.Context, chatModel *modelModule.ChatModel, content string, topN int) (string, error) {
+	if chatModel == nil {
+		return "", fmt.Errorf("chat model is nil")
 	}
 
 	if content == "" {
@@ -65,14 +64,13 @@ func KeywordExtraction(ctx context.Context, creds *entity.ModelCredentials, cont
 		{Role: "user", Content: "Output: "},
 	}
 
-	// Call LLM using ChatWithMessagesToModelByAPIKey
-	modelProviderSvc := NewModelProviderService()
-	responsePtr, code, err := modelProviderSvc.ChatWithMessagesToModelByAPIKey(creds.ProviderName, creds.ModelName, creds.APIKey, messages)
+	// Call the bound model with a request-local context.
+	responsePtr, err := chatWithContext(ctx, chatModel, messages)
 	if err != nil {
-		return "", fmt.Errorf("failed to extract keywords: code=%d, err=%w", int(code), err)
+		return "", fmt.Errorf("failed to extract keywords: %w", err)
 	}
 
-	response := *responsePtr
+	response := *responsePtr.Answer
 	logger.Info("KeywordExtraction result", zap.String("response", response))
 
 	// Clean up response - remove thinking tags if present
@@ -88,9 +86,9 @@ func KeywordExtraction(ctx context.Context, creds *entity.ModelCredentials, cont
 }
 
 // CrossLanguages translates a question into multiple languages using LLM.
-func CrossLanguages(ctx context.Context, creds *entity.ModelCredentials, query string, languages []string) (string, error) {
-	if creds == nil {
-		return "", fmt.Errorf("model credentials is nil")
+func CrossLanguages(ctx context.Context, chatModel *modelModule.ChatModel, query string, languages []string) (string, error) {
+	if chatModel == nil {
+		return "", fmt.Errorf("chat model is nil")
 	}
 
 	if query == "" {
@@ -125,14 +123,13 @@ func CrossLanguages(ctx context.Context, creds *entity.ModelCredentials, query s
 		{Role: "user", Content: userPrompt},
 	}
 
-	// Call LLM using ChatWithMessagesToModelByAPIKey
-	modelProviderSvc := NewModelProviderService()
-	responsePtr, code, err := modelProviderSvc.ChatWithMessagesToModelByAPIKey(creds.ProviderName, creds.ModelName, creds.APIKey, messages)
+	// Call the bound model with a request-local context.
+	responsePtr, err := chatWithContext(ctx, chatModel, messages)
 	if err != nil {
-		return query, fmt.Errorf("failed to translate question: code=%d, err=%w", int(code), err)
+		return query, fmt.Errorf("failed to translate question: %w", err)
 	}
 
-	response := *responsePtr
+	response := *responsePtr.Answer
 
 	// Clean up response - remove think tags and trim
 	response = strings.TrimSpace(response)
@@ -164,4 +161,19 @@ func CrossLanguages(ctx context.Context, creds *entity.ModelCredentials, query s
 	}
 
 	return query, nil
+}
+
+// chatWithContext copies binding metadata so concurrent consumers cannot replace each other's context.
+func chatWithContext(ctx context.Context, model *modelModule.ChatModel, messages []modelModule.Message) (*modelModule.ChatResponse, error) {
+	if model == nil {
+		return nil, fmt.Errorf("chat model is nil")
+	}
+	local := *model
+	api := modelModule.APIConfig{}
+	if model.APIConfig != nil {
+		api = *model.APIConfig
+	}
+	api.Context = ctx
+	local.APIConfig = &api
+	return local.ChatWithMessages(messages, nil)
 }

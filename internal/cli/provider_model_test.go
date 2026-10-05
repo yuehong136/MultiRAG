@@ -97,3 +97,10 @@ func TestCustomModelClientPayloadAndBusinessError(t *testing.T) {
 		t.Fatal("inconsistent request timeout")
 	}
 }
+
+func TestCreateDefaultProviderInstance(t *testing.T) {
+	cmd, err := NewParser(`CREATE PROVIDER 'vllm' INSTANCE 'default' KEY '' URL 'http://localhost:8000/v1';`).Parse(false)
+	if err != nil || cmd.Params["instance_name"] != "default" {
+		t.Fatalf("default instance: %+v %v", cmd, err)
+	}
+}

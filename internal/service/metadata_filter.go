@@ -20,14 +20,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
-	"multirag/internal/entity"
 	modelModule "multirag/internal/entity/models"
 	"multirag/internal/logger"
 )
@@ -48,44 +46,9 @@ type MetaFilterResult struct {
 // ManualValueResolver is a callback function to transform manual filter values
 type ManualValueResolver func(map[string]interface{}) map[string]interface{}
 
-// metaFilterTemplateCache caches the template content
-var metaFilterTemplateCache string
-
-// getMetaFilterTemplate loads and caches the meta_filter.md template
-func getMetaFilterTemplate() (string, error) {
-	if metaFilterTemplateCache != "" {
-		return metaFilterTemplateCache, nil
-	}
-
-	// Try to find meta_filter.md relative to the rag module
-	// Look for it in rag/prompts/ directory
-	possiblePaths := []string{
-		"rag/prompts/meta_filter.md",
-		"../rag/prompts/meta_filter.md",
-		"../../rag/prompts/meta_filter.md",
-	}
-
-	var templateContent string
-	for _, path := range possiblePaths {
-		content, err := os.ReadFile(path)
-		if err == nil {
-			templateContent = string(content)
-			break
-		}
-	}
-
-	if templateContent == "" {
-		// Fallback: return error
-		return "", fmt.Errorf("could not find meta_filter.md template")
-	}
-
-	metaFilterTemplateCache = templateContent
-	return templateContent, nil
-}
-
 // renderMetaFilterTemplate renders the Jinja2-like template from meta_filter.md
 func renderMetaFilterTemplate(currentDate, metadataKeys, question, constraints string) (string, error) {
-	templateContent, err := getMetaFilterTemplate()
+	templateContent, err := LoadPrompt("meta_filter")
 	if err != nil {
 		return "", err
 	}
@@ -111,21 +74,10 @@ func renderMetaFilterTemplate(currentDate, metadataKeys, question, constraints s
 	return strings.TrimSpace(result), nil
 }
 
-// genMetaFilterPrompt builds the prompt for LLM-based metadata filter generation
-func genMetaFilterPrompt(metaDataJSON, question, constraintsJSON, currentDate string) string {
-	prompt, err := renderMetaFilterTemplate(currentDate, metaDataJSON, question, constraintsJSON)
-	if err != nil {
-		logger.Warn("Failed to render meta filter template, using fallback", zap.Error(err))
-		// Fallback to empty prompt
-		return ""
-	}
-	return prompt
-}
-
 // GenMetaFilter generates filter conditions using LLM based on metadata and question.
-func GenMetaFilter(ctx context.Context, creds *entity.ModelCredentials, metaData map[string]interface{}, question string, constraints map[string]string) (*MetaFilterResult, error) {
-	if creds == nil {
-		return nil, fmt.Errorf("model credentials is nil")
+func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaData map[string]interface{}, question string, constraints map[string]string) (*MetaFilterResult, error) {
+	if chatModel == nil {
+		return nil, fmt.Errorf("chat model is nil")
 	}
 
 	if len(metaData) == 0 {
@@ -153,7 +105,10 @@ func GenMetaFilter(ctx context.Context, creds *entity.ModelCredentials, metaData
 
 	// Build the prompt
 	currentDate := time.Now().Format("2006-01-02")
-	systemPrompt := genMetaFilterPrompt(string(metaDataJSON), question, constraintsJSON, currentDate)
+	systemPrompt, err := renderMetaFilterTemplate(currentDate, string(metaDataJSON), question, constraintsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("load metadata prompt: %w", err)
+	}
 
 	// Build user message
 	userMessage := "Generate filters:"
@@ -164,20 +119,18 @@ func GenMetaFilter(ctx context.Context, creds *entity.ModelCredentials, metaData
 		{Role: "user", Content: userMessage},
 	}
 
-	// Call LLM using ChatWithMessagesToModelByAPIKey
-	modelProviderSvc := NewModelProviderService()
-	response, code, err := modelProviderSvc.ChatWithMessagesToModelByAPIKey(creds.ProviderName, creds.ModelName, creds.APIKey, messages)
+	// Call the bound model with a request-local context.
+	response, err := chatWithContext(ctx, chatModel, messages)
 	if err != nil {
-		logger.Warn("ChatWithMessagesToModelByAPIKey failed for GenMetaFilter",
-			zap.String("provider", creds.ProviderName),
-			zap.String("model", creds.ModelName),
-			zap.Int("code", int(code)),
+		logger.Warn("Bound chat failed for GenMetaFilter",
+			zap.String("provider", chatModel.ModelDriver.Name()),
+			zap.String("model", *chatModel.ModelName),
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to generate meta filter: %w", err)
 	}
 
 	// Clean up response
-	responseStr := strings.TrimSpace(*response)
+	responseStr := strings.TrimSpace(*response.Answer)
 	responseStr = thinkBlockRE.ReplaceAllString(responseStr, "")
 	responseStr = strings.TrimSpace(responseStr)
 
@@ -447,7 +400,7 @@ func ApplyMetaDataFilter(
 	metaDataFilter map[string]interface{},
 	metaData map[string]interface{},
 	question string,
-	creds *entity.ModelCredentials,
+	chatModel *modelModule.ChatModel,
 	baseDocIDs []string,
 	manualValueResolver ...ManualValueResolver,
 ) ([]string, bool) {
@@ -462,7 +415,7 @@ func ApplyMetaDataFilter(
 
 	switch method {
 	case "auto":
-		filters, err := GenMetaFilter(ctx, creds, metaData, question, nil)
+		filters, err := GenMetaFilter(ctx, chatModel, metaData, question, nil)
 		if err != nil {
 			logger.Warn("Failed to generate meta filter", zap.Error(err))
 			return docIDs, false
@@ -503,7 +456,7 @@ func ApplyMetaDataFilter(
 			}
 
 			if len(filteredMeta) > 0 {
-				filters, err := GenMetaFilter(ctx, creds, filteredMeta, question, constraints)
+				filters, err := GenMetaFilter(ctx, chatModel, filteredMeta, question, constraints)
 				if err != nil {
 					logger.Warn("Failed to generate meta filter", zap.Error(err))
 					return docIDs, false

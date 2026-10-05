@@ -1523,6 +1523,11 @@ Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型�
 类型不匹配和数据库错误均失败。每次绑定创建独立 driver，自定义 base_url 优先，否则复制 region/default URL；不改全局 provider 配置。
 模型实例列表/详情同时保留 region 和持久化原始 extra；自定义模型的启停保留 Extra。
 模型 max_tokens 声明表示容量元数据，不自动作为本次生成的 max_tokens；生成配置仍由调用方传入。
+关键词提取、跨语言及自动 metadata filter 统一使用 GetChatModel 绑定，保留实例 URL、
+模型默认配置与请求取消；重复的 ModelCredentials / 按 API key 聊天入口已删除。
+默认模型名称查询保持原始引用；空默认模型返回明确错误，未设置 TTS 返回空名称。
+API/CLI 允许创建名为 default 的实例；自定义模型可设置和查询为默认模型，受同一启用状态校验。
+实例改名/改凭据当前未实现，返回明确错误，不返回成功，也不自动改写历史引用。
 
 Go embedding 驱动只保留 `Encode(modelName, texts, apiConfig, embeddingConfig)`；
 绑定后的模型只需 `Encode(texts)`，检索将查询作为单项批次传入。`ModelBundle` 与旧

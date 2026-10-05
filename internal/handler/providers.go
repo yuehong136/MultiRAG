@@ -265,15 +265,6 @@ func (h *ProviderHandler) CreateProviderInstance(c *gin.Context) {
 		return
 	}
 
-	// Check if instance name is "default"
-	if req.InstanceName == "default" {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeBadRequest,
-			"message": "Instance name cannot be 'default'",
-		})
-		return
-	}
-
 	user, code, message := GetUser(c)
 	if code != common.CodeSuccess {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": code, "message": message})

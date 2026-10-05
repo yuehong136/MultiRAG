@@ -1026,11 +1026,6 @@ func (p *Parser) parseCreateProviderInstance() (*Command, error) {
 		return nil, fmt.Errorf("expected instance name: %w", err)
 	}
 
-	// Check if instance_name is "default"
-	if instanceName == "default" {
-		return nil, fmt.Errorf("instance name cannot be 'default'")
-	}
-
 	p.nextToken()
 	// Keep the legacy positional API key and accept the explicit KEY grammar.
 	if p.curToken.Type == TokenKey {

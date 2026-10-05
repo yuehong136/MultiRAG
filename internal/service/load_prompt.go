@@ -38,15 +38,15 @@ func init() {
 	// Strategy 1: Check working directory first (most reliable during development/tests)
 	cwd, err := os.Getwd()
 	if err == nil {
-		// Check if CWD has rag/prompts directly
-		if _, err := os.Stat(filepath.Join(cwd, "rag", "prompts")); err == nil {
+		// Check if CWD has core/prompts directly
+		if _, err := os.Stat(filepath.Join(cwd, "core", "prompts")); err == nil {
 			promptsBaseDir = cwd
 			return
 		}
-		// Walk up from CWD looking for rag/prompts
+		// Walk up from CWD looking for core/prompts
 		dir := cwd
 		for dir != "/" && dir != "" {
-			if _, err := os.Stat(filepath.Join(dir, "rag", "prompts")); err == nil {
+			if _, err := os.Stat(filepath.Join(dir, "core", "prompts")); err == nil {
 				promptsBaseDir = dir
 				return
 			}
@@ -59,7 +59,7 @@ func init() {
 	if err == nil {
 		dir := filepath.Dir(exe)
 		for dir != "/" && dir != "" {
-			if _, err := os.Stat(filepath.Join(dir, "rag", "prompts")); err == nil {
+			if _, err := os.Stat(filepath.Join(dir, "core", "prompts")); err == nil {
 				promptsBaseDir = dir
 				return
 			}
@@ -68,12 +68,12 @@ func init() {
 	}
 
 	// Final fallback
-	promptsBaseDir = "/ragflow"
+	promptsBaseDir = "/multirag"
 }
 
-// LoadPrompt loads a prompt by name from the rag/prompts/ directory.
+// LoadPrompt loads a prompt by name from the core/prompts/ directory.
 // It caches loaded prompts for subsequent calls.
-// Corresponds to rag/prompts/template.py:load_prompt()
+// Corresponds to core/prompts/template.py:load_prompt()
 func LoadPrompt(name string) (string, error) {
 	promptMu.RLock()
 	if cached, ok := promptCache[name]; ok {
@@ -82,10 +82,10 @@ func LoadPrompt(name string) (string, error) {
 	}
 	promptMu.RUnlock()
 
-	promptPath := filepath.Join(promptsBaseDir, "rag", "prompts", fmt.Sprintf("%s.md", name))
+	promptPath := filepath.Join(promptsBaseDir, "core", "prompts", fmt.Sprintf("%s.md", name))
 	content, err := os.ReadFile(promptPath)
 	if err != nil {
-		return "", fmt.Errorf("prompt file '%s.md' not found in rag/prompts/: %w", name, err)
+		return "", fmt.Errorf("prompt file '%s.md' not found in core/prompts/: %w", name, err)
 	}
 
 	cached := strings.TrimSpace(string(content))
@@ -98,7 +98,7 @@ func LoadPrompt(name string) (string, error) {
 
 // RenderPrompt renders a prompt template with the given variables.
 // Supports {{ variable }} and {{ variable | filter(args) }} syntax.
-// Corresponds to rag/prompts/generator.py template rendering (Jinja2).
+// Corresponds to core/prompts/generator.py template rendering (Jinja2).
 func RenderPrompt(template string, data map[string]interface{}) string {
 	// Handle {{ variable | filter(args) }} syntax - capture filter arguments too
 	filterPattern := regexp.MustCompile(`\{\{\s*(\w+)\s*\|\s*(\w+)\s*\(\s*([^)]*)\s*\)\s*\}\}`)

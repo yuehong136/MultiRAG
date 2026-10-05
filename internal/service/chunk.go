@@ -191,7 +191,7 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 
 	// Determine meta_data_filter
 	var chatID string
-	var creds *entity.ModelCredentials
+	var chatModel *models.ChatModel
 	filter := req.Filter
 
 	if req.SearchID != nil && *req.SearchID != "" {
@@ -216,27 +216,27 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 			modelProviderSvc := NewModelProviderService()
 			if chatID != "" {
 				// Use chat_id from search_config
-				creds, err = modelProviderSvc.GetModelByName(chatID, tenantIDs[0])
+				chatModel, err = modelProviderSvc.GetChatModel(tenantIDs[0], chatID)
 				if err != nil {
 					logger.Warn("Failed to get chat model from search_config chat_id, using tenant default", zap.String("chatID", chatID), zap.Error(err))
 				} else {
 					logger.Info("Fetched chat model (from search_config) for metadata filter",
 						zap.String("chatID", chatID),
 						zap.String("tenantID", tenantIDs[0]),
-						zap.String("providerName", creds.ProviderName),
-						zap.String("modelName", creds.ModelName))
+						zap.String("providerName", chatModel.ModelDriver.Name()),
+						zap.String("modelName", *chatModel.ModelName))
 				}
 			}
-			// If no chatID from search_config, or creds not found, use tenant default
-			if creds == nil {
-				creds, err = modelProviderSvc.GetDefaultModel(entity.ModelTypeChat, tenantIDs[0])
+			// If no chatID from search_config, or chatModel not found, use tenant default
+			if chatModel == nil {
+				chatModel, err = modelProviderSvc.GetChatModel(tenantIDs[0], "")
 				if err != nil {
 					logger.Warn("Failed to get tenant default chat model for meta_data_filter", zap.Error(err))
 				} else {
 					logger.Info("Fetched chat model (tenant default) for metadata filter",
 						zap.String("tenantID", tenantIDs[0]),
-						zap.String("providerName", creds.ProviderName),
-						zap.String("modelName", creds.ModelName))
+						zap.String("providerName", chatModel.ModelDriver.Name()),
+						zap.String("modelName", *chatModel.ModelName))
 				}
 			}
 		}
@@ -253,7 +253,7 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 			logger.Warn("Failed to get flatted metadata", zap.Error(err))
 		} else {
 			logger.Info("metadata filter conditions", zap.Any("filter", filter))
-			filteredDocIDs, _ := ApplyMetaDataFilter(ctx, filter, flattedMeta, req.Question, creds, req.DocIDs)
+			filteredDocIDs, _ := ApplyMetaDataFilter(ctx, filter, flattedMeta, req.Question, chatModel, req.DocIDs)
 			docIDs = filteredDocIDs
 			logger.Info("ApplyMetaDataFilter result", zap.Strings("docIDs", docIDs))
 		}
@@ -265,20 +265,20 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 	// Get chat model for cross_languages and keyword_extraction
 	if len(req.CrossLanguages) > 0 || (req.Keyword != nil && *req.Keyword) {
 		modelProviderSvc := NewModelProviderService()
-		creds, err = modelProviderSvc.GetDefaultModel(entity.ModelTypeChat, tenantIDs[0])
+		chatModel, err = modelProviderSvc.GetChatModel(tenantIDs[0], "")
 		if err != nil {
 			logger.Warn("Failed to get default chat model for LLM transformations", zap.Error(err))
 		} else {
 			logger.Info("Fetched chat model (tenant default) for cross_languages/keyword_extraction",
 				zap.String("tenantID", tenantIDs[0]),
-				zap.String("providerName", creds.ProviderName),
-				zap.String("modelName", creds.ModelName))
+				zap.String("providerName", chatModel.ModelDriver.Name()),
+				zap.String("modelName", *chatModel.ModelName))
 		}
 	}
 
 	// Apply cross_languages on the question (translate question)
-	if creds != nil && len(req.CrossLanguages) > 0 {
-		translated, err := CrossLanguages(ctx, creds, req.Question, req.CrossLanguages)
+	if chatModel != nil && len(req.CrossLanguages) > 0 {
+		translated, err := CrossLanguages(ctx, chatModel, req.Question, req.CrossLanguages)
 		if err != nil {
 			logger.Warn("Failed to translate question", zap.Error(err))
 		} else {
@@ -287,8 +287,8 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 	}
 
 	// Apply keyword extraction on the question (append keywords to question)
-	if creds != nil && req.Keyword != nil && *req.Keyword {
-		extractedKeywords, err := KeywordExtraction(ctx, creds, modifiedQuestion, 3)
+	if chatModel != nil && req.Keyword != nil && *req.Keyword {
+		extractedKeywords, err := KeywordExtraction(ctx, chatModel, modifiedQuestion, 3)
 		if err != nil {
 			logger.Warn("Failed to extract keywords from question", zap.Error(err))
 		} else if extractedKeywords != "" {
