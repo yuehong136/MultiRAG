@@ -2598,13 +2598,14 @@ class DocumentService(CommonService):
         return UserTenantService.can_access_tenant_resources(membership.role)
 
     @classmethod
-    def accessible4deletion(cls, db: Session, doc_id, user_id):
+    def accessible4deletion(cls, db: Session, doc_id: str, user_id: str) -> bool:
         stmt = (
             select(cls.model.id)
             .join(Knowledgebase, cls.model.kb_id == Knowledgebase.id)
-            .join(UserTenant, and_(UserTenant.tenant_id == Knowledgebase.created_by, UserTenant.user_id == user_id))
+            .join(UserTenant, and_(UserTenant.tenant_id == Knowledgebase.tenant_id, UserTenant.user_id == user_id))
             .where(
                 cls.model.id == doc_id,
+                Knowledgebase.status == StatusEnum.VALID.value,
                 UserTenant.status == StatusEnum.VALID.value,
                 or_(UserTenant.role == UserTenantRole.NORMAL, UserTenant.role == UserTenantRole.ADMIN, UserTenant.role == UserTenantRole.OWNER),
             )

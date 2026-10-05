@@ -84,9 +84,23 @@ Skills Space 应在自己的持久 operation 中维护授权后的资源清单�
 
 合法 `delete_all=true` 仅使用当前 dataset 的 ID 集合；空 dataset 返回
 `{"code":0,"data":{"deleted":0}}`。重复指定 ID 在预检后去重。
+文档 ID 是字符串，允许 connector 的非 UUID 标识；不存在 ID 由存在性/范围预检拒绝，
+不依靠 UUID 格式判定权限。重复 ID 只删除、计数一次；这个合同不改变其他请求的 UUID 校验。
 该预检合同不等于后续合法请求中的跨存储删除原子性保证。
 
-`tests/integration/test_document_delete_scope.py` 使用真实 JWT 请求，比较拒绝前后的
+Web 文档页通过 `useDeleteDocument(datasetId)` 调用该 REST 入口。现有回退
+`POST /v1/document/rm` 接收 `doc_id: string[]`，也接受非 UUID 并去重；它没有 dataset
+参数，逐项校验文档存在、dataset 有效、用户属于 dataset 的 `tenant_id` 且角色为
+owner/admin/normal，全部通过才删除。不能用 `created_by` 代替所属 tenant。
+任一项无权限或不存在时整批 `retcode=109`；成功仍为 `code=0,data=true`。
+
+旧 `DELETE /v1/dataset/{dataset_id}/documents/{document_id}` 先校验 dataset 权限，
+再验证文档的 `kb_id` 与路径 dataset 一致，之后才初始化文件目录或进入删除服务。
+无权限为 HTTP 403；不存在或错 dataset 为 HTTP 404。含 `/` 的 ID 使用 REST JSON
+批删入口，此旧单路径参数不提供斜杠 ID 合同。
+
+`tests/integration/test_document_delete_scope.py` 使用真实 JWT/API-key 请求，比较拒绝前后的
 完整 SQL、物理对象字节、Milvus payload/向量以及专用 Redis 队列；并读回合法
-`delete_all` 后的目标清理与其他 dataset 保留。现有路由单测
+`delete_all`、非 UUID 重复 ID 删除后的目标清理与其他 dataset 保留，包含创建人与
+所属 tenant 不同、无效 dataset 和两个兼容入口。现有路由单测
 `tests/unit/test_restful_document_delete_route.py` 覆盖归属、去重、互斥与业务码。

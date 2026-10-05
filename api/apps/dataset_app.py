@@ -5,11 +5,12 @@ import re
 import warnings
 from functools import partial
 from io import BytesIO
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from fastapi import File as Fe
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -389,35 +390,17 @@ async def upload_documents(
 
 
 @router.delete("/{dataset_id}/documents/{document_id}", summary="删除文件", response_description="成功删除文件")
-def delete_document(dataset_id: str, document_id: str, db: Session = Depends(get_db), user=Depends(manager)):
-    root_folder = FileService.get_root_folder(db, user.id)
-    parent_file_id = root_folder.id
-    FileService.init_knowledgebase_docs(db, parent_file_id, user.id)
-    errors = ""
-    try:
-        document = DocumentService.get_by_id(db, document_id)
-        if not document:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document {document_id} not found!")
+def delete_document(dataset_id: str, document_id: str, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Response:
+    """Validate dataset access and document membership before any deletion side effect."""
+    if not KnowledgebaseService.accessible(db, kb_id=dataset_id, user_id=user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No authorization for this dataset.")
+    document = DocumentService.get_by_id(db, document_id)
+    if not document or document.kb_id != dataset_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found in this dataset.")
 
-        tenant_id = DocumentService.get_tenant_id(db, document_id)
-        if not tenant_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"You cannot delete this document {document_id} due to the authorization reason!")
-
-        real_dataset_id, _location = File2DocumentService.get_storage_address(db, doc_id=document_id)
-        if real_dataset_id != dataset_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"The document {document_id} is not in the dataset: {dataset_id}, but in the dataset: {real_dataset_id}.")
-
-        if not DocumentService.remove_document(db, document, tenant_id):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="There was an error during the document removal process. Please check the status of the RAGFlow server and try the removal again.",
-            )
-    except Exception as e:
-        errors += str(e)
-
+    errors = FileService.delete_docs(db, [document_id], user.id)
     if errors:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=errors)
-
     return construct_json_result(data=True, code=RetCode.SUCCESS)
 
 

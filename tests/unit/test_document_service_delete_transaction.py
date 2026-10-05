@@ -245,13 +245,14 @@ def test_remove_document_swallows_post_commit_cleanup_failures(monkeypatch: pyte
 def test_dataset_delete_document_route_no_longer_runs_duplicate_db_deletes(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _build_session()
     user = type("User", (), {"id": "user-1"})()
-    document = Document(id="doc-1")
+    document = Document(id="doc-1", kb_id="kb-1")
 
     remove_document = MagicMock(return_value=True)
     file_delete = MagicMock()
     relation_delete = MagicMock()
 
-    monkeypatch.setattr(dataset_app.FileService, "get_root_folder", lambda *_args, **_kwargs: type("Root", (), {"id": "root"})())
+    monkeypatch.setattr(dataset_app.KnowledgebaseService, "accessible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(dataset_app.FileService, "get_root_folder", lambda *_args, **_kwargs: {"id": "root"})
     monkeypatch.setattr(dataset_app.FileService, "init_knowledgebase_docs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(dataset_app.DocumentService, "get_by_id", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(dataset_app.DocumentService, "get_tenant_id", lambda *_args, **_kwargs: "tenant-1")
