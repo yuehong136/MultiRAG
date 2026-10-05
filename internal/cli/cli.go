@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"multirag/internal/common"
 	"os"
 	"os/signal"
 	"strconv"
@@ -1237,6 +1238,7 @@ func (c *CLI) Cleanup() {
 
 // RunInteractive runs the CLI in interactive mode
 func RunInteractive() error {
+	defer common.Sync()
 	cli, err := NewCLI()
 	if err != nil {
 		return fmt.Errorf("failed to create CLI: %v", err)
@@ -1248,6 +1250,7 @@ func RunInteractive() error {
 	go func() {
 		<-sigChan
 		cli.Cleanup()
+		common.Sync()
 		os.Exit(0)
 	}()
 

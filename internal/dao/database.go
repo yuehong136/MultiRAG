@@ -30,8 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"multirag/internal/common"
 	"multirag/internal/entity"
-	"multirag/internal/logger"
 	"multirag/internal/server"
 	"multirag/internal/utility"
 
@@ -178,13 +178,13 @@ func InitDB() error {
 		return fmt.Errorf("failed to run manual migrations: %w", err)
 	}
 
-	logger.Info("Database connected and migrated successfully")
+	common.Info("Database connected and migrated successfully")
 
 	modelProviderManager, err = entity.NewProviderManager(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "models"))
 	if err != nil {
-		log.Fatal("Failed to load model providers:", err)
+		return fmt.Errorf("failed to load model providers: %w", err)
 	}
-	logger.Info("Model providers loaded successfully")
+	common.Info("Model providers loaded successfully")
 	return nil
 }
 
@@ -225,15 +225,15 @@ func autoMigrateSafely(db *gorm.DB, model interface{}) error {
 	errStr := err.Error()
 	// MySQL errors
 	if strings.Contains(errStr, "Error 1061") && strings.Contains(errStr, "Duplicate key name") {
-		logger.Info("Index already exists, skipping", zap.String("error", errStr))
+		common.Info("Index already exists, skipping", zap.String("error", errStr))
 		return nil
 	}
 	if strings.Contains(errStr, "Error 1060") && strings.Contains(errStr, "Duplicate column name") {
-		logger.Info("Column already exists, skipping", zap.String("error", errStr))
+		common.Info("Column already exists, skipping", zap.String("error", errStr))
 		return nil
 	}
 	if strings.Contains(errStr, "Error 1050") && strings.Contains(errStr, "Table") {
-		logger.Info("Table already exists, skipping", zap.String("error", errStr))
+		common.Info("Table already exists, skipping", zap.String("error", errStr))
 		return nil
 	}
 	// PostgreSQL errors
@@ -242,7 +242,7 @@ func autoMigrateSafely(db *gorm.DB, model interface{}) error {
 	if strings.Contains(errStr, "42P07") || strings.Contains(errStr, "42701") ||
 		strings.Contains(errStr, "42P16") || strings.Contains(errStr, "23502") ||
 		strings.Contains(errStr, "already exists") {
-		logger.Info("Schema conflict (will be handled by migrations), skipping", zap.String("error", errStr))
+		common.Info("Schema conflict (will be handled by migrations), skipping", zap.String("error", errStr))
 		return nil
 	}
 

@@ -28,13 +28,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/utility"
 )
 
 func init() {
 	// Initialize logger for tests
-	if err := logger.Init("info"); err != nil {
+	if err := common.Init("info"); err != nil {
 		fmt.Printf("Failed to initialize logger: %v\n", err)
 	}
 }
@@ -493,7 +493,7 @@ func ExampleGetPoolStats() {
 // logPoolStats logs pool statistics using the zap logger
 func logPoolStats(msg string) {
 	stats := GetPoolStats()
-	logger.Info(msg,
+	common.Info(msg,
 		zap.Bool("initialized", stats["initialized"].(bool)),
 		zap.Int32("current_size", stats["current_size"].(int32)),
 		zap.Int("min_size", stats["min_size"].(int)),

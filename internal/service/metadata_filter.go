@@ -26,8 +26,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"multirag/internal/common"
 	modelModule "multirag/internal/entity/models"
-	"multirag/internal/logger"
 )
 
 // MetaFilterCondition represents a single filter condition
@@ -122,7 +122,7 @@ func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaDa
 	// Call the bound model with a request-local context.
 	response, err := chatWithContext(ctx, chatModel, messages)
 	if err != nil {
-		logger.Warn("Bound chat failed for GenMetaFilter",
+		common.Warn("Bound chat failed for GenMetaFilter",
 			zap.String("provider", chatModel.ModelDriver.Name()),
 			zap.String("model", *chatModel.ModelName),
 			zap.Error(err))
@@ -143,11 +143,11 @@ func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaDa
 	// Parse JSON
 	var result MetaFilterResult
 	if err := json.Unmarshal([]byte(responseStr), &result); err != nil {
-		logger.Warn("Failed to parse meta filter response, returning empty conditions", zap.Error(err))
+		common.Warn("Failed to parse meta filter response, returning empty conditions", zap.Error(err))
 		return &MetaFilterResult{Conditions: []MetaFilterCondition{}, Logic: "and"}, nil
 	}
 
-	logger.Info("GenMetaFilter result", zap.Any("conditions", result.Conditions), zap.String("logic", result.Logic))
+	common.Info("GenMetaFilter result", zap.Any("conditions", result.Conditions), zap.String("logic", result.Logic))
 
 	return &result, nil
 }
@@ -417,7 +417,7 @@ func ApplyMetaDataFilter(
 	case "auto":
 		filters, err := GenMetaFilter(ctx, chatModel, metaData, question, nil)
 		if err != nil {
-			logger.Warn("Failed to generate meta filter", zap.Error(err))
+			common.Warn("Failed to generate meta filter", zap.Error(err))
 			return docIDs, false
 		}
 		filteredIDs := ApplyMetaFilter(metaData, filters.Conditions, filters.Logic)
@@ -458,7 +458,7 @@ func ApplyMetaDataFilter(
 			if len(filteredMeta) > 0 {
 				filters, err := GenMetaFilter(ctx, chatModel, filteredMeta, question, constraints)
 				if err != nil {
-					logger.Warn("Failed to generate meta filter", zap.Error(err))
+					common.Warn("Failed to generate meta filter", zap.Error(err))
 					return docIDs, false
 				}
 				filteredIDs := ApplyMetaFilter(metaData, filters.Conditions, filters.Logic)

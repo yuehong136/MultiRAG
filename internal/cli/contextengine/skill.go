@@ -35,7 +35,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 )
 
 // Ported from RAGFlow 4ee0702, internal/cli/filesystem/skill.go.
@@ -566,7 +566,7 @@ func (p *SkillProvider) listSkillsInSpaceFromFileSystem(ctx stdctx.Context, spac
 	if skillsResult.Code != 0 {
 		return nil, fmt.Errorf("failed to list skills: %s", skillsResult.Msg)
 	}
-	logger.Debug("File system list response", zap.Int("files_count", len(skillsResult.Data.Files)))
+	common.Debug("File system list response", zap.Int("files_count", len(skillsResult.Data.Files)))
 
 	// Convert folders to nodes
 	nodes := make([]*Node, 0)
@@ -601,7 +601,7 @@ func (p *SkillProvider) listSkillsInSpaceFromFileSystem(ctx stdctx.Context, spac
 	end := min(offset+limit, total)
 	nodes = nodes[offset:end]
 
-	logger.Info("Listed skills via FILE SYSTEM", zap.String("space", spaceName), zap.Int("count", len(nodes)), zap.Int("total", total))
+	common.Info("Listed skills via FILE SYSTEM", zap.String("space", spaceName), zap.Int("count", len(nodes)), zap.Int("total", total))
 
 	return &Result{
 		Nodes:      nodes,

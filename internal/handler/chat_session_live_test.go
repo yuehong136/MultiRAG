@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
-	"multirag/internal/logger"
 	"multirag/internal/server"
 	"multirag/internal/service"
 )
@@ -33,7 +33,7 @@ func TestChatSessionLiveHTTPAndSQL(t *testing.T) {
 		t.Skip("requires an owned chat-session scratch database config")
 	}
 	t.Chdir(filepath.Join("..", ".."))
-	if err := logger.Init("error"); err != nil {
+	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.FromConfigFile(configPath); err != nil {

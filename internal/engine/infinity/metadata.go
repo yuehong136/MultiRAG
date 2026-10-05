@@ -27,7 +27,7 @@ import (
 	infinity "github.com/infiniflow/infinity-go-sdk"
 	"go.uber.org/zap"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/utility"
 )
 
@@ -77,7 +77,7 @@ func (e *infinityEngine) CreateMetadata(ctx context.Context, indexName string) e
 	if err != nil {
 		return fmt.Errorf("Failed to create doc meta table: %w", err)
 	}
-	logger.Debug("Infinity created doc meta table", zap.String("tableName", indexName))
+	common.Debug("Infinity created doc meta table", zap.String("tableName", indexName))
 
 	// Get table for creating indexes
 	table, err := db.GetTable(indexName)
@@ -116,7 +116,7 @@ func (e *infinityEngine) CreateMetadata(ctx context.Context, indexName string) e
 // Replace existing metadata with same id and kb_id
 func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[string]interface{}, tenantID string) ([]string, error) {
 	tableName := fmt.Sprintf("multirag_doc_meta_%s", tenantID)
-	logger.Info("InfinityConnection.InsertMetadata called", zap.String("tableName", tableName), zap.Int("metaCount", len(metadata)))
+	common.Info("InfinityConnection.InsertMetadata called", zap.String("tableName", tableName), zap.Int("metaCount", len(metadata)))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -166,12 +166,12 @@ func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[stri
 			idList[i] = fmt.Sprintf("(id = %s AND kb_id = %s)", docID, kbID)
 		}
 		filter := strings.Join(idList, " OR ")
-		logger.Debug(fmt.Sprintf("Deleting existing metadata with filter: %s", filter))
+		common.Debug(fmt.Sprintf("Deleting existing metadata with filter: %s", filter))
 		delResp, delErr := table.Delete(filter)
 		if delErr != nil {
-			logger.Warn(fmt.Sprintf("Failed to delete existing metadata: %v", delErr))
+			common.Warn(fmt.Sprintf("Failed to delete existing metadata: %v", delErr))
 		} else if delResp.DeletedRows > 0 {
-			logger.Info(fmt.Sprintf("Deleted %d existing metadata entries", delResp.DeletedRows))
+			common.Info(fmt.Sprintf("Deleted %d existing metadata entries", delResp.DeletedRows))
 		}
 	}
 
@@ -181,7 +181,7 @@ func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[stri
 		return nil, fmt.Errorf("Failed to insert metadata: %w", err)
 	}
 
-	logger.Info("InfinityConnection.InsertMetadata result", zap.String("tableName", tableName), zap.Int("metaCount", len(metadata)))
+	common.Info("InfinityConnection.InsertMetadata result", zap.String("tableName", tableName), zap.Int("metaCount", len(metadata)))
 	return []string{}, nil
 }
 
@@ -191,7 +191,7 @@ func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[stri
 // Table name format: multirag_doc_meta_{tenant_id}
 func (e *infinityEngine) UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error {
 	tableName := fmt.Sprintf("multirag_doc_meta_%s", tenantID)
-	logger.Info("InfinityConnection.UpdateMetadata called", zap.String("tableName", tableName), zap.String("docID", docID), zap.String("kbID", kbID))
+	common.Info("InfinityConnection.UpdateMetadata called", zap.String("tableName", tableName), zap.String("docID", docID), zap.String("kbID", kbID))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -213,7 +213,7 @@ func (e *infinityEngine) UpdateMetadata(ctx context.Context, docID string, kbID 
 	queryResult, err := table.Output([]string{"id", "kb_id", "meta_fields"}).Filter(filter).Limit(1).Offset(0).ToResult()
 	rowExists := false
 	if err != nil {
-		logger.Warn(fmt.Sprintf("Failed to query existing metadata: %v", err))
+		common.Warn(fmt.Sprintf("Failed to query existing metadata: %v", err))
 		// If query fails, treat as not exists and insert
 	} else if qr, ok := queryResult.(*infinity.QueryResult); ok && qr != nil && len(qr.Data["id"]) > 0 {
 		rowExists = true
@@ -222,7 +222,7 @@ func (e *infinityEngine) UpdateMetadata(ctx context.Context, docID string, kbID 
 			switch v := metaArr[0].(type) {
 			case string:
 				if err := json.Unmarshal([]byte(v), &existingMetaFields); err != nil {
-					logger.Warn(fmt.Sprintf("Failed to parse existing meta_fields: %v", err))
+					common.Warn(fmt.Sprintf("Failed to parse existing meta_fields: %v", err))
 					existingMetaFields = make(map[string]interface{})
 				}
 			case []byte:
@@ -246,7 +246,7 @@ func (e *infinityEngine) UpdateMetadata(ctx context.Context, docID string, kbID 
 		updatedFields := map[string]interface{}{
 			"meta_fields": utility.ConvertMapToJSONString(metaFields),
 		}
-		logger.Info(fmt.Sprintf("UpdateMetadata: updating existing row, table=%s, filter=%s, newValue=%v", tableName, filter, updatedFields))
+		common.Info(fmt.Sprintf("UpdateMetadata: updating existing row, table=%s, filter=%s, newValue=%v", tableName, filter, updatedFields))
 		_, err = table.Update(filter, updatedFields)
 		if err != nil {
 			return fmt.Errorf("failed to update metadata: %w", err)
@@ -258,13 +258,13 @@ func (e *infinityEngine) UpdateMetadata(ctx context.Context, docID string, kbID 
 			"kb_id":       kbID,
 			"meta_fields": utility.ConvertMapToJSONString(metaFields),
 		}
-		logger.Info(fmt.Sprintf("UpdateMetadata: inserting new row, table=%s, newValue=%v", tableName, insertFields))
+		common.Info(fmt.Sprintf("UpdateMetadata: inserting new row, table=%s, newValue=%v", tableName, insertFields))
 		_, err = table.Insert(insertFields)
 		if err != nil {
 			return fmt.Errorf("failed to insert metadata: %w", err)
 		}
 	}
 
-	logger.Info("InfinityConnection.UpdateMetadata completes", zap.String("tableName", tableName), zap.String("docID", docID))
+	common.Info("InfinityConnection.UpdateMetadata completes", zap.String("tableName", tableName), zap.String("docID", docID))
 	return nil
 }

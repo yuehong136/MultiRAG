@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"strings"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 
 	infinity "github.com/infiniflow/infinity-go-sdk"
 	"go.uber.org/zap"
@@ -47,7 +47,7 @@ func (e *infinityEngine) Delete(ctx context.Context, condition map[string]interf
 
 	table, err := db.GetTable(tableName)
 	if err != nil {
-		logger.Warn(fmt.Sprintf("Table %s does not exist, skipping delete", tableName))
+		common.Warn(fmt.Sprintf("Table %s does not exist, skipping delete", tableName))
 		return 0, nil
 	}
 
@@ -104,7 +104,7 @@ func (e *infinityEngine) DropTable(ctx context.Context, indexName string) error 
 	if err != nil {
 		return fmt.Errorf("Failed to drop table: %w", err)
 	}
-	logger.Debug("Infinity dropped table", zap.String("tableName", indexName))
+	common.Debug("Infinity dropped table", zap.String("tableName", indexName))
 	return nil
 }
 
@@ -198,7 +198,7 @@ func existsCondition(field string, tableColumns map[string]struct {
 }) string {
 	col, colOk := tableColumns[field]
 	if !colOk {
-		logger.Warn(fmt.Sprintf("Column '%s' not found in table columns", field))
+		common.Warn(fmt.Sprintf("Column '%s' not found in table columns", field))
 		return fmt.Sprintf("%s!=null", field)
 	}
 	if strings.Contains(strings.ToLower(col.Type), "char") {

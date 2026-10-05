@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 	"go.uber.org/zap"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/server"
 )
 
@@ -57,7 +57,7 @@ func NewEngine(cfg interface{}) (*milvusEngine, error) {
 		return nil, fmt.Errorf("failed to connect to Milvus: %w", err)
 	}
 
-	logger.Info("Milvus engine connected", zap.String("address", addr))
+	common.Info("Milvus engine connected", zap.String("address", addr))
 	return &milvusEngine{client: cli, config: milvusConfig}, nil
 }
 

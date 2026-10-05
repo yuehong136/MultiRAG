@@ -26,7 +26,7 @@ import (
 
 	infinity "github.com/infiniflow/infinity-go-sdk"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/server"
 )
 
@@ -53,7 +53,7 @@ func NewInfinityClient(cfg *server.InfinityConfig) (*infinityClient, error) {
 	}
 
 	// Retry connecting for up to 120 seconds (24 attempts * 5 seconds)
-	logger.Info("Connecting to Infinity")
+	common.Info("Connecting to Infinity")
 	var conn *infinity.InfinityConnection
 	var err error
 	for i := 0; i < 24; i++ {
@@ -77,7 +77,7 @@ func NewInfinityClient(cfg *server.InfinityConfig) (*infinityClient, error) {
 
 // WaitForHealthy blocks until Infinity is healthy or timeout
 func (c *infinityClient) WaitForHealthy(ctx context.Context, timeout time.Duration) error {
-	logger.Info("Waiting for Infinity to be healthy")
+	common.Info("Waiting for Infinity to be healthy")
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {
@@ -109,7 +109,7 @@ func (c *infinityClient) WaitForHealthy(ctx context.Context, timeout time.Durati
 		if errorCode.Int() == 0 {
 			status := serverStatus.String()
 			if status == "started" || status == "alive" {
-				logger.Info("Infinity is healthy")
+				common.Info("Infinity is healthy")
 				return nil
 			}
 		}

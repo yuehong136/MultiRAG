@@ -26,6 +26,8 @@ import (
 	"strings"
 	"time"
 
+	"multirag/internal/common"
+
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
@@ -220,7 +222,7 @@ type RedisConfig struct {
 var (
 	globalConfig *Config
 	globalViper  *viper.Viper
-	zapLogger    *zap.Logger
+	zapLogger    = common.Logger
 	allConfigs   []map[string]interface{}
 )
 

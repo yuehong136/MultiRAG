@@ -30,8 +30,6 @@ import (
 	"strings"
 	"unicode"
 
-	"multirag/internal/logger"
-
 	infinity "github.com/infiniflow/infinity-go-sdk"
 	"go.uber.org/zap"
 )
@@ -40,8 +38,8 @@ import (
 // It supports three matching types: MatchTextExpr (full-text), MatchDenseExpr (vector), and FusionExpr (combined).
 // If no match expressions are provided, Search relies solely on filter (e.g., doc_id, available_int) to find results.
 func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
-	logger.Info("Search in Infinity started", zap.Any("indexNames", req.IndexNames))
-	if logger.IsDebugEnabled() {
+	common.Info("Search in Infinity started", zap.Any("indexNames", req.IndexNames))
+	if common.IsDebugEnabled() {
 		// Format match expressions for logging
 		var matchExprsStr string
 		for i, expr := range req.MatchExprs {
@@ -56,7 +54,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 				matchExprsStr += fmt.Sprintf("    [%d] unknown type\n", i)
 			}
 		}
-		logger.Debug(fmt.Sprintf("Search request:\n"+
+		common.Debug(fmt.Sprintf("Search request:\n"+
 			"    indexNames=%v\n"+
 			"    KbIDs=%v\n"+
 			"    offset=%d, limit=%d\n"+
@@ -305,7 +303,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 
 				table = table.MatchText(fields, questionText, textTopN, extraOptions)
 
-				logger.Debug(fmt.Sprintf(
+				common.Debug(fmt.Sprintf(
 					"MatchTextExpr:\n"+
 						"    fields=%s\n"+
 						"    matching_text=%s\n"+
@@ -354,7 +352,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 					"filter":    denseFilterStr,
 				}
 
-				logger.Debug(fmt.Sprintf(
+				common.Debug(fmt.Sprintf(
 					"MatchDenseExpr:\n"+
 						"    field=%s\n"+
 						"    topn=%d\n"+
@@ -380,7 +378,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 						fusionParams[k] = v
 					}
 				}
-				logger.Debug(fmt.Sprintf(
+				common.Debug(fmt.Sprintf(
 					"FusionExpr:\n"+
 						"    method=%s\n"+
 						"    topn=%d\n"+
@@ -406,7 +404,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 
 			// Add filter when there's no text/vector match (like metadata queries)
 			if !hasTextMatch && !hasVectorMatch && filterStr != "" {
-				logger.Debug(fmt.Sprintf("Adding filter for no-match query: %s", filterStr))
+				common.Debug(fmt.Sprintf("Adding filter for no-match query: %s", filterStr))
 				table = table.Filter(filterStr)
 			}
 
@@ -475,7 +473,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		allResults = allResults[:pageSize]
 	}
 
-	logger.Info("Search in Infinity completed", zap.Any("indexNames", req.IndexNames), zap.Int("returnedRows", len(allResults)), zap.Int64("totalHits", totalHits))
+	common.Info("Search in Infinity completed", zap.Any("indexNames", req.IndexNames), zap.Int("returnedRows", len(allResults)), zap.Int64("totalHits", totalHits))
 
 	return &types.SearchResult{
 		Chunks: allResults,

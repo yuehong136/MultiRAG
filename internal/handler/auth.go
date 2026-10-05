@@ -18,11 +18,10 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"multirag/internal/common"
-	"multirag/internal/logger"
 	"multirag/internal/server/local"
 	"multirag/internal/service"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -78,7 +77,7 @@ func (h *AuthHandler) AuthMiddleware() gin.HandlerFunc {
 		if !local.IsAdminAvailable() {
 			license := local.GetAdminStatus()
 			errMsg := fmt.Sprintf("server license %s", license.Reason)
-			logger.Warn(errMsg)
+			common.Warn(errMsg)
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"code":    common.CodeUnauthorized,
 				"message": errMsg,

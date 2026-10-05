@@ -7,7 +7,6 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
-	"multirag/internal/logger"
 	"multirag/internal/server"
 	"multirag/internal/service"
 	"net/http"
@@ -25,7 +24,7 @@ func TestOllamaInstanceLiveHTTPAndSQL(t *testing.T) {
 		t.Skip("requires owned provider scratch database")
 	}
 	t.Chdir(filepath.Join("..", ".."))
-	if err := logger.Init("error"); err != nil {
+	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.FromConfigFile(config); err != nil {

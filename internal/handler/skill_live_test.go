@@ -17,10 +17,10 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlog "gorm.io/gorm/logger"
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
-	"multirag/internal/logger"
 	"multirag/internal/server"
 	"multirag/internal/service"
 	"multirag/internal/skills"
@@ -59,7 +59,7 @@ func TestSkillCoreLiveServer(t *testing.T) {
 	dao.DB = db
 	pool, _ := db.DB()
 	defer pool.Close()
-	_ = logger.Init("error")
+	_ = common.Init("error")
 	server.SetSecretKey(cfg.SecretKey)
 	blobs, e := skills.NewObjectStore(&cfg.Minio)
 	if e != nil {

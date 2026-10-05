@@ -28,10 +28,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
-	"multirag/internal/logger"
 	"multirag/internal/storage"
 	"multirag/internal/utility"
 )
@@ -656,7 +656,7 @@ func (s *FileService) deleteSingleFile(ctx context.Context, file *entity.File) e
 		storageImpl := storage.GetStorageFactory().GetStorage()
 		if storageImpl != nil {
 			if err := storageImpl.Remove(file.ParentID, *file.Location); err != nil {
-				logger.Error(fmt.Sprintf("Fail to remove object: %s/%s", file.ParentID, *file.Location), err)
+				common.Error(fmt.Sprintf("Fail to remove object: %s/%s", file.ParentID, *file.Location), err)
 			}
 		}
 	}
@@ -685,14 +685,14 @@ func (s *FileService) deleteSingleFile(ctx context.Context, file *entity.File) e
 					if tenantID != "" {
 						// Delete from document engine
 						if err := s.deleteDocumentFromEngine(ctx, doc, tenantID); err != nil {
-							logger.Error(fmt.Sprintf("Fail to delete document from engine: %s", doc.ID), err)
+							common.Error(fmt.Sprintf("Fail to delete document from engine: %s", doc.ID), err)
 						}
 					}
 				}
 
 				// Delete document record
 				if err := documentDAO.Delete(docID); err != nil {
-					logger.Error(fmt.Sprintf("Fail to delete document: %s", docID), err)
+					common.Error(fmt.Sprintf("Fail to delete document: %s", docID), err)
 				}
 			}
 

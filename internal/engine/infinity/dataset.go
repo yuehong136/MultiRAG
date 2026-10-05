@@ -29,7 +29,7 @@ import (
 	infinity "github.com/infiniflow/infinity-go-sdk"
 	"go.uber.org/zap"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/utility"
 )
 
@@ -103,7 +103,7 @@ func (e *infinityEngine) CreateDataset(ctx context.Context, indexName, datasetID
 	if err != nil {
 		return fmt.Errorf("Failed to create table: %w", err)
 	}
-	logger.Debug("Infinity created table", zap.String("tableName", tableName))
+	common.Debug("Infinity created table", zap.String("tableName", tableName))
 
 	// Create HNSW index on vector column
 	_, err = table.CreateIndex(
@@ -203,7 +203,7 @@ func (e *infinityEngine) CreateDataset(ctx context.Context, indexName, datasetID
 // Delete existing rows with matching IDs before insert
 func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]interface{}, tableNamePrefix string, knowledgebaseID string) ([]string, error) {
 	tableName := fmt.Sprintf("%s_%s", tableNamePrefix, knowledgebaseID)
-	logger.Info("InfinityConnection.InsertDataset called", zap.String("tableName", tableName), zap.Int("chunkCount", len(chunks)))
+	common.Info("InfinityConnection.InsertDataset called", zap.String("tableName", tableName), zap.Int("chunkCount", len(chunks)))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -294,12 +294,12 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 			idList[i] = fmt.Sprintf("'%v'", chunk["id"])
 		}
 		filter := fmt.Sprintf("id IN (%s)", strings.Join(idList, ", "))
-		logger.Debug(fmt.Sprintf("Deleting existing rows with filter: %s", filter))
+		common.Debug(fmt.Sprintf("Deleting existing rows with filter: %s", filter))
 		delResp, delErr := table.Delete(filter)
 		if delErr != nil {
-			logger.Warn(fmt.Sprintf("Failed to delete existing rows: %v", delErr))
+			common.Warn(fmt.Sprintf("Failed to delete existing rows: %v", delErr))
 		} else {
-			logger.Info(fmt.Sprintf("Deleted %d existing rows", delResp.DeletedRows))
+			common.Info(fmt.Sprintf("Deleted %d existing rows", delResp.DeletedRows))
 		}
 	}
 
@@ -309,7 +309,7 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 		return nil, fmt.Errorf("Failed to insert chunks to dataset: %w", err)
 	}
 
-	logger.Info("InfinityConnection.InsertDataset result", zap.String("tableName", tableName), zap.Int("count", len(insertChunks)))
+	common.Info("InfinityConnection.InsertDataset result", zap.String("tableName", tableName), zap.Int("count", len(insertChunks)))
 	return []string{}, nil
 }
 
@@ -317,7 +317,7 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 // Table name format: {tableNamePrefix}_{knowledgebaseID}
 func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
 	tableName := fmt.Sprintf("%s_%s", tableNamePrefix, knowledgebaseID)
-	logger.Info("InfinityConnection.UpdateDataset called", zap.String("tableName", tableName), zap.Any("condition", condition))
+	common.Info("InfinityConnection.UpdateDataset called", zap.String("tableName", tableName), zap.Any("condition", condition))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -415,7 +415,7 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 		// Query rows to be updated
 		queryResult, err := table.Output(colToRemove).Filter(filter).ToResult()
 		if err != nil {
-			logger.Warn(fmt.Sprintf("Failed to query rows for remove operation: %v", err))
+			common.Warn(fmt.Sprintf("Failed to query rows for remove operation: %v", err))
 		} else {
 			qr, ok := queryResult.(*infinity.QueryResult)
 			if ok && len(qr.Data) > 0 {
@@ -458,10 +458,10 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 				for colName, valueToIDs := range removeOpt {
 					for newVal, ids := range valueToIDs {
 						idFilter := filter + " AND id IN (" + strings.Join(ids, ", ") + ")"
-						logger.Info(fmt.Sprintf("INFINITY remove update: table=%s, idFilter=%s, column=%s, newValue=%v", tableName, idFilter, colName, newVal))
+						common.Info(fmt.Sprintf("INFINITY remove update: table=%s, idFilter=%s, column=%s, newValue=%v", tableName, idFilter, colName, newVal))
 						_, err := table.Update(idFilter, map[string]interface{}{colName: newVal})
 						if err != nil {
-							logger.Warn(fmt.Sprintf("Failed to remove value from column %s: %v", colName, err))
+							common.Warn(fmt.Sprintf("Failed to remove value from column %s: %v", colName, err))
 						}
 					}
 				}
@@ -470,13 +470,13 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 	}
 
 	// Execute the main update
-	logger.Info(fmt.Sprintf("INFINITY update: table=%s, filter=%s, newValue=%v", tableName, filter, newValue))
+	common.Info(fmt.Sprintf("INFINITY update: table=%s, filter=%s, newValue=%v", tableName, filter, newValue))
 	_, err = table.Update(filter, newValue)
 	if err != nil {
 		return fmt.Errorf("Failed to update chunks: %w", err)
 	}
 
-	logger.Info("InfinityConnection.UpdateDataset completes", zap.String("tableName", tableName))
+	common.Info("InfinityConnection.UpdateDataset completes", zap.String("tableName", tableName))
 	return nil
 }
 

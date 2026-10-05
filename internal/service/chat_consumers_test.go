@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"multirag/internal/common"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
-	"multirag/internal/logger"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +27,7 @@ func TestTenantDefaultModelNames(t *testing.T) {
 }
 
 func TestChatConsumersUseBoundInstanceAndContext(t *testing.T) {
-	if err := logger.Init("error"); err != nil {
+	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
 	}
 	answer := "keywords"

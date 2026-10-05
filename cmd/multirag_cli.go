@@ -7,27 +7,35 @@ import (
 	"syscall"
 
 	"multirag/internal/cli"
+	"multirag/internal/common"
 )
 
-func main() {
+func main() { os.Exit(runCLI()) }
+
+func runCLI() int {
+	defer common.Sync()
+	if err := common.Init("error"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	// Parse command line arguments (skip program name).
 	args, err := cli.ParseConnectionArgs(os.Args[1:])
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Show help and exit.
 	if args.ShowHelp {
 		cli.PrintUsage()
-		os.Exit(0)
+		return 0
 	}
 
 	// Create CLI instance with parsed arguments.
 	cliApp, err := cli.NewCLIWithArgs(args)
 	if err != nil {
 		fmt.Printf("Failed to create CLI: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Handle interrupt signal.
@@ -36,6 +44,7 @@ func main() {
 	go func() {
 		<-sigChan
 		cliApp.Cleanup()
+		common.Sync()
 		os.Exit(0)
 	}()
 
@@ -43,12 +52,13 @@ func main() {
 	if args.Command != "" {
 		if err = cliApp.RunSingleCommand(args.Command); err != nil {
 			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	} else {
 		if err = cliApp.Run(); err != nil {
 			fmt.Printf("CLI error: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	}
+	return 0
 }

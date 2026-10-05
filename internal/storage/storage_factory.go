@@ -18,7 +18,7 @@ package storage
 
 import (
 	"fmt"
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/server"
 	"sync"
 )
@@ -55,7 +55,7 @@ func InitStorageFactory() error {
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("Storage initialized: %s", factory.config.Type))
+	common.Info(fmt.Sprintf("Storage initialized: %s", factory.config.Type))
 
 	return nil
 }

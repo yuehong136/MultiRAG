@@ -23,7 +23,6 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
-	"multirag/internal/logger"
 	"strings"
 	"sync"
 	"time"
@@ -122,7 +121,7 @@ func (s *SkillSpaceService) getSkillsFolderID(tenantID string) (string, error) {
 	}
 
 	// Skills folder not found, create it
-	logger.Info("Creating skills folder", zap.String("tenant_id", tenantID))
+	common.Info("Creating skills folder", zap.String("tenant_id", tenantID))
 	folderID := generateSpaceID()
 	folder := &entity.File{
 		ID:         folderID,
@@ -182,13 +181,13 @@ func (s *SkillSpaceService) CreateSpace(req *CreateSpaceRequest) (map[string]int
 	// This handles the case where a previous creation failed partially
 	// Only delete non-active spaces (status != '1') to prevent TOCTOU race
 	if err := s.spaceDAO.DeletePermanentByName(req.TenantID, req.Name); err != nil {
-		logger.Warn("Failed to delete permanent space by name", zap.Error(err))
+		common.Warn("Failed to delete permanent space by name", zap.Error(err))
 	}
 
 	// Get skills folder ID
 	skillsFolderID, err := s.getSkillsFolderID(req.TenantID)
 	if err != nil {
-		logger.Error("Failed to get skills folder ID", err)
+		common.Error("Failed to get skills folder ID", err)
 		return nil, common.CodeOperatingError, err
 	}
 
@@ -216,7 +215,7 @@ func (s *SkillSpaceService) CreateSpace(req *CreateSpaceRequest) (map[string]int
 	}
 
 	if err := s.fileDAO.Create(folder); err != nil {
-		logger.Error("Failed to create space folder", err)
+		common.Error("Failed to create space folder", err)
 		return nil, common.CodeOperatingError, fmt.Errorf("failed to create space folder: %w", err)
 	}
 
@@ -235,7 +234,7 @@ func (s *SkillSpaceService) CreateSpace(req *CreateSpaceRequest) (map[string]int
 
 	if err := s.spaceDAO.Create(space); err != nil {
 		// Rollback: delete the created folder
-		logger.Error("Failed to create space in database", err)
+		common.Error("Failed to create space in database", err)
 		s.fileDAO.DeleteByIDs([]string{folderID})
 		return nil, common.CodeOperatingError, fmt.Errorf("failed to create space: %w", err)
 	}
@@ -246,14 +245,14 @@ func (s *SkillSpaceService) CreateSpace(req *CreateSpaceRequest) (map[string]int
 		tenant, err := s.tenantDAO.GetByID(req.TenantID)
 		if err == nil && tenant != nil && tenant.EmbdID != "" {
 			defaultEmbdID = tenant.EmbdID
-			logger.Info("Using tenant default embedding model", zap.String("tenantID", req.TenantID), zap.String("embdID", defaultEmbdID))
+			common.Info("Using tenant default embedding model", zap.String("tenantID", req.TenantID), zap.String("embdID", defaultEmbdID))
 		} else {
-			logger.Warn("Tenant has no default embedding model, skill search will not work until configured", zap.String("tenantID", req.TenantID))
+			common.Warn("Tenant has no default embedding model, skill search will not work until configured", zap.String("tenantID", req.TenantID))
 		}
 	}
 	if defaultEmbdID != "" {
 		if _, err := s.configDAO.GetOrCreate(req.TenantID, spaceID, defaultEmbdID); err != nil {
-			logger.Warn("Failed to create skill search config for new space",
+			common.Warn("Failed to create skill search config for new space",
 				zap.String("tenantID", req.TenantID),
 				zap.String("spaceID", spaceID),
 				zap.String("embdID", defaultEmbdID),
@@ -335,10 +334,10 @@ func (s *SkillSpaceService) UpdateSpace(spaceID string, tenantID string, req *Up
 
 		// Update folder name as well - if this fails, rollback space name
 		if err := s.fileDAO.UpdateByID(space.FolderID, map[string]interface{}{"name": req.Name}); err != nil {
-			logger.Error("Failed to update folder name, rolling back space name", err)
+			common.Error("Failed to update folder name, rolling back space name", err)
 			// Rollback space name
 			if rollbackErr := s.spaceDAO.UpdateByID(spaceID, map[string]interface{}{"name": originalName}); rollbackErr != nil {
-				logger.Error("Failed to rollback space name after folder rename failure", rollbackErr)
+				common.Error("Failed to rollback space name after folder rename failure", rollbackErr)
 			}
 			return nil, common.CodeOperatingError, fmt.Errorf("failed to update folder name: %w", err)
 		}
@@ -387,13 +386,13 @@ func (s *SkillSpaceService) DeleteSpace(spaceID, tenantID string, docEngine engi
 
 	// If already deleting, return success (idempotent)
 	if space.Status == entity.SpaceStatusDeleting {
-		logger.Info("Space is already being deleted", zap.String("spaceID", spaceID))
+		common.Info("Space is already being deleted", zap.String("spaceID", spaceID))
 		return common.CodeSuccess, nil
 	}
 
 	// If already deleted, return success (idempotent)
 	if space.Status == entity.SpaceStatusDeleted {
-		logger.Info("Space is already deleted", zap.String("spaceID", spaceID))
+		common.Info("Space is already deleted", zap.String("spaceID", spaceID))
 		return common.CodeSuccess, nil
 	}
 
@@ -407,7 +406,7 @@ func (s *SkillSpaceService) DeleteSpace(spaceID, tenantID string, docEngine engi
 		return common.CodeOperatingError, fmt.Errorf("space is being modified by another request")
 	}
 
-	logger.Info("Space marked as deleting, starting async cleanup", zap.String("spaceID", spaceID), zap.String("tenantID", tenantID))
+	common.Info("Space marked as deleting, starting async cleanup", zap.String("spaceID", spaceID), zap.String("tenantID", tenantID))
 
 	// Launch async deletion in background goroutine
 	go s.asyncDeleteSpace(spaceID, space.FolderID, tenantID, docEngine, context.Background())
@@ -452,7 +451,7 @@ func (s *SkillSpaceService) asyncDeleteSpace(spaceID, folderID, tenantID string,
 		err = deleteCoreTree(cleanup, tenantID, folderID)
 	}
 	if err != nil {
-		logger.Error("Skills space cleanup failed; preserving deletion state", err)
+		common.Error("Skills space cleanup failed; preserving deletion state", err)
 		_ = s.spaceDAO.UpdateByID(spaceID, map[string]interface{}{"status": entity.SpaceStatusDeleteFailed, "core_state": mergedCoreError(space.CoreState)})
 		return
 	}
@@ -468,41 +467,41 @@ func (s *SkillSpaceService) deleteFolderRecursive(folderID string) error {
 	// Get all children
 	children, err := s.fileDAO.ListByParentID(folderID)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to list children for folder %s", folderID), err)
+		common.Error(fmt.Sprintf("Failed to list children for folder %s", folderID), err)
 		return err
 	}
 
-	logger.Info("Deleting folder contents", zap.String("folder_id", folderID), zap.Int("child_count", len(children)))
+	common.Info("Deleting folder contents", zap.String("folder_id", folderID), zap.Int("child_count", len(children)))
 
 	// Collect file IDs (non-folder) and recurse into subfolders
 	var fileIDs []string
 	for _, child := range children {
 		if child.Type == "folder" {
-			logger.Debug("Recursively deleting child folder", zap.String("folder_id", child.ID), zap.String("folder_name", child.Name))
+			common.Debug("Recursively deleting child folder", zap.String("folder_id", child.ID), zap.String("folder_name", child.Name))
 			if err := s.deleteFolderRecursive(child.ID); err != nil {
-				logger.Warn("Failed to delete child folder", zap.String("folder_id", child.ID), zap.Error(err))
+				common.Warn("Failed to delete child folder", zap.String("folder_id", child.ID), zap.Error(err))
 			}
 		} else {
 			// Collect non-folder files for batch deletion
-			logger.Debug("Collecting file for deletion", zap.String("file_id", child.ID), zap.String("file_name", child.Name))
+			common.Debug("Collecting file for deletion", zap.String("file_id", child.ID), zap.String("file_name", child.Name))
 			fileIDs = append(fileIDs, child.ID)
 		}
 	}
 
 	// Delete all non-folder files in batch
 	if len(fileIDs) > 0 {
-		logger.Info("Deleting files in folder", zap.String("folder_id", folderID), zap.Int("file_count", len(fileIDs)))
+		common.Info("Deleting files in folder", zap.String("folder_id", folderID), zap.Int("file_count", len(fileIDs)))
 		if _, err := s.fileDAO.DeleteByIDs(fileIDs); err != nil {
-			logger.Warn("Failed to delete files in folder", zap.String("folder_id", folderID), zap.Strings("file_ids", fileIDs), zap.Error(err))
+			common.Warn("Failed to delete files in folder", zap.String("folder_id", folderID), zap.Strings("file_ids", fileIDs), zap.Error(err))
 			// Continue to delete folder even if file deletion fails
 		}
 	}
 
 	// Delete the folder itself
-	logger.Info("Deleting folder", zap.String("folder_id", folderID))
+	common.Info("Deleting folder", zap.String("folder_id", folderID))
 	_, err = s.fileDAO.DeleteByIDs([]string{folderID})
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to delete folder %s", folderID), err)
+		common.Error(fmt.Sprintf("Failed to delete folder %s", folderID), err)
 	}
 	return err
 }

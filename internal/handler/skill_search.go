@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"multirag/internal/common"
 	"multirag/internal/engine"
-	"multirag/internal/logger"
 	"multirag/internal/service"
 	"net/http"
 
@@ -197,7 +196,7 @@ func (h *SkillSearchHandler) IndexSkills(c *gin.Context) {
 	}
 
 	// Ensure index exists before indexing (for both ES and Infinity)
-	logger.Info("Ensuring skill index exists before indexing",
+	common.Info("Ensuring skill index exists before indexing",
 		zap.String("tenantID", user.ID),
 		zap.String("spaceID", req.SpaceID),
 		zap.String("engineType", h.docEngine.GetType()),
@@ -211,12 +210,12 @@ func (h *SkillSearchHandler) IndexSkills(c *gin.Context) {
 	}
 
 	if err := h.indexerService.BatchIndexSkills(c.Request.Context(), user.ID, req.SpaceID, req.Skills, h.docEngine, embdID); err != nil {
-		logger.Error(fmt.Sprintf("Failed to batch index skills: tenantID=%s, spaceID=%s, error=%v", user.ID, req.SpaceID, err), err)
+		common.Error(fmt.Sprintf("Failed to batch index skills: tenantID=%s, spaceID=%s, error=%v", user.ID, req.SpaceID, err), err)
 		jsonError(c, common.CodeOperatingError, err.Error())
 		return
 	}
 
-	logger.Info("Successfully indexed skills",
+	common.Info("Successfully indexed skills",
 		zap.String("tenantID", user.ID),
 		zap.String("spaceID", req.SpaceID),
 		zap.Int("indexedCount", len(req.Skills)))

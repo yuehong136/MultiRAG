@@ -17,9 +17,9 @@
 package handler
 
 import (
-	"net/http"
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/server"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 
@@ -134,7 +134,7 @@ func (h *SystemHandler) GetVersion(c *gin.Context) {
 
 // GetLogLevel returns the current log level
 func (h *SystemHandler) GetLogLevel(c *gin.Context) {
-	level := logger.GetLevel()
+	level := common.GetLevel()
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
@@ -158,7 +158,7 @@ func (h *SystemHandler) SetLogLevel(c *gin.Context) {
 		return
 	}
 
-	if err := logger.SetLevel(req.Level); err != nil {
+	if err := common.SetLevel(req.Level); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),

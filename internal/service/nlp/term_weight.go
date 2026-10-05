@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"multirag/internal/tokenizer"
 
 	"go.uber.org/zap"
@@ -58,10 +58,10 @@ func NewTermWeightDealer(resPath string) *TermWeightDealer {
 	nerPath := filepath.Join(resPath, "ner.json")
 	if data, err := os.ReadFile(nerPath); err == nil {
 		if err := json.Unmarshal(data, &d.ne); err != nil {
-			logger.Warn("Failed to load ner.json", zap.Error(err))
+			common.Warn("Failed to load ner.json", zap.Error(err))
 		}
 	} else {
-		logger.Warn("Failed to load ner.json", zap.Error(err))
+		common.Warn("Failed to load ner.json", zap.Error(err))
 	}
 
 	// Load term frequency dictionary
@@ -92,7 +92,7 @@ func loadDict(fnm string) map[string]int {
 	res := make(map[string]int)
 	data, err := os.ReadFile(fnm)
 	if err != nil {
-		logger.Warn("Failed to load dictionary", zap.String("file", fnm), zap.Error(err))
+		common.Warn("Failed to load dictionary", zap.String("file", fnm), zap.Error(err))
 		return res
 	}
 

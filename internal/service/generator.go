@@ -24,8 +24,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"multirag/internal/common"
 	modelModule "multirag/internal/entity/models"
-	"multirag/internal/logger"
 )
 
 // KeywordExtraction extracts keywords from content using LLM.
@@ -71,7 +71,7 @@ func KeywordExtraction(ctx context.Context, chatModel *modelModule.ChatModel, co
 	}
 
 	response := *responsePtr.Answer
-	logger.Info("KeywordExtraction result", zap.String("response", response))
+	common.Info("KeywordExtraction result", zap.String("response", response))
 
 	// Clean up response - remove thinking tags if present
 	response = strings.TrimSpace(response)

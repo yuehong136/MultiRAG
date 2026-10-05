@@ -18,7 +18,7 @@ package dao
 
 import (
 	"fmt"
-	"multirag/internal/logger"
+	"multirag/internal/common"
 	"strings"
 
 	"go.uber.org/zap"
@@ -57,7 +57,7 @@ func RunMigrations(db *gorm.DB) error {
 		return fmt.Errorf("failed to modify column types: %w", err)
 	}
 
-	logger.Info("All manual migrations completed successfully")
+	common.Info("All manual migrations completed successfully")
 	return nil
 }
 
@@ -120,7 +120,7 @@ func migrateTenantLLMPrimaryKey(db *gorm.DB) error {
 		}
 	}
 
-	logger.Info("Migrating t_ai_tenant_llms to use ID primary key...")
+	common.Info("Migrating t_ai_tenant_llms to use ID primary key...")
 
 	// Start transaction
 	return db.Transaction(func(tx *gorm.DB) error {
@@ -135,7 +135,7 @@ func migrateTenantLLMPrimaryKey(db *gorm.DB) error {
 		}
 		if tempIdExists > 0 {
 			if err := tx.Exec("ALTER TABLE t_ai_tenant_llms DROP COLUMN temp_id").Error; err != nil {
-				logger.Warn("Failed to drop temp_id column", zap.Error(err))
+				common.Warn("Failed to drop temp_id column", zap.Error(err))
 			}
 		}
 
@@ -145,7 +145,7 @@ func migrateTenantLLMPrimaryKey(db *gorm.DB) error {
 			if err := tx.Exec(`
 				ALTER TABLE t_ai_tenant_llms DROP CONSTRAINT IF EXISTS t_ai_tenant_llms_pkey
 			`).Error; err != nil {
-				logger.Warn("Failed to drop existing primary key constraint", zap.Error(err))
+				common.Warn("Failed to drop existing primary key constraint", zap.Error(err))
 			}
 
 			if idColumnExists > 0 {
@@ -218,19 +218,19 @@ func migrateTenantLLMPrimaryKey(db *gorm.DB) error {
 					CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_llm_unique
 					ON t_ai_tenant_llms (tenant_id, llm_factory, llm_name)
 				`).Error; err != nil {
-					logger.Warn("Failed to add unique index idx_tenant_llm_unique", zap.Error(err))
+					common.Warn("Failed to add unique index idx_tenant_llm_unique", zap.Error(err))
 				}
 			} else {
 				if err := tx.Exec(`
 					ALTER TABLE t_ai_tenant_llms
 					ADD UNIQUE INDEX idx_tenant_llm_unique (tenant_id, llm_factory, llm_name)
 				`).Error; err != nil {
-					logger.Warn("Failed to add unique index idx_tenant_llm_unique", zap.Error(err))
+					common.Warn("Failed to add unique index idx_tenant_llm_unique", zap.Error(err))
 				}
 			}
 		}
 
-		logger.Info("t_ai_tenant_llms primary key migration completed")
+		common.Info("t_ai_tenant_llms primary key migration completed")
 		return nil
 	})
 }
@@ -277,16 +277,16 @@ func migrateAddUniqueEmail(db *gorm.DB) error {
 	}
 
 	if duplicateCount > 0 {
-		logger.Warn("Found duplicate emails in t_ai_users table, cannot add unique index", zap.Int64("count", duplicateCount))
+		common.Warn("Found duplicate emails in t_ai_users table, cannot add unique index", zap.Int64("count", duplicateCount))
 		return nil
 	}
 
-	logger.Info("Adding unique index on t_ai_users.email...")
+	common.Info("Adding unique index on t_ai_users.email...")
 	if IsPostgres() {
 		if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email_unique ON t_ai_users (email)`).Error; err != nil {
 			errStr := err.Error()
 			if strings.Contains(errStr, "already exists") {
-				logger.Info("Index already exists, skipping", zap.String("error", errStr))
+				common.Info("Index already exists, skipping", zap.String("error", errStr))
 				return nil
 			}
 			return fmt.Errorf("failed to add unique index on email: %w", err)
@@ -296,7 +296,7 @@ func migrateAddUniqueEmail(db *gorm.DB) error {
 			// Check if error is MySQL duplicate index error (Error 1061)
 			errStr := err.Error()
 			if strings.Contains(errStr, "Error 1061") && strings.Contains(errStr, "Duplicate key name") {
-				logger.Info("Index already exists, skipping", zap.String("error", errStr))
+				common.Info("Index already exists, skipping", zap.String("error", errStr))
 				return nil
 			}
 			return fmt.Errorf("failed to add unique index on email: %w", err)
@@ -356,7 +356,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 					ALTER COLUMN %s TYPE JSONB
 					USING %s
 				`, table, column, usingExpr)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to modify %s.%s to JSONB", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to modify %s.%s to JSONB", table, column), zap.Error(err))
 				}
 			}
 
@@ -365,14 +365,14 @@ func modifyColumnTypes(db *gorm.DB) error {
 					ALTER TABLE %s
 					ALTER COLUMN %s SET DEFAULT '%s'::jsonb
 				`, table, column, defaultJSON)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
 				}
 				if err := db.Exec(fmt.Sprintf(`
 					UPDATE %s
 					SET %s = '%s'::jsonb
 					WHERE %s IS NULL
 				`, table, column, defaultJSON, column)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
 				}
 			}
 
@@ -381,14 +381,14 @@ func modifyColumnTypes(db *gorm.DB) error {
 					ALTER TABLE %s
 					ALTER COLUMN %s SET NOT NULL
 				`, table, column)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
 				}
 			} else {
 				if err := db.Exec(fmt.Sprintf(`
 					ALTER TABLE %s
 					ALTER COLUMN %s DROP NOT NULL
 				`, table, column)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to drop %s.%s not null", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to drop %s.%s not null", table, column), zap.Error(err))
 				}
 			}
 			return
@@ -400,7 +400,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 				SET %s = ?
 				WHERE %s IS NULL OR TRIM(CAST(%s AS CHAR)) = ''
 			`, table, column, column, column), defaultJSON).Error; err != nil {
-				logger.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
+				common.Warn(fmt.Sprintf("Failed to backfill %s.%s nulls", table, column), zap.Error(err))
 			}
 		}
 
@@ -412,7 +412,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 			ALTER TABLE %s
 			MODIFY COLUMN %s JSON %s
 		`, table, column, nullability)).Error; err != nil {
-			logger.Warn(fmt.Sprintf("Failed to modify %s.%s to JSON", table, column), zap.Error(err))
+			common.Warn(fmt.Sprintf("Failed to modify %s.%s to JSON", table, column), zap.Error(err))
 		}
 	}
 
@@ -431,7 +431,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 				ALTER TABLE %s
 				ADD COLUMN IF NOT EXISTS %s JSONB
 			`, table, column)).Error; err != nil {
-				logger.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
+				common.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
 				return
 			}
 			if defaultJSON != "" {
@@ -439,14 +439,14 @@ func modifyColumnTypes(db *gorm.DB) error {
 					ALTER TABLE %s
 					ALTER COLUMN %s SET DEFAULT '%s'::jsonb
 				`, table, column, defaultJSON)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to set %s.%s default", table, column), zap.Error(err))
 				}
 				if err := db.Exec(fmt.Sprintf(`
 					UPDATE %s
 					SET %s = '%s'::jsonb
 					WHERE %s IS NULL
 				`, table, column, defaultJSON, column)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
 				}
 			}
 			if notNull {
@@ -454,7 +454,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 					ALTER TABLE %s
 					ALTER COLUMN %s SET NOT NULL
 				`, table, column)).Error; err != nil {
-					logger.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
+					common.Warn(fmt.Sprintf("Failed to set %s.%s not null", table, column), zap.Error(err))
 				}
 			}
 			return
@@ -464,7 +464,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 			ALTER TABLE %s
 			ADD COLUMN %s JSON %s
 		`, table, column, nullability)).Error; err != nil {
-			logger.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
+			common.Warn(fmt.Sprintf("Failed to add %s.%s", table, column), zap.Error(err))
 			return
 		}
 		if defaultJSON != "" {
@@ -473,7 +473,7 @@ func modifyColumnTypes(db *gorm.DB) error {
 				SET %s = ?
 				WHERE %s IS NULL
 			`, table, column, column), defaultJSON).Error; err != nil {
-				logger.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
+				common.Warn(fmt.Sprintf("Failed to backfill %s.%s", table, column), zap.Error(err))
 			}
 		}
 	}
@@ -482,17 +482,17 @@ func modifyColumnTypes(db *gorm.DB) error {
 	if db.Migrator().HasTable("t_ai_dialogs") && columnExists("t_ai_dialogs", "top_k") {
 		if IsPostgres() {
 			if err := db.Exec(`ALTER TABLE t_ai_dialogs ALTER COLUMN top_k TYPE BIGINT`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_dialogs.top_k type", zap.Error(err))
+				common.Warn("Failed to modify t_ai_dialogs.top_k type", zap.Error(err))
 			}
 			if err := db.Exec(`ALTER TABLE t_ai_dialogs ALTER COLUMN top_k SET DEFAULT 1024`).Error; err != nil {
-				logger.Warn("Failed to set t_ai_dialogs.top_k default", zap.Error(err))
+				common.Warn("Failed to set t_ai_dialogs.top_k default", zap.Error(err))
 			}
 			if err := db.Exec(`ALTER TABLE t_ai_dialogs ALTER COLUMN top_k SET NOT NULL`).Error; err != nil {
-				logger.Warn("Failed to set t_ai_dialogs.top_k not null", zap.Error(err))
+				common.Warn("Failed to set t_ai_dialogs.top_k not null", zap.Error(err))
 			}
 		} else {
 			if err := db.Exec(`ALTER TABLE t_ai_dialogs MODIFY COLUMN top_k BIGINT NOT NULL DEFAULT 1024`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_dialogs.top_k", zap.Error(err))
+				common.Warn("Failed to modify t_ai_dialogs.top_k", zap.Error(err))
 			}
 		}
 	}
@@ -501,11 +501,11 @@ func modifyColumnTypes(db *gorm.DB) error {
 	if db.Migrator().HasTable("t_ai_tenant_llms") && columnExists("t_ai_tenant_llms", "api_key") {
 		if IsPostgres() {
 			if err := db.Exec(`ALTER TABLE t_ai_tenant_llms ALTER COLUMN api_key TYPE TEXT`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_tenant_llms.api_key", zap.Error(err))
+				common.Warn("Failed to modify t_ai_tenant_llms.api_key", zap.Error(err))
 			}
 		} else {
 			if err := db.Exec(`ALTER TABLE t_ai_tenant_llms MODIFY COLUMN api_key LONGTEXT`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_tenant_llms.api_key", zap.Error(err))
+				common.Warn("Failed to modify t_ai_tenant_llms.api_key", zap.Error(err))
 			}
 		}
 	}
@@ -514,11 +514,11 @@ func modifyColumnTypes(db *gorm.DB) error {
 	if db.Migrator().HasTable("t_ai_api_tokens") && columnExists("t_ai_api_tokens", "dialog_id") {
 		if IsPostgres() {
 			if err := db.Exec(`ALTER TABLE t_ai_api_tokens ALTER COLUMN dialog_id TYPE VARCHAR(32)`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_api_tokens.dialog_id", zap.Error(err))
+				common.Warn("Failed to modify t_ai_api_tokens.dialog_id", zap.Error(err))
 			}
 		} else {
 			if err := db.Exec(`ALTER TABLE t_ai_api_tokens MODIFY COLUMN dialog_id VARCHAR(32)`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_api_tokens.dialog_id", zap.Error(err))
+				common.Warn("Failed to modify t_ai_api_tokens.dialog_id", zap.Error(err))
 			}
 		}
 	}
@@ -568,14 +568,14 @@ func modifyColumnTypes(db *gorm.DB) error {
 	if db.Migrator().HasTable("t_ai_system_settings") && columnExists("t_ai_system_settings", "value") {
 		if IsPostgres() {
 			if err := db.Exec(`ALTER TABLE t_ai_system_settings ALTER COLUMN value TYPE TEXT`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_system_settings.value", zap.Error(err))
+				common.Warn("Failed to modify t_ai_system_settings.value", zap.Error(err))
 			}
 			if err := db.Exec(`ALTER TABLE t_ai_system_settings ALTER COLUMN value SET NOT NULL`).Error; err != nil {
-				logger.Warn("Failed to set t_ai_system_settings.value not null", zap.Error(err))
+				common.Warn("Failed to set t_ai_system_settings.value not null", zap.Error(err))
 			}
 		} else {
 			if err := db.Exec(`ALTER TABLE t_ai_system_settings MODIFY COLUMN value LONGTEXT NOT NULL`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_system_settings.value", zap.Error(err))
+				common.Warn("Failed to modify t_ai_system_settings.value", zap.Error(err))
 			}
 		}
 	}
@@ -584,11 +584,11 @@ func modifyColumnTypes(db *gorm.DB) error {
 	if db.Migrator().HasTable("t_ai_knowledgebases") && columnExists("t_ai_knowledgebases", "raptor_task_finish_at") {
 		if IsPostgres() {
 			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases ALTER COLUMN raptor_task_finish_at TYPE TIMESTAMP`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_knowledgebases.raptor_task_finish_at", zap.Error(err))
+				common.Warn("Failed to modify t_ai_knowledgebases.raptor_task_finish_at", zap.Error(err))
 			}
 		} else {
 			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases MODIFY COLUMN raptor_task_finish_at DATETIME`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_knowledgebases.raptor_task_finish_at", zap.Error(err))
+				common.Warn("Failed to modify t_ai_knowledgebases.raptor_task_finish_at", zap.Error(err))
 			}
 		}
 	}
@@ -597,11 +597,11 @@ func modifyColumnTypes(db *gorm.DB) error {
 	if db.Migrator().HasTable("t_ai_knowledgebases") && columnExists("t_ai_knowledgebases", "mindmap_task_finish_at") {
 		if IsPostgres() {
 			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases ALTER COLUMN mindmap_task_finish_at TYPE TIMESTAMP`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_knowledgebases.mindmap_task_finish_at", zap.Error(err))
+				common.Warn("Failed to modify t_ai_knowledgebases.mindmap_task_finish_at", zap.Error(err))
 			}
 		} else {
 			if err := db.Exec(`ALTER TABLE t_ai_knowledgebases MODIFY COLUMN mindmap_task_finish_at DATETIME`).Error; err != nil {
-				logger.Warn("Failed to modify t_ai_knowledgebases.mindmap_task_finish_at", zap.Error(err))
+				common.Warn("Failed to modify t_ai_knowledgebases.mindmap_task_finish_at", zap.Error(err))
 			}
 		}
 	}
@@ -636,14 +636,14 @@ func renameColumnIfExists(db *gorm.DB, tableName, oldName, newName string) error
 	// Check if new column already exists
 	if columnExists(newName) {
 		// Both exist, drop the old one
-		logger.Warn("Both old and new columns exist, dropping old one",
+		common.Warn("Both old and new columns exist, dropping old one",
 			zap.String("table", tableName),
 			zap.String("oldColumn", oldName),
 			zap.String("newColumn", newName))
 		return db.Migrator().DropColumn(tableName, oldName)
 	}
 
-	logger.Info("Renaming column",
+	common.Info("Renaming column",
 		zap.String("table", tableName),
 		zap.String("oldColumn", oldName),
 		zap.String("newColumn", newName))
@@ -669,7 +669,7 @@ func addColumnIfNotExists(db *gorm.DB, tableName, columnName, columnDef string) 
 		return nil
 	}
 
-	logger.Info("Adding column",
+	common.Info("Adding column",
 		zap.String("table", tableName),
 		zap.String("column", columnName))
 	sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, columnDef)

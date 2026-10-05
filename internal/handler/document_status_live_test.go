@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/handler"
-	"multirag/internal/logger"
 	"multirag/internal/router"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
@@ -51,7 +51,7 @@ func TestDocumentStatusLiveServer(t *testing.T) {
 	if configPath == "" {
 		t.Skip("live harness is driven by the Python scratch integration fixture")
 	}
-	if err := logger.Init("error"); err != nil {
+	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(configPath)

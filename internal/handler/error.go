@@ -22,13 +22,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"multirag/internal/logger"
+	"multirag/internal/common"
 )
 
 // HandleNoRoute handles requests to undefined routes
 func HandleNoRoute(c *gin.Context) {
 	// Log the request details on server side
-	logger.Logger.Warn("The requested URL was not found",
+	common.Logger.Warn("The requested URL was not found",
 		zap.String("method", c.Request.Method),
 		zap.String("path", c.Request.URL.Path),
 		zap.String("query", c.Request.URL.RawQuery),

@@ -19,12 +19,12 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine/infinity"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
-	"multirag/internal/logger"
 	"multirag/internal/server"
 	"multirag/internal/utility"
 )
@@ -91,7 +91,7 @@ func TestRetrievalScratchPostgresInfinity(t *testing.T) {
 		t.Fatalf("SQL cancellation lost: %v", err)
 	}
 	t.Chdir(utility.GetProjectRoot())
-	if err := logger.Init("error"); err != nil {
+	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
 	}
 	indexDB := "multirag_go_retrieval_" + strings.ReplaceAll(uuid.NewString(), "-", "")
