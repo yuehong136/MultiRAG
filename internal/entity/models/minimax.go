@@ -56,11 +56,6 @@ func minimaxChatBody(modelName string, messages []Message, config *ChatConfig, s
 	if err := ValidateMessages(messages); err != nil {
 		return nil, err
 	}
-	if stream {
-		if err := ValidateTextMessages(messages); err != nil {
-			return nil, err
-		}
-	}
 	apiMessages := messages
 
 	// The entry point determines the response protocol, regardless of config.Stream.

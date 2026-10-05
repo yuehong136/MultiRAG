@@ -1538,18 +1538,18 @@ context、region、APIKey，HTTP 断开终止 provider 请求；sender/provider/
 并返回累计 `reasoning_content`；正常结束的 `data: true` 在 session 持久化成功之后发送。
 指定 `llm_id` 的临时调用不落库。成功保存完整用户历史及助手答案；错误和取消不保存部分答案。
 
-历史聊天及文本历史 SSE 支持 Google、Aliyun、VolcEngine、Moonshot、MiniMax、Zhipu-AI、vLLM、
+历史聊天及多模态历史 SSE 支持 Google、Aliyun、VolcEngine、Moonshot、MiniMax、Zhipu-AI、vLLM、
 DeepSeek、Gitee、SiliconFlow。驱动统一使用 `ChatWithMessages(modelName, apiConfig, messages, config)`，
 返回 `ChatResponse`（answer/reasoning_content）；旧单文本 Go helper 委托消息接口。
-非流式 provider API 与 session 保留每条消息的角色和 content；content 接受非空字符串或
+普通与流式 provider API、session 保留每条消息的角色和 content；content 接受非空字符串或
 `text`/`image_url` 对象数组，`image_url.url` 接受 HTTP(S) 或 base64 image data URL。
 空 messages、空/非法 content、未知 part/role、空答案均报错；assistant 的 `reasoning_content`
 可随输入历史传给兼容 OpenAI 格式的 provider。Google 将 system 独立为 system instruction，
 图片 data URL 解码为含原始 MIME 的 inline data，HTTP(S) URL 作为 file URI，不在本机下载。
 Google system content 仅支持文本；image detail 仅透传给兼容 OpenAI 格式的 provider。
 
-本阶段**所有 content 数组均不支持流式**（包括只有 text part 的数组）：provider API 在发送
-SSE header 前返回 HTTP 400，session/驱动返回明确错误；字符串流式发送完整历史，不截取首条。
+流式传递完整 content parts 与历史，不截取首条或将图片降成文本；未知 part 明确报错。
+Google 必须收到供应商结束标记，异常 EOF 不发送成功终帧；assistant reasoning 映射为 thought part。
 CLI 普通文本改发单项 messages；有效 JSON 数组按 content parts 校验，非法 part 报错；
 非 JSON 的方括号文本继续作为字符串发送，保留旧文本输入习惯。
 旧 message 的 HTTP 请求仍受相同身份、实例和模型能力校验。真实图片理解取决于所选远程模型，

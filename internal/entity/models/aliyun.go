@@ -78,11 +78,6 @@ func aliyunChatBody(modelName string, messages []Message, config *ChatConfig, st
 	if err := ValidateMessages(messages); err != nil {
 		return nil, err
 	}
-	if stream {
-		if err := ValidateTextMessages(messages); err != nil {
-			return nil, err
-		}
-	}
 	apiMessages := messages
 
 	body := map[string]interface{}{
@@ -232,7 +227,8 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 	}
 	defer resp.Body.Close()
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	receivedAnswer := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -240,6 +236,9 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			if !receivedAnswer {
+				return errors.New("aliyun: stream returned no text answer")
+			}
 			done := "[DONE]"
 			return sender(&done, nil)
 		}
@@ -266,6 +265,7 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 		}
 		delta := event.Choices[0].Delta
 		if delta.Content != nil && *delta.Content != "" {
+			receivedAnswer = true
 			if err := sender(delta.Content, nil); err != nil {
 				return err
 			}

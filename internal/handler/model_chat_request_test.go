@@ -57,7 +57,7 @@ func TestModelChatMessageContracts(t *testing.T) {
 		{`{"message":"legacy","messages":[]}`, false, 0},
 		{`{"messages":[{"role":"user","content":42}]}`, false, 0},
 		{`{"messages":[{"role":"user","content":{"text":"x"}}]}`, false, 0},
-		{`{"messages":[{"role":"user","content":[{"type":"text","text":"x"}]}],"stream":true}`, false, 0},
+		{`{"messages":[{"role":"user","content":[{"type":"text","text":"x"}]}],"stream":true}`, true, 1},
 	} {
 		var req ChatToModelRequest
 		if err := json.Unmarshal([]byte(test.body), &req); err != nil {

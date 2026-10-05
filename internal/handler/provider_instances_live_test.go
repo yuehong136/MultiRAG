@@ -225,13 +225,6 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 			t.Fatalf("multimodal history/response lost: %v %v", result, received[i].Load())
 		}
 		body["stream"] = true
-		before := calls[i].Load()
-		httpStatus, rejected := request("POST", "/api/v1/chat/completions", "owner", body)
-		if httpStatus != http.StatusBadRequest || rejected["code"] != float64(common.CodeBadRequest) || calls[i].Load() != before {
-			t.Fatalf("multimodal stream reached provider: %d %v", httpStatus, rejected)
-		}
-		textHistory := []map[string]interface{}{{"role": "system", "content": "rules"}, {"role": "assistant", "content": "previous"}, {"role": "user", "content": "next"}}
-		body["messages"] = textHistory
 		raw, _ := json.Marshal(body)
 		streamRequest, _ := http.NewRequest("POST", api.URL+"/api/v1/chat/completions", bytes.NewReader(raw))
 		streamRequest.Header.Set("Content-Type", "application/json")
@@ -245,7 +238,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		encoded, _ = json.Marshal(textHistory)
+		encoded, _ = json.Marshal(multimodal)
 		json.Unmarshal(encoded, &expected)
 		if streamResponse.StatusCode != 200 || !strings.Contains(string(streamBody), "[DONE]") || !strings.Contains(string(streamBody), fmt.Sprintf("answer-%d", i)) || !reflect.DeepEqual(received[i].Load(), expected) {
 			t.Fatalf("stream history lost: %s %v", streamBody, received[i].Load())

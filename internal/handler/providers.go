@@ -728,10 +728,5 @@ func (r *ChatToModelRequest) chatMessages() ([]models.Message, error) {
 	if err := models.ValidateMessages(messages); err != nil {
 		return nil, err
 	}
-	if r.Stream != nil && *r.Stream {
-		if err := models.ValidateTextMessages(messages); err != nil {
-			return nil, err
-		}
-	}
 	return messages, nil
 }

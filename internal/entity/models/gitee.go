@@ -218,7 +218,7 @@ func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Messa
 	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
 	}
-	if err := ValidateTextMessages(messages); err != nil {
+	if err := ValidateMessages(messages); err != nil {
 		return err
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)

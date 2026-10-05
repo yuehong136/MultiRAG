@@ -1311,11 +1311,6 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	if err := models.ValidateMessages(messages); err != nil {
 		return nil, err
 	}
-	if stream {
-		if err := models.ValidateTextMessages(messages); err != nil {
-			return nil, err
-		}
-	}
 	url := "/chat/completions"
 	payload := map[string]interface{}{
 		"provider_name": providerName,

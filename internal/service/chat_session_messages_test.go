@@ -17,8 +17,8 @@ func TestSessionModelMessagesPreserveMultimodalHistory(t *testing.T) {
 	if got[0].Content != "configured system" || got[1].ReasoningContent == nil || *got[1].ReasoningContent != "thought" || !reflect.DeepEqual(got[2].Content, parts) {
 		t.Fatalf("lost data: %#v", got)
 	}
-	if err := models.ValidateTextMessages(got); err == nil {
-		t.Fatal("multimodal streaming accepted")
+	if err := models.ValidateMessages(got); err != nil {
+		t.Fatal(err)
 	}
 	for _, bad := range []map[string]any{{"content": "x"}, {"role": "user", "content": 42}, {"role": "assistant", "content": "x", "reasoning_content": 42}} {
 		if _, err := svc.modelMessages([]map[string]any{bad}, "rules"); err == nil {

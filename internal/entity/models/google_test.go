@@ -97,7 +97,7 @@ func TestGoogleStreamingEmptyChunksOrderAndCallbackFailure(t *testing.T) {
 			t.Error("stream dropped generation config")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"reason\",\"thought\":true},{\"text\":\"answer\"}]}}]}\n\n")
+		fmt.Fprint(w, "data: {}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"reason\",\"thought\":true},{\"text\":\"answer\"}]}}]}\n\n")
 	}))
 	defer server.Close()
 	g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
@@ -332,7 +332,7 @@ func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
 			t.Errorf("history %#v", body)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"reply\"}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"reply\"}]}}]}\n\n")
 	}))
 	defer server.Close()
 	model := NewGoogleModel(map[string]string{"default": "http://127.0.0.1:1", "fixture": server.URL}, URLSuffix{})
@@ -358,5 +358,42 @@ func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
 	}
 	if err := model.ChatStreamlyWithMessages("gemini-test", history, api, nil, func(*string, *string) error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("history stream cancellation=%v", err)
+	}
+}
+
+func TestGoogleMultimodalStreamAndTruncation(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			contents := body["contents"].([]any)
+			if len(contents) != 2 || contents[0].(map[string]any)["role"] != "model" {
+				t.Error("roles lost")
+			}
+			parts := contents[1].(map[string]any)["parts"].([]any)
+			if len(parts) != 2 || parts[1].(map[string]any)["fileData"].(map[string]any)["fileUri"] != "https://example.com/a.png" {
+				t.Error("image lost")
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, `data: {"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}`+"\n\n")
+			if complete {
+				fmt.Fprint(w, `data: {"candidates":[{"finishReason":"STOP"}]}`+"\n\n")
+			}
+		}))
+		g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
+		_, _, api := googleTestConfig()
+		done := false
+		err := g.ChatStreamlyWithMessages("gemini-test", multimodalFixture(), api, nil, func(c, r *string) error {
+			if c != nil && *c == "[DONE]" {
+				done = true
+			}
+			return nil
+		})
+		if (err == nil) != complete || done != complete {
+			t.Errorf("complete=%v done=%v error=%v", complete, done, err)
+		}
+		server.Close()
 	}
 }

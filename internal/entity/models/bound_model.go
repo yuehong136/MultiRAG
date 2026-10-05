@@ -164,7 +164,7 @@ func (m *ChatModel) ChatStreamlyWithSender(system string, history []map[string]s
 }
 
 func (m *ChatModel) ChatStreamlyWithMessages(messages []Message, values map[string]interface{}, sender func(*string, *string) error) error {
-	if err := ValidateTextMessages(messages); err != nil {
+	if err := ValidateMessages(messages); err != nil {
 		return err
 	}
 	config, err := chatGenerationConfig(values, m.ModelConfig)

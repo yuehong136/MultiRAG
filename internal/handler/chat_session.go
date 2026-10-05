@@ -262,18 +262,14 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 		chatModelConfig["thinking"] = *req.Thinking
 	}
 
-	// Process messages - filter out system messages and initial assistant messages
+	// The configured system prompt is authoritative; preserve all conversation turns.
 	var processedMessages []map[string]interface{}
-	for i, m := range req.Messages {
+	for _, m := range req.Messages {
 		role, _ := m["role"].(string)
 		if role == "system" {
 			continue
 		}
-		if role == "assistant" && len(processedMessages) == 0 {
-			continue
-		}
 		processedMessages = append(processedMessages, m)
-		_ = i
 	}
 
 	// Get last message ID if present

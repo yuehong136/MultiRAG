@@ -66,9 +66,6 @@ func TestMultimodalProviderContract(t *testing.T) {
 			if _, err := driver.ChatWithMessages("fixture", &APIConfig{APIKey: &key}, nil, nil); err == nil {
 				t.Fatal("accepted empty messages")
 			}
-			if err := driver.ChatStreamlyWithMessages("fixture", multimodalFixture(), &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil }); err == nil {
-				t.Fatal("accepted multimodal stream")
-			}
 			if calls != before {
 				t.Fatal("invalid requests reached provider")
 			}
@@ -82,9 +79,9 @@ func TestMultimodalProviderContract(t *testing.T) {
 }
 
 func TestNewHistoryStreamProviders(t *testing.T) {
-	for _, name := range []string{"deepseek", "gitee", "siliconflow"} {
+	for _, name := range []string{"aliyun", "deepseek", "gitee", "siliconflow", "zhipu-ai", "minimax", "moonshot", "vllm", "volcengine"} {
 		t.Run(name, func(t *testing.T) {
-			history := []Message{{Role: "system", Content: "rules"}, {Role: "assistant", Content: "old", ReasoningContent: stringPtr("thought")}, {Role: "user", Content: "new"}}
+			history := multimodalFixture()
 			payload := "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning_content\":\"reason\"}}]}\n\ndata: [DONE]\n\n"
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body struct {

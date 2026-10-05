@@ -102,19 +102,6 @@ func ValidateMessages(messages []Message) error {
 	return nil
 }
 
-// ValidateTextMessages defines the current streaming boundary for every provider.
-func ValidateTextMessages(messages []Message) error {
-	if err := ValidateMessages(messages); err != nil {
-		return err
-	}
-	for _, message := range messages {
-		if _, ok := message.Content.(string); !ok {
-			return fmt.Errorf("streaming with multimodal content is not supported")
-		}
-	}
-	return nil
-}
-
 // ValidateChatResponse protects all consumers from nil provider responses.
 func ValidateChatResponse(response *ChatResponse) error {
 	if response == nil || response.Answer == nil || *response.Answer == "" {

@@ -212,10 +212,6 @@ func TestChatCLIContentArray(t *testing.T) {
 		}
 	}
 	cmd.Params["message"] = message
-	cmd.Params["stream"] = true
-	if _, err := client.ChatToModel(cmd); err == nil {
-		t.Fatal("accepted multimodal stream")
-	}
 	if calls != 1 {
 		t.Fatalf("invalid content reached server: %d", calls)
 	}

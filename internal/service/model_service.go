@@ -633,7 +633,7 @@ func (m *ModelProviderService) ChatToModelStreamWithSender(providerName, instanc
 }
 
 func (m *ModelProviderService) ChatToModelStreamWithMessages(providerName, instanceName, modelName, userID string, messages []modelModule.Message, apiConfig *modelModule.APIConfig, modelConfig *modelModule.ChatConfig, sender func(*string, *string) error) (common.ErrorCode, error) {
-	if err := modelModule.ValidateTextMessages(messages); err != nil {
+	if err := modelModule.ValidateMessages(messages); err != nil {
 		return common.CodeBadRequest, err
 	}
 	bound, code, err := m.userInstanceChatModel(providerName, instanceName, modelName, userID, apiConfig, modelConfig)

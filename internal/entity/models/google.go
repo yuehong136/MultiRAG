@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -190,7 +191,7 @@ func (g *GoogleModel) ChatStreamlyWithSender(modelName, message *string, apiConf
 }
 
 func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
-	if err := ValidateTextMessages(messages); err != nil {
+	if err := ValidateMessages(messages); err != nil {
 		return err
 	}
 	if strings.TrimSpace(modelName) == "" || len(messages) == 0 {
@@ -209,10 +210,17 @@ func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 	if err != nil {
 		return err
 	}
-	receivedAnswer := false
+	receivedAnswer, finished := false, false
 	for response, err := range client.Models.GenerateContentStream(ctx, modelName, contents, generation) {
 		if err != nil {
 			return googleRequestError(ctx, err)
+		}
+		if response != nil {
+			for _, candidate := range response.Candidates {
+				if candidate != nil && candidate.FinishReason != "" {
+					finished = true
+				}
+			}
 		}
 		answer, reasoning := googleText(response, config != nil && config.Thinking != nil && *config.Thinking)
 		if reasoning != "" {
@@ -232,6 +240,9 @@ func (g *GoogleModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 	}
 	if !receivedAnswer {
 		return errors.New("Google returned no text answer")
+	}
+	if !finished {
+		return io.ErrUnexpectedEOF
 	}
 	done := "[DONE]"
 	return sender(&done, nil)
@@ -299,6 +310,9 @@ func googleHistory(messages []Message, config *ChatConfig) ([]*genai.Content, *g
 	var system []*genai.Part
 	for _, message := range messages {
 		var parts []*genai.Part
+		if message.ReasoningContent != nil && *message.ReasoningContent != "" {
+			parts = append(parts, &genai.Part{Text: *message.ReasoningContent, Thought: true})
+		}
 		if text, ok := message.Content.(string); ok {
 			parts = append(parts, genai.NewPartFromText(text))
 		} else {

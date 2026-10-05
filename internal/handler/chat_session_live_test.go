@@ -67,7 +67,7 @@ func TestChatSessionLiveHTTPAndSQL(t *testing.T) {
 			t.Errorf("credential/URL mismatch %s", r.URL.Path)
 		}
 		var body struct {
-			Messages []map[string]string
+			Messages []map[string]interface{}
 			Stream   bool
 			Thinking map[string]string
 			Model    string
@@ -75,10 +75,16 @@ func TestChatSessionLiveHTTPAndSQL(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if len(body.Messages) != 4 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "rules" || body.Messages[2]["role"] != "assistant" || body.Messages[2]["content"] != "previous" || body.Model != "kimi-k2.5" {
+		if len(body.Messages) != 5 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "rules" || body.Messages[1]["content"] != "prologue" || body.Messages[3]["role"] != "assistant" || body.Messages[3]["content"] != "previous" || body.Model != "kimi-k2.5" {
 			t.Errorf("roles/history/model lost %#v", body)
 		}
 		message := body.Messages[len(body.Messages)-1]["content"]
+		if parts, ok := message.([]interface{}); ok {
+			if len(parts) != 2 || parts[1].(map[string]interface{})["type"] != "image_url" {
+				t.Error("image content lost")
+			}
+			message = parts[0].(map[string]interface{})["text"]
+		}
 		wantThinking := "enabled"
 		if message == "off" {
 			wantThinking = "disabled"
@@ -138,7 +144,7 @@ func TestChatSessionLiveHTTPAndSQL(t *testing.T) {
 	api := httptest.NewServer(router)
 	defer api.Close()
 	bodyFor := func(id, message string, flags map[string]interface{}) []byte {
-		body := map[string]interface{}{"conversation_id": id, "messages": []map[string]string{{"role": "system", "content": "untrusted"}, {"role": "assistant", "content": "prologue"}, {"role": "user", "content": "old"}, {"role": "assistant", "content": "previous"}, {"role": "user", "content": message, "id": "msg"}}}
+		body := map[string]interface{}{"conversation_id": id, "messages": []map[string]interface{}{{"role": "system", "content": "untrusted"}, {"role": "assistant", "content": "prologue"}, {"role": "user", "content": "old"}, {"role": "assistant", "content": "previous"}, {"role": "user", "content": []map[string]interface{}{{"type": "text", "text": message}, {"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}}}, "id": "msg"}}}
 		for k, v := range flags {
 			body[k] = v
 		}
@@ -194,7 +200,7 @@ func TestChatSessionLiveHTTPAndSQL(t *testing.T) {
 		t.Fatalf("SSE %d %s", status, body)
 	}
 	var stored string
-	if err := readback.QueryRow(`SELECT message::text FROM t_ai_conversations WHERE id='stream'`).Scan(&stored); err != nil || !strings.Contains(stored, "part two") {
+	if err := readback.QueryRow(`SELECT message::text FROM t_ai_conversations WHERE id='stream'`).Scan(&stored); err != nil || (!strings.Contains(stored, "part two") || !strings.Contains(stored, "image_url")) {
 		t.Fatal("independent persisted answer readback failed")
 	}
 	_, body = send("error", "error", map[string]interface{}{"stream": true}, true)
