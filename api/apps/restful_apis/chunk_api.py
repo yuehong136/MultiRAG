@@ -4,7 +4,7 @@ import asyncio
 import base64
 import datetime
 import re
-from typing import Any
+from typing import Any, Literal
 
 import xxhash
 from fastapi import APIRouter, Depends, Query
@@ -17,12 +17,13 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Document, db_connection, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.document_image_lock import image_reference_key, image_write_locks
+from api.db.services.document_image_service import _raster
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result, server_error_response
-from api.utils.image_utils import store_chunk_image
+from api.utils.image_utils import replace_chunk_image, store_chunk_image
 from common import settings
 from common.constants import LLMType, ParserType, RetCode
 from common.string_utils import is_content_empty, remove_redundant_spaces
@@ -72,7 +73,18 @@ class UpdateChunkRequest(BaseModel):
     positions: list[list[int]] | None = None
     tag_kwd: list[str] | None = None
     tag_feas: Any | None = None
-    image_base64: str | None = None
+    image_base64: str | None = Field(
+        default=None,
+        description="Pure Base64 of a raster image. Omitted, null or empty preserves the image unless image_update_mode is explicitly supplied.",
+    )
+    image_update_mode: Literal["append", "replace"] = Field(
+        default="append", description="append (default) stacks images vertically; replace stores only the new image. Both require image_base64 when explicit."
+    )
+
+    @field_validator("image_update_mode", mode="before")
+    @classmethod
+    def normalize_image_update_mode(cls, value: Any) -> Any:
+        return value.strip().lower() if isinstance(value, str) else value
 
 
 class DeleteChunksRequest(BaseModel):
@@ -101,7 +113,7 @@ def _map_doc(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _strip_chunk_runtime_fields(chunk: dict[str, Any]) -> dict[str, Any]:
-    return {name: value for name, value in chunk.items() if not re.search(r"(_vec$|_sm_|_tks|_ltks)", name)}
+    return {name: float(value) if name.endswith("_flt") and value is not None else value for name, value in chunk.items() if name != "vector" and not re.search(r"(_vec$|_sm_|_tks|_ltks)", name)}
 
 
 def _chunk_payload(chunk_id: str, chunk: dict[str, Any]) -> dict[str, Any]:
@@ -335,6 +347,16 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
         if not current or str(current.get("doc_id", current.get("document_id"))) != document_id:
             return get_error_data_result(retmsg=f"Can't find this chunk {chunk_id}")
         req = request.model_dump(exclude_unset=True)
+        image_binary = None
+        if "image_update_mode" in req and not req.get("image_base64"):
+            return get_error_data_result(retmsg="`image_base64` is required when `image_update_mode` is supplied")
+        if req.get("image_base64"):
+            try:
+                # Use the protected read's raster contract before any mutation,
+                # so an acknowledged replacement remains readable there.
+                image_binary = _raster(base64.b64decode(req["image_base64"], validate=True)).data
+            except ValueError:
+                return get_error_data_result(retmsg="`image_base64` must be pure Base64 of a valid raster image")
         content = req.get("content", current.get("content_with_weight", ""))
         if is_content_empty(content):
             return get_error_data_result(retmsg="`content` is required")
@@ -381,8 +403,13 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
         with image_write_locks(db.get_bind(), keys):
             if not settings.docStoreConn.update({"id": chunk_id}, patch, index_name, dataset_id):
                 return get_error_data_result(retmsg="Index updating failure")
-            if req.get("image_base64"):
-                store_chunk_image(dataset_id, chunk_id, base64.b64decode(req["image_base64"]))
+            if image_binary is not None:
+                # Index and object storage are not transactional together. A
+                # storage failure reports failure but can leave the index patch.
+                if request.image_update_mode == "replace":
+                    replace_chunk_image(dataset_id, chunk_id, image_binary)
+                else:
+                    store_chunk_image(dataset_id, chunk_id, image_binary)
         return get_result()
 
 

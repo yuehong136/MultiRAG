@@ -7,6 +7,22 @@ from api.db.services.document_image_lock import image_write_locks
 from common import settings
 
 
+def replace_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
+    """Replace exact bytes under the shared key lock and confirm storage readback.
+
+    This confirms the object write, not an atomic commit with the chunk index.
+    Creation callers retain the append behavior of ``store_chunk_image``.
+    """
+    with db_connection() as db, image_write_locks(db.get_bind(), [(bucket, name)]):
+        storage = settings.STORAGE_IMPL
+        storage.put(bucket, name, image_binary)
+        # Legacy put adapters can swallow errors, so their return alone cannot
+        # acknowledge a replacement. Strict reads also preserve decryption.
+        read = getattr(storage, "get_bytes", None) or storage.get
+        if read(bucket, name) != image_binary:
+            raise RuntimeError("Chunk image replacement could not be confirmed.")
+
+
 def store_chunk_image(bucket: str, name: str, image_binary: bytes) -> None:
     with db_connection() as db, image_write_locks(db.get_bind(), [(bucket, name)]):
         _store_locked_chunk_image(bucket, name, image_binary)
