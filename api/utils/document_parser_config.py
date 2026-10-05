@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_validator, model_validator
 
-from common.metadata_config import MetadataField, MetadataType
+from common.metadata_config import MetadataField, MetadataType, field_schema
 
 NonNegativeInt = Annotated[int, Field(ge=0)]
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
@@ -166,6 +166,23 @@ def _deep_merge(stored: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str
     return result
 
 
+def _legacy_metadata_schema(fields: list[Any]) -> dict[str, Any]:
+    """Project the complete legacy snapshot, rejecting ambiguous stored fields."""
+    properties: dict[str, Any] = {}
+    for item in fields:
+        if not isinstance(item, dict):
+            raise ValueError("Stored metadata fields must be objects.")
+        MetadataField.model_validate(item)
+        # Keep the same property names as the existing GET projection.
+        key = item.get("key") or item.get("name")
+        if not isinstance(key, str) or not key or key in properties:
+            raise ValueError("Stored metadata fields require unique names.")
+        if item.get("descriptions") is not None and not isinstance(item["descriptions"], str):
+            raise ValueError("Stored metadata descriptions must be strings.")
+        properties[key] = field_schema(item)
+    return {"type": "object", "properties": properties, "additionalProperties": False}
+
+
 def merge_document_parser_config(
     stored_config: Mapping[str, Any],
     incoming_patch: DocumentParserConfigPatch | Mapping[str, Any],
@@ -175,11 +192,17 @@ def merge_document_parser_config(
     Empty nested patches are noops. Explicit child disable follows the existing
     flatten convention (parent_child={}, children_delimiter=''). All other
     nested config, including disabled RAPTOR/GraphRAG, retains old fields.
+    A schema patch projects historical metadata arrays before merging. Submitted
+    arrays still replace the template, including [] for clearing/deletion.
+    The PATCH service repeats this merge on the current row under its write lock.
     """
     # Revalidate model_construct()/mutated models at this service boundary.
     raw = incoming_patch.model_dump(exclude_unset=True) if isinstance(incoming_patch, DocumentParserConfigPatch) else dict(incoming_patch)
     patch = DocumentParserConfigPatch.model_validate(raw).model_dump(exclude_unset=True)
-    merged = _deep_merge(stored_config, patch)
+    base = dict(stored_config)
+    if isinstance(patch.get("metadata"), dict) and patch["metadata"] and isinstance(base.get("metadata"), list):
+        base["metadata"] = _legacy_metadata_schema(base["metadata"])
+    merged = _deep_merge(base, patch)
     if isinstance(patch.get("metadata"), dict) and patch["metadata"]:
         schema = merged["metadata"]
         if schema.get("type", "object") != "object" or not isinstance(schema.get("properties"), dict):

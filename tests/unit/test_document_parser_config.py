@@ -256,3 +256,63 @@ def test_legacy_delimiter_only_children_remain_enabled_after_partial_update() ->
     }
     with pytest.raises(ValueError, match="explicit parent-child disable"):
         merge_document_parser_config({"children_delimiter": ";"}, {"children_delimiter": ""})
+
+
+def test_partial_schema_patch_projects_all_legacy_fields_without_losing_constraints() -> None:
+    stored = {
+        "metadata": [
+            {"name": "a", "type": "number", "examples": ["2024", "2025.5"], "restrict_values": True, "description": "Year"},
+            {"key": "b", "type": "list", "enum": ["one", "two"], "descriptions": "Choices"},
+        ],
+        "built_in_metadata": [{"key": "filename"}],
+        "enable_metadata": False,
+        "future": [1],
+    }
+    before = deepcopy(stored)
+    patch = {"metadata": {"properties": {"a": {"description": "Updated year"}}, "required": ["a"]}}
+    incoming = deepcopy(patch)
+    result = merge_document_parser_config(stored, patch)
+    assert result["metadata"] == {
+        "type": "object",
+        "properties": {
+            "a": {"type": "number", "description": "Updated year", "enum": [2024, 2025.5]},
+            "b": {"type": "array", "description": "Choices", "items": {"type": "string", "enum": ["one", "two"]}},
+        },
+        "additionalProperties": False,
+        "required": ["a"],
+    }
+    assert stored == before and patch == incoming
+    assert result["built_in_metadata"] == stored["built_in_metadata"]
+    assert result["enable_metadata"] is False and result["future"] == [1]
+    assert turn2jsonschema(result["metadata"]) == result["metadata"]
+
+
+@pytest.mark.parametrize("fields", [[{"key": "a"}, {"key": "a"}], [{"description": "No key"}], [{"key": "n", "type": "number", "enum": ["NaN"]}], [{"key": "a", "descriptions": 1}], [None]])
+def test_ambiguous_legacy_arrays_fail_closed_instead_of_dropping_fields(fields: list[Any]) -> None:
+    stored = {"metadata": fields}
+    before = deepcopy(stored)
+    with pytest.raises(ValueError):
+        merge_document_parser_config(stored, {"metadata": {"properties": {"new": {"type": "string"}}}})
+    assert stored == before
+    assert merge_document_parser_config(stored, {"metadata": {}}) == stored
+
+
+def test_legacy_metadata_omission_noop_and_explicit_array_replacement() -> None:
+    stored = {"metadata": [{"key": "a"}, {"key": "b"}], "built_in_metadata": [{"key": "filename"}]}
+    for patch in [{}, {"metadata": {}}, {"metadata": {"properties": {}}}]:
+        result = merge_document_parser_config(stored, patch)
+        if patch.get("metadata"):
+            assert set(result["metadata"]["properties"]) == {"a", "b"}
+        else:
+            assert result == stored
+    assert merge_document_parser_config(stored, {"metadata": [{"key": "a"}]}) == {**stored, "metadata": [{"key": "a"}]}
+    assert merge_document_parser_config(stored, {"metadata": []}) == {**stored, "metadata": []}
+    assert merge_document_parser_config({"metadata": []}, {"metadata": {"properties": {"a": {"type": "string"}}}})["metadata"]["properties"] == {"a": {"type": "string"}}
+
+
+def test_historical_property_names_match_get_projection() -> None:
+    fields = [{"name": " a ", "type": "string", "examples": ["example"], "descriptions": None}]
+    result = merge_document_parser_config({"metadata": fields}, {"metadata": {"properties": {" a ": {"description": "Updated"}}}})
+    expected = deepcopy(turn2jsonschema(fields))
+    expected["properties"][" a "]["description"] = "Updated"
+    assert result["metadata"] == expected

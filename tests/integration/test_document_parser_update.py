@@ -36,6 +36,133 @@ from tests.support.document_parser_update import parser_api as parser_api
 from tests.support.document_parser_update import parser_database as parser_database
 
 
+def _seed_legacy_metadata(env: dict[str, Any]) -> dict[str, Any]:
+    with Session(env["engine"]) as db:
+        doc = db.get(Document, env["docs"]["a"])
+        assert doc is not None
+        doc.parser_config = {
+            **doc.parser_config,
+            "metadata": [
+                {"key": "a", "type": "number", "examples": ["2024", "2025.5"], "restrict_values": True, "description": "Year"},
+                {"key": "b", "type": "string", "description": "Original b", "enum": ["one", "two"]},
+            ],
+            "built_in_metadata": [{"key": "filename"}],
+        }
+        db.commit()
+    return _read_metadata_document(env)
+
+
+def _read_metadata_document(env: dict[str, Any]) -> dict[str, Any]:
+    response = requests.get(
+        env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents",
+        params={"id": env["docs"]["a"]},
+        headers={"Authorization": "Bearer " + env["tokens"]["owner"]},
+        timeout=30,
+    )
+    assert response.status_code == 200 and response.json()["code"] == 0
+    documents = response.json()["data"]["docs"]
+    assert len(documents) == 1
+    return documents[0]
+
+
+def test_metadata_legacy_schema_patch_merges_latest_locked_snapshot(parser_api: dict[str, Any]) -> None:
+    env = parser_api
+    initial = _seed_legacy_metadata(env)
+    assert set(initial["parser_config"]["metadata"]["properties"]) == {"a", "b"}
+    assert initial["parser_config"]["metadata"]["properties"]["a"]["enum"] == [2024, 2025.5]
+    # Both editors first read the historical array as Schema. The second edit
+    # arrives after b commits; its raw partial patch must use the latest b.
+    patch(env, {"parser_config": {"metadata": {"properties": {"b": {"description": "Edited b"}}}}})
+    result = patch(env, {"parser_config": {"metadata": {"properties": {"a": {"description": "Edited a"}}}}})["data"]
+    listed = _read_metadata_document(env)
+    with Session(env["engine"]) as db:
+        stored = db.get(Document, env["docs"]["a"]).parser_config
+        assert result["parser_config"] == listed["parser_config"] == stored
+        assert stored["metadata"]["properties"] == {
+            "a": {"type": "number", "description": "Edited a", "enum": [2024, 2025.5]},
+            "b": {"type": "string", "description": "Edited b", "enum": ["one", "two"]},
+        }
+        assert stored["built_in_metadata"] == [{"key": "filename"}] and stored["unknown"] == [0]
+    for payload in [{"parser_config": {}}, {"parser_config": {"metadata": {}}}, {"parser_config": {"metadata": {"properties": {}}}}]:
+        assert patch(env, payload)["data"]["parser_config"] == stored
+    replacement = {"type": "object", "properties": {"a": {"type": "number", "enum": [1, 2.5]}}}
+    response = requests.put(
+        env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents/{env['docs']['a']}/metadata/config",
+        json={"metadata": replacement},
+        headers={"Authorization": "Bearer " + env["tokens"]["owner"]},
+        timeout=30,
+    )
+    assert response.status_code == 200 and response.json()["code"] == 0
+    assert _read_metadata_document(env)["parser_config"]["metadata"] == replacement
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["docs"]["a"]).parser_config["metadata"] == replacement
+    assert patch(env, {"parser_config": {"metadata": [{"key": "b", "type": "string"}]}})["data"]["parser_config"]["metadata"] == [{"key": "b", "type": "string"}]
+    assert set(_read_metadata_document(env)["parser_config"]["metadata"]["properties"]) == {"b"}
+    cleared = patch(env, {"parser_config": {"metadata": []}})["data"]["parser_config"]
+    assert cleared["metadata"] == [] and cleared["built_in_metadata"] == [{"key": "filename"}]
+    assert _read_metadata_document(env)["parser_config"] == cleared
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["docs"]["a"]).parser_config == cleared
+
+
+def test_metadata_overlapping_edit_conflict_then_raw_patch_retry_preserves_both(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    env = parser_api
+    _seed_legacy_metadata(env)
+    entered, selected, release = threading.Event(), threading.Event(), threading.Event()
+    original_set = ingest_service._set_document
+    original_preflight = parser_service.preflight_document_update
+
+    def hold(db: Session, doc: Document, kb: Knowledgebase, values: dict[str, Any]) -> None:
+        if doc.id == env["docs"]["a"] and values.get("parser_config", {}).get("metadata", {}).get("properties", {}).get("a", {}).get("description") == "Concurrent a":
+            entered.set()
+            assert release.wait(20)
+        original_set(db, doc, kb, values)
+
+    def preflight(*args: Any, **kwargs: Any) -> Any:
+        selection = original_preflight(*args, **kwargs)
+        if args[4].model_dump(exclude_unset=True).get("parser_config", {}).get("metadata", {}).get("properties", {}).get("b", {}).get("description") == "Concurrent b":
+            selected.set()
+        return selection
+
+    first_patch = {"parser_config": {"metadata": {"properties": {"a": {"description": "Concurrent a"}}}}}
+    second_patch = {"parser_config": {"metadata": {"properties": {"b": {"description": "Concurrent b"}}}}}
+    with monkeypatch.context() as scope:
+        scope.setattr(ingest_service, "_set_document", hold)
+        scope.setattr(parser_service, "preflight_document_update", preflight)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(patch, env, first_patch)
+            assert entered.wait(10)
+            second = pool.submit(patch, env, second_patch, status=409)
+            try:
+                assert selected.wait(10)
+            finally:
+                release.set()
+            assert first.result(20)["code"] == 0
+            conflict = second.result(20)
+            assert conflict["code"] == "DOCUMENT_UPDATE_CONFLICT" and conflict["retcode"] == 102 and conflict["data"] == {"outcome": "unchanged"}
+    assert _read_metadata_document(env)["parser_config"]["metadata"]["properties"]["b"]["description"] == "Original b"
+    retried = patch(env, second_patch)["data"]["parser_config"]
+    assert retried["metadata"]["properties"]["a"]["description"] == "Concurrent a"
+    assert retried["metadata"]["properties"]["b"]["description"] == "Concurrent b"
+    assert retried["metadata"]["properties"]["a"]["enum"] == [2024, 2025.5]
+    assert _read_metadata_document(env)["parser_config"] == retried
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["docs"]["a"]).parser_config == retried
+
+
+@pytest.mark.parametrize("role,key,status", [("normal", "a", 403), ("outsider", "a", 404), ("owner", "foreign", 404)])
+def test_metadata_schema_patch_still_requires_document_ownership(parser_api: dict[str, Any], role: str, key: str, status: int) -> None:
+    env = parser_api
+    _seed_legacy_metadata(env)
+    before = snapshot(env)
+    result = patch(env, {"parser_config": {"metadata": {"properties": {"a": {"description": "Unauthorized"}}}}}, role=role, key=key, status=status)
+    assert result["code"] == ("DOCUMENT_UPDATE_FORBIDDEN" if status == 403 else "DOCUMENT_UPDATE_UNAVAILABLE")
+    assert result["retcode"] == (109 if status == 403 else 102) and result["data"] == {"outcome": "unchanged"}
+    assert snapshot(env) == before
+
+
 def test_retired_parser_real_http_fullstores_zero_private_calls(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     from urllib.parse import unquote, urlsplit
 
