@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import time
+from typing import Any
 
 from opensearchpy import ConnectionTimeout, Index, NotFoundError, OpenSearch, Q, Search, UpdateByQuery
 
@@ -154,28 +155,26 @@ class OSConnection(DocStoreConnection):
         self,
         selectFields: list[str],
         highlightFields: list[str],
-        condition: dict,
+        condition: dict[str, Any],
         matchExprs: list[MatchExpr],
-        orderBy: OrderByExpr,
+        orderBy: OrderByExpr | None,
         offset: int,
         limit: int,
         indexNames: str | list[str],
         knowledgebaseIds: list[str],
-        aggFields: list[str] = [],
-        rank_feature: dict | None = None,
-    ):
+        aggFields: list[str] | None = None,
+        rank_feature: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Refers to https://github.com/opensearch-project/opensearch-py/blob/main/guides/dsl.md
         """
-        use_knn = False
         if isinstance(indexNames, str):
             indexNames = indexNames.split(",")
         assert isinstance(indexNames, list) and len(indexNames) > 0
         assert "_id" not in condition
 
         bqry = Q("bool", must=[])
-        condition["kb_id"] = knowledgebaseIds
-        for k, v in condition.items():
+        for k, v in {**condition, "kb_id": knowledgebaseIds}.items():
             if k == "available_int":
                 if v == 0:
                     bqry.filter.append(Q("range", available_int={"lt": 1}))
@@ -192,37 +191,44 @@ class OSConnection(DocStoreConnection):
                 raise Exception(f"Condition `{k!s}={v!s}` value type is {type(v)!s}, expected to be int, str or list.")
 
         s = Search()
-        vector_similarity_weight = 0.5
+        # Snapshot only scalar scope: lexical matches must not filter kNN candidates.
+        scalar_filter = bqry.to_dict()
+        text_similarity_weight = 1.0
+        vector_similarity_weight = 1.0
         for m in matchExprs:
             if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
                 assert len(matchExprs) == 3 and isinstance(matchExprs[0], MatchTextExpr) and isinstance(matchExprs[1], MatchDenseExpr) and isinstance(matchExprs[2], FusionExpr)
                 weights = m.fusion_params["weights"]
-                vector_similarity_weight = float(weights.split(",")[1])
-        knn_query = {}
+                text_similarity_weight, vector_similarity_weight = (float(value) for value in weights.split(","))
+        candidate_queries: list[dict[str, Any]] = []
         for m in matchExprs:
             if isinstance(m, MatchTextExpr):
                 minimum_should_match = m.extra_options.get("minimum_should_match", 0.0)
                 if isinstance(minimum_should_match, float):
                     minimum_should_match = str(int(minimum_should_match * 100)) + "%"
-                bqry.must.append(Q("query_string", fields=m.fields, type="best_fields", query=m.matching_text, minimum_should_match=minimum_should_match, boost=1))
-                bqry.boost = 1.0 - vector_similarity_weight
+                candidate_queries.append(
+                    Q("query_string", fields=m.fields, type="best_fields", query=m.matching_text, minimum_should_match=minimum_should_match, boost=text_similarity_weight).to_dict()
+                )
 
             # Elasticsearch has the encapsulation of KNN_search in python sdk
             # while the Python SDK for OpenSearch does not provide encapsulation for KNN_search,
             # the following codes implement KNN_search in OpenSearch using DSL
             # Besides, Opensearch's DSL for KNN_search query syntax differs from that in Elasticsearch, I also made some adaptions for it
             elif isinstance(m, MatchDenseExpr):
-                assert bqry is not None
-                similarity = 0.0
-                if "similarity" in m.extra_options:
-                    similarity = m.extra_options["similarity"]
-                use_knn = True
-                vector_column_name = m.vector_column_name
-                knn_query[vector_column_name] = {}
-                knn_query[vector_column_name]["vector"] = list(m.embedding_data)
-                knn_query[vector_column_name]["k"] = m.topn
-                knn_query[vector_column_name]["filter"] = bqry.to_dict()
-                knn_query[vector_column_name]["boost"] = similarity
+                # OpenSearch k and min_score are mutually exclusive. Dealer applies
+                # the similarity threshold after reranking; it is not a score boost.
+                candidate_queries.append(
+                    {
+                        "knn": {
+                            m.vector_column_name: {
+                                "vector": list(m.embedding_data),
+                                "k": m.topn,
+                                "filter": scalar_filter,
+                                "boost": vector_similarity_weight,
+                            }
+                        }
+                    }
+                )
 
         if bqry and rank_feature:
             for fld, sc in rank_feature.items():
@@ -248,17 +254,17 @@ class OSConnection(DocStoreConnection):
                 orders.append({field: order_info})
             s = s.sort(*orders)
 
-        for fld in aggFields:
+        for fld in aggFields or []:
             s.aggs.bucket(f"aggs_{fld}", "terms", field=fld, size=1000000)
 
         if limit > 0:
             s = s[offset : offset + limit]
         q = s.to_dict()
+        if candidate_queries:
+            # opensearch-py 2.7 has no kNN DSL class, so insert the raw clauses
+            # after serialization. Rank features cannot admit unrelated rows.
+            q["query"]["bool"].setdefault("must", []).append({"bool": {"should": candidate_queries, "minimum_should_match": 1}})
         logger.debug(f"OSConnection.search {indexNames!s} query: " + json.dumps(q))
-
-        if use_knn:
-            del q["query"]
-            q["query"] = {"knn": knn_query}
 
         for i in range(ATTEMPT_TIME):
             try:
