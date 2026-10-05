@@ -3,7 +3,7 @@
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV。
 首次导入与重建不执行删除核对；后续同步启用
 开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
 
@@ -125,6 +125,16 @@ Zendesk ticket 正文保持 `zendesk_ticket_{id}`，排除 `status=deleted`，�
 该限制见 [Zendesk Incremental Exports](https://developer.zendesk.com/api-reference/ticketing/ticket-management/incremental_exports/)。
 后续需要源 ID 持久映射及删除候选的源端存在性复核；不能用搜索索引或不含归档记录的 tickets
 列表直接替换导出来宣称完整。UI 仅在 articles 模式展示删除开关，改为 tickets 时提交关闭值。
+
+WebDAV 的正文与 slim 清单共用 `remote_path` 递归范围、扩展名、图片开关及大小上限，
+身份沿用 `webdav:{base_url}:{file_path}`（路径保留 SDK 返回的形式，不对历史 ID 改写）。
+清单不下载正文、不按修改时间过滤；增量终点在清单之前捕获。完整空目录可以清理。
+根目录缺失、子目录失败、207 逐项/属性错误、重复或越界路径、未知资源类型或大小元数据
+均中断本轮，不能把部分目录当作完整快照。大小兼容整数及数字字符串，包括 WebDAV4 的
+`content_length`；超出大小上限的文件在正文和清单中都排除。正文下载失败同样阻断删除。
+缩小路径范围、关闭图片或文件增长到大小上限之外会改变索引资格；开启删除同步前应确认。
+恢复旧文件但修改时间未进入增量窗口时，需重建以补回正文。服务器成功响应却静默隐藏
+对象的权限行为仍无法识别；需要在实际 Nextcloud/ownCloud 等部署中验证凭据和可见范围。
 
 ## 文档身份与删除链
 

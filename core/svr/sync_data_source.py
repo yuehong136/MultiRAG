@@ -61,6 +61,7 @@ task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
     {
+        FileSource.WEBDAV,
         FileSource.AIRTABLE,
         FileSource.GOOGLE_DRIVE,
         FileSource.GMAIL,
@@ -901,8 +902,14 @@ class Teams(SyncBase):
 class WebDAV(SyncBase):
     SOURCE_NAME: str = FileSource.WEBDAV
 
-    async def _generate(self, task: dict):
-        self.connector = WebDAVConnector(base_url=self.conf["base_url"], remote_path=self.conf.get("remote_path", "/"))
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        try:
+            batch_size = int(self.conf.get("batch_size", INDEX_BATCH_SIZE))
+        except (TypeError, ValueError):
+            batch_size = INDEX_BATCH_SIZE
+        if batch_size <= 0:
+            batch_size = INDEX_BATCH_SIZE
+        self.connector = WebDAVConnector(base_url=self.conf["base_url"], remote_path=self.conf.get("remote_path", "/"), batch_size=batch_size)
         self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
 
@@ -921,10 +928,7 @@ class WebDAV(SyncBase):
 
         logging.info("Connect to WebDAV: {}(path: {}) {}".format(self.conf["base_url"], self.conf.get("remote_path", "/"), _begin_info))
 
-        def wrapper():
-            yield from document_batch_generator
-
-        return wrapper()
+        return document_batch_generator
 
 
 class Moodle(SyncBase):

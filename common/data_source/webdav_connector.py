@@ -2,22 +2,48 @@
 
 import logging
 import os
+import posixpath
 from datetime import UTC, datetime
 from typing import Any
 
 from webdav4.client import Client as WebDAVClient
+from webdav4.multistatus import MultiStatusResponse
 
 from common.data_source.config import BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
-from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector
-from common.data_source.models import Document, GenerateDocumentsOutput, SecondsSinceUnixEpoch
+from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector, SlimConnectorWithPermSync
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
 from common.data_source.utils import (
     get_file_ext,
     is_accepted_file_ext,
 )
 
 
-class WebDAVConnector(LoadConnector, PollConnector):
+class _CompleteWebDAVClient(WebDAVClient):
+    """Keep DAV response failures visible before the SDK flattens directory entries."""
+
+    def propfind(self, path: str, **kwargs: Any) -> MultiStatusResponse:
+        result = super().propfind(path, **kwargs)
+        if result.tree.tag != "{DAV:}multistatus":
+            raise ValueError("WebDAV listing is not a DAV multistatus response")
+        result.raise_for_status()
+        root_path = self.join_url(path).path.rstrip("/") or "/"
+        if root_path not in result.responses:
+            raise ValueError("WebDAV listing omitted the requested root")
+        for response in result.responses.values():
+            if response.path_norm != root_path and not response.path_norm.startswith(root_path.rstrip("/") + "/"):
+                raise ValueError("WebDAV response is outside the requested directory")
+            # webdav4 does not check propstat status before extracting properties.
+            for propstat in response.response_xml.findall("{DAV:}propstat"):
+                status = (propstat.findtext("{DAV:}status") or "").split()
+                if len(status) < 2 or status[1] != "200":
+                    raise ValueError("WebDAV listing contains failed or missing property status")
+            if response.properties.resource_type not in {"file", "directory"}:
+                raise ValueError("WebDAV listing omitted resource type")
+        return result
+
+
+class WebDAVConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """WebDAV connector for syncing files from WebDAV servers"""
 
     def __init__(
@@ -41,6 +67,8 @@ class WebDAVConnector(LoadConnector, PollConnector):
         if remote_path.endswith("/") and remote_path != "/":
             remote_path = remote_path.rstrip("/")
         self.remote_path = remote_path
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
         self.batch_size = batch_size
         self.client: WebDAVClient | None = None
         self._allow_images: bool | None = None
@@ -83,91 +111,96 @@ class WebDAVConnector(LoadConnector, PollConnector):
 
         try:
             # Initialize WebDAV client
-            self.client = WebDAVClient(base_url=self.base_url, auth=(username, password))
+            self.client = _CompleteWebDAVClient(base_url=self.base_url, auth=(username, password))
         except Exception as e:
             logging.error(f"Failed to connect to WebDAV server: {e}")
             raise ConnectorMissingCredentialError(f"Failed to authenticate with WebDAV server: {e}")
 
         return None
 
+    @staticmethod
+    def _get_size_bytes(file_info: dict[str, Any]) -> int:
+        for key in ("size", "content_length", "getcontentlength"):
+            value = file_info.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value >= 0:
+                return value
+            if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit() and len(value.strip()) <= 20:
+                return int(value.strip())
+        # Unknown eligibility must not remove an existing document from the snapshot.
+        raise ValueError("WebDAV file has no valid size metadata")
+
+    @staticmethod
+    def _modified_at(file_info: dict[str, Any], fallback: datetime) -> datetime:
+        value = file_info.get("modified")
+        if isinstance(value, datetime):
+            modified = value
+        elif isinstance(value, str):
+            try:
+                modified = datetime.strptime(value, "%a, %d %b %Y %H:%M:%S %Z")
+            except ValueError:
+                modified = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        elif value is None:
+            modified = fallback
+        else:
+            raise ValueError("WebDAV file has invalid modified time")
+        return modified.replace(tzinfo=UTC) if modified.tzinfo is None else modified.astimezone(UTC)
+
     def _list_files_recursive(
         self,
         path: str,
         start: datetime,
         end: datetime,
-    ) -> list[tuple[str, dict]]:
-        """Recursively list all files in the given path
-
-        Args:
-            path: Path to list files from
-            start: Start datetime for filtering
-            end: End datetime for filtering
-
-        Returns:
-            List of tuples containing (file_path, file_info)
-        """
+        *,
+        filter_by_mtime: bool = True,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Exhaust every directory, propagating errors instead of publishing partial data."""
         if self.client is None:
             raise ConnectorMissingCredentialError("WebDAV client not initialized")
-
-        files = []
-
-        try:
-            logging.debug(f"Listing directory: {path}")
-            for item in self.client.ls(path, detail=True):
-                item_path = item["name"]
-
-                if item_path == path or item_path == path + "/":
+        files: list[tuple[str, dict[str, Any]]] = []
+        parent = "/" + path.strip("/")
+        items = self.client.ls(path, detail=True)
+        if not isinstance(items, list):
+            raise ValueError("WebDAV listing is not a list")
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
+                raise ValueError("WebDAV listing contains an invalid path")
+            item_path = item["name"]
+            canonical = "/" + item_path.strip("/")
+            if canonical == parent:
+                if item.get("type") != "directory":
+                    raise ValueError("WebDAV configured path is not a directory")
+                continue
+            if posixpath.normpath(canonical) != canonical or posixpath.dirname(canonical) != parent or canonical in seen:
+                raise ValueError("WebDAV listing contains duplicate or out-of-scope paths")
+            seen.add(canonical)
+            if item.get("type") == "directory":
+                files.extend(self._list_files_recursive(item_path, start, end, filter_by_mtime=filter_by_mtime))
+            elif item.get("type") == "file":
+                if not self._is_supported_file(os.path.basename(item_path)):
                     continue
-
-                logging.debug(f"Found item: {item_path}, type: {item.get('type')}")
-
-                if item.get("type") == "directory":
-                    try:
-                        files.extend(self._list_files_recursive(item_path, start, end))
-                    except Exception as e:
-                        logging.error(f"Error recursing into directory {item_path}: {e}")
-                        continue
-                else:
-                    try:
-                        file_name = os.path.basename(item_path)
-                        if not self._is_supported_file(file_name):
-                            logging.debug(f"Skipping file {item_path} due to unsupported extension.")
-                            continue
-
-                        modified_time = item.get("modified")
-                        if modified_time:
-                            if isinstance(modified_time, datetime):
-                                modified = modified_time
-                                if modified.tzinfo is None:
-                                    modified = modified.replace(tzinfo=UTC)
-                            elif isinstance(modified_time, str):
-                                try:
-                                    modified = datetime.strptime(modified_time, "%a, %d %b %Y %H:%M:%S %Z")
-                                    modified = modified.replace(tzinfo=UTC)
-                                except (ValueError, TypeError):
-                                    try:
-                                        modified = datetime.fromisoformat(modified_time.replace("Z", "+00:00"))
-                                    except (ValueError, TypeError):
-                                        logging.warning(f"Could not parse modified time for {item_path}: {modified_time}")
-                                        modified = datetime.now(UTC)
-                            else:
-                                modified = datetime.now(UTC)
-                        else:
-                            modified = datetime.now(UTC)
-
-                        logging.debug(f"File {item_path}: modified={modified}, start={start}, end={end}, include={start < modified <= end}")
-                        if start < modified <= end:
-                            files.append((item_path, item))
-                        else:
-                            logging.debug(f"File {item_path} filtered out by time range")
-                    except Exception as e:
-                        logging.error(f"Error processing file {item_path}: {e}")
-                        continue
-
-        except Exception as e:
-            logging.error(f"Error listing directory {path}: {e}")
-
+                size_bytes = self._get_size_bytes(item)
+                if self.size_threshold is not None and size_bytes > self.size_threshold:
+                    continue
+                if not filter_by_mtime or start < self._modified_at(item, end) <= end:
+                    files.append((item_path, item))
+            else:
+                raise ValueError("WebDAV listing contains unknown resource type")
         return files
+
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        """Enumerate the full configured tree without downloading or filtering by mtime."""
+        files = self._list_files_recursive(self.remote_path, datetime(1970, 1, 1, tzinfo=UTC), datetime.now(UTC), filter_by_mtime=False)
+        batch: list[SlimDocument] = []
+        for file_path, _ in files:
+            batch.append(SlimDocument(id=f"webdav:{self.base_url}:{file_path}"))
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
 
     def _yield_webdav_documents(
         self,
@@ -203,8 +236,8 @@ class WebDAVConnector(LoadConnector, PollConnector):
                 logging.debug(f"Skipping file {file_path} due to unsupported extension.")
                 continue
 
-            size_bytes = file_info.get("size", 0)
-            if self.size_threshold is not None and isinstance(size_bytes, int) and size_bytes > self.size_threshold:
+            size_bytes = self._get_size_bytes(file_info)
+            if self.size_threshold is not None and size_bytes > self.size_threshold:
                 logging.warning(f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping.")
                 continue
 
@@ -220,26 +253,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
                     logging.warning(f"Downloaded content is empty for {file_path}")
                     continue
 
-                modified_time = file_info.get("modified")
-                if modified_time:
-                    if isinstance(modified_time, datetime):
-                        modified = modified_time
-                        if modified.tzinfo is None:
-                            modified = modified.replace(tzinfo=UTC)
-                    elif isinstance(modified_time, str):
-                        try:
-                            modified = datetime.strptime(modified_time, "%a, %d %b %Y %H:%M:%S %Z")
-                            modified = modified.replace(tzinfo=UTC)
-                        except (ValueError, TypeError):
-                            try:
-                                modified = datetime.fromisoformat(modified_time.replace("Z", "+00:00"))
-                            except (ValueError, TypeError):
-                                logging.warning(f"Could not parse modified time for {file_path}: {modified_time}")
-                                modified = datetime.now(UTC)
-                    else:
-                        modified = datetime.now(UTC)
-                else:
-                    modified = datetime.now(UTC)
+                modified = self._modified_at(file_info, end)
 
                 if filename_counts.get(file_name, 0) > 1:
                     relative_path = file_path
@@ -269,6 +283,7 @@ class WebDAVConnector(LoadConnector, PollConnector):
 
             except Exception as e:
                 logging.exception(f"Error downloading file {file_path}: {e}")
+                raise
 
         if batch:
             yield batch
