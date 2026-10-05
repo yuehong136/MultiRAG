@@ -512,9 +512,8 @@ async def list_documents(
     if error is not None:
         return error
 
-    if metadata_value.get("empty_metadata"):
+    if metadata_value.pop("empty_metadata", False):
         return_empty_metadata = True
-        metadata_value = {key: value for key, value in metadata_value.items() if key != "empty_metadata"}
     if return_empty_metadata:
         metadata_condition_value = {}
         metadata_value = {}

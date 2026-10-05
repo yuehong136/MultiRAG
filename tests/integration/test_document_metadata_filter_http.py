@@ -20,16 +20,19 @@ from tests.support.dataset_management_http import request_api, sql_state
 def test_typed_falsy_filters_do_not_expand_the_document_scope(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
     env = management_api
     dataset, matched, other, foreign = env["datasets"][0], *env["documents"]
+    empty = uuid4().hex
+    env["documents"].append(empty)
     file_ids = [uuid4().hex for _ in env["documents"]]
     link_ids = [uuid4().hex for _ in env["documents"]]
     # Exercise the real SQL metadata backend with the fixture's scratch session.
     monkeypatch.setattr(DocMetadataService, "_store", staticmethod(SqlMetadataStore))
     with env["engine"].begin() as db:
         db.execute(sa.update(Document).where(Document.id == other).values(kb_id=dataset))
+        db.execute(sa.insert(Document).values(id=empty, kb_id=dataset, created_by=env["users"][0], name="empty.txt", type="txt", parser_id="naive", parser_config={}))
         db.execute(
             sa.insert(File),
             [
-                {"id": file_id, "parent_id": "", "tenant_id": env["users"][0 if index < 2 else 1], "created_by": env["users"][0 if index < 2 else 1], "name": "filter.txt", "type": "txt"}
+                {"id": file_id, "parent_id": "", "tenant_id": env["users"][1 if index == 2 else 0], "created_by": env["users"][1 if index == 2 else 0], "name": "filter.txt", "type": "txt"}
                 for index, file_id in enumerate(file_ids)
             ],
         )
@@ -57,9 +60,15 @@ def test_typed_falsy_filters_do_not_expand_the_document_scope(management_api: di
             ({"approved": False, "author": "Bob"}, set()),
             ({"score": [], "author": "Ada"}, {matched}),
             ({"score": None, "author": "Ada"}, {matched}),
-            ({"score": []}, {matched, other}),
-            ({"score": None}, {matched, other}),
-            ({}, {matched, other}),
+            ({"score": []}, {matched, other, empty}),
+            ({"score": None}, {matched, other, empty}),
+            ({}, {matched, other, empty}),
+            ({"empty_metadata": False}, {matched, other, empty}),
+            ({"empty_metadata": False, "score": 0}, {matched}),
+            ({"empty_metadata": False, "approved": False}, {matched}),
+            ({"empty_metadata": False, "author": "Ada"}, {matched}),
+            ({"empty_metadata": True}, {empty}),
+            ({"empty_metadata": True, "score": 0, "approved": False}, {empty}),
         ]
         for metadata, expected in cases:
             response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env[kind][0], params={"metadata": json.dumps(metadata)})
@@ -67,6 +76,20 @@ def test_typed_falsy_filters_do_not_expand_the_document_scope(management_api: di
             data = response.json()["data"]
             assert data["total"] == len(expected), (metadata, data)
             assert {doc["id"] for doc in data["docs"]} == expected, (metadata, data)
+        for metadata, query_empty in [({"empty_metadata": False, "score": 0}, "true"), ({"empty_metadata": True, "score": 0}, "false")]:
+            response = request_api(
+                env,
+                "GET",
+                f"/datasets/{dataset}/documents",
+                credential=env[kind][0],
+                params={
+                    "metadata": json.dumps(metadata),
+                    "return_empty_metadata": query_empty,
+                    "metadata_condition": json.dumps({"logic": "and", "conditions": [{"name": "author", "comparison_operator": "is", "value": "Ada"}]}),
+                },
+            )
+            assert response.status_code == 200 and response.json()["code"] == 0, response.text
+            assert response.json()["data"]["total"] == 1 and [doc["id"] for doc in response.json()["data"]["docs"]] == [empty]
         response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env[kind][0], params={"metadata": json.dumps({"score": 0}), "ids": other})
         assert response.status_code == 200 and response.json() == {"code": 0, "data": {"total": 0, "docs": []}}, response.text
         if kind == "jwt":

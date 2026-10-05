@@ -357,6 +357,42 @@ def test_list_documents_distinguishes_falsy_scalars_from_empty_selections(client
     _assert_sync_facade(sessions)
 
 
+@pytest.mark.parametrize(
+    "metadata,query_empty,expected_ids,expected_empty",
+    [
+        ({}, None, None, False),
+        ({"empty_metadata": False}, None, None, False),
+        ({"score": 0}, None, ["doc1"], False),
+        ({"approved": False}, None, ["doc1"], False),
+        ({"empty_metadata": False, "score": 0}, None, ["doc1"], False),
+        ({"empty_metadata": False, "approved": False}, None, ["doc1"], False),
+        ({"empty_metadata": False, "score": 0}, "false", ["doc1"], False),
+        ({"empty_metadata": True}, None, None, True),
+        ({"empty_metadata": True, "score": 0, "approved": False}, None, None, True),
+        ({"empty_metadata": False, "score": 0}, "true", None, True),
+        ({"empty_metadata": True, "score": 0}, "false", None, True),
+    ],
+)
+def test_list_documents_removes_empty_metadata_control_before_business_filters(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata: dict[str, Any], query_empty: str | None, expected_ids: list[str] | None, expected_empty: bool
+) -> None:
+    sessions: list[object] = []
+    calls: list[dict[str, Any]] = []
+    _stub_list(monkeypatch, sessions, calls)
+    flattened = {"score": {"0": ["doc1"]}, "approved": {"False": ["doc1"]}}
+    monkeypatch.setattr(DocMetadataService, "get_flatted_meta_by_kbs", classmethod(lambda cls, db, kb_ids: flattened))
+    params = {"metadata": json.dumps(metadata)}
+    if query_empty is not None:
+        params["return_empty_metadata"] = query_empty
+
+    response = client.get(_PATH, params=params)
+
+    assert response.status_code == 200 and response.json()["code"] == 0
+    assert calls[0]["doc_ids"] == expected_ids
+    assert calls[0]["return_empty_metadata"] is expected_empty
+    _assert_sync_facade(sessions)
+
+
 def test_legacy_document_infos_post_is_deprecated(client):
     legacy_routes = []
     for context in iter_route_contexts(client.app.routes):
