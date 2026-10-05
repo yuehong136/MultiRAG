@@ -20,6 +20,7 @@ import os
 import re
 import time
 from abc import abstractmethod
+from functools import partial
 from typing import Any
 
 import infinity
@@ -30,12 +31,13 @@ from infinity.index import IndexInfo, IndexType
 
 from common import settings
 from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr
+from common.doc_store.infinity_metadata import _retry_on_meta_contention
 from common.file_utils import get_project_base_directory
 from core.nlp import is_english
 
 
 class InfinityConnectionBase(DocStoreConnection):
-    def __init__(self, mapping_file_name: str = "infinity_mapping.json", logger_name: str = "multirag.infinity_conn", table_name_prefix: str = "multirag_"):
+    def __init__(self, mapping_file_name: str = "infinity_mapping.json", logger_name: str = "multirag.infinity_conn", table_name_prefix: str = "multirag_") -> None:
         from common.doc_store.infinity_conn_pool import INFINITY_CONN
 
         self.dbName = settings.INFINITY.get("db_name", "default_db")
@@ -52,27 +54,34 @@ class InfinityConnectionBase(DocStoreConnection):
         for _ in range(24):
             try:
                 inf_conn = conn_pool.get_conn()
-                res = inf_conn.show_current_node()
-                if res.error_code == ErrorCode.OK and res.server_status in ["started", "alive"]:
-                    self._migrate_db(inf_conn)
-                    self.connPool = conn_pool
+                try:
+                    res = inf_conn.show_current_node()
+                finally:
                     conn_pool.release_conn(inf_conn)
+                if res.error_code == ErrorCode.OK and res.server_status in ["started", "alive"]:
                     break
-                conn_pool.release_conn(inf_conn)
                 self.logger.warning(f"Infinity status: {res.server_status}. Waiting Infinity {infinity_uri} to be healthy.")
                 time.sleep(5)
             except Exception as e:
                 conn_pool = INFINITY_CONN.refresh_conn_pool()
                 self.logger.warning(f"{e!s}. Waiting Infinity {infinity_uri} to be healthy.")
                 time.sleep(5)
-        if self.connPool is None:
+        else:
             msg = f"Infinity {infinity_uri} is unhealthy in 120s."
             self.logger.error(msg)
             raise Exception(msg)
+        # Migration includes add_columns, which is not safe to replay as a
+        # batch. Only individual Ignore CREATE calls have contention retries.
+        inf_conn = conn_pool.get_conn()
+        try:
+            self._migrate_db(inf_conn)
+        finally:
+            conn_pool.release_conn(inf_conn)
+        self.connPool = conn_pool
         self.logger.info(f"Infinity {infinity_uri} is healthy.")
 
-    def _migrate_db(self, inf_conn):
-        inf_db = inf_conn.create_database(self.dbName, ConflictType.Ignore)
+    def _migrate_db(self, inf_conn: Any) -> None:
+        inf_db = _retry_on_meta_contention("create_database", partial(inf_conn.create_database, self.dbName, ConflictType.Ignore), logger=self.logger)
         fp_mapping = os.path.join(get_project_base_directory(), "configs", self.mapping_file_name)
         if not os.path.exists(fp_mapping):
             raise Exception(f"Mapping file not found at {fp_mapping}")
@@ -102,19 +111,29 @@ class InfinityConnectionBase(DocStoreConnection):
                     if isinstance(analyzers, str):
                         analyzers = [analyzers]
                     for analyzer in analyzers:
-                        inf_table.create_index(
-                            f"ft_{re.sub(r'[^a-zA-Z0-9]', '_', field_name)}_{re.sub(r'[^a-zA-Z0-9]', '_', analyzer)}",
-                            IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
-                            ConflictType.Ignore,
+                        _retry_on_meta_contention(
+                            "create_index",
+                            partial(
+                                inf_table.create_index,
+                                f"ft_{re.sub(r'[^a-zA-Z0-9]', '_', field_name)}_{re.sub(r'[^a-zA-Z0-9]', '_', analyzer)}",
+                                IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
+                                ConflictType.Ignore,
+                            ),
+                            logger=self.logger,
                         )
 
                 if "index_type" in field_info:
                     index_config = field_info["index_type"]
                     if isinstance(index_config, str) and index_config == "secondary":
-                        inf_table.create_index(
-                            f"sec_{field_name}",
-                            IndexInfo(field_name, IndexType.Secondary),
-                            ConflictType.Ignore,
+                        _retry_on_meta_contention(
+                            "create_index",
+                            partial(
+                                inf_table.create_index,
+                                f"sec_{field_name}",
+                                IndexInfo(field_name, IndexType.Secondary),
+                                ConflictType.Ignore,
+                            ),
+                            logger=self.logger,
                         )
                         self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name}")
                     elif isinstance(index_config, dict):
@@ -122,10 +141,15 @@ class InfinityConnectionBase(DocStoreConnection):
                             params = {}
                             if "cardinality" in index_config:
                                 params = {"cardinality": index_config["cardinality"]}
-                            inf_table.create_index(
-                                f"sec_{field_name}",
-                                IndexInfo(field_name, IndexType.Secondary, params),
-                                ConflictType.Ignore,
+                            _retry_on_meta_contention(
+                                "create_index",
+                                partial(
+                                    inf_table.create_index,
+                                    f"sec_{field_name}",
+                                    IndexInfo(field_name, IndexType.Secondary, params),
+                                    ConflictType.Ignore,
+                                ),
+                                logger=self.logger,
                             )
                             self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name} with params {params}")
 
@@ -267,13 +291,13 @@ class InfinityConnectionBase(DocStoreConnection):
     Table operations
     """
 
-    def create_idx(self, index_name: str, dataset_id: str, vector_size: int, parser_id: str = None):
+    def create_idx(self, index_name: str, dataset_id: str, vector_size: int, parser_id: str | None = None) -> bool:
         table_name = f"{index_name}_{dataset_id}"
         self.logger.debug(f"CREATE_IDX: Creating table {table_name}, parser_id: {parser_id}")
 
         inf_conn = self.connPool.get_conn()
         try:
-            inf_db = inf_conn.create_database(self.dbName, ConflictType.Ignore)
+            inf_db = _retry_on_meta_contention("create_database", partial(inf_conn.create_database, self.dbName, ConflictType.Ignore), logger=self.logger)
 
             # Use configured schema
             fp_mapping = os.path.join(get_project_base_directory(), "configs", self.mapping_file_name)
@@ -291,24 +315,34 @@ class InfinityConnectionBase(DocStoreConnection):
 
             vector_name = f"q_{vector_size}_vec"
             schema[vector_name] = {"type": f"vector,{vector_size},float"}
-            inf_table = inf_db.create_table(
-                table_name,
-                schema,
-                ConflictType.Ignore,
-            )
-            inf_table.create_index(
-                "q_vec_idx",
-                IndexInfo(
-                    vector_name,
-                    IndexType.Hnsw,
-                    {
-                        "M": "16",
-                        "ef_construction": "50",
-                        "metric": "cosine",
-                        "encode": "lvq",
-                    },
+            inf_table = _retry_on_meta_contention(
+                "create_table",
+                partial(
+                    inf_db.create_table,
+                    table_name,
+                    schema,
+                    ConflictType.Ignore,
                 ),
-                ConflictType.Ignore,
+                logger=self.logger,
+            )
+            _retry_on_meta_contention(
+                "create_index",
+                partial(
+                    inf_table.create_index,
+                    "q_vec_idx",
+                    IndexInfo(
+                        vector_name,
+                        IndexType.Hnsw,
+                        {
+                            "M": "16",
+                            "ef_construction": "50",
+                            "metric": "cosine",
+                            "encode": "lvq",
+                        },
+                    ),
+                    ConflictType.Ignore,
+                ),
+                logger=self.logger,
             )
             for field_name, field_info in schema.items():
                 if field_info["type"] != "varchar" or "analyzer" not in field_info:
@@ -317,10 +351,15 @@ class InfinityConnectionBase(DocStoreConnection):
                 if isinstance(analyzers, str):
                     analyzers = [analyzers]
                 for analyzer in analyzers:
-                    inf_table.create_index(
-                        f"ft_{re.sub(r'[^a-zA-Z0-9]', '_', field_name)}_{re.sub(r'[^a-zA-Z0-9]', '_', analyzer)}",
-                        IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
-                        ConflictType.Ignore,
+                    _retry_on_meta_contention(
+                        "create_index",
+                        partial(
+                            inf_table.create_index,
+                            f"ft_{re.sub(r'[^a-zA-Z0-9]', '_', field_name)}_{re.sub(r'[^a-zA-Z0-9]', '_', analyzer)}",
+                            IndexInfo(field_name, IndexType.FullText, {"ANALYZER": analyzer}),
+                            ConflictType.Ignore,
+                        ),
+                        logger=self.logger,
                     )
 
             # Create secondary indexes for fields with index_type
@@ -329,10 +368,15 @@ class InfinityConnectionBase(DocStoreConnection):
                     continue
                 index_config = field_info["index_type"]
                 if isinstance(index_config, str) and index_config == "secondary":
-                    inf_table.create_index(
-                        f"sec_{field_name}",
-                        IndexInfo(field_name, IndexType.Secondary),
-                        ConflictType.Ignore,
+                    _retry_on_meta_contention(
+                        "create_index",
+                        partial(
+                            inf_table.create_index,
+                            f"sec_{field_name}",
+                            IndexInfo(field_name, IndexType.Secondary),
+                            ConflictType.Ignore,
+                        ),
+                        logger=self.logger,
                     )
                     self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name}")
                 elif isinstance(index_config, dict):
@@ -340,10 +384,15 @@ class InfinityConnectionBase(DocStoreConnection):
                         params = {}
                         if "cardinality" in index_config:
                             params = {"cardinality": index_config["cardinality"]}
-                        inf_table.create_index(
-                            f"sec_{field_name}",
-                            IndexInfo(field_name, IndexType.Secondary, params),
-                            ConflictType.Ignore,
+                        _retry_on_meta_contention(
+                            "create_index",
+                            partial(
+                                inf_table.create_index,
+                                f"sec_{field_name}",
+                                IndexInfo(field_name, IndexType.Secondary, params),
+                                ConflictType.Ignore,
+                            ),
+                            logger=self.logger,
                         )
                         self.logger.info(f"INFINITY created secondary index sec_{field_name} for field {field_name} with params {params}")
 
@@ -352,35 +401,39 @@ class InfinityConnectionBase(DocStoreConnection):
         finally:
             self.connPool.release_conn(inf_conn)
 
-    def create_doc_meta_idx(self, index_name: str):
+    def create_doc_meta_idx(self, index_name: str) -> bool:
         """Create a per-tenant document metadata table (no dataset_id suffix)."""
         inf_conn = self.connPool.get_conn()
         try:
-            inf_db = inf_conn.create_database(self.dbName, ConflictType.Ignore)
+            inf_db = _retry_on_meta_contention("create_database", partial(inf_conn.create_database, self.dbName, ConflictType.Ignore), logger=self.logger)
             fp_mapping = os.path.join(get_project_base_directory(), "configs", "doc_meta_infinity_mapping.json")
             if not os.path.exists(fp_mapping):
                 self.logger.error(f"Document metadata mapping file not found at {fp_mapping}")
                 return False
             with open(fp_mapping) as f:
                 schema = json.load(f)
-            inf_db.create_table(index_name, schema, ConflictType.Ignore)
+            _retry_on_meta_contention("create_table", partial(inf_db.create_table, index_name, schema, ConflictType.Ignore), logger=self.logger)
             inf_table = inf_db.get_table(index_name)
-            try:
-                inf_table.create_index(
+            _retry_on_meta_contention(
+                "create_index",
+                partial(
+                    inf_table.create_index,
                     f"idx_{index_name}_id",
                     IndexInfo("id", IndexType.Secondary),
                     ConflictType.Ignore,
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to create index on id for {index_name}: {e}")
-            try:
-                inf_table.create_index(
+                ),
+                logger=self.logger,
+            )
+            _retry_on_meta_contention(
+                "create_index",
+                partial(
+                    inf_table.create_index,
                     f"idx_{index_name}_kb_id",
                     IndexInfo("kb_id", IndexType.Secondary),
                     ConflictType.Ignore,
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to create index on kb_id for {index_name}: {e}")
+                ),
+                logger=self.logger,
+            )
             self.logger.info(f"INFINITY created metadata table {index_name}")
             return True
         except Exception as e:
@@ -389,13 +442,13 @@ class InfinityConnectionBase(DocStoreConnection):
         finally:
             self.connPool.release_conn(inf_conn)
 
-    def delete_idx(self, index_name: str, dataset_id: str):
+    def delete_idx(self, index_name: str, dataset_id: str) -> None:
         # Empty dataset_id means delete the table directly (used for metadata tables)
         table_name = index_name if not dataset_id else f"{index_name}_{dataset_id}"
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            db_instance.drop_table(table_name, ConflictType.Ignore)
+            _retry_on_meta_contention("drop_table", partial(db_instance.drop_table, table_name, ConflictType.Ignore), logger=self.logger)
             self.logger.info(f"INFINITY dropped table {table_name}")
         finally:
             self.connPool.release_conn(inf_conn)

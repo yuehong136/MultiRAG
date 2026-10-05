@@ -74,7 +74,10 @@ class InfinityConnectionPool:
     def refresh_conn_pool(self) -> ConnectionPool | None:
         try:
             inf_conn = self.conn_pool.get_conn()
-            res = inf_conn.show_current_node()
+            try:
+                res = inf_conn.show_current_node()
+            finally:
+                self.conn_pool.release_conn(inf_conn)
             if res.error_code == ErrorCode.OK and res.server_status in ["started", "alive"]:
                 return self.conn_pool
             else:

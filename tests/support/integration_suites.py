@@ -38,7 +38,7 @@ DATABASE_TESTS = frozenset(
         "test_sync_log_checkpoint.py",
     }
 )
-INFINITY_TESTS = frozenset({"test_infinity_available_filter.py"})
+INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py"})
 
 ISOLATED_STORAGE_TESTS = frozenset(
     {
