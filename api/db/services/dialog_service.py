@@ -783,7 +783,7 @@ def chat(
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
                     search_mode=dialog.search_mode,
-                    kb_ids=dialog.kb_ids,
+                    kb_ids=[kb.id for kb in kbs],
                 ),
                 internet_enabled=use_web_search,
             )
@@ -816,7 +816,7 @@ def chat(
                         rerank_mdl=rerank_mdl,
                         rank_feature=label_question(db, " ".join(questions), kbs),
                         search_mode=dialog.search_mode,
-                        kb_ids=dialog.kb_ids,
+                        kb_ids=[kb.id for kb in kbs],
                     )
                 )
                 if prompt_config.get("toc_enhance"):
@@ -1149,7 +1149,7 @@ async def async_chat(
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
                     search_mode=dialog.search_mode,
-                    kb_ids=dialog.kb_ids,
+                    kb_ids=[kb.id for kb in kbs],
                 ),
                 internet_enabled=use_web_search,
             )
@@ -1177,7 +1177,7 @@ async def async_chat(
                     rerank_mdl=rerank_mdl,
                     rank_feature=rank_feature,
                     search_mode=dialog.search_mode,
-                    kb_ids=dialog.kb_ids,
+                    kb_ids=[kb.id for kb in kbs],
                 )
                 if prompt_config.get("toc_enhance"):
                     cks = await retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, kb_names, chat_mdl, dialog.top_n)
@@ -2039,7 +2039,7 @@ async def _stream_with_think_delta(
         state.pending_after_close = ""
 
 
-def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
+def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_name: str | None = None, search_config: dict[str, Any] | None = None) -> Generator[dict[str, Any], None, None]:
     if search_config is None:
         search_config = {}
     metadata_preferences = resolve_reference_metadata_preferences(None, search_config)
@@ -2101,6 +2101,7 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
                 aggs=True,
                 rerank_mdl=rerank_mdl,
                 rank_feature=label_question(db, question, kbs),
+                kb_ids=[kb.id for kb in kbs],
                 search_mode=None,  # todo 无法传递应用里的配置，所以只能使用一种默认检索模式
             )
         )
@@ -2135,7 +2136,9 @@ def ask(db: Session, question, kb_ids, tenant_id, chat_llm_name=None, search_con
     yield decorate_answer(answer)
 
 
-async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name=None, search_config=None):
+async def async_ask(
+    db: AsyncSession, question: str, kb_ids: list[str], tenant_id: str, chat_llm_name: str | None = None, search_config: dict[str, Any] | None = None
+) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 ask（AsyncSession；遗留同步 service 经 run_sync 桥接）"""
     if search_config is None:
         search_config = {}
@@ -2204,6 +2207,7 @@ async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name
             aggs=True,
             rerank_mdl=rerank_mdl,
             rank_feature=rank_feature,
+            kb_ids=[kb.id for kb in kbs],
             search_mode=None,
         )
 
@@ -2248,7 +2252,7 @@ async def async_ask(db: AsyncSession, question, kb_ids, tenant_id, chat_llm_name
     yield final
 
 
-async def gen_mindmap(db: AsyncSession, question, kb_ids, tenant_id, search_config=None):
+async def gen_mindmap(db: AsyncSession, question: str, kb_ids: list[str], tenant_id: str, search_config: dict[str, Any] | None = None) -> dict[str, Any]:
     if search_config is None:
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
@@ -2259,8 +2263,8 @@ async def gen_mindmap(db: AsyncSession, question, kb_ids, tenant_id, search_conf
     if not kbs:
         return {"error": "No KB selected"}
     KnowledgebaseService.ensure_same_embedding_model(kbs)
-    tenant_ids = list({kb.tenant_id for kb in kbs})
-    kb_names = list({kb.name for kb in kbs})
+    tenant_ids = [kb.tenant_id for kb in kbs]
+    kb_names = [kb.name for kb in kbs]
 
     embd_owner_tenant_id = kbs[0].tenant_id
     embd_model_config = await db.run_sync(  # TODO(async-phase4)
@@ -2307,7 +2311,7 @@ async def gen_mindmap(db: AsyncSession, question, kb_ids, tenant_id, search_conf
         aggs=False,
         rerank_mdl=rerank_mdl,
         rank_feature=rank_feature,
-        kb_ids=kb_ids,
+        kb_ids=[kb.id for kb in kbs],
     )
     mindmap = MindMapExtractor(chat_mdl)
     contents = [c.get("content_with_weight") or c.get("text") for c in ranks["chunks"]]

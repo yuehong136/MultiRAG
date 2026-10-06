@@ -69,7 +69,7 @@ class _PipelineProbe:
 def dialog_pipeline_stubs(monkeypatch: pytest.MonkeyPatch) -> _PipelineProbe:
     """Keep both chat pipelines offline while leaving their web gates observable."""
     bundle = _PipelineBundle()
-    kb = SimpleNamespace(name="dataset", tenant_id="tenant-unit")
+    kb = SimpleNamespace(id="kb-1", name="dataset", tenant_id="tenant-unit")
     tavily_calls: list[tuple[str, str]] = []
 
     def fake_llm_type(_llm_id: str) -> str:
@@ -817,3 +817,25 @@ def test_sync_sql_chat_resolves_and_enriches_reference(monkeypatch: pytest.Monke
     result = list(dialog_service.chat(probe.dialog, probe.messages, db, stream=stream))
     assert len(result) == 1 and result[0]["final"] is True
     assert result[0]["reference"]["chunks"][0]["document_metadata"] == {"author": "Alice"}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_chat_retrieval_uses_ids_in_loaded_dataset_order(dialog_pipeline_stubs: _PipelineProbe, monkeypatch: pytest.MonkeyPatch, db: Session, async_db: AsyncSession, asynchronous: bool) -> None:
+    from unittest.mock import AsyncMock
+
+    probe = dialog_pipeline_stubs
+    probe.dialog.kb_ids = ["a", "b"]
+    rows = [SimpleNamespace(id=identifier, name="name-" + identifier, tenant_id="owner-" + identifier) for identifier in ("b", "a")]
+    bundle = _PipelineBundle()
+    monkeypatch.setattr(dialog_service, "get_models", lambda *_: (rows, bundle, None, bundle, None))
+    monkeypatch.setattr(dialog_service, "label_question", lambda *_: {})
+    fetch = AsyncMock(side_effect=_GenerationReached)
+    monkeypatch.setattr(dialog_service.settings, "retriever", SimpleNamespace(retrieval=fetch))
+    with pytest.raises(_GenerationReached):
+        if asynchronous:
+            async for _ in dialog_service.async_chat(probe.dialog, probe.messages, async_db, stream=False):
+                pass
+        else:
+            await asyncio.to_thread(lambda: list(dialog_service.chat(probe.dialog, probe.messages, db, stream=False)))
+    assert fetch.call_args.args[3:5] == (["owner-b", "owner-a"], ["name-b", "name-a"])
+    assert fetch.call_args.kwargs["kb_ids"] == ["b", "a"]

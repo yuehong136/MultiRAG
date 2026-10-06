@@ -212,7 +212,7 @@ class Retrieval(ToolBase, ABC):
         with db_connection() as db:
             return label_question(db, query, kbs)
 
-    async def _retrieve_kb(self, query_text: str):
+    async def _retrieve_kb(self, query_text: str) -> str | None:
         """Retrieve from knowledge base.
 
         DB 面一律按需自开短连接、用完即释放（helper 内部 to_thread + 剥离会话）：
@@ -299,7 +299,7 @@ class Retrieval(ToolBase, ABC):
                 query,
                 "",
                 embd_mdl,
-                tenant_ids,
+                [kb.tenant_id for kb in kbs],
                 kb_names,
                 1,
                 self._param.top_n,
@@ -309,7 +309,7 @@ class Retrieval(ToolBase, ABC):
                 aggs=True,
                 rerank_mdl=rerank_mdl,
                 rank_feature=rank_feature,
-                kb_ids=filtered_kb_ids,
+                kb_ids=[kb.id for kb in kbs],
             )
 
             if self.check_if_canceled("Retrieval processing"):

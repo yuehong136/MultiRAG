@@ -24,7 +24,7 @@ from common.tag_feature_utils import parse_tag_features
 from core.nlp import is_english, query, rag_tokenizer
 
 
-def index_name(uid, kb_names=None):
+def index_name(uid: str | list[str], kb_names: str | list[str] | None = None) -> list[str]:
     # return [f"multirag_{uid}_{kb_name}" for kb_name in kb_names]
     if kb_names is None:
         kb_names = []
@@ -61,8 +61,7 @@ def index_name(uid, kb_names=None):
         if len(kb_names) == 1:
             return [f"multirag_{u}_{kb_names[0]}" for u in uid]
 
-        # 多租户 + 多 KB（数量不一致），兜底返回笛卡尔积
-        return [f"multirag_{u}_{kb}" for u in uid for kb in kb_names]
+        raise ValueError("Dataset/tenant binding is ambiguous; preserve the tenant for each dataset")
 
     return []
 
@@ -320,6 +319,56 @@ class Dealer:
                 keywords=keywords,
             )
 
+        if qst and self.dataStore.db_type() == "infinity" and (len(kb_ids) > 1 or (isinstance(idx_names, list) and len(idx_names) > 1)):
+            # Infinity table identity is index + dataset ID. Query bound pairs,
+            # never the two independent lists' cross product. Merge before paging.
+            indices = [idx_names] if isinstance(idx_names, str) else idx_names
+            pairs = req.get("dataset_indices")
+            if pairs is None:
+                if len(indices) == 1:
+                    pairs = [(indices[0], kb_id) for kb_id in kb_ids]
+                elif len(indices) == len(kb_ids):
+                    pairs = list(zip(indices, kb_ids))
+                else:
+                    raise ValueError("Dataset/index binding is ambiguous")
+            pool_size = min(topk, offset + limit)
+            cached_dense = None
+            configured = req.get("search_mode") or ({"sparse": {}} if emb_mdl is None else None)
+            _, _, dense_weight = _mode_weights(configured)
+            if dense_weight > 0:
+                if emb_mdl is None:
+                    raise ValueError("Vector search requires an embedding model")
+                cached_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
+            fields = {}
+            highlights = {}
+            keywords = set()
+            counts: dict[str, int] = defaultdict(int)
+            total = 0
+            for index, kb_id in pairs:
+                bound_req = {**req, "kb_ids": [kb_id], "page": 1, "size": pool_size, "_dense_query": cached_dense}
+                bound_req.pop("dataset_indices", None)
+                part = await self.search(bound_req, [index], [kb_id], emb_mdl, highlight, rank_feature)
+                total += part.total
+                for chunk_id in part.ids:
+                    row = part.field[chunk_id]
+                    if chunk_id in fields and (fields[chunk_id].get("doc_id"), fields[chunk_id].get("kb_id")) != (row.get("doc_id"), row.get("kb_id")):
+                        raise ValueError("Conflicting chunk dataset identity")
+                    fields[chunk_id] = row
+                highlights.update(part.highlight or {})
+                keywords.update(part.keywords or [])
+                for name, count in part.aggregation or []:
+                    counts[name] += count
+            ids = sorted(fields, key=lambda chunk_id: (-get_float(fields[chunk_id].get("_score", 0)), chunk_id))[offset : offset + limit]
+            return self.SearchResult(
+                total=total,
+                ids=ids,
+                query_vector=cached_dense.embedding_data if cached_dense is not None else [],
+                field={chunk_id: fields[chunk_id] for chunk_id in ids},
+                highlight={chunk_id: highlights[chunk_id] for chunk_id in ids if chunk_id in highlights},
+                aggregation=list(counts.items()),
+                keywords=sorted(keywords),
+            )
+
         # ---------- 无 query: 浏览/排序 ----------
         if not qst:
             order_by = OrderByExpr()
@@ -344,7 +393,7 @@ class Dealer:
         if weight_dense > 0:
             if emb_mdl is None:
                 raise ValueError(f"{mode} search requires an embedding model")
-            match_dense = await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
+            match_dense = deepcopy(req["_dense_query"]) if req.get("_dense_query") is not None else await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
             q_vec = match_dense.embedding_data
             if self.dataStore.db_type() != "infinity":
                 src.append(match_dense.vector_column_name)
@@ -736,6 +785,13 @@ class Dealer:
         }
 
         idxnms = index_name(tenant_id, kb_names)
+        if kb_ids is not None:
+            if not kb_ids:
+                return ranks
+            if len(idxnms) != len(kb_ids):
+                raise ValueError("Each selected dataset must have one tenant/name index binding")
+            req["kb_ids"] = kb_ids
+            req["dataset_indices"] = list(zip(idxnms, kb_ids, strict=True))
         if not idxnms:
             logging.warning("No valid index names built: tenant_id=%s, kb_names=%s", tenant_id, kb_names)
             return ranks

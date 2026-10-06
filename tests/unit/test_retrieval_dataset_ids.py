@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from agent.tools.retrieval import Retrieval, RetrievalParam
 
 
@@ -58,3 +60,26 @@ def test_invoke_uses_dataset_ids_for_dataset_retrieval(monkeypatch):
 
     assert result == "retrieved"
     assert called == {"query": "hello"}
+
+
+async def test_agent_retrieval_preserves_dataset_tenant_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import agent.tools.retrieval as module
+
+    param = RetrievalParam()
+    retrieval = build_retrieval(param)
+    rows = [
+        SimpleNamespace(id=identifier, tenant_id=owner, name="name-" + identifier, embd_id="embedding", tenant_embd_id=None) for identifier, owner in (("a", "owner"), ("b", "owner"), ("c", "other"))
+    ]
+    retrieval._canvas = SimpleNamespace(get_tenant_id=lambda: "owner")
+    monkeypatch.setattr(retrieval, "_resolve_kbs", lambda: (["a", "b", "c"], ["a", "b", "c"], rows))
+    monkeypatch.setattr(retrieval, "get_input_elements_from_text", lambda _: {})
+    monkeypatch.setattr(retrieval, "string_format", lambda query, _: query)
+    monkeypatch.setattr(retrieval, "_rank_feature", lambda *_: {})
+    monkeypatch.setattr(module, "build_named_bundle_async", AsyncMock(return_value=object()))
+    fetch = AsyncMock(return_value={"chunks": [], "doc_aggs": []})
+    monkeypatch.setattr(module.settings, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, _: chunks))
+    await retrieval._retrieve_kb("query")
+    assert fetch.call_args.args[3:5] == (["owner", "owner", "other"], ["name-a", "name-b", "name-c"])
+    assert fetch.call_args.kwargs["kb_ids"] == ["a", "b", "c"]

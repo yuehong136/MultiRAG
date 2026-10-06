@@ -866,7 +866,7 @@ async def retrieval_test_embedded(
     body: SearchBotRetrievalTestRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_beta_token_required),
-):
+) -> JSONResponse:
     req = body.model_dump()
 
     page = int(req.get("page", 1))
@@ -963,7 +963,7 @@ async def retrieval_test_embedded(
             question,
             "",
             embd_mdl,
-            tenant_ids,
+            [k.tenant_id for k in kbs],
             [k.name for k in kbs],
             page,
             size,
@@ -974,7 +974,7 @@ async def retrieval_test_embedded(
             rerank_mdl=rerank_mdl,
             highlight=req.get("highlight"),
             rank_feature=labels,
-            kb_ids=kb_ids,
+            kb_ids=[k.id for k in kbs],
         )
         if use_kg:
             kg_chat_mdl = await build_default_bundle_async(kb.tenant_id, LLMType.CHAT)

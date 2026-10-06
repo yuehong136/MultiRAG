@@ -773,3 +773,100 @@ def test_http_typed_membership_preserves_scalar_types_and_scope(search_api: dict
     check([{"key": "mixed_number", "op": "in", "value": [0]}, {"key": "mixed_boolean", "op": "not in", "value": ["False"]}], {first})
     assert metadata_snapshot() == sql_before
     assert chunk_snapshot() == milvus_before
+
+
+def test_http_and_sdk_joint_search_keep_only_selected_index_bindings(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two owners and three datasets must never query the three cross-pairs."""
+    from api.apps.sdk import session
+
+    env = search_api
+    monkeypatch.setattr(session, "build_named_bundle_async", dataset_search_service._bundle)
+    monkeypatch.setattr(session, "_label_question_with_conn", lambda *_: {})
+    beta_token = "binding-" + uuid4().hex
+    reader = env["reader"]
+    membership_id = uuid4().hex
+    selected = [env[key] for key in ("dataset", "second", "foreign")]
+    expected_chunks = {env["rows"][key][1]["id"] for key in ("dataset", "second", "foreign")}
+    extras: list[tuple[str, str, str]] = []
+    with Session(env["engine"]) as db:
+        db.add(UserTenant(id=membership_id, user_id=env["owners"][0], tenant_id=env["owners"][1], role="normal", invited_by=env["owners"][1]))
+        db.query(APIToken).filter(APIToken.token == env["sdk_token"]).one().beta = beta_token
+        db.commit()
+        names = [db.get(Knowledgebase, identifier).name for identifier in selected]
+    payload = {"question": "availability", "dataset_ids": selected, "similarity_threshold": 0, "size": 30, "top_k": 200}
+
+    def check(mode: str, sdk: bool = False, embedded: bool = False) -> None:
+        keys = ("dataset", "second") if sdk and not embedded else ("dataset", "second", "foreign")
+        selected_ids = {env[key] for key in keys}
+        expected_ids = {env["rows"][key][1]["id"] for key in keys}
+        expected_docs = {env["rows"][key][1]["doc_id"] for key in keys}
+        data = {**payload, "dataset_ids": list(selected_ids), "search_mode": {"type": mode}}
+        if embedded:
+            response = requests.post(env["base"] + "/api/v1/searchbots/retrieval_test", headers={"Authorization": "Bearer " + beta_token}, json={**data, "kb_id": list(selected_ids)}, timeout=30)
+        elif sdk:
+            response = requests.post(env["base"] + "/api/v1/retrieval", headers={"Authorization": "Bearer " + env["sdk_token"]}, json=data, timeout=30)
+        else:
+            response = request(env, "POST", "/search", json=data)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["retcode" if embedded else "code"] == 0, body
+        chunks = body["data"]["chunks"]
+        assert {chunk["dataset_id" if sdk and not embedded else "kb_id"] for chunk in chunks} == selected_ids, body
+        assert {chunk.get("chunk_id", chunk.get("id")) for chunk in chunks} == expected_ids, body
+        assert body["data"]["total"] == len(keys), body
+        assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == expected_docs, body
+
+    try:
+        # Absent cross-pairs used to produce a Milvus RPC business failure.
+        for mode in ("dense", "sparse", "hybrid", "fusion"):
+            check(mode)
+            check(mode, sdk=True)
+        check("dense", embedded=True)
+        for owner in env["owners"]:
+            for name in names:
+                collection = search.index_name_one(owner, name)
+                if collection in env["collections"].values():
+                    continue
+                kb_id, doc_id, chunk_id = uuid4().hex, uuid4().hex, uuid4().hex
+                extras.append((collection, kb_id, doc_id))
+                with Session(env["engine"]) as db:
+                    db.add(Knowledgebase(id=kb_id, tenant_id=owner, created_by=owner, name=name, embd_id="controlled", parser_id="naive", parser_config={}))
+                    db.add(Document(id=doc_id, kb_id=kb_id, created_by=owner, name="unselected.txt", type="txt", parser_id="naive", parser_config={}))
+                    db.commit()
+                schema = reader.create_schema(auto_id=False, enable_dynamic_field=True)
+                schema.add_field("pk", DataType.VARCHAR, is_primary=True, max_length=512)
+                for field in ("kb_id", "doc_id", "docnm_kwd", "content_with_weight"):
+                    schema.add_field(field, DataType.VARCHAR, max_length=65535)
+                schema.add_field("available_int", DataType.INT64)
+                schema.add_field("q_768_vec", DataType.FLOAT_VECTOR, dim=768)
+                indexes = reader.prepare_index_params()
+                indexes.add_index("q_768_vec", index_type="FLAT", metric_type="COSINE")
+                reader.create_collection(collection, schema=schema, index_params=indexes, consistency_level="Strong", timeout=60)
+                reader.insert(
+                    collection,
+                    [{"pk": chunk_id, "kb_id": kb_id, "doc_id": doc_id, "docnm_kwd": "unselected.txt", "content_with_weight": "availability", "available_int": 1, "q_768_vec": [0.2] * 768}],
+                )
+                reader.flush(collection, timeout=60)
+                assert reader.query(collection, filter="pk != ''", output_fields=["pk", "kb_id", "doc_id"], consistency_level="Strong") == [{"pk": chunk_id, "kb_id": kb_id, "doc_id": doc_id}]
+        # Existing cross-pairs used to return live, unselected datasets.
+        check("dense")
+        check("dense", sdk=True)
+        check("dense", embedded=True)
+        for key in ("dataset", "second", "foreign"):
+            raw = reader.query(env["collections"][key], filter="available_int == 1", output_fields=["pk", "kb_id", "doc_id"], consistency_level="Strong")
+            assert len(raw) == 1 and raw[0]["pk"] in expected_chunks and raw[0]["kb_id"] == env[key]
+        with Session(env["engine"]) as db:
+            assert {db.get(Document, env[key]).kb_id for key in ("doc", "second_doc", "foreign_doc")} == set(selected)
+    finally:
+        for collection, kb_id, doc_id in extras:
+            if reader.has_collection(collection):
+                reader.drop_collection(collection)
+            assert not reader.has_collection(collection)
+            with Session(env["engine"]) as db:
+                db.execute(sa.delete(Document).where(Document.id == doc_id))
+                db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == kb_id))
+                db.commit()
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(UserTenant).where(UserTenant.id == membership_id))
+            db.commit()
+            assert db.get(UserTenant, membership_id) is None

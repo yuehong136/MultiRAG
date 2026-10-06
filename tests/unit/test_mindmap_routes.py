@@ -8,6 +8,7 @@ import sys
 import types
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.services import dialog_service
 from api.db.services.dialog_service import gen_mindmap
@@ -131,3 +132,16 @@ def test_conversation_mindmap_legacy_shape(auth_client, mindmap_route_stubs):
     body = resp.json()
     assert body["retcode"] == 0
     assert body["data"] == {"id": "root"}
+
+
+async def test_mindmap_preserves_loaded_dataset_tenant_name_id_bindings(async_db: AsyncSession, mindmap_service_stubs: type[_FakeBundle], monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    rows = [types.SimpleNamespace(**{**vars(_fake_kb()), "id": identifier, "tenant_id": owner, "name": "name-" + identifier}) for identifier, owner in (("c", "other"), ("b", "owner"), ("a", "owner"))]
+    monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: rows))
+    fetch = AsyncMock(return_value={"chunks": [{"content_with_weight": "c1"}]})
+    monkeypatch.setattr(settings, "retriever", types.SimpleNamespace(retrieval=fetch))
+    await gen_mindmap(async_db, "q", ["a", "b", "c"], "owner")
+    assert fetch.call_args.kwargs["tenant_id"] == ["other", "owner", "owner"]
+    assert fetch.call_args.kwargs["kb_names"] == ["name-c", "name-b", "name-a"]
+    assert fetch.call_args.kwargs["kb_ids"] == ["c", "b", "a"]

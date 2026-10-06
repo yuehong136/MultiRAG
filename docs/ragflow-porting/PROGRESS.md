@@ -2923,3 +2923,31 @@ identity schema 与 MCP interaction schema 两项仍期望旧 head `b0d2e4f6a8c0
 `/tmp/multirag-f45c-{unit,verify,verify-rerun,integration}.log`。
 未运行真实 ES/OceanBase，不声明真实映射兼容性、查询计划或性能已验收。
 未改变启动、路由或健康检查，无新增 smoke 要求。
+
+## 检索 R1 · 本地索引绑定与后续分页跟进
+
+2026-10-06 按用户确认，将本轮限定为本地“租户＋库名”索引布局的参数适配。
+REST、SDK、embedded、Agent、聊天/Ask 和 mindmap 保留同一组库记录的租户、名称、ID 顺序；
+SDK 和 Ask 补齐 `kb_ids`，
+检索器下推选中 ID，并拒绝无法对应的参数，不再把不等长的租户和名称列表展开为交叉组合。
+Infinity 物理表由索引和库 ID 共同定位，检索层按绑定逐表查询，复用一次查询向量并在合并后分页。
+本轮不修改 SDK 的 owner-only 权限，也不修改存储适配器。
+
+分页与 `total` 保留当前候选窗口合同，作为已知问题随上游后续修复链跟进：
+`5659476a3`（固定候选池）→ `4c6f745c1`（候选数命名）→ `92c69db79`（分离 KNN 参数）。
+这三个提交在既有冻结基准 `519e7d98` 的历史范围内；当前代码已采用的 `91983106f`
+窗口对齐只解决跨窗口漏结果，不代表全候选池计数已经完成。后续需核对现行 Web、SDK、
+Agent 消费者与上游外部 rerank 仅支持第一页的限制，本轮不引入该接口变化。
+新增 SQL 文档→库归属查询及候选归属校验另列本地补强，不作为以上上游跟进的前置条件。
+
+本次最终 `make verify` exit=0：6048 passed，lint、分层契约、async DB 门禁与 mypy 均通过。
+Infinity 专项 `make integration` exit=0：19 passed，无 skip，含绑定查询与独立 SDK 读回。
+所选 HTTP 文件的既有 22 个用例通过；新增联合检索用例初次因 SDK/embedded 响应字段
+断言不匹配失败，按实际 `dataset_id` 与 `retcode` 合同修正后单独复跑 exit=0（1 passed）。
+未重复运行已通过的既有用例，也未将初次整文件运行报告为全绿。
+新增用例实际运行 REST 四模式、SDK 同租户多库与 embedded 跨租户三库，
+验证交叉组合索引缺失和存在两种情况；真实 PostgreSQL/Milvus 独立读回与自有资源清理均通过。
+embedding 输出受控，未验收生产模型调用；聊天/Ask/mindmap 参数绑定按单元链路验证。
+证据：`.test-results/20261006-133222-22785`（HTTP 既有用例）、
+`.test-results/20261006-134034-27087`（新增 HTTP 复跑）、
+`.test-results/20261006-133147-22509`（Infinity）；完整 unit 日志位于本机 `/tmp/multirag-r1-verify.log`。

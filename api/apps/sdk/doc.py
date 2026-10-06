@@ -451,7 +451,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             question,
             filter_exp,
             embd_mdl,
-            tenant_ids,
+            [item.tenant_id for item in kbs],
             kb_names,
             page,
             size,
@@ -463,6 +463,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             highlight=highlight,
             rank_feature=label_question(db, question, kbs),
             search_mode=search_mode_dict,
+            kb_ids=[item.id for item in kbs],
         )
         if toc_enhance:
             toc_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)

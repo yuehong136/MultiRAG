@@ -216,3 +216,53 @@ def test_dense_zero_matches_remain_successful_with_independent_readback(infinity
     assert store.get_total(result) == 0
     assert store.get_doc_ids(result) == []
     assert reader.output(["id", "doc_id", "available_int"]).to_result()[0] == source
+
+
+async def test_dealer_queries_bound_index_dataset_pairs_with_independent_readback(infinity_scratch: tuple[Any, Any]) -> None:
+    from unittest.mock import Mock
+
+    import numpy as np
+
+    from core.nlp.search import Dealer
+
+    store, _ = infinity_scratch
+    database = store.connPool.get_conn().get_database(store.dbName)
+    uri = os.environ.get("INFINITY_TEST_URI", CONFIGS.get("infinity", {}).get("uri", "localhost:23817"))
+    host, port = uri.rsplit(":", 1)
+    reader = infinity.connect(NetworkAddress(host, int(port)))
+    try:
+        # A perfect vector in an existing cross-pair must remain unselected.
+        for name, identifier, kb_id, vector in (
+            ("index_a_first", "chosen-a", "first", [0.9, 0.4358899]),
+            ("index_b_second", "chosen-b", "second", [0.8, 0.6]),
+            ("index_a_second", "outside", "second", [1.0, 0.0]),
+        ):
+            table = database.create_table(
+                name,
+                {
+                    "id": {"type": "varchar"},
+                    "doc_id": {"type": "varchar"},
+                    "kb_id": {"type": "varchar"},
+                    "docnm": {"type": "varchar"},
+                    "available_int": {"type": "integer"},
+                    "q_2_vec": {"type": "vector,2,float"},
+                    "pagerank_fea": {"type": "float", "default": 0.0},
+                },
+            )
+            table.insert([{"id": identifier, "doc_id": identifier, "kb_id": kb_id, "docnm": identifier, "available_int": 1, "q_2_vec": vector}])
+        dealer = Dealer(store)
+        encode = Mock(return_value=(np.array([1.0, 0.0]), 0))
+        embedding = SimpleNamespace(encode_queries=encode)
+        for page, expected in ((1, "chosen-a"), (2, "chosen-b")):
+            result = await dealer.search(
+                {"question": "query", "fields": ["id", "doc_id", "kb_id", "docnm_kwd"], "kb_ids": ["first", "second"], "available_int": 1, "search_mode": {"dense": {}}, "page": page, "size": 1},
+                ["index_a", "index_b"],
+                ["first", "second"],
+                embedding,
+            )
+            assert result.ids == [expected] and result.total == 2
+        assert encode.call_count == 2, "One embedding call per multi-dataset request"
+        raw = reader.get_database(store.dbName).get_table("index_a_second").output(["id", "kb_id"]).to_result()[0]
+        assert raw == {"id": ["outside"], "kb_id": ["second"]}
+    finally:
+        reader.disconnect()

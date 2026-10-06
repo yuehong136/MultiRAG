@@ -105,7 +105,7 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
         question,
         "",
         embedding,
-        tenant_ids,
+        [item.tenant_id for item in kbs],
         [item.name for item in kbs],
         request.page,
         request.size,

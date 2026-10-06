@@ -33,6 +33,8 @@ chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files 
 共用数据集成员访问校验。默认检索路径中的数据集；本地多数据集消费者可传完整
 `dataset_ids` 列表，必须包含路径 ID，所有选中数据集均须可访问且 embedding 一致。
 联合检索一次完成排序、分页和文档聚合，不把每个数据集的分页结果拼接成联合结果。
+检索按每个选中库的租户、名称和 ID 绑定独立索引；同一租户拥有多个库时也保留逐库对应，
+并将完整 `kb_ids` 下推到存储过滤。Infinity 按索引与库 ID 的绑定查询物理表，合并候选后分页。
 
 保留 `doc_ids`、`page/size`、`top_k`（上限 2048）、相似度/向量权重、
 `search_mode`（sparse/dense/hybrid/fusion）、高亮、跨语言、关键词、rerank 和 KG 参数。

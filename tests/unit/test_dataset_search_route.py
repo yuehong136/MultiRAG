@@ -306,3 +306,13 @@ def test_search_route_exposes_storage_exception_as_business_failure(client: Test
     assert body["code"] == RetCode.DATA_ERROR
     assert "data" not in body
     assert body["message"] == "Internal server error"
+
+
+async def test_multi_dataset_retrieval_keeps_each_tenant_paired_with_its_dataset(search_env: SearchEnv) -> None:
+    db, rows, retrieval = search_env
+    rows[1].tenant_id = rows[0].tenant_id
+    rows.append(kb("c"))
+    result = await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", dataset_ids=["a", "b", "c"]))
+    assert result[0] is True
+    assert retrieval.call_args.args[3:5] == (["owner-a", "owner-a", "owner-c"], ["name-a", "name-b", "name-c"])
+    assert retrieval.call_args.kwargs["kb_ids"] == ["a", "b", "c"]

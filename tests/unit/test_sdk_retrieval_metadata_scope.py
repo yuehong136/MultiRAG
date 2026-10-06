@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.apps.sdk import doc as sdk
 from api.db.db_models import Knowledgebase
@@ -93,3 +94,33 @@ def test_legacy_http_preserves_unrestricted_kg(sdk_retrieval: tuple[TestClient, 
     assert response.json()["code"] == 0 and response.json()["data"]["chunks"][0]["content"] == "graph", response.text
     assert retrieval.call_args.args[10] is None
     graph.assert_awaited_once()
+
+
+def test_sdk_multi_dataset_passes_ordered_tenant_name_id_bindings(sdk_retrieval: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, retrieval = sdk_retrieval
+    rows = [
+        Knowledgebase(id=identifier, tenant_id=owner, name="name-" + identifier, tenant_embd_id=None, embd_id="embedding") for identifier, owner in (("a", "owner"), ("b", "owner"), ("c", "other"))
+    ]
+    monkeypatch.setattr(sdk.KnowledgebaseService, "query", lambda *_a, **_k: rows)
+    monkeypatch.setattr(sdk.KnowledgebaseService, "get_by_ids", lambda *_: rows)
+    monkeypatch.setattr(sdk.KnowledgebaseService, "get_by_id", lambda *_: rows[0])
+    response = client.post("/api/v1/retrieval", json={"dataset_ids": ["a", "b", "c"], "question": "q"})
+    assert response.json()["code"] == 0, response.text
+    assert retrieval.call_args.args[3:5] == (["owner", "owner", "other"], ["name-a", "name-b", "name-c"])
+    assert retrieval.call_args.kwargs["kb_ids"] == ["a", "b", "c"]
+
+
+async def test_embedded_retrieval_pairs_loaded_rows_when_sql_order_differs(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps.sdk import session
+
+    rows = [Knowledgebase(id=identifier, tenant_id=owner, name="name-" + identifier, tenant_embd_id=None, embd_id="embedding") for identifier, owner in (("b", "other"), ("a", "owner"))]
+    monkeypatch.setattr(session.UserTenantService, "query", lambda *_a, **_k: [SimpleNamespace(tenant_id="owner"), SimpleNamespace(tenant_id="other")])
+    monkeypatch.setattr(session.KnowledgebaseService, "query", lambda *_a, **kwargs: [row for row in rows if row.id == kwargs["id"] and row.tenant_id == kwargs["tenant_id"]])
+    monkeypatch.setattr(session.KnowledgebaseService, "get_by_ids", lambda *_: rows)
+    monkeypatch.setattr(session, "build_named_bundle_async", AsyncMock(return_value=object()))
+    monkeypatch.setattr(session, "_label_question_with_conn", lambda *_: {})
+    fetch = AsyncMock(return_value={"total": 0, "chunks": [], "doc_aggs": []})
+    monkeypatch.setattr(session.settings, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, *_: chunks))
+    await session.retrieval_test_embedded(session.SearchBotRetrievalTestRequest(question="q", kb_id=["a", "b"]), async_db, "owner")
+    assert fetch.call_args.args[3:5] == (["other", "owner"], ["name-b", "name-a"])
+    assert fetch.call_args.kwargs["kb_ids"] == ["b", "a"]
