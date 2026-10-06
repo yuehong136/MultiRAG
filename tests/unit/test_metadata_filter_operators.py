@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from common.metadata_utils import apply_meta_data_filter, convert_conditions, meta_filter
+from common.metadata_utils import MetadataValueIndex, apply_meta_data_filter, convert_conditions, meta_filter
 
 
 @pytest.mark.parametrize("operator", ["in", "not in"])
@@ -15,6 +15,39 @@ def test_membership_list_strings_ignore_case(operator: str, values: list[str]) -
     original = deepcopy((metas, filters))
 
     expected = {"doc1", "doc2"} if operator == "in" else {"doc3", "doc4"}
+    assert set(meta_filter(metas, filters)) == expected
+    assert (metas, filters) == original
+
+
+@pytest.mark.parametrize("operator", ["in", "not in"])
+@pytest.mark.parametrize(
+    "stored,values,member",
+    [
+        (0, [0], True),
+        (False, [False], True),
+        (5, [5], True),
+        (1.5, [1.5], True),
+        (True, [True], True),
+        (0, [False], False),
+        (False, [0], False),
+        (1, [True], False),
+        (True, [1], False),
+        (9007199254740993, [9007199254740993], True),
+        ("F2", ["f2", 0, False], True),
+        ("F", ["f2"], False),
+        ("05", [5], False),
+        (" F2 ", ["f2"], False),
+        ("", [""], True),
+    ],
+)
+def test_membership_uses_aggregated_scalar_types(operator: str, stored: Any, values: list[Any], member: bool) -> None:
+    entries = MetadataValueIndex()
+    entries.add(stored, "selected")
+    entries.add("outside", "other")
+    metas = {"field": entries}
+    filters = [{"key": "field", "op": operator, "value": values}]
+    original = deepcopy((metas, filters))
+    expected = ({"selected"} if member else set()) if operator == "in" else ({"other"} if member else {"selected", "other"})
     assert set(meta_filter(metas, filters)) == expected
     assert (metas, filters) == original
 

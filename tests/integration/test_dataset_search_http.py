@@ -690,3 +690,86 @@ def test_http_invalid_manual_membership_is_not_unrestricted(search_api: dict[str
     for dataset, doc in (("dataset", "doc"), ("second", "second_doc")):
         raw = env["reader"].query(env["collections"][dataset], filter="available_int == 1", output_fields=["doc_id"], consistency_level="Strong")
         assert {row["doc_id"] for row in raw} == {env[doc]}
+
+
+def test_http_typed_membership_preserves_scalar_types_and_scope(search_api: dict[str, Any]) -> None:
+    env = search_api
+    first, second = env["doc"], env["second_doc"]
+    fields = {
+        first: {"mixed_number": 0, "mixed_boolean": False, "revision": 0, "positive": 5, "ratio": 1.5, "published": True, "product": "F2"},
+        second: {"mixed_number": "0", "mixed_boolean": "False", "revision": 1, "positive": 6, "ratio": 2.5, "published": False, "product": "G1"},
+        env["foreign_doc"]: {"mixed_number": 0, "mixed_boolean": False, "revision": 0, "positive": 5, "ratio": 1.5, "published": True, "product": "F2"},
+    }
+    with Session(env["engine"]) as db:
+        for doc_id, values in fields.items():
+            row = db.get(DocumentMetadata, doc_id)
+            assert row is not None
+            row.meta_fields = values
+        db.commit()
+
+    def metadata_snapshot() -> dict[str, Any]:
+        with Session(env["engine"]) as db:
+            return {row.id: row.meta_fields for row in db.scalars(sa.select(DocumentMetadata).where(DocumentMetadata.id.in_(fields)))}
+
+    def chunk_snapshot() -> dict[str, Any]:
+        return {
+            key: sorted(
+                env["reader"].query(collection, filter="", limit=100, output_fields=["pk", "doc_id", "available_int", "content_with_weight"], consistency_level="Strong"), key=lambda row: row["pk"]
+            )
+            for key, collection in env["collections"].items()
+        }
+
+    sql_before, milvus_before = metadata_snapshot(), chunk_snapshot()
+    assert sql_before == fields
+    assert type(sql_before[first]["mixed_number"]) is int and type(sql_before[second]["mixed_number"]) is str
+    assert type(sql_before[first]["mixed_boolean"]) is bool and type(sql_before[second]["mixed_boolean"]) is str
+    assert all({row["available_int"] for row in rows} == {0, 1} for rows in milvus_before.values())
+    payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "similarity_threshold": 0, "search_mode": {"type": "dense"}}
+
+    def check(conditions: list[dict[str, Any]], expected: set[str], scope: list[str] | None = None) -> None:
+        for token in (env["jwt"], env["sdk_token"]):
+            response = request(env, "POST", "/search", token=token, json={**payload, "doc_ids": scope, "meta_data_filter": {"method": "manual", "manual": conditions}})
+            body = response.json()
+            assert response.status_code == 200 and body["code"] == 0, body
+            assert body["data"]["total"] == len(expected), (conditions, scope, body)
+            assert {row["doc_id"] for row in body["data"]["chunks"]} == expected, (conditions, scope, body)
+            assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == expected, body
+        selector = {"logic": "and", "conditions": [{"name": condition["key"], "comparison_operator": condition["op"], "value": condition["value"]} for condition in conditions]}
+        sdk_payload = {**payload, "document_ids": scope or []}
+        if conditions:
+            sdk_payload["metadata_condition"] = selector
+        response = requests.post(env["base"] + "/api/v1/retrieval", headers={"Authorization": "Bearer " + env["sdk_token"]}, json=sdk_payload, timeout=30)
+        body = response.json()
+        assert response.status_code == 200 and body["code"] == 0, body
+        assert body["data"]["total"] == len(expected), (conditions, scope, body)
+        assert {row["document_id"] for row in body["data"]["chunks"]} == expected, (conditions, scope, body)
+
+    both = {first, second}
+    check([], both)
+    cases: list[tuple[str, list[Any], set[str]]] = [
+        ("mixed_number", [0], {first}),
+        ("mixed_number", ["0"], {second}),
+        ("mixed_boolean", [False], {first}),
+        ("mixed_boolean", ["FALSE"], {second}),
+        ("published", [True], {first}),
+        ("published", [False], {second}),
+        ("revision", [1], {second}),
+        ("revision", [False], set()),
+        ("revision", [True], set()),
+        ("published", [1], set()),
+        ("positive", [5], {first}),
+        ("ratio", [1.5], {first}),
+        ("product", ["f2"], {first}),
+        ("product", ["f"], set()),
+        ("product", ["f2", 0, False], {first}),
+        ("mixed_number", [0, "0"], both),
+        ("mixed_boolean", [False, "false"], both),
+    ]
+    for key, values, members in cases:
+        for operator in ("in", "not in"):
+            check([{"key": key, "op": operator, "value": values}], members if operator == "in" else both - members)
+    check([{"key": "mixed_number", "op": "in", "value": ["0"]}], set(), [first])
+    check([{"key": "mixed_boolean", "op": "not in", "value": [False]}], set(), [first])
+    check([{"key": "mixed_number", "op": "in", "value": [0]}, {"key": "mixed_boolean", "op": "not in", "value": ["False"]}], {first})
+    assert metadata_snapshot() == sql_before
+    assert chunk_snapshot() == milvus_before

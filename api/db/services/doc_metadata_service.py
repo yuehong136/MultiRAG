@@ -38,7 +38,7 @@ from api.db.db_models import Document, Knowledgebase
 from api.db.services.metadata_store import MetadataStore
 from api.db.services.metadata_store_sql import SqlMetadataStore
 from common import settings
-from common.metadata_utils import dedupe_list
+from common.metadata_utils import MetadataValueIndex, dedupe_list
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +217,9 @@ class DocMetadataService:
     def get_flatted_meta_by_kbs(cls, db: Session, kb_ids: list[str]) -> dict:
         """Expanded aggregator — expands list values.
 
-        Returns: {field: {value_str: [doc_ids]}}
+        Returns: {field: {value_str: [doc_ids]}} with original scalar types
+        retained internally for membership filtering. The text view alone
+        cannot distinguish a JSON number/boolean from identical text.
         """
         if not kb_ids:
             return {}
@@ -234,7 +236,9 @@ class DocMetadataService:
                 for vv in values:
                     if vv is None:
                         continue
-                    meta.setdefault(k, {}).setdefault(str(vv), []).append(doc_id)
+                    if k not in meta:
+                        meta[k] = MetadataValueIndex()
+                    meta[k].add(vv, doc_id)
         return meta
 
     @classmethod

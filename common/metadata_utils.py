@@ -16,7 +16,7 @@
 import ast
 import logging
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from copy import deepcopy
 from typing import Any
 
@@ -25,6 +25,33 @@ import json_repair
 from common.metadata_config import canonical_field, field_schema
 
 _OPERATOR_ALIASES = {"is": "=", "not is": "≠", ">=": "≥", "<=": "≤", "!=": "≠"}
+
+
+def _membership_key(value: Any) -> tuple[str, Any]:
+    """Case-fold text and keep JSON booleans distinct from numeric 0/1."""
+    if isinstance(value, str):
+        return "string", value.lower()
+    if isinstance(value, bool):
+        return "boolean", value
+    if isinstance(value, (int, float)):
+        return "number", value
+    return "other", repr(value)
+
+
+class MetadataValueIndex(dict[str, list[str]]):
+    """Keep the public text-key view and a lossless scalar index for matching."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._typed_values: dict[tuple[str, Any], tuple[Any, list[str]]] = {}
+
+    def add(self, value: Any, doc_id: str) -> None:
+        self.setdefault(str(value), []).append(doc_id)
+        _, documents = self._typed_values.setdefault(_membership_key(value), (value, []))
+        documents.append(doc_id)
+
+    def typed_items(self) -> Iterable[tuple[Any, list[str]]]:
+        return self._typed_values.values()
 
 
 def convert_conditions(metadata_condition: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -52,8 +79,14 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
     def filter_out(v2docs: dict[Any, list[str]], operator: str, value: Any) -> list[str]:
         operator = _OPERATOR_ALIASES.get(operator, operator)
         ids: list[str] = []
-        for input, docids in v2docs.items():
-            if operator in ["=", "≠", ">", "<", "≥", "≤"]:
+        membership_list = operator in ("in", "not in") and isinstance(value, (list, tuple))
+        entries = v2docs.typed_items() if membership_list and isinstance(v2docs, MetadataValueIndex) else v2docs.items()
+        if membership_list:
+            value = {_membership_key(item) for item in value}
+        for input, docids in entries:
+            if membership_list:
+                input = [_membership_key(item) for item in input] if isinstance(input, list) else _membership_key(input)
+            elif operator in ["=", "≠", ">", "<", "≥", "≤"]:
                 # Check if input is in YYYY-MM-DD date format
                 input_str = str(input).strip()
                 value_str = str(value).strip()
