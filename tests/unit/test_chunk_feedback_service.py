@@ -143,7 +143,7 @@ def test_update_chunk_weight_uses_adjust_method_with_row_id(monkeypatch):
     )
 
 
-def test_milvus_adjust_uses_primary_key_kb_filter_and_upserts_clamped_weight():
+def test_milvus_adjust_uses_primary_key_kb_filter_and_upserts_clamped_weight() -> None:
     cls = _wrapped_singleton_class(milvus_module.MilvusConnection)
     conn = cls.__new__(cls)
     conn.logger = MagicMock()
@@ -168,21 +168,23 @@ def test_milvus_adjust_uses_primary_key_kb_filter_and_upserts_clamped_weight():
                 ]
             }
 
-        def query(self, _collection_name, filter_expr, output_fields):
+        def query(self, _collection_name: str, filter_expr: str, output_fields: list[str], consistency_level: str) -> list[dict]:
             assert output_fields == ["*"]
+            assert consistency_level == "Strong"
             self.query_filter = filter_expr
             return [{"pk": "c1", "id": "c1", "kb_id": "kb-1", PAGERANK_FLD: 99}]
 
         def delete(self, _collection_name, expression):
             self.delete_filter = expression
 
-        def insert_rows(self, _collection_name, rows):
+        def upsert_rows(self, _collection_name: str, rows: list[dict]) -> SimpleNamespace:
             self.inserted = rows
+            return SimpleNamespace(upsert_count=len(rows))
 
     fake = FakeMilvusClient()
     conn._get_connection = lambda: fake
 
     assert conn.adjust_chunk_pagerank_fea("c1", "idx", "kb-1", 5, 0, 100)
     assert fake.query_filter == "pk == 'c1' && kb_id == 'kb-1'"
-    assert fake.delete_filter == fake.query_filter
+    assert fake.delete_filter is None
     assert fake.inserted[0][PAGERANK_FLD] == 100

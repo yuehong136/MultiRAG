@@ -1,6 +1,7 @@
 # Milvus 3.0.2 升级准备
 
-状态：2026-10-04 完成代码、官方文档和本机版本核查；以下实施项尚未执行。
+状态：2026-10-04 完成代码、官方文档和本机版本核查；2026-10-06 补充更新安全前置门禁。
+服务/SDK 升级、nullable schema 和冗余向量字段退役尚未执行。
 目标为 Milvus 3.0.2。生产版本、Standalone/Cluster、消息队列、数据规模和停写窗口待补齐，
 当前不能确定生产升级路径或恢复耗时。本次没有升级服务、改写业务数据或改变依赖。
 
@@ -30,6 +31,9 @@ Milvus 2.6.18 已引入 nullable vector；这不是必须等到 3.0 才能使用
 | adapter 写入 | [MilvusConnection.insert](../../core/utils/milvus_conn.py) 已跳过 nullable 字段的默认填充 | 必须同时修上层转换，不能只改 adapter |
 | 字段选择 | ANN 使用 `q_<dim>_vec`，部分结果输出、重排和 RAPTOR 对 768 维选择 `vector` | dataflow 的正确 q 向量与补零标准字段可能走向不同消费者 |
 | SDK 耦合 | adapter 使用 `pymilvus.client`、`orm` 和连接 handler 等内部接口 | 仅 SDK import 成功不足以证明读写、BM25、排序兼容 |
+
+2026-10-06 只读复核本机服务仍为 `3.0-beta`，SDK 仍为 2.5.11。服务版本升级不会自动
+更改旧集合字段类型，也不会移除应用层预删；两者需要独立修复和验收。
 
 已有 dataflow 问题及复现边界见 [embedding 批量累积](embedding-batching.md)。
 nullable 不会把已经存储的标准字段零向量自动还原为有效向量。
@@ -68,6 +72,45 @@ Milvus 3.0 提供 `drop_collection_field()`，可删除非最后一个向量字�
 见 [Alter Collection Schema](https://milvus.io/docs/add-fields-to-an-existing-collection.md#drop-user-defined-fields)。
 若原地删字段经过隔离演练且不需要改变 q 的 nullable，可避免为“删 vector”单独全量重建；
 若同时迁 nullable，则仍优先评估新集合迁移。此处没有执行删除。
+
+### 0. 先完成更新安全门禁
+
+2026-10-06 排查图片 PATCH 时，API 的合法 `tag_kwd: list[str]` 与既有集合的
+`VARCHAR(256)` 不同；普通更新绕过插入路径的转换，应用先删除原行，再因 SDK 类型校验
+失败而丢失切片。这是 adapter 写入顺序与 codec 的缺陷，当前 SDK 已有原生 upsert，
+无需等待 3.0.2。只升级服务/SDK 不会解决旧 schema 与列表类型不匹配。
+
+[MilvusConnection](../../core/utils/milvus_conn.py) 的普通更新、反馈权重更新与重复主键插入使用单次
+完整行 upsert，不再应用层预删；更新保留未提交字段、向量和创建时间，检查写入数量。
+按实际 schema 编码标签/特征与位置字段，读回标签恢复列表/对象，BM25 输出交给服务重新生成。
+更新条件保留主键之外的文档/知识库限制，无法表达的条件明确失败，不可扩大更新范围。
+结构化标签超过 VARCHAR 长度时拒绝写入，不截断 JSON。
+
+升级前后都运行 [adapter 专项](../../tests/integration/test_milvus_safe_mutations.py) 和
+[图片 PATCH 真链路](../../tests/integration/test_chunk_image_replacement.py)，独立 Strong 读回：
+
+- 空标签、中文与包含空格/标点的标签、特征对象、位置、BM25 字段均能往返；旧空字符串与
+  worker 逗号分隔标签保持可读，本次 API 的列表/对象写入用 JSON 保留标点。worker 仍会预先
+  转成逗号字符串，后续需统一 codec；历史逗号分隔本身不能区分标签内逗号。
+- 确定未提交的类型/长度/向量维度校验失败或写入拒绝保留原行，正文/向量/创建时间及图片对象和 SQL 计数不变。
+- 重复主键插入失败保留已有行；错误/数量不符不能报成功；网络超时不能自动重放可能已提交的增量更新。
+- 单次 upsert 不等于客户端查询到写入的并发事务，不同批次/集合也没有整体事务。网络结果不确定时
+  需独立读回；恢复旧快照前需比对来源身份、向量/schema 和后续编辑，不能覆盖已出现的新行。
+
+3.0.2 + 配套 SDK 的 [partial update](https://milvus.io/docs/upsert-entities.md) 可作为后续优化候选，
+先验证省略字段、显式空值、ARRAY/JSON 覆盖、动态字段与同切片图片/标签并发修改，再决定是否替代
+完整行合并。当前 2.5.11 SDK 不发送 partial-update 请求字段，仅传 kwargs 不能启用该能力。
+结合 [CAS 修复](https://github.com/milvus-io/milvus/pull/52495) 验证冲突与有限重试；ARRAY 增删不可
+按普通替换重放。候选能力不能代替本节的失败保留门禁。
+
+标签原生化可一起评估 `tag_kwd: ARRAY<VARCHAR>`、`tag_feas: JSON`，这些类型本身不需要等待
+3.0；旧 VARCHAR 不会自动转换，需显式新集合/新字段迁移。先统一 API/worker 的读写 codec，
+并适配标签筛选、聚合与特征排序：当前 ARRAY filter 字段未包含 `tag_kwd`，聚合也未按数组元素
+计数，不能仅改 schema。验收容量/长度/JSON 大小越限拒绝、中文/空格/标点与 JSON 查询路径转义，明确
+ARRAY/JSON 的整体替换语义，partial update 不会自动合并 JSON 内键。历史 CSV 歧义列清单，
+不猜测拆分；在隔离集合演练回填、切换与回退后再决定迁移。保留 VARCHAR 时也需统一共享 codec。
+
+已有数据丢失需要独立恢复，提交代码不会重建被删原行；常驻 API/worker 需受控重载后才使用新代码。
 
 ### 1. 先统一有效向量的读写契约
 

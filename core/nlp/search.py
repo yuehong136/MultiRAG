@@ -261,6 +261,7 @@ class Dealer:
             "doc_type_kwd",
             "title_tks",
             "important_kwd",
+            "tag_kwd",
             "position_int",
             "doc_id",
             "chunk_order_int",

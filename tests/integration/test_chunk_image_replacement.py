@@ -1,6 +1,7 @@
 """Real PATCH/JWT/protected reads, PG locks and independent MinIO/Milvus readback."""
 
 import base64
+import json
 import os
 import subprocess
 import sys
@@ -106,6 +107,57 @@ def test_patch_replaces_exact_image_and_preserves_omitted_null_empty(chunk_api: 
     smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     (Path(env["evidence"]) / "chunk-smoke.log").write_text(smoke.stdout + smoke.stderr)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
+
+
+@pytest.mark.parametrize(
+    "tags,features",
+    [([], {}), (["财务 审核", "approved, manual"], {"财务 审核": 1.5, "approved, manual": 0.25})],
+    ids=["empty-tags", "unicode-and-punctuation"],
+)
+def test_replace_image_with_tags_preserves_native_payload_and_public_contract(chunk_api: dict[str, Any], tags: list[str], features: dict[str, float]) -> None:
+    env = chunk_api
+    before = _snapshot(env)
+    original = next(row for row in before["index"]["kb"]["rows"] if row["id"] == env["chunk"])
+    new = _image("blue", (3, 4))
+    payload = {**_payload(new), "tag_kwd": tags, "tag_feas": features}
+    assert _patch(env, payload)["code"] == 0
+
+    after = _readback(env, new, "new")
+    row = next(row for row in after["index"]["kb"]["rows"] if row["id"] == env["chunk"])
+    assert row["pk"] == original["pk"] and row["doc_id"] == original["doc_id"] and row["kb_id"] == original["kb_id"]
+    assert json.loads(row["tag_kwd"]) == tags and json.loads(row["tag_feas"]) == features
+    assert row["vector"] == original["vector"]
+    assert len(row["q_768_vec"]) == 768 and row["q_768_vec"] == pytest.approx([1.0] * 768)
+    for field in ["create_time", "create_timestamp_flt"]:
+        assert row.get(field) == original.get(field)
+    assert after["sql"] == before["sql"] and after["queue"] == before["queue"]
+    assert after["index"]["kb"]["count"] == before["index"]["kb"]["count"]
+
+    headers = {"Authorization": "Bearer " + env["tokens"]["owner"]}
+    direct = requests.get(env["base"] + env["path"], headers=headers, timeout=30)
+    assert direct.status_code == 200 and direct.json()["code"] == 0
+    assert direct.json()["data"]["tag_kwd"] == tags and direct.json()["data"]["tag_feas"] == features
+    listed = requests.get(env["base"] + env["path"].rsplit("/", 1)[0], headers=headers, timeout=30)
+    assert listed.status_code == 200 and listed.json()["code"] == 0
+    chunk = next(item for item in listed.json()["data"]["chunks"] if item["id"] == env["chunk"])
+    assert chunk["tag_kwd"] == tags and chunk["tag_feas"] == features
+    _save(Path(env["evidence"]) / ("chunk-replace-tags-empty.json" if not tags else "chunk-replace-tags-unicode.json"), {"before": before, "after": after, "payload": payload})
+
+
+def test_rejected_overlength_tag_preserves_original_chunk_image_and_sql(chunk_api: dict[str, Any]) -> None:
+    env = chunk_api
+    before = _snapshot(env)
+    schema = before["index"]["kb"]["collection"]
+    tag_field = next(field for field in schema["fields"] if field["name"] == "tag_kwd")
+    max_length = int(tag_field["params"]["max_length"])
+    payload = {**_payload(_image("blue", (3, 4))), "tag_kwd": ["x" * (max_length + 1)], "tag_feas": {}}
+    body = _patch(env, payload)
+    assert body["code"] == 100 and body["data"]["stage"] == "index_write"
+    assert body["data"]["index"] == "unknown" and body["data"]["image"] == "not_attempted"
+    assert body["data"]["retry_safe"] is False
+    after = _readback(env, env["old"], "old")
+    assert after == before
+    _save(Path(env["evidence"]) / "chunk-replace-overlength-tag-rejected.json", {"body": body, "before": before, "after": after, "max_length": max_length})
 
 
 def test_default_patch_keeps_append_compatibility(chunk_api: dict[str, Any]) -> None:
