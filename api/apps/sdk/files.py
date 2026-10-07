@@ -23,7 +23,7 @@ ragflow #13741 的路径设计对齐），鉴权由原 token_required 统一升�
   GET    /files/{id}/parent     -> GET    /files/{id}/parent
   GET    /files/{id}/parents    -> GET    /files/{id}/ancestors
 原样保留（ragflow 无对应、multirag 专有，仍在 file_api.py）：
-  POST /files/upload_info、GET /files/root、POST /file/convert、GET /file/download/{attachment_id}
+  POST /files/upload_info、GET /files/root、POST /files/link-to-datasets、GET /file/download/{attachment_id}
 """
 
 from fastapi import APIRouter

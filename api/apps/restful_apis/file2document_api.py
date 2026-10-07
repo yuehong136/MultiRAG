@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from typing import Literal
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -11,6 +13,8 @@ from api.apps.services.file_convert_service import convert_files_with_new_sessio
 from api.common.check_team_permission import check_file_team_permission, check_kb_team_permission
 from api.db import FileType
 from api.db.db_models import get_async_db
+from api.db.services.document_service import DocumentService
+from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_json_result, server_error_response
@@ -26,7 +30,8 @@ async def link_to_datasets(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+    mode: Literal["replace", "add"] = Query("replace"),
+) -> JSONResponse:
     """把文件（含文件夹内最内层文件）转换/关联为指定知识库的文档。"""
     try:
 
@@ -36,6 +41,8 @@ async def link_to_datasets(
             for file_id in file_ids:
                 if file_id not in files_by_id:
                     return None, get_json_result(retmsg="File not found!", retcode=RetCode.NOT_FOUND)
+                if not check_file_team_permission(session, files_by_id[file_id], tenant_id):
+                    return None, get_error_data_result(retmsg="No authorization.")
 
             knowledgebases = {}
             for kb_id in kb_ids:
@@ -52,6 +59,7 @@ async def link_to_datasets(
                 else:
                     expanded_file_ids.append(file_id)
 
+            expanded_file_ids = list(dict.fromkeys(expanded_file_ids))
             expanded_files = FileService.get_by_ids(session, expanded_file_ids)
             expanded_files_by_id = {file.id: file for file in expanded_files}
             for file_id in expanded_file_ids:
@@ -63,13 +71,21 @@ async def link_to_datasets(
             for knowledgebase in knowledgebases.values():
                 if not check_kb_team_permission(session, knowledgebase, tenant_id):
                     return None, get_error_data_result(retmsg="No authorization.")
+            if mode == "replace":
+                for file_id in expanded_file_ids:
+                    for link in File2DocumentService.get_by_file_id(session, file_id):
+                        document = DocumentService.get_by_id(session, link.document_id)
+                        if document is not None and document.kb_id not in knowledgebases:
+                            source = KnowledgebaseService.get_by_id(session, document.kb_id)
+                            if source is None or not check_kb_team_permission(session, source, tenant_id):
+                                return None, get_error_data_result(retmsg="No authorization.")
             return expanded_file_ids, None
 
         expanded_file_ids, error = await db.run_sync(_collect)  # TODO(async-phase4)
         if error is not None:
             return error
 
-        background_tasks.add_task(convert_files_with_new_session, expanded_file_ids, kb_ids, tenant_id)
+        background_tasks.add_task(convert_files_with_new_session, expanded_file_ids, kb_ids, tenant_id, mode)
         return get_json_result(data=True)
     except Exception as exc:
         return server_error_response(exc)
