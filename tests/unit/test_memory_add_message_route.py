@@ -49,7 +49,7 @@ def queue_stubs(monkeypatch):
     from api.db.services.memory_service import MemoryService
 
     monkeypatch.setattr(MemoryService, "get_by_memory_id", classmethod(lambda cls, s, mid: _fake_memory()))
-    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid: {"llm_name": "emb-m"})
+    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid, *, tenant_id: {"llm_name": "emb-m"})
     monkeypatch.setattr(mms, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(mms, "REDIS_CONN", types.SimpleNamespace(generate_auto_increment_id=lambda namespace: 42, queue_product=lambda name, message: True))
     monkeypatch.setattr(mms, "settings", types.SimpleNamespace(get_svr_queue_name=lambda priority: "q0"))
@@ -103,7 +103,7 @@ async def test_embed_and_save_sync_twin_reports_progress(db, monkeypatch):
 
     from memory.services.messages import MessageService
 
-    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid: {"llm_name": "emb-m"})
+    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid, *, tenant_id: {"llm_name": "emb-m"})
     monkeypatch.setattr(mms, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(mms.TaskService, "update_progress", classmethod(lambda cls, s, tid, info: progress.append(info["progress"])))
     monkeypatch.setattr(_FakeBundle, "encode", lambda self, texts: ([[0.1]] * len(texts), 3), raising=False)
@@ -128,7 +128,8 @@ _PAYLOAD = {"memory_id": "mem1", "agent_id": "a", "session_id": "s", "user_input
 
 
 def test_add_message_route_success_shape(client, monkeypatch):
-    async def _fake(db, memory_ids, message_dict):
+    async def _fake(db, memory_ids, message_dict, *, user_id):
+        assert user_id == "user-unit"
         assert memory_ids == ["mem1"]
         return True, "All add to task."
 
@@ -143,7 +144,8 @@ def test_add_message_route_success_shape(client, monkeypatch):
 
 
 def test_add_message_route_failure_shape(client, monkeypatch):
-    async def _fake(db, memory_ids, message_dict):
+    async def _fake(db, memory_ids, message_dict, *, user_id):
+        assert user_id == "user-unit"
         return False, "Memory mem1 failed. Detail: boom"
 
     monkeypatch.setattr(memory_api_service, "add_message", _fake)

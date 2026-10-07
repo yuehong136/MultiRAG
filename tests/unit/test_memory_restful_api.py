@@ -125,13 +125,14 @@ def test_memory_list_envelope(client, monkeypatch):
 
 def test_memory_config_success_and_not_found(client, monkeypatch):
     records: list[dict] = []
-    monkeypatch.setattr(memory_api_service, "get_memory_config", lambda s, mid: _record(records, s) or {"id": mid, "name": "mem"})
+    monkeypatch.setattr(memory_api_service, "get_memory_config", lambda s, mid, *, user_id: _record(records, s) or {"id": mid, "name": "mem"})
 
     ok = client.get("/api/v1/memories/m-1/config").json()
     assert ok["retcode"] == 0 and ok["data"] == {"id": "m-1", "name": "mem"}
     _assert_sync_facade(records)
 
-    def _missing(s, mid):
+    def _missing(s, mid, *, user_id):
+        assert user_id == "user-unit"
         raise NotFoundException(f"Memory '{mid}' not found.")
 
     monkeypatch.setattr(memory_api_service, "get_memory_config", _missing)
@@ -148,7 +149,8 @@ def test_memory_config_success_and_not_found(client, monkeypatch):
 def test_memory_update_runs_off_loop(client, monkeypatch):
     records: list[dict] = []
 
-    def _update(s, memory_id, new_settings):
+    def _update(s, memory_id, new_settings, *, user_id):
+        assert user_id == "user-unit"
         _record(records, s)
         assert (memory_id, new_settings) == ("m-1", {"name": "renamed"})
         return True, {"id": "m-1", "name": "renamed"}
@@ -164,7 +166,7 @@ def test_memory_update_runs_off_loop(client, monkeypatch):
 
 def test_memory_delete_runs_off_loop(client, monkeypatch):
     records: list[dict] = []
-    monkeypatch.setattr(memory_api_service, "delete_memory", lambda s, mid: _record(records, s) or True)
+    monkeypatch.setattr(memory_api_service, "delete_memory", lambda s, mid, *, user_id: _record(records, s) or True)
 
     body = client.delete("/api/v1/memories/m-1").json()
 
@@ -177,7 +179,8 @@ def test_memory_detail_messages_runs_off_loop(client, monkeypatch):
     records: list[dict] = []
     payload = {"messages": {"message_list": []}, "storage_type": "es"}
 
-    def _detail(s, memory_id, agent_ids, keywords, page, page_size):
+    def _detail(s, memory_id, agent_ids, keywords, page, page_size, *, user_id):
+        assert user_id == "user-unit"
         _record(records, s)
         assert (memory_id, agent_ids, keywords) == ("m-1", ["a-1", "a-2"], "kw")
         return payload
@@ -194,9 +197,9 @@ def test_memory_detail_messages_runs_off_loop(client, monkeypatch):
 def test_message_ops_run_off_loop(client, monkeypatch):
     records: list[dict] = []
     forgotten: list[tuple] = []
-    monkeypatch.setattr(memory_api_service, "forget_message", lambda s, mid, msg_id: _record(records, s) or forgotten.append((mid, msg_id)) or True)
-    monkeypatch.setattr(memory_api_service, "update_message_status", lambda s, mid, msg_id, status: _record(records, s) or status)
-    monkeypatch.setattr(memory_api_service, "get_message_content", lambda s, mid, msg_id: _record(records, s) or {"message_id": msg_id})
+    monkeypatch.setattr(memory_api_service, "forget_message", lambda s, mid, msg_id, *, user_id: _record(records, s) or forgotten.append((mid, msg_id)) or True)
+    monkeypatch.setattr(memory_api_service, "update_message_status", lambda s, mid, msg_id, status, *, user_id: _record(records, s) or status)
+    monkeypatch.setattr(memory_api_service, "get_message_content", lambda s, mid, msg_id, *, user_id: _record(records, s) or {"message_id": msg_id})
 
     forget = client.delete("/api/v1/messages/m-1:42").json()
     status = client.put("/api/v1/messages/m-1:42", json={"status": True}).json()
@@ -212,7 +215,8 @@ def test_message_ops_run_off_loop(client, monkeypatch):
 def test_message_search_and_recent_run_off_loop(client, monkeypatch):
     records: list[dict] = []
 
-    def _search(s, filter_dict, params):
+    def _search(s, filter_dict, params, *, user_id):
+        assert user_id == "user-unit"
         _record(records, s)
         assert filter_dict["memory_id"] == ["m-1", "m-2"]  # 逗号形态拆分
         assert params["top_n"] == 3
@@ -220,7 +224,8 @@ def test_message_search_and_recent_run_off_loop(client, monkeypatch):
 
     monkeypatch.setattr(memory_api_service, "search_message", _search)
 
-    def _recent(s, memory_ids, agent_id, session_id, limit):
+    def _recent(s, memory_ids, agent_id, session_id, limit, *, user_id):
+        assert user_id == "user-unit"
         _record(records, s)
         assert (memory_ids, limit) == (["m-1"], 5)
         return [{"message_id": 2}]

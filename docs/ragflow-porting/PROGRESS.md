@@ -3170,3 +3170,32 @@ SessionLocal 已修正后复跑；HTTP 与鉴权使用生产实现，没有模�
 PDF 只验收字节输出合同，真实 XeLaTeX、字体渲染、远程 OpenDataLoader、真实 LLM、
 后台完整入库及生产部署不在本次运行证据内；未重启常驻服务、未 push。
 共享工作区 `make verify` 的 lint、8 条依赖契约、async DB 检查和 mypy（143 个源文件）通过；unit 6191 passed / 13 failed。失败属于并行未提交的 GraphRAG/checkpoint 假件及消费者清单合同，未修改这些文件。前项 Memory 假件已由其他工作修正，当前单独复跑 6 passed。为排除共享 WIP，额外在基于 `4225691234dfcd113dd509cb3adc1dba007b2c85` 的隔离源码快照叠加本项三个文件，核对模块确由快照加载后执行完整 `make verify`：exit=0，6126 passed，Ruff、8 条依赖契约、async DB 与 mypy（143 源文件）均通过。快照保留前项 `ea6b7dca` 的实现和回归；日志 `.test-results/port-3e396c/{verify,isolated-verify}.log`，基准与退出码另存同目录。本次生产实现及测试没有剩余已知回归；共享工作区全库结果仍不能记为通过。
+
+## 94f8779a00993395bf4f3506bae7a9229f5d6d6e · Memory 管理 API 权限
+
+2026-10-07 对照指定提交的完整三文件 diff、冻结上限
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 内后修链，remote 为
+`infiniflow/ragflow`，按用户冻结要求未 fetch。保留 FastAPI/SQLAlchemy 与既有异步桥接。
+
+直接采用集中权限检查、授权后消息读取/更新及搜索筛选；本地加强有效成员角色/状态、
+`tenant_id` 与 `owner_ids` 同时取交集、显式空过滤、计数复用授权 SQL。
+批量读取仅保留可见资源；批量写入对缺失/混合未授权资源整体拒绝，不沿用上游部分写入
+后返回成功的行为。后修 `198f3c4b9` 的模型租户绑定同时覆盖配置更新及提取/embedding/搜索，
+防止可见 Memory 引用其他租户模型行。`7433fbb77` 的授权思想已覆盖，未新增本地未使用
+的列表 ids/facet 合同；`670e68872` 的 Python 删除不作为本地撤回。
+
+当前契约与范围见 [Memory HTTP 权限](../references/memory-api-authorization.md)。
+真实注册的 12 条路由经 JWT、scratch PostgreSQL、Milvus 消息存储、自有 Redis ID/cache/stream
+验证：自有 private、有效 owner/admin/normal 的 team、跨租户、同租户 private、邀请/停用；
+计数与分页、混合批量筛选/拒绝、模型行绑定、消息写入与 SQL Task/queue 读回、状态与遗忘、
+删除的即时 HTTP 不可见和底层最终一致清除。资源清理断言通过，无 skip。
+集成文件最终 7 项的证据为 `.test-results/20261007-182154-80675` 中 6 项通过，
+删除一致性验收调整后的受影响单项在 `.test-results/20261007-182603-86718` 通过。
+早期验收固定 embedding 缺少 encode_queries 的问题已修；模型本身为受控边界。
+
+本项 37 个单元用例在最终完整 unit 运行中无失败，相关文件 Ruff 通过；mypy 143 源文件通过，
+初次 import/async 门禁通过，`make smoke` 的现有 8123 健康检查通过。
+`make verify` 未全绿：并行工作造成文档生成器格式、checkpoint import lint、GraphRAG/数据集
+假件、消费者套件登记及全局 secure-leave 测试锁失败；最后完整 unit 为 6187 passed / 9 failed，
+失败均不在本项用例，未修改这些其他 owner 文件。常驻 8123 未重启，真实模型/提取 worker、
+生产部署及 ES/Infinity 后端未验收。不 push。

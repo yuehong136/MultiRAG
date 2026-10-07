@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
-from api.db.db_models import db_connection
+from api.db.db_models import Memory, db_connection
 from api.db.joint_services.memory_message_service import (
     get_memory_size_cache,
     judge_system_prompt_is_default,
@@ -24,7 +24,6 @@ from api.db.joint_services.memory_message_service import (
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.memory_service import MemoryService
 from api.db.services.task_service import TaskService
-from api.db.services.user_service import UserTenantService
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import ForgettingPolicy, MemoryType, TenantPermission
@@ -34,7 +33,29 @@ from memory.services.messages import MessageService
 from memory.utils.prompt_util import PromptAssembler
 
 
-def create_memory(db: Session, tenant_id: str, memory_info: dict):
+def _split_filter_values(values: str | list[str] | None) -> list[str]:
+    if not values:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    return list(dict.fromkeys(part.strip() for value in values for part in value.split(",") if part.strip()))
+
+
+def _accessible_memories(db: Session, user_id: str, memory_ids: list[str]) -> list[Memory]:
+    if not memory_ids:
+        return []
+    tenant_ids = MemoryService.accessible_tenant_ids(db, user_id)
+    return [memory for memory in MemoryService.get_by_ids(db, memory_ids) if memory.tenant_id == user_id or (memory.permissions == TenantPermission.TEAM.value and memory.tenant_id in tenant_ids)]
+
+
+def _require_memory_access(db: Session, user_id: str, memory_id: str) -> Memory:
+    memories = _accessible_memories(db, user_id, [memory_id])
+    if not memories:
+        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    return memories[0]
+
+
+def create_memory(db: Session, tenant_id: str, memory_info: dict) -> tuple[bool, Any]:
     """
     创建Memory
 
@@ -82,7 +103,7 @@ def create_memory(db: Session, tenant_id: str, memory_info: dict):
         return False, result
 
 
-def update_memory(db: Session, memory_id: str, new_settings: dict):
+def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: str) -> tuple[bool, Any]:
     """
     更新Memory配置
 
@@ -90,10 +111,16 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
     :param memory_id: Memory ID
     :param new_settings: 可更新字段字典
     """
-    current_memory = MemoryService.get_by_memory_id(db, memory_id)
-    if not current_memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    current_memory = _require_memory_access(db, user_id, memory_id)
 
+    new_settings = dict(new_settings)
+    for model_key in ("llm_id", "embd_id"):
+        tenant_key = f"tenant_{model_key}"
+        if tenant_key in new_settings:
+            if not new_settings.get(model_key):
+                raise ArgumentException(f"Use {model_key} to change the memory model.")
+            # Resolve from the memory owner's tenant; never trust supplied row IDs.
+            new_settings.pop(tenant_key)
     update_dict = {}
 
     if "name" in new_settings:
@@ -122,11 +149,6 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
 
     if new_settings.get("llm_id"):
         update_dict["llm_id"] = new_settings["llm_id"]
-
-    if new_settings.get("tenant_llm_id"):
-        update_dict["tenant_llm_id"] = new_settings["tenant_llm_id"]
-    if new_settings.get("tenant_embd_id"):
-        update_dict["tenant_embd_id"] = new_settings["tenant_embd_id"]
 
     if new_settings.get("memory_size"):
         if not 0 < int(new_settings["memory_size"]) <= MEMORY_SIZE_LIMIT:
@@ -161,6 +183,7 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
     if not to_update:
         return True, memory_dict
 
+    to_update = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, to_update, strict=True)
     memory_size = get_memory_size_cache(current_memory.tenant_id, memory_id)
     not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and memory_size > 0]
     if not_allowed_update:
@@ -170,61 +193,51 @@ def update_memory(db: Session, memory_id: str, new_settings: dict):
         if "system_prompt" not in to_update and judge_system_prompt_is_default(current_memory.system_prompt, current_memory.memory_type):
             to_update["system_prompt"] = PromptAssembler.assemble_system_prompt({"memory_type": to_update["memory_type"]})
 
-    to_update = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, to_update)
     MemoryService.update_memory(db, current_memory.tenant_id, memory_id, to_update)
     updated_memory = MemoryService.get_by_memory_id(db, memory_id)
     return True, format_ret_data_from_memory(updated_memory)
 
 
-def delete_memory(db: Session, memory_id: str):
+def delete_memory(db: Session, memory_id: str, *, user_id: str) -> bool:
     """删除Memory"""
-    memory = MemoryService.get_by_memory_id(db, memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(db, user_id, memory_id)
     MemoryService.delete_memory(db, memory_id)
     if MessageService.has_index(memory.tenant_id, memory_id):
         MessageService.delete_message({"memory_id": memory_id}, memory.tenant_id, memory_id)
     return True
 
 
-def list_memory(db: Session, user_id: str, filter_params: dict, keywords: str, page: int = 1, page_size: int = 50):
+def list_memory(db: Session, user_id: str, filter_params: dict, keywords: str, page: int = 1, page_size: int = 50) -> dict:
     """获取Memory列表"""
     filter_dict: dict = {"storage_type": filter_params.get("storage_type")}
-
-    tenant_ids = filter_params.get("tenant_id")
-    if not tenant_ids:
-        user_tenants = UserTenantService.get_user_tenant_relation_by_user_id(db, user_id)
-        filter_dict["tenant_id"] = [tenant["tenant_id"] for tenant in user_tenants]
-    else:
-        if len(tenant_ids) == 1 and "," in tenant_ids[0]:
-            tenant_ids = tenant_ids[0].split(",")
-        filter_dict["tenant_id"] = tenant_ids
-
-    memory_types = filter_params.get("memory_type")
-    if memory_types and len(memory_types) == 1 and "," in memory_types[0]:
-        memory_types = memory_types[0].split(",")
-    filter_dict["memory_type"] = memory_types
-
-    memory_list, count = MemoryService.get_by_filter(db, filter_dict, keywords, page, page_size)
+    allowed_tenant_ids = MemoryService.accessible_tenant_ids(db, user_id)
+    # Both filters are constraints, including when explicitly empty.
+    for key in ("tenant_id", "owner_ids"):
+        if key in filter_params:
+            allowed_tenant_ids &= set(_split_filter_values(filter_params[key]))
+    if not allowed_tenant_ids:
+        return {"memory_list": [], "total_count": 0}
+    filter_dict["tenant_id"] = list(allowed_tenant_ids)
+    filter_dict["memory_type"] = _split_filter_values(filter_params.get("memory_type"))
+    memory_list, count = MemoryService.get_by_filter(db, filter_dict, keywords, page, page_size, user_id=user_id)
     for memory in memory_list:
         memory["memory_type"] = get_memory_type_human(memory["memory_type"])
 
     return {"memory_list": memory_list, "total_count": count}
 
 
-def get_memory_config(db: Session, memory_id: str):
+def get_memory_config(db: Session, memory_id: str, *, user_id: str) -> dict:
     """获取Memory配置"""
+    _require_memory_access(db, user_id, memory_id)
     memory = MemoryService.get_with_owner_name_by_id(db, memory_id)
     if not memory:
         raise NotFoundException(f"Memory '{memory_id}' not found.")
     return format_ret_data_from_memory(memory)
 
 
-def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywords: str, page: int = 1, page_size: int = 50):
+def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywords: str, page: int = 1, page_size: int = 50, *, user_id: str) -> dict:
     """获取Memory消息列表"""
-    memory = MemoryService.get_by_memory_id(db, memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(db, user_id, memory_id)
 
     messages = MessageService.list_message(memory.tenant_id, memory_id, agent_ids, keywords, page, page_size)
 
@@ -249,7 +262,7 @@ def get_memory_messages(db: Session, memory_id: str, agent_ids: list[str], keywo
     return {"messages": messages, "storage_type": memory.storage_type}
 
 
-async def add_message(db: AsyncSession, memory_ids: list[str], message_dict: dict) -> tuple[bool, str]:
+async def add_message(db: AsyncSession, memory_ids: list[str], message_dict: dict, *, user_id: str) -> tuple[bool, str]:
     """
     添加消息到Memory，并投递后台任务提取结构化记忆。
 
@@ -263,14 +276,16 @@ async def add_message(db: AsyncSession, memory_ids: list[str], message_dict: dic
         "agent_response": str,
     }
     """
+    memory_ids = _split_filter_values(memory_ids)
+    accessible_ids = await db.run_sync(lambda s: [m.id for m in _accessible_memories(s, user_id, memory_ids)])  # TODO(async-phase4)
+    if not memory_ids or set(accessible_ids) != set(memory_ids):
+        return False, "Memory not found."
     return await queue_save_to_memory_task(db, memory_ids, message_dict)
 
 
-def forget_message(db: Session, memory_id: str, message_id: int):
+def forget_message(db: Session, memory_id: str, message_id: int, *, user_id: str) -> bool:
     """忘记（软删除）消息"""
-    memory = MemoryService.get_by_memory_id(db, memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(db, user_id, memory_id)
 
     forget_time = timestamp_to_date(current_timestamp())
     update_succeed = MessageService.update_message({"memory_id": memory_id, "message_id": int(message_id)}, {"forget_at": forget_time}, memory.tenant_id, memory_id)
@@ -279,11 +294,9 @@ def forget_message(db: Session, memory_id: str, message_id: int):
     raise Exception(f"Failed to forget message '{message_id}' in memory '{memory_id}'.")
 
 
-def update_message_status(db: Session, memory_id: str, message_id: int, status: bool):
+def update_message_status(db: Session, memory_id: str, message_id: int, status: bool, *, user_id: str) -> bool:
     """更新消息状态"""
-    memory = MemoryService.get_by_memory_id(db, memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(db, user_id, memory_id)
 
     update_succeed = MessageService.update_message({"memory_id": memory_id, "message_id": int(message_id)}, {"status": status}, memory.tenant_id, memory_id)
     if update_succeed:
@@ -291,7 +304,7 @@ def update_message_status(db: Session, memory_id: str, message_id: int, status: 
     raise Exception(f"Failed to set status for message '{message_id}' in memory '{memory_id}'.")
 
 
-def search_message(db: Session, filter_dict: dict, params: dict):
+def search_message(db: Session, filter_dict: dict, params: dict, *, user_id: str) -> list[dict]:
     """
     搜索记忆中的消息
 
@@ -309,21 +322,26 @@ def search_message(db: Session, filter_dict: dict, params: dict):
         "top_n": int
     }
     """
-    return query_message(db, filter_dict, params)
+    memory_ids = _split_filter_values(filter_dict.get("memory_id"))
+    accessible_ids = [m.id for m in _accessible_memories(db, user_id, memory_ids)]
+    if not accessible_ids:
+        return []
+    return query_message(db, {**filter_dict, "memory_id": accessible_ids}, params)
 
 
-def get_messages(db: Session, memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10):
+def get_messages(db: Session, memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10, *, user_id: str) -> list[dict]:
     """获取最近的消息"""
-    memory_list = MemoryService.get_by_ids(db, memory_ids)
+    memory_list = _accessible_memories(db, user_id, _split_filter_values(memory_ids))
+    if not memory_list:
+        return []
+    memory_ids = [memory.id for memory in memory_list]
     uids = [memory.tenant_id for memory in memory_list]
     return MessageService.get_recent_messages(uids, memory_ids, agent_id, session_id, limit)
 
 
-def get_message_content(db: Session, memory_id: str, message_id: int):
+def get_message_content(db: Session, memory_id: str, message_id: int, *, user_id: str) -> dict:
     """获取消息内容"""
-    memory = MemoryService.get_by_memory_id(db, memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(db, user_id, memory_id)
 
     res = MessageService.get_by_message_id(memory_id, message_id, memory.tenant_id)
     if res:
@@ -338,49 +356,49 @@ def get_message_content(db: Session, memory_id: str, message_id: int):
 # ---------------------------------------------------------------------------
 
 
-async def _run_with_own_session(fn: Callable[..., Any], /, *args: Any) -> Any:
+async def _run_with_own_session(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
     def _run() -> Any:
         with db_connection() as s:
-            return fn(s, *args)
+            return fn(s, *args, **kwargs)
 
     return await asyncio.to_thread(_run)
 
 
-async def update_memory_async(memory_id: str, new_settings: dict) -> tuple[bool, Any]:
+async def update_memory_async(memory_id: str, new_settings: dict, *, user_id: str) -> tuple[bool, Any]:
     """update_memory 的异步入口（Redis size cache + msg_store 空判混轨）。"""
-    return await _run_with_own_session(update_memory, memory_id, new_settings)
+    return await _run_with_own_session(update_memory, memory_id, new_settings, user_id=user_id)
 
 
-async def delete_memory_async(memory_id: str) -> bool:
+async def delete_memory_async(memory_id: str, *, user_id: str) -> bool:
     """delete_memory 的异步入口（msg_store 索引删除混轨）。"""
-    return await _run_with_own_session(delete_memory, memory_id)
+    return await _run_with_own_session(delete_memory, memory_id, user_id=user_id)
 
 
-async def get_memory_messages_async(memory_id: str, agent_ids: list[str], keywords: str, page: int = 1, page_size: int = 50) -> dict:
+async def get_memory_messages_async(memory_id: str, agent_ids: list[str], keywords: str, page: int = 1, page_size: int = 50, *, user_id: str) -> dict:
     """get_memory_messages 的异步入口（msg_store 列表与 DB 富化交错）。"""
-    return await _run_with_own_session(get_memory_messages, memory_id, agent_ids, keywords, page, page_size)
+    return await _run_with_own_session(get_memory_messages, memory_id, agent_ids, keywords, page, page_size, user_id=user_id)
 
 
-async def forget_message_async(memory_id: str, message_id: int) -> bool:
+async def forget_message_async(memory_id: str, message_id: int, *, user_id: str) -> bool:
     """forget_message 的异步入口（DB 读 + msg_store 更新混轨）。"""
-    return await _run_with_own_session(forget_message, memory_id, message_id)
+    return await _run_with_own_session(forget_message, memory_id, message_id, user_id=user_id)
 
 
-async def update_message_status_async(memory_id: str, message_id: int, status: bool) -> bool:
+async def update_message_status_async(memory_id: str, message_id: int, status: bool, *, user_id: str) -> bool:
     """update_message_status 的异步入口（DB 读 + msg_store 更新混轨）。"""
-    return await _run_with_own_session(update_message_status, memory_id, message_id, status)
+    return await _run_with_own_session(update_message_status, memory_id, message_id, status, user_id=user_id)
 
 
-async def search_message_async(filter_dict: dict, params: dict) -> Any:
+async def search_message_async(filter_dict: dict, params: dict, *, user_id: str) -> Any:
     """search_message 的异步入口（query_message：DB + embedding HTTP + msg_store 检索混轨）。"""
-    return await _run_with_own_session(search_message, filter_dict, params)
+    return await _run_with_own_session(search_message, filter_dict, params, user_id=user_id)
 
 
-async def get_messages_async(memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10) -> Any:
+async def get_messages_async(memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10, *, user_id: str) -> Any:
     """get_messages 的异步入口（DB 读 + msg_store 最近消息混轨）。"""
-    return await _run_with_own_session(get_messages, memory_ids, agent_id, session_id, limit)
+    return await _run_with_own_session(get_messages, memory_ids, agent_id, session_id, limit, user_id=user_id)
 
 
-async def get_message_content_async(memory_id: str, message_id: int) -> Any:
+async def get_message_content_async(memory_id: str, message_id: int, *, user_id: str) -> Any:
     """get_message_content 的异步入口（DB 读 + msg_store 取内容混轨）。"""
-    return await _run_with_own_session(get_message_content, memory_id, message_id)
+    return await _run_with_own_session(get_message_content, memory_id, message_id, user_id=user_id)

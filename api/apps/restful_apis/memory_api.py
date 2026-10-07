@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,7 +67,7 @@ class UpdateMemoryRequest(BaseModel):
 
 
 @router.post("/memories", summary="创建Memory", response_description="成功创建Memory")
-async def create_memory(request_body: CreateMemoryRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
+async def create_memory(request_body: CreateMemoryRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
     memory_info = {
         "name": request_body.name,
         "memory_type": request_body.memory_type,
@@ -89,11 +90,11 @@ async def create_memory(request_body: CreateMemoryRequest, db: AsyncSession = De
 
 
 @router.put("/memories/{memory_id}", summary="更新Memory", response_description="成功更新Memory")
-async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user: Principal = Depends(async_current_user)):
+async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user: Principal = Depends(async_current_user)) -> JSONResponse:
     new_settings = dict(request_body.model_dump(exclude_unset=True).items())
     try:
         # Redis size cache + msg_store 空判与 DB 交错：整块在工作线程 + 自开短会话执行
-        success, result = await memory_api_service.update_memory_async(memory_id, new_settings)
+        success, result = await memory_api_service.update_memory_async(memory_id, new_settings, user_id=user.id)
         if success:
             return get_json_result(data=result)
         else:
@@ -110,10 +111,10 @@ async def update_memory(memory_id: str, request_body: UpdateMemoryRequest, user:
 
 
 @router.delete("/memories/{memory_id}", summary="删除Memory", response_description="成功删除Memory")
-async def delete_memory(memory_id: str, user: Principal = Depends(async_current_user)):
+async def delete_memory(memory_id: str, user: Principal = Depends(async_current_user)) -> JSONResponse:
     try:
         # msg_store 索引删除与 DB 交错：整块在工作线程 + 自开短会话执行
-        await memory_api_service.delete_memory_async(memory_id)
+        await memory_api_service.delete_memory_async(memory_id, user_id=user.id)
         return get_json_result(data=True)
     except NotFoundException as e:
         logger.error(e)
@@ -126,6 +127,7 @@ async def delete_memory(memory_id: str, user: Principal = Depends(async_current_
 @router.get("/memories", summary="获取Memory列表", response_description="成功获取Memory列表")
 async def list_memory(
     tenant_id: list[str] | None = Query(None, description="租户ID列表"),
+    owner_ids: list[str] | None = Query(None, description="所有者租户ID列表；仅缩小可见范围"),
     memory_type: list[str] | None = Query(None, description="Memory类型列表"),
     storage_type: str | None = Query(None, description="存储类型"),
     keywords: str | None = Query(None, description="搜索关键词"),
@@ -133,11 +135,13 @@ async def list_memory(
     page_size: int = Query(50, ge=1, description="每页数量"),
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     filter_params = {}
     if tenant_id is not None:
         filter_params["tenant_id"] = tenant_id
+    if owner_ids is not None:
+        filter_params["owner_ids"] = owner_ids
     if memory_type is not None:
         filter_params["memory_type"] = memory_type
     if storage_type is not None:
@@ -151,9 +155,9 @@ async def list_memory(
 
 
 @router.get("/memories/{memory_id}/config", summary="获取Memory配置", response_description="成功获取Memory配置")
-async def get_memory_config(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
+async def get_memory_config(memory_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> JSONResponse:
     try:
-        result = await db.run_sync(lambda s: memory_api_service.get_memory_config(s, memory_id))  # TODO(async-phase4)
+        result = await db.run_sync(lambda s: memory_api_service.get_memory_config(s, memory_id, user_id=user.id))  # TODO(async-phase4)
         return get_json_result(data=result)
     except NotFoundException as e:
         logger.error(e)
@@ -171,13 +175,13 @@ async def get_memory_messages(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(50, ge=1, description="每页数量"),
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     if agent_id and len(agent_id) == 1 and "," in agent_id[0]:
         agent_id = agent_id[0].split(",")
     try:
         # msg_store 列表与 DB 富化交错：整块在工作线程 + 自开短会话执行
-        result = await memory_api_service.get_memory_messages_async(memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size)
+        result = await memory_api_service.get_memory_messages_async(memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size, user_id=user.id)
         return get_json_result(data=result)
     except NotFoundException as e:
         logger.error(e)
@@ -212,7 +216,7 @@ async def add_message(
     request_body: AddMessageRequest,
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     memory_ids = request_body.memory_id
     if isinstance(memory_ids, str):
         memory_ids = [memory_ids]
@@ -225,7 +229,7 @@ async def add_message(
         "agent_response": request_body.agent_response,
     }
 
-    res, msg = await memory_api_service.add_message(db, memory_ids, message_dict)
+    res, msg = await memory_api_service.add_message(db, memory_ids, message_dict, user_id=user.id)
     if res:
         return get_json_result(retmsg=msg)
     return get_json_result(retcode=RetCode.SERVER_ERROR, retmsg="Some messages failed to add. Detail:" + msg)
@@ -236,10 +240,10 @@ async def forget_message(
     memory_id: str,
     message_id: int,
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     try:
         # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
-        await memory_api_service.forget_message_async(memory_id, message_id)
+        await memory_api_service.forget_message_async(memory_id, message_id, user_id=user.id)
         return get_json_result(data=True)
     except NotFoundException as e:
         logger.error(e)
@@ -255,12 +259,12 @@ async def update_message(
     message_id: int,
     request_body: UpdateMessageRequest,
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     if not isinstance(request_body.status, bool):
         return get_error_argument_result("Status must be a boolean.")
     try:
         # DB 读 + msg_store 更新交错：整块在工作线程 + 自开短会话执行
-        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status)
+        update_succeed = await memory_api_service.update_message_status_async(memory_id, message_id, request_body.status, user_id=user.id)
         if update_succeed:
             return get_json_result(data=update_succeed)
         else:
@@ -284,7 +288,7 @@ async def search_message(
     session_id: str = Query(default="", description="Optional Session ID filter"),
     user_id: str = Query(default="", description="Optional User ID filter"),
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
     filter_dict = {"memory_id": memory_id, "agent_id": agent_id, "session_id": session_id, "user_id": user_id}
@@ -295,7 +299,7 @@ async def search_message(
         "top_n": top_n,
     }
     # query_message：DB + embedding HTTP + msg_store 检索交错：整块在工作线程 + 自开短会话执行
-    res = await memory_api_service.search_message_async(filter_dict, params)
+    res = await memory_api_service.search_message_async(filter_dict, params, user_id=user.id)
     return get_json_result(data=res)
 
 
@@ -306,14 +310,14 @@ async def get_messages(
     session_id: str = Query(default="", description="Session ID"),
     limit: int = Query(default=10, description="Maximum number of messages"),
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     if len(memory_id) == 1 and "," in memory_id[0]:
         memory_id = memory_id[0].split(",")
     if not memory_id:
         return get_error_argument_result("memory_ids is required.")
     try:
         # DB 读 + msg_store 最近消息交错：整块在工作线程 + 自开短会话执行
-        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit)
+        res = await memory_api_service.get_messages_async(memory_id, agent_id, session_id, limit, user_id=user.id)
         return get_json_result(data=res)
     except Exception as e:
         logger.error(e)
@@ -325,10 +329,10 @@ async def get_message_content(
     memory_id: str,
     message_id: int,
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     try:
         # DB 读 + msg_store 取内容交错：整块在工作线程 + 自开短会话执行
-        res = await memory_api_service.get_message_content_async(memory_id, message_id)
+        res = await memory_api_service.get_message_content_async(memory_id, message_id, user_id=user.id)
         return get_json_result(data=res)
     except NotFoundException as e:
         logger.error(e)

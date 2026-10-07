@@ -12,8 +12,11 @@ from common import settings
 from common.constants import LLMType
 
 
-def get_model_config_by_id(db: Session, tenant_model_id: int) -> dict:
-    tenant_model = TenantLLMService.get_or_none(db, id=tenant_model_id)
+def get_model_config_by_id(db: Session, tenant_model_id: int, *, tenant_id: str | None = None) -> dict:
+    filters: dict = {"id": tenant_model_id}
+    if tenant_id is not None:
+        filters["tenant_id"] = tenant_id
+    tenant_model = TenantLLMService.get_or_none(db, **filters)
     if not tenant_model:
         raise LookupError(f"Tenant Model with id {tenant_model_id} not found")
 

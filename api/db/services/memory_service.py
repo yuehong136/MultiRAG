@@ -1,13 +1,14 @@
 import logging
 
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
 from api.constants import MEMORY_NAME_LIMIT
-from api.db.db_models import Memory, User
+from api.db.db_models import Memory, User, UserTenant
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
 from api.utils.memory_utils import calculate_memory_type
+from common.constants import StatusEnum, TenantPermission
 from common.misc_utils import get_uuid
 from memory.utils.prompt_util import PromptAssembler
 
@@ -21,6 +22,16 @@ class MemoryService(CommonService):
     """
 
     model = Memory
+
+    @classmethod
+    def accessible_tenant_ids(cls, db: Session, user_id: str) -> set[str]:
+        """Personal tenant plus current, joined team memberships (never invites)."""
+        stmt = select(UserTenant.tenant_id).where(
+            UserTenant.user_id == user_id,
+            UserTenant.status == StatusEnum.VALID.value,
+            UserTenant.role.in_(["owner", "admin", "normal"]),
+        )
+        return {user_id, *db.scalars(stmt).all()}
 
     @classmethod
     def get_by_ids_for_tenant(
@@ -127,7 +138,7 @@ class MemoryService(CommonService):
         return db.execute(stmt).one_or_none()
 
     @classmethod
-    def get_by_filter(cls, db: Session, filter_dict: dict, keywords: str = "", page: int = 1, page_size: int = 50) -> tuple[list[dict], int]:
+    def get_by_filter(cls, db: Session, filter_dict: dict, keywords: str = "", page: int = 1, page_size: int = 50, *, user_id: str) -> tuple[list[dict], int]:
         """
         根据过滤条件获取Memory列表
 
@@ -160,8 +171,9 @@ class MemoryService(CommonService):
             cls.model.create_date,
         ).join(User, cls.model.tenant_id == User.id)
 
-        # 应用过滤条件
-        if filter_dict.get("tenant_id"):
+        # Authorization precedes count and pagination; filters only narrow it.
+        stmt = stmt.where((cls.model.tenant_id == user_id) | ((cls.model.tenant_id.in_(cls.accessible_tenant_ids(db, user_id))) & (cls.model.permissions == TenantPermission.TEAM.value)))
+        if "tenant_id" in filter_dict:
             tenant_ids = filter_dict["tenant_id"]
             if isinstance(tenant_ids, list):
                 stmt = stmt.where(cls.model.tenant_id.in_(tenant_ids))
@@ -179,23 +191,7 @@ class MemoryService(CommonService):
         if keywords:
             stmt = stmt.where(cls.model.name.contains(keywords))
 
-        # 获取总数（使用子查询）
-        count_stmt = select(cls.model.id)
-        if filter_dict.get("tenant_id"):
-            tenant_ids = filter_dict["tenant_id"]
-            if isinstance(tenant_ids, list):
-                count_stmt = count_stmt.where(cls.model.tenant_id.in_(tenant_ids))
-            else:
-                count_stmt = count_stmt.where(cls.model.tenant_id == tenant_ids)
-        if filter_dict.get("memory_type"):
-            memory_type_int = calculate_memory_type(filter_dict["memory_type"])
-            count_stmt = count_stmt.where(cls.model.memory_type.bitwise_and(memory_type_int) > 0)
-        if filter_dict.get("storage_type"):
-            count_stmt = count_stmt.where(cls.model.storage_type == filter_dict["storage_type"])
-        if keywords:
-            count_stmt = count_stmt.where(cls.model.name.contains(keywords))
-
-        count = len(db.scalars(count_stmt).all())
+        count = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
         # 排序和分页
         stmt = stmt.order_by(desc(cls.model.update_time))

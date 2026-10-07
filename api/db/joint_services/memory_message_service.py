@@ -215,7 +215,7 @@ async def extract_by_llm(
     else:
         user_prompts.append({"role": "user", "content": PromptAssembler.assemble_user_prompt(conversation_content, conversation_time, conversation_time)})
     if tenant_llm_id:
-        llm_config = get_model_config_by_id(db, tenant_llm_id)
+        llm_config = get_model_config_by_id(db, tenant_llm_id, tenant_id=tenant_id)
     else:
         llm_config = get_model_config_by_type_and_name(db, tenant_id, llm_type, llm_id)
     llm = LLMBundle(db, tenant_id, llm_config)
@@ -240,7 +240,7 @@ async def extract_by_llm(
 def _embedding_bundle_for(db: Session, memory: Memory) -> LLMBundle:
     """构造 memory 的 embedding LLMBundle（纯同步 DB 面，供同步轨直调 / 异步轨 run_sync 复用）。"""
     if getattr(memory, "tenant_embd_id", None):
-        embd_config = get_model_config_by_id(db, memory.tenant_embd_id)
+        embd_config = get_model_config_by_id(db, memory.tenant_embd_id, tenant_id=memory.tenant_id)
     else:
         embd_config = get_model_config_by_type_and_name(db, memory.tenant_id, LLMType.EMBEDDING.value, memory.embd_id)
     return LLMBundle(db, memory.tenant_id, embd_config)
@@ -347,7 +347,7 @@ def query_message(
     question = question.strip()
     memory = memory_list[0]
     if getattr(memory, "tenant_embd_id", None):
-        embd_config = get_model_config_by_id(db, memory.tenant_embd_id)
+        embd_config = get_model_config_by_id(db, memory.tenant_embd_id, tenant_id=memory.tenant_id)
     else:
         embd_config = get_model_config_by_type_and_name(db, memory.tenant_id, LLMType.EMBEDDING.value, memory.embd_id)
     embd_model = LLMBundle(db, memory.tenant_id, embd_config)
