@@ -121,3 +121,27 @@ uvicorn 后复跑通过，未放宽启动断言。未调用真实外部模型或
 删除仍 owner；后来的 `6ce014c23` 再整理阻塞 IO，`20180790e` 补 OpenAI 首跑授权。
 本地 management 与受信 draft/publication 的合同原本更严格，是否采用后修的团队编辑
 按第 20 项的本地消费者和权限验收决定，不把它误标为第 17 项“已移植”。
+
+## 20 · 15dcdd7b5b1cb7c2433a8cf667d749ae6f5eb8c6
+
+撤回结论成立；与本地 owner 管理边界等价，保留本地异步执行适配。冻结内
+`c50028b1f` 的重新放开 team 编辑/组件输入已比较，但**未采用该额外扩权**：
+本地更新/发布是 owner 事务及受信草稿/发布来源合同，Web input-form 的实际消费者是
+`single-step-debug-sheet`（草稿调试），发布用户表单随执行事件交付。
+没有活动消费者要求成员重写 owner 的草稿与发布快照；不借此次撤回扩大发布者权限。
+本地 row lock、Canvas/version 原子更新、执行来源校验及开流前授权比装饰器式 accessible
+更合适。该结果是明确的本地合同选择，不能声称与 `c50028b1f` 全等价。
+
+| 操作 | owner | 当前有效 normal/admin TEAM 成员 | 邀请/失效/外部用户 |
+| --- | --- | --- | --- |
+| 组件输入、更新/发布、删除 | 允许 | 拒绝 | 拒绝 |
+| Agent 草稿 runtime | 允许 | 拒绝 | 拒绝 |
+| 已发布 Agent 首跑/续聊 | 允许 | 允许（当前 canvas 为 team；session 来源绑定调用者） | 拒绝 |
+| DataFlow runtime | 允许 | 当前 team + 有效成员校验 | 拒绝 |
+
+新增真实 HTTP/SQL/Redis 六种调用者矩阵与既有执行来源七项验收；拒绝不改 Canvas/version/
+session 或 replica，body user_id 不能冒充 owner。允许的发布调用使用 owner 模型租户，
+session.user_id 却归真实调用者；owner 删除用 SQL 读回确认，既有 route 只删 Canvas，
+不声称关联行级联删除，测试显式清理其自有版本/session。
+首轮输入测试错选无表单的 Message，改用真实支持表单的 Begin 后复跑 owner 分支；
+其他五种调用者及七项 origin 测试已通过。最终批次复跑覆盖完整矩阵。
