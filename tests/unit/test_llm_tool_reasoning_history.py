@@ -201,3 +201,35 @@ async def test_async_tool_loop_keeps_sync_session_fallback(monkeypatch: pytest.M
     answer, _tokens = await model.async_chat_with_tools("", [{"role": "user", "content": "hello"}], {})
     assert "answer" in answer
     session.tool_call.assert_called_once_with("first", {"query": "hello"})
+
+
+@pytest.mark.parametrize("backend", ["sync", "base", "litellm"])
+async def test_stream_tool_loop_rejects_nonstream_object_without_index(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
+    """The history fix must not relax the required index during delta assembly."""
+    model: Any
+    if backend == "sync":
+        model = DeepSeekChat("fixture-key", "test-model", "http://fixture.invalid/v1", max_retries=0)
+    elif backend == "base":
+        model = _ReasoningBase("fixture-key", "test-model", "http://fixture.invalid/v1", max_retries=0)
+    else:
+        model = chat.LiteLLMBase("fixture-key", "test-model", provider="DeepSeek", max_retries=0)
+    session = _Session()
+    model.bind_tools(session, [{"type": "function", "function": {"name": "first"}}])
+    call = _call("first", "a")
+    assert not hasattr(call, "index")
+    response = _Stream([_chunk(calls=[call])])
+    history = [{"role": "user", "content": "hello"}]
+    if backend == "sync":
+        complete = Mock(return_value=response)
+        model.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)))
+        parts = list(model.chat_streamly_with_tools("", history, {}))
+    else:
+        complete = AsyncMock(return_value=response)
+        if backend == "litellm":
+            monkeypatch.setattr(chat.litellm, "acompletion", complete)
+        else:
+            model.async_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)))
+        parts = [part async for part in model.async_chat_streamly_with_tools("", history, {})]
+    assert any(isinstance(part, str) and "**ERROR**" in part and "index" in part for part in parts)
+    assert session.calls == []
+    assert complete.call_count == 1

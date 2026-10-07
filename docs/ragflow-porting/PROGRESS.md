@@ -2169,6 +2169,48 @@ help 与脚本语法检查均 exit=0，单 head `e1f3a5c7b9d0`；完整上游 di
 逐次检查下一轮 wire assistant reasoning、多工具结果与答案；fixture listener 已关闭。
 这是本机协议验证，未调用远程模型或真实外部 MCP，也不代表完整 Agent UI/生产端到端验收。
 
+## 8269fa01b41041b7e4f41c0630800e35383a2fef · 非流式工具历史 SDK 合同审结
+
+2026-10-07 核对目标完整 diff、活动调用链和冻结上限
+`519e7d98a5651564d4e35d6648f006cba4baaf4f`；上游 remote 为
+`infiniflow/ragflow`，目标属于冻结范围，未 fetch。目标只有
+`rag/llm/chat_model.py`：四处历史构造读取 index 改为 getattr，另含 RAGcon 格式变化。
+冻结链中该读取修复未回退；`670e68872` 最终删除 Python 文件，不作为本地撤回。
+
+生产实现已随 `bf379bd5` 等价覆盖，本次不修改生产代码：
+正式模型注册的 DeepSeek → `chat.py::LiteLLMBase`；其他 OpenAI 兼容异步入口 →
+`chat.py::Base`；包内同步 DeepSeek → `chat_model/base.py::Base`。
+Agent 的多轮优化 `full_question` → `LLMBundle.async_chat` 在 bundle 和模型均绑定工具时
+进入非流式工具循环。三个 backend 的非流式与流式循环均走共用
+`ToolHistoryMixin._append_history_batch`；单个 `_append_history` 无独立活动调用，
+直接委托批量入口。同步顺序执行、异步 gather 并发但按原调用顺序写历史。
+
+质量比较：本地共用构造器避免上游四处重复修复；无 index 时省略字段，避免上游写入
+`index: null`，有 index 时保留原值。每批一条 assistant 后跟匹配 ID 的 tool 结果，
+原始 function name/arguments 不经解析后重编码，DeepSeek 每轮 reasoning_content 与
+reasoning 别名保留。流式组装仍直接读取必需的 index；未把历史构造的容错扩散到组装。
+无收益的重复生产改写和 RAGcon 纯格式变动不带入。
+
+本次改进是可复跑的合同证据：[SDK HTTP 边界测试](../../tests/unit/test_llm_tool_sdk_contract.py)
+使用本机 OpenAI 2.30.0 / LiteLLM 1.82.6 的真实 completion 方法、响应解码和续轮请求
+序列化，仅替换 httpx 发送边界，不访问外部服务。三个 backend × 非流式/流式共 6 组、
+12 个 completion 请求全部通过。OpenAI 解码的非流式函数调用对象确实没有 index；
+LiteLLM 解码对象也不要求 index。断言实际 wire 的 assistant/tool 顺序、call ID、原始
+含中文与空白的 arguments、reasoning_content、单个入口及输入历史不变；异步工具反序
+完成仍保留历史顺序。流式反序片段按 index 合并，同 delta reasoning 不丢失。
+[既有回归](../../tests/unit/test_llm_tool_reasoning_history.py)另补三个 backend 的缺失 index
+流式对象拒绝用例，断言错误可见、工具零调用且无续轮。相关两文件合计 **60 passed**。
+
+本次 `make verify` 的格式/Ruff、8 条 import contracts、async DB 门禁和 mypy（143 个
+源文件）通过；unit 为 **6171 passed、5 failed**。五个失败均是其他并行任务新增的
+`test_doc_generator_downloads.py` base64 字段断言；进程已加载的生成器尚无该字段。
+其 owner 随后补齐当前生成器，本项只复查该文件：**13 passed**，未修改它或生成器，
+未重跑全库，不能宣称完整门禁通过。日志在本机 `/tmp/multirag-8269fa01-verify.log`、
+`/tmp/multirag-8269fa01-focused.log` 和 `/tmp/multirag-8269fa01-doc-download-recheck.log`。
+无 DB、存储、路由或启动行为变更，不触发 integration/smoke。
+合同测试没有真实网络传输、远程模型、外部 MCP、检索/记忆
+工具或完整 Agent UI/生产端到端验收；不以受控 HTTP 成功替代这些验证。
+
 ## dcce864d4c9fc939e4a75bfdd1d8ffec64e31a4f · Go embedding Encode 接口
 
 按冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 核对目标完整 14 文件 diff，
