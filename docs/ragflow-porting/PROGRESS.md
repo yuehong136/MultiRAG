@@ -3069,3 +3069,51 @@ MiniMax `clear_thinking` 配置 true、断言 false；独立 HEAD 快照
 证据在本机 `/tmp/multirag-dd7-evidence/`，含 `manifest.json`、`controlled-http.json`、
 专项/回归/独立基线日志与构建结果。未运行真实 LM Studio、模型/硬件、SQL opt-in、生产
 或 Web 验收；受控 HTTP 不证明真实供应商功能或部署完成。独立提交，不 push。
+
+## 406b36a4529dfa765b10d32a355fa8d74cbb7dee · 元数据字符串归一化补齐
+
+2026-10-07 使用移植 Skill 核对完整两文件 diff；上游 remote 为
+`infiniflow/ragflow`，刷新后的 `origin/main` 为 `cc72ecb0af18ade5d58f84d107af7cd59a88c39f`。
+目标在冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f` 的祖先范围内；
+此次实现与后修链判断限定于该冻结范围。
+
+现有 `b23b1a2a` 已覆盖字符串列表成员大小写；`4ce5dc0d` 的无损标量索引、
+`42999c44` 的非法 operand 全条件组拒绝，以及文档范围交集均保留。
+完整 diff 还将所有非比较运算的输入值与条件值统一归一化，而本地之前仅覆盖
+成员运算的列表输入。此次在 [metadata_utils](../../common/metadata_utils.py) 采用
+带类型注解的统一 helper，仅把字符串或列表中的字符串转小写；补齐直接列表输入
+`contains/not contains` 的大小写差异，不把数字、布尔、0/false 转字符串。
+四个行为回归断言在修复前失败，修复后通过；输入与条件均保持不变。
+
+实现质量比较：统一 helper 消除两侧归一化逻辑重复，覆盖目标完整机制；成员列表
+仍使用一次构建的类型键集合与私有类型索引，保留数字/布尔/同名文本的来源区分，
+不退回上游普通 Python membership 中 `False == 0` / `True == 1` 的混同。
+直接列表输入的 `in/not in` 仍是 all-items；活动生产聚合先展开数组，因此按匹配项
+汇总文档时，`in/not in` 文档结果集不一定互补。这一差异已锁定为现行合同，
+不借归一化改变数组排除语义。当前行为说明维护在[元数据配置](../references/metadata-configuration.md)。
+
+后修链：`53bb2bd9e` 的空 AND、`fa2467d33` 的文档范围交集已有本地等价实现；
+`198815a36` 是独立比较运算的 literal_eval 原子性与循环状态修复，本项不修改比较
+运算。ES/Infinity 的过滤下推为独立存储路径，不替换当前 SQL 聚合/Milvus 检索；
+`670e68872` 删除上游 Python 文件不构成本地生产路径的撤回。未发现目标归一化的
+独立 revert/re-land。
+
+相关五文件定向 unit 242 passed。隔离 `make integration` 选择当前数据集搜索 HTTP
+中的 typed-membership、非法 operand、四种检索模式的文档交集与多库鉴权，
+exit=0：7 passed，无 skip。真实 JWT/API key、SQL 持久化、Milvus 检索与独立
+Strong 读回锁定了实际文档 ID、total/doc_aggs、混合数组类型、非法 AND/OR 条件
+组零匹配及选中文档/知识库范围；metadata 与 chunk 快照前后相同，自有资源清理通过。
+证据：`.test-results/20261007-181634-73118`。
+
+完整 `make verify` 的 lint、8 条分层契约、async DB 门禁与 mypy（143 个源文件）
+通过；unit 为 6167 passed、3 failed，退出码 2。失败仅在其他任务修改的
+`test_memory_add_message_route.py`，模型查询假件要求 `tenant_id` 而该运行加载的
+调用未带参数；当前工作树已补该参数，本项未修改 Memory 代码或假件。
+该文件当前版本定向复跑 exit=0：6 passed，三项初跑失败均通过；不将初跑描述为全绿，
+也未重复已通过的完整单元套件。
+完整日志位于本机 `/tmp/multirag-406b36-verify.log` 与
+`/tmp/multirag-406b36-integration.log`。
+
+模型/过滤生成为受控输出；本次未验收真实供应商、生产部署、独立 Web 或 ES/Infinity
+后端。直接列表输入分支由 unit 假件验证，活动生产聚合后的数组行为由真实存储/HTTP
+验证，二者证据边界保持区分。其他任务改动保留；本项独立提交，不 push。

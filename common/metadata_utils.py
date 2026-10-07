@@ -76,6 +76,13 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
             return []
     doc_ids: set[str] | None = None
 
+    def normalize_string_values(value: Any) -> Any:
+        if isinstance(value, str):
+            return value.lower()
+        if isinstance(value, list):
+            return [item.lower() if isinstance(item, str) else item for item in value]
+        return value
+
     def filter_out(v2docs: dict[Any, list[str]], operator: str, value: Any) -> list[str]:
         operator = _OPERATOR_ALIASES.get(operator, operator)
         ids: list[str] = []
@@ -121,15 +128,9 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
                     if isinstance(value, str):
                         value = value.lower()
             else:
-                # Non-comparison operators: maintain original logic
-                if isinstance(input, str):
-                    input = input.lower()
-                elif operator in ("in", "not in") and isinstance(input, list):
-                    input = [item.lower() if isinstance(item, str) else item for item in input]
-                if isinstance(value, str):
-                    value = value.lower()
-                elif operator in ("in", "not in") and isinstance(value, list):
-                    value = [item.lower() if isinstance(item, str) else item for item in value]
+                # Normalize both operands without changing non-string types.
+                input = normalize_string_values(input)
+                value = normalize_string_values(value)
 
             matched = False
             try:

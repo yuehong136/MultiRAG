@@ -696,9 +696,29 @@ def test_http_typed_membership_preserves_scalar_types_and_scope(search_api: dict
     env = search_api
     first, second = env["doc"], env["second_doc"]
     fields = {
-        first: {"mixed_number": 0, "mixed_boolean": False, "revision": 0, "positive": 5, "ratio": 1.5, "published": True, "product": "F2"},
-        second: {"mixed_number": "0", "mixed_boolean": "False", "revision": 1, "positive": 6, "ratio": 2.5, "published": False, "product": "G1"},
-        env["foreign_doc"]: {"mixed_number": 0, "mixed_boolean": False, "revision": 0, "positive": 5, "ratio": 1.5, "published": True, "product": "F2"},
+        first: {"mixed_number": 0, "mixed_boolean": False, "revision": 0, "positive": 5, "ratio": 1.5, "published": True, "product": "F2", "products": ["F2", "f11"], "mixed_items": ["F2", 0, False]},
+        second: {
+            "mixed_number": "0",
+            "mixed_boolean": "False",
+            "revision": 1,
+            "positive": 6,
+            "ratio": 2.5,
+            "published": False,
+            "product": "G1",
+            "products": ["G1"],
+            "mixed_items": ["G1", "0", "False"],
+        },
+        env["foreign_doc"]: {
+            "mixed_number": 0,
+            "mixed_boolean": False,
+            "revision": 0,
+            "positive": 5,
+            "ratio": 1.5,
+            "published": True,
+            "product": "F2",
+            "products": ["F2", "f11"],
+            "mixed_items": ["F2", 0, False],
+        },
     }
     with Session(env["engine"]) as db:
         for doc_id, values in fields.items():
@@ -768,8 +788,26 @@ def test_http_typed_membership_preserves_scalar_types_and_scope(search_api: dict
     for key, values, members in cases:
         for operator in ("in", "not in"):
             check([{"key": key, "op": operator, "value": values}], members if operator == "in" else both - members)
+    # Production aggregation expands arrays: a document can have both a matching
+    # and a nonmatching item, so its in/not-in result sets need not be complements.
+    list_cases: list[tuple[str, list[Any], set[str], set[str]]] = [
+        ("products", ["f2", "F11"], {first}, {second}),
+        ("products", ["F11"], {first}, both),
+        ("products", [], set(), both),
+        ("mixed_items", [0], {first}, both),
+        ("mixed_items", [False], {first}, both),
+        ("mixed_items", ["0", "FALSE"], {second}, both),
+        ("mixed_items", ["f2", 0, False], {first}, {second}),
+    ]
+    for key, values, members, nonmembers in list_cases:
+        check([{"key": key, "op": "in", "value": values}], members)
+        check([{"key": key, "op": "not in", "value": values}], nonmembers)
     check([{"key": "mixed_number", "op": "in", "value": ["0"]}], set(), [first])
     check([{"key": "mixed_boolean", "op": "not in", "value": [False]}], set(), [first])
+    check([{"key": "products", "op": "in", "value": ["F2", "F11"]}], set(), [second])
+    check([{"key": "products", "op": "not in", "value": ["F2", "F11"]}], set(), [first])
+    check([{"key": "products", "op": "contains", "value": "F"}], {first})
+    check([{"key": "products", "op": "not contains", "value": "F"}], {second})
     check([{"key": "mixed_number", "op": "in", "value": [0]}, {"key": "mixed_boolean", "op": "not in", "value": ["False"]}], {first})
     assert metadata_snapshot() == sql_before
     assert chunk_snapshot() == milvus_before

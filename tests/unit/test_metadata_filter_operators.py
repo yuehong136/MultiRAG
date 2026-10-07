@@ -113,8 +113,12 @@ def test_membership_list_input_keeps_all_items_semantics(operator: str, metadata
         ("not in", "G1", "F2,F11", True),
         ("contains", "F2", "f", True),
         ("not contains", "F2", "g", True),
-        ("contains", ["F2"], "f", False),
-        ("not contains", ["F2"], "f", True),
+        ("contains", ["F2"], "f", True),
+        ("not contains", ["F2"], "f", False),
+        ("contains", ["F2", 0, False], "F", True),
+        ("contains", ["F2", 0, False], "0", True),
+        ("contains", ["F2", 0, False], "false", False),
+        ("not contains", ["F2", 0, False], "F", False),
         ("start with", ["F2", "F11"], "f2", True),
         ("end with", ["F2", "F11"], "f11", True),
         ("empty", [], "", True),
@@ -129,12 +133,14 @@ def test_membership_list_input_keeps_all_items_semantics(operator: str, metadata
         (">", "F2", "2026-10-02", False),
     ],
 )
-def test_other_operand_and_operator_behavior_is_preserved(operator: str, metadata_value: Any, filter_value: Any, matched: bool) -> None:
+def test_operand_normalization_and_other_operator_behavior(operator: str, metadata_value: Any, filter_value: Any, matched: bool) -> None:
     entries = Mock(spec=dict)
     entries.items.return_value = [(metadata_value, ["doc"])]
     filters = [{"key": "value", "op": operator, "value": filter_value}]
+    original = deepcopy((metadata_value, filters))
 
     assert meta_filter({"value": entries}, filters) == (["doc"] if matched else [])
+    assert (metadata_value, filters) == original
 
 
 @pytest.mark.parametrize("operator", ["in", "not in"])
