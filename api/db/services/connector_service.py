@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 from api.utils.common import hash128
 from common.constants import TaskStatus
+from common.data_source.imap_connector import imap_scope_signature
 from common.data_source.models import SlimDocument
 from common.misc_utils import get_uuid
 
@@ -68,6 +70,53 @@ class ConnectorService(CommonService):
     """
 
     model = Connector
+
+    @classmethod
+    def ensure_imap_sync_scope(
+        cls,
+        db: Session,
+        connector_id: str,
+        kb_id: str,
+        task_id: str,
+        signature: str,
+        initial_start: float,
+        *,
+        reindex: bool,
+        incremental: bool,
+    ) -> float:
+        """Persist the initial inventory scope independently for every KB.
+
+        Retry the same task with its original lower bound. Configuration saves
+        share this row lock, so concurrent KB starts do not overwrite state.
+        """
+        connector = db.scalar(select(cls.model).where(cls.model.id == connector_id).with_for_update().execution_options(populate_existing=True))
+        if connector is None or connector.source != "imap":
+            raise RuntimeError("IMAP connector is unavailable")
+        config = connector.config or {}
+        if imap_scope_signature(config) != signature:
+            raise RuntimeError("IMAP configuration changed before synchronization; retry")
+        scopes = config.get("imap_sync_scopes", {})
+        if not isinstance(scopes, dict):
+            raise ValueError("Invalid persisted IMAP synchronization scopes")
+        previous = scopes.get(kb_id)
+        if previous is not None:
+            if not isinstance(previous, dict) or isinstance(previous.get("start"), bool):
+                raise ValueError("Invalid persisted IMAP initial range")
+            start = float(previous["start"])
+            if not math.isfinite(start) or start < 0:
+                raise ValueError("Invalid persisted IMAP initial range")
+            if previous.get("scope") != signature and not reindex:
+                raise RuntimeError("IMAP account/mailboxes changed; rebuild this knowledge base before syncing")
+            if previous.get("scope") == signature and (not reindex or previous.get("initial_task") == task_id):
+                return start
+        # Old incremental tasks without persisted state get a conservative
+        # inventory superset; their unknown original lower bound is never guessed.
+        start = 0.0 if incremental and not reindex else initial_start
+        if not math.isfinite(start) or start < 0:
+            raise ValueError("Invalid IMAP initial range")
+        connector.config = {**config, "imap_sync_scopes": {**scopes, kb_id: {"start": start, "scope": signature, "initial_task": task_id}}}
+        db.commit()
+        return start
 
     @classmethod
     def accessible(cls, db: Session, connector_id: str, user_id: str) -> bool:

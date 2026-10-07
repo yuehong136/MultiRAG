@@ -22,9 +22,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import InputType
+from api.db.db_models import Connector
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
 from common.constants import RetCode, TaskStatus
 from common.misc_utils import get_uuid
@@ -57,6 +59,9 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
     if not req.get("name") or not req.get("source"):
         return False, "创建连接器时 name 和 source 为必填项", RetCode.DATA_ERROR
 
+    config = dict(req.get("config", {}))
+    if req["source"] == "imap":
+        config.pop("imap_sync_scopes", None)
     connector_id = get_uuid()
     ConnectorService.insert(
         db,
@@ -65,7 +70,7 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
         name=req["name"],
         source=req["source"],
         input_type=InputType.POLL,
-        config=req.get("config", {}),
+        config=config,
         refresh_freq=int(req.get("refresh_freq", 5)),
         prune_freq=int(req.get("prune_freq", 720)),
         timeout_secs=int(req.get("timeout_secs", 60 * 29)),
@@ -76,10 +81,20 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
 
 def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tuple[bool, Any, RetCode | None]:
     """改连接器的调度配置，成功时返回 id（回读同上，由网关发起）。"""
-    if not ConnectorService.get_by_id(db, connector_id):
+    connector = ConnectorService.get_by_id(db, connector_id)
+    if connector is None:
         return False, "Can't find this Connector!", RetCode.DATA_ERROR
 
     changes = {field: req[field] for field in _UPDATABLE_FIELDS if field in req}
+    if "config" in changes and connector.source == "imap":
+        connector = db.scalar(select(Connector).where(Connector.id == connector_id).with_for_update().execution_options(populate_existing=True))
+        if connector is None:
+            return False, "Can't find this Connector!", RetCode.DATA_ERROR
+        config = dict(changes["config"])
+        config.pop("imap_sync_scopes", None)
+        if "imap_sync_scopes" in (connector.config or {}):
+            config["imap_sync_scopes"] = connector.config["imap_sync_scopes"]
+        changes["config"] = config
     if changes:
         ConnectorService.update_by_id(db, connector_id, changes)
     return True, connector_id, None

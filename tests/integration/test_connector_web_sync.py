@@ -61,7 +61,7 @@ def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 
 @pytest.mark.external_consumer
-@pytest.mark.parametrize("source", ["dingtalk_ai_table"])
+@pytest.mark.parametrize("source", ["dingtalk_ai_table", "imap"])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connector_web: str, source: str, theme: Literal["light", "dark"]) -> None:
     env = connector_sync_api
@@ -74,6 +74,16 @@ def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connect
         "credentials": {"access_token": "synthetic", "custom": "preserved"},
         "sync_deleted_files": False,
     }
+    if source == "imap":
+        config = {
+            "imap_host": "imap.test",
+            "imap_port": 993,
+            "imap_mailbox": ["INBOX"],
+            "poll_range": 30,
+            "custom": "preserved",
+            "credentials": {"imap_username": "owner", "imap_password": "synthetic", "custom": "preserved"},
+            "sync_deleted_files": False,
+        }
     identifier = api.request("POST", "/connectors", json={"source": source, "name": "Connector scratch", "config": config})["id"]
     evidence = Evidence(Path(os.environ.get("CONNECTOR_WEB_EVIDENCE", ".test-results/connector-web")), mode="web")
     errors: list[str] = []
@@ -83,6 +93,9 @@ def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connect
             browser = playwright.chromium.launch()
             try:
                 with browser_flow._context(browser, theme, (1440, 1000), errors) as context:
+                    # Keep this configuration-flow check independent of CDN
+                    # availability; rendering uses the declared system fallback.
+                    context.route("https://fonts.googleapis.com/**", lambda route: route.fulfill(status=200, content_type="text/css", body="/* controlled system-font fallback */"))
                     page = context.new_page()
                     browser_flow._observe(page, errors, [])
                     route = f"/settings/datasource-detail?id={identifier}"

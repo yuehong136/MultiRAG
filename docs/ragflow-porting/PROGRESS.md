@@ -3199,3 +3199,12 @@ PDF 只验收字节输出合同，真实 XeLaTeX、字体渲染、远程 OpenDat
 假件、消费者套件登记及全局 secure-leave 测试锁失败；最后完整 unit 为 6187 passed / 9 failed，
 失败均不在本项用例，未修改这些其他 owner 文件。常驻 8123 未重启，真实模型/提取 worker、
 生产部署及 ES/Infinity 后端未验收。不 push。
+
+
+### IMAP 邮件与附件删除同步（2026-10-07）
+
+已跟进 `5672be0652577de7101cfcfd374e88e4e36db706`：稳定缺失 Message-ID、统一附件
+解码和正文/slim ID、全 mailbox 完整快照、默认关闭删除开关；持久化每个 KB 初始范围，
+重建/配置改变/失败关闭语义及存量调查见 [IMAP 删除同步](imap-deletion-sync.md)。
+当前环境 IMAP 存量为 0，无需迁移；隔离完整 verify 6153 passed，真实存储 15+2 passed、
+浏览器明暗 2 passed、Web 构建通过。SaaS 和其他部署历史数据未验收，不 push。

@@ -7,6 +7,7 @@ import copy
 import faulthandler
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -49,6 +50,7 @@ from common.data_source.confluence_connector import ConfluenceConnector
 from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
+from common.data_source.imap_connector import _as_utc, imap_scope_signature
 from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
 from common.data_source.models import ConnectorFailure, Document, SeafileSyncScope, SlimDocument
 from common.data_source.webdav_connector import WebDAVConnector
@@ -61,6 +63,7 @@ task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
     {
+        FileSource.IMAP,
         FileSource.DINGTALK_AI_TABLE,
         FileSource.RSS,
         FileSource.WEBDAV,
@@ -408,24 +411,39 @@ class Confluence(SyncBase):
 class IMAP(SyncBase):
     SOURCE_NAME: str = FileSource.IMAP
 
-    async def _generate(self, task):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         from common.data_source.config import DocumentSource
         from common.data_source.interfaces import StaticCredentialsProvider
 
+        end_time = datetime.now(UTC).timestamp()
+        try:
+            poll_range = float(self.conf.get("poll_range", 30))
+        except (TypeError, ValueError):
+            poll_range = 30.0
+        if not math.isfinite(poll_range) or poll_range < 0:
+            raise ValueError("IMAP poll_range must be finite and nonnegative")
+        default_start = max(0.0, end_time - poll_range * 86400)
+        poll_start = task.get("poll_range_start")
+        reindex = task.get("reindex") == "1"
+
+        def persist_scope() -> float:
+            with db_connection() as db:
+                return ConnectorService.ensure_imap_sync_scope(
+                    db, task["connector_id"], task["kb_id"], task["id"], imap_scope_signature(self.conf), default_start, reindex=reindex, incremental=poll_start is not None
+                )
+
+        initial_start = await asyncio.to_thread(persist_scope)
+        start_time = initial_start if reindex or poll_start is None else _as_utc(poll_start).timestamp()
         self.connector = ImapConnector(
-            host=self.conf.get("imap_host"),
-            port=self.conf.get("imap_port"),
+            host=self.conf["imap_host"],
+            port=int(self.conf.get("imap_port") or 993),
             mailboxes=self.conf.get("imap_mailbox"),
+            snapshot_start=initial_start,
+            snapshot_end=end_time,
         )
         credentials_provider = StaticCredentialsProvider(tenant_id=task["tenant_id"], connector_name=DocumentSource.IMAP, credential_json=self.conf["credentials"])
         self.connector.set_credentials_provider(credentials_provider)
-        end_time = datetime.now(UTC).timestamp()
-        if task["reindex"] == "1" or not task["poll_range_start"]:
-            start_time = end_time - self.conf.get("poll_range", 30) * 24 * 60 * 60
-            _begin_info = "totally"
-        else:
-            start_time = task["poll_range_start"].timestamp()
-            _begin_info = f"from {task['poll_range_start']}"
+        _begin_info = f"from {datetime.fromtimestamp(start_time, UTC)}"
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
             batch_size = int(raw_batch_size)
@@ -434,7 +452,7 @@ class IMAP(SyncBase):
         if batch_size <= 0:
             batch_size = INDEX_BATCH_SIZE
 
-        def document_batches():
+        def document_batches() -> GenerateDocumentsOutput:
             checkpoint = self.connector.build_dummy_checkpoint()
             pending_docs = []
             iterations = 0
@@ -444,8 +462,7 @@ class IMAP(SyncBase):
                 doc_generator = wrapper(self.connector.load_from_checkpoint(start_time, end_time, checkpoint))
                 for document, failure, next_checkpoint in doc_generator:
                     if failure is not None:
-                        logging.warning("IMAP connector failure: %s", getattr(failure, "failure_message", failure))
-                        continue
+                        raise RuntimeError(f"IMAP connector failure: {getattr(failure, 'failure_message', failure)}")
                     if document is not None:
                         pending_docs.append(document)
                         if len(pending_docs) >= batch_size:
@@ -461,7 +478,7 @@ class IMAP(SyncBase):
             if pending_docs:
                 yield pending_docs
 
-        def wrapper():
+        def wrapper() -> GenerateDocumentsOutput:
             yield from document_batches()
 
         logging.info(
@@ -469,7 +486,7 @@ class IMAP(SyncBase):
             self.conf["imap_host"],
             self.conf["imap_port"],
             self.conf["credentials"]["imap_username"],
-            self.conf["imap_mailbox"],
+            self.conf.get("imap_mailbox"),
             _begin_info,
         )
         return wrapper()
