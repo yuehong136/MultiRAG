@@ -265,7 +265,7 @@ def agent_route_stubs(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> Te
 
 def test_restful_agent_completions_stream_frames(agent_route_stubs):
     resp = agent_route_stubs.post(
-        "/api/v1/agents/chat/completion",
+        "/api/v1/agents/chat/completions",
         json={"agent_id": "agent-1", "session_id": "sess-1", "query": "hi", "stream": True},
     )
 
@@ -288,7 +288,7 @@ def test_restful_agent_routes_replace_legacy_canvas_and_sdk_surfaces(client):
         ("GET", "/api/v1/agents/{canvas_id}"),
         ("PUT", "/api/v1/agents/{agent_id}"),
         ("DELETE", "/api/v1/agents/{agent_id}"),
-        ("POST", "/api/v1/agents/chat/completion"),
+        ("POST", "/api/v1/agents/chat/completions"),
         ("GET", "/api/v1/agents/{canvas_id}/sessions"),
         ("POST", "/api/v1/agents/{canvas_id}/sessions"),
         ("GET", "/api/v1/agents/{canvas_id}/sessions/{session_id}"),
@@ -301,7 +301,7 @@ def test_restful_agent_routes_replace_legacy_canvas_and_sdk_surfaces(client):
 def test_canvas_run_rejects_non_owner(client, monkeypatch):
     monkeypatch.setattr(UserCanvasService, "accessible", classmethod(lambda cls, s, cid, tid: False))
 
-    resp = client.post("/api/v1/agents/chat/completion", json={"agent_id": "c1", "query": "hi"})
+    resp = client.post("/api/v1/agents/chat/completions", json={"agent_id": "c1", "query": "hi"})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -346,7 +346,7 @@ def test_restful_agent_delegation_refusal_is_not_an_unhandled_error(
     monkeypatch.setattr(canvas_service, "completion", reject_completion)
 
     response = agent_route_stubs.post(
-        "/api/v1/agents/chat/completion",
+        "/api/v1/agents/chat/completions",
         json={"agent_id": "agent-1", "query": "hi", "release": release, "openai-compatible": openai_compatible, "stream": stream, "messages": [{"role": "user", "content": "hi"}]},
     )
 
@@ -406,7 +406,7 @@ async def test_registered_debug_response_owns_bound_runtime(client: TestClient, 
     monkeypatch.setattr(module, "require_canvas", authorized)
     monkeypatch.setattr(module, "finish_runtime", lambda task_id: calls.append("finish"))
     monkeypatch.setattr(module, "require_runtime_finish", lambda task_id: calls.append("finish"))
-    assert "/api/v1/agents/chat/completion" in client.app.openapi()["paths"]
+    assert "/api/v1/agents/chat/completions" in client.app.openapi()["paths"]
     if window == "setup_cancel":
         with pytest.raises(asyncio.CancelledError):
             await module.run({"agent_id": "agent-unit", "query": "hi"}, DebugDB({}), principal)
@@ -445,7 +445,7 @@ def test_restful_agents_openai_mode_streams(agent_route_stubs, monkeypatch):
     monkeypatch.setattr(_route_module("api.apps.restful_apis.agent"), "completion_openai", _fake_completion_openai)
 
     resp = agent_route_stubs.post(
-        "/api/v1/agents/chat/completion",
+        "/api/v1/agents/chat/completions",
         json={"agent_id": "agent-1", "openai-compatible": True, "model": "m", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
     )
 
@@ -548,7 +548,7 @@ def test_agent_adapter_preserves_failure_and_closes_generator(agent_route_stubs:
             closed.append(True)
 
     monkeypatch.setattr(_route_module("api.apps.restful_apis.agent"), "agent_completion", fail_completion)
-    response = agent_route_stubs.post("/api/v1/agents/chat/completion", json={"agent_id": "agent-1", "release": True, "stream": stream})
+    response = agent_route_stubs.post("/api/v1/agents/chat/completions", json={"agent_id": "agent-1", "release": True, "stream": stream})
     assert response.status_code == 200 and closed == [True]
     assert "must_not_succeed" not in response.text
     if stream:

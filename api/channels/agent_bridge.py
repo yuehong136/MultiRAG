@@ -66,7 +66,7 @@ class MultiRAGAgentClient:
         self._owns_client = client is None
         self._base_url = base_url.rstrip("/")
         endpoint_agent_id = quote(agent_id, safe="")
-        self._endpoint = f"{self._base_url}/api/v1/agents/chat/completion"
+        self._endpoint = f"{self._base_url}/api/v1/agents/chat/completions"
         self._sessions_endpoint = f"{self._base_url}/api/v1/agents/{endpoint_agent_id}/sessions"
         self._headers = {
             "Accept": "text/event-stream",

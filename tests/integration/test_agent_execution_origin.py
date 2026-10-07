@@ -57,7 +57,7 @@ def test_http_session_origin_is_fixed_across_edits_and_publications(release_api:
         db.commit()
     update(env, agent_id, {"dsl": message_dsl("new publication"), "release": True})
     response = env["client"].post(
-        f"{env['base']}/api/v1/agents/chat/completion",
+        f"{env['base']}/api/v1/agents/chat/completions",
         json={
             "agent_id": agent_id,
             "session_id": session_id,
@@ -101,7 +101,7 @@ def test_http_completion_passes_authenticated_context_before_canvas_construction
     payload: dict[str, Any] = {"agent_id": agent_id, "release": True, "stream": False, "user_id": "forged", "run_context": {"agent_revision_id": "forged"}, "prepared_run": {"caller_id": "forged"}}
     if openai_compatible:
         payload.update({"openai-compatible": True, "messages": [{"role": "user", "content": "first"}]})
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json=payload, timeout=30)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json=payload, timeout=30)
     assert response.status_code == 200, response.text
     assert observed and observed[-1] is not None
     context = observed[-1]
@@ -121,19 +121,19 @@ def test_http_shared_published_sessions_are_owned_by_runner(release_api: dict[st
     join_member(env, monkeypatch, 1, UserTenantRole.NORMAL)
     headers = {"Authorization": f"Bearer {env['jwts'][1]}"}
     created = env["client"].post(
-        f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": agent_id, "release": True, "stream": False, "user_id": env["owners"][0]}, timeout=30
+        f"{env['base']}/api/v1/agents/chat/completions", headers=headers, json={"agent_id": agent_id, "release": True, "stream": False, "user_id": env["owners"][0]}, timeout=30
     )
     assert created.status_code == 200 and created.json()["retcode"] == 0, created.text
     session_id = created.json()["data"]["session_id"]
     with Session(env["engine"]) as db:
         origin = db.get(AgentExecutionOrigin, session_id)
         assert origin is not None and origin.platform_user_id == env["owners"][1] and origin.tenant_id == env["owners"][0]
-    owner_response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id, "session_id": session_id, "stream": False}, timeout=30)
+    owner_response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "session_id": session_id, "stream": False}, timeout=30)
     assert owner_response.status_code == 403 and owner_response.json()["retcode"] != 0
     with Session(env["engine"]) as db:
         db.execute(sa.delete(UserTenant).where(UserTenant.user_id == env["owners"][1], UserTenant.tenant_id == env["owners"][0]))
         db.commit()
-    removed = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": agent_id, "session_id": session_id, "stream": False}, timeout=30)
+    removed = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", headers=headers, json={"agent_id": agent_id, "session_id": session_id, "stream": False}, timeout=30)
     assert removed.status_code == 403 and removed.json()["retcode"] != 0
 
 

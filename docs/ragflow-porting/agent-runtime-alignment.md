@@ -48,3 +48,29 @@ add 只添加缺失关联。重复文件/数据集 ID 不重复创建，`d8a6cac
 误用 code 已修为实际 retcode。报告：`.test-results/20261007-182233-81762`。
 HTTP 成功表示任务已调度，后台仍沿用错误日志合同，不承诺跨存储整批事务。
 本次无解析后的向量/对象关联删除验收，不把 SQL 文档保留证明外推为完整后台解析验收。
+
+## 12 · f32034e83e2aed71943ee9d095d4e5fe467c1121
+
+统一 canonical `/agents/chat/completions`；Search 已有 `/searches/{id}/completions`。
+独立 Web `b45f319` 将 Agent 单数调用和 Search 的 `conversation/ask` 摘要调用迁移；
+原生演示客户端、runtime replica 文档、执行来源文档和全部活动 Python 验收一起迁移。
+无活动消费者后 singular 与旧 Agent 路径保持 HTTP 404/OpenAPI 缺失，不增加兼容别名。
+上游 `477f2fceb` 后修同样删除 singular；其“无消费者”注释未作为本地退出依据。
+
+admin/CLI `chat_on_session` 已使用 canonical `/chat/completions` 和 chat_id/session_id，
+本次通过真实 HttpClient 执行并独立 SQL 读回用户输入与助手回答。
+已检查 SDK-v1 `ed38de7f` 的实际 `sdk/python/src/multirag_sdk`，以及正在开发的 REST-first SDK：
+两者没有 Agent/Search completion 方法，不能机械修改上游 `ragflow_sdk.modules.Session`。
+当前 SDK-v1 的 Chat Session 专用 scoped completions 与本批 Agent/Search 合同是独立工作，未声称验收。
+停滞 Go 验收脚本保留它自己的旧路径，不把 Go 测试当 Python 活动消费者。
+
+实际 Node/tsx 导入独立 Web 领域 API，只有测试 origin 被映射到隔离监听器，路径、body、
+鉴权和流解析不替换；Agent 两轮、失效 token、SQL session 归属与消息读回，Search SQL
+配置/受控模型输出、拒绝、旧路径 404，以及真实 admin/CLI 均通过。
+原生客户端 **1 passed**；Web Agent **1 passed**（包含绑定隔离 API 的 `make smoke`）；
+Web Search/admin **1 passed**。Web API **236 passed**，lint 0 errors，文件体积门禁通过；
+共享树 build 被其他 WIP 的 TS7030 阻断，HEAD + 本次五个文件的隔离 `npm run build` 通过。
+全量 Python 初跑 **6106 passed / 1 failed**：新增集成复用误从测试模块导入 fixture，已移至
+`tests/support/reference_metadata_http.py`；专用 harness 复跑和最终批次 gate 记录在后续验收。
+模型输出受控，未证明外部模型、浏览器画面、真实飞书或部署。证据日志在本机
+`/tmp/multirag-runtime-20261007/item12-*`，集成报告随 `.test-results` 保存。

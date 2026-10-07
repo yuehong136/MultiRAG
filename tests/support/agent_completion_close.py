@@ -39,7 +39,7 @@ def close_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, surface:
         update(env, agent_id, {"dsl": message_dsl("different draft")})
     payload: dict[str, Any] = {"query": "close window", "release": surface != "debug", "stream": True}
     headers = dict(env["client"].headers)
-    path = "/api/v1/agents/chat/completion"
+    path = "/api/v1/agents/chat/completions"
     if surface == "beta":
         path = f"/api/v1/agentbots/{agent_id}/completions"
         with Session(env["engine"]) as db:

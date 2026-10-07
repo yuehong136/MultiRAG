@@ -87,7 +87,7 @@ def test_real_disconnect_after_cancel_preserves_failure(cancel_api: dict[str, An
     previous: list[dict[str, Any]] = []
     prior_round = 0
     if continued:
-        initial = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json={**payload, "stream": False}, timeout=30)
+        initial = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json={**payload, "stream": False}, timeout=30)
         assert initial.json()["retcode"] == 0
         with Session(env["engine"]) as db:
             row = db.scalar(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))
@@ -113,7 +113,7 @@ def test_real_disconnect_after_cancel_preserves_failure(cancel_api: dict[str, An
     monkeypatch.setattr(Canvas, "run", actual_run)
     try:
         with HTTPSession() as client:
-            response = client.post(env["base"] + "/api/v1/agents/chat/completion", headers=env["client"].headers, json=payload, stream=True, timeout=30)
+            response = client.post(env["base"] + "/api/v1/agents/chat/completions", headers=env["client"].headers, json=payload, stream=True, timeout=30)
             connection = response.raw._connection
             assert connection is not None and connection.sock is not None
             owned_socket = connection.sock

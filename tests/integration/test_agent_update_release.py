@@ -170,7 +170,7 @@ def test_published_run_denials_before_stream(release_api: dict[str, Any], monkey
         headers["Authorization"] = ""
     requested_agent = uuid4().hex if case == "missing" else agent_id
     response = env["client"].post(
-        f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": requested_agent, "release": True, "stream": stream, "user_id": env["owners"][0]}, timeout=30
+        f"{env['base']}/api/v1/agents/chat/completions", headers=headers, json={"agent_id": requested_agent, "release": True, "stream": stream, "user_id": env["owners"][0]}, timeout=30
     )
     auth_failure = case in {"invalid_identity", "inactive_identity", "missing_auth"}
     expected_status = 401 if auth_failure else {"unpublished": 409, "missing": 404}.get(case, 403)
@@ -229,7 +229,7 @@ def test_http_legacy_empty_list_variables_all_reset_paths(release_api: dict[str,
         payload = {"agent_id": agent_id, "release": True, "query": query, "stream": stream}
         if session_id:
             payload["session_id"] = session_id
-        response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json=payload, timeout=30)
+        response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json=payload, timeout=30)
         assert response.status_code == 200, response.text
         if stream:
             events = sse_events(response.text)
@@ -303,7 +303,7 @@ def test_http_variable_defaults_first_run(release_api: dict[str, Any], stream: b
         payload.update({"openai-compatible": True, "messages": [{"role": "user", "content": "first"}]})
     else:
         payload["query"] = "first"
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json=payload, timeout=30)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json=payload, timeout=30)
     assert response.status_code == 200, response.text
     if stream:
         events = sse_events(response.text)
@@ -421,7 +421,7 @@ def test_published_run_owner_team_and_existing_session(release_api: dict[str, An
     before = read_state(env, agent_id)
     replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
     replica_before = REDIS_CONN.get(replica_key)
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": agent_id, "release": True, "stream": stream, "query": "first"}, timeout=30)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", headers=headers, json={"agent_id": agent_id, "release": True, "stream": stream, "query": "first"}, timeout=30)
     assert response.status_code == 200
     if stream:
         events = sse_events(response.text)
@@ -450,7 +450,7 @@ def test_published_run_owner_team_and_existing_session(release_api: dict[str, An
     next_state = read_state(env, agent_id)
     next_replica = REDIS_CONN.get(replica_key)
     response = env["client"].post(
-        f"{env['base']}/api/v1/agents/chat/completion", headers=headers, json={"agent_id": agent_id, "session_id": session_id, "release": True, "stream": stream, "query": "continue"}, timeout=30
+        f"{env['base']}/api/v1/agents/chat/completions", headers=headers, json={"agent_id": agent_id, "session_id": session_id, "release": True, "stream": stream, "query": "continue"}, timeout=30
     )
     assert response.status_code == 200
     if stream:
@@ -495,7 +495,7 @@ def test_published_runtime_failure_has_no_success(release_api: dict[str, Any], m
 
     if fault != "component":
         monkeypatch.setattr(Canvas, "run", injected_run)
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id, "release": True, "stream": stream}, timeout=30)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "release": True, "stream": stream}, timeout=30)
     assert response.status_code == 200
     if stream:
         events = sse_events(response.text)
@@ -538,7 +538,7 @@ def test_published_run_consumes_the_prepared_snapshot(release_api: dict[str, Any
         return prepared
 
     monkeypatch.setattr(module, "prepare_agent_run", prepare_then_publish)
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id, "release": True, "stream": stream}, timeout=30)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "release": True, "stream": stream}, timeout=30)
     assert response.status_code == 200 and len(selected_titles) == 1
     if stream:
         assert "".join(event["data"]["content"] for event in sse_events(response.text) if event.get("event") == "message") == "selected-published"
@@ -584,7 +584,7 @@ def test_existing_session_run_denials_are_http_errors(release_api: dict[str, Any
     replica_before = REDIS_CONN.get(replica_key)
     headers = {"Authorization": f"Bearer {env['jwts'][2]}"} if case in {"private", "nonmember", "invite", "inactive_member", "inactive_admin"} else {}
     response = env["client"].post(
-        f"{env['base']}/api/v1/agents/chat/completion",
+        f"{env['base']}/api/v1/agents/chat/completions",
         headers=headers,
         json={"agent_id": requested_agent, "session_id": uuid4().hex if case == "missing_session" else session_id, "release": True, "stream": stream, "user_id": env["owners"][0]},
         timeout=30,
@@ -629,7 +629,7 @@ def test_http_variable_defaults_new_and_existing_sessions(release_api: dict[str,
         unrelated_before = unrelated.to_dict()
     for query, expected in [("first", [seed, "first"]), ("second", [seed, "first", "second"])]:
         response = env["client"].post(
-            f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id, "session_id": session_id, "release": release, "query": query, "stream": stream}, timeout=30
+            f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "session_id": session_id, "release": release, "query": query, "stream": stream}, timeout=30
         )
         assert response.status_code == 200, response.text
         if stream:

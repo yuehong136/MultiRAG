@@ -61,7 +61,7 @@ def terminal_case(
         payload: dict[str, Any] = {"query": "final window", "release": surface != "debug", "stream": streaming}
         if session_id:
             payload["session_id"] = session_id
-        path = f"/api/v1/agentbots/{agent_id}/completions" if surface == "beta" else "/api/v1/agents/chat/completion"
+        path = f"/api/v1/agentbots/{agent_id}/completions" if surface == "beta" else "/api/v1/agents/chat/completions"
         if surface != "beta":
             payload["agent_id"] = agent_id
         if surface == "openai":

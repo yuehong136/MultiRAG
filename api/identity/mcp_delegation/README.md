@@ -31,7 +31,7 @@ Dialog target 当前没有可验证的发布 revision，非 Channel ChatAgent �
 引用 delegated server，会因上下文不足拒绝，不会回退到 static auth。已接入动态委托的入口包括
 带 C3 Principal 与已验证 Canvas release 的 Channel Canvas execution，以及下述 Web Canvas 运行。
 
-Web `/api/v1/agents/chat/completion` 的草稿调试、发布运行、会话续聊与 OpenAI 兼容分支现在均由
+Web `/api/v1/agents/chat/completions` 的草稿调试、发布运行、会话续聊与 OpenAI 兼容分支现在均由
 服务端传入可信上下文。客户端的 `run_context`、`prepared_run` 不进入授权；`user_id` 只能作为
 既有 replica/展示标签，不能替换当前 Principal。团队发布运行先检查当前有效成员关系，再把同一
 调用者的 Web/API 认证证据绑定到资源 tenant，不使用 Agent 创建者的凭据。

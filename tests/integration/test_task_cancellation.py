@@ -189,20 +189,20 @@ def test_agent_run_bound_before_first_frame_cancel_and_sibling_isolation(cancel_
     if mode == "draft":
         payload["user_id"] = env["owners"][0]
     if mode == "continued":
-        initial = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json={**payload, "query": "first"}, timeout=30)
+        initial = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json={**payload, "query": "first"}, timeout=30)
         payload["session_id"] = sse_events(initial.text)[0]["session_id"]
     wait_gate["enabled"] = True
     # Keep a sibling active in the same Canvas, with a separate attempt ID.
     with HTTPSession() as first_client, HTTPSession() as sibling_client:
         first_client.headers.update(env["client"].headers)
         sibling_client.headers.update(env["client"].headers)
-        response = first_client.post(env["base"] + "/api/v1/agents/chat/completion", json=payload, stream=True, timeout=30)
+        response = first_client.post(env["base"] + "/api/v1/agents/chat/completions", json=payload, stream=True, timeout=30)
         iterator = response.iter_lines()
         first = json.loads(next(line for line in iterator if line.startswith(b"data:"))[5:])
         task_id = first["task_id"]
         assert task_id != first["message_id"] and read_binding(task_id)[1]["principal_id"] == env["owners"][0]
         assert wait_gate["entered"].setdefault(task_id, threading.Event()).wait(10)
-        sibling = sibling_client.post(env["base"] + "/api/v1/agents/chat/completion", json={**payload, "query": "sibling", "session_id": None}, stream=True, timeout=30)
+        sibling = sibling_client.post(env["base"] + "/api/v1/agents/chat/completions", json={**payload, "query": "sibling", "session_id": None}, stream=True, timeout=30)
         sibling_iter = sibling.iter_lines()
         sibling_first = json.loads(next(line for line in sibling_iter if line.startswith(b"data:"))[5:])
         sibling_id = sibling_first["task_id"]
@@ -242,7 +242,7 @@ def test_dataflow_actual_enqueue_and_pipeline_cancel_observation(cancel_api: dic
     response = env["client"].post(env["base"] + "/api/v1/agents", json={"title": f"pipeline {uuid4().hex}", "dsl": dsl, "canvas_category": CanvasCategory.DataFlow}, timeout=30)
     assert response.json()["retcode"] == 0
     flow_id = response.json()["data"]["id"]
-    response = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json={"agent_id": flow_id, "tenant_id": env["owners"][1]}, timeout=30)
+    response = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json={"agent_id": flow_id, "tenant_id": env["owners"][1]}, timeout=30)
     assert response.json()["retcode"] == 0, response.text
     task_id = response.json()["data"]["message_id"]
     env["task_ids"].append(task_id)
@@ -307,7 +307,7 @@ def test_retired_canvas_cancel_http_has_no_execution_or_storage_effects(cancel_a
         if kind.startswith("agent"):
             payload = {"agent_id": canvas_id, "session_id": session_id, "release": True, "query": "retired request must not cancel", "stream": kind != "agent_finished"}
             if kind == "agent_finished":
-                finished = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json=payload, timeout=30)
+                finished = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json=payload, timeout=30)
                 assert finished.status_code == 200 and finished.json()["retcode"] == 0
                 task_id = env["task_ids"][-1]
                 assert read_binding(task_id)[1]["state"] == "finished"
@@ -315,7 +315,7 @@ def test_retired_canvas_cancel_http_has_no_execution_or_storage_effects(cancel_a
                 wait_gate["enabled"] = True
                 client = stack.enter_context(HTTPSession())
                 client.headers.update(env["client"].headers)
-                stream = stack.enter_context(client.post(env["base"] + "/api/v1/agents/chat/completion", json=payload, stream=True, timeout=30))
+                stream = stack.enter_context(client.post(env["base"] + "/api/v1/agents/chat/completions", json=payload, stream=True, timeout=30))
                 assert stream.status_code == 200
                 lines = stream.iter_lines()
                 first = json.loads(next(line for line in lines if line.startswith(b"data:"))[5:])
@@ -329,7 +329,7 @@ def test_retired_canvas_cancel_http_has_no_execution_or_storage_effects(cancel_a
             created_flow = env["client"].post(env["base"] + "/api/v1/agents", json={"title": f"retired flow {uuid4().hex}", "dsl": dsl, "canvas_category": CanvasCategory.DataFlow}, timeout=30)
             assert created_flow.status_code == 200 and created_flow.json()["retcode"] == 0
             flow_id = created_flow.json()["data"]["id"]
-            queued = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json={"agent_id": flow_id}, timeout=30)
+            queued = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json={"agent_id": flow_id}, timeout=30)
             assert queued.status_code == 200 and queued.json()["retcode"] == 0
             task_id = queued.json()["data"]["message_id"]
             env["task_ids"].append(task_id)
@@ -487,7 +487,7 @@ def test_dataflow_member_binding_uses_resource_owner(cancel_api: dict[str, Any],
     # The actual GET bootstraps the member's editor replica when authorized.
     env["client"].get(env["base"] + f"/api/v1/agents/{flow_id}", headers=headers, timeout=30)
     before_ids = set(env["task_ids"])
-    response = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", headers=headers, json={"agent_id": flow_id}, timeout=30)
+    response = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", headers=headers, json={"agent_id": flow_id}, timeout=30)
     if not allowed:
         assert response.json()["retcode"] != 0 and set(env["task_ids"]) == before_ids
         assert not any(json.loads(entry["message"]).get("dataflow_id") == flow_id for _, entry in REDIS_CONN.REDIS.xrange(env["queue"]))
@@ -520,7 +520,7 @@ def test_binding_failure_prevents_first_frame(cancel_api: dict[str, Any], monkey
         raise ConnectionError("test injected registration failure")
 
     monkeypatch.setattr(task_cancellation_service, "register_runtime", fail_registration)
-    response = env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json={"agent_id": canvas_id, "release": published, "stream": True}, timeout=30)
+    response = env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json={"agent_id": canvas_id, "release": published, "stream": True}, timeout=30)
     assert response.status_code == 500 and "text/event-stream" not in response.headers.get("Content-Type", "")
     assert len(attempts) == 1 and not REDIS_CONN.REDIS.exists(binding_key(attempts[0]), f"{attempts[0]}-cancel")
     with Session(env["engine"]) as db:

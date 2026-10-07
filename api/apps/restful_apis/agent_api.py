@@ -482,7 +482,7 @@ def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     return get_json_result(data=canvas)
 
 
-@router.post("/agents/chat/completion", summary="运行Canvas", response_description="成功执行Canvas")
+@router.post("/agents/chat/completions", summary="运行Canvas", response_description="成功执行Canvas")
 async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
     """
     执行Canvas推理任务

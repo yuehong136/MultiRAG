@@ -84,7 +84,7 @@ def debug_start_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, fa
 
     def request() -> Any:
         with HTTPSession() as client:
-            return client.post(env["base"] + "/api/v1/agents/chat/completion", headers=env["client"].headers, json=payload, timeout=30)
+            return client.post(env["base"] + "/api/v1/agents/chat/completions", headers=env["client"].headers, json=payload, timeout=30)
 
     with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=1) as pool:
         patch.setattr(Canvas, "run", run)
@@ -101,7 +101,7 @@ def debug_start_case(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, *, fa
             connection = socket.create_connection((address.hostname, address.port), timeout=10)
             body = json.dumps(payload).encode()
             headers = (
-                "POST /api/v1/agents/chat/completion HTTP/1.1\r\n"
+                "POST /api/v1/agents/chat/completions HTTP/1.1\r\n"
                 f"Host: {address.netloc}\r\nAuthorization: {env['client'].headers['Authorization']}\r\n"
                 f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
             )

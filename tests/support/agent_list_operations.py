@@ -72,7 +72,7 @@ def run(env: dict[str, Any], agent_id: str, *, stream: bool, items: Any = _ITEMS
         payload.update({"openai-compatible": True, "messages": [{"role": "user", "content": "list round"}]})
     else:
         payload["query"] = "list round"
-    return env["client"].post(env["base"] + "/api/v1/agents/chat/completion", json=payload, headers={"Authorization": f"Bearer {env['keys'][0] if api_key else env['jwts'][0]}"}, timeout=30)
+    return env["client"].post(env["base"] + "/api/v1/agents/chat/completions", json=payload, headers={"Authorization": f"Bearer {env['keys'][0] if api_key else env['jwts'][0]}"}, timeout=30)
 
 
 def assert_success(response: Response, stream: bool, expected: list[Any], session_id: str, *, openai: bool = False) -> None:
