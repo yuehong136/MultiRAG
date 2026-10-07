@@ -36,7 +36,7 @@ from api.db.db_models import (
 )
 
 _I6_REVISION = "b4c6d8e0f2a4"
-_CURRENT_HEAD_REVISION = "b0d2e4f6a8c0"
+_EXECUTION_ORIGIN_REVISION = "b0d2e4f6a8c0"
 _I21_REVISION = "9a3b5c7d8e0f"
 _I2_REVISION = "8f2c4d6e7a9b"
 _PRE_I2_REVISION = "7c8d9e0f1a2b"
@@ -1043,8 +1043,10 @@ def test_i2_downgrade_refuses_to_destroy_identity_history(
             IdentityProviderTenant.__tablename__,
             schema=_SCHEMA,
         )
-        head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
-        assert head == _CURRENT_HEAD_REVISION
+        script = ScriptDirectory.from_config(alembic_cfg)
+        head = script.get_current_head()
+        assert script.get_heads() == [head]
+        assert _EXECUTION_ORIGIN_REVISION in {revision.revision for revision in script.walk_revisions(head=head)}
         # The source, I8, U15/U14, and I2.1 steps are reversible because their
         # protected rows do not exist; the following I2 downgrade then refuses
         # to erase the provider tenant history. Alembic therefore remains at

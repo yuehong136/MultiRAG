@@ -130,9 +130,12 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
     adapter.bucket = f"missing-upload-test-{uuid4().hex}"
     try:
         response = requests.post(url, headers=headers, files={"file": ("storage-failure.txt", b"not stored")}, timeout=30)
-        assert response.status_code == 200 and response.json() == {"code": 100, "message": "Failed to upload document."}
+        # Missing buckets make compensation readback unknown. The runtime must
+        # surface that uncertainty instead of claiming cleanup was confirmed.
+        assert response.status_code == 200 and response.json() == {"code": 100, "message": "Upload failed; cleanup of runtime files could not be confirmed."}
     finally:
         adapter.bucket = env["bucket"]
+    assert {item.object_name for item in env["storage"].list_objects(env["bucket"], recursive=True)} == existing
 
     # Optional external crawl acceptance, explicitly requested by the operator.
     # The normal integration gate remains independent of Internet availability.

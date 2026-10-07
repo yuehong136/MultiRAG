@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
@@ -153,6 +154,7 @@ async def test_origin_failure_rolls_back_the_session_row(bootstrapped_async_engi
 def test_origin_migration_preserves_material_and_refuses_destructive_downgrade(bootstrapped_engine: sa.Engine, alembic_cfg: Any) -> None:
     table = AgentExecutionOrigin.__table__
     identifier = uuid4().hex
+    expected_head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
     with bootstrapped_engine.begin() as connection:
         alembic_cfg.attributes["connection"] = connection
         command.stamp(alembic_cfg, "a9c810f1d2e3")
@@ -176,7 +178,7 @@ def test_origin_migration_preserves_material_and_refuses_destructive_downgrade(b
             command.downgrade(alembic_cfg, "a9c810f1d2e3")
         with bootstrapped_engine.connect() as connection:
             assert connection.scalar(sa.select(table.c.id).where(table.c.id == identifier)) == identifier
-            assert connection.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == "b0d2e4f6a8c0"
+            assert connection.scalar(sa.text("SELECT version_num FROM usr_ai.alembic_version")) == expected_head
     finally:
         with bootstrapped_engine.begin() as connection:
             connection.execute(sa.delete(API4Conversation).where(API4Conversation.id == identifier))
