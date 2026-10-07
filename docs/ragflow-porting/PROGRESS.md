@@ -3017,3 +3017,55 @@ multipart 请求和真实分块返回，验证后缀/显式/候选/环境优先�
 未知参数过滤及非空正文。模型配置与 bundle 在外部边界替换，HTTP 响应受控；
 不证明真实租户数据库、远程 OpenDataLoader 或完整 worker 入库通过。
 新增 12 项与既有解析器 6 项共 18 passed。`make verify` 的格式、Ruff、8 条依赖契约、async DB 检查与 mypy（143 个源文件）通过；unit 6158 passed / 3 failed。失败均在其他任务已修改的 `test_memory_add_message_route.py`：测试替身要求 `user_id`，当前 memory helper 传 `tenant_id`，与本项调用链无关。未修改或暂存这些文件；日志为 `.test-results/port-38f6484/verify.log`。
+
+## dd7a0ce1d3e4c08927b95a1fbfcd395650cd5950 · Go LM Studio 聊天与发现
+
+2026-10-07 核对上游完整四文件 diff；remote 为 `infiniflow/ragflow`，冻结上限
+`519e7d98a5651564d4e35d6648f006cba4baaf4f`，未 fetch。
+配置映射到 [lmstudio.json](../../configs/models/lmstudio.json)，注册
+[LMStudioModel](../../internal/entity/models/lmstudio.go)，沿本地统一消息接口及
+`instanceModelDriver` 构造实例。采用冻结范围内 `1430d0e43` 的 `LM-Studio` 名称，
+与现有目录和消费者一致；不添加无活动消费者的旧 `lmstudio` 名称别名。
+
+- 配置无固定 URL、无预置模型；由实例 `Extra.base_url` 提供含 `/v1` 的地址，例如
+  `http://127.0.0.1:1234/v1`。chat 与 models 分别拼接 `chat/completions`、`models`；
+  qwen/glm 仍使用标准 chat URL，不复制上游未配置 AsyncChat 的模型名前缀分流。
+  API key 可省略；有 key 时携带 Bearer。缺 URL/未知 region/缺 suffix 明确失败。
+- 普通调用固定 `stream=false`，sender 调用固定 `stream=true`，保持角色历史、content
+  parts 和 assistant reasoning。generation 参数的零值、thinking 的省略/true/false 均保留；
+  thinking 使用 `type=enabled/disabled`。普通响应读取 `reasoning_content`，无该字段时按
+  qwen3 模型系列拆分 inline `<think>`；流式读取独立 `reasoning_content` delta，不拆分
+  流式 inline 标签。本批不承诺真实模型的视觉或 thinking 参数执行效果。
+- ListModels 发无 body 的 GET；合法 `data: []` 返回空列表，缺失/null/类型错误、缺 ID
+  或 provider error 返回错误，不复制不安全类型断言。聊天空答案与错误响应拒绝，HTTP
+  错误不回显响应 body、prompt 或 key。
+- 复用本地请求上下文、消息校验、URL 拼接、请求 body 和单次 timeout helper；对应冻结
+  `04aa8d04e` 大帧及 `2819d0ea2` 超时修复，以本地 4 MiB scanner 和非流式 120 秒
+  timeout 落实。流式无 client 总时限，保留调用方取消；非空答案加 `[DONE]` 或有效
+  `finish_reason` 才成功，发送一次终帧。截断/坏事件/超限/取消/sender 失败不得成功结束。
+- 实例 factory 已覆盖 `94f82acd0` 全局污染问题，保留本地构造路径而不恢复已退役的
+  NewInstance 接口；新 constructor 复制 URL map，受控并行实例实测目录 URL/driver 不变。
+- 完整核对 Ollama 的 9 处 receiver 变化：Name、ChatWithMessages、sender、ListModels、
+  CheckConnection 已为指针 receiver；Encode、Rerank、Balance 由指针 DummyModel 继承；
+  NewInstance 已由每实例 factory 取代。当前 native chat/NDJSON/发现及已实现的连接检查
+  比目标初版更完整，既有 Ollama 回归通过，未退回旧 OpenAI 风格实现或制造 receiver diff。
+- LM Studio 的 Encode、Rerank、Balance、CheckConnection 及 channel streaming 明确未实现；
+  `2fd8cdc3c` 连接检查、`530edbac9` embedding 及后续工具/usage 重构另属后续批次，未宣称支持。
+  本批未改 Python 或 DB/事务/路由/健康检查，不触发 Python、integration 或 smoke 门禁。
+
+[HTTP 故障与取消回归](../../internal/entity/models/lmstudio_test.go)及
+[实例配置与并行 HTTP 回归](../../internal/service/model_service_lmstudio_test.go)：
+Go 1.25.14 race 专项 **50 个叶子用例通过、零 skip**（57 个 passing test events）。
+实际 httptest HTTP 验证两个并行实例各三次 chat/SSE/models 调用，独立 URL、region、
+可选 auth、完整历史与 reasoning；128 KiB delta、4 MiB scanner 上限、空/异常响应、
+两种终帧、已缓冲终帧前取消、sender 错误和 HTTP body 关闭均验证。
+相关 entity/models/service/handler/CLI race 回归为 **394 passed / 1 failed / 11 opt-in skips**
+（含父用例计为 442 passing events）。失败为既有 `TestModelLevelThinkingAndGoogleFactory`：
+MiniMax `clear_thinking` 配置 true、断言 false；独立 HEAD 快照
+`ea6b7dca67f7e120e45adaabe2af1624a48fa54e` 同样复现，未修改无关配置或断言。
+`go build ./internal/...`、`go vet ./internal/...`、三个独立 `cmd/*.go` main 构建均 exit 0；
+依赖 `go-m1cpu` 保留两条 C 编译 warning。旧工具链标准库缺失后，在自有临时目录恢复
+同版本官方工具链并核验 SHA256；第一次 JSON 断言因对象键顺序误报，已按完整结构比较修正。
+证据在本机 `/tmp/multirag-dd7-evidence/`，含 `manifest.json`、`controlled-http.json`、
+专项/回归/独立基线日志与构建结果。未运行真实 LM Studio、模型/硬件、SQL opt-in、生产
+或 Web 验收；受控 HTTP 不证明真实供应商功能或部署完成。独立提交，不 push。
