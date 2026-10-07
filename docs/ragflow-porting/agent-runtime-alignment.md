@@ -29,3 +29,22 @@ JWT/API-key 缺失、错误与跨租户均拒绝，旧入口 HTTP 404、OpenAPI 
 与 `test_chat_session_compat.py` 合跑 **3 passed**，unit 三文件 **90 passed**。
 真实 SQL/Redis/HTTP 使用隔离资源并由 fixture 清理；未发真实飞书消息、未部署或 push。
 集成报告：`.test-results/20261007-181629-73012`。
+
+## 11 · a190a6d67f4e93974716515310b75417adb66599
+
+`files/link-to-datasets` 通过 FastAPI 依赖注入执行；未发现 Web、当前 SDK、admin/CLI
+使用退休 `file/convert`，该入口保持 HTTP 404/OpenAPI 缺失。SDK 路由文件的旧注释已纠正。
+后修 `654775193` 的文件/数据集预检本地已有，补强为选中目录自身也需授权、展开结果稳定去重，
+replace 删除来源逐一授权后才调度。`e65bac238` → `55d587962` → `b4a3ff3c6` 的有效
+add/replace 链已采用：默认 replace 只删除未选中的关联，保留仍选中的文档及解析成果；
+add 只添加缺失关联。重复文件/数据集 ID 不重复创建，`d8a6cacd0` 的重名处理亦采用。
+`mode` 以 FastAPI 枚举 query 校验，非法值 HTTP 422、零调度。
+
+本次真实 HTTP/SQL **1 passed**：空的跨租户目录、含越权子文件目录、跨租户目标与缺失 ID
+均零写；退休入口 404；JWT/API-key 的真实认证、真实后台转换服务、scratch 新 session，
+重复关联保留原文档 ID/时间/内容、add 保留旧关联、replace 删除未选中的关联且保留原文档，
+独立 SQL 读回及 fixture 清理。定向 unit **18 passed**，Ruff/async 门禁/mypy 143 文件通过。
+最初被其他并行 GraphRAG WIP 的导入窗口阻断，稳定后复跑通过；首轮测试对 envelope
+误用 code 已修为实际 retcode。报告：`.test-results/20261007-182233-81762`。
+HTTP 成功表示任务已调度，后台仍沿用错误日志合同，不承诺跨存储整批事务。
+本次无解析后的向量/对象关联删除验收，不把 SQL 文档保留证明外推为完整后台解析验收。

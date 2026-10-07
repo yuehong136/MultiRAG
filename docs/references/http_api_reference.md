@@ -272,6 +272,15 @@ OpenAI 消息适配的 strict 失败返回 `{"error":{"message":"...","type":"se
 流式失败发送同形状的 SSE 后结束，不发送成功 choices 或 `[DONE]`，非流式失败也不返回 choices。
 失败会话保存本次用户输入及错误，不追加成功助手答案。
 
+### 文件关联数据集
+
+**POST** `/files/link-to-datasets?mode=replace`，body 为 `file_ids` 与 `kb_ids` 列表。
+支持 web JWT 或 API Key。目录和其展开文件、目标数据集以及 replace 待删除来源都须授权；
+全部预检通过后调度后台转换，`retcode=0,data=true` 仅表示已调度。
+`mode=add` 添加缺失关联；默认 replace 移除未选中的关联，并保留仍选中的原文档与解析成果。
+重复 ID 不重复创建，重名文档自动取唯一名称；非法 mode 返回 HTTP 422。
+旧 `/file/convert` 已退出，返回 HTTP 404。
+
 ### 分享与嵌入 Agent 的补全
 
 **POST** `/agentbots/{agent_id}/completions`（完整路径 `/api/v1/agentbots/{agent_id}/completions`）。

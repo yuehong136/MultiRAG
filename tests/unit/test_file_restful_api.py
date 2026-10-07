@@ -273,6 +273,7 @@ def test_file_link_to_datasets_schedules_background_work(client, monkeypatch):
     kb = SimpleNamespace(id="kb-1")
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kid: _record(records, s) or kb))
     route_module = _link_route_module()
+    monkeypatch.setattr(route_module.File2DocumentService, "get_by_file_id", lambda *args: [])
     monkeypatch.setattr(route_module, "check_file_team_permission", lambda *_args: True)
     monkeypatch.setattr(route_module, "check_kb_team_permission", lambda *_args: True)
     scheduled: list[tuple] = []
@@ -283,7 +284,7 @@ def test_file_link_to_datasets_schedules_background_work(client, monkeypatch):
     body = resp.json()
     assert body["retcode"] == 0
     assert body["data"] is True
-    assert scheduled == [(["inner-1"], ["kb-1"], "tenant-unit")]  # TestClient 同步执行 background task
+    assert scheduled == [(["inner-1"], ["kb-1"], "tenant-unit", "replace")]  # TestClient 同步执行 background task
     _assert_sync_facade(records)
 
 
