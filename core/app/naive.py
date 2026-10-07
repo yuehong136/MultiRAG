@@ -890,6 +890,9 @@ def chunk(
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
         layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        opendataloader_llm_name = kwargs.pop("opendataloader_llm_name", None)
+        if layout_recognizer == "OpenDataLoader" and parser_model_name:
+            opendataloader_llm_name = parser_model_name
 
         if parser_config.get("analyze_hyperlink", False) and is_root:
             urls = extract_links_from_pdf(binary)
@@ -911,7 +914,7 @@ def chunk(
             layout_recognizer=layout_recognizer,  # 传递原始值给 plaintext_parser 以支持 VLM
             mineru_llm_name=parser_model_name,
             paddleocr_llm_name=parser_model_name,
-            opendataloader_llm_name=parser_model_name,
+            opendataloader_llm_name=opendataloader_llm_name,
             **kwargs,
         )
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)

@@ -2951,3 +2951,27 @@ embedding 输出受控，未验收生产模型调用；聊天/Ask/mindmap 参数
 证据：`.test-results/20261006-133222-22785`（HTTP 既有用例）、
 `.test-results/20261006-134034-27087`（新增 HTTP 复跑）、
 `.test-results/20261006-133147-22509`（Infinity）；完整 unit 日志位于本机 `/tmp/multirag-r1-verify.log`。
+
+## 38f6484e98df6cfd50ef560a8823f8e4a1d300e3 · Naive OpenDataLoader 模型选择
+
+2026-10-07 使用 port-ragflow-commit 核对完整两文件 diff，remote 为
+`infiniflow/ragflow`，目标是冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f`
+的祖先；按用户冻结上限未 fetch。后续模型引用解析、MinerU 路由、格式化及
+`670e68872` 删除 Python 实现未撤回本项修复，本仓保留活动 Python 调用链。
+
+补齐 [归一化](../../common/parser_config_utils.py) 的大小写无关
+`model@OpenDataLoader` 后缀，按最后一个 `@` 保留完整模型名。
+[naive.chunk](../../core/app/naive.py) 先取出显式 `opendataloader_llm_name`，
+只有非空的 OpenDataLoader 后缀模型覆盖它，避免重复关键字与误选默认模型。
+优先级为后缀指定模型 > 显式参数 > 现有租户 OCR 候选 > 环境配置回退。
+`by_opendataloader` 已有 `hybrid/image_output/sanitize` 白名单，与实际
+`OpenDataLoaderParser.parse_pdf` 签名一致；保留其合法参数、显式 false 以及
+现有 tenant/lang/callback/parse_method 传递，不重新引入任意 kwargs。
+上游机制在模型选择处有明确收益；既有白名单等价且维护成本更低，无需重复改写。
+
+调用证据：[回归测试](../../tests/unit/test_naive_opendataloader.py) 从真实
+`naive.chunk` 经 `by_opendataloader`、OCR bundle 的实际解析器，到受控 HTTP
+multipart 请求和真实分块返回，验证后缀/显式/候选/环境优先级、合法参数保留、
+未知参数过滤及非空正文。模型配置与 bundle 在外部边界替换，HTTP 响应受控；
+不证明真实租户数据库、远程 OpenDataLoader 或完整 worker 入库通过。
+新增 12 项与既有解析器 6 项共 18 passed。`make verify` 的格式、Ruff、8 条依赖契约、async DB 检查与 mypy（143 个源文件）通过；unit 6158 passed / 3 failed。失败均在其他任务已修改的 `test_memory_add_message_route.py`：测试替身要求 `user_id`，当前 memory helper 传 `tenant_id`，与本项调用链无关。未修改或暂存这些文件；日志为 `.test-results/port-38f6484/verify.log`。
