@@ -66,7 +66,7 @@ class MultiRAGAgentClient:
         self._owns_client = client is None
         self._base_url = base_url.rstrip("/")
         endpoint_agent_id = quote(agent_id, safe="")
-        self._endpoint = f"{self._base_url}/api/v1/agents/{endpoint_agent_id}/completions"
+        self._endpoint = f"{self._base_url}/api/v1/agents/chat/completion"
         self._sessions_endpoint = f"{self._base_url}/api/v1/agents/{endpoint_agent_id}/sessions"
         self._headers = {
             "Accept": "text/event-stream",
@@ -127,6 +127,7 @@ class MultiRAGAgentClient:
 
     async def ask(self, *, question: str, session_id: str | None) -> AgentReply:
         request_body: dict[str, object] = {
+            "agent_id": self._agent_id,
             "question": question,
             "stream": True,
             "release": True,

@@ -179,6 +179,7 @@ async def test_agent_client_aggregates_sse_without_reasoning_or_identity_fields(
     sse = "".join(f"data:{json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
         captured["body"] = json.loads(request.content)
         captured["authorization"] = request.headers.get("Authorization")
         return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
@@ -193,7 +194,8 @@ async def test_agent_client_aggregates_sse_without_reasoning_or_identity_fields(
         reply = await client.ask(question="question", session_id=None)
 
     assert reply == AgentReply(content="Hello world", session_id="session-1")
-    assert captured["body"] == {"question": "question", "stream": True, "release": True}
+    assert captured["path"] == "/api/v1/agents/chat/completion"
+    assert captured["body"] == {"agent_id": "agent-1", "question": "question", "stream": True, "release": True}
     assert captured["authorization"] == "Bearer secret-token"
     assert not {"user_id", "custom_header", "inputs", "metadata"} & set(captured["body"])
 

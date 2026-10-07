@@ -79,6 +79,10 @@ web 侧 commit scope 从 `settings` 切到 `channel`（后端已有 `feat(channe
 
 ## 阶段 U · 今日可见缺陷
 
+| ID | 仓库 | 任务 | 状态 | 依赖 | 锚点 |
+| --- | --- | --- | --- | --- | --- |
+| CHN-U20 | MR | 演示客户端迁移 canonical Agent completion，保留发布快照和会话隔离 | ✅ | — | `api/channels/agent_bridge.py::MultiRAGAgentClient`、`tests/integration/test_agent_route_migration.py` |
+
 | ID | 仓 | 任务 | 状态 | 依赖 | 锚点 |
 |---|---|---|:---:|---|---|
 | CHN-U1 | MR | `_respond` 把 `data=False` 换成 `data={"error_code": ...}`。`retcode`/`retmsg` 不动，前端 `APIError.details` 零改动就能拿到 | ✅ | — | `api/apps/restful_apis/chat_channel_api.py:35-65` |
@@ -921,6 +925,8 @@ stdout 为空」`pytest.skip` 并写明「purity unverified」：子进程根本
 ---
 
 ## 变更日志
+
+2026-10-07 · CHN-U20：演示 Agent 客户端迁移 canonical completion，显式传 agent_id；真实原生客户端两轮 HTTP/SQL 验收、跨租户拒绝与旧路径 404 通过。详见 [验收记录](../ragflow-porting/agent-runtime-alignment.md)。未部署。
 
 | 日期 | 变更 | 提交 | 记录人 |
 |---|---|---|---|
