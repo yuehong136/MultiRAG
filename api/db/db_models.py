@@ -83,7 +83,7 @@ def build_database_url(db_config: dict[str, Any]) -> str:
 DATABASE_URL = build_database_url(database_config)
 
 
-def get_engine_config(db_config: dict) -> dict:
+def get_engine_config(db_config: dict[str, Any]) -> dict[str, Any]:
     """
     将配置文件中的数据库配置映射到 SQLAlchemy 引擎配置
 
@@ -117,7 +117,7 @@ def get_engine_config(db_config: dict) -> dict:
     }
 
     # 根据数据库类型添加特定连接参数
-    db_type = db_config.get("name", "postgresql").lower()
+    db_type = str(db_config.get("name", "postgresql")).lower().split("+", 1)[0]
 
     if db_type in ("mysql", "oceanbase"):
         # MySQL/OceanBase 特定配置（OceanBase 兼容 MySQL 协议）
@@ -126,12 +126,13 @@ def get_engine_config(db_config: dict) -> dict:
             "read_timeout": 30,  # 读取超时（秒）
             "write_timeout": 30,  # 写入超时（秒）
             "charset": "utf8mb4",
+            "init_command": "SET time_zone = '+00:00'",
         }
     elif db_type == "postgresql":
         # PostgreSQL 特定配置
         engine_config["connect_args"] = {
             "connect_timeout": 10,  # 连接超时（秒）
-            "options": "-c statement_timeout=30000",  # 30秒语句超时
+            "options": "-c statement_timeout=30000 -c timezone=UTC",  # UTC wall-clock persistence
         }
 
     return engine_config

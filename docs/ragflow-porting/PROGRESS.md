@@ -3242,3 +3242,13 @@ unit 6266 passed / 1 failed，唯一失败是其他 owner GraphRAG 改动中的
 `test_delete_knowledge_graph_offloads_doc_store_delete` 假件缺 `db_type`，本项及 Memory 用例均无失败。
 本次未修改该范围。`make smoke` 的现有 8123 健康检查通过；常驻服务未重启。
 真实生产部署、非 MinIO 适配器及其他下载/认证入口未验收；不 push。
+
+
+### 调度间隔与 UTC 合同（2026-10-07）
+
+已跟进 `5e01feb755920dcc291df169aa713ffdc3e76b55`：实际 SQLAlchemy 方言、typed
+整分钟间隔、精确严格边界、同步/异步 PostgreSQL 与 MySQL UTC session、日志和游标 UTC
+读出，沿用应用 UTC 与 checkpoint 存储合同，不引入北京时间默认或动态 SQL。
+隔离 verify 6162 passed，真实 PG 4+1 passed；真实 MySQL 8.4.11 自有四表库的边界、
+UTC/+08 session、日期与清理读回通过。范围、等价判断与整库/SaaS/部署限制见
+[连接器调度与 UTC](connector-schedule-utc.md)。不 push。

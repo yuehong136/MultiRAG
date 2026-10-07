@@ -10,15 +10,14 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
-from sqlalchemy import case, cast, delete, func, literal_column, select, text, update
-from sqlalchemy.dialects.postgresql import INTERVAL as Interval
+from sqlalchemy import case, delete, func, literal_column, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
+from sqlalchemy.sql.elements import ColumnElement
 
 from api.db import InputType
 from api.db.db_models import Connector, Connector2Kb, Knowledgebase, SyncLogs
@@ -51,6 +50,19 @@ def _to_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _schedule_time_condition(dialect: str, now: ColumnElement[datetime] | None = None) -> ColumnElement[bool]:
+    """Compare UTC wall-clock timestamps without rounding elapsed minutes."""
+    if dialect == "postgresql":
+        utc_now = func.timezone("UTC", func.now()) if now is None else now
+        cutoff = utc_now - func.make_interval(0, 0, 0, 0, 0, Connector.refresh_freq)
+    elif dialect in {"mysql", "mariadb"}:
+        utc_now = func.utc_timestamp(6) if now is None else now
+        cutoff = func.timestampadd(literal_column("MINUTE"), -Connector.refresh_freq, utc_now)
+    else:
+        raise ValueError(f"Connector scheduling does not support database dialect {dialect}")
+    return SyncLogs.update_date < cutoff
 
 
 def connector_doc_id_candidates(kb_id: str, connector_id: str, external_id: str) -> tuple[str, str, str]:
@@ -367,18 +379,7 @@ class SyncLogsService(CommonService):
         if connector_id:
             stmt = stmt.where(cls.model.connector_id == connector_id)
         else:
-            # 计算时间间隔，查询需要执行的定时任务
-            # 根据数据库类型选择正确的 INTERVAL 语法
-            database_type = os.getenv("DB_TYPE", "postgresql")
-            if "postgres" in database_type.lower():
-                # PostgreSQL 使用 INTERVAL 表达式
-                # 构造: NOW() - (refresh_freq || ' minutes')::INTERVAL
-                interval_expr = func.now() - cast(Connector.refresh_freq.concat(literal_column("' minutes'")), Interval)
-                time_condition = cls.model.update_date < interval_expr
-            else:
-                # MySQL 使用 TIMESTAMPDIFF 函数
-                # TIMESTAMPDIFF(MINUTE, update_date, NOW()) > refresh_freq
-                time_condition = func.timestampdiff(text("MINUTE"), cls.model.update_date, func.now()) > Connector.refresh_freq
+            time_condition = _schedule_time_condition(db.get_bind().dialect.name)
             stmt = stmt.where(Connector.input_type == InputType.POLL, Connector.status == TaskStatus.SCHEDULE, cls.model.status == TaskStatus.SCHEDULE, time_condition)
 
         stmt = stmt.distinct().order_by(sa_desc(cls.model.update_time))
@@ -389,7 +390,12 @@ class SyncLogsService(CommonService):
             stmt = stmt.offset(offset).limit(items_per_page)
 
         rows = db.execute(stmt).mappings().all()
-        return [dict(row) for row in rows], total
+        tasks = [dict(row) for row in rows]
+        # MySQL DATETIME has no offset; worker cursors always represent UTC.
+        for task in tasks:
+            for field in ("update_date", "poll_range_start", "poll_range_end"):
+                task[field] = _to_utc(task[field])
+        return tasks, total
 
     @classmethod
     def start(cls, db: Session, task_id: str, connector_id: str) -> None:
