@@ -94,3 +94,18 @@ team 草稿拒绝与零副本写入；24 次/12 线程并发初始化得到同�
 定向 unit **95 passed**；实际结果及 gate 的最终累计见末尾。
 首轮错误响应对 data 字段有过强形状假设，修为既有错误信封允许省略空 data，非零业务码
 与零执行断言保留。报告：`.test-results/20261007-183345-93351`。
+
+## 16 · 04c5f1b3b621ffc191e783dd7b10c86f176f905a
+
+无 session runtime 按 `query or question` 选输入，query 非空时优先；custom_header
+送入真实 Canvas 构造，与 session 分支同一约定。不把请求 user_id 或伪造 prepared_run/
+run_context 当身份；tenant 与 Principal 仍来自开流前授权，sys.user_id 保持当前不进入模型
+输入的空值。现有模型工厂、消息格式、MCP credential provider 与请求事务不改。
+后修 `8f90740d2` 的 chat_template_kwargs 是独立模型控制能力，本项不借输入兼容扩展模型参数。
+
+真实 HTTP/SQL/Redis **3 passed**：query 优先、空串与 null 回退 question，观察真实 Canvas
+构造收到 header，内部上下文绑定真实 owner，伪造 tenant/run_context 无效，Redis 读回
+正确 sys.query 与空 sys.user_id，SQL Canvas/version 不变。unit completion/context/MCP
+**79 passed**。测试启动先后触发旧 nest_asyncio/uvicorn 导入顺序问题，按已有测试先导入
+uvicorn 后复跑通过，未放宽启动断言。未调用真实外部模型或 MCP 服务。
+报告：`.test-results/20261007-183731-98577`。

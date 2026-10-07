@@ -600,7 +600,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         return await exp_agent_completion(agent_id, req, db, user)
 
     req["id"] = agent_id
-    query = req.get("query", "")
+    query = req.get("query", "") or req.get("question", "")
     files = req.get("files", [])
     inputs = req.get("inputs", {})
     tenant_id = str(user.id)
@@ -673,6 +673,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             resource_owner_id,
             task_id=uuid4().hex,
             canvas_id=req["id"],
+            custom_header=req.get("custom_header", ""),
             run_context=run_context,
         )
         canvas.globals["sys.user_id"] = ""

@@ -9,8 +9,10 @@ from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+import uvicorn  # noqa: F401 -- initialize before legacy Canvas asyncio compatibility
 from sqlalchemy.orm import Session
 
+from agent.canvas import Canvas
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import UserTenantRole
 from api.db.db_models import API4Conversation
@@ -96,3 +98,41 @@ def test_bootstrap_failure_has_no_execution_or_false_success(release_api: dict[s
     assert result.headers["content-type"].startswith("application/json")
     assert result.json()["retcode"] != 0 and result.json().get("data") is None
     assert len(env["task_ids"]) == tasks and read_state(env, agent_id) == before
+
+
+@pytest.mark.parametrize("query,question,expected", [("primary", "secondary", "primary"), ("", "fallback", "fallback"), (None, "fallback", "fallback")])
+def test_runtime_question_headers_keep_authenticated_context(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, query: str | None, question: str, expected: str) -> None:
+    env = release_api
+    agent_id = create_agent(env)
+    owner, runtime_user = env["owners"][0], uuid4().hex
+    original_init = Canvas.__init__
+    construction: list[tuple[Any, Any]] = []
+
+    def observe(self: Canvas, *args: Any, **kwargs: Any) -> None:
+        construction.append((kwargs.get("custom_header"), kwargs.get("run_context")))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(Canvas, "__init__", observe)
+    before = read_state(env, agent_id)
+    headers = {"x-runtime-marker": "test-only"}
+    response = env["client"].post(
+        f"{env['base']}/api/v1/agents/chat/completions",
+        json={
+            "agent_id": agent_id,
+            "query": query,
+            "question": question,
+            "custom_header": headers,
+            "user_id": runtime_user,
+            "tenant_id": env["owners"][1],
+            "run_context": {"tenant_id": env["owners"][1]},
+            "prepared_run": {},
+        },
+        timeout=30,
+    )
+    assert response.status_code == 200 and any(event.get("event") == "message_end" for event in sse_events(response.text)), response.text
+    assert len(construction) == 1 and construction[0][0] == headers
+    context = construction[0][1]
+    assert context.tenant_id == owner and context.platform_user_id == owner and context.draft_target.agent_id == agent_id
+    replica = CanvasReplicaService.load_for_run(agent_id, owner, runtime_user)
+    assert replica["dsl"]["globals"]["sys.query"] == expected and replica["dsl"]["globals"]["sys.user_id"] == ""
+    assert read_state(env, agent_id) == before
