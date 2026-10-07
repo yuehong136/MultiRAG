@@ -109,3 +109,15 @@ run_context 当身份；tenant 与 Principal 仍来自开流前授权，sys.user
 **79 passed**。测试启动先后触发旧 nest_asyncio/uvicorn 导入顺序问题，按已有测试先导入
 uvicorn 后复跑通过，未放宽启动断言。未调用真实外部模型或 MCP 服务。
 报告：`.test-results/20261007-183731-98577`。
+
+## 17 · 67e1de50abbcf4b0acd6ae0560f370b2f7ffb74c
+
+**已被第 20 项完整撤回，不实现其权限扩大。** 目标将组件输入、更新、删除从 owner
+放宽为 accessible，并把 async runtime 的异步 DB 包装换为直接同步调用。
+最危险的 team 删除权没有有效重落，本地继续仅 owner 删除；FastAPI AsyncSession 与
+执行线程分工保持。单独记录撤回结论，不先上线再回滚，也不生成空的权限实现提交。
+
+后修链完整区分：`53a4edfde` 整理访问装饰器，`c50028b1f` 再允许上游团队编辑与组件输入，
+删除仍 owner；后来的 `6ce014c23` 再整理阻塞 IO，`20180790e` 补 OpenAI 首跑授权。
+本地 management 与受信 draft/publication 的合同原本更严格，是否采用后修的团队编辑
+按第 20 项的本地消费者和权限验收决定，不把它误标为第 17 项“已移植”。
