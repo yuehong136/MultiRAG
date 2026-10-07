@@ -11,6 +11,7 @@ API Documentation:
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,8 +23,8 @@ from alibabacloud_tea_util.client import Client as UtilClient
 
 from common.data_source.config import INDEX_BATCH_SIZE, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
-from common.data_source.interfaces import LoadConnector, PollConnector, SecondsSinceUnixEpoch
-from common.data_source.models import Document, GenerateDocumentsOutput
+from common.data_source.interfaces import LoadConnector, PollConnector, SecondsSinceUnixEpoch, SlimConnectorWithPermSync
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SlimDocument
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ class DingTalkAITableClientNotSetUpError(PermissionError):
         super().__init__("DingTalk Notable client is not set up. Did you forget to call load_credentials()?")
 
 
-class DingTalkAITableConnector(LoadConnector, PollConnector):
+class DingTalkAITableConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     """
     DingTalk AI Table (Notable) connector for accessing table records.
 
@@ -71,9 +72,16 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
         """
         self.table_id = table_id
         self.operator_id = operator_id
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
         self.batch_size = batch_size
         self._client: NotableClient | None = None
         self._access_token: str | None = None
+
+    def _document_id(self, sheet_id: str, record_id: str) -> str:
+        if not all(isinstance(value, str) and value.strip() for value in (self.table_id, sheet_id, record_id)):
+            raise ValueError("DingTalk table, sheet and record IDs must be nonempty strings")
+        return f"{_DINGTALK_AI_TABLE_DOC_ID_PREFIX}{self.table_id}:{sheet_id}:{record_id}"
 
     def _create_client(self) -> NotableClient:
         """Create DingTalk Notable API client."""
@@ -160,9 +168,13 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
                 util_models.RuntimeOptions(),
             )
 
+            if response.body is None or not isinstance(response.body.value, list):
+                raise RuntimeError("DingTalk sheets response is incomplete")
             sheets = []
-            if response.body and response.body.value:
+            if response.body.value:
                 for sheet in response.body.value:
+                    if not isinstance(sheet.id, str) or not sheet.id.strip():
+                        raise ValueError("DingTalk sheet has no valid ID")
                     sheets.append(
                         {
                             "id": sheet.id,
@@ -215,6 +227,8 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
             records = []
             new_next_token = None
 
+            if response.body is None or not isinstance(response.body.records, list):
+                raise RuntimeError("DingTalk records response is incomplete")
             if response.body:
                 if response.body.records:
                     for record in response.body.records:
@@ -234,31 +248,34 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
                 logger.error(f"[DingTalk AITable]: API error - code: {e.code}, message: {e.message}")
             raise
 
-    def _get_all_records(self, sheet_id: str) -> list[dict[str, Any]]:
-        """
-        Retrieve all records from a sheet with pagination.
-
-        Args:
-            sheet_id: The sheet ID
-
-        Returns:
-            List of all records
-        """
-        all_records = []
+    def _iter_records(self, sheet_id: str) -> Iterator[dict[str, Any]]:
+        """Use identical eligibility and pagination for content and inventory."""
         next_token = None
-
+        seen_tokens: set[str] = set()
         while True:
-            records, next_token = self._list_records(
-                sheet_id=sheet_id,
-                next_token=next_token,
-            )
-            all_records.extend(records)
-
+            records, next_token = self._list_records(sheet_id=sheet_id, next_token=next_token)
+            for record in records:
+                self._document_id(sheet_id, record.get("id"))
+                if not isinstance(record.get("fields"), dict):
+                    raise ValueError("DingTalk record fields must be an object")
+                yield record
             if not next_token:
-                break
+                return
+            if not isinstance(next_token, str) or next_token in seen_tokens:
+                raise RuntimeError("DingTalk record pagination did not advance")
+            seen_tokens.add(next_token)
 
-        logger.info(f"[DingTalk Notable]: Retrieved {len(all_records)} records from sheet {sheet_id}")
-        return all_records
+    def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> GenerateSlimDocumentOutput:
+        del callback
+        batch: list[SlimDocument] = []
+        for sheet in self._get_all_sheets():
+            for record in self._iter_records(sheet["id"]):
+                batch.append(SlimDocument(id=self._document_id(sheet["id"], record["id"])))
+                if len(batch) >= self.batch_size:
+                    yield batch
+                    batch = []
+        if batch:
+            yield batch
 
     def _convert_record_to_document(
         self,
@@ -277,7 +294,7 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
         Returns:
             Document object
         """
-        record_id = record.get("id", "unknown")
+        record_id = record["id"]
         fields = record.get("fields", {})
 
         # Convert fields to JSON string for blob content
@@ -304,7 +321,7 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
 
         # Create document
         doc = Document(
-            id=f"{_DINGTALK_AI_TABLE_DOC_ID_PREFIX}{self.table_id}:{sheet_id}:{record_id}",
+            id=self._document_id(sheet_id, record_id),
             source=DocumentSource.DINGTALK_AI_TABLE,
             semantic_identifier=semantic_identifier,
             extension=".json",
@@ -316,21 +333,8 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
 
         return doc
 
-    def _yield_documents_from_table(
-        self,
-        start: SecondsSinceUnixEpoch | None = None,
-        end: SecondsSinceUnixEpoch | None = None,
-    ) -> GenerateDocumentsOutput:
-        """
-        Yield documents from all sheets in the table.
-
-        Args:
-            start: Optional start timestamp for filtering
-            end: Optional end timestamp for filtering
-
-        Yields:
-            Lists of Document objects
-        """
+    def _yield_documents_from_table(self) -> GenerateDocumentsOutput:
+        """Refresh all sheets: ListRecords has no source update timestamp."""
         # Get all sheets
         sheets = self._get_all_sheets()
 
@@ -341,7 +345,7 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
             sheet_name = sheet["name"]
 
             # Get all records from this sheet
-            records = self._get_all_records(sheet_id)
+            records = self._iter_records(sheet_id)
 
             for record in records:
                 doc = self._convert_record_to_document(
@@ -350,15 +354,8 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
                     sheet_name=sheet_name,
                 )
 
-                # Apply time filtering if specified
-                if start is not None or end is not None:
-                    doc_time = doc.doc_updated_at.timestamp() if doc.doc_updated_at else None
-                    if doc_time is not None:
-                        if start is not None and doc_time < start:
-                            continue
-                        if end is not None and doc_time > end:
-                            continue
-
+                # ListRecords exposes no source update timestamp. Every poll
+                # refreshes the current table; fetch time is not a time filter.
                 batch.append(doc)
 
                 if len(batch) >= self.batch_size:
@@ -392,7 +389,8 @@ class DingTalkAITableConnector(LoadConnector, PollConnector):
         Yields:
             Lists of Document objects
         """
-        return self._yield_documents_from_table(start=start, end=end)
+        del start, end
+        return self._yield_documents_from_table()
 
 
 if __name__ == "__main__":

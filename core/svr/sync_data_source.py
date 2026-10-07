@@ -61,6 +61,7 @@ task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
     {
+        FileSource.DINGTALK_AI_TABLE,
         FileSource.RSS,
         FileSource.WEBDAV,
         FileSource.AIRTABLE,
@@ -1277,14 +1278,20 @@ class SeaFile(SyncBase):
 class DingTalkAITable(SyncBase):
     SOURCE_NAME: str = FileSource.DINGTALK_AI_TABLE
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         """
         Sync records from DingTalk AI Table (Notable).
         """
+        try:
+            batch_size = int(self.conf.get("batch_size", INDEX_BATCH_SIZE))
+        except (TypeError, ValueError):
+            batch_size = INDEX_BATCH_SIZE
+        if batch_size <= 0:
+            batch_size = INDEX_BATCH_SIZE
         self.connector = DingTalkAITableConnector(
             table_id=self.conf.get("table_id"),
             operator_id=self.conf.get("operator_id"),
-            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
+            batch_size=batch_size,
         )
 
         credentials = self.conf.get("credentials", {})
