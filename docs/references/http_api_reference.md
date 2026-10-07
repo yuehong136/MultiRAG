@@ -272,6 +272,26 @@ OpenAI 消息适配的 strict 失败返回 `{"error":{"message":"...","type":"se
 流式失败发送同形状的 SSE 后结束，不发送成功 choices 或 `[DONE]`，非流式失败也不返回 choices。
 失败会话保存本次用户输入及错误，不追加成功助手答案。
 
+### Agent 草稿 runtime 结果
+
+**POST** `/agents/chat/completions`，省略 session_id/release 时执行 owner 的草稿副本。
+缺失副本从已授权 SQL 草稿初始化；已有副本保留运行状态。`query` 非空时优先，
+否则使用 `question`；`custom_header` 传入 Canvas，身份仍由认证和服务端执行上下文确定。
+`user_id` 仅选择隔离副本，不授予资源访问权，也不填入模型可见的 `sys.user_id`。
+
+默认 `stream: true`；`stream: false` 返回 `retcode/retmsg` 信封，data 为终态事件，
+其中 data.content 合并 message，data.reference 保留引用，data.structured 按组件 ID
+归集；`return_trace: true` 才提供节点 trace。workflow_finished 保留 outputs，
+user_inputs 表示已保存的等待输入状态，调用者提交 inputs 后继续，不表示工作流已全部完成。
+
+执行结束、取消/完成 CAS 和 replica 提交确认后才发送成功终态与 `[DONE]`；
+存储读取失败不当作副本缺失，非法副本不自动覆盖。异常、无结果或仅计时/空 structured、
+取消获胜、提交锁/写入失败都不会返回业务成功。流式可已发送部分正文，失败后发送 error，
+不发送成功终态或 `[DONE]`；断连仍按既有取消/终态竞态与运行资源清理处理。
+
+已有 session 分支在 SQL 保存成功后才交付终态/表单，每轮引用追加保存，读取兼容历史
+单包/数组/按序号的字典；chunk citation map 保留 citation_id。会话不提交草稿 replica。
+
 ### 文件关联数据集
 
 **POST** `/files/link-to-datasets?mode=replace`，body 为 `file_ids` 与 `kb_ids` 列表。

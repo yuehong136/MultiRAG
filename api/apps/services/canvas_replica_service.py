@@ -54,20 +54,22 @@ class CanvasReplicaService:
         return f"{cls.LOCK_KEY_PREFIX}:{canvas_id}:{tenant_id}:{runtime_user_id}"
 
     @classmethod
-    def _read_payload(cls, replica_key: str):
-        """Read replica payload from Redis; return None on missing/invalid content."""
-        cache_blob = REDIS_CONN.get(replica_key)
-        if not cache_blob:
+    def _read_payload(cls, replica_key: str) -> dict[str, Any] | None:
+        """Only confirmed absence permits bootstrap; transport/corruption failures propagate."""
+        client = REDIS_CONN.REDIS
+        if client is None:
+            raise ConnectionError("Canvas replica storage is unavailable.")
+        cache_blob = client.get(replica_key)
+        if cache_blob is None:
             return None
         try:
             payload = json.loads(cache_blob)
             if not isinstance(payload, dict):
-                return None
+                raise ValueError("Canvas replica must be an object.")
             payload["dsl"] = cls.normalize_dsl(payload.get("dsl", {}))
             return payload
-        except Exception as e:
-            logging.warning("Failed to parse canvas replica %s: %s", replica_key, e)
-            return None
+        except Exception as error:
+            raise ValueError("Invalid canvas replica payload.") from error
 
     @classmethod
     def _write_payload(cls, replica_key: str, payload: dict[str, Any]) -> None:
@@ -212,10 +214,10 @@ class CanvasReplicaService:
         canvas_id: str,
         tenant_id: str,
         runtime_user_id: str,
-        dsl,
-        canvas_category=CanvasCategory.Agent,
-        title="",
-    ):
+        dsl: Any,
+        canvas_category: str = CanvasCategory.Agent,
+        title: str = "",
+    ) -> bool:
         """
         Commit post-run DSL into replica.
 
@@ -224,9 +226,14 @@ class CanvasReplicaService:
         """
         new_dsl = cls.normalize_dsl(dsl)
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
+        lock_key = cls._lock_key(canvas_id, str(tenant_id), str(runtime_user_id))
+        lock = None
 
         try:
-            latest_payload = cls._read_payload(replica_key)
+            lock = cls._acquire_lock_with_retry(lock_key)
+            if lock is None:
+                return False
+            latest_payload = cls.load_for_run(canvas_id, tenant_id, runtime_user_id)
 
             # Always write latest runtime DSL back to Redis first.
             updated_payload = cls._build_payload(
@@ -243,3 +250,9 @@ class CanvasReplicaService:
         except Exception:
             logging.exception("Failed to commit canvas runtime replica.")
             return False
+        finally:
+            if lock is not None:
+                try:
+                    lock.release()
+                except Exception:
+                    logging.exception("Failed to release canvas replica lock: %s", lock_key)

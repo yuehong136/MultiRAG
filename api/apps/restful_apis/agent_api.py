@@ -57,6 +57,7 @@ from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, TaskService, queue
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService
 from api.identity.mcp_delegation.contracts import DelegationErrorCode, McpDelegationError
+from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event
 from api.utils.agent_streaming import AgentStreamingResponse
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common import settings
@@ -178,8 +179,13 @@ def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
             references = [value for _, value in sorted(references.items(), key=lambda item: int(item[0]))]
     assistant_messages = [message for index, message in enumerate(normalized["messages"]) if index != 0 and message.get("role") != "user"]
     for message, reference in zip(assistant_messages, references or []):
-        message["reference"] = [
-            {
+        chunks = reference.get("chunks", [])
+        items = chunks.items() if isinstance(chunks, dict) else enumerate(chunks) if isinstance(chunks, list) else []
+        normalized_references = []
+        for citation_id, chunk in items:
+            if not isinstance(chunk, dict):
+                continue
+            item = {
                 "id": chunk.get("chunk_id", chunk.get("id")),
                 "content": chunk.get("content_with_weight", chunk.get("content")),
                 "document_id": chunk.get("doc_id", chunk.get("document_id")),
@@ -189,9 +195,10 @@ def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
                 "positions": chunk.get("positions", chunk.get("position_int")),
                 **{key: chunk[key] for key in ("doc_type", "doc_type_kwd") if key in chunk},
             }
-            for chunk in reference.get("chunks", [])
-            if isinstance(chunk, dict)
-        ]
+            if isinstance(chunks, dict):
+                item["citation_id"] = str(citation_id)
+            normalized_references.append(item)
+        message["reference"] = normalized_references
     return normalized
 
 
@@ -685,9 +692,9 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         return _mcp_delegation_error_response(error)
     except Exception as e:
         return server_error_response(e)
-    await bind_canvas_task(db, canvas.task_id, tenant_id, req["id"])
     finish_attempted = False
     runtime_closed = False
+    runtime_bound = False
 
     async def close_runtime() -> None:
         nonlocal finish_attempted, runtime_closed
@@ -700,33 +707,43 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                     finish_attempted = True
                     await asyncio.to_thread(finish_runtime, canvas.task_id)
             finally:
-                canvas.cancel_task()
+                if runtime_bound:
+                    canvas.cancel_task()
 
     # setup 产物已全是纯值（无 ORM 对象存活）——结束 autobegin 的读事务，避免连接在
     # 下方分钟级的 SSE 流式期间以 idle-in-transaction 状态钉死
     try:
+        await bind_canvas_task(db, canvas.task_id, tenant_id, req["id"])
+        runtime_bound = True
         await db.rollback()
     except BaseException:
         await close_runtime()
         raise
 
-    async def sse() -> AsyncGenerator[str, None]:
-        nonlocal canvas, user_id, finish_attempted
+    aggregate = AgentCompletionAccumulator(return_trace=bool(req.get("return_trace", False)))
+
+    async def runtime_events() -> AsyncGenerator[dict[str, Any], None]:
+        nonlocal finish_attempted
         terminal_frames: list[dict[str, Any]] = []
         try:
             async with aclosing(canvas.run(query=query, files=files, inputs=inputs)) as run_events:
-                async for ans in run_events:
+                async for raw in run_events:
+                    ans = normalize_agent_event(raw)
                     failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
                     if failure:
                         raise RuntimeError(failure)
-                    if ans.get("event") in {"message_end", "workflow_finished"}:
+                    aggregate.add(ans)
+                    if ans.get("event") == "node_finished" and aggregate.return_trace:
+                        ans["data"]["trace"] = copy.deepcopy(aggregate.trace)
+                    if ans.get("event") in {"message_end", "workflow_finished", "user_inputs"}:
                         terminal_frames.append(ans)
                         continue
-                    yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
-
+                    yield ans
+            aggregate.finish(require_terminal=True)
             finish_attempted = True
             await asyncio.to_thread(require_runtime_finish, canvas.task_id)
-            commit_ok = CanvasReplicaService.commit_after_run(
+            commit_ok = await asyncio.to_thread(
+                CanvasReplicaService.commit_after_run,
                 canvas_id=req["id"],
                 tenant_id=tenant_id,
                 runtime_user_id=user_id,
@@ -735,21 +752,32 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                 title=canvas_title,
             )
             if not commit_ok:
-                logging.error(
-                    "Canvas runtime replica commit failed: canvas_id=%s tenant_id=%s runtime_user_id=%s",
-                    req["id"],
-                    tenant_id,
-                    user_id,
-                )
                 raise RuntimeError("Failed to persist Canvas runtime replica.")
             for terminal in terminal_frames:
-                yield "data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n"
-
-        except Exception as e:
-            logging.exception(e)
-            yield "data:" + json.dumps({"code": 500, "message": str(e), "data": False}, ensure_ascii=False) + "\n\n"
+                yield terminal
         finally:
             await close_runtime()
+
+    if not req.get("stream", True):
+        try:
+            async with aclosing(runtime_events()) as events:
+                async for _ in events:
+                    pass
+            return get_json_result(data=aggregate.finish(require_terminal=True))
+        except Exception:
+            logging.exception("Agent runtime completion failed")
+            return get_data_error_result(retmsg="Agent runtime completion failed.")
+
+    async def sse() -> AsyncGenerator[str, None]:
+        try:
+            async with aclosing(runtime_events()) as events:
+                async for event in events:
+                    yield "data:" + json.dumps(event, ensure_ascii=False) + "\n\n"
+        except Exception as error:
+            logging.exception("Agent runtime stream failed")
+            yield "data:" + json.dumps({"event": "error", "code": 500, "message": str(error), "data": False}, ensure_ascii=False) + "\n\n"
+            return
+        yield "data:[DONE]\n\n"
 
     return AgentStreamingResponse(sse(), close_callback=close_runtime, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
 
@@ -815,50 +843,26 @@ async def exp_agent_completion(
             yield answer
 
     if not req.get("stream", True):
-        full_content = ""
-        reference: dict[str, Any] = {}
-        final_answer: dict[str, Any] = {}
-        trace_items: list[dict[str, Any]] = []
-        structured_output: dict[str, Any] = {}
+        aggregate = AgentCompletionAccumulator(return_trace=return_trace)
         try:
             async for answer in with_first():
-                parsed = parse_answer(answer)
+                parsed = normalize_agent_event(parse_answer(answer))
                 failure = agent_event_error(parsed)
                 if failure:
                     return get_data_error_result(retmsg=failure)
-                if parsed.get("event") == "message":
-                    full_content += parsed["data"]["content"]
-                if parsed.get("data", {}).get("reference"):
-                    reference.update(parsed["data"]["reference"])
-                if parsed.get("event") == "node_finished":
-                    data = parsed.get("data", {})
-                    outputs = data.get("outputs", {})
-                    component_id = data.get("component_id")
-                    if component_id is not None and "structured" in outputs:
-                        structured_output[component_id] = copy.deepcopy(outputs["structured"])
-                    if return_trace:
-                        trace_items.append({"component_id": component_id, "trace": [copy.deepcopy(data)]})
-                final_answer = parsed
+                aggregate.add(parsed)
+            return get_json_result(data=aggregate.finish())
         except Exception:
             logging.exception("Agent completion failed")
             return get_data_error_result(retmsg="Agent completion failed.")
         finally:
             await answers.aclose()
-        if not final_answer:
-            return get_data_error_result(retmsg="Agent completion returned no events.")
-        final_answer.setdefault("data", {})["content"] = full_content
-        final_answer["data"]["reference"] = reference
-        if structured_output:
-            final_answer["data"]["structured"] = structured_output
-        if return_trace:
-            final_answer["data"]["trace"] = trace_items
-        return get_json_result(data=final_answer)
 
     async def generate() -> AsyncGenerator[str, None]:
         trace_items: list[dict[str, Any]] = []
         try:
             async for answer in with_first():
-                ans = parse_answer(answer)
+                ans = normalize_agent_event(parse_answer(answer))
                 failure = agent_event_error(ans)
                 if failure:
                     ans.update(event="error", code=100, message=failure, data={"error": failure})
@@ -871,7 +875,7 @@ async def exp_agent_completion(
                         trace_items.append({"component_id": data.get("component_id"), "trace": [copy.deepcopy(data)]})
                         ans.setdefault("data", {})["trace"] = trace_items
                     yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
-                elif event in ("message", "message_end", "a2ui_command"):
+                elif event in ("message", "message_end", "a2ui_command", "user_inputs", "workflow_finished"):
                     yield "data:" + json.dumps(ans, ensure_ascii=False) + "\n\n"
         except Exception:
             logging.exception("Agent stream failed")

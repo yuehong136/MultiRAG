@@ -145,3 +145,65 @@ session.user_id 却归真实调用者；owner 删除用 SQL 读回确认，既�
 不声称关联行级联删除，测试显式清理其自有版本/session。
 首轮输入测试错选无表单的 Message，改用真实支持表单的 Begin 后复跑 owner 分支；
 其他五种调用者及七项 origin 测试已通过。最终批次复跑覆盖完整矩阵。
+
+## 18 · faae91d34fde8c371fb50ac63e16bc0d15033932
+
+采用 runtime stream=false 聚合意图，映射到 FastAPI 响应及现有 CAS/资源清理合同。
+统一 accumulator 汇总 content/reference/structured/可选 trace，保留终态 outputs。
+流式和非流式使用同一执行迭代器；成功输出需已终止且有实际结果，纯计时信息、空或 null
+structured 不能冒充结果。成功 CAS 与 replica 写入确认后才释放终态和 `[DONE]`，
+提交锁与 editor/bootstrap 共用；写入、读取异常或损坏 payload 均明确失败。
+没有把 Redis get 的吞错 None 当缺失再覆盖旧状态，阻塞提交放线程执行。
+
+保留本地无 session 草稿 runtime，不机械采用后期自动创建 workflow session 的结构。
+不采用目标异常转成功字符串、空执行 data={} 成功、提交失败只记日志的实现；
+`09dc4c884` 对空输出仅回 session_id 的成功也不采用。取消/disconnect 继续传播，
+close callback 负责已绑定运行的清理；bind/setup 失败仍执行 finish 清理，
+仅已绑定运行写 cancel 标记，未注册 attempt 不产生新的取消状态。
+finish 已获胜后的既有终态竞态语义保持，不承诺回滚已越过屏障的成功提交。
+
+后修 `f0f10b609`：转发 user_inputs/workflow_finished，表单与终态等 SQL/Redis 保存后交付；
+`e9cdd09b6`：session 引用逐轮追加，读取 citation map/列表与历史包形状；
+`38f8f8a65`：事件及组件参数的 deferred callable 归一为 null，不泄漏 partial 的 repr，
+其他不可序列化值仍报错，不把任意对象 stringify 成成功输出。
+已有 session 的空执行保存失败轮及用户输入，不追加成功助手答案；SQL 与 replica 分支分离。
+
+本次真实 HTTP/SQL/Redis：正常流式/非流式 runtime/session、content/reference/structured/
+trace、真实 Message 执行加明确的受控输出边界、两轮引用及 citation ID 读回；异常、晚于
+终态的 error、零事件/空内容、真实 POST Task 取消、真实写失败/锁失败均零副本提交、
+无成功终态。真实 UserFillUp 四种路径持久化 pause、交付表单并 resume；网络读失败和
+损坏缓存不能初始化覆盖。结果与清理均独立读回。引用模型与外部 provider 仍受控。
+
+初轮新增测试对 SQL reference/dsl 的形状假设错误，已按真实存储兼容包/数组/字符串 DSL
+修正；旧引用写入覆盖的问题作为本项回归修复，原单轮 SQL 断言改为完整包数组断言，
+新增两轮断言锁定前轮引用保留。24 项结果/故障/已有图片引用集成、4 项表单集成通过，
+最终存储读失败与最新源码专项/通用门禁结果补记在下方。
+
+## 交付范围与环境
+
+八项按同一 owner 串行执行，无 push。独立交付分支为
+`codex/agent-runtime-alignment-20261007`，工作树为 Codex 附加的隔离 worktree。
+第 11 项首次误带共享 index 的其他任务暂存，纠正时主分支已被其他提交推进，原子校验
+阻止改写其他任务历史；独立修正版为 `4919bcbf`，本分支排除混合提交，主分支历史保留。
+Web 使用 `git commit --only` 限定五个文件，其余 studio/GraphRAG 等 WIP 保留。
+
+本机既有 .venv/DeepDOC 资源供隔离 worktree 复用，仅复制已忽略的本地配置，未更改共享
+配置或安装依赖；缺失模型资源的首次测试初始化触发下载尝试后已中断，改用本机现有资源。
+真实 HTTP 使用自有监听器；PostgreSQL scratch 库、fixture-owned Redis/对象/索引按现有
+fixture 清理，未重启生产/常驻服务，未运行线上迁移或部署。
+
+最终源码已通过 `make verify`：8 条 import contracts、async DB 门禁、mypy 144 文件、
+unit **6115 passed**（3 条既有 transformers deprecation warnings）。最新 runtime completion
+及 replica 专项 `make integration` **34 passed，无 skip**。完整 core 门禁实际为
+**993 passed / 2 failed / 0 skip / 2 deselected**，报告 `.test-results/20261007-184952-5940`。
+其中草稿绑定失败后的 close callback 曾新建 cancel 标记，已修复为仅已绑定运行写标记；
+不放宽原有 SQL/Redis 零残留断言。修复后的取消、终态、close、runtime completion/replica
+六个文件复跑 **158 passed / 1 failed / 0 skip**，草稿与发布的绑定失败两分支均通过，
+报告 `.test-results/20261007-195205-40151`；修复后 `make verify` 再次 **6115 passed**。
+剩余失败为无关 Skill core 的 Go CLI 编译：默认 PATH 无 go，指定现有 Go 1.25.14 后，
+该工具链的 `src/fmt` 等标准库目录为空，编译仍失败。没有修改无关 Go 代码或安装工具链，
+因此完整 core 门禁尚未全绿；本批 Python admin/client 的真实 HTTP/SQL 验收已通过。
+Web 的 236 项 API 测试、lint 0 errors、文件体积门禁、隔离完整 build，以及
+真实 Web Agent/Search、admin/CLI、绑定隔离 API 的 smoke 均通过。
+本机日志与源码 SHA256 manifest 在 `/tmp/multirag-runtime-20261007/`，服务准备/测试/清理
+证据在各次 `.test-results`，不以此前历史通过数替代本轮结果。

@@ -32,6 +32,7 @@ from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.identity.mcp_delegation.contracts import McpDelegationError
 from api.identity.principal import Principal
 from api.identity.run_context import RunContext
+from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event
 from api.utils.api_utils import get_data_openai
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
@@ -561,6 +562,7 @@ async def completion(
     if run_context is None or run_context.principal is None:
         run_kwargs["user_id"] = legacy_user_id
     terminal_frames: list[dict[str, Any]] = []
+    aggregate = AgentCompletionAccumulator()
     finish_attempted = False
     round_persisted = False
     prior_history = copy.deepcopy(canvas.history)
@@ -589,12 +591,14 @@ async def completion(
         async with aclosing(canvas.run(**run_kwargs)) as run_events:
             async for ans in run_events:
                 ans["session_id"] = session_id
+                ans = normalize_agent_event(ans)
                 failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
                 if failure:
                     await persist_failure(failure)
                     yield failure_frame(failure)
                     return
-                if ans.get("event") in {"message_end", "workflow_finished"}:
+                aggregate.add(ans)
+                if ans.get("event") in {"message_end", "workflow_finished", "user_inputs"}:
                     terminal_frames.append(ans)
                     continue
                 if ans["event"] == "message":
@@ -621,6 +625,7 @@ async def completion(
 
         # Resolve the lifecycle race before any successful append. A cancelled
         # winner follows the failure path once, without an extra session round.
+        aggregate.finish()
         finish_attempted = True
         await asyncio.to_thread(require_runtime_finish, canvas.task_id)
         # Validate terminal payloads before a successful SQL commit as well.
@@ -634,7 +639,13 @@ async def completion(
                 "surface_ids": sorted(a2ui_surface_ids),
             }
         conv["message"].append(assistant_message)
-        conv["reference"] = canvas.get_reference()
+        prior_references = conv.get("reference") or []
+        if isinstance(prior_references, dict):
+            prior_references = [prior_references] if "chunks" in prior_references else [value for _, value in sorted(prior_references.items(), key=lambda item: int(item[0]))]
+        if not isinstance(prior_references, list):
+            raise ValueError("Invalid stored Agent references.")
+        current_reference = canvas.get_reference()
+        conv["reference"] = copy.deepcopy(prior_references) + [copy.deepcopy(current_reference) if isinstance(current_reference, dict) else {}]
         conv["errors"] = canvas.error
         conv["dsl"] = str(canvas)
 
