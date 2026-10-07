@@ -12,10 +12,11 @@ from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from api.db.db_models import File, File2Document
+from api.db import FileType
+from api.db.db_models import Document, File, File2Document, Knowledgebase, Tenant
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
-from common.constants import FileSource
+from common.constants import FileSource, StatusEnum
 from common.time_utils import current_timestamp, datetime_format
 
 
@@ -120,6 +121,42 @@ class File2DocumentService(CommonService):
         db.commit()
         updated_obj = db.query(cls.model).filter_by(id=file_id).one()
         return updated_obj
+
+    @classmethod
+    def get_authorized_document_storage_address(cls, db: Session, doc_id: str, tenant_id: str) -> tuple[str, str]:
+        """Resolve a document's registered object only inside an owned dataset.
+
+        File-to-document links intentionally share source bytes with datasets.
+        For local source bytes the namespace must be a folder of the source
+        file's tenant; a forged parent must never redirect into another tenant.
+        """
+        denied = "You do not have access to this document."
+        tenant = db.get(Tenant, tenant_id)
+        doc = db.get(Document, doc_id)
+        kb = db.get(Knowledgebase, doc.kb_id) if doc else None
+        if not tenant or tenant.status != StatusEnum.VALID.value or not doc or doc.status != StatusEnum.VALID.value or not kb or kb.status != StatusEnum.VALID.value or kb.tenant_id != tenant_id:
+            raise PermissionError(denied)
+
+        links = cls.get_by_document_id(db, doc_id)
+        if len(links) > 1:
+            raise PermissionError(denied)
+        bucket, key = kb.id, doc.location
+        if links:
+            file = db.get(File, links[0].file_id) if links[0].file_id else None
+            if file is None:
+                raise PermissionError(denied)
+            if not file.source_type or file.source_type == FileSource.LOCAL:
+                folder = db.get(File, file.parent_id)
+                if not file.tenant_id or not folder or folder.tenant_id != file.tenant_id or folder.type != FileType.FOLDER.value:
+                    raise PermissionError(denied)
+                bucket, key = folder.id, file.location
+        # Storage adapters can join namespaces/keys to a filesystem or a shared
+        # object prefix. Reject malformed addresses instead of normalizing them.
+        if not bucket or bucket in {".", ".."} or any(c in bucket for c in "/\\") or any(ord(c) < 32 or ord(c) == 127 for c in bucket):
+            raise PermissionError(denied)
+        if not key or key.startswith("/") or "\\" in key or any(part in {".", ".."} for part in key.split("/")) or any(ord(c) < 32 or ord(c) == 127 for c in key):
+            raise PermissionError(denied)
+        return bucket, key
 
     @classmethod
     def get_storage_address(cls, db: Session, doc_id: str = None, file_id: str = None):

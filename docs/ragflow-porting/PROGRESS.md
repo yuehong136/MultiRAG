@@ -3208,3 +3208,37 @@ PDF 只验收字节输出合同，真实 XeLaTeX、字体渲染、远程 OpenDat
 重建/配置改变/失败关闭语义及存量调查见 [IMAP 删除同步](imap-deletion-sync.md)。
 当前环境 IMAP 存量为 0，无需迁移；隔离完整 verify 6153 passed，真实存储 15+2 passed、
 浏览器明暗 2 passed、Web 构建通过。SaaS 和其他部署历史数据未验收，不 push。
+
+## 7e83c5f4219e4e11ae92cfda114b18c992f0ad91 · beta 文档下载权限
+
+2026-10-07 完整核对目标代码/测试 diff 与冻结
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 内 `b89878c59` / `58819f5d3` /
+`87918650f` 的路由演进，remote 为 `infiniflow/ragflow`，未 fetch。
+当前本地仍真实注册 beta `GET /api/v1/documents/{document_id}` 与普通 token 的
+`GET /api/v1/datasets/{dataset_id}/documents/{document_id}`；保留它们的认证类型和二进制合同，
+不沿用后续 Python 整体删除或扩展为无关 legacy 入口改造。
+
+采用唯一 beta token 与知识库 tenant 绑定；本地加强 Bearer 格式、有效 tenant/dataset/document，
+两个 SDK 下载入口共用授权地址解析，拒绝重复/断裂映射、错误源目录租户及不可信路径。
+既有 `/files/link-to-datasets` 允许显式共享源文件到知识库，因此保留该映射的内容授权：
+源 File 可属于其他租户，但 namespace 必须属于源 File 自己的目录，不能以任意 parent_id
+跳到另一租户对象。非本地源沿用文档知识库 namespace；内部可信 worker 的旧地址 helper 不变。
+权限合同见 [SDK 文档下载权限](../references/document-download-authorization.md)。
+
+核对本仓后台/MCP 及相邻 Web 消费者：Web 二进制入口主要为 legacy document/get；
+`knowledge-document-parser.ts` 已说明 dataset/document GET 返回文件，JSON 读回走列表；
+MCP 走 dataset 文档列表，未发现直接使用 beta 下载的本地消费者。外部 beta API 合同保留。
+集成测试通过官方 route context 展平核对两个请求的实际 SDK endpoint，再通过真实 HTTP、
+scratch PostgreSQL token/资源行、自有 MinIO 桶读取原始字节，非函数直调或存储成功替身。
+
+验证：定向 unit 8 passed；集成 3 passed、无 skip，证据
+`.test-results/20261007-183433-94583`。覆盖 owner private/team 与 local/shared 原文、普通
+SDK dataset 下载、空对象、无效/重复/孤立 token、有效团队成员自身 token 对其他租户拒绝、
+停用 tenant、失效/孤立资源、dataset/document 错配与存储地址错误。
+拒绝时真实 storage.get 调用数为零，SQL/原始对象独立快照不变，清理桶和 SQL 行断言通过。
+
+最终 `make verify` 的 Ruff、8 个 import contracts、async 门禁和 mypy 143 源文件均通过；
+unit 6266 passed / 1 failed，唯一失败是其他 owner GraphRAG 改动中的
+`test_delete_knowledge_graph_offloads_doc_store_delete` 假件缺 `db_type`，本项及 Memory 用例均无失败。
+本次未修改该范围。`make smoke` 的现有 8123 健康检查通过；常驻服务未重启。
+真实生产部署、非 MinIO 适配器及其他下载/认证入口未验收；不 push。

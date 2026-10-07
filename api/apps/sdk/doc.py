@@ -4,11 +4,11 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, model_validator
 from sqlalchemy.orm import Session
 
-from api.db.db_models import APIToken, Document, Task, get_db
+from api.db.db_models import APIToken, Document, Task, Tenant, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
@@ -19,7 +19,7 @@ from api.db.services.task_service import TaskService, cancel_all_task_of, queue_
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
 from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata, resolve_reference_metadata_preferences
 from common import settings
-from common.constants import LLMType, RetCode, TaskStatus
+from common.constants import LLMType, RetCode, StatusEnum, TaskStatus
 from common.metadata_utils import apply_meta_data_filter, convert_conditions
 from core.app.tag import label_question
 from core.nlp import search
@@ -112,7 +112,7 @@ class RetrievalTestRequest(BaseModel):
 
 
 @router.get("/datasets/{dataset_id}/documents/{document_id}", summary="下载文档")
-def download_document(dataset_id: str, document_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
+def download_document(dataset_id: str, document_id: str, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)) -> Response:
     """
     从数据集下载文档
 
@@ -128,15 +128,18 @@ def download_document(dataset_id: str, document_id: str, db: Session = Depends(g
     if not document_id:
         return get_error_data_result(retmsg="Specify document_id please.")
 
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
+    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
         return get_error_data_result(retmsg=f"You do not own the dataset {dataset_id}.")
 
-    doc = DocumentService.query(db, kb_id=dataset_id, id=document_id)
+    doc = DocumentService.query(db, kb_id=dataset_id, id=document_id, status=StatusEnum.VALID.value)
     if not doc:
         return get_error_data_result(retmsg=f"The dataset not own the document {document_id}.")
 
     doc = doc[0]
-    bucket, name = File2DocumentService.get_storage_address(db, doc_id=document_id)
+    try:
+        bucket, name = File2DocumentService.get_authorized_document_storage_address(db, document_id, tenant_id)
+    except PermissionError:
+        return get_error_data_result(retmsg="You do not have access to this document.")
     file_stream = settings.STORAGE_IMPL.get(bucket, name)
     if not file_stream:
         return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
@@ -151,26 +154,35 @@ def download_doc(
     document_id: str,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> Response:
     """
     仅通过文档ID下载文档（使用API Token认证）
     """
     token = request.headers.get("Authorization", "").split()
-    if len(token) != 2:
+    if len(token) != 2 or token[0].lower() != "bearer":
         return get_error_data_result(retmsg="Authorization is not valid!")
     token = token[1]
     objs = APIToken.query(db, beta=token)
     if not objs:
         return get_error_data_result(retmsg="Authentication error: API key is invalid!")
+    if len(objs) != 1:
+        return get_error_data_result(retmsg="Authentication error: API key configuration is ambiguous.")
+    tenant_id = objs[0].tenant_id
+    if not tenant_id or not Tenant.query(db, id=tenant_id, status=StatusEnum.VALID.value):
+        return get_error_data_result(retmsg="Authentication error: API key is invalid!")
 
     if not document_id:
         return get_error_data_result(retmsg="Specify document_id please.")
-    doc = DocumentService.query(db, id=document_id)
+    doc = DocumentService.query(db, id=document_id, status=StatusEnum.VALID.value)
     if not doc:
         return get_error_data_result(retmsg=f"The dataset not own the document {document_id}.")
-    # The process of downloading
-    doc_id, doc_location = File2DocumentService.get_storage_address(db, doc_id=document_id)
-    file_stream = settings.STORAGE_IMPL.get(doc_id, doc_location)
+    if not KnowledgebaseService.query(db, id=doc[0].kb_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
+        return get_error_data_result(retmsg="You do not have access to this document.")
+    try:
+        bucket, key = File2DocumentService.get_authorized_document_storage_address(db, document_id, tenant_id)
+    except PermissionError:
+        return get_error_data_result(retmsg="You do not have access to this document.")
+    file_stream = settings.STORAGE_IMPL.get(bucket, key)
     if not file_stream:
         return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
     file = BytesIO(file_stream)

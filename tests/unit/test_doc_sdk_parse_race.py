@@ -41,12 +41,14 @@ async def test_download_document_uses_storage_address_and_preserves_binary(monke
 
     monkeypatch.setattr(doc_routes.KnowledgebaseService, "query", lambda *_args, **_kwargs: [object()])
     monkeypatch.setattr(doc_routes.DocumentService, "query", lambda *_args, **_kwargs: [doc])
-    monkeypatch.setattr(doc_routes.File2DocumentService, "get_storage_address", lambda *_args, **_kwargs: ("bucket-1", "path/doc.bin"))
+    authorized_address = Mock(return_value=("bucket-1", "path/doc.bin"))
+    monkeypatch.setattr(doc_routes.File2DocumentService, "get_authorized_document_storage_address", authorized_address)
     monkeypatch.setattr(doc_routes.File2DocumentService, "get_by_document_id", Mock(side_effect=AssertionError("legacy file lookup should not be used")))
     monkeypatch.setattr(doc_routes.settings, "STORAGE_IMPL", storage)
 
     response = doc_routes.download_document("kb-1", "doc-1", db=db, tenant_id="tenant-1")
 
+    authorized_address.assert_called_once_with(db, "doc-1", "tenant-1")
     assert isinstance(response, StreamingResponse)
     assert await _streaming_response_body(response) == binary_content
     assert storage.get_calls == [("bucket-1", "path/doc.bin", None)]
