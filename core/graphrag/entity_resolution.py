@@ -95,13 +95,13 @@ class EntityResolution(Extractor):
         callback(msg=f"Identified {num_candidates} candidate pairs")
         remain_candidates_to_resolve = num_candidates
 
-        resolution_result = set()
+        resolution_result: set[tuple[str, str]] = set()
         resolution_result_lock = asyncio.Lock()
         resolution_batch_size = 100
         max_concurrent_tasks = 5
         semaphore = asyncio.Semaphore(max_concurrent_tasks)
 
-        async def limited_resolve_candidate(candidate_batch, result_set, result_lock):
+        async def limited_resolve_candidate(candidate_batch: tuple[str, list[tuple[str, str]]], result_set: set[Any], result_lock: asyncio.Lock) -> None:
             nonlocal remain_candidates_to_resolve, callback
             async with semaphore:
                 try:
@@ -116,10 +116,12 @@ class EntityResolution(Extractor):
                     except TimeoutError:
                         logging.warning(f"Timeout resolving {candidate_batch}, skipping...")
                         remain_candidates_to_resolve -= len(candidate_batch[1])
-                        callback(msg=f"Failed to resolve {len(candidate_batch[1])} pairs due to timeout, skipped. {remain_candidates_to_resolve} remain.")
+                        callback(msg=f"Failed to resolve {len(candidate_batch[1])} pairs due to timeout.")
+                        raise
 
                 except Exception as exception:
                     logging.error(f"Error resolving candidate batch: {exception}")
+                    raise
 
         tasks = []
         for key, lst in candidate_resolution.items():
@@ -127,10 +129,10 @@ class EntityResolution(Extractor):
                 continue
             for i in range(0, len(lst), resolution_batch_size):
                 batch = (key, lst[i : i + resolution_batch_size])
-                tasks.append(limited_resolve_candidate(batch, resolution_result, resolution_result_lock))
+                tasks.append(asyncio.create_task(limited_resolve_candidate(batch, resolution_result, resolution_result_lock)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
+        except BaseException as e:
             logging.error(f"Error resolving candidate pairs: {e}")
             for t in tasks:
                 t.cancel()
@@ -148,7 +150,7 @@ class EntityResolution(Extractor):
         # "dictionary keys changed during iteration"。semaphore（并发 5）只限流不互斥。
         merge_lock = asyncio.Lock()
 
-        async def limited_merge_nodes(graph, nodes, change):
+        async def limited_merge_nodes(graph: nx.Graph, nodes: list[str], change: GraphChange) -> None:
             async with merge_lock:
                 await self._merge_graph_nodes(graph, nodes, change, task_id)
 
@@ -158,7 +160,7 @@ class EntityResolution(Extractor):
             tasks.append(asyncio.create_task(limited_merge_nodes(graph, merging_nodes, change)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
+        except BaseException as e:
             logging.error(f"Error merging nodes: {e}")
             for t in tasks:
                 t.cancel()
@@ -175,7 +177,9 @@ class EntityResolution(Extractor):
             change=change,
         )
 
-    async def _resolve_candidate(self, candidate_resolution_i: tuple[str, list[tuple[str, str]]], resolution_result: set[str], resolution_result_lock: asyncio.Lock, task_id: str = ""):
+    async def _resolve_candidate(
+        self, candidate_resolution_i: tuple[str, list[tuple[str, str]]], resolution_result: set[tuple[str, str]], resolution_result_lock: asyncio.Lock, task_id: str = ""
+    ) -> None:
         if task_id:
             if has_canceled(task_id):
                 logging.info(f"Task {task_id} cancelled during entity resolution candidate processing.")
@@ -201,11 +205,11 @@ class EntityResolution(Extractor):
                 )
 
             except TimeoutError:
-                logging.warning("_resolve_candidate._async_chat timeout, skipping...")
-                return
+                logging.warning("_resolve_candidate._async_chat timeout")
+                raise
             except Exception as e:
                 logging.error(f"_resolve_candidate._async_chat failed: {e}")
-                return
+                raise
 
         logging.debug(f"_resolve_candidate chat prompt: {text}\nchat response: {response}")
         result = self._process_results(

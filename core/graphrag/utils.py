@@ -28,8 +28,9 @@ from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
 from common.connection_utils import timeout
-from common.doc_store.doc_store_base import OrderByExpr
 from common.misc_utils import get_uuid, thread_pool_exec
+from core.graphrag.persistence import checked_insert, delete_rows, graph_rows, settled_io, validate_chunks
+from core.graphrag.phase_markers import clear_phase_markers
 from core.nlp import rag_tokenizer, search
 from core.utils.redis_conn import REDIS_CONN
 
@@ -38,6 +39,64 @@ GRAPH_FIELD_SEP = "<SEP>"
 ErrorHandlerFn = Callable[[BaseException | None, str | None, dict | None], None]
 
 chat_limiter = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
+
+
+_INSERT_BULK_SIZE = max(1, int(os.environ.get("GRAPHRAG_INSERT_BULK_SIZE", 64)))
+_INSERT_CONCURRENCY = max(1, int(os.environ.get("GRAPHRAG_INSERT_CONCURRENCY", 4)))
+
+
+async def insert_chunks_bounded(chunks: list[dict[str, Any]], tenant_id: str, kb_id: str, *, index_name: str, callback: Callable[..., Any] | None = None, label: str = "Insert chunks") -> None:
+    """Fixed worker count; stop dispatch on error and drain every executor write.
+
+    Timeout never triggers an overlapping retry. settled_io waits for the
+    underlying thread even on cancellation; gather below owns every worker.
+    """
+    if not chunks:
+        return
+    offsets = iter(range(0, len(chunks), _INSERT_BULK_SIZE))
+    failed = asyncio.Event()
+    done = 0
+
+    async def worker() -> None:
+        nonlocal done
+        try:
+            while not failed.is_set():
+                offset = next(offsets, None)
+                if offset is None:
+                    return
+                batch = chunks[offset : offset + _INSERT_BULK_SIZE]
+                for attempt in range(3):
+                    try:
+                        deadline = 3 if os.environ.get("ENABLE_TIMEOUT_ASSERTION") else 30000000
+                        await asyncio.wait_for(settled_io(checked_insert, batch, index_name, kb_id), deadline)
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        if attempt == 2 or failed.is_set():
+                            raise
+                        await asyncio.sleep(2**attempt)
+                done += len(batch)
+                if callback:
+                    callback(msg=f"{label}: {done}/{len(chunks)}")
+        except BaseException:
+            failed.set()
+            raise
+
+    tasks = [asyncio.create_task(worker()) for _ in range(min(_INSERT_CONCURRENCY, (len(chunks) + _INSERT_BULK_SIZE - 1) // _INSERT_BULK_SIZE))]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        failed.set()
+        for task in tasks:
+            task.cancel()
+        drain = asyncio.gather(*tasks, return_exceptions=True)
+        while not drain.done():
+            try:
+                await asyncio.shield(drain)
+            except asyncio.CancelledError:
+                continue
+        raise
 
 
 @dataclasses.dataclass
@@ -297,11 +356,19 @@ def chunk_id(chunk):
     return xxhash.xxh64((chunk["content_with_weight"] + chunk["kb_id"]).encode("utf-8")).hexdigest()
 
 
-async def graph_node_to_chunk(kb_id, embd_mdl, ent_name, meta, chunks):
+def entity_chunk_id(kb_id: str, name: str) -> str:
+    return chunk_id({"content_with_weight": json.dumps(["entity", name]), "kb_id": kb_id})
+
+
+def relation_chunk_id(kb_id: str, source: str, target: str) -> str:
+    return chunk_id({"content_with_weight": json.dumps(["relation", *get_from_to(source, target)]), "kb_id": kb_id})
+
+
+async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
     global chat_limiter
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     chunk = {
-        "id": get_uuid(),
+        "id": entity_chunk_id(kb_id, ent_name),
         "important_kwd": [ent_name],
         "title_tks": rag_tokenizer.tokenize(ent_name),
         "entity_kwd": ent_name,
@@ -354,10 +421,10 @@ async def get_relation(tenant_id, kb_id, from_ent_name, to_ent_name, size=1):
     return res
 
 
-async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta, chunks):
+async def graph_edge_to_chunk(kb_id: str, embd_mdl: Any, from_ent_name: str, to_ent_name: str, meta: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     chunk = {
-        "id": get_uuid(),
+        "id": relation_chunk_id(kb_id, from_ent_name, to_ent_name),
         "from_entity_kwd": from_ent_name,
         "to_entity_kwd": to_ent_name,
         "knowledge_graph_kwd": "relation",
@@ -383,25 +450,22 @@ async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta,
     chunks.append(chunk)
 
 
-async def does_graph_contains(tenant_id, kb_id, doc_id):
-    # Get doc_ids of graph
-    fields = ["source_id"]
-    condition = {
-        "knowledge_graph_kwd": ["graph"],
-        "removed_kwd": "N",
-    }
+def load_graph_source_chunks(tenant_id: str, kb_id: str, doc_id: str) -> list[str]:
     with db_connection() as db:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
-        kb_name = kb.name
+        index_name = search.index_name_one(tenant_id, kb.name)
+    store = settings.docStoreConn
+    if store.db_type() != "milvus":
+        raise RuntimeError("GraphRAG checkpoints require checked atomic upsert storage")
+    rows = store.graph_source_rows(index_name, kb_id, doc_id)
+    if any(row.get("kb_id") != kb_id or row.get("doc_id") != doc_id for row in rows):
+        raise RuntimeError("Invalid GraphRAG source snapshot scope")
+    return [row["content_with_weight"] for row in rows if row.get("content_with_weight")]
 
-    index_name = search.index_name(tenant_id, [kb_name])
-    res = await thread_pool_exec(settings.docStoreConn.search, fields, [], condition, [], OrderByExpr(), 0, 1, index_name, [kb_id])
-    fields2 = settings.docStoreConn.get_fields(res, fields)
-    graph_doc_ids = set()
-    for chunk_id, chunk_data in fields2.items():
-        if isinstance(chunk_data, dict) and "source_id" in chunk_data:
-            graph_doc_ids = set(chunk_data["source_id"])
-    return doc_id in graph_doc_ids
+
+async def does_graph_contains(tenant_id: str, kb_id: str, doc_id: str) -> bool:
+    graph = await get_graph(tenant_id, kb_id)
+    return graph is not None and doc_id in graph.graph.get("source_id", [])
 
 
 async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
@@ -420,31 +484,28 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
     return doc_ids
 
 
-async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
-    conds = {"fields": ["content_with_weight", "removed_kwd", "source_id"], "size": 1, "knowledge_graph_kwd": ["graph"]}
+async def get_graph(tenant_id: str, kb_id: str, exclude_rebuild: str | list[str] | None = None) -> nx.Graph | None:
     with db_connection() as db:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
-        kb_name = kb.name
-
-    index_name = search.index_name(tenant_id, [kb_name])
-    res = await settings.retriever.search(conds, index_name, [kb_id])
-    if not res.total == 0:
-        for id in res.ids:
-            try:
-                if res.field[id]["removed_kwd"] == "N":
-                    g = json_graph.node_link_graph(json.loads(res.field[id]["content_with_weight"]), edges="edges")
-                    if "source_id" not in g.graph:
-                        g.graph["source_id"] = res.field[id]["source_id"]
-                else:
-                    g = await rebuild_graph(tenant_id, kb_id, exclude_rebuild)
-                return g
-            except Exception:
-                continue
-    result = None
-    return result
+        index_name = search.index_name_one(tenant_id, kb.name)
+    rows = await settled_io(graph_rows, index_name, kb_id, ["graph"])
+    if not rows:
+        return None
+    checkpoint_id = chunk_id({"content_with_weight": "graph_checkpoint", "kb_id": kb_id})
+    selected = [row for row in rows if row["pk"] == checkpoint_id] or rows
+    if len(selected) != 1:
+        raise RuntimeError("Ambiguous persisted graph checkpoints")
+    row = selected[0]
+    if row.get("removed_kwd", "N") != "N":
+        return await rebuild_graph(tenant_id, kb_id, exclude_rebuild)
+    graph = json_graph.node_link_graph(json.loads(row["content_with_weight"]), edges="edges")
+    if "source_id" not in graph.graph:
+        sources = row.get("source_id", [])
+        graph.graph["source_id"] = sources.split("\n") if isinstance(sources, str) else sources
+    return graph
 
 
-async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, change: GraphChange, callback):
+async def set_graph(tenant_id: str, kb_id: str, embd_mdl: Any, graph: nx.Graph, change: GraphChange, callback: Callable[..., Any] | None) -> None:
     global chat_limiter
     start = asyncio.get_running_loop().time()
 
@@ -452,47 +513,12 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         kb_name = kb.name
 
-    index_name = search.index_name(tenant_id, [kb_name])
+    index_name = search.index_name_one(tenant_id, kb_name)
 
-    await thread_pool_exec(settings.docStoreConn.delete, {"knowledge_graph_kwd": ["graph", "subgraph"]}, index_name, kb_id)
-
-    if change.removed_nodes:
-        await thread_pool_exec(settings.docStoreConn.delete, {"knowledge_graph_kwd": ["entity"], "entity_kwd": sorted(change.removed_nodes)}, index_name, kb_id)
-
-    if change.removed_edges:
-
-        async def del_edges(from_node: str, to_node: str) -> None:
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    async with chat_limiter:
-                        await thread_pool_exec(settings.docStoreConn.delete, {"knowledge_graph_kwd": ["relation"], "from_entity_kwd": from_node, "to_entity_kwd": to_node}, index_name, kb_id)
-                    return
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        wait = 2**attempt
-                        logging.warning(f"del_edges({from_node}, {to_node}) attempt {attempt + 1} failed: {e}, retrying in {wait}s")
-                        await asyncio.sleep(wait)
-                    else:
-                        raise
-
-        tasks = []
-        for from_node, to_node in change.removed_edges:
-            tasks.append(asyncio.create_task(del_edges(from_node, to_node)))
-
-        try:
-            await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
-            logging.error(f"Error while deleting edges: {e}")
-            for t in tasks:
-                t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-
-    now = asyncio.get_running_loop().time()
-    if callback:
-        callback(msg=f"set_graph removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges from index in {now - start:.2f}s.")
-    start = now
+    # Complete snapshot before any writes. Legacy APIs hide query failures.
+    previous = await settled_io(graph_rows, index_name, kb_id, ["graph", "subgraph", "entity", "relation"])
+    graph.graph["checkpoint_revision"] = get_uuid()
+    clear_phase_markers(kb_id)
 
     chunks = [
         {
@@ -514,7 +540,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             subgraph.nodes[n]["source_id"] = [source]
         chunks.append(
             {
-                "id": get_uuid(),
+                "id": chunk_id({"content_with_weight": f"subgraph::{source}", "kb_id": kb_id}),
                 "content_with_weight": json.dumps(nx.node_link_data(subgraph, edges="edges"), ensure_ascii=False),
                 "knowledge_graph_kwd": "subgraph",
                 "kb_id": kb_id,
@@ -532,7 +558,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
-    except Exception as e:
+    except BaseException as e:
         logging.error(f"Error in get_embedding_of_nodes: {e}")
         for t in tasks:
             t.cancel()
@@ -549,7 +575,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
-    except Exception as e:
+    except BaseException as e:
         logging.error(f"Error in get_embedding_of_edges: {e}")
         for t in tasks:
             t.cancel()
@@ -561,45 +587,41 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
         callback(msg=f"set_graph converted graph change to {len(chunks)} chunks in {now - start:.2f}s.")
     start = now
 
-    enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
-    es_bulk_size = 4
-    for b in range(0, len(chunks), es_bulk_size):
-        timeout = 3 if enable_timeout_assertion else 30000000
-        max_retries = 3
-        for attempt in range(max_retries):
-            task = asyncio.create_task(thread_pool_exec(settings.docStoreConn.insert, chunks[b : b + es_bulk_size], index_name, kb_id))
-            try:
-                doc_store_result = await asyncio.wait_for(task, timeout=timeout)
-                break
-            except TimeoutError:
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                if attempt < max_retries - 1:
-                    wait = 2**attempt
-                    logging.warning(f"Insert batch {b}/{len(chunks)} attempt {attempt + 1} timed out, retrying in {wait}s")
-                    await asyncio.sleep(wait)
-                else:
-                    raise
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    wait = 2**attempt
-                    logging.warning(f"Insert batch {b}/{len(chunks)} attempt {attempt + 1} failed: {e}, retrying in {wait}s")
-                    await asyncio.sleep(wait)
-                else:
-                    raise
-        if b % 100 == es_bulk_size and callback:
-            callback(msg=f"Insert chunks: {b}/{len(chunks)}")
-        if doc_store_result:
-            error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
-            raise Exception(error_message)
-    now = asyncio.get_running_loop().time()
+    # Auxiliary rows first, authoritative graph checkpoint last. Failed inserts
+    # leave the prior graph readable, and pruning never precedes persistence.
+    checkpoint = chunks[0]
+    checkpoint["id"] = chunk_id({"content_with_weight": "graph_checkpoint", "kb_id": kb_id})
+    await settled_io(validate_chunks, chunks, index_name)
+    await insert_chunks_bounded(chunks[1:], tenant_id, kb_id, index_name=index_name, callback=callback)
+    await insert_chunks_bounded([checkpoint], tenant_id, kb_id, index_name=index_name, callback=callback)
+    new_ids = {chunk["id"] for chunk in chunks}
+    all_ids = new_ids | {row["pk"] for row in previous}
+    graph_edges = {get_from_to(source, target) for source, target in graph.edges()}
+    updated_nodes = change.removed_nodes | change.added_updated_nodes
+    updated_edges = change.removed_edges | change.added_updated_edges
+    sources = set(graph.graph.get("source_id", []))
+    stale = []
+    for row in previous:
+        kind = row["knowledge_graph_kwd"]
+        source_ids = row.get("source_id", [])
+        if isinstance(source_ids, str):
+            source_ids = source_ids.split("\n")
+        if row["pk"] in new_ids:
+            continue
+        entity = row.get("entity_kwd", "")
+        pair = get_from_to(row.get("from_entity_kwd", ""), row.get("to_entity_kwd", ""))
+        entity_replaced = row["pk"] != entity_chunk_id(kb_id, entity) and entity_chunk_id(kb_id, entity) in all_ids
+        relation_replaced = row["pk"] != relation_chunk_id(kb_id, *pair) and relation_chunk_id(kb_id, *pair) in all_ids
+        if (
+            kind == "graph"
+            or (kind == "subgraph" and set(source_ids) <= sources)
+            or (kind == "entity" and (entity not in graph or entity in updated_nodes or entity_replaced))
+            or (kind == "relation" and (pair not in graph_edges or pair in updated_edges or relation_replaced))
+        ):
+            stale.append(row["pk"])
+    await settled_io(delete_rows, index_name, kb_id, stale)
     if callback:
-        callback(msg=f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.")
+        callback(msg=f"set_graph persisted {len(chunks)} chunks and pruned {len(stale)} stale rows.")
 
 
 def is_continuous_subsequence(subseq, seq):
@@ -682,45 +704,38 @@ def flat_uniq_list(arr, key):
     return list(set(res))
 
 
-async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
-    graph = nx.Graph()
-    flds = ["knowledge_graph_kwd", "content_with_weight", "source_id"]
-    bs = 256
-
+async def rebuild_graph(tenant_id: str, kb_id: str, exclude_rebuild: str | list[str] | None = None) -> nx.Graph | None:
+    """Reconstruct only from a complete, checked inventory of persisted subgraphs."""
     with db_connection() as db:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
-        kb_name = kb.name
+        index_name = search.index_name_one(tenant_id, kb.name)
+    rows = await settled_io(graph_rows, index_name, kb_id, ["subgraph"])
+    excluded = set(exclude_rebuild) if isinstance(exclude_rebuild, list) else {exclude_rebuild} if exclude_rebuild else set()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        sources = row.get("source_id", [])
+        if isinstance(sources, str):
+            sources = sources.split("\n") if sources else []
+        if row.get("removed_kwd", "N") != "N" or excluded.intersection(sources):
+            continue
+        if len(sources) != 1:
+            raise ValueError("Invalid per-document subgraph provenance")
+        grouped.setdefault(sources[0], []).append(row)
+    checkpoints: dict[str, dict[str, Any]] = {}
+    for source, candidates in grouped.items():
+        stable = chunk_id({"content_with_weight": f"subgraph::{source}", "kb_id": kb_id})
+        selected = [row for row in candidates if row["pk"] == stable] or candidates
+        if len(selected) != 1:
+            raise ValueError("Ambiguous subgraph checkpoints during rebuild")
+        checkpoints[source] = selected[0]
 
-    index_name = search.index_name(tenant_id, [kb_name])
-
-    for i in range(0, 1024 * bs, bs):
-        es_res = await thread_pool_exec(settings.docStoreConn.search, flds, [], {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"]}, [], OrderByExpr(), i, bs, index_name, [kb_id])
-        # tot = settings.docStoreConn.get_total(es_res)
-        es_res = settings.docStoreConn.get_fields(es_res, flds)
-        es_res = {k: v for k, v in es_res.items() if isinstance(v, dict)}
-
-        if len(es_res) == 0:
-            break
-
-        for id, d in es_res.items():
-            assert d["knowledge_graph_kwd"] == "subgraph"
-            if isinstance(exclude_rebuild, list):
-                if sum([n in d["source_id"] for n in exclude_rebuild]):
-                    continue
-            elif exclude_rebuild in d["source_id"]:
-                continue
-
-            next_graph = json_graph.node_link_graph(json.loads(d["content_with_weight"]), edges="edges")
-            merged_graph = nx.compose(graph, next_graph)
-            merged_source = {n: graph.nodes[n]["source_id"] + next_graph.nodes[n]["source_id"] for n in graph.nodes & next_graph.nodes}
-            nx.set_node_attributes(merged_graph, merged_source, "source_id")
-            if "source_id" in graph.graph:
-                merged_graph.graph["source_id"] = graph.graph["source_id"] + next_graph.graph["source_id"]
-            else:
-                merged_graph.graph["source_id"] = next_graph.graph["source_id"]
-            graph = merged_graph
-
-    if len(graph.nodes) == 0:
-        return None
-    graph.graph["source_id"] = sorted(graph.graph["source_id"])
-    return graph
+    graph = nx.Graph()
+    for source, row in sorted(checkpoints.items()):
+        next_graph = json_graph.node_link_graph(json.loads(row["content_with_weight"]), edges="edges")
+        next_graph.graph["source_id"] = [source]
+        merged_graph = nx.compose(graph, next_graph)
+        merged_source = {node: sorted(set(graph.nodes[node]["source_id"] + next_graph.nodes[node]["source_id"])) for node in graph.nodes & next_graph.nodes}
+        nx.set_node_attributes(merged_graph, merged_source, "source_id")
+        merged_graph.graph["source_id"] = graph.graph.get("source_id", []) + [source]
+        graph = merged_graph
+    return graph if graph.number_of_nodes() else None

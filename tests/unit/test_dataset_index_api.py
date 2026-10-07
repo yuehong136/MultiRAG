@@ -1,6 +1,7 @@
 """Unified index API, explicit compatibility routes and dataset contracts."""
 
 import types
+from contextlib import nullcontext
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,8 @@ from common import settings
 @pytest.fixture
 def kb_access(monkeypatch, fake_kb):
     kb = fake_kb(mindmap_task_id=None)
+    monkeypatch.setattr(dataset_api_service, "writer_active", lambda *args: False)
+    monkeypatch.setattr(dataset_api_service, "GraphRAGControlLease", lambda *args: nullcontext())
     monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, tid: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kb_id: kb))
     return kb
@@ -82,8 +85,12 @@ def test_delete_index_cancels_task_and_wipes_only_graph_artifacts(db, kb_access,
     saved: dict[str, object] = {}
 
     kb_access.graphrag_task_id = "g1"
-    monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", lambda key, value: cancelled.append(key))
+    monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", lambda key, value: cancelled.append(key) or True)
     monkeypatch.setattr(TaskService, "delete_by_id", classmethod(lambda cls, s, tid: 1))
+    monkeypatch.setattr(dataset_api_service, "GraphRAGLease", lambda *args: nullcontext(types.SimpleNamespace(check=lambda: None)))
+    monkeypatch.setattr(dataset_api_service, "graph_rows", lambda *args: [{"pk": "old"}])
+    monkeypatch.setattr(dataset_api_service, "delete_rows", lambda *args: deleted.append({"knowledge_graph_kwd": dataset_api_service.GRAPH_KINDS}))
+    monkeypatch.setattr(dataset_api_service, "clear_phase_markers", lambda *args: None)
     monkeypatch.setattr(settings, "docStoreConn", types.SimpleNamespace(delete=lambda cond, idx, kb_id: deleted.append(cond)))
     monkeypatch.setattr(KnowledgebaseService, "update_by_id", classmethod(lambda cls, s, kb_id, payload: saved.update(payload) or True))
 
@@ -91,7 +98,7 @@ def test_delete_index_cancels_task_and_wipes_only_graph_artifacts(db, kb_access,
 
     assert (success, result) == (True, {})
     assert cancelled == ["g1-cancel"]
-    assert deleted == [{"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}]
+    assert deleted == [{"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report"]}]
     assert saved == {"graphrag_task_id": "", "graphrag_task_finish_at": None}
 
 
@@ -188,7 +195,7 @@ def test_catch_all_delete_does_not_swallow_knowledge_graph(client, monkeypatch):
         reached.append("knowledge_graph")
         return True, True
 
-    async def _delete_index(tenant_id, dataset_id, index_type):
+    async def _delete_index(tenant_id, dataset_id, index_type, *, wipe=True):
         reached.append(f"index:{index_type}")
         return True, {}
 
@@ -206,7 +213,7 @@ def test_catch_all_delete_does_not_swallow_tags(client, monkeypatch):
         reached.append(f"tags:{tags}")
         return True, {}
 
-    async def _delete_index(tenant_id, dataset_id, index_type):
+    async def _delete_index(tenant_id, dataset_id, index_type, *, wipe=True):
         reached.append(f"index:{index_type}")
         return True, {}
 
@@ -222,7 +229,7 @@ def test_catch_all_delete_does_not_swallow_tags(client, monkeypatch):
 def test_catch_all_delete_serves_index_types(client, monkeypatch):
     seen: list[str] = []
 
-    async def _delete_index(tenant_id, dataset_id, index_type):
+    async def _delete_index(tenant_id, dataset_id, index_type, *, wipe=True):
         seen.append(index_type)
         return True, {}
 
@@ -290,7 +297,7 @@ def test_index_routes_normalize_legal_type_queries(client: TestClient, monkeypat
         seen.append(f"trace:{type_name}")
         return True, {"id": "t1", "task_type": "graphrag" if type_name == "graph" else type_name}
 
-    async def delete(tenant_id: str, dataset_id: str, type_name: str) -> tuple[bool, Any]:
+    async def delete(tenant_id: str, dataset_id: str, type_name: str, *, wipe: bool = True) -> tuple[bool, Any]:
         seen.append(f"delete:{type_name}")
         return True, {}
 
@@ -382,3 +389,67 @@ def test_ingestion_dates_are_validated_before_database_access(client):
 def test_single_dataset_tags_serialize_as_upstream_pairs(client, monkeypatch):
     monkeypatch.setattr(dataset_api_service, "list_tags_async", AsyncMock(return_value=(True, [("alpha", 2)])))
     assert client.get("/api/v1/datasets/kb1/tags").json()["data"] == [["alpha", 2]]
+
+
+@pytest.mark.parametrize("path", ["index?type=graph", "index?type=raptor", "graph", "raptor", "mindmap"])
+@pytest.mark.parametrize("value", ["false", "0", "no", "off", "true"])
+def test_delete_routes_forward_wipe_flag(client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, value: str) -> None:
+    seen: list[bool] = []
+
+    async def delete(tenant_id: str, dataset_id: str, index_type: str, *, wipe: bool = True) -> tuple[bool, Any]:
+        seen.append(wipe)
+        return True, {}
+
+    monkeypatch.setattr(dataset_api_service, "delete_index_async", delete)
+    separator = "&" if "?" in path else "?"
+    response = client.delete(f"/api/v1/datasets/kb1/{path}{separator}wipe={value}")
+    assert response.json() == {"code": 0, "data": {}}
+    assert seen == [value == "true"]
+
+
+def test_pause_preserves_task_trace_and_artifacts(db: Any, kb_access: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    kb_access.graphrag_task_id = "active"
+    monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", lambda *args: True)
+    monkeypatch.setattr(TaskService, "delete_by_id", classmethod(lambda *args: pytest.fail("pause deleted task")))
+    monkeypatch.setattr(TaskService, "update_by_id", classmethod(lambda *args: 1))
+    monkeypatch.setattr(KnowledgebaseService, "update_by_id", classmethod(lambda *args: pytest.fail("pause unbound task")))
+    monkeypatch.setattr(dataset_api_service, "graph_rows", lambda *args: pytest.fail("pause touched graph"))
+    assert dataset_api_service.delete_index(db, "tenant-unit", "kb1", "graph", wipe=False) == (True, {})
+    assert kb_access.graphrag_task_id == "active"
+
+
+def test_failed_cancel_does_not_wipe_or_unbind(db: Any, kb_access: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    kb_access.graphrag_task_id = "active"
+    monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", lambda *args: False)
+    monkeypatch.setattr(dataset_api_service, "graph_rows", lambda *args: pytest.fail("failed cancel wiped graph"))
+    monkeypatch.setattr(TaskService, "delete_by_id", classmethod(lambda *args: pytest.fail("failed cancel deleted task")))
+    success, _ = dataset_api_service.delete_index(db, "tenant-unit", "kb1", "graph")
+    assert not success and kb_access.graphrag_task_id == "active"
+
+
+def test_restart_rejects_writer_even_when_trace_is_terminal(db: Any, kb_access: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    kb_access.graphrag_task_id = "active"
+    monkeypatch.setattr(dataset_api_service, "writer_active", lambda *args: True)
+    monkeypatch.setattr(TaskService, "get_by_id", classmethod(lambda *args: types.SimpleNamespace(progress=-1)))
+    success, message = dataset_api_service.run_index(db, "tenant-unit", "kb1", "graph")
+    assert not success and "writer is still active" in message
+
+
+def test_pause_with_stale_trace_id_does_not_cancel_new_binding(db: Any, kb_access: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    kb_access.graphrag_task_id = "new-task"
+    monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", lambda *args: pytest.fail("stale trace cancelled new task"))
+    success, message = dataset_api_service.delete_index(db, "tenant-unit", "kb1", "graph", wipe=False, expected_task_id="old-task")
+    assert not success and "binding changed" in message
+
+
+def test_delete_route_forwards_trace_identity(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str | None] = []
+
+    async def delete(tenant_id: str, dataset_id: str, index_type: str, *, wipe: bool = True, expected_task_id: str | None = None) -> tuple[bool, Any]:
+        assert not wipe
+        seen.append(expected_task_id)
+        return True, {}
+
+    monkeypatch.setattr(dataset_api_service, "delete_index_async", delete)
+    assert client.delete("/api/v1/datasets/kb1/index?type=graph&wipe=false&task_id=old").json()["code"] == 0
+    assert seen == ["old"]

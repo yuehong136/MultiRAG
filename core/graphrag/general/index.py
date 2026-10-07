@@ -17,6 +17,9 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Callable
+from hashlib import sha256
+from typing import Any
 
 import networkx as nx
 
@@ -26,20 +29,22 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import has_canceled
 from common import settings
 from common.connection_utils import timeout
-from common.doc_store.doc_store_base import OrderByExpr
 from common.exceptions import TaskCanceledException
-from common.misc_utils import get_uuid, thread_pool_exec
 from core.graphrag.entity_resolution import EntityResolution
 from core.graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
 from core.graphrag.light.graph_extractor import GraphExtractor as LightKGExt
+from core.graphrag.persistence import GraphRAGLease, current_task, current_writer, delete_rows, graph_rows, settled_io
+from core.graphrag.phase_markers import PHASE_COMMUNITY, PHASE_RESOLUTION, clear_phase_markers, has_phase_marker, set_phase_marker
 from core.graphrag.utils import (
     GraphChange,
     chunk_id,
     does_graph_contains,
     get_graph,
     graph_merge,
+    insert_chunks_bounded,
+    load_graph_source_chunks,
     set_graph,
     tidy_graph,
 )
@@ -47,55 +52,71 @@ from core.nlp import rag_tokenizer, search
 from core.utils.redis_conn import RedisDistributedLock
 
 
-async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str):
-    """Load a previously saved subgraph from the doc store.
-
-    Filters directly by source_id (== doc_id) and knowledge_graph_kwd in the
-    query so the doc store index does the heavy lifting.  Expects at most one
-    matching chunk per doc_id (as written by generate_subgraph).
-    Returns a networkx Graph on hit, or None on miss.
-    """
-    fields = ["content_with_weight", "source_id"]
-    condition = {
-        "knowledge_graph_kwd": ["subgraph"],
-        "removed_kwd": "N",
-        "source_id": [doc_id],
-    }
-    try:
-        with db_connection() as db:
-            kb = KnowledgebaseService.get_by_id(db, kb_id)
-            kb_name = kb.name
-        index_name = search.index_name(tenant_id, [kb_name])
-        res = await thread_pool_exec(settings.docStoreConn.search, fields, [], condition, [], OrderByExpr(), 0, 1, index_name, [kb_id])
-        field_map = settings.docStoreConn.get_fields(res, fields)
-        for cid, row in field_map.items():
-            content = row.get("content_with_weight", "")
-            if not content:
-                continue
-            try:
-                data = json.loads(content)
-                sg = nx.node_link_graph(data, edges="edges")
-                sg.graph["source_id"] = [doc_id]
-                logging.info("Checkpoint hit: subgraph for doc %s (tenant=%s kb=%s) found at chunk %s", doc_id, tenant_id, kb_id, cid)
-                return sg
-            except Exception:
-                logging.exception("Failed to parse subgraph JSON for doc %s chunk %s", doc_id, cid)
-    except Exception:
-        logging.exception("Failed to load subgraph from store for doc %s", doc_id)
+async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str) -> nx.Graph | None:
+    with db_connection() as db:
+        kb = KnowledgebaseService.get_by_id(db, kb_id)
+        index_name = search.index_name_one(tenant_id, kb.name)
+    rows = await settled_io(graph_rows, index_name, kb_id, ["subgraph"], doc_id)
+    selected = []
+    for row in rows:
+        sources = row.get("source_id", [])
+        if isinstance(sources, str):
+            sources = sources.split("\n")
+        if sources == [doc_id] and row.get("removed_kwd", "N") == "N":
+            selected.append(row)
+    if not selected:
         return None
-    logging.info("Checkpoint miss: no subgraph for doc %s (tenant=%s kb=%s)", doc_id, tenant_id, kb_id)
-    return None
+    stable_id = chunk_id({"content_with_weight": f"subgraph::{doc_id}", "kb_id": kb_id})
+    selected = [row for row in selected if row["pk"] == stable_id] or selected
+    if len(selected) != 1:
+        raise RuntimeError("Ambiguous persisted subgraph checkpoints")
+    graph = nx.node_link_graph(json.loads(selected[0]["content_with_weight"]), edges="edges")
+    graph.graph["source_id"] = [doc_id]
+    return graph
+
+
+def phase_revision(graph: nx.Graph, config: dict[str, Any]) -> str:
+    material = {"graph": nx.node_link_data(graph, edges="edges"), "config": config.get("graphrag", {})}
+    return sha256(json.dumps(material, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+async def run_graphrag_for_kb(
+    row: dict[str, Any],
+    doc_ids: list[str],
+    language: str,
+    kb_parser_config: dict[str, Any],
+    chat_model: Any,
+    embedding_model: Any,
+    callback: Callable[..., Any],
+    *,
+    with_resolution: bool = True,
+    with_community: bool = True,
+    max_parallel_docs: int = 4,
+) -> dict[str, Any]:
+    async with GraphRAGLease(row["tenant_id"], str(row["kb_id"])) as lease:
+        token = current_writer.set(lease)
+        task_token = current_task.set(row["id"])
+        try:
+            return await _run_graphrag_for_kb(
+                row, doc_ids, language, kb_parser_config, chat_model, embedding_model, callback, with_resolution=with_resolution, with_community=with_community, max_parallel_docs=max_parallel_docs
+            )
+        except TaskCanceledException:
+            callback(prog=-1, msg=f"Task {row['id']} cancelled after GraphRAG writes settled.")
+            raise
+        finally:
+            current_task.reset(task_token)
+            current_writer.reset(token)
 
 
 async def run_graphrag(
-    row: dict,
-    language,
+    row: dict[str, Any],
+    language: str,
     with_resolution: bool,
     with_community: bool,
-    chat_model,
-    embedding_model,
-    callback,
-):
+    chat_model: Any,
+    embedding_model: Any,
+    callback: Callable[..., Any],
+) -> None:
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     start = asyncio.get_running_loop().time()
     tenant_id, kb_id, doc_id = row["tenant_id"], str(row["kb_id"]), row["doc_id"]
@@ -181,23 +202,22 @@ async def run_graphrag(
     return
 
 
-async def run_graphrag_for_kb(
-    row: dict,
+async def _run_graphrag_for_kb(
+    row: dict[str, Any],
     doc_ids: list[str],
     language: str,
-    kb_parser_config: dict,
-    chat_model,
-    embedding_model,
-    callback,
+    kb_parser_config: dict[str, Any],
+    chat_model: Any,
+    embedding_model: Any,
+    callback: Callable[..., Any],
     *,
     with_resolution: bool = True,
     with_community: bool = True,
     max_parallel_docs: int = 4,
-) -> dict:
+) -> dict[str, Any]:
     tenant_id, kb_id = row["tenant_id"], row["kb_id"]
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     start = asyncio.get_running_loop().time()
-    fields_for_chunks = ["content_with_weight", "doc_id"]
 
     if not doc_ids:
         logging.info(f"Fetching all docs for {kb_id}")
@@ -221,28 +241,17 @@ async def run_graphrag_for_kb(
         callback(msg=f"[GraphRAG] kb:{kb_id} has no processable doc_id.")
         return {"ok_docs": [], "failed_docs": [], "total_docs": 0, "total_chunks": 0, "seconds": 0.0}
 
-    def load_doc_chunks(doc_id: str) -> list[str]:
+    persisted_graph = await get_graph(tenant_id, kb_id)
+    merged_doc_ids = set(persisted_graph.graph.get("source_id", [])) if persisted_graph is not None else set()
+
+    async def load_doc_chunks(doc_id: str) -> list[str]:
         from common.token_utils import num_tokens_from_string
 
         chunks = []
         current_chunk = ""
 
-        # DEBUG: Obtener todos los chunks primero
-        raw_chunks = list(
-            settings.retriever.chunk_list(
-                doc_id,
-                tenant_id,
-                [kb_id],
-                max_count=10000,  # FIX: Aumentar límite para procesar todos los chunks
-                fields=fields_for_chunks,
-                sort_by_position=True,
-            )
-        )
-
-        callback(msg=f"[DEBUG] chunk_list() returned {len(raw_chunks)} raw chunks for doc {doc_id}")
-
-        for d in raw_chunks:
-            content = d["content_with_weight"]
+        raw_chunks = await settled_io(load_graph_source_chunks, tenant_id, kb_id, doc_id)
+        for content in raw_chunks:
             if num_tokens_from_string(current_chunk + content) < 4096:
                 current_chunk += content
             else:
@@ -258,20 +267,20 @@ async def run_graphrag_for_kb(
     all_doc_chunks: dict[str, list[str]] = {}
     total_chunks = 0
     for doc_id in doc_ids:
-        chunks = load_doc_chunks(doc_id)
+        chunks = await load_doc_chunks(doc_id)
         all_doc_chunks[doc_id] = chunks
         total_chunks += len(chunks)
 
-    if total_chunks == 0:
+    if total_chunks == 0 and persisted_graph is None:
         callback(msg=f"[GraphRAG] kb:{kb_id} has no available chunks in all documents, skip.")
         return {"ok_docs": [], "failed_docs": doc_ids, "total_docs": len(doc_ids), "total_chunks": 0, "seconds": 0.0}
 
     semaphore = asyncio.Semaphore(max_parallel_docs)
 
-    subgraphs: dict[str, object] = {}
+    subgraphs: dict[str, nx.Graph] = {}
     failed_docs: list[tuple[str, str]] = []  # (doc_id, error)
 
-    async def build_one(doc_id: str):
+    async def build_one(doc_id: str) -> None:
         if has_canceled(row["id"]):
             callback(msg=f"Task {row['id']} cancelled, stopping execution.")
             raise TaskCanceledException(f"Task {row['id']} was cancelled")
@@ -286,6 +295,9 @@ async def run_graphrag_for_kb(
         deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
 
         async with semaphore:
+            if doc_id in merged_doc_ids:
+                callback(msg=f"[GraphRAG] doc:{doc_id} already merged, skipping extraction.")
+                return
             # CHECKPOINT: bounded by semaphore so doc-store lookups respect max_parallel_docs
             existing_sg = await load_subgraph_from_store(tenant_id, kb_id, doc_id)
             if existing_sg:
@@ -323,8 +335,8 @@ async def run_graphrag_for_kb(
                 else:
                     failed_docs.append((doc_id, "subgraph is empty"))
                     callback(msg=f"{msg} empty")
-            except TaskCanceledException as canceled:
-                callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {canceled}")
+            except TaskCanceledException:
+                raise
             except Exception as e:
                 failed_docs.append((doc_id, repr(e)))
                 callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {e!r}")
@@ -336,7 +348,7 @@ async def run_graphrag_for_kb(
     tasks = [asyncio.create_task(build_one(doc_id)) for doc_id in doc_ids]
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
-    except Exception as e:
+    except BaseException as e:
         logging.error(f"Error in asyncio.gather: {e}")
         for t in tasks:
             t.cancel()
@@ -348,88 +360,35 @@ async def run_graphrag_for_kb(
         raise TaskCanceledException(f"Task {row['id']} was cancelled")
 
     ok_docs = [d for d in doc_ids if d in subgraphs]
-    if not ok_docs:
-        callback(msg=f"[GraphRAG] kb:{kb_id} no subgraphs generated successfully, end.")
-        now = asyncio.get_running_loop().time()
-        return {"ok_docs": [], "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
+    final_graph = persisted_graph
+    for doc_id in ok_docs:
+        if has_canceled(row["id"]):
+            raise TaskCanceledException(f"Task {row['id']} was cancelled")
+        # Invalidate before mutation, including a failed/partial new merge.
+        clear_phase_markers(kb_id)
+        final_graph = await merge_subgraph(tenant_id, kb_id, doc_id, subgraphs[doc_id], embedding_model, callback)
+    if failed_docs:
+        raise RuntimeError(f"GraphRAG failed to build {len(failed_docs)} document subgraphs")
+    if final_graph is None:
+        if with_resolution or with_community:
+            raise RuntimeError("No persisted graph found for resolution/community resume")
+        return {"ok_docs": ok_docs, "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": asyncio.get_running_loop().time() - start}
 
-    kb_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value="batch_merge", timeout=1200)
-    await kb_lock.spin_acquire()
-    callback(msg=f"[GraphRAG] kb:{kb_id} merge lock acquired")
-
-    if has_canceled(row["id"]):
-        callback(msg=f"Task {row['id']} cancelled before merging subgraphs.")
-        raise TaskCanceledException(f"Task {row['id']} was cancelled")
-
-    try:
-        union_nodes: set = set()
-        final_graph = None
-
-        for doc_id in ok_docs:
-            sg = subgraphs[doc_id]
-            union_nodes.update(set(sg.nodes()))
-
-            new_graph = await merge_subgraph(
-                tenant_id,
-                kb_id,
-                doc_id,
-                sg,
-                embedding_model,
-                callback,
-            )
-            if new_graph is not None:
-                final_graph = new_graph
-
-        if final_graph is None:
-            callback(msg=f"[GraphRAG] kb:{kb_id} merge finished (no in-memory graph returned).")
-        else:
-            callback(msg=f"[GraphRAG] kb:{kb_id} merge finished, graph ready.")
-    finally:
-        kb_lock.release()
-
-    if not with_resolution and not with_community:
-        now = asyncio.get_running_loop().time()
-        callback(msg=f"[GraphRAG] KB merge done in {now - start:.2f}s. ok={len(ok_docs)} / total={len(doc_ids)}")
-        return {"ok_docs": ok_docs, "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
-
-    if has_canceled(row["id"]):
-        callback(msg=f"Task {row['id']} cancelled before resolution/community extraction.")
-        raise TaskCanceledException(f"Task {row['id']} was cancelled")
-
-    await kb_lock.spin_acquire()
-    callback(msg=f"[GraphRAG] kb:{kb_id} post-merge lock acquired for resolution/community")
-
-    try:
-        subgraph_nodes = set()
-        for sg in subgraphs.values():
-            subgraph_nodes.update(set(sg.nodes()))
-
-        if with_resolution:
-            await resolve_entities(
-                final_graph,
-                subgraph_nodes,
-                tenant_id,
-                kb_id,
-                None,
-                chat_model,
-                embedding_model,
-                callback,
-                task_id=row["id"],
-            )
-
-        if with_community:
-            await extract_community(
-                final_graph,
-                tenant_id,
-                kb_id,
-                None,
-                chat_model,
-                embedding_model,
-                callback,
-                task_id=row["id"],
-            )
-    finally:
-        kb_lock.release()
+    subgraph_nodes = {node for graph in subgraphs.values() for node in graph.nodes()} or set(final_graph.nodes())
+    revision = phase_revision(final_graph, kb_parser_config)
+    if with_resolution and not has_phase_marker(kb_id, PHASE_RESOLUTION, revision):
+        await resolve_entities(final_graph, subgraph_nodes, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+        revision = phase_revision(final_graph, kb_parser_config)
+        if has_canceled(row["id"]):
+            raise TaskCanceledException(f"Task {row['id']} was cancelled")
+        current_writer.get().check()
+        set_phase_marker(kb_id, PHASE_RESOLUTION, revision)
+    if with_community and not has_phase_marker(kb_id, PHASE_COMMUNITY, revision):
+        await extract_community(final_graph, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+        if has_canceled(row["id"]):
+            raise TaskCanceledException(f"Task {row['id']} was cancelled")
+        current_writer.get().check()
+        set_phase_marker(kb_id, PHASE_COMMUNITY, revision)
 
     now = asyncio.get_running_loop().time()
     callback(msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks}")
@@ -448,13 +407,13 @@ async def generate_subgraph(
     kb_id: str,
     doc_id: str,
     chunks: list[str],
-    language,
-    entity_types,
-    llm_bdl,
-    embed_bdl,
-    callback,
+    language: str,
+    entity_types: list[str],
+    llm_bdl: Any,
+    embed_bdl: Any,
+    callback: Callable[..., Any],
     task_id: str = "",
-):
+) -> nx.Graph | None:
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled during subgraph generation for doc {doc_id}.")
         raise TaskCanceledException(f"Task {task_id} was cancelled")
@@ -510,24 +469,16 @@ async def generate_subgraph(
         "available_int": 0,
         "removed_kwd": "N",
     }
-    cid = chunk_id(chunk)
+    cid = chunk_id({"content_with_weight": f"subgraph::{doc_id}", "kb_id": kb_id})
     with db_connection() as db:
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         kb_name = kb.name
 
-    index_name = search.index_name(tenant_id, [kb_name])
-    await thread_pool_exec(
-        settings.docStoreConn.delete,
-        {"knowledge_graph_kwd": "subgraph", "source_id": doc_id},
-        index_name,
-        kb_id,
-    )
-    await thread_pool_exec(
-        settings.docStoreConn.insert,
-        [{"id": cid, **chunk}],
-        index_name,
-        kb_id,
-    )
+    index_name = search.index_name_one(tenant_id, kb_name)
+    previous = await settled_io(graph_rows, index_name, kb_id, ["subgraph"], doc_id)
+    await insert_chunks_bounded([{"id": cid, **chunk}], tenant_id, kb_id, index_name=index_name, callback=callback)
+    stale = [r["pk"] for r in previous if r["pk"] != cid and r.get("source_id") in ([doc_id], doc_id)]
+    await settled_io(delete_rows, index_name, kb_id, stale)
     now = asyncio.get_running_loop().time()
     callback(msg=f"generated subgraph for doc {doc_id} in {now - start:.2f} seconds.")
     return subgraph
@@ -539,9 +490,9 @@ async def merge_subgraph(
     kb_id: str,
     doc_id: str,
     subgraph: nx.Graph,
-    embedding_model,
-    callback,
-):
+    embedding_model: Any,
+    callback: Callable[..., Any],
+) -> nx.Graph:
     start = asyncio.get_running_loop().time()
     change = GraphChange()
     old_graph = await get_graph(tenant_id, kb_id, subgraph.graph["source_id"])
@@ -565,16 +516,16 @@ async def merge_subgraph(
 
 @timeout(60 * 30, 1)
 async def resolve_entities(
-    graph,
+    graph: nx.Graph,
     subgraph_nodes: set[str],
     tenant_id: str,
     kb_id: str,
     doc_id: str | None,
-    llm_bdl,
-    embed_bdl,
-    callback,
+    llm_bdl: Any,
+    embed_bdl: Any,
+    callback: Callable[..., Any],
     task_id: str = "",
-):
+) -> None:
     # Check if task has been canceled before resolution
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled during entity resolution.")
@@ -601,15 +552,15 @@ async def resolve_entities(
 
 @timeout(60 * 30, 1)
 async def extract_community(
-    graph,
+    graph: nx.Graph,
     tenant_id: str,
     kb_id: str,
     doc_id: str | None,
-    llm_bdl,
-    embed_bdl,
-    callback,
+    llm_bdl: Any,
+    embed_bdl: Any,
+    callback: Callable[..., Any],
     task_id: str = "",
-):
+) -> tuple[list[dict[str, Any]], list[str]]:
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled before community extraction.")
         raise TaskCanceledException(f"Task {task_id} was cancelled")
@@ -642,7 +593,7 @@ async def extract_community(
             "evidences": "\n".join([f.get("explanation", "") for f in stru["findings"]]),
         }
         chunk = {
-            "id": get_uuid(),
+            "id": chunk_id({"content_with_weight": f"community_report::{stru['title']}", "kb_id": kb_id}),
             "docnm_kwd": stru["title"],
             "title_tks": rag_tokenizer.tokenize(stru["title"]),
             "content_with_weight": json.dumps(obj, ensure_ascii=False),
@@ -662,24 +613,14 @@ async def extract_community(
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         kb_name = kb.name
 
-    index_name = search.index_name(tenant_id, [kb_name])
-    await thread_pool_exec(
-        settings.docStoreConn.delete,
-        {"knowledge_graph_kwd": "community_report", "kb_id": kb_id},
-        index_name,
-        kb_id,
-    )
-    es_bulk_size = 4
-    for b in range(0, len(chunks), es_bulk_size):
-        doc_store_result = await thread_pool_exec(
-            settings.docStoreConn.insert,
-            chunks[b : b + es_bulk_size],
-            index_name,
-            kb_id,
-        )
-        if doc_store_result:
-            error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
-            raise Exception(error_message)
+    index_name = search.index_name_one(tenant_id, kb_name)
+    new_ids = {chunk["id"] for chunk in chunks}
+    if len(new_ids) != len(chunks):
+        raise ValueError("Duplicate community titles cannot identify stable reports")
+    previous = await settled_io(graph_rows, index_name, kb_id, ["community_report"])
+    await insert_chunks_bounded(chunks, tenant_id, kb_id, index_name=index_name, callback=callback, label="Insert community reports")
+    stale = [row["pk"] for row in previous if row["pk"] not in new_ids]
+    await settled_io(delete_rows, index_name, kb_id, stale)
 
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled after community indexing.")

@@ -618,6 +618,58 @@ class MilvusConnection(MilvusConnectionBase):
             self.logger.error(f"Insert into {collection_name} failed: {error_msg}")
             return [error_msg]
 
+    def _graph_snapshot(self, index_name: str, expression: str) -> list[dict[str, Any]]:
+        conn = self._get_connection()
+        if not conn.has_collection(index_name):
+            return []
+        iterator = Collection(index_name, using=self._using).query_iterator(expr=expression, output_fields=["*"], batch_size=512, consistency_level="Strong", timeout=60)
+        try:
+            rows: list[dict[str, Any]] = []
+            while batch := iterator.next():
+                rows.extend(batch)
+            return rows
+        finally:
+            iterator.close()
+
+    def graph_rows(self, index_name: str, dataset_id: str, kinds: list[str]) -> list[dict[str, Any]]:
+        """Complete Strong snapshot for checkpoint decisions; never hide errors."""
+        expression = f"kb_id == {json.dumps(dataset_id)} && knowledge_graph_kwd in {json.dumps(kinds)}"
+        return self._graph_snapshot(index_name, expression)
+
+    def graph_subgraph_rows(self, index_name: str, dataset_id: str, document_id: str) -> list[dict[str, Any]]:
+        """Filter per-document checkpoints in storage instead of rescanning the KB."""
+        conn = self._get_connection()
+        if not conn.has_collection(index_name):
+            return []
+        fields = {field["name"]: field for field in conn.describe_collection(index_name)["fields"]}
+        source_type = fields.get("source_id", {}).get("type")
+        expression = f'kb_id == {json.dumps(dataset_id)} && knowledge_graph_kwd == "subgraph"'
+        if source_type == DataType.ARRAY:
+            expression += f" && ARRAY_CONTAINS(source_id, {json.dumps(document_id)})"
+        elif source_type == DataType.VARCHAR:
+            expression += f" && source_id == {json.dumps(document_id)}"
+        rows = self._graph_snapshot(index_name, expression)
+        return [row for row in rows if row.get("source_id") in ([document_id], document_id)]
+
+    def graph_source_rows(self, index_name: str, dataset_id: str, document_id: str) -> list[dict[str, Any]]:
+        """Read new source content with the same consistency as checkpoint decisions."""
+        expression = f"kb_id == {json.dumps(dataset_id)} && doc_id == {json.dumps(document_id)}"
+        rows = self._graph_snapshot(index_name, expression)
+        ordering = OrderByExpr()
+        for field in ["page_num_int", "position_int", "top_int"]:
+            ordering.asc(field)
+        return self._sort_by_order_fields(rows, ordering)
+
+    def graph_delete_rows(self, index_name: str, dataset_id: str, identifiers: list[str]) -> None:
+        """Delete only an enumerated set, propagate failures and verify absence."""
+        conn = self._get_connection()
+        for offset in range(0, len(identifiers), 128):
+            batch = identifiers[offset : offset + 128]
+            expression = f"kb_id == {json.dumps(dataset_id)} && pk in {json.dumps(batch)}"
+            conn.delete(index_name, expression=expression, timeout=60)
+            if conn.query(index_name, expr=expression, output_fields=["pk"], consistency_level="Strong", timeout=60):
+                raise RuntimeError("GraphRAG prune readback still contains deleted rows")
+
     def document_chunk_count(self, document_id: str, index_name: str, dataset_id: str) -> int:
         """Strong read for the source insert/SQL-counter status boundary."""
         conn = self._get_connection()

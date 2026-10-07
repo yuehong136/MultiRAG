@@ -6,15 +6,17 @@
   removed_kwd="N"），命中即复用、跳过 LLM 抽取；
 - has_raptor_chunks 在 RAPTOR file-scope 循环前查 raptor_kwd="raptor" 行，
   命中即跳过该文档。
-两者查询失败一律 fail-open（返回 None/False → 照常重跑），绝不让检查点错误中断任务。
+GraphRAG 查询失败或损坏检查点必须失败并保留原数据；RAPTOR 保持原 fail-open 合同。
 DB / doc store 全部打桩（纯函数打桩形态），共享 fixtures 见 tests/unit/conftest.py。
 """
 
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any
 
 import networkx as nx
+import pytest
 
 import core.graphrag.general.index as kg_index
 from core.svr import task_executor
@@ -32,6 +34,20 @@ class _FakeDocStore:
         self.rows = rows or {}
         self.error = error
         self.calls = []
+
+    def db_type(self) -> str:
+        return "milvus"
+
+    def graph_rows(self, index_name: str, kb_id: str, kinds: list[str]) -> list[dict[str, Any]]:
+        self.calls.append({"index_names": index_name, "kb_ids": [kb_id], "kinds": kinds})
+        if self.error is not None:
+            raise self.error
+        return [{"pk": cid, "kb_id": kb_id, "knowledge_graph_kwd": "subgraph", **row} for cid, row in self.rows.items()]
+
+    def graph_subgraph_rows(self, name: str, kb_id: str, doc_id: str) -> list[dict[str, Any]]:
+        rows = self.graph_rows(name, kb_id, ["subgraph"])
+        self.calls[-1]["doc_id"] = doc_id
+        return [row for row in rows if row.get("source_id") in ([doc_id], doc_id)]
 
     def search(self, fields, highlight, condition, match_exprs, order_by, offset, limit, index_names, kb_ids):
         self.calls.append({"fields": fields, "condition": condition, "offset": offset, "limit": limit, "index_names": index_names, "kb_ids": kb_ids})
@@ -74,9 +90,9 @@ async def test_subgraph_checkpoint_query_pins_generate_subgraph_write_contract(m
     await kg_index.load_subgraph_from_store("t1", "kb1", "doc-1")
 
     (call,) = store.calls
-    assert call["condition"] == {"knowledge_graph_kwd": ["subgraph"], "removed_kwd": "N", "source_id": ["doc-1"]}
-    assert call["limit"] == 1
-    assert call["index_names"] == ["multirag_t1_kb"]  # kb_name 参与索引名，回归点：漏查 kb 名会打错索引
+    assert call["kinds"] == ["subgraph"]
+    assert call["doc_id"] == "doc-1"
+    assert call["index_names"] == "multirag_t1_kb"  # kb_name 参与索引名，回归点：漏查 kb 名会打错索引
     assert call["kb_ids"] == ["kb1"]
 
 
@@ -87,18 +103,20 @@ async def test_subgraph_checkpoint_miss_returns_none(monkeypatch):
     assert await kg_index.load_subgraph_from_store("t1", "kb1", "doc-1") is None
 
 
-async def test_subgraph_corrupt_json_fails_open(monkeypatch):
+async def test_subgraph_corrupt_json_fails_closed(monkeypatch):
     store = _FakeDocStore(rows={"chunk-1": {"content_with_weight": "{not-json", "source_id": ["doc-1"]}})
     _patch_common(monkeypatch, kg_index, store)
 
-    assert await kg_index.load_subgraph_from_store("t1", "kb1", "doc-1") is None
+    with pytest.raises(ValueError):
+        await kg_index.load_subgraph_from_store("t1", "kb1", "doc-1")
 
 
-async def test_subgraph_store_error_fails_open(monkeypatch):
+async def test_subgraph_store_error_fails_closed(monkeypatch):
     store = _FakeDocStore(error=RuntimeError("doc store down"))
     _patch_common(monkeypatch, kg_index, store)
 
-    assert await kg_index.load_subgraph_from_store("t1", "kb1", "doc-1") is None
+    with pytest.raises(RuntimeError, match="doc store down"):
+        await kg_index.load_subgraph_from_store("t1", "kb1", "doc-1")
 
 
 async def test_raptor_checkpoint_hit_and_query_contract(monkeypatch):

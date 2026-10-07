@@ -82,13 +82,16 @@ def _parse_dataset_ids(raw: str | None) -> list[str]:
     return [d.strip() for d in (raw or "").split(",") if d.strip()]
 
 
-async def _delete_index(tenant_id: str, dataset_id: str, index_type: str) -> Response:
+async def _delete_index(tenant_id: str, dataset_id: str, index_type: str, *, wipe: bool = True, expected_task_id: str | None = None) -> Response:
     """DELETE 索引的两种寻址（?type= 与路径段）共用的执行体。"""
     index_type = (index_type or "").lower()
     if index_type not in dataset_api_service.VALID_INDEX_TYPES:
         return get_error_data_result(retmsg=f"Invalid index type '{index_type}'")
     try:
-        success, result = await dataset_api_service.delete_index_async(tenant_id, dataset_id, index_type)
+        if expected_task_id is None:
+            success, result = await dataset_api_service.delete_index_async(tenant_id, dataset_id, index_type, wipe=wipe)
+        else:
+            success, result = await dataset_api_service.delete_index_async(tenant_id, dataset_id, index_type, wipe=wipe, expected_task_id=expected_task_id)
         return _respond(success, result)
     except Exception as e:
         logger.exception(e)
@@ -429,9 +432,11 @@ async def trace_index(
 async def delete_index_by_query(
     dataset_id: str,
     type: str = Query("", description="索引类型：graph / raptor / mindmap"),
+    wipe: bool = Query(True, description="false 仅请求暂停，保留产物和 trace"),
+    task_id: str | None = Query(None, description="可选 trace ID；绑定已变化时拒绝操作"),
     tenant_id: str = Depends(async_current_tenant_id),
 ) -> Response:
-    return await _delete_index(tenant_id, dataset_id, type)
+    return await _delete_index(tenant_id, dataset_id, type, wipe=wipe, expected_task_id=task_id)
 
 
 @router.get("/datasets/{dataset_id}/metadata/config", summary="获取数据集自动元数据配置")
@@ -602,15 +607,15 @@ async def trace_raptor(
 
 # Explicit compatibility paths must not match another router's /documents endpoint.
 @router.delete("/datasets/{dataset_id}/graph", summary="删除图索引任务及产物")
-async def delete_graph_index(dataset_id: str, tenant_id: str = Depends(async_current_tenant_id)) -> Response:
-    return await _delete_index(tenant_id, dataset_id, "graph")
+async def delete_graph_index(dataset_id: str, wipe: bool = Query(True), task_id: str | None = Query(None), tenant_id: str = Depends(async_current_tenant_id)) -> Response:
+    return await _delete_index(tenant_id, dataset_id, "graph", wipe=wipe, expected_task_id=task_id)
 
 
 @router.delete("/datasets/{dataset_id}/raptor", summary="删除 RAPTOR 索引任务及产物")
-async def delete_raptor_index(dataset_id: str, tenant_id: str = Depends(async_current_tenant_id)) -> Response:
-    return await _delete_index(tenant_id, dataset_id, "raptor")
+async def delete_raptor_index(dataset_id: str, wipe: bool = Query(True), task_id: str | None = Query(None), tenant_id: str = Depends(async_current_tenant_id)) -> Response:
+    return await _delete_index(tenant_id, dataset_id, "raptor", wipe=wipe, expected_task_id=task_id)
 
 
 @router.delete("/datasets/{dataset_id}/mindmap", summary="删除思维导图索引任务")
-async def delete_mindmap_index(dataset_id: str, tenant_id: str = Depends(async_current_tenant_id)) -> Response:
-    return await _delete_index(tenant_id, dataset_id, "mindmap")
+async def delete_mindmap_index(dataset_id: str, wipe: bool = Query(True), task_id: str | None = Query(None), tenant_id: str = Depends(async_current_tenant_id)) -> Response:
+    return await _delete_index(tenant_id, dataset_id, "mindmap", wipe=wipe, expected_task_id=task_id)

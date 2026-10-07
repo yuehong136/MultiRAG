@@ -21,7 +21,6 @@ from api.apps.services import dataset_api_service
 from api.db.db_models import get_async_db, get_db
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import async_current_tenant_id, current_tenant_id
-from common import settings
 from common.constants import RetCode
 
 
@@ -186,15 +185,19 @@ async def test_delete_knowledge_graph_offloads_doc_store_delete(async_db, monkey
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, kb_id: SimpleNamespace(tenant_id="tenant-unit", name="kb")))
     deletes: list[dict] = []
 
-    def _delete(condition, index_name, kb_id):
-        deletes.append({"condition": condition, "index_name": index_name, "kb_id": kb_id, "off_loop": threading.current_thread() is not threading.main_thread()})
+    def wipe(owner: str, kb_id: str, index_name: str) -> None:
+        deletes.append({"owner": owner, "index_name": index_name, "kb_id": kb_id, "off_loop": threading.current_thread() is not threading.main_thread()})
 
-    monkeypatch.setattr(settings, "docStoreConn", SimpleNamespace(delete=_delete))
+    from contextlib import nullcontext
 
+    monkeypatch.setattr(dataset_api_service, "GraphRAGControlLease", lambda *args: nullcontext())
+    monkeypatch.setattr(dataset_api_service, "wipe_graph", wipe)
+    monkeypatch.setattr(async_db, "execute", AsyncMock())
+    monkeypatch.setattr(async_db, "commit", AsyncMock())
     assert await dataset_api_service.delete_knowledge_graph(async_db, "tenant-unit", "kb1") == (True, True)
-    assert deletes[0]["condition"] == {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}
-    assert deletes[0]["kb_id"] == "kb1"
-    assert deletes[0]["off_loop"] is True  # doc-store 同步 HTTP 必须在工作线程执行
+    assert deletes == [{"owner": "tenant-unit", "index_name": "multirag_tenant-unit_kb", "kb_id": "kb1", "off_loop": True}]
+    async_db.execute.assert_awaited_once()
+    async_db.commit.assert_awaited_once()
 
 
 async def test_delete_knowledge_graph_denies_without_access(async_db, monkeypatch):

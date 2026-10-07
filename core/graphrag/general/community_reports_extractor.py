@@ -12,6 +12,7 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import networkx as nx
 import pandas as pd
@@ -53,7 +54,7 @@ class CommunityReportsExtractor(Extractor):
         self._extraction_prompt = COMMUNITY_REPORT_PROMPT
         self._max_report_length = max_report_length or 1500
 
-    async def __call__(self, graph: nx.Graph, callback: Callable | None = None, task_id: str = ""):
+    async def __call__(self, graph: nx.Graph, callback: Callable | None = None, task_id: str = "") -> CommunityReportsResult:
         enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
         for node_degree in graph.degree:
             graph.nodes[str(node_degree[0])]["rank"] = int(node_degree[1])
@@ -64,7 +65,7 @@ class CommunityReportsExtractor(Extractor):
         res_dict = []
         over, token_count = 0, 0
 
-        async def extract_community_report(community):
+        async def extract_community_report(community: tuple[str, dict[str, Any]]) -> None:
             nonlocal res_str, res_dict, over, token_count
             if task_id:
                 if has_canceled(task_id):
@@ -102,11 +103,11 @@ class CommunityReportsExtractor(Extractor):
                         timeout = 180 if enable_timeout_assertion else 1000000000
                         response = await asyncio.wait_for(self._async_chat(text, [{"role": "user", "content": "Output:"}], {}, task_id), timeout=timeout)
                     except TimeoutError:
-                        logging.warning("extract_community_report._async_chat timeout, skipping...")
-                        return
+                        logging.warning("extract_community_report._async_chat timeout")
+                        raise
                 except Exception as e:
                     logging.error(f"extract_community_report._async_chat failed: {e}")
-                    return
+                    raise
             token_count += num_tokens_from_string(text + response)
             response = re.sub(r"^[^\{]*", "", response)
             response = re.sub(r"[^\}]*$", "", response)
@@ -117,8 +118,7 @@ class CommunityReportsExtractor(Extractor):
                 response = json.loads(response)
             except json.JSONDecodeError as e:
                 logging.error(f"Failed to parse JSON response: {e}")
-                logging.error(f"Response content: {response}")
-                return
+                raise ValueError("Invalid community report JSON") from e
             if not dict_has_keys_with_types(
                 response,
                 [
@@ -129,7 +129,7 @@ class CommunityReportsExtractor(Extractor):
                     ("rating_explanation", str),
                 ],
             ):
-                return
+                raise ValueError("Invalid community report structure")
             response["weight"] = weight
             response["entities"] = ents
             add_community_info2graph(graph, ents, response["title"])
@@ -150,7 +150,7 @@ class CommunityReportsExtractor(Extractor):
                 tasks.append(asyncio.create_task(extract_community_report(community)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
+        except BaseException as e:
             logging.error(f"Error in community processing: {e}")
             for t in tasks:
                 t.cancel()

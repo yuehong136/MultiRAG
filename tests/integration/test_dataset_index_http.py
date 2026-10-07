@@ -83,13 +83,13 @@ def index_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -
         # The sibling deliberately shares the owner's physical index. Every
         # deletion must also restrict kb_id; the foreign dataset has its own index.
         for dataset, doc in zip(env["datasets"], env["documents"], strict=True):
-            for kind in ["graph", "subgraph", "entity", "relation", "raptor", "source", "mind_map"]:
+            for kind in ["graph", "subgraph", "entity", "relation", "community_report", "raptor", "source", "mind_map"]:
                 rows.append(
                     {
                         "pk": uuid4().hex,
                         "kb_id": dataset,
                         "doc_id": doc,
-                        "knowledge_graph_kwd": kind if kind in {"graph", "subgraph", "entity", "relation", "mind_map"} else "",
+                        "knowledge_graph_kwd": kind if kind in {"graph", "subgraph", "entity", "relation", "community_report", "mind_map"} else "",
                         "raptor_kwd": "raptor" if kind == "raptor" else "",
                         "content_with_weight": kind,
                         "vector": [0.25, 0.75],
@@ -173,7 +173,10 @@ def test_index_case_lifecycle_and_independent_readback(index_api: dict[str, Any]
                 identifier
                 for identifier, row in before.items()
                 if row["kb_id"] == env["datasets"][0]
-                and ((canonical == "graph" and row["knowledge_graph_kwd"] in {"graph", "subgraph", "entity", "relation"}) or (canonical == "raptor" and row["raptor_kwd"] == "raptor"))
+                and (
+                    (canonical == "graph" and row["knowledge_graph_kwd"] in {"graph", "subgraph", "entity", "relation", "community_report"})
+                    or (canonical == "raptor" and row["raptor_kwd"] == "raptor")
+                )
             }
             assert native_state(env) == {identifier: row for identifier, row in before.items() if identifier not in removed}
             state = sql_state(env)

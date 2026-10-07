@@ -20,7 +20,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,8 @@ from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common import settings
 from common.constants import PAGERANK_FLD, FileSource, StatusEnum, TaskStatus
 from common.metadata_config import apply_metadata_config, metadata_config_view
+from core.graphrag.persistence import GRAPH_KINDS, GraphRAGControlLease, GraphRAGLease, delete_rows, graph_rows, settled_io, writer_active
+from core.graphrag.phase_markers import clear_phase_markers
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 
@@ -457,24 +459,35 @@ async def get_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: str)
     return True, obj
 
 
+def wipe_graph(tenant_id: str, dataset_id: str, index_name: str) -> None:
+    """Wait for the dataset writer and delete only a checked complete snapshot."""
+    with GraphRAGLease(tenant_id, dataset_id) as lease:
+        previous = graph_rows(index_name, dataset_id, GRAPH_KINDS)
+        lease.check()
+        delete_rows(index_name, dataset_id, [row["pk"] for row in previous])
+        clear_phase_markers(dataset_id)
+
+
 async def delete_knowledge_graph(db: AsyncSession, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
-    """删除数据集的知识图谱。失败时返回 (False, "No authorization.")。"""
+    """Wipe through the same writer lease while retaining this request's session."""
     if not await db.run_sync(lambda s: KnowledgebaseService.accessible(s, dataset_id, tenant_id)):  # TODO(async-phase4)
         return False, "No authorization."
 
-    def _kb_index(s: Session) -> str:
-        kb = KnowledgebaseService.get_by_id(s, dataset_id)
-        return search.index_name_one(kb.tenant_id, kb.name)
+    async with GraphRAGControlLease(dataset_id):
 
-    index_name = await db.run_sync(_kb_index)  # TODO(async-phase4)
-    # doc-store 删除是同步 HTTP：不持有 Session，to_thread 外移避免阻塞事件循环
-    await asyncio.to_thread(
-        settings.docStoreConn.delete,
-        {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]},
-        index_name,
-        dataset_id,
-    )
-    return True, True
+        def reference(s: Session) -> tuple[str, str, str | None]:
+            kb = KnowledgebaseService.get_by_id(s, dataset_id)
+            return kb.tenant_id, search.index_name_one(kb.tenant_id, kb.name), getattr(kb, "graphrag_task_id", None)
+
+        owner, index_name, task_id = await db.run_sync(reference)  # TODO(async-phase4)
+        if task_id and not await settled_io(REDIS_CONN.set, f"{task_id}-cancel", "x"):
+            return False, "Cannot request task cancellation"
+        await settled_io(wipe_graph, owner, dataset_id, index_name)
+        if task_id:
+            await db.execute(delete(Task).where(Task.id == task_id))
+        await db.execute(update(Knowledgebase).where(Knowledgebase.id == dataset_id).values(graphrag_task_id="", graphrag_task_finish_at=None))
+        await db.commit()
+        return True, True
 
 
 def run_graphrag(db: Session, tenant_id: str, dataset_id: str) -> tuple[bool, Any]:
@@ -521,6 +534,13 @@ async def trace_raptor(db: AsyncSession, tenant_id: str, dataset_id: str) -> tup
 
 
 def run_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+    if index_type == "graph" and dataset_id and KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        with GraphRAGControlLease(dataset_id):
+            return _run_index(db, tenant_id, dataset_id, index_type)
+    return _run_index(db, tenant_id, dataset_id, index_type)
+
+
+def _run_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
     """运行索引任务（graph/raptor/mindmap），三者共用同一套排队与去重逻辑。"""
     if index_type not in VALID_INDEX_TYPES:
         return False, f"Invalid index type '{index_type}'. Must be one of {sorted(VALID_INDEX_TYPES)}"
@@ -538,6 +558,8 @@ def run_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> 
     display_name = _INDEX_TYPE_TO_DISPLAY_NAME[index_type]
 
     existing_task_id = getattr(kb, task_id_field, None)
+    if index_type == "graph" and writer_active(kb.tenant_id, dataset_id):
+        return False, "A GraphRAG writer is still active; wait for pause to settle."
     if existing_task_id:
         task = TaskService.get_by_id(db, existing_task_id)
         if not task:
@@ -612,8 +634,15 @@ async def trace_index(db: AsyncSession, tenant_id: str, dataset_id: str, index_t
     return True, task.to_dict()
 
 
-def delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
-    """取消并解绑索引任务，同时清掉该任务写进 doc-store 的产物。
+def delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str, *, wipe: bool = True, expected_task_id: str | None = None) -> tuple[bool, Any]:
+    if index_type == "graph" and dataset_id and KnowledgebaseService.accessible(db, dataset_id, tenant_id):
+        with GraphRAGControlLease(dataset_id):
+            return _delete_index(db, tenant_id, dataset_id, index_type, wipe=wipe, expected_task_id=expected_task_id)
+    return _delete_index(db, tenant_id, dataset_id, index_type, wipe=wipe, expected_task_id=expected_task_id)
+
+
+def _delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str, *, wipe: bool = True, expected_task_id: str | None = None) -> tuple[bool, Any]:
+    """wipe=False 仅请求暂停；wipe=True 在 graph writer 收束后删除并解绑。
 
     RAPTOR 之外的 mindmap 没有独立产物字段，只解绑任务。
     """
@@ -631,19 +660,27 @@ def delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) 
     task_id_field = _INDEX_TYPE_TO_TASK_ID_FIELD[index_type]
     task_finish_at_field = task_id_field.replace("_task_id", "_task_finish_at")
     task_id = getattr(kb, task_id_field, None)
+    if expected_task_id is not None and task_id != expected_task_id:
+        return False, "Task binding changed; refresh the trace before pausing."
 
-    if task_id:
-        try:
-            REDIS_CONN.set(f"{task_id}-cancel", "x")
-        except Exception as e:
-            logger.exception(e)
-        TaskService.delete_by_id(db, task_id)
+    if task_id and not REDIS_CONN.set(f"{task_id}-cancel", "x"):
+        return False, "Cannot request task cancellation"
+    # Pause preserves binding/trace; a new run remains blocked while its writer drains.
+    if not wipe:
+        # Queued tasks may be acknowledged without entering the writer. Keep a
+        # terminal trace so a paused queued task can also be restarted. The
+        # renewable lease still blocks a restart while actual writes drain.
+        if task_id and not TaskService.update_by_id(db, task_id, {"progress": -1, "progress_msg": "Pause requested; waiting for the graph writer to settle."}):
+            return False, "Cannot save task pause state"
+        return True, {}
 
     index_name = search.index_name_one(kb.tenant_id, kb.name)
     if index_type == "graph":
-        settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, index_name, dataset_id)
+        wipe_graph(kb.tenant_id, dataset_id, index_name)
     elif index_type == "raptor":
         settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, index_name, dataset_id)
+    if task_id:
+        TaskService.delete_by_id(db, task_id)
 
     if not KnowledgebaseService.update_by_id(db, kb.id, {task_id_field: "", task_finish_at_field: None}):
         return False, f"Internal error: cannot delete {index_type} task"
@@ -651,13 +688,13 @@ def delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str) 
     return True, {}
 
 
-async def delete_index_async(tenant_id: str, dataset_id: str, index_type: str) -> tuple[bool, Any]:
+async def delete_index_async(tenant_id: str, dataset_id: str, index_type: str, *, wipe: bool = True, expected_task_id: str | None = None) -> tuple[bool, Any]:
     """delete_index 的异步入口：Redis 取消信号 + doc-store 删除 + DB 写交错，
     整块进工作线程 + 自开短会话（同 delete_datasets_async 口径）。"""
 
     def _run() -> tuple[bool, Any]:
         with db_connection() as s:
-            return delete_index(s, tenant_id, dataset_id, index_type)
+            return delete_index(s, tenant_id, dataset_id, index_type, wipe=wipe, expected_task_id=expected_task_id)
 
     return await asyncio.to_thread(_run)
 

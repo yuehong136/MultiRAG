@@ -279,7 +279,7 @@ class Extractor:
         edge_data = {"src_id": src_id, "tgt_id": tgt_id, "description": description, "keywords": keywords, "weight": weight, "source_id": source_id}
         all_relationships_data.append(edge_data)
 
-    async def _merge_graph_nodes(self, graph: nx.Graph, nodes: list[str], change: GraphChange, task_id=""):
+    async def _merge_graph_nodes(self, graph: nx.Graph, nodes: list[str], change: GraphChange, task_id: str = "") -> None:
         if task_id and has_canceled(task_id):
             raise TaskCanceledException(f"Task {task_id} was cancelled during merge graph nodes")
 
@@ -298,7 +298,7 @@ class Extractor:
             node1_attrs = graph.nodes[node1]
             node0_attrs["description"] += f"{GRAPH_FIELD_SEP}{node1_attrs['description']}"
             node0_attrs["source_id"] = sorted(set(node0_attrs["source_id"] + node1_attrs["source_id"]))
-            for neighbor in graph.neighbors(node1):
+            for neighbor in list(graph.neighbors(node1)):
                 change.removed_edges.add(get_from_to(node1, neighbor))
                 if neighbor not in nodes_set:
                     edge1_attrs = graph.get_edge_data(node1, neighbor)
@@ -314,6 +314,8 @@ class Extractor:
                         graph.add_edge(nodes[0], neighbor, **edge0_attrs)
                     else:
                         graph.add_edge(nodes[0], neighbor, **edge1_attrs)
+                        node0_neighbors.add(neighbor)
+                        change.added_updated_edges.add(get_from_to(nodes[0], neighbor))
             graph.remove_node(node1)
         node0_attrs["description"] = await self._handle_entity_relation_summary(nodes[0], node0_attrs["description"], task_id=task_id)
         graph.nodes[nodes[0]].update(node0_attrs)

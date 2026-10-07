@@ -3252,3 +3252,46 @@ unit 6266 passed / 1 failed，唯一失败是其他 owner GraphRAG 改动中的
 隔离 verify 6162 passed，真实 PG 4+1 passed；真实 MySQL 8.4.11 自有四表库的边界、
 UTC/+08 session、日期与清理读回通过。范围、等价判断与整库/SaaS/部署限制见
 [连接器调度与 UTC](connector-schedule-utc.md)。不 push。
+
+## 2026-10-07 GraphRAG 阶段恢复与安全持久化
+
+上游 `e8f19aa33821b6a7d0d96fb48c0944702ff06c50`，完整 12 文件范围；
+上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`，确认 ancestry 与上游 remote。
+检查了冻结范围内 `c58629299` 的细粒度 checkpoint、`c5a46fda4` 的 event-loop semaphore
+修复与 `b0e600713` 的 batch embeddings 演进；本轮保持指定提交的阶段恢复范围，
+不扩展到新的抽取方法、模型或 embeddings 重构。
+
+| 上游文件 | 本地覆盖 / 处置 |
+|---|---|
+| `api/apps/restful_apis/dataset_api.py` | FastAPI bool `wipe`，统一 index 和三条显式路径；额外可选 trace ID 防止暂停错任务 |
+| `api/apps/services/dataset_api_service.py` | pause 保留绑定/trace；wipe 五类图产物和 marker；控制与 writer lease、取消写入失败明确失败；异步图删除保留请求 Session |
+| `rag/graphrag/general/extractor.py` | 邻居 list snapshot、重定向后的邻居集合与 added edge 跟踪，合并 weight/description/keywords/source_id |
+| `rag/graphrag/general/index.py` | 未合并 subgraph 恢复、已合并文档去重、无新内容时加载 persisted graph；两阶段 marker，成功 readback/prune 后标记；稳定社区 ID |
+| `rag/graphrag/phase_markers.py` | 七天 Redis hint，绑定图内容/revision 和配置；查询/设置失败为 miss，旧值和清理失败不能误跳过新图 |
+| `rag/graphrag/utils.py` | 64×4 fixed-worker insert pipeline；失败/取消 drain executor；图最后 upsert/readback，之后精确 prune；源 chunks Strong 完整读取 |
+| `test/testcases/test_web_api/test_dataset_management/test_dataset_sdk_routes_unit.py` | 本地 dataset index unit/真实 HTTP；wipe 参数、默认清理、paused trace、Redis 失败、trace identity 和 writer 活跃时拒绝重启 |
+| `test/unit_test/rag/graphrag/test_merge_graph_nodes.py` | GraphRAG checkpoint 单测：公共邻居属性合并、真实 resolution 的串行合并；保留并改进既有 mutex，不复制外层 semaphore 测试桩 |
+| `test/unit_test/rag/graphrag/test_phase_markers.py` | scoped revision marker、Redis miss、阶段失败无 marker、新内容失效与稳定 ID 的 unit + native Redis 读回 |
+| `web/src/pages/dataset/dataset/generate-button/hook.ts` | 独立 Web `use-generate-task.ts`：GraphRAG dataset pause 携带 `wipe=false` 和 trace ID；保留等待/迟到反馈边界及 RAPTOR 原取消入口 |
+| `web/src/services/knowledge-service.ts` | 当前领域 `knowledge-index.ts` 加可选 wipe/trace；详情 count normalization 已在 `knowledge.ts`，使用正数与 0 合同、真实详情请求及生成按钮验收，不添加旧协议 alias |
+| `web/src/utils/api.ts` | 领域 index API 在 canonical `/index?type=graph` 地址编码 wipe 与 trace 参数，显式删除继续默认 wipe |
+
+本地已有 entity-resolution mutex，比上游的 merge semaphore 同样保证互斥，直接保留；
+修复判定和 community extractor 吞异常的问题，避免把 partial model success 标成阶段完成。
+稳定 entity/relation ID 及按权威图清理用于恢复上次 prune 失败留下的辅助行。
+
+**明确差异**：上游 community 枚举异常的 delete-then-insert fallback 未采用，完整枚举失败即失败；
+set_graph 仍先删除旧 checkpoint 的顺序未采用。本地先校验、写辅助行、最后原子 upsert/readback
+权威图，再按完整快照 prune；prune 错误传播，marker 不表示未完成阶段成功。
+这不是跨行/跨存储事务，辅助行或同 ID 社区报告可有部分更新，后续稳定 key 重跑修复。
+支持与生产并发边界见 [GraphRAG checkpoint](../references/graphrag-checkpoints.md)。
+
+隔离基线 `044805a671bb2565f8ae385fea5cbcef4edb4f82`；只复制本任务文件，复用已安装依赖
+和本地模型资产，不修改共享配置。验收用独立 PostgreSQL scratch 库、Milvus 集合、Redis keys、
+监听端口与 Web 进程，保留完整原生行、SQL Task/绑定、marker、lease 和清理读回。
+覆盖阶段间暂停恢复、新内容失效、wipe、query/insert/prune 故障、真实在途写入收束、续约和
+互斥；Web 明暗主题按真实 pause/retry 请求验收并审阅 contact sheet。
+
+验证记录和实际数量见本任务交付；复现入口与模型/字体替身边界统一记录在上述参考文档。
+不启动或重启生产服务、不 push；Milvus 之外的 checkpoint backend、生产多机压力及远端
+超时后继续提交的 fencing 边界未验收。
