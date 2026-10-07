@@ -2,6 +2,7 @@ import json
 import logging
 import random
 import time
+from typing import Any
 
 from agent.dsl_migration import normalize_chunker_dsl
 from api.db import CanvasCategory
@@ -69,10 +70,11 @@ class CanvasReplicaService:
             return None
 
     @classmethod
-    def _write_payload(cls, replica_key: str, payload: dict):
+    def _write_payload(cls, replica_key: str, payload: dict[str, Any]) -> None:
         """Write payload and refresh TTL."""
         payload["updated_at"] = int(time.time())
-        REDIS_CONN.set_obj(replica_key, payload, cls.TTL_SECS)
+        if not REDIS_CONN.set_obj(replica_key, payload, cls.TTL_SECS):
+            raise ConnectionError("Failed to persist canvas replica.")
 
     @classmethod
     def _build_payload(
@@ -100,18 +102,27 @@ class CanvasReplicaService:
         canvas_id: str,
         tenant_id: str,
         runtime_user_id: str,
-        dsl,
-        canvas_category=CanvasCategory.Agent,
-        title="",
-    ):
-        """Create a runtime replica if it does not exist; otherwise keep existing state."""
+        dsl: Any,
+        canvas_category: str = CanvasCategory.Agent,
+        title: str = "",
+    ) -> dict[str, Any]:
+        """Initialize once under the same lock as explicit editor saves."""
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
-        payload = cls._read_payload(replica_key)
+        payload = cls.load_for_run(canvas_id, tenant_id, runtime_user_id)
         if payload:
             return payload
-        payload = cls._build_payload(canvas_id, str(tenant_id), str(runtime_user_id), dsl, canvas_category, title)
-        cls._write_payload(replica_key, payload)
-        return payload
+        lock = cls._acquire_lock_with_retry(cls._lock_key(canvas_id, tenant_id, runtime_user_id))
+        if lock is None:
+            raise RuntimeError("Canvas replica initialization is busy; retry the request.")
+        try:
+            payload = cls.load_for_run(canvas_id, tenant_id, runtime_user_id)
+            if payload:
+                return payload
+            payload = cls._build_payload(canvas_id, str(tenant_id), str(runtime_user_id), dsl, canvas_category, title)
+            cls._write_payload(replica_key, payload)
+            return payload
+        finally:
+            lock.release()
 
     @classmethod
     def bootstrap(
@@ -134,10 +145,13 @@ class CanvasReplicaService:
         )
 
     @classmethod
-    def load_for_run(cls, canvas_id: str, tenant_id: str, runtime_user_id: str):
+    def load_for_run(cls, canvas_id: str, tenant_id: str, runtime_user_id: str) -> dict[str, Any] | None:
         """Load current runtime replica used by /completions."""
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
-        return cls._read_payload(replica_key)
+        payload = cls._read_payload(replica_key)
+        if payload is not None and (payload.get("canvas_id"), payload.get("tenant_id"), payload.get("runtime_user_id")) != (canvas_id, str(tenant_id), str(runtime_user_id)):
+            raise ValueError("Canvas replica ownership is inconsistent.")
+        return payload
 
     @classmethod
     def replace_for_set(

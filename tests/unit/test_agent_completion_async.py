@@ -325,7 +325,7 @@ def test_restful_agent_delegation_refusal_is_not_an_unhandled_error(
 
     class DebugDB(_RecordingAsyncSession):
         async def execute(self, *args: Any, **kwargs: Any) -> Any:
-            return SimpleNamespace(one=lambda: (CanvasCategory.Agent, principal.id))
+            return SimpleNamespace(one_or_none=lambda: ({}, "debug", CanvasCategory.Agent, principal.id))
 
     def reject_canvas(*args: Any, **kwargs: Any) -> None:
         raise McpDelegationError(DelegationErrorCode.CONTEXT_REQUIRED)
@@ -376,7 +376,7 @@ async def test_registered_debug_response_owns_bound_runtime(client: TestClient, 
 
     class DebugDB(_RecordingAsyncSession):
         async def execute(self, *args: Any, **kwargs: Any) -> Any:
-            return SimpleNamespace(one=lambda: (CanvasCategory.Agent, principal.id))
+            return SimpleNamespace(one_or_none=lambda: ({}, "debug", CanvasCategory.Agent, principal.id))
 
         async def rollback(self) -> None:
             if window == "setup_cancel":

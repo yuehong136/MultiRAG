@@ -74,3 +74,23 @@ Web Search/admin **1 passed**。Web API **236 passed**，lint 0 errors，文件�
 `tests/support/reference_metadata_http.py`；专用 harness 复跑和最终批次 gate 记录在后续验收。
 模型输出受控，未证明外部模型、浏览器画面、真实飞书或部署。证据日志在本机
 `/tmp/multirag-runtime-20261007/item12-*`，集成报告随 `.test-results` 保存。
+
+## 13 · c9513e5ecb9d319d9ce596df541a4798e4064fc0
+
+缺少 runtime replica 时，从已授权 SQL Canvas 的当前草稿 bootstrap，无需先 GET；
+先验证 canvas 存在、实际资源 owner、当前有效成员与 draft 执行边界，拒绝后 Redis 零写。
+body tenant/user_id 不构成权限；模型与运行上下文取资源 owner，runtime_user 仅选择隔离副本。
+副本 key 与 payload 均绑定 canvas/tenant/runtime_user，混错归属 payload 明确拒绝。
+Redis 读取/bootstrap 放工作线程，不在 event loop 做同步 IO。
+
+本地改进超过上游简单 read-then-set：缺失初始化使用 editor save 同一分布式锁，
+锁内二次检查，已有执行状态不会被并发旧草稿覆盖；busy/写失败返回非零业务结果，
+不构造 Canvas。`set_obj=False` 不再被当作持久化成功。并发运行结果仍按最后一次提交覆盖，
+本项不引入全运行租约或乐观版本冲突协议。
+
+真实 HTTP/SQL/Redis 五项验收：无需 fetch 首跑使用 SQL 草稿而非旧发布版本，
+team 草稿拒绝与零副本写入；24 次/12 线程并发初始化得到同一赢家，后续 bootstrap
+保留 editor save；tenant/runtime_user 双维隔离与 TTL；写/锁/归属异常均无执行、无 SQL 改动。
+定向 unit **95 passed**；实际结果及 gate 的最终累计见末尾。
+首轮错误响应对 data 字段有过强形状假设，修为既有错误信封允许省略空 data，非零业务码
+与零执行断言保留。报告：`.test-results/20261007-183345-93351`。

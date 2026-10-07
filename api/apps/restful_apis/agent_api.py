@@ -610,14 +610,36 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     if not await db.run_sync(lambda s: UserCanvasService.accessible(s, req["id"], tenant_id)):  # TODO(async-phase4)
         return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
-    replica_payload = CanvasReplicaService.load_for_run(
-        canvas_id=req["id"],
-        tenant_id=tenant_id,
-        runtime_user_id=user_id,
-    )
+    stored = (await db.execute(select(UserCanvas.dsl, UserCanvas.title, UserCanvas.canvas_category, UserCanvas.user_id).where(UserCanvas.id == req["id"]))).one_or_none()
+    if stored is None:
+        return get_data_error_result(retmsg="canvas not found.")
+    draft_dsl, draft_title, stored_category, resource_owner_id = stored
+    try:
+        await require_canvas(db, req["id"], resource_owner_id, tenant_id)
+        if stored_category != CanvasCategory.DataFlow and resource_owner_id != tenant_id:
+            raise PermissionError("Only the owner can run a draft agent.")
+    except PermissionError as error:
+        await db.rollback()
+        return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
 
+    try:
+        replica_payload = await asyncio.to_thread(CanvasReplicaService.load_for_run, canvas_id=req["id"], tenant_id=tenant_id, runtime_user_id=user_id)
+        if replica_payload is None:
+            replica_payload = await asyncio.to_thread(
+                CanvasReplicaService.bootstrap,
+                canvas_id=req["id"],
+                tenant_id=tenant_id,
+                runtime_user_id=user_id,
+                dsl=draft_dsl,
+                canvas_category=stored_category,
+                title=draft_title,
+            )
+    except ValueError as error:
+        return get_data_error_result(retmsg=str(error))
+    except Exception as error:
+        return server_error_response(error)
     if not replica_payload:
-        return get_data_error_result(retmsg="canvas replica not found, please call /get/<canvas_id> first.")
+        return get_data_error_result(retmsg="canvas replica initialization failed.")
 
     replica_dsl = replica_payload.get("dsl", {})
     canvas_title = replica_payload.get("title", "")
@@ -625,11 +647,6 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
 
     # DataFlow模式（只取所需字段，不让 ORM 对象活到流式期）
-    stored_category, resource_owner_id = (await db.execute(select(UserCanvas.canvas_category, UserCanvas.user_id).where(UserCanvas.id == req["id"]))).one()
-    try:
-        await require_canvas(db, req["id"], resource_owner_id, tenant_id)
-    except PermissionError as error:
-        return get_json_result(data=False, retmsg=str(error), retcode=RetCode.AUTHENTICATION_ERROR)
     if stored_category == CanvasCategory.DataFlow:
         task_id = get_uuid()
         Pipeline(dsl_str, tenant_id=resource_owner_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
