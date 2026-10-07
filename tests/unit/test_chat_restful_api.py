@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import Knowledgebase
@@ -266,6 +267,123 @@ def test_update_payload_allows_knowledge_placeholder_without_sources(monkeypatch
 
     assert ok is True
     assert payload["prompt_config"]["system"] == "Answer with {knowledge}"
+
+
+def test_create_payload_stores_documented_search_mode_in_retrieval_shape(monkeypatch):
+    _install_common_fakes(monkeypatch)
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kwargs: [])
+
+    ok, payload = chat_api._prepare_create_payload(
+        object(),
+        "tenant-1",
+        {"name": "Support Bot", "dataset_ids": ["kb-1"], "search_mode": {"type": "dense"}},
+    )
+
+    assert ok is True
+    assert payload["search_mode"] == {"dense": {}}
+
+
+@pytest.mark.parametrize("merge_nested", [False, True], ids=["put", "patch"])
+def test_update_payload_stores_documented_search_mode_in_retrieval_shape(monkeypatch, merge_nested):
+    _install_common_fakes(monkeypatch)
+    current = Obj(id="chat-1", name="Old Bot", kb_ids=["kb-1"], prompt_config={"system": "Old"}, llm_setting={})
+    monkeypatch.setattr(chat_api.DialogService, "get_by_id", lambda _db, _chat_id: current)
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kwargs: [])
+
+    ok, payload = chat_api._prepare_update_payload(
+        object(),
+        "tenant-1",
+        "chat-1",
+        {"search_mode": {"type": "hybrid", "weight_dense": 0.6, "weight_sparse": 0.4}},
+        merge_nested=merge_nested,
+    )
+
+    assert ok is True
+    assert payload["search_mode"] == {"hybrid": {"weight_dense": 0.6, "weight_sparse": 0.4}}
+
+
+@pytest.mark.parametrize(("merge_nested", "expected"), [(False, {}), (True, {"temperature": 0.1})], ids=["put", "patch"])
+def test_update_payload_treats_null_llm_setting_as_no_overrides(monkeypatch, merge_nested, expected):
+    _install_common_fakes(monkeypatch)
+    current = Obj(id="chat-1", name="Old Bot", kb_ids=[], prompt_config={"system": "Old"}, llm_setting={"temperature": 0.1})
+    monkeypatch.setattr(chat_api.DialogService, "get_by_id", lambda _db, _chat_id: current)
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kwargs: [])
+
+    ok, payload = chat_api._prepare_update_payload(object(), "tenant-1", "chat-1", {"llm_setting": None}, merge_nested=merge_nested)
+
+    assert ok is True
+    assert payload["llm_setting"] == expected
+
+
+@pytest.mark.parametrize(
+    "search_mode",
+    [
+        pytest.param("dense", id="string"),
+        pytest.param({"type": "keyword"}, id="unknown-type"),
+        pytest.param({"type": "hybrid", "weight_dense": 0, "weight_sparse": 0}, id="zero-weights"),
+        pytest.param({"dense": {}, "sparse": {}}, id="two-modes"),
+    ],
+)
+def test_create_payload_rejects_unusable_search_mode(monkeypatch, search_mode):
+    _install_common_fakes(monkeypatch)
+    monkeypatch.setattr(chat_api.DialogService, "query", lambda *_args, **_kwargs: [])
+
+    ok, message = chat_api._prepare_create_payload(
+        object(),
+        "tenant-1",
+        {"name": "Support Bot", "dataset_ids": ["kb-1"], "search_mode": search_mode},
+    )
+
+    assert ok is False
+    assert message.startswith("`search_mode` must be an object")
+
+
+def test_put_chat_round_trips_documented_search_mode(client, monkeypatch):
+    """Studio PUTs ``{"type": ...}``; storage gets the keyed form, the response the documented one."""
+    _install_common_fakes(monkeypatch)
+    current = Obj(
+        id="chat-1",
+        tenant_id="tenant-unit",
+        name="Support Bot",
+        kb_ids=["kb-1"],
+        prompt_config={"system": "Answer from {knowledge}", "parameters": [{"key": "knowledge", "optional": False}]},
+        llm_setting={},
+        search_mode={"type": "dense"},
+    )
+    captured = {}
+
+    def fake_query(_db, **kwargs):
+        return [current] if kwargs.get("id") == "chat-1" else []
+
+    def fake_update_by_id(_db, _chat_id, payload):
+        captured.update(payload)
+        current.search_mode = payload["search_mode"]
+        return True
+
+    monkeypatch.setattr(chat_api.DialogService, "query", fake_query)
+    monkeypatch.setattr(chat_api.DialogService, "get_by_id", lambda _db, _chat_id: current)
+    monkeypatch.setattr(chat_api.DialogService, "update_by_id", fake_update_by_id)
+
+    response = client.put(
+        "/api/v1/chats/chat-1",
+        json={"name": "Support Bot", "search_mode": {"type": "hybrid", "weight_dense": 0.6, "weight_sparse": 0.4}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert captured["search_mode"] == {"hybrid": {"weight_dense": 0.6, "weight_sparse": 0.4}}
+    assert body["data"]["search_mode"] == {"type": "hybrid", "weight_dense": 0.6, "weight_sparse": 0.4}
+
+
+def test_build_chat_response_presents_stored_search_modes_in_documented_shape(db):
+    def present(search_mode):
+        return chat_api.build_chat_response(db, Obj(id="chat-1", kb_ids=[], search_mode=search_mode))["search_mode"]
+
+    assert present({"sparse": {}}) == {"type": "sparse"}
+    assert present({"type": "dense"}) == {"type": "dense"}
+    assert present(None) is None
+    assert present({"type": "keyword"}) == {"type": "keyword"}
 
 
 def test_list_chats_returns_restful_shape(client, monkeypatch):

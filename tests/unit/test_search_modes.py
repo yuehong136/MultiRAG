@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from api.utils.dataset_search import SearchDatasetRequest
+from api.utils.dataset_search import SearchDatasetRequest, normalize_search_mode, search_mode_response
 from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchTextExpr
-from core.nlp.search import Dealer
+from core.nlp.search import Dealer, _mode_weights
 
 
 @pytest.fixture
@@ -69,6 +69,51 @@ def test_fusion_rejects_unusable_weights(weights: str) -> None:
 def test_fusion_normalizes_sparse_then_dense_weights() -> None:
     request = SearchDatasetRequest(question="q", search_mode={"type": "fusion", "weights": "1,3"})
     assert request.get_search_mode_dict() == {"fusion": {"weights": "0.25,0.75"}}
+
+
+@pytest.mark.parametrize(
+    ("value", "keyed", "weights"),
+    [
+        pytest.param(None, None, (0.0, 1.0), id="default"),
+        pytest.param({}, None, (0.0, 1.0), id="empty"),
+        pytest.param({"type": "dense"}, {"dense": {}}, (0.0, 1.0), id="documented-dense"),
+        pytest.param({"type": "dense", "weight_dense": 0.7}, {"dense": {}}, (0.0, 1.0), id="stale-weights"),
+        pytest.param({"type": "sparse"}, {"sparse": {}}, (1.0, 0.0), id="documented-sparse"),
+        pytest.param({"type": "hybrid", "weight_dense": 0.6, "weight_sparse": 0.4}, {"hybrid": {"weight_dense": 0.6, "weight_sparse": 0.4}}, (0.4, 0.6), id="documented-hybrid"),
+        pytest.param({"type": "fusion", "weights": "1,3"}, {"fusion": {"weights": "0.25,0.75"}}, (0.25, 0.75), id="documented-fusion"),
+        pytest.param({"hybrid": {"weight_dense": 0.6, "weight_sparse": 0.4}}, {"hybrid": {"weight_dense": 0.6, "weight_sparse": 0.4}}, (0.4, 0.6), id="stored-hybrid"),
+        pytest.param({"sparse": {}}, {"sparse": {}}, (1.0, 0.0), id="stored-sparse"),
+    ],
+)
+def test_normalized_search_modes_satisfy_retrieval(value: object, keyed: dict[str, Any] | None, weights: tuple[float, float]) -> None:
+    normalized = normalize_search_mode(value)
+    assert normalized == keyed
+    _, sparse, dense = _mode_weights(normalized)
+    assert (sparse, dense) == pytest.approx(weights)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("dense", id="string"),
+        pytest.param(["dense"], id="list"),
+        pytest.param({"type": "keyword"}, id="unknown-type"),
+        pytest.param({"type": "hybrid", "weight_dense": 0, "weight_sparse": 0}, id="zero-weights"),
+        pytest.param({"type": "fusion", "weights": "nan,1"}, id="non-finite-fusion"),
+        pytest.param({"dense": {}, "sparse": {}}, id="two-modes"),
+        pytest.param({"hybrid": 0.7}, id="scalar-params"),
+    ],
+)
+def test_normalize_search_mode_rejects_unusable_values(value: object) -> None:
+    with pytest.raises(ValueError):
+        normalize_search_mode(value)
+
+
+def test_search_mode_response_uses_documented_shape() -> None:
+    assert search_mode_response({"hybrid": {"weight_dense": 0.6, "weight_sparse": 0.4}}) == {"type": "hybrid", "weight_dense": 0.6, "weight_sparse": 0.4}
+    assert search_mode_response({"type": "dense"}) == {"type": "dense"}
+    assert search_mode_response(None) is None
+    assert search_mode_response({"type": "keyword"}) == {"type": "keyword"}
 
 
 async def test_search_failure_reaches_rest_error_boundary(mode_dealer: Dealer) -> None:

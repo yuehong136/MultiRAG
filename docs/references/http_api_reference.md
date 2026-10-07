@@ -1382,7 +1382,8 @@ POST /chats
   "vector_similarity_weight": 0.3,
   "top_n": 6,
   "top_k": 1024,
-  "rerank_id": ""
+  "rerank_id": "",
+  "search_mode": {"type": "hybrid", "weight_dense": 0.7, "weight_sparse": 0.3}
 }
 ```
 
@@ -1391,8 +1392,9 @@ POST /chats
 | name | string | 是 | 聊天助手名称 |
 | dataset_ids | array | 否 | 关联的知识库 ID；省略或为空数组时创建空助手，可稍后绑定知识库 |
 | llm_id | string | 否 | 聊天模型 ID；未指定时使用租户默认聊天模型 |
-| llm_setting | object | 否 | 模型参数配置，例如 `model_type`、`temperature`、`top_p`、`presence_penalty`、`frequency_penalty` |
-| prompt_config | object | 否 | 提示词配置，例如 `system`、`prologue`、`parameters`、`empty_response`、`quote`、`tts`、`refine_multiturn` |
+| llm_setting | object | 否 | 模型参数配置，例如 `model_type`、`temperature`、`top_p`、`presence_penalty`、`frequency_penalty`；创建与 `PUT` 时 `null` 按 `{}`（不覆盖模型默认参数）保存 |
+| prompt_config | object | 否 | 提示词配置，例如 `system`、`prologue`、`parameters`、`empty_response`、`quote`、`tts`、`refine_multiturn`。关联知识库时检索内容填入 `system` 的 `{knowledge}` 占位符；`parameters` 需含 `knowledge` 才会检索（`system` 含占位符时服务端自动补上），二者都缺时不检索：设置了 `empty_response` 就直接返回它，否则模型不带知识库内容作答 |
+| search_mode | object | 否 | 检索模式：`{"type": "dense"}`、`{"type": "sparse"}`、`{"type": "hybrid", "weight_dense": 0.7, "weight_sparse": 0.3}` 或 `{"type": "fusion", "weights": "0.05,0.95"}`；省略或为 null 时使用向量检索。创建、`PUT`、`PATCH` 时校验，非法值返回错误；响应使用相同形状 |
 | similarity_threshold | number | 否 | 相似度阈值 |
 | vector_similarity_weight | number | 否 | 向量相似度权重 |
 | top_n | integer | 否 | 送入回答生成的分块数量 |

@@ -1,4 +1,5 @@
-"""Request contract shared by REST dataset search and its service."""
+"""Request contract shared by REST dataset search and its service, plus the
+search-mode contract that chats store and retrieval consumes."""
 
 import math
 from typing import Annotated, Any, Literal
@@ -50,6 +51,49 @@ class FusionSearchMode(BaseModel):
 
 
 SearchMode = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
+
+
+class _SearchModeValue(BaseModel):
+    search_mode: SearchMode
+
+
+def normalize_search_mode(value: object) -> dict[str, Any] | None:
+    """Validate a search mode and return the keyed form retrieval consumes.
+
+    REST callers send the documented ``{"type": "hybrid", "weight_dense": ...}``
+    shape, while the legacy dialog route stores ``{"hybrid": {...}}``. Both
+    become ``{"hybrid": {...}}`` so writes, stored chats and retrieval share
+    one contract. Anything else raises ``ValueError`` (pydantic's
+    ``ValidationError`` included).
+    """
+    if value is None or value == {}:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("search_mode must be an object")
+    if "type" not in value:
+        if len(value) != 1:
+            raise ValueError("search_mode must select exactly one mode")
+        mode, params = next(iter(value.items()))
+        if not isinstance(params, dict):
+            raise ValueError("search_mode parameters must be an object")
+        value = {**params, "type": mode}
+    data = _SearchModeValue.model_validate({"search_mode": value}).search_mode.model_dump()
+    return {data.pop("type"): data}
+
+
+def search_mode_response(value: object) -> object:
+    """Present a stored search mode in the documented ``{"type": ...}`` shape.
+
+    Unrecognized stored values are returned unchanged instead of being hidden.
+    """
+    try:
+        keyed = normalize_search_mode(value)
+    except ValueError:
+        return value
+    if keyed is None:
+        return None
+    mode, params = next(iter(keyed.items()))
+    return {"type": mode, **params}
 
 
 class SearchDatasetRequest(BaseModel):

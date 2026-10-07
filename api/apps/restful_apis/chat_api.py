@@ -34,6 +34,7 @@ from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result
+from api.utils.dataset_search import normalize_search_mode, search_mode_response
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import LLMType, RetCode, StatusEnum
@@ -161,6 +162,8 @@ def build_chat_response(db: Session, chat: Any) -> dict[str, Any]:
     data["dataset_ids"] = kb_ids
     data["kb_names"] = kb_names
     data.pop("kb_ids", None)
+    if "search_mode" in data:
+        data["search_mode"] = search_mode_response(data["search_mode"])
     return data
 
 
@@ -260,6 +263,17 @@ def _normalize_do_refer(req: dict[str, Any]) -> None:
         req["do_refer"] = "1" if req["do_refer"] else "0"
 
 
+def _normalize_search_mode_field(req: dict[str, Any]) -> str | None:
+    """Store the documented ``{"type": ...}`` request shape in the keyed form retrieval reads."""
+    if "search_mode" not in req:
+        return None
+    try:
+        req["search_mode"] = normalize_search_mode(req["search_mode"])
+    except ValueError:
+        return '`search_mode` must be an object such as {"type": "hybrid", "weight_dense": 0.7, "weight_sparse": 0.3}; type is one of dense, sparse, hybrid, fusion.'
+    return None
+
+
 def _validate_llm_id(db: Session, tenant_id: str, llm_id: str | None, llm_setting: dict[str, Any] | None) -> str | None:
     if not llm_id:
         return None
@@ -351,6 +365,8 @@ def _prepare_create_payload(db: Session, tenant_id: str, req: dict[str, Any]) ->
         req["llm_setting"] = {}
     elif not isinstance(llm_setting, dict):
         return False, "`llm_setting` should be an object."
+    if err := _normalize_search_mode_field(req):
+        return False, err
 
     llm_id_provided = bool(req.get("llm_id"))
     if not req.get("llm_id"):
@@ -427,8 +443,14 @@ def _prepare_update_payload(
             return False, kb_ids
         req["kb_ids"] = kb_ids
 
-    if "llm_setting" in req and req["llm_setting"] is not None and not isinstance(req["llm_setting"], dict):
-        return False, "`llm_setting` should be an object."
+    if "llm_setting" in req:
+        if req["llm_setting"] is None:
+            # Same as create: null means no overrides, and chat generation reads a dict.
+            req["llm_setting"] = {}
+        elif not isinstance(req["llm_setting"], dict):
+            return False, "`llm_setting` should be an object."
+    if err := _normalize_search_mode_field(req):
+        return False, err
     if "llm_id" in req:
         err = _validate_llm_id(db, tenant_id, req.get("llm_id"), req.get("llm_setting"))
         if err:

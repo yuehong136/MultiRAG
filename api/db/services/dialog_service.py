@@ -26,6 +26,7 @@ from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.run_context import RunContext
+from api.utils.dataset_search import normalize_search_mode
 from api.utils.reference_metadata import enrich_reference_metadata, enrich_reference_metadata_async, reference_dataset_id, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, ParserType, StatusEnum
@@ -124,6 +125,12 @@ async def _deep_research_events(
                 await task
         else:
             await task
+
+
+def _retrieval_search_mode(dialog: Any) -> dict[str, Any] | None:
+    """Chats saved through the REST API before it normalized writes hold the
+    documented ``{"type": ...}`` shape; retrieval only accepts the keyed form."""
+    return normalize_search_mode(dialog.search_mode)
 
 
 def _deep_research_event_payload(message: str) -> dict[str, Any]:
@@ -782,7 +789,7 @@ def chat(
                     similarity_threshold=0.2,
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
-                    search_mode=dialog.search_mode,
+                    search_mode=_retrieval_search_mode(dialog),
                     kb_ids=[kb.id for kb in kbs],
                 ),
                 internet_enabled=use_web_search,
@@ -815,7 +822,7 @@ def chat(
                         aggs=True,
                         rerank_mdl=rerank_mdl,
                         rank_feature=label_question(db, " ".join(questions), kbs),
-                        search_mode=dialog.search_mode,
+                        search_mode=_retrieval_search_mode(dialog),
                         kb_ids=[kb.id for kb in kbs],
                     )
                 )
@@ -847,7 +854,7 @@ def chat(
         return {"answer": prompt_config["empty_response"], "reference": kbinfos}
 
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
-    gen_conf = dialog.llm_setting
+    gen_conf = dialog.llm_setting or {}  # chats saved by PUT before it normalized null
 
     msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs) + attachments_}]
     prompt4citation = ""
@@ -1148,7 +1155,7 @@ async def async_chat(
                     similarity_threshold=0.2,
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
-                    search_mode=dialog.search_mode,
+                    search_mode=_retrieval_search_mode(dialog),
                     kb_ids=[kb.id for kb in kbs],
                 ),
                 internet_enabled=use_web_search,
@@ -1176,7 +1183,7 @@ async def async_chat(
                     aggs=True,
                     rerank_mdl=rerank_mdl,
                     rank_feature=rank_feature,
-                    search_mode=dialog.search_mode,
+                    search_mode=_retrieval_search_mode(dialog),
                     kb_ids=[kb.id for kb in kbs],
                 )
                 if prompt_config.get("toc_enhance"):
@@ -1209,7 +1216,7 @@ async def async_chat(
         return
 
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
-    gen_conf = dialog.llm_setting
+    gen_conf = dialog.llm_setting or {}  # chats saved by PUT before it normalized null
 
     msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs) + attachments_}]
     prompt4citation = ""
