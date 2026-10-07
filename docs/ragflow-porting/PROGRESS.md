@@ -3124,3 +3124,49 @@ Strong 读回锁定了实际文档 ID、total/doc_aggs、混合数组类型、�
 不发布快照；复用本地删除协调器，接通独立 Web 配置及开关。完整对照、适配、隔离
 验证和 SaaS 限制见 [钉钉删除同步](dingtalk-deletion-sync.md)。隔离 `make verify`
 通过（6123 unit），实际 SQL/对象/向量读回 7 项、真实 Chromium 明暗保存读回 2 项通过。
+
+## 3e396c0a72b9ccfd3da6dd7b436bbdf192b785cb · DocGenerator base64 输出
+
+2026-10-07 使用 port-ragflow-commit 核对目标完整单文件 diff，冻结与 remote
+同上项；本地 [DocGenerator](../../agent/component/docs_generator.py) 存在字段缺口，
+已在 `download` JSON 及实际返回对象增加 ASCII base64，直接编码本次生成的
+`file_bytes`，保留 `doc_id/filename/mime_type/size` 和原来的临时文件清理。
+ASCII 与上游 UTF-8 解码对 base64 字符集等价，无需额外读对象或重新转换文档；
+编码增加约三分之一载荷大小，这是目标输出合同的成本。
+
+沿活动消费者核对：[Message](../../agent/component/message.py) 完整收集下载对象到
+`downloads`，不把 JSON/base64 写入正文；Web 的
+`src/pages/agent/features/runtime-workbench/utils.ts` 保留附件的附加字段，登录态
+`components/runtime-chat/download-runtime-attachment.ts` 仍按 doc_id 调用
+`/v1/document/download/{id}`；分享页 `share/download-attachment.ts` 仍用 beta token
+调用公开 Agent 附件接口。保留实际下载鉴权与用户存储命名空间，本项未更改路由。
+Web 两个既有消费者测试文件 40 passed，另执行归一化函数证明新 base64 字段与四项
+元数据保留且能解码非 UTF-8 字节，未修改 Web 源码。
+
+冻结内后续 `5b162a0c4` 的正文可选下载元数据、`e7d45dd64` 的独立标量输出、
+`7da4f200e` 的 preview URL，以及 thinking 标签/空白修正是独立消费者能力，
+不属于本次 base64 的前置条件；本地保留下载对象与正文分离的既有合同，不扩大功能。
+`670e68872` 删除上游 Python 实现不改变本仓活动组件的归属。
+
+验证：[单元回归](../../tests/unit/test_doc_generator_downloads.py) 13 passed，覆盖五种
+格式分支、非 UTF-8 与中文原始字节、真实 component output、Message streaming
+附件传递、不记录全文/base64、存储异常传播及临时文件清理。
+[集成回归](../../tests/integration/test_doc_generator_downloads.py) 使用已建的 scratch
+数据库、独立 MinIO 桶和真实 HTTP。只替换格式转换边界，真实写文件、组件输出、
+直接 MinIO 读回和登录态下载逐字节一致；匿名 401，同 ID 的跨租户对象仍按用户
+命名空间读取，HTML 保留 attachment/nosniff 安全响应头。
+
+另用 `/tmp` 隔离 Pandoc 3.6.1 执行真实 TXT、Markdown、HTML、DOCX 生成，分别
+61、63、103、11365 字节；独立读取生成文件、MinIO 对象、base64 解码与 HTTP
+下载均相同。两文件经 `make integration TESTS=...` 运行共 2 passed、0 skip、exit=0；
+证据 `.test-results/20261007-182357-83966/`，格式哈希与清理记录在
+`.test-results/port-3e396c-readback/{6da3fa4acc7445a782a328cf35709882,668a826e42864845932271cc434fd5a4}.json`。
+记录只含 ID、大小、哈希与断言，不保存 base64/全文；独立桶删除、监听关闭和四类
+scratch 用户/租户/token 行的清理读回均通过。临时真实转换验收源保存于同证据目录
+`real_acceptance.py`，不作为默认门禁引入 Pandoc/XeLaTeX 依赖。
+
+初轮验收脚本的 Uvicorn 导入顺序、真实路由前缀及遗留 JWT 用户加载未绑定 scratch
+SessionLocal 已修正后复跑；HTTP 与鉴权使用生产实现，没有模拟下载成功。
+PDF 只验收字节输出合同，真实 XeLaTeX、字体渲染、远程 OpenDataLoader、真实 LLM、
+后台完整入库及生产部署不在本次运行证据内；未重启常驻服务、未 push。
+共享工作区 `make verify` 的 lint、8 条依赖契约、async DB 检查和 mypy（143 个源文件）通过；unit 6191 passed / 13 failed。失败属于并行未提交的 GraphRAG/checkpoint 假件及消费者清单合同，未修改这些文件。前项 Memory 假件已由其他工作修正，当前单独复跑 6 passed。为排除共享 WIP，额外在基于 `4225691234dfcd113dd509cb3adc1dba007b2c85` 的隔离源码快照叠加本项三个文件，核对模块确由快照加载后执行完整 `make verify`：exit=0，6126 passed，Ruff、8 条依赖契约、async DB 与 mypy（143 源文件）均通过。快照保留前项 `ea6b7dca` 的实现和回归；日志 `.test-results/port-3e396c/{verify,isolated-verify}.log`，基准与退出码另存同目录。本次生产实现及测试没有剩余已知回归；共享工作区全库结果仍不能记为通过。

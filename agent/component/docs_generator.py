@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -85,7 +86,7 @@ class DocGenerator(Message, ABC):
         }
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> dict[str, Any]:
         file_path = None
         try:
             content = self._resolve_content(kwargs)
@@ -130,6 +131,7 @@ class DocGenerator(Message, ABC):
                     "filename": filename,
                     "mime_type": mime_type,
                     "size": file_size,
+                    "base64": base64.b64encode(file_bytes).decode("ascii"),
                 }
                 self.set_output("download", json.dumps(download_info))
                 return download_info
