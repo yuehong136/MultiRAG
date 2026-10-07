@@ -226,7 +226,7 @@ def assert_published_runtime(env: dict[str, Any], agent_id: str, published: str,
         assert session.version_title == next(v["title"] for v in before["versions"] if v["release"])
     # A fresh published run must use the stored snapshot even while Redis holds
     # the current draft. Execute real Begin/Message components, no remote LLM.
-    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id, "release": True, "query": "test", "stream": False}, timeout=30)
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "release": True, "query": "test", "stream": False}, timeout=30)
     assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
     assert response.json()["data"]["data"]["content"] == published
     replica = json.loads(REDIS_CONN.get(f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"))

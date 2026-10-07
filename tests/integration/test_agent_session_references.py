@@ -236,7 +236,7 @@ def test_saved_history_types_and_authenticated_images_are_read_only(history_api:
     ]
     references = {"chunks": chunks, "doc_aggs": [{"doc_id": source["doc_id"], "count": 4}]}
     monkeypatch.setattr(Canvas, "get_reference", lambda self: copy.deepcopy(references))
-    completion = call("POST", "/api/v1/agents/chat/completion", json={"agent_id": agent_id, "session_id": session_id, "stream": stream, "query": "show saved references"})
+    completion = call("POST", "/api/v1/agents/chat/completions", json={"agent_id": agent_id, "session_id": session_id, "stream": stream, "query": "show saved references"})
     assert completion.status_code == 200
     if stream:
         assert '"event": "message_end"' in completion.text and '"event": "error"' not in completion.text
@@ -247,7 +247,7 @@ def test_saved_history_types_and_authenticated_images_are_read_only(history_api:
         origin = record["saved_execution_origin"] = dict(db.execute(sa.select(AgentExecutionOrigin.__table__).where(AgentExecutionOrigin.id == session_id)).mappings().one())
     assert origin["agent_id"] == agent_id and origin["platform_user_id"] == ids["owner"] and origin["tenant_id"] == ids["owner"]
     assert origin["execution_mode"] == "draft" and origin["agent_revision_id"] is None
-    assert saved["reference"] == references and saved["round"] == 1 and not saved["errors"]
+    assert saved["reference"] == [references] and saved["round"] == 1 and not saved["errors"]
     assert saved["message"][-1]["role"] == "assistant" and saved["message"][-1]["content"] == "real Message answer"
     # Explicit persisted fixtures exercise historic array/keyed reference
     # formats separately from the real completion above.

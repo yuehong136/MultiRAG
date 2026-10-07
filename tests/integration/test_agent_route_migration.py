@@ -46,7 +46,7 @@ def test_native_client_uses_authorized_canonical_agent(release_api: dict[str, An
 
     for authorization in ("", "invalid", env["keys"][1], env["foreign_jwt"]):
         denied = requests.post(
-            f"{env['base']}/api/v1/agents/chat/completion",
+            f"{env['base']}/api/v1/agents/chat/completions",
             headers={"Authorization": f"Bearer {authorization}"},
             json={"agent_id": agent_id, "release": True, "stream": False},
             timeout=30,
@@ -56,6 +56,8 @@ def test_native_client_uses_authorized_canonical_agent(release_api: dict[str, An
     assert retired.status_code == 404
     paths = env["client"].get(f"{env['base']}/openapi.json", timeout=30).json()["paths"]
     assert "/api/v1/agents/{agent_id}/completions" not in paths
+    assert "/api/v1/agents/chat/completion" not in paths
+    assert env["client"].post(f"{env['base']}/api/v1/agents/chat/completion", json={"agent_id": agent_id}, timeout=30).status_code == 404
     with Session(env["engine"]) as db:
         assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == agent_id)) == count
     assert read_state(env, agent_id) == before

@@ -65,7 +65,7 @@ MultiRAG 已发布 Agent：
 ```text
 飞书长连接
   -> Redis 去重和飞书用户会话映射
-  -> POST /api/v1/agents/chat/completion
+  -> POST /api/v1/agents/chat/completions
   -> 聚合最终 SSE 文本
   -> 回复飞书消息
 ```

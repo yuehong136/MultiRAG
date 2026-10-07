@@ -10,6 +10,7 @@
 | `api/settings.py`、`rag/settings.py` | `common/app_config.py` + `common/resources.py` | 新配置进入类型化 `AppConfig`；状态资源由 `resources` 懒加载 |
 | 消费者的 `settings.X` | `common/settings.py` | 上游同步文件继续照抄访问面，由永久 facade 翻译；不要逐文件改成 DI |
 | Quart/Flask handler | FastAPI router + Pydantic + dependency | 新 service async-first；同一请求不混用同步/异步 session |
+| Agent/Search completion 与 backward compatibility | `api/apps/restful_apis/{agent_api,search_api}.py` | canonical 路由为 `/agents/chat/completions`、`/searches/{id}/completions`；Web 与原生演示客户端迁移完成后退出 singular/旧 Agent 路径，不转调带 Depends 的 handler；runtime 副本按 canvas/tenant/runtime_user 隔离。见 [迁移验收](../ragflow-porting/agent-runtime-alignment.md) |
 | peewee model/query | `api/db/db_models.py` + SQLAlchemy 2.0 repository | 迁移和真 PostgreSQL 测试固定约束；业务事务放自有 service/repository |
 | 数据库 schema/数据迁移文档与 MySQL/Peewee 工具 | `docs/database-migration.md`、`api/db/schema_bootstrap.py`、`configs/alembic/`、`docker/migration.sh` | 按 PostgreSQL/SQLAlchemy/Alembic 与本地六卷归档能力适配；模型建表、迁移版本、业务数据和完整恢复分别核验，不复制上游工具或初始化开关，见 [数据库迁移指南](../database-migration.md) |
 | `api/apps/restful_apis/task_api.py`、已退役的旧 Canvas cancel | `api/apps/restful_apis/task_api.py` + `api/db/services/task_cancellation_service.py` + `core/utils/task_runtime.py`；Go `internal/handler/task.go` + `internal/service/task.go` | SQL 文档/图任务与可信 Agent/DataFlow 运行登记共同授权；Python/Go 共用 Redis v1 归属、CAS、24 小时 TTL 及 SQL 取消标记。Web POST 迁移已验收，旧 PUT 路由及独占文件已删除；POST/PATCH 保留，不增加 GET，见 [HTTP API](../references/http_api_reference.md#task-api) |

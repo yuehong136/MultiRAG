@@ -155,12 +155,12 @@ Web 的 Agent/DataFlow 取消均已迁移到上述 POST；PATCH `action: "stop"`
 相同 DSL 重复保存复用最新版本；发布快照后的草稿保存另建版本，发布快照始终保留，
 未发布版本只保留最新 20 个。
 
-创建 `/agents/{agent_id}/sessions` 或首次调用 `/agents/chat/completion` 时传
+创建 `/agents/{agent_id}/sessions` 或首次调用 `/agents/chat/completions` 时传
 `release: true`，使用最新发布快照，即使当前画布已有新草稿。已有会话继续使用创建时保存的 DSL。
 
 ### 运行发布版本的授权与错误
 
-普通 **POST** `/agents/chat/completion` 首次传 `release: true`，或传已有 `session_id` 时，
+普通 **POST** `/agents/chat/completions` 首次传 `release: true`，或传已有 `session_id` 时，
 先验证当前认证身份能访问该 Agent，再固定本次要运行的 DSL。
 owner 可以运行；其他用户需要已加入 owner 的团队（成员关系 `status=1`，角色为
 `normal` 或 `admin`），且画布 `permission` 为 `team`。
@@ -209,7 +209,7 @@ reset 不会将它们静默转换为空变量。
 | 操作 | 变量与会话状态 |
 |---|---|
 | **POST** `/agents/{agent_id}/sessions`，body `{"release": false}` 或 `{"release": true}` | 从草稿或最新发布快照创建新会话，恢复默认值、清空 history/path；成功 `retcode=0`，新 ID 为 `data.id` |
-| 普通 **POST** `/agents/chat/completion`，首次传 `release: true` | 首次运行发布快照并创建会话，恢复默认值；`stream` 可为 true/false |
+| 普通 **POST** `/agents/chat/completions`，首次传 `release: true` | 首次运行发布快照并创建会话，恢复默认值；`stream` 可为 true/false |
 | 同一路径传 `agent_id`、`session_id`、`query`、`stream` | 装载该会话保存的 DSL，继续运行值和历史；`release` 不替换已有会话 DSL |
 | **POST** `/agents/{agent_id}/reset`，空 body | SQL Canvas 恢复变量默认值并清空运行状态，成功返回 `retcode=0` 和 `data` DSL；既有会话、版本和 Redis 编辑器副本保持原状态 |
 | **POST** `/agents/{agent_id}/components/{component_id}/debug`，body `{"params": {}}` | 从 SQL Canvas 建立临时运行实例并 reset；返回组件输出，不保存 Canvas 或会话状态 |
@@ -271,6 +271,26 @@ v2 省略或清空 `operations` 时默认 `nth`；旧名 `topN`（忽略大小�
 OpenAI 消息适配的 strict 失败返回 `{"error":{"message":"...","type":"server_error","code":100}}`；
 流式失败发送同形状的 SSE 后结束，不发送成功 choices 或 `[DONE]`，非流式失败也不返回 choices。
 失败会话保存本次用户输入及错误，不追加成功助手答案。
+
+### Agent 草稿 runtime 结果
+
+**POST** `/agents/chat/completions`，省略 session_id/release 时执行 owner 的草稿副本。
+缺失副本从已授权 SQL 草稿初始化；已有副本保留运行状态。`query` 非空时优先，
+否则使用 `question`；`custom_header` 传入 Canvas，身份仍由认证和服务端执行上下文确定。
+`user_id` 仅选择隔离副本，不授予资源访问权，也不填入模型可见的 `sys.user_id`。
+
+默认 `stream: true`；`stream: false` 返回 `retcode/retmsg` 信封，data 为终态事件，
+其中 data.content 合并 message，data.reference 保留引用，data.structured 按组件 ID
+归集；`return_trace: true` 才提供节点 trace。workflow_finished 保留 outputs，
+user_inputs 表示已保存的等待输入状态，调用者提交 inputs 后继续，不表示工作流已全部完成。
+
+执行结束、取消/完成 CAS 和 replica 提交确认后才发送成功终态与 `[DONE]`；
+存储读取失败不当作副本缺失，非法副本不自动覆盖。异常、无结果或仅计时/空 structured、
+取消获胜、提交锁/写入失败都不会返回业务成功。流式可已发送部分正文，失败后发送 error，
+不发送成功终态或 `[DONE]`；断连仍按既有取消/终态竞态与运行资源清理处理。
+
+已有 session 分支在 SQL 保存成功后才交付终态/表单，每轮引用追加保存，读取兼容历史
+单包/数组/按序号的字典；chunk citation map 保留 citation_id。会话不提交草稿 replica。
 
 ### 文件关联数据集
 

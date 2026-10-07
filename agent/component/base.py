@@ -26,6 +26,7 @@ from typing import Any
 import pandas as pd
 
 from agent import settings
+from api.utils.agent_completion import canvas_json_default
 from common.connection_utils import timeout
 from common.misc_utils import thread_pool_exec
 
@@ -91,8 +92,8 @@ class ComponentParamBase(ABC):
     def _deprecated_params_set(self):
         return dict.fromkeys(self.get_feeded_deprecated_params(), True)
 
-    def __str__(self):
-        return json.dumps(self.as_dict(), ensure_ascii=False)
+    def __str__(self) -> str:
+        return json.dumps(self.as_dict(), ensure_ascii=False, default=canvas_json_default)
 
     def as_dict(self):
         def _recursive_convert_obj_to_dict(obj):
