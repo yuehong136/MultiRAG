@@ -145,7 +145,7 @@ def pg_scratch_engine(postgres_service: None) -> Iterator[sa.Engine]:
     with ExitStack() as resources:
         resources.callback(container.stop)
         container.start()
-        engine = sa.create_engine(container.get_connection_url())
+        engine = sa.create_engine(container.get_connection_url(host=services.container_host(container)))
         resources.callback(engine.dispose)
         with engine.begin() as conn:
             conn.execute(sa.text("CREATE SCHEMA IF NOT EXISTS usr_ai"))

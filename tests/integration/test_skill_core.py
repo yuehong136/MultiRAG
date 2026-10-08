@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.support import event_loop
 from tests.support.skills_http import (
     bootstrapped_engine as bootstrapped_engine,
 )
@@ -60,7 +61,7 @@ def test_core_shared_http_cli_contract(skill_http: dict[str, Any], tmp_path: Pat
             await asyncio.to_thread(stop.wait)
             await core_runtime.stop_core_worker()
 
-        asyncio.run(run())
+        event_loop.run(run())
 
     worker = threading.Thread(target=background, daemon=True)
     worker.start()

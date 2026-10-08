@@ -36,6 +36,7 @@ from tests.support.document_parser_update import assert_durable_journal, assert_
 from tests.support.document_parser_update import bootstrapped_engine as bootstrapped_engine
 from tests.support.document_parser_update import parser_api as parser_api
 from tests.support.document_parser_update import parser_database as parser_database
+from tests.support.smoke import smoke_command
 
 
 def _seed_legacy_metadata(env: dict[str, Any]) -> dict[str, Any]:
@@ -542,7 +543,7 @@ def test_real_http_save_same_config_and_reset_exact_images(parser_api: dict[str,
         assert patch(env, payload)["data"]["pipeline_id"] == env["canvas"]
     assert patch(env, {"pipeline_id": ""})["data"]["pipeline_id"] == ""
     assert patch(env, {"chunk_method": "paper"})["data"]["chunk_method"] == "paper"
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     env["parser_record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0
 

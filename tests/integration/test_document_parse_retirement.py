@@ -27,6 +27,7 @@ from tests.support.document_parse_retirement import _counts, _headers, assert_re
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.smoke import smoke_command
 
 
 def test_retired_parse_http_openapi_no_execution(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +82,7 @@ def test_retired_parse_http_openapi_no_execution(parse_api: dict[str, Any], monk
     assert "/v1/document/parse" not in paths
     for path in ["/api/v1/datasets/{dataset_id}/documents/parse", "/v1/write/api/reference-materials/parse", "/v1/document/web_parse"]:
         assert "post" in paths[path]
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 
@@ -146,7 +147,7 @@ def test_retired_conversation_upload_parse_preserves_real_sql_objects_index_queu
     assert REDIS_CONN.queue_product(env["queue"], {"id": task_id, "doc_id": doc_id, "task_type": "Parse"})
     assert len(index_snapshot(env)) == 2 and len(REDIS_CONN.REDIS.xrange(env["queue"])) == 1
     assert_retired_upload_has_no_work(env, monkeypatch)
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
     env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 

@@ -18,6 +18,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.metadata_store_sql import SqlMetadataStore
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api, sql_state
+from tests.support.smoke import smoke_command
 
 
 def test_document_list_sql_permission_failure_is_safe_and_recoverable(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,7 +160,7 @@ def test_typed_falsy_filters_do_not_expand_the_document_scope(management_api: di
         response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env[kind][0], params={"metadata": json.dumps({"score": 0}), "ids": other})
         assert response.status_code == 200 and response.json() == {"code": 0, "data": {"total": 0, "docs": []}}, response.text
         if kind == "jwt":
-            smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+            smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
             env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
             assert smoke.returncode == 0, smoke.stdout + smoke.stderr
         assert sql_state(env) == before

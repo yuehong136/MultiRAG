@@ -19,6 +19,7 @@ from core.utils.redis_conn import REDIS_CONN
 from tests.support.agent_list_operations import _ITEMS, _NODE, assert_runtime, assert_success, create, list_dsl, replica_key, run, session_state
 from tests.support.agent_update_release import read_state, sse_events, update
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.smoke import smoke_command
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -53,7 +54,7 @@ def test_http_new_and_legacy_matrix(release_api: dict[str, Any], stream: bool) -
         assert state["dsl"]["globals"]["sys.conversation_turns"] == 1
         assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key(env, agent_id)) == replica
     if not stream:
-        smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+        smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
         assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 

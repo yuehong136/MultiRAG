@@ -8,6 +8,7 @@ import requests
 import sqlalchemy as sa
 
 from api.db.db_models import File, SkillIndexGeneration, SkillSpace, SkillVersionFile
+from tests.support import event_loop
 from tests.support.skills_http import bootstrapped_engine as bootstrapped_engine
 from tests.support.skills_http import image_http_api as image_http_api
 from tests.support.skills_http import image_http_database as image_http_database
@@ -135,4 +136,4 @@ def test_runtime_worker_lifecycle_advances_http_operations(skill_http: dict[str,
             assert task.done() and runtime._task is None and runtime._worker is None
             await runtime.stop_skill_worker()
 
-    asyncio.run(scenario())
+    event_loop.run(scenario())

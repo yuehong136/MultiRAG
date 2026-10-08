@@ -43,6 +43,17 @@ SIGKILL 等无法执行收尾的情况保留登记记录，恢复时核对所属
 
 REST 各族的生产入口、已有测试和执行边界见 [REST 覆盖索引](REST_COVERAGE.md)。
 
+### Windows
+
+没有 `make` 时直接运行目标里的命令，例如
+`uv run --no-sync python scripts/run_integration.py --suite infinity --workers 2 -- -q`；
+用例调用的 `make smoke` 由 [`smoke.py`](support/smoke.py) 回退为同一脚本。Compose、模板、语料和
+测试源码按 UTF-8 读取，不依赖 `PYTHONUTF8=1`。async psycopg 拒绝 Windows 默认的 Proactor 循环，
+因此进程内 scratch HTTP 服务与生产一样使用 selector 循环，同步用例驱动异步数据库时用
+[`event_loop.run()`](support/event_loop.py) 代替 `asyncio.run()`；pytest-asyncio 用例由集成 conftest 的
+`event_loop_policy` 处理。Web 消费者用例执行 npm 在同目录生成的 `node_modules/.bin/tsx.cmd`。
+`tests/unit/test_secure_leave_e2e.py` 覆盖的部署脚本依赖 POSIX `fcntl`，在 Windows 上无法收集。
+
 ## CI 分层与证据
 
 本地验证范围与证据复用以 [AGENTS.md](../AGENTS.md#验证) 为准。CI 入口为
@@ -160,7 +171,8 @@ API 文档在明暗主题、1440×1000 和 1024×768 视口检查路由、脚本
 ## 服务与隔离
 
 入口先做协议就绪检查，再导入应用。PG、Redis、MinIO 探测包含认证；Milvus 查询版本；
-Infinity 在有时限的子进程内完成真实 Thrift 握手和数据库列表读取。
+Infinity 在子进程内完成真实 Thrift 握手和数据库列表读取：SDK 导入（pandas/polars，
+Windows 冷导入可达十几秒）与握手分别限时，握手仍以 5 秒为限。
 metadata pushdown 与 `test_es_conn_keyword_ids.py` 的 ES 合同在收集前准备 Elasticsearch 8：显式
 `METADATA_TEST_ES_URL` 指向可丢弃的专用实例，否则由 Testcontainers 创建和回收。
 这些测试不会隐式使用应用的 ES 地址，显式地址不可用或版本不符时直接失败。
@@ -168,7 +180,8 @@ ID 合同仅需要 ES，用独立索引验证 keyword 映射、缺失字段排�
 并覆盖 memory 维护查询的缺失日期字段和已有日期字段排序。索引清理后独立读回删除结果；
 更新模板不会迁移已有索引。
 已有实例只读探测、不会由测试框架停止；缺失的 PG、Redis、MinIO、Infinity 可用
-Testcontainers 启动，镜像从 Compose 读取。Milvus 必须预先提供，当前不自动创建整套
+Testcontainers 启动，镜像从 Compose 读取；本机 Docker 的端点记为 `127.0.0.1`，避免
+`localhost` 先解析到未被转发的 `::1`。Milvus 必须预先提供，当前不自动创建整套
 Milvus 依赖。`INTEGRATION_NO_TESTCONTAINERS=1` 禁用自动启动。
 
 临时端点通过进程内配置和 0600 外部覆盖文件同步给应用及子进程，不修改共享配置。
@@ -200,7 +213,7 @@ xdist 的每个进程使用独立 scratch 库和随机外部资源，进程内�
 
 每次 Makefile 集成或质量运行创建独立 `.test-results/<运行标识>/`：
 
-- `run.json`：套件、选中/未选择的文件、依赖服务、复用/临时来源、准备与总耗时、退出码、Python/平台/关键包版本。
+- `run.json`：套件、选中/未选择的文件（仓库相对 POSIX 路径）、依赖服务、复用/临时来源、准备与总耗时、退出码、Python/平台/关键包版本。
 - `execution-main.json` / `execution-gw*.json`：收集耗时、选中/排除用例、乱序种子、fixture 并发数和 setup/call/teardown 结果。
 - `events-main.jsonl` / `events-gw*.jsonl`：逐用例开始和阶段完成记录；进程中途退出也能定位停顿。
 - `junit.xml`：pytest 标准结果；控制台同时打印最慢 25 项。

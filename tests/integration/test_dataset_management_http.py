@@ -9,6 +9,8 @@ import pytest
 from api.db.db_models import Document, Knowledgebase, PipelineOperationLog
 from tests.support.dataset_management_http import FIELDS, PARSER, metadata_path, request_api, sql_state
 from tests.support.dataset_management_http import management_api as management_api
+from tests.support.smoke import smoke_command
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.mark.parametrize("route", ["dataset-get", "dataset-put", "document-put", "ingestions"])
@@ -142,7 +144,7 @@ def test_ingestion_logs_real_errors_scope_and_smoke(management_api: dict[str, An
     response = request_api(env, "GET", "/datasets//ingestions", credential=key)
     assert response.status_code == 404 and response.json()["code"] == 404
     assert sql_state(env) == before
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print("Actual metadata/ingestion HTTP auth and SQL contracts; same listener make smoke passed; exact owned IDs/readback cleanup recorded")
@@ -198,7 +200,7 @@ def test_ingestion_actual_web_consumer(management_api: dict[str, Any]) -> None:
 
     env = management_api
     root = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
-    runner = root / "node_modules/.bin/tsx"
+    runner = tsx_runner(root)
     script = root / "scripts/verify-ingestion-logs.ts"
     assert runner.exists() and script.exists(), "Web checkout required for consumer acceptance"
     before = sql_state(env)

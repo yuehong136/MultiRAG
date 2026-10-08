@@ -30,6 +30,7 @@ from tests.support.document_image_http import image_http_api as image_http_api
 from tests.support.document_image_http import image_http_database as image_http_database
 from tests.support.document_image_read_service import _raw_object, _snapshot
 from tests.support.document_image_read_service import image_resources as image_resources
+from tests.support.smoke import smoke_command
 
 
 def _image(color: str, size: tuple[int, int]) -> bytes:
@@ -104,7 +105,7 @@ def test_patch_replaces_exact_image_and_preserves_omitted_null_empty(chunk_api: 
         response = requests.get(env["base"] + env["image_path"], headers={"Authorization": "Bearer " + env["tokens"][role]}, timeout=30)
         assert response.status_code == 404 and response.json()["code"] != 0
     _save(Path(env["evidence"]) / "chunk-replacement.json", {"before": before, "after": after, "image": new})
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     (Path(env["evidence"]) / "chunk-smoke.log").write_text(smoke.stdout + smoke.stderr)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 

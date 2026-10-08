@@ -145,7 +145,7 @@ def selected_paths(suite: str, args: list[str]) -> list[Path]:
     explicit = [Path(arg.split("::", 1)[0]).resolve() for arg in targets if arg.split("::", 1)[0].endswith(".py")]
     boundary = ACCEPTANCE if suite == "acceptance" else EVALS if suite.startswith("eval") else INTEGRATION
     if any(not path.is_relative_to(boundary) or not path.is_file() for path in explicit):
-        raise ValueError(f"Test targets must be existing files under {boundary.relative_to(ROOT)}")
+        raise ValueError(f"Test targets must be existing files under {boundary.relative_to(ROOT).as_posix()}")
     return explicit or suite_paths(suite)
 
 
@@ -230,9 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     manifest: dict[str, Any] = {
         "suite": options.suite,
         "workers": workers,
-        "serial_only_paths": [str(path.relative_to(ROOT)) for path in paths if path.name not in PARALLEL_TESTS],
-        "paths": [str(path.relative_to(ROOT)) for path in paths],
-        "unselected_paths": [str(path.relative_to(ROOT)) for path in suite_paths("all") if path not in paths],
+        "serial_only_paths": [path.relative_to(ROOT).as_posix() for path in paths if path.name not in PARALLEL_TESTS],
+        "paths": [path.relative_to(ROOT).as_posix() for path in paths],
+        "unselected_paths": [path.relative_to(ROOT).as_posix() for path in suite_paths("all") if path not in paths],
         "required_services": required,
         "services": {},
         "exit_code": 1,

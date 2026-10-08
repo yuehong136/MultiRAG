@@ -24,6 +24,7 @@ from common.config_utils import CONFIGS
 from core.nlp import search
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api, sql_state
+from tests.support.smoke import smoke_command
 
 CASES = [("graph", "graphrag", "graphrag"), ("raptor", "raptor", "raptor"), ("mindmap", "mindmap", "mindmap")]
 
@@ -271,5 +272,5 @@ def test_index_rejections_do_not_write(index_api: dict[str, Any]) -> None:
 
 
 def test_index_fixture_listener_smoke(index_api: dict[str, Any]) -> None:
-    result = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": index_api["base"]}, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": index_api["base"]}, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr

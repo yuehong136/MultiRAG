@@ -39,6 +39,7 @@ from tests.support.document_parse_retirement import object_snapshot, sql_snapsho
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 from tests.support.search_metadata import search_store as search_store
+from tests.support.smoke import smoke_command
 
 
 def evidence(env: dict[str, Any], label: str, value: Any) -> None:
@@ -362,7 +363,7 @@ def test_http_keep_clear_apply_reset_cancel_and_canonical_contracts(ingest_api: 
     for path in ["/api/v1/documents/ingest", "/api/v1/datasets/{dataset_id}/documents/parse", "/api/v1/datasets/{dataset_id}/documents/stop"]:
         assert "post" in schema["paths"][path]
     evidence(env, "keep-clear", {"before": before, "after_reuse": after, "partial": partial, "final": snapshot(env)})
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     evidence(env, "smoke", {"exit": smoke.returncode, "stdout": smoke.stdout, "stderr": smoke.stderr})
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 

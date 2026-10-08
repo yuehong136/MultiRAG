@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
@@ -18,6 +19,7 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
+import psutil
 import pytest
 import requests
 import sqlalchemy as sa
@@ -38,6 +40,7 @@ from tests.support.document_image_http import image_http_api as image_http_api
 from tests.support.document_image_http import image_http_database as image_http_database
 from tests.support.document_image_read_service import _snapshot
 from tests.support.document_image_read_service import image_resources as image_resources
+from tests.support.smoke import smoke_command
 
 
 @contextmanager
@@ -45,7 +48,7 @@ def history_environment(env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) ->
     from api import apps
 
     manifest = env["manifest"]
-    manifest.update(history_sql_ids={}, redis_keys=[], advisory_locks=[], os_start=subprocess.check_output(["ps", "-p", str(os.getpid()), "-o", "lstart="], text=True).strip())
+    manifest.update(history_sql_ids={}, redis_keys=[], advisory_locks=[], os_start=time.ctime(psutil.Process().create_time()))
     pools: list[Any] = []
     lock = threading.RLock()
 
@@ -344,7 +347,7 @@ def test_saved_history_types_and_authenticated_images_are_read_only(history_api:
         record["read_phase_sql_writes"] = writes
         record["read_phase_verified"] = True
         if not stream:
-            smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True)
+            smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True)
             record["smoke"] = {"exit": smoke.returncode, "stdout": smoke.stdout, "stderr": smoke.stderr}
             assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     finally:

@@ -24,6 +24,7 @@ from api.db.services.dialog_service import split_file_attachments
 from common.config_utils import CONFIGS
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.smoke import smoke_command
 
 
 def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict[str, Any]) -> None:
@@ -165,7 +166,7 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
         assert db.scalar(sa.select(sa.func.count()).select_from(File).where(File.created_by.in_(env["owners"]))) == 0
     assert len(list(env["storage"].list_objects(env["bucket"], recursive=True))) == (12 if crawl_url else 10)
 
-    smoke = subprocess.run(["make", "smoke"], cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print(

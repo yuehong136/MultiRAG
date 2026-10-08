@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +133,7 @@ def test_consumer_suite_contains_every_external_consumer_module() -> None:
 
     consumers = set()
     for path in INTEGRATION.glob("test_*.py"):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         if any(isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute) and node.value.attr == "mark" and node.attr == "external_consumer" for node in ast.walk(tree)):
             consumers.add(path)
     assert set(suite_paths("consumer")) == consumers
@@ -313,7 +314,7 @@ def test_owned_container_cleanup_also_covers_start_failure(monkeypatch: pytest.M
             events.append("stop")
 
         def get_container_host_ip(self) -> str:
-            return "127.0.0.1"
+            return "localhost"  # what Testcontainers reports for a local daemon
 
         def get_exposed_port(self, port: int) -> int:
             return 54321
@@ -336,6 +337,78 @@ def test_owned_container_cleanup_also_covers_start_failure(monkeypatch: pytest.M
             assert manager.ready["redis"]["source"] == "testcontainers"
     assert events == ["start", "stop"]
     assert configs == {"redis": original}
+
+
+_FAKE_INFINITY_SDK = """
+import os, time
+seconds = float(os.environ["FAKE_INFINITY_IMPORT"])
+if seconds < 0:
+    os._exit(int(-seconds))
+time.sleep(seconds)
+
+class _Client:
+    def list_databases(self):
+        time.sleep(float(os.environ["FAKE_INFINITY_HANDSHAKE"]))
+        return type("Result", (), {"error_code": 0})()
+
+    def disconnect(self):
+        pass
+
+def connect(address):
+    return _Client()
+"""
+
+
+@pytest.mark.parametrize(
+    ("import_seconds", "handshake_seconds", "bounds", "error"),
+    [
+        (1.5, 0, (30, 1), None),  # a slow cold SDK import is not a failed handshake
+        (0, 30, (30, 1), subprocess.TimeoutExpired),  # a hung handshake still fails fast
+        (30, 0, (1, 1), TimeoutError),  # and so does a hung import
+        (-1, 0, (30, 1), ImportError),  # the import raised (Python exit status 1)
+        (-3, 0, (30, 1), ChildProcessError),  # the probe process itself died
+    ],
+)
+def test_infinity_probe_bounds_sdk_import_apart_from_handshake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, import_seconds: float, handshake_seconds: float, bounds: tuple[float, float], error: type[Exception] | None
+) -> None:
+    package = tmp_path / "infinity"
+    package.mkdir()
+    (package / "__init__.py").write_text(_FAKE_INFINITY_SDK)
+    (package / "common.py").write_text("class NetworkAddress:\n    def __init__(self, host, port):\n        pass\n")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    monkeypatch.setenv("FAKE_INFINITY_IMPORT", str(import_seconds))
+    monkeypatch.setenv("FAKE_INFINITY_HANDSHAKE", str(handshake_seconds))
+    monkeypatch.setattr(services, "INFINITY_IMPORT_SECONDS", bounds[0])
+    monkeypatch.setattr(services, "INFINITY_HANDSHAKE_SECONDS", bounds[1])
+    started = time.monotonic()
+    if error is None:
+        services.infinity_handshake("127.0.0.1", 23817)
+    else:
+        with pytest.raises(error):
+            services.infinity_handshake("127.0.0.1", 23817)
+    assert time.monotonic() - started < 15
+
+
+def test_scratch_loops_are_ones_async_psycopg_accepts() -> None:
+    """uvicorn and asyncio.run() default to Proactor loops on win32, where async psycopg refuses to connect."""
+    import asyncio
+
+    import uvicorn
+
+    from tests.support import event_loop
+
+    proactor = getattr(asyncio, "ProactorEventLoop", ())
+    factory = uvicorn.Config(object(), loop=event_loop.UVICORN_LOOP, log_config=None).get_loop_factory()
+    assert factory is not None
+    server_loop = factory()
+    server_loop.close()
+
+    async def running_loop() -> asyncio.AbstractEventLoop:
+        return asyncio.get_running_loop()
+
+    assert not isinstance(server_loop, proactor)
+    assert not isinstance(event_loop.run(running_loop()), proactor)
 
 
 def _pytest(tmp_path: Path, source: str, *args: str, strict: bool = False) -> subprocess.CompletedProcess[str]:
@@ -415,7 +488,7 @@ def test_integration_modules_do_not_import_other_test_modules() -> None:
 
     violations = []
     for path in INTEGRATION.glob("test_*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
                 if module.startswith("tests.integration.test_") or (node.level and module.startswith("test_")):

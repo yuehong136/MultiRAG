@@ -26,6 +26,7 @@ from core.nlp import search
 from tests.support.dataset_search_http import request
 from tests.support.dataset_search_http import search_api as search_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
@@ -312,7 +313,7 @@ def test_actual_web_client_against_scratch_http(search_api: dict[str, Any]) -> N
     from pathlib import Path
 
     root = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
-    runner = root / "node_modules/.bin/tsx"
+    runner = tsx_runner(root)
     script = root / "scripts/verify-dataset-retrieval.ts"
     if not runner.exists() or not script.exists():
         pytest.skip("Independent Web checkout unavailable; select WEB_DATASET_CHECKOUT for live consumer acceptance")

@@ -33,6 +33,7 @@ from tests.support.agent_update_release import (
     variable_dsl,
 )
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.smoke import smoke_command
 
 
 def test_http_agent_publish_draft_and_readback(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,7 +98,7 @@ def test_http_agent_publish_draft_and_readback(release_api: dict[str, Any], monk
     assert REDIS_CONN.get(replica_key) == replica_before
     update(env, agent_id, {"dsl": message_dsl("replica-retry-draft")})
     assert_published_runtime(env, agent_id, "published-v3", "replica-retry-draft")
-    smoke = subprocess.run(["make", "smoke"], cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print(
         "release HTTP acceptance: JWT/API-key publish/draft/metadata/string normalization, independent PostgreSQL canvas/version/session + Redis draft, real constant Message runtime, make smoke passed"

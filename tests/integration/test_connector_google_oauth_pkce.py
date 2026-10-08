@@ -22,6 +22,7 @@ from common.data_source.config import DocumentSource
 from common.data_source.google_util.auth import get_google_oauth_creds
 from common.data_source.google_util.constant import GOOGLE_SCOPES
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.smoke import smoke_command
 
 
 @pytest.fixture
@@ -91,7 +92,7 @@ def test_real_http_google_pkce_state_and_credentials(oauth_api: dict[str, Any], 
     env = oauth_api
     base = env["base"]
     if prefix == "/api/v1/connectors" and source == "gmail":
-        smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": base}, capture_output=True, text=True, timeout=60)
+        smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": base}, capture_output=True, text=True, timeout=60)
         env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
         assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     headers = {"Authorization": f"Bearer {env['jwt']}"}

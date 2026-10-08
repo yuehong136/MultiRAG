@@ -23,7 +23,7 @@ class ServiceError(RuntimeError):
 def service_images() -> dict[str, str]:
     from ruamel.yaml import YAML
 
-    with (ROOT / "docker/docker-compose-base.yml").open() as stream:
+    with (ROOT / "docker/docker-compose-base.yml").open(encoding="utf-8") as stream:
         services = YAML(typ="safe").load(stream)["services"]
     return {
         name: re.sub(r"\$\{(\w+):-([^}]+)\}", lambda match: os.environ.get(match[1]) or match[2], str(services[key]["image"]))
@@ -36,6 +36,14 @@ def split_address(value: str, default_port: int) -> tuple[str, int]:
 
     parsed = urlsplit(value if "://" in value else f"//{value}")
     return parsed.hostname or "127.0.0.1", parsed.port or default_port
+
+
+def container_host(container: Any) -> str:
+    # Testcontainers reports "localhost" for a local daemon. Windows resolves it
+    # to ::1 first, which Docker Desktop's published ports may silently drop:
+    # clients without a connect timeout (Thrift) then wait out the TCP timeout.
+    host = str(container.get_container_host_ip())
+    return "127.0.0.1" if host == "localhost" else host
 
 
 def probe(service: str, configs: dict[str, Any]) -> str | None:
@@ -105,29 +113,52 @@ def probe(service: str, configs: dict[str, Any]) -> str | None:
         finally:
             client.close()
     elif service == "infinity":
-        import subprocess
-        import sys
-
-        # Run the actual version handshake and read in a bounded subprocess:
-        # the SDK has no connect/read timeout. An open TCP port is insufficient.
-        host, port = split_address(os.environ.get("INFINITY_TEST_URI", conf["uri"]), 23817)
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import infinity,sys; from infinity.common import NetworkAddress; c=infinity.connect(NetworkAddress(sys.argv[1],int(sys.argv[2]))); r=c.list_databases(); assert r.error_code == 0; c.disconnect()",
-                host,
-                str(port),
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        if result.returncode:
-            raise ConnectionError("Infinity protocol handshake failed")
+        infinity_handshake(*split_address(os.environ.get("INFINITY_TEST_URI", conf["uri"]), 23817))
     else:
         raise ValueError(f"Unknown test service: {service}")
     return None
+
+
+# Importing the SDK (pandas/polars) alone took 4-17 s on a Windows host, so it
+# gets its own bound; only the network handshake keeps the short readiness one.
+INFINITY_IMPORT_SECONDS = 120
+INFINITY_HANDSHAKE_SECONDS = 5
+
+
+def infinity_handshake(host: str, port: int) -> None:
+    """Run the actual version handshake and read in a bounded subprocess.
+
+    The SDK has no connect/read timeout. An open TCP port is insufficient.
+    """
+    import subprocess
+    import sys
+    import threading
+
+    script = "import infinity,sys; from infinity.common import NetworkAddress; print('imported', flush=True); c=infinity.connect(NetworkAddress(sys.argv[1],int(sys.argv[2]))); r=c.list_databases(); assert r.error_code == 0; c.disconnect()"
+    expired = threading.Event()
+    with subprocess.Popen([sys.executable, "-c", script, host, str(port)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as child:
+        assert child.stdout is not None
+
+        def expire() -> None:
+            expired.set()
+            child.kill()
+
+        watchdog = threading.Timer(INFINITY_IMPORT_SECONDS, expire)
+        watchdog.start()
+        try:
+            imported = child.stdout.readline().strip() == "imported"
+            watchdog.cancel()
+            returncode = child.wait(timeout=INFINITY_HANDSHAKE_SECONDS)
+        finally:
+            watchdog.cancel()
+            child.kill()
+    if expired.is_set():
+        raise TimeoutError("Infinity SDK import exceeded its bound")
+    if not imported:
+        # Status 1 is a Python exception; any other status means the child itself failed to run.
+        raise ImportError("Infinity SDK import failed") if returncode == 1 else ChildProcessError(f"Probe process exited with {returncode:#x}")
+    if returncode:
+        raise ConnectionError("Infinity protocol handshake failed")
 
 
 class ServiceManager:
@@ -233,7 +264,7 @@ class ServiceManager:
         # partially created container. Testcontainers stop() handles this case.
         self.stack.callback(container.stop)
         container.start()
-        host, mapped_port = container.get_container_host_ip(), int(container.get_exposed_port(port))
+        host, mapped_port = container_host(container), int(container.get_exposed_port(port))
         if service in {"elasticsearch", "opensearch"}:
             key = "METADATA_TEST_ES_URL" if service == "elasticsearch" else "METADATA_TEST_OS_URL"
             self.stack.callback(os.environ.pop, key, None)

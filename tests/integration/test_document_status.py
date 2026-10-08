@@ -22,12 +22,14 @@ from api.db.db_models import Document, Knowledgebase, UserTenant
 from api.db.services import document_status_service as status_service
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
+from tests.support import event_loop
 from tests.support.document_parse_retirement import _ModelOutput, assert_retired_upload_has_no_work
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.document_status import assert_retired_status_has_no_work, change, chunk, index_rows, sql_rows
 from tests.support.document_status import status_api as status_api
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.smoke import smoke_command
 
 
 def test_http_disable_enable_retry_partial_preserves_every_source_field(status_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,7 +67,7 @@ def test_http_disable_enable_retry_partial_preserves_every_source_field(status_a
     enabled = change(env, [env["doc"]], 1, key=env["jwt"])
     assert enabled.status_code == 200 and enabled.json() == {"code": 0, "message": "success", "data": {env["doc"]: {"status": "1"}}}
     assert sql_rows(env)[env["doc"]]["status"] == "1"
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
     env["record_path"].with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     print("Real HTTP/SQL/Milvus full payload+vectors+timestamps, sibling and object bytes preserved; same-state retry, partial map and available0/1 filters; same-listener smoke passed")
@@ -220,7 +222,7 @@ def test_recovery_failure_releases_per_document_transaction(status_api: dict[str
             await engine.dispose()
 
     if asynchronous:
-        asyncio.run(scenario())
+        event_loop.run(scenario())
     else:
         with Session(env["engine"]) as db:
             doc, kb = db.get(Document, env["doc"]), db.get(Knowledgebase, env["kb"])
@@ -314,7 +316,7 @@ def test_cancelled_status_drains_store_before_next_sql_winner(status_api: dict[s
             release.set()
             await engine.dispose()
 
-    asyncio.run(scenario())
+    event_loop.run(scenario())
     assert sql_rows(env)[env["doc"]]["status"] == "1" and all(row["available_int"] == 1 for row in index_rows(env, env["doc"]))
 
 

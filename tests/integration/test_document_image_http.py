@@ -25,6 +25,7 @@ from tests.support.document_image_http import image_http_api as image_http_api
 from tests.support.document_image_http import image_http_database as image_http_database
 from tests.support.document_image_read_service import _image, _snapshot
 from tests.support.document_image_read_service import image_resources as image_resources
+from tests.support.smoke import smoke_command
 
 
 def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,6 +240,6 @@ def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[st
     runtime_ids = {item["id"] for item in setup["runtimes"].values()}
     assert not runtime_ids.intersection(row["id"] for row in before["sql"][Document.__tablename__])
     assert all(not runtime_ids.intersection(row["doc_id"] for row in index["rows"]) for index in before["index"].values())
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     path.with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr

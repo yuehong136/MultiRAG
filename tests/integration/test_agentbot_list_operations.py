@@ -17,6 +17,7 @@ from core.utils.redis_conn import REDIS_CONN
 from tests.support.agent_list_operations import assert_runtime, create, list_dsl, replica_key, session_state
 from tests.support.agent_update_release import read_state, sse_events, update
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.smoke import smoke_command
 
 
 @pytest.fixture
@@ -136,7 +137,7 @@ def test_agentbot_first_and_continued_runs_persist_results(agentbot_api: dict[st
         else:
             assert session_state(env, agent_id, sibling_id) == sibling
     if not stream and scenario == "v2":
-        smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
+        smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, text=True, capture_output=True, timeout=60)
         assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 

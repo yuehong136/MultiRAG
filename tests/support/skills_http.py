@@ -1,6 +1,5 @@
 """Isolated authenticated Skills HTTP with real SQL, object and index stores."""
 
-import asyncio
 import io
 import json
 import threading
@@ -26,6 +25,7 @@ from api.skills.search import SkillSearchRuntime
 from api.skills.storage import SkillStorage
 from api.skills.worker import SkillWorker
 from common.config_utils import CONFIGS
+from tests.support import event_loop
 from tests.support.document_image_http import bootstrapped_engine as bootstrapped_engine
 from tests.support.document_image_http import image_http_api as image_http_api
 from tests.support.document_image_http import image_http_database as image_http_database
@@ -152,7 +152,7 @@ def skill_request(env: dict[str, Any], method: str, path: str, *, token: str | N
 
 
 def skill_complete(env: dict[str, Any], accepted: dict[str, Any], *, state: str = "succeeded") -> dict[str, Any]:
-    assert asyncio.run(env["skill_worker"].run_once())
+    assert event_loop.run(env["skill_worker"].run_once())
     operation = skill_request(env, "GET", "/operations/" + accepted["operation_id"])
     assert operation["state"] == state, operation
     return operation

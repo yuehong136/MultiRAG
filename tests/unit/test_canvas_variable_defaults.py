@@ -14,7 +14,7 @@ from api.apps.services.canvas_replica_service import CanvasReplicaService
 from core.utils.redis_conn import REDIS_CONN
 
 _TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[2] / "agent" / "templates"
-_LIST_VARIABLE_TEMPLATES = [path for path in sorted(_TEMPLATE_DIRECTORY.glob("*.json")) if json.loads(path.read_text())["dsl"].get("variables") == []]
+_LIST_VARIABLE_TEMPLATES = [path for path in sorted(_TEMPLATE_DIRECTORY.glob("*.json")) if json.loads(path.read_text(encoding="utf-8"))["dsl"].get("variables") == []]
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ def test_real_templates_with_legacy_empty_variables_reset(monkeypatch: pytest.Mo
         monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *args: object())
         monkeypatch.setattr(module, "LLMBundle", lambda *args, **kwargs: ConfiguredModel())
     monkeypatch.setattr(REDIS_CONN, "delete", lambda *args: None)
-    source = json.loads(template_path.read_text())["dsl"]
+    source = json.loads(template_path.read_text(encoding="utf-8"))["dsl"]
     assert source["variables"] == []
     normalized = CanvasReplicaService.normalize_dsl(normalize_chunker_dsl(source))
     assert normalized["variables"] == []

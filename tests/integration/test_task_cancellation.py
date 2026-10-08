@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import ExitStack
@@ -34,6 +35,7 @@ from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import TASK_CANCEL_MARKER, binding_key, finish_runtime, read_binding, register_runtime, request_runtime_cancel
 from tests.support.agent_update_release import denied_membership, join_member, message_dsl, read_state, sse_events, update
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.smoke import smoke_command
 from tests.support.task_cancellation import cancel, persistent_state, retirement_state, wait_dsl
 from tests.support.task_cancellation import cancel_api as cancel_api
 from tests.support.task_cancellation import wait_gate as wait_gate
@@ -278,8 +280,8 @@ def test_runtime_expiry_and_finish_cas_are_noops(cancel_api: dict[str, Any]) -> 
 
 
 def test_same_listener_smoke(cancel_api: dict[str, Any]) -> None:
-    smoke = subprocess.run(["make", "smoke"], env={**os.environ, "SMOKE_BASE_URL": cancel_api["base"]}, text=True, capture_output=True, timeout=60)
-    Path("/tmp/multirag-488-smoke.log").write_text(smoke.stdout + smoke.stderr)
+    smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": cancel_api["base"]}, text=True, capture_output=True, timeout=60)
+    Path(tempfile.gettempdir(), "multirag-488-smoke.log").write_text(smoke.stdout + smoke.stderr)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 
