@@ -21,6 +21,10 @@ import numpy as np
 DEFAULT_MATCH_VECTOR_TOPN = 10
 DEFAULT_MATCH_SPARSE_TOPN = 10
 VEC = list | np.ndarray
+# Exact cosine scoring (MatchDenseExpr with extra_options={"exact": True}) scores
+# a candidate cosine + 1, within [0, 2]. A candidate without a stored vector
+# scores this instead, so it is not mistaken for an orthogonal vector.
+EXACT_SCORE_NO_VECTOR = 3.0
 
 
 @dataclass

@@ -8,6 +8,7 @@ import pytest
 
 from api.db.services.dialog_service import _hydrate_chunk_vectors
 from common import settings
+from common.doc_store.doc_store_base import EXACT_SCORE_NO_VECTOR
 from common.doc_store.es_conn_base import ESConnectionBase
 from core.nlp.search import Dealer
 from core.utils.opensearch_conn import OSConnection
@@ -44,6 +45,19 @@ async def test_score_pass_keeps_paired_indexes_candidates_and_scalar_predicates(
         assert call.args[0] == []
         assert call.args[2] == {"doc_id": ["doc"], "available_int": 1, "auth": "scope", "id": [identifier]}
         assert call.args[7:9] == ([index], [kb])
+
+
+@pytest.mark.parametrize("raw", [-0.5, 2.5, 3.5])
+async def test_score_pass_reports_only_vector_cosines_and_the_no_vector_sentinel(raw: float) -> None:
+    dealer = Dealer.__new__(Dealer)
+    dealer.dataStore = SimpleNamespace(search=Mock(return_value={"orthogonal": 1.0, "missing": EXACT_SCORE_NO_VECTOR}), get_scores=lambda result: result)
+    result = Dealer.SearchResult(total=2, ids=["orthogonal", "missing"], query_vector=[1.0, 0.0], field={"orthogonal": {"kb_id": "a"}, "missing": {"kb_id": "a"}})
+    # An orthogonal vector is a computed 0.0; a chunk without a vector has no score to report.
+    assert await dealer._knn_scores(result, ["index-a"], ["a"], {}) == {"orthogonal": 0.0, "missing": None}
+    # Only the sentinel itself widens the cosine + 1 range.
+    dealer.dataStore.search = Mock(return_value={"orthogonal": raw})
+    with pytest.raises(ValueError, match="invalid cosine"):
+        await dealer._knn_scores(result, ["index-a"], ["a"], {})
 
 
 async def test_empty_scope_does_not_issue_a_score_or_vector_read() -> None:

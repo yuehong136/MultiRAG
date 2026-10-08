@@ -1428,13 +1428,39 @@ POST /retrieval
         "id": "chunk-uuid",
         "content": "RAG (Retrieval-Augmented Generation)...",
         "tag_kwd": ["tag1", "tag2"],
-        "score": 0.85,
-        "document_name": "rag_intro.pdf"
+        "similarity": 0.85,
+        "vector_similarity": 0.85,
+        "term_similarity": null,
+        "document_keyword": "rag_intro.pdf"
       }
     ]
   }
 }
 ```
+
+### 检索分数字段
+
+检索返回的 chunk，以及聊天、搜索应用和 Agent 引用中的 `reference.chunks`，都带以下三个分数。
+`POST /datasets/{dataset_id}/search` 与 `POST /searchbots/retrieval_test` 语义相同。
+
+| 字段 | 含义 |
+|------|------|
+| `similarity` | 排序分数：结果按它排序，`similarity_threshold` 也比较它（仅全文检索时阈值按 0 计）。它不限于 0–1：排序特征直接相加，`pagerank_fea`（0–100）按原值计入，命中查询标签最多再加 10；Infinity 的引擎分数已含 `pagerank_fea`；仅全文检索时部分引擎返回原始全文相关度（如 BM25）；TOC 增强把目录相关度加到已命中的 chunk 上。大于 1 时只能作排序依据，不应换算为百分比。 |
+| `vector_similarity` | 向量分量：查询向量与 chunk 向量的余弦相似度；使用 rerank 模型时为模型相关度。 |
+| `term_similarity` | 词汇分量：查询关键词与 chunk 词项的匹配度。 |
+
+分量字段始终存在。检索路径实际算出的分量返回数值，`0` 表示算出的零匹配；未算出时返回 `null`，表示不可用：
+
+| 检索路径 | `vector_similarity` | `term_similarity` |
+|------|------|------|
+| 使用 rerank 模型 | 模型相关度 | 词汇匹配度 |
+| Elasticsearch / OpenSearch，带查询向量 | 余弦相似度；chunk 缺少向量时为 `null` | 词汇匹配度 |
+| Elasticsearch / OpenSearch，仅全文检索 | `null` | `null` |
+| Milvus，仅向量检索 | 引擎返回的余弦相似度，不含排序特征 | `null` |
+| Milvus，全文、hybrid 或 fusion | `null` | `null` |
+| Infinity、OceanBase、Vastbase 等只返回一个引擎分数的后端 | `null` | `null` |
+| 知识图谱汇总、TOC 补入的 chunk、联网搜索结果 | `null` | `null` |
+| 父子分块合并出的父 chunk | 子 chunk 分量的平均值；任一子 chunk 为 `null` 时为 `null` | 同左 |
 
 ## 助手 API
 

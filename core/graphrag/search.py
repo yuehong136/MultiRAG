@@ -18,6 +18,7 @@ import json
 import logging
 from collections import defaultdict
 from copy import deepcopy
+from typing import Any
 
 import json_repair
 import pandas as pd
@@ -197,16 +198,16 @@ class KGSearch(Dealer):
         question: str,
         tenant_ids: str | list[str],
         kb_ids: list[str],
-        emb_mdl,
-        llm,
+        emb_mdl: Any,
+        llm: Any,
         max_token: int = 8196,
         ent_topn: int = 6,
         rel_topn: int = 6,
         comm_topn: int = 1,
         ent_sim_threshold: float = 0.3,
         rel_sim_threshold: float = 0.3,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         qst = question
         filters = self.get_filters({"kb_ids": kb_ids})
         if isinstance(tenant_ids, str):
@@ -329,8 +330,9 @@ class KGSearch(Dealer):
             "important_kwd": [],
             "image_id": "",
             "similarity": 1.0,
-            "vector_similarity": 1.0,
-            "term_similarity": 0,
+            # The graph summary is assembled, not matched; it has no lexical or vector score.
+            "vector_similarity": None,
+            "term_similarity": None,
             "vector": [],
             "positions": [],
         }

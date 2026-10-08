@@ -30,7 +30,7 @@ from opensearchpy.helpers import scan
 from common import settings
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
-from common.doc_store.doc_store_base import DocStoreConnection, FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
+from common.doc_store.doc_store_base import EXACT_SCORE_NO_VECTOR, DocStoreConnection, FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.search_metadata import SearchMetadata
 from common.file_utils import get_project_base_directory
 from core.nlp import is_english, rag_tokenizer
@@ -260,7 +260,7 @@ class OSConnection(SearchMetadata, DocStoreConnection):
                             "script_score": {
                                 "query": scalar_filter,
                                 "script": {
-                                    "source": "doc[params.field].size() == 0 ? 1.0 : 1.0 + cosineSimilarity(params.vector, doc[params.field])",
+                                    "source": f"doc[params.field].size() == 0 ? {EXACT_SCORE_NO_VECTOR} : 1.0 + cosineSimilarity(params.vector, doc[params.field])",
                                     "params": {"vector": list(m.embedding_data), "field": m.vector_column_name},
                                 },
                             }

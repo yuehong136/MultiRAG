@@ -3,15 +3,17 @@ import logging
 import math
 import re
 from collections import OrderedDict, defaultdict
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, SupportsFloat
 
 import numpy as np
 
 from api.db.db_models import async_db_connection, db_connection
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.doc_store.doc_store_base import (
+    EXACT_SCORE_NO_VECTOR,
     DocStoreConnection,
     FusionExpr,
     MatchDenseExpr,
@@ -104,6 +106,27 @@ def _mode_weights(search_mode: dict[str, Any] | None) -> tuple[str, float, float
     if not all(math.isfinite(weight) and weight >= 0 for weight in (sparse, dense)) or not math.isfinite(total) or total <= 0:
         raise ValueError("Search weights must be finite, nonnegative and have a positive sum")
     return mode, sparse / total, dense / total
+
+
+def _component_score(scores: Sequence[SupportsFloat | None] | np.ndarray | None, index: int) -> float | None:
+    """Return one chunk's lexical or vector score, or None when no path computed it.
+
+    Clients show None as unavailable and 0.0 as a real zero match, so a ranking
+    path never fills a component it did not compute.
+    """
+    if scores is None or scores[index] is None:
+        return None
+    value = float(scores[index])
+    return value if math.isfinite(value) else None
+
+
+def _mean_component(chunks: list[dict[str, Any]], key: str) -> float | None:
+    """Average a component over merged child chunks; unavailable if any child lacks it."""
+    values = [chunk.get(key) for chunk in chunks]
+    if not values or any(value is None for value in values):
+        return None
+    mean = float(np.mean([float(value) for value in values]))
+    return mean if math.isfinite(mean) else None
 
 
 class Dealer:
@@ -615,17 +638,19 @@ class Dealer:
 
         return ins_tw
 
-    async def _knn_scores(self, sres: SearchResult, idx_names: list[str], kb_ids: list[str], filters: dict[str, Any]) -> dict[str, float]:
+    async def _knn_scores(self, sres: SearchResult, idx_names: list[str], kb_ids: list[str], filters: dict[str, Any]) -> dict[str, float | None]:
         """Recover exact cosine scores, retaining candidate and dataset bindings.
 
         A bounded server-side exact pass avoids ANN omissions and the different
-        native ES/OpenSearch score transforms. Both scripts return cosine + 1.
+        native ES/OpenSearch score transforms. Both scripts return cosine + 1,
+        or EXACT_SCORE_NO_VECTOR for a candidate without a stored vector, which
+        maps to None: it has no vector similarity to report.
         """
         if not sres.ids or not sres.query_vector or not kb_ids:
             return {}
         if len(idx_names) != len(kb_ids):
             raise ValueError("Each selected dataset must have one index binding")
-        scores: dict[str, float] = {}
+        scores: dict[str, float | None] = {}
         for index, kb_id in zip(idx_names, kb_ids, strict=True):
             ids = [identifier for identifier in sres.ids if _chunk_scalar(sres.field[identifier].get("kb_id")) == kb_id]
             if not ids:
@@ -636,9 +661,12 @@ class Dealer:
             if not set(raw_scores).issubset(ids):
                 raise ValueError("Vector scoring returned an unauthorized candidate")
             for identifier, raw in raw_scores.items():
-                if not 0 <= raw <= 2.000001:
+                if raw == EXACT_SCORE_NO_VECTOR:
+                    scores[identifier] = None
+                elif 0 <= raw <= 2.000001:
+                    scores[identifier] = min(1.0, raw - 1.0)
+                else:
                     raise ValueError("Vector scoring returned an invalid cosine score")
-                scores[identifier] = min(1.0, raw - 1.0)
         return scores
 
     async def fetch_chunk_vectors(self, chunk_ids: list[str], tenant_ids: str | list[str], kb_ids: list[str], dim: int, *, kb_names: list[str], doc_ids: list[str]) -> dict[str, list[float]]:
@@ -671,16 +699,21 @@ class Dealer:
         return vectors
 
     def rerank_with_knn(
-        self, sres: SearchResult, query: str, knn_scores: dict[str, float], tkweight: float = 0.3, vtweight: float = 0.7, cfield: str = "content_ltks", rank_feature: dict | None = None
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self, sres: SearchResult, query: str, knn_scores: dict[str, float | None], tkweight: float = 0.3, vtweight: float = 0.7, cfield: str = "content_ltks", rank_feature: dict | None = None
+    ) -> tuple[np.ndarray, np.ndarray, list[float | None]]:
         _, keywords = self.qryr.question(query)
         tksim = np.array(self.qryr.token_similarity(keywords, self._rerank_tokens(sres, cfield)), dtype=np.float64)
-        vtsim = np.array([knn_scores[identifier] for identifier in sres.ids], dtype=np.float64)
+        vector_scores = [knn_scores[identifier] for identifier in sres.ids]
+        # A chunk without a stored vector ranks as the historical zero vector
+        # did, but has no vector similarity to report.
+        vtsim = np.array([0.0 if score is None else score for score in vector_scores], dtype=np.float64)
         # Preserve FulltextQueryer's historical all-zero vector fallback.
         sim = tksim if np.sum(vtsim) == 0 else tkweight * tksim + vtweight * vtsim
-        return sim + self._rank_feature_scores(rank_feature, sres), tksim, vtsim
+        return sim + self._rank_feature_scores(rank_feature, sres), tksim, vector_scores
 
-    def rerank(self, sres: SearchResult, query: str, tkweight: float = 0.3, vtweight: float = 0.7, cfield: str = "content_ltks", rank_feature: dict | None = None) -> tuple[Any, Any, Any]:
+    def rerank(
+        self, sres: SearchResult, query: str, tkweight: float = 0.3, vtweight: float = 0.7, cfield: str = "content_ltks", rank_feature: dict | None = None
+    ) -> tuple[np.ndarray, list[float] | None, list[float | None] | None]:
         """
         对搜索结果进行重排序
 
@@ -692,13 +725,13 @@ class Dealer:
             cfield: 内容字段名
 
         Returns:
-            重排序后的相似度分数
+            重排序后的相似度分数，以及实际计算的词项、向量相似度；未计算的分量为 None
         """
         _, keywords = self.qryr.question(query)
 
         # 检查结果是否为空
         if not sres.ids:
-            return [], [], []
+            return np.array([], dtype=np.float64), [], []
 
         # 获取结果中的嵌入向量
         vector_dim = len(sres.query_vector) if sres.query_vector else 0
@@ -706,9 +739,9 @@ class Dealer:
 
         if vector_dim == 0:
             logging.warning("rerank: query_vector 为空，无法计算向量相似度")
-            # 返回基于文本的相似度
+            # 沿用引擎全文分数排序；它不是词项或向量相似度，两个分量均未计算
             sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids], dtype=np.float64)
-            return sim, sim, np.zeros(len(sim), dtype=np.float64)
+            return sim, None, None
 
         if vector_dim != 768:
             dim_field = f"q_{vector_dim}_vec"
@@ -717,13 +750,16 @@ class Dealer:
 
         ins_embd = []
         zero_count = 0
-        for i in sres.ids:
+        # 缺少向量的分块用零向量参与排序，但不报告向量相似度
+        missing_vectors: set[int] = set()
+        for position, i in enumerate(sres.ids):
             # 优先使用维度特定字段，如果没有则使用标准vector字段
             if dim_field in sres.field[i] and sres.field[i][dim_field]:
                 vector = sres.field[i][dim_field]
             elif sres.field[i].get(f"q_{vector_dim}_vec") is None:
                 vector = [0.0] * vector_dim
                 zero_count += 1
+                missing_vectors.add(position)
             else:
                 vector = sres.field[i].get(f"q_{vector_dim}_vec", [0.0] * vector_dim)
 
@@ -735,6 +771,7 @@ class Dealer:
                 except Exception:
                     vector = [0.0] * vector_dim
                     zero_count += 1
+                    missing_vectors.add(position)
 
             ins_embd.append(vector)
 
@@ -747,8 +784,9 @@ class Dealer:
 
         # 计算混合相似度
         sim, tksim, vtsim = self.qryr.hybrid_similarity(sres.query_vector, ins_embd, keywords, ins_tw, tkweight, vtweight)
+        vector_scores = [None if position in missing_vectors else float(score) for position, score in enumerate(vtsim)]
 
-        return sim + rank_fea, tksim, vtsim
+        return sim + rank_fea, [float(score) for score in tksim], vector_scores
 
     def rerank_by_model(self, rerank_mdl, sres, query, tkweight=0.3, vtweight=0.7, cfield="content_ltks", rank_feature: dict | None = None):
         _, keywords = self.qryr.question(query)
@@ -895,22 +933,23 @@ class Dealer:
                 # Don't need rerank here since Infinity normalizes each way score before fusion.
                 sim = [sres.field[id].get("_score", 0.0) for id in sres.ids]
                 sim = [s if s is not None else 0.0 for s in sim]
-                tsim = sim
-                vsim = sim
+                # The store score already includes pagerank_fea; Infinity returns
+                # no separate lexical or vector component to report.
+                tsim = vsim = None
             elif db_type == "milvus":
                 if req.get("search_mode", {}).get("hybrid"):
                     if "distance" in sres.field and isinstance(sres.field["distance"], list):
                         sim = np.array(sres.field["distance"])
                     else:
                         sim = np.array([sres.field[id].get("_score", 0.0) for id in sres.ids], dtype=np.float64)
-                    tsim = np.zeros(len(sim), dtype=np.float64)
-                    vsim = np.zeros(len(sim), dtype=np.float64)
                 else:
                     # 应用层已经对 BM25 + 向量做了融合，直接使用 _score
                     sim_list = [sres.field[id].get("_score", 0.0) for id in sres.ids]
                     sim = np.array([s if s is not None else 0.0 for s in sim_list], dtype=np.float64)
-                    tsim = np.zeros(len(sim), dtype=np.float64)
-                    vsim = np.zeros(len(sim), dtype=np.float64)
+                # Milvus 每个分块只返回一个分数：没有全文分支时它就是存储计算的 COSINE 相似度；
+                # BM25 原始分和融合分无法拆出分量，保持未计算。排序特征在下方另行叠加。
+                tsim = None
+                vsim = sim.copy() if weight_sparse <= 0 else None
             elif db_type in ["elasticsearch", "opensearch"]:
                 if sres.query_vector:
                     knn_scores = await self._knn_scores(sres, idxnms, search_kb_ids, self.get_filters(req))
@@ -921,11 +960,10 @@ class Dealer:
                 else:
                     sim, tsim, vsim = self.rerank(sres, question, weight_sparse, weight_dense, rank_feature=rank_feature)
             else:
-                # 其它已归一化的引擎
+                # 其它引擎只返回一个（融合）分数，没有可拆分的词项或向量分量
                 sim_list = [sres.field[id].get("_score", 0.0) for id in sres.ids]
                 sim = np.array([s if s is not None else 0.0 for s in sim_list], dtype=np.float64)
-                tsim = sim.copy()
-                vsim = sim.copy()
+                tsim = vsim = None
 
             if db_type == "milvus" and rank_feature:
                 rank_scores = self._rank_feature_scores(rank_feature, sres)
@@ -981,8 +1019,8 @@ class Dealer:
                 "tag_kwd": list(sres.field[id].get("tag_kwd", [])),
                 "img_id": sres.field[id].get("img_id", ""),
                 "similarity": float(sim_np[i]),
-                "vector_similarity": float(vsim[i]),
-                "term_similarity": float(tsim[i]),
+                "vector_similarity": _component_score(vsim, i),
+                "term_similarity": _component_score(tsim, i),
                 "vector": chunk.get(vector_column, zero_vector),
                 "positions": position_int,
                 "doc_type_kwd": chunk.get("doc_type_kwd", ""),
@@ -1200,7 +1238,7 @@ class Dealer:
         tag_fea = sorted([(a, round(0.1 * (c + 1) / (cnt + S) / max(1e-6, all_tags.get(a, 0.0001)))) for a, c in aggs], key=lambda x: x[1] * -1)[:topn_tags]
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
-    async def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl, topn: int = 6):
+    async def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], kb_names: list[str], chat_mdl: Any, topn: int = 6) -> list[dict]:
         """
         基于 TOC (Table of Contents) 的检索增强方法
 
@@ -1284,8 +1322,9 @@ class Dealer:
                 "important_kwd": chunk.get("important_kwd", []),
                 "image_id": chunk.get("img_id", ""),
                 "similarity": sim,
-                "vector_similarity": sim,
-                "term_similarity": sim,
+                # TOC 相关度来自聊天模型，不是词项或向量匹配
+                "vector_similarity": None,
+                "term_similarity": None,
                 "vector": [0.0] * vector_size,
                 "positions": chunk.get("position_int", []),
                 "doc_type_kwd": chunk.get("doc_type_kwd", ""),
@@ -1357,8 +1396,8 @@ class Dealer:
                     "important_kwd": [keyword for child in children for keyword in child.get("important_kwd", [])],
                     "image_id": parent.get("img_id", ""),
                     "similarity": similarity,
-                    "vector_similarity": similarity,
-                    "term_similarity": similarity,
+                    "vector_similarity": _mean_component(children, "vector_similarity"),
+                    "term_similarity": _mean_component(children, "term_similarity"),
                     "vector": vector,
                     **({"_citation_vector_chunk_id": children[0].get("_citation_vector_chunk_id", children[0]["chunk_id"])} if self.dataStore.db_type() in {"elasticsearch", "opensearch"} else {}),
                     "positions": parent.get("position_int", []),

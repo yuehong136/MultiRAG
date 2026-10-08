@@ -85,6 +85,8 @@ Web 的 parser/metadata/chunk 客户端及 Agent Hub 的 MultiRAG 适配器均�
 
 保留 `doc_ids`、`page/size`、`top_k`（上限 2048）、相似度/向量权重、
 `search_mode`（sparse/dense/hybrid/fusion）、高亮、跨语言、关键词、rerank 和 KG 参数。
+chunk 的 `similarity`、`vector_similarity`、`term_similarity` 语义（未计算的分量为 `null`、
+排序分数可大于 1）见 [检索分数字段](../../../docs/references/http_api_reference.md#检索分数字段)。
 `search_id` 指定有权访问的搜索应用时沿用其元数据配置，否则使用请求中的
 `meta_data_filter`。非空 `doc_ids` 与元数据命中求交；`doc_ids=[]` 沿用未限定文档的语义。
 manual 及 auto/semi_auto 生成的非空条件均保留 AND/OR 空集，条件无匹配时传递空结果哨兵，

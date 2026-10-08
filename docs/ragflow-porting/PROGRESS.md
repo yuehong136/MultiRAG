@@ -3799,3 +3799,49 @@ managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 fals
 - 历史严格预登记仍为 false，A Ruff cache、I admin 路径假设/空 uv 环境、M pytest cache 和 W 拼贴解释器清单缺口不倒填。真实供应商/权限、常驻 worker、Linux native、生产迁移/部署及 Go 全应用 MySQL 未验；旧 whole-provider child/orphan 风险单列。未 push、未部署，远程 `ci-required` 待运行，未发布 Web pin 远程不可取；不继续下一批或创建自动化。
 
 <!-- END AFTER-B7D88F0B LOCAL DELIVERY -->
+
+
+## 检索分数分量 · 未计算时返回 null
+
+2026-10-08 起，检索结果和引用 chunk 的 `vector_similarity`、`term_similarity` 只在检索路径
+实际算出时返回数值，否则返回 `null`；`similarity` 的计算和排序不变。此前 Milvus 未接 rerank 模型时
+两个分量固定填 0，Infinity 和其他单分数引擎把引擎分数复制进两个分量，ES/OpenSearch 无查询向量时
+复制全文分并填 0 向量分，TOC 补入、父子合并、知识图谱汇总和联网结果也复制或写死分量；
+Web 把这些值显示为“向量匹配 0% / 词汇匹配 0%”等不存在的匹配结果。
+
+现在 rerank 模型与 ES/OpenSearch 应用层重排的计算值保留（含真实的 0），缺少向量的 chunk 不报告向量分；
+Milvus 仅向量检索报告引擎返回的余弦相似度（叠加排序特征前）；父 chunk 取子 chunk 分量均值，
+任一子 chunk 缺少该分量时为 `null`；非有限分量也返回 `null`。字段语义、各路径结果以及 `similarity`
+大于 1 的来源见 [检索分数字段](../references/http_api_reference.md#检索分数字段)。
+
+ES/OpenSearch 带查询向量时由服务端精确余弦打分（`Dealer._knn_scores`，来自 `8a4cc393`），候选不再携带向量；
+两个打分脚本对缺少向量的候选返回 `EXACT_SCORE_NO_VECTOR`（3.0，在 cosine + 1 的 [0, 2] 之外），映射为 `null`，
+排序仍按零向量计 0 分。本改动于 2026-10-25 变基到该路径之上时补齐这一处。
+
+上游对照：本机 `../ragflow` 的 `15a63bc15`（2026-08-14，本次未 fetch）在 Infinity 分支、TOC 补入
+和父子合并中仍把融合分数复制到两个分量。后续移植 `rag/nlp/search.py` 的这些段落时保留本地 `null` 合同。
+OceanBase 仅向量检索的 `_score` 按代码同样是 `1 - cosine_distance`，本机没有 OceanBase 无法验证，
+仍返回 `null`；验证后可按 Milvus 方式报告。
+
+本机（Windows）验证：新增 `tests/unit/test_search_score_components.py` 29 例通过；同一文件在不含本改动的
+HEAD 快照上 27 例失败，余下 2 例锁定 rerank 模型与引用序列化的既有正确行为。`make verify` 等价命令中
+ruff format/check、lint-imports（8 kept）与 async DB 门禁通过，`mypy --platform linux` 通过；本机默认 win32
+平台另报 `scripts/secure_leave_e2e.py` 的 26 个 POSIX 调用错误。全量 unit（`PYTHONUTF8=1`）5960 passed、
+14 skipped、31 failed、1 个收集错误，均为既有 Windows 环境问题：27 例在 HEAD 快照同样失败，4 例为 bash
+子进程 0xC0000142，收集错误为 `fcntl`。
+
+Milvus 核心集成：新增 REST `/search` 与 SDK `/retrieval` 真实 Milvus 用例在四种模式及 rerank 路径通过。
+`test_dataset_search_http.py` 与 `test_reference_metadata_http.py` 整文件首轮 24 例通过，另 4 例在 fixture
+阶段遇本机 Milvus 因 etcd 超时反复重启及一次 6 小时挂起而出错，单独重跑后全部通过。Infinity 专项
+（`REQUIRE_SERVICES=1`）20 passed、无 skip，含新增用例：dense 分数 31.0（余弦 1.0 + `pagerank_fea` 30），分量为 `null`。
+Web 消费者专项未通过，四次尝试均未实际运行验收脚本：一次因 `.bin/tsx` 不能在 Windows 直接执行，
+一次在 pytest 进程内启动 `tsx.cmd` 返回 0xC0000142，两次因 Milvus 重启中断于 fixture；改在 Web 仓只读运行评分处理测试，
+`retrieval-score` 5 例与 `reference-diagnostics` 17 例通过，覆盖 `null`、真实 0 与大于 1 的分数。
+
+本机适配均未入库：测试 HTTP 服务改用与生产相同的 SelectorEventLoop（默认 Proactor 下 async psycopg 不可用）；
+Infinity 就绪握手改在进程内执行（冷导入 8–17 秒，超过 5 秒探测），实例为手动启动、经 `INFINITY_TEST_URI`
+指定并用后删除的临时容器；消费者用例改用 `tsx.cmd`。未运行真实 ES/OpenSearch/OceanBase/Vastbase，
+这些分支由单元测试覆盖。重启后的本机服务 `scripts/smoke.py` 通过（ping、healthz）。
+证据：`.test-results/20261008-014831-5616`（新增 Milvus 用例）、`.test-results/20261008-020348-35312`（整文件）、
+`.test-results/20261008-095443-61372` 与 `.test-results/20261008-102146-32672`（重跑）、
+`.test-results/20261008-103000-infinity-direct`（Infinity）。

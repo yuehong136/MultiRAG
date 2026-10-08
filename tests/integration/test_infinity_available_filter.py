@@ -318,3 +318,55 @@ def test_get_preserves_chunk_identity_through_real_roundtrip(infinity_scratch: t
     assert store.delete({"id": "hidden"}, "chunks", "kb") == 1
     assert store.get("hidden", index_name, ["kb"]) is None
     assert set(reader.output(["id"]).to_result()[0]["id"]) == {"visible", "foreign"}
+
+
+async def test_retrieval_reports_no_components_for_the_store_score(infinity_scratch: tuple[Any, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Infinity ranks by one store score that already adds pagerank_fea, so no component is reported."""
+    from unittest.mock import AsyncMock, Mock
+
+    import numpy as np
+
+    from core.nlp.search import Dealer, index_name_one
+
+    store, _ = infinity_scratch
+    # The fixture skips __init__; the production schema and field mapping need its defaults.
+    store.mapping_file_name, store.table_name_prefix = "infinity_mapping.json", "multirag_"
+    index = index_name_one("tenant", "scores")
+    rows = [
+        {
+            "id": "boosted",
+            "doc_id": "doc",
+            "kb_id": "kb",
+            "docnm_kwd": "doc.txt",
+            "content_with_weight": "boosted words",
+            "content_ltks": "boosted words",
+            "available_int": 1,
+            "q_2_vec": [1.0, 0.0],
+            "pagerank_fea": 30,
+        },
+        {"id": "plain", "doc_id": "doc", "kb_id": "kb", "docnm_kwd": "doc.txt", "content_with_weight": "plain words", "content_ltks": "plain words", "available_int": 1, "q_2_vec": [0.6, 0.8]},
+    ]
+    # The production insert creates the full mapped schema and vector index.
+    assert store.insert(rows, index, "kb") == []
+    dealer = Dealer(store)
+    # Document liveness is a SQL check outside this store contract.
+    monkeypatch.setattr(dealer, "_existing_doc_ids", AsyncMock(return_value={"doc"}))
+    embedding = SimpleNamespace(encode_queries=Mock(return_value=(np.array([1.0, 0.0]), 0)))
+
+    async def scores(mode: dict[str, Any]) -> dict[str, tuple[Any, Any, Any]]:
+        ranks = await dealer.retrieval("boosted", "", embedding, "tenant", ["scores"], 1, 10, similarity_threshold=0, rank_feature={}, search_mode=mode, kb_ids=["kb"])
+        return {chunk["chunk_id"]: (chunk["similarity"], chunk["vector_similarity"], chunk["term_similarity"]) for chunk in ranks["chunks"]}
+
+    # The score is SIMILARITY plus pagerank_fea: it ranks above 1 and cannot be split.
+    dense = await scores({"dense": {}})
+    assert dense == {"boosted": (pytest.approx(31.0, abs=0.05), None, None), "plain": (pytest.approx(0.6, abs=0.05), None, None)}, dense
+    sparse = await scores({"sparse": {}})
+    assert set(sparse) == {"boosted"} and sparse["boosted"][0] > 30 and sparse["boosted"][1:] == (None, None), sparse
+    uri = os.environ.get("INFINITY_TEST_URI", CONFIGS.get("infinity", {}).get("uri", "localhost:23817"))
+    host, port = uri.rsplit(":", 1)
+    reader = infinity.connect(NetworkAddress(host, int(port)))
+    try:
+        raw = reader.get_database(store.dbName).get_table(index + "_kb").output(["id", "pagerank_fea"]).to_result()[0]
+        assert dict(zip(raw["id"], raw["pagerank_fea"], strict=True)) == {"boosted": 30, "plain": 0}
+    finally:
+        reader.disconnect()

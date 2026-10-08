@@ -484,6 +484,68 @@ def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: 
         assert metadata is not None and metadata.meta_fields == {"category": "match"}
 
 
+def test_http_search_reports_only_computed_score_components(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real Milvus scores: computed components (including 0.0) are kept, the rest are null."""
+    from api.apps.sdk import doc as sdk
+
+    env = search_api
+    query_vector = [1.0] + [0.0] * 767
+    lexical_vector = [0.0, 1.0] + [0.0] * 766
+
+    class Embedding:
+        def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+            return np.array(query_vector), 0
+
+    async def bundle(*args: Any, **kwargs: Any) -> Any:
+        return Embedding()
+
+    monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
+    monkeypatch.setattr(sdk, "LLMBundle", lambda *_: Embedding())
+    lexical = {**env["rows"]["dataset"][1], "content_with_weight": "rivet rivet rivet", "content_ltks": "rivet rivet rivet", "vector": lexical_vector, "q_768_vec": lexical_vector}
+    semantic = {**lexical, "id": uuid4().hex, "content_with_weight": "unrelated wording", "content_ltks": "unrelated wording", "vector": query_vector, "q_768_vec": query_vector}
+    store = settings.docStoreConn
+    assert store.delete({"id": lexical["id"]}, env["collections"]["dataset"], env["dataset"]) == 1
+    assert store.insert([lexical, semantic], env["collections"]["dataset"], env["dataset"]) == []
+    env["reader"].flush(env["collections"]["dataset"], timeout=60)
+    raw = env["reader"].query(env["collections"]["dataset"], filter="pk in " + json.dumps([lexical["id"], semantic["id"]]), output_fields=["pk", "q_768_vec"], consistency_level="Strong")
+    assert {row["pk"]: [float(value) for value in row["q_768_vec"][:2]] for row in raw} == {lexical["id"]: [0.0, 1.0], semantic["id"]: [1.0, 0.0]}
+
+    def scores(mode: str, *, sdk_route: bool = False, rerank: bool = False) -> dict[str, tuple[Any, Any, Any]]:
+        payload: dict[str, Any] = {"question": "rivet", "search_mode": {"type": mode}, "similarity_threshold": 0}
+        if rerank:
+            payload["rerank_id"] = "controlled"
+        if sdk_route:
+            response = requests.post(env["base"] + "/api/v1/retrieval", headers={"Authorization": "Bearer " + env["sdk_token"]}, json={**payload, "dataset_ids": [env["dataset"]]}, timeout=30)
+        else:
+            response = request(env, "POST", "/search", json=payload)
+        body = response.json()
+        assert response.status_code == 200 and body["code"] == 0, body
+        chunks = body["data"]["chunks"]
+        # Unavailable components are explicit JSON null, never omitted.
+        assert chunks and all({"similarity", "vector_similarity", "term_similarity"} <= chunk.keys() for chunk in chunks), body
+        return {chunk.get("chunk_id", chunk.get("id")): (chunk["similarity"], chunk["vector_similarity"], chunk["term_similarity"]) for chunk in chunks}
+
+    for sdk_route in (False, True):
+        # Dense-only Milvus ranks by the stored COSINE similarity, so an orthogonal vector keeps a real 0.0.
+        dense = scores("dense", sdk_route=sdk_route)
+        assert dense == {semantic["id"]: (pytest.approx(1.0), pytest.approx(1.0), None), lexical["id"]: (pytest.approx(0.0), pytest.approx(0.0), None)}, dense
+        for mode in ("sparse", "hybrid", "fusion"):
+            # Raw BM25 and fused scores cannot be split into lexical and vector parts.
+            single_score = scores(mode, sdk_route=sdk_route)
+            assert lexical["id"] in single_score and all(vector is None and term is None for _, vector, term in single_score.values()), (mode, single_score)
+
+    def model_rank(_self: search.Dealer, _model: Any, result: search.Dealer.SearchResult, *_args: Any, **_kwargs: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        term = np.array([0.25 if key == lexical["id"] else 0.0 for key in result.ids])
+        vector = np.array([0.75 if key == semantic["id"] else 0.5 for key in result.ids])
+        return term + vector, term, vector
+
+    monkeypatch.setattr(search.Dealer, "rerank_by_model", model_rank)
+    for mode in ("dense", "hybrid"):
+        # A reranker computes both components for every chunk, including a 0.0 term match.
+        reranked = scores(mode, rerank=True)
+        assert reranked == {semantic["id"]: (0.75, 0.75, 0.0), lexical["id"]: (0.75, 0.5, 0.25)}, (mode, reranked)
+
+
 def test_http_vector_schema_failure_is_business_error(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env = search_api
 

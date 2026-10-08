@@ -173,7 +173,9 @@ async def test_exact_server_cosines_include_negative_and_omit_vector_payload(sco
     chosen = [ids[key] for key in ["semantic", "lexical", "negative", "missing"]]
     result = Dealer.SearchResult(4, chosen, [1.0] + [0.0] * 511, {identifier: env["rows"][identifier] for identifier in chosen})
     scores = await dealer._knn_scores(result, [env["index"]], [env["kb"]], {"available_int": 1, "doc_id": chosen})
-    assert scores == pytest.approx(dict(zip(chosen, [1.0, 0.1, -1.0, 0.0], strict=True)), abs=1e-6)
+    # The chunk without a stored vector has no cosine to report; it ranks as 0.0.
+    assert scores[ids["missing"]] is None
+    assert {key: value for key, value in scores.items() if key != ids["missing"]} == pytest.approx(dict(zip(chosen[:3], [1.0, 0.1, -1.0], strict=True)), abs=1e-6)
     raw = env["store"].search([], [], {"id": chosen}, [MatchDenseExpr("q_512_vec", [1.0] + [0.0] * 511, "float", "cosine", 4, {"exact": True})], OrderByExpr(), 0, 4, [env["index"]], [env["kb"]])
     ordinary = env["store"].search([], [], {"id": chosen}, [], OrderByExpr(), 0, 4, [env["index"]], [env["kb"]])
     assert all("_source" in hit for hit in ordinary["hits"]["hits"])

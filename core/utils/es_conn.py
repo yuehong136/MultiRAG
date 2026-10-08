@@ -27,7 +27,7 @@ from elasticsearch_dsl import Q, Search, UpdateByQuery
 
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
-from common.doc_store.doc_store_base import FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
+from common.doc_store.doc_store_base import EXACT_SCORE_NO_VECTOR, FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
 from common.doc_store.es_conn_base import ESConnectionBase
 from common.float_utils import get_float
 
@@ -234,7 +234,7 @@ class ESConnection(ESConnectionBase):
                         "script_score",
                         query=scalar_filter,
                         script={
-                            "source": f"doc['{m.vector_column_name}'].size() == 0 ? 1.0 : cosineSimilarity(params.vector, '{m.vector_column_name}') + 1.0",
+                            "source": f"doc['{m.vector_column_name}'].size() == 0 ? {EXACT_SCORE_NO_VECTOR} : cosineSimilarity(params.vector, '{m.vector_column_name}') + 1.0",
                             "params": {"vector": list(m.embedding_data)},
                         },
                     )

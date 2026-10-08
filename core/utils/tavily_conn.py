@@ -65,8 +65,9 @@ class Tavily:
                     "important_kwd": [],
                     "image_id": "",
                     "similarity": r["score"],
-                    "vector_similarity": 1.0,
-                    "term_similarity": 0,
+                    # Tavily scores whole web results; no lexical or vector component is computed.
+                    "vector_similarity": None,
+                    "term_similarity": None,
                     "vector": [],
                     "positions": [],
                     "url": r["url"],
