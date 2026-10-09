@@ -5,7 +5,6 @@ The browser owner writes <path>.done after acceptance; teardown removes all
 owned SQL/object/index resources and the credential handoff file.
 """
 
-import asyncio
 import json
 import os
 import threading
@@ -16,6 +15,7 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.support import event_loop
 from tests.support.skills_http import bootstrapped_engine as bootstrapped_engine
 from tests.support.skills_http import image_http_api as image_http_api
 from tests.support.skills_http import image_http_database as image_http_database
@@ -54,8 +54,8 @@ def test_browser_session(skill_http: dict[str, Any], monkeypatch: pytest.MonkeyP
 
     def run_worker() -> None:
         while not stop.wait(0.2):
-            asyncio.run(env["skill_worker"].run_once())
-            asyncio.run(core_runtime.sweep(sessions, SkillStorage(env["storage"]), core))
+            event_loop.run(env["skill_worker"].run_once())
+            event_loop.run(core_runtime.sweep(sessions, SkillStorage(env["storage"]), core))
 
     thread = threading.Thread(target=run_worker, daemon=True)
     thread.start()

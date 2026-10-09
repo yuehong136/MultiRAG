@@ -12,6 +12,7 @@ from scripts.provision_eval_assets import MODEL, REVISION
 from tests.evals.contracts import CORPUS, Corpus, Observation, QualityCase, corpus_fingerprint, generation_assertions
 from tests.evals.runtime import _report_path
 from tests.evals.runtime import quality_runtime as quality_runtime
+from tests.support import event_loop
 
 PROMPT_VERSION = "grounded-json-v1"
 SYSTEM = """仅依据给出的资料或工具结果回答问题。资料不足时明确拒绝猜测。
@@ -49,7 +50,7 @@ def test_real_provider_answers_citations_abstention_and_tools(generation_runtime
 
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "45")
     env = generation_runtime
-    corpus = Corpus.model_validate_json((CORPUS / "cases.json").read_text())
+    corpus = Corpus.model_validate_json((CORPUS / "cases.json").read_text(encoding="utf-8"))
 
     class Grounding(Evaluator[QualityCase, Observation, Any]):
         def evaluate(self, ctx: EvaluatorContext[QualityCase, Observation, Any]) -> dict[str, bool]:
@@ -105,20 +106,24 @@ def test_real_provider_answers_citations_abstention_and_tools(generation_runtime
         )
 
     dataset = Dataset(name="multirag-grounded-generation-v1", cases=[Case(name=case.id, inputs=case) for case in corpus.cases], evaluators=[Grounding()])
-    report = dataset.evaluate_sync(
-        candidate,
-        max_concurrency=1,
-        progress=False,
-        metadata={
-            "corpus_version": corpus.version,
-            "corpus_sha256": corpus_fingerprint(),
-            "embedding_model": MODEL,
-            "embedding_revision": REVISION,
-            "model": os.environ["MULTIRAG_EVAL_MODEL"],
-            "prompt_version": PROMPT_VERSION,
-            "cost_usd": None,
-            "cost_note": "Provider returns total tokens; currency cost requires provider billing, never guessed.",
-        },
+    # evaluate_sync would run this on win32's default Proactor loop, which the
+    # async psycopg session behind retrieval rejects.
+    report = event_loop.run(
+        dataset.evaluate(
+            candidate,
+            max_concurrency=1,
+            progress=False,
+            metadata={
+                "corpus_version": corpus.version,
+                "corpus_sha256": corpus_fingerprint(),
+                "embedding_model": MODEL,
+                "embedding_revision": REVISION,
+                "model": os.environ["MULTIRAG_EVAL_MODEL"],
+                "prompt_version": PROMPT_VERSION,
+                "cost_usd": None,
+                "cost_note": "Provider returns total tokens; currency cost requires provider billing, never guessed.",
+            },
+        )
     )
     _report_path(request, "quality-generation.json").write_bytes(TypeAdapter(type(report)).dump_json(report, indent=2))
     assert not report.failures, [failure.name for failure in report.failures]

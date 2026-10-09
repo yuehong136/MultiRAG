@@ -172,6 +172,38 @@ def finite_worker(env: dict[str, Any], evidence: Evidence) -> Callable[[], None]
     return run
 
 
+# npm starts Vite as a child, so each run owns a process group to stop: a new
+# session on POSIX (start_new_session), a console process group on Windows.
+if sys.platform == "win32":
+    _NEW_PROCESS_GROUP = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    _NEW_PROCESS_GROUP = 0
+
+
+def _stop_process_group(child: subprocess.Popen[bytes]) -> None:
+    """Stop npm and the Vite server it started, and no other process."""
+    if sys.platform == "win32":
+        # Ctrl+Break reaches the group only through a console we share with it;
+        # without one (OSError) or an exit in time, taskkill /T ends the tree.
+        try:
+            os.kill(child.pid, signal.CTRL_BREAK_EVENT)
+            child.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"], capture_output=True, check=False)
+            child.wait(timeout=10)
+    else:
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        if child.poll() is None:
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=10)
+
+
 @contextmanager
 def product_web_server(api_base: str, evidence: Evidence) -> Iterator[str]:
     selected = os.environ.get("MULTIRAG_ACCEPTANCE_WEB_BASE_URL")
@@ -195,6 +227,7 @@ def product_web_server(api_base: str, evidence: Evidence) -> Iterator[str]:
             stdout=log,
             stderr=log,
             start_new_session=True,
+            creationflags=_NEW_PROCESS_GROUP,
             env={**os.environ, "VITE_API_BASE_URL": api_base},
         )
         try:
@@ -213,17 +246,7 @@ def product_web_server(api_base: str, evidence: Evidence) -> Iterator[str]:
             evidence.save()
             yield base
         finally:
-            # npm starts Vite as a child; stop this owned process group only.
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            if child.poll() is None:
-                try:
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=10)
+            _stop_process_group(child)
 
             def closed_listener() -> dict[str, bool]:
                 with socket.socket() as probe:

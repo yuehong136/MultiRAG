@@ -14,6 +14,7 @@ from scripts.provision_test_assets import REVISION as OCR_REVISION
 from tests.evals.contracts import CORPUS, Corpus, Observation, QualityCase, corpus_fingerprint, retrieval_scores
 from tests.evals.runtime import _report_path
 from tests.evals.runtime import quality_runtime as quality_runtime
+from tests.support import event_loop
 
 
 def test_local_retrieval_quality(quality_runtime: dict[str, Any], request: pytest.FixtureRequest) -> None:
@@ -21,7 +22,7 @@ def test_local_retrieval_quality(quality_runtime: dict[str, Any], request: pytes
     from pydantic_evals import Case, Dataset
     from pydantic_evals.evaluators import Evaluator, EvaluatorContext
 
-    corpus = Corpus.model_validate_json((CORPUS / "cases.json").read_text())
+    corpus = Corpus.model_validate_json((CORPUS / "cases.json").read_text(encoding="utf-8"))
     env = quality_runtime
 
     class Relevance(Evaluator[QualityCase, Observation, Any]):
@@ -59,7 +60,9 @@ def test_local_retrieval_quality(quality_runtime: dict[str, Any], request: pytes
         "scope": "production-parser-embedding-and-retrieval",
         "provider_cost_usd": 0,
     }
-    report = dataset.evaluate_sync(retrieve, name=dataset.name, max_concurrency=1, progress=False, metadata=metadata)
+    # evaluate_sync would run this on win32's default Proactor loop, which the
+    # async psycopg session behind retrieval rejects.
+    report = event_loop.run(dataset.evaluate(retrieve, name=dataset.name, max_concurrency=1, progress=False, metadata=metadata))
     _report_path(request, "quality-retrieval.json").write_bytes(TypeAdapter(type(report)).dump_json(report, indent=2))
     assert not report.failures, [failure.name for failure in report.failures]
     assert len(report.cases) == len(dataset.cases)
@@ -84,6 +87,7 @@ def test_real_parser_and_ocr_quality(quality_runtime: dict[str, Any], request: p
     _report_path(request, "quality-parsing.json").write_text(
         json.dumps(
             {"findings": findings, "recognized": recognized, "seconds": time.monotonic() - started, "ocr_revision": OCR_REVISION, "corpus_sha256": corpus_fingerprint()}, ensure_ascii=False, indent=2
-        )
+        ),
+        encoding="utf-8",
     )
     assert all(findings.values()), findings
