@@ -1,5 +1,6 @@
 """Acceptance must fail on false success, missing effects and lost readback."""
 
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,24 @@ def test_running_checks_cannot_report_completion(tmp_path: Path) -> None:
     value = json.loads((tmp_path / "acceptance.json").read_text())
     assert value["automated_status"] == "passed"
     assert value["visual_review"] == "pending_human_review"
+
+
+@pytest.mark.parametrize("locale_codec", ["gbk", "cp1252"])
+def test_evidence_is_utf8_under_any_locale_codec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, locale_codec: str) -> None:
+    # pathlib resolves encoding=None through io.text_encoding(); answer like a
+    # Chinese (GBK) or Western (cp1252) Windows locale instead of UTF-8.
+    monkeypatch.setattr(io, "text_encoding", lambda encoding, stacklevel=2: encoding or locale_codec)
+    report = Evidence(tmp_path, mode="api")
+
+    def failure() -> None:
+        raise AcceptanceError("解析失败：分块为空")
+
+    assert report.check("api.upload.readback", lambda: {"filename": "验收文档.txt"})
+    assert not report.check("api.parse.completed_nonzero_chunks", failure)
+    report.finish()
+    checks = json.loads((tmp_path / "acceptance.json").read_text(encoding="utf-8"))["checks"]
+    assert [check["detail"] for check in checks] == [{"filename": "验收文档.txt"}, "AcceptanceError: 解析失败：分块为空"]
+    assert "AcceptanceError: 解析失败：分块为空" in (tmp_path / "acceptance.md").read_text(encoding="utf-8")
 
 
 def test_product_suite_is_explicit_and_serial(monkeypatch: pytest.MonkeyPatch) -> None:

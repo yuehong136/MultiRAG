@@ -89,7 +89,7 @@ class Evidence:
         path = self.directory / name
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.touch(mode=0o600)
-        temporary.write_text(content)
+        temporary.write_text(content, encoding="utf-8")
         temporary.replace(path)
 
     def contact_sheets(self) -> list[str]:
