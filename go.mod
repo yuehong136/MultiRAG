@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.11
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/aws/smithy-go v1.24.2
+	github.com/blang/semver/v4 v4.0.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/elastic/go-elasticsearch/v8 v8.19.1
 	github.com/gin-gonic/gin v1.9.1
@@ -24,6 +25,7 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.52.0
 	golang.org/x/term v0.43.0
+	golang.org/x/text v0.37.0
 	google.golang.org/genai v1.54.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.5.2
@@ -51,7 +53,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.16 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.8 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
@@ -190,7 +191,6 @@ require (
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
@@ -205,4 +205,4 @@ require (
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
 
-replace github.com/infiniflow/infinity-go-sdk => github.com/infiniflow/infinity/go v0.0.0-20260424025959-72028e662929
+replace github.com/infiniflow/infinity-go-sdk => github.com/infiniflow/infinity/go v0.0.0-20261009034419-e1bd341a2083
