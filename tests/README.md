@@ -52,7 +52,9 @@ REST 各族的生产入口、已有测试和执行边界见 [REST 覆盖索引](
 因此进程内 scratch HTTP 服务与生产一样使用 selector 循环，同步用例驱动异步数据库时用
 [`event_loop.run()`](support/event_loop.py) 代替 `asyncio.run()`；pytest-asyncio 用例由集成 conftest 的
 `event_loop_policy` 处理。Web 消费者用例执行 npm 在同目录生成的 `node_modules/.bin/tsx.cmd`。
-`tests/unit/test_secure_leave_e2e.py` 覆盖的部署脚本依赖 POSIX `fcntl`，在 Windows 上无法收集。
+`tests/unit/test_secure_leave_e2e.py` 覆盖的部署脚本依赖 POSIX `fcntl`，在 Windows 上无法收集；
+类型检查不受影响：mypy 的目标平台在 [`pyproject.toml`](../pyproject.toml) 的 `[tool.mypy]` 中固定为
+Linux，Windows 上 `uv run --no-sync mypy` 仍检查该脚本，结果与 CI 一致。
 
 ## CI 分层与证据
 

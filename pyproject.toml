@@ -475,6 +475,11 @@ known-first-party = ["api", "common", "core", "agent", "deepdoc", "workflow", "w
 # ============================================================
 [tool.mypy]
 python_version = "3.12"
+# 检查目标平台与 python_version 一样固定，不随主机变化：CI typecheck（ubuntu-latest）
+# 与生产均为 Linux。Windows 上 `uv run --no-sync mypy` 由此与 CI 同范围、同结果，
+# 仅限 POSIX 的 scripts/secure_leave_e2e.py（fcntl、os.getpgid 等）照常受检；CI 不受影响。
+# 代价同 CI 现状：`sys.platform == "win32"` 分支视为不可达而不检查，可临时加 --platform win32。
+platform = "linux"
 files = ["common", "api/utils", "api/identity", "api/run_platform", "scripts"]
 exclude = [
     "^server/", "^internal/", "^tests/", "^docker/", "^temp/", "^tmp/",
