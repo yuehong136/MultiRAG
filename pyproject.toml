@@ -222,7 +222,7 @@ dev = [
     "pytest-xdist>=3.8,<4",
     # EIM-A1 contract oracle: direct test dependency rather than relying on
     # the MCP SDK's transitive dependency. A2 may promote it to runtime later.
-    "PyJWT[crypto]==2.13.0",
+    "PyJWT[crypto]==2.15.0",
     "ruff",
     "testcontainers[minio,postgres,redis]>=4.8",
     "types-python-dateutil>=2.9.0.20241206",
