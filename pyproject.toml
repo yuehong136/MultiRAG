@@ -61,7 +61,7 @@ dependencies = [
     "httpx[socks]>=0.28.1,<0.29.0",
     "huggingface-hub>=0.25.0",
     "infinity-sdk==0.7.0-dev5",
-    "infinity-emb>=0.0.66,<0.0.67",
+    "infinity-emb>=0.0.77,<0.0.78",
     "itsdangerous==2.1.2",
     "jieba>=0.42.1",
     "jira==3.10.5",
