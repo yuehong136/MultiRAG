@@ -10,7 +10,6 @@ from api.db import CanvasCategory, TenantPermission
 from api.db.db_models import UserCanvas
 from api.db.services import canvas_service as canvas_service_module
 from api.db.services.api_service import API4ConversationService
-from api.db.services.user_service import UserTenantService
 
 
 def test_get_agent_dsl_with_release_prefers_latest_published_version(monkeypatch) -> None:
@@ -75,11 +74,7 @@ def test_agent_accessible_allows_owner_and_team_members_only(monkeypatch) -> Non
         "get_by_canvas_id",
         classmethod(lambda cls, db, canvas_id: (True, canvas)),
     )
-    monkeypatch.setattr(
-        UserTenantService,
-        "query",
-        classmethod(lambda cls, db, **kwargs: [SimpleNamespace(tenant_id="owner-1")]),
-    )
+    monkeypatch.setattr(fake_db, "scalar", lambda statement: "active-member")
 
     assert canvas_service_module.UserCanvasService.accessible(fake_db, "agent-1", "owner-1") is True
     assert canvas_service_module.UserCanvasService.accessible(fake_db, "agent-1", "member-1") is False

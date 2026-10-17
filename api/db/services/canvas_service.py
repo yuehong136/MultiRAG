@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import tiktoken
 from anyio import CancelScope
-from sqlalchemy import and_, asc, func, or_, select
+from sqlalchemy import Select, and_, asc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
@@ -242,20 +242,15 @@ class UserCanvasService(CommonService):
     @classmethod
     def accessible(cls, db: Session, canvas_id: str, tenant_id: str) -> bool:
         """Check whether the given tenant can access the canvas."""
-        from api.db.services.user_service import UserTenantService
-
         exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
         if not exists or not canvas:
             return False
 
         if canvas["user_id"] == tenant_id:
             return True
-        tenant_ids = [t.tenant_id for t in UserTenantService.query(db=db, user_id=tenant_id)]
-        if canvas["user_id"] not in tenant_ids:
-            return False
         if canvas["permission"] != TenantPermission.TEAM.value:
             return False
-        return True
+        return db.scalar(_agent_membership_query(tenant_id, canvas["user_id"])) is not None
 
     @classmethod
     def get_agent_dsl_with_release(
@@ -300,6 +295,31 @@ class PublishedAgentVersionUnavailable(LookupError):
     """The authorized Agent has no published snapshot to run."""
 
 
+def _agent_membership_query(caller_id: str, owner_id: str) -> Select[tuple[str]]:
+    """Only joined, active normal/admin members inherit TEAM access."""
+    return (
+        select(UserTenant.id)
+        .where(
+            UserTenant.user_id == caller_id,
+            UserTenant.tenant_id == owner_id,
+            UserTenant.status == StatusEnum.VALID.value,
+            UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
+        )
+        .limit(1)
+    )
+
+
+async def require_agent_access(db: AsyncSession, agent_id: str, caller_id: str) -> UserCanvas:
+    """Resolve the resource owner and authorize using the request's session."""
+    canvas = await db.scalar(select(UserCanvas).join(User, UserCanvas.user_id == User.id).where(UserCanvas.id == agent_id))
+    if canvas is None:
+        raise LookupError("Agent not found.")
+    if canvas.user_id != caller_id:
+        if canvas.permission != TenantPermission.TEAM.value or await db.scalar(_agent_membership_query(caller_id, canvas.user_id)) is None:
+            raise PermissionError("Only authorized users can access this agent.")
+    return canvas
+
+
 async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, session_id: str | None = None, release_mode: bool = False, principal: Principal | None = None) -> PreparedAgentRun:
     """Authorize the REST run and select its exact DSL before any stream starts.
 
@@ -308,22 +328,7 @@ async def prepare_agent_run(db: AsyncSession, agent_id: str, caller_id: str, *, 
     """
     if principal is not None and principal.platform_user_id != caller_id:
         raise PermissionError("Authenticated run identity is inconsistent.")
-    canvas = await db.scalar(select(UserCanvas).join(User, UserCanvas.user_id == User.id).where(UserCanvas.id == agent_id))
-    if canvas is None:
-        raise LookupError("Agent not found.")
-    if canvas.user_id != caller_id:
-        membership = await db.scalar(
-            select(UserTenant.id)
-            .where(
-                UserTenant.user_id == caller_id,
-                UserTenant.tenant_id == canvas.user_id,
-                UserTenant.status == StatusEnum.VALID.value,
-                UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
-            )
-            .limit(1)
-        )
-        if canvas.permission != TenantPermission.TEAM.value or membership is None:
-            raise PermissionError("Only authorized users can run this agent.")
+    canvas = await require_agent_access(db, agent_id, caller_id)
     conversation = None
     run_context = None
     revision_id = None

@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import AgentExecutionOrigin, API4Conversation, UserCanvasVersion
+from api.db.db_models import AgentExecutionOrigin, API4Conversation, UserCanvas, UserCanvasVersion
 from api.db.services.agent_execution_service import execution_context, restore_execution_snapshot, snapshot_digest
 from api.db.services.canvas_service import prepare_agent_run
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, Principal, TenantMembershipEvidence, build_principal_from_authenticated_actor
@@ -63,7 +63,7 @@ class ExecutionSession(AsyncSession):
         self.origin = origin
         self.caller_id = caller_id
         self.version_available = version_available
-        self.canvas = SimpleNamespace(user_id="owner", permission="team", dsl={"components": {}}, id="agent")
+        self.canvas = UserCanvas(user_id="owner", permission="team", dsl={"components": {}}, id="agent")
 
     async def scalar(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
         if "user_tenant" in str(statement):

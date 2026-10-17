@@ -24,7 +24,7 @@ from anyio import CancelScope
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,7 @@ from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
-from api.db.db_models import Task, UserCanvas, get_async_db, get_db
+from api.db.db_models import API4Conversation, Task, UserCanvas, UserCanvasVersion, get_async_db, get_db
 from api.db.services.agent_execution_service import execution_context, save_agent_session
 from api.db.services.canvas_service import (
     API4ConversationService,
@@ -44,6 +44,7 @@ from api.db.services.canvas_service import (
     agent_event_error,
     completion_openai,
     prepare_agent_run,
+    require_agent_access,
 )
 from api.db.services.canvas_service import (
     completion as agent_completion,
@@ -59,7 +60,7 @@ from api.db.services.user_service import TenantService
 from api.identity.mcp_delegation.contracts import DelegationErrorCode, McpDelegationError
 from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event
 from api.utils.agent_streaming import AgentStreamingResponse
-from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
+from api.utils.api_utils import BusinessError, Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common import settings
 from common.constants import RetCode
 from common.misc_utils import get_uuid, thread_pool_exec
@@ -69,6 +70,18 @@ from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import finish_runtime, require_runtime_finish
 
 router = APIRouter()
+
+
+async def _require_canvas_access(
+    canvas_id: str,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+) -> UserCanvas:
+    """Bind the path and authenticated caller explicitly before handler work."""
+    try:
+        return await require_agent_access(db, canvas_id, user.id)
+    except (LookupError, PermissionError) as error:
+        raise BusinessError("Make sure you have permission to access the agent.", RetCode.OPERATING_ERROR) from error
 
 
 def _mcp_delegation_error_response(error: McpDelegationError) -> JSONResponse:
@@ -1407,7 +1420,7 @@ def test_db_connect(request_body: TestDBConnectRequest, db: Session = Depends(ge
 
 
 @router.get("/agents/{canvas_id}/versions", summary="获取Canvas版本历史", response_description="成功获取版本列表")
-def getlistversion(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def getlistversion(canvas_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user), canvas: UserCanvas = Depends(_require_canvas_access)) -> JSONResponse:
     """
     获取Canvas的所有历史版本
 
@@ -1446,10 +1459,8 @@ def getlistversion(canvas_id: str, db: Session = Depends(get_db), user=Depends(m
     - 版本按时间倒序排列，最新的在前
     - 系统会自动清理过期版本
     """
-    if not UserCanvasService.accessible(db, canvas_id, user.id):
-        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
     try:
-        versions = UserCanvasVersionService.list_by_canvas_id(db, canvas_id)
+        versions = (await db.scalars(select(UserCanvasVersion).where(UserCanvasVersion.user_canvas_id == canvas_id))).all()
         version_list = sorted([v.to_dict() for v in versions], key=lambda x: x["update_time"] * -1)
         return get_json_result(data=version_list)
     except Exception as e:
@@ -1457,7 +1468,9 @@ def getlistversion(canvas_id: str, db: Session = Depends(get_db), user=Depends(m
 
 
 @router.get("/agents/{canvas_id}/versions/{version_id}", summary="获取特定版本详情", response_description="成功获取版本详情")
-def getversion(canvas_id: str, version_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def getversion(
+    canvas_id: str, version_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user), canvas: UserCanvas = Depends(_require_canvas_access)
+) -> JSONResponse:
     """
     获取Canvas特定版本的详细配置
 
@@ -1478,15 +1491,13 @@ def getversion(canvas_id: str, version_id: str, db: Session = Depends(get_db), u
     - 如果版本不存在，返回 None
     - 查询错误返回错误信息
     """
-    if not UserCanvasService.accessible(db, canvas_id, user.id):
-        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
     try:
-        version = UserCanvasVersionService.get_by_id(db, version_id)
+        version = await db.get(UserCanvasVersion, version_id)
         if version and str(version.user_canvas_id) == str(canvas_id):
             return get_json_result(data=version.to_dict())
         return get_data_error_result(retmsg="Version not found.")
     except Exception as e:
-        return get_json_result(data=f"Error getting history file: {e}")
+        return get_data_error_result(retmsg=f"Error getting history file: {e}")
 
 
 @router.get("/agents", summary="列出Canvas", response_description="成功获取Canvas列表")
@@ -1622,7 +1633,9 @@ def setting(request_body: CanvasSettingRequest, db: Session = Depends(get_db), u
 
 
 @router.get("/agents/{canvas_id}/logs/{message_id}", summary="追踪Canvas执行日志", response_description="成功获取执行日志")
-def trace(canvas_id: str, message_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+async def trace(
+    canvas_id: str, message_id: str, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user), canvas: UserCanvas = Depends(_require_canvas_access)
+) -> JSONResponse:
     """
     获取Canvas执行过程的详细日志
 
@@ -1660,20 +1673,21 @@ def trace(canvas_id: str, message_id: str, db: Session = Depends(get_db), user=D
     - 如果日志不存在返回空对象
     - 日志存储在Redis中
     """
-    if not UserCanvasService.accessible(db, canvas_id, user.id):
-        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
     try:
-        binary = REDIS_CONN.get(f"{canvas_id}-{message_id}-logs")
+        redis = REDIS_CONN.REDIS
+        if redis is None:
+            raise RuntimeError("Agent log storage is unavailable.")
+        binary = await asyncio.to_thread(redis.get, f"{canvas_id}-{message_id}-logs")
         if not binary:
             return get_json_result(data={})
-        return get_json_result(data=json.loads(binary.encode("utf-8")))
+        return get_json_result(data=json.loads(binary))
     except Exception as e:
         logging.exception(e)
-        return get_json_result(data={})
+        return server_error_response(e)
 
 
 @router.get("/agents/{canvas_id}/sessions", summary="获取Canvas会话列表", response_description="成功获取会话列表")
-def sessions(
+async def sessions(
     canvas_id: str,
     user_id: str | None = Query(None, description="用户ID筛选"),
     exp_user_id: str | None = Query(None, description="实验用户ID筛选"),
@@ -1685,9 +1699,10 @@ def sessions(
     from_date: str | None = Query(None, description="开始日期"),
     to_date: str | None = Query(None, description="结束日期"),
     dsl: bool = Query(True, description="是否包含DSL"),
-    db: Session = Depends(get_db),
-    user=Depends(manager),
-):
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+    canvas: UserCanvas = Depends(_require_canvas_access),
+) -> JSONResponse:
     """
     获取Canvas的会话历史
 
@@ -1738,33 +1753,31 @@ def sessions(
     - dsl字段可能较大，按需获取
     - 支持日期范围查询
     """
-    tenant_id = user.id
-
-    if not UserCanvasService.accessible(db, canvas_id, tenant_id):
-        return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     if exp_user_id:
-        sess = API4ConversationService.get_names(db, canvas_id, exp_user_id)
+        sess = await db.run_sync(lambda session: API4ConversationService.get_names(session, canvas_id, exp_user_id))  # TODO(async-phase4)
         return get_json_result(data={"total": len(sess), "sessions": sess})
 
     include_dsl = dsl
 
     try:
-        total, sess = API4ConversationService.get_list(
-            db,
-            canvas_id,
-            tenant_id,
-            page,
-            page_size,
-            orderby,
-            desc,
-            None,
-            user_id,
-            include_dsl,
-            keywords or "",
-            from_date,
-            to_date,
-            exp_user_id=exp_user_id,
+        total, sess = await db.run_sync(  # TODO(async-phase4)
+            lambda session: API4ConversationService.get_list(
+                session,
+                canvas_id,
+                user.id,
+                page,
+                page_size,
+                orderby,
+                desc,
+                None,
+                user_id,
+                include_dsl,
+                keywords or "",
+                from_date,
+                to_date,
+                exp_user_id=exp_user_id,
+            )
         )
         return get_json_result(data={"total": total, "sessions": [_normalize_agent_session(item) for item in sess]})
     except Exception as e:
@@ -1821,12 +1834,13 @@ async def set_session(
 
 
 @router.get("/agents/{canvas_id}/sessions/{session_id}", summary="获取单个Canvas会话", response_description="成功获取会话详情")
-def get_session(
+async def get_session(
     canvas_id: str,
     session_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
-):
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+    canvas: UserCanvas = Depends(_require_canvas_access),
+) -> JSONResponse:
     """
     获取指定Canvas下的单个会话详情。
 
@@ -1837,34 +1851,28 @@ def get_session(
     返回：
     - dict: 会话的完整信息
     """
-    tenant_id = user.id
-    if not UserCanvasService.accessible(db, canvas_id, tenant_id):
-        return get_json_result(
-            data=False,
-            retmsg="Only owner of canvas authorized for this operation.",
-            retcode=RetCode.OPERATING_ERROR,
-        )
-    conv = API4ConversationService.get_by_id(db, session_id)
-    if conv is None:
+    conv = await db.get(API4Conversation, session_id)
+    if conv is None or conv.dialog_id != canvas_id or conv.source != "agent":
         return get_data_error_result(retmsg="Session not found.")
     return get_json_result(data=_normalize_agent_session(conv.to_dict()))
 
 
 @router.delete("/agents/{canvas_id}/sessions/{session_id}", summary="删除Canvas会话", response_description="成功删除会话")
-def del_session(
+async def del_session(
     canvas_id: str,
     session_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(manager),
-):
-    tenant_id = user.id
-    if not UserCanvasService.accessible(db, canvas_id, tenant_id):
-        return get_json_result(
-            data=False,
-            retmsg="Only owner of canvas authorized for this operation.",
-            retcode=RetCode.OPERATING_ERROR,
-        )
-    return get_json_result(data=API4ConversationService.delete_by_id(db, session_id))
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+    canvas: UserCanvas = Depends(_require_canvas_access),
+) -> JSONResponse:
+    deleted_id = await db.scalar(
+        delete(API4Conversation).where(API4Conversation.id == session_id, API4Conversation.dialog_id == canvas_id, API4Conversation.source == "agent").returning(API4Conversation.id)
+    )
+    if deleted_id is None:
+        await db.rollback()
+        return get_data_error_result(retmsg="Session not found.")
+    await db.commit()
+    return get_json_result(data=1)
 
 
 @router.get("/agents/prompts", summary="获取系统提示词", response_description="成功获取提示词")
