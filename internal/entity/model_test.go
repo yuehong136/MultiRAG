@@ -229,7 +229,7 @@ func TestModelLevelThinkingAndGoogleFactory(t *testing.T) {
 	}{
 		{"Google", "gemini-2.5-flash", true}, {"DeepSeek", "deepseek-v4-pro", true},
 		{"Moonshot", "kimi-k2.5", true}, {"ZHIPU-AI", "glm-5-turbo", true},
-		{"ZHIPU-AI", "glm-4.7-flashx", true}, {"MiniMax", "minimax-m2.7", false},
+		{"ZHIPU-AI", "glm-4.7-flashx", true}, {"MiniMax", "minimax-m2.7", true},
 	} {
 		model, err := manager.GetModelByName(test.provider, test.model)
 		if err != nil || model.Thinking == nil || !model.Thinking.DefaultValue || model.Thinking.ClearThinking != test.clear {
