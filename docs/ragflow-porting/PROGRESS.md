@@ -3404,3 +3404,13 @@ entity/models/service/handler/CLI race **507 passed / 11 opt-in skips**，零失
 取消回执及 HTTP server 关闭由用例验证，未启动常驻服务、未创建 DB/容器资源。
 未验证真实智谱、供应商模型/硬件、生产、SQL opt-in、Web 或真实检索端到端；skip 不算通过。
 未改 Python，不占用旧批 integration 的源码或环境。独立提交，不 push。
+
+
+### RDBMS 查询、游标与删除同步（2026-10-17，编号 6）
+
+已适配 `911671cef0810835207de4e4a7c68157c2c476c5` 与等值边界后修：参数化查询、
+正文/slim 共享资格和 ID、typed cursor、每 KB 状态与任务完成同事务、默认关闭删除开关。
+成功空快照可清最后一条，源读取/权限/上传失败不删不推进；保留既有严格协调器。
+完整隔离 verify unit 6293 passed，PG 实源与目标存储 10 passed，Web 明暗 4 passed，
+Web lint/build/体积通过。MySQL 镜像 content-store 三次提交失败，实源未验收；未动旧批
+源码、进程或共享工具链。范围、存量调查和证据见 [RDBMS 删除同步](rdbms-deletion-sync.md)。

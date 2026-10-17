@@ -53,6 +53,7 @@ from common.data_source.gmail_connector import GmailConnector
 from common.data_source.imap_connector import _as_utc, imap_scope_signature
 from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
 from common.data_source.models import ConnectorFailure, Document, SeafileSyncScope, SlimDocument
+from common.data_source.rdbms_connector import rdbms_scope_signature
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
@@ -63,6 +64,8 @@ task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
     {
+        FileSource.MYSQL,
+        FileSource.POSTGRESQL,
         FileSource.IMAP,
         FileSource.DINGTALK_AI_TABLE,
         FileSource.RSS,
@@ -104,12 +107,14 @@ class SyncBase:
                 checkpoint = await asyncio.wait_for(self._run_task_logic(task), timeout=task["timeout_secs"])
 
             with db_connection() as db:
+                completion = {"rdbms_state": self._completion_state()} if isinstance(self, _RDBMSBase) else {}
                 SyncLogsService.complete_and_schedule_next(
                     db,
                     task["id"],
                     task["connector_id"],
                     task["kb_id"],
                     checkpoint,
+                    **completion,
                 )
         except SyncTaskCancelled:
             logging.info("Sync task remains cancelled: task_id=%s", task["id"])
@@ -1339,76 +1344,54 @@ class DingTalkAITable(SyncBase):
         return document_generator
 
 
-class MySQL(SyncBase):
+class _RDBMSBase(SyncBase):
+    DEFAULT_PORT: int = 0
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        self.connector = RDBMSConnector(
+            db_type=self.SOURCE_NAME,
+            host=self.conf.get("host", "localhost"),
+            port=int(self.conf.get("port") or self.DEFAULT_PORT),
+            database=self.conf.get("database", ""),
+            query=self.conf.get("query", ""),
+            content_columns=self.conf.get("content_columns", ""),
+            metadata_columns=self.conf.get("metadata_columns", ""),
+            id_column=self.conf.get("id_column") or None,
+            timestamp_column=self.conf.get("timestamp_column") or None,
+            batch_size=int(self.conf.get("batch_size") or INDEX_BATCH_SIZE),
+        )
+        self.connector.load_credentials(self.conf.get("credentials") or {})
+        self.connector.scope_signature = rdbms_scope_signature(self.conf, self.SOURCE_NAME)
+        start = None
+        scopes = self.conf.get("rdbms_sync_scopes", {})
+        if not isinstance(scopes, dict):
+            raise ValueError("Invalid persisted RDBMS synchronization state")
+        saved = scopes.get(task["kb_id"])
+        if saved is not None and task.get("reindex") != "1":
+            if not isinstance(saved, dict) or saved.get("scope") != self.connector.scope_signature or "cursor" not in saved:
+                raise ValueError("RDBMS query/account/column scope changed; rebuild this knowledge base")
+            start = self.connector.deserialize_cursor_value(saved["cursor"])
+        # A fresh/rebuilt KB never borrows another KB's cursor or the generic
+        # wall-clock poll_range_start. Legacy tasks conservatively replay rows.
+        if not task.get("poll_range_start") or task.get("reindex") == "1":
+            start = None
+        if self.connector.timestamp_column and self.connector.query:
+            self.connector.pending_cursor = await asyncio.to_thread(self.connector.get_max_cursor_value)
+            return self.connector.load_from_cursor_range(start, self.connector.pending_cursor)
+        return self.connector.load_from_state()
+
+    def _completion_state(self) -> dict[str, Any]:
+        return {"source": self.SOURCE_NAME, "scope": self.connector.scope_signature, "cursor": self.connector.serialize_cursor_value(self.connector.pending_cursor)}
+
+
+class MySQL(_RDBMSBase):
     SOURCE_NAME: str = FileSource.MYSQL
-
-    async def _generate(self, task: dict):
-        self.connector = RDBMSConnector(
-            db_type="mysql",
-            host=self.conf.get("host", "localhost"),
-            port=int(self.conf.get("port", 3306)),
-            database=self.conf.get("database", ""),
-            query=self.conf.get("query", ""),
-            content_columns=self.conf.get("content_columns", ""),
-            metadata_columns=self.conf.get("metadata_columns", ""),
-            id_column=self.conf.get("id_column") or None,
-            timestamp_column=self.conf.get("timestamp_column") or None,
-            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
-        )
-
-        credentials = self.conf.get("credentials")
-        if not credentials:
-            raise ValueError("MySQL connector is missing credentials.")
-
-        self.connector.load_credentials(credentials)
-        self.connector.validate_connector_settings()
-
-        if task["reindex"] == "1" or not task["poll_range_start"]:
-            document_generator = self.connector.load_from_state()
-            _begin_info = "totally"
-        else:
-            poll_start = task["poll_range_start"]
-            document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
-            _begin_info = f"from {poll_start}"
-
-        logging.info(f"[MySQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {_begin_info}")
-        return document_generator
+    DEFAULT_PORT = 3306
 
 
-class PostgreSQL(SyncBase):
+class PostgreSQL(_RDBMSBase):
     SOURCE_NAME: str = FileSource.POSTGRESQL
-
-    async def _generate(self, task: dict):
-        self.connector = RDBMSConnector(
-            db_type="postgresql",
-            host=self.conf.get("host", "localhost"),
-            port=int(self.conf.get("port", 5432)),
-            database=self.conf.get("database", ""),
-            query=self.conf.get("query", ""),
-            content_columns=self.conf.get("content_columns", ""),
-            metadata_columns=self.conf.get("metadata_columns", ""),
-            id_column=self.conf.get("id_column") or None,
-            timestamp_column=self.conf.get("timestamp_column") or None,
-            batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
-        )
-
-        credentials = self.conf.get("credentials")
-        if not credentials:
-            raise ValueError("PostgreSQL connector is missing credentials.")
-
-        self.connector.load_credentials(credentials)
-        self.connector.validate_connector_settings()
-
-        if task["reindex"] == "1" or not task["poll_range_start"]:
-            document_generator = self.connector.load_from_state()
-            _begin_info = "totally"
-        else:
-            poll_start = task["poll_range_start"]
-            document_generator = self.connector.poll_source(poll_start.timestamp(), datetime.now(UTC).timestamp())
-            _begin_info = f"from {poll_start}"
-
-        logging.info(f"[PostgreSQL] Connect to {self.conf.get('host')}:{self.conf.get('database')} {_begin_info}")
-        return document_generator
+    DEFAULT_PORT = 5432
 
 
 func_factory = {

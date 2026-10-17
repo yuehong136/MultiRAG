@@ -61,7 +61,7 @@ def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 
 @pytest.mark.external_consumer
-@pytest.mark.parametrize("source", ["dingtalk_ai_table", "imap"])
+@pytest.mark.parametrize("source", ["dingtalk_ai_table", "imap", "mysql", "postgresql"])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connector_web: str, source: str, theme: Literal["light", "dark"]) -> None:
     env = connector_sync_api
@@ -82,6 +82,20 @@ def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connect
             "poll_range": 30,
             "custom": "preserved",
             "credentials": {"imap_username": "owner", "imap_password": "synthetic", "custom": "preserved"},
+            "sync_deleted_files": False,
+        }
+    if source in {"mysql", "postgresql"}:
+        config = {
+            "host": "db.test",
+            "port": 3306 if source == "mysql" else 5432,
+            "database": "owned",
+            "query": "SELECT * FROM records",
+            "content_columns": "body",
+            "metadata_columns": "id",
+            "id_column": "id",
+            "timestamp_column": "seq",
+            "custom": "preserved",
+            "credentials": {"username": "owner", "password": "synthetic", "custom": "preserved"},
             "sync_deleted_files": False,
         }
     identifier = api.request("POST", "/connectors", json={"source": source, "name": "Connector scratch", "config": config})["id"]
@@ -116,6 +130,8 @@ def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connect
                     assert checkbox.is_checked()
                     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
                     browser_flow._screenshot(page, source, theme, (1440, 1000), status="save-and-readback-passed")
+                    checkbox.scroll_into_view_if_needed()
+                    browser_flow._screenshot(page, source + "-deletion", theme, (1440, 1000), status="saved-deletion-switch-visible")
             finally:
                 browser.close()
     finally:

@@ -12,6 +12,7 @@ import logging
 import math
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import case, delete, func, literal_column, select, update
@@ -29,6 +30,7 @@ from api.utils.common import hash128
 from common.constants import TaskStatus
 from common.data_source.imap_connector import imap_scope_signature
 from common.data_source.models import SlimDocument
+from common.data_source.rdbms_connector import RDBMSConnector, rdbms_scope_signature
 from common.misc_utils import get_uuid
 
 logger = logging.getLogger(__name__)
@@ -129,6 +131,23 @@ class ConnectorService(CommonService):
         connector.config = {**config, "imap_sync_scopes": {**scopes, kb_id: {"start": start, "scope": signature, "initial_task": task_id}}}
         db.commit()
         return start
+
+    @classmethod
+    def stage_rdbms_sync_state(cls, db: Session, connector_id: str, kb_id: str, state: dict[str, Any]) -> None:
+        """Stage a per-KB cursor in the task completion transaction, without commit."""
+        connector = db.scalar(select(cls.model).where(cls.model.id == connector_id).with_for_update().execution_options(populate_existing=True))
+        if connector is None or connector.source not in {"mysql", "postgresql"} or state.get("source") != connector.source:
+            raise RuntimeError("RDBMS connector is unavailable")
+        config = connector.config or {}
+        signature = rdbms_scope_signature(config, connector.source)
+        if state.get("scope") != signature:
+            raise RuntimeError("RDBMS configuration changed during sync; retry/rebuild")
+        scopes = config.get("rdbms_sync_scopes", {})
+        if not isinstance(scopes, dict):
+            raise ValueError("Invalid persisted RDBMS scopes")
+        cursor = RDBMSConnector.serialize_cursor_value(RDBMSConnector.deserialize_cursor_value(state["cursor"]))
+        connector.config = {**config, "rdbms_sync_scopes": {**scopes, kb_id: {"scope": signature, "cursor": cursor}}}
+        db.flush()
 
     @classmethod
     def accessible(cls, db: Session, connector_id: str, user_id: str) -> bool:
@@ -521,6 +540,8 @@ class SyncLogsService(CommonService):
         connector_id: str,
         kb_id: str,
         checkpoint: datetime,
+        *,
+        rdbms_state: dict[str, Any] | None = None,
     ) -> str:
         """Commit task completion, its checkpoint, and the next task atomically."""
         checkpoint = _to_utc(checkpoint)
@@ -533,6 +554,8 @@ class SyncLogsService(CommonService):
         if current.status == TaskStatus.CANCEL:
             raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
 
+        if rdbms_state is not None:
+            ConnectorService.stage_rdbms_sync_state(db, connector_id, kb_id, rdbms_state)
         now = datetime.now(UTC)
         timestamp = cls.current_timestamp()
         current.status = TaskStatus.DONE
@@ -654,12 +677,9 @@ class SyncLogsService(CommonService):
         # 将文档转换为 FileObj 对象，携带 id 以支持重复检测
         files = [FileObj(id=d["id"], filename=d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d["extension"][::-1]) < 0 else ""), blob=d["blob"]) for d in docs]
 
-        # Create a mapping from filename to metadata for later use
-        metadata_map = {}
-        for d in docs:
-            if d.get("metadata"):
-                filename = d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d["extension"][::-1]) < 0 else "")
-                metadata_map[filename] = d["metadata"]
+        # Distinct source rows can share a title/filename. Match by the exact
+        # resolved document identity used by upload, never by display name.
+        metadata_map = {d["id"]: d["metadata"] for d in docs if d.get("metadata")}
 
         doc_ids = []
         errs, doc_blob_pairs = FileService.upload_document(db, kb, files, tenant_id, None, src)
@@ -668,8 +688,9 @@ class SyncLogsService(CommonService):
             doc_ids.append(doc["id"])
 
             # Set metadata if available for this document
-            if doc["name"] in metadata_map:
-                DocMetadataService.update_document_metadata(db, doc["id"], metadata_map[doc["name"]])
+            if doc["id"] in metadata_map:
+                if not DocMetadataService.update_document_metadata(db, doc["id"], metadata_map[doc["id"]]):
+                    raise RuntimeError("Failed to persist connector document metadata")
 
             if not auto_parse or auto_parse == "0":
                 continue

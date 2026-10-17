@@ -38,6 +38,8 @@ _UPDATABLE_FIELDS = ("prune_freq", "refresh_freq", "config", "timeout_secs")
 
 AUTH_ERROR = "No authorization."
 
+_WORKER_STATE_FIELDS = {"imap": "imap_sync_scopes", "mysql": "rdbms_sync_scopes", "postgresql": "rdbms_sync_scopes"}
+
 
 def accessible(db: Session, connector_id: str, user_id: str) -> bool:
     return ConnectorService.accessible(db, connector_id, user_id)
@@ -60,8 +62,8 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
         return False, "创建连接器时 name 和 source 为必填项", RetCode.DATA_ERROR
 
     config = dict(req.get("config", {}))
-    if req["source"] == "imap":
-        config.pop("imap_sync_scopes", None)
+    if state_key := _WORKER_STATE_FIELDS.get(req["source"]):
+        config.pop(state_key, None)
     connector_id = get_uuid()
     ConnectorService.insert(
         db,
@@ -86,14 +88,14 @@ def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tup
         return False, "Can't find this Connector!", RetCode.DATA_ERROR
 
     changes = {field: req[field] for field in _UPDATABLE_FIELDS if field in req}
-    if "config" in changes and connector.source == "imap":
+    if "config" in changes and (state_key := _WORKER_STATE_FIELDS.get(connector.source)):
         connector = db.scalar(select(Connector).where(Connector.id == connector_id).with_for_update().execution_options(populate_existing=True))
         if connector is None:
             return False, "Can't find this Connector!", RetCode.DATA_ERROR
         config = dict(changes["config"])
-        config.pop("imap_sync_scopes", None)
-        if "imap_sync_scopes" in (connector.config or {}):
-            config["imap_sync_scopes"] = connector.config["imap_sync_scopes"]
+        config.pop(state_key, None)
+        if state_key in (connector.config or {}):
+            config[state_key] = connector.config[state_key]
         changes["config"] = config
     if changes:
         ConnectorService.update_by_id(db, connector_id, changes)
