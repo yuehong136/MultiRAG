@@ -3295,3 +3295,39 @@ set_graph 仍先删除旧 checkpoint 的顺序未采用。本地先校验、写�
 验证记录和实际数量见本任务交付；复现入口与模型/字体替身边界统一记录在上述参考文档。
 不启动或重启生产服务、不 push；Milvus 之外的 checkpoint backend、生产多机压力及远端
 超时后继续提交的 fencing 边界未验收。
+
+## b8b741555f9e4fb536b79cbd76928ccd3209abdc · Go OpenAI 聊天、发现与连接检查
+
+2026-10-17 核对完整三文件 diff、冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`
+内后修及当前消费者，remote 为 `infiniflow/ragflow`，未 fetch。新增
+[OpenAIModel](../../internal/entity/models/openai.go)、[共享聊天驱动](../../internal/entity/models/openai_chat.go)，
+factory 的 OpenAI 分支及配置 `models` suffix 已接通真实 HTTP；实例 URL/region/key
+沿现有 `instanceModelDriver` 传递，不修改目录 singleton，构造时复制 URL map。
+
+普通 JSON 固定 stream=false、sender 固定 stream=true，保留完整角色、content parts、
+assistant reasoning 和生成参数零值。响应透传 `reasoning_content`，不宣称官方 OpenAI
+返回该字段或执行本地 thinking 参数。连接检查实际 GET models；合法空 inventory 仍可
+证明该 API 请求成功，缺失/畸形/错误 inventory 不可当作成功。
+沿本地统一消息/取消接口和 4 MiB SSE 上限补强空答案、异常事件、截断与发送失败语义；
+仅有效终止帧且已有答案时发送一次 DONE，取消或 sender 错误优先。采用目标提交的
+默认 transport 克隆和 60 秒响应头上限，非流式 120 秒上下文超时、流式无 client 总时限；
+连接池跨请求级 driver 复用，凭据仅放请求，不复制每实例独立池造成空闲连接堆积。
+
+本地原有 OpenAI/compatible embedding 是已验证的独立能力，保留 `encodeHTTP` 合同、
+排序及数量/维度/有限值校验；不将它算作此上游初版实现的 Encode。Rerank、Balance、
+channel streaming 仍明确失败。OpenAI-API-Compatible 原 embedding 分支保持原范围。
+后修 `6bfe0f9a1` 恢复 `078ea3bf4` 误删的 OpenAI factory case；后续 NVIDIA 接入必须
+保留两者。`daa381116`/`1478aa4ce` 的共享管线思路映射到本地 helper，不引入后续 tools、
+usage、音频或接口重构；错误 HTTP 不回显响应 body、prompt 或 key。
+
+本次以 Go 1.25.14、独立快照 `/tmp/multirag-go-batch-20261017/5/source` 验证。
+相关 entity/models/service/handler/CLI 的 race 回归最终 **438 passed / 11 opt-in skips**，
+零失败；skip 不计通过，未启用 SQL/live opt-in。`go build ./internal/...`、
+`go vet ./internal/...`、三个独立 main 构建均 exit 0。初轮快照漏带既有 `core/prompts`
+资源导致一个消费者测试失败；补入绑定 SHA 的资源后完整相关回归 exit 0，未改业务代码。
+[受控 HTTP 回归](../../internal/entity/models/openai_test.go)及
+[实例读回](../../internal/service/model_service_openai_test.go)验证独立 URL/key、完整历史、
+reasoning、发现/连接检查、空/异常响应、128 KiB/超限帧、取消、sender 错误与终帧。
+日志、源码 hash、命令退出结果及 HTTP 证据在 `/tmp/multirag-go-batch-20261017/5/`。
+未运行真实 OpenAI、生产、SQL 或 Web 验收；未改 Python/DB/路由，不运行 Python 全量
+门禁，也未打断旧批 integration。独立提交，不 push。
