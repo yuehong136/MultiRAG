@@ -3,6 +3,8 @@ import os
 import time
 from typing import Any
 
+from azure.core import MatchConditions
+from azure.core.exceptions import ResourceExistsError
 from azure.identity import AzureAuthorityHosts, ClientSecretCredential
 from azure.storage.filedatalake import FileSystemClient
 
@@ -47,50 +49,56 @@ class MultiRAGAzureSpnBlob:
         del self.conn
         self.conn = None
 
-    def health(self):
-        _bucket, fnm, binary = "txtxtxtxt1", "txtxtxtxt1", b"_t@@@1"
-        f = self.conn.create_file(fnm)
-        f.append_data(binary, offset=0, length=len(binary))
-        return f.flush_data(len(binary))
+    def health(self) -> Any:
+        return self.put("txtxtxtxt1", "txtxtxtxt1", b"_t@@@1")
 
     def put(self, bucket: str, fnm: str, binary: bytes, tenant_id: str | None = None) -> Any:
-        for _ in range(3):
+        blob_name = f"{bucket}/{fnm}"
+        for attempt in range(3):
             try:
-                f = self.conn.create_file(fnm)
-                f.append_data(binary, offset=0, length=len(binary))
-                return f.flush_data(len(binary))
+                # ADLS requires each parent directory to exist. Do not reset
+                # metadata/ACLs when another writer has already created it.
+                parts = blob_name.split("/")
+                for index in range(1, len(parts)):
+                    try:
+                        self.conn.create_directory("/".join(parts[:index]), match_condition=MatchConditions.IfMissing)
+                    except ResourceExistsError:
+                        pass
+                client = self.conn.create_file(blob_name)
+                client.append_data(binary, offset=0, length=len(binary))
+                return client.flush_data(len(binary))
             except Exception:
-                logging.exception(f"Fail put {bucket}/{fnm}")
+                logging.exception(f"Fail put {blob_name}")
+                if attempt == 2:
+                    raise
                 self.__open__()
-                time.sleep(1)
-                return None
-        return None
+                time.sleep(2**attempt)
 
-    def rm(self, bucket: str, fnm: str) -> None:
+    def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
-            self.conn.delete_file(fnm)
+            self.conn.delete_file(f"{bucket}/{fnm}")
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
             raise
 
-    def get(self, bucket, fnm):
-        for _ in range(1):
+    def get(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        blob_name = f"{bucket}/{fnm}"
+        for attempt in range(3):
             try:
-                client = self.conn.get_file_client(fnm)
-                r = client.download_file()
-                return r.read()
+                return self.conn.get_file_client(blob_name).download_file().readall()
             except Exception:
-                logging.exception(f"fail get {bucket}/{fnm}")
+                logging.exception(f"Fail get {blob_name}")
+                if attempt == 2:
+                    raise
                 self.__open__()
-                time.sleep(1)
+                time.sleep(2**attempt)
         return None
 
-    def obj_exist(self, bucket, fnm):
+    def obj_exist(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bool:
         try:
-            client = self.conn.get_file_client(fnm)
-            return client.exists()
+            return self.conn.get_file_client(f"{bucket}/{fnm}").exists()
         except Exception:
-            logging.exception(f"Fail put {bucket}/{fnm}")
+            logging.exception(f"Fail obj_exist {bucket}/{fnm}")
         return False
 
     def get_presigned_url(self, bucket, fnm, expires):

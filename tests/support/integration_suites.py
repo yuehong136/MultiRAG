@@ -52,6 +52,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_agent_update_release.py",
         "test_agentbot_list_operations.py",
         "test_asana_deleted_sync.py",
+        "test_azure_storage_protocol.py",
         "test_chat_session_compat.py",
         "test_connector_deleted_snapshot.py",
         "test_connector_google_oauth_pkce.py",
@@ -126,6 +127,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_azure_storage_protocol.py":
+            # Real SDKs with an owned HTTP transport; no infrastructure needed.
+            continue
         if path.name in INFINITY_TESTS:
             required.add("infinity")
         elif path.name in DATABASE_TESTS:

@@ -34,42 +34,46 @@ class MultiRAGAzureSasBlob:
         del self.conn
         self.conn = None
 
-    def health(self):
-        _bucket, fnm, binary = "txtxtxtxt1", "txtxtxtxt1", b"_t@@@1"
-        return self.conn.upload_blob(name=fnm, data=BytesIO(binary), length=len(binary))
+    def health(self) -> Any:
+        return self.put("txtxtxtxt1", "txtxtxtxt1", b"_t@@@1")
 
     def put(self, bucket: str, fnm: str, binary: bytes, tenant_id: str | None = None) -> Any:
-        for _ in range(3):
+        blob_name = f"{bucket}/{fnm}"
+        for attempt in range(3):
             try:
-                return self.conn.upload_blob(name=fnm, data=BytesIO(binary), length=len(binary))
+                return self.conn.upload_blob(name=blob_name, data=BytesIO(binary), length=len(binary), overwrite=True)
             except Exception:
-                logging.exception(f"Fail put {bucket}/{fnm}")
+                logging.exception(f"Fail put {blob_name}")
+                if attempt == 2:
+                    raise
                 self.__open__()
-                time.sleep(1)
+                time.sleep(2**attempt)
 
-    def rm(self, bucket: str, fnm: str) -> None:
+    def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
-            self.conn.delete_blob(fnm)
+            self.conn.delete_blob(f"{bucket}/{fnm}")
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
             raise
 
-    def get(self, bucket, fnm):
-        for _ in range(1):
+    def get(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        blob_name = f"{bucket}/{fnm}"
+        for attempt in range(3):
             try:
-                r = self.conn.download_blob(fnm)
-                return r.read()
+                return self.conn.download_blob(blob_name).readall()
             except Exception:
-                logging.exception(f"fail get {bucket}/{fnm}")
+                logging.exception(f"Fail get {blob_name}")
+                if attempt == 2:
+                    raise
                 self.__open__()
-                time.sleep(1)
-        return
+                time.sleep(2**attempt)
+        return None
 
-    def obj_exist(self, bucket, fnm):
+    def obj_exist(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bool:
         try:
-            return self.conn.get_blob_client(fnm).exists()
+            return self.conn.get_blob_client(f"{bucket}/{fnm}").exists()
         except Exception:
-            logging.exception(f"Fail put {bucket}/{fnm}")
+            logging.exception(f"Fail obj_exist {bucket}/{fnm}")
         return False
 
     def get_presigned_url(self, bucket, fnm, expires):
