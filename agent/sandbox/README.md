@@ -1,6 +1,7 @@
 # MultiRAG Sandbox
 
-A secure, pluggable code execution backend for MultiRAG and beyond.
+A pluggable code execution backend for MultiRAG. Container isolation applies to
+the self-managed provider; the opt-in local provider runs host processes.
 
 ## 🔧 Features
 
@@ -9,6 +10,66 @@ A secure, pluggable code execution backend for MultiRAG and beyond.
 - 🔧 **Customizable Sandboxing** — Easily modify `seccomp` settings as needed.
 - 🧩 **Pluggable Runtime Support** — Easily extend to support any programming language.
 - ⚙️ **Developer Friendly** — Get started with a single command using `Makefile`.
+
+## Provider selection and local development
+
+`SANDBOX_PROVIDER_TYPE` overrides the `sandbox.provider_type` system setting.
+When neither selects a provider, CodeExec may use the existing HTTP executor.
+A selected provider's invalid configuration, missing dependency, timeout or
+execution error is reported through `_ERROR`; it does not retry on another
+backend. Nonzero exits clear stale business and attachment outputs.
+
+For `local`, `SANDBOX_LOCAL_*` fields override the `sandbox.local` JSON system
+setting, followed by the provider defaults. For `self_managed`, `SANDBOX_HOST`,
+`SANDBOX_EXECUTOR_MANAGER_PORT` (when `SANDBOX_HOST` is supplied) and
+`SANDBOX_EXECUTOR_MANAGER_POOL_SIZE` override its endpoint/pool settings. An explicit environment selection can initialize
+from environment/defaults when the settings DB is unavailable; malformed saved
+JSON remains an error. Other provider credentials retain their existing rules.
+The client caches successful initialization; `reload_provider()` invalidates
+that cache for the next call. Local execution checks its enable flag at
+initialization, so changing the flag requires cache invalidation as well.
+
+Local execution requires a POSIX host, Python and (for JavaScript) Node.js. It is
+**not a security sandbox**: code can access the runtime account's files and
+network, spawn processes or evade resource limits. Enable it only for trusted
+code under a low-privilege account. It is never selected or enabled by default.
+The Docker manager does not need to run for this provider. Example environment
+for a dedicated development process:
+
+```sh
+export SANDBOX_ENABLED=1
+export SANDBOX_PROVIDER_TYPE=local
+export SANDBOX_LOCAL_ENABLED=true
+export SANDBOX_LOCAL_PYTHON_BIN=python3
+export SANDBOX_LOCAL_NODE_BIN=node
+export SANDBOX_LOCAL_WORK_DIR=/tmp/multirag-codeexec
+```
+
+The commented [environment example](../../docker/.env) lists all limits.
+Defaults: timeout 30 seconds, memory 512 MiB, combined stdout/stderr 1 MiB,
+20 artifacts, and 10 MiB per artifact. Requested timeout is capped by the
+provider timeout. Output is bounded while reading; timeout, output overflow and
+normal completion kill the execution process group. A fresh interpreter applies
+CPU, file-size and descriptor limits before starting user code, avoiding
+`preexec_fn` in the threaded server. Python address-space limits apply on Linux;
+macOS does not enforce that memory cap. Node uses `--max-old-space-size`, which
+limits its managed heap, not total process memory. These are resource controls,
+not isolation guarantees.
+
+Each instance gets its own `0700` temporary directory. The child receives a
+small environment (HOME/TMPDIR point there, PATH, Agg plotting backend and BLAS
+thread controls); application credentials are not forwarded. Scripts and files
+are removed when the client destroys the instance, including after failure.
+Only regular files below `artifacts/` are collected, with count/size limits;
+symlinks, hardlinks and special files are rejected, including replacement of
+the artifact root. Supported suffixes: CSV, HTML, JPEG/JPG, JSON, PDF, PNG, SVG.
+Existing upload-time ownership bindings and REST download checks still apply.
+
+Both local and Aliyun use the shared result protocol: Python calls
+`main(**arguments)` and JavaScript awaits `main(arguments)` (also supporting
+`module.exports.main`). Return JSON values, including `false` and `null`;
+JavaScript `undefined`, exceptions and nonserializable values are failures.
+Structured return values are separate from stdout logs and artifacts.
 
 ## 🏗 Architecture
 

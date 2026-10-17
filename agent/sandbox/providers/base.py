@@ -26,6 +26,14 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class SandboxProviderConfigError(Exception):
+    """The selected provider is configured but unusable; never fall back."""
+
+
+class SandboxProviderNotConfigured(RuntimeError):
+    """No provider was selected; the legacy HTTP executor may be used."""
+
+
 @dataclass
 class SandboxInstance:
     """Represents a sandbox execution instance"""

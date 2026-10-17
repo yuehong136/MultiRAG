@@ -26,17 +26,21 @@ This package contains:
 - e2b.py: E2B provider implementation
 """
 
-from .base import SandboxProvider, SandboxInstance, ExecutionResult
+from .base import SandboxProvider, SandboxInstance, ExecutionResult, SandboxProviderConfigError, SandboxProviderNotConfigured
 from .manager import ProviderManager
 from .self_managed import SelfManagedProvider
 from .aliyun_codeinterpreter import AliyunCodeInterpreterProvider
 from .e2b import E2BProvider
+from .local import LocalProvider
 
 __all__ = [
     "AliyunCodeInterpreterProvider",
     "E2BProvider",
     "ExecutionResult",
+    "LocalProvider",
     "ProviderManager",
+    "SandboxProviderConfigError",
+    "SandboxProviderNotConfigured",
     "SandboxInstance",
     "SandboxProvider",
     "SelfManagedProvider",

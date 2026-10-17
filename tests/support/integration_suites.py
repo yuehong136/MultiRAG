@@ -37,6 +37,7 @@ DATABASE_TESTS = frozenset(
         "test_llm_tool_capability.py",
         "test_pdf_page_task_defaults.py",
         "test_principal_auth.py",
+        "test_sandbox_provider_settings.py",
         "test_sync_log_checkpoint.py",
         "test_task_log_limits.py",
     }

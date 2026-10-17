@@ -340,8 +340,13 @@ class CodeExec(ToolBase, ABC):
 
         return self._execute_code(language=lang, code=script, arguments=arguments)
 
-    def _execute_code(self, language: str, code: str, arguments: dict):
+    def _execute_code(self, language: str, code: str, arguments: dict[str, Any]) -> dict[str, Any]:
         import requests
+
+        try:
+            from agent.sandbox.providers.base import SandboxProviderConfigError, SandboxProviderNotConfigured
+        except ImportError as provider_error:
+            return self._execution_failed(f"Provider modules unavailable: {provider_error}")
 
         if self.check_if_canceled("CodeExec execution"):
             return self.output()
@@ -354,13 +359,16 @@ class CodeExec(ToolBase, ABC):
                 from agent.sandbox.client import execute_code as sandbox_execute_code
 
                 if self.check_if_canceled("CodeExec execution"):
-                    return
+                    return self.output()
 
                 # Execute code using the provider system
                 result = sandbox_execute_code(code=code, language=language, timeout=timeout_seconds, arguments=arguments)
 
                 if self.check_if_canceled("CodeExec execution"):
-                    return
+                    return self.output()
+
+                if result.exit_code != 0:
+                    return self._execution_failed(result.stderr or f"Provider execution exited with code {result.exit_code}")
 
                 artifacts = result.metadata.get("artifacts", []) if result.metadata else []
                 return self._process_execution_result(
@@ -371,9 +379,10 @@ class CodeExec(ToolBase, ABC):
                     execution_metadata=result.metadata,
                 )
 
-            except (ImportError, RuntimeError) as provider_error:
-                # Provider system not available or not configured, fall back to HTTP
-                logging.info(f"[CodeExec]: Provider system not available, using HTTP fallback: {provider_error}")
+            except SandboxProviderNotConfigured as provider_error:
+                logging.info("[CodeExec]: No provider selected, using HTTP fallback: %s", provider_error)
+            except (SandboxProviderConfigError, ImportError, RuntimeError, TimeoutError) as provider_error:
+                return self._execution_failed(f"Provider system execution failed: {provider_error}")
 
             # Fallback to direct HTTP request
             code_b64 = self._encode_code(code)
@@ -382,8 +391,7 @@ class CodeExec(ToolBase, ABC):
             if self.check_if_canceled("CodeExec execution"):
                 return self.output()
 
-            self.set_output("_ERROR", "construct code request error: " + str(e))
-            return self.output()
+            return self._execution_failed("construct code request error: " + str(e))
 
         try:
             if self.check_if_canceled("CodeExec execution"):
@@ -400,6 +408,8 @@ class CodeExec(ToolBase, ABC):
                 resp.raise_for_status()
             body = resp.json()
             if body:
+                if body.get("exit_code", 0) != 0:
+                    return self._execution_failed(body.get("stderr") or f"HTTP execution exited with code {body['exit_code']}")
                 return self._process_execution_result(
                     body.get("stdout", ""),
                     body.get("stderr"),
@@ -417,6 +427,18 @@ class CodeExec(ToolBase, ABC):
 
             self.set_output("_ERROR", "Exception executing code: " + str(e))
 
+        return self.output()
+
+    def _execution_failed(self, message: str) -> dict[str, Any]:
+        for key in self._param.outputs:
+            if key not in SYSTEM_OUTPUT_KEYS:
+                self.set_output(key, None)
+        for key in ("content", "actual_type", "_ATTACHMENT_CONTENT"):
+            self.set_output(key, "")
+        self.set_output("raw_result", None)
+        self.set_output("_ARTIFACTS", None)
+        self.set_output("attachments", [])
+        self.set_output("_ERROR", message)
         return self.output()
 
     def _process_execution_result(
