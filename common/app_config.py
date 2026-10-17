@@ -212,6 +212,7 @@ class SmtpConfig(_Section):
 
 
 class AuthenticationConfig(_Section):
+    enable_register: bool = True
     client: dict[str, Any] = {}
     site: dict[str, Any] = {}
     disable_password_login: bool = False

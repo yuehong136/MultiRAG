@@ -154,20 +154,24 @@ def _embedding_mdl() -> str:
     return model
 
 
+def _auth_switch(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid authentication switch: {name}")
+
+
 def _register_enabled() -> int:
-    try:
-        return int(os.environ.get("REGISTER_ENABLED", "1"))
-    except Exception:
-        return 1
+    return int(_auth_switch("REGISTER_ENABLED", get_app_config().authentication.enable_register))
 
 
 def _disable_password_login() -> bool:
-    try:
-        if os.environ.get("DISABLE_PASSWORD_LOGIN", "").lower() in ("1", "true", "yes"):
-            return True
-        return bool(get_app_config().authentication.disable_password_login)
-    except Exception:
-        return False
+    return _auth_switch("DISABLE_PASSWORD_LOGIN", get_app_config().authentication.disable_password_login)
 
 
 def _mail_default_sender() -> tuple:

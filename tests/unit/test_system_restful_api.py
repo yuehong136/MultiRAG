@@ -306,7 +306,6 @@ def test_system_authenticated_routes_have_pure_async_dependency_tree(client):
     import api.apps as api_apps
 
     for method, path in (
-        ("GET", "/api/v1/system/version"),
         ("GET", "/api/v1/system/status"),
         ("GET", "/api/v1/system/tokens"),
         ("POST", "/api/v1/system/tokens"),
@@ -403,3 +402,9 @@ def test_multirag_server_alive_uses_restful_ping(monkeypatch):
     assert health_utils.check_multirag_server_alive()["status"] == "alive"
     assert seen["url"] == "http://127.0.0.1:9380/api/v1/system/ping"
     assert seen["timeout"] == 10
+
+
+def test_version_public_route_has_no_authentication_dependency(client):
+    calls = _dependency_calls(client.app, "GET", "/api/v1/system/version")
+    assert async_current_user not in calls
+    assert get_db not in calls

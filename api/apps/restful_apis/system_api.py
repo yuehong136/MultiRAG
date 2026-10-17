@@ -61,7 +61,7 @@ async def ping():
 
 
 @router.get("/system/version", summary="获取版本", response_description="成功获取版本")
-async def version(user: Principal = Depends(async_current_user)):
+async def version() -> Response:
     """
     获取系统当前版本信息。
 

@@ -168,6 +168,8 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_async_db))
     - 成功时返回包含访问令牌和用户信息的JSON结果
     - 失败时返回错误信息
     """
+    if settings.DISABLE_PASSWORD_LOGIN:
+        return get_json_result(data=False, retcode=RetCode.FORBIDDEN, retmsg="Password login is disabled")
     email = request.username
     users = await db.run_sync(lambda s: UserService.query(s, email=email))  # TODO(async-phase4)
     if not users:

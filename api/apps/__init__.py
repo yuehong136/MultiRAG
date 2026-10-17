@@ -545,6 +545,8 @@ def login(data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     使用场景:
     - 当客户端通过POST请求访问'/auth/token'端点时，此函数将被异步调用，以验证用户凭据并生成访问令牌。
     """
+    if settings.DISABLE_PASSWORD_LOGIN:
+        raise HTTPException(status_code=403, detail="Password login is disabled")
     # 提取请求中的用户名（电子邮件）和密码
     email = data.username
     password = data.password

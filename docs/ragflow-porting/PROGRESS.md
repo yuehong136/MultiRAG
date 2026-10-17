@@ -3591,3 +3591,17 @@ Cookie 双向跨 Python 实例访问成功，无 Cookie 仍拒绝。证据目录
 启动验收；没有重启常驻 8123 或修改其配置。可复现入口为
 `python -m tests.support.shared_secret_live INFINITY_URI EVIDENCE_DIR`，资源配置见
 [共享密钥验收说明](../references/shared-authentication-secret.md)。后续混合鉴权最终源码还会执行组合验收。
+
+## 94324afee91acb39939efe88b2d4d4e70827df91 · 混合鉴权的 Python 合同
+
+2026-10-17，冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。沿用本地
+HS256/email-subject JWT，不引入 itsdangerous 登录协议。`authentication.enable_register`
+纳入 typed config；注册/禁用密码登录支持 YAML 与显式环境 true/false 覆盖，无效开关报错。
+REST 密码登录和 `/auth/token` 在账户读取/写入前拒绝禁用请求；现有注册入口 `/api/v1/users`
+保留开关和当前调用合同。按目标 diff 公开只读版本路由，其他受保护路由保留异步鉴权门禁。
+SQLAdmin 的配置准入和 Cookie 认证边界不变。
+
+最终 `PYTHONDONTWRITEBYTECODE=1 make verify` exit 0：lint、8 个 import contracts、async
+门禁、mypy 144 源文件和 unit 6279 passed。定向禁用登录用未绑定 DB Session 证明未查询；
+版本公开的依赖结构另有明确断言，不放宽其他路由的鉴权检查。日志
+`/tmp/hybrid-python-verify-final.log`；后续 Go/双向 HTTP 与 SQL 读回见同项验收补记。
