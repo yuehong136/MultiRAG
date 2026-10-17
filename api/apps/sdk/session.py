@@ -917,11 +917,22 @@ async def retrieval_test_embedded(
             search_config = detail.get("search_config") or {}
             meta_data_filter = search_config.get("meta_data_filter", {})
             if meta_data_filter:
-                metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
+
+                async def load_metadata() -> dict[str, Any]:
+                    return await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
+
                 chat_mdl = None
                 if meta_data_filter.get("method") in ["auto", "semi_auto"]:
                     chat_mdl = await build_named_bundle_async(tenant_id, LLMType.CHAT.value, search_config.get("chat_id", ""))
-                doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
+                doc_ids = await apply_meta_data_filter(
+                    meta_data_filter,
+                    None,
+                    question,
+                    chat_mdl,
+                    doc_ids,
+                    metas_loader=load_metadata,
+                    metadata_filterer=lambda conditions, logic: DocMetadataService.filter_doc_ids_by_meta_pushdown_async(db, kb_ids, conditions, logic),
+                )
             # Apply search_config settings if not explicitly provided in request
             if not req.get("similarity_threshold"):
                 similarity_threshold = float(search_config.get("similarity_threshold", similarity_threshold))

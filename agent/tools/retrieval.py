@@ -243,11 +243,22 @@ class Retrieval(ToolBase, ABC):
 
         doc_ids = []
         if self._param.meta_data_filter != {}:
-            metas = await asyncio.to_thread(self._flatted_metas, kb_ids)
+
+            async def load_metadata() -> dict[str, Any]:
+                return await asyncio.to_thread(self._flatted_metas, kb_ids)
+
+            async def filter_metadata(conditions: list[dict[str, Any]], logic: str) -> list[str] | None:
+                def read_ids() -> list[str] | None:
+                    with db_connection() as db:
+                        return DocMetadataService.filter_doc_ids_by_meta_pushdown(db, kb_ids, conditions, logic)
+
+                return await asyncio.to_thread(read_ids)
 
             def _resolve_manual_filter(flt: dict) -> dict:
                 pat = re.compile(self.variable_ref_patt)
                 s = flt.get("value", "")
+                if not isinstance(s, str):
+                    return flt
                 out_parts = []
                 last = 0
 
@@ -280,11 +291,13 @@ class Retrieval(ToolBase, ABC):
 
             doc_ids = await apply_meta_data_filter(
                 self._param.meta_data_filter,
-                metas,
+                None,
                 query,
                 chat_mdl,
                 doc_ids,
                 _resolve_manual_filter if self._param.meta_data_filter.get("method") == "manual" else None,
+                metas_loader=load_metadata,
+                metadata_filterer=filter_metadata,
             )
 
         if self._param.cross_languages:

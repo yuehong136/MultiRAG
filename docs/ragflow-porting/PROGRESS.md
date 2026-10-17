@@ -3485,3 +3485,65 @@ Web `test:ci` exit=0（771 Node、594 Vitest、81 Desktop、10 tooling），buil
 `.test-results/docgen-5b162a0c-20261017/`，保存基准、源码哈希、完整命令退出结果、
 读回/清理 manifest、真实转换验收源及明暗 contact sheet。真实 XeLaTeX/PDF 渲染、
 远程模型、完整后台入库、生产部署未验收；旧批完整集成结果不能由本项证明。
+## 59c35100c56ab8954f1c4066cac512eb51bbf194 · 惰性元数据过滤与完整结果集
+
+2026-10-17 使用移植 Skill 核对完整九文件 diff、当前活动消费者及冻结
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 范围内的后修链；目标为该冻结点祖先。
+上游 remote 为 `infiniflow/ragflow`；刷新后的 `origin/main` 为
+`543e16738b4883fcb7e70520e0b5849e7e18c9b7`，仅作后续演进线索。
+隔离源码从本地 `9582bdb80f1a1be4505f4061d1abe71aa4cac63a` 开始，分支
+`codex/metadata-filter-59c351`；未替换共享 Python 源码、共享工具链或旧批验证输入。
+
+| 目标足迹 | 本地处置与收益 |
+| --- | --- |
+| ES 过滤编译器及测试 | 采用无损候选编译器，仅对可证明完整索引的标量字段下推存在性/KB 条件，再以原始 JSON 精确匹配。未知映射、复杂键与可能忽略源值的映射只下推 KB 范围。未复制上游值 DSL 的不等价假设。 |
+| DocMetadataService | 在当前 SQL metadata/Milvus 主路径逐行匹配；ES 按 tenant/KB 绑定枚举，返回精确 ID。非法 operand 先失败关闭；存储故障、超时、分片失败及越界响应传播，不改成空/全量成功。 |
+| lazy/memoized loader | 消费者注入异步 loader/filterer，底层不反向导入 API；无过滤、手工空条件与非法条件无 metadata IO。完整聚合每请求按需读取一次；semi_auto 保留选中字段及已有刷新回调的求值快照。 |
+| Agent / dataset / dialog / embedded | Agent、dataset search、同步/异步 chat、同步/异步 Ask、mindmap 与 embedded search 均接入；保留当前 KB 授权入口、文档交集、0/false、typed scalar 和多值负运算语义。Agent 变量替换保留非字符串条件值，不对 typed list 执行字符串正则。 |
+| REST SDK retrieval 后修链 | 对应 `f44436a54`，同样按需加载并复用过滤服务；保持其现行同步请求 Session，不扩大迁移。原 SDK 条件形状、KG 限制、空值与文档验证顺序不变。 |
+
+SQL 游标和 ES scroll 每批 1000，过滤结果无 10k 截断；ES 聚合回退亦用完整 scroll，
+仍按旧 `id` 排序，避免改变比较分支的枚举顺序。匹配器异常也主动关闭上游迭代器；
+scroll 在成功/失败时清理，部分页不成为可消费结果。条件只在请求内准备一次，流式
+路径不构造全库值→文档聚合；只累积命中 ID。现行比较运算含 entry-dependent literal
+coercion，保持聚合回退，未借优化引入 `198815a36` 的独立语义变化。
+
+实现质量与上游对照：在真实 ES 8.11.3、相同源文档和条件下，运行冻结目标的实际
+编译器，六组对照中四组结果不同：多值 `not contains` 排除了应匹配的文档；CSV 字符串
+membership 丢失现行子串匹配；ASCII case-insensitive 丢失 Kelvin 符号的小写匹配；
+`empty` 纳入缺字段文档。本地六组均与现行精确匹配器一致，原 `not in` 不支持下推
+的边界亦复核。因此只采用安全候选机制，并保持 typed 条件与负运算合同。
+合成万行、八个高基数字段、100 个命中 ID 的 Python 分配峰值为
+42,314,055 → 25,722 bytes，结果 ID 相同；仅是合成内存对照，不承诺生产延迟。
+
+后修链：`39b194453` 的 >10k 聚合分页意图用完整 scroll 适配，避免 offset 越过 ES
+窗口；`53bb2bd9e` 的空 AND、`fa2467d33` 的文档范围交集已等价保留。
+`09af85935` 针对带 document ID 读取的批处理，本项过滤候选没有 ID terms 载荷，
+不修改文档批量读取接口；命中 ID 列表仍按结果数增长，下游 chunk 候选窗口保持原合同。
+`663fc1d42` 为 OpenSearch dispatch；`f1d238357` / `486065d87` 为 Infinity 下推与连接池，
+本项不照搬其他引擎结构，现行回退保留。`670e68872` 删除上游 Python 文件不作为本地
+生产链退役。未发现目标惰性读取机制的独立 revert/re-land。
+
+最终源码有 1682 个 Python 文件哈希清单，验证前后完全一致。定向 unit 302 passed；
+最终 `make verify` exit=0：lint/format、8 条分层契约、async DB 门禁、mypy（145 个
+源文件）、unit 6297 passed（3 条既有 torch/transformers FutureWarning）。
+最终 `make integration INTEGRATION_WORKERS=0 TESTS=...` exit=0：7 passed，
+0 failure/error/skip。覆盖独立 SQL/ES 同源条件矩阵、10005 条完整结果、真实 REST
+JWT/API key、SDK、typed scalar/混合数组、非法 AND/OR 条件、联合 KB/文档范围，
+以及存储故障必须产生非零业务码。独立 SQL/Milvus 读回及快照不变断言通过；自有
+索引、scroll、SQL 行、桶/对象、向量集合、监听与线程的 fixture 清理断言通过。
+专用 ES 容器已删除，私有服务 overlay 已删除；其他常驻服务保留。
+
+证据在隔离工作树 `.test-results/20261017-194824-99146`（run/execution/JUnit），
+`.test-results/59c351-evidence`（源码哈希、上游实际 ES 六组对照、内存对照与清理摘要）；
+最终完整日志为 `/tmp/multirag-59c351-final-verify.log`、
+`/tmp/multirag-59c351-final-integration.log`。环境准备时默认 Milvus 地址不可用、隔离
+checkout 缺 tokenizer/模型缓存及 `.venv` 启动路径；仅在自有目录映射现有解释器、
+复制已有缓存并使用私有服务端点覆盖后复跑。新增 Agent 测试曾误用位置参数断言，
+按实际 `doc_ids` 关键字合同修正后复跑；最终不存在遗留失败。
+
+验收边界：模型输出受控，未调用真实供应商；ES 验证仅覆盖原始 metadata 索引与实际
+查询，不宣称完整 ES chunk/排名链验收。比较运算、Infinity/OpenSearch 的值下推仍为
+显式未采用项；已运行主路径的 HTTP/SQL/Milvus 验收。无 Web 文件改动，字段选项归
+另一 owner；未修改 tenant_llm_service.py。独立提交留在隔离分支，不 push、不回灌共享
+旧批源码。入库行为说明与结构映射见 metadata-configuration 与 RAGFLOW_PORTING_MAP。

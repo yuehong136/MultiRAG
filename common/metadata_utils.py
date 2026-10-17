@@ -60,21 +60,23 @@ def convert_conditions(metadata_condition: dict[str, Any] | None) -> list[dict[s
     return [{"op": _OPERATOR_ALIASES.get(cond["comparison_operator"], cond["comparison_operator"]), "key": cond["name"], "value": cond["value"]} for cond in metadata_condition.get("conditions", [])]
 
 
-def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str = "and") -> list[str]:
-    """Match metadata; unusable list operands invalidate the complete filter."""
-    # Validate before evaluating AND/OR. Ignoring a malformed exclusion, or
-    # comparing scalar values to null/object/nested-list members, can make a
-    # negative predicate true for every document (including an OR branch).
+def valid_metadata_conditions(filters: list[dict[str, Any]]) -> bool:
+    """Reject unusable operands before any storage IO or boolean evaluation."""
     for condition in filters:
         value = condition.get("value")
         if isinstance(value, (list, tuple)):
             if any(not isinstance(item, (str, bool, int, float)) or (isinstance(item, float) and not math.isfinite(item)) for item in value):
-                return []
+                return False
         elif condition.get("op") in ("in", "not in") and not isinstance(value, str):
-            return []
+            return False
         elif isinstance(value, float) and not math.isfinite(value):
-            return []
-    doc_ids: set[str] | None = None
+            return False
+    return True
+
+
+def _metadata_matcher(filters: list[dict[str, Any]], logic: str) -> Callable[[dict[str, Any]], list[str]]:
+    """Prepare list membership once, reusable for a stream or one aggregate."""
+    membership_values = {id(flt["value"]): {_membership_key(item) for item in flt["value"]} for flt in filters if flt.get("op") in ("in", "not in") and isinstance(flt.get("value"), (list, tuple))}
 
     def normalize_string_values(value: Any) -> Any:
         if isinstance(value, str):
@@ -89,7 +91,7 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
         membership_list = operator in ("in", "not in") and isinstance(value, (list, tuple))
         entries = v2docs.typed_items() if membership_list and isinstance(v2docs, MetadataValueIndex) else v2docs.items()
         if membership_list:
-            value = {_membership_key(item) for item in value}
+            value = membership_values[id(value)]
         for input, docids in entries:
             if membership_list:
                 input = [_membership_key(item) for item in input] if isinstance(input, list) else _membership_key(input)
@@ -169,25 +171,36 @@ def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str
                 ids.extend(docids)
         return ids
 
-    for f in filters:
-        k = f["key"]
-        if k not in metas:
-            # Key not found in metas: treat as no match
-            ids = []
-        else:
-            v2docs = metas[k]
-            ids = filter_out(v2docs, f["op"], f["value"])
-
-        if doc_ids is None:
-            doc_ids = set(ids)
-        else:
-            if logic == "and":
-                doc_ids = doc_ids & set(ids)
-                if not doc_ids:
-                    return []
+    def match(metas: dict[str, Any]) -> list[str]:
+        doc_ids: set[str] | None = None
+        for f in filters:
+            k = f["key"]
+            if k not in metas:
+                # Key not found in metas: treat as no match
+                ids = []
             else:
-                doc_ids = doc_ids | set(ids)
-    return list(doc_ids or [])
+                v2docs = metas[k]
+                ids = filter_out(v2docs, f["op"], f["value"])
+
+            if doc_ids is None:
+                doc_ids = set(ids)
+            else:
+                if logic == "and":
+                    doc_ids = doc_ids & set(ids)
+                    if not doc_ids:
+                        return []
+                else:
+                    doc_ids = doc_ids | set(ids)
+        return list(doc_ids or [])
+
+    return match
+
+
+def meta_filter(metas: dict[str, Any], filters: list[dict[str, Any]], logic: str = "and") -> list[str]:
+    """Match metadata; unusable list operands invalidate the complete filter."""
+    if not valid_metadata_conditions(filters):
+        return []
+    return _metadata_matcher(filters, logic)(metas)
 
 
 def _semi_auto_candidates(meta_data_filter: dict[str, Any], metas: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]] | None:
@@ -214,12 +227,15 @@ def _semi_auto_candidates(meta_data_filter: dict[str, Any], metas: dict[str, Any
 
 async def apply_meta_data_filter(
     meta_data_filter: dict[str, Any] | None,
-    metas: dict[str, Any],
-    question: str,
+    metas: dict[str, Any] | None = None,
+    question: str = "",
     chat_mdl: Any = None,
     base_doc_ids: list[str] | None = None,
     manual_value_resolver: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     metadata_refresher: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    *,
+    metas_loader: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    metadata_filterer: Callable[[list[dict[str, Any]], str], Awaitable[list[str] | None]] | None = None,
 ) -> list[str] | None:
     """
     Intersect metadata matches with a nonempty base document selection.
@@ -236,21 +252,33 @@ async def apply_meta_data_filter(
         auto empty conditions retain the existing fallback. Semi-auto requires
         usable selected fields and generated predicates; stale/empty selections
         return the no-match sentinel. A refresher rechecks metadata after LLM IO.
+        Async metas_loader is memoized per request. metadata_filterer returns
+        None only for unsupported execution; [] means an authoritative no-match.
+        Storage errors propagate and never trigger a successful empty fallback.
     """
-    from core.prompts.generator import gen_meta_filter  # move from the top of the file to avoid circular import
-
     doc_ids = list(base_doc_ids) if base_doc_ids else []
 
     if not meta_data_filter:
         return doc_ids
 
     method = meta_data_filter.get("method")
+    if method in ("auto", "semi_auto"):
+        from core.prompts.generator import gen_meta_filter
+
+    cached_metas = metas
+
+    async def load_metas() -> dict[str, Any]:
+        nonlocal cached_metas
+        if cached_metas is None:
+            cached_metas = await metas_loader() if metas_loader is not None else {}
+        return cached_metas
+
     filter_metas = metas
 
     if method == "auto":
-        filters = await gen_meta_filter(chat_mdl, metas, question)
+        filters = await gen_meta_filter(chat_mdl, await load_metas(), question)
     elif method == "semi_auto":
-        candidates = _semi_auto_candidates(meta_data_filter, metas)
+        candidates = _semi_auto_candidates(meta_data_filter, await load_metas())
         if candidates is None:
             return ["-999"]
         filter_metas, constraints = candidates
@@ -274,7 +302,15 @@ async def apply_meta_data_filter(
 
     if not filters["conditions"]:
         return (doc_ids or None) if method in ("auto", "semi_auto") else doc_ids
-    matches = meta_filter(filter_metas, filters["conditions"], filters.get("logic", "and"))
+    conditions = filters["conditions"]
+    if not valid_metadata_conditions(conditions):
+        return ["-999"]
+    logic = filters.get("logic", "and")
+    # Semi-auto evaluates the freshly validated selected directory after LLM IO.
+    # Do not replace that snapshot with a separate index read.
+    matches = await metadata_filterer(conditions, logic) if method != "semi_auto" and metadata_filterer is not None else None
+    if matches is None:
+        matches = meta_filter(filter_metas if filter_metas is not None else await load_metas(), conditions, logic)
     if doc_ids:
         matched_ids = set(matches)
         matches = list(dict.fromkeys(doc_id for doc_id in doc_ids if doc_id in matched_ids))
@@ -405,3 +441,43 @@ def build_metadata_config(parser_config: dict[str, Any]) -> dict[str, Any] | lis
     if isinstance(metadata_conf, list):
         return deepcopy(metadata_conf) + built_in_metadata
     return built_in_metadata
+
+
+def aggregate_metadata_rows(rows: Iterable[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """Build the existing public string view and lossless membership index."""
+    metas: dict[str, Any] = {}
+    for doc_id, fields in rows:
+        if not isinstance(fields, dict):
+            continue
+        for key, value in fields.items():
+            for item in value if isinstance(value, list) else [value]:
+                if item is not None:
+                    if key not in metas:
+                        metas[key] = MetadataValueIndex()
+                    metas[key].add(item, doc_id)
+    return metas
+
+
+STREAMABLE_METADATA_OPERATORS = frozenset({"in", "not in", "contains", "not contains", "start with", "end with", "empty", "not empty"})
+
+
+def stream_metadata_matches(rows: Iterable[tuple[str, dict[str, Any]]], filters: list[dict[str, Any]], logic: str) -> list[str]:
+    """Keep the expanded-array ANY semantics while bounding memory to one row.
+
+    Comparison operators stay on the aggregate path: its literal coercion has
+    entry-dependent state, so independent row evaluation is not equivalent.
+    """
+    matches: dict[str, None] = {}
+    iterator = iter(rows)
+    try:
+        if not filters or not valid_metadata_conditions(filters):
+            return []
+        match = _metadata_matcher(filters, logic)
+        for doc_id, fields in iterator:
+            if match(aggregate_metadata_rows([(doc_id, fields)])):
+                matches[doc_id] = None
+    finally:
+        close = getattr(iterator, "close", None)
+        if callable(close):
+            close()
+    return list(matches)

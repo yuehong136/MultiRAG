@@ -400,8 +400,21 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     if metadata_condition:
         conditions = convert_conditions(metadata_condition)
         if conditions:
-            metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
-            doc_ids = await apply_meta_data_filter({"method": "manual", "manual": conditions, "logic": metadata_condition.get("logic", "and")}, metas, question, base_doc_ids=doc_ids)
+
+            async def load_metadata() -> dict[str, Any]:
+                return DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
+
+            async def filter_metadata(filters: list[dict[str, Any]], logic: str) -> list[str] | None:
+                return DocMetadataService.filter_doc_ids_by_meta_pushdown(db, kb_ids, filters, logic)
+
+            doc_ids = await apply_meta_data_filter(
+                {"method": "manual", "manual": conditions, "logic": metadata_condition.get("logic", "and")},
+                None,
+                question,
+                base_doc_ids=doc_ids,
+                metas_loader=load_metadata,
+                metadata_filterer=filter_metadata,
+            )
             if doc_ids == ["-999"]:
                 return get_result(data={"total": 0, "chunks": [], "doc_aggs": {}})
         elif not doc_ids:

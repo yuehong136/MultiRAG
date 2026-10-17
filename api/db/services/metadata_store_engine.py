@@ -22,6 +22,9 @@ Index name pattern: multirag_doc_meta_{tenant_id}
 
 import json
 import logging
+from collections.abc import Iterator
+from contextlib import closing
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -131,7 +134,62 @@ class EngineMetadataStore(MetadataStore):
             logger.warning("Failed to check/drop empty metadata index %s: %s", index_name, e)
 
     @classmethod
+    def _iter_es_rows(cls, index_name: str, kb_ids: list[str], query: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Consume a scroll snapshot completely; partial RPCs are failures."""
+        client = settings.docStoreConn.es
+        scroll_id = None
+        try:
+            response = client.search(index=index_name, query=query, size=1000, scroll="2m", sort=["id"], source_includes=["id", "kb_id", "meta_fields"], allow_partial_search_results=False)
+            while True:
+                scroll_id = response.get("_scroll_id", scroll_id)
+                if response.get("timed_out") is not False or response.get("_shards", {}).get("failed") != 0:
+                    raise RuntimeError("Incomplete ES metadata search")
+                hits = response["hits"]["hits"]
+                if not isinstance(hits, list):
+                    raise RuntimeError("Malformed ES metadata response")
+                if not hits:
+                    break
+                if not scroll_id:
+                    raise RuntimeError("ES metadata search omitted its scroll cursor")
+                for hit in hits:
+                    source = hit["_source"]
+                    if source.get("kb_id") not in kb_ids or not isinstance(hit.get("_id"), str):
+                        raise RuntimeError("ES metadata response escaped the requested scope")
+                    yield hit["_id"], source
+                response = client.scroll(scroll_id=scroll_id, scroll="2m")
+        finally:
+            if scroll_id:
+                client.clear_scroll(scroll_id=scroll_id)
+
+    @classmethod
+    def iter_metadata(cls, index: str, kb_ids: list[str], query: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Close the underlying scroll even if the exact matcher raises."""
+        with closing(cls._iter_es_rows(index, kb_ids, query)) as rows:
+            for doc_id, source in rows:
+                yield doc_id, cls._extract_metadata(source)
+
+    def filter_candidates(self, tenant_id: str, kb_ids: list[str], filters: list[dict[str, Any]], logic: str) -> Iterator[tuple[str, dict[str, Any]]] | None:
+        from common.metadata_es_filter import UnsupportedMetaFilter, build_meta_filter_query
+
+        index = self._index_name(tenant_id)
+        client = settings.docStoreConn.es
+        if not client.indices.exists(index=index):
+            return iter(())
+        mapping = client.indices.get_mapping(index=index)[index]["mappings"]
+        try:
+            query = build_meta_filter_query(filters, logic, kb_ids, mapping)
+        except UnsupportedMetaFilter:
+            return None
+        return self.iter_metadata(index, kb_ids, query)
+
+    @classmethod
     def _search_all(cls, index_name: str, condition: dict | None, kb_ids: list[str]) -> list[dict]:
+        if settings.DOC_ENGINE.lower() == "elasticsearch" and condition == {"kb_id": kb_ids}:
+            # Never translate an RPC error into a missing metadata index.
+            if not settings.docStoreConn.es.indices.exists(index=index_name):
+                return []
+            query = {"bool": {"filter": [{"terms": {"kb_id": kb_ids}}]}}
+            return [{**source, "id": doc_id} for doc_id, source in cls._iter_es_rows(index_name, kb_ids, query)]
         if not settings.docStoreConn.index_exist(index_name, ""):
             logger.debug("Metadata index %s does not exist, skipping search", index_name)
             return []

@@ -89,8 +89,16 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
         async def read_metadata() -> dict[str, Any]:
             return await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, dataset_ids))  # TODO(async-phase4)
 
-        metas = await read_metadata()
-        doc_ids = await apply_meta_data_filter(metadata_filter, metas, question, chat, doc_ids, metadata_refresher=read_metadata if metadata_filter.get("method") == "semi_auto" else None)
+        doc_ids = await apply_meta_data_filter(
+            metadata_filter,
+            None,
+            question,
+            chat,
+            doc_ids,
+            metadata_refresher=read_metadata if metadata_filter.get("method") == "semi_auto" else None,
+            metas_loader=read_metadata,
+            metadata_filterer=lambda conditions, logic: DocMetadataService.filter_doc_ids_by_meta_pushdown_async(db, dataset_ids, conditions, logic),
+        )
     if request.cross_languages:
         question = await cross_languages(kb.tenant_id, None, question, request.cross_languages)
     embedding = await _bundle(db, kb.tenant_id, LLMType.EMBEDDING, model_id=kb.tenant_embd_id, name=kb.embd_id)

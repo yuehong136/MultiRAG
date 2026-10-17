@@ -29,6 +29,7 @@ import json
 import logging
 import re
 from copy import deepcopy
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +39,7 @@ from api.db.db_models import Document, Knowledgebase
 from api.db.services.metadata_store import MetadataStore
 from api.db.services.metadata_store_sql import SqlMetadataStore
 from common import settings
-from common.metadata_utils import MetadataValueIndex, dedupe_list
+from common.metadata_utils import STREAMABLE_METADATA_OPERATORS, aggregate_metadata_rows, dedupe_list, stream_metadata_matches, valid_metadata_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -227,19 +228,79 @@ class DocMetadataService:
         if not tenant_id:
             return {}
         rows = cls._store().list_by_kb_ids(db, tenant_id, kb_ids)
-        meta: dict = {}
-        for doc_id, fields in rows:
-            if not isinstance(fields, dict):
-                continue
-            for k, v in fields.items():
-                values = v if isinstance(v, list) else [v]
-                for vv in values:
-                    if vv is None:
-                        continue
-                    if k not in meta:
-                        meta[k] = MetadataValueIndex()
-                    meta[k].add(vv, doc_id)
-        return meta
+        return aggregate_metadata_rows(rows)
+
+    @staticmethod
+    def _metadata_groups(db: Session, kb_ids: list[str]) -> dict[str, list[str]] | None:
+        rows = db.execute(select(Knowledgebase.id, Knowledgebase.tenant_id).where(Knowledgebase.id.in_(kb_ids))).all()
+        if {row.id for row in rows} != set(kb_ids):
+            return None
+        groups: dict[str, list[str]] = {}
+        for row in rows:
+            groups.setdefault(row.tenant_id, []).append(row.id)
+        return groups
+
+    @classmethod
+    def _filter_engine_groups(cls, groups: dict[str, list[str]], filters: list[dict[str, Any]], logic: str) -> list[str] | None:
+        from api.db.services.metadata_store_engine import EngineMetadataStore
+
+        store = cls._store()
+        if not isinstance(store, EngineMetadataStore):
+            return None
+        matches: dict[str, None] = {}
+        for tenant_id, selected in groups.items():
+            rows = store.filter_candidates(tenant_id, selected, filters, logic)
+            if rows is None:
+                # Mapping cannot prove field-presence pruning is lossless. Keep
+                # only the KB predicate and evaluate original source values.
+                index = store._index_name(tenant_id)
+                query = {"bool": {"filter": [{"terms": {"kb_id": selected}}]}}
+                rows = store.iter_metadata(index, selected, query)
+            matches.update(dict.fromkeys(stream_metadata_matches(rows, filters, logic)))
+        return list(matches)
+
+    @classmethod
+    def filter_doc_ids_by_meta_pushdown(cls, db: Session, kb_ids: list[str], filters: list[dict[str, Any]], logic: str = "and") -> list[str] | None:
+        """Return exact IDs, or None for an explicitly unsupported execution path.
+
+        SQL streams scoped rows; ES prunes indexed-field candidates and verifies
+        raw source values. RPC/DB failures propagate, including partial scrolls.
+        Comparison coercion and other engine types retain the aggregate fallback.
+        Callers must authorize the complete KB selection before calling.
+        """
+        if not valid_metadata_conditions(filters) or not kb_ids:
+            return []
+        if not filters or any(flt.get("op") not in STREAMABLE_METADATA_OPERATORS for flt in filters):
+            return None
+        backend = settings.DOC_ENGINE.lower()
+        if backend not in {"milvus", "elasticsearch"}:
+            return None
+        groups = cls._metadata_groups(db, kb_ids)
+        if groups is None:
+            return []
+        if backend == "elasticsearch":
+            return cls._filter_engine_groups(groups, filters, logic)
+        store = cls._store()
+        if not isinstance(store, SqlMetadataStore):
+            return None
+        matches: dict[str, None] = {}
+        for tenant_id, selected in groups.items():
+            matches.update(dict.fromkeys(stream_metadata_matches(store.iter_by_kb_ids(db, tenant_id, selected), filters, logic)))
+        return list(matches)
+
+    @classmethod
+    async def filter_doc_ids_by_meta_pushdown_async(cls, db: AsyncSession, kb_ids: list[str], filters: list[dict[str, Any]], logic: str = "and") -> list[str] | None:
+        """Keep SQL inside run_sync and blocking ES RPCs in a worker thread."""
+        if not valid_metadata_conditions(filters) or not kb_ids:
+            return []
+        if not filters or any(flt.get("op") not in STREAMABLE_METADATA_OPERATORS for flt in filters):
+            return None
+        if settings.DOC_ENGINE.lower() == "milvus":
+            return await db.run_sync(lambda session: cls.filter_doc_ids_by_meta_pushdown(session, kb_ids, filters, logic))  # TODO(async-phase4)
+        if settings.DOC_ENGINE.lower() != "elasticsearch":
+            return None
+        groups = await db.run_sync(lambda session: cls._metadata_groups(session, kb_ids))  # TODO(async-phase4)
+        return [] if groups is None else await asyncio.to_thread(cls._filter_engine_groups, groups, filters, logic)
 
     @classmethod
     def get_metadata_keys_by_kbs(cls, db: Session, kb_ids: list[str]) -> list[str]:

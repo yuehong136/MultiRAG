@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.orm import Session
 
 from agent.tools.retrieval import Retrieval, RetrievalParam
 
@@ -83,3 +84,38 @@ async def test_agent_retrieval_preserves_dataset_tenant_bindings(monkeypatch: py
     await retrieval._retrieve_kb("query")
     assert fetch.call_args.args[3:5] == (["owner", "owner", "other"], ["name-a", "name-b", "name-c"])
     assert fetch.call_args.kwargs["kb_ids"] == ["a", "b", "c"]
+
+
+async def test_agent_typed_manual_filter_skips_metadata_aggregation(db: "Session", monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+    from unittest.mock import AsyncMock, Mock
+
+    import agent.tools.retrieval as module
+
+    param = RetrievalParam()
+    param.meta_data_filter = {"method": "manual", "manual": [{"key": "product", "op": "in", "value": [0, False, "F2"]}]}
+    retrieval = build_retrieval(param)
+    rows = [SimpleNamespace(id="dataset", tenant_id="owner", name="name", embd_id="embedding", tenant_embd_id=None)]
+    retrieval._canvas = SimpleNamespace(get_tenant_id=lambda: "owner")
+    monkeypatch.setattr(retrieval, "_resolve_kbs", lambda: (["dataset"], ["dataset"], rows))
+    monkeypatch.setattr(retrieval, "get_input_elements_from_text", lambda _: {})
+    monkeypatch.setattr(retrieval, "string_format", lambda query, _: query)
+    monkeypatch.setattr(retrieval, "_rank_feature", lambda *_: {})
+    load = Mock(side_effect=AssertionError("Manual push-down must not aggregate metadata"))
+    monkeypatch.setattr(retrieval, "_flatted_metas", load)
+    pushed = Mock(return_value=["selected"])
+    monkeypatch.setattr(module.DocMetadataService, "filter_doc_ids_by_meta_pushdown", pushed)
+
+    @contextmanager
+    def session() -> Iterator[Session]:
+        yield db
+
+    monkeypatch.setattr(module, "db_connection", session)
+    monkeypatch.setattr(module, "build_named_bundle_async", AsyncMock(return_value=object()))
+    fetch = AsyncMock(return_value={"chunks": [], "doc_aggs": []})
+    monkeypatch.setattr(module.settings, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, _: chunks))
+    await retrieval._retrieve_kb("query")
+    assert pushed.call_args.args[1:3] == (["dataset"], param.meta_data_filter["manual"])
+    assert fetch.call_args.kwargs["doc_ids"] == ["selected"]
+    load.assert_not_called()

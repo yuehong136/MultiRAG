@@ -908,3 +908,21 @@ def test_http_and_sdk_joint_search_keep_only_selected_index_bindings(search_api:
             db.execute(sa.delete(UserTenant).where(UserTenant.id == membership_id))
             db.commit()
             assert db.get(UserTenant, membership_id) is None
+
+
+def test_http_metadata_filter_storage_failure_is_business_error(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.services.doc_metadata_service import DocMetadataService
+
+    env = search_api
+    failure = AsyncMock(side_effect=ConnectionError("controlled metadata storage failure"))
+    monkeypatch.setattr(DocMetadataService, "filter_doc_ids_by_meta_pushdown_async", failure)
+    payload = {"question": "availability", "meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": "in", "value": ["MATCH"]}]}}
+    for token in (env["jwt"], env["sdk_token"]):
+        response = request(env, "POST", "/search", token=token, json=payload)
+        assert response.status_code == 200
+        assert response.json()["code"] != 0, response.json()
+    assert failure.await_count == 2
+    with Session(env["engine"]) as db:
+        assert db.get(DocumentMetadata, env["doc"]).meta_fields == {"category": "match"}
+    raw = env["reader"].query(env["collections"]["dataset"], filter="available_int == 1", output_fields=["doc_id"], consistency_level="Strong")
+    assert {row["doc_id"] for row in raw} == {env["doc"]}

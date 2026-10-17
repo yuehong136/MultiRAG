@@ -758,8 +758,14 @@ def chat(
         questions = [asyncio.run(cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"]))]
 
     if dialog.meta_data_filter:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, dialog.kb_ids)
-        attachments = asyncio.run(apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments))
+
+        async def load_metadata() -> dict[str, Any]:
+            return DocMetadataService.get_flatted_meta_by_kbs(db, dialog.kb_ids)
+
+        async def filter_metadata(conditions: list[dict[str, Any]], logic: str) -> list[str] | None:
+            return DocMetadataService.filter_doc_ids_by_meta_pushdown(db, dialog.kb_ids, conditions, logic)
+
+        attachments = asyncio.run(apply_meta_data_filter(dialog.meta_data_filter, None, questions[-1], chat_mdl, attachments, metas_loader=load_metadata, metadata_filterer=filter_metadata))
 
     if prompt_config.get("keyword", False):
         questions[-1] = questions[-1] + "," + asyncio.run(keyword_extraction(chat_mdl, questions[-1]))
@@ -1123,8 +1129,19 @@ async def async_chat(
         questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
     if dialog.meta_data_filter:
-        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, dialog.kb_ids))  # TODO(async-phase4)
-        attachments = await apply_meta_data_filter(dialog.meta_data_filter, metas, questions[-1], chat_mdl, attachments)
+
+        async def load_metadata() -> dict[str, Any]:
+            return await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, dialog.kb_ids))  # TODO(async-phase4)
+
+        attachments = await apply_meta_data_filter(
+            dialog.meta_data_filter,
+            None,
+            questions[-1],
+            chat_mdl,
+            attachments,
+            metas_loader=load_metadata,
+            metadata_filterer=lambda conditions, logic: DocMetadataService.filter_doc_ids_by_meta_pushdown_async(db, dialog.kb_ids, conditions, logic),
+        )
 
     if prompt_config.get("keyword", False):
         questions[-1] = questions[-1] + "," + await keyword_extraction(chat_mdl, questions[-1])
@@ -2082,8 +2099,14 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
     tenant_ids = [kb.tenant_id for kb in kbs]
 
     if meta_data_filter:
-        metas = DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
-        doc_ids = asyncio.run(apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids))
+
+        async def load_metadata() -> dict[str, Any]:
+            return DocMetadataService.get_flatted_meta_by_kbs(db, kb_ids)
+
+        async def filter_metadata(conditions: list[dict[str, Any]], logic: str) -> list[str] | None:
+            return DocMetadataService.filter_doc_ids_by_meta_pushdown(db, kb_ids, conditions, logic)
+
+        doc_ids = asyncio.run(apply_meta_data_filter(meta_data_filter, None, question, chat_mdl, doc_ids, metas_loader=load_metadata, metadata_filterer=filter_metadata))
 
     filter_exp = ""  # todo 暂时不提供权限过滤的查询，如果需要这边需要完善
     kb_names = [kb.name for kb in kbs]
@@ -2188,8 +2211,19 @@ async def async_ask(
     tenant_ids = [kb.tenant_id for kb in kbs]
 
     if meta_data_filter:
-        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
-        doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
+
+        async def load_metadata() -> dict[str, Any]:
+            return await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
+
+        doc_ids = await apply_meta_data_filter(
+            meta_data_filter,
+            None,
+            question,
+            chat_mdl,
+            doc_ids,
+            metas_loader=load_metadata,
+            metadata_filterer=lambda conditions, logic: DocMetadataService.filter_doc_ids_by_meta_pushdown_async(db, kb_ids, conditions, logic),
+        )
 
     filter_exp = ""
     kb_names = [kb.name for kb in kbs]
@@ -2299,8 +2333,19 @@ async def gen_mindmap(db: AsyncSession, question: str, kb_ids: list[str], tenant
             _mdl.db = None
 
     if meta_data_filter:
-        metas = await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
-        doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, doc_ids)
+
+        async def load_metadata() -> dict[str, Any]:
+            return await db.run_sync(lambda s: DocMetadataService.get_flatted_meta_by_kbs(s, kb_ids))  # TODO(async-phase4)
+
+        doc_ids = await apply_meta_data_filter(
+            meta_data_filter,
+            None,
+            question,
+            chat_mdl,
+            doc_ids,
+            metas_loader=load_metadata,
+            metadata_filterer=lambda conditions, logic: DocMetadataService.filter_doc_ids_by_meta_pushdown_async(db, kb_ids, conditions, logic),
+        )
 
     rank_feature = await db.run_sync(lambda s: label_question(s, question, kbs))  # TODO(async-phase4)
     ranks = await settings.retriever.retrieval(

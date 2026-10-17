@@ -20,6 +20,8 @@ Used when the doc engine is Milvus.
 """
 
 import logging
+from collections.abc import Iterator
+from typing import Any
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
@@ -84,6 +86,17 @@ class SqlMetadataStore(MetadataStore):
             db.rollback()
             logger.error("SqlMetadataStore.delete failed for doc %s: %s", doc_id, e)
             return False
+
+    def iter_by_kb_ids(self, db: Session, tenant_id: str, kb_ids: list[str]) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Stream complete scoped rows, without a result-window cap or aggregate."""
+        statement = select(DocumentMetadata.id, DocumentMetadata.meta_fields).where(DocumentMetadata.tenant_id == tenant_id, DocumentMetadata.kb_id.in_(kb_ids)).execution_options(yield_per=1000)
+        result = db.execute(statement)
+        try:
+            for doc_id, fields in result:
+                if isinstance(fields, dict):
+                    yield doc_id, fields
+        finally:
+            result.close()
 
     def list_by_kb_ids(self, db: Session, tenant_id: str, kb_ids: list[str]) -> list[tuple[str, dict]]:
         stmt = select(DocumentMetadata.id, DocumentMetadata.meta_fields).where(DocumentMetadata.kb_id.in_(kb_ids))

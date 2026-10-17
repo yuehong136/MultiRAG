@@ -121,6 +121,32 @@ async def test_embedded_retrieval_pairs_loaded_rows_when_sql_order_differs(async
     monkeypatch.setattr(session, "_label_question_with_conn", lambda *_: {})
     fetch = AsyncMock(return_value={"total": 0, "chunks": [], "doc_aggs": []})
     monkeypatch.setattr(session.settings, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, *_: chunks))
-    await session.retrieval_test_embedded(session.SearchBotRetrievalTestRequest(question="q", kb_id=["a", "b"]), async_db, "owner")
+    config = {"method": "manual", "manual": [{"key": "product", "op": "in", "value": [0, False]}]}
+    monkeypatch.setattr(session.SearchService, "get_detail", lambda *_: {"tenant_id": "owner", "search_config": {"meta_data_filter": config}})
+    monkeypatch.setattr(session.UserTenantService, "get_membership", lambda *_a, **_kw: SimpleNamespace(role="normal"))
+    monkeypatch.setattr(session.DocMetadataService, "get_flatted_meta_by_kbs", lambda *_: pytest.fail("Embedded manual filters must stay lazy"))
+    pushed = AsyncMock(return_value=["selected", "outside"])
+    monkeypatch.setattr(session.DocMetadataService, "filter_doc_ids_by_meta_pushdown_async", pushed)
+    await session.retrieval_test_embedded(session.SearchBotRetrievalTestRequest(question="q", kb_id=["a", "b"], search_id="search", doc_ids=["selected"]), async_db, "owner")
+    assert pushed.call_args.args[1:3] == (["a", "b"], config["manual"])
+    assert fetch.call_args.args[10] == ["selected"]
     assert fetch.call_args.args[3:5] == (["other", "owner"], ["name-b", "name-a"])
     assert fetch.call_args.kwargs["kb_ids"] == ["b", "a"]
+
+
+def test_sdk_membership_uses_lazy_exact_filter_and_document_intersection(sdk_retrieval: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    client, retrieval = sdk_retrieval
+    load = Mock(side_effect=AssertionError("Aggregation must stay lazy"))
+    pushed = Mock(return_value=["new", "outside-selection"])
+    monkeypatch.setattr(sdk.DocMetadataService, "get_flatted_meta_by_kbs", load)
+    monkeypatch.setattr(sdk.DocMetadataService, "filter_doc_ids_by_meta_pushdown", pushed)
+    response = client.post(
+        "/api/v1/retrieval",
+        json={"dataset_ids": ["dataset"], "question": "q", "document_ids": ["new"], "metadata_condition": {"conditions": [{"name": "version", "comparison_operator": "in", "value": [0, False]}]}},
+    )
+    assert response.json()["code"] == 0, response.text
+    assert retrieval.call_args.args[10] == ["new"]
+    assert pushed.call_args.args[1:3] == (["dataset"], [{"key": "version", "op": "in", "value": [0, False]}])
+    load.assert_not_called()
