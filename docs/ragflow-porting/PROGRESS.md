@@ -3368,3 +3368,39 @@ entity/models/service/handler/CLI race **478 passed / 11 opt-in skips**，零失
 由用例关闭；日志、命令退出结果和源码 hash 在 `/tmp/multirag-go-batch-20261017/7/`。
 未运行真实 NVIDIA NIM/模型硬件、生产、SQL opt-in 或 Web；skip 不算通过。
 未改 Python/DB/路由，不占用旧批 Python 验证窗口。独立提交，不 push。
+
+## bb10b83e6114cc271c3563194464b19297dc5c25 · Go 智谱 rerank 索引与完整性
+
+2026-10-17 对照完整单文件 diff、冻结上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`
+内后修与当前消费者；remote 为 `infiniflow/ragflow`，未 fetch。原本 `glm-rerank`
+目录、rerank suffix、factory 及 bound RerankModel 已就绪，实际 driver 仍为明确失败桩；
+本项补上 [ZhipuAIModel.Rerank](../../internal/entity/models/zhipu-ai.go) 的真实 POST。
+发送 model/query/documents、top_n=len(texts)、return_documents=false，沿实例 region/URL/key
+及现有绑定模型调用，不改目录、DB、查询/存储链或既有聊天实现。
+
+目标初版按 index 写回的意图保留，但未照搬其“不合法项跳过、缺失槽位默认 0”的假成功。
+index 与 relevance_score 均用指针区分缺失/null 与合法零值；结果数量必须等于输入数，
+索引必须唯一且在范围内，每个 score 必须有限。乱序按输入位置还原，任何缺失、重复、
+越界、类型错误、NaN/Infinity/溢出、provider error 或 HTTP 错误整体失败，不返回部分分数。
+空文档列表立即返回非 nil 空数组、零 HTTP；空模型/key、缺 URL/suffix、未知 region
+在发送前拒绝。错误不回显 provider body、prompt 或 key。
+
+后修 `2819d0ea2` 的单次超时、`d19a036cd` 的调用方上下文映射为本地 APIConfig.Context
+加 120 秒派生上下文，取消优先并释放 response body；不迁入后续 Embed/RerankRequest、
+usage、tools 或独立知识编译器重构。既有 SiliconFlow 有类似校验，但没有智谱请求接线，
+不能把相似能力当作本项已等价；本项不扩展到改造其他 provider 或通用 rerank 接口。
+
+[受控 HTTP 故障矩阵](../../internal/entity/models/zhipu_rerank_test.go)验证真实请求体、
+实例 URL、合法 0 分、乱序/缺失/重复/越界索引、分数类型/有限值、空输入、异常响应及
+发送前/读响应中取消。[并行实例读回](../../internal/service/model_service_zhipu_rerank_test.go)
+经目录→factory→instanceModelDriver→bound RerankModel 实际调用两个不同 URL/key，
+读回各自有序分数，并确认共享目录 driver/URL 未变。
+
+Go 1.25.14 独立快照 `/tmp/multirag-go-batch-20261017/15/source` 的相关
+entity/models/service/handler/CLI race **507 passed / 11 opt-in skips**，零失败；
+`go build ./internal/...`、`go vet ./internal/...`、三个独立 main 构建均 exit 0。
+累计回归同时重新覆盖 OpenAI/NVIDIA 的完整消息、并行实例、取消、CLI EOF/timeout 和流终帧。
+日志、命令退出结果、完整源码 hash、HTTP 证据在 `/tmp/multirag-go-batch-20261017/15/`；
+取消回执及 HTTP server 关闭由用例验证，未启动常驻服务、未创建 DB/容器资源。
+未验证真实智谱、供应商模型/硬件、生产、SQL opt-in、Web 或真实检索端到端；skip 不算通过。
+未改 Python，不占用旧批 integration 的源码或环境。独立提交，不 push。
