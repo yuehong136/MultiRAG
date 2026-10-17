@@ -28,7 +28,7 @@ func (h *AuthHandler) DocumentStatusAuthMiddleware() gin.HandlerFunc {
 				if token.Method != jwt.SigningMethodHS256 {
 					return nil, fmt.Errorf("invalid signing method")
 				}
-				return []byte(server.GetVariables().SecretKey), nil
+				return []byte(server.GetSecretKey()), nil
 			})
 			if verifyErr == nil && token.Valid && claims.ExpiresAt != nil && claims.Subject != "" {
 				webJWT = true

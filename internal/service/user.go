@@ -273,12 +273,18 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 
 // Login user login
 func (s *UserService) Login(req *LoginRequest) (*entity.User, common.ErrorCode, error) {
+	if server.GetConfig().Authentication.DisablePasswordLogin {
+		return nil, common.CodeForbidden, fmt.Errorf("password login is disabled")
+	}
 	// Get user by email (using username field as email)
 	user, err := s.userDAO.GetByEmail(req.Username)
 	if err != nil {
 		return nil, common.CodeAuthenticationError, fmt.Errorf("invalid email or password")
 	}
 
+	if user.AccountKind == "external" {
+		return nil, common.CodeForbidden, fmt.Errorf("password login unavailable")
+	}
 	// Decrypt password using RSA
 	decryptedPassword, err := s.decryptPassword(req.Password)
 	if err != nil {
@@ -290,7 +296,7 @@ func (s *UserService) Login(req *LoginRequest) (*entity.User, common.ErrorCode, 
 		return nil, common.CodeAuthenticationError, fmt.Errorf("invalid username or password")
 	}
 
-	if user.Status == nil || *user.Status != "1" {
+	if !activeUser(user) {
 		return nil, common.CodeForbidden, fmt.Errorf("user is disabled")
 	}
 
@@ -316,11 +322,17 @@ func (s *UserService) Login(req *LoginRequest) (*entity.User, common.ErrorCode, 
 // - CodeServerError (500): Password decryption failure
 // - CodeForbidden (403): Account disabled
 func (s *UserService) LoginByEmail(req *EmailLoginRequest) (*entity.User, common.ErrorCode, error) {
+	if server.GetConfig().Authentication.DisablePasswordLogin {
+		return nil, common.CodeForbidden, fmt.Errorf("password login is disabled")
+	}
 	user, err := s.userDAO.GetByEmail(req.Email)
 	if err != nil {
 		return nil, common.CodeAuthenticationError, fmt.Errorf("Email: %s is not registered!", req.Email)
 	}
 
+	if user.AccountKind == "external" {
+		return nil, common.CodeForbidden, fmt.Errorf("password login unavailable")
+	}
 	decryptedPassword, err := s.decryptPassword(req.Password)
 	if err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("Fail to crypt password")
@@ -330,7 +342,7 @@ func (s *UserService) LoginByEmail(req *EmailLoginRequest) (*entity.User, common
 		return nil, common.CodeAuthenticationError, fmt.Errorf("Email and password do not match!")
 	}
 
-	if !user.IsActive {
+	if !activeUser(user) {
 		return nil, common.CodeForbidden, fmt.Errorf("This account has been disabled, please contact the administrator!")
 	}
 
@@ -624,53 +636,47 @@ func (s *UserService) loadPrivateKey() (*rsa.PrivateKey, error) {
 
 // decryptPassword decrypts the password using RSA private key
 func (s *UserService) decryptPassword(encryptedPassword string) (string, error) {
-	// Try to decode base64
 	ciphertext, err := base64.StdEncoding.DecodeString(encryptedPassword)
 	if err != nil {
-		// If base64 decoding fails, assume it's already a plain password
-		return encryptedPassword, nil
+		return "", fmt.Errorf("invalid encrypted password")
 	}
-
-	// Load private key
 	privateKey, err := s.loadPrivateKey()
 	if err != nil {
 		return "", err
 	}
-
-	// Decrypt using PKCS#1 v1.5
 	plaintext, err := rsa.DecryptPKCS1v15(nil, privateKey, ciphertext)
 	if err != nil {
-		// If decryption fails, assume it's already a plain password
-		return encryptedPassword, nil
+		return "", fmt.Errorf("invalid encrypted password")
 	}
-
-	return string(plaintext), nil
+	decoded, err := base64.StdEncoding.DecodeString(string(plaintext))
+	if err != nil {
+		return "", fmt.Errorf("invalid password payload")
+	}
+	return string(decoded), nil
 }
 
 // GetUserByToken gets user by authorization header
-// The token parameter is the authorization header value, which needs to be decrypted
-// using itsdangerous URLSafeTimedSerializer to get the actual access_token
+// Current main API JWTs resolve signed email subjects against current SQL state.
+// Previously issued Go CLI tokens remain valid against their stored access token.
 func (s *UserService) GetUserByToken(authorization string) (*entity.User, common.ErrorCode, error) {
-	// Get secret key from config
-	variables := server.GetVariables()
-	secretKey := variables.SecretKey
-
-	// Extract access token from authorization header
-	// Equivalent to: access_token = str(jwt.loads(authorization)) in Python
-	accessToken, err := utility.ExtractAccessToken(authorization, secretKey)
-	if err != nil {
-		return nil, common.CodeUnauthorized, fmt.Errorf("invalid authorization token: %w", err)
+	secret := server.GetSecretKey()
+	if secret == "" {
+		return nil, common.CodeUnauthorized, fmt.Errorf("signing key unavailable")
 	}
-
-	// Validate token format (should be at least 32 chars, UUID format)
-	if len(accessToken) < 32 {
-		return nil, common.CodeUnauthorized, fmt.Errorf("invalid access token format")
+	var user *entity.User
+	var err error
+	if email, jwtErr := utility.UserJWTSubject(authorization, secret); jwtErr == nil {
+		user, err = s.userDAO.GetByEmail(email)
+	} else {
+		// Existing CLI sessions may still hold a previously issued signed token.
+		accessToken, decodeErr := utility.ExtractAccessToken(authorization, secret)
+		if decodeErr != nil || len(accessToken) < 32 {
+			return nil, common.CodeUnauthorized, fmt.Errorf("invalid authorization token")
+		}
+		user, err = s.userDAO.GetByAccessToken(accessToken)
 	}
-
-	// Get user by access token
-	user, err := s.userDAO.GetByAccessToken(accessToken)
-	if err != nil {
-		return nil, common.CodeUnauthorized, err
+	if err != nil || !validAuthenticatedUser(user) {
+		return nil, common.CodeUnauthorized, fmt.Errorf("invalid authorization user")
 	}
 
 	return user, common.CodeSuccess, nil
@@ -718,12 +724,6 @@ func (s *UserService) GetUserProfile(user *entity.User) map[string]interface{} {
 		lastLoginTime = user.LastLoginTime.Format("2006-01-02T15:04:05")
 	}
 
-	// Get access token
-	var accessToken string
-	if user.AccessToken != nil {
-		accessToken = *user.AccessToken
-	}
-
 	// Get avatar
 	var avatar interface{}
 	if user.Avatar != nil {
@@ -756,12 +756,6 @@ func (s *UserService) GetUserProfile(user *entity.User) map[string]interface{} {
 		loginChannel = *user.LoginChannel
 	}
 
-	// Get password
-	var password string
-	if user.Password != nil {
-		password = *user.Password
-	}
-
 	// Get status
 	status := "1"
 	if user.Status != nil {
@@ -775,7 +769,6 @@ func (s *UserService) GetUserProfile(user *entity.User) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"access_token":     accessToken,
 		"avatar":           avatar,
 		"color_schema":     colorSchema,
 		"create_date":      createDate,
@@ -790,7 +783,6 @@ func (s *UserService) GetUserProfile(user *entity.User) map[string]interface{} {
 		"last_login_time":  lastLoginTime,
 		"login_channel":    loginChannel,
 		"nickname":         user.Nickname,
-		"password":         password,
 		"status":           status,
 		"timezone":         timezone,
 		"update_date":      updateDate,
@@ -1028,10 +1020,26 @@ func (s *UserService) GetUserByAPIToken(authorization string) (*entity.User, com
 		return nil, common.CodeUnauthorized, fmt.Errorf("user not found for this access token")
 	}
 
-	// Check if user's access_token is empty
-	if user.AccessToken == nil || *user.AccessToken == "" {
+	// API keys remain independent of web logout, but never bypass account state.
+	if !activeUser(user) || user.AccessToken == nil || *user.AccessToken == "" {
 		return nil, common.CodeUnauthorized, fmt.Errorf("user has empty access_token in database")
 	}
 
 	return user, common.CodeSuccess, nil
+}
+
+func validAuthenticatedUser(user *entity.User) bool {
+	return activeUser(user) && (user.AccessToken == nil || !strings.HasPrefix(*user.AccessToken, "INVALID_"))
+}
+
+func (s *UserService) LoginAdmin(req *EmailLoginRequest) (*entity.User, common.ErrorCode, error) {
+	user, err := s.userDAO.GetByEmail(req.Email)
+	if err != nil || user.IsSuperuser == nil || !*user.IsSuperuser {
+		return nil, common.CodeForbidden, fmt.Errorf("only superuser can login admin system")
+	}
+	return s.LoginByEmail(req)
+}
+
+func activeUser(user *entity.User) bool {
+	return user != nil && user.Status != nil && *user.Status == "1" && user.IsActive && user.IsAuthenticated && !user.IsAnonymous
 }

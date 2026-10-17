@@ -35,8 +35,15 @@ import (
 // DefaultConnectTimeout default connection timeout for external services
 const DefaultConnectTimeout = 5 * time.Second
 
+// AuthenticationConfig controls local password login and registration.
+type AuthenticationConfig struct {
+	DisablePasswordLogin bool `mapstructure:"disable_password_login"`
+	EnableRegister       bool `mapstructure:"enable_register"`
+}
+
 // Config application configuration
 type Config struct {
+	Authentication   AuthenticationConfig   `mapstructure:"authentication"`
 	Server           ServerConfig           `mapstructure:"server"`
 	Database         DatabaseConfig         `mapstructure:"database"`
 	Redis            RedisConfig            `mapstructure:"redis"`
@@ -93,8 +100,9 @@ type OAuthConfig struct {
 
 // ServerConfig server configuration
 type ServerConfig struct {
-	Mode string `mapstructure:"mode"` // debug, release
-	Port int    `mapstructure:"port"`
+	SecretKey string `mapstructure:"secret_key"`
+	Mode      string `mapstructure:"mode"` // debug, release
+	Port      int    `mapstructure:"port"`
 }
 
 // DatabaseConfig database configuration
@@ -417,6 +425,7 @@ func Init(configPath string) error {
 			configDict["port"] = "-"
 		}
 
+		delete(configDict, "secret_key")
 		delete(configDict, "prefix_path")
 		delete(configDict, "username")
 		allConfigs = append(allConfigs, configDict)
@@ -549,6 +558,7 @@ func FromEnvironments() error {
 
 func FromConfigFile(configPath string) error {
 	v := viper.New()
+	v.SetDefault("authentication.enable_register", true)
 
 	// Set configuration file path
 	if configPath != "" {
@@ -596,14 +606,35 @@ func FromConfigFile(configPath string) error {
 		globalConfig.Admin.Port += 2
 	}
 
-	// Load REGISTER_ENABLED from environment variable (default: 1)
-	registerEnabled := 1
-	if envVal := os.Getenv("REGISTER_ENABLED"); envVal != "" {
-		if parsed, err := strconv.Atoi(envVal); err == nil {
-			registerEnabled = parsed
+	globalConfig.RegisterEnabled = 0
+	if globalConfig.Authentication.EnableRegister {
+		globalConfig.RegisterEnabled = 1
+	}
+	if globalConfig.Server.SecretKey == "" {
+		globalConfig.Server.SecretKey = v.GetString("multirag.secret_key")
+	}
+	for _, name := range []string{"MULTIRAG_SECRET_KEY", "MULTIRAG_MULTIRAG__SECRET_KEY"} {
+		if value, ok := os.LookupEnv(name); ok && (len(value) >= 32 || name == "MULTIRAG_MULTIRAG__SECRET_KEY") {
+			globalConfig.Server.SecretKey = value
 		}
 	}
-	globalConfig.RegisterEnabled = registerEnabled
+	for _, name := range []string{"REGISTER_ENABLED", "DISABLE_PASSWORD_LOGIN"} {
+		if value, ok := os.LookupEnv(name); ok {
+			enabled, err := parseAuthSwitch(value)
+			if err != nil {
+				return fmt.Errorf("invalid authentication switch: %s", name)
+			}
+			if name == "REGISTER_ENABLED" {
+				globalConfig.Authentication.EnableRegister = enabled
+				globalConfig.RegisterEnabled = 0
+				if enabled {
+					globalConfig.RegisterEnabled = 1
+				}
+			} else {
+				globalConfig.Authentication.DisablePasswordLogin = enabled
+			}
+		}
+	}
 
 	// If we loaded service_conf.yaml, map mysql fields to DatabaseConfig
 	if globalConfig != nil && globalConfig.Database.Host == "" {
@@ -930,4 +961,15 @@ func GetLanguage() string {
 	}
 
 	return "English"
+}
+
+func parseAuthSwitch(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean")
+	}
 }

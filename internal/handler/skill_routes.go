@@ -61,10 +61,7 @@ func AttachSkillCore(r *gin.Engine, cfg *server.Config, authenticate func(contex
 	register := func(base string) {
 		group := r.Group(base)
 		group.Use(func(c *gin.Context) {
-			secret := ""
-			if vars := server.GetVariables(); vars != nil {
-				secret = vars.SecretKey
-			}
+			secret := server.GetSecretKey()
 			tenant, e := authenticate(c.Request.Context(), c.GetHeader("Authorization"), secret)
 			if e != nil {
 				c.AbortWithStatusJSON(401, gin.H{"code": 401, "message": "Unauthorized", "data": nil})

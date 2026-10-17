@@ -221,35 +221,13 @@ type ListChatSessionsResponse struct {
 
 // ListChatSessions lists chat sessions for a dialog
 func (s *ChatSessionService) ListChatSessions(userID string, dialogID string) (*ListChatSessionsResponse, error) {
-	// Get user's tenants
-	tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
+	// Match Python REST's tenant-owned chat contract. Membership does not
+	// grant access to another tenant's private conversations.
+	exists, err := s.chatSessionDAO.CheckDialogExists(userID, dialogID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Check if user is the owner of the dialog
-	isOwner := false
-	for _, tenantID := range tenantIDs {
-		exists, err := s.chatSessionDAO.CheckDialogExists(tenantID, dialogID)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			isOwner = true
-			break
-		}
-	}
-
-	// Also check with userID as tenant
-	if !isOwner {
-		exists, err := s.chatSessionDAO.CheckDialogExists(userID, dialogID)
-		if err != nil {
-			return nil, err
-		}
-		isOwner = exists
-	}
-
-	if !isOwner {
+	if !exists {
 		return nil, errors.New("Only owner of dialog authorized for this operation")
 	}
 

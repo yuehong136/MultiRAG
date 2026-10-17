@@ -36,7 +36,7 @@ func Attach(engine *gin.Engine, cfg *server.Config) func() {
 	if e != nil {
 		panic(e)
 	}
-	secret := func() string { return server.GetVariables().SecretKey }
+	secret := func() string { return server.GetSecretKey() }
 	s.RegisterAt(engine, secret, "/api/v1/skill-assets", protocol == server.SkillsCoreProtocol)
 	if protocol == server.SkillsAssetsProtocol {
 		s.RegisterAt(engine, secret, "/api/v1/skills", false)

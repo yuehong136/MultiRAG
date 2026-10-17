@@ -161,7 +161,10 @@ func (h *ChatSessionHandler) ListChatSessions(c *gin.Context) {
 	userID := user.ID
 
 	// Get dialog_id from query parameter
-	dialogID := c.Query("dialog_id")
+	dialogID := c.Param("chat_id")
+	if dialogID == "" {
+		dialogID = c.Query("dialog_id")
+	}
 	if dialogID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,

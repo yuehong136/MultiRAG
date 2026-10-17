@@ -135,7 +135,7 @@ func (h *Handler) Login(c *gin.Context) {
 
 	// Use userService.LoginByEmail with adminLogin=true
 	// This allows default admin account to login admin system
-	user, code, err := h.userService.LoginByEmail(&req)
+	user, code, err := h.userService.LoginAdmin(&req)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    code,
@@ -153,9 +153,8 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	variables := server.GetVariables()
-	secretKey := variables.SecretKey
-	authToken, err := utility.DumpAccessToken(*user.AccessToken, secretKey)
+	secretKey := server.GetSecretKey()
+	authToken, err := utility.SignUserJWT(user.Email, secretKey)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,
@@ -1203,11 +1202,12 @@ func (h *Handler) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if !*user.IsSuperuser {
+		if user.IsSuperuser == nil || !*user.IsSuperuser {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    common.CodeForbidden,
 				"message": "Permission denied",
 			})
+			c.Abort()
 			return
 		}
 

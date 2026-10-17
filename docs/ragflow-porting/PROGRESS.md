@@ -3605,3 +3605,43 @@ SQLAdmin 的配置准入和 Cookie 认证边界不变。
 门禁、mypy 144 源文件和 unit 6279 passed。定向禁用登录用未绑定 DB Session 证明未查询；
 版本公开的依赖结构另有明确断言，不放宽其他路由的鉴权检查。日志
 `/tmp/hybrid-python-verify-final.log`；后续 Go/双向 HTTP 与 SQL 读回见同项验收补记。
+
+### 同项 Go 主 API 适配与调用链
+
+完整核对目标 15 文件足迹，沿本地主 API HS256/email JWT 对齐 Go 签发与解析；共享固定
+配置、环境优先级、Redis 竞争失败语义与启动缓存，不移植硬编码 fallback 或注释中的空实现。
+两管理后台保留原准入，修复拒绝分支未 Abort；Go Admin 登录先检查 superuser 再修改用户。
+注册/密码开关、外部账户密码限制和 system/config 输出对齐 Python；响应移除数据库凭据。
+真实共库登录还发现 Go User 的未使用 role_id 列不在 Python schema，删除错误映射，不改库。
+
+canonical 注册采用当前 Web 的 POST `/api/v1/users`，登录、渠道、logout、users/me、
+tenants、chat sessions 按实际消费者接线。旧 Go CLI 的活跃 `/v1` 路由和已签发 opaque
+session token 保留，新的登录只签 JWT。会话列表不再把加入的其他 tenant 当作认证身份；
+对齐 Python REST 个人租户 owner 查询，normal、invite、外部账户不获得私人列表权限。
+chat detail 已有有效 dataset_ids 解析，保留现有解析与过滤；不复制重复 DAO 实现。
+
+Web 消费者核对到 `6ad9577e3d76bdd91d2df9915b6e0c21e447f5ac`。Vite 当前配置的统一
+API base 与独立 admin target 比上游固定端口更适合此部署，保留它，不启用新混合流量切换。
+冻结范围内 secret 缓存、用户敏感字段、禁用状态与团队只读后修仅作同链参考；没有修改
+模型 factory/provider 或增加新的鉴权架构。运行合同和明确未覆盖范围见
+[混合鉴权](../references/hybrid-authentication.md)。
+
+最终实际验收：`.test-results/hybrid-auth-acceptance/acceptance.json`，driver exit 0。
+两套完整资源 Python API 的 make smoke 各 exit 0，db/chat/db_pool/redis/Infinity dev6/MinIO
+健康项全 ok，真实 SQLAdmin Cookie 双向互认。真实 RSA 密码登录后 Go/Python JWT 双向
+读回同一用户；实际 Go Admin login/auth 路由、主 API 超级管理员拒绝、SQLAdmin 无 Cookie
+拒绝、normal/invite/foreign 会话拒绝均覆盖。管理员 mutation 阳性对照确实改变 scratch SQL，
+普通用户拒绝时未改变 SQL 或自有 Redis；停用、logout、关闭密码登录和注册同样拒绝且读回不变。
+夹具凭据只取私有 overlay，端点覆盖不丢失凭据或 Redis db 配置，不输出密钥。
+
+最终源码绑定和退出记录索引 `.test-results/hybrid-auth-final-source/`：`input.json` 的所有
+代码 SHA256 末尾读回一致；`command-results.json`、`go-gates.json`、`cleanup.json`。
+Go build/vet `./internal/...`、server/admin/CLI 三个独立 main 构建及 6 个相关包测试均 exit 0。
+本线额外 selected `make integration TESTS=tests/integration/test_shared_auth_secret.py` exit 0、
+2 passed/0 skip，报告 `.test-results/20261017-225914-46084`。没有重复启动共享全量 core。
+
+三个 Python/两个 Go 验收进程均退出，scratch SQL 库、MinIO 桶、私有配置及三自有容器
+删除后读回通过；只读依赖/模型/native tokenizer 资产链接保留以便集成复现。生产切换、
+worker lifespan、全量 Go endpoint parity、其他 session 写入/生成入口和 JWT 单会话撤销未验收。
+同租户/private/team Memory 与 beta 下载由此前独立提交验收，本项不扩展那些合同。
+未改共享 main/Web、未 push；候选可按本线顺序交由组合 owner 合入后做最终组合回归。

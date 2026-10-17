@@ -93,7 +93,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	engine.GET("/v1/system/ping", r.systemHandler.Ping)
 	engine.GET("/api/v1/system/ping", r.systemHandler.Ping)
 	engine.GET("/v1/system/config", r.systemHandler.GetConfig)
-	engine.GET("/v1/system/configs", r.systemHandler.GetConfigs)
+
 	engine.GET("/v1/system/version", r.systemHandler.GetVersion)
 	engine.POST("/v1/user/register", r.userHandler.Register)
 	// User login channels endpoint
@@ -103,14 +103,26 @@ func (r *Router) Setup(engine *gin.Engine) {
 	engine.POST("/v1/user/login", r.userHandler.LoginByEmail)
 
 	// User logout endpoint
-	engine.GET("/v1/user/logout", r.userHandler.Logout)
+	// Logout requires a validated current user.
 
 	engine.POST("/api/v1/datasets/:dataset_id/documents/batch-update-status", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.BatchUpdateStatus)
 
+	engine.GET("/api/v1/system/config", r.systemHandler.GetConfig)
+	engine.GET("/api/v1/system/version", r.systemHandler.GetVersion)
+	engine.POST("/api/v1/auth/login", r.userHandler.Login)
+	engine.POST("/api/v1/users", r.userHandler.Register)
+	engine.GET("/api/v1/auth/login/channels", r.userHandler.GetLoginChannels)
 	// Protected routes
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
+		authorized.GET("/v1/user/logout", r.userHandler.Logout)
+		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
+		authorized.GET("/v1/system/configs", r.systemHandler.GetConfigs)
+		authorized.GET("/api/v1/users/me", r.userHandler.Info)
+		authorized.PATCH("/api/v1/users/me", r.userHandler.Setting)
+		authorized.GET("/api/v1/tenants", r.tenantHandler.TenantList)
+		authorized.GET("/api/v1/chats/:chat_id/sessions", r.chatSessionHandler.ListChatSessions)
 		// User info endpoint
 		authorized.GET("/v1/user/info", r.userHandler.Info)
 		// User tenant info endpoint
@@ -238,7 +250,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 			// System routes (RESTful, aligned with Python /api/v1/system)
 			system := v1.Group("/system")
 			{
-				system.GET("/version", r.systemHandler.GetVersion)
 				system.GET("/configs", r.systemHandler.GetConfigs)
 				system.GET("/tokens", r.systemHandler.ListTokens)
 				system.POST("/tokens", r.systemHandler.CreateToken)

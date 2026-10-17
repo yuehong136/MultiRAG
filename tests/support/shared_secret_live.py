@@ -52,7 +52,11 @@ def main() -> None:
         cleanup.callback(lambda: (evidence / "acceptance.json").write_text(json.dumps(result, indent=2)))
         engine = cleanup.enter_context(scratch_database(evidence))
         bucket = "auth-smoke-" + uuid4().hex[:16]
-        mc = {"host": os.environ["AUTH_SMOKE_MINIO"], "user": "owned-smoke-user", "password": "owned-smoke-password", "secure": False, "region": ""}
+        mc = dict(CONFIGS["minio"])
+        mc["host"] = os.environ.get("AUTH_SMOKE_MINIO", mc["host"])
+        mc.setdefault("region", "")
+        redis_config = dict(CONFIGS["redis"])
+        redis_config["host"] = os.environ.get("AUTH_SMOKE_REDIS", redis_config["host"])
         secure = str(mc.get("secure", False)).lower() in {"true", "1"}
         client = Minio(mc["host"], access_key=mc["user"], secret_key=mc["password"], secure=secure)
 
@@ -70,7 +74,7 @@ def main() -> None:
             db.add(User(id=uuid4().hex, email=email, nickname="Owned smoke", password=UserService.hash_password(password), is_superuser=True, access_token=uuid4().hex))
             db.commit()
         overlay = {
-            "redis": {"host": os.environ["AUTH_SMOKE_REDIS"], "password": "", "db": 0},
+            "redis": redis_config,
             "postgresql": dict(CONFIGS["postgresql"], dbname=engine.url.database),
             "minio": dict(mc, bucket=bucket, prefix_path=""),
             "infinity": dict(CONFIGS.get("infinity", {}), uri=sys.argv[1], db_name="auth_smoke_" + uuid4().hex[:12]),
@@ -128,6 +132,10 @@ def main() -> None:
             result[f"cookie_{source}_to_{target}"] = True
             session.cookies.clear()
             assert session.get(bases[target] + "/admin/", allow_redirects=False, timeout=10).status_code in {302, 303, 307}
+        if os.environ.get("AUTH_SMOKE_HYBRID") == "1":
+            from tests.support.hybrid_auth_live import verify
+
+            result["hybrid"] = verify(engine, evidence, config, bases, env, (email, password))
         result["passed"] = True
     print(json.dumps(result, indent=2))
 

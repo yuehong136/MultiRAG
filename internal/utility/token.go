@@ -23,7 +23,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/golang-jwt/jwt/v4"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/iromli/go-itsdangerous"
@@ -166,4 +168,29 @@ func GenerateBetaAPIToken(accessKey string) string {
 		return withoutPrefix[:32]
 	}
 	return withoutPrefix
+}
+
+// SignUserJWT uses the main Python API's HS256/email-subject contract.
+func SignUserJWT(email, secret string) (string, error) {
+	if email == "" || secret == "" {
+		return "", errors.New("missing JWT subject or signing key")
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{Subject: email, ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour))}).SignedString([]byte(secret))
+}
+
+func UserJWTSubject(authorization, secret string) (string, error) {
+	if secret == "" {
+		return "", errors.New("signing key unavailable")
+	}
+	claims := &jwt.RegisteredClaims{}
+	token, err := jwt.ParseWithClaims(strings.TrimPrefix(authorization, "Bearer "), claims, func(token *jwt.Token) (interface{}, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("invalid signing method")
+		}
+		return []byte(secret), nil
+	})
+	if err != nil || !token.Valid || claims.Subject == "" || claims.ExpiresAt == nil {
+		return "", errors.New("invalid JWT")
+	}
+	return claims.Subject, nil
 }

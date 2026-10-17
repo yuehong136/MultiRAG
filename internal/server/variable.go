@@ -43,13 +43,10 @@ type VariableStore interface {
 
 var (
 	globalVariables *Variables
-	variablesOnce   sync.Once
 	variablesMu     sync.RWMutex
 )
 
 const (
-	// DefaultSecretKey is used when no secret key is found in storage
-	DefaultSecretKey = "infiniflow-token"
 	// SecretKeyRedisKey is the Redis key for storing secret key
 	SecretKeyRedisKey = "multirag:system:secret_key"
 	// SecretKeyTTL is the TTL for secret key in Redis (0 = no expiration)
@@ -59,34 +56,36 @@ const (
 // InitVariables initializes all runtime variables from persistent storage
 // This should be called after Config and Cache are initialized
 func InitVariables(store VariableStore) error {
-	var initErr error
-	variablesOnce.Do(func() {
-		globalVariables = &Variables{}
-
-		generatedKey, err := utility.GenerateSecretKey()
-		if err != nil {
-			initErr = fmt.Errorf("failed to generate secret key: %w", err)
-		}
-
-		// Initialize SecretKey
-		secretKey, err := GetOrCreateKey(store, SecretKeyRedisKey, generatedKey)
-		if err != nil {
-			initErr = fmt.Errorf("failed to initialize secret key: %w", err)
-		} else {
-			globalVariables.SecretKey = secretKey
-			common.Info("Secret key initialized from store")
-		}
-
-		common.Info("Server variables initialized successfully")
-	})
-	return initErr
+	variablesMu.Lock()
+	defer variablesMu.Unlock()
+	if globalVariables != nil && globalVariables.SecretKey != "" {
+		return nil
+	}
+	if cfg := GetConfig(); cfg != nil && len(cfg.Server.SecretKey) >= 32 {
+		globalVariables = &Variables{SecretKey: cfg.Server.SecretKey}
+		return nil
+	}
+	generatedKey, err := utility.GenerateSecretKey()
+	if err != nil {
+		return fmt.Errorf("failed to generate secret key")
+	}
+	secretKey, err := GetOrCreateKey(store, SecretKeyRedisKey, generatedKey)
+	if err != nil {
+		return fmt.Errorf("failed to initialize secret key: %w", err)
+	}
+	globalVariables = &Variables{SecretKey: secretKey}
+	return nil
 }
 
 // GetVariables returns the global variables instance
 func GetVariables() *Variables {
 	variablesMu.RLock()
 	defer variablesMu.RUnlock()
-	return globalVariables
+	if globalVariables == nil {
+		return nil
+	}
+	snapshot := *globalVariables
+	return &snapshot
 }
 
 // GetSecretKey returns the current secret key
@@ -94,7 +93,7 @@ func GetSecretKey() string {
 	variablesMu.RLock()
 	defer variablesMu.RUnlock()
 	if globalVariables == nil {
-		return DefaultSecretKey
+		return ""
 	}
 	return globalVariables.SecretKey
 }
@@ -111,9 +110,12 @@ func SetSecretKey(key string) {
 
 // GetOrCreateKey gets a key from store, or creates it if not exists
 // - If key exists in store, returns the stored value
-// - If key doesn't exist, calls createFn to generate value, stores it, and returns it
+// - If absent, atomically persists the candidate and returns the actual winner
 // - Uses SetNX to ensure atomic creation (only one caller succeeds when key doesn't exist)
 func GetOrCreateKey(store VariableStore, key string, newValue string) (string, error) {
+	if newValue == "" {
+		return "", fmt.Errorf("empty candidate")
+	}
 	if store == nil {
 		err := fmt.Errorf("store is nil")
 		common.Warn("VariableStore is nil, cannot get or create key", zap.String("key", key))
@@ -138,7 +140,7 @@ func GetOrCreateKey(store VariableStore, key string, newValue string) (string, e
 
 	// Try to set with NX (only if not exists) - ensures atomicity
 	if store.SetNX(key, newValue, SecretKeyTTL) {
-		common.Info("New value stored successfully", zap.String("key", key))
+		common.Warn("SECURITY WARNING: Using auto-generated SECRET_KEY.")
 		return newValue, nil
 	}
 
@@ -146,7 +148,7 @@ func GetOrCreateKey(store VariableStore, key string, newValue string) (string, e
 	value, err = store.Get(key)
 	if err != nil {
 		common.Warn("Failed to get key after SetNX", zap.String("key", key), zap.Error(err))
-		return newValue, nil // Return our generated value as fallback
+		return "", fmt.Errorf("failed to read shared secret after creation race")
 	}
 
 	if value != "" {
@@ -154,13 +156,16 @@ func GetOrCreateKey(store VariableStore, key string, newValue string) (string, e
 		return value, nil
 	}
 
-	// If still empty, use our generated value
-	return newValue, nil
+	// A losing candidate is never a shared signing key.
+	return "", fmt.Errorf("shared secret missing after creation race")
 }
 
 // RefreshVariables refreshes all variables from storage
 // Call this when you want to reload variables from persistent storage
 func RefreshVariables(store VariableStore) error {
+	if cfg := GetConfig(); cfg != nil && len(cfg.Server.SecretKey) >= 32 {
+		return nil
+	}
 	if store == nil {
 		return fmt.Errorf("store is nil")
 	}

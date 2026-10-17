@@ -18,11 +18,11 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"multirag/internal/common"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
 	"multirag/internal/utility"
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -72,9 +72,8 @@ func (h *UserHandler) Register(c *gin.Context) {
 		return
 	}
 
-	variables := server.GetVariables()
-	secretKey := variables.SecretKey
-	authToken, err := utility.DumpAccessToken(*user.AccessToken, secretKey)
+	secretKey := server.GetSecretKey()
+	authToken, err := utility.SignUserJWT(user.Email, secretKey)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,
@@ -128,10 +127,9 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Sign the access_token using itsdangerous (compatible with Python)
-	variables := server.GetVariables()
-	secretKey := variables.SecretKey
-	authToken, err := utility.DumpAccessToken(*user.AccessToken, secretKey)
+	// Sign the current main API JWT using the shared startup key.
+	secretKey := server.GetSecretKey()
+	authToken, err := utility.SignUserJWT(user.Email, secretKey)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,
@@ -197,9 +195,8 @@ func (h *UserHandler) LoginByEmail(c *gin.Context) {
 		return
 	}
 
-	variables := server.GetVariables()
-	secretKey := variables.SecretKey
-	authToken, err := utility.DumpAccessToken(*user.AccessToken, secretKey)
+	secretKey := server.GetSecretKey()
+	authToken, err := utility.SignUserJWT(user.Email, secretKey)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeServerError,
