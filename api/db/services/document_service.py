@@ -2762,7 +2762,7 @@ class DocumentService(CommonService):
 
     @classmethod
     def _sync_progress(cls, db: Session, docs: list[dict[str, Any]]) -> None:
-        from api.db.services.task_service import TaskService
+        from api.db.services.task_service import TASK_LOG_MAX_BYTES, TaskService, trim_header_by_lines
 
         for d in docs:
             try:
@@ -2797,7 +2797,7 @@ class DocumentService(CommonService):
                     if t.progress == -1:
                         bad += 1
                     prg += t.progress if t.progress >= 0 else 0
-                    if t.progress_msg.strip():
+                    if (t.progress_msg or "").strip():
                         msg.append(t.progress_msg)
                     priority = max(priority, t.priority)
 
@@ -2829,6 +2829,7 @@ class DocumentService(CommonService):
                         info["progress_msg"] += "\n%d tasks are ahead in the queue..." % get_queue_length(priority)
                 else:
                     info["progress_msg"] = "%d tasks are ahead in the queue..." % get_queue_length(priority)
+                info["progress_msg"] = trim_header_by_lines(info["progress_msg"], TASK_LOG_MAX_BYTES)
                 info["update_time"] = current_timestamp()
                 info["update_date"] = get_format_time()
                 db.execute(update(cls.model).where(cls.model.id == d["id"], or_(cls.model.run.is_(None), cls.model.run != TaskStatus.CANCEL.value)).values(info))

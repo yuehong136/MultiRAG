@@ -19,7 +19,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
 from api.db import FileType
-from api.db.db_models import DatabaseLock, Document, File, File2Document, Knowledgebase, Task, Tenant
+from api.db.db_models import Document, File, File2Document, Knowledgebase, Task, Tenant
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from api.db.services.document_task_service import accounted_tokens, base_task_digest, token_digest
@@ -38,14 +38,40 @@ CANVAS_DEBUG_DOC_ID = "dataflow_x"
 GRAPH_RAPTOR_FAKE_DOC_ID = "graph_raptor_x"
 
 
-def trim_header_by_lines(text: str, max_length) -> str:
-    len_text = len(text)
-    if len_text <= max_length:
-        return text
-    for i in range(len_text):
-        if text[i] == "\n" and len_text - i <= max_length:
-            return text[i + 1 :]
-    return text
+# Keep room below MySQL TEXT's 65535-byte limit for terminal/status markers.
+TASK_LOG_MAX_BYTES = 60 * 1024
+
+
+def _configured_task_log_length(value: str | None) -> int:
+    try:
+        length = int(value) if value is not None else 3000
+        if length <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        logging.warning("Invalid TASK_MAX_LOG_LENGTH; using 3000 characters")
+        return 3000
+    if length > TASK_LOG_MAX_BYTES:
+        logging.warning("TASK_MAX_LOG_LENGTH exceeds the portable log budget; clamping")
+    return min(length, TASK_LOG_MAX_BYTES)
+
+
+TASK_MAX_LOG_LENGTH = _configured_task_log_length(os.environ.get("TASK_MAX_LOG_LENGTH"))
+
+
+def trim_header_by_lines(text: str, max_length: int) -> str:
+    """Keep a bounded UTF-8 tail, preserving whole lines when they fit."""
+    if max_length <= 0:
+        raise ValueError("Task log length must be positive")
+    result = text[-max_length:]
+    encoded = result.encode("utf-8")
+    if len(encoded) > TASK_LOG_MAX_BYTES:
+        result = encoded[-TASK_LOG_MAX_BYTES:].decode("utf-8", errors="ignore")
+    start = len(text) - len(result)
+    if start > 0 and text[start - 1] != "\n":
+        newline = result.find("\n")
+        if 0 <= newline < len(result) - 1:
+            result = result[newline + 1 :]
+    return result
 
 
 def _task_queue_payload(task: dict) -> dict:
@@ -174,12 +200,12 @@ class TaskService(CommonService):
         # task["progress_msg"] = task["progress_msg"] + "\n" + msg
         # task["progress"] = prog
 
-        # 将更新写入数据库
-        stmt = (
-            update(cls.model)
-            .where(cls.model.id == task["id"], ~func.coalesce(cls.model.progress_msg, "").contains(TASK_CANCEL_MARKER))
-            .values(progress_msg=func.coalesce(cls.model.progress_msg, "") + msg, progress=prog)
-        )
+        # Serialize with progress writers until this transaction commits.
+        locked_task = db.scalar(select(cls.model).where(cls.model.id == task["id"]).with_for_update().execution_options(populate_existing=True))
+        if locked_task is None:
+            return None
+        progress_msg = trim_header_by_lines((locked_task.progress_msg or "") + msg, TASK_MAX_LOG_LENGTH)
+        stmt = update(cls.model).where(cls.model.id == task["id"], ~func.coalesce(cls.model.progress_msg, "").contains(TASK_CANCEL_MARKER)).values(progress_msg=progress_msg, progress=prog)
         written = db.execute(stmt).rowcount
 
         db.commit()
@@ -305,12 +331,12 @@ class TaskService(CommonService):
         """Update the progress information for a task.
 
         This method updates both the progress message and completion percentage of a task.
-        It handles platform-specific behavior (macOS vs others) and uses database locking
-        when necessary to ensure thread safety.
+        Transaction row locks serialize log appends on every platform. The caller
+        retains control of commit/rollback; no intermediate lock release loses a log.
 
         Update Rules:
             - A persisted cancellation marker prevents all later worker writes.
-            - progress_msg: Appends the new message, and trims the result to max 3000 lines.
+            - progress_msg: Appends within TASK_MAX_LOG_LENGTH characters and the UTF-8 byte budget.
             - progress: Updates when (a) new progress >= 1 (allows recovery from -1), or
                         (b) current progress != -1 AND (new progress is -1 OR greater than existing).
 
@@ -322,7 +348,7 @@ class TaskService(CommonService):
         """
 
         def do_update() -> None:
-            task = cls.get_by_id(db, id)
+            task = db.scalar(select(cls.model).where(cls.model.id == id).with_for_update().execution_options(populate_existing=True))
             if not task:
                 logging.warning("Update_progress error: task not found")
                 return
@@ -330,7 +356,7 @@ class TaskService(CommonService):
             filters = [cls.model.id == id, ~func.coalesce(cls.model.progress_msg, "").contains(TASK_CANCEL_MARKER)]
 
             if info.get("progress_msg"):
-                progress_msg = trim_header_by_lines((task.progress_msg or "") + "\n" + str(info["progress_msg"]), 3000)
+                progress_msg = trim_header_by_lines((task.progress_msg or "") + "\n" + str(info["progress_msg"]), TASK_MAX_LOG_LENGTH)
                 db.execute(update(cls.model).where(*filters).values(progress_msg=progress_msg))
 
             if "progress" in info:
@@ -348,11 +374,7 @@ class TaskService(CommonService):
                 process_duration = (datetime.now() - begin_at).total_seconds()
                 db.execute(update(cls.model).where(*filters).values(process_duration=process_duration))
 
-        if os.environ.get("MACOS"):
-            do_update()
-        else:
-            with DatabaseLock.create(db, f"update_progress_{id}"):
-                do_update()
+        do_update()
 
         # Note: 不在此处 commit，由调用者控制事务边界
 

@@ -3414,3 +3414,12 @@ entity/models/service/handler/CLI race **507 passed / 11 opt-in skips**，零失
 完整隔离 verify unit 6293 passed，PG 实源与目标存储 10 passed，Web 明暗 4 passed，
 Web lint/build/体积通过。MySQL 镜像 content-store 三次提交失败，实源未验收；未动旧批
 源码、进程或共享工具链。范围、存量调查和证据见 [RDBMS 删除同步](rdbms-deletion-sync.md)。
+
+
+### 任务日志长度配置（2026-10-17，编号 8）
+
+已适配 `1d114f034bf8783ae52f048e5ee5c1053d711a22`：TASK_MAX_LOG_LENGTH 默认 3000
+字符，合法值有界、坏值告警回退；长单行、UTF-8 字节预算、事务行锁并发追加、接收与
+聚合日志容量均已补齐，保留取消/失败恢复合同。隔离 verify unit 6314 passed；PG 日志
+专项 3+1、取消竞争/回调 2、普通失败恢复 1 passed，无 skip。MySQL 物理库未供给，未
+当作实库通过。说明与证据见 [任务日志长度配置](task-log-limits.md)。不 push。

@@ -37,6 +37,7 @@ DATABASE_TESTS = frozenset(
         "test_pdf_page_task_defaults.py",
         "test_principal_auth.py",
         "test_sync_log_checkpoint.py",
+        "test_task_log_limits.py",
     }
 )
 INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py"})

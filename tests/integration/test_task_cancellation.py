@@ -422,24 +422,23 @@ def test_simultaneous_cancel_is_idempotent(cancel_api: dict[str, Any]) -> None:
     assert state[0] == -1 and state[1].count(TASK_CANCEL_MARKER) == state[4].count(TASK_CANCEL_MARKER) == 1
 
 
-def test_cancel_wins_over_worker_that_already_read_task(cancel_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cancel_wins_over_worker_that_already_read_task(cancel_api: dict[str, Any]) -> None:
     env, task_id = cancel_api, cancel_api["document_task_id"]
     read, release = threading.Event(), threading.Event()
-    original = TaskService.get_by_id
     failures: list[BaseException] = []
 
-    def delayed_read(db: Session, identifier: str) -> Any:
-        task = original(db, identifier)
-        if threading.current_thread().name == "late-progress" and identifier == task_id:
+    def before_lock(connection: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        if threading.current_thread().name == "late-progress" and "FOR UPDATE" in statement.upper() and "t_ai_tasks" in statement:
             read.set()
             assert release.wait(15)
-        return task
 
-    monkeypatch.setattr(TaskService, "get_by_id", delayed_read)
+    sa.event.listen(env["engine"], "before_cursor_execute", before_lock)
 
     def worker() -> None:
         try:
             with Session(env["engine"]) as db:
+                stale = db.get(Task, task_id)
+                assert stale is not None
                 TaskService.update_progress(db, task_id, {"progress": 1, "progress_msg": "late success after old read"})
                 db.commit()
         except BaseException as error:
@@ -454,6 +453,7 @@ def test_cancel_wins_over_worker_that_already_read_task(cancel_api: dict[str, An
     finally:
         release.set()
         thread.join(15)
+        sa.event.remove(env["engine"], "before_cursor_execute", before_lock)
     assert not thread.is_alive() and not failures
     assert persistent_state(env, task_id) == before
 
