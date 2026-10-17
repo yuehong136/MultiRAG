@@ -1,5 +1,6 @@
 """Concurrent real SDK metadata operations in an owned database, with readback."""
 
+import json
 import logging
 import os
 from collections.abc import Callable, Iterator
@@ -125,3 +126,30 @@ def test_concurrent_create_and_drop_with_independent_readback(
     record_property("leases_acquired_released", pool.released)
     record_property("observed_contention_retries", sum("contention (" in record.message for record in caplog.records))
     record_property("surfaced_same_table_drop_conflicts", sum(len(errors) for errors in drop_errors))
+
+
+def test_metadata_crud_preserves_json_and_returns_every_lease(metadata_store: tuple[Any, Any, TrackedPool]) -> None:
+    store, reader, pool = metadata_store
+    table_name = "ragflow_doc_meta_contract"
+    original = {"category": "研发", "tags": ["one", "two"], "enabled": False, "rank": 0}
+    replacement = {"category": "updated", "tags": [], "enabled": True}
+    assert store.create_doc_meta_idx(table_name) is True
+    assert store.insert([{"id": "doc", "kb_id": "kb", "meta_fields": original}], table_name, "") == []
+    table = reader.get_database(store.dbName).get_table(table_name)
+
+    def read_metadata() -> dict[str, Any]:
+        data = table.output(["id", "kb_id", "meta_fields"]).to_result()[0]
+        assert data["id"] == ["doc"] and data["kb_id"] == ["kb"]
+        return json.loads(data["meta_fields"][0])
+
+    assert read_metadata() == original
+    stored = store.get("doc", table_name, [""])
+    assert stored is not None and json.loads(stored["meta_fields"]) == original
+    assert store.update({"id": "doc", "kb_id": "kb"}, {"meta_fields": replacement}, table_name, "") is True
+    assert read_metadata() == replacement
+    assert store.delete({"id": "doc", "kb_id": "kb"}, table_name, "") == 1
+    assert table.output(["id"]).to_result()[0]["id"] == []
+    store.delete_idx(table_name, "")
+    assert reader.get_database(store.dbName).list_tables().table_names == []
+    assert pool.acquired == pool.released == 6
+    assert not pool.active
