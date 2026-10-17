@@ -77,3 +77,28 @@ Infinity 文档存储与 memory 存储共用 `InfinityConnectionBase`。元数�
   迁移或该断言。复现证据为 `.test-results/20261005-142631-53461/`。
 - 生产部署、多副本 HTTP 压测和其他 Infinity 版本
   不在本次真实环境验收内。`make smoke` 检查现有服务，不能代表本补丁已部署。
+
+### 2026-10-17 复核
+
+实现已由独立提交 `feac2aedeef412e99533cdaa940ed3f0c1c47389` 入库，当前
+`9582bdb80f1a1be4505f4061d1abe71aa4cac63a` 已包含该提交。本次重新核对指定
+上游完整 diff、冻结范围内后续演进、安装的 dev5 SDK 异常与返回值，以及文档/
+memory 存储的共用调用链；上述重试合同仍成立，无需重复移植或修改生产代码。
+当前没有独立删除数据库、索引的生产调用，未新增无消费者接口。
+
+- 专项单测与 Infinity 回归：150 passed，exit=0。命令为
+  `uv run --no-sync pytest tests/unit/test_infinity_metadata_retry.py tests/unit/test_infinity_available_filter.py tests/unit/test_infinity_empty_results.py tests/unit/test_infinity_condition_escaping.py tests/unit/test_infinity_missing_table_update.py tests/unit/test_infinity_search_failures.py tests/unit/test_infinity_row_id.py tests/unit/test_document_availability_infinity.py -q`。
+  覆盖 SDK/旧异常形态、参数非法值与上下界、非竞争立即失败、耗尽、提前返回、
+  中断与每次借用恰好归还；完整日志为 `/tmp/infinity-retry-20261017-unit.log`。
+- `make integration-infinity`：21 passed，零 skip，exit=0。运行器创建自有
+  `infiniflow/infinity:v0.7.0-dev5` 容器，两组各 12 路并发在独占 scratch
+  数据库中创建/删除，并使用独立 SDK 连接读回数据库、表和索引。
+  不同表组捕获 4 次目标竞争重试，同表组捕获 11 次；每组借出/归还均为 48 次，
+  无活动连接遗留。同表删除的 3 次 `4005` 保持异常，不计作操作成功。
+  scratch 数据库清理读回通过，运行结束后确认自有容器已移除。
+  证据为 `.test-results/20261017-193506-84129/{run.json,junit.xml}`；完整日志为
+  `/tmp/infinity-retry-20261017-integration.log`。
+- 本次仅更新验收文档，未修改代码、依赖或共享配置，未重跑全量 `make verify`
+  与核心 `make integration`。上节全量门禁及其失败是历史结果，不作为本次结果。
+  真实验收范围是单个 dev5 实例的 SDK 并发；生产部署、多副本 HTTP 压测及
+  其他 Infinity 版本仍未验收。
