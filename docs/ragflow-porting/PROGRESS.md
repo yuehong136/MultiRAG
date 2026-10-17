@@ -3331,3 +3331,40 @@ reasoning、发现/连接检查、空/异常响应、128 KiB/超限帧、取消�
 日志、源码 hash、命令退出结果及 HTTP 证据在 `/tmp/multirag-go-batch-20261017/5/`。
 未运行真实 OpenAI、生产、SQL 或 Web 验收；未改 Python/DB/路由，不运行 Python 全量
 门禁，也未打断旧批 integration。独立提交，不 push。
+
+## 078ea3bf4a773d973472136aa4ceb843d712b061 · Go NVIDIA 聊天与 CLI 故障反馈
+
+2026-10-17 核对完整四文件 diff，remote 已核为 `infiniflow/ragflow`，冻结上限
+`519e7d98a5651564d4e35d6648f006cba4baaf4f`，未 fetch。新增
+[NVIDIA driver](../../internal/entity/models/nvidia.go)及 56 个目标目录条目；采用
+`1430d0e43` 的 NVIDIA 名称。目录保留供应商模型能力描述，不代表 Go driver 已实现
+全部能力：本批仅聊天/历史/sender SSE，Encode、Rerank、ListModels、Balance、
+CheckConnection、channel streaming 均明确失败。初版之外的 `c7ddc8c03` 发现/连接检查、
+`4b9636209` embedding、`39ee2fb12` rerank 及 `1b02abd48` 每模型完整 URL 另属后续批次。
+
+factory 是新增 NVIDIA case，不复制目标误删 OpenAI case 的回退；有效后修
+`6bfe0f9a1` 已确认恢复两者。本轮累计 HTTP 回归实际调用两种 provider，确保上一项不退回 dummy。
+复用上一项统一角色/content parts/HTTP/SSE/取消管线及 transport pool，避免再复制上游
+重复请求与解析逻辑；不改变已交付 LM Studio。NVIDIA 保留 thinking 省略/true/false，
+流式 do_sample 的显式 false，无请求温度时不加默认值；结构化 reasoning 优先，普通
+qwen3 系列可拆 inline think 标签，流式只透传独立 reasoning delta。
+普通与 SSE 强制匹配各自流模式；空答案、异常事件、超限、截断、取消及 sender 错误失败关闭。
+实例 URL/key/region 沿当前 factory 绑定，错误 region 不隐式切到另一实例 URL；当前服务
+已要求 hosted provider 凭据，不因上游直接调用可省 key 而放宽本地实例凭据合同。
+
+CLI 旧的“list instance models”误报已由现行“failed to chat model”修正，保留该改进；
+本次补充 EOF/UnexpectedEOF 与 net.Error timeout 分类，普通请求、流请求/读流均覆盖，
+无 DONE 的流以 UnexpectedEOF 返回。错误保留原 cause，不打印为成功或吞掉取消。
+[HTTP CLI 回归](../../internal/cli/chat_errors_test.go)经 parser→实际 socket/超时/截断
+验证反馈及 errors.Is；测试 handler 先读完请求 body，再观察连接取消，防止夹具清理等待。
+首次专项的目录数量断言按完整目标实际 56 项修正，未删目录项或放宽能力断言。
+
+独立快照 `/tmp/multirag-go-batch-20261017/7/source`，Go 1.25.14 相关
+entity/models/service/handler/CLI race **478 passed / 11 opt-in skips**，零失败；
+`go build ./internal/...`、`go vet ./internal/...`、三个独立 main 构建均 exit 0。
+[驱动 HTTP 回归](../../internal/entity/models/nvidia_test.go)与
+[实例 HTTP 读回](../../internal/service/model_service_nvidia_test.go)覆盖多实例并行、完整历史、
+自定义 URL/key、thinking、reasoning、取消/终帧，并核对共享目录不变。受控 HTTP 服务
+由用例关闭；日志、命令退出结果和源码 hash 在 `/tmp/multirag-go-batch-20261017/7/`。
+未运行真实 NVIDIA NIM/模型硬件、生产、SQL opt-in 或 Web；skip 不算通过。
+未改 Python/DB/路由，不占用旧批 Python 验证窗口。独立提交，不 push。

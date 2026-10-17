@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"multirag/internal/entity/models"
 	"net/http"
 	"net/url"
@@ -1326,7 +1327,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		startTime := time.Now()
 		reader, err := c.HTTPClient.RequestStream("POST", url, true, "web", nil, payload)
 		if err != nil {
-			return nil, fmt.Errorf("failed to chat model: %w", err)
+			return nil, chatRequestError(err)
 		}
 		defer reader.Close()
 
@@ -1375,10 +1376,10 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		}
 		duration := time.Since(startTime).Seconds()
 		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("error reading stream: %w", err)
+			return nil, chatRequestError(err)
 		}
 		if !completed {
-			return nil, fmt.Errorf("chat stream ended before completion")
+			return nil, chatRequestError(io.ErrUnexpectedEOF)
 		}
 		fmt.Println()
 		return &StreamMessageResponse{Code: 0, Message: fullMessage.String(), Duration: duration}, nil
@@ -1386,7 +1387,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 
 	resp, err := c.HTTPClient.Request("POST", url, true, "web", nil, payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to chat model: %w", err)
+		return nil, chatRequestError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to chat model: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
