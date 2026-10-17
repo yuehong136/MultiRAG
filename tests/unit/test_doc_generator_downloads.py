@@ -117,7 +117,7 @@ async def test_generator_base64_matches_file_and_message_downloads(monkeypatch: 
 
     with caplog.at_level(logging.INFO):
         info = generator._invoke()
-    assert set(info) == {"doc_id", "filename", "mime_type", "size", "base64"}
+    assert set(info) == {"doc_id", "filename", "mime_type", "size", "base64", "include_download_info_in_content"}
     assert info["filename"] == generated.name and info["mime_type"] == mime_type and info["size"] == len(raw)
     assert base64.b64decode(info["base64"], validate=True) == objects[("owner", info["doc_id"])] == raw
     assert json.loads(generator.output("download")) == info
@@ -131,7 +131,7 @@ async def test_generator_base64_matches_file_and_message_downloads(monkeypatch: 
     monkeypatch.setattr(message, "_convert_content", lambda content: None)
     rendered = "".join([part async for part in message._stream("Ready[{DocGenerator:one@download}].")])
     assert rendered == "Ready[]."
-    assert message.output("downloads") == [info]
+    assert message.output("downloads") == [Message._normalize_download_info(info)]
 
 
 def test_generator_storage_failure_has_no_download_and_cleans_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

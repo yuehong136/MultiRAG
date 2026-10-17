@@ -3435,3 +3435,53 @@ Web 元数据设置与公式测试已逐文件比较，上游仅格式化/末尾
 明暗两例、完整 CI/lint/build/体积通过；11 库/29 角色及临时监听清理已独立读回。
 未接真实 Moodle SaaS，MySQL 实源仍未供给；未部署、不 push。范围与证据见
 [Moodle 删除同步](moodle-deletion-sync.md)。
+
+## 5b162a0c4693d78e49e591d94d00e2c61184c8e2 · DocGenerator 下载元数据贯通
+
+2026-10-17 按 port-ragflow-commit 核对完整五文件 diff，remote 为
+`infiniflow/ragflow`，目标在冻结 `519e7d98a5651564d4e35d6648f006cba4baaf4f`
+以内，未 fetch。Python 基于 `9582bdb8`、Web 基于 `3358b65` 在各自独立工作树实现，
+不替换旧批正在验收的共享源码，不混入共享账本 WIP，未 push。
+Web 配套提交 `eacd24004b74480e4da37443b1cd840727be5623`。
+
+[DocGenerator](../../agent/component/docs_generator.py) 增加默认 false、布尔校验的
+`include_download_info_in_content`，将其随现有五项 download 数据传递。
+[Message](../../agent/component/message.py) 对 dict、JSON 字符串、列表统一收集
+结构化下载对象；开启选项时正文同时得到有效 JSON，关闭或旧 DSL 缺省时继续只生成
+下载附件。向下游输出时仅去除控制标记，保留 doc_id、filename、mime_type、size、
+base64 及未知扩展字段，复制归一化而不修改输入，避免 JSON 字符串二次编码。
+实际组件 `output()` 的 content/downloads 被节点输出与 workflow_finished 直接消费；
+Web 原有附件归一化仍保留扩展字段，登录态/分享下载控件继续通过受保护接口读取对象。
+本项未修改 Sandbox、CodeExec、Canvas、权限或下载路由。
+
+同链路采用冻结内 `8e6f94bfa` 的字面量替换，避免非流式/Jinja 模板中 JSON 的反斜杠
+被 re.sub 当作替换转义，导致正文数据与结构化附件不一致；移除 XLSX 转换的正文
+前 500 字符日志，保留长度统计。未重写一般流式引用语法或 deferred-stream 错误协议。
+`8968f94bd` 所修的 header_text/footer_text/watermark_text，本地表单已有正确字段名、
+schema 与回读路径，保留等价实现；`e7d45dd64` 独立标量输出、`7da4f200e` preview URL、
+thinking 清理及 `670e68872` 删除 Python 均非本项前置，不扩大范围。
+
+Web 的默认值、类型、schema、use-values、中英开关已贯通；实际 form/store/DSL
+回归验证旧节点默认关闭、开启→保存→序列化/反序列化→重开→编辑其他字段→关闭，
+且中英切换不丢状态。原有变量选择器仍仅允许 Message 引用 DocGenerator download；
+既有下载控件与附件归一化 21 项回归通过。Playwright 使用真实组件与 store 的隔离
+表单页面，验证中英明暗主题、Space 操作、DSL 重开与无横向溢出；contact sheet 已审阅。
+此 UI 页面不模拟在线 API 成功，也不代表完整登录、Agent 运行与分享页浏览器 E2E。
+
+后端相关单元 29 passed。独立 scratch 数据库、自有 MinIO 桶及监听端口的所选
+`make integration TESTS=...`：受控五格式×开关两态，加真实 Pandoc 3.6.1 的
+TXT/Markdown/HTML/DOCX×开关两态，分别经 stream/Jinja Message，验证组件正文与
+附件元数据、base64 解码、生成文件独立读取、MinIO 原始读取和受保护 HTTP 字节一致。
+匿名拒绝、同 ID 跨租户隔离、HTML 安全头、输入不变性、正文/base64 不入日志及临时
+文件清理有断言。只记录 ID、大小与哈希；数据库用户/租户/token 行、桶、监听端口的
+清理均独立读回。初轮默认服务地址不可用后，改用现场已有的隔离服务端点，未启动、
+重启或关闭它们；未修改共享工具链，仅在本项目录安装 Pandoc 二进制。
+
+最终源码 `make verify` exit=0：6275 passed、8 条依赖契约、async DB 检查、
+Ruff 与 mypy（144 个源文件）全部通过；最终源码所选集成 exit=0，3 passed、0 skip。
+Web `test:ci` exit=0（771 Node、594 Vitest、81 Desktop、10 tooling），build、
+完整 lint（0 errors，既有 warnings）、i18n、文件体积、inventory 均通过。
+证据目录为
+`.test-results/docgen-5b162a0c-20261017/`，保存基准、源码哈希、完整命令退出结果、
+读回/清理 manifest、真实转换验收源及明暗 contact sheet。真实 XeLaTeX/PDF 渲染、
+远程模型、完整后台入库、生产部署未验收；旧批完整集成结果不能由本项证明。

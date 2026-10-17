@@ -41,7 +41,7 @@ class DocGeneratorParam(ComponentParamBase):
     Define the Docs Generator component parameters.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.output_format = "pdf"  # pdf, docx, txt, markdown, html
         self.content = ""
@@ -51,12 +51,13 @@ class DocGeneratorParam(ComponentParamBase):
         self.watermark_text = ""
         self.add_page_numbers = True
         self.add_timestamp = True
+        self.include_download_info_in_content = False
         self.font_size = 12
         self.outputs = {
             "download": {"value": "", "type": "string"},
         }
 
-    def check(self):
+    def check(self) -> None:
         self.check_empty(self.content, "[DocGenerator] Content")
         self.check_valid_value(
             self.output_format,
@@ -64,6 +65,7 @@ class DocGeneratorParam(ComponentParamBase):
             ["pdf", "docx", "txt", "markdown", "html"],
         )
         self.check_positive_number(self.font_size, "[DocGenerator] Font size")
+        self.check_boolean(self.include_download_info_in_content, "[DocGenerator] Include download info in content")
         if self.font_size < 12:
             raise ValueError("[DocGenerator] Font size must be greater than or equal to 12")
 
@@ -132,6 +134,7 @@ class DocGenerator(Message, ABC):
                     "mime_type": mime_type,
                     "size": file_size,
                     "base64": base64.b64encode(file_bytes).decode("ascii"),
+                    "include_download_info_in_content": self._param.include_download_info_in_content,
                 }
                 self.set_output("download", json.dumps(download_info))
                 return download_info

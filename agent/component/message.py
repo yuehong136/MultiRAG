@@ -74,6 +74,20 @@ class Message(ComponentBase):
     def _is_download_info(value: Any) -> bool:
         return isinstance(value, dict) and all(key in value for key in ("doc_id", "filename", "mime_type"))
 
+    @staticmethod
+    def _download_info_includes_content(value: Any) -> bool:
+        return isinstance(value, dict) and bool(value.get("include_download_info_in_content"))
+
+    @staticmethod
+    def _normalize_download_info(value: Any) -> Any:
+        if isinstance(value, list):
+            return [Message._normalize_download_info(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        normalized = value.copy()
+        normalized.pop("include_download_info_in_content", None)
+        return normalized
+
     def _extract_downloads(self, value: Any) -> list[dict[str, Any]]:
         if isinstance(value, str):
             try:
@@ -99,7 +113,16 @@ class Message(ComponentBase):
         extracted_downloads = self._extract_downloads(value)
         if extracted_downloads:
             if downloads is not None:
-                downloads.extend(extracted_downloads)
+                downloads.extend(self._normalize_download_info(item) for item in extracted_downloads)
+            if any(self._download_info_includes_content(item) for item in extracted_downloads):
+                # Decode recognized JSON strings before serializing, so the
+                # payload remains an object/list rather than quoted JSON text.
+                if isinstance(value, str):
+                    value = json.loads(value)
+                try:
+                    return json.dumps(self._normalize_download_info(value), ensure_ascii=False)
+                except (TypeError, ValueError):
+                    return str(value) if fallback_to_str else ""
             return ""
 
         if value is None:
@@ -229,8 +252,15 @@ class Message(ComponentBase):
         patt = [r"\{%.*%\}", "{{", "}}"]
         return any(re.search(p, content) for p in patt)
 
+    @staticmethod
+    def _apply_kwargs(content: str, kwargs: dict[str, Any]) -> str:
+        for name, value in kwargs.items():
+            if value is not None:
+                content = content.replace(name, str(value))
+        return content
+
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("Message processing"):
             return
 
@@ -251,8 +281,7 @@ class Message(ComponentBase):
         if self.check_if_canceled("Message processing"):
             return
 
-        for n, v in kwargs.items():
-            content = re.sub(n, v, content)
+        content = self._apply_kwargs(content, kwargs)
 
         self.set_output("downloads", downloads)
         self.set_output("content", content)
@@ -337,7 +366,7 @@ class Message(ComponentBase):
 
         return None
 
-    def _convert_content(self, content):
+    def _convert_content(self, content: Any) -> None:
         if not self._param.output_format:
             return
 
@@ -370,8 +399,7 @@ class Message(ComponentBase):
 
                 import pandas as pd
 
-                # Debug: log the content being parsed
-                logging.info(f"XLSX Parser: Content length={len(content) if content else 0}, first 500 chars: {content[:500] if content else 'None'}")
+                logging.info("XLSX Parser: Content length=%s", len(content) if content else 0)
 
                 # Try to parse ALL Markdown tables from the content
                 # Each table will be written to a separate sheet

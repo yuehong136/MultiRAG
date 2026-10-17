@@ -23,7 +23,8 @@ from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
-def test_generated_download_bytes_and_owner_scope(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize("include", [False, True])
+def test_generated_download_bytes_and_owner_scope(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture, include: bool) -> None:
     from api import apps
 
     env = runtime_upload_api
@@ -32,6 +33,7 @@ def test_generated_download_bytes_and_owner_scope(runtime_upload_api: dict[str, 
     monkeypatch.setattr(apps, "SessionLocal", sessionmaker(bind=env["engine"]))
     generator = object.__new__(DocGenerator)
     generator._param = DocGeneratorParam()
+    generator._param.include_download_info_in_content = include
     generator._param.content = "Confidential generation marker 中文"
     generator._param.filename = "generated-report"
     generator._canvas = SimpleNamespace(get_tenant_id=lambda: env["owners"][0])
@@ -62,7 +64,7 @@ def test_generated_download_bytes_and_owner_scope(runtime_upload_api: dict[str, 
             info = generator._invoke()
         payload = json.loads(generator.output("download"))
         assert payload == info
-        assert set(info) == {"doc_id", "filename", "mime_type", "size", "base64"}
+        assert set(info) == {"doc_id", "filename", "mime_type", "size", "base64", "include_download_info_in_content"}
         assert info["filename"] == f"generated-report.{extension}" and info["mime_type"] == mime
         physical = read_object(env["storage"], env["bucket"], f"{env['owners'][0]}/{info['doc_id']}")
         assert base64.b64decode(info["base64"], validate=True) == generated["bytes"] == physical == expected
@@ -70,8 +72,9 @@ def test_generated_download_bytes_and_owner_scope(runtime_upload_api: dict[str, 
         assert not Path(generated["path"]).exists()
         downloads: list[dict[str, Any]] = []
         message = object.__new__(Message)
-        assert message._stringify_message_value(generator.output("download"), downloads=downloads) == ""
-        assert downloads == [info]
+        text = message._stringify_message_value(generator.output("download"), downloads=downloads)
+        assert json.loads(text) == Message._normalize_download_info(info) if include else text == ""
+        assert downloads == [Message._normalize_download_info(info)]
 
         url = f"{env['base']}/v1/document/download/{info['doc_id']}"
         response = requests.get(url, headers=headers, params={"ext": extension}, timeout=30)
