@@ -64,6 +64,7 @@ task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
 DELETED_FILE_SYNC_SOURCES = frozenset(
     {
+        FileSource.MOODLE,
         FileSource.MYSQL,
         FileSource.POSTGRESQL,
         FileSource.IMAP,
@@ -958,7 +959,7 @@ class WebDAV(SyncBase):
 class Moodle(SyncBase):
     SOURCE_NAME: str = FileSource.MOODLE
 
-    async def _generate(self, task: dict):
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         self.connector = MoodleConnector(moodle_url=self.conf["moodle_url"], batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE))
 
         self.connector.load_credentials(self.conf["credentials"])

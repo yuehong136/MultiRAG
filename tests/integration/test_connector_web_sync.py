@@ -61,7 +61,7 @@ def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 
 @pytest.mark.external_consumer
-@pytest.mark.parametrize("source", ["dingtalk_ai_table", "imap", "mysql", "postgresql"])
+@pytest.mark.parametrize("source", ["dingtalk_ai_table", "imap", "mysql", "postgresql", "moodle"])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connector_web: str, source: str, theme: Literal["light", "dark"]) -> None:
     env = connector_sync_api
@@ -84,6 +84,8 @@ def test_connector_web_save_readback(connector_sync_api: dict[str, Any], connect
             "credentials": {"imap_username": "owner", "imap_password": "synthetic", "custom": "preserved"},
             "sync_deleted_files": False,
         }
+    if source == "moodle":
+        config = {"moodle_url": "https://moodle.invalid", "credentials": {"moodle_token": "synthetic", "custom": "preserved"}, "custom": "preserved", "sync_deleted_files": False}
     if source in {"mysql", "postgresql"}:
         config = {
             "host": "db.test",

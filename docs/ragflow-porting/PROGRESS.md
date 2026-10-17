@@ -3423,3 +3423,15 @@ Web lint/build/体积通过。MySQL 镜像 content-store 三次提交失败，�
 聚合日志容量均已补齐，保留取消/失败恢复合同。隔离 verify unit 6314 passed；PG 日志
 专项 3+1、取消竞争/回调 2、普通失败恢复 1 passed，无 skip。MySQL 物理库未供给，未
 当作实库通过。说明与证据见 [任务日志长度配置](task-log-limits.md)。不 push。
+
+
+### Moodle 完整快照与删除同步（2026-10-17，编号 14）
+
+已适配 `59bb184e63e47b7cb706a104f8cc3096bca02821`：全部课程/module 共享正文/slim
+资格及既有 ID、默认关闭删除开关；原始 REST 响应/论坛 warning/任一课程或正文读取
+失败均阻止删除，成功空结果可清最后一条。纳入冻结后修的 styled whitespace 修复。
+Web 元数据设置与公式测试已逐文件比较，上游仅格式化/末尾换行，本地共用合同及测试
+保留。隔离 make verify unit 6339 passed，实际 PG/Redis/MinIO/Milvus 9 passed，Web
+明暗两例、完整 CI/lint/build/体积通过；11 库/29 角色及临时监听清理已独立读回。
+未接真实 Moodle SaaS，MySQL 实源仍未供给；未部署、不 push。范围与证据见
+[Moodle 删除同步](moodle-deletion-sync.md)。
