@@ -3556,8 +3556,8 @@ checkout 缺 tokenizer/模型缓存及 `.venv` 启动路径；仅在自有目录
 `94324afe` 的仅创建者告警同时采用。上游 User.get_id 的 itsdangerous 不复制到本地 JWT 链。
 
 实际隔离源码基线为 `9582bdb80f1a1be4505f4061d1abe71aa4cac63a`，分支
-`codex/auth-secret-hybrid`。派发中提及的 `15dcdd7b` 在本机对象库及取回的目标远端 main
-中均不存在；基线核对尚待回复。本提交是这一实际基线上的独立候选，不替换共享 checkout
+`codex/auth-secret-hybrid`。派发中提及的 `15dcdd7b` 是上游队列标记，不是本地基线；
+已纠正该理解，实际隔离基线有效。本提交是这一实际基线上的独立候选，不替换共享 checkout
 或旧批验收源码。共享 `common/app_config.py` 的 Channel WIP 未复制、未暂存。
 
 本地改进：有效固定配置及环境覆盖启用，签名配置用 SecretStr；标准环境变量保留原始
@@ -3578,4 +3578,16 @@ API probe 进程按当前代码验证 JWT、API Session Cookie 双向签名一�
 未知文件的完整依赖策略保留并加回归。`make smoke` exit=2：现有 8123 ping HTTP 200，
 healthz 30 秒超时；未重启或修改服务。这不证明生产已加载候选代码。固定密钥的生产
 配置/轮换、Redis 丢失后的新旧副本恢复、真实账户授权及 Go 混合鉴权不以签名 probe
-代替验收。Go/Python Cookie 授权边界仍待关键选择确认，不属于本提交；未 push。
+代替验收。后续授权已明确保留两后台各自准入边界；不新增跨后台 Cookie 登录。未 push。
+
+
+### 共享密钥实际资源启动补验（2026-10-17）
+
+自有两个完整资源 API 进程通过两次 `make smoke`（各 exit 0）；真实 scratch PostgreSQL、
+自有 Redis、Infinity v0.7.0-dev6、MinIO 的健康项全部为 ok。真实 SQLAdmin 账户登录后
+Cookie 双向跨 Python 实例访问成功，无 Cookie 仍拒绝。证据目录
+`.test-results/auth-secret-live-3`，含 source SHA256、smoke 日志、健康项与数据库清理 manifest。
+两个 API 进程退出、scratch 库和桶均确认删除。此验收关闭 worker lifespan，不替代后台任务
+启动验收；没有重启常驻 8123 或修改其配置。可复现入口为
+`python -m tests.support.shared_secret_live INFINITY_URI EVIDENCE_DIR`，资源配置见
+[共享密钥验收说明](../references/shared-authentication-secret.md)。后续混合鉴权最终源码还会执行组合验收。

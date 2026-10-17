@@ -27,3 +27,10 @@ Python 的 JWT、API SessionMiddleware 和 SQLAdmin 认证 Cookie 在启动时�
 两个独立、绑定当前源码的 API 进程验证 JWT 与 `multirag_session` 双向签名互认、篡改拒绝、
 无 Cookie 的区别及进程/端口清理。签名 HTTP probe 使用固定测试密钥和合成 subject，
 不替代真实账户权限或 SQLAdmin/Go Admin 跨后台授权验收。
+
+
+完整资源验收入口为 `python -m tests.support.shared_secret_live INFINITY_URI EVIDENCE_DIR`。
+为脚本准备自有 Infinity、MinIO、Redis；`AUTH_SMOKE_MINIO` / `AUTH_SMOKE_REDIS` 指定
+本任务拥有的端点，MinIO 用脚本内的非生产测试账户。它创建 scratch PostgreSQL、独立
+配置和两个真实 API 进程，执行 make smoke 及真实 SQLAdmin 登录/Cookie 互认；关闭
+worker lifespan。日志、源文件 hash、清理读回写入 evidence；最终删除私有配置、库和桶。
