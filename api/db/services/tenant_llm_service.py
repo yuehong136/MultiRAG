@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from langfuse import Langfuse
@@ -36,6 +37,72 @@ class LLMFactoriesService(CommonService):
 
 class TenantLLMService(CommonService):
     model = TenantLLM
+
+    @staticmethod
+    def _decode_api_key_config(raw_api_key: str | dict[str, Any] | None) -> tuple[str, bool | None, str | None]:
+        if isinstance(raw_api_key, dict):
+            parsed: Any = dict(raw_api_key)
+        else:
+            try:
+                parsed = json.loads(raw_api_key or "")
+            except json.JSONDecodeError:
+                return raw_api_key or "", None, None
+        if not isinstance(parsed, dict):
+            return raw_api_key if isinstance(raw_api_key, str) else "", None, None
+        is_tools = parsed.get("is_tools")
+        if "is_tools" in parsed and not isinstance(is_tools, bool):
+            raise ValueError("Stored is_tools must be a boolean")
+        payload = {key: value for key, value in parsed.items() if key != "is_tools"}
+        raw_key = payload.get("api_key", "")
+        if set(payload) <= {"api_key"} and isinstance(raw_key, str):
+            return raw_key, is_tools, None
+        provider_payload = json.dumps(payload, ensure_ascii=False)
+        return raw_key if "api_key" in payload and isinstance(raw_key, str) else provider_payload, is_tools, provider_payload
+
+    @staticmethod
+    def _encode_api_key_config(raw_api_key: str | dict[str, Any], is_tools: bool | None) -> str:
+        if isinstance(raw_api_key, dict):
+            payload: Any = dict(raw_api_key)
+        else:
+            if is_tools is None:
+                return raw_api_key
+            try:
+                payload = json.loads(raw_api_key)
+            except json.JSONDecodeError:
+                payload = None
+        if not isinstance(payload, dict):
+            payload = {"api_key": raw_api_key}
+        if is_tools is not None:
+            payload["is_tools"] = is_tools
+        return json.dumps(payload, ensure_ascii=False)
+
+    @classmethod
+    def decode_model_config(cls, model_config: dict[str, Any]) -> dict[str, Any]:
+        config = dict(model_config)
+        api_key, is_tools, payload = cls._decode_api_key_config(config.get("api_key"))
+        config["api_key"] = api_key
+        if payload is not None:
+            config["api_key_payload"] = payload
+        if is_tools is not None:
+            config["is_tools"] = is_tools
+        return config
+
+    @classmethod
+    def resolve_model_config(cls, db: Session, model_config: dict[str, Any]) -> dict[str, Any]:
+        from api.db.services.llm_service import LLMService
+
+        config = cls.decode_model_config(model_config)
+        if "is_tools" not in config:
+            model_name, factory = cls.split_model_name_and_factory(config["llm_name"])
+            factory = factory or config.get("llm_factory")
+            suffix = cls._FACTORY_SUFFIX.get(factory, "")
+            if suffix and model_name.endswith(suffix):
+                model_name = model_name[: -len(suffix)]
+            models = LLMService.query(db, llm_name=model_name, fid=factory) if factory else LLMService.query(db, llm_name=model_name)
+            if not models and factory:
+                models = LLMService.query(db, llm_name=model_name)
+            config["is_tools"] = bool(models[0].is_tools) if models else False
+        return config
 
     @dataclass(slots=True, frozen=True)
     class UsageIdentity:
@@ -87,7 +154,7 @@ class TenantLLMService(CommonService):
         return obj
 
     @classmethod
-    def get_my_llms(cls, db: Session, tenant_id: str):
+    def get_my_llms(cls, db: Session, tenant_id: str) -> list[Any]:
         stmt = (
             select(
                 TenantLLM.id,
@@ -98,6 +165,7 @@ class TenantLLMService(CommonService):
                 TenantLLM.llm_name,
                 TenantLLM.used_tokens,
                 TenantLLM.status,
+                TenantLLM.api_key,
             )
             .join(LLMFactories, TenantLLM.llm_factory == LLMFactories.name)
             .where(
@@ -127,9 +195,7 @@ class TenantLLMService(CommonService):
         return model_name, None
 
     @classmethod
-    def get_model_config(cls, db: Session, tenant_id, llm_type, llm_name=None):
-        from api.db.services.llm_service import LLMService
-
+    def get_model_config(cls, db: Session, tenant_id: str, llm_type: str | LLMType, llm_name: str | None = None) -> dict[str, Any]:
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             raise LookupError("Tenant not found")
@@ -165,17 +231,14 @@ class TenantLLMService(CommonService):
         else:
             raise LookupError(f"Model({mdlnm}@{fid}) not authorized")
 
-        llm = LLMService.query(db, llm_name=mdlnm) if not fid else LLMService.query(db, llm_name=mdlnm, fid=fid)
-        if not llm and fid:  # for some cases seems fid mismatch
-            llm = LLMService.query(db, llm_name=mdlnm)
-        if llm:
-            model_config["is_tools"] = llm[0].is_tools
-        return model_config
+        return cls.resolve_model_config(db, model_config)
 
     @classmethod
     def model_instance(cls, db: Session, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
         if not model_config:
             raise LookupError("Model config is required")
+        model_config = cls.decode_model_config(model_config)
+        model_config["api_key"] = model_config.get("api_key_payload", model_config["api_key"])
         model_type = model_config.get("mdl_type") or model_config.get("model_type")
         if not model_type:
             raise ValueError("Model config is missing mdl_type/model_type")
@@ -198,6 +261,10 @@ class TenantLLMService(CommonService):
             if model_config["llm_factory"] not in CvModel:
                 logging.info(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
                 return None
+            if model_config.get("is_tools"):
+                if model_config["llm_factory"] not in ChatModel:
+                    raise ValueError("Native tools are unavailable for this vision provider")
+                kwargs["_tool_chat_model_factory"] = partial(ChatModel[model_config["llm_factory"]], model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
             return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"], **kwargs)
 
         elif model_type == LLMType.CHAT.value:
@@ -641,7 +708,8 @@ class TenantLLMService(CommonService):
 
 
 class LLM4Tenant:
-    def __init__(self, db: Session | None, tenant_id: str, model_config: dict, lang: str = "Chinese", **kwargs):
+    def __init__(self, db: Session | None, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> None:
+        model_config = TenantLLMService.decode_model_config(model_config)
         self.db = db
         self.tenant_id = tenant_id
         self.model_config = model_config

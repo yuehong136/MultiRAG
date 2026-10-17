@@ -20,6 +20,8 @@ import os
 import re
 import tempfile
 from abc import ABC
+from collections.abc import AsyncIterator
+from contextlib import aclosing
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -37,7 +39,7 @@ from core.prompts.generator import vision_llm_describe_prompt
 
 
 class Base(ABC):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         # Configure retry parameters
         self.max_retries = kwargs.get("max_retries", int(os.environ.get("LLM_MAX_RETRIES", 5)))
         self.base_delay = kwargs.get("retry_interval", float(os.environ.get("LLM_BASE_DELAY", 2.0)))
@@ -46,6 +48,41 @@ class Base(ABC):
         self.tools = []
         self.toolcall_sessions = {}
         self.extra_body = None
+        self._tool_chat_model: Any = None
+        self._tool_chat_model_factory = kwargs.get("_tool_chat_model_factory")
+
+    def bind_tools(self, toolcall_session: Any, tools: list[dict[str, Any]]) -> None:
+        if not toolcall_session or not tools:
+            return
+        if self._tool_chat_model is None:
+            if self._tool_chat_model_factory is None:
+                raise ValueError("Native tools are not configured for this vision model")
+            self._tool_chat_model = self._tool_chat_model_factory()
+        self._tool_chat_model.bind_tools(toolcall_session, tools)
+        self.is_tools = self._tool_chat_model.is_tools
+
+    async def _tool_messages(self, history: list[dict[str, Any]], images: Any, video_bytes: bytes | None, filename: str) -> list[dict[str, Any]]:
+        if video_bytes:
+            frames = await thread_pool_exec(self._video_frames_to_image_bytes, video_bytes, filename)
+            existing_images = images if isinstance(images, list) else [images] if images else []
+            images = [*existing_images, *frames]
+        # Use the common OpenAI image representation; Ollama's chat backend then
+        # converts it to native image fields. Never mutate the caller's history.
+        return Base._form_history(self, "", deepcopy(history), images)
+
+    async def async_chat_with_tools(
+        self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
+    ) -> tuple[str, int]:
+        messages = await self._tool_messages(history, images, video_bytes, filename)
+        return await self._tool_chat_model.async_chat_with_tools(system, messages, gen_conf)
+
+    async def async_chat_streamly_with_tools(
+        self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | int]:
+        messages = await self._tool_messages(history, images, video_bytes, filename)
+        async with aclosing(self._tool_chat_model.async_chat_streamly_with_tools(system, messages, gen_conf)) as stream:
+            async for item in stream:
+                yield item
 
     def describe(self, image):
         raise NotImplementedError("Please implement encode method!")

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
 from api.db.joint_services import tenant_model_service
+from api.db.services.llm_service import LLMService
 from common.constants import LLMType
 
 
@@ -23,7 +24,7 @@ def test_chat_lookup_falls_back_to_image2text_model(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr(tenant_model_service.TenantLLMService, "get_api_key", classmethod(fake_get_api_key))
-    monkeypatch.setattr(tenant_model_service.LLMService, "query", classmethod(lambda _cls, _db, **_kwargs: []))
+    monkeypatch.setattr(LLMService, "query", classmethod(lambda _cls, _db, **_kwargs: []))
 
     with Session() as db:
         config = tenant_model_service.get_model_config_by_type_and_name(

@@ -1,18 +1,19 @@
 import asyncio
 import enum
 import os
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle, LLMService
+from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from common import settings
 from common.constants import LLMType
 
 
-def get_model_config_by_id(db: Session, tenant_model_id: int, *, tenant_id: str | None = None) -> dict:
+def get_model_config_by_id(db: Session, tenant_model_id: int, *, tenant_id: str | None = None) -> dict[str, Any]:
     filters: dict = {"id": tenant_model_id}
     if tenant_id is not None:
         filters["tenant_id"] = tenant_id
@@ -20,11 +21,7 @@ def get_model_config_by_id(db: Session, tenant_model_id: int, *, tenant_id: str 
     if not tenant_model:
         raise LookupError(f"Tenant Model with id {tenant_model_id} not found")
 
-    config_dict = tenant_model.to_dict()
-    llms = LLMService.query(db, llm_name=config_dict["llm_name"])
-    if llms:
-        config_dict["is_tools"] = llms[0].is_tools
-    return config_dict
+    return TenantLLMService.resolve_model_config(db, tenant_model.to_dict())
 
 
 def get_model_config_by_type_and_name(
@@ -32,7 +29,7 @@ def get_model_config_by_type_and_name(
     tenant_id: str,
     model_type: str,
     model_name: str,
-) -> dict:
+) -> dict[str, Any]:
     if not model_name:
         raise ValueError("Model Name is required")
 
@@ -73,13 +70,7 @@ def get_model_config_by_type_and_name(
     if config_model_type != model_type_value and not (model_type_value == LLMType.CHAT.value and config_model_type == LLMType.IMAGE2TEXT.value):
         raise LookupError(f"Tenant Model with name {model_name} has type {config_model_type}, expected {model_type_value}")
 
-    pure_model_name, fid = TenantLLMService.split_model_name_and_factory(config_dict["llm_name"])
-    llms = LLMService.query(db, llm_name=pure_model_name, fid=fid) if fid else LLMService.query(db, llm_name=pure_model_name)
-    if not llms and fid:
-        llms = LLMService.query(db, llm_name=pure_model_name)
-    if llms:
-        config_dict["is_tools"] = llms[0].is_tools
-    return config_dict
+    return TenantLLMService.resolve_model_config(db, config_dict)
 
 
 def get_tenant_default_model_by_type(

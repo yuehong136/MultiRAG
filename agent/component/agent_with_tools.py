@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
 from copy import deepcopy
 from functools import partial
 from timeit import default_timer as timer
@@ -337,7 +338,7 @@ class Agent(LLM, ToolBase):
         self.set_output("content", ans)
         return ans
 
-    async def stream_output_with_tools_async(self, prompt, msg, user_defined_prompt={}):
+    async def stream_output_with_tools_async(self, prompt: str, msg: list[dict[str, Any]], user_defined_prompt: dict[str, Any] = {}) -> AsyncIterator[str]:
         if len(msg) > 3:
             st = timer()
             user_request = await full_question(messages=msg, chat_mdl=self.chat_mdl)
@@ -357,11 +358,14 @@ class Agent(LLM, ToolBase):
             if self.check_if_canceled("Agent streaming"):
                 return
             if delta.find("**ERROR**") >= 0:
-                if self.get_exception_default_value():
-                    self.set_output("content", self.get_exception_default_value())
-                    yield self.get_exception_default_value()
+                fallback = self.get_exception_default_value()
+                if fallback:
+                    self.set_output("content", fallback)
+                    yield fallback
                 else:
                     self.set_output("_ERROR", delta)
+                    self.set_output("content", delta)
+                    yield delta
                 return
             if not need2cite or cited:
                 yield delta

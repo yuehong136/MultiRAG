@@ -6,11 +6,12 @@ import os
 import re
 from array import array
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, StrictBool, ValidationError, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -639,13 +640,18 @@ class SetAPIKeyRequest(BaseModel):
     base_url: str | None = None
     source_fid: str | None = None
     verify: bool = False
+    group_id: str | None = None
 
 
 class AddLLMRequest(BaseModel):
     llm_factory: str
     llm_name: str
     mdl_type: str
-    api_key: str | dict = None  # 支持字符串或字典（MinerU 等厂商传递配置对象）
+    api_key: str | dict[str, Any] | None = None
+    is_tools: StrictBool = False
+    group_id: str | None = None
+    provider_order: str | list[str] | None = None
+    api_version: str | None = None
     api_base: str | None = None
     max_tokens: int | None = 8192
     ark_api_key: str | None = None
@@ -873,7 +879,7 @@ def probe_timeout_seconds() -> int:
 
 
 @router.post("/set_api_key", summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
-async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Any:
     req = request.model_dump()
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
@@ -888,6 +894,23 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
         if req.get("verify", False):
             return get_json_result(data={"message": msg, "success": False})
         return get_data_error_result(retmsg=msg)
+
+    existing_by_name = {row.llm_name: row for row in TenantLLMService.query(db, tenant_id=user.id, llm_factory=factory)}
+
+    def candidate_key(model_name: str) -> str:
+        existing = existing_by_name.get(model_name)
+        _, _, saved_payload = TenantLLMService._decode_api_key_config(existing.api_key if existing else None)
+        new_key, _, new_payload = TenantLLMService._decode_api_key_config(req["api_key"])
+        if saved_payload is None and new_payload is None and not (factory == "MiniMax" and req.get("group_id") is not None):
+            return new_key
+        fields = json.loads(saved_payload) if saved_payload else {}
+        if new_payload:
+            fields.update(json.loads(new_payload))
+        else:
+            fields["api_key"] = new_key
+        if factory == "MiniMax" and req.get("group_id") is not None:
+            fields["group_id"] = req["group_id"]
+        return json.dumps(fields, ensure_ascii=False)
 
     msg = ""
     # 这里最多串行探测 embedding + chat + rerank 三个模型（通义千问三样都有），
@@ -912,7 +935,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             try:
                 if factory not in EmbeddingModel:
                     raise LookupError(f"Embedding model from {factory} is not supported yet.")
-                mdl = EmbeddingModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
+                mdl = EmbeddingModel[factory](candidate_key(llm.llm_name), llm.llm_name, base_url=base_url)
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.encode, ["Test if the api key is available"]),
                     timeout=remaining_budget(),
@@ -926,15 +949,20 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             try:
                 if factory not in ChatModel:
                     raise LookupError(f"Chat model from {factory} is not supported yet.")
-                mdl = ChatModel[factory](req["api_key"], llm.llm_name, base_url=base_url, **extra)
+                mdl = ChatModel[factory](candidate_key(llm.llm_name), llm.llm_name, base_url=base_url, **extra)
                 # 上游报错以 "**ERROR**: ..." 字符串 yield 出来，必须留下来回灌给用户
                 upstream_error = ""
-                async with asyncio.timeout(remaining_budget()):
-                    async for chunk in mdl.async_chat_streamly(
-                        "",
-                        [{"role": "user", "content": "Hi"}],
-                        {"temperature": 0.9},
-                    ):
+                async with (
+                    asyncio.timeout(remaining_budget()),
+                    aclosing(
+                        mdl.async_chat_streamly(
+                            "",
+                            [{"role": "user", "content": "Hi"}],
+                            {"temperature": 0.9},
+                        )
+                    ) as probe_stream,
+                ):
+                    async for chunk in probe_stream:
                         if not chunk or not isinstance(chunk, str):
                             continue
                         if chunk.find("**ERROR**") >= 0:
@@ -950,7 +978,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             try:
                 if factory not in RerankModel:
                     raise LookupError(f"Re-rank model from {factory} is not supported yet.")
-                mdl = RerankModel[factory](req["api_key"], llm.llm_name, base_url=base_url)
+                mdl = RerankModel[factory](candidate_key(llm.llm_name), llm.llm_name, base_url=base_url)
                 arr, tc = await asyncio.wait_for(
                     thread_pool_exec(mdl.similarity, "What's the weather?", ["Is it sunny today?"]),
                     timeout=remaining_budget(),
@@ -974,6 +1002,9 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             llm_config[n] = req[n]
 
     for llm in source_llms:
+        existing = existing_by_name.get(llm.llm_name)
+        _, saved_tools, _ = TenantLLMService._decode_api_key_config(existing.api_key if existing else None)
+        llm_config["api_key"] = TenantLLMService._encode_api_key_config(candidate_key(llm.llm_name), saved_tools)
         llm_config["max_tokens"] = llm.max_tokens
         if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory, TenantLLM.llm_name == llm.llm_name], llm_config):
             TenantLLMService.save(
@@ -991,7 +1022,7 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
 
 
 @router.post("/add_llm", summary="新增模型", response_description="成功新增该模型")
-async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Any:
     """
     # POST /add_llm
 
@@ -1094,9 +1125,6 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     """
     req = request.model_dump()
     factory = req["llm_factory"]
-    # AddLLMRequest.api_key 默认就是 None，model_dump() 一定带上该键，所以 get 的兜底值取不到，
-    # 必须用 or：否则 OpenAI(api_key=None) 直接抛异常（本地模型场景常留空）。
-    api_key = req.get("api_key") or "x"
     llm_name = req["llm_name"]
     timeout_seconds = probe_timeout_seconds()
 
@@ -1106,9 +1134,36 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     if factory not in allowed_factory_names:
         return get_data_error_result(retmsg=f"LLM factory {factory} is not allowed")
 
-    def apikey_json(keys):
-        nonlocal req
-        return json.dumps({k: req.get(k, "") for k in keys})
+    saved_name = llm_name + TenantLLMService._FACTORY_SUFFIX.get(factory, "")
+    existing = TenantLLMService.query(db, tenant_id=user.id, llm_factory=factory, llm_name=saved_name)
+    existing_key, saved_tools, saved_payload = TenantLLMService._decode_api_key_config(existing[0].api_key if existing else None)
+    provided_key = req.get("api_key")
+    if existing:
+        for field in ("api_base", "max_tokens"):
+            if field not in request.model_fields_set:
+                req[field] = getattr(existing[0], field, req[field])
+    api_key: str | dict[str, Any] = (saved_payload or existing_key or "x") if provided_key is None else provided_key or "x"
+    # Preserve provider-specific and unknown fields when editing only capability/key.
+    incoming_key, _, incoming_payload = TenantLLMService._decode_api_key_config(provided_key)
+    credential_fields: dict[str, Any] = json.loads(saved_payload) if saved_payload else {}
+    if incoming_payload:
+        credential_fields.update(json.loads(incoming_payload))
+
+    def apikey_json(keys: list[str]) -> str:
+        payload = dict(credential_fields)
+        for key in keys:
+            if key == "api_key":
+                if provided_key is None:
+                    payload.setdefault(key, existing_key or "x")
+                elif isinstance(provided_key, str) and not incoming_payload:
+                    payload[key] = incoming_key or "x"
+                elif isinstance(provided_key, dict) and "api_key" in provided_key:
+                    payload[key] = provided_key["api_key"]
+            elif key in request.model_fields_set and req.get(key) is not None:
+                payload[key] = req[key]
+            else:
+                payload.setdefault(key, req.get(key) or "")
+        return json.dumps(payload, ensure_ascii=False)
 
     if factory == "VolcEngine":
         # For VolcEngine, due to its special authentication method
@@ -1152,6 +1207,9 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     elif factory == "OpenRouter":
         api_key = apikey_json(["api_key", "provider_order"])
 
+    elif factory == "MiniMax":
+        api_key = apikey_json(["api_key", "group_id"])
+
     elif factory == "MinerU":
         api_key = apikey_json(["api_key", "provider_order"])
 
@@ -1177,7 +1235,11 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     # 一旦命中可重试错误就必然睡穿探测超时，把真实的 429/5xx 掩盖成一条空 timeout。
     extra = {"provider": factory, "max_retries": 0}
     model_type = llm["mdl_type"]
-    model_api_key = llm["api_key"]
+    effective_tools = req["is_tools"] if "is_tools" in request.model_fields_set else saved_tools
+    if effective_tools and model_type == LLMType.IMAGE2TEXT.value and factory not in ChatModel:
+        return get_data_error_result(retmsg="Native tools are unavailable for this vision provider")
+    decoded_key, _, provider_payload = TenantLLMService._decode_api_key_config(llm["api_key"])
+    model_api_key = provider_payload if provider_payload is not None else decoded_key
     model_base_url = llm.get("api_base", "")
 
     def probe_failure(prefix: str, err: BaseException) -> str:
@@ -1216,12 +1278,17 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
                 # 上游报错是以 "**ERROR**: ..." 字符串 yield 出来的，必须留下来回灌给用户，
                 # 否则 401/404/参数错误全被统一成一句 "No valid response received"。
                 upstream_error = ""
-                async with asyncio.timeout(timeout_seconds):
-                    async for chunk in mdl.async_chat_streamly(
-                        "",
-                        [{"role": "user", "content": "Hi"}],
-                        {"temperature": 0.9},
-                    ):
+                async with (
+                    asyncio.timeout(timeout_seconds),
+                    aclosing(
+                        mdl.async_chat_streamly(
+                            "",
+                            [{"role": "user", "content": "Hi"}],
+                            {"temperature": 0.9},
+                        )
+                    ) as probe_stream,
+                ):
+                    async for chunk in probe_stream:
                         if not chunk or not isinstance(chunk, str):
                             continue
                         if chunk.find("**ERROR**:") >= 0:
@@ -1310,6 +1377,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user=De
     if msg:
         return get_data_error_result(retmsg=msg.strip())
 
+    is_tools = req["is_tools"] if "is_tools" in request.model_fields_set else saved_tools
+    llm["api_key"] = TenantLLMService._encode_api_key_config(llm["api_key"], is_tools)
     try:
         if not TenantLLMService.filter_update(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == factory, TenantLLM.llm_name == llm["llm_name"]], llm):
             TenantLLMService.save(db, **llm)
@@ -1358,7 +1427,7 @@ def delete_factory_restful(request: DeleteFactoryRequest, db: Session = Depends(
 
 
 @router.get("/my_llms", summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
-def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=Depends(manager), request: Request = None):
+def my_llms(include_details: bool = False, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Any:
     try:
         TenantLLMService.ensure_mineru_from_env(db, user.id)
         TenantLLMService.ensure_opendataloader_from_env(db, user.id)
@@ -1388,6 +1457,7 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
                         "api_base": o_dict["api_base"] or "",
                         "max_tokens": o_dict["max_tokens"] or 8192,
                         "status": o_dict["status"] or "1",
+                        "is_tools": TenantLLMService.resolve_model_config(db, o_dict)["is_tools"],
                     }
                 )
         else:
@@ -1395,7 +1465,8 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user=D
             for o in TenantLLMService.get_my_llms(db, user.id):
                 if o.llm_factory not in res:
                     res[o.llm_factory] = {"tags": o.tags, "llm": []}
-                res[o.llm_factory]["llm"].append({"id": o.id, "type": o.mdl_type, "name": o.llm_name, "used_token": o.used_tokens, "status": o.status})
+                capability = TenantLLMService.resolve_model_config(db, {"llm_name": o.llm_name, "llm_factory": o.llm_factory, "api_key": getattr(o, "api_key", "")})["is_tools"]
+                res[o.llm_factory]["llm"].append({"id": o.id, "type": o.mdl_type, "name": o.llm_name, "used_token": o.used_tokens, "status": o.status, "is_tools": capability})
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

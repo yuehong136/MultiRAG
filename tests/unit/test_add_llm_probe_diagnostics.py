@@ -56,6 +56,7 @@ def probe_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=FACTORY)])
     monkeypatch.setattr(llm_app, "ChatModel", {FACTORY: _FakeChat})
+    monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: []))
 
     saved: list[dict[str, Any]] = []
     monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, conds, payload: False))
@@ -268,6 +269,7 @@ class TestSetApiKeyProbe:
         _FakeChat.delay = 0.0
 
         monkeypatch.setattr(llm_app, "ChatModel", {"ZHIPU-AI": _FakeChat})
+        monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: []))
         monkeypatch.setattr(
             llm_app.LLMService,
             "query",
