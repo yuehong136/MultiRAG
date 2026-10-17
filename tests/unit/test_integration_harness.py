@@ -22,6 +22,10 @@ def test_database_suite_never_requires_unrelated_services() -> None:
     assert required_services([INTEGRATION / "new_test.py"]) == {"postgresql", "redis", "minio", "milvus"}
 
 
+def test_shared_auth_secret_prepares_only_redis() -> None:
+    assert required_services([INTEGRATION / "test_shared_auth_secret.py"]) == {"redis"}
+
+
 def test_explicit_node_selection_prepares_only_its_dependencies() -> None:
     paths = selected_paths("core", [str(INTEGRATION / "test_async_engine.py") + "::test_async_engine_select_one", "-q"])
     assert required_services(paths) == {"postgresql"}

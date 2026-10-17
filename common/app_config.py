@@ -89,7 +89,7 @@ class ServerConfig(_Section):
 
     host: str = "127.0.0.1"
     http_port: int = 9380
-    secret_key: str | None = None  # 注意：实际 SECRET_KEY 来自 Redis（见 resources），此字段历史遗留
+    secret_key: SecretStr | None = None  # >=32 characters selects a fixed shared key; otherwise Redis fallback
     admin_require_superuser: bool = False
 
 
@@ -999,11 +999,21 @@ def _coerce_env_value(value: str) -> Any:
 def _apply_env_overlay(merged: dict[str, Any]) -> None:
     """把 MULTIRAG_<SECTION>__<FIELD>[__<SUBFIELD>...] 环境变量写入合并配置。
 
+    - >=32 字符的 ``MULTIRAG_SECRET_KEY`` 映射到 ``multirag.secret_key``；
+      标准双下划线变量优先，短历史占位别名不覆盖有效 YAML 密钥；
     - ``INFINITY_POOL_MAX_SIZE`` 作为上游兼容别名，映射到
       ``infinity.pool_max_size``；标准 MULTIRAG 变量优先级更高；
     - 至少要有一层 '__'（裸 MULTIRAG_X 不视为配置覆盖，避免误伤无关变量）；
     - 中间路径不存在时自动建 dict；中间路径撞上非 dict 值则覆盖为 dict。
     """
+    legacy_secret_key = os.environ.get("MULTIRAG_SECRET_KEY")
+    if legacy_secret_key is not None and len(legacy_secret_key) >= 32:
+        multirag_config = merged.get("multirag")
+        if not isinstance(multirag_config, dict):
+            multirag_config = {}
+            merged["multirag"] = multirag_config
+        multirag_config["secret_key"] = legacy_secret_key
+
     legacy_pool_max_size = os.environ.get("INFINITY_POOL_MAX_SIZE")
     if legacy_pool_max_size is not None:
         infinity_config = merged.get("infinity")
@@ -1025,7 +1035,8 @@ def _apply_env_overlay(merged: dict[str, Any]) -> None:
                 child = {}
                 node[part] = child
             node = child
-        node[path[-1]] = _coerce_env_value(env_value)
+        # Signing keys are opaque strings, even when they look like YAML numbers.
+        node[path[-1]] = (env_value or None) if path == ["multirag", "secret_key"] else _coerce_env_value(env_value)
 
 
 def _apply_decryption(merged: dict[str, Any]) -> None:

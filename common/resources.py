@@ -19,6 +19,7 @@ import secrets
 import threading
 from typing import TYPE_CHECKING, Any
 
+from common.app_config import get_app_config
 from common.constants import Storage
 
 if TYPE_CHECKING:
@@ -61,12 +62,26 @@ class StorageFactory:
 
 
 def _create_secret_key() -> str:
-    """镜像旧 settings._get_or_create_secret_key：Redis get_or_create，自动生成并告警。"""
+    """Resolve one startup signing key, shared by API/admin and process replicas."""
+    configured = get_app_config().multirag.secret_key
+    fixed_key = configured.get_secret_value() if configured is not None else ""
+    if len(fixed_key) >= 32:
+        return fixed_key
+    if fixed_key:
+        logging.warning("Configured authentication secret is too short; using the shared Redis key.")
+
     from core.utils.redis_conn import REDIS_CONN
 
-    generated_key = secrets.token_hex(32)
-    secret_key = REDIS_CONN.get_or_create_secret_key("multirag:system:secret_key", generated_key)
-    logging.warning("SECURITY WARNING: Using auto-generated SECRET_KEY.")
+    generated_key: str | None = None
+
+    def generate() -> str:
+        nonlocal generated_key
+        generated_key = secrets.token_hex(32)
+        return generated_key
+
+    secret_key = REDIS_CONN.get_or_create_secret_key("multirag:system:secret_key", generate)
+    if generated_key is not None and secret_key == generated_key:
+        logging.warning("SECURITY WARNING: Using auto-generated SECRET_KEY.")
     return secret_key
 
 

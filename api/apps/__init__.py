@@ -169,6 +169,12 @@ async def lifespan(app: FastAPI):
     logging.info("=" * 80)
 
 
+# Authentication signers (SQLAdmin, session cookies and JWT manager) must all
+# capture the initialized shared key. Lifespan runs too late for these objects.
+if settings.SECRET_KEY is None:
+    settings.init_settings()
+
+
 # 创建FastAPI实例
 app = FastAPI(
     title="Multi-RAG",
@@ -195,9 +201,6 @@ app = FastAPI(
 # under the versioned application API. It has no user/session dependency and
 # returns only the configured public signing-key snapshot.
 app.include_router(well_known_router)
-
-# 注意：settings.init_settings() 已移到 lifespan 函数中
-# 这样确保在 FastAPI 应用完全启动前完成初始化
 
 # ⚠️ 重要：SQLAdmin 必须在添加中间件之前初始化！
 # 这样 SQLAdmin 才能正确注册其路由和内部中间件
@@ -252,23 +255,6 @@ app.add_middleware(RequestContextMiddleware)
 #     logging.info("敏感词过滤中间件已启用")
 # except Exception as e:
 #     logging.warning(f"敏感词过滤中间件启用失败: {e}")
-
-# ============================================================================
-# 模块级别初始化 settings（一次性完成）
-#
-# 为什么在这里初始化而不是在 lifespan？
-# 1. LoginManager、SQLAdmin 等对象必须在模块级别创建（用于装饰器）
-# 2. 这些对象需要 settings 中的配置（如 SECRET_KEY）
-# 3. 只初始化一次，避免资源浪费
-#
-# 关于热重载：
-# - 开发模式下使用 uvicorn --reload 时，代码变更会重新导入模块
-# - 模块重新导入 = settings.init_settings() 重新执行
-# - 因此自动支持热重载，无需在 lifespan 中重复初始化
-# ============================================================================
-if settings.SECRET_KEY is None:
-    logging.info("Initializing settings at module level...")
-    settings.init_settings()
 
 
 # 初始化登录管理器，设置密钥和令牌URL

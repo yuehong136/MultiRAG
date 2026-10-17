@@ -3547,3 +3547,35 @@ checkout 缺 tokenizer/模型缓存及 `.venv` 启动路径；仅在自有目录
 显式未采用项；已运行主路径的 HTTP/SQL/Milvus 验收。无 Web 文件改动，字段选项归
 另一 owner；未修改 tenant_llm_service.py。独立提交留在隔离分支，不 push、不回灌共享
 旧批源码。入库行为说明与结构映射见 metadata-configuration 与 RAGFLOW_PORTING_MAP。
+## 1d0519d02507dbf87b11d7101d35c0b64ba55ead · 共享签名密钥与初始化
+
+2026-10-17 对照目标完整六文件 diff 和冻结上限
+`519e7d98a5651564d4e35d6648f006cba4baaf4f` 内后修，保留本地 FastAPI/JWT/SQLAdmin
+与资源生命周期架构。上游最初按请求重新读 Redis 的做法被 `ab703b6de` 改回进程缓存；
+本地 resources 已有这一最终行为，保留缓存，不额外叠加 getter 或第二签名协议。
+`94324afe` 的仅创建者告警同时采用。上游 User.get_id 的 itsdangerous 不复制到本地 JWT 链。
+
+实际隔离源码基线为 `9582bdb80f1a1be4505f4061d1abe71aa4cac63a`，分支
+`codex/auth-secret-hybrid`。派发中提及的 `15dcdd7b` 在本机对象库及取回的目标远端 main
+中均不存在；基线核对尚待回复。本提交是这一实际基线上的独立候选，不替换共享 checkout
+或旧批验收源码。共享 `common/app_config.py` 的 Channel WIP 未复制、未暂存。
+
+本地改进：有效固定配置及环境覆盖启用，签名配置用 SecretStr；标准环境变量保留原始
+字符串并优先于兼容别名，短历史别名不遮盖有效 YAML。未配置时使用共享 Redis 原子
+初始化，已有值不生成无用候选，竞争失败只接受持久写入者；连续消失有界失败，不返回
+临时候选。初始化移到 SQLAdmin、API Session 和 LoginManager 构造之前，避免首导入
+签名器捕获 None。合同见 [共享签名密钥](../references/shared-authentication-secret.md)。
+
+验证全在自有工作树，复用已安装解释器及只读模型资产，不同步/修改共享依赖、不重启
+常驻服务。最终 `make verify` exit=0：Ruff、8 个分层契约、async 门禁、mypy 144 源文件、
+unit 6272 passed。自有 Redis key 的 6 进程/12 次初始化读回唯一持久值并删除；两个独立
+API probe 进程按当前代码验证 JWT、API Session Cookie 双向签名一致、篡改拒绝及
+进程/端口回收，选定集成 2 passed、exit=0、无 skip，报告
+`.test-results/20261017-194224-94764`。9 个源码文件 SHA256 绑定与末尾读回一致，见
+`.test-results/auth-secret-source/input.json`，无密钥明文或真实身份凭据。
+
+初次默认依赖检查被现有 Milvus 不可达阻塞；该文件只消费 Redis，现按精确依赖登记，
+未知文件的完整依赖策略保留并加回归。`make smoke` exit=2：现有 8123 ping HTTP 200，
+healthz 30 秒超时；未重启或修改服务。这不证明生产已加载候选代码。固定密钥的生产
+配置/轮换、Redis 丢失后的新旧副本恢复、真实账户授权及 Go 混合鉴权不以签名 probe
+代替验收。Go/Python Cookie 授权边界仍待关键选择确认，不属于本提交；未 push。
