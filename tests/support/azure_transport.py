@@ -4,10 +4,12 @@ No sockets or cloud credentials. This deliberately implements only the Blob/ADLS
 operations asserted by the connector contract, not a general Azure emulator.
 """
 
+import base64
 import inspect
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
+from xml.etree import ElementTree
 
 from azure.core.credentials import AccessToken
 from azure.core.pipeline.transport import HttpRequest, HttpResponse, HttpTransport
@@ -56,13 +58,18 @@ class AzureTransport(HttpTransport):
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.directories: set[str] = set()
+        self.existing_directory_status = 409
         self.requests: list[tuple[str, str]] = []
+        self.delegation_windows: list[tuple[str, str]] = []
+        self.closed = False
+        self.fail_delegation = False
+        self.delegation_key = base64.b64encode(b"controlled-delegation-key").decode()
 
     def open(self) -> None:
         pass
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
     def __exit__(self, *args: Any) -> None:
         self.close()
@@ -79,6 +86,21 @@ class AzureTransport(HttpTransport):
                 request, status, f"<Error><Code>{code}</Code><Message>Controlled error</Message></Error>".encode(), **{**headers, "Content-Type": "application/xml", "x-ms-error-code": code}
             )
 
+        if request.method == "POST" and query.get("comp") == ["userdelegationkey"]:
+            if self.fail_delegation:
+                return error(403, "AuthorizationPermissionMismatch")
+            payload = ElementTree.fromstring(request.body)
+            start = payload.findtext("Start")
+            expiry = payload.findtext("Expiry")
+            assert start and expiry
+            self.delegation_windows.append((start, expiry))
+            body = (
+                f"<UserDelegationKey><SignedOid>controlled-oid</SignedOid><SignedTid>controlled-tid</SignedTid>"
+                f"<SignedStart>{start}</SignedStart><SignedExpiry>{expiry}</SignedExpiry>"
+                f"<SignedService>b</SignedService><SignedVersion>2024-08-04</SignedVersion>"
+                f"<Value>{self.delegation_key}</Value></UserDelegationKey>"
+            ).encode()
+            return AzureResponse(request, 200, body, **{**headers, "Content-Type": "application/xml"})
         if request.method == "PUT":
             if ".dfs." in (url.hostname or ""):
                 parent = path.rpartition("/")[0]
@@ -87,7 +109,7 @@ class AzureTransport(HttpTransport):
                 if query.get("resource") == ["directory"]:
                     if path in self.directories:
                         assert request.headers.get("If-None-Match") == "*"
-                        return error(409, "PathAlreadyExists")
+                        return error(self.existing_directory_status, "PathAlreadyExists" if self.existing_directory_status == 409 else "ConditionNotMet")
                     self.directories.add(path)
                 else:
                     self.objects[path] = b""
@@ -126,5 +148,6 @@ def azure_adapter(kind: str, transport: AzureTransport) -> Any:
     if kind == "sas":
         adapter.conn = ContainerClient("https://controlled.blob.core.windows.net", "container", credential="sp=rw&sig=controlled", transport=transport, retry_total=0)
     else:
+        adapter.account_url = "https://controlled.dfs.core.windows.net"
         adapter.conn = FileSystemClient("https://controlled.dfs.core.windows.net", "container", credential=TestCredential(), transport=transport, retry_total=0)
     return adapter

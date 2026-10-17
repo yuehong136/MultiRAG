@@ -37,3 +37,20 @@ def test_azure_delete_failure_is_not_success(kind: str) -> None:
     delete.side_effect = OSError("controlled delete failure")
     with pytest.raises(OSError, match="controlled delete failure"):
         adapter.rm("dataset", "same.txt", "tenant")
+
+
+@pytest.mark.parametrize("expires", [0, -1, 604501])
+def test_spn_rejects_invalid_url_lifetime(expires: int) -> None:
+    transport = AzureTransport()
+    adapter = azure_adapter("spn", transport)
+    with pytest.raises(ValueError, match="expiry"):
+        adapter.get_presigned_url("dataset", "file", expires)
+    assert transport.requests == []
+
+
+def test_sas_cannot_delegate_its_container_token() -> None:
+    transport = AzureTransport()
+    adapter = azure_adapter("sas", transport)
+    with pytest.raises(NotImplementedError, match="object-scoped"):
+        adapter.get_presigned_url("dataset", "file", 3600, "tenant")
+    assert transport.requests == []

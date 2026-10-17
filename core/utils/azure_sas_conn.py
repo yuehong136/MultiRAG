@@ -76,12 +76,7 @@ class MultiRAGAzureSasBlob:
             logging.exception(f"Fail obj_exist {bucket}/{fnm}")
         return False
 
-    def get_presigned_url(self, bucket, fnm, expires):
-        for _ in range(10):
-            try:
-                return self.conn.get_presigned_url("GET", bucket, fnm, expires)
-            except Exception:
-                logging.exception(f"fail get {bucket}/{fnm}")
-                self.__open__()
-                time.sleep(1)
-        return
+    def get_presigned_url(self, bucket: str, fnm: str, expires: int, tenant_id: str | None = None) -> str:
+        # A container SAS cannot sign a new, narrower SAS or honor expires.
+        # Returning BlobClient.url would disclose the container credential.
+        raise NotImplementedError("Azure SAS credentials cannot sign an object-scoped URL; use Azure SPN for presigned URLs")

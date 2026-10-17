@@ -1,12 +1,13 @@
 import logging
 import os
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from azure.core import MatchConditions
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import ResourceExistsError, ResourceModifiedError
 from azure.identity import AzureAuthorityHosts, ClientSecretCredential
-from azure.storage.filedatalake import FileSystemClient
+from azure.storage.filedatalake import DataLakeServiceClient, FileSasPermissions, FileSystemClient, generate_file_sas
 
 from common import settings
 from common.decorator import singleton
@@ -64,6 +65,10 @@ class MultiRAGAzureSpnBlob:
                         self.conn.create_directory("/".join(parts[:index]), match_condition=MatchConditions.IfMissing)
                     except ResourceExistsError:
                         pass
+                    except ResourceModifiedError as error:
+                        # If-None-Match: * may report an existing path as 412.
+                        if error.error_code != "ConditionNotMet":
+                            raise
                 client = self.conn.create_file(blob_name)
                 client.append_data(binary, offset=0, length=len(binary))
                 return client.flush_data(len(binary))
@@ -101,12 +106,24 @@ class MultiRAGAzureSpnBlob:
             logging.exception(f"Fail obj_exist {bucket}/{fnm}")
         return False
 
-    def get_presigned_url(self, bucket, fnm, expires):
-        for _ in range(10):
-            try:
-                return self.conn.get_presigned_url("GET", bucket, fnm, expires)
-            except Exception:
-                logging.exception(f"fail get {bucket}/{fnm}")
-                self.__open__()
-                time.sleep(1)
-        return None
+    def get_presigned_url(self, bucket: str, fnm: str, expires: int, tenant_id: str | None = None) -> str:
+        # A delegation key can live for at most seven days, including skew.
+        if not 0 < expires <= 7 * 24 * 60 * 60 - 300:
+            raise ValueError("Azure URL expiry must be between 1 and 604500 seconds")
+        now = datetime.now(UTC)
+        expiry = now + timedelta(seconds=expires)
+        with DataLakeServiceClient(account_url=self.account_url, credential=self.conn.credential) as service:
+            key = service.get_user_delegation_key(now - timedelta(minutes=5), expiry)
+        path = f"{bucket}/{fnm}"
+        directory, _, filename = path.rpartition("/")
+        sas = generate_file_sas(
+            account_name=self.conn.account_name,
+            file_system_name=self.conn.file_system_name,
+            directory_name=directory,
+            file_name=filename,
+            credential=key,
+            permission=FileSasPermissions(read=True),
+            expiry=expiry,
+            protocol="https",
+        )
+        return f"{self.conn.get_file_client(path).url}?{sas}"
