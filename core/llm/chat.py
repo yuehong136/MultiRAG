@@ -22,10 +22,12 @@ import re
 import time
 from abc import ABC
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from enum import StrEnum
 from typing import Any
 
+import httpx
 import json_repair
 import litellm
 import openai
@@ -35,6 +37,7 @@ from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
+from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request_options
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.nlp import is_chinese, is_english
 
@@ -1199,7 +1202,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         "Tencent Hunyuan",
     ]
 
-    def __init__(self, key, model_name, base_url=None, **kwargs):
+    def __init__(self, key: str | dict[str, Any], model_name: str, base_url: str | None = None, **kwargs: Any) -> None:
         self.timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
         self.provider = kwargs.get("provider", "")
         self.prefix = LITELLM_PROVIDER_PREFIX.get(self.provider, "")
@@ -1225,6 +1228,9 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         elif self.provider == SupportedLiteLLMProvider.Azure_OpenAI:
             self.api_key = json.loads(key).get("api_key", "")
             self.api_version = json.loads(key).get("api_version", "2024-02-01")
+        elif self.provider == SupportedLiteLLMProvider.MiniMax:
+            self.api_key, self.group_id = decode_minimax_key(key)
+            self.base_url = base_url or FACTORY_DEFAULT_BASE_URL[self.provider]
 
     def _get_delay(self):
         return self.base_delay * random.uniform(10, 150)
@@ -1264,7 +1270,28 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
     def _need_reasoning_content_back(self) -> bool:
         return self.provider == SupportedLiteLLMProvider.DeepSeek
 
-    async def async_chat(self, system, history, gen_conf, **kwargs):
+    @asynccontextmanager
+    async def _completion(self, completion_args: dict[str, Any]) -> AsyncIterator[Any]:
+        """Own the MiniMax SDK client through response/stream consumption.
+
+        LiteLLM 1.82 drops extra_query or moves it into the JSON body.
+        A request hook adds encoded query values after SDK endpoint construction;
+        SDK default_query would rename repeated keys and drop empty values.
+        """
+        if self.provider != SupportedLiteLLMProvider.MiniMax:
+            yield await litellm.acompletion(**completion_args, drop_params=True, timeout=self.timeout)
+            return
+        options = dict(completion_args)
+        query = options.pop("extra_query", {})
+
+        async def apply_query(request: httpx.Request) -> None:
+            request.url = request.url.copy_merge_params(query)
+
+        http_client = httpx.AsyncClient(event_hooks={"request": [apply_query]})
+        async with AsyncOpenAI(api_key=self.api_key, base_url=options["api_base"], http_client=http_client, timeout=self.timeout, max_retries=self.max_retries) as client:
+            yield await litellm.acompletion(**options, client=client, drop_params=True, timeout=self.timeout)
+
+    async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> tuple[str, int]:
         hist = list(history) if history else []
         if system:
             if not hist or hist[0].get("role") != "system":
@@ -1283,19 +1310,14 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
 
         for attempt in range(self.max_retries + 1):
             try:
-                response = await litellm.acompletion(
-                    **completion_args,
-                    drop_params=True,
-                    timeout=self.timeout,
-                )
+                async with self._completion(completion_args) as response:
+                    if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
+                        return "", 0
+                    ans = response.choices[0].message.content.strip()
+                    if response.choices[0].finish_reason == "length":
+                        ans = self._length_stop(ans)
 
-                if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
-                    return "", 0
-                ans = response.choices[0].message.content.strip()
-                if response.choices[0].finish_reason == "length":
-                    ans = self._length_stop(ans)
-
-                return ans, total_token_count_from_response(response)
+                    return ans, total_token_count_from_response(response)
             except Exception as e:
                 e = await self._exceptions_async(e, attempt)
                 if e:
@@ -1311,54 +1333,50 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         reasoning_start = False
         total_tokens = 0
 
-        completion_args = self._construct_completion_args(history=history, stream=True, tools=False, **gen_conf)
+        request_options = {key: kwargs[key] for key in ("extra_headers", "extra_query") if key in kwargs}
+        completion_args = self._construct_completion_args(history=history, stream=True, tools=False, **{**gen_conf, **request_options})
         stop = kwargs.get("stop")
         if stop:
             completion_args["stop"] = stop
 
         for attempt in range(self.max_retries + 1):
             try:
-                stream = await litellm.acompletion(
-                    **completion_args,
-                    drop_params=True,
-                    timeout=self.timeout,
-                )
+                async with self._completion(completion_args) as stream:
+                    async for resp in stream:
+                        if not hasattr(resp, "choices") or not resp.choices:
+                            continue
 
-                async for resp in stream:
-                    if not hasattr(resp, "choices") or not resp.choices:
-                        continue
+                        delta = resp.choices[0].delta
+                        if not hasattr(delta, "content") or delta.content is None:
+                            delta.content = ""
 
-                    delta = resp.choices[0].delta
-                    if not hasattr(delta, "content") or delta.content is None:
-                        delta.content = ""
-
-                    _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-                    if kwargs.get("with_reasoning", True) and _reasoning:
-                        ans = ""
-                        if not reasoning_start:
-                            reasoning_start = True
-                            ans = "<think>"
-                        ans += _reasoning + "</think>"
-                    else:
-                        reasoning_start = False
-                        ans = delta.content
-
-                    tol = total_token_count_from_response(resp)
-                    if not tol:
-                        tol = num_tokens_from_string(delta.content)
-                    total_tokens += tol
-
-                    finish_reason = resp.choices[0].finish_reason if hasattr(resp.choices[0], "finish_reason") else ""
-                    if finish_reason == "length":
-                        if is_chinese(ans):
-                            ans += LENGTH_NOTIFICATION_CN
+                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                        if kwargs.get("with_reasoning", True) and _reasoning:
+                            ans = ""
+                            if not reasoning_start:
+                                reasoning_start = True
+                                ans = "<think>"
+                            ans += _reasoning + "</think>"
                         else:
-                            ans += LENGTH_NOTIFICATION_EN
+                            reasoning_start = False
+                            ans = delta.content
 
-                    yield ans
-                    if kwargs.get("with_reasoning", True) and _reasoning and delta.content:
-                        reasoning_start = False
-                        yield delta.content
+                        tol = total_token_count_from_response(resp)
+                        if not tol:
+                            tol = num_tokens_from_string(delta.content)
+                        total_tokens += tol
+
+                        finish_reason = resp.choices[0].finish_reason if hasattr(resp.choices[0], "finish_reason") else ""
+                        if finish_reason == "length":
+                            if is_chinese(ans):
+                                ans += LENGTH_NOTIFICATION_CN
+                            else:
+                                ans += LENGTH_NOTIFICATION_EN
+
+                        yield ans
+                        if kwargs.get("with_reasoning", True) and _reasoning and delta.content:
+                            reasoning_start = False
+                            yield delta.content
                 yield total_tokens
                 return
             except Exception as e:
@@ -1427,13 +1445,8 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     logging.info(f"{self.tools=}")
 
                     completion_args = self._construct_completion_args(history=history, stream=False, tools=True, **gen_conf)
-                    response = await litellm.acompletion(
-                        **completion_args,
-                        drop_params=True,
-                        timeout=self.timeout,
-                    )
-
-                    tk_count += total_token_count_from_response(response)
+                    async with self._completion(completion_args) as response:
+                        tk_count += total_token_count_from_response(response)
 
                     if not hasattr(response, "choices") or not response.choices or not response.choices[0].message:
                         raise Exception(f"500 response structure error. Response: {response}")
@@ -1501,64 +1514,59 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     logging.info(f"{tools=}")
 
                     completion_args = self._construct_completion_args(history=history, stream=True, tools=True, **gen_conf)
-                    response = await litellm.acompletion(
-                        **completion_args,
-                        drop_params=True,
-                        timeout=self.timeout,
-                    )
+                    async with self._completion(completion_args) as response:
+                        final_tool_calls = {}
+                        answer = ""
 
-                    final_tool_calls = {}
-                    answer = ""
+                        async for resp in response:
+                            if not hasattr(resp, "choices") or not resp.choices:
+                                continue
 
-                    async for resp in response:
-                        if not hasattr(resp, "choices") or not resp.choices:
-                            continue
+                            delta = resp.choices[0].delta
+                            _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None) or ""
+                            if self._need_reasoning_content_back():
+                                reasoning_content += _reasoning
 
-                        delta = resp.choices[0].delta
-                        _reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None) or ""
-                        if self._need_reasoning_content_back():
-                            reasoning_content += _reasoning
+                            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                                for tool_call in delta.tool_calls:
+                                    index = tool_call.index
+                                    if index not in final_tool_calls:
+                                        if not tool_call.function.arguments:
+                                            tool_call.function.arguments = ""
+                                        final_tool_calls[index] = tool_call
+                                    else:
+                                        final_tool_calls[index].function.arguments += tool_call.function.arguments or ""
 
-                        if hasattr(delta, "tool_calls") and delta.tool_calls:
-                            for tool_call in delta.tool_calls:
-                                index = tool_call.index
-                                if index not in final_tool_calls:
-                                    if not tool_call.function.arguments:
-                                        tool_call.function.arguments = ""
-                                    final_tool_calls[index] = tool_call
-                                else:
-                                    final_tool_calls[index].function.arguments += tool_call.function.arguments or ""
+                            if not hasattr(delta, "content") or delta.content is None:
+                                delta.content = ""
 
-                        if not hasattr(delta, "content") or delta.content is None:
-                            delta.content = ""
-
-                        if getattr(delta, "tool_calls", None) and not delta.content and not _reasoning:
-                            continue
-                        if _reasoning:
-                            ans = ""
-                            if not reasoning_start:
-                                reasoning_start = True
-                                ans = "<think>"
-                            ans += _reasoning + "</think>"
-                            yield ans
-                            if delta.content:
+                            if getattr(delta, "tool_calls", None) and not delta.content and not _reasoning:
+                                continue
+                            if _reasoning:
+                                ans = ""
+                                if not reasoning_start:
+                                    reasoning_start = True
+                                    ans = "<think>"
+                                ans += _reasoning + "</think>"
+                                yield ans
+                                if delta.content:
+                                    reasoning_start = False
+                                    answer += delta.content
+                                    yield delta.content
+                            else:
                                 reasoning_start = False
                                 answer += delta.content
                                 yield delta.content
-                        else:
-                            reasoning_start = False
-                            answer += delta.content
-                            yield delta.content
 
-                        tol = total_token_count_from_response(resp)
-                        if not tol:
-                            total_tokens += num_tokens_from_string(delta.content)
-                        else:
-                            total_tokens = tol
+                            tol = total_token_count_from_response(resp)
+                            if not tol:
+                                total_tokens += num_tokens_from_string(delta.content)
+                            else:
+                                total_tokens = tol
 
-                        finish_reason = getattr(resp.choices[0], "finish_reason", "")
-                        if finish_reason == "length":
-                            yield self._length_stop("")
+                            finish_reason = getattr(resp.choices[0], "finish_reason", "")
+                            if finish_reason == "length":
+                                yield self._length_stop("")
 
                     if answer and not final_tool_calls:
                         yield total_tokens
@@ -1625,7 +1633,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    def _construct_completion_args(self, history, stream: bool, tools: bool, **kwargs):
+    def _construct_completion_args(self, history: list[dict[str, Any]], stream: bool, tools: bool, **kwargs: Any) -> dict[str, Any]:
         completion_args = {
             "model": self.model_name,
             "messages": history,
@@ -1720,6 +1728,11 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         extra_headers = deepcopy(completion_args.get("extra_headers") or {})
         if self.provider == SupportedLiteLLMProvider.Ollama and self.api_key and "Authorization" not in extra_headers:
             extra_headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.provider == SupportedLiteLLMProvider.MiniMax:
+            api_base, query = minimax_request_options(self.base_url, self.group_id, completion_args.get("extra_query"))
+            completion_args["api_base"] = api_base
+            if query:
+                completion_args["extra_query"] = query
         if extra_headers:
             completion_args["extra_headers"] = extra_headers
         return completion_args

@@ -32,7 +32,8 @@ _BEARER_PATTERN = re.compile(r"(?P<prefix>\b(?:Bearer|Basic)\s+)(?P<value>[A-Za-
 _BARE_KEY_PATTERN = re.compile(r"(?P<prefix>\bsk-)(?P<value>[A-Za-z0-9\-_]{12,})")
 
 # 快速预筛：消息不含任何敏感线索时跳过正则，控日志热路径开销
-_HINT_PATTERN = re.compile(r"key|token|password|passwd|pwd|secret|authorization|bearer|basic\s|sk-", re.IGNORECASE)
+_HINT_PATTERN = re.compile(r"key|token|password|passwd|pwd|secret|authorization|bearer|basic\s|sk-|group_?id", re.IGNORECASE)
+_GROUP_ID_PATTERN = re.compile(r"""(?P<prefix>\bgroup_?id['"]?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^'",;&\s}\]]+)""", re.IGNORECASE)
 
 
 def _mask_value(value: str) -> str:
@@ -50,6 +51,7 @@ def sanitize_message(message: str) -> str:
     message = _BEARER_PATTERN.sub(lambda m: m.group("prefix") + _mask_value(m.group("value")), message)
     message = _KV_PATTERN.sub(lambda m: m.group("prefix") + _mask_value(m.group("value")), message)
     message = _BARE_KEY_PATTERN.sub(lambda m: m.group("prefix") + _mask_value(m.group("value")), message)
+    message = _GROUP_ID_PATTERN.sub(lambda m: m.group("prefix") + "***", message)
     return message
 
 
