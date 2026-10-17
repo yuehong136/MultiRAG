@@ -228,20 +228,26 @@ main 的其他未提交修改与 untracked 文件保留；重叠 README 的本�
 `~/.local/bin/go` 已可从普通 shell 解析；保留本机 `integration-go.env` 供固定版本复现。
 真实 CLI 构建与 Skill HTTP/CLI 共享合同均通过，未更改 Go/Python 依赖锁或共享配置。
 
-main 在验收期间持续合入其他任务，每轮均从对应提交的隔离快照运行，实际结果如下：
+main 在验收期间持续合入其他任务，每轮均从对应提交的隔离快照运行。
+按用户确认，本次正式交付锁定 `3bd0bfc77e0c114c2f505a0e40aef7f645f95112`；
+后续提交另行验收，已额外完成的 `f2dc7ba2` 复验单列为补充证据，不扩大本次交付范围。
+实际结果如下：
 
 | main 基准 | make verify（unit） | 完整 make integration（默认 core） |
 | --- | --- | --- |
 | `5bd47c61` | 6259 passed | 1048 passed，0 failed，0 skip，6 deselected |
-| `3bd0bfc7` | 6259 passed | 1048 passed，0 failed，0 skip，6 deselected |
-| `f2dc7ba2`（最终基准） | **6339 passed** | **1071 passed，0 failed，0 skip，12 deselected** |
+| `3bd0bfc7`（本次正式交付） | **6259 passed** | **1048 passed，0 failed，0 skip，6 deselected** |
+| `f2dc7ba2`（独立补充复验） | 6339 passed | 1071 passed，0 failed，0 skip，12 deselected |
 
-最终完整集成退出码 0，耗时 4408.89 秒；无 TESTS 局部选择、无门禁或断言调整。
-12 个 deselected 为默认 core 排除的独立 consumer 组（10 个明暗主题连接器页面用例及
+正式交付基准的完整集成退出码 0，耗时 4334.40 秒；无 TESTS 局部选择、无门禁或断言调整。
+6 个 deselected 为默认 core 排除的独立 consumer 组（4 个钉钉与 IMAP 明暗主题页面用例及
 2 个数据集 Web 消费者用例），见[测试分组](../../tests/README.md)；不当作 skip 或通过。
-新增任务日志 4 项、Moodle 9 项、关系库同步 10 项均在最终完整运行中通过。
 `make verify` 的 lint、8 条 import contracts、async DB、mypy 144 文件均通过；
 unit 仅有 3 条既有 transformers deprecation warnings。真实 Web Agent 的隔离 API smoke 亦通过。
+
+独立补充复验 `f2dc7ba2` 的完整集成退出码 0，耗时 4408.89 秒；新增任务日志 4 项、
+Moodle 9 项、关系库同步 10 项均通过。其 12 个 deselected 为默认 core 排除的独立
+consumer 组（10 个明暗主题连接器页面用例及 2 个数据集 Web 消费者用例）。
 
 依赖使用本次专用 loopback 端口、PostgreSQL 16.14、Milvus 2.6.22、Redis 与 MinIO，
 fixture-owned scratch 数据独立读回并清理。结束后 5 个自有容器、4 个卷及专用网络已删除，
@@ -249,6 +255,7 @@ fixture-owned scratch 数据独立读回并清理。结束后 5 个自有容器�
 本次记录提交仅限本文件，无 push。临时隔离 worktree 在报告另存后归档，不新增交付分支。
 
 持久化证据根目录为 `~/.local/state/multirag/validation/20261017-main-integration/`：
-最终 `final-main-f2dc7ba2/report/` 保存 run.json、JUnit 与逐用例事件，
-同目录 result.json 绑定 SHA、门禁结果及默认排除项，service-cleanup.json 保存清理读回；
-父目录保留官方工具链校验元数据及前两轮报告。
+正式交付的 `latest-main-3bd0bfc7/report/` 保存 run.json、JUnit 与逐用例事件，
+同级 verify.log、integration-full.log 与 result.json 绑定 SHA 和门禁结果。
+独立补充证据位于 `final-main-f2dc7ba2/`，其 service-cleanup.json 保存最终清理读回；
+父目录保留官方工具链校验元数据及首轮报告。
