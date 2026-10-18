@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
+from api.apps.services.document_file_http import DocumentFileRoute, document_file_response, generated_attachment_response
 from api.apps.services.document_image_http import ImageReadRoute, thumbnail_url
 from api.apps.services.document_update_http import DocumentUpdateRoute
 from api.apps.services.sandbox_artifact_service import download_artifact
@@ -23,6 +24,7 @@ from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES
 from api.db.db_models import Document, get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
+from api.db.services.document_file_service import read_document_file, read_generated_attachment
 from api.db.services.document_image_service import list_thumbnails, read_dataset_image, read_runtime_image
 from api.db.services.document_ingest_service import IngestError, ingest_documents
 from api.db.services.document_parser_service import update_document_parser
@@ -72,6 +74,25 @@ async def runtime_image(file_id: str, principal: Principal = Depends(async_curre
     return Response(content=result.data, media_type=result.media_type)
 
 
+file_router = APIRouter(route_class=DocumentFileRoute)
+
+
+@file_router.get("/documents/{doc_id}/preview", summary="预览已授权知识库文档")
+async def preview_document(doc_id: str, db: AsyncSession = Depends(get_async_db), principal: Principal = Depends(async_current_user)) -> Response:
+    return document_file_response(await read_document_file(db, principal, doc_id))
+
+
+@file_router.get("/documents/{doc_id}/download", summary="下载知识库文档（owner/admin）")
+async def download_document_file(doc_id: str, db: AsyncSession = Depends(get_async_db), principal: Principal = Depends(async_current_user)) -> Response:
+    return document_file_response(await read_document_file(db, principal, doc_id, download=True), download=True)
+
+
+@file_router.get("/documents/runtime/{attachment_id}/download", summary="下载本人生成的附件")
+async def download_generated_attachment(attachment_id: str, ext: str = "markdown", principal: Principal = Depends(async_current_user)) -> Response:
+    return generated_attachment_response(await read_generated_attachment(principal, attachment_id), ext)
+
+
+router.include_router(file_router)
 router.include_router(image_router)
 
 

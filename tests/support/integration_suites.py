@@ -65,6 +65,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_dataset_search_http.py",
         "test_debug_response_start.py",
         "test_document_delete_scope.py",
+        "test_document_file_http.py",
         "test_document_image_http.py",
         "test_document_image_read_service.py",
         "test_document_ingest.py",

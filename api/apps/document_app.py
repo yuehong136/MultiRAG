@@ -2,10 +2,8 @@ import json
 import logging
 import pathlib
 import re
-from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -40,7 +38,7 @@ from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
-from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, html2pdf, is_valid_url
+from api.utils.web_utils import html2pdf, is_valid_url
 from common import settings
 from common.constants import VALID_TASK_STATUS, ParserType, RetCode
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
@@ -1727,75 +1725,6 @@ def rename(request_body: RenameRequest, db: Session = Depends(get_db), user=Depe
             )
 
         return construct_json_result(data=True)
-    except Exception as e:
-        return construct_error_response(e)
-
-
-@router.get("/get/{doc_id}", summary="获取文档内容", response_description="成功获取文档内容")
-def get_document(doc_id: str, action: str = Query("preview", description="preview: 仅预览; download: 下载(需 owner/admin 权限)"), db: Session = Depends(get_db), user=Depends(manager)):
-    try:
-        doc = DocumentService.get_by_id(db, doc_id)
-        if not doc:
-            return construct_json_result(data=False, message="Document not found!", code=RetCode.ARGUMENT_ERROR)
-
-        if not DocumentService.accessible(db, doc_id, user.id):
-            return get_json_result(data=False, retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
-
-        if action == "download":
-            kb = KnowledgebaseService.get_by_id(db, doc.kb_id)
-            if kb:
-                role = UserTenantService.get_role_in_tenant(db, user.id, kb.tenant_id)
-                if not UserTenantService.can_download(role):
-                    return get_json_result(
-                        data=False,
-                        retmsg="No download permission. Please contact your administrator.",
-                        retcode=RetCode.PERMISSION_ERROR,
-                    )
-
-        b, n = File2DocumentService.get_storage_address(db, doc_id=doc_id)
-
-        file_content = settings.STORAGE_IMPL.get(b, n)
-        if not file_content:
-            raise HTTPException(status_code=404, detail="File not found in storage")
-
-        # 将文件内容包装成 BytesIO 对象
-        file_stream = BytesIO(file_content)
-
-        ext = re.search(r"\.([^.]+)$", doc.name.lower())
-        ext = ext.group(1) if ext else None
-        content_type = None
-        if ext:
-            fallback_prefix = "image" if doc.type == FileType.VISUAL.value else "application"
-            content_type = CONTENT_TYPE_MAP.get(ext, f"{fallback_prefix}/{ext}")
-
-        # 使用 quote 对文件名进行编码
-        encoded_filename = quote(doc.name)
-        response = StreamingResponse(file_stream, media_type=content_type or "application/octet-stream")
-        response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{encoded_filename}"
-        apply_safe_file_response_headers(response, content_type, ext)
-        return response
-    except Exception as e:
-        return construct_error_response(e)
-
-
-@router.get("/download/{attachment_id}", summary="下载附件", response_description="成功获取附件内容")
-def download_attachment(attachment_id: str, ext: str = "markdown", user=Depends(manager)):
-    """
-    下载 Message 组件导出的附件文件
-
-    参数：
-    - **attachment_id**: 附件ID（必填）
-    - **ext**: 文件扩展名（可选，默认为 markdown）
-
-    返回：
-    - 附件文件内容
-    """
-    try:
-        data = settings.STORAGE_IMPL.get(user.id, attachment_id)
-        content_type = CONTENT_TYPE_MAP.get(ext, f"application/{ext}")
-        response = Response(content=data)
-        apply_safe_file_response_headers(response, content_type, ext)
-        return response
     except Exception as e:
         return construct_error_response(e)
 
