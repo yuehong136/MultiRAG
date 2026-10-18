@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.constants import NAME_LENGTH_LIMIT
 from api.db import FileType
-from api.db.db_models import db_connection, get_db
+from api.db.db_models import User, db_connection, get_db
 from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -184,7 +184,7 @@ def remove_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depends(
 
 
 @router.get("/{dataset_id}", summary="获取数据集详情", response_description="成功获取数据集详情")
-def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get_dataset(dataset_id: str, db: Session = Depends(get_db), user: User = Depends(manager)) -> Response:
     """
     获取指定数据集的详细信息。
 
@@ -195,6 +195,8 @@ def get_dataset(dataset_id: str, db: Session = Depends(get_db), user=Depends(man
     - JSON: 数据集详细信息的JSON响应。
     """
     try:
+        if not KnowledgebaseService.accessible(db, dataset_id, user.id):
+            return construct_json_result(data=False, message="No authorization.", code=RetCode.OPERATING_ERROR)
         dataset = KnowledgebaseService.get_detail(db, dataset_id)
         if not dataset:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Can't find this dataset!")

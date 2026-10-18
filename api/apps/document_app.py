@@ -25,7 +25,7 @@ from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT
 from api.db import VALID_FILE_TYPES, FileType
-from api.db.db_models import get_async_db, get_db
+from api.db.db_models import User, get_async_db, get_db
 from api.db.services import duplicate_name
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_analysis_service import DocumentAnalysisService
@@ -35,7 +35,6 @@ from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_analysis_service import PipelineAnalysisService
 from api.db.services.task_service import TaskService
-from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, construct_error_response, construct_json_result, convert_datetime_to_str, get_data_error_result, get_json_result, server_error_response
 from api.utils.document_upload import UploadDocumentsManifest, UploadManifestValidationError, resolve_document_upload_names
 from api.utils.file_utils import filename_type, thumbnail
@@ -785,7 +784,9 @@ def create_document(request_body: CreateDocumentRequest, db: Session = Depends(g
 
 
 @router.get("/list", summary="列出文档", response_description="成功列出文档")
-def list_docs_get(kb_id: str, keywords: str = "", page: int = 1, page_size: int = 15, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user=Depends(manager)):
+def list_docs_get(
+    kb_id: str, keywords: str = "", page: int = 1, page_size: int = 15, orderby: str = "create_time", desc: bool = True, db: Session = Depends(get_db), user: User = Depends(manager)
+) -> Response:
     """
     ### GET `/list` 列出文档接口
 
@@ -941,11 +942,7 @@ def list_docs_get(kb_id: str, keywords: str = "", page: int = 1, page_size: int 
     if not kb_id:
         return construct_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
 
-    tenants = UserTenantService.query(db, user_id=user.id)
-    for tenant in tenants:
-        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-            break
-    else:
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:
@@ -982,8 +979,8 @@ def list_docs(
     create_time_from: int | None = Query(0, description="创建时间起（时间戳）"),
     create_time_to: int | None = Query(0, description="创建时间止（时间戳）"),
     db: Session = Depends(get_db),
-    user=Depends(manager),
-):
+    user: User = Depends(manager),
+) -> Response:
     """
     ### POST `/list` 列出文档接口
 
@@ -1200,11 +1197,7 @@ def list_docs(
             code=RetCode.ARGUMENT_ERROR,
         )
 
-    tenants = UserTenantService.query(db, user_id=user.id)
-    for tenant in tenants:
-        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-            break
-    else:
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     # 验证 run_status 参数
@@ -1314,7 +1307,7 @@ def list_docs(
     response_description="成功获取文档过滤器",
     deprecated=True,
 )
-def get_filter(request_body: FilterRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def get_filter(request_body: FilterRequest, db: Session = Depends(get_db), user: User = Depends(manager)) -> Response:
     """
     获取指定知识库的文档过滤器统计信息。
 
@@ -1340,11 +1333,7 @@ def get_filter(request_body: FilterRequest, db: Session = Depends(get_db), user=
         return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
     # 验证用户是否有权访问该知识库
-    tenants = UserTenantService.query(db, user_id=user.id)
-    for tenant in tenants:
-        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-            break
-    else:
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     keywords = req.get("keywords", "")
@@ -1761,7 +1750,7 @@ async def get_artifact(
 # 前端 knowledge.ts 已迁移到新端点（web 仓 d6b442d），待前端部署后再于后续版本移除。
 # ============================================================================
 @router.post("/metadata/summary", summary="获取元数据汇总", response_description="成功获取元数据汇总", deprecated=True)
-def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_db), user: User = Depends(manager)) -> Response:
     """获取知识库中文档元数据的汇总统计。
 
     返回每个元数据键下各值的出现次数，按次数降序排列。
@@ -1773,11 +1762,7 @@ def metadata_summary(request: MetadataSummaryRequest, db: Session = Depends(get_
     if not kb_id:
         return get_json_result(data=False, retmsg='Lack of "KB ID"', retcode=RetCode.ARGUMENT_ERROR)
 
-    tenants = UserTenantService.query(db, user_id=user.id)
-    for tenant in tenants:
-        if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-            break
-    else:
+    if not KnowledgebaseService.accessible(db, kb_id, user.id):
         return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
 
     try:

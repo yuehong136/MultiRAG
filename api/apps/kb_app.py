@@ -5,12 +5,13 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.db import VALID_FILE_TYPES
-from api.db.db_models import get_db
+from api.db.db_models import User, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -85,13 +86,9 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
 
 
 @router.get("/detail", summary="获取知识库详情", response_description="成功获取知识库详情", deprecated=True)
-def detail(kb_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def detail(kb_id: str, db: Session = Depends(get_db), user: User = Depends(manager)) -> Response:
     try:
-        tenants = UserTenantService.query(db, user_id=user.id)
-        for tenant in tenants:
-            if KnowledgebaseService.query(db, tenant_id=tenant.tenant_id, id=kb_id):
-                break
-        else:
+        if not KnowledgebaseService.accessible(db, kb_id, user.id):
             return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(db, kb_id)
         if not kb:

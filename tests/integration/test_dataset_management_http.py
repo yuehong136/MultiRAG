@@ -241,3 +241,60 @@ def test_private_dataset_denies_joined_member_over_real_http(management_api: dic
     for credential in [env["keys"][1], env["jwt"][1]]:
         response = request_api(env, "GET", f"/datasets/{dataset}/ingestions", credential=credential)
         assert response.status_code == 200 and response.json()["code"] == 0, response.text
+
+
+def test_legacy_dataset_document_routes_share_private_visibility(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections.abc import Iterator
+    from uuid import uuid4
+
+    import requests
+    import sqlalchemy as sa
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from api import apps
+    from api.db.db_models import UserTenant, get_db
+
+    env = management_api
+    sessions = sessionmaker(env["engine"], expire_on_commit=False)
+
+    def scratch_db() -> Iterator[Session]:
+        with sessions() as db:
+            yield db
+
+    monkeypatch.setattr(apps, "SessionLocal", sessions)
+    monkeypatch.setitem(apps.app.dependency_overrides, get_db, scratch_db)
+    dataset = env["datasets"][0]
+    peer_membership = uuid4().hex
+    routes = [
+        ("GET", "/v1/kb/detail", {"kb_id": dataset}, None),
+        ("GET", f"/v1/dataset/{dataset}", None, None),
+        ("GET", "/v1/document/list", {"kb_id": dataset}, None),
+        ("POST", "/v1/document/list", {"id": dataset}, {}),
+        ("POST", "/v1/document/filter", None, {"kb_id": dataset}),
+        ("POST", "/v1/document/metadata/summary", None, {"kb_id": dataset}),
+    ]
+
+    def check_routes(actor: int, allowed: bool) -> None:
+        before = sql_state(env)
+        for method, path, params, payload in routes:
+            response = requests.request(method, env["base"] + path, params=params, json=payload, headers={"Authorization": "Bearer " + env["jwt"][actor]}, timeout=30)
+            body = response.json()
+            assert response.status_code == 200, (path, response.text)
+            assert (body.get("retcode", body.get("code")) == 0) is allowed, (path, body)
+            if not allowed:
+                assert body.get("data") in [None, False], (path, body)
+        assert sql_state(env) == before
+
+    check_routes(1, False)  # authenticated outsider
+    with env["engine"].begin() as db:
+        db.execute(sa.insert(UserTenant).values(id=peer_membership, tenant_id=env["users"][0], user_id=env["users"][1], role="normal", invited_by=env["users"][0]))
+    for role, status in [("normal", "1"), ("invite", "1"), ("normal", "0")]:
+        with env["engine"].begin() as db:
+            db.execute(sa.update(UserTenant).where(UserTenant.id == peer_membership).values(role=role, status=status))
+        check_routes(1, False)
+    check_routes(0, True)  # owner
+    check_routes(2, True)  # admin
+    with env["engine"].begin() as db:
+        db.execute(sa.update(UserTenant).where(UserTenant.id == peer_membership).values(role="normal", status="1"))
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(permission="team"))
+    check_routes(1, True)
