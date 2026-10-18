@@ -60,7 +60,10 @@ class AgentCompletionAccumulator:
             if self.return_trace:
                 self.trace.append({"component_id": component_id, "trace": [copy.deepcopy(data)]})
         if kind in {"message_end", "workflow_finished", "user_inputs"}:
-            self.terminal = copy.deepcopy(event)
+            # Session delivery flushes earlier message ends after committing
+            # the pause. Keep the form as the JSON response's terminal event.
+            if kind != "message_end" or self.terminal.get("event") != "user_inputs":
+                self.terminal = copy.deepcopy(event)
             if kind == "workflow_finished" and isinstance(outputs := data.get("outputs"), dict):
                 self.has_output |= any(not key.startswith("_") and value not in (None, "", [], {}) for key, value in outputs.items())
             if kind == "user_inputs":

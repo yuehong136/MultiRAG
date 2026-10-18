@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
@@ -416,15 +417,19 @@ class Canvas(Graph):
                 value = ""
             self.globals[f"env.{key}"] = value
 
-    async def run(self, **kwargs):
+    async def run(self, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.globals["sys.date"] = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
         st = time.perf_counter()
         self._loop = asyncio.get_running_loop()
         self.message_id = get_uuid()
         created_at = int(time.time())
         self.add_user_input(kwargs.get("query"))
+        # A pause replaces path with the pending nodes; completed outputs are
+        # still needed by references when that path resumes.
+        path_set = set(self.path)
         for k, cpn in self.components.items():
-            self.components[k]["obj"].reset(True)
+            if k in path_set:
+                cpn["obj"].reset(True)
 
         if kwargs.get("webhook_payload"):
             for k, cpn in self.components.items():

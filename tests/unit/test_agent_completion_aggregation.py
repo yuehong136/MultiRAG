@@ -56,6 +56,17 @@ def test_null_structured_output_is_not_a_success_result() -> None:
         aggregate.finish(require_terminal=True)
 
 
+def test_committed_pause_keeps_form_after_earlier_message_end_is_flushed() -> None:
+    aggregate = AgentCompletionAccumulator()
+    aggregate.add({"event": "message", "data": {"content": "Draft"}})
+    aggregate.add({"event": "user_inputs", "data": {"inputs": {"approval": {"type": "line"}}, "tips": "Approve draft"}})
+    aggregate.add({"event": "message_end", "data": {"reference": {"chunks": {"0": {"id": "draft-source"}}}}})
+    answer = aggregate.finish(require_terminal=True)
+    assert answer["event"] == "user_inputs"
+    assert answer["data"]["inputs"] == {"approval": {"type": "line"}} and answer["data"]["tips"] == "Approve draft"
+    assert answer["data"]["content"] == "Draft" and answer["data"]["reference"]["chunks"]["0"]["id"] == "draft-source"
+
+
 def test_nontext_message_and_nonobject_data_are_rejected() -> None:
     with pytest.raises(ValueError):
         normalize_agent_event({"event": "message_end", "data": []})
