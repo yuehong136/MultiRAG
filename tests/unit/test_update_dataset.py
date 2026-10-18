@@ -5,6 +5,12 @@ Dataset RESTful service 层单元测试 —— update_dataset
 共享 fixtures（db / fake_kb）见 tests/unit/conftest.py。
 """
 
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+from sqlalchemy.orm import Session
+
 import api.apps.services.dataset_api_service as svc
 
 
@@ -67,13 +73,14 @@ def test_update_duplicate_name(monkeypatch, db, fake_kb):
     assert "already exists" in msg
 
 
-def test_update_embedding_locked_when_chunks_exist(monkeypatch, db, fake_kb):
+def test_update_embedding_can_switch_when_chunks_exist(monkeypatch: pytest.MonkeyPatch, db: Session, fake_kb: Callable[..., Any]) -> None:
     kb = fake_kb(embd_id="old@f", chunk_num=5)
     cap = {}
     _patch_update_common(monkeypatch, kb, cap)
-    ok, msg = svc.update_dataset(db, "t1", "kb1", {"embedding_model": "new@f"})
-    assert ok is False
-    assert "must remain" in msg
+    monkeypatch.setattr(svc, "verify_embedding_availability", lambda *_: (True, ""))
+    ok, _ = svc.update_dataset(db, "t1", "kb1", {"embedding_model": "new@f"})
+    assert ok is True
+    assert cap["embd_id"] == "new@f"
 
 
 def test_update_pipeline_shift_clears_pipeline_id(monkeypatch, db, fake_kb):

@@ -17,11 +17,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.services import dataset_api_service, dataset_search_service
+from api.apps.services import dataset_api_service, dataset_embedding_service, dataset_search_service
 from api.db.db_models import get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
 from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
@@ -62,6 +62,11 @@ class UpdateDatasetRequest(BaseModel):
         validate_dataset_raptor_scope(self.ext.get("parser_config", self.parser_config))
         validate_parser_metadata(self.ext.get("parser_config", self.parser_config))
         return self
+
+
+class CheckEmbeddingRequest(BaseModel):
+    embd_id: str = Field(min_length=1)
+    check_num: int = Field(default=5, ge=1, le=100, strict=True)
 
 
 class DeleteDatasetRequest(BaseModel):
@@ -167,6 +172,23 @@ async def update_dataset(
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
+
+
+@router.post("/datasets/{dataset_id}/embedding/check", summary="检查嵌入模型兼容性")
+async def check_embedding(
+    dataset_id: str,
+    request: CheckEmbeddingRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    try:
+        success, result, code = await dataset_embedding_service.check_embedding(db, tenant_id, dataset_id, request.embd_id, request.check_num)
+        if code == RetCode.NOT_EFFECTIVE:
+            return JSONResponse(content={"code": code, "message": "Embedding model switch failed: average similarity is below 0.9.", "data": result})
+        return get_result(data=result) if success else get_error_data_result(retcode=code, retmsg=result)
+    except Exception:
+        logger.exception("Embedding compatibility check failed")
+        return get_error_data_result(retmsg="Embedding comparison failed.")
 
 
 @router.get("/datasets", summary="获取数据集列表")
