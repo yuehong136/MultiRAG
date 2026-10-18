@@ -12,8 +12,11 @@ import (
 )
 
 func TestRegisterAndLogoutRESTContract(t *testing.T) {
-	for _, envelope := range []string{"go", "python"} {
-		t.Run(envelope, func(t *testing.T) {
+	for _, test := range []struct{ envelope, token string }{
+		{"go", "owned-session"}, {"go", "Bearer owned-session"},
+		{"python", "owned-session"}, {"python", "Bearer owned-session"},
+	} {
+		t.Run(test.envelope+"/"+test.token, func(t *testing.T) {
 			reject := false
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
@@ -31,7 +34,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 						t.Error("wrong registration identity or unencrypted password")
 					}
 				case "/api/v1/auth/logout":
-					if r.Method != "POST" || r.Header.Get("Authorization") != "owned-session" {
+					if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer owned-session" {
 						t.Error("wrong logout contract")
 					}
 				default:
@@ -41,7 +44,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 				if reject {
 					code = 109
 				}
-				if envelope == "go" {
+				if test.envelope == "go" {
 					fmt.Fprintf(w, `{"code":%d,"message":"result"}`, code)
 				} else {
 					fmt.Fprintf(w, `{"retcode":%d,"retmsg":"result"}`, code)
@@ -53,7 +56,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 			client := NewMultiRAGClient("user")
 			client.HTTPClient.Host = parsed.Hostname()
 			client.HTTPClient.Port = port
-			client.HTTPClient.LoginToken = "owned-session"
+			client.HTTPClient.LoginToken = test.token
 			command, err := NewParser(`REGISTER USER 'owned@example.invalid' AS 'Owned' PASSWORD 'owned-password';`).Parse(false)
 			if err != nil {
 				t.Fatal(err)
@@ -61,7 +64,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 			if _, err = client.ExecuteCommand(command); err != nil {
 				t.Fatal(err)
 			}
-			if client.HTTPClient.LoginToken != "owned-session" {
+			if client.HTTPClient.LoginToken != test.token {
 				t.Fatal("registration changed session")
 			}
 			reject = true
@@ -71,7 +74,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 			if _, err = client.Logout(); err == nil {
 				t.Fatal("rejected logout succeeded")
 			}
-			if client.HTTPClient.LoginToken != "owned-session" {
+			if client.HTTPClient.LoginToken != test.token {
 				t.Fatal("rejected logout cleared session")
 			}
 			reject = false
@@ -82,5 +85,27 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 				t.Fatal("logout retained session")
 			}
 		})
+	}
+}
+
+func TestAdminLogoutRetainsLegacyAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/admin/logout" || r.Header.Get("Authorization") != "owned-admin-session" {
+			t.Errorf("unexpected admin logout contract: %s %s", r.Method, r.URL.Path)
+		}
+		fmt.Fprint(w, `{"code":0}`)
+	}))
+	defer server.Close()
+	parsed, _ := url.Parse(server.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	client := NewMultiRAGClient("admin")
+	client.HTTPClient.Host = parsed.Hostname()
+	client.HTTPClient.Port = port
+	client.HTTPClient.LoginToken = "owned-admin-session"
+	if _, err := client.Logout(); err != nil {
+		t.Fatal(err)
+	}
+	if client.HTTPClient.LoginToken != "" {
+		t.Fatal("successful admin logout retained session")
 	}
 }

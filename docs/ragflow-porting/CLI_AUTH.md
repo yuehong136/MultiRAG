@@ -23,7 +23,8 @@ Registration executes `REGISTER USER 'email' AS 'nickname' PASSWORD 'password';`
 through public `POST /api/v1/users`, encrypting the password with RSA before
 sending it. Go registration stores the current Python bcrypt format so new
 accounts can authenticate on either backend. Registration creates a regular user and does not reuse or overwrite
-an existing login session. User logout is authenticated `POST /api/v1/auth/logout`;
+an existing login session. User logout is authenticated `POST /api/v1/auth/logout` with a `Bearer` session token
+(the CLI normalizes an existing prefix without duplicating it);
 admin logout retains its separate `GET /api/v1/admin/logout` contract. A successful
 logout clears the CLI session, while a rejected logout preserves it.
 

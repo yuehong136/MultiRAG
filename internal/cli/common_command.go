@@ -152,10 +152,16 @@ func (c *MultiRAGClient) Logout() (ResponseIf, error) {
 		return nil, fmt.Errorf("not logged in")
 	}
 	path, method := "/auth/logout", http.MethodPost
+	var headers map[string]string
 	if c.ServerType == "admin" {
 		path, method = "/admin/logout", http.MethodGet
+	} else {
+		// Python's user auth dependency requires the Bearer scheme. The Go
+		// user router accepts it too; admin retains its legacy raw token.
+		token := strings.TrimPrefix(c.HTTPClient.LoginToken, "Bearer ")
+		headers = map[string]string{"Authorization": "Bearer " + token}
 	}
-	resp, err := c.HTTPClient.Request(method, path, "web", nil, nil)
+	resp, err := c.HTTPClient.Request(method, path, "web", headers, nil)
 	if err != nil {
 		return nil, fmt.Errorf("logout failed: %w", err)
 	}
