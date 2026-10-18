@@ -23,3 +23,9 @@ only the connection pool.
 The Go service and bound chat model use `ChatWithMessages` and sender streaming.
 The obsolete concrete MiniMax single-message wrapper has no runtime consumer;
 its removal retains the role-history and sender paths used by the service.
+
+NVIDIA discovery and connection checks use the configured NIM `models` endpoint.
+Discovery permits an absent API key for self-hosted deployments; chat continues
+to require a key. Missing or malformed lists and provider/HTTP errors fail,
+while an explicitly empty inventory is valid. Discovery remains request-scoped,
+cancellable, and bounded by the normal call timeout.

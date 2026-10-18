@@ -1,13 +1,12 @@
 package models
 
-import "fmt"
-
-// NVIDIAModel implements the initial NVIDIA chat contract; other capabilities stay unavailable.
+// NVIDIAModel implements NVIDIA chat and instance model discovery.
 type NVIDIAModel struct{ *openAIChatDriver }
 
 func NewNVIDIAModel(baseURL map[string]string, suffix URLSuffix) *NVIDIAModel {
 	driver := newOpenAIChatDriver(baseURL, suffix, "nvidia", nvidiaChatBody)
 	driver.splitReasoning = true
+	driver.optionalDiscoveryKey = true
 	return &NVIDIAModel{driver}
 }
 
@@ -32,13 +31,6 @@ func nvidiaChatBody(name string, messages []Message, config *ChatConfig, stream 
 		}
 	}
 	return body, nil
-}
-
-func (n *NVIDIAModel) ListModels(api *APIConfig) ([]string, error) {
-	return nil, fmt.Errorf("nvidia: model discovery is not implemented")
-}
-func (n *NVIDIAModel) CheckConnection(api *APIConfig) error {
-	return fmt.Errorf("nvidia: connection check is not implemented")
 }
 
 var _ ModelDriver = (*NVIDIAModel)(nil)

@@ -22,8 +22,50 @@ func TestNVIDIAChatHTTP(t *testing.T) {
 		}
 	})
 }
-func TestNVIDIAFailuresHTTP(t *testing.T) { testHostedChatFailures(t, "NVIDIA", false) }
-func TestNVIDIACancelHTTP(t *testing.T)   { testHostedCancellation(t, "NVIDIA", false) }
+func TestNVIDIAFailuresHTTP(t *testing.T) { testHostedChatFailures(t, "NVIDIA", true) }
+func TestNVIDIACancelHTTP(t *testing.T)   { testHostedCancellation(t, "NVIDIA", true) }
+
+func TestNVIDIADiscoveryOptionalKeyHTTP(t *testing.T) {
+	for _, key := range []*string{nil, stringPtr(""), stringPtr("fixture")} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/nim/models" || r.ContentLength > 0 {
+				t.Errorf("invalid discovery request: %s %s", r.Method, r.URL.Path)
+			}
+			want := ""
+			if key != nil && *key != "" {
+				want = "Bearer " + *key
+			}
+			if r.Header.Get("Authorization") != want {
+				t.Error("incorrect discovery authorization")
+			}
+			fmt.Fprint(w, `{"data":[{"id":"nvidia/model"}]}`)
+		}))
+		driver := NewNVIDIAModel(map[string]string{"default": server.URL + "/nim/"}, URLSuffix{Models: "models", Chat: "chat/completions"})
+		configs := []*APIConfig{{APIKey: key, Region: stringPtr("")}}
+		if key == nil {
+			configs = append(configs, nil)
+		}
+		for _, api := range configs {
+			names, err := driver.ListModels(api)
+			if err != nil || !reflect.DeepEqual(names, []string{"nvidia/model"}) {
+				t.Fatal(names, err)
+			}
+			if err := driver.CheckConnection(api); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if key == nil || *key == "" {
+			if _, err := driver.ChatWithMessages("model", configs[0], []Message{{Role: "user", Content: "q"}}, nil); err == nil {
+				t.Fatal("optional discovery key weakened chat authentication")
+			}
+		}
+		server.Close()
+	}
+	missing := NewNVIDIAModel(nil, URLSuffix{Models: "models"})
+	if err := missing.CheckConnection(nil); err == nil {
+		t.Fatal("missing URL succeeded")
+	}
+}
 
 func TestNVIDIAThinkingAndUnsupportedCapabilities(t *testing.T) {
 	history := []Message{{Role: "user", Content: "q"}}
@@ -70,9 +112,7 @@ func TestNVIDIAThinkingAndUnsupportedCapabilities(t *testing.T) {
 	for _, call := range []func() error{
 		func() error { _, e := driver.Encode(&name, []string{"q"}, nil, nil); return e },
 		func() error { _, e := driver.Rerank(&name, "q", []string{"d"}, nil); return e },
-		func() error { _, e := driver.ListModels(nil); return e },
 		func() error { _, e := driver.Balance(nil); return e },
-		func() error { return driver.CheckConnection(nil) },
 	} {
 		if err := call(); err == nil {
 			t.Fatal("NVIDIA unsupported method succeeded")

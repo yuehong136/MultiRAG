@@ -19,11 +19,12 @@ import (
 // openAIChatDriver shares the HTTP and response contract of the hosted chat providers.
 type openAIChatDriver struct {
 	*DummyModel
-	httpClient          *http.Client
-	provider            string
-	buildBody           func(string, []Message, *ChatConfig, bool) (map[string]interface{}, error)
-	splitReasoning      bool
-	openRouterReasoning bool
+	httpClient           *http.Client
+	provider             string
+	buildBody            func(string, []Message, *ChatConfig, bool) (map[string]interface{}, error)
+	splitReasoning       bool
+	openRouterReasoning  bool
+	optionalDiscoveryKey bool
 }
 
 // One pool is shared across request-scoped drivers; credentials stay on requests.
@@ -55,7 +56,10 @@ func openAIChatBody(name string, messages []Message, config *ChatConfig, stream 
 }
 
 func (d *openAIChatDriver) request(method, suffix string, config *APIConfig, body interface{}) (*http.Response, error) {
-	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
+	if config == nil {
+		config = &APIConfig{}
+	}
+	if (config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "") && !(d.optionalDiscoveryKey && method == http.MethodGet && suffix == d.URLSuffix.Models) {
 		return nil, fmt.Errorf("%s: API key is required", d.Name())
 	}
 	if suffix == "" {
