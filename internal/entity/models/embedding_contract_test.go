@@ -107,7 +107,7 @@ func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
 			}
 		})
 	}
-	for _, provider := range []string{"Google", "MiniMax", "VolcEngine", "xAI", "unknown"} {
+	for _, provider := range []string{"Google", "MiniMax", "xAI", "unknown"} {
 		t.Run(provider, func(t *testing.T) {
 			driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": "https://example.invalid"}, URLSuffix{})
 			if err != nil {

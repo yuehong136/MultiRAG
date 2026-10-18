@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// VolcEngine implements Ark text chat, reasoning streams and model discovery.
+// VolcEngine implements Ark chat, discovery and text input to multimodal embedding.
 type VolcEngine struct {
 	*DummyModel
 	httpClient *http.Client
@@ -238,4 +238,56 @@ func (v *VolcEngine) CheckConnection(config *APIConfig) error {
 		return err
 	}
 	return resp.Body.Close()
+}
+
+func (v *VolcEngine) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+	if len(texts) == 0 {
+		return [][]float64{}, nil
+	}
+	if name == nil || strings.TrimSpace(*name) == "" {
+		return nil, fmt.Errorf("volcengine: embedding model name is required")
+	}
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	vectors := make([][]float64, 0, len(texts))
+	for _, text := range texts {
+		body := map[string]any{
+			"model":           *name,
+			"encoding_format": "float",
+			"input":           []map[string]string{{"type": "text", "text": text}},
+		}
+		response, err := v.request(http.MethodPost, v.URLSuffix.Embedding, local, body)
+		if err != nil {
+			return nil, err
+		}
+		var result struct {
+			Data *struct {
+				Embedding []float64 `json:"embedding"`
+			} `json:"data"`
+			Error json.RawMessage `json:"error"`
+		}
+		err = json.NewDecoder(response.Body).Decode(&result)
+		response.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("volcengine: decode embedding: %w", err)
+		}
+		if len(result.Error) > 0 && string(result.Error) != "null" {
+			return nil, fmt.Errorf("volcengine: embedding provider error")
+		}
+		if result.Data == nil {
+			return nil, fmt.Errorf("volcengine: missing embedding data")
+		}
+		vector := result.Data.Embedding
+		if err := ValidateEmbeddings([][]float64{vector}, 1); err != nil {
+			return nil, fmt.Errorf("volcengine: %w", err)
+		}
+		if len(vectors) > 0 && len(vector) != len(vectors[0]) {
+			return nil, fmt.Errorf("volcengine: inconsistent embedding dimensions")
+		}
+		vectors = append(vectors, vector)
+	}
+	if err := requestContext(local).Err(); err != nil {
+		return nil, err
+	}
+	return vectors, nil
 }

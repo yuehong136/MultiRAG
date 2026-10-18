@@ -81,6 +81,8 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 			fmt.Fprint(w, `{"results":[{"index":0,"relevance_score":0.8}]}`)
 		case "/fixture/chat/completions":
 			fmt.Fprint(w, `{"choices":[{"message":{"content":"answer"}}]}`)
+		case "/fixture/embeddings/multimodal":
+			fmt.Fprint(w, `{"data":{"embedding":[1,2]}}`)
 		default:
 			t.Errorf("unexpected URL %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -137,6 +139,14 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	answer, err := chat.Chat("system", []map[string]string{{"role": "user", "content": "q"}}, nil)
 	if err != nil || answer != "answer" {
 		t.Fatalf("answer=%q, error=%v", answer, err)
+	}
+	volcEmbedding, err := svc.GetEmbeddingModel("tenant", "doubao-embedding-vision-250615@fixture@VolcEngine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	volcExpression, err := nlp.NewRetrievalService(nil).GetVector("question", volcEmbedding, 7, 0.4)
+	if err != nil || volcExpression.VectorColumnName != "q_2_vec" || !reflect.DeepEqual(volcExpression.EmbeddingData, []float64{1, 2}) {
+		t.Fatalf("VolcEngine bound retrieval expression=%v error=%v", volcExpression, err)
 	}
 	tenantName, tenantStatus := "fixture", "1"
 	if err := db.Create(&entity.Tenant{ID: "tenant", Name: &tenantName, LLMID: name, Status: &tenantStatus}).Error; err != nil {
@@ -209,7 +219,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err := db.Exec("ALTER TABLE hidden_tenant_model RENAME TO tenant_model").Error; err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(paths, []string{"/fixture/embeddings", "/fixture/embeddings", "/fixture/embeddings", "/fixture/rerank", "/fixture/chat/completions", "/legacy/embeddings", "/legacy/embeddings"}) {
+	if !reflect.DeepEqual(paths, []string{"/fixture/embeddings", "/fixture/embeddings", "/fixture/embeddings", "/fixture/rerank", "/fixture/chat/completions", "/fixture/embeddings/multimodal", "/legacy/embeddings", "/legacy/embeddings"}) {
 		t.Fatalf("paths=%v", paths)
 	}
 	// Independent SQL readback verifies the persisted denial record.

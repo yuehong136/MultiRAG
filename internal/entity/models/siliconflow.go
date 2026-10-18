@@ -385,6 +385,9 @@ func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *
 }
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
+		return nil, fmt.Errorf("siliconflow: model discovery API key is required")
+	}
 	var region = "default"
 	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region

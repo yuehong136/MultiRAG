@@ -25,7 +25,7 @@ The obsolete concrete MiniMax single-message wrapper has no runtime consumer;
 its removal retains the role-history and sender paths used by the service.
 
 NVIDIA discovery and connection checks use the configured NIM `models` endpoint.
-Discovery permits an absent API key for self-hosted deployments; chat continues
+Driver discovery permits an absent API key for self-hosted deployments; chat continues
 to require a key. Missing or malformed lists and provider/HTTP errors fail,
 while an explicitly empty inventory is valid. Discovery remains request-scoped,
 cancellable, and bounded by the normal call timeout.
@@ -41,3 +41,17 @@ instance credentials and cancellation without logging provider response bodies.
 
 The obsolete VolcEngine single-message wrapper is also removed; bound chat,
 role-history, and sender streaming remain the active service contracts.
+
+
+VolcEngine declares `doubao-embedding-vision-250615` and sends one text part per
+request to `embeddings/multimodal`, with `encoding_format: float`. Replies must
+contain a nonempty finite `data.embedding`; dimensions must agree across the
+batch. Failed later requests return an error without partial vectors. The Go
+embedding interface accepts text strings; image/video input is not exposed here.
+
+Connection checking and discovery resolve provider instances through the same
+factory path. Concurrent custom addresses and credentials do not replace the
+catalog driver or mutate its address map. The existing path already provides
+this isolation, so the service needs no second instance-creation mechanism.
+SiliconFlow discovery now rejects nil/missing credentials before dereferencing
+configuration, while preserving its integrated balance and rerank behavior.
