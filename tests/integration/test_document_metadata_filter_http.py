@@ -109,3 +109,41 @@ def test_typed_falsy_filters_do_not_expand_the_document_scope(management_api: di
             assert db.scalar(sa.select(sa.func.count()).select_from(DocumentMetadata).where(DocumentMetadata.id.in_(env["documents"]))) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(File2Document).where(File2Document.id.in_(link_ids))) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(File).where(File.id.in_(file_ids))) == 0
+
+
+def test_filter_aggregates_all_linked_documents_and_ignores_metadata_pagination(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = management_api
+    dataset, first, second = env["datasets"][0], env["documents"][0], env["documents"][1]
+    monkeypatch.setattr(DocMetadataService, "_store", staticmethod(SqlMetadataStore))
+    files, links = [uuid4().hex for _ in range(3)], [uuid4().hex for _ in range(3)]
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Document).where(Document.id == first).values(type="pdf", suffix="pdf", run="3"))
+        db.execute(sa.update(Document).where(Document.id == second).values(kb_id=dataset, type="txt", suffix="txt", run="0"))
+        db.execute(sa.insert(File), [{"id": identifier, "parent_id": "", "tenant_id": env["users"][0], "created_by": env["users"][0], "name": "facet", "type": "txt"} for identifier in files])
+        db.execute(sa.insert(File2Document), [{"id": identifier, "file_id": file_id, "document_id": doc} for identifier, file_id, doc in zip(links, files, [first, first, second], strict=True)])
+        db.execute(sa.insert(DocumentMetadata), [{"id": first, "kb_id": dataset, "tenant_id": env["users"][0], "meta_fields": {"author": "Ada"}}])
+    try:
+        before = sql_state(env)
+        response = request_api(
+            env,
+            "GET",
+            f"/datasets/{dataset}/documents",
+            credential=env["jwt"][0],
+            params={"type": "filter", "page": 999, "page_size": 1, "metadata": "invalid JSON", "metadata_condition": "invalid JSON", "id": "ignored", "ids": "also-ignored"},
+        )
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        assert response.json()["data"] == {"total": 2, "filter": {"suffix": {"pdf": 1, "txt": 1}, "run_status": {"0": 1, "3": 1}, "metadata": {"author": {"Ada": 1}, "empty_metadata": {"true": 1}}}}
+        response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][0], params={"type": "filter", "run": "DONE", "types": "pdf", "suffix": "pdf"})
+        assert response.json()["data"]["total"] == 1, response.text
+        assert response.json()["data"]["filter"]["suffix"] == {"pdf": 1}
+        for query in [{"type": "filter", "run": "bogus"}, {"type": "filter", "types": "exe"}]:
+            assert request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][0], params=query).json()["code"] == 102
+        assert request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][1], params={"type": "filter"}).json()["code"] == 102
+        assert sql_state(env) == before
+    finally:
+        with env["engine"].begin() as db:
+            db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == first))
+            db.execute(sa.delete(File2Document).where(File2Document.id.in_(links)))
+            db.execute(sa.delete(File).where(File.id.in_(files)))
+        with env["engine"].connect() as db:
+            assert db.scalar(sa.select(sa.func.count()).select_from(File).where(File.id.in_(files))) == 0

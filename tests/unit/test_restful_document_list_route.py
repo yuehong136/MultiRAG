@@ -448,3 +448,10 @@ def test_document_list_route_has_pure_async_dependency_tree(client, route_depend
     assert async_current_tenant_id in calls
     assert get_async_db in calls
     assert _route_module().list_documents in calls
+
+
+def test_filter_ignores_unused_document_and_metadata_parameters(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_args, **_kwargs: True))
+    monkeypatch.setattr(DocumentService, "get_filter_by_kb_id", classmethod(lambda *_: ({"suffix": {"pdf": 81}}, 81)))
+    body = client.get(_PATH, params={"type": "filter", "page": 10, "page_size": 1, "metadata": "invalid JSON", "metadata_condition": "invalid JSON", "id": "a", "ids": "b"}).json()
+    assert body == {"code": 0, "data": {"total": 81, "filter": {"suffix": {"pdf": 81}}}}

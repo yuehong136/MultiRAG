@@ -519,21 +519,24 @@ async def list_documents(
     if invalid_statuses:
         return get_error_data_result(retmsg=f"Invalid filter run status conditions: {', '.join(sorted(invalid_statuses))}")
 
-    if document_id and document_ids:
-        return get_error_data_result(retmsg=f"Should not provide both 'id':{document_id} and 'ids':{document_ids}")
+    metadata_condition_value: dict[str, Any] = {}
+    metadata_value: dict[str, Any] = {}
+    if list_type != "filter":
+        if document_id and document_ids:
+            return get_error_data_result(retmsg=f"Should not provide both 'id':{document_id} and 'ids':{document_ids}")
 
-    metadata_condition_value, error = _parse_object_query_param(metadata_condition, "metadata_condition")
-    if error is not None:
-        return error
-    metadata_value, error = _parse_object_query_param(metadata, "metadata")
-    if error is not None:
-        return error
+        metadata_condition_value, error = _parse_object_query_param(metadata_condition, "metadata_condition")
+        if error is not None:
+            return error
+        metadata_value, error = _parse_object_query_param(metadata, "metadata")
+        if error is not None:
+            return error
 
-    if metadata_value.pop("empty_metadata", False):
-        return_empty_metadata = True
-    if return_empty_metadata:
-        metadata_condition_value = {}
-        metadata_value = {}
+        if metadata_value.pop("empty_metadata", False):
+            return_empty_metadata = True
+        if return_empty_metadata:
+            metadata_condition_value = {}
+            metadata_value = {}
 
     def _list(sync_db: Session) -> Response:
         if not KnowledgebaseService.accessible(sync_db, kb_id=dataset_id, user_id=tenant_id):
