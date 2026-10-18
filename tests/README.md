@@ -39,7 +39,7 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 - `changes` 仅对明确的纯文档路径省去运行时；未知基线、空差异、workflow/工具链/锁文件及测试语料变化均保守执行。lint/security 始终运行。
 - lint、typecheck、unit、Go、Infinity、smoke 与 consumer 分别执行。core 按当前文件集合稳定切成四片，每片独立 runner/服务并串行运行其文件，不扩大进程内并行白名单。新增 core 文件自动分配；汇总检查核对同 SHA、四片完整且不重复、runner/JUnit 成功及零意外 skip（保留既有 xfail 语义）。
 - `ci-required` 为唯一汇总入口，拒绝任何适用 job 的失败、取消或跳过；文档 job 的合法跳过由范围判定约束。**仓库保护规则应要求 `ci-required`，启用 merge queue 时也要求此检查。** 远程保护规则属于仓库设置，不会随本地工作流提交自动启用。
-- consumer 使用 [consumer-web.json](../.github/consumer-web.json) 的仓库与完整 SHA，安装真实 npm 依赖并执行现有 Web helper/浏览器合同。调整消费者版本需明确更新该文件，不跟随移动的 master；必须先发布所固定的 Web commit。本次 pin 的 `6ad9577` 是已验收、尚未推送的本地提交，发布依赖后此 job 才能远程 checkout；不能用 skip 或旧客户端代替。
+- consumer 使用 [consumer-web.json](../.github/consumer-web.json) 的仓库与完整 SHA，安装真实 npm 依赖并执行现有 Web helper/浏览器合同。调整消费者版本需明确更新该文件，不跟随移动的 master；必须先发布所固定的 Web commit。若固定提交尚未推送，发布依赖后此 job 才能远程 checkout；不能用 skip 或旧客户端代替。
 - Go job 显式准备与 `go.mod` 同系列的 Go patch、CMake 4、编译器、PCRE2/SIMDe、真实 native 静态库，以及固定提交的 `infiniflow/resource` 字典。准备独立 MinIO 后，再跑 build/vet、三个独立 cmd 和默认 race 套件。需要真实外部服务的 Go opt-in 由 `scripts/ci_checks.py` 明确列出；JSON 审计拒绝其他 skip、失败、空报告或未完成的包，不将这些 opt-in skip 称为已验收。
 - 本地真实模型质量评测从 core/smoke 拆到 [quality.yml](../.github/workflows/quality.yml)，每天 20:30 UTC 及手动运行；模型仍按原不可变版本校验。不移走 core 的事务、故障恢复或权限用例；修改质量资产/评测时本地运行相关检查，质量结果独立报告，不冒充组合合同通过。
 
