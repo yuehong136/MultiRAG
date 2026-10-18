@@ -1,4 +1,7 @@
 import os
+from collections.abc import Iterator
+from copy import deepcopy
+from typing import Any
 
 from ollama import Client
 
@@ -25,10 +28,9 @@ class OllamaChat(Base):
             options[k] = gen_conf[k]
         return options
 
-    def _chat(self, history, gen_conf=None, **kwargs):
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
         # Calculate context size
-        if gen_conf is None:
-            gen_conf = {}
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         ctx_size = self._calculate_dynamic_ctx(history)
 
         gen_conf["num_ctx"] = ctx_size
@@ -37,9 +39,8 @@ class OllamaChat(Base):
         token_count = response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
         return ans, token_count
 
-    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:

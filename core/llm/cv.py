@@ -73,12 +73,14 @@ class Base(ABC):
     async def async_chat_with_tools(
         self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
     ) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         messages = await self._tool_messages(history, images, video_bytes, filename)
         return await self._tool_chat_model.async_chat_with_tools(system, messages, gen_conf)
 
     async def async_chat_streamly_with_tools(
         self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
     ) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         messages = await self._tool_messages(history, images, video_bytes, filename)
         async with aclosing(self._tool_chat_model.async_chat_streamly_with_tools(system, messages, gen_conf)) as stream:
             async for item in stream:
@@ -454,7 +456,10 @@ class QWenCV(GptV4):
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         super().__init__(key, model_name, lang=lang, base_url=base_url, **kwargs)
 
-    async def async_chat(self, system, history, gen_conf, images=None, video_bytes=None, filename="", **kwargs):
+    async def async_chat(
+        self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
+    ) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if video_bytes:
             try:
                 summary, summary_num_tokens = self._process_video(
@@ -564,7 +569,8 @@ class Zhipu4V(GptV4):
             del gen_conf["frequency_penalty"]
         return gen_conf
 
-    def _request(self, msg, stream, gen_conf={}):
+    def _request(self, msg: list[dict[str, Any]], stream: bool, gen_conf: dict[str, Any] | None = None) -> dict[str, Any]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         response = requests.post(
             self.base_url,
             json={"model": self.model_name, "messages": msg, "stream": stream, **gen_conf},
@@ -585,6 +591,7 @@ class Zhipu4V(GptV4):
         filename: str = "",
         **kwargs: Any,
     ) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if video_bytes:
             prompt = self._resolve_video_prompt(system, history, **kwargs)
             content, token_count = await self._describe_video_frame(video_bytes, filename, prompt)
@@ -603,7 +610,8 @@ class Zhipu4V(GptV4):
         cleaned = re.sub(r"<\|(begin_of_box|end_of_box)\|>", "", content).strip()
         return cleaned, total_token_count_from_response(response)
 
-    async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         from core.llm.chat import LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN
         from core.nlp import is_chinese
 
@@ -905,7 +913,8 @@ class OllamaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         try:
             response = await thread_pool_exec(
                 self.client.chat, model=self.model_name, messages=self._form_history(system, history, images), options=self._clean_conf(gen_conf), keep_alive=self.keep_alive
@@ -916,7 +925,8 @@ class OllamaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         ans = ""
         try:
             response = await thread_pool_exec(
@@ -1054,7 +1064,10 @@ class GeminiCV(Base):
         )
         return res.text, total_token_count_from_response(res)
 
-    async def async_chat(self, system, history, gen_conf, images=None, video_bytes=None, filename="", **kwargs):
+    async def async_chat(
+        self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
+    ) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if video_bytes:
             try:
                 size = len(video_bytes) if video_bytes else 0
@@ -1088,7 +1101,8 @@ class GeminiCV(Base):
             logging.warning(f"[GeminiCV] async_chat error: {e}")
             return "**ERROR**: " + str(e), 0
 
-    async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         ans = ""
         response = None
         try:
@@ -1195,7 +1209,8 @@ class NvidiaCV(Base):
             total_token_count_from_response(response),
         )
 
-    def _request(self, msg, gen_conf={}):
+    def _request(self, msg: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> dict[str, Any]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         response = requests.post(
             url=self.base_url,
             headers={
@@ -1213,14 +1228,16 @@ class NvidiaCV(Base):
         response = self._request(vision_prompt)
         return (response["choices"][0]["message"]["content"].strip(), total_token_count_from_response(response))
 
-    async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         try:
             response = await thread_pool_exec(self._request, self._form_history(system, history, images), gen_conf)
             return (response["choices"][0]["message"]["content"].strip(), total_token_count_from_response(response))
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         total_tokens = 0
         try:
             response = await thread_pool_exec(self._request, self._form_history(system, history, images), gen_conf)
@@ -1315,7 +1332,8 @@ class AnthropicCV(Base):
         gen_conf["max_tokens"] = int(limit) if limit else self.max_tokens
         return gen_conf
 
-    async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         ans = ""
         try:
@@ -1338,7 +1356,8 @@ class AnthropicCV(Base):
         except Exception as e:
             return ans + "\n**ERROR**: " + str(e), 0
 
-    async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         total_tokens = 0
         try:
@@ -1425,13 +1444,15 @@ class GoogleCV(AnthropicCV, GeminiCV):
         else:
             return GeminiCV.describe_with_prompt(self, image, prompt)
 
-    async def async_chat(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if "claude" in self.model_name:
             return await AnthropicCV.async_chat(self, system, history, gen_conf, images)
         else:
             return await GeminiCV.async_chat(self, system, history, gen_conf, images)
 
-    async def async_chat_streamly(self, system, history, gen_conf, images=None, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if "claude" in self.model_name:
             async for ans in AnthropicCV.async_chat_streamly(self, system, history, gen_conf, images):
                 yield ans

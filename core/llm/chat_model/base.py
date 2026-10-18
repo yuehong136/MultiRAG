@@ -120,7 +120,8 @@ class Base(ToolHistoryMixin, ABC):
 
         return gen_conf
 
-    def _chat(self, history, gen_conf, **kwargs):
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         logging.info("[HISTORY]" + json.dumps(history, ensure_ascii=False, indent=2))
         if self.model_name.lower().find("qwen3") >= 0:
             kwargs["extra_body"] = {"enable_thinking": False}
@@ -133,7 +134,8 @@ class Base(ToolHistoryMixin, ABC):
             ans = self._length_stop(ans)
         return ans, self.total_token_count(response)
 
-    def _chat_streamly(self, history, gen_conf, **kwargs):
+    def _chat_streamly(self, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> Iterator[tuple[str, int]]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
         reasoning_start = False
         if kwargs.get("stop") or "stop" in gen_conf:
@@ -207,8 +209,7 @@ class Base(ToolHistoryMixin, ABC):
         self.tools = tools
 
     def chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
-        if gen_conf is None:
-            gen_conf = {}
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system:
             history.insert(0, {"role": "system", "content": system})
 
@@ -266,9 +267,8 @@ class Base(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    def chat(self, system, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
@@ -298,8 +298,7 @@ class Base(ToolHistoryMixin, ABC):
         return final_tool_calls
 
     def chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> Iterator[str | int]:
-        if gen_conf is None:
-            gen_conf = {}
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system:
@@ -418,7 +417,8 @@ class Base(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    def chat_streamly(self, system, history, gen_conf: dict = {}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)

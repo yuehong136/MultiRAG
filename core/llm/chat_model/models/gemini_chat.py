@@ -1,4 +1,6 @@
+from collections.abc import Iterator
 from copy import deepcopy
+from typing import Any
 
 from core.llm.chat_model.base import Base
 
@@ -26,9 +28,8 @@ class GeminiChat(Base):
                 gen_conf["max_output_tokens"] = gen_conf.pop("max_tokens")
         return gen_conf
 
-    def _chat(self, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         from google.generativeai.types import content_types
 
         system = history[0]["content"] if history and history[0]["role"] == "system" else ""
@@ -63,9 +64,8 @@ class GeminiChat(Base):
 
                     time.sleep(50)
 
-    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         from google.generativeai.types import content_types
 
         if system:

@@ -21,7 +21,7 @@ import random
 import re
 import time
 from abc import ABC
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from enum import StrEnum
@@ -190,7 +190,8 @@ class Base(ToolHistoryMixin, ABC):
         gen_conf = {k: v for k, v in gen_conf.items() if k in allowed_conf}
         return gen_conf
 
-    async def _async_chat_streamly(self, history, gen_conf, **kwargs):
+    async def _async_chat_streamly(self, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> AsyncIterator[tuple[str, int]]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
         reasoning_start = False
 
@@ -230,7 +231,8 @@ class Base(ToolHistoryMixin, ABC):
                         ans += LENGTH_NOTIFICATION_EN
                 yield ans, tol
 
-    async def async_chat_streamly(self, system, history, gen_conf: dict = {}, **kwargs):
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
@@ -319,7 +321,8 @@ class Base(ToolHistoryMixin, ABC):
         self.toolcall_session = toolcall_session
         self.tools = tools
 
-    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> tuple[str, int]:
+    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
@@ -381,7 +384,8 @@ class Base(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> AsyncIterator[str | int]:
+    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system and history and history[0].get("role") != "system":
@@ -516,7 +520,8 @@ class Base(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def _async_chat(self, history, gen_conf, **kwargs):
+    async def _async_chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         logging.info("[HISTORY]" + json.dumps(history, ensure_ascii=False, indent=2))
         if self.model_name.lower().find("qwq") >= 0:
             logging.info(f"[INFO] {self.model_name} detected as reasoning model, using async_chat_streamly")
@@ -549,7 +554,8 @@ class Base(ToolHistoryMixin, ABC):
             ans = self._length_stop(ans)
         return ans, total_token_count_from_response(response)
 
-    async def async_chat(self, system, history, gen_conf={}, **kwargs):
+    async def async_chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
@@ -615,7 +621,8 @@ class BaiChuanChat(Base):
             "top_p": gen_conf.get("top_p", 0.85),
         }
 
-    def _chat(self, history, gen_conf={}, **kwargs):
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=history,
@@ -630,7 +637,8 @@ class BaiChuanChat(Base):
                 ans += LENGTH_NOTIFICATION_EN
         return ans, total_token_count_from_response(response)
 
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:
@@ -714,7 +722,8 @@ class LocalLLM(Base):
             yield answer + "\n**ERROR**: " + str(e)
         yield num_tokens_from_string(answer)
 
-    def chat(self, system, history, gen_conf={}, **kwargs):
+    def chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         prompt = self._prepare_prompt(system, history, gen_conf)
@@ -723,7 +732,8 @@ class LocalLLM(Base):
         total_tokens = next(chat_gen)
         return ans, total_tokens
 
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         prompt = self._prepare_prompt(system, history, gen_conf)
@@ -762,7 +772,8 @@ class MistralChat(Base):
                 del gen_conf[k]
         return gen_conf
 
-    def _chat(self, history, gen_conf={}, **kwargs):
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         response = self.client.chat(model=self.model_name, messages=history, **gen_conf)
         ans = response.choices[0].message.content
@@ -773,7 +784,8 @@ class MistralChat(Base):
                 ans += LENGTH_NOTIFICATION_EN
         return ans, total_token_count_from_response(response)
 
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
@@ -843,7 +855,8 @@ class ReplicateChat(Base):
         self.model_name = model_name
         self.client = Client(api_token=key)
 
-    def _chat(self, history, gen_conf={}, **kwargs):
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         system = history[0]["content"] if history and history[0]["role"] == "system" else ""
         prompt = "\n".join([item["role"] + ":" + item["content"] for item in history[-5:] if item["role"] != "system"])
         response = self.client.run(
@@ -853,7 +866,8 @@ class ReplicateChat(Base):
         ans = "".join(response)
         return ans, num_tokens_from_string(ans)
 
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         prompt = "\n".join([item["role"] + ":" + item["content"] for item in history[-5:]])
@@ -948,7 +962,8 @@ class GoogleChat(Base):
                     del gen_conf[k]
         return gen_conf
 
-    def _chat(self, history, gen_conf={}, **kwargs):
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         system = history[0]["content"] if history and history[0]["role"] == "system" else ""
 
         if "claude" in self.model_name:
@@ -1026,7 +1041,8 @@ class GoogleChat(Base):
 
         return ans, total_tokens
 
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if "claude" in self.model_name:
             if "max_tokens" in gen_conf:
                 del gen_conf["max_tokens"]
@@ -1292,6 +1308,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
             yield await litellm.acompletion(**options, client=client, drop_params=True, timeout=self.timeout)
 
     async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         hist = list(history) if history else []
         if system:
             if not hist or hist[0].get("role") != "system":
@@ -1326,6 +1343,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         raise AssertionError("Shouldn't be here.")
 
     async def async_chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
@@ -1430,7 +1448,8 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         self.toolcall_session = toolcall_session
         self.tools = tools
 
-    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> tuple[str, int]:
+    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
@@ -1496,7 +1515,8 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}) -> AsyncIterator[str | int]:
+    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> AsyncIterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
         if system and history and history[0].get("role") != "system":

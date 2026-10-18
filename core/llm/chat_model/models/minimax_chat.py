@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from copy import deepcopy
 from typing import Any
 
 import requests
@@ -27,6 +28,7 @@ class MiniMaxChat(Base):
         return gen_conf
 
     def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -44,6 +46,7 @@ class MiniMaxChat(Base):
         return ans, self.total_token_count(response)
 
     def chat_streamly(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         for k in list(gen_conf.keys()):

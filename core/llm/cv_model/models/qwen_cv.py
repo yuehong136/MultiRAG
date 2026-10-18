@@ -1,7 +1,9 @@
 import logging
 import os
 import tempfile
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from common.token_utils import num_tokens_from_string
 from core.llm.cv_model.models.gptv4 import GptV4
@@ -48,7 +50,10 @@ class QWenCV(GptV4):
 
         return "Please summarize this video in proper sentences."
 
-    def chat(self, system, history, gen_conf, images=None, video_bytes=None, filename="", **kwargs):
+    def chat(
+        self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
+    ) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if video_bytes:
             try:
                 summary, summary_num_tokens = self._process_video(video_bytes, filename, self._resolve_video_prompt(system, history, **kwargs))

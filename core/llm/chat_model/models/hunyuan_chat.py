@@ -1,4 +1,7 @@
 import json
+from collections.abc import Iterator
+from copy import deepcopy
+from typing import Any
 
 from core.llm.chat_model.base import Base
 
@@ -27,9 +30,8 @@ class HunyuanChat(Base):
             _gen_conf["TopP"] = gen_conf["top_p"]
         return _gen_conf
 
-    def _chat(self, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         from tencentcloud.hunyuan.v20230901 import models
 
         hist = [{k.capitalize(): v for k, v in item.items()} for item in history]
@@ -40,9 +42,8 @@ class HunyuanChat(Base):
         ans = response.Choices[0].Message.Content
         return ans, response.Usage.TotalTokens
 
-    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
             TencentCloudSDKException,
         )

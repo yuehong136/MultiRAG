@@ -1,5 +1,7 @@
 import os
+from collections.abc import Iterator
 from copy import deepcopy
+from typing import Any
 
 from core.llm.cv_model.base import Base
 
@@ -80,7 +82,8 @@ class OllamaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat(self, system, history, gen_conf, images=None):
+    def chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if images is None:
             images = []
         try:
@@ -91,7 +94,8 @@ class OllamaCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=None):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if images is None:
             images = []
         ans = ""

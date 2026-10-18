@@ -1,3 +1,7 @@
+from collections.abc import Iterator
+from copy import deepcopy
+from typing import Any
+
 from common.token_utils import num_tokens_from_string
 from core.llm.cv_model.base import Base
 from core.nlp import is_english
@@ -52,7 +56,8 @@ class AnthropicCV(Base):
             gen_conf["max_tokens"] = self.max_tokens
         return gen_conf
 
-    def chat(self, system, history, gen_conf, images=[]):
+    def chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = []) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         ans = ""
         try:
@@ -73,7 +78,8 @@ class AnthropicCV(Base):
         except Exception as e:
             return ans + "\n**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = []) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         total_tokens = 0
         try:

@@ -1,3 +1,7 @@
+from collections.abc import Iterator
+from copy import deepcopy
+from typing import Any
+
 from groq import Groq
 
 from core.llm.chat_model.base import LENGTH_NOTIFICATION_CN, LENGTH_NOTIFICATION_EN, Base
@@ -17,9 +21,8 @@ class GroqChat(Base):
                 del gen_conf[k]
         return gen_conf
 
-    def chat_streamly(self, system, history, gen_conf=None, **kwargs):
-        if gen_conf is None:
-            gen_conf = {}
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system:
             history.insert(0, {"role": "system", "content": system})
         for k in list(gen_conf.keys()):

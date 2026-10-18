@@ -1,5 +1,8 @@
 import base64
+from collections.abc import Iterator
+from copy import deepcopy
 from io import BytesIO
+from typing import Any
 
 from core.llm.cv_model.base import Base
 from core.prompts.generator import vision_llm_describe_prompt
@@ -57,7 +60,8 @@ class GeminiCV(Base):
             img.close()
             return res.text, res.usage_metadata.total_token_count
 
-    def chat(self, system, history, gen_conf, images=[]):
+    def chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = []) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         generation_config = {"temperature": gen_conf.get("temperature", 0.3), "top_p": gen_conf.get("top_p", 0.7)}
         try:
             response = self.model.generate_content(self._form_history(system, history, images), generation_config=generation_config)
@@ -66,7 +70,8 @@ class GeminiCV(Base):
         except Exception as e:
             return "**ERROR**: " + str(e), 0
 
-    def chat_streamly(self, system, history, gen_conf, images=[]):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = []) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         ans = ""
         response = None
         try:

@@ -1,5 +1,8 @@
 import json
 import logging
+from collections.abc import Iterator
+from copy import deepcopy
+from typing import Any
 
 from zhipuai import ZhipuAI
 
@@ -29,12 +32,14 @@ class ZhipuChat(Base):
             del gen_conf["frequency_penalty"]
         return gen_conf
 
-    def chat_with_tools(self, system: str, history: list, gen_conf: dict):
+    def chat_with_tools(self, system: str, history: list, gen_conf: dict[str, Any]) -> tuple[str, int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf_plealty(gen_conf)
 
         return super().chat_with_tools(system, history, gen_conf)
 
-    def chat_streamly(self, system, history, gen_conf={}, **kwargs):
+    def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         gen_conf = self._clean_conf(gen_conf)
@@ -62,6 +67,7 @@ class ZhipuChat(Base):
 
         yield tk_count
 
-    def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict):
+    def chat_streamly_with_tools(self, system: str, history: list, gen_conf: dict[str, Any]) -> Iterator[str | int]:
+        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf_plealty(gen_conf)
         return super().chat_streamly_with_tools(system, history, gen_conf)
