@@ -15,7 +15,7 @@ import threading
 import traceback
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeAlias
 
 from box_sdk_gen import AccessToken, BoxOAuth, OAuthConfig
 
@@ -58,6 +58,8 @@ from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.versions import get_multirag_version
+
+GenerateDocumentsResult: TypeAlias = GenerateDocumentsOutput | tuple[GenerateDocumentsOutput, tuple[SlimDocument, ...] | None]
 
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -245,7 +247,7 @@ class SyncBase:
         logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
         return next_update
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsResult:
         raise NotImplementedError
 
     def _get_source_prefix(self):
