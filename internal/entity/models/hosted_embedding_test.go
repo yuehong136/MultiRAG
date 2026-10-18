@@ -16,7 +16,71 @@ import (
 	"time"
 )
 
-func TestBaiduEmbeddingsHTTP(t *testing.T) { testHostedEmbeddingsHTTP(t, "Baidu") }
+func TestBaiduEmbeddingsHTTP(t *testing.T)  { testHostedEmbeddingsHTTP(t, "Baidu") }
+func TestOpenAIEmbeddingsHTTP(t *testing.T) { testHostedEmbeddingsHTTP(t, "OpenAI") }
+
+func TestHostedEmbeddingDimensionsHTTP(t *testing.T) {
+	for _, provider := range []string{"OpenAI", "Baidu"} {
+		t.Run(provider, func(t *testing.T) {
+			for _, config := range []*EmbeddingConfig{nil, {}, {Query: true, Dimension: 2}} {
+				t.Run(fmt.Sprint(config), func(t *testing.T) {
+					var calls atomic.Int32
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						var body map[string]any
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Error(err)
+						}
+						if config != nil && config.Dimension == 2 {
+							if body["dimensions"] != float64(2) {
+								t.Error("requested dimensions missing", body)
+							}
+						} else if _, exists := body["dimensions"]; exists {
+							t.Error("default dimensions should be omitted", body)
+						}
+						if _, exists := body["query"]; exists {
+							t.Error("local Query flag leaked into provider payload")
+						}
+						inputs, ok := body["input"].([]any)
+						if !ok {
+							t.Error("input must be an array")
+						}
+						data := make([]map[string]any, len(inputs))
+						for i := range data {
+							data[i] = map[string]any{"index": i, "embedding": []float64{0, 1}}
+						}
+						json.NewEncoder(w).Encode(map[string]any{"data": data})
+					}))
+					defer server.Close()
+					driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
+					vectors, err := driver.Encode(stringPtr("text-embedding"), make([]string, 33), &APIConfig{APIKey: stringPtr("fixture")}, config)
+					if err != nil || len(vectors) != 33 || calls.Load() != 2 || config != nil && config.Dimension == 2 && !config.Query {
+						t.Fatal(vectors, err, calls.Load())
+					}
+				})
+			}
+			t.Run("requested dimension mismatch and negative dimension", func(t *testing.T) {
+				var calls atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0]}]}`)
+				}))
+				defer server.Close()
+				driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
+				api := &APIConfig{APIKey: stringPtr("fixture")}
+				for _, dimension := range []int{-1, 2} {
+					vectors, err := driver.Encode(stringPtr("model"), []string{"a"}, api, &EmbeddingConfig{Dimension: dimension})
+					if err == nil || vectors != nil {
+						t.Fatal("invalid dimension yielded vectors", dimension, vectors, err)
+					}
+				}
+				if calls.Load() != 1 {
+					t.Fatal("negative dimension reached provider", calls.Load())
+				}
+			})
+		})
+	}
+}
 
 func testHostedEmbeddingsHTTP(t *testing.T, provider string) {
 	t.Helper()

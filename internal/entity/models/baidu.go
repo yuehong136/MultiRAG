@@ -62,7 +62,7 @@ func (b *BaiduModel) ChatWithMessages(name string, api *APIConfig, messages []Me
 func (b *BaiduModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
 	local, cancel := modelCallConfig(api)
 	defer cancel()
-	return encodeHTTP(b.httpClient, b.BaseURL, b.URLSuffix.Embedding, name, texts, local)
+	return encodeHTTPWithConfig(b.httpClient, b.BaseURL, b.URLSuffix.Embedding, name, texts, local, config)
 }
 
 func (b *BaiduModel) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {

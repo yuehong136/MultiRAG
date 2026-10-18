@@ -47,8 +47,21 @@ func requestContext(config *APIConfig) context.Context {
 // encodeHTTP preserves the old OpenAI-compatible embedding path, with ordered
 // batch validation. SiliconFlow limits one request to 32 inputs.
 func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig) ([][]float64, error) {
+	return encodeHTTPWithConfig(client, baseURLs, suffix, name, texts, config, nil)
+}
+
+// encodeHTTPWithConfig carries optional dimensions through every batch and
+// validates the provider's vectors against the requested dimension.
+func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
 	if len(texts) == 0 {
 		return [][]float64{}, nil
+	}
+	dimension := 0
+	if embeddingConfig != nil {
+		if embeddingConfig.Dimension < 0 {
+			return nil, fmt.Errorf("embedding dimension must be non-negative")
+		}
+		dimension = embeddingConfig.Dimension
 	}
 	if name == nil || strings.TrimSpace(*name) == "" || config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
 		return nil, fmt.Errorf("embedding model name and API key are required")
@@ -65,10 +78,13 @@ func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, 
 		endpoint = baseURL
 	}
 	embeddings := make([][]float64, 0, len(texts))
-	dimension := 0
 	for start := 0; start < len(texts); start += 32 {
 		end := min(start+32, len(texts))
-		body, err := json.Marshal(map[string]interface{}{"model": *name, "input": texts[start:end]})
+		payload := map[string]interface{}{"model": *name, "input": texts[start:end]}
+		if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
+			payload["dimensions"] = embeddingConfig.Dimension
+		}
+		body, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
 		}
