@@ -566,7 +566,8 @@ def test_http_modes_have_distinct_candidates_weights_and_pages(search_api: dict[
         assert response.status_code == 422, response.text
 
 
-def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("collection", [False, True])
+def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, collection: bool) -> None:
     env = search_api
 
     class ControlledModel:
@@ -574,7 +575,7 @@ def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: 
             return np.array([0.2] * 768), 0
 
         def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-            return np.array([0.1 if "low" in text else 0.9 for text in texts]), 0
+            return np.array([0.9 if "high" in text else 0.1 for text in texts]), 0
 
     async def bundle(*args: Any, **kwargs: Any) -> ControlledModel:
         return ControlledModel()
@@ -595,10 +596,18 @@ def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: 
 
     before = snapshot()
     assert {row["pk"] for row in before} >= {low["id"], high["id"]}
-    for scope in ({}, {"doc_ids": [env["doc"]]}, {"meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": "=", "value": "match"}]}}):
-        payload = {"question": "availability", "similarity_threshold": 0.5, "vector_similarity_weight": 1.0, "rerank_id": "controlled", "size": 1, **scope}
+    for scope in ({}, {"doc_ids": [env["doc"], env["second_doc"]]}, {"meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": "=", "value": "match"}]}}):
+        payload = {
+            "dataset_ids": [env["dataset"], env["second"]],
+            "question": "availability",
+            "similarity_threshold": 0.5,
+            "vector_similarity_weight": 1.0,
+            "rerank_id": "controlled",
+            "size": 1,
+            **scope,
+        }
         for page in (1, 2):
-            response = request(env, "POST", "/search", json={**payload, "page": page})
+            response = request(env, "POST", "/search", collection=collection, json={**payload, "page": page})
             body = response.json()
             assert response.status_code == 200 and body["code"] == 0, body
             result = body["data"]
