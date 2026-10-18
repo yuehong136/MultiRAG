@@ -29,41 +29,12 @@ import (
 
 // LoginUserInteractive performs interactive login with username and password
 func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
-	// First, ping the server to check if it's available
-	// Both public ping endpoints use the /api/v1 base.
-	var pingPath string
-	if c.ServerType == "admin" {
-		pingPath = "/admin/ping"
-	} else {
-		pingPath = "/system/ping"
-	}
-
-	resp, err := c.HTTPClient.Request("GET", pingPath, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "", nil, nil)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		fmt.Println("Can't access server for login (connection failed)")
-		return err
+		return fmt.Errorf("login ping failed: %w", err)
 	}
-
-	if resp.StatusCode != 200 {
-		fmt.Println("Server is down")
+	if !pingResponseOK(resp) {
 		return fmt.Errorf("server is down")
-	}
-
-	// Check response - admin returns JSON with message "pong", user returns plain "pong"
-	resJSON, err := resp.JSON()
-	if err == nil {
-		// Admin mode returns {"code":0,"message":"pong"}
-		if msg, ok := resJSON["message"].(string); !ok || msg != "pong" {
-			fmt.Println("Server is down")
-			return fmt.Errorf("server is down")
-		}
-	} else {
-		// User mode returns plain "pong"
-		if string(resp.Body) != "pong" {
-			fmt.Println("Server is down")
-			return fmt.Errorf("server is down")
-		}
 	}
 
 	// If password is not provided, prompt for it
@@ -92,41 +63,12 @@ func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 
 // LoginUser performs user login
 func (c *MultiRAGClient) LoginUser(cmd *Command) error {
-	// First, ping the server to check if it's available
-	// Both public ping endpoints use the /api/v1 base.
-	var pingPath string
-	if c.ServerType == "admin" {
-		pingPath = "/admin/ping"
-	} else {
-		pingPath = "/system/ping"
-	}
-
-	resp, err := c.HTTPClient.Request("GET", pingPath, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "", nil, nil)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		fmt.Println("Can't access server for login (connection failed)")
-		return err
+		return fmt.Errorf("login ping failed: %w", err)
 	}
-
-	if resp.StatusCode != 200 {
-		fmt.Println("Server is down")
+	if !pingResponseOK(resp) {
 		return fmt.Errorf("server is down")
-	}
-
-	// Check response - admin returns JSON with message "pong", user returns plain "pong"
-	resJSON, err := resp.JSON()
-	if err == nil {
-		// Admin mode returns {"code":0,"message":"pong"}
-		if msg, ok := resJSON["message"].(string); !ok || msg != "pong" {
-			fmt.Println("Server is down")
-			return fmt.Errorf("server is down")
-		}
-	} else {
-		// User mode returns plain "pong"
-		if string(resp.Body) != "pong" {
-			fmt.Println("Server is down")
-			return fmt.Errorf("server is down")
-		}
 	}
 
 	email, ok := cmd.Params["email"].(string)
@@ -209,34 +151,18 @@ func (c *MultiRAGClient) Logout() (ResponseIf, error) {
 	if c.HTTPClient.LoginToken == "" {
 		return nil, fmt.Errorf("not logged in")
 	}
-
-	var path string
+	path, method := "/auth/logout", http.MethodPost
 	if c.ServerType == "admin" {
-		path = "/admin/logout"
-	} else {
-		path = "/user/logout"
+		path, method = "/admin/logout", http.MethodGet
 	}
-
-	resp, err := c.HTTPClient.Request("GET", path, "web", nil, nil)
+	resp, err := c.HTTPClient.Request(method, path, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("logout failed: %w", err)
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("logout failed: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("logout", resp); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("logout failed: invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok || code != 0 {
-		msg, _ := resJSON["message"].(string)
-		return nil, fmt.Errorf("logout failed: %s", msg)
-	}
-
+	c.HTTPClient.LoginToken = ""
 	return &SimpleResponse{Code: 0, Message: "Logout successful"}, nil
 }
 

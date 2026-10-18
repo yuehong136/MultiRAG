@@ -170,6 +170,8 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 // ExecuteUserCommand executes a command in user mode.
 func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 	switch cmd.Type {
+	case "register_user":
+		return c.RegisterUser(cmd)
 	case "login_user":
 		return nil, c.LoginUser(cmd)
 	case "logout":

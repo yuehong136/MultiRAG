@@ -24,7 +24,11 @@ func TestLoginCommandRESTContract(t *testing.T) {
 					prefix += "/admin"
 				}
 				if r.Method == "GET" && r.URL.Path == prefix+map[string]string{"user": "/system/ping", "admin": "/ping"}[mode] {
-					fmt.Fprint(w, "pong")
+					if mode == "admin" {
+						fmt.Fprint(w, `{"code":0,"message":"PONG"}`)
+					} else {
+						fmt.Fprint(w, "pong")
+					}
 					return
 				}
 				path := prefix + map[string]string{"user": "/auth/login", "admin": "/login"}[mode]
@@ -142,5 +146,21 @@ func TestAuthBusinessEnvelopes(t *testing.T) {
 	}
 	if err := checkAuthResponse("login", &Response{StatusCode: 403, Body: []byte(`{"code":0}`)}); err == nil {
 		t.Fatal("accepted denied HTTP status")
+	}
+}
+
+func TestPingRequiresSuccessfulPong(t *testing.T) {
+	for _, test := range []struct {
+		body   string
+		status int
+		want   bool
+	}{
+		{"pong", 200, true}, {`{"code":0,"message":"PONG"}`, 200, true},
+		{`{"code":109,"message":"PONG"}`, 200, false}, {`{"message":"pong"}`, 200, false},
+		{"pong", 503, false}, {"upstream error", 200, false},
+	} {
+		if got := pingResponseOK(&Response{StatusCode: test.status, Body: []byte(test.body)}); got != test.want {
+			t.Errorf("ping accepted=%t, want %t", got, test.want)
+		}
 	}
 }

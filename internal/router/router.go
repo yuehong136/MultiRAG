@@ -104,7 +104,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
-		authorized.GET("/v1/user/logout", r.userHandler.Logout)
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
 		authorized.GET("/api/v1/users/me", r.userHandler.Info)
 		authorized.PATCH("/api/v1/users/me", r.userHandler.Setting)

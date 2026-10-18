@@ -58,7 +58,7 @@ func TestHybridAuthLiveServer(t *testing.T) {
 	app := gin.New()
 	app.Use(gin.Recovery())
 	users := service.NewUserService()
-	appRouter := router.NewRouter(handler.NewAuthHandler(), handler.NewUserHandler(users), handler.NewTenantHandler(service.NewTenantService(), users), nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, handler.NewChatSessionHandler(service.NewChatSessionService(), users), nil, nil, nil, nil, nil, nil)
+	appRouter := router.NewRouter(handler.NewAuthHandler(), handler.NewUserHandler(users), handler.NewTenantHandler(service.NewTenantService(), users), nil, handler.NewDatasetsHandler(service.NewDatasetsService()), handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, handler.NewChatSessionHandler(service.NewChatSessionService(), users), nil, nil, nil, nil, nil, nil)
 	appRouter.Setup(app)
 	adminHandler := admin.NewHandler(admin.NewService())
 	adminApp := gin.New()

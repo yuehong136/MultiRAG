@@ -40,17 +40,17 @@ func (c *MultiRAGClient) PingServer(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode: multiple iterations
-		return c.HTTPClient.RequestWithIterations("GET", "/system/ping", "web", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", c.pingPath(), "web", nil, nil, iterations)
 	}
 
 	// Single ping mode
-	resp, err := c.HTTPClient.Request("GET", "/system/ping", "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "web", nil, nil)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return nil, err
 	}
 
-	if resp.StatusCode == 200 && string(resp.Body) == "pong" {
+	if pingResponseOK(resp) {
 		return &SimpleResponse{Code: 0, Message: "Server is alive"}, nil
 	}
 	return nil, fmt.Errorf("server is down: HTTP %d", resp.StatusCode)

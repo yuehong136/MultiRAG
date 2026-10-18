@@ -123,11 +123,13 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 		return nil, common.CodeServerError, fmt.Errorf("Fail to decrypt password")
 	}
 
-	hashedPassword, err := s.HashPassword(decryptedPassword)
+	// New regular accounts use the current Python backend password format.
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(decryptedPassword), 12)
 	if err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("failed to hash password: %w", err)
 	}
 
+	passwordHash := string(hashedPassword)
 	userID := utility.GenerateToken()
 	accessToken := utility.GenerateToken()
 	status := "1"
@@ -139,7 +141,7 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 		AccessToken:     &accessToken,
 		Email:           req.Email,
 		Nickname:        req.Nickname,
-		Password:        &hashedPassword,
+		Password:        &passwordHash,
 		Status:          &status,
 		IsActive:        true,
 		IsAuthenticated: true,
@@ -327,7 +329,7 @@ func (s *UserService) LoginByEmail(req *EmailLoginRequest) (*entity.User, common
 	}
 	user, err := s.userDAO.GetByEmail(req.Email)
 	if err != nil {
-		return nil, common.CodeAuthenticationError, fmt.Errorf("Email: %s is not registered!", req.Email)
+		return nil, common.CodeAuthenticationError, fmt.Errorf("email: %s is not registered!", req.Email)
 	}
 
 	if user.AccountKind == "external" {
@@ -335,11 +337,11 @@ func (s *UserService) LoginByEmail(req *EmailLoginRequest) (*entity.User, common
 	}
 	decryptedPassword, err := s.decryptPassword(req.Password)
 	if err != nil {
-		return nil, common.CodeServerError, fmt.Errorf("Fail to crypt password")
+		return nil, common.CodeServerError, fmt.Errorf("fail to crypt password")
 	}
 
 	if user.Password == nil || !s.VerifyPassword(*user.Password, decryptedPassword) {
-		return nil, common.CodeAuthenticationError, fmt.Errorf("Email and password do not match!")
+		return nil, common.CodeAuthenticationError, fmt.Errorf("email and password do not match!")
 	}
 
 	if !activeUser(user) {

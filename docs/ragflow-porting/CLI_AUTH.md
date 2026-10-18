@@ -19,6 +19,18 @@ Authentication responses require an explicit successful business code and HTTP
 missing or conflicting codes fail. SQL `LOGIN ... WITH PASSWORD ...` works in
 single-command mode without a second password prompt.
 
+Registration executes `REGISTER USER 'email' AS 'nickname' PASSWORD 'password';`
+through public `POST /api/v1/users`, encrypting the password with RSA before
+sending it. Go registration stores the current Python bcrypt format so new
+accounts can authenticate on either backend. Registration creates a regular user and does not reuse or overwrite
+an existing login session. User logout is authenticated `POST /api/v1/auth/logout`;
+admin logout retains its separate `GET /api/v1/admin/logout` contract. A successful
+logout clears the CLI session, while a rejected logout preserves it.
+
+The independent Web Vite configuration already proxies all `/api` requests to
+its configured backend. It covers users and auth without an upstream-specific
+Go proxy split or a production configuration change.
+
 The CLI retains the existing shared chat error formatter. Both streaming and
 non-streaming chat failures distinguish EOF and timeout and preserve the cause
 for `errors.Is`/`errors.As`. A second formatter provides no additional behavior.

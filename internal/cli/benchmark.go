@@ -242,7 +242,7 @@ func (c *MultiRAGClient) executeBenchmarkSilent(cmd *Command, iterations int) []
 
 		switch cmd.Type {
 		case "ping_server":
-			resp, err = c.HTTPClient.Request("GET", "/system/ping", "web", nil, nil)
+			resp, err = c.HTTPClient.Request("GET", c.pingPath(), "web", nil, nil)
 		case "list_user_datasets":
 			resp, err = c.HTTPClient.Request("GET", "/datasets", "web", nil, nil)
 		case "list_datasets":
@@ -282,7 +282,7 @@ func isSuccess(resp *Response, commandType string) bool {
 
 	switch commandType {
 	case "ping_server":
-		return resp.StatusCode == 200 && string(resp.Body) == "pong"
+		return pingResponseOK(resp)
 	case "list_user_datasets", "list_datasets", "search_on_datasets":
 		// Check status code and JSON response code for dataset commands
 		if resp.StatusCode != 200 {
