@@ -441,8 +441,33 @@ func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	return models, nil
 }
 
+type siliconFlowBalanceResponse struct {
+	Code   *int  `json:"code"`
+	Status *bool `json:"status"`
+	Data   struct {
+		Balance      string `json:"balance"`
+		TotalBalance string `json:"totalBalance"`
+	} `json:"data"`
+	Error json.RawMessage `json:"error"`
+}
+
 func (m *SiliconFlowModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("%s, no such method", m.Name())
+	var result siliconFlowBalanceResponse
+	if err := decodeBalanceHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Balance, apiConfig, &result); err != nil {
+		return nil, fmt.Errorf("siliconflow: %w", err)
+	}
+	if result.Code == nil || *result.Code != 0 || result.Status == nil || !*result.Status || len(result.Error) != 0 && string(result.Error) != "null" {
+		return nil, fmt.Errorf("siliconflow: balance provider returned an error")
+	}
+	raw := result.Data.TotalBalance
+	if raw == "" {
+		raw = result.Data.Balance
+	}
+	amount, err := parseBalanceAmount(raw)
+	if err != nil {
+		return nil, fmt.Errorf("siliconflow: %w", err)
+	}
+	return map[string]interface{}{"balance": amount, "currency": "CNY"}, nil
 }
 
 func (m *SiliconFlowModel) CheckConnection(apiConfig *APIConfig) error {
