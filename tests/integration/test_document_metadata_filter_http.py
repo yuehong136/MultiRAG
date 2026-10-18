@@ -140,6 +140,14 @@ def test_filter_aggregates_all_linked_documents_and_ignores_metadata_pagination(
             assert request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][0], params=query).json()["code"] == 102
         assert request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][1], params={"type": "filter"}).json()["code"] == 102
         assert sql_state(env) == before
+
+        def failed_metadata(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("Controlled metadata read failure")
+
+        monkeypatch.setattr(DocMetadataService, "get_metadata_for_documents", failed_metadata)
+        response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][0], params={"type": "filter"})
+        assert response.status_code == 200 and response.json()["code"] != 0, response.text
+        assert sql_state(env) == before
     finally:
         with env["engine"].begin() as db:
             db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == first))
