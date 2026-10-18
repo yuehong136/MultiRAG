@@ -85,7 +85,7 @@ def snapshot(env: dict[str, Any]) -> Any:
 def test_folder_moves_reject_cycles_without_partial_batch_writes(move_tree: dict[str, Any]) -> None:
     env, ids = move_tree, move_tree["ids"]
     before = snapshot(env)
-    for destination in ["source", "child", "grandchild"]:
+    for destination in ["source", "child", "grandchild", "root"]:
         response = env["client"].post(env["base"] + "/api/v1/files/move", json={"src_file_ids": [ids["sibling"], ids["source"]], "dest_file_id": ids[destination]}, timeout=30)
         assert response.status_code == 200 and response.json()["code"] != 0, response.text
         assert "Cannot move a folder" in response.json()["message"]
@@ -104,4 +104,17 @@ def test_folder_move_to_sibling_preserves_contents(move_tree: dict[str, Any]) ->
         assert leaf is not None and leaf.parent_id == moved.id
         assert env["storage"].get(leaf.parent_id, leaf.location) == b"nested-file"
     assert not env["storage"].obj_exist(ids["source"], "leaf")
+    assert env["storage"].get(ids["root"], "sibling") == b"first-in-batch"
+
+
+def test_folder_move_to_current_parent_allows_explicit_rename(move_tree: dict[str, Any]) -> None:
+    env, ids = move_tree, move_tree["ids"]
+    response = env["client"].post(env["base"] + "/api/v1/files/move", json={"src_file_ids": [ids["source"]], "dest_file_id": ids["root"], "new_name": "renamed"}, timeout=30)
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    with Session(env["engine"]) as db:
+        assert db.get(File, ids["source"]) is None
+        renamed = db.scalar(sa.select(File).where(File.parent_id == ids["root"], File.name == "renamed"))
+        leaf = db.get(File, ids["leaf"])
+        assert renamed is not None and leaf is not None and leaf.parent_id == renamed.id
+        assert env["storage"].get(leaf.parent_id, leaf.location) == b"nested-file"
     assert env["storage"].get(ids["root"], "sibling") == b"first-in-batch"

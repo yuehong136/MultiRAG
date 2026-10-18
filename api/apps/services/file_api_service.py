@@ -362,9 +362,12 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
                 return False, "Duplicated file name in the same folder."
 
     if dest_folder:
-        source_folder_ids = {file.id for file in files if file.type == FileType.FOLDER.value}
+        source_folders = [file for file in files if file.type == FileType.FOLDER.value]
+        source_folder_ids = {file.id for file in source_folders}
         if dest_folder.id in source_folder_ids:
             return False, "Cannot move a folder to itself."
+        if not new_name and any(file.parent_id == dest_folder.id for file in source_folders):
+            return False, "Cannot move a folder to its current location."
         if source_folder_ids:
             dest_ancestor_ids = {folder.id for folder in FileService.get_all_parent_folders(db, dest_folder.id)}
             if source_folder_ids & dest_ancestor_ids:
