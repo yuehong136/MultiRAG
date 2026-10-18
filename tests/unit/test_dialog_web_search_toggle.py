@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from functools import partial
 from types import SimpleNamespace
@@ -839,3 +840,125 @@ async def test_chat_retrieval_uses_ids_in_loaded_dataset_order(dialog_pipeline_s
             await asyncio.to_thread(lambda: list(dialog_service.chat(probe.dialog, probe.messages, db, stream=False)))
     assert fetch.call_args.args[3:5] == (["owner-b", "owner-a"], ["name-b", "name-a"])
     assert fetch.call_args.kwargs["kb_ids"] == ["b", "a"]
+
+
+@pytest.mark.parametrize(
+    ("message", "answer"),
+    [
+        ("<START_DEEP_RESEARCH><br/>", "<retrieving>"),
+        ("searching<br/>", "searching<br/>"),
+        ("<END_DEEP_RESEARCH><br/>", "</retrieving>"),
+    ],
+)
+def test_deep_research_uses_retrieval_envelopes(message: str, answer: str) -> None:
+    assert dialog_service._deep_research_event_payload(message) == {
+        "answer": answer,
+        "reference": {},
+        "audio_binary": None,
+        "final": False,
+    }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_deep_research_final_answer_keeps_independent_history(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Session,
+    async_db: AsyncSession,
+    dialog_pipeline_stubs: _PipelineProbe,
+    asynchronous: bool,
+) -> None:
+    from api.db.services.conversation_service import structure_answer
+
+    async def research(
+        self: Any,
+        chunk_info: dict[str, Any],
+        question: str,
+        query: str,
+        depth: int = 3,
+        callback: Any = None,
+    ) -> None:
+        await callback("<START_DEEP_RESEARCH>")
+        await callback("lookup")
+        await callback("<END_DEEP_RESEARCH>")
+
+    def chat_streamly(self: Any, *args: Any, **kwargs: Any) -> Iterator[str]:
+        yield "<think>reason</think>Answer [ID:0]"
+
+    async def async_streamly(self: Any, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+        yield "<think>reason</think>Answer [ID:0]"
+
+    monkeypatch.setattr(deep_research_module.TreeStructuredQueryDecompositionRetrieval, "research", research)
+    monkeypatch.setattr(_PipelineBundle, "chat_streamly", chat_streamly)
+    monkeypatch.setattr(_PipelineBundle, "async_chat_streamly_delta", async_streamly)
+    if asynchronous:
+        events = [
+            event
+            async for event in dialog_service.async_chat(
+                dialog_pipeline_stubs.dialog,
+                dialog_pipeline_stubs.messages,
+                async_db,
+                reasoning=True,
+                stream=True,
+            )
+        ]
+    else:
+        # The legacy bridge owns its event loop; run it outside this async test loop.
+        events = await asyncio.to_thread(
+            lambda: list(
+                dialog_service.chat(
+                    dialog_pipeline_stubs.dialog,
+                    dialog_pipeline_stubs.messages,
+                    db,
+                    reasoning=True,
+                    stream=True,
+                )
+            )
+        )
+    trace = "<retrieving>lookup<br/></retrieving>"
+    assert [event["answer"] for event in events[:3]] == ["<retrieving>", "lookup<br/>", "</retrieving>"]
+    assert all(not event.get("start_to_think") and not event.get("end_to_think") for event in events[:3])
+    assert events[-1]["answer"] == trace + "<think>reason</think>Answer [ID:0]"
+    if asynchronous:
+        assert events[-1]["final"] is True
+    conv = SimpleNamespace(message=[], reference=[{}])
+    for event in events:
+        structure_answer(conv, event, "message-1", "session-1")
+    assert conv.message[-1]["content"] == events[-1]["answer"]
+    assert conv.message[-1]["content"].count("<retrieving>") == 1
+    assert conv.message[-1]["content"].count("<think>") == 1
+
+
+async def test_nonstreaming_research_does_not_emit_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    async_db: AsyncSession,
+    dialog_pipeline_stubs: _PipelineProbe,
+) -> None:
+    async def research(
+        self: Any,
+        chunk_info: dict[str, Any],
+        question: str,
+        query: str,
+        depth: int = 3,
+        callback: Any = None,
+    ) -> None:
+        await callback("<START_DEEP_RESEARCH>")
+        await callback("lookup")
+        await callback("<END_DEEP_RESEARCH>")
+
+    async def generate(self: Any, *args: Any, **kwargs: Any) -> str:
+        return "<think>reason</think>Answer"
+
+    monkeypatch.setattr(deep_research_module.TreeStructuredQueryDecompositionRetrieval, "research", research)
+    monkeypatch.setattr(_PipelineBundle, "async_chat", generate)
+    events = [
+        event
+        async for event in dialog_service.async_chat(
+            dialog_pipeline_stubs.dialog,
+            dialog_pipeline_stubs.messages,
+            async_db,
+            reasoning=True,
+            stream=False,
+        )
+    ]
+    assert len(events) == 1
+    assert events[0]["answer"] == "<think>reason</think>Answer"

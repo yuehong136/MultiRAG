@@ -136,9 +136,9 @@ def _retrieval_search_mode(dialog: Any) -> dict[str, Any] | None:
 def _deep_research_event_payload(message: str) -> dict[str, Any]:
     """Convert a DeepResearcher callback message to the chat stream contract."""
     if message.startswith("<START_DEEP_RESEARCH>"):
-        return {"answer": "", "reference": {}, "audio_binary": None, "final": False, "start_to_think": True}
+        return {"answer": "<retrieving>", "reference": {}, "audio_binary": None, "final": False}
     if message.startswith("<END_DEEP_RESEARCH>"):
-        return {"answer": "", "reference": {}, "audio_binary": None, "final": False, "end_to_think": True}
+        return {"answer": "</retrieving>", "reference": {}, "audio_binary": None, "final": False}
     return {"answer": message, "reference": {}, "audio_binary": None, "final": False}
 
 
@@ -773,6 +773,7 @@ def chat(
     refine_question_ts = timer()
 
     thought = ""
+    retrieval_trace = ""
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
     knowledges = []
 
@@ -805,7 +806,9 @@ def chat(
             try:
                 for message in research_events:
                     if stream:
-                        yield _deep_research_event_payload(message)
+                        payload = _deep_research_event_payload(message)
+                        retrieval_trace += payload["answer"]
+                        yield payload
             finally:
                 research_events.close()
             enrich_reference_metadata(db, kbinfos["chunks"], metadata_preferences)
@@ -856,7 +859,7 @@ def chat(
     retrieval_ts = timer()
     if has_retrieval_source and not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
-        yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res)}
+        yield {"answer": retrieval_trace + empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res)}
         return {"answer": prompt_config["empty_response"], "reference": kbinfos}
 
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
@@ -980,11 +983,13 @@ def chat(
             if num_tokens_from_string(delta_ans) < 16:
                 continue
             last_ans = answer
-            yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+            yield {"answer": retrieval_trace + thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
         delta_ans = answer[len(last_ans) :]
         if delta_ans:
-            yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
-        yield decorate_answer(thought + answer)
+            yield {"answer": retrieval_trace + thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+        final = decorate_answer(thought + answer)
+        final["answer"] = retrieval_trace + final["answer"]
+        yield final
     else:
         if llm_type == "chat":
             answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf)
@@ -1149,6 +1154,7 @@ async def async_chat(
     refine_question_ts = timer()
 
     thought = ""
+    retrieval_trace = ""
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
     knowledges = []
 
@@ -1180,7 +1186,10 @@ async def async_chat(
 
             async with aclosing(_deep_research_events(reasoner, kbinfos, questions[-1])) as research_events:
                 async for message in research_events:
-                    yield _deep_research_event_payload(message)
+                    if stream:
+                        payload = _deep_research_event_payload(message)
+                        retrieval_trace += payload["answer"]
+                        yield payload
 
         else:
             if embd_mdl:
@@ -1229,7 +1238,7 @@ async def async_chat(
     retrieval_ts = timer()
     if has_retrieval_source and not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
-        yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res), "final": True}
+        yield {"answer": retrieval_trace + empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions), "audio_binary": tts(tts_mdl, empty_res), "final": True}
         return
 
     kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
@@ -1348,6 +1357,8 @@ async def async_chat(
         full_answer = last_state.full_text if last_state else ""
         if full_answer:
             final = decorate_answer(_extract_visible_answer(thought + full_answer))
+            # Keep retrieval outside model reasoning and retain it in persisted history.
+            final["answer"] = retrieval_trace + final["answer"]
             final["final"] = True
             final["audio_binary"] = None
             yield final

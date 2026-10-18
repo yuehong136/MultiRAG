@@ -97,3 +97,70 @@ def test_session_patch_and_retired_put(runtime_upload_api: dict[str, Any], crede
             db.execute(sa.delete(Dialog).where(Dialog.id.in_([chat_id, other_chat_id])))
             db.commit()
         assert readback() == {}
+
+
+def test_retrieval_and_thinking_survive_completion_and_history_readback(
+    runtime_upload_api: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+    import sys
+    from collections.abc import AsyncIterator
+
+    from api.db.services.dialog_service import _deep_research_event_payload
+
+    env = runtime_upload_api
+    chat_id, session_id = uuid4().hex, uuid4().hex
+    owner = env["owners"][0]
+    trace = "<retrieving>lookup<br/></retrieving>"
+    expected = trace + "<think>model reasoning</think>Answer [ID:0]"
+    references = {"chunks": [{"chunk_id": "chunk-1", "doc_id": "doc-1", "docnm_kwd": "Fixture source", "content_with_weight": "Evidence"}], "doc_aggs": []}
+
+    async def controlled_chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        for message in ("<START_DEEP_RESEARCH><br/>", "lookup<br/>", "<END_DEEP_RESEARCH><br/>"):
+            yield _deep_research_event_payload(message)
+        yield {"answer": "", "start_to_think": True, "reference": {}, "final": False}
+        yield {"answer": "model reasoning", "reference": {}, "final": False}
+        yield {"answer": "", "end_to_think": True, "reference": {}, "final": False}
+        yield {"answer": "Answer", "reference": {}, "final": False}
+        yield {"answer": expected, "reference": references, "final": True}
+
+    # register_page loads the active router under this canonical module name.
+    monkeypatch.setattr(sys.modules["api.apps.restful_apis.chat"], "async_chat", controlled_chat)
+    with Session(env["engine"]) as db:
+        db.add(Dialog(id=chat_id, tenant_id=owner, name="Retrieval scratch", llm_id="controlled"))
+        db.add(Conversation(id=session_id, dialog_id=chat_id, user_id=owner, name="Replay scratch", message=[], reference=[]))
+        db.commit()
+    headers = {"Authorization": f"Bearer {env['jwt']}"}
+    try:
+        response = requests.post(
+            f"{env['base']}/api/v1/chat/completions",
+            headers=headers,
+            json={"chat_id": chat_id, "session_id": session_id, "messages": [{"role": "user", "content": "Fixture question"}], "stream": True},
+            timeout=30,
+        )
+        assert response.status_code == 200 and response.headers["content-type"].startswith("text/event-stream")
+        frames = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+        assert all(frame["code"] == 0 for frame in frames)
+        assert frames[-1]["data"] is True
+        assert [frame["data"]["answer"] for frame in frames[:3]] == ["<retrieving>", "lookup<br/>", "</retrieving>"]
+        assert frames[-2]["data"]["answer"] == expected
+        assert frames[-2]["data"]["final"] is True
+        assert frames[-2]["data"]["reference"]["chunks"][0]["document_id"] == "doc-1"
+        with Session(env["engine"]) as db:
+            persisted = db.get(Conversation, session_id)
+            assert persisted is not None
+            assert persisted.message[-1]["content"] == expected
+            assert persisted.reference[-1]["chunks"][0]["document_id"] == "doc-1"
+        history = requests.get(f"{env['base']}/api/v1/chats/{chat_id}/sessions/{session_id}", headers=headers, timeout=30).json()
+        assert history["code"] == 0
+        assert history["data"]["messages"][-1]["content"] == expected
+        assert history["data"]["reference"][-1]["chunks"][0]["document_id"] == "doc-1"
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(Conversation).where(Conversation.id == session_id))
+            db.execute(sa.delete(Dialog).where(Dialog.id == chat_id))
+            db.commit()
+        with Session(env["engine"]) as db:
+            assert db.get(Conversation, session_id) is None
+            assert db.get(Dialog, chat_id) is None
