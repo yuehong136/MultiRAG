@@ -3,6 +3,11 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2026-10-18 · 20 项组合验收索引
+
+本批逐项 SHA/等价结论、组合失败修复、最终门禁、HTTP/SQL/消费者证据及清理结果统一见
+[20 项串行合入与组合验收](batch-20-combination.md)。旧八项 `3bd0bfc7` 交付与本批分别记录。
+
 ## c81081f8ef1f805fcc44642f35c78c61709dae9e · 文档 PATCH parser/Pipeline 整项接受
 
 2026-10-03 后端修后范围提交 `d1177243ef6c3cdcbbe2728ddc6c1665560eede6`
