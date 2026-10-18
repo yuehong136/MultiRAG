@@ -4,13 +4,14 @@ from datetime import datetime
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from api.constants import DATASET_NAME_LIMIT
-from api.db import TenantPermission
+from api.db import TenantPermission, UserTenantRole
 from api.db.db_models import Document, Knowledgebase, User, UserCanvas, UserTenant
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.services.user_service import TenantService, UserTenantService
+from api.db.services.user_service import TenantService
 from api.utils.api_utils import get_data_error_result
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
@@ -23,6 +24,33 @@ class EmbeddingModelMismatchError(ValueError):
 
 class KnowledgebaseService(CommonService):
     model = Knowledgebase
+
+    @classmethod
+    def _visibility_and_status_filter(cls, user_id: str, tenant_ids: Sequence[str] | None = None) -> ColumnElement[bool]:
+        """Use active membership and dataset permission for every read path.
+
+        Tenant IDs are independent of user IDs. Creators retain private access
+        while members of that tenant; owners/admins retain management access.
+        Caller-supplied tenant lists only narrow visibility, never grant access.
+        """
+        membership = select(UserTenant.id).where(
+            UserTenant.tenant_id == cls.model.tenant_id,
+            UserTenant.user_id == user_id,
+            UserTenant.status == StatusEnum.VALID.value,
+            UserTenant.role.in_([UserTenantRole.OWNER, UserTenantRole.ADMIN, UserTenantRole.NORMAL]),
+            or_(
+                UserTenant.role.in_([UserTenantRole.OWNER, UserTenantRole.ADMIN]),
+                cls.model.created_by == user_id,
+                cls.model.permission == TenantPermission.TEAM.value,
+            ),
+        )
+        if tenant_ids is not None:
+            membership = membership.where(or_(cls.model.tenant_id.in_(tenant_ids), cls.model.created_by == user_id, UserTenant.role == UserTenantRole.OWNER))
+        return and_(
+            cls.model.status == StatusEnum.VALID.value,
+            cls.model.permission.in_([TenantPermission.ME.value, TenantPermission.TEAM.value]),
+            membership.correlate(cls.model).exists(),
+        )
 
     @classmethod
     async def get_existing_ids_async(cls, db: AsyncSession, kb_ids: list[str]) -> set[str]:
@@ -88,7 +116,9 @@ class KnowledgebaseService(CommonService):
         return [doc.document_id for doc in doc_ids]
 
     @classmethod
-    def get_by_tenant_ids(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, keywords=None, parser_id=None):
+    def get_by_tenant_ids(
+        cls, db: Session, joined_tenant_ids: Sequence[str], user_id: str, page_number: int, items_per_page: int, orderby: str, desc: bool, keywords: str | None = None, parser_id: str | None = None
+    ) -> tuple[list[dict], int]:
         fields = [
             cls.model.id,
             cls.model.avatar,
@@ -108,13 +138,7 @@ class KnowledgebaseService(CommonService):
         ]
 
         # 构建查询表达式
-        query = (
-            db.query(*fields)
-            .join(User, cls.model.tenant_id == User.id)
-            .filter(
-                ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value)
-            )
-        )
+        query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(cls._visibility_and_status_filter(user_id, joined_tenant_ids))
         if parser_id:
             query = query.filter(cls.model.parser_id == parser_id)
         # 如果提供了关键词，则增加模糊搜索条件
@@ -162,7 +186,7 @@ class KnowledgebaseService(CommonService):
         return result, total
 
     @classmethod
-    def get_by_tenant_ids_by_offset(cls, db: Session, joined_tenant_ids, user_id, offset, count, orderby, desc):
+    def get_by_tenant_ids_by_offset(cls, db: Session, joined_tenant_ids: Sequence[str], user_id: str, offset: int, count: int, orderby: str, desc: bool) -> list[dict]:
         """
         根据租户ID列表和用户ID，通过偏移量和计数获取知识库列表。
 
@@ -176,9 +200,7 @@ class KnowledgebaseService(CommonService):
         :return: 符合条件的知识库列表的字典形式。
         """
         # 根据条件构建查询表达式
-        query = db.query(cls.model).filter(
-            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value)
-        )
+        query = db.query(cls.model).filter(cls._visibility_and_status_filter(user_id, joined_tenant_ids))
 
         # 根据desc参数确定排序方式
         if desc:
@@ -200,7 +222,7 @@ class KnowledgebaseService(CommonService):
         return [kb.to_dict() for kb in kbs[offset : offset + count]]
 
     @classmethod
-    def get_all_kb_by_tenant_ids(cls, db: Session, tenant_ids: list, user_id: str):
+    def get_all_kb_by_tenant_ids(cls, db: Session, tenant_ids: list[str], user_id: str) -> list[dict]:
         """
         根据租户ID列表获取所有有权限的知识库
 
@@ -226,11 +248,7 @@ class KnowledgebaseService(CommonService):
             cls.model.update_date,
         ]
         # find team kb and owned kb
-        query = (
-            db.query(*fields)
-            .filter(or_(and_(cls.model.tenant_id.in_(tenant_ids), cls.model.permission == TenantPermission.TEAM.value), cls.model.tenant_id == user_id))
-            .order_by(cls.model.create_time.asc())
-        )
+        query = db.query(*fields).filter(cls._visibility_and_status_filter(user_id, tenant_ids)).order_by(cls.model.create_time.asc())
         # maybe cause slow query by deep paginate, optimize later.
         offset, limit = 0, 50
         res = []
@@ -470,7 +488,20 @@ class KnowledgebaseService(CommonService):
         return True, payload
 
     @classmethod
-    def get_list(cls, db: Session, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, id, name, keywords=None, parser_id=None):
+    def get_list(
+        cls,
+        db: Session,
+        joined_tenant_ids: Sequence[str],
+        user_id: str,
+        page_number: int,
+        items_per_page: int,
+        orderby: str,
+        desc: bool,
+        id: str | None,
+        name: str | None,
+        keywords: str | None = None,
+        parser_id: str | None = None,
+    ) -> tuple[list[dict], int]:
         """
         # Get list of datasets with filtering and pagination
         # Args:
@@ -488,9 +519,7 @@ class KnowledgebaseService(CommonService):
         #     Tuple of (List of datasets, Total count of datasets)
         """
         # 构建基础查询条件
-        query = db.query(cls.model).filter(
-            ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission == TenantPermission.TEAM.value)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value)
-        )
+        query = db.query(cls.model).filter(cls._visibility_and_status_filter(user_id, joined_tenant_ids))
 
         # 根据ID和名称进行进一步过滤（如果有提供）
         if id:
@@ -516,48 +545,22 @@ class KnowledgebaseService(CommonService):
         return [kb.to_dict() for kb in kbs], total
 
     @classmethod
-    def accessible(cls, db: Session, kb_id, user_id):
-        stmt = select(cls.model.tenant_id).where(
-            cls.model.id == kb_id,
-            cls.model.status == StatusEnum.VALID.value,
-        )
-        tenant_id = db.execute(stmt).scalar_one_or_none()
-        if tenant_id is None:
-            return False
-
-        membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
-        if not membership:
-            return False
-
-        return UserTenantService.can_access_tenant_resources(membership.role)
+    def accessible(cls, db: Session, kb_id: str, user_id: str) -> bool:
+        return db.scalar(select(cls.model.id).where(cls.model.id == kb_id, cls._visibility_and_status_filter(user_id)).limit(1)) is not None
 
     @classmethod
     async def accessible_async(cls, db: AsyncSession, kb_id: str, user_id: str) -> bool:
-        """Native async equivalent of accessible, including active membership checks."""
-        stmt = (
-            select(UserTenant.role)
-            .join(cls.model, cls.model.tenant_id == UserTenant.tenant_id)
-            .where(
-                cls.model.id == kb_id,
-                cls.model.status == StatusEnum.VALID.value,
-                UserTenant.user_id == user_id,
-                UserTenant.status == StatusEnum.VALID.value,
-            )
-            .limit(1)
-        )
-        return UserTenantService.can_access_tenant_resources(await db.scalar(stmt))
+        return await db.scalar(select(cls.model.id).where(cls.model.id == kb_id, cls._visibility_and_status_filter(user_id)).limit(1)) is not None
 
     @classmethod
-    def get_kb_by_id(cls, db: Session, kb_id, user_id):
-        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(cls.model.id == kb_id, UserTenant.user_id == user_id).limit(1)
-
-        return [kb.to_dict() for kb in query]
+    def get_kb_by_id(cls, db: Session, kb_id: str, user_id: str) -> list[dict]:
+        query = select(cls.model).where(cls.model.id == kb_id, cls._visibility_and_status_filter(user_id)).limit(1)
+        return [kb.to_dict() for kb in db.scalars(query)]
 
     @classmethod
-    def get_kb_by_name(cls, db: Session, kb_name, user_id):
-        query = db.query(cls.model).join(UserTenant, UserTenant.tenant_id == cls.model.tenant_id).filter(cls.model.name == kb_name, UserTenant.user_id == user_id).limit(1)
-
-        return [kb.to_dict() for kb in query]
+    def get_kb_by_name(cls, db: Session, kb_name: str, user_id: str) -> list[dict]:
+        query = select(cls.model).where(cls.model.name == kb_name, cls._visibility_and_status_filter(user_id)).order_by(cls.model.id).limit(1)
+        return [kb.to_dict() for kb in db.scalars(query)]
 
     @classmethod
     def accessible4deletion(cls, db: Session, kb_id, user_id):

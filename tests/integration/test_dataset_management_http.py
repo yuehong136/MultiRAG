@@ -213,3 +213,31 @@ def test_ingestion_actual_web_consumer(management_api: dict[str, Any]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ingestion Web acceptance passed" in result.stdout
     assert sql_state(env) == before
+
+
+def test_private_dataset_denies_joined_member_over_real_http(management_api: dict[str, Any]) -> None:
+    from uuid import uuid4
+
+    import sqlalchemy as sa
+
+    from api.db.db_models import UserTenant
+
+    env = management_api
+    with env["engine"].begin() as db:
+        db.execute(sa.insert(UserTenant).values(id=uuid4().hex, tenant_id=env["users"][0], user_id=env["users"][1], role="normal", invited_by=env["users"][0]))
+    before = sql_state(env)
+    dataset = env["datasets"][0]
+    for credential in [env["keys"][1], env["jwt"][1]]:
+        for method, path, payload in [
+            ("GET", f"/datasets/{dataset}/ingestions", None),
+            ("GET", f"/datasets?id={dataset}", None),
+            ("POST", f"/datasets/{dataset}/metadata/update", {"selector": {"document_ids": [env["documents"][0]]}, "updates": [{"key": "private", "value": "forbidden"}], "deletes": []}),
+        ]:
+            response = request_api(env, method, path, credential=credential, payload=payload)
+            assert response.status_code == 200 and response.json()["code"] != 0, response.text
+            assert sql_state(env) == before
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(permission="team"))
+    for credential in [env["keys"][1], env["jwt"][1]]:
+        response = request_api(env, "GET", f"/datasets/{dataset}/ingestions", credential=credential)
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text

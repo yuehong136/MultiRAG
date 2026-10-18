@@ -251,94 +251,25 @@ def test_delete_member_allows_admin_but_protects_owner(client, client_user, monk
 # ---------------------------------------------------------------------------
 
 
-class _ScalarResult:
-    def __init__(self, value):
-        self._value = value
-
-    def scalar_one_or_none(self):
-        return self._value
-
-
-class _FakeScalarSession(Session):
-    def __init__(self, scalar_value):
-        super().__init__()
-        self.scalar_value = scalar_value
-        self.last_stmt = None
-
-    def execute(self, stmt):
-        self.last_stmt = stmt
-        return _ScalarResult(self.scalar_value)
-
-
-def test_knowledgebase_accessible_requires_owner_or_joined_member(monkeypatch):
+def test_document_accessible_uses_dataset_policy_and_requires_live_document(monkeypatch) -> None:
+    from api.db.services.document_service import DocumentService
     from api.db.services.knowledgebase_service import KnowledgebaseService
 
-    db = _FakeScalarSession("tenant-1")
+    class DocumentSession(Session):
+        def scalar(self, statement) -> str:
+            return "kb-1"
 
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.INVITE, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert KnowledgebaseService.accessible(db, "kb-1", "user-1") is False
+    db = DocumentSession()
+    calls = []
 
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.OWNER, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert KnowledgebaseService.accessible(db, "kb-1", "user-1") is True
+    def denied(_db, kb_id: str, user_id: str) -> bool:
+        calls.append((kb_id, user_id))
+        return False
 
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.ADMIN, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert KnowledgebaseService.accessible(db, "kb-1", "user-1") is True
-
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.NORMAL, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert KnowledgebaseService.accessible(db, "kb-1", "user-1") is True
-
-    db.scalar_value = None
-    assert KnowledgebaseService.accessible(db, "kb-missing", "user-1") is False
-
-
-def test_document_accessible_requires_owner_or_joined_member(monkeypatch):
-    from api.db.services.document_service import DocumentService
-
-    db = _FakeScalarSession("tenant-1")
-
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.INVITE, tenant_id=tenant_id, user_id=user_id),
-    )
+    monkeypatch.setattr(KnowledgebaseService, "accessible", denied)
     assert DocumentService.accessible(db, "doc-1", "user-1") is False
-
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.OWNER, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert DocumentService.accessible(db, "doc-1", "user-1") is True
-
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.ADMIN, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert DocumentService.accessible(db, "doc-1", "user-1") is True
-
-    monkeypatch.setattr(
-        UserTenantService,
-        "get_membership",
-        lambda _db, tenant_id, user_id: SimpleNamespace(role=UserTenantRole.NORMAL, tenant_id=tenant_id, user_id=user_id),
-    )
-    assert DocumentService.accessible(db, "doc-1", "user-1") is True
-
-    db.scalar_value = None
-    assert DocumentService.accessible(db, "doc-missing", "user-1") is False
+    assert DocumentService.accessible4deletion(db, "doc-1", "user-1") is False
+    assert calls == [("kb-1", "user-1"), ("kb-1", "user-1")]
+    monkeypatch.setattr(db, "scalar", lambda _statement: None)
+    assert DocumentService.accessible(db, "missing", "user-1") is False
+    assert len(calls) == 2

@@ -15,12 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
-from api.db import CanvasCategory, FileType, UserTenantRole
-from api.db.db_models import Document, File, File2Document, Knowledgebase, Task, Tenant, User, UserCanvas, UserTenant
+from api.db import CanvasCategory, FileType
+from api.db.db_models import Document, File, File2Document, Knowledgebase, Task, Tenant, User, UserCanvas
 from api.db.services.common_service import CommonService, retry_transient_tx_conflict
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.user_service import UserTenantService
 from api.utils.db_utils import bulk_insert_into_db
 from common import settings
 from common.constants import (
@@ -2577,41 +2576,13 @@ class DocumentService(CommonService):
         return query.tenant_id if query else None
 
     @classmethod
-    def accessible(cls, db: Session, doc_id, user_id):
-        stmt = (
-            select(Knowledgebase.tenant_id)
-            .join(cls.model, cls.model.kb_id == Knowledgebase.id)
-            .where(
-                cls.model.id == doc_id,
-                cls.model.status == StatusEnum.VALID.value,
-                Knowledgebase.status == StatusEnum.VALID.value,
-            )
-        )
-        tenant_id = db.execute(stmt).scalar_one_or_none()
-        if tenant_id is None:
-            return False
-
-        membership = UserTenantService.get_membership(db, tenant_id=tenant_id, user_id=user_id)
-        if not membership:
-            return False
-
-        return UserTenantService.can_access_tenant_resources(membership.role)
+    def accessible(cls, db: Session, doc_id: str, user_id: str) -> bool:
+        kb_id = db.scalar(select(cls.model.kb_id).where(cls.model.id == doc_id, cls.model.status == StatusEnum.VALID.value))
+        return kb_id is not None and KnowledgebaseService.accessible(db, kb_id, user_id)
 
     @classmethod
     def accessible4deletion(cls, db: Session, doc_id: str, user_id: str) -> bool:
-        stmt = (
-            select(cls.model.id)
-            .join(Knowledgebase, cls.model.kb_id == Knowledgebase.id)
-            .join(UserTenant, and_(UserTenant.tenant_id == Knowledgebase.tenant_id, UserTenant.user_id == user_id))
-            .where(
-                cls.model.id == doc_id,
-                Knowledgebase.status == StatusEnum.VALID.value,
-                UserTenant.status == StatusEnum.VALID.value,
-                or_(UserTenant.role == UserTenantRole.NORMAL, UserTenant.role == UserTenantRole.ADMIN, UserTenant.role == UserTenantRole.OWNER),
-            )
-            .limit(1)
-        )
-        return db.execute(stmt).first() is not None
+        return cls.accessible(db, doc_id, user_id)
 
     @classmethod
     def get_embd_id(cls, db: Session, doc_id: str) -> str | None:
