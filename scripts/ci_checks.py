@@ -27,6 +27,7 @@ GO_LIVE_OPT_INS = {
         "TestProviderInstancesLiveHTTPAndSQL",
         "TestGoogleProviderLiveHTTPAndSQL",
         "TestModelClassProviderLiveHTTPAndSQL",
+        "TestModelInferenceLiveHTTPAndSQL",
         "TestSkillCoreLiveServer",
         "TestTaskLiveServer",
         "TestXAIInstanceLiveHTTPAndSQL",

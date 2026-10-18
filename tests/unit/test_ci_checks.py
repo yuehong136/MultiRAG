@@ -110,11 +110,20 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
         {"Action": "start", "Package": package},
         {"Action": "pass", "Package": package, "Test": "TestUnit"},
         {"Action": "skip", "Package": package, "Test": "TestChatSessionLiveHTTPAndSQL"},
+        {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL"},
         {"Action": "pass", "Package": package},
     ]
     path.write_text("\n".join(map(json.dumps, events)))
-    assert audit_go(path)["counts"]["pass_test"] == 1
-    for bad in [[], events[:-1], [*events, {"Action": "fail", "Package": package}], [*events, {"Action": "skip", "Package": package, "Test": "TestOrdinary"}]]:
+    result = audit_go(path)
+    assert result["counts"]["pass_test"] == 1
+    assert result["unverified_live_opt_ins"] == [f"{package}::TestChatSessionLiveHTTPAndSQL", f"{package}::TestModelInferenceLiveHTTPAndSQL"]
+    for bad in [
+        [],
+        events[:-1],
+        [*events, {"Action": "fail", "Package": package}],
+        [*events, {"Action": "skip", "Package": package, "Test": "TestOrdinary"}],
+        [*events, {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL/unknown"}],
+    ]:
         path.write_text("\n".join(map(json.dumps, bad)))
         with pytest.raises(ValueError):
             audit_go(path)
