@@ -8,8 +8,11 @@ File RESTful service 层单元测试 —— api/apps/services/file_api_service.p
 """
 
 import types
+from collections.abc import Callable
+from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
 import api.apps.services.file_api_service as svc
 
@@ -369,3 +372,11 @@ def test_movereq_valid_combinations():
 def ordinary_file_skill_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Existing fixtures model ordinary files; managed-tree SQL is tested separately."""
     monkeypatch.setattr(svc, "is_skill_managed", lambda *args, **kwargs: False)
+
+
+@pytest.mark.parametrize("lookup", [svc.get_parent_folder, svc.get_all_parent_folders])
+def test_ancestry_rejects_empty_actor(monkeypatch: pytest.MonkeyPatch, db: Session, lookup: Callable[..., tuple[bool, Any]]) -> None:
+    monkeypatch.setattr(svc.FileService, "get_by_id", lambda d, fid: _file())
+    monkeypatch.setattr(svc.FileService, "get_parent_folder", lambda *args: pytest.fail("unauthorized ancestry traversal"))
+    monkeypatch.setattr(svc.FileService, "get_all_parent_folders", lambda *args: pytest.fail("unauthorized ancestry traversal"))
+    assert lookup(db, "f1", user_id="") == (False, "No authorization.")
