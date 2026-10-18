@@ -21,6 +21,7 @@ DATABASE_TESTS = frozenset(
         "test_common_service_crud.py",
         "test_db_bootstrap.py",
         "test_database_process_recovery.py",
+        "test_dialog_sql_scope.py",
         "test_document_existence.py",
         "test_enterprise_subject_repository.py",
         "test_identity_channel_credentials.py",

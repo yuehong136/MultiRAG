@@ -72,8 +72,9 @@ async def test_sql_references_retain_dataset_pairs(monkeypatch: pytest.MonkeyPat
     from common import resources
 
     queries: list[str] = []
+    kb_ids = ["a" * 32, "b" * 32]
     columns = [{"name": name} for name in ["doc_id", "docnm_kwd", "kb_id", "value"]]
-    source_table = {"columns": columns, "rows": [["same", "A", "a", 1], ["same", "B", "b", 2]]}
+    source_table = {"columns": columns, "rows": [["same", "A", kb_ids[0], 1], ["same", "B", kb_ids[1], 2]]}
 
     def retrieve(sql: str, **kwargs: Any) -> dict[str, Any]:
         queries.append(sql)
@@ -89,11 +90,11 @@ async def test_sql_references_retain_dataset_pairs(monkeypatch: pytest.MonkeyPat
     monkeypatch.setitem(resources._state, "retriever", SimpleNamespace(sql_retrieval=retrieve))
     monkeypatch.setattr(dialog_service, "index_name", lambda *a: "table")
     monkeypatch.setattr(DocMetadataService, "get_metadata_for_documents", lambda s, docs, kb: {"same": {"owner": kb}})
-    result = await dialog_service.use_sql("show values", {"value": "Value"}, "tenant", ["A", "B"], Model(), kb_ids=["a", "b"])
+    result = await dialog_service.use_sql("show values", {"value": "Value"}, "tenant", ["A", "B"], Model(), kb_ids=kb_ids)
     assert result is not None
     chunks = result["reference"]["chunks"]
     enrich_reference_metadata(db, chunks, (True, None))
-    assert [c["document_metadata"] for c in chunks] == [{"owner": "a"}, {"owner": "b"}]
+    assert [c["document_metadata"] for c in chunks] == [{"owner": kb_id} for kb_id in kb_ids]
     assert "|kb_id|" not in result["answer"]
     if aggregate:
         assert "kb_id" in queries[-1].split("from")[0]

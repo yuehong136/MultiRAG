@@ -820,6 +820,29 @@ def test_sync_sql_chat_resolves_and_enriches_reference(monkeypatch: pytest.Monke
     assert result[0]["reference"]["chunks"][0]["document_metadata"] == {"author": "Alice"}
 
 
+@pytest.mark.parametrize("engine", ["infinity", "elasticsearch", "oceanbase"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_sql_chat_rejects_invalid_dataset_scope(
+    dialog_pipeline_stubs: _PipelineProbe, monkeypatch: pytest.MonkeyPatch, db: Session, async_db: AsyncSession, engine: str, asynchronous: bool
+) -> None:
+    from unittest.mock import Mock
+
+    from common import resources
+
+    probe = dialog_pipeline_stubs
+    probe.dialog.kb_ids = ["abcdef0123456789abcdef0123456789' OR '1'='1"]
+    monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_field_map", lambda *a: {"value": "Value"})
+    monkeypatch.setattr(dialog_service.settings, "DOC_ENGINE", engine)
+    retrieve = Mock()
+    monkeypatch.setitem(resources._state, "retriever", SimpleNamespace(sql_retrieval=retrieve))
+    with pytest.raises(ValueError, match="Invalid kb_id format"):
+        if asynchronous:
+            _ = [item async for item in dialog_service.async_chat(probe.dialog, probe.messages, async_db, stream=False)]
+        else:
+            await asyncio.to_thread(lambda: list(dialog_service.chat(probe.dialog, probe.messages, db, stream=False)))
+    retrieve.assert_not_called()
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_chat_retrieval_uses_ids_in_loaded_dataset_order(dialog_pipeline_stubs: _PipelineProbe, monkeypatch: pytest.MonkeyPatch, db: Session, async_db: AsyncSession, asynchronous: bool) -> None:
     from unittest.mock import AsyncMock

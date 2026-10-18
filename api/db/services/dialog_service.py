@@ -10,6 +10,7 @@ from datetime import datetime
 from functools import partial
 from timeit import default_timer as timer
 from typing import Any, Literal
+from uuid import UUID
 
 from langfuse import Langfuse
 from sqlalchemy import func, select
@@ -1391,6 +1392,16 @@ def _sql_reference_chunk(columns: list[dict[str, Any]], row: list[Any], kb_ids: 
 async def use_sql(
     question: str, field_map: dict[str, str], tenant_id: str | list[str], kb_names: list[str], chat_mdl: Any, quota: bool = True, kb_ids: list[str] | None = None
 ) -> dict[str, Any] | None:
+    # Snapshot and validate the entire scope before prompts, SQL interpolation or
+    # model calls. Keep the stored ID representation (including compact hex).
+    if kb_ids is not None:
+        kb_ids = list(kb_ids)
+        for kb_id in kb_ids:
+            try:
+                UUID(kb_id)
+            except (ValueError, AttributeError, TypeError):
+                raise ValueError("Invalid kb_id format: expected a UUID string") from None
+
     logging.debug(f"use_sql: Question: {question}")
 
     doc_engine = settings.DOC_ENGINE.lower()
