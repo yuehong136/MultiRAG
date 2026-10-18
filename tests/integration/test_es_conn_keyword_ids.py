@@ -150,3 +150,31 @@ def test_existing_text_id_index_is_not_sorted_or_migrated(es_store: dict[str, An
     assert _ids(_search(es_store, [index], OrderByExpr().desc("id").asc("docnm_kwd"))) == ["Old-ID_A", "Old-ID_B"]
     assert es_store["reader"].indices.get_mapping(index=index)[index]["mappings"] == before
     assert es_store["reader"].count(index=index)["count"] == 2
+
+
+@pytest.mark.parametrize("es_store", ["memory"], indirect=True)
+@pytest.mark.parametrize("method", ["get_forgotten_messages", "get_missing_field_message"])
+def test_memory_maintenance_handles_unmapped_dates(es_store: dict[str, Any], method: str) -> None:
+    index = es_store["create_index"]()
+    _write(es_store, index, [{"id": "message-without-dates"}])
+    args = (["id"], index, "scope")
+    if method == "get_missing_field_message":
+        args += ("content_ltks",)
+    result = getattr(es_store["conn"], method)(*args)
+    assert result["_shards"]["failed"] == 0
+    assert _ids(result) == ([] if method == "get_forgotten_messages" else ["message-without-dates"])
+    # Once mapped, the real date type still controls chronological ordering.
+    _write(
+        es_store,
+        index,
+        [
+            {"id": "late", "valid_at": "2026-10-18 10:00:00", "forget_at": "2026-10-18 10:00:00"},
+            {"id": "early", "valid_at": "2026-10-17 10:00:00", "forget_at": "2026-10-17 10:00:00"},
+        ],
+    )
+    result = getattr(es_store["conn"], method)(*args)
+    assert result["_shards"]["failed"] == 0
+    expected = ["early", "late"]
+    if method == "get_missing_field_message":
+        expected.append("message-without-dates")
+    assert _ids(result) == expected

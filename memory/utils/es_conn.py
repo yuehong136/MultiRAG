@@ -283,7 +283,7 @@ class ESConnection(ESConnectionBase):
             if field.endswith("_int") or field.endswith("_flt"):
                 order_info = {"order": order, "unmapped_type": "float"}
             else:
-                order_info = {"order": order, "unmapped_type": "text"}
+                order_info = {"order": order, "unmapped_type": "keyword"}
             orders.append({field: order_info})
         s = s.sort(*orders)
         s = s[:limit]
@@ -328,7 +328,7 @@ class ESConnection(ESConnectionBase):
             if field.endswith("_int") or field.endswith("_flt"):
                 order_info = {"order": order, "unmapped_type": "float"}
             else:
-                order_info = {"order": order, "unmapped_type": "text"}
+                order_info = {"order": order, "unmapped_type": "keyword"}
             orders.append({field: order_info})
         s = s.sort(*orders)
         s = s[:limit]

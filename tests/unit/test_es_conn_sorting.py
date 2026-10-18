@@ -105,10 +105,10 @@ def test_dense_search_keeps_existing_pagination() -> None:
 
 
 @pytest.mark.parametrize(("method", "field"), [("get_forgotten_messages", "forget_at"), ("get_missing_field_message", "valid_at")])
-def test_memory_maintenance_sort_is_unchanged(method: str, field: str) -> None:
+def test_memory_maintenance_sort_supports_unmapped_dates(method: str, field: str) -> None:
     conn = _connection("memory")
     args = (["id"], "tenant", "memory1")
     if method == "get_missing_field_message":
         args += ("content_ltks",)
     getattr(conn, method)(*args)
-    assert conn.es.search.call_args.kwargs["body"]["sort"] == [{field: {"order": "asc", "unmapped_type": "text"}}]
+    assert conn.es.search.call_args.kwargs["body"]["sort"] == [{field: {"order": "asc", "unmapped_type": "keyword"}}]
