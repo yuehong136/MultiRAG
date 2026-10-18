@@ -13,14 +13,14 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import APIToken, get_async_db, get_db
+from api.db.db_models import APIToken, Tenant, get_async_db, get_db
 from api.db.services.api_service import APITokenService
 from api.db.services.tenant_llm_service import LLMFactoriesService
 from api.identity.legacy_owner import principal_from_legacy_owner_context
 from api.identity.principal import AuthenticationSource, Principal
 from common import settings
 from common.connection_utils import timeout
-from common.constants import RetCode
+from common.constants import RetCode, StatusEnum
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.misc_utils import thread_pool_exec
 
@@ -283,21 +283,22 @@ def token_required(request: Request, db: Session = Depends(get_db)):
     return objs[0].tenant_id
 
 
-def beta_token_required(request: Request, db: Session = Depends(get_db)) -> str:
-    """
-    Beta token validation for chatbots/agentbots/searchbots embedded endpoints.
-    Validates Authorization header against APIToken.beta field.
-    Returns tenant_id.
-    """
-    authorization_str = request.headers.get("Authorization", "")
-    parts = authorization_str.split()
-    if len(parts) != 2:
+def _beta_token_tenant(db: Session, authorization: str) -> str:
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
         raise SDKAuthError("Authorization is not valid!")
-    token = parts[1]
-    objs = APIToken.query(db, beta=token)
-    if not objs:
+    tokens = APITokenService.query(db, beta=parts[1])
+    if len(tokens) != 1:
         raise SDKAuthError("Authentication error: API key is invalid!")
-    return objs[0].tenant_id
+    tenant_id = tokens[0].tenant_id
+    if not tenant_id or not Tenant.query(db, id=tenant_id, status=StatusEnum.VALID.value):
+        raise SDKAuthError("Authentication error: API key is invalid!")
+    return tenant_id
+
+
+def beta_token_required(request: Request, db: Session = Depends(get_db)) -> str:
+    """Validate one Bearer beta token bound to an active tenant."""
+    return _beta_token_tenant(db, request.headers.get("Authorization", ""))
 
 
 def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
@@ -386,21 +387,8 @@ async def async_token_required(request: Request, db: AsyncSession = Depends(get_
 
 
 async def async_beta_token_required(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
-    """beta_token_required 的 AsyncSession 版(embedded 端点),返回 tenant_id。"""
-    authorization_str = request.headers.get("Authorization", "")
-    parts = authorization_str.split()
-    if len(parts) != 2:
-        raise SDKAuthError("Authorization is not valid!")
-    token = parts[1]
-
-    def _tenant_of_beta(s: Session) -> str | None:
-        objs = APITokenService.query(s, beta=token)
-        return objs[0].tenant_id if objs else None
-
-    tenant_id = await db.run_sync(_tenant_of_beta)  # TODO(async-phase4)
-    if not tenant_id:
-        raise SDKAuthError("Authentication error: API key is invalid!")
-    return tenant_id
+    """Async equivalent of beta_token_required, sharing the same auth policy."""
+    return await db.run_sync(lambda s: _beta_token_tenant(s, request.headers.get("Authorization", "")))  # TODO(async-phase4)
 
 
 async def async_current_tenant_id(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:

@@ -10,9 +10,11 @@ import types
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 import api.apps as apps
+from api.db.db_models import Tenant
 from api.db.services.api_service import APITokenService
 from api.db.services.user_service import UserService
 from api.identity import legacy_owner
@@ -94,8 +96,9 @@ async def test_async_token_required_disable_sdk(monkeypatch, async_db):
 # ---------------------------------------------------------------------------
 
 
-async def test_async_beta_token_required_returns_tenant_id(monkeypatch, async_db):
+async def test_async_beta_token_required_returns_tenant_id(monkeypatch: pytest.MonkeyPatch, async_db: AsyncSession) -> None:
     monkeypatch.setattr(APITokenService, "query", lambda s, **kw: _token_rows("tenant-beta") if kw.get("beta") == "beta-1" else [])
+    monkeypatch.setattr(Tenant, "query", lambda s, **kw: [types.SimpleNamespace(id="tenant-beta")] if kw == {"id": "tenant-beta", "status": "1"} else [])
 
     assert await async_beta_token_required(_req("Bearer beta-1"), async_db) == "tenant-beta"
 

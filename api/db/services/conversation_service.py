@@ -1,6 +1,8 @@
 import json
 import logging
 import time
+from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
@@ -8,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Conversation
+from api.db.db_models import API4Conversation, Conversation, Dialog
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
 from api.db.services.dialog_service import DialogService, async_chat, chat
@@ -287,35 +289,51 @@ async def async_completion(db: AsyncSession, tenant_id, chat_id, question, name=
         yield answer
 
 
-def iframe_completion(db, dialog_id, question, session_id=None, stream=True, **kwargs):
+def validate_iframe_access(db: Session, dialog_id: str, tenant_id: str, session_id: str | None = None) -> tuple[Dialog, API4Conversation | None]:
+    """Resolve the token-owned chatbot and session before execution or mutation."""
     dia = DialogService.get_by_id(db, dialog_id)
-    assert dia, "Dialog not found"
+    conv = None
+    if dia and tenant_id and dia.tenant_id == tenant_id and dia.status == StatusEnum.VALID.value:
+        if not session_id:
+            return dia, None
+        conv = API4ConversationService.get_by_id(db, session_id)
+        if conv and conv.dialog_id == dialog_id and conv.user_id == tenant_id:
+            return dia, conv
+    logging.getLogger(__name__).warning("Denied chatbot access: tenant_id=%s dialog_id=%s session_id=%s", tenant_id, dialog_id, session_id)
+    raise PermissionError("Authentication error: no access to this chatbot!")
+
+
+def iframe_completion(db: Session, dialog_id: str, question: str | None, session_id: str | None = None, stream: bool | None = True, *, tenant_id: str, **kwargs: Any) -> Iterator[Any]:
+    dia, existing_conv = validate_iframe_access(db, dialog_id, tenant_id, session_id)
     if not session_id:
         session_id = get_uuid()
-        conv = {"id": session_id, "dialog_id": dialog_id, "user_id": kwargs.get("user_id", ""), "message": [{"role": "assistant", "content": dia.prompt_config["prologue"], "created_at": time.time()}]}
-        API4ConversationService.save(db, **conv)
+        initial_conv: dict[str, Any] = {
+            "id": session_id,
+            "dialog_id": dialog_id,
+            "user_id": tenant_id,
+            "message": [{"role": "assistant", "content": dia.prompt_config["prologue"], "created_at": time.time()}],
+        }
+        API4ConversationService.save(db, **initial_conv)
         yield (
             "data:"
-            + json.dumps({"code": 0, "message": "", "data": {"answer": conv["message"][0]["content"], "reference": {}, "audio_binary": None, "id": None, "session_id": session_id}}, ensure_ascii=False)
+            + json.dumps(
+                {"code": 0, "message": "", "data": {"answer": initial_conv["message"][0]["content"], "reference": {}, "audio_binary": None, "id": None, "session_id": session_id}}, ensure_ascii=False
+            )
             + "\n\n"
         )
         yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
         return
-    else:
-        session_id = session_id
-        conv = API4ConversationService.get_by_id(db, session_id)
-        assert conv, "Session not found!"
-
-    if not conv.message:
-        conv.message = []
+    assert existing_conv is not None
+    conv = existing_conv
+    conv.message = deepcopy(conv.message or [])
     messages = conv.message
-    question = {"role": "user", "content": question, "id": str(uuid4())}
+    question_message = {"role": "user", "content": question, "id": str(uuid4())}
 
     # Propagate runtime attachments so downstream chat flow can resolve file content.
     if isinstance(kwargs.get("files"), list) and kwargs["files"]:
-        question["files"] = kwargs["files"]
+        question_message["files"] = kwargs["files"]
 
-    messages.append(question)
+    messages.append(question_message)
 
     msg = []
     for m in messages:
@@ -328,8 +346,7 @@ def iframe_completion(db, dialog_id, question, session_id=None, stream=True, **k
         msg[-1]["id"] = get_uuid()
     message_id = msg[-1]["id"]
 
-    if not conv.reference:
-        conv.reference = []
+    conv.reference = deepcopy(conv.reference or [])
     conv.reference.append({"chunks": [], "doc_aggs": []})
 
     if stream:
@@ -351,36 +368,40 @@ def iframe_completion(db, dialog_id, question, session_id=None, stream=True, **k
         yield answer
 
 
-async def async_iframe_completion(db: AsyncSession, dialog_id, question, session_id=None, stream=True, **kwargs):
+async def async_iframe_completion(
+    db: AsyncSession, dialog_id: str, question: str | None, session_id: str | None = None, stream: bool | None = True, *, tenant_id: str, **kwargs: Any
+) -> AsyncIterator[Any]:
     """异步版本的 iframe_completion(AsyncSession;遗留同步 service 经 run_sync 桥接)"""
-    dia = await db.run_sync(lambda s: DialogService.get_by_id(s, dialog_id))  # TODO(async-phase4)
-    assert dia, "Dialog not found"
+    dia, existing_conv = await db.run_sync(lambda s: validate_iframe_access(s, dialog_id, tenant_id, session_id))  # TODO(async-phase4)
     if not session_id:
         session_id = get_uuid()
-        conv = {"id": session_id, "dialog_id": dialog_id, "user_id": kwargs.get("user_id", ""), "message": [{"role": "assistant", "content": dia.prompt_config["prologue"], "created_at": time.time()}]}
-        await db.run_sync(lambda s: API4ConversationService.save(s, **conv))  # TODO(async-phase4)
+        initial_conv: dict[str, Any] = {
+            "id": session_id,
+            "dialog_id": dialog_id,
+            "user_id": tenant_id,
+            "message": [{"role": "assistant", "content": dia.prompt_config["prologue"], "created_at": time.time()}],
+        }
+        await db.run_sync(lambda s: API4ConversationService.save(s, **initial_conv))  # TODO(async-phase4)
         yield (
             "data:"
-            + json.dumps({"code": 0, "message": "", "data": {"answer": conv["message"][0]["content"], "reference": {}, "audio_binary": None, "id": None, "session_id": session_id}}, ensure_ascii=False)
+            + json.dumps(
+                {"code": 0, "message": "", "data": {"answer": initial_conv["message"][0]["content"], "reference": {}, "audio_binary": None, "id": None, "session_id": session_id}}, ensure_ascii=False
+            )
             + "\n\n"
         )
         yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
         return
-    else:
-        session_id = session_id
-        conv = await db.run_sync(lambda s: API4ConversationService.get_by_id(s, session_id))  # TODO(async-phase4)
-        assert conv, "Session not found!"
-
-    if not conv.message:
-        conv.message = []
+    assert existing_conv is not None
+    conv = existing_conv
+    conv.message = deepcopy(conv.message or [])
     messages = conv.message
-    question = {"role": "user", "content": question, "id": str(uuid4())}
+    question_message = {"role": "user", "content": question, "id": str(uuid4())}
 
     # Propagate runtime attachments so downstream chat flow can resolve file content.
     if isinstance(kwargs.get("files"), list) and kwargs["files"]:
-        question["files"] = kwargs["files"]
+        question_message["files"] = kwargs["files"]
 
-    messages.append(question)
+    messages.append(question_message)
 
     msg = []
     for m in messages:
@@ -393,8 +414,7 @@ async def async_iframe_completion(db: AsyncSession, dialog_id, question, session
         msg[-1]["id"] = get_uuid()
     message_id = msg[-1]["id"]
 
-    if not conv.reference:
-        conv.reference = []
+    conv.reference = deepcopy(conv.reference or [])
     conv.reference.append({"chunks": [], "doc_aggs": []})
 
     if stream:

@@ -29,7 +29,7 @@ from api.db.joint_services.tenant_model_service import (
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService, agent_event_error, completion_openai
 from api.db.services.canvas_service import completion as agent_completion
-from api.db.services.conversation_service import ConversationService, async_completion, async_iframe_completion
+from api.db.services.conversation_service import ConversationService, async_completion, async_iframe_completion, validate_iframe_access
 from api.db.services.dialog_service import DialogService, async_ask, gen_mindmap
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -125,6 +125,7 @@ class RelatedQuestionsRequest(BaseModel):
 class ChatbotCompletionRequest(BaseModel):
     reference_metadata: ReferenceMetadata | None = None
     question: str | None = ""
+    session_id: str | None = None
     stream: bool | None = True
     internet: bool | None = None
     quote: bool | None = False
@@ -631,34 +632,44 @@ async def chatbot_completions(
     dialog_id: str,
     body: ChatbotCompletionRequest,
     db: AsyncSession = Depends(get_async_db),
-    _: str = Depends(async_beta_token_required),
-):
+    tenant_id: str = Depends(async_beta_token_required),
+) -> Response:
     req = body.model_dump()
+
+    try:
+        await db.run_sync(lambda s: validate_iframe_access(s, dialog_id, tenant_id, body.session_id))  # TODO(async-phase4)
+    except PermissionError as error:
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
 
     if "quote" not in req:
         req["quote"] = False
 
     if req.get("stream", True):
-        resp = StreamingResponse(async_iframe_completion(db, dialog_id, **req), media_type="text/event-stream")
+        resp = StreamingResponse(async_iframe_completion(db, dialog_id, tenant_id=tenant_id, **req), media_type="text/event-stream")
         resp.headers["Cache-control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
         resp.headers["X-Accel-Buffering"] = "no"
         resp.headers["Content-Type"] = "text/event-stream; charset=utf-8"
         return resp
 
-    async for answer in async_iframe_completion(db, dialog_id, **req):
-        return get_result(data=answer)
+    try:
+        async for answer in async_iframe_completion(db, dialog_id, tenant_id=tenant_id, **req):
+            return get_result(data=answer)
+    except PermissionError as error:
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
+    return get_error_data_result(retmsg="No answer returned.")
 
 
 @router.get("/chatbots/{dialog_id}/info", summary="获取聊天机器人信息")
 def chatbots_inputs(
     dialog_id: str,
     db: Session = Depends(get_db),
-    _: str = Depends(beta_token_required),
-):
-    dialog = DialogService.get_by_id(db, dialog_id)
-    if not dialog:
-        return get_error_data_result(retmsg=f"Can't find dialog by ID: {dialog_id}")
+    tenant_id: str = Depends(beta_token_required),
+) -> JSONResponse:
+    try:
+        dialog, _ = validate_iframe_access(db, dialog_id, tenant_id)
+    except PermissionError as error:
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
 
     return get_result(
         data={

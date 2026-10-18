@@ -11,7 +11,9 @@ import sys
 import types
 
 import pytest
+from fastapi.testclient import TestClient
 
+from api.db.db_models import Dialog
 from api.db.services import conversation_service
 from api.db.services.api_service import API4ConversationService
 from api.db.services.conversation_service import ConversationService
@@ -31,10 +33,11 @@ def _sse_frames(text: str):
     return frames
 
 
-def _fake_dialog():
-    return types.SimpleNamespace(
+def _fake_dialog() -> Dialog:
+    return Dialog(
         id="dlg-1",
         tenant_id="tenant-unit",
+        status="1",
         kb_ids=[],
         prompt_config={"prologue": "您好！"},
     )
@@ -150,8 +153,8 @@ def test_chat_completion_non_stream_returns_first_answer(sdk_auth, completion_st
 # ---------------------------------------------------------------------------
 
 
-def test_chatbot_completions_stream_prologue_frames(sdk_auth, completion_stubs):
-    """请求模型无 session_id 字段→路由恒走新会话路径（存量契约，钉住）。"""
+def test_chatbot_completions_stream_prologue_frames(sdk_auth: TestClient, completion_stubs: types.SimpleNamespace) -> None:
+    """省略 session_id 时返回新会话的 prologue 帧。"""
     resp = sdk_auth.post("/api/v1/chatbots/dlg-1/completions", json={"question": "hi", "stream": True})
 
     assert resp.status_code == 200
