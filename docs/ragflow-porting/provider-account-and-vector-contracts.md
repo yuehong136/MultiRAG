@@ -9,3 +9,7 @@ These contracts describe the parallel Go implementation. The active Python backe
 Requests honor cancellation and the existing non-streaming call timeout. Empty regions use the default; unknown regions at the driver boundary fail explicitly. Instance binding resolves any catalog fallback before creating the private driver.
 
 Controlled HTTP tests cover response contracts and instance URL/key isolation; they do not establish real cloud account availability.
+
+## DeepSeek balance
+
+`user/balance` returns the first currency in the common `balance/currency` fields and retains `is_available` plus every entry in `balance_infos`. Amounts are finite numbers; currencies remain separate. Availability false is a valid account state, including zero balances, rather than a transport failure. Missing availability, currencies, total amounts or balance entries fail explicitly. Optional granted and topped-up amounts are validated when present.

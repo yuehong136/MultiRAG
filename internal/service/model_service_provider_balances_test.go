@@ -55,3 +55,10 @@ func testProviderBalanceInstances(t *testing.T, providerName, suffix, body strin
 func TestSiliconFlowBalanceConfiguredInstancesHTTP(t *testing.T) {
 	testProviderBalanceInstances(t, "SiliconFlow", "user/info", `{"code":0,"status":true,"data":{"totalBalance":"5.75","balance":"1"}}`, map[string]interface{}{"balance": 5.75, "currency": "CNY"})
 }
+
+func TestDeepSeekBalanceConfiguredInstancesHTTP(t *testing.T) {
+	testProviderBalanceInstances(t, "DeepSeek", "user/balance", `{"is_available":false,"balance_infos":[{"currency":"USD","total_balance":"0"},{"currency":"CNY","total_balance":"2"}]}`, map[string]interface{}{
+		"balance": float64(0), "currency": "USD", "is_available": false,
+		"balance_infos": []map[string]interface{}{{"currency": "USD", "total_balance": float64(0)}, {"currency": "CNY", "total_balance": float64(2)}},
+	})
+}

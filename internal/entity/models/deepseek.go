@@ -451,8 +451,58 @@ func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	return models, nil
 }
 
+type deepSeekBalanceResponse struct {
+	IsAvailable  *bool `json:"is_available"`
+	BalanceInfos []struct {
+		Currency        string `json:"currency"`
+		TotalBalance    string `json:"total_balance"`
+		GrantedBalance  string `json:"granted_balance"`
+		ToppedUpBalance string `json:"topped_up_balance"`
+	} `json:"balance_infos"`
+	Error json.RawMessage `json:"error"`
+}
+
+// Balance preserves each currency and account availability. The first pair also
+// supplies the common balance/currency fields consumed by the provider CLI.
 func (m *DeepSeekModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("balance query is not available for DeepSeek")
+	var result deepSeekBalanceResponse
+	if err := decodeBalanceHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Balance, apiConfig, &result); err != nil {
+		return nil, fmt.Errorf("deepseek: %w", err)
+	}
+	if result.IsAvailable == nil || len(result.Error) != 0 && string(result.Error) != "null" {
+		return nil, fmt.Errorf("deepseek: balance provider returned an error")
+	}
+	if len(result.BalanceInfos) == 0 {
+		return nil, fmt.Errorf("deepseek: no balance info in response")
+	}
+	infos := make([]map[string]interface{}, 0, len(result.BalanceInfos))
+	for _, item := range result.BalanceInfos {
+		if strings.TrimSpace(item.Currency) == "" {
+			return nil, fmt.Errorf("deepseek: balance currency is missing")
+		}
+		total, err := parseBalanceAmount(item.TotalBalance)
+		if err != nil {
+			return nil, fmt.Errorf("deepseek: invalid total balance: %w", err)
+		}
+		info := map[string]interface{}{"currency": item.Currency, "total_balance": total}
+		for field, raw := range map[string]string{"granted_balance": item.GrantedBalance, "topped_up_balance": item.ToppedUpBalance} {
+			if raw == "" {
+				continue
+			}
+			amount, err := parseBalanceAmount(raw)
+			if err != nil {
+				return nil, fmt.Errorf("deepseek: invalid %s: %w", field, err)
+			}
+			info[field] = amount
+		}
+		infos = append(infos, info)
+	}
+	return map[string]interface{}{
+		"balance":       infos[0]["total_balance"],
+		"currency":      infos[0]["currency"],
+		"is_available":  *result.IsAvailable,
+		"balance_infos": infos,
+	}, nil
 }
 
 func (m *DeepSeekModel) CheckConnection(apiConfig *APIConfig) error {
