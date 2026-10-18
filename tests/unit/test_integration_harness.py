@@ -26,6 +26,77 @@ def test_shared_auth_secret_prepares_only_redis() -> None:
     assert required_services([INTEGRATION / "test_shared_auth_secret.py"]) == {"redis"}
 
 
+def test_metadata_es_dependency_is_prepared_before_collection() -> None:
+    assert required_services([INTEGRATION / "test_metadata_lazy_pushdown.py"]) == {"postgresql", "elasticsearch"}
+    assert "elasticsearch" in required_services(suite_paths("core"))
+
+
+def test_explicit_metadata_es_failure_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("METADATA_TEST_ES_URL", "http://owned.invalid:9200")
+    monkeypatch.delenv("INTEGRATION_NO_TESTCONTAINERS", raising=False)
+
+    def unavailable(name: str, configs: dict[str, Any]) -> None:
+        raise ConnectionError("private test URL")
+
+    monkeypatch.setattr(services, "probe", unavailable)
+    monkeypatch.setattr(services.ServiceManager, "_start", lambda *args: pytest.fail("Explicit listener must not be replaced"))
+    with services.ServiceManager({}) as manager, pytest.raises(services.ServiceError, match="elasticsearch"):
+        manager.ensure("elasticsearch")
+
+
+@pytest.mark.parametrize("fail_start", [False, True])
+def test_metadata_es_container_and_endpoint_are_scoped(monkeypatch: pytest.MonkeyPatch, fail_start: bool) -> None:
+    import testcontainers.core.container
+
+    events: list[str] = []
+    monkeypatch.delenv("METADATA_TEST_ES_URL", raising=False)
+    monkeypatch.delenv("INTEGRATION_NO_TESTCONTAINERS", raising=False)
+
+    class Container:
+        def __init__(self, image: str) -> None:
+            assert "elasticsearch" in image and "${" not in image
+
+        def with_exposed_ports(self, port: int) -> "Container":
+            assert port == 9200
+            return self
+
+        def with_env(self, key: str, value: str) -> "Container":
+            return self
+
+        def start(self) -> None:
+            events.append("start")
+            if fail_start:
+                raise RuntimeError("startup failed")
+
+        def stop(self) -> None:
+            events.append("stop")
+
+        def get_container_host_ip(self) -> str:
+            return "127.0.0.1"
+
+        def get_exposed_port(self, port: int) -> int:
+            return 54321
+
+    def probe(name: str, configs: dict[str, Any]) -> str:
+        if not os.environ.get("METADATA_TEST_ES_URL"):
+            raise ConnectionError
+        return "8.11.3"
+
+    monkeypatch.setattr(testcontainers.core.container, "DockerContainer", Container)
+    monkeypatch.setattr(services, "probe", probe)
+    if fail_start:
+        with pytest.raises(services.ServiceError, match="Could not provision"):
+            with services.ServiceManager({}) as manager:
+                manager.ensure("elasticsearch")
+    else:
+        with services.ServiceManager({}) as manager:
+            manager.ensure("elasticsearch")
+            assert os.environ["METADATA_TEST_ES_URL"] == "http://127.0.0.1:54321"
+            assert manager.ready["elasticsearch"]["source"] == "testcontainers"
+    assert events == ["start", "stop"]
+    assert "METADATA_TEST_ES_URL" not in os.environ
+
+
 def test_explicit_node_selection_prepares_only_its_dependencies() -> None:
     paths = selected_paths("core", [str(INTEGRATION / "test_async_engine.py") + "::test_async_engine_select_one", "-q"])
     assert required_services(paths) == {"postgresql"}

@@ -6,6 +6,7 @@ No application modules are imported until service endpoints have been resolved.
 
 import copy
 import os
+import re
 import time
 from contextlib import ExitStack
 from typing import Any
@@ -24,7 +25,10 @@ def service_images() -> dict[str, str]:
 
     with (ROOT / "docker/docker-compose-base.yml").open() as stream:
         services = YAML(typ="safe").load(stream)["services"]
-    return {name: str(services[key]["image"]) for name, key in {"postgresql": "postgres", "redis": "redis", "minio": "minio", "milvus": "milvus-standalone", "infinity": "infinity"}.items()}
+    return {
+        name: re.sub(r"\$\{(\w+):-([^}]+)\}", lambda match: os.environ.get(match[1]) or match[2], str(services[key]["image"]))
+        for name, key in {"postgresql": "postgres", "redis": "redis", "minio": "minio", "milvus": "milvus-standalone", "infinity": "infinity", "elasticsearch": "es01"}.items()
+    }
 
 
 def split_address(value: str, default_port: int) -> tuple[str, int]:
@@ -36,6 +40,19 @@ def split_address(value: str, default_port: int) -> tuple[str, int]:
 
 def probe(service: str, configs: dict[str, Any]) -> str | None:
     """Check protocol/authentication, not just an open TCP port. Do not write data."""
+    if service == "elasticsearch":
+        from elasticsearch import Elasticsearch
+
+        # Never choose the application's ES listener implicitly. This suite
+        # needs a disposable endpoint or a container owned by this manager.
+        url = os.environ.get("METADATA_TEST_ES_URL")
+        if not url:
+            raise ValueError("Missing disposable metadata ES listener")
+        with Elasticsearch(url, request_timeout=3) as client:
+            version = str(client.info()["version"]["number"])
+            if not version.startswith("8."):
+                raise ValueError("Metadata integration requires Elasticsearch 8")
+            return version
     conf = configs.get(service)
     if not conf:
         raise ValueError(f"Missing configuration section: {service}")
@@ -123,7 +140,12 @@ class ServiceManager:
         try:
             version = probe(service, self.configs)
         except Exception as exc:
-            if not self.allow_containers or service == "milvus" or (service == "infinity" and os.environ.get("INFINITY_TEST_URI")):
+            if (
+                not self.allow_containers
+                or service == "milvus"
+                or (service == "infinity" and os.environ.get("INFINITY_TEST_URI"))
+                or (service == "elasticsearch" and os.environ.get("METADATA_TEST_ES_URL"))
+            ):
                 # Never include exception text: drivers often include credentials.
                 raise ServiceError(f"Test service {service} is not ready ({type(exc).__name__}); provision it or enable Testcontainers") from None
             try:
@@ -170,6 +192,17 @@ class ServiceManager:
 
             container = DockerContainer(images[service]).with_exposed_ports(23817)
             port = 23817
+        elif service == "elasticsearch":
+            from testcontainers.core.container import DockerContainer
+
+            container = (
+                DockerContainer(images[service])
+                .with_exposed_ports(9200)
+                .with_env("discovery.type", "single-node")
+                .with_env("xpack.security.enabled", "false")
+                .with_env("ES_JAVA_OPTS", "-Xms512m -Xmx512m")
+            )
+            port = 9200
         else:
             raise ValueError(f"No container adapter for {service}")
         # Register before start: an image/pull/readiness failure can leave a
@@ -177,6 +210,10 @@ class ServiceManager:
         self.stack.callback(container.stop)
         container.start()
         host, mapped_port = container.get_container_host_ip(), int(container.get_exposed_port(port))
+        if service == "elasticsearch":
+            self.stack.callback(os.environ.pop, "METADATA_TEST_ES_URL", None)
+            os.environ["METADATA_TEST_ES_URL"] = f"http://{host}:{mapped_port}"
+            return
         if service == "postgresql":
             conf.update(host=host, port=mapped_port)
         elif service == "infinity":

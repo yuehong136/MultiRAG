@@ -75,6 +75,9 @@ def selected_paths(suite: str, args: list[str]) -> list[Path]:
 def service_hosts(configs: dict[str, Any]) -> list[str]:
     """Allow owned listeners and configured infrastructure, never model endpoints."""
     hosts = {"127.0.0.1", "::1", "localhost"}
+    if metadata_url := os.environ.get("METADATA_TEST_ES_URL"):
+        if metadata_host := urlsplit(metadata_url).hostname:
+            hosts.add(metadata_host)
     for service, key in [("postgresql", "host"), ("redis", "host"), ("minio", "host"), ("milvus", "hosts"), ("infinity", "uri")]:
         value = configs.get(service, {}).get(key)
         if isinstance(value, str) and value:

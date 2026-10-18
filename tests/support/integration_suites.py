@@ -132,6 +132,9 @@ def required_services(paths: list[Path]) -> set[str]:
         if path.name == "test_azure_storage_protocol.py":
             # Real SDKs with an owned HTTP transport; no infrastructure needed.
             continue
+        if path.name == "test_metadata_lazy_pushdown.py":
+            required.update(("postgresql", "elasticsearch"))
+            continue
         if path.name in INFINITY_TESTS:
             required.add("infinity")
         elif path.name in REDIS_TESTS:
