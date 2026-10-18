@@ -361,6 +361,15 @@ def move_files(db: Session, uid: str, src_file_ids: list[str], dest_file_id: str
             if f.name == new_name:
                 return False, "Duplicated file name in the same folder."
 
+    if dest_folder:
+        source_folder_ids = {file.id for file in files if file.type == FileType.FOLDER.value}
+        if dest_folder.id in source_folder_ids:
+            return False, "Cannot move a folder to itself."
+        if source_folder_ids:
+            dest_ancestor_ids = {folder.id for folder in FileService.get_all_parent_folders(db, dest_folder.id)}
+            if source_folder_ids & dest_ancestor_ids:
+                return False, "Cannot move a folder into its own subfolder."
+
     def _move_entry_recursive(source_file_entry, dest_folder_entry, override_name=None):
         effective_name = override_name or source_file_entry.name
 
