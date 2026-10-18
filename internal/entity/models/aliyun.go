@@ -283,7 +283,7 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 }
 
 func (m *AliyunModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return nil, errors.New("aliyun: embeddings are not configured")
+	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig)
 }
 
 // ListModels checks the configured endpoint and returns model names.

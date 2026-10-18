@@ -54,7 +54,7 @@ func TestBoundEncodeValidatesBatchAndForwardsConfig(t *testing.T) {
 }
 
 func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
-	for _, provider := range []string{"OpenAI", "OpenAI-API-Compatible", "DeepSeek", "Moonshot", "Gitee", "SiliconFlow", "ZHIPU-AI"} {
+	for _, provider := range []string{"Aliyun", "OpenAI", "OpenAI-API-Compatible", "DeepSeek", "Moonshot", "Gitee", "SiliconFlow", "ZHIPU-AI"} {
 		t.Run(provider, func(t *testing.T) {
 			var requests atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +107,7 @@ func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
 			}
 		})
 	}
-	for _, provider := range []string{"Aliyun", "Google", "MiniMax", "VolcEngine", "xAI", "unknown"} {
+	for _, provider := range []string{"Google", "MiniMax", "VolcEngine", "xAI", "unknown"} {
 		t.Run(provider, func(t *testing.T) {
 			driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": "https://example.invalid"}, URLSuffix{})
 			if err != nil {
