@@ -25,6 +25,8 @@ from tests.support.agent_update_release import release_api as release_api
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
+pytestmark = pytest.mark.external_consumer
+
 
 def run_web(env: dict[str, Any], mode: str, **values: str) -> dict[str, Any]:
     checkout = Path(os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web"))

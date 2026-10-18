@@ -12,7 +12,7 @@
 | `make integration INTEGRATION_WORKERS=0` | 串行调试；显式 pytest `-n 0` 也会覆盖默认并行数 |
 | `make integration-system` | 数据库进程事务恢复，以及真实 worker 被终止后的消息重投、取消恢复 |
 | `make integration-infinity` | Infinity 真库契约；可用 `INFINITY_TEST_URI` 明确选择实例 |
-| `make integration-consumer` | 独立 Web 检索与导入日志客户端；需要已安装依赖的 `WEB_DATASET_CHECKOUT` |
+| `make integration-consumer` | 独立 Web 检索、导入日志、模型配置与生成文档下载客户端；需要已安装依赖的 `WEB_DATASET_CHECKOUT` / `WEB_COMPLETION_CHECKOUT` |
 | `make integration-all` | 核心、Infinity 和 Web 消费者全部执行 |
 | `make eval` | 固定版本本地 OCR、中文向量模型、解析与真实 Milvus 检索回归 |
 | `make eval-generation` | 显式真实模型回答、引用、拒答和工具选择评测 |
