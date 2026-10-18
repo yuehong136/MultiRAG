@@ -293,3 +293,46 @@ def test_actual_web_document_preview_and_download(document_files: dict[str, Any]
     assert result["paths"] == [f"/api/v1/documents/{env['docs']['own']}/preview", f"/api/v1/documents/{env['docs']['own']}/download"] * 2
     assert snapshot(env) == before
     env["record"]["web_document_file_consumer"] = {**result, "web_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()}
+
+
+@pytest.mark.external_consumer
+@pytest.mark.parametrize("resource", ["document", "generated"])
+@pytest.mark.parametrize("payload", [b'{"code":109,"message":"literal source"}\n', b""])
+def test_actual_web_json_download_preserves_bytes(document_files: dict[str, Any], resource: str, payload: bytes) -> None:
+    env = document_files
+    checkout = Path(os.environ.get("WEB_DOCUMENT_FILE_CHECKOUT", os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web")))
+    namespace = env["datasets"]["own"] if resource == "document" else env["owners"][0]
+    key = "own" if resource == "document" else env["attachment"]
+    resource_id = env["docs"]["own"] if resource == "document" else env["attachment"]
+    if resource == "document":
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(Document).where(Document.id == resource_id).values(name="文档.json"))
+            db.commit()
+    env["storage_adapter"].put(namespace, key, payload)
+    physical = read_object(env["storage"], env["bucket"], namespace + "/" + key)
+    assert physical == payload
+    before = snapshot(env)
+    completed = subprocess.run(
+        [str(checkout / "node_modules/.bin/tsx"), "--tsconfig", str(checkout / "tsconfig.app.json"), str(checkout / "scripts/verify-document-file-routes.ts")],
+        cwd=checkout,
+        env={
+            **os.environ,
+            "DOCUMENT_FILES_BASE": env["base"],
+            "DOCUMENT_FILES_TOKEN": env["jwt"],
+            "DOCUMENT_FILES_ID": resource_id,
+            "DOCUMENT_FILES_SHA256": hashlib.sha256(physical).hexdigest(),
+            "DOCUMENT_FILES_RESOURCE": resource,
+            "DOCUMENT_FILES_DOWNLOAD_ONLY": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(completed.stdout.splitlines()[-1])
+    path = f"/api/v1/documents/{resource_id}/download" if resource == "document" else f"/api/v1/documents/runtime/{resource_id}/download"
+    assert result["anonymous_denied"] is True and result["size"] == len(physical)
+    assert result["paths"] == [path, path]
+    assert result["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert snapshot(env) == before
+    env["record"]["web_json_download_consumer"] = {**result, "resource": resource, "web_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()}
