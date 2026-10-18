@@ -29,7 +29,7 @@ import (
 //   - files/{folder_name}/               -> List folder contents
 //   - files/{folder_name}/{file_name}    -> Get file info/content
 //
-// Note: Uses Python backend API (useAPIBase=true):
+// Note: Uses Python backend API (the /api/v1 base):
 //   - GET /files?parent_id={id}         -> List files/folders in parent
 //   - GET /files/{file_id}              -> Get file info
 //   - POST /files                       -> Create folder or upload file
@@ -279,7 +279,7 @@ func (p *FileProvider) getRootID(ctx stdctx.Context) (string, error) {
 	}
 
 	// List files without parent_id to get root folder
-	resp, err := p.httpClient.Request("GET", "/files", true, "auto", nil, nil)
+	resp, err := p.httpClient.Request("GET", "/files", "auto", nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +340,7 @@ func (p *FileProvider) listFilesByParentID(ctx stdctx.Context, parentID string, 
 		path = path + "?" + strings.Join(queryParams, "&")
 	}
 
-	resp, err := p.httpClient.Request("GET", path, true, "auto", nil, nil)
+	resp, err := p.httpClient.Request("GET", path, "auto", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func (p *FileProvider) getFolderIDByName(ctx stdctx.Context, folderName string) 
 		path = path + "?" + strings.Join(queryParams, "&")
 	}
 
-	resp, err := p.httpClient.Request("GET", path, true, "auto", nil, nil)
+	resp, err := p.httpClient.Request("GET", path, "auto", nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -521,7 +521,7 @@ func (p *FileProvider) getFileNode(ctx stdctx.Context, folderName, fileName stri
 // downloadFile downloads file content
 func (p *FileProvider) downloadFile(ctx stdctx.Context, fileID string) ([]byte, error) {
 	path := fmt.Sprintf("/files/%s", fileID)
-	resp, err := p.httpClient.Request("GET", path, true, "auto", nil, nil)
+	resp, err := p.httpClient.Request("GET", path, "auto", nil, nil)
 	if err != nil {
 		return nil, err
 	}

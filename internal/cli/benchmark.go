@@ -242,12 +242,12 @@ func (c *MultiRAGClient) executeBenchmarkSilent(cmd *Command, iterations int) []
 
 		switch cmd.Type {
 		case "ping_server":
-			resp, err = c.HTTPClient.Request("GET", "/system/ping", false, "web", nil, nil)
+			resp, err = c.HTTPClient.Request("GET", "/system/ping", "web", nil, nil)
 		case "list_user_datasets":
-			resp, err = c.HTTPClient.Request("GET", "/datasets", true, "web", nil, nil)
+			resp, err = c.HTTPClient.Request("GET", "/datasets", "web", nil, nil)
 		case "list_datasets":
 			userName, _ := cmd.Params["user_name"].(string)
-			resp, err = c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), true, "admin", nil, nil)
+			resp, err = c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), "admin", nil, nil)
 		case "search_on_datasets":
 			question, _ := cmd.Params["question"].(string)
 			datasetIDs, _ := cmd.Params["dataset_ids"].([]string)
@@ -257,7 +257,7 @@ func (c *MultiRAGClient) executeBenchmarkSilent(cmd *Command, iterations int) []
 				"similarity_threshold":     0.2,
 				"vector_similarity_weight": 0.3,
 			}
-			resp, err = c.HTTPClient.Request("POST", "/chunk/retrieval_test", false, "web", nil, payload)
+			resp, err = c.HTTPClient.Request("POST", "/chunk/retrieval_test", "web", nil, payload)
 		default:
 			// For other commands, we would need to add specific handling
 			// For now, mark as failed

@@ -73,7 +73,7 @@ func TestSkillCoreIncompletePaginationFails(t *testing.T) {
 		io.WriteString(w, `{"code":0,"data":{"spaces":[],"total":101}}`)
 	})
 	adapter := &skillCoreClient{client: client, ctx: context.Background()}
-	if _, err := adapter.Request("GET", "/skills/spaces", true, "", nil, nil); err == nil {
+	if _, err := adapter.Request("GET", "/skills/spaces", "", nil, nil); err == nil {
 		t.Fatal("incomplete space catalog accepted")
 	}
 }

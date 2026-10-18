@@ -43,7 +43,7 @@ func (c *MultiRAGClient) AddCustomModel(cmd *Command) (ResponseIf, error) {
 		payload["thinking"] = value
 	}
 	path := fmt.Sprintf("/providers/%s/instances/%s/models", url.PathEscape(payload["provider_name"].(string)), url.PathEscape(payload["instance_name"].(string)))
-	resp, err := c.HTTPClient.Request("POST", path, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", path, "web", nil, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (c *MultiRAGClient) DropInstanceModel(cmd *Command) (ResponseIf, error) {
 		values[field] = value
 	}
 	path := fmt.Sprintf("/providers/%s/instances/%s/models", url.PathEscape(values["provider_name"]), url.PathEscape(values["instance_name"]))
-	resp, err := c.HTTPClient.Request("DELETE", path, true, "web", nil, map[string]interface{}{"models": []string{values["model_name"]}})
+	resp, err := c.HTTPClient.Request("DELETE", path, "web", nil, map[string]interface{}{"models": []string{values["model_name"]}})
 	if err != nil {
 		return nil, err
 	}

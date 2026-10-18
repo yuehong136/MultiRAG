@@ -41,7 +41,7 @@ type httpClientAdapter struct {
 
 // Request resolves the "auto" auth kind against the client's available
 // credentials (API key vs. login session token) and forwards the call.
-func (a *httpClientAdapter) Request(method, path string, useAPIBase bool, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*ce.HTTPResponse, error) {
+func (a *httpClientAdapter) Request(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*ce.HTTPResponse, error) {
 	if authKind == "auto" || authKind == "" {
 		if a.client.APIKey != "" {
 			authKind = "api"
@@ -49,7 +49,7 @@ func (a *httpClientAdapter) Request(method, path string, useAPIBase bool, authKi
 			authKind = "web"
 		}
 	}
-	resp, err := a.client.Request(method, path, useAPIBase, authKind, headers, jsonBody)
+	resp, err := a.client.Request(method, path, authKind, headers, jsonBody)
 	if err != nil {
 		return nil, err
 	}

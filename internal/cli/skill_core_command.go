@@ -130,7 +130,7 @@ func (c *CLI) executeSkillCore(command string, args []string) error {
 	default:
 		return fmt.Errorf("unknown skill-core command %q", verb)
 	}
-	response, err := client.Request(method, path, true, "api", nil, body)
+	response, err := client.Request(method, path, "api", nil, body)
 	if err != nil {
 		return err
 	}

@@ -30,19 +30,15 @@ import (
 // LoginUserInteractive performs interactive login with username and password
 func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 	// First, ping the server to check if it's available
-	// For admin mode, use /admin/ping with useAPIBase=true
-	// For user mode, use /system/ping with useAPIBase=false
+	// Both public ping endpoints use the /api/v1 base.
 	var pingPath string
-	var useAPIBase bool
 	if c.ServerType == "admin" {
 		pingPath = "/admin/ping"
-		useAPIBase = true
 	} else {
 		pingPath = "/system/ping"
-		useAPIBase = false
 	}
 
-	resp, err := c.HTTPClient.Request("GET", pingPath, useAPIBase, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", pingPath, "web", nil, nil)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		fmt.Println("Can't access server for login (connection failed)")
@@ -97,19 +93,15 @@ func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 // LoginUser performs user login
 func (c *MultiRAGClient) LoginUser(cmd *Command) error {
 	// First, ping the server to check if it's available
-	// For admin mode, use /admin/ping with useAPIBase=true
-	// For user mode, use /system/ping with useAPIBase=false
+	// Both public ping endpoints use the /api/v1 base.
 	var pingPath string
-	var useAPIBase bool
 	if c.ServerType == "admin" {
 		pingPath = "/admin/ping"
-		useAPIBase = true
 	} else {
 		pingPath = "/system/ping"
-		useAPIBase = false
 	}
 
-	resp, err := c.HTTPClient.Request("GET", pingPath, useAPIBase, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", pingPath, "web", nil, nil)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		fmt.Println("Can't access server for login (connection failed)")
@@ -143,14 +135,14 @@ func (c *MultiRAGClient) LoginUser(cmd *Command) error {
 	}
 
 	// Get password from user input (hidden)
-	var password string
-	if c.PasswordPrompt != nil {
+	password, _ := cmd.Params["password"].(string)
+	if password == "" && c.PasswordPrompt != nil {
 		pwd, err := c.PasswordPrompt(fmt.Sprintf("password for %s: ", email))
 		if err != nil {
 			return fmt.Errorf("failed to read password: %w", err)
 		}
 		password = pwd
-	} else {
+	} else if password == "" {
 		fmt.Printf("password for %s: ", email)
 		pwd, err := readPassword()
 		if err != nil {
@@ -175,7 +167,7 @@ func (c *MultiRAGClient) LoginUser(cmd *Command) error {
 
 // loginUser performs the actual login request
 func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
-	// Encrypt password using scrypt (same as Python implementation)
+	// Encrypt the password with the shared RSA public key.
 	encryptedPassword, err := EncryptPassword(password)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt password: %w", err)
@@ -190,23 +182,18 @@ func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
 	if c.ServerType == "admin" {
 		path = "/admin/login"
 	} else {
-		path = "/user/login"
+		path = "/auth/login"
+		delete(payload, "email")
+		payload["username"] = email
 	}
 
-	resp, err := c.HTTPClient.Request("POST", path, c.ServerType == "admin", "", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", path, "", nil, payload)
 	if err != nil {
 		return "", err
 	}
 
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return "", fmt.Errorf("login failed: invalid JSON response (%w)", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok || code != 0 {
-		msg, _ := resJSON["message"].(string)
-		return "", fmt.Errorf("login failed: %s", msg)
+	if err := checkAuthResponse("login", resp); err != nil {
+		return "", err
 	}
 
 	token := resp.Headers.Get("Authorization")
@@ -230,7 +217,7 @@ func (c *MultiRAGClient) Logout() (ResponseIf, error) {
 		path = "/user/logout"
 	}
 
-	resp, err := c.HTTPClient.Request("GET", path, c.ServerType == "admin", "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", path, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("logout failed: %w", err)
 	}
@@ -296,7 +283,7 @@ func (c *MultiRAGClient) ListAvailableProviders(cmd *Command) (ResponseIf, error
 		endPoint = "/admin/providers?available=true"
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list providers: %w", err)
 	}
@@ -328,7 +315,7 @@ func (c *MultiRAGClient) ShowProvider(cmd *Command) (ResponseIf, error) {
 		endPoint = fmt.Sprintf("/admin/providers/%s", providerName)
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show provider: %w", err)
 	}
@@ -360,7 +347,7 @@ func (c *MultiRAGClient) ListModels(cmd *Command) (ResponseIf, error) {
 		endPoint = fmt.Sprintf("/admin/providers/%s/models", providerName)
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list models: %w", err)
 	}
@@ -395,7 +382,7 @@ func (c *MultiRAGClient) ListSupportedModels(cmd *Command) (ResponseIf, error) {
 	if c.ServerType == "admin" {
 		endpoint = fmt.Sprintf("/admin/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
 	}
-	resp, err := c.HTTPClient.Request("GET", endpoint, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endpoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list supported models: %w", err)
 	}
@@ -427,7 +414,7 @@ func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {
 		endPoint = fmt.Sprintf("/admin/providers/%s/models/%s", providerName, modelName)
 	}
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show model: %w", err)
 	}
@@ -472,7 +459,7 @@ func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
 		"model_instance": modelInstance,
 		"model_name":     modelName,
 	}
-	resp, err := c.HTTPClient.Request("PATCH", "/models", true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PATCH", "/models", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to set default model: %w", err)
 	}
@@ -492,7 +479,7 @@ func (c *MultiRAGClient) SetDefaultModel(cmd *Command) (ResponseIf, error) {
 }
 
 func (c *MultiRAGClient) ListDefaultModels(cmd *Command) (ResponseIf, error) {
-	resp, err := c.HTTPClient.Request("GET", "/models", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/models", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list default models: %w", err)
 	}

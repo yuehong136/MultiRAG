@@ -25,7 +25,7 @@ func (c *HTTPClient) skillsRequest(ctx context.Context, method, path, contentTyp
 }
 
 func (c *HTTPClient) skillProtocolRequest(ctx context.Context, method, path, contentType, key string, body io.Reader, expected int, binary bool) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.BuildURL(path, true), body)
+	req, err := http.NewRequestWithContext(ctx, method, c.BuildURL(path), body)
 	if err != nil {
 		return nil, err
 	}

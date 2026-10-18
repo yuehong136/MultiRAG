@@ -35,7 +35,7 @@ type HTTPResponse struct {
 
 // HTTPClientInterface defines the interface needed from HTTPClient
 type HTTPClientInterface interface {
-	Request(method, path string, useAPIBase bool, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*HTTPResponse, error)
+	Request(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*HTTPResponse, error)
 }
 
 // DatasetProvider handles datasets and their documents
@@ -143,7 +143,7 @@ func (p *DatasetProvider) Cat(ctx stdctx.Context, subPath string) ([]byte, error
 // ==================== Dataset Operations ====================
 
 func (p *DatasetProvider) listDatasets(ctx stdctx.Context, opts *ListOptions) (*Result, error) {
-	resp, err := p.httpClient.Request("GET", "/datasets", true, "auto", nil, nil)
+	resp, err := p.httpClient.Request("GET", "/datasets", "auto", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (p *DatasetProvider) getDataset(ctx stdctx.Context, name string) (*Node, er
 	}
 
 	// First list all datasets to find the one with matching name
-	resp, err := p.httpClient.Request("GET", "/datasets", true, "auto", nil, nil)
+	resp, err := p.httpClient.Request("GET", "/datasets", "auto", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -324,8 +324,8 @@ func (p *DatasetProvider) searchWithRetrieval(ctx stdctx.Context, opts *SearchOp
 	}
 	payload["similarity_threshold"] = threshold
 
-	// Call retrieval API (useAPIBase=false because the route is /v1/chunk/retrieval_test, not /api/v1/...)
-	resp, err := p.httpClient.Request("POST", "/chunk/retrieval_test", false, "auto", nil, payload)
+	// Call the Go retrieval API under /api/v1.
+	resp, err := p.httpClient.Request("POST", "/chunk/retrieval_test", "auto", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval request failed: %w", err)
 	}
@@ -505,7 +505,7 @@ func (p *DatasetProvider) listDocuments(ctx stdctx.Context, datasetName string, 
 	}
 
 	path := fmt.Sprintf("/datasets/%s/documents", datasetID)
-	resp, err := p.httpClient.Request("GET", path, true, "auto", params, nil)
+	resp, err := p.httpClient.Request("GET", path, "auto", params, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -609,8 +609,8 @@ func (p *DatasetProvider) searchDocuments(ctx stdctx.Context, datasetName string
 	}
 	payload["similarity_threshold"] = threshold
 
-	// Call retrieval API (useAPIBase=false because the route is /v1/chunk/retrieval_test, not /api/v1/...)
-	resp, err := p.httpClient.Request("POST", "/chunk/retrieval_test", false, "auto", nil, payload)
+	// Call the Go retrieval API under /api/v1.
+	resp, err := p.httpClient.Request("POST", "/chunk/retrieval_test", "auto", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval request failed: %w", err)
 	}

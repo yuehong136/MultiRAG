@@ -40,11 +40,11 @@ func (c *MultiRAGClient) PingServer(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode: multiple iterations
-		return c.HTTPClient.RequestWithIterations("GET", "/system/ping", false, "web", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/system/ping", "web", nil, nil, iterations)
 	}
 
 	// Single ping mode
-	resp, err := c.HTTPClient.Request("GET", "/system/ping", false, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/system/ping", "web", nil, nil)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return nil, err
@@ -57,7 +57,7 @@ func (c *MultiRAGClient) PingServer(cmd *Command) (ResponseIf, error) {
 }
 
 // ShowServerVersion shows the API server version (user mode).
-// Aligned with Python /api/v1/system/version (RESTful), so useAPIBase=true.
+// Aligned with Python /api/v1/system/version (RESTful), so the /api/v1 base.
 func (c *MultiRAGClient) ShowServerVersion(cmd *Command) (ResponseIf, error) {
 	// Get iterations from command params (for benchmark)
 	iterations := 1
@@ -67,11 +67,11 @@ func (c *MultiRAGClient) ShowServerVersion(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode: multiple iterations
-		return c.HTTPClient.RequestWithIterations("GET", "/system/version", true, "web", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/system/version", "web", nil, nil, iterations)
 	}
 
 	// Single mode
-	resp, err := c.HTTPClient.Request("GET", "/system/version", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/system/version", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show version: %w", err)
 	}
@@ -104,11 +104,11 @@ func (c *MultiRAGClient) ListConfigs(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode: multiple iterations
-		return c.HTTPClient.RequestWithIterations("GET", "/system/configs", true, "web", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/system/configs", "web", nil, nil, iterations)
 	}
 
 	// Single mode
-	resp, err := c.HTTPClient.Request("GET", "/system/configs", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/system/configs", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list configs: %w", err)
 	}
@@ -278,7 +278,7 @@ func (c *MultiRAGClient) SetLogLevel(cmd *Command) (ResponseIf, error) {
 		"level": logLevel,
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", "/system/log", true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PUT", "/system/log", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to change log level: %w", err)
 	}
@@ -317,11 +317,11 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("GET", "/datasets", true, authKind, nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/datasets", authKind, nil, nil, iterations)
 	}
 
 	// Normal mode
-	resp, err := c.HTTPClient.Request("GET", "/datasets", true, authKind, nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/datasets", authKind, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list datasets: %w", err)
 	}
@@ -361,7 +361,7 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 
 // getDatasetID gets dataset ID by name
 func (c *MultiRAGClient) getDatasetID(datasetName string) (string, error) {
-	resp, err := c.HTTPClient.Request("GET", "/datasets", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/datasets", "web", nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to list datasets: %w", err)
 	}
@@ -464,11 +464,11 @@ func (c *MultiRAGClient) SearchOnDatasets(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("POST", "/chunk/retrieval_test", false, "web", nil, payload, iterations)
+		return c.HTTPClient.RequestWithIterations("POST", "/chunk/retrieval_test", "web", nil, payload, iterations)
 	}
 
 	// Normal mode
-	resp, err := c.HTTPClient.Request("POST", "/chunk/retrieval_test", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/chunk/retrieval_test", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search on datasets: %w", err)
 	}
@@ -542,7 +542,7 @@ func (c *MultiRAGClient) CreateToken(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/system/tokens", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("POST", "/system/tokens", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token: %w", err)
 	}
@@ -571,7 +571,7 @@ func (c *MultiRAGClient) ListTokens(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", "/system/tokens", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/system/tokens", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %w", err)
 	}
@@ -610,7 +610,7 @@ func (c *MultiRAGClient) DropToken(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("token not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/system/tokens/%s", token), true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/system/tokens/%s", token), "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop token: %w", err)
 	}
@@ -657,7 +657,7 @@ func (c *MultiRAGClient) CreateDatasetInDocEngine(cmd *Command) (ResponseIf, err
 		"vector_size": vectorSize,
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/kb/doc_engine_table", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/kb/doc_engine_table", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table: %w", err)
 	}
@@ -708,7 +708,7 @@ func (c *MultiRAGClient) DropDatasetInDocEngine(cmd *Command) (ResponseIf, error
 		"kb_id": datasetID,
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", "/kb/doc_engine_table", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("DELETE", "/kb/doc_engine_table", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop dataset: %w", err)
 	}
@@ -744,7 +744,7 @@ func (c *MultiRAGClient) CreateMetadataInDocEngine(cmd *Command) (ResponseIf, er
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/tenant/doc_engine_metadata_table", false, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("POST", "/tenant/doc_engine_metadata_table", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metadata table: %w", err)
 	}
@@ -780,7 +780,7 @@ func (c *MultiRAGClient) DropMetadataInDocEngine(cmd *Command) (ResponseIf, erro
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", "/tenant/doc_engine_metadata_table", false, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("DELETE", "/tenant/doc_engine_metadata_table", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop metadata table: %w", err)
 	}
@@ -830,7 +830,7 @@ func (c *MultiRAGClient) AddProvider(cmd *Command) (ResponseIf, error) {
 		"provider_name": providerName,
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", "/providers", true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PUT", "/providers", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add provider: %w", err)
 	}
@@ -862,7 +862,7 @@ func (c *MultiRAGClient) ListProviders(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", "/providers", true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/providers", "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list providers: %w", err)
 	}
@@ -906,7 +906,7 @@ func (c *MultiRAGClient) DeleteProvider(cmd *Command) (ResponseIf, error) {
 		"llm_factory": providerName,
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("DELETE", url, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete provider: %w", err)
 	}
@@ -962,7 +962,7 @@ func (c *MultiRAGClient) CreateProviderInstance(cmd *Command) (ResponseIf, error
 		"region":        cmd.Params["region"],
 	}
 
-	resp, err := c.HTTPClient.Request("POST", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", url, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider instance: %w", err)
 	}
@@ -1001,7 +1001,7 @@ func (c *MultiRAGClient) ListProviderInstances(cmd *Command) (ResponseIf, error)
 
 	url := fmt.Sprintf("/providers/%s/instances", providerName)
 
-	resp, err := c.HTTPClient.Request("GET", url, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", url, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
@@ -1045,7 +1045,7 @@ func (c *MultiRAGClient) ShowProviderInstance(cmd *Command) (ResponseIf, error) 
 
 	url := fmt.Sprintf("/providers/%s/instances/%s", providerName, instanceName)
 
-	resp, err := c.HTTPClient.Request("GET", url, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", url, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show instance: %w", err)
 	}
@@ -1086,7 +1086,7 @@ func (c *MultiRAGClient) ShowInstanceBalance(cmd *Command) (ResponseIf, error) {
 
 	url := fmt.Sprintf("/providers/%s/instances/%s/balance", providerName, instanceName)
 
-	resp, err := c.HTTPClient.Request("GET", url, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", url, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show balance: %w", err)
 	}
@@ -1139,7 +1139,7 @@ func (c *MultiRAGClient) AlterProviderInstance(cmd *Command) (ResponseIf, error)
 		"llm_name": newName,
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PUT", url, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to alter instance: %w", err)
 	}
@@ -1187,7 +1187,7 @@ func (c *MultiRAGClient) DropProviderInstance(cmd *Command) (ResponseIf, error) 
 
 	path := fmt.Sprintf("/providers/%s/instances", url.PathEscape(providerName))
 
-	resp, err := c.HTTPClient.Request("DELETE", path, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("DELETE", path, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop instance: %w", err)
 	}
@@ -1211,7 +1211,7 @@ func (c *MultiRAGClient) ListInstanceModels(cmd *Command) (ResponseIf, error) {
 	var endPoint string
 	endPoint = fmt.Sprintf("/providers/%s/instances/%s/models", providerName, instanceName)
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instance models: %w", err)
 	}
@@ -1258,7 +1258,7 @@ func (c *MultiRAGClient) EnableOrDisableModel(cmd *Command, status string) (Resp
 		"status": status,
 	}
 
-	resp, err := c.HTTPClient.Request("PATCH", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("PATCH", url, "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enable/disable model: %w", err)
 	}
@@ -1325,7 +1325,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 
 	if stream {
 		startTime := time.Now()
-		reader, err := c.HTTPClient.RequestStream("POST", url, true, "web", nil, payload)
+		reader, err := c.HTTPClient.RequestStream("POST", url, "web", nil, payload)
 		if err != nil {
 			return nil, chatRequestError(err)
 		}
@@ -1385,7 +1385,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		return &StreamMessageResponse{Code: 0, Message: fullMessage.String(), Duration: duration}, nil
 	}
 
-	resp, err := c.HTTPClient.Request("POST", url, true, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", url, "web", nil, payload)
 	if err != nil {
 		return nil, chatRequestError(err)
 	}
@@ -1419,7 +1419,7 @@ func (c *MultiRAGClient) CheckProviderConnection(cmd *Command) (ResponseIf, erro
 	}
 
 	url := fmt.Sprintf("/providers/%s/instances/%s/connection", providerName, instanceName)
-	resp, err := c.HTTPClient.Request(http.MethodGet, url, true, "web", nil, nil)
+	resp, err := c.HTTPClient.Request(http.MethodGet, url, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check provider connection: %w", err)
 	}
@@ -1513,7 +1513,7 @@ func (c *MultiRAGClient) InsertDatasetFromFile(cmd *Command) (ResponseIf, error)
 		"file_path": filePath,
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/kb/insert_from_file", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/kb/insert_from_file", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert dataset from file: %w", err)
 	}
@@ -1558,7 +1558,7 @@ func (c *MultiRAGClient) InsertMetadataFromFile(cmd *Command) (ResponseIf, error
 		"file_path": filePath,
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/tenant/insert_metadata_from_file", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/tenant/insert_metadata_from_file", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert metadata from file: %w", err)
 	}
@@ -1616,7 +1616,7 @@ func (c *MultiRAGClient) UpdateChunk(cmd *Command) (ResponseIf, error) {
 	}
 
 	// Try to get doc_id from the chunk get endpoint
-	getResp, err := c.HTTPClient.Request("GET", "/chunk/get?chunk_id="+chunkID, false, "web", nil, nil)
+	getResp, err := c.HTTPClient.Request("GET", "/chunk/get?chunk_id="+chunkID, "web", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunk info: %w", err)
 	}
@@ -1648,7 +1648,7 @@ func (c *MultiRAGClient) UpdateChunk(cmd *Command) (ResponseIf, error) {
 	payload["document_id"] = docID
 	payload["chunk_id"] = chunkID
 
-	resp, err := c.HTTPClient.Request("POST", "/chunk/update", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/chunk/update", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update chunk: %w", err)
 	}
@@ -1703,7 +1703,7 @@ func (c *MultiRAGClient) RmTags(cmd *Command) (ResponseIf, error) {
 		"tags": tags,
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/kb/"+kbID+"/rm_tags", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/kb/"+kbID+"/rm_tags", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove tags: %w", err)
 	}
@@ -1754,7 +1754,7 @@ func (c *MultiRAGClient) SetMeta(cmd *Command) (ResponseIf, error) {
 		"meta":   metaJSON,
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/document/set_meta", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/document/set_meta", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to set metadata: %w", err)
 	}
@@ -1806,7 +1806,7 @@ func (c *MultiRAGClient) RemoveChunks(cmd *Command) (ResponseIf, error) {
 		payload["chunk_ids"] = chunkIDs
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/chunk/rm", false, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/chunk/rm", "web", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove chunks: %w", err)
 	}

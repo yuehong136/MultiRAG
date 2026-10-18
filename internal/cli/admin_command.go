@@ -36,10 +36,10 @@ func (c *MultiRAGClient) ListUsers(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("GET", "/admin/users", true, "admin", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/admin/users", "admin", nil, nil, iterations)
 	}
 
-	resp, err := c.HTTPClient.Request("GET", "/admin/users", true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/admin/users", "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list users: %w", err)
 	}
@@ -97,10 +97,10 @@ func (c *MultiRAGClient) ListDatasets(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), true, "admin", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), "admin", nil, nil, iterations)
 	}
 
-	resp, err := c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list datasets: %w", err)
 	}
@@ -142,7 +142,7 @@ func (c *MultiRAGClient) GrantAdmin(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("user_name not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", fmt.Sprintf("/admin/users/%s/admin", userName), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("PUT", fmt.Sprintf("/admin/users/%s/admin", userName), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to grant admin: %w", err)
 	}
@@ -176,7 +176,7 @@ func (c *MultiRAGClient) RevokeAdmin(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("user_name not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s/admin", userName), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s/admin", userName), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to revoke admin: %w", err)
 	}
@@ -227,7 +227,7 @@ func (c *MultiRAGClient) CreateUser(cmd *Command) (ResponseIf, error) {
 		"role":     "user",
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/admin/users", true, "admin", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/admin/users", "admin", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -275,7 +275,7 @@ func (c *MultiRAGClient) ActivateUser(cmd *Command) (ResponseIf, error) {
 		"activate_status": activateStatus,
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", fmt.Sprintf("/admin/users/%s/activate", userName), true, "admin", nil, payload)
+	resp, err := c.HTTPClient.Request("PUT", fmt.Sprintf("/admin/users/%s/activate", userName), "admin", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update user activate status: %w", err)
 	}
@@ -324,7 +324,7 @@ func (c *MultiRAGClient) AlterUserPassword(cmd *Command) (ResponseIf, error) {
 		"new_password": encryptedPassword,
 	}
 
-	resp, err := c.HTTPClient.Request("PUT", fmt.Sprintf("/admin/users/%s/password", userName), true, "admin", nil, payload)
+	resp, err := c.HTTPClient.Request("PUT", fmt.Sprintf("/admin/users/%s/password", userName), "admin", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to change user password: %w", err)
 	}
@@ -358,7 +358,7 @@ func (c *MultiRAGClient) DropUser(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("user_name not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s", userName), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s", userName), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete user: %w", err)
 	}
@@ -392,7 +392,7 @@ func (c *MultiRAGClient) GenerateAdminToken(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("user_name not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("POST", fmt.Sprintf("/admin/users/%s/keys", userName), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("POST", fmt.Sprintf("/admin/users/%s/keys", userName), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
@@ -430,7 +430,7 @@ func (c *MultiRAGClient) ListAdminTokens(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("user_name not provided")
 	}
 
-	resp, err := c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/keys", userName), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/keys", userName), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tokens: %w", err)
 	}
@@ -482,7 +482,7 @@ func (c *MultiRAGClient) DropAdminToken(cmd *Command) (ResponseIf, error) {
 	// URL encode the token to handle special characters
 	encodedToken := url.QueryEscape(token)
 
-	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s/keys/%s", userName, encodedToken), true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("DELETE", fmt.Sprintf("/admin/users/%s/keys/%s", userName, encodedToken), "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop token: %w", err)
 	}
@@ -517,10 +517,10 @@ func (c *MultiRAGClient) ShowAdminVersion(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("GET", "/admin/version", true, "admin", nil, nil, iterations)
+		return c.HTTPClient.RequestWithIterations("GET", "/admin/version", "admin", nil, nil, iterations)
 	}
 
-	resp, err := c.HTTPClient.Request("GET", "/admin/version", true, "admin", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/admin/version", "admin", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show admin version: %w", err)
 	}

@@ -89,36 +89,23 @@ func (r *Router) Setup(engine *gin.Engine) {
 	// Health check
 	engine.GET("/health", r.systemHandler.Health)
 
-	// System endpoints
-	engine.GET("/v1/system/ping", r.systemHandler.Ping)
-	engine.GET("/api/v1/system/ping", r.systemHandler.Ping)
-	engine.GET("/v1/system/config", r.systemHandler.GetConfig)
-
-	engine.GET("/v1/system/version", r.systemHandler.GetVersion)
-	engine.POST("/v1/user/register", r.userHandler.Register)
-	// User login channels endpoint
-	engine.GET("/v1/user/login/channels", r.userHandler.GetLoginChannels)
-
-	// User login by email endpoint
-	engine.POST("/v1/user/login", r.userHandler.LoginByEmail)
-
-	// User logout endpoint
-	// Logout requires a validated current user.
-
 	engine.POST("/api/v1/datasets/:dataset_id/documents/batch-update-status", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.BatchUpdateStatus)
 
-	engine.GET("/api/v1/system/config", r.systemHandler.GetConfig)
-	engine.GET("/api/v1/system/version", r.systemHandler.GetVersion)
-	engine.POST("/api/v1/auth/login", r.userHandler.Login)
-	engine.POST("/api/v1/users", r.userHandler.Register)
-	engine.GET("/api/v1/auth/login/channels", r.userHandler.GetLoginChannels)
+	public := engine.Group("/api/v1")
+	{
+		public.GET("/system/ping", r.systemHandler.Ping)
+		public.GET("/system/config", r.systemHandler.GetConfig)
+		public.GET("/system/version", r.systemHandler.GetVersion)
+		public.POST("/auth/login", r.userHandler.Login)
+		public.POST("/users", r.userHandler.Register)
+		public.GET("/auth/login/channels", r.userHandler.GetLoginChannels)
+	}
 	// Protected routes
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
 		authorized.GET("/v1/user/logout", r.userHandler.Logout)
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
-		authorized.GET("/v1/system/configs", r.systemHandler.GetConfigs)
 		authorized.GET("/api/v1/users/me", r.userHandler.Info)
 		authorized.PATCH("/api/v1/users/me", r.userHandler.Setting)
 		authorized.GET("/api/v1/tenants", r.tenantHandler.TenantList)
@@ -130,10 +117,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// Tenant list endpoint
 		authorized.GET("/v1/tenant/list", r.tenantHandler.TenantList)
 		// Tenant doc engine metadata table endpoints (per-tenant resources)
-		authorized.POST("/v1/tenant/doc_engine_metadata_table", r.tenantHandler.CreateMetadataInDocEngine)   // Internal API only for GO
-		authorized.DELETE("/v1/tenant/doc_engine_metadata_table", r.tenantHandler.DeleteMetadataInDocEngine) // Internal API only for GO
+		authorized.POST("/api/v1/tenant/doc_engine_metadata_table", r.tenantHandler.CreateMetadataInDocEngine)   // Internal API only for GO
+		authorized.DELETE("/api/v1/tenant/doc_engine_metadata_table", r.tenantHandler.DeleteMetadataInDocEngine) // Internal API only for GO
 		// Tenant metadata insert from file (internal)
-		authorized.POST("/v1/tenant/insert_metadata_from_file", r.tenantHandler.InsertMetadataFromFile) // Internal API only for GO
+		authorized.POST("/api/v1/tenant/insert_metadata_from_file", r.tenantHandler.InsertMetadataFromFile) // Internal API only for GO
 		// User settings endpoint
 		authorized.POST("/v1/user/setting", r.userHandler.Setting)
 		// User change password endpoint
@@ -284,15 +271,15 @@ func (r *Router) Setup(engine *gin.Engine) {
 			kb.GET("/tags", r.knowledgebaseHandler.ListTagsFromKbs)
 			kb.GET("/get_meta", r.knowledgebaseHandler.GetMeta)
 			kb.GET("/basic_info", r.knowledgebaseHandler.GetBasicInfo)
-			kb.POST("/doc_engine_table", r.knowledgebaseHandler.CreateDatasetInDocEngine)   // Internal API only for GO
-			kb.DELETE("/doc_engine_table", r.knowledgebaseHandler.DeleteDatasetInDocEngine) // Internal API only for GO
-			kb.POST("/insert_from_file", r.knowledgebaseHandler.InsertDatasetFromFile)      // Internal API only for GO
+			authorized.POST("/api/v1/kb/doc_engine_table", r.knowledgebaseHandler.CreateDatasetInDocEngine)   // Internal API only for GO
+			authorized.DELETE("/api/v1/kb/doc_engine_table", r.knowledgebaseHandler.DeleteDatasetInDocEngine) // Internal API only for GO
+			authorized.POST("/api/v1/kb/insert_from_file", r.knowledgebaseHandler.InsertDatasetFromFile)      // Internal API only for GO
 
 			// KB ID specific routes
 			kbByID := kb.Group("/:kb_id")
 			{
 				kbByID.GET("/tags", r.knowledgebaseHandler.ListTags)
-				kbByID.POST("/rm_tags", r.knowledgebaseHandler.RemoveTags)
+				authorized.POST("/api/v1/kb/:kb_id/rm_tags", r.knowledgebaseHandler.RemoveTags)
 				kbByID.POST("/rename_tag", r.knowledgebaseHandler.RenameTag)
 				kbByID.GET("/knowledge_graph", r.knowledgebaseHandler.KnowledgeGraph)
 				kbByID.DELETE("/knowledge_graph", r.knowledgebaseHandler.DeleteKnowledgeGraph)
@@ -304,17 +291,17 @@ func (r *Router) Setup(engine *gin.Engine) {
 		{
 			doc.POST("/list", r.documentHandler.ListDocumentsByKB)
 			doc.POST("/metadata/summary", r.documentHandler.MetadataSummary)
-			doc.POST("/set_meta", r.documentHandler.SetMeta)
+			authorized.POST("/api/v1/document/set_meta", r.documentHandler.SetMeta)
 		}
 
 		// Chunk routes
 		chunk := authorized.Group("/v1/chunk")
 		{
-			chunk.POST("/retrieval_test", r.chunkHandler.RetrievalTest)
-			chunk.GET("/get", r.chunkHandler.Get)
+			authorized.POST("/api/v1/chunk/retrieval_test", r.chunkHandler.RetrievalTest)
+			authorized.GET("/api/v1/chunk/get", r.chunkHandler.Get)
 			chunk.POST("/list", r.chunkHandler.List)
-			chunk.POST("/update", r.chunkHandler.UpdateChunk) // Internal API only for GO
-			chunk.POST("/rm", r.chunkHandler.Remove)
+			authorized.POST("/api/v1/chunk/update", r.chunkHandler.UpdateChunk) // Internal API only for GO
+			authorized.POST("/api/v1/chunk/rm", r.chunkHandler.Remove)
 		}
 
 		// LLM routes

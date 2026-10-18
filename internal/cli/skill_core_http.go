@@ -20,7 +20,7 @@ type skillCoreClient struct {
 	ctx    context.Context
 }
 
-func (a *skillCoreClient) Request(method, path string, _ bool, _ string, _ map[string]string, body map[string]interface{}) (*contextengine.HTTPResponse, error) {
+func (a *skillCoreClient) Request(method, path string, _ string, _ map[string]string, body map[string]interface{}) (*contextengine.HTTPResponse, error) {
 	path = strings.Replace(path, "/skills", "/skill-core", 1)
 	parsed, err := url.Parse(path)
 	if err != nil {
