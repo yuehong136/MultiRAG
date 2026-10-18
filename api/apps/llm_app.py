@@ -1146,6 +1146,13 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
     # Preserve provider-specific and unknown fields when editing only capability/key.
     incoming_key, _, incoming_payload = TenantLLMService._decode_api_key_config(provided_key)
     credential_fields: dict[str, Any] = json.loads(saved_payload) if saved_payload else {}
+    if factory in {"MinerU", "PaddleOCR", "OpenDataLoader"}:
+        # These providers accept an opaque configuration object as the key.
+        # Keep the UI/storage envelope when merging capability-only edits.
+        if credential_fields and "api_key" not in credential_fields:
+            credential_fields = {"api_key": credential_fields}
+        if isinstance(provided_key, dict) and "api_key" not in provided_key:
+            incoming_payload = json.dumps({"api_key": provided_key}, ensure_ascii=False)
     if incoming_payload:
         credential_fields.update(json.loads(incoming_payload))
 

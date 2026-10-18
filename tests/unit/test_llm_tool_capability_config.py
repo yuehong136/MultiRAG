@@ -93,6 +93,36 @@ async def test_capability_edit_preserves_structured_credentials(monkeypatch: pyt
     assert json.loads(keys[0]) == {key: value for key, value in after.items() if key != "is_tools"}
 
 
+@pytest.mark.parametrize("factory", ["MinerU", "PaddleOCR", "OpenDataLoader"])
+@pytest.mark.parametrize("edit", ["create", "replace", "capability", "flat_saved"])
+async def test_ocr_object_key_survives_capability_merge(monkeypatch: pytest.MonkeyPatch, db: Session, factory: str, edit: str) -> None:
+    before = {"endpoint": "http://owned.invalid/ocr", "token": "fixture-original"}
+    replacement = {**before, "token": "fixture-replacement"}
+    saved: list[dict[str, Any]] = []
+    probed: list[dict[str, Any]] = []
+
+    class Probe:
+        def __init__(self, key: str, **kwargs: Any) -> None:
+            probed.append(json.loads(key))
+
+        def check_available(self) -> tuple[bool, str]:
+            return True, ""
+
+    record = SimpleNamespace(api_key=json.dumps(before if edit == "flat_saved" else {"api_key": before, "provider_order": "", "is_tools": True}), api_base="", max_tokens=0)
+    monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=factory)])
+    monkeypatch.setattr(llm_app, "OcrModel", {factory: Probe})
+    monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: [] if edit == "create" else [record]))
+    monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, filters, payload: saved.append(payload) or True))
+    payload: dict[str, Any] = {"llm_factory": factory, "llm_name": "fixture", "mdl_type": "ocr", "is_tools": False}
+    if edit in {"create", "replace"}:
+        payload["api_key"] = replacement
+    response = await llm_app.add_llm(llm_app.AddLLMRequest(**payload), db, SimpleNamespace(id="tenant"))
+    assert json.loads(response.body)["retcode"] == 0
+    expected = replacement if edit in {"create", "replace"} else before
+    assert json.loads(saved[0]["api_key"]) == {"api_key": expected, "provider_order": "", "is_tools": False}
+    assert probed == [{"api_key": expected, "provider_order": ""}]
+
+
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_bundle_binds_and_dispatches_native_tools_only_when_enabled(monkeypatch: pytest.MonkeyPatch, db: Session, enabled: bool) -> None:
     calls: list[str] = []
