@@ -18,7 +18,7 @@ runs:
         python-version: ${{ inputs.python-version }}
     - uses: astral-sh/setup-uv@v7
       with:
-        version: '0.12.5'
+        version: '0.13.1'
         enable-cache: true
         cache-dependency-glob: uv.lock
     - shell: bash
