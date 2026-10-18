@@ -62,7 +62,8 @@ func NewChunkService() *ChunkService {
 
 // RetrievalTestRequest retrieval test request
 type RetrievalTestRequest struct {
-	KbID                   interface{}            `json:"kb_id" binding:"required"` // string or []string
+	DatasetIDs             []string               `json:"dataset_ids,omitempty"`
+	KbID                   interface{}            `json:"kb_id,omitempty"` // string or []string
 	Question               string                 `json:"question" binding:"required"`
 	Page                   *int                   `json:"page,omitempty"`
 	Size                   *int                   `json:"size,omitempty"`

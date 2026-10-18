@@ -361,7 +361,7 @@ func (c *MultiRAGClient) ListUserDatasets(cmd *Command) (ResponseIf, error) {
 
 // getDatasetID gets dataset ID by name
 func (c *MultiRAGClient) getDatasetID(datasetName string) (string, error) {
-	resp, err := c.HTTPClient.Request("GET", "/datasets", "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", "/datasets", "api", nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to list datasets: %w", err)
 	}
@@ -456,7 +456,7 @@ func (c *MultiRAGClient) SearchOnDatasets(cmd *Command) (ResponseIf, error) {
 	}
 
 	payload := map[string]interface{}{
-		"kb_id":                    datasetIDs,
+		"dataset_ids":              datasetIDs,
 		"question":                 question,
 		"similarity_threshold":     0.2,
 		"vector_similarity_weight": 0.3,
@@ -464,11 +464,11 @@ func (c *MultiRAGClient) SearchOnDatasets(cmd *Command) (ResponseIf, error) {
 
 	if iterations > 1 {
 		// Benchmark mode - return raw result for benchmark stats
-		return c.HTTPClient.RequestWithIterations("POST", "/chunk/retrieval_test", "web", nil, payload, iterations)
+		return c.HTTPClient.RequestWithIterations("POST", "/datasets/search", "api", nil, payload, iterations)
 	}
 
 	// Normal mode
-	resp, err := c.HTTPClient.Request("POST", "/chunk/retrieval_test", "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/datasets/search", "api", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search on datasets: %w", err)
 	}

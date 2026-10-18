@@ -252,12 +252,12 @@ func (c *MultiRAGClient) executeBenchmarkSilent(cmd *Command, iterations int) []
 			question, _ := cmd.Params["question"].(string)
 			datasetIDs, _ := cmd.Params["dataset_ids"].([]string)
 			payload := map[string]interface{}{
-				"kb_id":                    datasetIDs,
+				"dataset_ids":              datasetIDs,
 				"question":                 question,
 				"similarity_threshold":     0.2,
 				"vector_similarity_weight": 0.3,
 			}
-			resp, err = c.HTTPClient.Request("POST", "/chunk/retrieval_test", "web", nil, payload)
+			resp, err = c.HTTPClient.Request("POST", "/datasets/search", "api", nil, payload)
 		default:
 			// For other commands, we would need to add specific handling
 			// For now, mark as failed

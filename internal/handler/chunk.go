@@ -18,8 +18,9 @@ package handler
 
 import (
 	"encoding/json"
-	"net/http"
 	"multirag/internal/common"
+	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -50,6 +51,15 @@ func NewChunkHandler(chunkService *service.ChunkService, userService *service.Us
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/chunk/retrieval_test [post]
 func (h *ChunkHandler) RetrievalTest(c *gin.Context) {
+	h.retrievalTest(c, false)
+}
+
+// SearchDatasets handles POST /api/v1/datasets/search with dataset_ids.
+func (h *ChunkHandler) SearchDatasets(c *gin.Context) {
+	h.retrievalTest(c, true)
+}
+
+func (h *ChunkHandler) retrievalTest(c *gin.Context, datasetSearch bool) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
@@ -64,6 +74,21 @@ func (h *ChunkHandler) RetrievalTest(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+
+	if datasetSearch {
+		if len(req.DatasetIDs) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": "dataset_ids must be a non-empty array"})
+			return
+		}
+		for _, id := range req.DatasetIDs {
+			if strings.TrimSpace(id) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": "dataset_ids must contain non-empty strings"})
+				return
+			}
+		}
+		// Keep the existing retrieval service and its per-dataset permission checks.
+		req.KbID = req.DatasetIDs
 	}
 
 	// Set default values for optional parameters
