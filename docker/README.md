@@ -441,72 +441,134 @@ HTTPS 站点配置模板（预留），包含：
 
 ### 启用 HTTPS
 
-#### 方式一：使用 Let's Encrypt 免费证书
+以下示例适用于 Python 模式的 Docker 部署；CPU 服务名为 `multirag-cpu`，GPU
+为 `multirag-gpu`，macOS Compose 使用 `multirag-cpu`。先确认实际部署文件、服务名、
+域名和宿主机端口，再安排变更窗口。下列命令是操作示例，不会由部署自动执行。
 
-1. **安装 Certbot**
-   ```bash
-   # Ubuntu/Debian
-   sudo apt update && sudo apt install certbot
-   
-   # macOS
-   brew install certbot
-   ```
+#### 1. 准备证书与持久化目录
 
-2. **获取证书**
-   ```bash
-   # 确保 80/443 端口未被占用
-   sudo certbot certonly --standalone -d your-multirag-domain.com
-   ```
+使用域名对应的 PEM 证书链和私钥：`fullchain.pem` 是服务器证书及中间证书链，
+`privkey.pem` 是对应私钥。域名须匹配证书，并通过 DNS 指向部署入口；仅修改
+`server_name` 不会签发证书。
 
-3. **证书位置**
-   - 证书: `/etc/letsencrypt/live/your-multirag-domain.com/fullchain.pem`
-   - 私钥: `/etc/letsencrypt/live/your-multirag-domain.com/privkey.pem`
+证书由现有 CA 或证书管理工具签发。本例将普通 PEM 文件放在宿主机的
+`/srv/multirag/tls/`，将站点配置放在 `/srv/multirag/nginx/`；均独立于容器生命周期。
+下面是 Linux 上准备文件的示例，`/path/to/issued/` 需替换为真实签发目录：
 
-4. **修改 docker-compose.yml**
-   在所选主服务中将 Python HTTP 源挂载替换为 HTTPS 源，并添加证书挂载。
-   以下为 CPU 服务，GPU 服务使用 `multirag-gpu`；同一源目标只保留一条挂载：
-   ```yaml
-   services:
-     multirag-cpu:
-       # ...existing configuration...
-       environment:
-         - API_PROXY_SCHEME=python
-       volumes:
-         # SSL 证书
-         - /etc/letsencrypt/live/your-multirag-domain.com/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-         - /etc/letsencrypt/live/your-multirag-domain.com/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
-         # 替换 Python HTTP 配置源，保留可写生成目标
-         - ./nginx/multirag.https.conf:/etc/nginx/conf.d/multirag.conf.python:ro
-         # ...other existing volumes...
-   ```
+```bash
+sudo install -d -m 700 /srv/multirag/tls
+sudo install -d -m 755 /srv/multirag/nginx
+sudo install -m 644 /path/to/issued/fullchain.pem /srv/multirag/tls/fullchain.pem
+sudo install -m 600 /path/to/issued/privkey.pem /srv/multirag/tls/privkey.pem
+# 从仓库 docker/ 目录执行，保留仓库模板供后续对照
+sudo install -m 644 nginx/multirag.https.conf /srv/multirag/nginx/multirag.https.conf
+```
 
-5. **更新 nginx 配置**
-   编辑 `nginx/multirag.https.conf`，将 `your-multirag-domain.com` 替换为实际域名。
-   保留 `nginx.conf` 的 include；入口脚本仍生成 `multirag.conf`。
-   此 HTTPS 模板代理到 Python 8123/8130，不提供 Go/hybrid 的 TLS 分流模板。
-   nginx 启动前需有可读的 fullchain.pem/privkey.pem，缺证书时 `nginx -t` 会失败。
+当前镜像以 root 启动 Nginx；私钥应由 root 持有且只允许所需进程读取，不要以
+`chmod 777` 解决读取失败。若自行设置了容器 `user`、rootless Docker 或不同文件共享
+权限，需按实际 UID/GID 调整目录遍历和文件读取权限，并通过下述 `nginx -t` 检查。
+证书、私钥和部署覆盖文件放在仓库外，不提交到 Git。
 
-6. **重启服务**
-   ```bash
-   docker compose down
-   docker compose up -d
-   ```
+#### 2. 修改 HTTPS 配置源并挂载
 
-#### 方式二：使用已有证书
+编辑宿主机 `/srv/multirag/nginx/multirag.https.conf`：
 
-如果您已有其他 CA 签发的证书：
+- 将两个 `server_name your-multirag-domain.com` 都替换为实际域名。
+- 确认 `ssl_certificate /etc/nginx/ssl/fullchain.pem` 和
+  `ssl_certificate_key /etc/nginx/ssl/privkey.pem` 与容器挂载路径一致。
+- 此模板将 API/admin 代理到 Python 8123/8130；不提供 Go/hybrid 的 TLS 分流。
+- HTTP 重定向默认使用 HTTPS 443；若对外使用非标准端口，须同步修改重定向地址。
 
-1. 将证书文件放置到 Docker 可访问的目录
-2. 修改 `docker-compose.yml` 中的卷挂载路径指向您的证书文件
-3. 确保证书文件包含完整的证书链
-4. 按照上述步骤 5-6 操作
+在仓库外保存 `/srv/multirag/compose.https.yml`，以下片段与原 Compose 合并。
+GPU 部署将键名改为 `multirag-gpu`；原有环境变量和数据卷保留：
 
-> [!IMPORTANT]
-> - 确保域名的 DNS A 记录指向服务器 IP 地址
-> - 使用 `--standalone` 方式获取证书时，需停止占用 80/443 端口的服务
+```yaml
+services:
+  multirag-cpu:
+    environment:
+      API_PROXY_SCHEME: python
+      ENABLE_WEBSERVER: "1"
+    volumes:
+      - type: bind
+        source: /srv/multirag/nginx/multirag.https.conf
+        target: /etc/nginx/conf.d/multirag.conf.python
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/multirag/tls
+        target: /etc/nginx/ssl
+        read_only: true
+        bind:
+          create_host_path: false
+```
 
-> [!TIP]
-> 开发或测试环境可使用自签名证书，但浏览器会显示安全警告。
+只读覆盖选中模式的**源文件**，同一容器目标仅保留一个挂载。macOS 原有 Python
+HTTP 源挂载也由上面的同目标条目替换。不要挂载生成目标
+`/etc/nginx/conf.d/multirag.conf`，也不要修改 `nginx.conf` 的 include；入口脚本会在
+每次启动时将选中的源复制到这个可写目标。镜像未内置 HTTPS 模板，需保留宿主配置。
+`create_host_path: false` 可让缺文件/目录直接报错，避免误建空目录。
+
+普通和 macOS Compose 已映射容器 80/443，外部端口分别由 `SVR_WEB_HTTP_PORT` /
+`SVR_WEB_HTTPS_PORT` 控制。仅镜像的
+[`docker-compose-standalone.yml`](docker-compose-standalone.yml) 服务名为 `multirag`，
+默认只映射 HTTP；如采用该入口，覆盖文件须改用该服务名，并额外合并
+`ports: ["443:443"]`，同时在服务器上准备本节的配置源和证书。
+
+#### 3. 检查后仅重建主服务
+
+下面命令从仓库 `docker/` 目录执行；macOS 替换 `COMPOSE_FILE`，GPU 替换服务名及
+profile。若部署另有覆盖文件，检查、应用和回退时均须带上同一组文件和环境参数。
+
+```bash
+COMPOSE_FILE=docker-compose.yml
+HTTPS_OVERRIDE=/srv/multirag/compose.https.yml
+MULTIRAG_SERVICE=multirag-cpu
+MULTIRAG_PROFILE=cpu
+
+docker compose -f "$COMPOSE_FILE" -f "$HTTPS_OVERRIDE" --profile "$MULTIRAG_PROFILE" config --quiet
+# 一次性容器内检查新源及证书；不运行应用入口，不发布服务端口
+# 复制只发生在该临时容器的可写层，不修改正在运行的容器
+docker compose -f "$COMPOSE_FILE" -f "$HTTPS_OVERRIDE" --profile "$MULTIRAG_PROFILE" \
+  run --rm --no-deps --entrypoint /bin/sh "$MULTIRAG_SERVICE" -c \
+  'cp /etc/nginx/conf.d/multirag.conf.python /etc/nginx/conf.d/multirag.conf && nginx -t'
+```
+
+两项检查成功后再应用。配置源/挂载变化需要重建选中的应用容器；单纯 `restart`
+不会更新 Compose 挂载。重建会短暂中断该容器中的请求与任务，需安排窗口；无需
+`compose down` 停止数据库和其他服务：
+
+```bash
+docker compose -f "$COMPOSE_FILE" -f "$HTTPS_OVERRIDE" --profile "$MULTIRAG_PROFILE" \
+  up -d --no-deps --force-recreate "$MULTIRAG_SERVICE"
+docker compose -f "$COMPOSE_FILE" -f "$HTTPS_OVERRIDE" --profile "$MULTIRAG_PROFILE" \
+  exec -T "$MULTIRAG_SERVICE" nginx -t
+# 使用真实域名和对外端口；不要用 -k 跳过证书校验
+curl --fail --show-error https://your-multirag-domain.com/api/v1/system/ping
+```
+
+核对证书域名/有效期、HTTP 重定向和端点的业务响应。`nginx -t` 仅验证配置与证书
+可加载，不能替代实际 TLS 访问及业务检查。若变更失败，恢复变更前的配置和挂载，
+用原 Compose 文件组合仅重建同一主服务；回退到 HTTP 也须先确认入口与访问策略。
+
+#### 4. 续期与重新加载
+
+宿主目录挂载和配置源在容器重建后仍有效；`docker cp` 或仅在容器内编辑生成目标
+不能提供这种持久性。续期时更新宿主目录中的完整证书链和私钥，然后先检查再加载：
+
+```bash
+docker compose -f "$COMPOSE_FILE" -f "$HTTPS_OVERRIDE" --profile "$MULTIRAG_PROFILE" \
+  exec -T "$MULTIRAG_SERVICE" nginx -t && \
+docker compose -f "$COMPOSE_FILE" -f "$HTTPS_OVERRIDE" --profile "$MULTIRAG_PROFILE" \
+  exec -T "$MULTIRAG_SERVICE" nginx -s reload
+```
+
+目录挂载可看到目录内替换后的证书文件；单文件 bind mount 在签发工具原子替换文件
+后可能仍指向旧文件，需重建挂载。若使用 Let's Encrypt 的 `live/` 符号链接，不要只
+挂载 `live/` 子目录：可将整个 `/etc/letsencrypt` 树只读挂到容器同路径，覆盖链接引用的
+`archive/`，并把 Nginx 证书路径改为真实域名的 `live/...` 路径；或由续期流程把普通
+PEM 文件同步到本例的专用目录。保持私钥权限，成功 reload 后再验证外部证书已更新。
+修改站点**配置源**内容后，需按步骤 3 重新检查并重建容器，入口脚本才会更新生成目标。
 
 ### 自定义配置
 
