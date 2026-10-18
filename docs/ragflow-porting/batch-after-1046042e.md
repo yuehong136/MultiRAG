@@ -100,7 +100,10 @@ Milvus 重启的只读诊断保存在 `integration/milvus-diagnostics/`，没有
 ## 清理与未验证边界
 
 八条工作线均已外置证据并清理自有工作树、监听进程和临时资源；本批分支在核查主干包含或
-patch 等价、无工作树引用后精确删除。集成工作树在报告和进度索引入实际 main 后归档，
+patch 等价、无工作树引用后精确删除。集成工作树的应用归档接口两次仅返回 queued，未移除目录；
+因此在报告和索引入 main 后，先创建并验证 `integration/after104-integration.bundle`，再用 Git
+移除干净的精确工作树和已被 main 包含的分支。可恢复记录见 `integration/archive-fallback.json`。
+应用附件仍显示旧路径，属于尚未刷新的应用元数据；Git 注册、目录和分支已独立确认不存在。
 外置 `integration/cleanup-readback.json` 与 `integration/deleted-branches.json` 记录最终结果。
 SDK、ironwood 等无关分支、工作树和既有服务保留，没有全局 prune/down。
 
