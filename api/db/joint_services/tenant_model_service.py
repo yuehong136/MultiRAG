@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
-from api.db.services.llm_service import LLMBundle
+from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from common import settings
@@ -57,6 +57,18 @@ def get_model_config_by_type_and_name(
             if not model_config:
                 raise LookupError(f"Tenant Model with name {model_name} and type {model_type_value} not found")
             config_dict = model_config.to_dict()
+        elif model_type_value == LLMType.IMAGE2TEXT.value:
+            model_config = TenantLLMService.get_api_key(db, tenant_id, model_name, LLMType.CHAT.value)
+            if model_config:
+                models = LLMService.query(db, fid=model_config.llm_factory, llm_name=model_config.llm_name)
+                tags = {tag.strip() for tag in (models[0].tags or "").split(",")} if models else set()
+                if "IMAGE2TEXT" not in tags:
+                    model_config = None
+            if not model_config:
+                raise LookupError(f"Tenant Model with name {model_name} and type {model_type_value} not found")
+            config_dict = model_config.to_dict()
+            # Select CvModel without changing the persisted CHAT registration.
+            config_dict["mdl_type"] = LLMType.IMAGE2TEXT.value
         else:
             model_config = TenantLLMService.get_api_key(db, tenant_id, pure_model_name, model_type_value)
             if not model_config:

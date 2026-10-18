@@ -36,6 +36,7 @@ DATABASE_TESTS = frozenset(
         "test_mcp_interaction_repository.py",
         "test_mcp_interaction_schema.py",
         "test_llm_tool_capability.py",
+        "test_model_config_resolution.py",
         "test_pdf_page_task_defaults.py",
         "test_principal_auth.py",
         "test_sandbox_provider_settings.py",
