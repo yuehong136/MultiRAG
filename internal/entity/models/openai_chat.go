@@ -19,10 +19,11 @@ import (
 // openAIChatDriver shares the HTTP and response contract of the hosted chat providers.
 type openAIChatDriver struct {
 	*DummyModel
-	httpClient     *http.Client
-	provider       string
-	buildBody      func(string, []Message, *ChatConfig, bool) (map[string]interface{}, error)
-	splitReasoning bool
+	httpClient          *http.Client
+	provider            string
+	buildBody           func(string, []Message, *ChatConfig, bool) (map[string]interface{}, error)
+	splitReasoning      bool
+	openRouterReasoning bool
 }
 
 // One pool is shared across request-scoped drivers; credentials stay on requests.
@@ -109,7 +110,16 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var result aliyunChatResponse
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content          *string `json:"content"`
+				ReasoningContent *string `json:"reasoning_content"`
+				Reasoning        *string `json:"reasoning"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error json.RawMessage `json:"error"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("openai-compatible: decode response: %w", err)
 	}
@@ -121,6 +131,9 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	}
 	message := result.Choices[0].Message
 	answer, reasoning := message.Content, message.ReasoningContent
+	if d.openRouterReasoning && message.Reasoning != nil {
+		reasoning = message.Reasoning
+	}
 	if reasoning == nil && d.splitReasoning {
 		class := ModelClassFromName(name)
 		if config != nil && config.ModelClass != nil {
@@ -188,8 +201,9 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			Choices []struct {
 				FinishReason *string `json:"finish_reason"`
 				Delta        struct {
-					Content   *string `json:"content"`
-					Reasoning *string `json:"reasoning_content"`
+					Content         *string `json:"content"`
+					Reasoning       *string `json:"reasoning_content"`
+					RouterReasoning *string `json:"reasoning"`
 				} `json:"delta"`
 			} `json:"choices"`
 			Error json.RawMessage `json:"error"`
@@ -208,6 +222,9 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			return fmt.Errorf("openai-compatible: stream event has no choices")
 		}
 		delta := event.Choices[0].Delta
+		if d.openRouterReasoning && delta.RouterReasoning != nil {
+			delta.Reasoning = delta.RouterReasoning
+		}
 		if delta.Reasoning != nil && *delta.Reasoning != "" {
 			if err := sender(nil, delta.Reasoning); err != nil {
 				return err

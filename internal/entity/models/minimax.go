@@ -30,13 +30,6 @@ func (m *MinimaxModel) Name() string {
 	return "minimax"
 }
 
-func (m *MinimaxModel) Chat(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig) (*ChatResponse, error) {
-	if modelName == nil || message == nil {
-		return nil, fmt.Errorf("minimax: model name and message are required")
-	}
-	return m.chat(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig)
-}
-
 func (m *MinimaxModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, modelConfig *ChatConfig) (*ChatResponse, error) {
 	return m.chat(modelName, messages, apiConfig, modelConfig)
 }

@@ -326,9 +326,9 @@ func TestMinimaxChatValidation(t *testing.T) {
 			t.Fatal("invalid API config accepted")
 		}
 	}
-	for _, test := range []struct{ name, message *string }{{nil, &message}, {&name, nil}, {minimaxPtr(" "), &message}} {
-		if _, err := driver.Chat(test.name, test.message, &APIConfig{APIKey: &key}, nil); err == nil {
-			t.Fatal("invalid chat arguments accepted")
+	for _, modelName := range []string{"", " "} {
+		if _, err := driver.ChatWithMessages(modelName, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
+			t.Fatal("invalid model name accepted")
 		}
 	}
 	if err := driver.ChatStreamlyWithSender(&name, &message, &APIConfig{APIKey: &key}, nil, nil); err == nil {

@@ -75,7 +75,7 @@ func (m *GiteeModel) ChatWithMessages(modelName string, apiConfig *APIConfig, me
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -223,7 +223,7 @@ func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Messa
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -419,7 +419,7 @@ func (m *GiteeModel) Encode(modelName *string, texts []string, apiConfig *APICon
 
 func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -476,7 +476,7 @@ func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 
 func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -531,7 +531,7 @@ func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, erro
 
 func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 

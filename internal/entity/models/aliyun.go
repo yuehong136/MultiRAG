@@ -58,7 +58,7 @@ func (m *AliyunModel) endpoint(config *APIConfig, suffix string) (string, string
 		return "", "", errors.New("aliyun: API key is required")
 	}
 	region := "default"
-	if config.Region != nil {
+	if config.Region != nil && *config.Region != "" {
 		region = *config.Region
 	}
 	baseURL := m.BaseURL[region]

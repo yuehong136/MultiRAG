@@ -75,7 +75,7 @@ func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConf
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -223,7 +223,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -386,7 +386,7 @@ func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 

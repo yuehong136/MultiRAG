@@ -49,7 +49,7 @@ func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig,
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
@@ -217,7 +217,7 @@ func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Me
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 	var region = "default"
-	if apiConfig.Region != nil {
+	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
 	}
 
