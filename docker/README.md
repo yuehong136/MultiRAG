@@ -259,6 +259,14 @@ HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py \
 
 ### 基础运行配置
 
+- `MULTIRAG_IMAGE`
+  主服务镜像引用。未设置时，[仓库版 Compose](./docker-compose.yml) 和
+  [macOS Compose](./docker-compose-macos.yml) 默认为 `multirag:latest`，
+  [Standalone Compose](./docker-compose-standalone.yml) 默认为 `datav/multirag:latest`。
+  可通过 `.env` 或调用 Compose 的环境设置已验证的镜像标签或 digest。
+  仓库版 Compose 挂载的 `configs/`、`entrypoint.sh` 和配置模板应与镜像版本配套；
+  只分发镜像时使用[独立镜像部署](#-独立镜像部署)。
+
 - `WS`  
   TaskExecutor（任务执行器）的数量。默认值为 `1`。
   
