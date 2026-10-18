@@ -3,6 +3,11 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2026-10-18 · after-94f82acd-20 定向验收索引
+
+连续 20 项的候选到主干映射、等价比较、定向验证与清理结果，统一见
+[94f82acd 后续 20 项交付](batch-after-94f82acd.md)。远程 CI 待运行，未 push。
+
 ## 2026-10-18 · after-5d28bb07-20 组合验收索引
 
 游标 `5d28bb07` 后续连续20项的逐项映射、组合验证、失败修复与清理结果，统一见
