@@ -20,6 +20,10 @@ def test_unknown_type_hint_cannot_inject_headers() -> None:
     assert response.body == b"raw bytes"
     assert response.headers["content-type"] == "application/octet-stream"
     assert "x-injected" not in response.headers
+    document = document_file_response(DocumentFile(data=b"raw bytes", name="report.txt\r\nX-Injected: true"), download=True)
+    assert document.headers["content-type"] == "application/octet-stream"
+    assert "\r" not in document.headers["content-disposition"]
+    assert "\n" not in document.headers["content-disposition"]
 
 
 @pytest.mark.parametrize(

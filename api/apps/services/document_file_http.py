@@ -1,13 +1,16 @@
 """Safe binary responses shared by REST and the generated-file compatibility route."""
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import PurePosixPath
 from urllib.parse import quote
 
 from fastapi import Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException
 
 from api.db.services.document_file_service import DocumentDownloadDenied, DocumentFile, DocumentFileStorageError, DocumentFileUnavailable
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
@@ -29,6 +32,12 @@ class DocumentFileRoute(APIRoute):
             except DocumentFileStorageError:
                 logger.error("Document storage read failed.")
                 response = JSONResponse(status_code=500, content={"code": 500, "message": "Document could not be read.", "data": None})
+            except RequestValidationError:
+                response = JSONResponse(status_code=422, content={"code": 101, "message": "Invalid document request.", "data": None})
+            except HTTPException as exc:
+                if exc.status_code not in {401, 403}:
+                    raise
+                response = JSONResponse(status_code=exc.status_code, content={"code": 401 if exc.status_code == 401 else 109, "message": "Unauthorized", "data": None}, headers=exc.headers)
             response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
             return response
 
@@ -38,7 +47,7 @@ class DocumentFileRoute(APIRoute):
 def document_file_response(file: DocumentFile, *, download: bool = False) -> Response:
     ext = PurePosixPath(file.name.lower()).suffix.removeprefix(".")
     fallback = "image" if file.visual else "application"
-    content_type = CONTENT_TYPE_MAP.get(ext, f"{fallback}/{ext}") if ext else "application/octet-stream"
+    content_type = CONTENT_TYPE_MAP.get(ext, f"{fallback}/{ext}") if re.fullmatch(r"[a-z0-9]{1,32}", ext) else "application/octet-stream"
     response = Response(content=file.data, media_type=content_type)
     apply_safe_file_response_headers(response, content_type, ext)
     if download or response.headers.get("Content-Disposition") == "attachment":

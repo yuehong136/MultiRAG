@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import Document, Knowledgebase, UserTenant
+from api.db.db_models import Document, Knowledgebase, Tenant, UserTenant
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.user_service import UserTenantService
 from api.identity.principal import Principal
@@ -52,17 +52,23 @@ async def read_document_file(db: AsyncSession, principal: Principal, doc_id: str
         await db.execute(
             select(Document, Knowledgebase, UserTenant.role)
             .join(Knowledgebase, Knowledgebase.id == Document.kb_id)
+            .join(Tenant, Tenant.id == Knowledgebase.tenant_id)
             .join(UserTenant, UserTenant.tenant_id == Knowledgebase.tenant_id)
-            .where(Document.id == doc_id, Document.status == "1", Knowledgebase.status == "1", UserTenant.user_id == principal.platform_user_id, UserTenant.status == "1")
+            .where(Document.id == doc_id, Document.status == "1", Knowledgebase.status == "1", Tenant.status == "1", UserTenant.user_id == principal.platform_user_id, UserTenant.status == "1")
             .limit(1)
         )
     ).first()
     if row is None or not UserTenantService.can_access_tenant_resources(row[2]):
         raise DocumentFileUnavailable()
-    doc, _kb, role = row
+    doc, kb, role = row
     if download and not UserTenantService.can_download(role):
         raise DocumentDownloadDenied()
-    namespace, key = await db.run_sync(lambda session: File2DocumentService.get_storage_address(session, doc_id=doc_id))  # TODO(async-phase4): legacy storage mapping uses only this request session.
+    try:
+        # TODO(async-phase4): reuse the SDK's provenance checks within this
+        # request session, never pass a session into the storage worker.
+        namespace, key = await db.run_sync(lambda session: File2DocumentService.get_authorized_document_storage_address(session, doc_id, kb.tenant_id))
+    except PermissionError:
+        raise DocumentFileUnavailable() from None
     data = await asyncio.to_thread(_read_object, namespace, key)
     return DocumentFile(data=data, name=doc.name, visual=doc.type == "visual")
 
