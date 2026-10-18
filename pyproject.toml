@@ -11,7 +11,7 @@ dependencies = [
     "akshare>=1.15.78,<2.0.0",
     "alembic>=1.13.2",
     "anthropic==0.76.0",
-    "arxiv==4.0.0",
+    "arxiv==4.0.1",
     "asana>=5.2.2",
     "atlassian-python-api==4.0.7",
     # discord-py 在 discord/player.py 模块加载期无条件 import audioop；audioop 已被
