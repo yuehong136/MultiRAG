@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -49,7 +50,7 @@ func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, 
 	if len(texts) == 0 {
 		return [][]float64{}, nil
 	}
-	if name == nil || *name == "" || config == nil || config.APIKey == nil || *config.APIKey == "" {
+	if name == nil || strings.TrimSpace(*name) == "" || config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
 		return nil, fmt.Errorf("embedding model name and API key are required")
 	}
 	if suffix == "" {
@@ -76,19 +77,26 @@ func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, 
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+*config.APIKey)
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*config.APIKey))
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("embedding request: %w", err)
 		}
 		var result struct {
 			Data []struct {
-				Index     *int      `json:"index"`
-				Embedding []float64 `json:"embedding"`
+				Index     *int       `json:"index"`
+				Embedding []*float64 `json:"embedding"`
 			} `json:"data"`
 			Error json.RawMessage `json:"error"`
 		}
-		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		decoder := json.NewDecoder(resp.Body)
+		decodeErr := decoder.Decode(&result)
+		if decodeErr == nil {
+			var trailing any
+			if err := decoder.Decode(&trailing); err != io.EOF {
+				decodeErr = fmt.Errorf("embedding response has trailing content")
+			}
+		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("embedding request failed (HTTP %d)", resp.StatusCode)
@@ -117,14 +125,19 @@ func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, 
 			if len(item.Embedding) != dimension {
 				return nil, fmt.Errorf("inconsistent embedding dimensions")
 			}
-			for _, value := range item.Embedding {
-				if math.IsInf(value, 0) || math.IsNaN(value) {
+			vector := make([]float64, len(item.Embedding))
+			for i, value := range item.Embedding {
+				if value == nil || math.IsInf(*value, 0) || math.IsNaN(*value) {
 					return nil, fmt.Errorf("invalid embedding value")
 				}
+				vector[i] = *value
 			}
-			batch[*item.Index] = item.Embedding
+			batch[*item.Index] = vector
 		}
 		embeddings = append(embeddings, batch...)
+	}
+	if err := requestContext(config).Err(); err != nil {
+		return nil, err
 	}
 	return embeddings, nil
 }

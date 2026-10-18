@@ -49,6 +49,8 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewNVIDIAModel(baseURL, urlSuffix), nil
 	case "huggingface":
 		return NewHuggingFaceModel(baseURL, urlSuffix), nil
+	case "baidu":
+		return NewBaiduModel(baseURL, urlSuffix), nil
 	case "openai":
 		return NewOpenAIModel(baseURL, urlSuffix), nil
 	case "openai-api-compatible":
