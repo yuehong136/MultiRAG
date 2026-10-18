@@ -133,6 +133,7 @@ def test_file_link_authorization_before_background_side_effects(release_api: dic
             "shared_doc",
             "shared_private_doc",
             "task",
+            "sibling_task",
         )
     }
     files = [ids[name] for name in ("root", "nested", "leaf", "foreign_leaf", "foreign_root", "owned_child", "shared_file")]
@@ -140,7 +141,7 @@ def test_file_link_authorization_before_background_side_effects(release_api: dic
     bucket = f"file-auth-{uuid4().hex}"
     queue = f"file-auth:{uuid4().hex}:queue"
     cancel_key = f"{ids['task']}-cancel"
-    evidence: dict[str, Any] = {"database": env["engine"].url.database, "bucket": bucket, "queue": queue, "cancel_key": cancel_key, "cases": []}
+    evidence: dict[str, Any] = {"ids": ids, "database": env["engine"].url.database, "bucket": bucket, "queue": queue, "cancel_key": cancel_key, "cases": []}
     report = request.config.getoption("--test-report-dir")
     report_path = (Path(report) if report else tmp_path) / "file-link-authorization.json"
     cfg = CONFIGS["minio"]
@@ -229,15 +230,17 @@ def test_file_link_authorization_before_background_side_effects(release_api: dic
 
     def cleanup_sql() -> None:
         with Session(env["engine"]) as db:
-            db.execute(sa.delete(Task).where(Task.id == ids["task"]))
+            db.execute(sa.delete(Task).where(Task.id.in_([ids["task"], ids["sibling_task"]])))
             db.execute(sa.delete(File2Document).where(File2Document.file_id.in_(files)))
             db.execute(sa.delete(Document).where(Document.kb_id.in_(datasets)))
             db.execute(sa.delete(File).where(File.id.in_(files)))
             db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id.in_(datasets)))
             db.execute(sa.delete(UserTenant).where(UserTenant.user_id == owner, UserTenant.tenant_id == other))
             db.commit()
-        assert all(not rows for rows in sql_snapshot().values())
-        evidence["sql_rows_removed"] = True
+        remaining = sql_snapshot()
+        assert remaining[Task.__tablename__] == baseline_tasks
+        assert all(not rows for table, rows in remaining.items() if table != Task.__tablename__)
+        evidence.update(sql_rows_removed=True, baseline_task_rows_preserved=True, task_rows_after_cleanup=remaining[Task.__tablename__])
 
     def cleanup_storage() -> None:
         if storage_client.bucket_exists(bucket):
@@ -253,9 +256,13 @@ def test_file_link_authorization_before_background_side_effects(release_api: dic
         evidence["redis_removed"] = True
 
     def save_evidence() -> None:
-        report_path.write_text(json.dumps(evidence, indent=2) + "\n")
+        report_path.write_text(json.dumps(evidence, indent=2, default=str) + "\n")
         report_path.chmod(0o600)
 
+    # The suite intentionally reuses its scratch DB. Preserve every pre-existing
+    # task, including full physical rows/xmin, while cleaning only our IDs.
+    baseline_tasks = sql_snapshot()[Task.__tablename__]
+    evidence["baseline_task_rows"] = baseline_tasks
     with ExitStack() as cleanup:
         cleanup.callback(save_evidence)
         cleanup.callback(cleanup_storage)
@@ -285,6 +292,7 @@ def test_file_link_authorization_before_background_side_effects(release_api: dic
                 )
                 db.add(File2Document(id=uuid4().hex, file_id=ids[file], document_id=ids[doc]))
             db.add(Task(id=ids["task"], doc_id=ids["old_doc"], progress=0.25))
+            db.add(Task(id=ids["sibling_task"], doc_id=ids["shared_doc"], progress=0.5))
             db.commit()
         storage.put(ids["nested"], ids["leaf"], b"owned source bytes")
         storage.put(ids["private"], "old-thumbnail", b"protected thumbnail")
@@ -335,7 +343,10 @@ def test_file_link_authorization_before_background_side_effects(release_api: dic
         allow([ids["leaf"]], [ids["target"], ids["extra"]], "replace")
         replaced = snapshot()
         assert len(replaced["sql"][Document.__tablename__]) == len(replaced["sql"][File2Document.__tablename__]) == 5
-        assert not replaced["sql"][Task.__tablename__]
+        expected_tasks = [row for row in before_replace["sql"][Task.__tablename__] if row["id"] != ids["task"]]
+        assert replaced["sql"][Task.__tablename__] == expected_tasks
+        assert any(row["id"] == ids["sibling_task"] for row in expected_tasks)
+        evidence.update(task_rows_before_replace=before_replace["sql"][Task.__tablename__], task_rows_after_replace=replaced["sql"][Task.__tablename__], only_removed_document_task_deleted=True)
         assert all(row["id"] != ids["old_doc"] for row in replaced["sql"][Document.__tablename__])
         for table in (Document.__tablename__, File2Document.__tablename__):
             assert all(row in before_replace["sql"][table] for row in replaced["sql"][table])
