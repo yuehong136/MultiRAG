@@ -66,7 +66,7 @@ func TestZhipuRerankInvalidResponsesHTTP(t *testing.T) {
 			defer server.Close()
 			driver := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "rerank"})
 			key, name := "fixture", "glm-rerank"
-			scores, err := driver.Rerank(&name, "q", []string{"one", "two"}, &APIConfig{APIKey: &key})
+			scores, err := NewRerankModel(driver, &name, &APIConfig{APIKey: &key}).Rerank("q", []string{"one", "two"})
 			if err == nil || scores != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal("invalid response yielded scores or exposed provider body", scores, err)
 			}
@@ -80,7 +80,7 @@ func TestZhipuRerankEmptyInputAndPreflight(t *testing.T) {
 	defer server.Close()
 	driver := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "rerank"})
 	key, name, unknown := "fixture", "glm-rerank", "missing"
-	if scores, err := driver.Rerank(nil, "", nil, nil); err != nil || scores == nil || len(scores) != 0 || calls.Load() != 0 {
+	if scores, err := NewRerankModel(driver, nil, nil).Rerank("", nil); err != nil || scores == nil || len(scores) != 0 || calls.Load() != 0 {
 		t.Fatal(scores, err, calls.Load())
 	}
 	for _, test := range []struct {
@@ -89,12 +89,12 @@ func TestZhipuRerankEmptyInputAndPreflight(t *testing.T) {
 	}{
 		{nil, &APIConfig{APIKey: &key}}, {stringPtr(" "), &APIConfig{APIKey: &key}}, {&name, nil}, {&name, &APIConfig{}}, {&name, &APIConfig{APIKey: stringPtr(" ")}}, {&name, &APIConfig{APIKey: &key, Region: &unknown}},
 	} {
-		if scores, err := driver.Rerank(test.model, "q", []string{"d"}, test.api); err == nil || scores != nil {
+		if scores, err := NewRerankModel(driver, test.model, test.api).Rerank("q", []string{"d"}); err == nil || scores != nil {
 			t.Fatal(scores, err)
 		}
 	}
 	for _, d := range []*ZhipuAIModel{NewZhipuAIModel(nil, URLSuffix{Rerank: "rerank"}), NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{})} {
-		if _, err := d.Rerank(&name, "q", []string{"d"}, &APIConfig{APIKey: &key}); err == nil {
+		if _, err := NewRerankModel(d, &name, &APIConfig{APIKey: &key}).Rerank("q", []string{"d"}); err == nil {
 			t.Fatal("missing URL/suffix accepted")
 		}
 	}
@@ -132,7 +132,7 @@ func TestZhipuRerankCancelHTTP(t *testing.T) {
 			}
 			driver := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Rerank: "rerank"})
 			key, name := "fixture", "glm-rerank"
-			scores, err := driver.Rerank(&name, "q", []string{"d"}, &APIConfig{APIKey: &key, Context: ctx})
+			scores, err := NewRerankModel(driver, &name, &APIConfig{APIKey: &key, Context: ctx}).Rerank("q", []string{"d"})
 			if !errors.Is(err, context.Canceled) || scores != nil {
 				t.Fatal(scores, err)
 			}

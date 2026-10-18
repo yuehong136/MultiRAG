@@ -277,7 +277,7 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	if err := driver.ChatStreamlyWithSender(nil, nil, api, nil, nil); err == nil {
 		t.Fatal("nil inputs accepted")
 	}
-	if _, err := driver.Rerank(&name, "q", []string{"d"}, api); err == nil {
+	if _, err := NewRerankModel(driver, &name, api).Rerank("q", []string{"d"}); err == nil {
 		t.Fatal("rerank fabricated")
 	}
 	if _, err := driver.Balance(api); err == nil {

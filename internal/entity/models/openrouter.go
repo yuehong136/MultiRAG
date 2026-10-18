@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"strings"
 )
 
 // OpenRouterModel uses the shared chat transport and OpenRouter reasoning fields.
@@ -47,50 +46,8 @@ func (o *OpenRouterModel) Encode(name *string, texts []string, api *APIConfig, c
 	return encodeHTTP(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local)
 }
 
-func (o *OpenRouterModel) Rerank(name *string, query string, texts []string, api *APIConfig) ([]float64, error) {
-	if len(texts) == 0 {
-		return []float64{}, nil
-	}
-	if name == nil || strings.TrimSpace(*name) == "" {
-		return nil, fmt.Errorf("openrouter: rerank model name is required")
-	}
-	body := map[string]any{"model": *name, "query": query, "documents": texts, "top_n": len(texts)}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
-	response, err := o.request(http.MethodPost, o.URLSuffix.Rerank, local, body)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	var result struct {
-		Results []struct {
-			Index *int     `json:"index"`
-			Score *float64 `json:"relevance_score"`
-		} `json:"results"`
-		Error json.RawMessage `json:"error"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("openrouter: decode rerank: %w", err)
-	}
-	if len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("openrouter: rerank provider error")
-	}
-	if len(result.Results) != len(texts) {
-		return nil, fmt.Errorf("openrouter: rerank result count mismatch")
-	}
-	scores := make([]float64, len(texts))
-	seen := make([]bool, len(texts))
-	for _, item := range result.Results {
-		if item.Index == nil || *item.Index < 0 || *item.Index >= len(texts) || seen[*item.Index] || item.Score == nil || math.IsNaN(*item.Score) || math.IsInf(*item.Score, 0) {
-			return nil, fmt.Errorf("openrouter: missing, duplicate or invalid rerank index/score")
-		}
-		seen[*item.Index] = true
-		scores[*item.Index] = *item.Score
-	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	return scores, nil
+func (o *OpenRouterModel) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return rerankHTTP(o.httpClient, o.BaseURL, o.URLSuffix.Rerank, name, query, texts, api, rerankConfig, map[string]any{"return_documents": nil})
 }
 
 func (o *OpenRouterModel) Balance(api *APIConfig) (map[string]interface{}, error) {

@@ -94,7 +94,7 @@ func TestSiliconFlowMalformedEmbeddingAndRerank(t *testing.T) {
 			if test.path == "embeddings" {
 				_, err = driver.Encode(&name, []string{"q"}, config, nil)
 			} else {
-				_, err = driver.Rerank(&name, "q", []string{"doc"}, config)
+				_, err = NewRerankModel(driver, &name, config).Rerank("q", []string{"doc"})
 			}
 			if err == nil {
 				t.Fatal("malformed response accepted")
@@ -145,7 +145,7 @@ func TestSiliconFlowRejectsDuplicateIndexesAndDimensions(t *testing.T) {
 			if test.path == "embeddings" {
 				_, err = driver.Encode(&name, []string{"a", "b"}, config, nil)
 			} else {
-				_, err = driver.Rerank(&name, "q", []string{"a", "b"}, config)
+				_, err = NewRerankModel(driver, &name, config).Rerank("q", []string{"a", "b"})
 			}
 			if err == nil {
 				t.Fatal("ambiguous provider results accepted")

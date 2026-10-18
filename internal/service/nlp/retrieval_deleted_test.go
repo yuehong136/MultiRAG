@@ -166,13 +166,13 @@ type retrievalRerankDriver struct {
 	calls [][]string
 }
 
-func (d *retrievalRerankDriver) Rerank(_ *string, _ string, texts []string, _ *models.APIConfig) ([]float64, error) {
+func (d *retrievalRerankDriver) Rerank(_ *string, _ string, texts []string, _ *models.APIConfig, _ *models.RerankConfig) (*models.RerankResponse, error) {
 	d.calls = append(d.calls, append([]string(nil), texts...))
-	scores := make([]float64, len(texts))
-	for i := range scores {
-		scores[i] = 1 - float64(i)/10
+	response := &models.RerankResponse{Data: make([]models.RerankResult, len(texts))}
+	for i := range response.Data {
+		response.Data[i] = models.RerankResult{Index: i, RelevanceScore: 1 - float64(i)/10}
 	}
-	return scores, nil
+	return response, nil
 }
 
 func TestRetrievalPrunesBeforeRerankWithoutChangingWindowOrCounts(t *testing.T) {

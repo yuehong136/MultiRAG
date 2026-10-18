@@ -403,6 +403,16 @@ func (l *Lexer) lookupIdent(ident string) Token {
 		return Token{Type: TokenVLM, Value: ident}
 	case "RERANK":
 		return Token{Type: TokenReranker, Value: ident}
+	case "EMBED":
+		return Token{Type: TokenEmbed, Value: ident}
+	case "TEXT":
+		return Token{Type: TokenText, Value: ident}
+	case "QUERY":
+		return Token{Type: TokenQuery, Value: ident}
+	case "TOP":
+		return Token{Type: TokenTop, Value: ident}
+	case "DIMENSION":
+		return Token{Type: TokenDimension, Value: ident}
 	case "OCR":
 		return Token{Type: TokenOCR, Value: ident}
 	case "REGION":

@@ -111,7 +111,7 @@ func TestNVIDIAThinkingAndUnsupportedCapabilities(t *testing.T) {
 	name := "m"
 	for _, call := range []func() error{
 		func() error { _, e := driver.Encode(&name, []string{"q"}, nil, nil); return e },
-		func() error { _, e := driver.Rerank(&name, "q", []string{"d"}, nil); return e },
+		func() error { _, e := NewRerankModel(driver, &name, nil).Rerank("q", []string{"d"}); return e },
 		func() error { _, e := driver.Balance(nil); return e },
 	} {
 		if err := call(); err == nil {

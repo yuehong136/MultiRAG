@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -572,84 +571,7 @@ func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
 	return nil
 }
 
-type giteeRerankRequest struct {
-	Model           string   `json:"model"`
-	Query           string   `json:"query"`
-	Documents       []string `json:"documents"`
-	TopN            int      `json:"top_n"`
-	ReturnDocuments bool     `json:"return_documents"`
-}
-
-type giteeRerankResponse struct {
-	Results []struct {
-		Index *int     `json:"index"`
-		Score *float64 `json:"relevance_score"`
-	} `json:"results"`
-	Error json.RawMessage `json:"error"`
-}
-
-// Rerank returns exactly one finite score per document, in the original input order.
-func (m *GiteeModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
-	if len(texts) == 0 {
-		return []float64{}, nil
-	}
-	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
-		return nil, fmt.Errorf("gitee: rerank API key is required")
-	}
-	if modelName == nil || strings.TrimSpace(*modelName) == "" {
-		return nil, fmt.Errorf("gitee: rerank model name is required")
-	}
-	if m.URLSuffix.Rerank == "" {
-		return nil, fmt.Errorf("gitee: rerank endpoint is not configured")
-	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
-	if err != nil {
-		return nil, err
-	}
-	body, err := json.Marshal(giteeRerankRequest{Model: *modelName, Query: query, Documents: texts, TopN: len(texts), ReturnDocuments: false})
-	if err != nil {
-		return nil, err
-	}
-	local, cancel := modelCallConfig(apiConfig)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestContext(local), http.MethodPost, joinModelURL(baseURL, m.URLSuffix.Rerank), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("gitee rerank request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gitee rerank failed (HTTP %d)", resp.StatusCode)
-	}
-	var result giteeRerankResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode gitee rerank: %w", err)
-	}
-	if len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("gitee rerank provider returned an error")
-	}
-	if len(result.Results) != len(texts) {
-		return nil, fmt.Errorf("gitee rerank result count mismatch")
-	}
-	scores := make([]float64, len(texts))
-	seen := make([]bool, len(texts))
-	for _, item := range result.Results {
-		if item.Index == nil || *item.Index < 0 || *item.Index >= len(texts) || seen[*item.Index] || item.Score == nil {
-			return nil, fmt.Errorf("gitee rerank has missing, duplicate or invalid result index/score")
-		}
-		if math.IsNaN(*item.Score) || math.IsInf(*item.Score, 0) {
-			return nil, fmt.Errorf("gitee rerank score must be finite")
-		}
-		seen[*item.Index] = true
-		scores[*item.Index] = *item.Score
-	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	return scores, nil
+// Rerank returns validated indexed results, ordered by relevance.
+func (m *GiteeModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return rerankHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Rerank, modelName, query, texts, apiConfig, rerankConfig, nil)
 }

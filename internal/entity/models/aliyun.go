@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -334,86 +333,7 @@ func (m *AliyunModel) CheckConnection(apiConfig *APIConfig) error {
 	return err
 }
 
-type aliyunRerankRequest struct {
-	Model           string   `json:"model"`
-	Query           string   `json:"query"`
-	Documents       []string `json:"documents"`
-	TopN            int      `json:"top_n"`
-	ReturnDocuments bool     `json:"return_documents"`
-}
-
-type aliyunRerankResponse struct {
-	Results []struct {
-		Index *int     `json:"index"`
-		Score *float64 `json:"relevance_score"`
-	} `json:"results"`
-	Error json.RawMessage `json:"error"`
-	Code  string          `json:"code"`
-}
-
-// Rerank returns exactly one finite score per document, in the original input order.
-func (m *AliyunModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
-	if len(texts) == 0 {
-		return []float64{}, nil
-	}
-	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
-		return nil, errors.New("aliyun: rerank API key is required")
-	}
-	if modelName == nil || strings.TrimSpace(*modelName) == "" {
-		return nil, errors.New("aliyun: rerank model name is required")
-	}
-	endpoint, _, err := m.endpoint(apiConfig, m.URLSuffix.Rerank)
-	if err != nil {
-		return nil, err
-	}
-	body, err := json.Marshal(aliyunRerankRequest{Model: *modelName, Query: query, Documents: texts, TopN: len(texts), ReturnDocuments: false})
-	if err != nil {
-		return nil, err
-	}
-	local, cancel := modelCallConfig(apiConfig)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestContext(local), http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("aliyun rerank request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("aliyun rerank failed (HTTP %d)", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read aliyun rerank: %w", err)
-	}
-	var result aliyunRerankResponse
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("decode aliyun rerank: %w", err)
-	}
-	if result.Code != "" || len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, errors.New("aliyun rerank provider returned an error")
-	}
-	if len(result.Results) != len(texts) {
-		return nil, errors.New("aliyun rerank result count mismatch")
-	}
-	scores := make([]float64, len(texts))
-	seen := make([]bool, len(texts))
-	for _, item := range result.Results {
-		if item.Index == nil || *item.Index < 0 || *item.Index >= len(texts) || seen[*item.Index] || item.Score == nil {
-			return nil, errors.New("aliyun rerank has missing, duplicate or invalid result index/score")
-		}
-		if math.IsNaN(*item.Score) || math.IsInf(*item.Score, 0) {
-			return nil, errors.New("aliyun rerank score must be finite")
-		}
-		seen[*item.Index] = true
-		scores[*item.Index] = *item.Score
-	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	return scores, nil
+// Rerank returns validated indexed results, ordered by relevance.
+func (m *AliyunModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return rerankHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Rerank, modelName, query, texts, apiConfig, rerankConfig, nil)
 }

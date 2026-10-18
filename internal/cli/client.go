@@ -243,6 +243,10 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.EnableOrDisableModel(cmd, "disable")
 	case "add_custom_model":
 		return c.AddCustomModel(cmd)
+	case "embed_user_text":
+		return c.ModelInference(cmd, false)
+	case "rerank_user_document":
+		return c.ModelInference(cmd, true)
 	case "chat_to_model":
 		return c.ChatToModel(cmd)
 	case "use_model":

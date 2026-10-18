@@ -274,7 +274,7 @@ func (l *LMStudioModel) ListModels(config *APIConfig) ([]string, error) {
 func (l *LMStudioModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
 	return nil, fmt.Errorf("lmstudio: embedding is not implemented")
 }
-func (l *LMStudioModel) Rerank(name *string, query string, texts []string, api *APIConfig) ([]float64, error) {
+func (l *LMStudioModel) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
 	return nil, fmt.Errorf("lmstudio: rerank is not implemented")
 }
 func (l *LMStudioModel) Balance(api *APIConfig) (map[string]interface{}, error) {

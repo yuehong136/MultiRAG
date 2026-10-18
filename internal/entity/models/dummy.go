@@ -80,7 +80,7 @@ func (z *DummyModel) CheckConnection(apiConfig *APIConfig) error {
 	return fmt.Errorf("connection check is not implemented for %s", z.Name())
 }
 
-func (m *DummyModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
+func (m *DummyModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
 }
 

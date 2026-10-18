@@ -302,7 +302,7 @@ func (d *openAIChatDriver) ListModels(config *APIConfig) ([]string, error) {
 func (d *openAIChatDriver) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
 	return nil, fmt.Errorf("openai-compatible: embedding is not implemented")
 }
-func (d *openAIChatDriver) Rerank(name *string, query string, texts []string, api *APIConfig) ([]float64, error) {
+func (d *openAIChatDriver) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
 	return nil, fmt.Errorf("openai-compatible: rerank is not implemented")
 }
 func (d *openAIChatDriver) Balance(api *APIConfig) (map[string]interface{}, error) {

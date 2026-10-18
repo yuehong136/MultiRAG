@@ -310,7 +310,7 @@ func (m *MinimaxModel) CheckConnection(apiConfig *APIConfig) error {
 	return checkBearerEndpointConnection(m.httpClient, m.BaseURL, m.URLSuffix.Files, apiConfig, m.Name())
 }
 
-func (m *MinimaxModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
+func (m *MinimaxModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
 }
 

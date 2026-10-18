@@ -19,7 +19,7 @@ func TestZhipuRerankConfiguredInstancesHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := manager.FindProvider("ZHIPU-AI")
-	model, err := manager.GetModelByName("ZHIPU-AI", "glm-rerank")
+	model, err := manager.GetModelByName("ZHIPU-AI", "rerank")
 	if provider == nil || provider.URLSuffix.Rerank != "rerank" || err != nil || !model.ModelTypeMap["rerank"] {
 		t.Fatal("existing catalog contract", model, err)
 	}
@@ -39,7 +39,7 @@ func TestZhipuRerankConfiguredInstancesHTTP(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if body["model"] != "glm-rerank" || body["top_n"] != float64(2) || body["return_documents"] != false {
+				if body["model"] != "rerank" || body["top_n"] != float64(2) || body["return_documents"] != false {
 					t.Error("rerank payload lost")
 				}
 				fmt.Fprintf(w, `{"results":[{"index":1,"relevance_score":%g},{"index":0,"relevance_score":0}]}`, score)
@@ -50,7 +50,7 @@ func TestZhipuRerankConfiguredInstancesHTTP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			name := "glm-rerank"
+			name := "rerank"
 			bound := models.NewRerankModel(driver, &name, api)
 			scores, err := bound.Rerank("q", []string{"zero", "one"})
 			if err != nil || !reflect.DeepEqual(scores, []float64{0, score}) {

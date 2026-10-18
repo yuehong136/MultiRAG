@@ -25,7 +25,7 @@ type ModelDriver interface {
 	ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
 	// Encode encodes a list of texts into embeddings with the selected configuration.
 	Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error)
-	Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error)
+	Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error)
 	// ListModels lists models supported by the configured provider instance.
 	ListModels(apiConfig *APIConfig) ([]string, error)
 
@@ -74,4 +74,22 @@ type APIConfig struct {
 }
 
 // EmbeddingConfig distinguishes retrieval queries from stored documents.
-type EmbeddingConfig struct{ Query bool }
+type EmbeddingConfig struct {
+	Query     bool
+	Dimension int
+}
+type RerankConfig struct{ TopN int }
+type EmbeddingResult struct {
+	Index     int `json:"index"`
+	Dimension int `json:"dimension"`
+}
+type EmbeddingResponse struct {
+	Data []EmbeddingResult `json:"data"`
+}
+type RerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+}
+type RerankResponse struct {
+	Data []RerankResult `json:"data"`
+}

@@ -150,6 +150,11 @@ const (
 	TokenWarn
 	TokenError
 	TokenFatal
+	TokenEmbed
+	TokenText
+	TokenQuery
+	TokenTop
+	TokenDimension
 	TokenPanic
 
 	// Literals

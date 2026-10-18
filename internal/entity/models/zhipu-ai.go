@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -467,7 +466,19 @@ func (z *ZhipuAIModel) ChatStreamlyWithMessages(name string, messages []Message,
 
 // Encode encodes a list of texts into embeddings
 func (z *ZhipuAIModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	if apiConfig == nil || apiConfig.APIKey == nil {
+	if len(texts) == 0 {
+		return [][]float64{}, nil
+	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, fmt.Errorf("model name required")
+	}
+	if embeddingConfig != nil && embeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("dimension must be non-negative")
+	}
+	local, cancel := modelCallConfig(apiConfig)
+	defer cancel()
+	apiConfig = local
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("API key is nil")
 	}
 	baseURL, err := z.resolveBaseURL(apiConfig.Region)
@@ -484,12 +495,15 @@ func (z *ZhipuAIModel) Encode(modelName *string, texts []string, apiConfig *APIC
 			"input": text,
 		}
 
+		if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
+			reqBody["dimensions"] = embeddingConfig.Dimension
+		}
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+		req, err := http.NewRequestWithContext(requestContext(apiConfig), "POST", url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -552,6 +566,9 @@ func (z *ZhipuAIModel) Encode(modelName *string, texts []string, apiConfig *APIC
 	if err := ValidateEmbeddings(embeddings, len(texts)); err != nil {
 		return nil, err
 	}
+	if embeddingConfig != nil && embeddingConfig.Dimension > 0 && len(embeddings[0]) != embeddingConfig.Dimension {
+		return nil, fmt.Errorf("embedding dimension does not match request")
+	}
 	return embeddings, nil
 }
 
@@ -567,84 +584,7 @@ func (z *ZhipuAIModel) CheckConnection(apiConfig *APIConfig) error {
 	return checkBearerEndpointConnection(z.httpClient, z.BaseURL, z.URLSuffix.Files, apiConfig, z.Name())
 }
 
-type zhipuRerankRequest struct {
-	Model           string   `json:"model"`
-	Query           string   `json:"query"`
-	Documents       []string `json:"documents"`
-	TopN            int      `json:"top_n"`
-	ReturnDocuments bool     `json:"return_documents"`
-}
-
-type zhipuRerankResponse struct {
-	Results []struct {
-		Index *int     `json:"index"`
-		Score *float64 `json:"relevance_score"`
-	} `json:"results"`
-	Error json.RawMessage `json:"error"`
-}
-
-// Rerank returns exactly one finite score per document, in the original input order.
-func (z *ZhipuAIModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
-	if len(texts) == 0 {
-		return []float64{}, nil
-	}
-	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
-		return nil, fmt.Errorf("zhipu: rerank API key is required")
-	}
-	if modelName == nil || strings.TrimSpace(*modelName) == "" {
-		return nil, fmt.Errorf("zhipu: rerank model name is required")
-	}
-	if z.URLSuffix.Rerank == "" {
-		return nil, fmt.Errorf("zhipu: rerank endpoint is not configured")
-	}
-	baseURL, err := resolveModelBaseURL(z.BaseURL, apiConfig.Region)
-	if err != nil {
-		return nil, err
-	}
-	body, err := json.Marshal(zhipuRerankRequest{Model: *modelName, Query: query, Documents: texts, TopN: len(texts), ReturnDocuments: false})
-	if err != nil {
-		return nil, err
-	}
-	local, cancel := modelCallConfig(apiConfig)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestContext(local), http.MethodPost, joinModelURL(baseURL, z.URLSuffix.Rerank), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
-	resp, err := z.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("zhipu rerank request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("zhipu rerank failed (HTTP %d)", resp.StatusCode)
-	}
-	var result zhipuRerankResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode zhipu rerank: %w", err)
-	}
-	if len(result.Error) > 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("zhipu rerank provider returned an error")
-	}
-	if len(result.Results) != len(texts) {
-		return nil, fmt.Errorf("zhipu rerank result count mismatch")
-	}
-	scores := make([]float64, len(texts))
-	seen := make([]bool, len(texts))
-	for _, item := range result.Results {
-		if item.Index == nil || *item.Index < 0 || *item.Index >= len(texts) || seen[*item.Index] || item.Score == nil {
-			return nil, fmt.Errorf("zhipu rerank has missing, duplicate or invalid result index/score")
-		}
-		if math.IsNaN(*item.Score) || math.IsInf(*item.Score, 0) {
-			return nil, fmt.Errorf("zhipu rerank score must be finite")
-		}
-		seen[*item.Index] = true
-		scores[*item.Index] = *item.Score
-	}
-	if err := requestContext(local).Err(); err != nil {
-		return nil, err
-	}
-	return scores, nil
+// Rerank returns validated indexed results, ordered by relevance.
+func (z *ZhipuAIModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
+	return rerankHTTP(z.httpClient, z.BaseURL, z.URLSuffix.Rerank, modelName, query, texts, apiConfig, rerankConfig, nil)
 }

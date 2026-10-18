@@ -38,7 +38,18 @@ func NewRerankModel(driver ModelDriver, name *string, config *APIConfig) *Rerank
 	return &RerankModel{driver, name, config}
 }
 func (m *RerankModel) Rerank(query string, texts []string) ([]float64, error) {
-	return m.ModelDriver.Rerank(m.ModelName, query, texts, m.APIConfig)
+	response, err := m.ModelDriver.Rerank(m.ModelName, query, texts, m.APIConfig, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateRerankResponse(response, len(texts), nil); err != nil {
+		return nil, err
+	}
+	scores := make([]float64, len(texts))
+	for _, result := range response.Data {
+		scores[result.Index] = result.RelevanceScore
+	}
+	return scores, nil
 }
 
 type ChatModel struct {

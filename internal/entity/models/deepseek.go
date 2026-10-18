@@ -522,6 +522,6 @@ func resolveModelBaseURL(baseURLs map[string]string, region *string) (string, er
 	return baseURL, nil
 }
 
-func (m *DeepSeekModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig) ([]float64, error) {
+func (m *DeepSeekModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
 	return nil, fmt.Errorf("%s: rerank is not supported", m.Name())
 }
