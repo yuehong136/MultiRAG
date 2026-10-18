@@ -1,5 +1,18 @@
 # 数据连接器
 
+## S3 系列增量
+
+S3、R2、Google Cloud Storage、OCI 和 S3-compatible Blob 同步先完整列出配置前缀内
+符合扩展名/图片设置的对象，再按 ETag 指纹决定是否下载正文。指纹存入现有
+`Document.content_hash`；首次从正文哈希迁移时会重新下载一次，后续未变化对象不调用
+GetObject。`reindex=1` 强制重新下载。缺少 ETag 时保守下载，其他连接器和本地上传继续
+使用正文哈希。ETag 是源版本标记，不作为正文 MD5 校验。
+
+下载后使用该次 GET 返回的 ETag，避免 LIST 与 GET 之间对象更新时保存旧指纹。
+枚举和下载错误使本轮失败，保留原检查点，不执行删除核对；显式尺寸限制可跳过正文，
+对象仍在完整保留清单中。开启删除同步时复用同一份完整枚举，未变化对象同样保留。
+新文档 ID 使用知识库和连接器命名空间，已有历史 ID 仅在本知识库、本连接器来源内复用。
+
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、

@@ -46,11 +46,11 @@ def test_blob_inventory_exhausts_pages_preserves_scope_and_existing_large_files(
     connector.size_threshold = 5
     downloads: list[str] = []
 
-    def download(_client: Any, _bucket: str, key: str, _threshold: int | None) -> bytes:
+    def download(_client: Any, _bucket: str, key: str, _threshold: int | None) -> tuple[bytes, dict[str, Any]]:
         downloads.append(key)
-        return b"data"
+        return b"data", {}
 
-    monkeypatch.setattr(blob_connector, "download_object", download)
+    monkeypatch.setattr(blob_connector, "download_object_with_metadata", download)
     docs = [doc for batch in connector.load_from_state() for doc in batch]
     inventory = [doc.id for batch in connector.retrieve_all_slim_docs_perm_sync() for doc in batch]
 
@@ -71,8 +71,9 @@ def test_blob_inventory_does_not_treat_download_failure_as_deletion(monkeypatch:
     def denied(*_args: Any) -> bytes:
         raise PermissionError("download denied")
 
-    monkeypatch.setattr(blob_connector, "download_object", denied)
-    assert list(connector.load_from_state()) == []
+    monkeypatch.setattr(blob_connector, "download_object_with_metadata", denied)
+    with pytest.raises(PermissionError, match="download denied"):
+        list(connector.load_from_state())
     assert [doc.id for batch in connector.retrieve_all_slim_docs_perm_sync() for doc in batch] == [f"{connector.bucket_type}:bucket:a.txt"]
 
 

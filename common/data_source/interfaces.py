@@ -4,15 +4,37 @@ import abc
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Iterator
-from enum import IntFlag, auto
+from enum import IntEnum, IntFlag, auto
 from types import TracebackType
 from typing import Any, Generic, Protocol, TypeAlias, TypeVar
 
 from anthropic import BaseModel
 
-from common.data_source.models import ConnectorCheckpoint, ConnectorFailure, Document, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
+from common.data_source.models import ConnectorCheckpoint, ConnectorFailure, Document, GenerateSlimDocumentOutput, KeyRecord, SecondsSinceUnixEpoch, SlimDocument
 
 GenerateDocumentsOutput = Iterator[list[Document]]
+
+
+class IncrementalCapability(IntEnum):
+    FULL_RESYNC = 0
+    CURSOR = 1
+    FINGERPRINT = 2
+
+
+class FingerprintConnector(ABC):
+    """Enumerate the complete source cheaply, then fetch changed keys only."""
+
+    INCREMENTAL_CAPABILITY = IncrementalCapability.FINGERPRINT
+
+    @abstractmethod
+    def list_keys(self) -> Iterator[KeyRecord]:
+        """Yield the full inventory; incomplete enumeration must raise."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_value(self, key: str) -> Document | None:
+        """Fetch the listed version; None means an explicit size exclusion."""
+        raise NotImplementedError
 
 
 class LoadConnector(ABC):

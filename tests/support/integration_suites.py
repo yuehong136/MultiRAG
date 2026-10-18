@@ -58,6 +58,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_agentbot_list_operations.py",
         "test_asana_deleted_sync.py",
         "test_azure_storage_protocol.py",
+        "test_blob_connector_fingerprint.py",
         "test_chat_session_compat.py",
         "test_connector_deleted_snapshot.py",
         "test_connector_google_oauth_pkce.py",

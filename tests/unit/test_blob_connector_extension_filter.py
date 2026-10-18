@@ -1,5 +1,8 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+import pytest
 
 from common.data_source import blob_connector
 from core.svr import sync_data_source
@@ -9,7 +12,7 @@ class _Paginator:
     def __init__(self, objects: list[dict[str, Any]]) -> None:
         self.objects = objects
 
-    def paginate(self, **_kwargs):
+    def paginate(self, **_kwargs: Any) -> list[dict[str, Any]]:
         return [{"Contents": self.objects}]
 
 
@@ -30,15 +33,15 @@ def _objects(now: datetime) -> list[dict[str, Any]]:
     ]
 
 
-def test_blob_connector_filters_extensions_before_download(monkeypatch) -> None:
+def test_blob_connector_filters_extensions_before_download(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(UTC)
     downloads: list[str] = []
 
-    def fake_download(_client, _bucket: str, key: str, _threshold: int | None) -> bytes:
+    def fake_download(_client: Any, _bucket: str, key: str, _threshold: int | None) -> tuple[bytes, dict[str, Any]]:
         downloads.append(key)
-        return b"data"
+        return b"data", {}
 
-    monkeypatch.setattr(blob_connector, "download_object", fake_download)
+    monkeypatch.setattr(blob_connector, "download_object_with_metadata", fake_download)
     connector = blob_connector.BlobStorageConnector("s3", "bucket")
     connector.s3_client = _S3Client(_objects(now))
 
@@ -48,15 +51,15 @@ def test_blob_connector_filters_extensions_before_download(monkeypatch) -> None:
     assert downloads == ["docs/accepted.txt"]
 
 
-def test_blob_connector_allows_images_when_enabled(monkeypatch) -> None:
+def test_blob_connector_allows_images_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(UTC)
     downloads: list[str] = []
 
-    def fake_download(_client, _bucket: str, key: str, _threshold: int | None) -> bytes:
+    def fake_download(_client: Any, _bucket: str, key: str, _threshold: int | None) -> tuple[bytes, dict[str, Any]]:
         downloads.append(key)
-        return b"data"
+        return b"data", {}
 
-    monkeypatch.setattr(blob_connector, "download_object", fake_download)
+    monkeypatch.setattr(blob_connector, "download_object_with_metadata", fake_download)
     connector = blob_connector.BlobStorageConnector("s3", "bucket")
     connector.set_allow_images(True)
     connector.s3_client = _S3Client(_objects(now))
@@ -66,11 +69,11 @@ def test_blob_connector_allows_images_when_enabled(monkeypatch) -> None:
     assert downloads == ["docs/accepted.txt", "docs/image.png"]
 
 
-async def test_blob_sync_wires_allow_images(monkeypatch) -> None:
+async def test_blob_sync_wires_allow_images(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[bool] = []
 
     class FakeConnector:
-        def __init__(self, **_kwargs) -> None:
+        def __init__(self, **_kwargs: Any) -> None:
             pass
 
         def set_allow_images(self, value: bool) -> None:
@@ -79,7 +82,7 @@ async def test_blob_sync_wires_allow_images(monkeypatch) -> None:
         def load_credentials(self, _credentials: dict[str, Any]) -> None:
             pass
 
-        def load_from_state(self):
+        def list_keys(self) -> Iterator[Any]:
             return iter(())
 
     monkeypatch.setattr(sync_data_source, "BlobStorageConnector", FakeConnector)

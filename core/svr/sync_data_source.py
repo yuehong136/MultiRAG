@@ -52,7 +52,7 @@ from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
 from common.data_source.imap_connector import _as_utc, imap_scope_signature
 from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
-from common.data_source.models import ConnectorFailure, Document, SeafileSyncScope, SlimDocument
+from common.data_source.models import ConnectorFailure, Document, KeyRecord, SeafileSyncScope, SlimDocument
 from common.data_source.rdbms_connector import rdbms_scope_signature
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
@@ -153,7 +153,7 @@ class SyncBase:
             document_batch_generator = generate_output
             file_list = None
 
-        if self.SOURCE_NAME in DELETED_FILE_SYNC_SOURCES and self.conf.get("sync_deleted_files") and task.get("reindex") != "1" and task.get("poll_range_start"):
+        if file_list is None and self.SOURCE_NAME in DELETED_FILE_SYNC_SOURCES and self.conf.get("sync_deleted_files") and task.get("reindex") != "1" and task.get("poll_range_start"):
             # Listing can block on remote pagination. Cancellation of this await
             # never hands a partially collected snapshot to the deletion service.
             file_list = await asyncio.to_thread(collect_slim_document_snapshot, self.connector)
@@ -192,6 +192,8 @@ class SyncBase:
                 }
                 if doc.metadata:
                     d["metadata"] = doc.metadata
+                if getattr(doc, "fingerprint", None):
+                    d["fingerprint"] = doc.fingerprint
                 docs.append(d)
 
             try:
@@ -253,37 +255,47 @@ class SyncBase:
 class _BlobLikeBase(SyncBase):
     DEFAULT_BUCKET_TYPE: str = "s3"
 
-    async def _generate(self, task: dict):
-        bucket_type = self.conf.get("bucket_type", self.DEFAULT_BUCKET_TYPE)
+    def _fingerprint_filtered_generator(self, task: dict[str, Any], records: list[KeyRecord]) -> GenerateDocumentsOutput:
+        with db_connection() as db:
+            existing = DocumentService.list_id_content_hash_map_by_kb_and_source_type(db, task["kb_id"], f"{self.SOURCE_NAME}/{task['connector_id']}")
+        batch: list[Document] = []
+        bypassed = fetched = excluded = 0
+        for record in records:
+            if record.deleted:
+                continue
+            doc_id = resolve_connector_doc_id(task["kb_id"], task["connector_id"], record.key, existing)
+            if task["reindex"] != "1" and record.fingerprint and existing.get(doc_id) == record.fingerprint:
+                bypassed += 1
+                continue
+            # Propagate errors: a partial fetch must not prune or report DONE.
+            doc = self.connector.get_value(record.key)
+            if doc is None:
+                excluded += 1
+                continue
+            if doc.id != record.key:
+                raise ValueError("Fetched blob identity differs from listed key")
+            fetched += 1
+            batch.append(doc)
+            if len(batch) >= self.connector.batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+        logging.info("[%s] fingerprint sync: %d bypassed, %d fetched, %d excluded (connector_id=%s, kb_id=%s)", self.SOURCE_NAME, bypassed, fetched, excluded, task["connector_id"], task["kb_id"])
 
-        self.connector = BlobStorageConnector(
-            bucket_type=bucket_type,
-            bucket_name=self.conf["bucket_name"],
-            prefix=self.conf.get("prefix", ""),
-        )
+    async def _generate(self, task: dict[str, Any]) -> tuple[GenerateDocumentsOutput, tuple[SlimDocument, ...] | None]:
+        bucket_type = self.conf.get("bucket_type", self.DEFAULT_BUCKET_TYPE)
+        self.connector = BlobStorageConnector(bucket_type=bucket_type, bucket_name=self.conf["bucket_name"], prefix=self.conf.get("prefix", ""))
         self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
-
-        document_batch_generator = (
-            self.connector.load_from_state()
-            if task["reindex"] == "1" or not task["poll_range_start"]
-            else self.connector.poll_source(
-                task["poll_range_start"].timestamp(),
-                datetime.now(UTC).timestamp(),
-            )
-        )
-
-        _begin_info = "totally" if task["reindex"] == "1" or not task["poll_range_start"] else "from {}".format(task["poll_range_start"])
-
-        logging.info(
-            "Connect to {}: {}(prefix/{}) {}".format(
-                bucket_type,
-                self.conf["bucket_name"],
-                self.conf.get("prefix", ""),
-                _begin_info,
-            )
-        )
-        return document_batch_generator
+        records = await asyncio.to_thread(lambda: list(self.connector.list_keys()))
+        # The same complete inventory retains bypassed objects, large objects
+        # and fetched objects. No second, potentially different listing is used.
+        file_list = None
+        if self.conf.get("sync_deleted_files") and task["reindex"] != "1" and task.get("poll_range_start"):
+            file_list = tuple(SlimDocument(id=record.key) for record in records if not record.deleted)
+        logging.info("Connect to %s: %s(prefix/%s) fingerprint sync", bucket_type, self.conf["bucket_name"], self.conf.get("prefix", ""))
+        return self._fingerprint_filtered_generator(task, records), file_list
 
 
 class S3(_BlobLikeBase):

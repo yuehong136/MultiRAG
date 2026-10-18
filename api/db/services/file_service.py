@@ -372,7 +372,7 @@ class FileService(CommonService):
 
     @classmethod
     def upload_document(
-        cls, db: Session, kb: Knowledgebase, file_objs: list, user_id, labels: list[str] | None = None, src: str = "local", parent_path: str | None = None
+        cls, db: Session, kb: Knowledgebase, file_objs: list, user_id: str, labels: list[str] | None = None, src: str = "local", parent_path: str | None = None
     ) -> tuple[list[str], list[tuple[dict, bytes]]]:
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, user_id)
@@ -409,7 +409,7 @@ class FileService(CommonService):
                             user_msg = "Existing document id collision with another knowledge base; skipping update."
                             err.append(filename + ": " + user_msg)
                             continue
-                        new_hash = xxhash.xxh128(file_blob).hexdigest()
+                        new_hash = getattr(file_obj, "fingerprint", None) or xxhash.xxh128(file_blob).hexdigest()
                         old_hash = existing_doc.content_hash or ""
                         settings.STORAGE_IMPL.put(kb.id, existing_doc.location, file_blob)
                         existing_doc.size = len(file_blob)
@@ -464,7 +464,7 @@ class FileService(CommonService):
                     "location": location,
                     "size": len(file_blob),
                     "thumbnail": thumbnail_location,
-                    "content_hash": xxhash.xxh128(file_blob).hexdigest(),
+                    "content_hash": getattr(file_obj, "fingerprint", None) or xxhash.xxh128(file_blob).hexdigest(),
                     "auth": json.dumps(labels) if labels else None,  # 将 labels 转换为 JSON 字符串
                 }
                 DocumentService.insert(db, doc)

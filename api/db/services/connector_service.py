@@ -648,7 +648,7 @@ class SyncLogsService(CommonService):
         return result.rowcount
 
     @classmethod
-    def duplicate_and_parse(cls, db: Session, kb, docs: list, tenant_id, src: str, auto_parse=True):
+    def duplicate_and_parse(cls, db: Session, kb: Knowledgebase, docs: list[dict[str, Any]], tenant_id: str, src: str, auto_parse: bool | str = True) -> tuple[list[str], list[str]]:
         """
         复制并解析文档
 
@@ -670,12 +670,21 @@ class SyncLogsService(CommonService):
             id: str
             filename: str
             blob: bytes
+            fingerprint: str | None = None
 
             def read(self) -> bytes:
                 return self.blob
 
         # 将文档转换为 FileObj 对象，携带 id 以支持重复检测
-        files = [FileObj(id=d["id"], filename=d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d["extension"][::-1]) < 0 else ""), blob=d["blob"]) for d in docs]
+        files = [
+            FileObj(
+                id=d["id"],
+                filename=d["semantic_identifier"] + (f"{d['extension']}" if d["semantic_identifier"][::-1].find(d["extension"][::-1]) < 0 else ""),
+                blob=d["blob"],
+                fingerprint=d.get("fingerprint"),
+            )
+            for d in docs
+        ]
 
         # Distinct source rows can share a title/filename. Match by the exact
         # resolved document identity used by upload, never by display name.

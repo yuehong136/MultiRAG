@@ -639,6 +639,23 @@ class DocumentService(CommonService):
         return res
 
     @classmethod
+    def list_id_content_hash_map_by_kb_and_source_type(cls, db: Session, kb_id: str, source_type: str, page_size: int = 500) -> dict[str, str]:
+        """Read only this KB/connector's active versions, with stable pagination."""
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
+        stmt = (
+            select(cls.model.id, cls.model.content_hash)
+            .where(cls.model.kb_id == kb_id, cls.model.source_type == source_type, cls.model.status == StatusEnum.VALID.value)
+            .order_by(cls.model.create_time, cls.model.id)
+        )
+        result: dict[str, str] = {}
+        offset = 0
+        while rows := db.execute(stmt.offset(offset).limit(page_size)).all():
+            result.update((row.id, row.content_hash or "") for row in rows)
+            offset += page_size
+        return result
+
+    @classmethod
     def list_doc_headers_by_kb_and_source_type(
         cls,
         db: Session,

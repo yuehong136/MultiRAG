@@ -2,24 +2,32 @@
 
 import logging
 import os
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+import xxhash
+
 from common.data_source.config import BLOB_STORAGE_SIZE_THRESHOLD, INDEX_BATCH_SIZE, BlobType, DocumentSource
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError
-from common.data_source.interfaces import LoadConnector, OnyxExtensionType, PollConnector
-from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, SecondsSinceUnixEpoch, SlimDocument
+from common.data_source.interfaces import FingerprintConnector, LoadConnector, OnyxExtensionType, PollConnector
+from common.data_source.models import Document, GenerateDocumentsOutput, GenerateSlimDocumentOutput, KeyRecord, SecondsSinceUnixEpoch, SlimDocument
 from common.data_source.utils import (
     create_s3_client,
     detect_bucket_region,
-    download_object,
+    download_object_with_metadata,
     extract_size_bytes,
     get_file_ext,
     is_accepted_file_ext,
 )
 
 
-class BlobStorageConnector(LoadConnector, PollConnector):
+def _normalize_etag(raw_etag: str | None) -> str | None:
+    token = raw_etag.strip().strip('"') if raw_etag else ""
+    return xxhash.xxh128(token.encode()).hexdigest() if token else None
+
+
+class BlobStorageConnector(LoadConnector, PollConnector, FingerprintConnector):
     """Blob storage connector"""
 
     def __init__(
@@ -39,6 +47,8 @@ class BlobStorageConnector(LoadConnector, PollConnector):
         self.size_threshold: int | None = BLOB_STORAGE_SIZE_THRESHOLD
         self.bucket_region: str | None = None
         self.european_residency: bool = european_residency
+        self._listing_cache: dict[str, dict[str, Any]] = {}
+        self._filename_counts: dict[str, int] = {}
 
     def set_allow_images(self, allow_images: bool) -> None:
         """Set whether to process images"""
@@ -95,59 +105,64 @@ class BlobStorageConnector(LoadConnector, PollConnector):
 
         return None
 
-    def _yield_blob_objects(
-        self,
-        start: datetime,
-        end: datetime,
-    ) -> GenerateDocumentsOutput:
-        """Generate bucket objects"""
-        all_objects, filename_counts = self._collect_blob_objects(start, end)
+    def _build_document_from_obj(self, obj: dict[str, Any], filename_counts: dict[str, int]) -> Document | None:
+        if self.s3_client is None:
+            raise ConnectorMissingCredentialError("Blob storage")
+        key = obj["Key"]
+        file_name = os.path.basename(key)
+        size_bytes = extract_size_bytes(obj)
+        if self.size_threshold is not None and isinstance(size_bytes, int) and size_bytes > self.size_threshold:
+            logging.warning("%s exceeds size threshold of %s. Skipping.", file_name, self.size_threshold)
+            return None
 
+        blob, metadata = download_object_with_metadata(self.s3_client, self.bucket_name, key, self.size_threshold)
+        if blob is None:
+            return None
+        # A write between LIST and GET must never pair the new body with the
+        # old listing's ETag. Missing response ETag deliberately falls back to
+        # byte hashing at persistence, causing a conservative future fetch.
+        last_modified = metadata.get("LastModified", obj["LastModified"]).replace(tzinfo=UTC)
+        relative_path = key[len(self.prefix) :] if self.prefix and key.startswith(self.prefix) else key
+        semantic_id = relative_path.replace("/", " / ") if filename_counts.get(file_name, 0) > 1 else file_name
+        return Document(
+            id=f"{self.bucket_type}:{self.bucket_name}:{key}",
+            blob=blob,
+            source=DocumentSource(self.bucket_type.value),
+            semantic_identifier=semantic_id or file_name,
+            extension=get_file_ext(file_name),
+            doc_updated_at=last_modified,
+            size_bytes=len(blob),
+            fingerprint=_normalize_etag(metadata.get("ETag")),
+        )
+
+    def _yield_blob_objects(self, start: datetime, end: datetime) -> GenerateDocumentsOutput:
+        all_objects, filename_counts = self._collect_blob_objects(start, end)
         batch: list[Document] = []
         for obj in all_objects:
-            last_modified = obj["LastModified"].replace(tzinfo=UTC)
-            file_name = os.path.basename(obj["Key"])
-            key = obj["Key"]
-
-            size_bytes = extract_size_bytes(obj)
-            if self.size_threshold is not None and isinstance(size_bytes, int) and size_bytes > self.size_threshold:
-                logging.warning(f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping.")
+            # Download/listing failures must fail the sync before deletion or
+            # checkpoint completion. Only configured size exclusions may skip.
+            doc = self._build_document_from_obj(obj, filename_counts)
+            if doc is None:
                 continue
-
-            try:
-                blob = download_object(self.s3_client, self.bucket_name, key, self.size_threshold)
-                if blob is None:
-                    continue
-
-                # Use full path only if filename appears multiple times
-                if filename_counts.get(file_name, 0) > 1:
-                    relative_path = key
-                    if self.prefix and key.startswith(self.prefix):
-                        relative_path = key[len(self.prefix) :]
-                    semantic_id = relative_path.replace("/", " / ") if relative_path else file_name
-                else:
-                    semantic_id = file_name
-
-                batch.append(
-                    Document(
-                        id=f"{self.bucket_type}:{self.bucket_name}:{key}",
-                        blob=blob,
-                        source=DocumentSource(self.bucket_type.value),
-                        semantic_identifier=semantic_id,
-                        extension=get_file_ext(file_name),
-                        doc_updated_at=last_modified,
-                        size_bytes=size_bytes if size_bytes else 0,
-                    )
-                )
-                if len(batch) == self.batch_size:
-                    yield batch
-                    batch = []
-
-            except Exception:
-                logging.exception(f"Error decoding object {key}")
-
+            batch.append(doc)
+            if len(batch) >= self.batch_size:
+                yield batch
+                batch = []
         if batch:
             yield batch
+
+    def list_keys(self) -> Iterator[KeyRecord]:
+        self._listing_cache = {}
+        self._filename_counts = {}
+        all_objects, filename_counts = self._collect_blob_objects()
+        # Publish the cache only after the full paginated listing succeeds.
+        self._filename_counts = filename_counts
+        self._listing_cache = {f"{self.bucket_type}:{self.bucket_name}:{obj['Key']}": obj for obj in all_objects}
+        for key, obj in self._listing_cache.items():
+            yield KeyRecord(key=key, fingerprint=_normalize_etag(obj.get("ETag")))
+
+    def get_value(self, key: str) -> Document | None:
+        return self._build_document_from_obj(self._listing_cache[key], self._filename_counts)
 
     def _collect_blob_objects(
         self,
@@ -169,6 +184,8 @@ class BlobStorageConnector(LoadConnector, PollConnector):
         for page in pages:
             if page.get("IsTruncated") and not page.get("NextContinuationToken"):
                 raise ConnectorValidationError("Blob listing is truncated without a continuation token.")
+            if page.get("KeyCount", 0) and not page.get("Contents"):
+                raise ConnectorValidationError("Blob listing reports keys without object metadata.")
             for obj in page.get("Contents", []):
                 key = obj["Key"]
                 if key.endswith("/"):

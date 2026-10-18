@@ -346,14 +346,22 @@ def detect_bucket_region(s3_client: S3Client, bucket_name: str) -> str | None:
 
 def download_object(s3_client: S3Client, bucket_name: str, key: str, size_threshold: int | None = None) -> bytes | None:
     """Download object from blob storage"""
+    blob, _ = download_object_with_metadata(s3_client, bucket_name, key, size_threshold)
+    return blob
+
+
+def download_object_with_metadata(s3_client: S3Client, bucket_name: str, key: str, size_threshold: int | None = None) -> tuple[bytes | None, dict[str, Any]]:
+    """Return content and the metadata of that exact GET, closing its body."""
     response = s3_client.get_object(Bucket=bucket_name, Key=key)
     body = response["Body"]
+    metadata: dict[str, Any] = {"ETag": response.get("ETag"), "LastModified": response.get("LastModified"), "ContentLength": response.get("ContentLength")}
+    metadata = {name: value for name, value in metadata.items() if value is not None}
 
     try:
         if size_threshold is None:
-            return body.read()
+            return body.read(), metadata
 
-        return read_stream_with_limit(body, key, size_threshold)
+        return read_stream_with_limit(body, key, size_threshold), metadata
     finally:
         body.close()
 

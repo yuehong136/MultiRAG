@@ -99,6 +99,16 @@ class Document(BaseModel):
     primary_owners: list | None = None
     metadata: dict[str, Any] | None = None
     doc_metadata: dict[str, Any] | None = None
+    # Opaque source version token persisted in Document.content_hash.
+    fingerprint: str | None = None
+
+
+class KeyRecord(BaseModel):
+    """A metadata-only source inventory entry for lazy content fetching."""
+
+    key: str
+    fingerprint: str | None = None
+    deleted: bool = False
 
 
 class BasicExpertInfo(BaseModel):
