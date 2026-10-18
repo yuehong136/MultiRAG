@@ -128,12 +128,6 @@ func (v *VolcEngine) chat(name string, messages []Message, apiConfig *APIConfig,
 	message := result.Choices[0].Message
 	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
 }
-func (v *VolcEngine) Chat(name, message *string, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
-	if name == nil || message == nil {
-		return nil, fmt.Errorf("volcengine: model name and message are required")
-	}
-	return v.chat(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config)
-}
 func (v *VolcEngine) ChatWithMessages(name string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
 	return v.chat(name, messages, apiConfig, config)
 }

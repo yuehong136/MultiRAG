@@ -125,8 +125,8 @@ func TestVolcEngineValidationSenderErrorAndCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error = %v", err)
 	}
-	if _, err := driver.Chat(nil, &message, nil, nil); err == nil {
-		t.Fatal("nil arguments accepted")
+	if _, err := driver.ChatWithMessages("", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: message}}, nil); err == nil {
+		t.Fatal("empty model name accepted")
 	}
 	if _, err := driver.ChatWithMessages(name, nil, []Message{{Role: "user", Content: message}}, nil); err == nil {
 		t.Fatal("missing key accepted")

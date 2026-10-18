@@ -29,3 +29,15 @@ Discovery permits an absent API key for self-hosted deployments; chat continues
 to require a key. Missing or malformed lists and provider/HTTP errors fail,
 while an explicitly empty inventory is valid. Discovery remains request-scoped,
 cancellable, and bounded by the normal call timeout.
+
+OpenRouter embedding uses indexed OpenAI-compatible batches and validates every
+input has exactly one finite, nonempty vector with a consistent dimension.
+Rerank sends `model`, `query`, `documents`, and `top_n`, restores input order,
+and rejects missing, duplicate, or invalid indices/scores; a genuine zero score
+is preserved. Empty inference input returns an empty result without an HTTP call.
+Credits checks require both `total_credits` and `total_usage`, return their
+finite difference in USD, and drive connection checking. These interfaces use
+instance credentials and cancellation without logging provider response bodies.
+
+The obsolete VolcEngine single-message wrapper is also removed; bound chat,
+role-history, and sender streaming remain the active service contracts.
