@@ -564,6 +564,51 @@ def test_http_modes_have_distinct_candidates_weights_and_pages(search_api: dict[
         assert response.status_code == 422, response.text
 
 
+def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+
+    class ControlledModel:
+        def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+            return np.array([0.2] * 768), 0
+
+        def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
+            return np.array([0.1 if "low" in text else 0.9 for text in texts]), 0
+
+    async def bundle(*args: Any, **kwargs: Any) -> ControlledModel:
+        return ControlledModel()
+
+    monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
+    low = {**env["rows"]["dataset"][1], "content_with_weight": "availability low", "content_ltks": "availability low"}
+    high = {**low, "id": uuid4().hex, "content_with_weight": "availability high", "content_ltks": "availability high"}
+    store = settings.docStoreConn
+    assert store.delete({"id": low["id"]}, env["collections"]["dataset"], env["dataset"]) == 1
+    assert store.insert([low, high], env["collections"]["dataset"], env["dataset"]) == []
+    env["reader"].flush(env["collections"]["dataset"], timeout=60)
+
+    def snapshot() -> list[dict[str, Any]]:
+        return sorted(
+            env["reader"].query(env["collections"]["dataset"], filter="", limit=100, output_fields=["pk", "doc_id", "content_with_weight", "available_int"], consistency_level="Strong"),
+            key=lambda row: row["pk"],
+        )
+
+    before = snapshot()
+    assert {row["pk"] for row in before} >= {low["id"], high["id"]}
+    for scope in ({}, {"doc_ids": [env["doc"]]}, {"meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": "=", "value": "match"}]}}):
+        payload = {"question": "availability", "similarity_threshold": 0.5, "vector_similarity_weight": 1.0, "rerank_id": "controlled", "size": 1, **scope}
+        for page in (1, 2):
+            response = request(env, "POST", "/search", json={**payload, "page": page})
+            body = response.json()
+            assert response.status_code == 200 and body["code"] == 0, body
+            result = body["data"]
+            assert result["total"] == 1, result
+            assert [row["chunk_id"] for row in result["chunks"]] == ([high["id"]] if page == 1 else []), result
+            assert result["doc_aggs"] == [{"doc_name": "doc.txt", "doc_id": env["doc"], "count": 1}], result
+    assert snapshot() == before
+    with Session(env["engine"]) as db:
+        metadata = db.get(DocumentMetadata, env["doc"])
+        assert metadata is not None and metadata.meta_fields == {"category": "match"}
+
+
 def test_http_vector_schema_failure_is_business_error(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env = search_api
 
