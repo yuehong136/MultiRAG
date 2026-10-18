@@ -3,10 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -125,6 +128,57 @@ func TestDatasetSearchRejectsBusinessFailure(t *testing.T) {
 				if isSuccess(resp, cmd.Type) {
 					t.Fatal("benchmark counted failed response as success")
 				}
+			}
+		})
+	}
+}
+
+func TestDatasetSearchSingleIterationBenchmark(t *testing.T) {
+	for _, test := range []struct{ body, want string }{
+		{`{"code":0,"data":{"chunks":[]}}`, "COMMAND_COUNT: 1, SUCCESS: 1, FAILURE: 0"},
+		{`{"code":403,"message":"denied"}`, "COMMAND_COUNT: 1, SUCCESS: 0, FAILURE: 1"},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/datasets" {
+					fmt.Fprint(w, `{"code":0,"data":[{"id":"a-id","name":"a"}]}`)
+					return
+				}
+				if r.URL.Path != "/api/v1/datasets/search" {
+					t.Error("obsolete search path")
+				}
+				fmt.Fprint(w, test.body)
+			}))
+			defer server.Close()
+			address, _ := url.Parse(server.URL)
+			port, _ := strconv.Atoi(address.Port())
+			client := NewMultiRAGClient("user")
+			client.HTTPClient.Host = address.Hostname()
+			client.HTTPClient.Port = port
+			nested := NewCommand("search_on_datasets")
+			nested.Params["datasets"] = "a"
+			nested.Params["question"] = "question"
+			benchmark := NewCommand("benchmark")
+			benchmark.Params["command"] = nested
+			benchmark.Params["concurrency"] = 1
+			benchmark.Params["iterations"] = 1
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := os.Stdout
+			os.Stdout = writer
+			defer func() { os.Stdout = old }()
+			_, runErr := client.RunBenchmark(benchmark)
+			writer.Close()
+			os.Stdout = old
+			output, readErr := io.ReadAll(reader)
+			reader.Close()
+			if runErr != nil || readErr != nil {
+				t.Fatal(runErr, readErr)
+			}
+			if !strings.Contains(string(output), test.want) {
+				t.Fatalf("incorrect single-iteration accounting: %s", output)
 			}
 		})
 	}

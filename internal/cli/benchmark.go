@@ -71,8 +71,10 @@ func (c *MultiRAGClient) runBenchmarkSingle(concurrency, iterations int, nestedC
 	startTime := time.Now()
 	responseList := make([]*Response, 0, iterations)
 
-	// For search_on_datasets, convert dataset names to IDs first
-	if commandType == "search_on_datasets" && iterations > 1 {
+	supportsNative := false
+
+	// Search benchmarks always retain the real response, including one iteration.
+	if commandType == "search_on_datasets" {
 		datasets, _ := nestedCmd.Params["datasets"].(string)
 		datasetNames := strings.Split(datasets, ",")
 		datasetIDs := make([]string, 0, len(datasetNames))
@@ -85,11 +87,12 @@ func (c *MultiRAGClient) runBenchmarkSingle(concurrency, iterations int, nestedC
 			datasetIDs = append(datasetIDs, id)
 		}
 		nestedCmd.Params["dataset_ids"] = datasetIDs
+		responseList = c.executeBenchmarkSilent(nestedCmd, iterations)
+		supportsNative = true
 	}
 
-	// Check if command supports native benchmark (iterations > 1)
-	supportsNative := false
-	if iterations > 1 {
+	// Check if other commands support native benchmark.
+	if iterations > 1 && !supportsNative {
 		result, err := c.ExecuteCommand(nestedCmd)
 		if raw, ok := result.(*BenchmarkRawResponse); ok && err == nil {
 			// Command supports benchmark natively
