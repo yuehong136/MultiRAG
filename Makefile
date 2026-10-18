@@ -1,5 +1,5 @@
 # MultiRAG 验证/测试统一入口（人类与 AI 通用）
-# 分层验证体系说明见 AGENTS.md。日常门禁：make verify
+# 本地按改动范围检查，最终组合由 CI 把关；规则见 AGENTS.md。
 .DEFAULT_GOAL := help
 UV := uv run --no-sync
 TESTS ?=
@@ -70,7 +70,7 @@ mcp-compat: ## EIM-F2：隔离 MCP 1/2 解释器，运行双方向真实协议�
 	uv lock --check --script tests/compat/mcp/modern_server.py
 	$(UV) python scripts/check_mcp_compat.py
 
-verify: lint typecheck test ## Python 编码交付门禁（Tier 0+1+2；适用范围见 AGENTS.md）
+verify: lint typecheck test ## 显式 Python 全量检查（Tier 0+1+2；非每次本地 commit 前置）
 
 .PHONY: eval eval-assets eval-generation
 # Install the optional eval group explicitly; normal integration never downloads models.

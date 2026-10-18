@@ -1,0 +1,49 @@
+name: Locked Python test environment
+description: Sync frozen dependencies; prepare corpora and OCR assets only when requested.
+inputs:
+  python-version:
+    default: '3.12'
+    description: Python interpreter
+  eval:
+    default: 'false'
+    description: Include the optional local quality dependencies
+  assets:
+    default: 'false'
+    description: Provision OCR import assets and NLTK corpora
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: '0.12.5'
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+    - shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
+        INCLUDE_EVAL: ${{ inputs.eval }}
+      run: |
+        set -euo pipefail
+        groups=(--group dev)
+        if [[ "$INCLUDE_EVAL" == true ]]; then groups+=(--group eval); fi
+        for attempt in 1 2 3; do
+          if uv sync --python "$PYTHON_VERSION" "${groups[@]}" --frozen; then exit 0; fi
+          echo "Dependency sync failed (attempt $attempt)" >&2
+          sleep 15
+        done
+        exit 1
+    - if: inputs.assets == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          core/res/deepdoc
+          ~/nltk_data
+        key: python-test-assets-${{ runner.os }}-${{ hashFiles('scripts/provision_test_assets.py', 'uv.lock') }}
+    - if: inputs.assets == 'true'
+      shell: bash
+      run: |
+        uv run --no-sync python scripts/provision_test_assets.py
+        uv run --no-sync python -m nltk.downloader punkt punkt_tab wordnet

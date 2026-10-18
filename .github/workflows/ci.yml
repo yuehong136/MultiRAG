@@ -3,21 +3,40 @@
 #   security  = gitleaks + osv-scanner（版本无关，独立执行一次）
 #   typecheck = make typecheck (Tier 1)
 #   unit      = make coverage  (Tier 2)
-#   integration + smoke        (Tier 3+4，服务容器)
+#   core shards / consumers / Go / smoke are independent required jobs; quality is separate.
 name: ci
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  actions: read
+
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      runtime: ${{ steps.scope.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        run: python3 scripts/ci_checks.py scope
+
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # dev 工具组（ruff/import-linter/门禁脚本）已验证 3.13 可跑，两版本均必过；
     # 版本无关的锁文件一致性检查只在 3.12 跑一次省时避噪。
@@ -51,7 +70,7 @@ jobs:
 
   # 安全扫描与 Python 版本无关，独立执行一次，避免矩阵重复及与 lint 结果耦合。
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -70,7 +89,9 @@ jobs:
           ./osv-scanner scan source -L uv.lock --config=osv-scanner.toml
 
   typecheck:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
@@ -95,7 +116,9 @@ jobs:
       - run: uv run --no-sync mypy
 
   unit:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     # 3.12/3.13 双版本均必过（3.13 已于 2026-07-09 首次 CI 全绿后转正）；
     # 3.14 待评估主开发版本切换时一并考虑。
@@ -131,197 +154,137 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-  # Tier 3+4：真实服务容器上的集成 + 冒烟（必过门禁，2026-07-09 转正：
-  # main 上连续 ≥5 次全绿达标——52b98e04 起至 c28605b3 无一失败）。
   integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: usr_ai
-          POSTGRES_PASSWORD: "123456"
-          POSTGRES_DB: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U usr_ai"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-      redis:
-        image: valkey/valkey:8
-        ports: ["6379:6379"]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Init postgres schema (mirror docker/postgres/init.sql)
-        run: |
-          PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
-            -c 'CREATE SCHEMA IF NOT EXISTS usr_ai; GRANT ALL ON SCHEMA usr_ai TO usr_ai;'
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: "0.12.5"  # 与 uv.lock 同源，见 lint job 注释
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: uv sync (retry)
-        run: |
-          for i in 1 2 3; do
-            uv sync --python 3.12 --group dev --group eval --frozen && exit 0
-            echo "uv sync failed (attempt $i), retrying..." >&2
-            sleep 15
-          done
-          exit 1
-      # GH services 无法覆盖容器 CMD，MinIO 需要 `server /data`，用 docker run
-      - name: Start MinIO
-        run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
-            "$(uv run --no-sync python -c 'from tests.support.services import service_images; print(service_images()["minio"])')" server /data
-      # 与 docker-compose-base.yml 同版本；CI 采用官方 embedded-etcd 单容器形态，
-      # 省去独立 etcd/minio 依赖；镜像从 Compose 读取，避免版本漂移。
-      - name: Start Milvus (standalone, embedded etcd)
-        run: |
-          cat > embedEtcd.yaml <<'EOF'
-          listen-client-urls: http://0.0.0.0:2379
-          advertise-client-urls: http://0.0.0.0:2379
-          quota-backend-bytes: 4294967296
-          auto-compaction-mode: revision
-          auto-compaction-retention: '1000'
-          EOF
-          docker run -d --name milvus --security-opt seccomp:unconfined \
-            -e DEPLOY_MODE=STANDALONE \
-            -e ETCD_USE_EMBED=true \
-            -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
-            -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml \
-            -e COMMON_STORAGETYPE=local \
-            -v "$PWD/embedEtcd.yaml":/milvus/configs/embedEtcd.yaml \
-            -p 19530:19530 -p 9091:9091 \
-            "$(uv run --no-sync python -c 'from tests.support.services import service_images; print(service_images()["milvus"])')" milvus run standalone
-      - name: Cache verified OCR assets
-        uses: actions/cache@v4
-        with:
-          path: core/res/deepdoc
-          key: deepdoc-test-${{ hashFiles('scripts/provision_test_assets.py') }}
-      - name: Cache verified Chinese embedding assets
-        uses: actions/cache@v4
-        with:
-          path: .cache/evals
-          key: chinese-eval-${{ hashFiles('scripts/provision_eval_assets.py') }}
-      - name: Provision immutable OCR and embedding assets
-        run: make eval-assets
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    uses: ./.github/workflows/python-integration.yml
+    with:
+      lane: core
+      shard: ${{ matrix.shard }}
 
-      - name: Install Chromium for browser SSRF integration regression
-        run: uv run --no-sync playwright install chromium --only-shell --with-deps
+  consumer:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    uses: ./.github/workflows/python-integration.yml
+    with:
+      lane: consumer
 
-      - name: Write CI service config override
-        # 浅合并按顶层 section 整体替换，因此每个 section 必须写全
-        run: |
-          cat > configs/local.service_conf.yaml <<'EOF'
-          multirag:
-            host: 127.0.0.1
-            http_port: 8123
-            secret_key: 'ci-smoke-secret'
-            admin_require_superuser: false
-          postgresql:
-            name: postgresql
-            dbname: postgres
-            user: usr_ai
-            password: '123456'
-            host: 127.0.0.1
-            port: 5432
-            max_connections: 50
-            stale_timeout: 30
-          redis:
-            db: 1
-            username: ''
-            password: ''
-            host: '127.0.0.1:6379'
-          minio:
-            user: minioadmin
-            password: '12345678'
-            host: '127.0.0.1:9000'
-            region: ''
-            bucket: 'multirag'
-            prefix_path: ''
-            workflow_bucket: 'multirag-workflow'
-          EOF
-      # 服务器 bootstrap 对 Milvus 只等 10s，必须先确认健康再起服务器
-      - name: Wait for Milvus healthy
-        run: |
-          for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:9091/healthz >/dev/null; then
-              echo "Milvus healthy after ~$((i * 3))s"
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "Milvus not healthy in time"
-          docker logs milvus 2>&1 | tail -50
-          exit 1
-      - name: Integration tests
-        run: make integration
-      - name: Local OCR and Chinese retrieval quality regression
-        run: make eval
-      - name: Smoke (boot server, hit health endpoints)
-        run: |
-          uv run --no-sync python -m api.multirag_server > server.log 2>&1 &
-          echo $! > server.pid
-          uv run --no-sync python scripts/smoke.py --wait 180
-          kill "$(cat server.pid)" || true
-      - name: Server log on failure
-        if: failure()
-        run: tail -200 server.log || true
+  smoke:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    uses: ./.github/workflows/python-integration.yml
+    with:
+      lane: smoke
 
-      - name: Collect service diagnostics
-        if: failure()
-        run: |
-          mkdir -p .test-results/services
-          for name in minio milvus; do
-            docker logs --tail 300 "$name" > ".test-results/services/$name.log" 2>&1 || true
-          done
-          cp server.log .test-results/services/ 2>/dev/null || true
-      - name: Upload integration evidence
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-evidence
-          path: .test-results/
-          retention-days: 7
-          include-hidden-files: true
-
-  # 独立后端契约无需 PostgreSQL/Redis/MinIO/Milvus。入口按 Compose 版本
-  # 自动供给一次性 Infinity，协议不兼容或用例 skip 均使门禁失败。
   integration-infinity:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: "0.12.5"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: uv sync (retry)
-        run: |
-          for i in 1 2 3; do
-            uv sync --python 3.12 --group dev --frozen && exit 0
-            echo "uv sync failed (attempt $i), retrying..." >&2
-            sleep 15
-          done
-          exit 1
-      - name: Infinity contracts
+      - uses: ./.github/actions/setup-python
+      - name: Real Infinity contracts
         run: make integration-infinity
-      - name: Upload Infinity evidence
-        if: ${{ !cancelled() }}
+      - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: integration-infinity-evidence
           path: .test-results/
-          retention-days: 7
           include-hidden-files: true
+          retention-days: 14
+
+  go:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.12.5'
+      - uses: ./.github/actions/setup-go-native
+      - name: Private configuration for owned MinIO test buckets
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-go-minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
+            pgsty/minio:RELEASE.2026-03-25T00-00-00Z server /data
+          export MULTIRAG_GO_TEST_MINIO_CONFIG="$RUNNER_TEMP/go-minio.json"
+          echo "MULTIRAG_GO_TEST_MINIO_CONFIG=$MULTIRAG_GO_TEST_MINIO_CONFIG" >> "$GITHUB_ENV"
+          umask 077
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path(os.environ['MULTIRAG_GO_TEST_MINIO_CONFIG']).write_text(json.dumps({
+              'host': '127.0.0.1:9000', 'user': 'minioadmin',
+              'password': '12345678', 'secure': False,
+          }))
+          PY
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker logs --tail 100 ci-go-minio
+          exit 1
+      - name: Build, vet and separate command binaries
+        run: |
+          set -euo pipefail
+          mkdir -p .test-results/go/bin
+          git rev-parse HEAD > .test-results/go/backend-sha.txt
+          test "$(cat .test-results/go/backend-sha.txt)" = "$GITHUB_SHA"
+          go version | tee .test-results/go/toolchain.txt
+          cmake --version >> .test-results/go/toolchain.txt
+          git -C resource rev-parse HEAD >> .test-results/go/toolchain.txt
+          go build ./internal/...
+          go vet ./internal/...
+          for command in multirag_cli server_main admin_server; do
+            go build -o ".test-results/go/bin/$command" "./cmd/$command.go"
+          done
+      - name: Go race regression (live opt-ins remain explicit)
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
+          python3 scripts/ci_checks.py go-audit --reports .test-results/go
+      - name: MinIO diagnostics and cleanup
+        if: always()
+        run: |
+          mkdir -p .test-results/go
+          docker logs --tail 200 ci-go-minio > .test-results/go/minio.log 2>&1 || true
+          docker rm -f -v ci-go-minio >/dev/null 2>&1 || true
+          rm -f "$MULTIRAG_GO_TEST_MINIO_CONFIG"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-evidence
+          path: .test-results/go/
+          retention-days: 14
+
+  required:
+    name: ci-required
+    if: always()
+    needs: [changes, lint, security, typecheck, unit, integration, integration-infinity, consumer, go, smoke]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require every applicable job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_checks.py required
+      - if: needs.changes.outputs.runtime == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: integration-core-*
+          merge-multiple: true
+          path: .ci-reports
+      - name: Verify complete same-SHA core coverage
+        if: needs.changes.outputs.runtime == 'true'
+        run: python3 scripts/ci_checks.py audit --reports .ci-reports

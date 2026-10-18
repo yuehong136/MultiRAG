@@ -1,0 +1,19 @@
+name: Local model quality
+
+on:
+  schedule:
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    uses: ./.github/workflows/python-integration.yml
+    with:
+      lane: quality

@@ -1,0 +1,73 @@
+name: Disposable integration infrastructure
+description: Prepare the existing fixture contracts on an ephemeral hosted runner.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        PGPASSWORD=123456 psql -h 127.0.0.1 -U usr_ai -d postgres \
+          -c 'CREATE SCHEMA IF NOT EXISTS usr_ai; GRANT ALL ON SCHEMA usr_ai TO usr_ai;'
+        docker run -d --name ci-minio -p 127.0.0.1:9000:9000 \
+          -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=12345678 \
+          "$(uv run --no-sync python -c 'from tests.support.services import service_images; print(service_images()["minio"])')" server /data
+        cat > "$RUNNER_TEMP/embedEtcd.yaml" <<'EOF'
+        listen-client-urls: http://0.0.0.0:2379
+        advertise-client-urls: http://0.0.0.0:2379
+        quota-backend-bytes: 4294967296
+        auto-compaction-mode: revision
+        auto-compaction-retention: '1000'
+        EOF
+        docker run -d --name ci-milvus --security-opt seccomp:unconfined \
+          -e DEPLOY_MODE=STANDALONE -e ETCD_USE_EMBED=true \
+          -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml \
+          -e COMMON_STORAGETYPE=local -v "$RUNNER_TEMP/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml" \
+          -p 127.0.0.1:19530:19530 -p 127.0.0.1:9091:9091 \
+          "$(uv run --no-sync python -c 'from tests.support.services import service_images; print(service_images()["milvus"])')" milvus run standalone
+    - shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cat > configs/local.service_conf.yaml <<'EOF'
+        multirag:
+          host: 127.0.0.1
+          http_port: 8123
+          secret_key: 'ci-smoke-secret'
+          admin_require_superuser: false
+        postgresql:
+          name: postgresql
+          dbname: postgres
+          user: usr_ai
+          password: '123456'
+          host: 127.0.0.1
+          port: 5432
+          max_connections: 50
+          stale_timeout: 30
+        redis:
+          db: 1
+          username: ''
+          password: ''
+          host: '127.0.0.1:6379'
+        minio:
+          user: minioadmin
+          password: '12345678'
+          host: '127.0.0.1:9000'
+          region: ''
+          bucket: 'multirag'
+          prefix_path: ''
+          workflow_bucket: 'multirag-workflow'
+        milvus:
+          hosts: 'http://127.0.0.1:19530'
+        EOF
+        for attempt in $(seq 1 60); do
+          if curl -sf http://127.0.0.1:9091/healthz >/dev/null; then exit 0; fi
+          sleep 3
+        done
+        docker logs --tail 100 ci-milvus
+        exit 1
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: chromium-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+    - shell: bash
+      run: uv run --no-sync playwright install chromium --with-deps

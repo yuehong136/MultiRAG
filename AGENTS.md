@@ -31,18 +31,24 @@ MultiRAG 的当前生产后端使用 Python、FastAPI、SQLAlchemy 和 uv。
 
 ## 验证
 
-| 改动 | 交付要求 |
-|---|---|
-| 仅文档、注释，不改变可执行行为 | 检查 diff、路径、链接和实现一致性；无需全套 Python 测试 |
-| Python 代码或影响其行为的配置、依赖 | 开发中跑相关检查，交付前跑 `make verify`（lint + typecheck + unit） |
-| DB、事务、存储或检索路径 | 另跑 `make integration`，必要时补所选后端专项验证 |
-| 启动流程、路由或健康检查 | 另跑 `make smoke`，并验证改动端点的行为 |
-| 特定协议或程序契约 | 加跑对应检查（例如 MCP 兼容矩阵），不替代通用门禁 |
+本地迭代按改动范围验证，最终组合由 CI 把关；本地 commit 不以全量门禁为前置条件。
 
-- 无 `make` 时运行目标内的等价命令。Ruff 局部修复用 `uv run --no-sync ruff check --fix <paths>` 和 `uv run --no-sync ruff format <paths>`；`make fix` 会修改全库，不作为局部任务的默认步骤。
-- 不要求开工跑全套基线；只在复杂重构或失败归因需要时建立本机对照。适用检查通过后，仅在新改动、失败或未解决疑点需要时扩大或重复验证。
-- `make integration` 在收集前准备核心套件所需服务，以 `REQUIRE_SERVICES=1` 运行并保存证据；分组、后端与独立消费者验收见 [测试说明](tests/README.md)。使用隔离资源，禁止对业务库做破坏性测试；Testcontainers 回退可用 `INTEGRATION_NO_TESTCONTAINERS=1` 关闭。
-- 交付写清实际结果、本次回归、已有问题与环境阻塞。集成 skip 不算通过，历史通过数不能充当本次证据；阻塞时完成其余可验证部分并说明限制。
+| 改动 | 本地验证 | 最终组合的 CI 检查 |
+|---|---|---|
+| 仅文档、注释，不改变可执行行为 | diff、路径、链接与实现一致性 | 文档范围判定、lint/security；不启动业务运行时 |
+| Python 代码或影响其行为的配置、依赖 | 改动文件 lint、相关单测；按影响面运行类型/依赖/async DB 检查 | 完整 lint、typecheck、unit |
+| DB、事务、存储或检索路径 | 相关文件的定向 integration，独立读回提交与失败副作用 | 完整 core 四分片及适用的后端专项 |
+| 启动流程、路由或健康检查 | 相关端点的鉴权、业务响应与必要 smoke | 独立启动/smoke；core 中的端点合同 |
+| Web、SDK、CLI 或跨仓消费者合同 | 运行受影响的真实消费者；区分受控边界与真实外部服务 | consumer 固定 Web 提交；适用 Go 构建、native 与 race 回归 |
+| 特定协议或程序契约 | 对应专项（例如 MCP 兼容矩阵） | 必需专项随交付范围补齐，不由通用检查替代 |
+
+- 使用 `uv run --no-sync ruff check <paths>`、`ruff format --check <paths>`、相关 `pytest` 文件及 `make integration TESTS=...`。跨模块、依赖、公共 fixture 或失败归因需要时扩大检查；不要求开工全套基线，也不在每个小提交前重跑全量。`make verify`、完整 `make integration` 等入口保留，按实际需要显式运行。
+- PR/merge queue 的最终组合必须通过适用 CI；受保护主干使用 `ci-required` 汇总检查，失败、取消、缺失分片或意外 skip 均不能视为成功。工作流、完整分组、夜间质量检查与跨仓版本见 [测试说明](tests/README.md#ci-分层与证据)。不能用仅 feature head 的结果替代不同 SHA 的最终组合。
+- 已有同一提交且检查范围、锁文件、配置/后端、消费者版本一致的通过证据时，直接引用 CI run/本地报告，不重复跑。正在执行、过时、范围不足或失败的结果不能复用；新增执行输入、环境变化、失败或明确重验要求时，仅补跑必要检查，再由最终组合 CI 验证。
+- 未 push 的任务可以先完成本地相关验证并独立提交，明确写 CI 待运行，不擅自 push。用户要求离线完整验收或本地合并验收时，对锁定组合集中跑一次适用全量；其间修复先定向验证，避免每个中间提交重复全套。
+- Ruff 局部修复用 `uv run --no-sync ruff check --fix <paths>` 和 `uv run --no-sync ruff format <paths>`；`make fix` 会修改全库，不作为局部任务默认步骤。无 `make` 时运行目标内的等价命令。
+- integration 在收集前准备所需服务，以 `REQUIRE_SERVICES=1` 保存证据；使用隔离资源，禁止对业务库做破坏性测试。Testcontainers 回退可用 `INTEGRATION_NO_TESTCONTAINERS=1` 关闭；缺失必需环境不能转 skip 换绿。
+- 交付写清提交/组合 SHA、实际检查及报告、复用证据、未验证项和环境阻塞。局部通过不称全量通过，CI 配置已提交不代表远程工作流已执行。未覆盖的生产或真实供应商行为单列限制。
 
 ## UI 快照审阅
 

@@ -1,0 +1,47 @@
+name: Go and real native tokenizer
+description: Prepare the pinned Go/CMake toolchain, native library and real dictionaries.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.14'
+        cache-dependency-path: go.sum
+    - shell: bash
+      run: |
+        set -euo pipefail
+        # Keep the tested patch version explicit; a go.mod series bump must update it.
+        declared=$(awk '$1 == "go" {print $2}' go.mod)
+        [[ "$(go env GOVERSION)" == "go${declared%.*}."* ]]
+        echo 'GOTOOLCHAIN=local' >> "$GITHUB_ENV"
+        echo 'GOFLAGS=-mod=readonly' >> "$GITHUB_ENV"
+        echo 'CGO_ENABLED=1' >> "$GITHUB_ENV"
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends build-essential libpcre2-dev libsimde-dev
+        uv tool install cmake==4.0.3
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - uses: actions/cache@v4
+      id: native
+      with:
+        path: internal/cpp/cmake-build-release/librag_tokenizer_c_api.a
+        key: native-${{ runner.os }}-${{ runner.arch }}-gcc13-cmake4.0.3-${{ hashFiles('internal/cpp/**', '.github/actions/setup-go-native/action.yml') }}
+    - if: steps.native.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cmake -S internal/cpp -B internal/cpp/cmake-build-release -DCMAKE_BUILD_TYPE=Release
+        cmake --build internal/cpp/cmake-build-release --target rag_tokenizer_c_api --parallel 2
+    - shell: bash
+      run: test -s internal/cpp/cmake-build-release/librag_tokenizer_c_api.a
+    - uses: actions/checkout@v5
+      with:
+        repository: infiniflow/resource
+        ref: 0937399b60f1949267388548e33ea0d5c0cc25f7
+        path: resource
+        persist-credentials: false
+    - shell: bash
+      run: |
+        test -s resource/rag/huqie.txt
+        test -s resource/rag/pos-id.def
+        test -d resource/opencc
+        test -s resource/wordnet/data.noun
+        echo "RAG_DICT_PATH=$GITHUB_WORKSPACE/resource" >> "$GITHUB_ENV"

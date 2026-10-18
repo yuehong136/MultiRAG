@@ -1,0 +1,158 @@
+name: Python integration lane
+
+on:
+  workflow_call:
+    inputs:
+      lane:
+        required: true
+        type: string
+      shard:
+        default: 0
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PYTEST_ADDOPTS: ''
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: usr_ai
+          POSTGRES_PASSWORD: '123456'
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U usr_ai" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+      redis:
+        image: valkey/valkey:8
+        ports: ['6379:6379']
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Validate lane
+        shell: bash
+        env:
+          LANE: ${{ inputs.lane }}
+        run: |
+          case "$LANE" in core|consumer|smoke|quality) ;; *) exit 1 ;; esac
+      - uses: ./.github/actions/setup-python
+        with:
+          assets: 'true'
+          eval: ${{ inputs.lane == 'quality' }}
+      - if: inputs.lane == 'core'
+        uses: ./.github/actions/setup-go-native
+      - uses: ./.github/actions/setup-integration
+
+      - name: Read fixed Web dependency
+        if: inputs.lane == 'consumer'
+        id: web
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          dependency = json.loads(Path('.github/consumer-web.json').read_text())
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', dependency['repository'])
+          assert re.fullmatch(r'[a-f0-9]{40}', dependency['ref'])
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
+              for key, value in dependency.items():
+                  stream.write(f'{key}={value}\n')
+          PY
+      - if: inputs.lane == 'consumer'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.web.outputs.repository }}
+          ref: ${{ steps.web.outputs.ref }}
+          path: consumer-web
+          persist-credentials: false
+      - if: inputs.lane == 'consumer'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.4.1'
+          cache: npm
+          cache-dependency-path: consumer-web/package-lock.json
+      - name: Install real Web client
+        if: inputs.lane == 'consumer'
+        working-directory: consumer-web
+        env:
+          HUSKY: '0'
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: |
+          npm install --global npm@11.9.0
+          npm ci
+      - name: Record exact input commits
+        env:
+          LANE: ${{ inputs.lane }}
+        run: |
+          mkdir -p .test-results
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert sha == os.environ['GITHUB_SHA']
+          identity = {'backend_sha': sha, 'lane': os.environ['LANE']}
+          if identity['lane'] == 'consumer':
+              web = subprocess.check_output(['git', '-C', 'consumer-web', 'rev-parse', 'HEAD'], text=True).strip()
+              assert web == json.loads(Path('.github/consumer-web.json').read_text())['ref']
+              identity['web_sha'] = web
+          Path('.test-results/identity.json').write_text(json.dumps(identity, indent=2))
+          PY
+      - name: Complete core partition
+        if: inputs.lane == 'core'
+        env:
+          SHARD: ${{ inputs.shard }}
+        run: uv run --no-sync python scripts/ci_checks.py core --index "$SHARD"
+      - name: Real independent consumers
+        if: inputs.lane == 'consumer'
+        env:
+          WEB_DATASET_CHECKOUT: ${{ github.workspace }}/consumer-web
+          WEB_COMPLETION_CHECKOUT: ${{ github.workspace }}/consumer-web
+        run: make integration-consumer
+      - name: API startup and health
+        if: inputs.lane == 'smoke'
+        run: |
+          set -euo pipefail
+          uv run --no-sync python -m api.multirag_server > .test-results/server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          uv run --no-sync python scripts/smoke.py --wait 180 | tee .test-results/smoke.json
+      - name: Cache fixed quality model
+        if: inputs.lane == 'quality'
+        uses: actions/cache@v4
+        with:
+          path: .cache/evals
+          key: chinese-eval-${{ hashFiles('scripts/provision_eval_assets.py') }}
+      - name: Explicit local model quality regression
+        if: inputs.lane == 'quality'
+        run: |
+          make eval-assets
+          make eval
+      - name: Capture service diagnostics
+        if: failure()
+        run: |
+          mkdir -p .test-results/services
+          for name in ci-minio ci-milvus; do
+            docker logs --tail 200 "$name" > ".test-results/services/$name.log" 2>&1 || true
+          done
+      - name: Remove only this hosted job's infrastructure
+        if: always()
+        run: |
+          docker rm -f -v ci-minio ci-milvus >/dev/null 2>&1 || true
+          rm -f configs/local.service_conf.yaml
+      - name: Upload exact-source evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-${{ inputs.lane }}-${{ inputs.shard }}
+          path: .test-results/
+          include-hidden-files: true
+          retention-days: 14
