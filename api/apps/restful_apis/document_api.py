@@ -547,14 +547,15 @@ async def list_documents(
                 docs_filter, filter_total = DocumentService.get_filter_by_kb_id(
                     sync_db,
                     dataset_id,
-                    keywords,
+                    keywords or "",
                     converted_statuses,
                     file_types,
                     suffix or [],
                 )
                 return get_result(data={"total": filter_total, "filter": docs_filter})
             except Exception as exc:
-                return server_error_response(exc)
+                logger.error("Document filter aggregation failed (%s)", type(exc).__name__)
+                return get_error_data_result(retmsg="Document filters are unavailable.")
 
         if document_id and not DocumentService.query(sync_db, id=document_id, kb_id=dataset_id):
             return get_error_data_result(retmsg=f"You don't own the document {document_id}.")

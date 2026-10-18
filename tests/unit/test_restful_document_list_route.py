@@ -455,3 +455,15 @@ def test_filter_ignores_unused_document_and_metadata_parameters(client: TestClie
     monkeypatch.setattr(DocumentService, "get_filter_by_kb_id", classmethod(lambda *_: ({"suffix": {"pdf": 81}}, 81)))
     body = client.get(_PATH, params={"type": "filter", "page": 10, "page_size": 1, "metadata": "invalid JSON", "metadata_condition": "invalid JSON", "id": "a", "ids": "b"}).json()
     assert body == {"code": 0, "data": {"total": 81, "filter": {"suffix": {"pdf": 81}}}}
+
+
+def test_filter_failure_uses_rest_error_and_normalizes_optional_keywords(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_args, **_kwargs: True))
+
+    def fail(cls: Any, db: Any, kb_id: str, keywords: str, *args: Any) -> Any:
+        assert keywords == ""
+        raise RuntimeError("private storage failure")
+
+    monkeypatch.setattr(DocumentService, "get_filter_by_kb_id", classmethod(fail))
+    body = client.get(_PATH, params={"type": "filter"}).json()
+    assert body == {"code": 102, "message": "Document filters are unavailable."}
