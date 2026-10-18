@@ -385,7 +385,7 @@ class DocumentService(CommonService):
         ), count
 
     @classmethod
-    def get_filter_by_kb_id(cls, db: Session, kb_id, keywords, run_status, types, suffix):
+    def get_filter_by_kb_id(cls, db: Session, kb_id: str, keywords: str, run_status: list[str], types: list[str], suffix: list[str]) -> tuple[dict, int]:
         """
         优化版本：使用数据库聚合查询提高性能
 
@@ -470,10 +470,7 @@ class DocumentService(CommonService):
         filtered_doc_ids = [r[0] for r in db.execute(doc_ids_subquery).all()]
         all_meta = {}
         if filtered_doc_ids:
-            try:
-                all_meta = DocMetadataService.get_metadata_for_documents(db, filtered_doc_ids, kb_id)
-            except Exception as e:
-                logging.warning(f"Failed to fetch metadata for kb {kb_id}: {e}")
+            all_meta = DocMetadataService.get_metadata_for_documents(db, filtered_doc_ids, kb_id)
 
         metadata_counter = {}
         empty_metadata_count = 0
