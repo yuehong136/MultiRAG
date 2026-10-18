@@ -9,8 +9,11 @@ facade（``sqlalchemy.orm.Session``），"AsyncSession 直递同步 service" 的
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
+import pytest
 from fastapi import Response
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -408,3 +411,13 @@ def test_version_public_route_has_no_authentication_dependency(client):
     calls = _dependency_calls(client.app, "GET", "/api/v1/system/version")
     assert async_current_user not in calls
     assert get_db not in calls
+
+
+def test_public_healthz_hides_internal_probe_diagnostics(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def degraded(_db: AsyncSession) -> tuple[dict[str, Any], bool]:
+        return {"status": "nok", "db": "nok", "_meta": {"db": {"error": "private DSN and config"}}}, False
+
+    monkeypatch.setattr(_system_route_module(), "run_health_checks_async", degraded)
+    response = client.get("/api/v1/system/healthz")
+    assert response.status_code == 500
+    assert response.json() == {"status": "nok", "db": "nok"}

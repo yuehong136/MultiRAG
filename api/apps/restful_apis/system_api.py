@@ -211,11 +211,13 @@ async def get_config() -> dict[str, Any]:
 
 
 @router.get("/system/healthz", summary="健康检查", response_description="返回系统健康状态")
-async def healthz(response: Response, db: AsyncSession = Depends(get_async_db)):
+async def healthz(response: Response, db: AsyncSession = Depends(get_async_db)) -> dict[str, Any]:
     """纯异步示范端点：DB 探针走 AsyncSession 全链路，其余组件检查经线程池执行。"""
     result, all_ok = await run_health_checks_async(db)
     response.status_code = 200 if all_ok else 500
-    return result
+    # Probe diagnostics can contain connection details and driver exceptions.
+    # Public readiness only exposes component states.
+    return {key: value for key, value in result.items() if not key.startswith("_")}
 
 
 @router.get("/system/tokens", summary="获取API访问令牌列表", response_description="成功获取并返回令牌列表")
