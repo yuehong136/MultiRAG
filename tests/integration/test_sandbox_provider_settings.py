@@ -13,9 +13,8 @@ from agent.sandbox import client
 from api.db.db_models import SystemSettings
 
 
-def test_local_provider_uses_committed_settings_with_environment_override(pg_scratch_engine: Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    SystemSettings.__table__.create(pg_scratch_engine)
-    sessions = sessionmaker(pg_scratch_engine, expire_on_commit=False)
+def test_local_provider_uses_committed_settings_with_environment_override(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sessions = sessionmaker(bootstrapped_engine, expire_on_commit=False)
     saved = {"python_bin": sys.executable, "work_dir": str(tmp_path / "runs"), "timeout": 9, "max_artifacts": 2}
     with sessions() as db:
         db.add_all(
@@ -50,3 +49,7 @@ def test_local_provider_uses_committed_settings_with_environment_override(pg_scr
             assert json.loads(readback.value) == saved
     finally:
         client.reload_provider()
+        with sessions() as db:
+            for setting in db.scalars(select(SystemSettings).where(SystemSettings.name.in_(("sandbox.provider_type", "sandbox.local")))):
+                db.delete(setting)
+            db.commit()
