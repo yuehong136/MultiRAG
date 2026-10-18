@@ -66,6 +66,11 @@ def embedding_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
     cfg = CONFIGS["milvus"]
     reader = MilvusClient(uri=cfg["hosts"], user=cfg.get("username", ""), password=cfg.get("password", ""), db_name=cfg.get("db_name") or "default")
     chunk_ids = [uuid4().hex for _ in range(3)]
+    # Keep a separate record: the parent fixture rewrites its own listener/SQL
+    # record during teardown. Register the collection before a setup RPC can fail.
+    record_path = env["record_path"].with_suffix(".embedding.json")
+    record = {"database": env["engine"].url.database, "embedding_collection": collection, "embedding_model_ids": models, "embedding_chunk_ids": chunk_ids}
+    record_path.write_text(json.dumps(record))
     try:
         schema = reader.create_schema(auto_id=False, enable_dynamic_field=True)
         schema.add_field("pk", DataType.VARCHAR, is_primary=True, max_length=512)
@@ -94,9 +99,6 @@ def embedding_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
         reader.flush(collection, timeout=60)
         assert settings.docStoreConn.db_type() == "milvus"
         env.update(embedding_state=state, model_ids=models, collection=collection, reader=reader, chunk_ids=chunk_ids)
-        record = json.loads(env["record_path"].read_text())
-        record.update(embedding_collection=collection, embedding_model_ids=models, embedding_chunk_ids=chunk_ids)
-        env["record_path"].write_text(json.dumps(record))
         yield env
     finally:
         if reader.has_collection(collection):
@@ -107,9 +109,8 @@ def embedding_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatc
             db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(models)))
         with env["engine"].connect() as db:
             assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.id.in_(models))) == 0
-        record = json.loads(env["record_path"].read_text())
         record.update(embedding_collection_removed=True, embedding_models_removed=True)
-        env["record_path"].write_text(json.dumps(record))
+        record_path.write_text(json.dumps(record))
 
 
 def vectors(env: dict[str, Any]) -> list[dict[str, Any]]:
