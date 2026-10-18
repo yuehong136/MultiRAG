@@ -81,10 +81,10 @@ S3 保留完整快照与删除安全边界，Go 模型复用本地实例隔离�
 | --- | --- | --- |
 | Python 最终相关单测 | 最终覆盖 245 个不同节点。首轮 244 通过、1 个 consumer 清单断言失败；修复后仅补跑相关 harness，33 通过，覆盖首轮失败及 32 个重复节点。 | `integration/python-unit/`、`integration/python-unit-repair/` |
 | Python 定向组合 integration | 20 个不同场景完成。首轮 17 通过、3 个 embedding fixture 初始化错误；Milvus 在期间重启。恢复后同文件 4 项全部通过，包含 1 个重复节点。使用 REQUIRE_SERVICES=1，无缺服务 skip。 | `integration/python-integration/`、`integration/python-integration-repair/` |
-| Python 静态检查 | 改动 Python 文件 Ruff/format、5 个相关文件 mypy、8 条 import contract、async DB guard 和 diff 检查通过。两个最终测试支持文件另做定向 Ruff/format；生产静态输入未变。 | `integration/python-static/manifest.json`、最终补充退出记录 |
+| Python 静态检查 | 改动 Python 文件 Ruff/format、5 个相关文件 mypy、8 条 import contract、async DB guard 和 diff 检查通过。两个最终测试支持文件另做定向 Ruff/format；生产静态输入未变。 | `integration/python-static/manifest.json`、`integration/final-static-supplement.json` |
 | Go 最终组合 | `9344e3d` 上 7 个相关包 race：1332 个通过的测试/子测试事件；13 个已登记的无关 live opt-in 未验收。新增 inference SQL 测试实际执行。全部 internal build/vet、三个 main 独立构建退出 0。最终 411 个 Go/目录/锁文件/检查脚本输入哈希一致，后续仅 Python/Web/文档变化。 | `integration/go-combo/manifest.json`、`audit.json`、`tests.jsonl` |
 | Go 实际业务链 | CLI→实际 HTTP listener→scratch PostgreSQL→两个受控 provider，检查 SQL 绑定和返回契约；目录 loader、实例绑定和批量维度另有受控服务验收。 | `A/`、`B/` 的命令与资源清单 |
-| ES | Elasticsearch 8.11.3 自有容器上 10 项真实集成通过；14 个精确测试索引和容器删除后读回不存在。受影响 30 单测通过，33 个未改 harness 结果复用。 | `G/resource-readback.json`、`G/owned-resource-events.jsonl`、G final |
+| ES | Elasticsearch 8.11.3 自有容器上 10 项真实集成通过；14 个精确测试索引和容器删除后读回不存在。受影响 30 单测通过，33 个未改 harness 结果复用。 | `G/resource-readback.json`、`G/owned-resource-events.json`、G final |
 | S3 / 权限组合 | 145 相关单测、17 个 PostgreSQL/MinIO/Milvus/授权组合场景及 4 个补充回归通过；真实 HTTP 拒绝与持久化/失败副作用独立读回。计数为该线不同执行，不与最终组合相加。 | F final、`F/cleanup-resource-readback.json` |
 | Web API / UI | 239 API 测试；最终 19 个设置/元数据 UI 测试；最终 build、相关 lint、文件大小检查通过。完整 lint 为 0 错误、1366 个既有 warning。E 的 27 UI 测试及浏览器行为证据按 6 个不变输入哈希复用。 | D final、`D/input-hashes.json`、E accepted |
 | 浏览器与真实消费者 | 按标注 contact sheet 审阅 E 解析器/单选及 D 最终浅深主题页面。D 浏览器受控 HTTP：不兼容累计 check=1/write=0，兼容后累计 check=2/write=1；真实后端消费者另跑实际 Web API client，最终补跑通过。 | `E/contact-sheet.png`、`D/settings-contact-sheet-final.png`、`D/browser-acceptance.json`、最终 integration 报告 |

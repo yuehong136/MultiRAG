@@ -3660,3 +3660,7 @@ Go build/vet `./internal/...`、server/admin/CLI 三个独立 main 构建及 6 �
 worker lifespan、全量 Go endpoint parity、其他 session 写入/生成入口和 JWT 单会话撤销未验收。
 同租户/private/team Memory 与 beta 下载由此前独立提交验收，本项不扩展那些合同。
 未改共享 main/Web、未 push；候选可按本线顺序交由组合 owner 合入后做最终组合回归。
+
+## 1046042e 后续 20 项（2026-10-18）
+
+逐项结论、提交与验证见 [本批交付报告](batch-after-1046042e.md)。本地已提交；未 push、未部署，远程 CI 待运行。
