@@ -50,8 +50,16 @@ def test_mixed_sort_keeps_other_fields_order_and_options(backend: str) -> None:
         {"create_timestamp_flt": {"order": "desc", "unmapped_type": "float"}},
         {"page_num_int": number},
         {"top_int": top},
-        {"docnm_kwd": {"order": "asc", "unmapped_type": "text"}},
+        {"docnm_kwd": {"order": "asc", "unmapped_type": "keyword"}},
     ]
+
+
+@pytest.mark.parametrize("backend", ["core", "memory"])
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+@pytest.mark.parametrize("field", ["docnm_kwd", "missing_kwd"])
+def test_keyword_sort_supports_unmapped_fields(backend: str, direction: str, field: str) -> None:
+    query = _search(_connection(backend), getattr(OrderByExpr(), direction)(field))
+    assert query["sort"] == [{field: {"order": direction, "unmapped_type": "keyword"}}]
 
 
 @pytest.mark.parametrize("backend", ["core", "memory"])
@@ -81,7 +89,7 @@ def test_mixed_sort_deep_page_preserves_real_search_after_cursor() -> None:
     assert len(queries) == 2
     assert queries[1]["search_after"] == [999]
     for query in queries:
-        assert query["sort"] == [{"_order_id": {"order": "asc", "unmapped_type": "text"}}]
+        assert query["sort"] == [{"_order_id": {"order": "asc", "unmapped_type": "keyword"}}]
         assert "from" not in query
 
 

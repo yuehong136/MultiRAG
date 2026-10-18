@@ -250,7 +250,7 @@ class ESConnection(ESConnectionBase):
                     # Existing indices may map id as text, which cannot be sorted.
                     continue
                 else:
-                    order_info = {"order": order, "unmapped_type": "text"}
+                    order_info = {"order": order, "unmapped_type": "keyword"}
                 orders.append({field: order_info})
             s = s.sort(*orders)
         if agg_fields:

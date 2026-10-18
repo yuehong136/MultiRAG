@@ -31,6 +31,10 @@ def test_metadata_es_dependency_is_prepared_before_collection() -> None:
     assert "elasticsearch" in required_services(suite_paths("core"))
 
 
+def test_keyword_id_contract_prepares_only_disposable_es() -> None:
+    assert required_services([INTEGRATION / "test_es_conn_keyword_ids.py"]) == {"elasticsearch"}
+
+
 def test_explicit_metadata_es_failure_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("METADATA_TEST_ES_URL", "http://owned.invalid:9200")
     monkeypatch.delenv("INTEGRATION_NO_TESTCONTAINERS", raising=False)

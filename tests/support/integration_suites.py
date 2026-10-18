@@ -135,6 +135,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_es_conn_keyword_ids.py":
+            required.add("elasticsearch")
+            continue
         if path.name == "test_azure_storage_protocol.py":
             # Real SDKs with an owned HTTP transport; no infrastructure needed.
             continue

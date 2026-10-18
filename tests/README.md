@@ -90,9 +90,11 @@ API 文档在明暗主题、1440×1000 和 1024×768 视口检查路由、脚本
 
 入口先做协议就绪检查，再导入应用。PG、Redis、MinIO 探测包含认证；Milvus 查询版本；
 Infinity 在有时限的子进程内完成真实 Thrift 握手和数据库列表读取。
-metadata pushdown 的 ES 合同在收集前准备 Elasticsearch 8：显式
+metadata pushdown 与 `test_es_conn_keyword_ids.py` 的 ES 合同在收集前准备 Elasticsearch 8：显式
 `METADATA_TEST_ES_URL` 指向可丢弃的专用实例，否则由 Testcontainers 创建和回收。
-该测试不会隐式使用应用的 ES 地址，显式地址不可用或版本不符时直接失败。
+这些测试不会隐式使用应用的 ES 地址，显式地址不可用或版本不符时直接失败。
+ID 合同仅需要 ES，用独立索引验证 keyword 映射、缺失字段排序、精确过滤及历史 text ID 兼容，
+并独立读回删除结果；更新模板不会迁移已有索引。
 已有实例只读探测、不会由测试框架停止；缺失的 PG、Redis、MinIO、Infinity 可用
 Testcontainers 启动，镜像从 Compose 读取。Milvus 必须预先提供，当前不自动创建整套
 Milvus 依赖。`INTEGRATION_NO_TESTCONTAINERS=1` 禁用自动启动。
