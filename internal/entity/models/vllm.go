@@ -190,7 +190,7 @@ func (v *VLLMModel) ListModels(config *APIConfig) ([]string, error) {
 	}
 	defer resp.Body.Close()
 	var result struct {
-		Data []struct {
+		Data *[]struct {
 			ID string `json:"id"`
 		} `json:"data"`
 		Error json.RawMessage `json:"error"`
@@ -201,11 +201,15 @@ func (v *VLLMModel) ListModels(config *APIConfig) ([]string, error) {
 	if len(result.Error) != 0 && string(result.Error) != "null" {
 		return nil, fmt.Errorf("vllm: model list error")
 	}
-	names := make([]string, 0, len(result.Data))
-	for _, item := range result.Data {
-		if item.ID != "" {
-			names = append(names, item.ID)
+	if result.Data == nil {
+		return nil, fmt.Errorf("vllm: missing model list")
+	}
+	names := make([]string, 0, len(*result.Data))
+	for _, item := range *result.Data {
+		if strings.TrimSpace(item.ID) == "" {
+			return nil, fmt.Errorf("vllm: invalid model ID")
 		}
+		names = append(names, item.ID)
 	}
 	return names, nil
 }

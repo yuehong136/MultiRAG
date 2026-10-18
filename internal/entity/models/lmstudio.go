@@ -281,7 +281,8 @@ func (l *LMStudioModel) Balance(api *APIConfig) (map[string]interface{}, error) 
 	return nil, fmt.Errorf("lmstudio: balance is not implemented")
 }
 func (l *LMStudioModel) CheckConnection(api *APIConfig) error {
-	return fmt.Errorf("lmstudio: connection check is not implemented")
+	_, err := l.ListModels(api)
+	return err
 }
 
 var _ ModelDriver = (*LMStudioModel)(nil)
