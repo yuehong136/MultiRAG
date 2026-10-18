@@ -199,6 +199,16 @@ func (h *Handler) AuthCheck(c *gin.Context) {
 	successNoData(c, "Admin is authorized")
 }
 
+// ListTasks returns ingestion task summaries for authenticated administrators.
+func (h *Handler) ListTasks(c *gin.Context) {
+	tasks, err := h.service.ListTasks()
+	if err != nil {
+		responseWithCode(c, err.Error(), http.StatusInternalServerError, common.CodeServerError)
+		return
+	}
+	success(c, tasks, "Get all tasks")
+}
+
 // ListUsers handle list users
 func (h *Handler) ListUsers(c *gin.Context) {
 	users, err := h.service.ListUsers()

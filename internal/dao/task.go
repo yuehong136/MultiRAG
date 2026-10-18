@@ -57,3 +57,10 @@ func (dao *TaskDAO) DeleteByTenantID(tenantID string) (int64, error) {
 	result := DB.Unscoped().Where("doc_id IN (SELECT id FROM t_ai_documents WHERE tenant_id = ?)", tenantID).Delete(&entity.Task{})
 	return result.RowsAffected, result.Error
 }
+
+// GetAllTasks returns ingestion tasks for the administrator task list.
+func (dao *TaskDAO) GetAllTasks() ([]*entity.Task, error) {
+	tasks := make([]*entity.Task, 0)
+	err := DB.Find(&tasks).Error
+	return tasks, err
+}

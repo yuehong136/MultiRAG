@@ -34,6 +34,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -98,6 +99,28 @@ func (s *Service) Logout(user interface{}) error {
 		return s.userDAO.UpdateAccessToken(u, invalidToken)
 	}
 	return nil
+}
+
+// ListTasks lists ingestion task summaries without document contents or logs.
+func (s *Service) ListTasks() ([]map[string]interface{}, error) {
+	tasks, err := s.taskDAO.GetAllTasks()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]interface{}, 0, len(tasks))
+	for _, task := range tasks {
+		chunkCount := 0
+		if task.ChunkIDs != nil {
+			chunkCount = len(strings.Fields(*task.ChunkIDs))
+		}
+		result = append(result, map[string]interface{}{
+			"id": task.ID, "task_type": task.TaskType, "document_id": task.DocID,
+			"chunk_count": chunkCount, "from_page": task.FromPage, "to_page": task.ToPage,
+			"priority": task.Priority, "duration": task.ProcessDuration, "progress": task.Progress,
+			"retry_count": task.RetryCount, "digest": task.Digest,
+		})
+	}
+	return result, nil
 }
 
 // GetUserByToken get user by access token

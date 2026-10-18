@@ -55,6 +55,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 			// Auth
 			protected.GET("/auth", r.handler.AuthCheck)
 
+			// Ingestion tasks are visible only through the admin auth middleware.
+			protected.GET("/tasks", r.handler.ListTasks)
+
 			// User management
 			protected.GET("/users", r.handler.ListUsers)
 			protected.POST("/users", r.handler.CreateUser)

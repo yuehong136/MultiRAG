@@ -116,6 +116,9 @@ LOGOUT;
 -- User management
 REGISTER USER 'john' AS 'John Doe' PASSWORD 'secret';
 LIST USERS;
+
+-- Admin mode: ingestion task summaries (read-only)
+LIST TASKS;
 SHOW USER 'john';
 
 -- Service management
@@ -208,3 +211,12 @@ An upload followed by indexing failure returns an error explaining that files
 remain saved and reindex is needed. Uninstall issues one Files delete request;
 the backend coordinates index cleanup. A delete-space 202 remains pending until
 the space becomes unavailable. See [the core contract](../../docs/skills/CORE_CONTRACT.md).
+
+`LIST TASKS;` requires `--admin` and an authenticated administrator session.
+It calls `GET /api/v1/admin/tasks`; user mode rejects this command. Empty task
+lists return an empty array. `chunk_count` counts whitespace-separated chunk IDs,
+including zero for missing IDs. Task logs and chunk contents are not included.
+
+SQL dataset search (`SEARCH 'question' ON DATASETS 'name1,name2';`) and its sequential/concurrent
+benchmark modes call `POST /api/v1/datasets/search` with `dataset_ids` and Bearer
+authentication. Dataset names resolve through `GET /api/v1/datasets` first.

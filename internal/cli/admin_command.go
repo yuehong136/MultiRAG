@@ -540,3 +540,22 @@ func (c *MultiRAGClient) ShowAdminVersion(cmd *Command) (ResponseIf, error) {
 	result.Duration = 0
 	return &result, nil
 }
+
+// ListAdminTasks lists ingestion task summaries in admin mode.
+func (c *MultiRAGClient) ListAdminTasks(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "admin" {
+		return nil, fmt.Errorf("this command is only allowed in ADMIN mode")
+	}
+	resp, err := c.HTTPClient.Request("GET", "/admin/tasks", "admin", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list ingestion tasks: %w", err)
+	}
+	if err := checkAuthResponse("list ingestion tasks", resp); err != nil {
+		return nil, err
+	}
+	var result CommonResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to list ingestion tasks: invalid JSON (%w)", err)
+	}
+	return &result, nil
+}

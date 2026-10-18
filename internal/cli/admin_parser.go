@@ -24,6 +24,15 @@ func (p *Parser) parseAdminListCommand() (*Command, error) {
 	p.nextToken() // consume LIST
 
 	switch p.curToken.Type {
+	case TokenTasks:
+		p.nextToken()
+		if p.curToken.Type != TokenSemicolon {
+			return nil, fmt.Errorf("expected semicolon after TASKS")
+		}
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
+		return NewCommand("list_admin_tasks"), nil
 	case TokenServices:
 		p.nextToken()
 		if err := p.expectSemicolon(); err != nil {
