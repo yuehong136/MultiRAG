@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_async_db, get_db
@@ -109,6 +110,28 @@ def test_list_documents_thumbnail_wire(client, monkeypatch, thumbnail: str | Non
     assert response.status_code == 200 and response.json()["code"] == 0
     assert response.json()["data"]["docs"][0]["thumbnail"] == expected
     _assert_sync_facade(sessions)
+
+
+@pytest.mark.parametrize("stage", ["permission", "metadata", "query", "mapping"])
+def test_list_documents_storage_failures_do_not_expose_internal_details(client: TestClient, monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    _stub_list(monkeypatch, [], [])
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise ProgrammingError("SELECT * FROM private_document_metadata", {"password": "private-password"}, RuntimeError("permission denied for private-reader"))
+
+    targets = {
+        "permission": (KnowledgebaseService, "accessible"),
+        "metadata": (DocMetadataService, "get_flatted_meta_by_kbs"),
+        "query": (DocumentService, "get_by_kb_id"),
+        "mapping": (_route_module().document_api_service, "map_doc_keys"),
+    }
+    owner, method = targets[stage]
+    monkeypatch.setattr(owner, method, fail)
+    params = {"metadata": '{"category":["fruit"]}'} if stage == "metadata" else {}
+    response = client.get(_PATH, params=params)
+    assert response.status_code == 200
+    assert response.json() == {"code": RetCode.DATA_ERROR, "message": "failed to get documents"}
+    assert all(value not in response.text for value in ["ProgrammingError", "SELECT", "private_document_metadata", "private-password", "private-reader", "permission denied"])
 
 
 def test_list_documents_maps_fields_and_forwards_filters(client, monkeypatch):

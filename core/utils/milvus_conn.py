@@ -25,12 +25,13 @@ import re
 import time
 from collections.abc import Mapping
 from functools import cmp_to_key
+from pathlib import Path
 from typing import Any
 
 from pymilvus import Collection, Function
 from pymilvus.client.abstract import AnnSearchRequest, BaseRanker
 from pymilvus.client.constants import DEFAULT_CONSISTENCY_LEVEL
-from pymilvus.client.types import FunctionType, OmitZeroDict
+from pymilvus.client.types import FunctionType, IndexState, LoadState, OmitZeroDict
 from pymilvus.milvus_client.index import IndexParam, IndexParams
 from pymilvus.orm import utility
 from pymilvus.orm.collection import CollectionSchema, FieldSchema
@@ -47,6 +48,7 @@ from common.doc_store.doc_store_base import (
     OrderByExpr,
 )
 from common.doc_store.milvus_conn_base import MilvusConnectionBase
+from common.file_utils import get_project_base_directory
 from common.float_utils import get_float
 from common.string_utils import truncate_utf8_bytes
 from common.tag_feature_utils import parse_tag_features
@@ -235,6 +237,42 @@ class MilvusConnection(MilvusConnectionBase):
 
     def __init__(self):
         super().__init__(logger_name="multirag.milvus_conn")
+
+    def create_idx(self, index_name: str | list[str], dataset_id: str | None, vector_size: int, parser_id: str | None = None) -> bool:
+        """Give manual insertion the same dense/BM25 schema as parsed chunks."""
+        if isinstance(index_name, list):
+            if not index_name:
+                return False
+            collection_name = index_name[0]
+        else:
+            collection_name = index_name
+        mapping_path = Path(get_project_base_directory()) / "configs" / "mapping.json"
+        with mapping_path.open(encoding="utf-8") as source:
+            mapping = json.load(source)
+        self.create_collection_with_mapping(collection_name, mapping, {"vector": vector_size, f"q_{vector_size}_vec": vector_size})
+        return True
+
+    def ensure_collection_loaded(self, collection_name: str, timeout: float = 60.0) -> None:
+        """Wait for another initializer's vector indexes before loading or reading."""
+        conn = self._get_connection()
+        deadline = time.monotonic() + timeout
+        if conn.get_load_state(collection_name, timeout=timeout) == LoadState.Loaded:
+            return
+        fields = conn.describe_collection(collection_name, timeout=timeout)["fields"]
+        vector_fields = {field["name"] for field in fields if "VECTOR" in DataType(field["type"]).name}
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Milvus collection indexes are not ready.")
+            indexes = conn.list_indexes(collection_name, timeout=remaining)
+            if any(index.state == IndexState.Failed for index in indexes):
+                raise RuntimeError("Milvus collection index creation failed.")
+            if vector_fields <= {index.field_name for index in indexes if index.state == IndexState.Finished}:
+                # The SDK waits for load completion. Existence alone does not
+                # make a collection safe for the source history snapshot.
+                conn.load_collection(collection_name, timeout=max(deadline - time.monotonic(), 0.001))
+                return
+            time.sleep(min(0.05, remaining))
 
     @staticmethod
     def field_keyword(field_name: str) -> bool:
@@ -561,6 +599,12 @@ class MilvusConnection(MilvusConnectionBase):
         try:
             schema_dict = conn.describe_collection(collection_name)
             schema_fields = {field["name"]: field for field in schema_dict.get("fields", [])}
+            for row in processed_rows:
+                for name in row:
+                    if re.fullmatch(r"q_\d+_vec", name):
+                        field = schema_fields.get(name, {})
+                        if field.get("type") != DataType.FLOAT_VECTOR or int(field.get("params", {}).get("dim", 0)) != int(name[2:-4]):
+                            raise ValueError("Milvus embedding field is not indexed in the collection schema; rebuild the collection before inserting chunks.")
             processed_rows = [prepare_milvus_write_row(row, schema_fields) for row in processed_rows]
             for fld in schema_dict.get("fields", []):
                 # Skip primary keys, auto-generated BM25 outputs, and nullable fields —
@@ -1276,13 +1320,13 @@ class MilvusConnection(MilvusConnectionBase):
             }
         )
 
-    def create_collection_with_mapping(self, collection_name: str, mapping: dict, auto_dimensions: dict | None = None):
+    def create_collection_with_mapping(self, collection_name: str, mapping: dict[str, Any], auto_dimensions: dict[str, int] | None = None) -> None:
         """
         Create Milvus collection based on mapping configuration.
         This method is idempotent - returns early if collection already exists.
         """
         if self.has_collection(collection_name):
-            self.logger.info(f"Collection {collection_name} already exists, skipping creation")
+            self.ensure_collection_loaded(collection_name)
             return
 
         dynamic_templates = mapping.get("mappings", {}).get("dynamic_templates", [])
@@ -1408,11 +1452,7 @@ class MilvusConnection(MilvusConnectionBase):
             if field.dtype == DataType.FLOAT_VECTOR:
                 index_params = IndexParams()
                 index_params.add_index(field.name, "IVF_FLAT", field.name, metric_type="COSINE", params={"nlist": 128})
-                try:
-                    self.create_index(collection_name, index_params)
-                    self.logger.info(f"Index created | collection: {collection_name} | index config: {index_params}")
-                except Exception:
-                    self.logger.exception(f"Index creation failed | collection: {collection_name} | index config: {index_params}")
+                self.create_index(collection_name, index_params)
             elif field.dtype == DataType.SPARSE_FLOAT_VECTOR:
                 sparse_index_params = IndexParams()
                 cfg = bm25_config_map.get(field.name, {})
@@ -1428,18 +1468,11 @@ class MilvusConnection(MilvusConnectionBase):
                         "bm25_b": idx_params.get("bm25_b", 0.75),
                     },
                 )
-                try:
-                    self.create_index(collection_name, sparse_index_params)
-                    self.logger.info(f"Sparse index created | collection: {collection_name} | field: {field.name}")
-                except Exception:
-                    self.logger.exception(f"Sparse index creation failed | collection: {collection_name} | field: {field.name}")
+                self.create_index(collection_name, sparse_index_params)
 
         # Load collection
-        try:
-            self.load_collection(collection_name)
-            self.logger.info(f"Collection {collection_name} loaded")
-        except Exception as e:
-            self.logger.warning(f"Collection {collection_name} load failed: {e!s}")
+        self.load_collection(collection_name, timeout=60)
+        self.logger.info(f"Collection {collection_name} loaded")
 
     def get_cluster_stats(self):
         """Get Milvus cluster statistics."""

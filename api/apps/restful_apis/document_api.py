@@ -568,42 +568,43 @@ async def list_documents(
         if document_ids:
             doc_ids = list(document_ids) if doc_ids is None else [candidate for candidate in document_ids if candidate in set(doc_ids)]
 
-        try:
-            docs, total = DocumentService.get_by_kb_id(
-                sync_db,
-                dataset_id,
-                page,
-                page_size,
-                orderby,
-                desc,
-                keywords,
-                converted_statuses,
-                file_types,
-                suffix or [],
-                name=document_name,
-                doc_ids=doc_ids,
-                return_empty_metadata=return_empty_metadata,
-            )
+        docs, total = DocumentService.get_by_kb_id(
+            sync_db,
+            dataset_id,
+            page,
+            page_size,
+            orderby,
+            desc,
+            keywords,
+            converted_statuses,
+            file_types,
+            suffix or [],
+            name=document_name,
+            doc_ids=doc_ids,
+            return_empty_metadata=return_empty_metadata,
+        )
 
-            if create_time_from or create_time_to:
-                docs = [doc for doc in docs if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)]
+        if create_time_from or create_time_to:
+            docs = [doc for doc in docs if (create_time_from == 0 or doc.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or doc.get("create_time", 0) <= create_time_to)]
 
-            output_docs = [document_api_service.map_doc_keys(sync_db, doc) for doc in docs]
-            for doc in output_docs:
-                thumbnail = doc.get("thumbnail")
-                doc["thumbnail"] = thumbnail_url(dataset_id, thumbnail)
-                if doc.get("source_type"):
-                    doc["source_type"] = doc["source_type"].split("/")[0]
-                parser_config = doc.get("parser_config") or {}
-                if parser_config.get("metadata"):
-                    parser_config["metadata"] = turn2jsonschema(parser_config["metadata"])
-                    doc["parser_config"] = parser_config
+        output_docs = [document_api_service.map_doc_keys(sync_db, doc) for doc in docs]
+        for doc in output_docs:
+            thumbnail = doc.get("thumbnail")
+            doc["thumbnail"] = thumbnail_url(dataset_id, thumbnail)
+            if doc.get("source_type"):
+                doc["source_type"] = doc["source_type"].split("/")[0]
+            parser_config = doc.get("parser_config") or {}
+            if parser_config.get("metadata"):
+                parser_config["metadata"] = turn2jsonschema(parser_config["metadata"])
+                doc["parser_config"] = parser_config
 
-            return get_result(data={"total": total, "docs": output_docs})
-        except Exception as exc:
-            return server_error_response(exc)
+        return get_result(data={"total": total, "docs": output_docs})
 
-    return await db.run_sync(_list)  # TODO(async-phase4)
+    try:
+        return await db.run_sync(_list)  # TODO(async-phase4)
+    except Exception as exc:
+        logger.error("Document list failed (%s)", type(exc).__name__)
+        return get_error_data_result(retmsg="failed to get documents")
 
 
 @router.delete("/datasets/{dataset_id}/documents", summary="批量删除文档")

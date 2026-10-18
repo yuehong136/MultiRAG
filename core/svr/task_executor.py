@@ -882,6 +882,7 @@ async def init_kb(row, kb_name):
     # 快速检查：集合/索引已存在则直接返回（避免不必要的 embedding 调用）
     if db_type == "milvus":
         if await thread_pool_exec(settings.docStoreConn.has_collection, idxnm):
+            await thread_pool_exec(settings.docStoreConn.ensure_collection_loaded, idxnm)
             return
     else:
         if await thread_pool_exec(settings.docStoreConn.index_exist, idxnm, kb_id):

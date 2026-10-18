@@ -68,6 +68,7 @@ def document_history(store: Any, index_name: str, dataset_id: str, document_id: 
         connection = store._get_connection()
         if not connection.has_collection(index_name):
             return []
+        store.ensure_collection_loaded(index_name)
         fields = connection.describe_collection(index_name)["fields"]
         vectors = [field["name"] for field in fields if "VECTOR" in DataType(field["type"]).name and not field.get("is_function_output")]
         iterator = Collection(index_name, using=store._using).query_iterator(

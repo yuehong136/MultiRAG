@@ -139,6 +139,21 @@ def row_store() -> tuple[Any, _RowStore]:
     return store, rpc
 
 
+@pytest.mark.parametrize("stage", ["index", "load"])
+def test_collection_initialization_failure_is_not_acknowledged(row_store: tuple[Any, _RowStore], monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    store, _ = row_store
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("collection initialization failed")
+
+    monkeypatch.setattr(store, "has_collection", lambda *_: False)
+    monkeypatch.setattr(store, "create_collection", lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "create_index", fail if stage == "index" else lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "load_collection", fail)
+    with pytest.raises(RuntimeError, match="collection initialization failed"):
+        store.create_idx("scratch", "kb-owned", 1024)
+
+
 @pytest.mark.parametrize("payload", [{"tag_kwd": []}, {"content_with_weight": ["invalid varchar"]}, {"q_2_vec": [0.25]}])
 def test_update_schema_failure_never_loses_original_row(row_store: tuple[Any, _RowStore], payload: dict[str, Any]) -> None:
     store, rpc = row_store

@@ -3,7 +3,9 @@
 import copy
 import json
 import logging
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from pymilvus import DataType, Function, FunctionType, MilvusClient, connections
 from pymilvus.client.search_result import Hit
 
 from common.config_utils import CONFIGS
+from common.doc_store.document_history import document_history
 from core.utils.milvus_conn import MilvusConnection
 
 
@@ -238,3 +241,109 @@ def test_ann_sdk_hit_decodes_tags_and_preserves_payload(mutation_row: dict[str, 
     assert fields["distance"] == [hit.distance]
     assert hit.data == before
     assert _read_row(env) == env["before"]
+
+
+def test_first_manual_chunk_creates_searchable_dense_and_sparse_schema(mutation_collection: dict[str, Any]) -> None:
+    env = mutation_collection
+    name = "manual_bootstrap_" + uuid4().hex
+    reader = env["reader"]
+    vector = [1.0] + [0.0] * 1023
+    row = {
+        "id": "first-manual-chunk",
+        "doc_id": "unparsed-document",
+        "kb_id": "manual-dataset",
+        "content_with_weight": "quasar telescope observation",
+        "content_ltks": "quasar telescope observation",
+        "content_sm_ltks": "quasar telescope observation",
+        "q_1024_vec": vector,
+    }
+    record: dict[str, Any] = {"collection": name, "collection_absent_after_cleanup": False}
+    env["record"]["manual_bootstrap"] = record
+    env["save_record"]()
+    try:
+        assert reader.has_collection(name) is False
+        assert env["store"].insert([row], name, "manual-dataset") == []
+        fields = {field["name"]: field for field in reader.describe_collection(name)["fields"]}
+        record["schema_fields"] = {key: {"type": str(value["type"]), "params": value.get("params", {})} for key, value in fields.items()}
+        env["save_record"]()
+        assert fields["q_1024_vec"]["type"] == DataType.FLOAT_VECTOR
+        assert int(fields["q_1024_vec"]["params"]["dim"]) == 1024
+        assert int(fields["vector"]["params"]["dim"]) == 1024
+        assert fields["content_ltks_sparse"]["type"] == DataType.SPARSE_FLOAT_VECTOR
+        rows = reader.query(name, filter='pk == "first-manual-chunk"', output_fields=["*", "q_1024_vec"], consistency_level="Strong", timeout=30)
+        assert len(rows) == 1 and rows[0]["q_1024_vec"] == vector
+        for field, query in [("q_1024_vec", vector), ("content_ltks_sparse", "quasar telescope")]:
+            hits = reader.search(name, data=[query], anns_field=field, limit=1, consistency_level="Strong", timeout=30)
+            assert len(hits) == 1 and [hit.id for hit in hits[0]] == ["first-manual-chunk"]
+            record[field + "_hits"] = [hit.id for hit in hits[0]]
+        assert env["store"].create_idx(name, "manual-dataset", 1024) is True
+        assert reader.query(name, filter='pk == "first-manual-chunk"', output_fields=["q_1024_vec"], consistency_level="Strong", timeout=30)[0]["q_1024_vec"] == vector
+    finally:
+        if reader.has_collection(name):
+            reader.drop_collection(name)
+        record["collection_absent_after_cleanup"] = not reader.has_collection(name)
+        env["save_record"]()
+        assert record["collection_absent_after_cleanup"] is True
+
+
+def test_insert_rejects_dynamic_only_embedding_without_mutating_source(mutation_row: dict[str, Any]) -> None:
+    env = mutation_row
+    replacement = {**env["source"], "content_with_weight": "must not acknowledge an unsearchable embedding", "q_1024_vec": [1.0] + [0.0] * 1023}
+    errors = env["store"].insert([replacement], env["collection"], "owned-dataset")
+    assert errors and "embedding field is not indexed" in errors[0]
+    assert _read_row(env) == env["before"]
+
+
+def test_history_waits_for_concurrent_collection_initialization(mutation_collection: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = mutation_collection
+    name = "history_bootstrap_" + uuid4().hex
+    store, reader = env["store"], env["reader"]
+    created, release, waiting = threading.Event(), threading.Event(), threading.Event()
+    original_create_index, original_ready = store.create_index, store.ensure_collection_loaded
+    record: dict[str, Any] = {"collection": name, "collection_absent_after_cleanup": False}
+    env["record"]["history_bootstrap"] = record
+    env["save_record"]()
+
+    def pause_indexing(collection_name: str, *args: Any, **kwargs: Any) -> None:
+        if not created.is_set():
+            created.set()
+            assert release.wait(15), "Test did not release owned collection initialization"
+        original_create_index(collection_name, *args, **kwargs)
+
+    def observe_wait(collection_name: str, timeout: float = 60.0) -> None:
+        waiting.set()
+        original_ready(collection_name, timeout)
+
+    monkeypatch.setattr(store, "create_index", pause_indexing)
+    monkeypatch.setattr(store, "ensure_collection_loaded", observe_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            creation = pool.submit(store.create_idx, name, "owned-dataset", 1024)
+            try:
+                assert created.wait(15), "Owned schema was not created"
+                assert reader.has_collection(name) is True
+                history = pool.submit(document_history, store, name, "owned-dataset", "unparsed-document")
+                assert waiting.wait(5), "History bypassed collection readiness"
+                assert history.done() is False
+            finally:
+                release.set()
+            assert creation.result(timeout=30) is True
+            assert history.result(timeout=30) == []
+            record["complete_history"] = []
+            record["concurrent_reader_waited"] = True
+            # An already released collection must be loaded before an exact
+            # history read, rather than being mistaken for empty history.
+            row = {"id": "retained", "doc_id": "unparsed-document", "kb_id": "owned-dataset", "content_with_weight": "retained quasar", "q_1024_vec": [1.0] + [0.0] * 1023}
+            assert store.insert([row], name, "owned-dataset") == []
+            reader.release_collection(name)
+            retained = document_history(store, name, "owned-dataset", "unparsed-document")
+            assert [item["id"] for item in retained] == ["retained"]
+            assert retained[0]["q_1024_vec"] == row["q_1024_vec"]
+            record["released_collection_history_ids"] = [item["id"] for item in retained]
+    finally:
+        release.set()
+        if reader.has_collection(name):
+            reader.drop_collection(name)
+        record["collection_absent_after_cleanup"] = not reader.has_collection(name)
+        env["save_record"]()
+        assert record["collection_absent_after_cleanup"] is True

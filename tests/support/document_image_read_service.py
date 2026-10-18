@@ -8,7 +8,7 @@ import base64
 import copy
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack
 from datetime import UTC, datetime
 from io import BytesIO
@@ -55,6 +55,9 @@ def _json(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, np.generic):
         return value.item()
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        # Milvus BM25 function descriptions include protobuf repeated fields.
+        return list(value)
     raise TypeError(type(value).__name__)
 
 

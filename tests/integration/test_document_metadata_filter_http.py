@@ -1,19 +1,85 @@
 """Typed exact metadata filters through owned HTTP and PostgreSQL resources."""
 
+import asyncio
 import json
 import os
 import subprocess
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
-from api.db.db_models import Document, DocumentMetadata, File, File2Document
+from api.db.db_models import Document, DocumentMetadata, File, File2Document, get_async_db
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.metadata_store_sql import SqlMetadataStore
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api, sql_state
+
+
+def test_document_list_sql_permission_failure_is_safe_and_recoverable(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps import app
+
+    env = management_api
+    dataset, document, user = env["datasets"][0], env["documents"][0], env["users"][0]
+    role = "document_reader_" + uuid4().hex
+    file_id, link_id = uuid4().hex, uuid4().hex
+    monkeypatch.setattr(DocMetadataService, "_store", staticmethod(SqlMetadataStore))
+    restricted_engine = create_async_engine(env["engine"].url, poolclass=NullPool)
+    sessions = async_sessionmaker(restricted_engine, expire_on_commit=False)
+
+    async def restricted_db() -> AsyncIterator[AsyncSession]:
+        async with sessions() as db:
+            await db.execute(sa.text(f'SET ROLE "{role}"'))
+            yield db
+
+    role_created = False
+    try:
+        with env["engine"].begin() as db:
+            db.execute(sa.insert(File).values(id=file_id, parent_id="", tenant_id=user, created_by=user, name="private.txt", type="txt"))
+            db.execute(sa.insert(File2Document).values(id=link_id, file_id=file_id, document_id=document))
+            db.execute(sa.insert(DocumentMetadata).values(id=document, kb_id=dataset, tenant_id=user, meta_fields={"category": "fruit"}))
+            db.execute(sa.text(f'CREATE ROLE "{role}"'))
+            role_created = True
+            db.execute(sa.text(f'GRANT USAGE ON SCHEMA usr_ai TO "{role}"'))
+            db.execute(sa.text(f'GRANT SELECT ON ALL TABLES IN SCHEMA usr_ai TO "{role}"'))
+            db.execute(sa.text(f'REVOKE SELECT ON usr_ai.t_ai_document_metadata FROM "{role}"'))
+        before = sql_state(env)
+        with env["engine"].connect() as db:
+            db.execute(sa.text(f'SET LOCAL ROLE "{role}"'))
+            with pytest.raises(sa.exc.ProgrammingError) as denied:
+                db.execute(sa.select(DocumentMetadata).where(DocumentMetadata.id == document)).all()
+            assert denied.value.orig.sqlstate == "42501"
+        monkeypatch.setitem(app.dependency_overrides, get_async_db, restricted_db)
+        responses = []
+        for credential in [env["keys"][0], env["jwt"][0]]:
+            for params in [{}, {"metadata": '{"category":["fruit"]}'}, {"type": "filter"}]:
+                response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=credential, params=params)
+                assert response.status_code == 200 and response.json()["code"] == 102
+                assert all(value not in response.text for value in [role, "ProgrammingError", "permission denied", "t_ai_document_metadata", "42501", "SELECT"])
+                responses.append({"http": response.status_code, "body": response.json()})
+        with env["engine"].begin() as db:
+            db.execute(sa.text(f'GRANT SELECT ON usr_ai.t_ai_document_metadata TO "{role}"'))
+        response = request_api(env, "GET", f"/datasets/{dataset}/documents", credential=env["keys"][0])
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        assert [doc["id"] for doc in response.json()["data"]["docs"]] == [document]
+        assert sql_state(env) == before
+        with env["engine"].connect() as db:
+            assert db.scalar(sa.select(DocumentMetadata.meta_fields).where(DocumentMetadata.id == document)) == {"category": "fruit"}
+        evidence = {"sqlstate": "42501", "responses": responses, "restored_document_ids": [document], "business_rows_unchanged": True}
+        env["record_path"].with_suffix(".sql-failure.json").write_text(json.dumps(evidence))
+    finally:
+        asyncio.run(restricted_engine.dispose())
+        with env["engine"].begin() as db:
+            if role_created:
+                db.execute(sa.text(f'DROP OWNED BY "{role}"'))
+                db.execute(sa.text(f'DROP ROLE "{role}"'))
+            db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == document))
+            db.execute(sa.delete(File2Document).where(File2Document.id == link_id))
+            db.execute(sa.delete(File).where(File.id == file_id))
 
 
 @pytest.mark.parametrize("kind", ["jwt", "keys"])
