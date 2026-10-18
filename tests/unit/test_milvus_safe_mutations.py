@@ -4,13 +4,16 @@ import ast
 import copy
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from beartype.roar import BeartypeCallHintParamViolation
 from pymilvus import DataType
 from pymilvus.client.search_result import Hit
+from pymilvus.client.types import IndexState, LoadState
 
+from core.utils import milvus_conn
 from core.utils.milvus_conn import MilvusConnection, decode_milvus_tag_fields
 
 
@@ -152,6 +155,57 @@ def test_collection_initialization_failure_is_not_acknowledged(row_store: tuple[
     monkeypatch.setattr(store, "load_collection", fail)
     with pytest.raises(RuntimeError, match="collection initialization failed"):
         store.create_idx("scratch", "kb-owned", 1024)
+
+
+@pytest.mark.parametrize("overrun", [None, "state", "already_loaded", "describe", "indexes", "load"])
+def test_collection_readiness_rpcs_share_one_budget(row_store: tuple[Any, _RowStore], monkeypatch: pytest.MonkeyPatch, overrun: str | None) -> None:
+    store, _ = row_store
+    now = 0.0
+    calls: list[tuple[str, float]] = []
+    durations = {"state": 50.0, "describe": 3.0, "indexes": 4.0, "load": 2.0}
+    expected = [("state", 60.0), ("describe", 10.0), ("indexes", 7.0), ("load", 3.0)]
+    if overrun in {"state", "already_loaded"}:
+        durations["state"] = 61.0
+        expected = expected[:1]
+    elif overrun == "describe":
+        durations.update(state=59.0, describe=2.0)
+        expected = [("state", 60.0), ("describe", 1.0)]
+    elif overrun == "indexes":
+        durations.update(state=59.0, describe=0.25, indexes=0.8)
+        expected = [("state", 60.0), ("describe", 1.0), ("indexes", 0.75)]
+    elif overrun == "load":
+        durations["load"] = 4.0
+
+    def advance(stage: str, timeout: float) -> None:
+        nonlocal now
+        calls.append((stage, timeout))
+        now += durations[stage]
+
+    class RPC:
+        def get_load_state(self, collection: str, timeout: float) -> LoadState:
+            advance("state", timeout)
+            return LoadState.Loaded if overrun == "already_loaded" else LoadState.NotLoad
+
+        def describe_collection(self, collection: str, timeout: float) -> dict[str, Any]:
+            advance("describe", timeout)
+            return {"fields": [{"name": "q_2_vec", "type": DataType.FLOAT_VECTOR}]}
+
+        def list_indexes(self, collection: str, timeout: float) -> list[Any]:
+            advance("indexes", timeout)
+            return [SimpleNamespace(field_name="q_2_vec", state=IndexState.Finished)]
+
+        def load_collection(self, collection: str, timeout: float) -> None:
+            advance("load", timeout)
+
+    monkeypatch.setattr(store, "_get_connection", lambda: RPC())
+    monkeypatch.setattr(milvus_conn, "time", SimpleNamespace(monotonic=lambda: now))
+    if overrun:
+        with pytest.raises(TimeoutError, match="indexes are not ready"):
+            store.ensure_collection_loaded("scratch")
+    else:
+        store.ensure_collection_loaded("scratch")
+        assert now == 59.0
+    assert calls == expected
 
 
 @pytest.mark.parametrize("payload", [{"tag_kwd": []}, {"content_with_weight": ["invalid varchar"]}, {"q_2_vec": [0.25]}])

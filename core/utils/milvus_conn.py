@@ -256,23 +256,30 @@ class MilvusConnection(MilvusConnectionBase):
         """Wait for another initializer's vector indexes before loading or reading."""
         conn = self._get_connection()
         deadline = time.monotonic() + timeout
-        if conn.get_load_state(collection_name, timeout=timeout) == LoadState.Loaded:
-            return
-        fields = conn.describe_collection(collection_name, timeout=timeout)["fields"]
-        vector_fields = {field["name"] for field in fields if "VECTOR" in DataType(field["type"]).name}
-        while True:
+
+        def remaining_budget() -> float:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Milvus collection indexes are not ready.")
-            indexes = conn.list_indexes(collection_name, timeout=remaining)
+            return remaining
+
+        state = conn.get_load_state(collection_name, timeout=remaining_budget())
+        remaining_budget()
+        if state == LoadState.Loaded:
+            return
+        fields = conn.describe_collection(collection_name, timeout=remaining_budget())["fields"]
+        vector_fields = {field["name"] for field in fields if "VECTOR" in DataType(field["type"]).name}
+        while True:
+            indexes = conn.list_indexes(collection_name, timeout=remaining_budget())
             if any(index.state == IndexState.Failed for index in indexes):
                 raise RuntimeError("Milvus collection index creation failed.")
             if vector_fields <= {index.field_name for index in indexes if index.state == IndexState.Finished}:
                 # The SDK waits for load completion. Existence alone does not
                 # make a collection safe for the source history snapshot.
-                conn.load_collection(collection_name, timeout=max(deadline - time.monotonic(), 0.001))
+                conn.load_collection(collection_name, timeout=remaining_budget())
+                remaining_budget()
                 return
-            time.sleep(min(0.05, remaining))
+            time.sleep(min(0.05, remaining_budget()))
 
     @staticmethod
     def field_keyword(field_name: str) -> bool:
