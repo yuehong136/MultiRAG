@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +20,13 @@ func huggingFaceChatBody(name string, messages []Message, config *ChatConfig, st
 	body, err := openAIChatBody(name, messages, config, stream)
 	if err != nil {
 		return nil, err
+	}
+	if config == nil || config.Temperature == nil {
+		if stream {
+			delete(body, "temperature")
+		} else {
+			body["temperature"] = 0.6
+		}
 	}
 	if config != nil && config.Thinking != nil {
 		mode := "disabled"
@@ -75,9 +83,24 @@ func (h *HuggingFaceModel) Encode(name *string, texts []string, api *APIConfig, 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var vectors [][]float64
-	if err := json.NewDecoder(resp.Body).Decode(&vectors); err != nil {
+	var raw [][]*float64
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("huggingface: decode embeddings: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("huggingface: trailing embedding response")
+	}
+	vectors := make([][]float64, len(raw))
+	for i, row := range raw {
+		vectors[i] = make([]float64, len(row))
+		for j, value := range row {
+			if value == nil {
+				return nil, fmt.Errorf("huggingface: null embedding value")
+			}
+			vectors[i][j] = *value
+		}
 	}
 	if err := ValidateEmbeddings(vectors, len(texts)); err != nil {
 		return nil, err

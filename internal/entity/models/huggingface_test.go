@@ -25,7 +25,7 @@ func TestHuggingFaceChatHTTP(t *testing.T) {
 func TestHuggingFaceFailuresHTTP(t *testing.T) { testHostedChatFailures(t, "HuggingFace", true) }
 func TestHuggingFaceCancelHTTP(t *testing.T)   { testHostedCancellation(t, "HuggingFace", true) }
 func TestHuggingFaceEmbeddingHTTP(t *testing.T) {
-	for _, body := range []string{`[[1,2],[3,4]]`, `[]`, `[[1]]`, `[[1,2],[]]`, `[[1,2],[3]]`, `[[1,2],[1e999,2]]`, `{"error":"private"}`} {
+	for _, body := range []string{`[[1,2],[3,4]]`, `[[0,2],[3,0]]`, `[[null,2],[3,4]]`, `[[1,2],[3,4]] {}`, `[]`, `[[1]]`, `[[1,2],[]]`, `[[1,2],[3]]`, `[[1,2],[1e999,2]]`, `{"error":"private"}`} {
 		t.Run(body, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/hf-inference/models/org/model" || r.Header.Get("Authorization") != "Bearer fixture" {
@@ -46,7 +46,7 @@ func TestHuggingFaceEmbeddingHTTP(t *testing.T) {
 			urls["default"] = "http://invalid"
 			key, name := "fixture", "org/model"
 			vectors, err := driver.Encode(&name, []string{"a", "b"}, &APIConfig{APIKey: &key}, nil)
-			if (err == nil) != (body == `[[1,2],[3,4]]`) {
+			if (err == nil) != (body == `[[1,2],[3,4]]` || body == `[[0,2],[3,0]]`) {
 				t.Fatal(vectors, err)
 			}
 		})
