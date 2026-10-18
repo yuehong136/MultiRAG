@@ -1823,8 +1823,8 @@ def update_metadata_setting(request: UpdateMetadataSettingRequest, db: Session =
 # ============================================================================
 # 【废弃通告】设置文档元数据已收编进 RESTful 更新端点：
 #   api/apps/restful_apis/document_api.py（PATCH /api/v1/datasets/{dataset_id}/documents/{document_id}，
-#   body 传 meta_fields，类型校验见 validation_utils.UpdateDocumentReq.validate_document_meta_fields；
-#   PUT 为 deprecated 别名，前端当前仍在发 PUT）。
+#   body 传 meta_fields，类型校验见 document_api.UpdateDocumentRequest）。
+# Web 元数据更新已使用 PATCH；此路径未注册 PUT 别名。
 # 下列旧路由（POST /v1/document/set_meta）已标注 deprecated=True：
 # 前端 knowledge.ts 已迁移到 RESTful 端点，待前端部署后再于后续版本移除。
 # ============================================================================

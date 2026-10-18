@@ -26,6 +26,19 @@ OpenAI 新旧补全路径继续由同一处理器提供，详见 [HTTP API](../.
 chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files REST、chunk PATCH
 以及单项 path/批量 `ids`。旧 run、图片、change_parser 与 upload_info 的退出合同保持。
 
+## 文档与分块更新
+
+文档更新使用 `PATCH /datasets/{dataset_id}/documents/{document_id}`，分块更新使用
+`PATCH /datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}`。
+FastAPI 直接按名称绑定路径、请求体和鉴权依赖，没有 Quart 位置参数兼容转发层。
+Web 的 parser/metadata/chunk 客户端及 Agent Hub 的 MultiRAG 适配器均使用 PATCH，
+两条更新路径的 PUT 返回 405，不因旧测试或过时示例恢复别名。
+
+文档读取使用专用的 `/documents/{doc_id}/preview` 与 `/documents/{doc_id}/download`；
+`/v1/document/get/{doc_id}` 已退出。预览按当前可见性校验，下载继续要求数据集 owner/admin，
+授权实现见[文档读取服务](../../db/services/document_file_service.py)。
+更新、下载和预览的授权策略各自保留，不通过兼容入口绕过。
+
 ## 数据集检索
 
 `POST /datasets/search` 接收非空 `dataset_ids` 和 `question`，返回 REST `code/data` 信封，

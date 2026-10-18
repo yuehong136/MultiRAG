@@ -1299,7 +1299,7 @@ POST /datasets/{dataset_id}/documents/{document_id}/chunks
 **请求**
 
 ```
-PUT /datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}
+PATCH /datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}
 ```
 
 **请求体**

@@ -336,3 +336,24 @@ def test_actual_web_json_download_preserves_bytes(document_files: dict[str, Any]
     assert result["sha256"] == hashlib.sha256(payload).hexdigest()
     assert snapshot(env) == before
     env["record"]["web_json_download_consumer"] = {**result, "resource": resource, "web_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()}
+
+
+def test_retired_document_and_chunk_put_remain_unregistered(document_files: dict[str, Any]) -> None:
+    env = document_files
+    document_path = f"/api/v1/datasets/{env['datasets']['own']}/documents/{env['docs']['own']}"
+    before = snapshot(env)
+    cases = []
+    for path in [document_path, document_path + f"/chunks/{uuid4().hex}"]:
+        for token in [env["jwt"], env["foreign_jwt"], None]:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = requests.put(env["base"] + path, headers=headers, json={"name": "must-not-change.txt", "content": "must not write", "meta_fields": {"guard": "unchanged"}}, timeout=30)
+            assert response.status_code == 405, response.text
+            assert snapshot(env) == before and not env["reads"]
+            cases.append({"path": path, "authenticated": token is not None, "status": response.status_code})
+    from api.apps import app
+
+    paths = app.openapi()["paths"]
+    for path in ["/api/v1/datasets/{dataset_id}/documents/{document_id}", "/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}"]:
+        assert "patch" in paths[path] and "put" not in paths[path]
+    env["record"]["retired_document_chunk_put"] = {"cases": cases, "sql_and_objects_unchanged": True, "no_storage_reads": True}
+    env["record_path"].write_text(json.dumps(env["record"], indent=2))
