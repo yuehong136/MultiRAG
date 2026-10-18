@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -35,6 +36,9 @@ import (
 	"multirag/internal/storage"
 	"multirag/internal/utility"
 )
+
+// ErrFileNoAuthorization is returned when the actor cannot read a file ancestry.
+var ErrFileNoAuthorization = errors.New("No authorization.")
 
 // FileService file service
 type FileService struct {
@@ -227,7 +231,7 @@ func (s *FileService) GetParentFolder(userID, fileID string) (map[string]interfa
 
 	// Permission check
 	if !s.checkFileTeamPermission(file, userID) {
-		return nil, fmt.Errorf("No authorization.")
+		return nil, ErrFileNoAuthorization
 	}
 
 	// Get parent folder
@@ -252,7 +256,7 @@ func (s *FileService) GetAllParentFolders(userID, fileID string) ([]map[string]i
 
 	// Permission check
 	if !s.checkFileTeamPermission(file, userID) {
-		return nil, fmt.Errorf("No authorization.")
+		return nil, ErrFileNoAuthorization
 	}
 
 	// Get all parent folders

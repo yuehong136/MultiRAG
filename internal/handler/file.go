@@ -158,6 +158,18 @@ func (h *FileHandler) GetRootFolder(c *gin.Context) {
 	})
 }
 
+func respondFileAncestryError(c *gin.Context, err error) {
+	if errors.Is(err, dao.ErrSkillManagedFile) {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
+		return
+	}
+	if errors.Is(err, service.ErrFileNoAuthorization) {
+		jsonError(c, common.CodeDataError, service.ErrFileNoAuthorization.Error())
+		return
+	}
+	jsonError(c, common.CodeServerError, err.Error())
+}
+
 // GetParentFolder gets parent folder of a file
 // @Summary Get Parent Folder
 // @Description Get parent folder of a file by file ID
@@ -185,11 +197,7 @@ func (h *FileHandler) GetParentFolder(c *gin.Context) {
 	// Get parent folder with permission check
 	parentFolder, err := h.fileService.GetParentFolder(userID, fileID)
 	if err != nil {
-		if errors.Is(err, dao.ErrSkillManagedFile) {
-			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
-			return
-		}
-		jsonError(c, common.CodeServerError, err.Error())
+		respondFileAncestryError(c, err)
 		return
 	}
 
@@ -227,11 +235,7 @@ func (h *FileHandler) GetAllParentFolders(c *gin.Context) {
 	// Get all parent folders with permission check
 	parentFolders, err := h.fileService.GetAllParentFolders(userID, fileID)
 	if err != nil {
-		if errors.Is(err, dao.ErrSkillManagedFile) {
-			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
-			return
-		}
-		jsonError(c, common.CodeServerError, err.Error())
+		respondFileAncestryError(c, err)
 		return
 	}
 
@@ -268,11 +272,7 @@ func (h *FileHandler) GetFileAncestors(c *gin.Context) {
 	// Get all parent folders with permission check
 	parentFolders, err := h.fileService.GetAllParentFolders(userID, fileID)
 	if err != nil {
-		if errors.Is(err, dao.ErrSkillManagedFile) {
-			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
-			return
-		}
-		jsonError(c, common.CodeServerError, err.Error())
+		respondFileAncestryError(c, err)
 		return
 	}
 
