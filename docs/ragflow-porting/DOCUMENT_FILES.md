@@ -14,6 +14,9 @@
 跨租户和缺失文档均返回 HTTP 404、`code=102`、`Document not found!`，在读取对象前拒绝。
 普通成员能预览但不能下载，下载拒绝为 HTTP 403、`code=109`。
 
+`GET /v1/document/download/{attachment_id}` 按明确兼容承诺保留 deprecated 入口，
+与生成附件 REST 路由注册同一个 handler、同一个异步 Principal 依赖与 owner 命名空间。
+只有在该兼容承诺退出后才移除；不新增未被消费的 `/api/v1/document/download` 别名。
 `GET /v1/document/get/{doc_id}` 已退役。Web 的预览 hook、文档查看页和下载领域 API
 共同使用新合同；SDK 的既有 `GET /api/v1/documents/{document_id}` 和 dataset-scoped
 下载继续保持自身鉴权合同。沙箱产物使用独立 artifact 路由及 run/session 授权。
@@ -31,10 +34,15 @@
   检查归属；本地沿 AsyncSession 显式连接 Document、KB、有效 tenant 和有效成员，
   再复用 SDK 的登记地址与 File→folder 来源校验。停用资源、邀请成员、孤儿文档和
   非法对象路径均拒绝且不读取对象；附件不套用不存在的 Document membership。
+- `d843035c8bbb9f370de2052e7aeaaf151b02833f`：保留明确要求的 `/v1` 兼容路径；
+  不将其改成知识库文档下载，也不复制另一份鉴权或存储实现。
 
 ## 验证入口
 
 `tests/integration/test_document_file_http.py` 通过实际注册 HTTP 路由、scratch PostgreSQL
 与独立 MinIO bucket，检查权限、字节、header、SQL/object 读回和清理。
+同文件的 `external_consumer` 用例通过 `WEB_DOCUMENT_FILE_CHECKOUT`（或
+`WEB_COMPLETION_CHECKOUT`）运行 Web 生产预览 helper 与下载领域 API；它同时登记在
+core 文件集合与 consumer 套件，core 默认排除该 marker，consumer 专门运行。
 运行使用 `make integration TESTS=tests/integration/test_document_file_http.py`，缺服务不能
 以 skip 视作通过。完整 core 与跨仓 consumer 的最终组合由批次集成者执行。

@@ -2,24 +2,26 @@
 
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from pathlib import PurePosixPath
+from typing import Any
 from urllib.parse import quote
 
-from fastapi import Request, Response
+from fastapi import Depends, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.exceptions import HTTPException
 
-from api.db.services.document_file_service import DocumentDownloadDenied, DocumentFile, DocumentFileStorageError, DocumentFileUnavailable
+from api.db.services.document_file_service import DocumentDownloadDenied, DocumentFile, DocumentFileStorageError, DocumentFileUnavailable, read_generated_attachment
+from api.utils.api_utils import Principal, async_current_user
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 
 logger = logging.getLogger(__name__)
 
 
 class DocumentFileRoute(APIRoute):
-    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
 
         async def read_file(request: Request) -> Response:
@@ -61,3 +63,8 @@ def generated_attachment_response(data: bytes, ext: str) -> Response:
     response = Response(content=data, media_type=content_type)
     apply_safe_file_response_headers(response, content_type, ext)
     return response
+
+
+async def download_generated_attachment(attachment_id: str, ext: str = "markdown", principal: Principal = Depends(async_current_user)) -> Response:
+    """One handler for the canonical and explicitly supported /v1 route."""
+    return generated_attachment_response(await read_generated_attachment(principal, attachment_id), ext)

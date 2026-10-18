@@ -19,6 +19,7 @@ from starlette.status import (
 )
 
 from api.apps import manager
+from api.apps.services.document_file_http import DocumentFileRoute, download_generated_attachment
 from api.apps.services.document_image_http import thumbnail_url
 from api.apps.services.sandbox_artifact_service import download_artifact
 from api.common.check_team_permission import check_kb_team_permission
@@ -46,6 +47,9 @@ from common.misc_utils import get_uuid, thread_pool_exec
 from core.nlp import rag_tokenizer, search
 
 router = APIRouter()
+compatibility_file_router = APIRouter(route_class=DocumentFileRoute)
+compatibility_file_router.add_api_route("/download/{attachment_id}", download_generated_attachment, methods=["GET"], summary="下载本人生成的附件（兼容入口）", deprecated=True)
+router.include_router(compatibility_file_router)
 
 
 # ==================== Pydantic Schemas ====================

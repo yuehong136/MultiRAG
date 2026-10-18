@@ -121,7 +121,10 @@ def suite_paths(suite: str) -> list[Path]:
     if suite == "infinity":
         return [path for path in files if path.name in INFINITY_TESTS]
     if suite == "consumer":
-        return [INTEGRATION / name for name in ("test_dataset_search_http.py", "test_dataset_management_http.py", "test_connector_web_sync.py", "test_model_document_web_consumers.py")]
+        return [
+            INTEGRATION / name
+            for name in ("test_dataset_search_http.py", "test_dataset_management_http.py", "test_connector_web_sync.py", "test_model_document_web_consumers.py", "test_document_file_http.py")
+        ]
     if suite == "core":
         return [path for path in files if path.name not in INFINITY_TESTS]
     return files
