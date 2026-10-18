@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from api.apps.services import dataset_search_service
-from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, UserTenant, get_db
+from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, TenantLLM, UserTenant, get_db
 from common import settings
 from common.config_utils import CONFIGS
 from common.constants import RetCode
@@ -170,8 +170,9 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
         env["record_path"].write_text(json.dumps(env["record"]))
 
 
-def request(env: dict[str, Any], method: str, suffix: str, *, token: str | None = None, **kwargs: Any) -> requests.Response:
-    return requests.request(method, env["base"] + "/api/v1/datasets/" + env["dataset"] + suffix, headers={"Authorization": "Bearer " + (token or env["jwt"])}, timeout=30, **kwargs)
+def request(env: dict[str, Any], method: str, suffix: str, *, token: str | None = None, collection: bool = False, **kwargs: Any) -> requests.Response:
+    path = "/api/v1/datasets/search" if collection else "/api/v1/datasets/" + env["dataset"] + suffix
+    return requests.request(method, env["base"] + path, headers={"Authorization": "Bearer " + (token or env["jwt"])}, timeout=30, **kwargs)
 
 
 @pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
@@ -312,30 +313,31 @@ def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: py
     assert graph.await_count == 2
 
 
-def test_http_search_multi_dataset_and_auth_matrix(search_api: dict[str, Any]) -> None:
+@pytest.mark.parametrize("collection", [False, True])
+def test_http_search_multi_dataset_and_auth_matrix(search_api: dict[str, Any], collection: bool) -> None:
     env = search_api
     payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "highlight": True}
-    body = request(env, "POST", "/search", json=payload).json()
+    body = request(env, "POST", "/search", collection=collection, json=payload).json()
     assert body["code"] == 0, body
     assert {chunk["kb_id"] for chunk in body["data"]["chunks"]} == {env["dataset"], env["second"]}
     assert body["data"]["total"] == 2
-    assert request(env, "POST", "/search", token=env["api_key"], json=payload).json()["code"] == 109
+    assert request(env, "POST", "/search", collection=collection, token=env["api_key"], json=payload).json()["code"] == 109
     with Session(env["engine"]) as db:
         db.add(UserTenant(id=uuid4().hex, user_id=env["owners"][1], tenant_id=env["owners"][0], invited_by=env["owners"][0], role="normal"))
         db.commit()
     try:
-        sdk = request(env, "POST", "/search", token=env["api_key"], json=payload).json()
+        sdk = request(env, "POST", "/search", collection=collection, token=env["api_key"], json=payload).json()
         assert sdk["code"] == 0 and sdk["data"]["total"] == 2, sdk
     finally:
         with Session(env["engine"]) as db:
             db.execute(sa.delete(UserTenant).where(UserTenant.user_id == env["owners"][1], UserTenant.tenant_id == env["owners"][0]))
             db.commit()
     payload["dataset_ids"].append(env["foreign"])
-    assert request(env, "POST", "/search", json=payload).json()["code"] == 109
-    payload.pop("dataset_ids")
+    assert request(env, "POST", "/search", collection=collection, json=payload).json()["code"] == 109
+    payload["dataset_ids"] = [env["dataset"]]
     payload["search_id"] = env["saved_search"]
-    assert request(env, "POST", "/search", json=payload).json()["code"] == 109
-    assert request(env, "POST", "/search", token="invalid", json=payload).status_code == 401
+    assert request(env, "POST", "/search", collection=collection, json=payload).json()["code"] == 109
+    assert request(env, "POST", "/search", collection=collection, token="invalid", json=payload).status_code == 401
 
 
 @pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
@@ -971,3 +973,53 @@ def test_http_metadata_filter_storage_failure_is_business_error(search_api: dict
         assert db.get(DocumentMetadata, env["doc"]).meta_fields == {"category": "match"}
     raw = env["reader"].query(env["collections"]["dataset"], filter="available_int == 1", output_fields=["doc_id"], consistency_level="Strong")
     assert {row["doc_id"] for row in raw} == {env["doc"]}
+
+
+def test_collection_search_filters_readback_and_model_scope(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+    # SQL rows and model configuration are real; only provider execution is controlled.
+    model_owners = [env["owners"][0], env["owners"][1]]
+    with Session(env["engine"]) as db:
+        models = [TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="controlled-rerank", mdl_type="rerank", api_key="controlled") for owner in model_owners]
+        db.add_all(models)
+        db.commit()
+        model_ids = [model.id for model in models]
+    payload = {"question": "availability", "dataset_ids": [env["second"], env["dataset"]], "meta_data_filter": {"method": "manual", "manual": [{"key": "category", "op": "=", "value": "absent"}]}}
+    embedding_bundle = dataset_search_service._bundle
+
+    class Rerank:
+        def similarity(self, question: str, texts: list[str]) -> tuple[np.ndarray, int]:
+            return np.ones(len(texts)), 0
+
+    async def controlled_bundle(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("model_id") in model_ids:
+            return Rerank()
+        return await embedding_bundle(*args, **kwargs)
+
+    bundle = AsyncMock(side_effect=controlled_bundle)
+    monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
+    try:
+        for model_id in [model_ids[1], max(model_ids) + 10000]:
+            denied = request(env, "POST", "/search", collection=True, json={**payload, "tenant_rerank_id": model_id})
+            assert denied.status_code == 200 and denied.json()["code"] == 109, denied.text
+        bundle.assert_not_called()
+        empty = request(env, "POST", "/search", collection=True, json=payload).json()
+        assert empty["code"] == 0 and empty["data"]["total"] == 0 and empty["data"]["chunks"] == [], empty
+        payload["meta_data_filter"]["manual"][0]["value"] = "match"
+        allowed = request(env, "POST", "/search", collection=True, json={**payload, "tenant_rerank_id": model_ids[0]}).json()
+        assert allowed["code"] == 0 and allowed["data"]["total"] == 2, allowed
+        assert {row["kb_id"] for row in allowed["data"]["chunks"]} == set(payload["dataset_ids"])
+        # Independent SQL and Milvus reads prove failed search did not mutate sources.
+        with Session(env["engine"]) as db:
+            assert set(db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids)))) == set(model_ids)
+            assert set(db.scalars(sa.select(Document.id).where(Document.kb_id.in_(payload["dataset_ids"])))) == {env["doc"], env["second_doc"]}
+        for key in ["dataset", "second"]:
+            raw = env["reader"].query(env["collections"][key], filter="knowledge_graph_kwd == ''", output_fields=["pk", "available_int"], consistency_level="Strong")
+            assert {row["pk"] for row in raw} == {row["id"] for row in env["rows"][key]}
+            assert {row["available_int"] for row in raw} == {0, 1}
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(TenantLLM).where(TenantLLM.id.in_(model_ids)))
+            db.commit()
+        with Session(env["engine"]) as db:
+            assert not db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))).all()

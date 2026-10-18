@@ -28,10 +28,13 @@ chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files 
 
 ## 数据集检索
 
-`POST /datasets/{id}/search` 接收 `question`，返回 REST `code/data` 信封，
+`POST /datasets/search` 接收非空 `dataset_ids` 和 `question`，返回 REST `code/data` 信封，
 `data` 含 `chunks`、检索总数 `total`、`doc_aggs` 和 `labels`。JWT 与个人 API Key
-共用数据集成员访问校验。默认检索路径中的数据集；本地多数据集消费者可传完整
+共用数据集成员访问校验。路径入口 `POST /datasets/{id}/search` 继续服务 Python 管理 CLI，
+省略列表时默认检索路径数据集；传完整
 `dataset_ids` 列表，必须包含路径 ID，所有选中数据集均须可访问且 embedding 一致。
+`tenant_rerank_id` 接收整数或 null；指定模型须属于认证租户或所选数据集的所属租户，
+在读取模型配置、元数据或执行检索前拒绝越界模型 ID。
 联合检索一次完成排序、分页和文档聚合，不把每个数据集的分页结果拼接成联合结果。
 检索按每个选中库的租户、名称和 ID 绑定独立索引；同一租户拥有多个库时也保留逐库对应，
 并将完整 `kb_ids` 下推到存储过滤。Infinity 按索引与库 ID 的绑定查询物理表，合并候选后分页。

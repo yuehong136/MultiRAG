@@ -132,3 +132,7 @@ class SearchDatasetRequest(BaseModel):
             return None
         values = self.search_mode.model_dump()
         return {values.pop("type"): values}
+
+
+class SearchDatasetsRequest(SearchDatasetRequest):
+    dataset_ids: list[str] = Field(min_length=1)

@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.apps.services import dataset_api_service, dataset_search_service
 from api.db.db_models import get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
-from api.utils.dataset_search import SearchDatasetRequest
+from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
 from api.utils.validation_utils import CreateDatasetReq, validate_dataset_raptor_scope
 from common.constants import RetCode
 from common.metadata_config import MetadataConfig, validate_parser_metadata
@@ -472,6 +472,21 @@ async def update_metadata_config(
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")
+
+
+@router.post("/datasets/search", summary="多数据集检索测试")
+async def search_datasets(
+    request: SearchDatasetsRequest,
+    db: AsyncSession = Depends(get_async_db),
+    tenant_id: str = Depends(async_current_tenant_id),
+) -> Response:
+    try:
+        success, result, code = await dataset_search_service.search_datasets(db, tenant_id, request)
+        return get_result(data=result) if success else get_error_data_result(retcode=code, retmsg=result)
+    except Exception as exc:
+        logger.exception(exc)
+        message = "No chunk found! Check the chunk status please!" if "not_found" in str(exc) else "Internal server error"
+        return get_error_data_result(retmsg=message)
 
 
 @router.post("/datasets/{dataset_id}/search", summary="数据集检索测试")

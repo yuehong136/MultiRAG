@@ -8,12 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Knowledgebase, Search, User
+from api.db.db_models import Document, Knowledgebase, Search, TenantLLM, User
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.utils.dataset_search import SearchDatasetRequest
+from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
 from api.utils.reference_metadata import enrich_reference_metadata_async, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum
@@ -44,6 +44,11 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
     dataset_ids = list(dict.fromkeys(request.dataset_ids if request.dataset_ids is not None else [dataset_id]))
     if dataset_id not in dataset_ids:
         return False, "Path dataset must be included in dataset_ids.", RetCode.ARGUMENT_ERROR
+    return await search_datasets(db, tenant_id, SearchDatasetsRequest.model_validate({**request.model_dump(), "dataset_ids": dataset_ids}))
+
+
+async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatasetsRequest) -> tuple[bool, Any, RetCode]:
+    dataset_ids = list(dict.fromkeys(request.dataset_ids))
     # Authorize the complete selection before reading metadata or model config.
     for selected_id in dataset_ids:
         if not await KnowledgebaseService.accessible_async(db, selected_id, tenant_id):
@@ -59,6 +64,10 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
         return False, str(exc), RetCode.DATA_ERROR
     kb = kbs[0]
     tenant_ids = list(dict.fromkeys(item.tenant_id for item in kbs))
+    if request.tenant_rerank_id is not None:
+        allowed_model = await db.scalar(select(TenantLLM.id).where(TenantLLM.id == request.tenant_rerank_id, TenantLLM.tenant_id.in_({tenant_id, *tenant_ids})))
+        if allowed_model is None:
+            return False, "No authorization for rerank model.", RetCode.AUTHENTICATION_ERROR
     # KG aggregates are dataset-wide and cannot honor document predicates.
     # Saved searches may supply filters even when the request has none.
     if request.use_kg and (request.doc_ids or request.meta_data_filter or request.search_id):

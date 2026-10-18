@@ -14,7 +14,7 @@ from api.apps.services import dataset_search_service as service
 from api.db.db_models import Knowledgebase
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.utils.dataset_search import SearchDatasetRequest
+from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
 from common import settings
 from common.constants import RetCode
 
@@ -211,12 +211,16 @@ def test_search_route_rejects_invalid_requests(client: TestClient, payload: dict
     assert client.post("/api/v1/datasets/a/search", json=payload).status_code == 422
 
 
-def test_search_route_rest_envelope(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("collection", [False, True])
+def test_search_route_rest_envelope(client: TestClient, monkeypatch: pytest.MonkeyPatch, collection: bool) -> None:
     fake = AsyncMock(return_value=(True, {"total": 2, "chunks": [], "labels": {}}, RetCode.SUCCESS))
-    monkeypatch.setattr(service, "search_dataset", fake)
-    response = client.post("/api/v1/datasets/a/search", json={"question": "question"})
+    monkeypatch.setattr(service, "search_datasets" if collection else "search_dataset", fake)
+    response = client.post("/api/v1/datasets/search" if collection else "/api/v1/datasets/a/search", json={"question": "question", "dataset_ids": ["a", "b"]})
     assert response.json() == {"code": 0, "data": {"total": 2, "chunks": [], "labels": {}}}
-    assert fake.call_args.args[1:3] == ("tenant-unit", "a")
+    assert fake.call_args.args[1] == "tenant-unit"
+    assert fake.call_args.args[-1].dataset_ids == ["a", "b"]
+    if not collection:
+        assert fake.call_args.args[2] == "a"
 
 
 @pytest.mark.parametrize("code", [RetCode.AUTHENTICATION_ERROR, RetCode.DATA_ERROR, RetCode.ARGUMENT_ERROR])
@@ -316,3 +320,43 @@ async def test_multi_dataset_retrieval_keeps_each_tenant_paired_with_its_dataset
     assert result[0] is True
     assert retrieval.call_args.args[3:5] == (["owner-a", "owner-a", "owner-c"], ["name-a", "name-b", "name-c"])
     assert retrieval.call_args.kwargs["kb_ids"] == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize("payload", [{"question": "q"}, {"question": "q", "dataset_ids": None}, {"question": "q", "dataset_ids": []}, {"question": " ", "dataset_ids": ["a"]}])
+def test_collection_search_requires_nonempty_selection(client: TestClient, payload: dict[str, Any]) -> None:
+    assert client.post("/api/v1/datasets/search", json=payload).status_code == 422
+
+
+async def test_collection_search_without_anchor_preserves_order_and_binding(search_env: SearchEnv) -> None:
+    db, _, retrieval = search_env
+    success, _, code = await service.search_datasets(db, "user", SearchDatasetsRequest(question="q", dataset_ids=["b", "a", "b"], tenant_rerank_id=None))
+    assert success and code == RetCode.SUCCESS
+    assert retrieval.call_args.args[3:5] == (["owner-b", "owner-a"], ["name-b", "name-a"])
+    assert retrieval.call_args.kwargs["kb_ids"] == ["b", "a"]
+
+
+async def test_foreign_rerank_id_rejected_before_models_metadata_and_retrieval(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, _, retrieval = search_env
+    monkeypatch.setattr(db, "scalar", AsyncMock(return_value=None))
+    metadata = AsyncMock()
+    monkeypatch.setattr(service, "apply_meta_data_filter", metadata)
+    result = await service.search_datasets(db, "user", SearchDatasetsRequest(question="q", dataset_ids=["a", "b"], tenant_rerank_id=42, meta_data_filter={"method": "auto"}))
+    assert result[2] == RetCode.AUTHENTICATION_ERROR
+    service._bundle.assert_not_called()
+    metadata.assert_not_called()
+    retrieval.assert_not_called()
+
+
+@pytest.mark.parametrize("code", [RetCode.AUTHENTICATION_ERROR, RetCode.DATA_ERROR, RetCode.ARGUMENT_ERROR])
+def test_collection_search_preserves_failure_business_code(client: TestClient, monkeypatch: pytest.MonkeyPatch, code: RetCode) -> None:
+    monkeypatch.setattr(service, "search_datasets", AsyncMock(return_value=(False, "denied", code)))
+    response = client.post("/api/v1/datasets/search", json={"question": "q", "dataset_ids": ["a"]})
+    assert response.status_code == 200 and response.json()["code"] == code
+    assert response.json()["message"] == "denied"
+
+
+def test_collection_search_exposes_storage_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service, "search_datasets", AsyncMock(side_effect=RuntimeError("storage unavailable")))
+    response = client.post("/api/v1/datasets/search", json={"question": "q", "dataset_ids": ["a"]})
+    assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR
+    assert "data" not in response.json()
