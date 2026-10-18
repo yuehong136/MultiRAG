@@ -34,3 +34,20 @@ BM25 schema 引入的 protobuf repeated 字段由测试证据序列化器转为�
 MR-05 原混合 auto/semi_auto 两次空结果未捕获同请求的生成谓词，仍保留为未归因的质量限制。
 另一次独立生成诊断添加了不存在的 `color` 条件，不能将它当作原失败的确定根因。
 简单无歧义正例通过也不能消除该限制。
+
+## MR-06：可空 GraphRAG 行的清理分流
+
+默认 lease 自然过期后的原生重放已完成 graph upsert，但清理阶段把所有旧行都先当作实体和关系，
+对非 entity 行的 `entity_kwd=None` 调用 `entity_chunk_id`，或比较可空的关系端点，导致任务失败。
+此分支来自本地 `2592ff26` 的检查点恢复适配，`dd01a241` 与 `949cb35a` 的该文件相同。
+高级 Milvus schema 的无关字段为 null，旧简单 schema 的空字符串曾掩盖该问题。
+
+对照上游 `90767771` 的 `rag/graphrag/utils.py:set_graph`，它按 graph/subgraph、entity、relation
+分别清理，没有这段本地逐行 ID 比较逻辑。刷新后的 `543e1673` 也没有可直接套用的同分支补丁。
+本地参考其按类型约束的方式，先按 `knowledge_graph_kwd` 分流，再读取该类型的身份和计算规范 ID；
+保留先持久化、再清理的顺序，以及稳定 ID 对重复旧行的清理。entity 自身名称或 relation 自身端点
+为空、缺失或类型错误时仍报错，不能跳过坏行后宣告完成。
+
+新增回归使用与现场相同的可空行形状：8 行（source、graph、subgraph、3 entity、2 relation）
+恢复后仍为 8 行，移除一个实体及对应关系后为 6 行；原始 source、保留实体和关系的完整载荷与向量不变。
+该用例使用新的 scratch 资源，不改写原 SIGKILL 失败任务、lease 或快照，也不重跑 20 分钟等待。

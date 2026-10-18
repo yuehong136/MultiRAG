@@ -68,6 +68,49 @@ async def seed(store: Store, doc: str = "doc") -> nx.Graph:
     return result
 
 
+async def test_nullable_fields_are_dispatched_by_graph_row_kind(checkpoint_env: Store) -> None:
+    store = checkpoint_env
+    null_fields = {"entity_kwd": None, "from_entity_kwd": None, "to_entity_kwd": None, "name_kwd": None}
+    entity_id, relation_id = utils.entity_chunk_id("kb", "A"), utils.relation_chunk_id("kb", "A", "B")
+    rows = [
+        ("old-graph", "graph", {}),
+        ("old-subgraph", "subgraph", {"source_id": "doc"}),
+        ("foreign-subgraph", "subgraph", {"source_id": "foreign-doc"}),
+        (entity_id, "entity", {"entity_kwd": "A"}),
+        ("duplicate-entity", "entity", {"entity_kwd": "A"}),
+        (relation_id, "relation", {"from_entity_kwd": "A", "to_entity_kwd": "B"}),
+        ("duplicate-relation", "relation", {"from_entity_kwd": "A", "to_entity_kwd": "B"}),
+        ("removed-entity", "entity", {"entity_kwd": "GONE"}),
+        ("removed-relation", "relation", {"from_entity_kwd": "B", "to_entity_kwd": "GONE"}),
+    ]
+    for pk, kind, fields in rows:
+        store.rows[pk] = {**null_fields, "pk": pk, "kb_id": "kb", "knowledge_graph_kwd": kind, **fields}
+    preserved = {pk: dict(store.rows[pk]) for pk in [entity_id, relation_id, "foreign-subgraph"]}
+    await seed(store)
+    assert all(store.rows[pk] == row for pk, row in preserved.items())
+    assert not {"old-graph", "old-subgraph", "duplicate-entity", "duplicate-relation", "removed-entity", "removed-relation"} & store.rows.keys()
+    assert sum(row["knowledge_graph_kwd"] == "graph" for row in store.rows.values()) == 1
+
+
+@pytest.mark.parametrize(
+    "kind, fields",
+    [
+        ("entity", {"entity_kwd": None}),
+        ("entity", {"entity_kwd": ""}),
+        ("relation", {"from_entity_kwd": None, "to_entity_kwd": "B"}),
+        ("relation", {"from_entity_kwd": "A", "to_entity_kwd": ""}),
+    ],
+)
+async def test_invalid_identity_in_its_own_graph_kind_is_not_silently_pruned(checkpoint_env: Store, kind: str, fields: dict[str, Any]) -> None:
+    store = checkpoint_env
+    malformed = {"pk": "malformed", "kb_id": "kb", "knowledge_graph_kwd": kind, **fields}
+    store.rows["malformed"] = malformed
+    with pytest.raises(ValueError, match="Invalid persisted graph"):
+        await seed(store)
+    assert store.rows["malformed"] == malformed
+    assert "prune" not in store.events
+
+
 @pytest.mark.parametrize("failure", ["fail_read", "fail_write"])
 async def test_failed_checkpoint_preserves_previous_graph_and_does_not_prune(checkpoint_env: Store, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     store = checkpoint_env

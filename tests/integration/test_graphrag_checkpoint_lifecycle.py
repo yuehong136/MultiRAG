@@ -3,9 +3,11 @@
 import asyncio
 import json
 import subprocess
+from itertools import pairwise
 from typing import Any
 from uuid import uuid4
 
+import networkx as nx
 import pytest
 
 from common import settings
@@ -17,6 +19,61 @@ from tests.support.dataset_management_http import management_api as management_a
 from tests.support.dataset_management_http import request_api
 from tests.support.graphrag_acceptance import DocumentExtractor, Model, add_source_document, api, native_rows, observe, worker
 from tests.support.graphrag_acceptance import graphrag_api as graphrag_api
+
+
+async def test_nullable_native_graph_rows_resume_and_prune_by_kind(graphrag_api: dict[str, Any]) -> None:
+    env, store = graphrag_api, settings.docStoreConn
+    kb, doc = env["kb"], env["documents"][0]
+    names = ["ALICE CHEN", "AURORA LABS", "HARBOR CITY"]
+    graph = nx.Graph()
+    graph.graph["source_id"] = [doc]
+    for name in names:
+        graph.add_node(name, entity_type="person", description=name, source_id=[doc])
+    for source, target in pairwise(names):
+        graph.add_edge(source, target, description="related", weight=1, keywords=["related"], source_id=[doc])
+    null_fields = {"entity_kwd": None, "name_kwd": None, "from_entity_kwd": None, "to_entity_kwd": None}
+    previous = [
+        {**null_fields, "id": "old-graph", "knowledge_graph_kwd": "graph", "content_with_weight": json.dumps(nx.node_link_data(graph, edges="edges"))},
+        {**null_fields, "id": "old-subgraph", "knowledge_graph_kwd": "subgraph", "content_with_weight": json.dumps(nx.node_link_data(graph, edges="edges"))},
+        *[{**null_fields, "id": utils.entity_chunk_id(kb, name), "knowledge_graph_kwd": "entity", "entity_kwd": name, "content_with_weight": name} for name in names],
+        *[
+            {**null_fields, "id": utils.relation_chunk_id(kb, source, target), "knowledge_graph_kwd": "relation", "from_entity_kwd": source, "to_entity_kwd": target, "content_with_weight": "related"}
+            for source, target in graph.edges()
+        ],
+    ]
+    for row in previous:
+        row.update(kb_id=kb, source_id=[doc], available_int=0, q_2_vec=[0.25, 0.75])
+    assert store.insert(previous, env["collection"], kb) == []
+
+    def complete_rows() -> list[dict[str, Any]]:
+        return env["reader"].query(env["collection"], filter=f"kb_id == {json.dumps(kb)}", output_fields=["*", "vector", "q_2_vec"], consistency_level="Strong", limit=100)
+
+    before = complete_rows()
+    assert len(before) == 8  # original source + graph/subgraph + 3 entities + 2 relations
+    assert all(row["name_kwd"] is None for row in before)
+    assert all(row["entity_kwd"] is None for row in before if row["knowledge_graph_kwd"] != "entity")
+    expected = {row["pk"]: row for row in before if row["knowledge_graph_kwd"] in {None, "entity", "relation"}}
+    await utils.set_graph(env["tenant"], kb, None, graph, utils.GraphChange(), None)
+    after = complete_rows()
+    assert len(after) == 8
+    assert all(next(row for row in after if row["pk"] == pk) == old for pk, old in expected.items())
+    assert not {"old-graph", "old-subgraph"} & {row["pk"] for row in after}
+    # A later resolution removes one entity and its edge without interpreting
+    # nullable fields from the other row kinds as entity/relation identities.
+    graph.remove_node(names[0])
+    change = utils.GraphChange(removed_nodes={names[0]}, removed_edges={utils.get_from_to(names[0], names[1])})
+    await utils.set_graph(env["tenant"], kb, None, graph, change, None)
+    final = complete_rows()
+    assert len(final) == 6
+    assert {row["entity_kwd"] for row in final if row["knowledge_graph_kwd"] == "entity"} == set(names[1:])
+    assert sum(row["knowledge_graph_kwd"] == "relation" for row in final) == 1
+    retained_ids = {utils.entity_chunk_id(kb, name) for name in names[1:]} | {utils.relation_chunk_id(kb, names[1], names[2])}
+    retained_ids.update(row["pk"] for row in before if row["knowledge_graph_kwd"] is None)
+    assert all(next(row for row in final if row["pk"] == pk) == expected[pk] for pk in retained_ids)
+    persisted = await utils.get_graph(env["tenant"], kb)
+    assert persisted is not None and set(persisted.nodes) == set(names[1:]) and persisted.number_of_edges() == 1
+    env["record"]["nullable_kind_dispatch"] = {"before_count": 8, "after_resume_count": 8, "after_resolution_count": 6, "source_and_retained_identity_rows_unchanged": True}
+    env["record"]["nullable_native_snapshots"] = {"before": before, "after_resume": after, "after_resolution": final}
 
 
 async def test_pause_resume_new_content_wipe_and_marker_readback(graphrag_api: dict[str, Any]) -> None:

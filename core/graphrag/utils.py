@@ -603,22 +603,33 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl: Any, graph: nx.Graph, 
     stale = []
     for row in previous:
         kind = row["knowledge_graph_kwd"]
-        source_ids = row.get("source_id", [])
-        if isinstance(source_ids, str):
-            source_ids = source_ids.split("\n")
         if row["pk"] in new_ids:
             continue
-        entity = row.get("entity_kwd", "")
-        pair = get_from_to(row.get("from_entity_kwd", ""), row.get("to_entity_kwd", ""))
-        entity_replaced = row["pk"] != entity_chunk_id(kb_id, entity) and entity_chunk_id(kb_id, entity) in all_ids
-        relation_replaced = row["pk"] != relation_chunk_id(kb_id, *pair) and relation_chunk_id(kb_id, *pair) in all_ids
-        if (
-            kind == "graph"
-            or (kind == "subgraph" and set(source_ids) <= sources)
-            or (kind == "entity" and (entity not in graph or entity in updated_nodes or entity_replaced))
-            or (kind == "relation" and (pair not in graph_edges or pair in updated_edges or relation_replaced))
-        ):
+        if kind == "graph":
             stale.append(row["pk"])
+        elif kind == "subgraph":
+            source_ids = row.get("source_id", [])
+            if isinstance(source_ids, str):
+                source_ids = source_ids.split("\n")
+            if set(source_ids) <= sources:
+                stale.append(row["pk"])
+        elif kind == "entity":
+            entity = row.get("entity_kwd")
+            if not isinstance(entity, str) or not entity.strip():
+                raise ValueError("Invalid persisted graph entity identity")
+            canonical_id = entity_chunk_id(kb_id, entity)
+            entity_replaced = row["pk"] != canonical_id and canonical_id in all_ids
+            if entity not in graph or entity in updated_nodes or entity_replaced:
+                stale.append(row["pk"])
+        elif kind == "relation":
+            source, target = row.get("from_entity_kwd"), row.get("to_entity_kwd")
+            if not isinstance(source, str) or not source.strip() or not isinstance(target, str) or not target.strip():
+                raise ValueError("Invalid persisted graph relation identity")
+            pair = get_from_to(source, target)
+            canonical_id = relation_chunk_id(kb_id, *pair)
+            relation_replaced = row["pk"] != canonical_id and canonical_id in all_ids
+            if pair not in graph_edges or pair in updated_edges or relation_replaced:
+                stale.append(row["pk"])
     await settled_io(delete_rows, index_name, kb_id, stale)
     if callback:
         callback(msg=f"set_graph persisted {len(chunks)} chunks and pruned {len(stale)} stale rows.")
