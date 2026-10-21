@@ -326,10 +326,16 @@ def test_http_search_multi_dataset_and_auth_matrix(search_api: dict[str, Any], c
         db.add(UserTenant(id=uuid4().hex, user_id=env["owners"][1], tenant_id=env["owners"][0], invited_by=env["owners"][0], role="normal"))
         db.commit()
     try:
+        # Membership alone cannot expose another creator's private datasets.
+        assert request(env, "POST", "/search", collection=collection, token=env["api_key"], json=payload).json()["code"] == 109
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(Knowledgebase).where(Knowledgebase.id.in_([env["dataset"], env["second"]])).values(permission="team"))
+            db.commit()
         sdk = request(env, "POST", "/search", collection=collection, token=env["api_key"], json=payload).json()
         assert sdk["code"] == 0 and sdk["data"]["total"] == 2, sdk
     finally:
         with Session(env["engine"]) as db:
+            db.execute(sa.update(Knowledgebase).where(Knowledgebase.id.in_([env["dataset"], env["second"]])).values(permission="me"))
             db.execute(sa.delete(UserTenant).where(UserTenant.user_id == env["owners"][1], UserTenant.tenant_id == env["owners"][0]))
             db.commit()
     payload["dataset_ids"].append(env["foreign"])
@@ -888,6 +894,12 @@ def test_http_and_sdk_joint_search_keep_only_selected_index_bindings(search_api:
         db.commit()
         names = [db.get(Knowledgebase, identifier).name for identifier in selected]
     payload = {"question": "availability", "dataset_ids": selected, "similarity_threshold": 0, "size": 30, "top_k": 200}
+    denied = request(env, "POST", "/search", json=payload).json()
+    assert denied["code"] == 109, denied
+    with Session(env["engine"]) as db:
+        # Exercise authorized cross-owner bindings using an explicitly shared KB.
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["foreign"]).values(permission="team"))
+        db.commit()
 
     def check(mode: str, sdk: bool = False, embedded: bool = False) -> None:
         keys = ("dataset", "second") if sdk and not embedded else ("dataset", "second", "foreign")
@@ -961,6 +973,7 @@ def test_http_and_sdk_joint_search_keep_only_selected_index_bindings(search_api:
                 db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == kb_id))
                 db.commit()
         with Session(env["engine"]) as db:
+            db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["foreign"]).values(permission="me"))
             db.execute(sa.delete(UserTenant).where(UserTenant.id == membership_id))
             db.commit()
             assert db.get(UserTenant, membership_id) is None
