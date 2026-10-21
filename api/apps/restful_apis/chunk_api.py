@@ -117,6 +117,7 @@ def _strip_chunk_runtime_fields(chunk: dict[str, Any]) -> dict[str, Any]:
 
 
 def _chunk_payload(chunk_id: str, chunk: dict[str, Any]) -> dict[str, Any]:
+    available = chunk.get("available_int")
     payload = {
         "id": chunk_id,
         "content": chunk.get("content_with_weight", ""),
@@ -126,12 +127,14 @@ def _chunk_payload(chunk_id: str, chunk: dict[str, Any]) -> dict[str, Any]:
         "questions": chunk.get("question_kwd", []),
         "dataset_id": chunk.get("kb_id", chunk.get("dataset_id")),
         "image_id": chunk.get("img_id", ""),
-        "available": bool(int(chunk.get("available_int", 1))),
+        "available": True if available is None else bool(int(available)),
         "positions": chunk.get("position_int", []),
         "tag_kwd": chunk.get("tag_kwd", []),
         "tag_feas": chunk.get("tag_feas", {}),
     }
-    return Chunk(**payload).model_dump()
+    # Declared nullable Milvus fields represent the same unset values as
+    # omitted dynamic fields. Keep explicit zero/empty values for validation.
+    return Chunk(**{name: value for name, value in payload.items() if value is not None}).model_dump()
 
 
 def _read_context(db: Session, user_id: str, dataset_id: str, document_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
