@@ -118,6 +118,16 @@ Then, build the executor manager image:
 docker build -t sandbox-executor-manager:latest ./executor_manager
 ```
 
+All three Dockerfiles default to `NEED_MIRROR=1`, using the Tsinghua apt/Python
+mirrors and the npm mirror where applicable. To use the upstream Debian, PyPI
+and npm registries instead, pass `--build-arg NEED_MIRROR=0` to each manual build:
+
+```bash
+docker build --build-arg NEED_MIRROR=0 -t sandbox-base-python:latest ./sandbox_base_image/python
+docker build --build-arg NEED_MIRROR=0 -t sandbox-base-nodejs:latest ./sandbox_base_image/nodejs
+docker build --build-arg NEED_MIRROR=0 -t sandbox-executor-manager:latest ./executor_manager
+```
+
 ---
 
 ### 📦 Running with MultiRAG
