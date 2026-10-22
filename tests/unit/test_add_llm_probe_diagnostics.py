@@ -369,3 +369,22 @@ async def test_verify_mode_reports_message_without_saving(probe_env: dict[str, A
     assert body["data"]["success"] is False
     assert "model not found" in body["data"]["message"]
     assert not probe_env["saved"]
+
+
+@pytest.mark.parametrize("model_type", ["chat", "rerank"])
+@pytest.mark.parametrize("verify", [False, True])
+async def test_unsupported_model_keeps_business_error_and_never_persists(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch, model_type: str, verify: bool) -> None:
+    monkeypatch.setattr(llm_app, "ChatModel", {})
+    monkeypatch.setattr(llm_app, "RerankModel", {})
+    body = await _call(_request(mdl_type=model_type, verify=verify), db)
+    if verify:
+        assert body["retcode"] == 0
+        assert body["data"]["success"] is False
+        message = body["data"]["message"]
+    else:
+        assert body["retcode"] == 102
+        message = body["retmsg"]
+    assert "is not supported yet" in message
+    assert "dose" not in message
+    assert not probe_env["saved"]
+    assert _FakeChat.instances == []

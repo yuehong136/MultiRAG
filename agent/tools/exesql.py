@@ -48,7 +48,7 @@ class ExeSQLParam(ToolParamBase):
         self.password = ""
         self.max_records = 1024
 
-    def check(self):
+    def check(self) -> None:
         self.check_valid_value(self.db_type, "Choose DB type", ["mysql", "postgres", "mariadb", "mssql", "IBM DB2", "trino", "oceanbase"])
         self.check_empty(self.database, "Database name")
         self.check_empty(self.username, "database username")
@@ -59,9 +59,9 @@ class ExeSQLParam(ToolParamBase):
         self.check_positive_integer(self.max_records, "Maximum number of records")
         if self.database == "rag_flow":
             if self.host == "ragflow-mysql":
-                raise ValueError("For the security reason, it dose not support database named rag_flow.")
+                raise ValueError("For the security reason, it does not support database named rag_flow.")
             if self.password == "infini_rag_flow":
-                raise ValueError("For the security reason, it dose not support database named rag_flow.")
+                raise ValueError("For the security reason, it does not support database named rag_flow.")
 
     def get_input_form(self) -> dict[str, dict]:
         return {"sql": {"name": "SQL", "type": "line"}}
