@@ -35,6 +35,7 @@ def test_tenant_factory_bedrock_image_and_tokens(monkeypatch: pytest.MonkeyPatch
     assert calls[0]["aws_region_name"] == "eu-west-1"
     assert calls[0]["aws_access_key_id"] == "test-ak"
     assert calls[0]["aws_secret_access_key"] == "test-sk"
+    assert calls[0]["timeout"] == 60
     content = calls[0]["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "read this"}
     assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
@@ -55,8 +56,9 @@ def test_bedrock_role_uses_real_sts_contract_and_closes_client(monkeypatch: pyte
 
 
 @pytest.mark.parametrize("region", [None, ""])
-def test_bedrock_default_credential_chain(region: str | None) -> None:
-    assert BedrockCV(json.dumps({"bedrock_region": region}), "m")._get_aws_creds() == {"aws_region_name": "us-east-1"}
+@pytest.mark.parametrize("auth_mode", ["", "assume_role"])
+def test_bedrock_default_credential_chain(region: str | None, auth_mode: str) -> None:
+    assert BedrockCV(json.dumps({"auth_mode": auth_mode, "bedrock_region": region}), "m")._get_aws_creds() == {"aws_region_name": "us-east-1"}
 
 
 @pytest.mark.parametrize("key", ["sensitive-not-json", "[]", '{"auth_mode":"access_key_secret"}', '{"auth_mode":"iam_role"}', '{"auth_mode":"typo"}'])

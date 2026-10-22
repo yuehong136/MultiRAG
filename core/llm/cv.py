@@ -416,7 +416,7 @@ class BedrockCV(Base):
             raise ValueError("Bedrock access_key_secret requires bedrock_ak and bedrock_sk")
         if self.auth_mode == "iam_role" and not self.aws_role_arn:
             raise ValueError("Bedrock iam_role requires aws_role_arn")
-        if self.auth_mode not in {"", "default", "access_key_secret", "iam_role"}:
+        if self.auth_mode not in {"", "default", "assume_role", "access_key_secret", "iam_role"}:
             raise ValueError("Unsupported Bedrock auth_mode")
 
     def _get_aws_creds(self) -> dict[str, str]:
@@ -439,7 +439,7 @@ class BedrockCV(Base):
     def describe_with_prompt(self, image: Any, prompt: str | None = None) -> tuple[str, int]:
         import litellm
 
-        response = litellm.completion(model=self.model_name, messages=self.vision_llm_prompt(self._normalize_image(image), prompt), **self._get_aws_creds())
+        response = litellm.completion(model=self.model_name, messages=self.vision_llm_prompt(self._normalize_image(image), prompt), timeout=60, **self._get_aws_creds())
         if not response.choices or not isinstance(response.choices[0].message.content, str) or not response.choices[0].message.content.strip():
             raise ValueError("Bedrock vision returned an empty response")
         return response.choices[0].message.content.strip(), total_token_count_from_response(response)
