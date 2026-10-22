@@ -177,9 +177,12 @@ class DocMetadataService:
         if not tenant_id or not kb_id:
             raise RuntimeError("Table metadata document disappeared.")
         store = cls._store()
+        SqlMetadataStore.ensure_in_transaction(db, doc_id, tenant_id, kb_id)
         row = db.scalar(select(DocumentMetadata).where(DocumentMetadata.id == doc_id).with_for_update().execution_options(populate_existing=True))
+        if row is None or row.tenant_id != tenant_id or row.kb_id != kb_id:
+            raise RuntimeError("Table metadata state ownership could not be confirmed.")
         existing = cls.get_document_metadata(db, doc_id)
-        state = row.table_metadata_state if row is not None else {}
+        state = row.table_metadata_state
         # Stable parse digests survive task-ID replacement when chunks are reused.
         active = {identifier: (digest or "").partition(":ingest-tokens:")[0] or identifier for identifier, digest in db.execute(select(Task.id, Task.digest).where(Task.doc_id == doc_id))}
         if task_id not in active:

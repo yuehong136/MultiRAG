@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 
 class SqlMetadataStore(MetadataStore):
     @staticmethod
+    def ensure_in_transaction(db: Session, doc_id: str, tenant_id: str, kb_id: str) -> None:
+        """Establish a stable row lock without replacing concurrent manual values.
+
+        The unique-key conflict serializes first inserts too. The caller must read
+        FOR UPDATE afterwards and commit only with the completed metadata/state.
+        """
+        now_ts, now_dt = current_timestamp(), get_format_time()
+        db.execute(
+            pg_insert(DocumentMetadata)
+            .values(id=doc_id, tenant_id=tenant_id, kb_id=kb_id, meta_fields={}, create_time=now_ts, create_date=now_dt, update_time=now_ts, update_date=now_dt)
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+
+    @staticmethod
     def upsert_in_transaction(db: Session, doc_id: str, tenant_id: str, kb_id: str, meta_fields: dict) -> None:
         """Participate in the caller's document transaction; never commit it."""
         now_ts = current_timestamp()

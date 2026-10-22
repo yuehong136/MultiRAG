@@ -238,3 +238,93 @@ def test_multiple_row_tasks_keep_manual_edits_and_reused_contributions(bootstrap
             db.execute(sa.delete(Task).where(Task.doc_id == document))
             db.execute(sa.delete(Document).where(Document.id == document))
             db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == dataset))
+
+
+@pytest.mark.parametrize("existing_row", [False, True])
+def test_manual_metadata_commit_survives_table_merge_race(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, existing_row: bool) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+
+    tenant, dataset, document, task = [uuid4().hex for _ in range(4)]
+    monkeypatch.setattr(settings, "DOC_ENGINE", "milvus")
+    parser_read = threading.Event()
+    release_parser = threading.Event()
+    manual_started = threading.Event()
+    original_get = DocMetadataService.get_document_metadata
+
+    def pause_after_read(db: Session, identifier: str) -> dict[str, Any]:
+        result = original_get(db, identifier)
+        if threading.current_thread().name.startswith("table-race"):
+            parser_read.set()
+            assert release_parser.wait(10), "parser release timed out"
+        return result
+
+    def manual_write() -> None:
+        with Session(bootstrapped_engine) as db:
+            manual_started.set()
+            assert DocMetadataService.update_document_metadata(db, document, {"manual": ["keep"]})
+
+    try:
+        with Session(bootstrapped_engine) as db:
+            db.add(Knowledgebase(id=dataset, tenant_id=tenant, created_by=tenant, name="Table race scratch", embd_id="test"))
+            db.add(Document(id=document, kb_id=dataset, created_by=tenant, name="rows.csv", parser_id="table", type="doc", run="1"))
+            db.add(Task(id=task, doc_id=document, digest="race-range", progress=0))
+            db.commit()
+            if existing_row:
+                assert DocMetadataService.update_document_metadata(db, document, {})
+        monkeypatch.setattr(DocMetadataService, "get_document_metadata", pause_after_read)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="table-race") as parser_pool, ThreadPoolExecutor(max_workers=1, thread_name_prefix="manual-race") as manual_pool:
+            parse = parser_pool.submit(write_task_table_metadata, bootstrapped_engine, task, document, dataset, {"country": ["Brazil"]})
+            try:
+                assert parser_read.wait(10)
+                manual = manual_pool.submit(manual_write)
+                assert manual_started.wait(10)
+                committed_before_parser = True
+                try:
+                    manual.result(timeout=0.3)
+                except TimeoutError:
+                    committed_before_parser = False
+            finally:
+                release_parser.set()
+            parse.result(timeout=10)
+            manual.result(timeout=10)
+        with Session(bootstrapped_engine) as db:
+            metadata = original_get(db, document)
+            assert metadata.get("manual") == ["keep"], (committed_before_parser, metadata)
+            assert not committed_before_parser, "manual upsert must serialize after the parser read/merge"
+            state = db.get(DocumentMetadata, document).table_metadata_state
+            assert state["tasks"]["race-range"] == {"country": ["Brazil"]}
+    finally:
+        release_parser.set()
+        with bootstrapped_engine.begin() as db:
+            db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == document))
+            db.execute(sa.delete(Task).where(Task.id == task))
+            db.execute(sa.delete(Document).where(Document.id == document))
+            db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == dataset))
+
+
+def test_failed_first_table_metadata_save_rolls_back_seed_row(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant, dataset, document, task = [uuid4().hex for _ in range(4)]
+    monkeypatch.setattr(settings, "DOC_ENGINE", "milvus")
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("controlled table state failure")
+
+    try:
+        with Session(bootstrapped_engine) as db:
+            db.add(Knowledgebase(id=dataset, tenant_id=tenant, created_by=tenant, name="Table seed rollback scratch", embd_id="test"))
+            db.add(Document(id=document, kb_id=dataset, created_by=tenant, name="rows.csv", parser_id="table", type="doc", run="1"))
+            db.add(Task(id=task, doc_id=document, digest="failed-range", progress=0))
+            db.commit()
+        monkeypatch.setattr(SqlMetadataStore, "upsert_in_transaction", fail)
+        with pytest.raises(RuntimeError, match="controlled table state failure"):
+            write_task_table_metadata(bootstrapped_engine, task, document, dataset, {"country": ["Brazil"]})
+        with bootstrapped_engine.connect() as db:
+            assert db.scalar(sa.select(sa.func.count()).select_from(DocumentMetadata).where(DocumentMetadata.id == document)) == 0
+            assert db.scalar(sa.select(Task.progress).where(Task.id == task)) == 0
+    finally:
+        with bootstrapped_engine.begin() as db:
+            db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == document))
+            db.execute(sa.delete(Task).where(Task.id == task))
+            db.execute(sa.delete(Document).where(Document.id == document))
+            db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == dataset))
