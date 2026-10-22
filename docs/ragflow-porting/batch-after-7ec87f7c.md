@@ -6,7 +6,7 @@
 
 - 上游起点（不含）：`7ec87f7cb78889180a1cd67d46d10a247977ae7e`；冻结上限：`519e7d98a5651564d4e35d6648f006cba4baaf4f`。
 - 按 first-parent 顺序取其后 20 项，末项 `0580c137fa2eaac8f8774ce32076d1003274c2a7`。独立核对与 `scope.json` 的 20 个完整 SHA 一致，未静默改变上限/游标。
-- 初始后端 `c595f17f8a079217fbcb201897adba864da25bf4`；最终源码 `d96b9b2430febdfb3a724bc2e4e9ffc469703142`（组合运行于 `ce86418e`，补修另验），Web `ca3f50afebe57f93406e3316cc0d65c57a74db3c`。唯一消费者 pin 为 `.github/consumer-web.json`，`56735a3f` 已更新；配置提交不代表远程 CI 已执行。
+- 初始后端 `c595f17f8a079217fbcb201897adba864da25bf4`；最终源码 `d96b9b2430febdfb3a724bc2e4e9ffc469703142`（组合运行于 `ce86418e`，补修另验），Web `eed958f792c52fac91490acec6a9eae00edd659a`。唯一消费者 pin 为 `.github/consumer-web.json`，`3a723fbe` 已更新；配置提交不代表远程 CI 已执行。
 - 外置证据根：`/Users/xldu/.local/state/multirag/validation/20261022-batch-after-7ec87f7c`。范围、实际派发、审查与源提交映射分别见 `scope.json`、`dispatch.json`、`handoffs/*-final.json` 和 `integration/merges.jsonl`。
 - 初始主目录 28 处无关 WIP 已逐文件外置备份、记录 SHA-256 和二进制补丁；每次串行合入核对内容。原 PROGRESS 历史 delta 保留，未处理 SDK/ironwood/g129 等其他工作树、服务或分支。
 
@@ -76,20 +76,20 @@ Go 冻结于 `bfb0fc88a78e6c1113166fef9ad52cd9e9d3cc19`，后续 Python 提交�
 
 根 Go 组合运行于 PostgreSQL 17.11，供应商 HTTP 与身份边界受控，实际 CLI/handler/SQL 与独立读回保留。四个自有 scratch 库创建前登记，完成后 DROP 并读回 0；私有配置删除。各线三个独立 cmd 的构建按相同 Go 输入复用，原始退出码保留；不因无关 Python HEAD 变化重复构建。
 
-Python/Web 锁定 `ce86418e` 与最终 Web pin 后的根证据为 `integration/python-combination.json`：
+Python 主组合锁定 `ce86418e`、初次 Web `ca3f50a`，根证据为 `integration/python-combination.json`。最终 Web `eed958f` 更新 pin 后重新运行三个消费者，见 `integration/web-final-validation.json`；下表列主组合与最终 Web 结果：
 
 | 检查 | 结果 |
 |---|---|
 | 本批修改文件 Ruff/format、依赖分层、async DB、纳管类型 | 全部 exit=0；补修四文件 Ruff/format 亦 exit=0 |
 | A/B/D/V 相关文件去重组合单测 | 988 passed，0 failure/error/skip；补修后相关 419 passed，不与前者叠加为独立覆盖 |
 | table/父子检索/模型/chunk/权限/元数据范围组合 | 75 passed，0 failure/error/skip，REQUIRE_SERVICES=1 |
-| 最终 Web 的真实模型保存、文档保存/下载、检索消费链 | 3 passed，0 failure/error/skip，真实固定 Web ca3f50a |
+| 最终 Web 的真实模型保存、文档保存/下载、检索消费链 | 3 passed，0 failure/error/skip，真实固定 Web eed958f |
 
 组合完成后合入 `1280e7c1`（Cohere 原始响应校验）与 `d96b9b24`（工具引用空白）两处补修，补跑 rerank/tool/Canvas/reasoning 六文件 419 项，零失败/skip。`integration/supplement-validation.json` 保存最终源码 SHA、命令、退出码、hash、AST 和复用依据；没有把 ce86418e 的 988 项表述为最终 SHA 上重新全跑。SQL/HTTP/Web 相关代码、Jina/HF/Qwen/Base 及其他 ComponentBase 方法未变，故复用其运行证据。
 
 只复用输入充分且未变的证据：V 的 GraphRAG、beta/session、Milvus deadline 原组合不因新 Go/文档 SHA 重跑；A/B/D 的真实交集及最后 Web SHA 重新运行。保留原始失败、修复和显式选择，未用放宽断言、转 skip 或吞异常换绿。
 
-Web `ca3f50a` 的局部 ESLint、生产 build、文件体积/清单、17 个设置组件与 11 个表单测试通过。真实 HTTP 保存、重载、键盘和中英文明暗主题浏览器验收通过；集成 owner 一次审阅标注文件名/路由/1440×1000 的四格 contact sheet，无视觉阻断。浏览器验收的列发现由 UI fixture 提供，独立真实任务集成另证明解析→存储→筛选；未伪造业务响应。
+Web `eed958f` 的局部 ESLint、生产 build、文件体积/清单、18 个设置组件与 11 个表单测试通过。真实 HTTP 保存、重载、键盘和中英文明暗主题浏览器验收通过；集成 owner 一次审阅标注文件名/路由/1440×1000 的四格 contact sheet，无视觉阻断。`eed958f` 另修复超过 200 列、滚动后 manual→auto→manual 的空白首屏，保留红/绿用例；最新后端/Web 配对浏览器验收已通过，四格拼图重新一起审阅。浏览器验收的列发现由 UI fixture 提供，独立真实任务集成另证明解析→存储→筛选；未伪造业务响应。
 
 sandbox 六组 mirror0/1 实际原生 linux/arm64 构建与六次离线镜像读回通过。分析器 17 新测试、7 既有测试、3 bundle 测试及 15 个实际 /run ASGI 场景通过；13 拒绝场景未调用执行/分配边界，队列读回不变。
 
@@ -106,7 +106,7 @@ sandbox 六组 mirror0/1 实际原生 linux/arm64 构建与六次离线镜像读
 
 所有源、测试和消费者 pin 已串行合入实际 main/master；本报告及 PROGRESS 的最小索引单独提交。各线接受/清理记录见 `handoffs/*-accepted.json`、`handoffs/*-cleanup.json`，每项清理均在本线全部接受后执行。
 
-根 Python 组合的只读资源复核 `integration/python-resource-readback.json` 枚举 2 个 scratch 库、27 个集合、11 个桶、5 个 Redis 键、2 个缓存前缀和 12 个 listener，均已不存在；Go 四个库另有逐个删除读回。没有 global prune/down 或重启既有服务。
+根 Python 组合的只读资源复核 `integration/python-resource-readback.json` 枚举 3 个 scratch 库、30 个集合、13 个桶、5 个 Redis 键、2 个缓存前缀和 14 个 listener，均已不存在；Go 四个库另有逐个删除读回。没有 global prune/down 或重启既有服务。
 
 本批工作树在无活动 runner、无独有 WIP、证据外置后由各 owner 归档/移除。各分支在主干包含或 patch 等价、无活动工作树引用、可恢复 bundle 验证后删除；集成工作树在文档合 main 后归档。其他任务的工作树/分支/服务均保留。实际最终状态由下面的外置完成记录读回。
 
