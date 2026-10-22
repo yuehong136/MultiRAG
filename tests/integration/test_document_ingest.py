@@ -38,6 +38,7 @@ from core.utils.redis_conn import REDIS_CONN
 from tests.support.document_parse_retirement import object_snapshot, sql_snapshot
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.search_metadata import search_store as search_store
 
 
 def evidence(env: dict[str, Any], label: str, value: Any) -> None:
@@ -1382,11 +1383,13 @@ def test_actual_bulk_visibility_reconciles_sql_and_commit_compensation(ingest_ap
     calls = []
 
     def bulk(**kwargs: Any) -> dict[str, Any]:
-        assert kwargs["refresh"] is False
+        assert kwargs["refresh"] == "wait_for"
         operations = kwargs.get("operations", kwargs.get("body"))
         for meta, payload in zip(operations[::2], operations[1::2], strict=True):
             identifier = meta["index"]["_id"]
             pending[identifier] = {"id": identifier, **copy.deepcopy(payload)}
+        visible.clear()
+        visible.update(copy.deepcopy(pending))
         calls.append("bulk")
         return {"errors": False}
 
@@ -1462,6 +1465,86 @@ def test_actual_bulk_visibility_reconciles_sql_and_commit_compensation(ingest_ap
             {"backend": backend, "controlled_transport": True, "actual_connector_and_sql": True, "calls": calls, "sql_before": before, "sql_after": sql_snapshot(env), "full_rows": saved},
         )
     assert settings.docStoreConn is original_store
+
+
+def test_actual_metadata_batch_http_reads_back_es_os_and_surfaces_failure(ingest_api: dict[str, Any], search_store: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env, native = ingest_api, search_store
+    index = native["register_index"]("multirag_doc_meta_" + env["owners"][0])
+    env["ingest_manifest"]["metadata_index"] = {"backend": native["backend"], "index": index}
+    evidence(env, "manifest", env["ingest_manifest"])
+    url = env["base"] + f"/api/v1/datasets/{env['kb']}/metadata/update"
+
+    def update(updates: list[dict[str, Any]], deletes: list[dict[str, Any]]) -> dict[str, Any]:
+        response = requests.post(url, headers={"Authorization": "Bearer " + env["jwt"]}, json={"selector": {"document_ids": [env["b"]]}, "updates": updates, "deletes": deletes}, timeout=30)
+        return response.json()
+
+    with monkeypatch.context() as native_patch:
+        native_patch.setattr(settings, "docStoreConn", native["store"])
+        native_patch.setattr(settings, "DOC_ENGINE", native["backend"])
+        native_patch.setattr(settings, "DOC_ENGINE_INFINITY", False)
+        native_patch.setattr(settings, "DOC_ENGINE_OCEANBASE", False)
+        created = update([{"key": "old", "value": "remove"}, {"key": "number", "value": 0}], [])
+        assert created["code"] == 0 and created["data"]["updated"] == 1
+        assert native["reader"].get(index=index, id=env["b"])["_source"]["meta_fields"] == {"old": "remove", "number": 0}
+        replaced = update([{"key": "keep", "value": "Ada"}], [{"key": "old"}])
+        assert replaced["code"] == 0 and replaced["data"]["updated"] == 1
+        expected = {"keep": "Ada", "number": 0}
+        assert native["reader"].get(index=index, id=env["b"])["_source"]["meta_fields"] == expected
+        rejected = update([{"key": "number", "value": {"invalid": "object"}}], [])
+        assert rejected["retcode"] != 0 and "Metadata storage rejected" in rejected["retmsg"]
+        assert native["reader"].get(index=index, id=env["b"])["_source"]["meta_fields"] == expected
+        evidence(env, "metadata-batch-es-os-http", {"backend": native["backend"], "create": created, "replace": replaced, "rejected": rejected, "independent_readback": expected})
+
+
+def test_actual_worker_done_has_immediate_es_os_search(ingest_api: dict[str, Any], search_store: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real worker/SQL terminal state, then an independent search without polling."""
+    from types import SimpleNamespace
+
+    from common.constants import TaskStatus
+    from core.svr import task_executor as worker
+
+    env, native = ingest_api, search_store
+    document_id = env["b"]
+    assert post(env, [document_id])["code"] == 0
+    task_id = tasks(env, document_id)[0]["id"]
+    index = native["register_index"](env["collection"])
+    env["ingest_manifest"]["search_index"] = {"backend": native["backend"], "index": index}
+    evidence(env, "manifest", env["ingest_manifest"])
+    assert native["store"].create_idx(index, env["kb"], 768)
+    row = source(env, document_id, text="Searchable at worker DONE")
+
+    async def parsed(*args: Any) -> list[dict[str, Any]]:
+        return [copy.deepcopy(row)]
+
+    async def embedding(*args: Any) -> int:
+        return 7
+
+    # Parser/provider output is controlled; insertion, progress and aggregation are real.
+    with monkeypatch.context() as native_patch:
+        native_patch.setattr(settings, "docStoreConn", native["store"])
+        native_patch.setattr(settings, "DOC_ENGINE", native["backend"])
+        native_patch.setattr(settings, "DOC_ENGINE_INFINITY", False)
+        native_patch.setattr(settings, "DOC_ENGINE_OCEANBASE", False)
+        native_patch.setattr(worker, "get_model_config_by_type_and_name", lambda *args: {})
+        native_patch.setattr(worker, "LLMBundle", lambda *args, **kwargs: SimpleNamespace(encode=lambda texts: ([[0.2] * 768], 7)))
+        native_patch.setattr(worker, "build_chunks", parsed)
+        native_patch.setattr(worker, "embedding", embedding)
+        with Session(env["engine"]) as db:
+            task = TaskService.get_task(db, task_id)
+            assert task is not None
+            task.update(task_type="", parser_config={"toc_extraction": False})
+            asyncio.run(worker.do_handle_task(db, task))
+        with Session(env["engine"]) as db:
+            DocumentService.update_progress_immediately(db, [{"id": document_id}])
+        with env["engine"].connect() as db:
+            doc = dict(db.execute(sa.select(Document.__table__).where(Document.id == document_id)).mappings().one())
+            task_row = dict(db.execute(sa.select(Task.__table__).where(Task.id == task_id)).mappings().one())
+        assert doc["run"] == TaskStatus.DONE.value and doc["progress"] == task_row["progress"] == 1
+        assert doc["chunk_num"] == 1
+        result = native["reader"].search(index=index, body={"query": {"term": {"doc_id": document_id}}})
+        assert result["hits"]["total"]["value"] == 1
+        assert result["hits"]["hits"][0]["_source"]["content_with_weight"] == row["content_with_weight"]
+        evidence(env, "actual-worker-es-os-done", {"backend": native["backend"], "task": task_row, "document": doc, "independent_search": dict(result), "controlled_parser_and_provider": True})
 
 
 @pytest.mark.parametrize("state", ["restore_retry", "submitted", "later_generation"])

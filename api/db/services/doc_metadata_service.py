@@ -516,10 +516,12 @@ class DocMetadataService:
             changed = _apply_deletes(meta) or changed
             if changed and meta != orig:
                 if not meta:
-                    store.delete(db, doc_id, tenant_id, kb_id)
+                    persisted = store.delete(db, doc_id, tenant_id, kb_id)
                 else:
                     processed = cls._split_combined_values(meta)
-                    store.upsert(db, doc_id, tenant_id, kb_id, processed)
+                    persisted = store.upsert(db, doc_id, tenant_id, kb_id, processed)
+                if persisted is not True:
+                    raise RuntimeError(f"Metadata storage rejected the update for document {doc_id}.")
                 updated += 1
 
         # Insert for docs without existing metadata rows
@@ -531,7 +533,8 @@ class DocMetadataService:
                 _apply_updates(meta)
                 if meta:
                     processed = cls._split_combined_values(meta)
-                    store.upsert(db, doc_id, tenant_id, kb_id, processed)
+                    if store.upsert(db, doc_id, tenant_id, kb_id, processed) is not True:
+                        raise RuntimeError(f"Metadata storage rejected the insert for document {doc_id}.")
                     updated += 1
 
         return updated

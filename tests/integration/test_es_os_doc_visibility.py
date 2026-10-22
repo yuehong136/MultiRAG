@@ -1,68 +1,14 @@
 """Owned real ES/OS writes, immediate independent search, and metadata CRUD."""
 
-import inspect
-import json
-import logging
-import os
-from collections.abc import Iterator
-from contextlib import ExitStack
-from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
-from elasticsearch import Elasticsearch
-from opensearchpy import OpenSearch
+from sqlalchemy.orm import Session
 
-from core.utils.es_conn import ESConnection
-from core.utils.opensearch_conn import OSConnection
-
-
-@pytest.fixture(params=["elasticsearch", "opensearch"])
-def search_store(request: pytest.FixtureRequest, record_property: Any) -> Iterator[dict[str, Any]]:
-    backend = request.param
-    es = backend == "elasticsearch"
-    url = os.environ.get("METADATA_TEST_ES_URL" if es else "METADATA_TEST_OS_URL")
-    assert url, "Prepare isolated ES/OS services before collection"
-    indexes: list[str] = []
-    manifest_path = os.environ.get("ES_OS_RESOURCE_MANIFEST")
-
-    def record() -> None:
-        if manifest_path:
-            path = Path(manifest_path)
-            data = json.loads(path.read_text()) if path.exists() else []
-            data.append({"backend": backend, "indexes": list(indexes), "phase": "current"})
-            temporary = path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(data, indent=2))
-            temporary.replace(path)
-
-    with ExitStack() as resources:
-        writer = resources.enter_context(Elasticsearch(url, request_timeout=10) if es else OpenSearch(url, timeout=10))
-        reader = resources.enter_context(Elasticsearch(url, request_timeout=10) if es else OpenSearch(url, timeout=10))
-        version = reader.info()["version"]["number"]
-        record_property("backend_version", f"{backend}:{version}")
-        cls = inspect.getclosurevars(ESConnection if es else OSConnection).nonlocals["cls"]
-        store = object.__new__(cls)
-        store.es = writer if es else None
-        store.os = writer if not es else None
-        store.logger = logging.getLogger(__name__)
-
-        def index_name() -> str:
-            name = "multirag_test_after058_d_" + uuid4().hex
-            indexes.append(name)
-            record()  # register before creation, including failed creation
-            return name
-
-        try:
-            yield {"store": store, "reader": reader, "writer": writer, "index_name": index_name, "backend": backend}
-        finally:
-            for index in indexes:
-                if reader.indices.exists(index=index):
-                    reader.indices.delete(index=index)
-                assert not reader.indices.exists(index=index)
-            record_property("removed_owned_indexes", indexes)
-            indexes.clear()
-            record()
+from api.db.services.metadata_store_engine import EngineMetadataStore
+from common import settings
+from common.doc_store.doc_store_base import OrderByExpr
+from tests.support.search_metadata import search_store as search_store
 
 
 def test_bulk_success_is_immediately_retrievable(search_store: dict[str, Any]) -> None:
@@ -83,3 +29,60 @@ def test_rejected_bulk_is_not_success(search_store: dict[str, Any]) -> None:
     env["writer"].indices.create(index=index, body={"settings": {"number_of_replicas": 0, "blocks.write": True}})
     assert env["store"].insert([{"id": "rejected", "doc_id": "doc", "kb_id": "kb"}], index, "kb")
     assert env["reader"].count(index=index)["count"] == 0
+
+
+def test_metadata_crud_has_complete_replacement_and_scoped_readback(search_store: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_store
+    index = env["index_name"]("multirag_doc_meta_test_after058_d_")
+    tenant = index.removeprefix("multirag_doc_meta_")
+    monkeypatch.setitem(settings.__dict__, "docStoreConn", env["store"])
+    monkeypatch.setattr(settings, "DOC_ENGINE", env["backend"])
+    monkeypatch.setattr(settings, "DOC_ENGINE_INFINITY", False)
+    monkeypatch.setattr(settings, "DOC_ENGINE_OCEANBASE", False)
+    store = EngineMetadataStore()
+    original = {"removed": "old", "keep": ["Ada", "Bob"], "enabled": False, "number": 0}
+    replacement = {"keep": ["Ada"], "enabled": False, "number": 0}
+    with Session() as db:
+        assert store.upsert(db, "doc", tenant, "kb", original) is True
+        mapping = env["reader"].indices.get_mapping(index=index)[index]["mappings"]
+        assert mapping["dynamic"] == ("runtime" if env["backend"] == "elasticsearch" else "true")
+        assert env["reader"].get(index=index, id="doc")["_source"] == {"id": "doc", "kb_id": "kb", "meta_fields": original}
+        assert env["store"].count_idx(index) == 1
+        assert store.upsert(db, "doc", tenant, "kb", replacement) is True
+        assert env["reader"].get(index=index, id="doc")["_source"]["meta_fields"] == replacement
+        assert env["reader"].search(index=index, body={"query": {"exists": {"field": "meta_fields.removed"}}})["hits"]["total"]["value"] == 0
+        # The original metadata service calls search with these snake_case keywords.
+        result = env["store"].search(
+            select_fields=["*"],
+            highlight_fields=[],
+            condition={"id": ["doc"]},
+            match_expressions=[],
+            order_by=OrderByExpr().asc("id"),
+            offset=0,
+            limit=10,
+            index_names=index,
+            knowledgebase_ids=["kb"],
+        )
+        assert result["hits"]["total"]["value"] == 1
+        assert store.list_by_kb_ids(db, tenant, ["kb"]) == [("doc", replacement)]
+        assert store.list_by_kb_ids(db, tenant, ["foreign"]) == []
+        assert env["store"].get_doc_metadata_rows(index, ["doc", "absent"], "kb") == [{"id": "doc", "kb_id": "kb", "meta_fields": replacement}]
+        # A permanent mapping rejection must not fall back to delete+insert.
+        assert store.upsert(db, "doc", tenant, "kb", {"number": {"invalid": "object"}}) is False
+        assert env["reader"].get(index=index, id="doc")["_source"]["meta_fields"] == replacement
+        assert store.upsert(db, "doc", tenant, "kb", {}) is True
+        assert env["reader"].get(index=index, id="doc")["_source"]["meta_fields"] == {}
+        assert store.delete(db, "doc", tenant, "kb") is True
+        assert env["reader"].count(index=index)["count"] == 0
+        store._drop_if_empty(index)
+        assert not env["reader"].indices.exists(index=index)
+
+
+def test_closed_index_refresh_and_count_fail_closed(search_store: dict[str, Any]) -> None:
+    env = search_store
+    index = env["index_name"]()
+    assert env["store"].create_doc_meta_idx(index) is True
+    env["writer"].indices.close(index=index)
+    assert env["store"].refresh_idx(index) is False
+    assert env["store"].count_idx(index) == -1
+    assert env["reader"].indices.exists(index=index)

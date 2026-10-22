@@ -16,7 +16,7 @@
 """
 EngineMetadataStore — metadata persistence via docStoreConn sidecar index.
 
-Used when the doc engine is Elasticsearch or Infinity.
+Used when the doc engine is Elasticsearch, OpenSearch, Infinity or OceanBase.
 Index name pattern: multirag_doc_meta_{tenant_id}
 """
 
@@ -101,65 +101,57 @@ class EngineMetadataStore(MetadataStore):
         return True
 
     @staticmethod
-    def _drop_if_empty(index_name: str):
+    def _drop_if_empty(index_name: str) -> None:
         try:
             if not settings.docStoreConn.index_exist(index_name, ""):
                 return
-            if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
-                count_resp = settings.docStoreConn.es.count(index=index_name)
-                if count_resp.get("count", 1) == 0:
+            count_idx = getattr(settings.docStoreConn, "count_idx", None)
+            count = count_idx(index_name) if callable(count_idx) else -1
+            if type(count) is int and count >= 0:
+                if count == 0:
                     settings.docStoreConn.delete_idx(index_name, "")
-            else:
-                from common.doc_store.doc_store_base import OrderByExpr
+                return
+            if callable(count_idx):
+                logger.warning("Unknown metadata count; retaining index %s", index_name)
+                return
+            # Backends without a native count retain the search fallback.
+            from common.doc_store.doc_store_base import OrderByExpr
 
-                results = settings.docStoreConn.search(
-                    select_fields=["id"],
-                    highlight_fields=[],
-                    condition={},
-                    match_expressions=[],
-                    order_by=OrderByExpr(),
-                    offset=0,
-                    limit=1,
-                    index_names=index_name,
-                    knowledgebase_ids=[""],
-                )
-                total = None
-                if isinstance(results, tuple):
-                    _, total = results
-                elif hasattr(results, "total"):
-                    total = results.total
-                if total is not None and total == 0:
-                    settings.docStoreConn.delete_idx(index_name, "")
+            results = settings.docStoreConn.search(
+                select_fields=["id"],
+                highlight_fields=[],
+                condition={},
+                match_expressions=[],
+                order_by=OrderByExpr(),
+                offset=0,
+                limit=1,
+                index_names=index_name,
+                knowledgebase_ids=[""],
+            )
+            total = None
+            if isinstance(results, tuple):
+                _, total = results
+            elif hasattr(results, "total"):
+                total = results.total
+            elif hasattr(results, "get") and "hits" in results:
+                raw = results["hits"].get("total")
+                if isinstance(raw, dict):
+                    if raw.get("relation") == "eq":
+                        total = raw.get("value")
+                else:
+                    total = raw
+                if results.get("timed_out") is not False or results.get("_shards", {}).get("failed") != 0:
+                    return
+            if type(total) is int and total == 0:
+                settings.docStoreConn.delete_idx(index_name, "")
         except Exception as e:
             logger.warning("Failed to check/drop empty metadata index %s: %s", index_name, e)
 
     @classmethod
     def _iter_es_rows(cls, index_name: str, kb_ids: list[str], query: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
         """Consume a scroll snapshot completely; partial RPCs are failures."""
-        client = settings.docStoreConn.es
-        scroll_id = None
-        try:
-            response = client.search(index=index_name, query=query, size=1000, scroll="2m", sort=["id"], source_includes=["id", "kb_id", "meta_fields"], allow_partial_search_results=False)
-            while True:
-                scroll_id = response.get("_scroll_id", scroll_id)
-                if response.get("timed_out") is not False or response.get("_shards", {}).get("failed") != 0:
-                    raise RuntimeError("Incomplete ES metadata search")
-                hits = response["hits"]["hits"]
-                if not isinstance(hits, list):
-                    raise RuntimeError("Malformed ES metadata response")
-                if not hits:
-                    break
-                if not scroll_id:
-                    raise RuntimeError("ES metadata search omitted its scroll cursor")
-                for hit in hits:
-                    source = hit["_source"]
-                    if source.get("kb_id") not in kb_ids or not isinstance(hit.get("_id"), str):
-                        raise RuntimeError("ES metadata response escaped the requested scope")
-                    yield hit["_id"], source
-                response = client.scroll(scroll_id=scroll_id, scroll="2m")
-        finally:
-            if scroll_id:
-                client.clear_scroll(scroll_id=scroll_id)
+        with closing(settings.docStoreConn.iter_doc_metadata(index_name, kb_ids, query)) as rows:
+            yield from rows
 
     @classmethod
     def iter_metadata(cls, index: str, kb_ids: list[str], query: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -172,10 +164,9 @@ class EngineMetadataStore(MetadataStore):
         from common.metadata_es_filter import UnsupportedMetaFilter, build_meta_filter_query
 
         index = self._index_name(tenant_id)
-        client = settings.docStoreConn.es
-        if not client.indices.exists(index=index):
+        if not settings.docStoreConn.doc_meta_index_exists(index):
             return iter(())
-        mapping = client.indices.get_mapping(index=index)[index]["mappings"]
+        mapping = settings.docStoreConn.doc_meta_mapping(index)
         try:
             query = build_meta_filter_query(filters, logic, kb_ids, mapping)
         except UnsupportedMetaFilter:
@@ -184,9 +175,9 @@ class EngineMetadataStore(MetadataStore):
 
     @classmethod
     def _search_all(cls, index_name: str, condition: dict | None, kb_ids: list[str]) -> list[dict]:
-        if settings.DOC_ENGINE.lower() == "elasticsearch" and condition == {"kb_id": kb_ids}:
+        if settings.DOC_ENGINE.lower() in {"elasticsearch", "opensearch"} and condition == {"kb_id": kb_ids}:
             # Never translate an RPC error into a missing metadata index.
-            if not settings.docStoreConn.es.indices.exists(index=index_name):
+            if not settings.docStoreConn.doc_meta_index_exists(index_name):
                 return []
             query = {"bool": {"filter": [{"terms": {"kb_id": kb_ids}}]}}
             return [{**source, "id": doc_id} for doc_id, source in cls._iter_es_rows(index_name, kb_ids, query)]
@@ -278,28 +269,20 @@ class EngineMetadataStore(MetadataStore):
         index_name = self._index_name(tenant_id)
 
         if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
-            # ES: replace meta_fields wholesale, or insert
-            if not settings.docStoreConn.index_exist(index_name, ""):
-                settings.docStoreConn.create_doc_meta_idx(index_name)
-                return self._insert(index_name, doc_id, kb_id, meta_fields)
+            # Native whole-map replacement must not degrade into destructive delete+insert.
             try:
-                doc_exists = settings.docStoreConn.get(doc_id, index_name, [kb_id])
-                if doc_exists:
-                    # A `doc=` partial update deep-merges object fields, so keys the caller
-                    # dropped would survive. Assign through a script to replace the whole map.
-                    settings.docStoreConn.es.update(
-                        index=index_name,
-                        id=doc_id,
-                        refresh=True,
-                        script={
-                            "source": "ctx._source.meta_fields = params.meta_fields",
-                            "params": {"meta_fields": meta_fields or {}},
-                        },
-                    )
-                    return True
+                if not self._ensure_index(index_name):
+                    return False
+                existing = settings.docStoreConn.get(doc_id, index_name, [kb_id])
+                if existing:
+                    if existing.get("kb_id") != kb_id:
+                        logger.error("Metadata replacement scope mismatch: %s", doc_id)
+                        return False
+                    return settings.docStoreConn.replace_meta_fields(index_name, doc_id, meta_fields or {})
+                return self._insert(index_name, doc_id, kb_id, meta_fields)
             except Exception:
-                pass
-            return self._insert(index_name, doc_id, kb_id, meta_fields)
+                logger.exception("Metadata upsert failed: %s", doc_id)
+                return False
 
         # Infinity/OceanBase: delete + insert
         self._delete_from_store(index_name, doc_id, kb_id)
@@ -313,11 +296,8 @@ class EngineMetadataStore(MetadataStore):
         if err:
             logger.error("Failed to insert metadata for doc %s: %s", doc_id, err)
             return False
-        if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
-            try:
-                settings.docStoreConn.es.indices.refresh(index=index_name)
-            except Exception:
-                pass
+        # ES/OS insert already waits for visibility; an extra refresh costs a
+        # second RPC without strengthening the successful-write contract.
         return True
 
     def _delete_from_store(self, index_name: str, doc_id: str, kb_id: str):
@@ -363,25 +343,7 @@ class EngineMetadataStore(MetadataStore):
                 continue
 
             if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
-                try:
-                    response = settings.docStoreConn.es.mget(
-                        index=index_name,
-                        ids=group_doc_ids,
-                        _source=True,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to batch fetch metadata from ES index %s: %s",
-                        index_name,
-                        e,
-                    )
-                    continue
-
-                for hit in response.get("docs", []):
-                    if not hit.get("found"):
-                        continue
-                    doc = hit.get("_source", {})
-                    doc["id"] = hit.get("_id", "")
+                for doc in settings.docStoreConn.get_doc_metadata_rows(index_name, group_doc_ids, kb_id):
                     meta = self._extract_metadata(doc)
                     if meta:
                         metadata_map[doc["id"]] = meta

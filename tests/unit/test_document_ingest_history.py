@@ -90,9 +90,10 @@ def test_real_bulk_connector_requires_visibility_before_history_read(backend: st
     pending, visible, calls = [], [], []
 
     def bulk(**kwargs: Any) -> dict[str, Any]:
-        assert kwargs["refresh"] is False
+        assert kwargs["refresh"] == "wait_for"
         operations = kwargs.get("operations", kwargs.get("body"))
         pending.extend({"id": meta["index"]["_id"], **copy.deepcopy(payload)} for meta, payload in zip(operations[::2], operations[1::2], strict=True))
+        visible[:] = copy.deepcopy(pending)
         calls.append("bulk")
         return {"errors": False}
 
@@ -118,14 +119,14 @@ def test_real_bulk_connector_requires_visibility_before_history_read(backend: st
     store.es = store.os = client
     row = {"id": "chunk", "doc_id": "doc", "kb_id": "kb", "q_2_vec": [0.2, 0.4], "content_with_weight": "visible after acknowledged refresh"}
     assert store.insert([row], "index", "kb") == []
-    assert history.document_history(store, "index", "kb", "doc") == []
+    assert history.document_history(store, "index", "kb", "doc") == [row]
     if fault in {None, "unassigned_replica"}:
         history.confirm_history_visibility(store, "index")
         assert history.document_history(store, "index", "kb", "doc") == [row]
     else:
         with pytest.raises((RuntimeError, ConnectionError)):
             history.confirm_history_visibility(store, "index")
-        assert visible == []
+        assert visible == [row]
     assert calls == ["bulk", "refresh"]
 
 

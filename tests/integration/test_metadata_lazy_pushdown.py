@@ -8,7 +8,6 @@ import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -24,6 +23,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.metadata_store_engine import EngineMetadataStore
 from api.db.services.metadata_store_sql import SqlMetadataStore
 from common import settings
+from common.doc_store.search_metadata import SearchMetadata
 from common.metadata_utils import aggregate_metadata_rows, apply_meta_data_filter, meta_filter
 
 
@@ -80,8 +80,9 @@ def es_metadata(metadata_rows: dict[str, Any], monkeypatch: pytest.MonkeyPatch) 
         assert bulk(client, actions, refresh=True)[0] == len(actions)
         monkeypatch.setattr(settings, "DOC_ENGINE", "elasticsearch")
         store = EngineMetadataStore()
-        conn = SimpleNamespace(es=client, index_exist=lambda index, _: bool(client.indices.exists(index=index)))
-        monkeypatch.setattr(settings, "docStoreConn", conn)
+        conn = SearchMetadata()
+        monkeypatch.setattr(conn, "_doc_meta_client", lambda: client)
+        monkeypatch.setitem(settings.__dict__, "docStoreConn", conn)
         monkeypatch.setattr(DocMetadataService, "_store", staticmethod(lambda: store))
         yield {**env, "client": client, "indexes": indexes}
     finally:

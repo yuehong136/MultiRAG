@@ -20,14 +20,15 @@ import os
 import re
 import time
 from abc import abstractmethod
+from typing import Any
 
 from elastic_transport import ConnectionTimeout
 from elasticsearch import NotFoundError
-from elasticsearch.client import IndicesClient
 from elasticsearch_dsl import Index
 
 from common import settings
 from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr
+from common.doc_store.search_metadata import SearchMetadata
 from common.file_utils import get_project_base_directory
 from common.misc_utils import convert_bytes
 from core.nlp import is_english, rag_tokenizer
@@ -35,7 +36,7 @@ from core.nlp import is_english, rag_tokenizer
 ATTEMPT_TIME = 2
 
 
-class ESConnectionBase(DocStoreConnection):
+class ESConnectionBase(SearchMetadata, DocStoreConnection):
     def __init__(self, mapping_file_name: str = "es_mapping.json", logger_name: str = "multirag.es_conn"):
         from common.doc_store.es_conn_pool import ES_CONN
 
@@ -129,7 +130,10 @@ class ESConnectionBase(DocStoreConnection):
         except Exception:
             self.logger.exception("ESConnection.createIndex error %s" % index_name)
 
-    def create_doc_meta_idx(self, index_name: str):
+    def _doc_meta_client(self) -> Any:
+        return self.es
+
+    def create_doc_meta_idx(self, index_name: str) -> bool:
         """Create a per-tenant document metadata index."""
         if self.index_exist(index_name, ""):
             return True
@@ -140,9 +144,10 @@ class ESConnectionBase(DocStoreConnection):
                 return False
             with open(fp_mapping) as f:
                 doc_meta_mapping = json.load(f)
-            return IndicesClient(self.es).create(index=index_name, settings=doc_meta_mapping["settings"], mappings=doc_meta_mapping["mappings"])
+            return self.es.indices.create(index=index_name, settings=doc_meta_mapping["settings"], mappings=doc_meta_mapping["mappings"]).get("acknowledged") is True
         except Exception as e:
             self.logger.exception(f"Error creating document metadata index {index_name}: {e}")
+            return False
 
     def delete_idx(self, index_name: str, dataset_id: str):
         if len(dataset_id) > 0:

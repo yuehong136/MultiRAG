@@ -28,6 +28,7 @@ from common import settings
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common.decorator import singleton
 from common.doc_store.doc_store_base import DocStoreConnection, FusionExpr, MatchDenseExpr, MatchExpr, MatchTextExpr, OrderByExpr
+from common.doc_store.search_metadata import SearchMetadata
 from common.file_utils import get_project_base_directory
 from core.nlp import is_english, rag_tokenizer
 
@@ -61,7 +62,7 @@ logger = logging.getLogger("multirag.opensearch_conn")
 
 
 @singleton
-class OSConnection(DocStoreConnection):
+class OSConnection(SearchMetadata, DocStoreConnection):
     def __init__(self):
         self.info = {}
         logger.info(f"Use OpenSearch {settings.OS['hosts']} as the doc engine.")
@@ -124,6 +125,25 @@ class OSConnection(DocStoreConnection):
         except Exception:
             logger.exception("OSConnection.createIndex error %s" % (indexName))
 
+    def _doc_meta_client(self) -> Any:
+        return self.os
+
+    def create_doc_meta_idx(self, index_name: str) -> bool:
+        if self.doc_meta_index_exists(index_name):
+            return True
+        try:
+            with open(os.path.join(get_project_base_directory(), "configs", "doc_meta_es_mapping.json")) as stream:
+                mapping = json.load(stream)
+            mappings = mapping["mappings"]
+            # OpenSearch does not support ES runtime fields; keep the shared file intact.
+            if mappings.get("dynamic") == "runtime":
+                mappings = {**mappings, "dynamic": True}
+            response = self.os.indices.create(index=index_name, body={"settings": mapping["settings"], "mappings": mappings})
+            return response.get("acknowledged") is True
+        except Exception:
+            logger.exception("OpenSearch metadata index creation failed: %s", index_name)
+            return False
+
     def delete_idx(self, indexName: str, knowledgebaseId: str):
         if len(knowledgebaseId) > 0:
             # The index need to be alive after any kb deletion since all kb under this tenant are in one index.
@@ -153,28 +173,28 @@ class OSConnection(DocStoreConnection):
 
     def search(
         self,
-        selectFields: list[str],
-        highlightFields: list[str],
+        select_fields: list[str],
+        highlight_fields: list[str],
         condition: dict[str, Any],
-        matchExprs: list[MatchExpr],
-        orderBy: OrderByExpr | None,
+        match_expressions: list[MatchExpr],
+        order_by: OrderByExpr | None,
         offset: int,
         limit: int,
-        indexNames: str | list[str],
-        knowledgebaseIds: list[str],
-        aggFields: list[str] | None = None,
+        index_names: str | list[str],
+        knowledgebase_ids: list[str],
+        agg_fields: list[str] | None = None,
         rank_feature: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Refers to https://github.com/opensearch-project/opensearch-py/blob/main/guides/dsl.md
         """
-        if isinstance(indexNames, str):
-            indexNames = indexNames.split(",")
-        assert isinstance(indexNames, list) and len(indexNames) > 0
+        if isinstance(index_names, str):
+            index_names = index_names.split(",")
+        assert isinstance(index_names, list) and len(index_names) > 0
         assert "_id" not in condition
 
         bqry = Q("bool", must=[])
-        for k, v in {**condition, "kb_id": knowledgebaseIds}.items():
+        for k, v in {**condition, "kb_id": knowledgebase_ids}.items():
             if k == "available_int":
                 if v == 0:
                     bqry.filter.append(Q("range", available_int={"lt": 1}))
@@ -195,13 +215,18 @@ class OSConnection(DocStoreConnection):
         scalar_filter = bqry.to_dict()
         text_similarity_weight = 1.0
         vector_similarity_weight = 1.0
-        for m in matchExprs:
+        for m in match_expressions:
             if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
-                assert len(matchExprs) == 3 and isinstance(matchExprs[0], MatchTextExpr) and isinstance(matchExprs[1], MatchDenseExpr) and isinstance(matchExprs[2], FusionExpr)
+                assert (
+                    len(match_expressions) == 3
+                    and isinstance(match_expressions[0], MatchTextExpr)
+                    and isinstance(match_expressions[1], MatchDenseExpr)
+                    and isinstance(match_expressions[2], FusionExpr)
+                )
                 weights = m.fusion_params["weights"]
                 text_similarity_weight, vector_similarity_weight = (float(value) for value in weights.split(","))
         candidate_queries: list[dict[str, Any]] = []
-        for m in matchExprs:
+        for m in match_expressions:
             if isinstance(m, MatchTextExpr):
                 minimum_should_match = m.extra_options.get("minimum_should_match", 0.0)
                 if isinstance(minimum_should_match, float):
@@ -238,12 +263,12 @@ class OSConnection(DocStoreConnection):
 
         if bqry:
             s = s.query(bqry)
-        for field in highlightFields:
+        for field in highlight_fields:
             s = s.highlight(field, force_source=True, no_match_size=30, require_field_match=False)
 
-        if orderBy:
+        if order_by:
             orders = []
-            for field, order in orderBy.fields:
+            for field, order in order_by.fields:
                 order = "asc" if order == 0 else "desc"
                 if field in ["page_num_int", "top_int"]:
                     order_info = {"order": order, "unmapped_type": "float", "mode": "avg", "numeric_type": "double"}
@@ -254,7 +279,7 @@ class OSConnection(DocStoreConnection):
                 orders.append({field: order_info})
             s = s.sort(*orders)
 
-        for fld in aggFields or []:
+        for fld in agg_fields or []:
             s.aggs.bucket(f"aggs_{fld}", "terms", field=fld, size=1000000)
 
         if limit > 0:
@@ -264,12 +289,12 @@ class OSConnection(DocStoreConnection):
             # opensearch-py 2.7 has no kNN DSL class, so insert the raw clauses
             # after serialization. Rank features cannot admit unrelated rows.
             q["query"]["bool"].setdefault("must", []).append({"bool": {"should": candidate_queries, "minimum_should_match": 1}})
-        logger.debug(f"OSConnection.search {indexNames!s} query: " + json.dumps(q))
+        logger.debug(f"OSConnection.search {index_names!s} query: " + json.dumps(q))
 
         for i in range(ATTEMPT_TIME):
             try:
                 res = self.os.search(
-                    index=indexNames,
+                    index=index_names,
                     body=q,
                     timeout=600,
                     # search_type="dfs_query_then_fetch",
@@ -278,10 +303,10 @@ class OSConnection(DocStoreConnection):
                 )
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("OpenSearch Timeout.")
-                logger.debug(f"OSConnection.search {indexNames!s} res: " + str(res))
+                logger.debug(f"OSConnection.search {index_names!s} res: " + str(res))
                 return res
             except Exception as e:
-                logger.exception(f"OSConnection.search {indexNames!s} query: " + str(q))
+                logger.exception(f"OSConnection.search {index_names!s} query: " + str(q))
                 if str(e).find("Timeout") > 0:
                     continue
                 raise e
@@ -318,7 +343,7 @@ class OSConnection(DocStoreConnection):
             assert "_id" not in d
             assert "id" in d
             d_copy = copy.deepcopy(d)
-            meta_id = d_copy.pop("id", "")
+            meta_id = d_copy.get("id", "")
             operations.append({"index": {"_index": indexName, "_id": meta_id}})
             operations.append(d_copy)
 

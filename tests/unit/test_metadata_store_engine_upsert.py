@@ -1,74 +1,73 @@
-"""EngineMetadataStore.upsert 的 doc-store 写形状。
+"""Engine metadata whole-map replacement through the real ES/OS connectors."""
 
-要点是 ES 分支必须整体替换 meta_fields。`es.update(doc=...)` 对 object 字段做的是
-深合并：用户删掉的键会在索引里活下来，元数据筛选随后按幽灵键把文档筛出来。
-这个坏行为在打桩测试里看不出差别（两种写法都"调用成功"），只能靠钉住请求形状。
-"""
-
-import types
+import inspect
+import logging
+from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 from api.db.services.metadata_store_engine import EngineMetadataStore
 from common import settings
+from core.utils.es_conn import ESConnection
+from core.utils.opensearch_conn import OSConnection
 
 
-@pytest.fixture
-def es_store(monkeypatch):
-    """ES 后端 + 记录所有 es.update 调用的 docStoreConn 假件。"""
-    calls: list[dict] = []
-    inserted: list[dict] = []
-
+@pytest.fixture(params=[ESConnection, OSConnection])
+def es_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> tuple[EngineMetadataStore, Any, Mock]:
+    cls = inspect.getclosurevars(request.param).nonlocals["cls"]
+    connector = object.__new__(cls)
+    client = Mock()
+    connector.es = connector.os = client
+    connector.logger = logging.getLogger(__name__)
+    client.get.return_value = {"_source": {"id": "d1", "kb_id": "kb1"}}
+    client.update.return_value = {"result": "updated", "_shards": {"failed": 0}}
+    client.bulk.return_value = {"errors": False}
+    client.indices.refresh.return_value = {"_shards": {"total": 1, "successful": 1, "failed": 0}}
     monkeypatch.setattr(settings, "DOC_ENGINE_INFINITY", False)
     monkeypatch.setattr(settings, "DOC_ENGINE_OCEANBASE", False)
-    monkeypatch.setattr(
-        settings,
-        "docStoreConn",
-        types.SimpleNamespace(
-            index_exist=lambda idx, kb_id: True,
-            get=lambda doc_id, idx, kb_ids: {"id": doc_id},
-            es=types.SimpleNamespace(
-                update=lambda **kw: calls.append(kw),
-                indices=types.SimpleNamespace(refresh=lambda index: None),
-            ),
-            insert=lambda docs, idx, kb_id: inserted.append(docs) or None,
-        ),
-    )
-    return EngineMetadataStore(), calls, inserted
+    monkeypatch.setattr(settings, "docStoreConn", connector)
+    return EngineMetadataStore(), connector, client
 
 
-def test_upsert_replaces_meta_fields_instead_of_merging(db, es_store):
-    store, calls, _ = es_store
-
-    assert store.upsert(db, "d1", "t1", "kb1", {"author": "ada"}) is True
-
-    assert len(calls) == 1
-    call = calls[0]
-    assert call["index"] == "multirag_doc_meta_t1"
-    assert call["id"] == "d1"
+@pytest.mark.parametrize("metadata", [{"author": "ada"}, {}])
+def test_upsert_replaces_whole_map(db: Any, es_store: tuple[EngineMetadataStore, Any, Mock], metadata: dict[str, Any]) -> None:
+    store, _, client = es_store
+    assert store.upsert(db, "d1", "t1", "kb1", metadata) is True
+    call = client.update.call_args.kwargs
+    assert call["index"] == "multirag_doc_meta_t1" and call["id"] == "d1"
     assert call["refresh"] is True
-    # 深合并的 doc= 形态会让删掉的键留在索引里，必须走 script 整体赋值
-    assert "doc" not in call
-    assert call["script"] == {
-        "source": "ctx._source.meta_fields = params.meta_fields",
-        "params": {"meta_fields": {"author": "ada"}},
-    }
+    assert call["body"] == {"script": {"source": "ctx._source.meta_fields = params.meta_fields", "params": {"meta_fields": metadata}}}
+    client.bulk.assert_not_called()
 
 
-def test_upsert_clears_all_fields_when_given_an_empty_map(db, es_store):
-    """清空元数据是删除语义：脚本参数得是空 map，而不是被跳过。"""
-    store, calls, _ = es_store
-
-    assert store.upsert(db, "d1", "t1", "kb1", {}) is True
-
-    assert calls[0]["script"]["params"] == {"meta_fields": {}}
-
-
-def test_upsert_inserts_when_the_document_is_absent(db, es_store, monkeypatch):
-    store, calls, inserted = es_store
-    monkeypatch.setattr(settings.docStoreConn, "get", lambda doc_id, idx, kb_ids: None)
-
+def test_upsert_inserts_absent_document(db: Any, es_store: tuple[EngineMetadataStore, Any, Mock], monkeypatch: pytest.MonkeyPatch) -> None:
+    store, connector, client = es_store
+    monkeypatch.setattr(connector, "get", lambda *args: None)
     assert store.upsert(db, "d1", "t1", "kb1", {"author": "ada"}) is True
+    client.update.assert_not_called()
+    call = client.bulk.call_args.kwargs
+    assert call["refresh"] == "wait_for"
+    assert call.get("operations", call.get("body"))[1] == {"id": "d1", "kb_id": "kb1", "meta_fields": {"author": "ada"}}
 
-    assert calls == []
-    assert inserted == [[{"id": "d1", "kb_id": "kb1", "meta_fields": {"author": "ada"}}]]
+
+@pytest.mark.parametrize("fault", ["replace", "get", "scope"])
+def test_upsert_failure_never_falls_back_to_destructive_write(db: Any, es_store: tuple[EngineMetadataStore, Any, Mock], fault: str) -> None:
+    store, _, client = es_store
+    if fault == "replace":
+        client.update.side_effect = RuntimeError("script rejected")
+    elif fault == "get":
+        client.get.side_effect = RuntimeError("read failed")
+    else:
+        client.get.return_value = {"_source": {"id": "d1", "kb_id": "foreign"}}
+    assert store.upsert(db, "d1", "t1", "kb1", {"author": "ada"}) is False
+    client.bulk.assert_not_called()
+    client.delete_by_query.assert_not_called()
+
+
+def test_insert_uses_bulk_visibility_without_another_refresh(db: Any, es_store: tuple[EngineMetadataStore, Any, Mock], monkeypatch: pytest.MonkeyPatch) -> None:
+    store, connector, client = es_store
+    monkeypatch.setattr(connector, "get", lambda *args: None)
+    client.indices.refresh.side_effect = RuntimeError("refresh failed")
+    assert store.upsert(db, "d1", "t1", "kb1", {"author": "ada"}) is True
+    client.indices.refresh.assert_not_called()

@@ -7,7 +7,7 @@ from typing import Any
 
 
 def confirm_history_visibility(store: Any, index_name: str) -> None:
-    """ES/OS bulk acknowledgements precede search visibility; refresh explicitly."""
+    """Refresh mutation/recovery paths that do not promise a wait_for barrier."""
     backend = store.db_type()
     if backend not in {"elasticsearch", "opensearch"}:
         return

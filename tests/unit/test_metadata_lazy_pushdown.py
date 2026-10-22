@@ -1,7 +1,6 @@
 """Lazy reads, exact expanded-value semantics, and fail-closed storage IO."""
 
 from copy import deepcopy
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -9,6 +8,7 @@ import pytest
 
 from api.db.services.metadata_store_engine import EngineMetadataStore
 from common import settings
+from common.doc_store.search_metadata import SearchMetadata
 from common.metadata_es_filter import UnsupportedMetaFilter, build_meta_filter_query
 from common.metadata_utils import aggregate_metadata_rows, apply_meta_data_filter, meta_filter, stream_metadata_matches
 
@@ -92,11 +92,13 @@ def test_scroll_partial_failures_propagate_and_clear_cursor(monkeypatch: pytest.
     client.scroll.return_value = next_page
     if failure == "rpc":
         client.scroll.side_effect = ConnectionError("owned failure")
-    monkeypatch.setattr(settings, "docStoreConn", SimpleNamespace(es=client))
+    connector = SearchMetadata()
+    monkeypatch.setattr(connector, "_doc_meta_client", lambda: client)
+    monkeypatch.setattr(settings, "docStoreConn", connector)
     with pytest.raises((ConnectionError, RuntimeError)):
         list(EngineMetadataStore._iter_es_rows("owned", ["kb"], {"match_all": {}}))
     client.clear_scroll.assert_called_once_with(scroll_id="owned")
-    assert client.search.call_args.kwargs["sort"] == ["id"]
+    assert client.search.call_args.kwargs["body"]["sort"] == ["id"]
 
 
 def test_matcher_exception_closes_source_iterator() -> None:

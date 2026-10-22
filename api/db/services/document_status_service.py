@@ -258,7 +258,7 @@ def _insert_locked_source_chunks(
     document_id: str,
     recovery: dict[str, Any],
 ) -> list[str]:
-    from common.doc_store.document_history import confirm_history_visibility, document_history
+    from common.doc_store.document_history import document_history
 
     original_task = db.get(Task, task_id) if db is not None and task_id is not None else None
     original_doc = db.get(Document, document_id) if original_task is not None else None
@@ -275,7 +275,6 @@ def _insert_locked_source_chunks(
         errors = settings.docStoreConn.insert(chunks, index_name, dataset_id)
         if not isinstance(errors, list) or errors:
             raise RuntimeError("Source chunk insertion failed.")
-        confirm_history_visibility(settings.docStoreConn, index)
     finally:
         # Capture the actual partial or complete write while Doc/Task/image
         # locks still exclude native writers, before SQL can release them.
