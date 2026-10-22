@@ -90,7 +90,7 @@ def metadata_http(runtime_upload_api: dict[str, Any], monkeypatch: pytest.Monkey
     monkeypatch.setitem(resources._state, "retriever", Retriever())
     monkeypatch.setattr(dialog_service, "get_models", models)
     monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda *a: {"max_tokens": 8192, "llm_name": "controlled"})
-    monkeypatch.setattr(dialog_service.TenantLLMService, "llm_id2llm_type", lambda *a: "chat")
+    monkeypatch.setattr(dialog_service, "resolve_model_type", lambda *a: ["chat"])
     monkeypatch.setattr(dialog_service.TenantLangfuseService, "filter_by_tenant", lambda *a, **k: None)
     monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_field_map", lambda *a: {})
     monkeypatch.setattr(dialog_service, "label_question", lambda *a: {})

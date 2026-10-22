@@ -18,14 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Dialog
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.common_service import CommonService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.run_context import RunContext
 from api.utils.dataset_search import normalize_search_mode
 from api.utils.reference_metadata import enrich_reference_metadata, enrich_reference_metadata_async, reference_dataset_id, resolve_reference_metadata_preferences
@@ -79,8 +78,9 @@ def _resolve_model_config(
     return get_model_config_by_type_and_name(db, tenant_id, model_type_value, model_name)
 
 
-def _resolve_dialog_primary_model_config(db: Session, dialog) -> dict:
-    llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
+def _resolve_dialog_primary_model_config(db: Session, dialog: Any) -> dict:
+    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
+    llm_type = "chat" if "chat" in model_types else model_types[0]
     model_type = LLMType.IMAGE2TEXT.value if llm_type == "image2text" else LLMType.CHAT.value
     return _resolve_model_config(db, dialog.tenant_id, dialog.tenant_llm_id, model_type, dialog.llm_id)
 
@@ -392,8 +392,9 @@ class DialogService(CommonService):
         return db.execute(stmt).all()
 
 
-def chat_solo(db, dialog, messages, stream=True):
-    llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
+def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> Generator[dict[str, Any], None, None]:
+    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
+    llm_type = "chat" if "chat" in model_types else model_types[0]
     attachments = ""
     image_attachments = []
     image_files = []
@@ -439,9 +440,10 @@ def chat_solo(db, dialog, messages, stream=True):
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
-async def async_chat_solo(db, dialog, messages, stream=True):
+async def async_chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 chat_solo"""
-    llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
+    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
+    llm_type = "chat" if "chat" in model_types else model_types[0]
     attachments = ""
     image_attachments = []
     image_files = []
@@ -665,7 +667,8 @@ def chat(
     # are preserved; the upstream solo fallback does not apply to this architecture.
     chat_start_ts = timer()
 
-    llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
+    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
+    llm_type = "chat" if "chat" in model_types else model_types[0]
     llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
@@ -1032,8 +1035,9 @@ async def async_chat(
     # are preserved; the upstream solo fallback does not apply to this architecture.
     chat_start_ts = timer()
 
-    # TODO(async-phase4): llm_id2llm_type 的 DB 兜底自开同步连接,先线程池外移防阻塞事件循环
-    llm_type = await asyncio.to_thread(TenantLLMService.llm_id2llm_type, dialog.llm_id)
+    # TODO(async-phase4): Resolve through the request session without global model lookups.
+    model_types = await db.run_sync(lambda s: resolve_model_type(s, dialog.tenant_id, dialog.llm_id))
+    llm_type = "chat" if "chat" in model_types else model_types[0]
     # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
     llm_model_config = await db.run_sync(lambda s: _resolve_dialog_primary_model_config(s, dialog))
 

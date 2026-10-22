@@ -259,17 +259,16 @@ async def question_proposal(chat_mdl, content, topn=3):
     return kwd
 
 
-async def full_question(tenant_id=None, llm_id=None, messages=None, language=None, chat_mdl=None):
+async def full_question(tenant_id: Any = None, llm_id: Any = None, messages: list[dict[str, Any]] | None = None, language: Any = None, chat_mdl: Any = None) -> str:
     if messages is None:
         messages = []
-    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, resolve_model_type
     from api.db.services.llm_service import LLMBundle
-    from api.db.services.tenant_llm_service import TenantLLMService
     from common.constants import LLMType
 
     if not chat_mdl:
         with db_connection() as db:
-            if TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
+            if "image2text" in resolve_model_type(db, tenant_id, llm_id):
                 mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, llm_id)
             else:
                 mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, llm_id)
@@ -298,16 +297,15 @@ async def full_question(tenant_id=None, llm_id=None, messages=None, language=Non
     return ans if ans.find("**ERROR**") < 0 else messages[-1]["content"]
 
 
-async def cross_languages(tenant_id, llm_id, query, languages=None):
-    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+async def cross_languages(tenant_id: str, llm_id: str | None, query: str, languages: Any = None) -> str:
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
     from api.db.services.llm_service import LLMBundle
-    from api.db.services.tenant_llm_service import TenantLLMService
     from common.constants import LLMType
 
     if languages is None:
         languages = []
     with db_connection() as db:
-        if llm_id and TenantLLMService.llm_id2llm_type(llm_id) == "image2text":
+        if llm_id and "image2text" in resolve_model_type(db, tenant_id, llm_id):
             mdl_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.IMAGE2TEXT.value, llm_id)
         else:
             if not llm_id:

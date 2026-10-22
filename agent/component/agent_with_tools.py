@@ -29,10 +29,9 @@ import json_repair
 from agent.component.llm import LLM, LLMParam
 from agent.tools.base import LLMToolPluginCallSession, ToolBase, ToolMeta, ToolParamBase
 from api.db.db_models import db_connection
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.llm_service import LLMBundle
 from api.db.services.mcp_server_service import MCPServerService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.mcp_delegation.runtime import resolve_mcp_credential_provider
 from api.identity.mcp_interactions.runtime import resolve_mcp_interaction_handler
 from api.identity.mcp_interactions.tool_gate import maybe_serialize_interaction_tool_calls
@@ -88,10 +87,12 @@ class Agent(LLM, ToolBase):
             self.tools[indexed_name] = cpn
         try:
             with db_connection() as db:
+                model_types = resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id)
+                model_type = "chat" if "chat" in model_types else model_types[0]
                 model_config = get_model_config_by_type_and_name(
                     db,
                     self._canvas.get_tenant_id(),
-                    TenantLLMService.llm_id2llm_type(self._param.llm_id),
+                    model_type,
                     self._param.llm_id,
                 )
                 self.chat_mdl = LLMBundle(

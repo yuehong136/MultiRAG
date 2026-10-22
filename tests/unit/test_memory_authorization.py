@@ -74,7 +74,7 @@ async def test_extraction_model_id_binds_owner(db: Session, monkeypatch: pytest.
         assert (model_id, tenant_id) == (123, "owner")
         raise LookupError("scoped denial")
 
-    monkeypatch.setattr(mms.TenantLLMService, "llm_id2llm_type", lambda *args: "chat")
+    monkeypatch.setattr(mms, "resolve_model_type", lambda *args: ["chat"])
     monkeypatch.setattr(mms, "get_model_config_by_id", scoped_lookup)
     with pytest.raises(LookupError, match="scoped denial"):
         await mms.extract_by_llm(db, "owner", "model", 123, {}, ["raw"], "hello", "world", system_prompt="s", user_prompt="u")

@@ -54,7 +54,7 @@ def retrieval_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         calls.append(kwargs)
         return {"chunks": [], "doc_aggs": []}
 
-    monkeypatch.setattr(dialog_service.TenantLLMService, "llm_id2llm_type", staticmethod(lambda _llm_id: "chat"))
+    monkeypatch.setattr(dialog_service, "resolve_model_type", lambda *_args: ["chat"])
     monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda _db, _dialog: {"max_tokens": 8192})
     monkeypatch.setattr(dialog_service.TenantLangfuseService, "filter_by_tenant", classmethod(lambda _cls, _db, tenant_id: None))
     monkeypatch.setattr(dialog_service, "get_models", lambda _db, _dialog: ([kb], embedding, None, _ChatBundle(), None))

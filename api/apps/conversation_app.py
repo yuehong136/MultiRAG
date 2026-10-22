@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -17,12 +16,11 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.apps.restful_apis.chat_api import apply_feedback_to_session_payload
 from api.db.db_models import APIToken, get_async_db, get_db
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
@@ -456,7 +454,7 @@ def list_conversation(dialog_id: str, db: Session = Depends(get_db), user=Depend
 
 
 @router.post("/completion", summary="[Deprecated] 生成对话", response_description="成功生成对话", deprecated=True)
-async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
+async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Any:
     req = request.model_dump()
     if not req.get("conversation_id") or not req.get("messages"):
         return get_data_error_result(retmsg="Missing conversation_id or messages!")
@@ -515,8 +513,8 @@ async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_
 
         if chat_model_id:
             try:
-                override_model_type = await asyncio.to_thread(TenantLLMService.llm_id2llm_type, chat_model_id)  # TODO(async-phase4): DB 兜底自开同步连接
-                if override_model_type == "image2text":
+                override_model_types = await db.run_sync(lambda s: resolve_model_type(s, dia.tenant_id, chat_model_id))  # TODO(async-phase4)
+                if "image2text" in override_model_types:
                     model_type_value = LLMType.IMAGE2TEXT.value
                 else:
                     model_type_value = LLMType.CHAT.value

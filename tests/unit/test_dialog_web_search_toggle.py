@@ -73,8 +73,8 @@ def dialog_pipeline_stubs(monkeypatch: pytest.MonkeyPatch) -> _PipelineProbe:
     kb = SimpleNamespace(id="kb-1", name="dataset", tenant_id="tenant-unit")
     tavily_calls: list[tuple[str, str]] = []
 
-    def fake_llm_type(_llm_id: str) -> str:
-        return "chat"
+    def fake_llm_type(_db: Session, _tenant_id: str, _llm_id: str) -> list[str]:
+        return ["chat"]
 
     def fake_primary_model_config(_db: Session, _dialog: Any) -> dict[str, Any]:
         return {"llm_name": "chat-model", "max_tokens": 8192}
@@ -123,9 +123,9 @@ def dialog_pipeline_stubs(monkeypatch: pytest.MonkeyPatch) -> _PipelineProbe:
             return {"chunks": [], "doc_aggs": []}
 
     monkeypatch.setattr(
-        dialog_service.TenantLLMService,
-        "llm_id2llm_type",
-        staticmethod(fake_llm_type),
+        dialog_service,
+        "resolve_model_type",
+        fake_llm_type,
     )
     monkeypatch.setattr(
         dialog_service,

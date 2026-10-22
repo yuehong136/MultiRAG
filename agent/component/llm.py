@@ -27,10 +27,9 @@ import json_repair
 
 from agent.component.base import ComponentBase, ComponentParamBase
 from api.db.db_models import db_connection
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.llm_service import LLMBundle
-from api.db.services.tenant_llm_service import TenantLLMService
 from common.connection_utils import timeout
 from common.constants import LLMType
 from core.prompts.generator import citation_prompt, message_fit_in, structured_output_prompt, tool_call_summary
@@ -89,15 +88,17 @@ class LLMParam(ComponentParamBase):
 class LLM(ComponentBase):
     component_name = "LLM"
 
-    def __init__(self, canvas, component_id, param: ComponentParamBase):
+    def __init__(self, canvas: Any, component_id: str, param: ComponentParamBase) -> None:
         super().__init__(canvas, component_id, param)
         self.chat_mdl = None
         try:
             with db_connection() as db:
+                model_types = resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id)
+                model_type = "chat" if "chat" in model_types else model_types[0]
                 model_config = get_model_config_by_type_and_name(
                     db,
                     self._canvas.get_tenant_id(),
-                    TenantLLMService.llm_id2llm_type(self._param.llm_id),
+                    model_type,
                     self._param.llm_id,
                 )
                 self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config, max_retries=self._param.max_retries, retry_interval=self._param.delay_after_error)
@@ -235,7 +236,7 @@ class LLM(ComponentBase):
 
         return value
 
-    def _prepare_prompt_variables(self):
+    def _prepare_prompt_variables(self) -> tuple[str, list[dict[str, Any]], str]:
         self.imgs = []
         if self._param.visual_files_var:
             visual_val = self._canvas.get_variable_value(self._param.visual_files_var)
@@ -258,15 +259,16 @@ class LLM(ComponentBase):
             self.set_input_value(k, args[k])
 
         self.imgs = self._uniq_images(self.imgs + extracted_imgs)
-        if self.imgs and TenantLLMService.llm_id2llm_type(self._param.llm_id) == LLMType.CHAT.value:
+        if self.imgs:
             with db_connection() as db:
-                model_config = get_model_config_by_type_and_name(
-                    db,
-                    self._canvas.get_tenant_id(),
-                    LLMType.IMAGE2TEXT.value,
-                    self._param.llm_id,
-                )
-                self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config, max_retries=self._param.max_retries, retry_interval=self._param.delay_after_error)
+                if "chat" in resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id):
+                    model_config = get_model_config_by_type_and_name(
+                        db,
+                        self._canvas.get_tenant_id(),
+                        LLMType.IMAGE2TEXT.value,
+                        self._param.llm_id,
+                    )
+                    self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config, max_retries=self._param.max_retries, retry_interval=self._param.delay_after_error)
 
         msg, sys_prompt = self._sys_prompt_and_msg(self._canvas.get_history(self._param.message_history_window_size)[:-1], args)
         user_defined_prompt, sys_prompt = self._extract_prompts(sys_prompt)

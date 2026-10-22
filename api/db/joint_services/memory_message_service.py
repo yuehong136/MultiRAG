@@ -25,11 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Memory, Task
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
+from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.llm_service import LLMBundle
 from api.db.services.memory_service import MemoryService
 from api.db.services.task_service import TaskService
-from api.db.services.tenant_llm_service import TenantLLMService
 from api.identity.run_context import RunContext
 from api.utils.db_utils import bulk_insert_into_db
 from api.utils.memory_utils import get_memory_type_human
@@ -201,7 +200,8 @@ async def extract_by_llm(
     user_prompt: str = "",
     task_id: str | None = None,
 ) -> list[dict]:
-    llm_type = TenantLLMService.llm_id2llm_type(llm_id)
+    model_types = resolve_model_type(db, tenant_id, llm_id)
+    llm_type = "chat" if "chat" in model_types else model_types[0]
     if not llm_type:
         raise RuntimeError(f"Unknown type of LLM '{llm_id}'")
     if not system_prompt:

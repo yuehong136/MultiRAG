@@ -38,8 +38,8 @@ def capture_chat_model(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         monkeypatch.setattr(module, "db_connection", lambda: nullcontext(None))
         monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *_args, **_kwargs: {})
         monkeypatch.setattr(module, "LLMBundle", CapturedModel)
+        monkeypatch.setattr(module, "resolve_model_type", lambda *_args: ["image2text"])
     monkeypatch.setattr(TenantLLMService, "get_my_llms", classmethod(lambda *_args: [SimpleNamespace(llm_name="capture-model", mdl_type="image2text")]))
-    monkeypatch.setattr(TenantLLMService, "llm_id2llm_type", staticmethod(lambda *_args: "image2text"))
     original_agent = route_module.Agent
 
     def real_agent(canvas: Any, component_id: str, param: Any) -> Any:

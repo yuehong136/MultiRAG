@@ -502,25 +502,6 @@ class TenantLLMService(CommonService):
             logging.exception(f"Failed to delete tenant LLM records for tenant_id={tenant_id}")
             raise e
 
-    @staticmethod
-    def llm_id2llm_type(llm_id: str) -> str | None:
-        from api.db.services.llm_service import LLMService
-
-        llm_id, *_ = TenantLLMService.split_model_name_and_factory(llm_id)
-        llm_factories = settings.FACTORY_LLM_INFOS
-        for llm_factory in llm_factories:
-            for llm in llm_factory["llm"]:
-                if llm_id == llm["llm_name"]:
-                    return llm["mdl_type"].split(",")[-1]
-        with db_connection() as db:
-            for llm in LLMService.query(db, llm_name=llm_id):
-                return llm.mdl_type
-            llm = TenantLLMService.get_or_none(db, llm_name=llm_id)
-            if llm:
-                return llm.mdl_type
-            for llm in TenantLLMService.query(db, llm_name=llm_id):
-                return llm.mdl_type
-
     @classmethod
     def _collect_mineru_env_config(cls) -> dict | None:
         cfg = MINERU_DEFAULT_CONFIG.copy()

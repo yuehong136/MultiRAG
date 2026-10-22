@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
 from api.db.db_models import get_async_db
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_chat, gen_mindmap
@@ -1266,8 +1266,8 @@ async def session_completion(
 
         if chat_model_id:
             try:
-                override_model_type = await asyncio.to_thread(TenantLLMService.llm_id2llm_type, chat_model_id)  # TODO(async-phase4): DB 兜底自开同步连接
-                model_type = LLMType.IMAGE2TEXT.value if override_model_type == "image2text" else LLMType.CHAT.value
+                override_model_types = await db.run_sync(lambda s: resolve_model_type(s, dialog.tenant_id, chat_model_id))  # TODO(async-phase4)
+                model_type = LLMType.IMAGE2TEXT.value if "image2text" in override_model_types else LLMType.CHAT.value
                 override_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, dialog.tenant_id, model_type, chat_model_id))  # TODO(async-phase4)
             except Exception:
                 return _error(f"Cannot use specified model {chat_model_id}.")

@@ -233,8 +233,8 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
-        "agent.component.agent_with_tools.TenantLLMService.llm_id2llm_type",
-        lambda *_args, **_kwargs: "chat",
+        "agent.component.agent_with_tools.resolve_model_type",
+        lambda *_args, **_kwargs: ["chat"],
     )
     monkeypatch.setattr(
         "agent.component.agent_with_tools.LLMBundle",

@@ -3,14 +3,42 @@ import enum
 import os
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.db.db_models import db_connection
+from api.db.db_models import TenantLLM, db_connection
 from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from common import settings
 from common.constants import LLMType
+
+
+def resolve_model_type(db: Session, tenant_id: str, model_ref: str) -> list[str]:
+    """Resolve types from the tenant's registration, preserving provider identity."""
+    if not tenant_id or not model_ref:
+        raise LookupError("Tenant and model reference are required")
+    name, factory = TenantLLMService.split_model_name_and_factory(model_ref)
+
+    def find(model_name: str) -> list[TenantLLM]:
+        statement = select(TenantLLM).where(TenantLLM.tenant_id == tenant_id, TenantLLM.llm_name == model_name)
+        if factory:
+            statement = statement.where(TenantLLM.llm_factory == factory)
+        return list(db.scalars(statement.limit(2)))
+
+    models = find(name)
+    if not models and factory and (suffix := TenantLLMService._FACTORY_SUFFIX.get(factory)):
+        models = find(name + suffix)
+    if not models:
+        raise LookupError(f"Tenant model {model_ref} not found")
+    if len(models) != 1:
+        raise LookupError(f"Model {model_ref} is ambiguous; include its provider")
+    model = models[0]
+    if model.status != "1":
+        raise LookupError(f"Model {model_ref} is disabled")
+    if not model.mdl_type:
+        raise LookupError(f"Model {model_ref} has no model type")
+    return [model.mdl_type]
 
 
 def get_model_config_by_id(db: Session, tenant_model_id: int, *, tenant_id: str | None = None) -> dict[str, Any]:
