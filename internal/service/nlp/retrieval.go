@@ -621,7 +621,14 @@ func (s *RetrievalService) Search(ctx context.Context, req *RetrievalSearchReque
 
 // GetVector computes query vector and returns MatchDenseExpr for hybrid search
 func (s *RetrievalService) GetVector(txt string, embModel *models.EmbeddingModel, topk int, similarity float64) (*types.MatchDenseExpr, error) {
-	embeddings, err := embModel.Encode([]string{txt})
+	queryModel := *embModel
+	config := models.EmbeddingConfig{Query: true}
+	if embModel.EmbeddingConfig != nil {
+		config = *embModel.EmbeddingConfig
+		config.Query = true
+	}
+	queryModel.EmbeddingConfig = &config
+	embeddings, err := queryModel.Encode([]string{txt})
 	if err != nil {
 		return nil, err
 	}
