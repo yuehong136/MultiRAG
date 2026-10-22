@@ -3675,5 +3675,5 @@ worker lifespan、全量 Go endpoint parity、其他 session 写入/生成入口
 ## 2026-10-22 · 7ec87f7c 后二十项与八增量复验
 
 本地已完成起点 `7ec87f7c` 后至 `0580c137fa2e` 的 20 项，以及冻结 `c595f17f` 的独立八增量实际复验；
-逐项映射、机制比较、组合运行与清理见 [本批交付报告](batch-after-7ec87f7c.md)。最终源码 `d96b9b24`，Web `ca3f50a`。
+逐项映射、机制比较、组合运行与清理见 [本批交付报告](batch-after-7ec87f7c.md)。最终源码 `d96b9b24`，Web `eed958f`。
 冻结上限仍为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`；仅本地提交，不 push、不部署，远程 `ci-required` 待运行。
