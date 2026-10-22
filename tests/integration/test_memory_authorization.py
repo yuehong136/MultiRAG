@@ -56,10 +56,12 @@ def memory_api(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> 
             for key, mid in memories.items():
                 MessageService.delete_index(tenants[key], mid)
                 assert not MessageService.has_index(tenants[key], mid)
-                redis.delete(mid)
+                redis.delete(mid, f"memory_{mid}")
+                assert not redis.exists(mid, f"memory_{mid}")
             for mid in created:
                 MessageService.delete_index(member, mid)
-                redis.delete(mid)
+                redis.delete(mid, f"memory_{mid}")
+                assert not redis.exists(mid, f"memory_{mid}")
             redis.delete(queue, f"{queue}:memory")
             assert not redis.exists(queue, f"{queue}:memory")
             with Session(env["engine"]) as db:
