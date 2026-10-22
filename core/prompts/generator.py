@@ -62,41 +62,82 @@ def chunks_format(reference: Any) -> list[dict[str, Any]]:
     ]
 
 
-def message_fit_in(msg, max_length=4000):
-    def count():
-        nonlocal msg
-        tks_cnts = []
-        for m in msg:
-            tks_cnts.append({"role": m["role"], "count": num_tokens_from_string(m["content"])})
-        total = 0
-        for m in tks_cnts:
-            total += m["count"]
-        return total
+def message_fit_in(msg: list[dict[str, Any]], max_length: int = 4000) -> tuple[int, list[dict[str, Any]]]:
+    """Fit message text and tool payloads; image token costs belong to the provider."""
+    # A model with an unknown context size can pass zero here. Follow the
+    # upstream follow-up's default instead of erasing the current user turn.
+    if max_length <= 0:
+        max_length = 8192
 
-    c = count()
-    if c < max_length:
-        return c, msg
+    def text_count(content: Any) -> int:
+        if isinstance(content, str):
+            return num_tokens_from_string(content)
+        if isinstance(content, list):
+            return sum(num_tokens_from_string(part["text"]) for part in content if isinstance(part, dict) and isinstance(part.get("text"), str))
+        return 0
 
-    msg_ = [m for m in msg if m["role"] == "system"]
-    if len(msg) > 1:
-        msg_.append(msg[-1])
-    msg = msg_
-    c = count()
-    if c < max_length:
-        return c, msg
+    def fixed_count(message: dict[str, Any]) -> int:
+        return sum(
+            num_tokens_from_string(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+            for key in ("tool_calls", "function_call", "reasoning_content")
+            if (value := message.get(key))
+        )
 
-    ll = num_tokens_from_string(msg_[0]["content"])
-    ll2 = num_tokens_from_string(msg_[-1]["content"])
-    if ll / (ll + ll2) > 0.8:
-        m = msg_[0]["content"]
-        m = encoder.decode(encoder.encode(m)[: max_length - ll2])
-        msg[0]["content"] = m
-        return max_length, msg
+    def count(messages: list[dict[str, Any]]) -> int:
+        return sum(text_count(message.get("content")) + fixed_count(message) for message in messages)
 
-    m = msg_[-1]["content"]
-    m = encoder.decode(encoder.encode(m)[: max_length - ll2])
-    msg[-1]["content"] = m
-    return max_length, msg
+    used = count(msg)
+    if used <= max_length:
+        return used, msg
+
+    # Preserve system messages and the current turn. A trailing tool reply must
+    # keep the assistant call and all its sibling replies to remain valid input.
+    last_start = len(msg) - 1
+    if msg[-1].get("role") == "tool":
+        while last_start > 0 and msg[last_start].get("role") == "tool":
+            last_start -= 1
+    selected = [index for index, message in enumerate(msg) if message.get("role") == "system" or index >= last_start]
+    fitted = deepcopy([msg[index] for index in selected])
+    used = count(fitted)
+    if used <= max_length:
+        return used, fitted
+
+    fixed = sum(fixed_count(message) for message in fitted)
+    if fixed > max_length:
+        raise ValueError("Tool-call payload exceeds the message token budget")
+    remaining = max_length - fixed
+    systems = [index for index, message in enumerate(fitted) if message.get("role") == "system"]
+    turns = [index for index, message in enumerate(fitted) if message.get("role") != "system"]
+    system_tokens = sum(text_count(fitted[index].get("content")) for index in systems)
+    text_tokens = sum(text_count(message.get("content")) for message in fitted)
+    # Keep the original preference: protect the final turn when the system
+    # dominates, otherwise reserve all system text before truncating the turn.
+    order = turns + systems if text_tokens and system_tokens / text_tokens > 0.8 else systems + turns
+
+    def trim_text(text: str, limit: int) -> str:
+        if num_tokens_from_string(text) <= limit:
+            return text
+        tokens = encoder.encode(text)[: max(0, limit)]
+        trimmed = encoder.decode(tokens)
+        # A truncated multi-byte token can decode to replacement characters;
+        # use the actual re-encoded count instead of claiming the requested cap.
+        while tokens and num_tokens_from_string(trimmed) > limit:
+            tokens.pop()
+            trimmed = encoder.decode(tokens)
+        return trimmed
+
+    for index in order:
+        message = fitted[index]
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = trim_text(content, remaining)
+            remaining -= text_count(message["content"])
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"] = trim_text(part["text"], remaining)
+                    remaining -= num_tokens_from_string(part["text"])
+    return count(fitted), fitted
 
 
 def kb_prompt(kbinfos: dict[str, Any], max_tokens: int | float, hash_id: bool = False) -> list[str]:
