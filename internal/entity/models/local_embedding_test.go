@@ -209,3 +209,27 @@ func TestLocalEmbeddingLaterBatchFailureHTTP(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalEmbeddingCancellationDuringHTTP(t *testing.T) {
+	for _, provider := range localEmbeddingProviders() {
+		t.Run(provider, func(t *testing.T) {
+			started := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				close(started)
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { <-started; cancel() }()
+			got, err := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL}).Encode(stringPtr("embed"), []string{"a"}, &APIConfig{Context: ctx}, nil)
+			if !errors.Is(err, context.Canceled) || got != nil {
+				t.Fatal(got, err)
+			}
+		})
+	}
+}

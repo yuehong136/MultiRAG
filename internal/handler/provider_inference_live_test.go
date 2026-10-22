@@ -239,5 +239,6 @@ func TestModelInferenceLiveHTTPAndSQL(t *testing.T) {
 	if err := readback.QueryRow(`SELECT count(*) FROM tenant_model_instance WHERE status='active'`).Scan(&statuses); err != nil || statuses != 2 {
 		t.Fatal("independent status readback", statuses, err)
 	}
+	checkEmbeddingProviderConsumers(t, api.URL, readback)
 	t.Logf("CLI parse/execute -> real HTTP handlers -> scratch SQL binding -> two authenticated provider listeners; %d provider calls; SQL readback %s unchanged after success/failure/denial", calls.Load(), before)
 }
