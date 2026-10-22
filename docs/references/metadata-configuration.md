@@ -102,3 +102,28 @@ metadata 字段的校验支持，不把专用 PUT 的替换规则扩散到通用
 - `tests/integration/test_metadata_config_contract.py`：真实 HTTP、业务码、重载及独立 SQL。
 - `tests/integration/test_task_metadata_generation.py`：实际存储、任务抽取与 number Schema。
 - `tests/integration/test_document_ingest.py`：应用 KB 配置及已有 Pipeline/清理边界。
+
+## 表格列角色
+
+数据集 `parser_config.table_column_mode` 为 `auto`（省略或 null 同效）时，所有列同时
+进入索引文本与元数据。设为 `manual` 后，`table_column_roles` 按原始列名指定
+`indexing`、`metadata` 或 `both`；未指定的列仍为 `both`。旧合法值 `vectorize`
+在保存时归一为 `indexing`，其他角色或模式拒绝。Web 设置页在首次解析发现
+`table_column_names` 后显示选择器；保存配置不改写已解析的数据，需重新解析生效。
+
+`indexing` 仅进入向量和全文索引文本，`metadata` 仅保留可筛选属性，`both` 同时保留。
+JSON 存储使用原始列名；ES 使用 `table_` 前缀的有类型字段并额外保留原始文本值，避免用户列覆盖 `title_tks` 等内置搜索字段。多 sheet 按同一
+列名统一推断类型并合并字段清单；同 sheet 重名列、ES 归一后冲突列拒绝解析。
+空单元格忽略，合法零值保留；无法用统一类型无损表示的列保留为文本，避免丢弃单元格。
+
+任务将原始元数据聚合为文档 `meta_fields`，保留数值类型与完整单元格文本。文档筛选
+依然是文档范围：某列匹配后，检索可读取该文档的多行，不能当作行级 SQL 筛选。
+Milvus 的元数据与私有 `table_metadata_state` 存在独立 SQL 表；后者记录各行任务的
+贡献及本次解析新增的值，不进入 API 元数据。重新解析、移除列或改成仅索引时，只移除
+解析器曾新增且仍存在的值，保留原有同名手工值和其他用户字段；用户把某生成值以完全
+相同的内容重新加入已有列表时，系统无法区分其来源，该值仍按生成值处理。
+
+多段行任务按解析摘要合并，复用旧 chunk 的新任务 ID 不丢贡献；已删除、取消或被替换
+的任务不能更新元数据。元数据保存失败向任务抛错，不能报告解析成功。升级需运行
+Alembic 迁移 `e7a9b1c3d5f0`；本批未执行生产迁移。真实运行证据以交付报告列明的后端为准，
+ES、Infinity 与 OceanBase 的适配分支没有因单测覆盖而获得真实后端验收。

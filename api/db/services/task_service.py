@@ -497,6 +497,13 @@ def prepare_parse_tasks(db: Session, doc: dict[str, Any], bucket: str, name: str
     chunking_config = copy.deepcopy(DocumentService.get_chunking_config(db, doc["id"]))
     if not chunking_config:
         raise ValueError("Document chunking configuration unavailable.")
+    if doc["parser_id"] == "table":
+        from core.utils.table_metadata import merge_table_parser_config_from_kb
+
+        chunking_config["parser_config"] = merge_table_parser_config_from_kb(chunking_config)
+        chunking_config["parser_config"].pop("table_column_names", None)
+    # Dataset settings unrelated to parsing must not invalidate reusable row tasks.
+    chunking_config.pop("kb_parser_config", None)
     for task in parse_task_array:
         hasher = xxhash.xxh64()
         for field in sorted(chunking_config.keys()):

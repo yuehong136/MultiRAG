@@ -14,9 +14,9 @@
 #  limitations under the License.
 #
 
-import copy
 import csv
 import io
+import json
 import logging
 import re
 from collections import Counter
@@ -35,6 +35,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER
 from core.nlp import rag_tokenizer, tokenize, tokenize_table
+from core.utils.table_metadata import TABLE_METADATA, TABLE_ROW_KEY, table_column_roles
 from deepdoc.parser import ExcelParser
 from deepdoc.parser.figure_parser import vision_figure_parser_figure_xlsx_wrapper
 from deepdoc.parser.utils import get_text
@@ -323,44 +324,27 @@ def trans_bool(s):
     return None
 
 
-def column_data_type(arr):
-    arr = list(arr)
-    counts = {"int": 0, "float": 0, "text": 0, "datetime": 0, "bool": 0}
-    trans = {t: f for f, t in [(int, "int"), (float, "float"), (trans_datatime, "datetime"), (trans_bool, "bool"), (str, "text")]}
-    float_flag = False
-    for a in arr:
-        if a is None:
-            continue
-        if re.match(r"[+-]?[0-9]+$", str(a).replace("%%", "")) and not str(a).replace("%%", "").startswith("0"):
-            counts["int"] += 1
-            if int(str(a)) > 2**63 - 1:
-                float_flag = True
-                break
-        elif re.match(r"[+-]?[0-9.]{,19}$", str(a).replace("%%", "")) and not str(a).replace("%%", "").startswith("0"):
-            counts["float"] += 1
-        elif re.match(r"(true|yes|是|\*|✓|✔|☑|✅|√|false|no|否|⍻|×)$", str(a), flags=re.IGNORECASE):
-            counts["bool"] += 1
-        elif trans_datatime(str(a)):
-            counts["datetime"] += 1
-        else:
-            counts["text"] += 1
-    if float_flag:
-        ty = "float"
-    else:
-        counts = sorted(counts.items(), key=lambda x: x[1] * -1)
-        ty = counts[0][0]
-    for i in range(len(arr)):
-        if arr[i] is None:
-            continue
+def column_data_type(values: Any) -> tuple[list[Any], str]:
+    """Infer a common lossless type; mixed or incompatible cells remain text."""
+    arr = [None if value is None or pd.isna(value) or not str(value).strip() else value for value in values]
+    present = [value for value in arr if value is not None]
+    if not present:
+        return arr, "text"
+    if any(re.match(r"[+-]?0[0-9]+", str(value)) for value in present):
+        return [None if value is None else str(value) for value in arr], "text"
+    for ty, convert in (("int", int), ("float", float), ("bool", trans_bool), ("datetime", trans_datatime)):
         try:
-            arr[i] = trans[ty](str(arr[i]))
-        except Exception as e:
-            arr[i] = None
-            logging.warning(f"Column {i}: {e}")
-    # if ty == "text":
-    #    if len(arr) > 128 and uni / len(arr) < 0.1:
-    #        ty = "keyword"
-    return arr, ty
+            converted = [None if value is None else convert(str(value)) for value in arr]
+            if any(value is None for value, original in zip(converted, arr, strict=True) if original is not None):
+                continue
+            if ty == "int" and any(not -(2**63) <= value < 2**63 for value in converted if value is not None):
+                return [None if value is None else str(value) for value in arr], "text"
+            if ty == "float" and any(not np.isfinite(value) for value in converted if value is not None):
+                continue
+            return converted, ty
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return [None if value is None else str(value) for value in arr], "text"
 
 
 def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_TASK_PAGE_NUMBER, lang: str = "Chinese", callback: Any = None, **kwargs: Any) -> Any:
@@ -430,77 +414,79 @@ def chunk(filename: Any, binary: Any = None, from_page: int = 0, to_page: int = 
     else:
         raise NotImplementedError("file type not supported yet(excel, text, csv supported)")
 
-    res = []
-    PY = Pinyin()
-    # Field type suffixes for database columns
-    # Maps data types to their database field suffixes
-    fields_map = {"text": "_tks", "int": "_long", "keyword": "_kwd", "float": "_flt", "datetime": "_dt", "bool": "_kwd"}
+    config = kwargs.get("parser_config") or {}
+    roles = table_column_roles(config)
+    use_chunk_data = settings.DOC_ENGINE.lower() in ("infinity", "milvus", "oceanbase")
+    fields_map = {"text": "_tks", "int": "_long", "float": "_flt", "datetime": "_dt", "bool": "_kwd"}
+    columns: list[str] = []
+    values: dict[str, list[Any]] = {}
     for df in dfs:
-        for n in ["id", "_id", "index", "idx"]:
-            if n in df.columns:
-                del df[n]
-        clmns = df.columns.values
-        if len(clmns) != len(set(clmns)):
-            col_counts = Counter(clmns)
-            duplicates = [col for col, count in col_counts.items() if count > 1]
-            if duplicates:
-                raise ValueError(f"Duplicate column names detected: {duplicates}\nFrom: {clmns}")
-
-        txts = list(copy.deepcopy(clmns))
-        py_clmns = [PY.get_pinyins(re.sub(r"(/.*|（[^（）]+?）|\([^()]+?\))", "", str(n)), "_")[0] for n in clmns]
-        clmn_tys = []
-        for j in range(len(clmns)):
-            cln, ty = column_data_type(df[clmns[j]])
-            clmn_tys.append(ty)
-            df[clmns[j]] = cln
-            if ty == "text":
-                txts.extend([str(c) for c in cln if c])
-        clmns_map = [(py_clmns[i].lower() + fields_map[clmn_tys[i]], str(clmns[i]).replace("_", " ")) for i in range(len(clmns))]
-
-        # For Infinity/Milvus/OceanBase: Use original column names as keys since they're stored in chunk_data JSON
-        # For ES/OS: Use full field names with type suffixes (e.g., url_kwd, body_tks)
-        use_chunk_data = settings.DOC_ENGINE.lower() in ("infinity", "milvus", "oceanbase")
-        if use_chunk_data:
-            field_map = {py_clmns[i].lower(): str(clmns[i]).replace("_", " ") for i in range(len(clmns))}
-        else:
-            field_map = dict(clmns_map)
-        logging.debug(f"Field map: {field_map}")
-
-        eng = lang.lower() == "english"  # is_english(txts)
-        for ii, row in df.iterrows():
-            d = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
-            row_fields = []
-            data_json = {}  # For Infinity: Store all columns in a JSON object
-            for j in range(len(clmns)):
-                if row[clmns[j]] is None:
+        for name in ["id", "_id", "index", "idx"]:
+            if name in df.columns:
+                del df[name]
+        df.columns = [str(name) for name in df.columns]
+        if len(df.columns) != len(set(df.columns)):
+            duplicates = [name for name, count in Counter(df.columns).items() if count > 1]
+            raise ValueError(f"Duplicate column names detected: {duplicates}")
+        for name in df.columns:
+            if name not in values:
+                columns.append(name)
+                values[name] = []
+            values[name].extend(df[name].tolist())
+    # Infer once across sheets: the same column cannot get conflicting ES types.
+    converted = {name: column_data_type(items) for name, items in values.items()}
+    offsets = dict.fromkeys(columns, 0)
+    pinyin = Pinyin()
+    bases = {name: pinyin.get_pinyins(re.sub(r"(/.*|（[^（）]+?）|\([^()]+?\))", "", name), "_")[0].lower() for name in columns}
+    # Keep user columns separate from built-in title_tks/docnm_kwd search fields.
+    if not use_chunk_data:
+        bases = {name: "table_" + base for name, base in bases.items()}
+    if not use_chunk_data and len(set(bases.values())) != len(bases):
+        raise ValueError("Table column names resolve to conflicting storage fields.")
+    field_map = {(name if use_chunk_data else bases[name] + fields_map[converted[name][1]]): name.replace("_", " ") for name in columns if roles.get(name, "both") in {"metadata", "both"}}
+    res = []
+    for df in dfs:
+        for name in df.columns:
+            start = offsets[name]
+            df[name] = converted[name][0][start : start + len(df)]
+            offsets[name] += len(df)
+        for _, row in df.iterrows():
+            document = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
+            text_fields = []
+            stored: dict[str, Any] = {}
+            for name in df.columns:
+                value = row[name]
+                if value is None or pd.isna(value) or not str(value).strip():
                     continue
-                if not str(row[clmns[j]]):
-                    continue
-                if not isinstance(row[clmns[j]], pd.Series) and pd.isna(row[clmns[j]]):
-                    continue
-                # For Infinity/Milvus/OceanBase: Store in chunk_data JSON column
-                # For ES/OS: Store as individual fields with type suffixes
-                if use_chunk_data:
-                    data_json[str(clmns[j])] = row[clmns[j]]
-                else:
-                    fld = clmns_map[j][0]
-                    d[fld] = row[clmns[j]] if clmn_tys[j] != "text" else rag_tokenizer.tokenize(row[clmns[j]])
-                row_fields.append((clmns[j], row[clmns[j]]))
-            if not row_fields:
+                if hasattr(value, "item"):
+                    value = value.item()
+                role = roles.get(name, "both")
+                if role in {"indexing", "both"}:
+                    text_fields.append((name, value))
+                if role in {"metadata", "both"}:
+                    stored[name] = value
+                    if not use_chunk_data:
+                        ty = converted[name][1]
+                        field = bases[name] + fields_map[ty]
+                        document[field] = rag_tokenizer.tokenize(str(value)) if ty == "text" else value
+                        if ty == "text":
+                            document[bases[name] + "_raw"] = value
+            if not text_fields and not stored:
                 continue
-            # Add the data JSON field to the document (for Infinity/Milvus/OceanBase)
             if use_chunk_data:
-                d["chunk_data"] = data_json
-            # Format as a structured text for better LLM comprehension
-            # Format each field as "- Field Name: Value" on separate lines
-            formatted_text = "\n".join([f"- {field}: {value}" for field, value in row_fields])
-            tokenize(d, formatted_text, eng)
-            res.append(d)
-        if tbls:
-            doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
-            res.extend(tokenize_table(tbls, doc, is_english))
+                document["chunk_data"] = stored
+            if kwargs.get("table_metadata_carrier", False):
+                document[TABLE_METADATA] = stored
+                # Metadata-only rows have empty text; include raw cells to avoid collapsing them.
+                document[TABLE_ROW_KEY] = json.dumps([text_fields, stored], ensure_ascii=False, sort_keys=True, allow_nan=False)
+            tokenize(document, "\n".join(f"- {name}: {value}" for name, value in text_fields), is_english)
+            res.append(document)
+    if tbls:
+        document = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
+        res.extend(tokenize_table(tbls, document, is_english))
+    if kwargs.get("kb_id"):
         with db_connection() as db:
-            KnowledgebaseService.update_parser_config(db, kwargs["kb_id"], {"field_map": field_map})
+            KnowledgebaseService.update_table_parser_fields(db, kwargs["kb_id"], field_map, columns)
     callback(0.35, "")
 
     return res

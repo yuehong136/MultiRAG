@@ -432,6 +432,26 @@ class ParserConfig(Base):
     task_page_size: Annotated[int | None, Field(default=None, ge=1)]
     pages: Annotated[list[list[int]] | None, Field(default=None)]
     ext: Annotated[dict[str, Any], Field(default_factory=dict)]
+    table_column_mode: Literal["auto", "manual"] | None = None
+    table_column_roles: dict[str, Literal["indexing", "metadata", "both"]] | None = None
+    table_column_names: list[str] | None = None
+
+    @field_validator("table_column_roles", mode="before")
+    @classmethod
+    def normalize_table_column_roles(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {key: "indexing" if role == "vectorize" else role for key, role in value.items()}
+
+
+def normalize_table_parser_config(config: Any) -> None:
+    """Validate only explicitly supplied table keys in partial, extensible configs."""
+    if not isinstance(config, dict):
+        return
+    keys = ("table_column_mode", "table_column_roles", "table_column_names")
+    patch = {key: config[key] for key in keys if key in config}
+    if patch:
+        config.update(ParserConfig.model_validate(patch).model_dump(exclude_unset=True))
 
 
 VALID_UPDATE_CHUNK_METHODS = {

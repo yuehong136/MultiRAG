@@ -2968,6 +2968,7 @@ class DocumentMetadata(BaseModel):
     tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
     kb_id: Mapped[str] = mapped_column(String(32), nullable=False)
     meta_fields: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default={})
+    table_metadata_state: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb"))
 
 
 class File(BaseModel):

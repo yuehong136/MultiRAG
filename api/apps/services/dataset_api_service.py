@@ -262,6 +262,8 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
         req["parser_config"] = deep_merge(kb.parser_config, parser_config)
         if parser_config.get("parent_child") == {}:
             req["parser_config"]["parent_child"] = {}
+        if "table_column_roles" in parser_config:
+            req["parser_config"]["table_column_roles"] = parser_config["table_column_roles"]
 
     if (chunk_method := req.get("parser_id")) and chunk_method != kb.parser_id:
         if not req.get("parser_config"):

@@ -35,7 +35,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_type_
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import finish_status_write, insert_source_chunks
-from api.db.services.document_task_service import SupersededDocumentTask, increment_task_document, put_task_image, record_task_pipeline, write_task_metadata
+from api.db.services.document_task_service import SupersededDocumentTask, increment_task_document, put_task_image, record_task_pipeline, write_task_metadata, write_task_table_metadata
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
@@ -65,6 +65,7 @@ from core.svr import executor_metrics
 from core.utils.base64_image import image2id
 from core.utils.raptor_utils import get_skip_reason, should_skip_raptor
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
+from core.utils.table_metadata import TABLE_ROW_KEY, collect_table_metadata, merge_table_parser_config_from_kb
 from core.utils.task_runtime import finish_runtime
 from deepdoc.parser.utils import extract_pdf_outlines
 
@@ -532,8 +533,9 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
                 lang=task["language"],
                 callback=progress_callback,
                 kb_id=task["kb_id"],
-                parser_config=task["parser_config"],
+                parser_config=merge_table_parser_config_from_kb(task),
                 tenant_id=task["tenant_id"],
+                table_metadata_carrier=task["parser_id"].lower() == "table",
             )
         logging.info("Chunking({}) {}/{}".format(timer() - st, task["location"], task["name"]))
     except TaskCanceledException:
@@ -543,6 +545,8 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         logging.exception("Chunking {}/{} got exception".format(task["location"], task["name"]))
         raise
 
+    if task["parser_id"].lower() == "table":
+        task["table_metadata"] = collect_table_metadata(cks)
     outline = cks[0].pop("__outline__", None) if cks else None
     for ck in cks[1:]:
         ck.pop("__outline__", None)
@@ -563,7 +567,8 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         try:
             d = copy.deepcopy(document)
             d.update(chunk)
-            chunk_hash = xxhash.xxh64((chunk["content_with_weight"] + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+            row_key = d.pop(TABLE_ROW_KEY, "")
+            chunk_hash = xxhash.xxh64((chunk["content_with_weight"] + row_key + str(d["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
             d["pk"] = chunk_hash
             d["id"] = chunk_hash  # 同时设置 id 以兼容 ES 和 build_TOC 等函数
             d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
@@ -2810,6 +2815,8 @@ async def do_handle_task(db: Session, task: Any) -> None:
         chunks = await build_chunks(task, progress_callback, db)
         logging.info(f"Build document {task_document_name}: {timer() - start_ts:.2f}s")
         if not chunks:
+            if task["parser_id"].lower() == "table":
+                await finish_status_write(asyncio.to_thread(write_task_table_metadata, db.get_bind(), task_id, task_doc_id, task_dataset_id, task.get("table_metadata", {})))
             progress_callback(1.0, msg=f"No chunk built from {task_document_name}")
             return
         progress_callback(msg=f"Generate {len(chunks)} chunks")
@@ -2856,6 +2863,9 @@ async def do_handle_task(db: Session, task: Any) -> None:
 
         if not await _maybe_insert_chunks(chunks):
             return
+
+        if task["parser_id"].lower() == "table":
+            await finish_status_write(asyncio.to_thread(write_task_table_metadata, db.get_bind(), task_id, task_doc_id, task_dataset_id, task.get("table_metadata", {})))
 
         logging.info(f"Indexing doc({task_document_name}), page({task_from_page}-{task_to_page}), chunks({len(chunks)}), elapsed: {timer() - start_ts:.2f}")
 

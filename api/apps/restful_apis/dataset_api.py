@@ -25,7 +25,7 @@ from api.apps.services import dataset_api_service, dataset_embedding_service, da
 from api.db.db_models import get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
 from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
-from api.utils.validation_utils import CreateDatasetReq, validate_dataset_raptor_scope
+from api.utils.validation_utils import CreateDatasetReq, normalize_table_parser_config, validate_dataset_raptor_scope
 from common.constants import RetCode
 from common.metadata_config import MetadataConfig, validate_parser_metadata
 
@@ -61,6 +61,7 @@ class UpdateDatasetRequest(BaseModel):
         # avoid filling parser defaults into a partial update.
         validate_dataset_raptor_scope(self.ext.get("parser_config", self.parser_config))
         validate_parser_metadata(self.ext.get("parser_config", self.parser_config))
+        normalize_table_parser_config(self.ext.get("parser_config", self.parser_config))
         return self
 
 

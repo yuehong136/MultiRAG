@@ -157,6 +157,12 @@ def write_task_metadata(bind: Engine | Connection, task_id: str, document_id: st
             raise RuntimeError(f"Failed to persist generated metadata for document {document_id}")
 
 
+def write_task_table_metadata(bind: Engine | Connection, task_id: str, document_id: str, dataset_id: str, metadata: dict[str, list[Any]]) -> None:
+    """Only a live current table task may replace parser-owned metadata values."""
+    with Session(bind) as db, current_document_task(db, task_id, document_id, dataset_id):
+        DocMetadataService.replace_table_metadata(db, document_id, task_id, metadata)
+
+
 def record_task_pipeline(bind: Engine | Connection, task_id: str, document_id: str, dataset_id: str, pipeline_id: str, dsl: str, *, task_type: PipelineTaskType = PipelineTaskType.PARSE) -> None:
     """Legacy log helpers may commit, but cannot release the ownership lock."""
     from api.db.services.pipeline_operation_log_service import PipelineOperationLogService

@@ -342,6 +342,16 @@ class KnowledgebaseService(CommonService):
         return dict(query._mapping)  # todo 用dict(query._mapping)替换原先手动访问所有字段方案，目前只在此处做了
 
     @classmethod
+    def update_table_parser_fields(cls, db: Session, kb_id: str, field_map: dict[str, str], column_names: list[str]) -> None:
+        """Replace the table-owned discovery snapshot without retaining indexing-only fields."""
+        kb = db.scalar(select(cls.model).where(cls.model.id == kb_id).with_for_update().execution_options(populate_existing=True))
+        if kb is None:
+            raise LookupError("Table dataset disappeared.")
+        config = {**(kb.parser_config or {}), "field_map": field_map, "table_column_names": column_names}
+        if not cls.update_by_id(db, kb_id, {"parser_config": config}):
+            raise RuntimeError("Table column discovery could not be persisted.")
+
+    @classmethod
     def update_parser_config(cls, db: Session, id, config):
         """
         更新知识库的解析配置。

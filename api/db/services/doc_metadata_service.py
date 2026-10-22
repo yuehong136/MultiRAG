@@ -35,11 +35,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Knowledgebase
+from api.db.db_models import Document, DocumentMetadata, Knowledgebase, Task
 from api.db.services.metadata_store import MetadataStore
 from api.db.services.metadata_store_sql import SqlMetadataStore
 from common import settings
 from common.metadata_utils import STREAMABLE_METADATA_OPERATORS, aggregate_metadata_rows, dedupe_list, stream_metadata_matches, valid_metadata_conditions
+from core.utils.table_metadata import replace_owned_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,14 @@ class DocMetadataService:
             if not tenant_id:
                 logger.warning("Knowledgebase %s not found for metadata deletion", kb_id)
                 return False
-        return cls._store().delete(db, doc_id, tenant_id, kb_id)
+        store = cls._store()
+        result = store.delete(db, doc_id, tenant_id, kb_id)
+        if result and not isinstance(store, SqlMetadataStore):
+            from sqlalchemy import delete
+
+            db.execute(delete(DocumentMetadata).where(DocumentMetadata.id == doc_id, DocumentMetadata.tenant_id == tenant_id, DocumentMetadata.kb_id == kb_id))
+            db.commit()
+        return result
 
     @classmethod
     def get_document_metadata(cls, db: Session, doc_id: str) -> dict:
@@ -157,6 +165,45 @@ class DocMetadataService:
         if not tenant_id:
             return {}
         return cls._store().get(db, doc_id, tenant_id, kb_id)
+
+    @classmethod
+    def replace_table_metadata(cls, db: Session, doc_id: str, task_id: str, metadata: dict[str, list[Any]]) -> None:
+        """Replace this task's contribution under the caller's document ownership lock.
+
+        SQL state stays private, separate from user-visible filter values. Multiple row
+        tasks merge, while replaced tasks disappear on the next successful parse.
+        """
+        tenant_id, kb_id = cls._get_tenant_kb_for_doc(db, doc_id)
+        if not tenant_id or not kb_id:
+            raise RuntimeError("Table metadata document disappeared.")
+        store = cls._store()
+        row = db.scalar(select(DocumentMetadata).where(DocumentMetadata.id == doc_id).with_for_update().execution_options(populate_existing=True))
+        existing = cls.get_document_metadata(db, doc_id)
+        state = row.table_metadata_state if row is not None else {}
+        # Stable parse digests survive task-ID replacement when chunks are reused.
+        active = {identifier: (digest or "").partition(":ingest-tokens:")[0] or identifier for identifier, digest in db.execute(select(Task.id, Task.digest).where(Task.doc_id == doc_id))}
+        if task_id not in active:
+            raise RuntimeError("Table metadata task disappeared.")
+        tasks = {key: value for key, value in state.get("tasks", {}).items() if key in active.values()}
+        tasks[active[task_id]] = metadata
+        merged, owned = replace_owned_metadata(existing, state.get("owned", {}), list(tasks.values()))
+        engine_written = False
+        try:
+            if not isinstance(store, SqlMetadataStore):
+                engine_written = True
+                if not store.upsert(db, doc_id, tenant_id, kb_id, merged):
+                    raise RuntimeError("Table metadata store rejected the write.")
+            SqlMetadataStore.upsert_in_transaction(db, doc_id, tenant_id, kb_id, merged)
+            row = db.get(DocumentMetadata, doc_id, populate_existing=True)
+            if row is None:
+                raise RuntimeError("Table metadata state write could not be confirmed.")
+            row.table_metadata_state = {"tasks": tasks, "owned": owned}
+            db.commit()
+        except BaseException:
+            db.rollback()
+            if engine_written and not store.upsert(db, doc_id, tenant_id, kb_id, existing):
+                raise RuntimeError("Table metadata recovery failed.") from None
+            raise
 
     @classmethod
     def delete_tenant_metadata_container(cls, tenant_id: str) -> bool:

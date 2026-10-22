@@ -757,6 +757,9 @@ class DocumentService(CommonService):
         from api.utils.api_utils import get_parser_config
 
         base_cfg = get_parser_config(parser_id, doc.parser_config)
+        from core.utils.table_metadata import merge_table_parser_config_from_kb
+
+        base_cfg = merge_table_parser_config_from_kb({**chunking_cfg, "parser_config": base_cfg})
         if parser_config_override:
             # 递归合并，以覆盖为主
             def _deep_merge(a: dict, b: dict) -> dict:
@@ -1001,7 +1004,9 @@ class DocumentService(CommonService):
 
         # 使用已有方法获取合并后的解析配置以计算摘要
         chunking_cfg = cls.get_chunking_config(db, doc_id) or {}
-        merged_cfg = chunking_cfg.get("parser_config") or {}
+        from core.utils.table_metadata import merge_table_parser_config_from_kb
+
+        merged_cfg = merge_table_parser_config_from_kb(chunking_cfg)
         if parser_config_override:
 
             def _deep_merge(a: dict, b: dict) -> dict:
@@ -2624,6 +2629,7 @@ class DocumentService(CommonService):
                 cls.model.content_hash.label("content_hash"),
                 Knowledgebase.language.label("language"),
                 Knowledgebase.embd_id.label("embd_id"),
+                Knowledgebase.parser_config.label("kb_parser_config"),
                 Knowledgebase.name.label("name"),
                 Tenant.id.label("tenant_id"),
                 Tenant.img2txt_id.label("img2txt_id"),
