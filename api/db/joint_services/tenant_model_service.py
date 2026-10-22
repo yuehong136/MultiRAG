@@ -117,7 +117,7 @@ def get_tenant_default_model_by_type(
     db: Session,
     tenant_id: str,
     model_type: str | enum.Enum,
-) -> dict:
+) -> dict[str, Any]:
     tenant = TenantService.get_or_none(db, id=tenant_id)
     if not tenant:
         raise LookupError("Tenant not found")
@@ -151,7 +151,7 @@ def get_tenant_default_model_by_type(
             raise ValueError(f"Unknown model type {model_type_val}")
 
     if tenant_model_id:
-        return get_model_config_by_id(db, tenant_model_id)
+        return get_model_config_by_id(db, tenant_model_id, tenant_id=tenant_id)
     if not model_name:
         raise ValueError(f"No default {model_type_val} model is set.")
     return get_model_config_by_type_and_name(db, tenant_id, model_type_val, model_name)
@@ -192,12 +192,12 @@ async def build_named_bundle_async(tenant_id: str, model_type: str, llm_id: str,
     return await asyncio.to_thread(_build)
 
 
-async def build_bundle_by_id_async(tenant_id: str, tenant_model_id: int, **kwargs) -> LLMBundle:
+async def build_bundle_by_id_async(tenant_id: str, tenant_model_id: int, **kwargs: Any) -> LLMBundle:
     """按租户模型行 id 构造 LLMBundle（事件循环安全）。"""
 
     def _build() -> LLMBundle:
         with db_connection() as db:
-            model_config = get_model_config_by_id(db, tenant_model_id)
+            model_config = get_model_config_by_id(db, tenant_model_id, tenant_id=tenant_id)
             bundle = LLMBundle(db, tenant_id, model_config, **kwargs)
         bundle.db = None
         return bundle

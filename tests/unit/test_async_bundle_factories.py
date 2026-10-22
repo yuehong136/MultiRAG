@@ -24,11 +24,11 @@ class _FakeBundle(LLMBundle):
 
 
 @pytest.fixture
-def factory_stubs(monkeypatch):
+def factory_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tms, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(tms, "get_tenant_default_model_by_type", lambda db, tid, t: {"llm_name": "default-m"})
     monkeypatch.setattr(tms, "get_model_config_by_type_and_name", lambda db, tid, t, name: {"llm_name": name})
-    monkeypatch.setattr(tms, "get_model_config_by_id", lambda db, mid: {"llm_name": f"id-{mid}"})
+    monkeypatch.setattr(tms, "get_model_config_by_id", lambda db, mid, *, tenant_id: {"llm_name": f"id-{mid}"})
 
 
 async def test_default_factory_strips_session_and_builds_off_loop(factory_stubs):
