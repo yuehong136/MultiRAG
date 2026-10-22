@@ -207,7 +207,8 @@ func (v *VolcEngine) ChatStreamlyWithMessages(name string, messages []Message, a
 	return io.ErrUnexpectedEOF
 }
 func (v *VolcEngine) ListModels(config *APIConfig) ([]string, error) {
-	resp, err := v.request(http.MethodGet, v.URLSuffix.Models, config, nil)
+	suffix := strings.Trim(strings.TrimSpace(v.URLSuffix.Models), "/")
+	resp, err := v.request(http.MethodGet, suffix, config, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -218,17 +219,30 @@ func (v *VolcEngine) ListModels(config *APIConfig) ([]string, error) {
 		} `json:"data"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("volcengine: decode model list: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("volcengine: unexpected data after model list")
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
 		return nil, fmt.Errorf("volcengine: model list error")
 	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("volcengine: model list data is missing")
+	}
 	names := make([]string, 0, len(result.Data))
+	seen := make(map[string]struct{}, len(result.Data))
 	for _, item := range result.Data {
-		if item.ID != "" {
-			names = append(names, item.ID)
+		if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.ID) != item.ID {
+			return nil, fmt.Errorf("volcengine: invalid model ID")
 		}
+		if _, duplicate := seen[item.ID]; duplicate {
+			return nil, fmt.Errorf("volcengine: duplicate model ID")
+		}
+		seen[item.ID] = struct{}{}
+		names = append(names, item.ID)
 	}
 	return names, nil
 }
