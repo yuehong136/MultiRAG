@@ -110,7 +110,6 @@ func TestNVIDIAThinkingAndUnsupportedCapabilities(t *testing.T) {
 	driver := NewNVIDIAModel(nil, URLSuffix{})
 	name := "m"
 	for _, call := range []func() error{
-		func() error { _, e := driver.Encode(&name, []string{"q"}, nil, nil); return e },
 		func() error { _, e := NewRerankModel(driver, &name, nil).Rerank("q", []string{"d"}); return e },
 		func() error { _, e := driver.Balance(nil); return e },
 	} {

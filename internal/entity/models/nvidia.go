@@ -1,6 +1,11 @@
 package models
 
-// NVIDIAModel implements NVIDIA chat and instance model discovery.
+import (
+	"context"
+	"time"
+)
+
+// NVIDIAModel implements NVIDIA chat, embeddings and instance model discovery.
 type NVIDIAModel struct{ *openAIChatDriver }
 
 func NewNVIDIAModel(baseURL map[string]string, suffix URLSuffix) *NVIDIAModel {
@@ -31,6 +36,28 @@ func nvidiaChatBody(name string, messages []Message, config *ChatConfig, stream 
 		}
 	}
 	return body, nil
+}
+
+func (n *NVIDIAModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+	inputType := "query"
+	if config != nil && !config.Query {
+		inputType = "passage"
+	}
+	local := APIConfig{}
+	if api != nil {
+		local = *api
+	}
+	ctx, cancel := context.WithTimeout(requestContext(api), 30*time.Second)
+	defer cancel()
+	local.Context = ctx
+	return encodeHTTPWithConfig(n.httpClient, n.BaseURL, n.URLSuffix.Embedding, name, texts, &local, config, embeddingHTTPOptions{
+		fallbackRegion: true,
+		parameters: map[string]any{
+			"input_type":      inputType,
+			"encoding_format": "float",
+			"truncate":        "END",
+		},
+	})
 }
 
 var _ ModelDriver = (*NVIDIAModel)(nil)
