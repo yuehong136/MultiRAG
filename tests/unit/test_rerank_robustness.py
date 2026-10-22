@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import dashscope
+import httpx
 import numpy as np
 import pytest
 import requests
@@ -174,6 +175,39 @@ def test_huggingface_later_batch_failure_stops_without_partial_success(monkeypat
     with pytest.raises(requests.Timeout, match="second batch failed"):
         model_for("HuggingFace").similarity("query", ["doc"] * 17)
     assert calls == [8, 8]
+
+
+@pytest.mark.parametrize("invalid", [{"index": True, "relevance_score": 0.9}, {"index": "1", "relevance_score": 0.9}, {"index": 1, "relevance_score": False}, {"index": 1, "relevance_score": "0.9"}])
+def test_real_cohere_sdk_does_not_coerce_invalid_wire_values(monkeypatch: pytest.MonkeyPatch, invalid: dict[str, Any]) -> None:
+    requests_seen: list[httpx.Request] = []
+    payload = [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.0}]
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(200, json={"id": "fixture", "results": payload, "meta": {"api_version": {"version": "1"}, "billed_units": {"search_units": 1}}})
+
+    clients: list[httpx.Client] = []
+    real_client = httpx.Client
+
+    def client(**kwargs: Any) -> httpx.Client:
+        created = real_client(transport=httpx.MockTransport(reply), **kwargs)
+        clients.append(created)
+        return created
+
+    monkeypatch.setattr(httpx, "Client", client)
+    try:
+        model = model_for("Cohere", "http://provider.invalid/v1")
+        scores, _ = model.similarity("query", ["zero", "high"])
+        np.testing.assert_array_equal(scores, [0.0, 0.9])
+        assert requests_seen[0].url.path == "/v1/rerank"
+        assert requests_seen[0].extensions["timeout"]["read"] == 30
+        payload[0] = invalid
+        with pytest.raises(ValueError, match="Rerank response"):
+            model.similarity("query", ["zero", "high"])
+        assert len(requests_seen) == 2
+    finally:
+        for created in clients:
+            created.close()
 
 
 @pytest.mark.enable_socket

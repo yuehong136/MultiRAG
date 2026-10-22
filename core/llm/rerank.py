@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import json
 import os
 import re
 import threading
@@ -22,6 +23,7 @@ from numbers import Real
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 import numpy as np
 import requests
 from huggingface_hub import snapshot_download
@@ -73,6 +75,15 @@ def _rank_from_results(results: Any, size: int, score_field: str = "relevance_sc
         seen.add(index)
         rank[index] = score
     return rank
+
+
+def _validate_cohere_response(response: httpx.Response) -> None:
+    # The SDK coerces bool/string indices and scores into numbers. Validate the
+    # wire response before that conversion erases malformed provider values.
+    if response.is_success:
+        response.read()
+        documents = json.loads(response.request.content)["documents"]
+        _rank_from_results(_field(response.json(), "results"), len(documents))
 
 
 class Base(ABC):
@@ -399,7 +410,11 @@ class CoHereRerank(Base):
         from cohere import Client
 
         # Only pass base_url if it's a non-empty string, otherwise use default Cohere API endpoint
-        client_kwargs = {"api_key": key, "timeout": 30.0}
+        client_kwargs = {
+            "api_key": key,
+            "timeout": 30.0,
+            "httpx_client": httpx.Client(timeout=30.0, follow_redirects=True, event_hooks={"response": [_validate_cohere_response]}),
+        }
         if base_url and base_url.strip():
             client_kwargs["base_url"] = base_url
         self.client = Client(**client_kwargs)
