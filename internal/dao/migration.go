@@ -19,6 +19,7 @@ package dao
 import (
 	"fmt"
 	"multirag/internal/common"
+	"multirag/internal/entity"
 	"strings"
 
 	"go.uber.org/zap"
@@ -51,6 +52,9 @@ func RunMigrations(db *gorm.DB) error {
 	if err := migrateAddUniqueEmail(db); err != nil {
 		return fmt.Errorf("failed to add unique index on t_ai_users.email: %w", err)
 	}
+	if err := migrateModelInstanceCredentials(db); err != nil {
+		return fmt.Errorf("failed to migrate model instance credentials: %w", err)
+	}
 
 	// Modify column types that AutoMigrate may not handle correctly
 	if err := modifyColumnTypes(db); err != nil {
@@ -58,6 +62,37 @@ func RunMigrations(db *gorm.DB) error {
 	}
 
 	common.Info("All manual migrations completed successfully")
+	return nil
+}
+
+// Local instances may omit credentials. Keep the existing uniqueness contract
+// for nonempty keys while allowing separate keyless instances.
+func migrateModelInstanceCredentials(db *gorm.DB) error {
+	model := &entity.TenantModelInstance{}
+	if !db.Migrator().HasTable(model) {
+		return nil
+	}
+	index := "idx_tenant_model_instance_api_key_nonempty"
+	if !db.Migrator().HasIndex(model, index) {
+		var statement string
+		switch db.Dialector.Name() {
+		case "postgres":
+			statement = "CREATE UNIQUE INDEX idx_tenant_model_instance_api_key_nonempty ON tenant_model_instance (api_key) WHERE api_key <> ''"
+		case "mysql":
+			statement = "CREATE UNIQUE INDEX idx_tenant_model_instance_api_key_nonempty ON tenant_model_instance ((NULLIF(api_key, '')))"
+		default:
+			return fmt.Errorf("unsupported database for model instance credentials: %s", db.Dialector.Name())
+		}
+		// Install the replacement first so a failure cannot remove protection for
+		// existing nonempty credentials.
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	legacyIndex := "idx_tenant_model_instance_api_key"
+	if db.Migrator().HasIndex(model, legacyIndex) {
+		return db.Migrator().DropIndex(model, legacyIndex)
+	}
 	return nil
 }
 

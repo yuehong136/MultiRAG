@@ -56,6 +56,7 @@ func TestTenantModelExtraScratchPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	checkModelInstanceCredentialMigration(t, db)
 	modelDAO, instanceDAO := NewTenantModelDAO(), NewTenantModelInstanceDAO()
 	legacy, err := modelDAO.GetByID("legacy")
 	if err != nil || legacy.Extra != "{}" || legacy.ModelName != "existing" || legacy.Status != "disabled" || legacy.ModelType != "chat" {
