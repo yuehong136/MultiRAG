@@ -21,7 +21,7 @@ import re
 import tempfile
 from abc import ABC
 from collections.abc import AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, closing
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -389,6 +389,63 @@ class Base(ABC):
 
     def vision_llm_prompt(self, b64, prompt=None):
         return [{"role": "user", "content": self._image_prompt(prompt if prompt else vision_llm_describe_prompt(), b64)}]
+
+
+class BedrockCV(Base):
+    _FACTORY_NAME = "Bedrock"
+
+    def __init__(self, key: str, model_name: str, lang: str = "Chinese", **kwargs: Any) -> None:
+        self.model_name = model_name if model_name.startswith("bedrock/") else f"bedrock/{model_name}"
+        self.lang = lang
+        self._parse_credentials(key)
+        super().__init__(**kwargs)
+
+    def _parse_credentials(self, key: str) -> None:
+        try:
+            credentials = json.loads(key)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Bedrock key must be a JSON object with auth_mode, bedrock_region and AWS credential fields") from exc
+        if not isinstance(credentials, dict):
+            raise ValueError("Bedrock key must be a JSON object with auth_mode, bedrock_region and AWS credential fields")
+        self.auth_mode = credentials.get("auth_mode") or ""
+        self.aws_region = credentials.get("bedrock_region") or "us-east-1"
+        self.aws_ak = credentials.get("bedrock_ak") or ""
+        self.aws_sk = credentials.get("bedrock_sk") or ""
+        self.aws_role_arn = credentials.get("aws_role_arn") or ""
+        if self.auth_mode == "access_key_secret" and (not self.aws_ak or not self.aws_sk):
+            raise ValueError("Bedrock access_key_secret requires bedrock_ak and bedrock_sk")
+        if self.auth_mode == "iam_role" and not self.aws_role_arn:
+            raise ValueError("Bedrock iam_role requires aws_role_arn")
+        if self.auth_mode not in {"", "default", "access_key_secret", "iam_role"}:
+            raise ValueError("Unsupported Bedrock auth_mode")
+
+    def _get_aws_creds(self) -> dict[str, str]:
+        if self.auth_mode == "access_key_secret":
+            return {"aws_region_name": self.aws_region, "aws_access_key_id": self.aws_ak, "aws_secret_access_key": self.aws_sk}
+        if self.auth_mode == "iam_role":
+            import boto3
+
+            with closing(boto3.client("sts", region_name=self.aws_region)) as client:
+                response = client.assume_role(RoleArn=self.aws_role_arn, RoleSessionName="BedrockCVSession")
+            credentials = response["Credentials"]
+            return {
+                "aws_region_name": self.aws_region,
+                "aws_access_key_id": credentials["AccessKeyId"],
+                "aws_secret_access_key": credentials["SecretAccessKey"],
+                "aws_session_token": credentials["SessionToken"],
+            }
+        return {"aws_region_name": self.aws_region}
+
+    def describe_with_prompt(self, image: Any, prompt: str | None = None) -> tuple[str, int]:
+        import litellm
+
+        response = litellm.completion(model=self.model_name, messages=self.vision_llm_prompt(self._normalize_image(image), prompt), **self._get_aws_creds())
+        if not response.choices or not isinstance(response.choices[0].message.content, str) or not response.choices[0].message.content.strip():
+            raise ValueError("Bedrock vision returned an empty response")
+        return response.choices[0].message.content.strip(), total_token_count_from_response(response)
+
+    def describe(self, image: Any) -> tuple[str, int]:
+        return self.describe_with_prompt(image)
 
 
 class GptV4(Base):
