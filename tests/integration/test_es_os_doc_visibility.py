@@ -76,6 +76,7 @@ def test_metadata_crud_has_complete_replacement_and_scoped_readback(search_store
         assert env["reader"].count(index=index)["count"] == 0
         store._drop_if_empty(index)
         assert not env["reader"].indices.exists(index=index)
+        assert store.delete(db, "doc", tenant, "kb") is True  # confirmed absent index is valid
 
 
 def test_closed_index_refresh_and_count_fail_closed(search_store: dict[str, Any]) -> None:

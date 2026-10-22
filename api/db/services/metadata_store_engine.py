@@ -306,6 +306,8 @@ class EngineMetadataStore(MetadataStore):
 
     def delete(self, db: Session, doc_id: str, tenant_id: str, kb_id: str) -> bool:
         index_name = self._index_name(tenant_id)
+        if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
+            return settings.docStoreConn.delete_doc_metadata(index_name, doc_id, kb_id)
         if not settings.docStoreConn.index_exist(index_name, ""):
             return True
         settings.docStoreConn.delete({"id": doc_id}, index_name, kb_id)
@@ -339,16 +341,17 @@ class EngineMetadataStore(MetadataStore):
 
         for (tenant_id, kb_id), group_doc_ids in grouped.items():
             index_name = self._index_name(tenant_id)
-            if not settings.docStoreConn.index_exist(index_name, ""):
-                continue
-
             if not settings.DOC_ENGINE_INFINITY and not settings.DOC_ENGINE_OCEANBASE:
+                if not settings.docStoreConn.doc_meta_index_exists(index_name):
+                    continue
                 for doc in settings.docStoreConn.get_doc_metadata_rows(index_name, group_doc_ids, kb_id):
                     meta = self._extract_metadata(doc)
                     if meta:
                         metadata_map[doc["id"]] = meta
                 continue
 
+            if not settings.docStoreConn.index_exist(index_name, ""):
+                continue
             results = settings.docStoreConn.search(
                 select_fields=["*"],
                 highlight_fields=[],

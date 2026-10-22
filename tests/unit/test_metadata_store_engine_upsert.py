@@ -21,7 +21,7 @@ def es_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
     connector.es = connector.os = client
     connector.logger = logging.getLogger(__name__)
     client.get.return_value = {"_source": {"id": "d1", "kb_id": "kb1"}}
-    client.update.return_value = {"result": "updated", "_shards": {"failed": 0}}
+    client.update.return_value = {"result": "updated", "_shards": {"total": 1, "successful": 1, "failed": 0}}
     client.bulk.return_value = {"errors": False}
     client.indices.refresh.return_value = {"_shards": {"total": 1, "successful": 1, "failed": 0}}
     monkeypatch.setattr(settings, "DOC_ENGINE_INFINITY", False)

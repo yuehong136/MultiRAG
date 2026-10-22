@@ -1,7 +1,7 @@
 """Shared ES/OpenSearch metadata dispatch without leaking client attributes."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from elastic_transport import ConnectionError as ESConnectionError
@@ -16,6 +16,20 @@ NOT_FOUND = (ESNotFoundError, OSNotFoundError)
 TRANSIENT = (ESConnectionError, ESConnectionTimeout, OSConnectionError, OSConnectionTimeout)
 
 
+def _complete_shards(response: Any, *, noop: bool = False) -> bool:
+    raw = getattr(response, "body", response)
+    shards = raw.get("_shards") if isinstance(raw, Mapping) else None
+    if not isinstance(shards, Mapping):
+        return False
+    total, successful, failed = (shards.get(key) for key in ("total", "successful", "failed"))
+    if any(type(value) is not int for value in (total, successful, failed)) or failed != 0:
+        return False
+    # An update whose script explicitly does nothing may perform no shard writes.
+    if noop and total == successful == 0:
+        return True
+    return 0 < successful <= total
+
+
 class SearchMetadata:
     """The client SDKs share these metadata operations and response contracts."""
 
@@ -23,7 +37,11 @@ class SearchMetadata:
         raise NotImplementedError
 
     def doc_meta_index_exists(self, index_name: str) -> bool:
-        return bool(self._doc_meta_client().indices.exists(index=index_name))
+        response = self._doc_meta_client().indices.exists(index=index_name)
+        exists = getattr(response, "body", response)
+        if type(exists) is not bool:
+            raise RuntimeError("Malformed metadata index existence response")
+        return exists
 
     def refresh_idx(self, index_name: str) -> bool:
         try:
@@ -40,7 +58,7 @@ class SearchMetadata:
         try:
             response = self._doc_meta_client().count(index=index_name)
             count = response.get("count")
-            if type(count) is not int or count < 0 or response.get("_shards", {}).get("failed", 0) != 0:
+            if type(count) is not int or count < 0 or not _complete_shards(response):
                 return -1
             return count
         except NOT_FOUND:
@@ -55,8 +73,8 @@ class SearchMetadata:
         for attempt in range(2):
             try:
                 response = self._doc_meta_client().update(index=index_name, id=doc_id, body=body, refresh=True)
-                shards = response.get("_shards", {})
-                return response.get("result") in {"updated", "noop"} and shards.get("failed") == 0
+                result = response.get("result")
+                return result in {"updated", "noop"} and _complete_shards(response, noop=result == "noop")
             except TRANSIENT:
                 if attempt == 1:
                     logger.exception("Metadata replacement transport failed: %s/%s", index_name, doc_id)
@@ -104,15 +122,70 @@ class SearchMetadata:
                 client.clear_scroll(scroll_id=scroll_id)
 
     def get_doc_metadata_rows(self, index_name: str, doc_ids: list[str], kb_id: str) -> list[dict[str, Any]]:
-        response = self._doc_meta_client().mget(index=index_name, body={"ids": doc_ids}, _source=True)
+        if any(type(doc_id) is not str for doc_id in doc_ids):
+            raise RuntimeError("Invalid metadata batch identity")
+        requested = set(doc_ids)
+        if not requested:
+            return []
+        response = self._doc_meta_client().mget(index=index_name, body={"ids": list(dict.fromkeys(doc_ids))}, _source=True)
+        raw = getattr(response, "body", response)
+        hits = raw.get("docs") if isinstance(raw, Mapping) else None
+        if not isinstance(hits, list) or len(hits) != len(requested):
+            raise RuntimeError("Incomplete metadata batch response")
         rows = []
-        for hit in response["docs"]:
-            if "error" in hit:
-                raise RuntimeError("Metadata batch read failed")
-            if not hit.get("found"):
+        seen: set[str] = set()
+        for hit in hits:
+            if not isinstance(hit, Mapping) or "error" in hit or type(hit.get("found")) is not bool:
+                raise RuntimeError("Malformed metadata batch result")
+            doc_id = hit.get("_id")
+            if type(doc_id) is not str or doc_id not in requested or doc_id in seen:
+                raise RuntimeError("Metadata batch identity mismatch")
+            seen.add(doc_id)
+            if hit["found"] is False:
                 continue
-            source = hit["_source"]
-            if hit["_id"] not in doc_ids or source.get("kb_id") != kb_id:
+            source = hit.get("_source")
+            if not isinstance(source, Mapping) or source.get("kb_id") != kb_id or not isinstance(source.get("meta_fields"), dict):
                 raise RuntimeError("Metadata batch read escaped the requested scope")
-            rows.append({**source, "id": hit["_id"]})
+            if "id" in source and source["id"] != doc_id:
+                raise RuntimeError("Metadata source identity mismatch")
+            rows.append({**source, "id": doc_id})
+        if seen != requested:
+            raise RuntimeError("Incomplete metadata batch response")
         return rows
+
+    def delete_doc_metadata(self, index_name: str, doc_id: str, kb_id: str) -> bool:
+        """Confirm the scoped delete and independently read its search visibility."""
+        client = self._doc_meta_client()
+        query = {"bool": {"filter": [{"ids": {"values": [doc_id]}}, {"term": {"kb_id": kb_id}}]}}
+        try:
+            response = client.delete_by_query(index=index_name, body={"query": query}, refresh=True)
+            deleted, total, conflicts = (response.get(key) for key in ("deleted", "total", "version_conflicts"))
+            if (
+                any(type(value) is not int for value in (deleted, total, conflicts))
+                or not 0 <= deleted == total
+                or conflicts != 0
+                or response.get("timed_out") is not False
+                or response.get("failures") != []
+            ):
+                return False
+            result = client.search(index=index_name, body={"query": query, "size": 0, "track_total_hits": True}, allow_partial_search_results=False)
+            hits = result.get("hits", {})
+            count = hits.get("total", {})
+            return (
+                _complete_shards(result)
+                and result.get("timed_out") is False
+                and isinstance(count, Mapping)
+                and type(count.get("value")) is int
+                and count["value"] == 0
+                and count.get("relation") == "eq"
+                and hits.get("hits") == []
+            )
+        except NOT_FOUND:
+            try:
+                return not self.doc_meta_index_exists(index_name)
+            except Exception:
+                logger.exception("Metadata deletion absence check failed: %s/%s", index_name, doc_id)
+                return False
+        except Exception:
+            logger.exception("Metadata deletion failed: %s/%s", index_name, doc_id)
+            return False
