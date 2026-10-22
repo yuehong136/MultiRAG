@@ -25,9 +25,10 @@ import re
 import ssl
 import time
 from abc import ABC
+from collections.abc import Iterator
 from datetime import datetime
 from time import mktime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 from wsgiref.handlers import format_date_time
 
@@ -100,25 +101,31 @@ class HTTPBasedTTS(Base):
         """
         return {"model": self.model_name, "voice": voice, "input": text}
 
-    def _send_request(self, endpoint, payload, stream=True):
+    def _send_request(self, endpoint: str, payload: dict[str, Any], stream: bool = True) -> requests.Response:
         """
         Send HTTP request to TTS service.
         """
         url = f"{self.base_url}{endpoint}"
-        response = requests.post(url, headers=self.headers, json=payload, stream=stream)
+        response = requests.post(url, headers=self.headers, json=payload, stream=stream, timeout=60)
 
         if response.status_code != 200:
-            raise Exception(f"**Error**: {response.status_code}, {response.text}")
+            try:
+                raise Exception(f"**Error**: {response.status_code}, {response.text}")
+            finally:
+                response.close()
 
         return response
 
-    def _process_response(self, response):
+    def _process_response(self, response: requests.Response) -> Iterator[bytes]:
         """
         Process streaming response from TTS service.
         """
-        for chunk in response.iter_content():
-            if chunk:
-                yield chunk
+        try:
+            for chunk in response.iter_content():
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()
 
     def tts(self, text, voice="alloy"):
         """
@@ -144,7 +151,7 @@ class FishAudioTTS(Base):
         self.ref_id = key.get("fish_audio_refid")
         self.base_url = base_url
 
-    def tts(self, text):
+    def tts(self, text: str) -> Iterator[bytes | int]:
         from http import HTTPStatus
 
         text = self.normalize_text(text)
@@ -157,7 +164,7 @@ class FishAudioTTS(Base):
                     url=self.base_url,
                     content=ormsgpack.packb(request, option=ormsgpack.OPT_SERIALIZE_PYDANTIC),
                     headers=self.headers,
-                    timeout=None,
+                    timeout=60,
                 ) as response:
                     if response.status_code == HTTPStatus.OK:
                         yield from response.iter_bytes()
@@ -497,18 +504,21 @@ class RAGconTTS(Base):
         self.model_name = model_name
         self.headers = {"accept": "application/json", "Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
-    def tts(self, text, voice="English Female", stream=True):
+    def tts(self, text: str, voice: str = "English Female", stream: bool = True) -> Iterator[bytes | int]:
         """
         Uses LiteLLM's /v1/audio/speech endpoint
         """
 
         payload = {"model": self.model_name, "input": text, "voice": voice}
 
-        response = requests.post(f"{self.base_url}/audio/speech", headers=self.headers, json=payload, stream=stream)
+        response = requests.post(f"{self.base_url}/audio/speech", headers=self.headers, json=payload, stream=stream, timeout=60)
 
-        if response.status_code != 200:
-            raise Exception(f"**Error**: {response.status_code}, {response.text}")
+        try:
+            if response.status_code != 200:
+                raise Exception(f"**Error**: {response.status_code}, {response.text}")
 
-        for chunk in response.iter_content(chunk_size=1024):
-            if chunk:
-                yield chunk
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()

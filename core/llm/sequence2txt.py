@@ -143,7 +143,7 @@ class XinferenceSeq2txt(Base):
         self.model_name = model_name
         self.key = key
 
-    def transcription(self, audio, language="zh", prompt=None, response_format="json", temperature=0.7):
+    def transcription(self, audio: Any, language: str = "zh", prompt: str | None = None, response_format: str = "json", temperature: float = 0.7) -> tuple[str, int]:
         if isinstance(audio, str):
             with open(audio, "rb") as audio_file:
                 audio_data = audio_file.read()
@@ -157,7 +157,7 @@ class XinferenceSeq2txt(Base):
         files = {"file": (audio_file_name, audio_data, "audio/wav")}
 
         try:
-            response = requests.post(f"{self.base_url}/v1/audio/transcriptions", files=files, data=payload)
+            response = requests.post(f"{self.base_url}/v1/audio/transcriptions", files=files, data=payload, timeout=60)
             response.raise_for_status()
             result = response.json()
 
@@ -318,7 +318,7 @@ class ZhipuSeq2txt(Base):
         except Exception as e:
             raise RuntimeError(f"audio convert failed: {e}")
 
-    def transcription(self, audio_path):
+    def transcription(self, audio_path: str) -> tuple[str, int]:
         payload = {
             "model": self.model_name,
             "temperature": str(self.gen_conf.get("temperature", 0.75)) or "0.75",
@@ -337,6 +337,7 @@ class ZhipuSeq2txt(Base):
                     data=payload,
                     files=files,
                     headers=headers,
+                    timeout=60,
                 )
                 body = response.json()
                 if response.status_code == 200:

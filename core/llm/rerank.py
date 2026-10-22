@@ -162,10 +162,10 @@ class JinaRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         texts = [truncate(t, 8196) for t in texts]
         data = {"model": self.model_name, "query": query, "documents": texts, "top_n": len(texts)}
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = requests.post(self.base_url, headers=self.headers, json=data, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -216,7 +216,7 @@ class XInferenceRerank(Base):
         if key and key != "x":
             self.headers["Authorization"] = f"Bearer {key}"
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         if len(texts) == 0:
             return np.array([]), 0
         pairs = [(query, truncate(t, 4096)) for t in texts]
@@ -224,7 +224,7 @@ class XInferenceRerank(Base):
         for _, t in pairs:
             token_count += num_tokens_from_string(t)
         data = {"model": self.model_name, "query": query, "return_documents": "true", "return_len": "true", "documents": texts}
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = requests.post(self.base_url, headers=self.headers, json=data, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -242,7 +242,7 @@ class LocalAIRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         # noway to config Ragflow , use fix setting
         texts = [truncate(t, 500) for t in texts]
         data = {
@@ -254,7 +254,7 @@ class LocalAIRerank(Base):
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = requests.post(self.base_url, headers=self.headers, json=data, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -291,7 +291,7 @@ class NvidiaRerank(Base):
             "Authorization": f"Bearer {key}",
         }
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         token_count = num_tokens_from_string(query) + sum([num_tokens_from_string(t) for t in texts])
         data = {
             "model": self.model_name,
@@ -300,7 +300,7 @@ class NvidiaRerank(Base):
             "truncate": "END",
             "top_n": len(texts),
         }
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = requests.post(self.base_url, headers=self.headers, json=data, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["rankings"]:
@@ -328,7 +328,7 @@ class OpenAI_APIRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         # noway to config MultiRAG , use fix setting
         texts = [truncate(t, 500) for t in texts]
         data = {
@@ -340,7 +340,7 @@ class OpenAI_APIRerank(Base):
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = requests.post(self.base_url, headers=self.headers, json=data, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -417,7 +417,7 @@ class SILICONFLOWRerank(Base):
             "authorization": f"Bearer {key}",
         }
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         payload = {
             "model": self.model_name,
             "query": query,
@@ -427,7 +427,7 @@ class SILICONFLOWRerank(Base):
             "max_chunks_per_doc": 1024,
             "overlap_tokens": 80,
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers).json()
+        response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in response["results"]:
@@ -509,7 +509,9 @@ class HuggingfaceRerank(Base):
         endpoint = append_path_segment(endpoint, "rerank")
         for i in range(0, len(texts), batch_size):
             try:
-                res = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"query": query, "texts": texts[i : i + batch_size], "raw_scores": False, "truncate": True})
+                res = requests.post(
+                    endpoint, headers={"Content-Type": "application/json"}, json={"query": query, "texts": texts[i : i + batch_size], "raw_scores": False, "truncate": True}, timeout=30
+                )
 
                 for o in res.json():
                     scores[o["index"] + i] = o["score"]
@@ -548,7 +550,7 @@ class GPUStackRerank(Base):
             "authorization": f"Bearer {key}",
         }
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         payload = {
             "model": self.model_name,
             "query": query,
@@ -557,7 +559,7 @@ class GPUStackRerank(Base):
         }
 
         try:
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
+            response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=30)
             response.raise_for_status()
             response_json = response.json()
 
@@ -637,7 +639,7 @@ class RAGconRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name
 
-    def similarity(self, query: str, texts: list):
+    def similarity(self, query: str, texts: list) -> tuple[np.ndarray, int]:
         # noway to config Ragflow , use fix setting
         texts = [truncate(t, 500) for t in texts]
         data = {
@@ -649,7 +651,7 @@ class RAGconRerank(Base):
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
-        res = requests.post(self._base_url + "/rerank", headers=self.headers, json=data).json()
+        res = requests.post(self._base_url + "/rerank", headers=self.headers, json=data, timeout=30).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:

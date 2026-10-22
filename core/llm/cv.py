@@ -635,6 +635,7 @@ class Zhipu4V(GptV4):
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
+            timeout=60,
         )
         return response.json()
 
@@ -1249,7 +1250,7 @@ class NvidiaCV(Base):
             htmls += ' <img src="{}"/>'.format(f"data:image/jpeg;base64,{img}" if img[:4] != "data" else img)
         return text + htmls
 
-    def describe(self, image):
+    def describe(self, image: Any) -> tuple[str, int]:
         b64 = self.image2base64(image)
         response = requests.post(
             url=self.base_url,
@@ -1259,6 +1260,7 @@ class NvidiaCV(Base):
                 "Authorization": f"Bearer {self.key}",
             },
             json={"messages": self.prompt(b64)},
+            timeout=60,
         )
         response = response.json()
         return (
@@ -1276,6 +1278,7 @@ class NvidiaCV(Base):
                 "Authorization": f"Bearer {self.key}",
             },
             json={"messages": msg, **gen_conf},
+            timeout=60,
         )
         return response.json()
 
