@@ -497,16 +497,10 @@ class FileService(CommonService):
             raise RuntimeError("Database error (list_by_parent_id)!")
 
     @staticmethod
-    def parse_docs(file_data, user_id):
-        exe = ThreadPoolExecutor(max_workers=12)
-        threads = []
-
-        for blob, filename in file_data:
-            threads.append(exe.submit(FileService.parse, filename, blob, False, user_id))
-
-        res = []
-        for th in threads:
-            res.append(th.result())
+    def parse_docs(file_data: Sequence[tuple[bytes, str]], user_id: str) -> str:
+        with ThreadPoolExecutor(max_workers=12) as exe:
+            threads = [exe.submit(FileService.parse, filename, blob, False, user_id) for blob, filename in file_data]
+            res = [th.result() for th in threads]
 
         return "\n\n".join(res)
 
@@ -829,26 +823,25 @@ class FileService(CommonService):
         return await asyncio.to_thread(structured, file.filename, filename_type(file.filename), file_content, file.content_type)
 
     @staticmethod
-    def get_files(files: list[dict] | None, raw: bool = False, layout_recognize: str = None) -> list[str] | tuple[list[str], list[bytes]]:
+    def get_files(files: list[dict[str, Any]] | None, raw: bool = False, layout_recognize: str | None = None) -> list[str] | tuple[list[str], list[bytes]]:
         if not files:
             return ([], []) if raw else []
 
-        def image_to_base64(file):
+        def image_to_base64(file: dict[str, Any]) -> str:
             return "data:{};base64,{}".format(file["mime_type"], base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8"))
 
-        exe = ThreadPoolExecutor(max_workers=5)
-        threads = []
-        imgs = []
-        for file in files:
-            if file["mime_type"].find("image") >= 0:
-                if raw:
-                    imgs.append(FileService.get_blob(file["created_by"], file["id"]))
-                else:
-                    threads.append(exe.submit(image_to_base64, file))
-                continue
-            threads.append(exe.submit(FileService.parse, file["name"], FileService.get_blob(file["created_by"], file["id"]), True, file["created_by"], layout_recognize))
+        with ThreadPoolExecutor(max_workers=5) as exe:
+            threads = []
+            imgs = []
+            for file in files:
+                if file["mime_type"].find("image") >= 0:
+                    if raw:
+                        imgs.append(FileService.get_blob(file["created_by"], file["id"]))
+                    else:
+                        threads.append(exe.submit(image_to_base64, file))
+                    continue
+                threads.append(exe.submit(FileService.parse, file["name"], FileService.get_blob(file["created_by"], file["id"]), True, file["created_by"], layout_recognize))
 
-        if raw:
-            return [th.result() for th in threads], imgs
-        else:
-            return [th.result() for th in threads]
+            results = [th.result() for th in threads]
+
+        return (results, imgs) if raw else results
