@@ -239,3 +239,75 @@ def test_stale_foreign_model_reference_denied_by_sql(memory_api: dict[str, Any])
             with pytest.raises(LookupError):
                 get_model_config_by_id(db, env["model_ids"][f"foreign-{kind}"], tenant_id=env["owners"][0])
     assert snapshot(env) == before
+
+
+def test_message_attribution_real_auth_storage_queue_and_denials(memory_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real credential resolution must agree with raw storage and queued work."""
+    import json
+
+    env = memory_api
+    mid = env["memories"]["team"]
+    tenant = env["tenants"]["team"]
+    calls: list[str] = []
+    encode = FixedEmbedding.encode
+
+    def counted_encode(self: FixedEmbedding, texts: list[str]) -> tuple[list[list[float]], int]:
+        calls.extend(texts)
+        return encode(self, texts)
+
+    monkeypatch.setattr(FixedEmbedding, "encode", counted_encode)
+    cases = [
+        ({"Authorization": f"Bearer {env['jwts'][1]}", "X-API-Key": env["keys"][0]}, "forged", env["owners"][1]),
+        ({"Authorization": f"Bearer {env['jwts'][0]}"}, "forged", env["owners"][0]),
+        ({"Authorization": f"Bearer {env['keys'][1]}"}, " external-subject ", " external-subject "),
+        ({"Authorization": f"Bearer {env['keys'][0]}"}, "", ""),
+        ({"Authorization": f"Bearer {env['keys'][1]}"}, "   ", "   "),
+        ({"Authorization": f"Bearer {env['keys'][1]}"}, None, ""),
+    ]
+    for headers, requested, expected in cases:
+        session_id = uuid4().hex
+        body = {
+            "memory_id": [mid],
+            "agent_id": "a",
+            "session_id": session_id,
+            "user_input": "attribution",
+            "agent_response": "verified",
+            "auth_via_api_token": True,
+            "auth_type": "API",
+            "authentication": {"source": "sdk_api_token"},
+        }
+        if requested is not None:
+            body["user_id"] = requested
+        response = env["client"].post(env["base"] + "/api/v1/messages", headers=headers, json=body, timeout=30)
+        assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+        queued = [json.loads(fields["message"]) for _, fields in REDIS_CONN.REDIS.xrange(env["queue"])]
+        task = next(row for row in queued if row["message_dict"]["session_id"] == session_id)
+        assert task["message_dict"]["user_id"] == expected
+        with Session(env["engine"]) as db:
+            persisted = db.get(Task, task["task_id"])
+            assert persisted is not None and persisted.doc_id == mid
+            message_id = int(persisted.digest)
+        stored = MessageService.get_by_message_id(mid, message_id, tenant)
+        assert stored["user_id"] == expected
+        assert stored["session_id"] == session_id
+    assert len(calls) == len(cases)
+    before = snapshot(env)
+    for headers, ids in [
+        ({"Authorization": f"Bearer {env['jwts'][1]}"}, [mid, env["memories"]["private"]]),
+        ({"Authorization": f"Bearer {env['keys'][1]}"}, [mid, env["memories"]["foreign"]]),
+        ({"Authorization": f"Bearer {env['keys'][2]}"}, [mid]),
+        ({"Authorization": "Bearer invalid-token"}, [mid]),
+        ({"Authorization": "Bearer invalid.jwt.token", "X-API-Key": env["keys"][0]}, [mid]),
+        ({"Authorization": "", "X-API-Key": env["keys"][0]}, [mid]),
+    ]:
+        response = env["client"].post(
+            env["base"] + "/api/v1/messages",
+            headers=headers,
+            json={"memory_id": ids, "agent_id": "a", "session_id": "denied", "user_input": "no", "agent_response": "no", "user_id": env["owners"][0], "auth_via_api_token": True},
+            timeout=30,
+        )
+        assert response.status_code in {200, 401}
+        if response.status_code == 200:
+            assert response.json()["retcode"] != 0
+        assert snapshot(env) == before
+        assert len(calls) == len(cases)

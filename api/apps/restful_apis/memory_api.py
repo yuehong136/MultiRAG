@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.apps.services import memory_api_service
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.db_models import get_async_db
+from api.identity.principal import AuthenticationSource
 from api.utils.api_utils import Principal, async_current_user, get_error_argument_result, get_json_result
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
@@ -202,7 +203,7 @@ class AddMessageRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     user_input: str = Field(..., description="User input message")
     agent_response: str = Field(..., description="Agent response message")
-    user_id: str = Field(default="", description="Optional User ID")
+    user_id: str = Field(default="", description="External subject for API-key authentication; otherwise the authenticated user is used")
 
 
 class UpdateMessageRequest(BaseModel):
@@ -222,7 +223,7 @@ async def add_message(
         memory_ids = [memory_ids]
 
     message_dict = {
-        "user_id": request_body.user_id,
+        "user_id": request_body.user_id if user.authentication.source is AuthenticationSource.SDK_API_TOKEN else user.id,
         "agent_id": request_body.agent_id,
         "session_id": request_body.session_id,
         "user_input": request_body.user_input,
