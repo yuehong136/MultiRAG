@@ -1166,31 +1166,33 @@ async def update_message_feedback(
     request: ChatRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
-    def _feedback(s: Session) -> Response:
+) -> Response:
+    def _load_payload(s: Session) -> dict[str, Any] | Response:
         if not _owned_chat_exists(s, tenant_id, chat_id):
             return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
+        conv = ConversationService.get_by_id(s, session_id)
+        if not conv or conv.dialog_id != chat_id:
+            return _error("Session not found!")
+        # JSON attributes may still alias the ORM instance. Only detached data
+        # may enter the worker; the request session stays on its greenlet.
+        return deepcopy(conv.to_dict())
 
-        try:
-            req = request.model_dump(exclude_unset=True)
-            conv = ConversationService.get_by_id(s, session_id)
-            if not conv or conv.dialog_id != chat_id:
-                return _error("Session not found!")
-
-            payload = conv.to_dict()
-            thumbup = req.get("thumbup")
-            if not isinstance(thumbup, bool):
-                return _error("thumbup must be a boolean")
-            feedback = req.get("feedback", "")
-            apply_feedback_to_session_payload(tenant_id, payload, msg_id, thumbup, feedback)
-
-            ConversationService.update_by_id(s, payload["id"], payload)
-            return get_result(data=build_session_response(payload))
-        except Exception as e:
-            logger.exception(e)
-            return _error("Internal server error")
-
-    return await db.run_sync(_feedback)  # TODO(async-phase4)
+    try:
+        payload = await db.run_sync(_load_payload)  # TODO(async-phase4)
+        if isinstance(payload, Response):
+            return payload
+        req = request.model_dump(exclude_unset=True)
+        thumbup = req.get("thumbup")
+        if not isinstance(thumbup, bool):
+            return _error("thumbup must be a boolean")
+        # Chunk feedback opens its own SQL connection and calls the synchronous
+        # document store. run_sync cannot offload either of those operations.
+        await asyncio.to_thread(apply_feedback_to_session_payload, tenant_id, payload, msg_id, thumbup, req.get("feedback", ""))
+        await db.run_sync(lambda s: ConversationService.update_by_id(s, payload["id"], payload))  # TODO(async-phase4)
+        return get_result(data=build_session_response(payload))
+    except Exception as e:
+        logger.exception(e)
+        return _error("Internal server error")
 
 
 @router.post("/chat/completions", summary="Chat completion")
