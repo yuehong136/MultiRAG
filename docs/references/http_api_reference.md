@@ -1560,11 +1560,13 @@ Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型�
 API/CLI 允许创建名为 default 的实例；自定义模型可设置和查询为默认模型，受同一启用状态校验。
 实例改名/改凭据当前未实现，返回明确错误，不返回成功，也不自动改写历史引用。
 
-Go embedding 驱动只保留 `Encode(modelName, texts, apiConfig, embeddingConfig)`；
-绑定后的模型只需 `Encode(texts)`，检索将查询作为单项批次传入。`ModelBundle` 与旧
-entity 模型接口已退出；其 token 估算没有运行时消费者，随旧抽象删除，未替换成供应商
-usage。空输入可返回空批次，非空输入的空结果、数量不匹配、空向量、维度不一致或非有限
-数值均失败，检索取首个向量前经过绑定边界校验。`EmbeddingConfig` 当前为空配置，默认 nil。
+Go embedding 驱动统一使用 `Embed(modelName, texts, apiConfig, embeddingConfig)`，
+绑定后的模型使用 `Embed(texts)`，返回带全局输入索引的 `[]EmbeddingData`（`index`、
+`embedding`）。检索通过 `Query` 标记查询，维度通过 `Dimension` 传递；配置与 context
+按调用隔离。共享 HTTP 路径每 32 条分批，批内索引重建为全局索引；空输入不调用供应商。
+缺失、重复、越界索引，空向量、数量或维度不匹配、null 和非有限数均失败，合法零分量保留。
+`POST /api/v1/embeddings` 返回真实向量，CLI 展示索引与由向量长度计算的维度。
+`ModelBundle` 与旧 entity 模型接口已退出；其无活动消费者的 token 估算随旧抽象删除。
 
 Go `/v1/conversation/completion` 的 session 调用直接绑定租户 ChatModel。`stream` 和
 `thinking` 保留缺省/显式 false，配置按模型默认、dialog 设置、请求覆盖的顺序合并；
@@ -1953,7 +1955,8 @@ Go Ollama driver 使用原生 `POST /api/chat` 与 `GET /api/tags`，实例 base
 和正文，并在 done=true 且有正文时发送 `[DONE]`。空列表可证明服务连通，但不代表已安装模型。
 聊天历史的多段文本和 base64 图片映射到原生 content/images；远程图片 URL、video/file、audio
 明确报不支持，不在服务端下载或静默降成文本。请求取消传至 HTTP，长流无总时长上限，普通调用
-有 120 秒请求超时。Encode/Rerank 明确未实现，模型目录没有声明这些能力。
+有 120 秒请求超时。embedding 使用 OpenAI 兼容的 `/v1/embeddings`，支持可选 API key、
+维度和共享严格批次校验；Rerank 明确未实现。
 协议参考 [Ollama chat](https://docs.ollama.com/api/chat) 与 [模型发现](https://docs.ollama.com/api/tags)。
 Moonshot 普通/流式聊天未显式配置 temperature 时使用 0.6，显式 0 保留。
 
