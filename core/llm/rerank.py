@@ -499,15 +499,17 @@ class HuggingfaceRerank(Base):
     _FACTORY_NAME = "HuggingFace"
 
     @staticmethod
-    def post(query: str, texts: list, url="127.0.0.1"):
+    def post(query: str, texts: list[str], url: str = "127.0.0.1") -> np.ndarray:
         exc = None
         scores = [0 for _ in range(len(texts))]
         batch_size = 8
+        endpoint = url.strip().rstrip("/")
+        if not endpoint.startswith(("http://", "https://")):
+            endpoint = f"http://{endpoint}"
+        endpoint = append_path_segment(endpoint, "rerank")
         for i in range(0, len(texts), batch_size):
             try:
-                res = requests.post(
-                    f"http://{url}/rerank", headers={"Content-Type": "application/json"}, json={"query": query, "texts": texts[i : i + batch_size], "raw_scores": False, "truncate": True}
-                )
+                res = requests.post(endpoint, headers={"Content-Type": "application/json"}, json={"query": query, "texts": texts[i : i + batch_size], "raw_scores": False, "truncate": True})
 
                 for o in res.json():
                     scores[o["index"] + i] = o["score"]
