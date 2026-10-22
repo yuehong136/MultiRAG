@@ -95,11 +95,16 @@ def test_real_templates_with_legacy_empty_variables_reset(monkeypatch: pytest.Mo
     def model_config_db() -> Iterator[Session]:
         yield db
 
+    def model_types(session: Session, tenant_id: str, model_ref: str) -> list[str]:
+        assert session is db and tenant_id == "template-unit" and model_ref
+        return ["chat"]
+
     # Keep actual Graph/Canvas and every component constructor/check/reset.
     # Only model configuration and provider construction use explicit unit
     # boundaries; no missing-model exception is accepted as a passing reset.
     for module in (llm, agent_with_tools):
         monkeypatch.setattr(module, "db_connection", model_config_db)
+        monkeypatch.setattr(module, "resolve_model_type", model_types)
         monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *args: object())
         monkeypatch.setattr(module, "LLMBundle", lambda *args, **kwargs: ConfiguredModel())
     monkeypatch.setattr(REDIS_CONN, "delete", lambda *args: None)
