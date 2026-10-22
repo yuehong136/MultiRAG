@@ -56,11 +56,124 @@ uv run python -m core.svr.task_executor
 
 ## Go 并行实现的本地验证
 
-Go 使用 `go.mod` 声明的版本，CGO 分词需要真实 native 静态库
-`internal/cpp/cmake-build-release/librag_tokenizer_c_api.a`，不能用空桩替代。
-现有 Linux 构建入口为 `./build.sh --cpp`；需 CMake 4、C/C++ 编译器、PCRE2 和 SIMDe
-头文件。Apple Silicon 的 PCRE2 链接路径为 `/opt/homebrew/lib/libpcre2-8.a`。
-工具链和 native 产物属于本机环境，不提交。
+本仓生产后端是 Python/FastAPI；`cmd/`、`internal/` 是停滞的 Go 并行实现。
+本节说明该实现的构建、CLI 用法和验证，不作为生产启动或前端代理配置入口。
+
+### 工具链与 native 依赖
+
+从仓库根目录执行命令。Go 版本以 [go.mod](../go.mod) 为准，当前要求 Go 1.25；
+CI 使用的 patch 版本和 native 准备步骤见
+[setup-go-native](../.github/actions/setup-go-native/action.yml)。
+
+```bash
+go version
+export GOTOOLCHAIN=local
+export GOFLAGS=-mod=readonly
+```
+
+CGO 需要真实的 `internal/cpp/cmake-build-release/librag_tokenizer_c_api.a`，
+以及与目标平台一致的 C/C++ 编译器和 PCRE2 静态库。当前 native 构建以 Linux amd64
+为 CI 验证平台，要求 CMake 4、PCRE2 和 SIMDe 开发头文件。依赖应预先安装；
+Go 构建阶段缺少 PCRE2 时直接报错，不自动调用系统包管理器。
+
+[CGO 链接声明](../internal/binding/rag_analyzer.go)还列有 macOS Intel 和 Apple Silicon
+的 PCRE2 路径，但这不代表现有 CMake 配置和编译器组合都可直接用于 macOS。
+不要跨平台复用静态库；已有本机 native 库时可以单独验证 Go 构建。
+
+### 构建三个入口
+
+在依赖已就绪的 Linux 环境中，首次构建：
+
+```bash
+./build.sh --all
+```
+
+也可以分两步执行；native 库未变化时只运行第二步：
+
+```bash
+./build.sh --cpp
+./build.sh --go
+```
+
+| 产物 | 独立源码入口 | 用途 |
+| --- | --- | --- |
+| `bin/server_main` | [`cmd/server_main.go`](../cmd/server_main.go) | Go API 服务 |
+| `bin/admin_server` | [`cmd/admin_server.go`](../cmd/admin_server.go) | Go 管理服务 |
+| `bin/multirag_cli` | [`cmd/multirag_cli.go`](../cmd/multirag_cli.go) | CLI 客户端 |
+
+`cmd/` 下有多个 `main`，应逐文件构建，不能用 `go build ./cmd` 合并编译。
+`--go` 对三个产物均检查失败并返回非零状态。`GOPROXY` 可由环境覆盖。
+直接构建到自有临时目录时，使用同一组入口：
+
+```bash
+mkdir -p /absolute/path/to/owned-bin
+CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/server_main ./cmd/server_main.go
+CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/admin_server ./cmd/admin_server.go
+CGO_ENABLED=1 go build -o /absolute/path/to/owned-bin/multirag_cli ./cmd/multirag_cli.go
+```
+
+`./build.sh --clean` 删除当前 checkout 的三个 binary 和 native 构建目录。
+仅在确认它们属于本任务时执行，避免清理共享工作目录中的他人产物。
+
+### 本地服务与 CLI
+
+运行服务前先准备独立数据库、Redis、文档引擎、对象存储和真实分词字典，配置与
+本节下方的定向验证约定一致。Go 服务会初始化数据库等资源，
+不要指向生产库或其他任务的测试资源。
+
+Go 服务默认从 `./configs/service_conf.yaml`、当前目录或 `/etc/multirag/` 查找配置；
+字段映射和端口变换以 [`internal/server/config.go`](../internal/server/config.go) 为准。
+管理服务支持 `--config` 指定私有配置，API 服务支持 `--port` 覆盖端口。
+确认生效配置后，在两个终端从仓库根目录分别启动：
+
+```bash
+./bin/admin_server
+```
+
+```bash
+./bin/server_main
+```
+
+API 服务与管理服务通过心跳通信。端口由配置决定；CLI 默认地址为 `127.0.0.1:9380`，
+连接 Go 实例时应显式传入其实际端口，例如独立配置的 `9384`：
+
+```bash
+./bin/multirag_cli --help
+./bin/multirag_cli --host 127.0.0.1:9384
+```
+
+在交互模式中用 `\?` 查看命令、`\q` 退出。登录现有测试用户后，先检查本租户资源：
+
+```sql
+LOGIN USER 'developer@example.com';
+LIST AVAILABLE PROVIDERS;
+LIST PROVIDERS;
+LIST DATASETS;
+```
+
+登录命令会提示输入密码。自动化可通过 `--config /absolute/path/to/private-multirag.yml`
+读取私有连接配置（格式见 CLI `--help`）；该文件放在仓库外并设为 `0600`，不提交凭据。
+API token 与用户名/密码是两种互斥认证方式。CLI 也支持单条 SQL 命令和 Context Engine
+命令，详见 [CLI README](../internal/cli/README.md)。
+
+模型实例已配置且测试用户有权使用后，可以生成 embedding 或重排文档；以下模型名和
+实例名需替换为本租户实际配置。`dimension 0` 使用模型默认维度，正数必须是模型支持的
+维度。`top 0` 保留全部重排结果，负数参数会被拒绝。
+
+```sql
+EMBED TEXT 'hello' 'world' WITH 'nomic-embed-text@local@LM-Studio' DIMENSION 0;
+RERANK QUERY 'what is rag' DOCUMENT 'retrieval augmented generation' 'a weather report' WITH 'rerank@dev@zhipu-ai' TOP 2;
+```
+
+Go embedding 驱动和绑定模型统一使用 `Embed`，返回 `[]EmbeddingData`；每项含输入
+`index` 和 `embedding` 向量。`POST /api/v1/embeddings` 的 `data` 使用这一结构，
+CLI 输出每项的 `index` 与从向量长度计算的 `dimension`。输入顺序通过全局 index 保持；
+结果缺失、重复、越界或维度不一致会失败，零分量合法。
+
+Web 是独立仓库，本指南不配置前端代理。需要 Web 联调时，按实际 Web 仓约定与当前
+后端契约验证；Go 构建成功只证明编译和链接，不能作为 Python 服务或 Web 验收证据。
+
+### 定向验证
 
 分词测试从 `RAG_DICT_PATH` 读取资源路径，未设置时使用仓库根下 `resource/`；
 路径应包含 `rag/huqie.txt`、`rag/pos-id.def`、`opencc/` 与完整 `wordnet/`。
@@ -87,7 +200,7 @@ go build ./internal/...
 go vet ./internal/...
 ```
 
-`cmd/` 包含多个独立 main，应逐个构建。Python integration 若卡住，先用
+Python integration 若卡住，先用
 `pytest -vv -o faulthandler_timeout=60 <selected-test>` 获取停顿位置并隔离复现；
 不要启动多份全套测试，或终止其他任务的进程。单例通过不等于全套通过。
 
