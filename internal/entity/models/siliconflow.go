@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ type SiliconFlowModel struct {
 // NewSiliconFlowModel creates a new SiliconFlow model instance.
 func NewSiliconFlowModel(baseURL map[string]string, urlSuffix URLSuffix) *SiliconFlowModel {
 	return &SiliconFlowModel{
-		BaseURL:   baseURL,
+		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
@@ -381,7 +382,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 
 // Encode encodes a list of texts into embeddings
 func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig)
+	return encodeHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig)
 }
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
