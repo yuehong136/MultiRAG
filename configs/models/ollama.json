@@ -1,6 +1,10 @@
 {
   "name": "ollama",
-  "url_suffix": {"chat": "api/chat", "models": "api/tags"},
+  "url_suffix": {
+    "chat": "api/chat",
+    "models": "api/tags",
+    "embedding": "v1/embeddings"
+  },
   "class": "local",
   "models": []
 }

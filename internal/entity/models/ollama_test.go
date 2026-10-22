@@ -77,7 +77,7 @@ func TestOllamaChatDiscoveryAndStreaming(t *testing.T) {
 	}
 	name := "m"
 	if _, err := driver.Encode(&name, []string{"q"}, nil, nil); err == nil {
-		t.Fatal("embedding stub succeeded")
+		t.Fatal("unconfigured embedding endpoint succeeded")
 	}
 	if _, err := NewRerankModel(driver, &name, nil).Rerank("q", []string{"d"}); err == nil {
 		t.Fatal("rerank stub succeeded")
