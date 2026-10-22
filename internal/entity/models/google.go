@@ -281,8 +281,8 @@ func (t googleResponseTransport) RoundTrip(request *http.Request) (*http.Respons
 		Embeddings []*struct {
 			Values []*float32 `json:"values"`
 		} `json:"embeddings"`
-		Models []map[string]json.RawMessage `json:"models"`
-		Error  json.RawMessage              `json:"error"`
+		Models *[]map[string]json.RawMessage `json:"models"`
+		Error  json.RawMessage               `json:"error"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || bytes.Equal(bytes.TrimSpace(body), []byte("null")) || len(payload.Error) != 0 && string(payload.Error) != "null" {
 		return nil, errors.New("invalid Google response")
@@ -290,9 +290,15 @@ func (t googleResponseTransport) RoundTrip(request *http.Request) (*http.Respons
 	if t.embeddings && len(payload.Embeddings) == 0 {
 		return nil, errors.New("invalid Google embedding response")
 	}
-	for _, model := range payload.Models {
-		if model == nil {
-			return nil, errors.New("invalid Google model response")
+	if !t.embeddings {
+		if payload.Models == nil {
+			return nil, errors.New("missing Google model inventory")
+		}
+		for _, model := range *payload.Models {
+			var name string
+			if err := json.Unmarshal(model["name"], &name); err != nil || strings.TrimSpace(name) == "" {
+				return nil, errors.New("invalid Google model response")
+			}
 		}
 	}
 	for _, embedding := range payload.Embeddings {

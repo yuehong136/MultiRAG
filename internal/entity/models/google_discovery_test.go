@@ -121,7 +121,12 @@ func TestGoogleConstructorOwnsURLMap(t *testing.T) {
 }
 
 func TestGoogleDiscoveryRejectsMalformedResponses(t *testing.T) {
-	for _, body := range []string{`null`, `42`, `{"models":"invalid"}`, `{"models":[null]}`, `{"error":{"code":403,"message":"fixture-key private error"}}`} {
+	for _, body := range []string{
+		`null`, `42`, `{}`, `{"models":null}`, `{"models":"invalid"}`, `{"models":[null]}`,
+		`{"models":[{}]}`, `{"models":[{"name":null}]}`, `{"models":[{"name":""}]}`,
+		`{"models":[{"name":"  \t "}]}`, `{"models":[{"name":42}]}`,
+		`{"error":{"code":403,"message":"fixture-key private error"}}`,
+	} {
 		t.Run(body, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
@@ -130,6 +135,22 @@ func TestGoogleDiscoveryRejectsMalformedResponses(t *testing.T) {
 			if names != nil || err == nil || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "private error") {
 				t.Fatalf("bad listing succeeded or leaked: %v %v", names, err)
 			}
+			if err := driver.CheckConnection(&APIConfig{APIKey: stringPtr("fixture-key")}); err == nil || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "private error") {
+				t.Fatalf("bad inventory passed connection check or leaked: %v", err)
+			}
 		})
+	}
+}
+
+func TestGoogleDiscoveryAcceptsExplicitEmptyInventory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"models":[]}`) }))
+	defer server.Close()
+	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
+	api := &APIConfig{APIKey: stringPtr("fixture-key")}
+	if names, err := driver.ListModels(api); err != nil || names == nil || len(names) != 0 {
+		t.Fatalf("valid empty inventory: %v %v", names, err)
+	}
+	if err := driver.CheckConnection(api); err != nil {
+		t.Fatal(err)
 	}
 }
