@@ -58,7 +58,7 @@ func TestVLLMModelChatAndDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := driver.Encode(&name, []string{"q"}, config, nil); err == nil {
-		t.Fatal("unsupported embedding succeeded")
+		t.Fatal("unconfigured embedding endpoint succeeded")
 	}
 }
 

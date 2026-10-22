@@ -223,3 +223,8 @@ func (v *VLLMModel) CheckConnection(config *APIConfig) error {
 	}
 	return nil
 }
+
+// Encode uses the same OpenAI-compatible namespace as vLLM chat and discovery.
+func (v *VLLMModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+	return encodeHTTPWithConfig(v.httpClient, v.BaseURL, v.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
+}
