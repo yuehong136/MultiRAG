@@ -458,7 +458,14 @@ class ComponentBase(ABC):
             v = self.get_param(var)
             if v is None:
                 continue
-            if isinstance(v, str) and self._canvas.is_reff(v):
+            # Graph.is_reff also accepts bare references and only checks the
+            # component before '@'. Check mixed templates first so a suffix
+            # cannot accidentally become part of the output field name.
+            if isinstance(v, str) and re.search(self.variable_ref_patt, v) and not re.fullmatch(self.variable_ref_patt, v):
+                elements = self.get_input_elements_from_text(v)
+                kv = {k: e.get("value", "") for k, e in elements.items()}
+                self.set_input_value(var, self.string_format(v, kv))
+            elif isinstance(v, str) and self._canvas.is_reff(v):
                 self.set_input_value(var, self._canvas.get_variable_value(v))
             else:
                 self.set_input_value(var, v)
