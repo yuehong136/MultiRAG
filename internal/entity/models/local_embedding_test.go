@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func localEmbeddingProviders() []string { return []string{"vllm", "ollama"} }
+func localEmbeddingProviders() []string { return []string{"vllm", "ollama", "LM-Studio"} }
 
 func localEmbeddingDriver(t *testing.T, provider string, urls map[string]string) ModelDriver {
 	t.Helper()

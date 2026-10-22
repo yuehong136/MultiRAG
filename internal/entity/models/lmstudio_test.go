@@ -286,7 +286,6 @@ func TestLMStudioInputIsolationAndUnsupported(t *testing.T) {
 	}
 	name, q := "m", "q"
 	for _, call := range []func() error{
-		func() error { _, e := driver.Encode(&name, []string{q}, nil, nil); return e },
 		func() error { _, e := NewRerankModel(driver, &name, nil).Rerank(q, []string{q}); return e },
 		func() error { _, e := driver.Balance(nil); return e },
 		func() error { return driver.CheckConnection(nil) },
