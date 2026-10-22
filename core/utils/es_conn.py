@@ -320,23 +320,24 @@ class ESConnection(ESConnectionBase):
         for _ in range(ATTEMPT_TIME):
             try:
                 res = []
-                r = self.es.bulk(index=index_name, operations=operations, refresh=False, timeout="60s")
-                if re.search(r"False", str(r["errors"]), re.IGNORECASE):
+                r = self.es.bulk(index=index_name, operations=operations, refresh="wait_for", timeout="60s")
+                if r["errors"] is False:
                     return res
 
                 for item in r["items"]:
                     for action in ["create", "delete", "index", "update"]:
                         if action in item and "error" in item[action]:
                             res.append(str(item[action]["_id"]) + ":" + str(item[action]["error"]))
-                return res
-            except ConnectionTimeout:
+                return res or ["Elasticsearch bulk write failed without item errors"]
+            except ConnectionTimeout as e:
+                res = [str(e)]
                 self.logger.exception("ES request timeout")
                 time.sleep(3)
                 self._connect()
                 continue
             except Exception as e:
-                res.append(str(e))
                 self.logger.warning("ESConnection.insert got exception: " + str(e))
+                return [str(e)]
 
         return res
 

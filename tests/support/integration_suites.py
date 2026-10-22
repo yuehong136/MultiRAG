@@ -145,6 +145,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_es_os_doc_visibility.py":
+            required.update(("elasticsearch", "opensearch"))
+            continue
         if path.name == "test_es_conn_keyword_ids.py":
             required.add("elasticsearch")
             continue

@@ -326,23 +326,22 @@ class OSConnection(DocStoreConnection):
         for _ in range(ATTEMPT_TIME):
             try:
                 res = []
-                r = self.os.bulk(index=(indexName), body=operations, refresh=False, timeout=60)
-                if re.search(r"False", str(r["errors"]), re.IGNORECASE):
+                r = self.os.bulk(index=(indexName), body=operations, refresh="wait_for", timeout=60)
+                if r["errors"] is False:
                     return res
 
                 for item in r["items"]:
                     for action in ["create", "delete", "index", "update"]:
                         if action in item and "error" in item[action]:
                             res.append(str(item[action]["_id"]) + ":" + str(item[action]["error"]))
-                return res
+                return res or ["OpenSearch bulk write failed without item errors"]
             except Exception as e:
-                res.append(str(e))
+                res = [str(e)]
                 logger.warning("OSConnection.insert got exception: " + str(e))
-                res = []
                 if re.search(r"(Timeout|time out)", str(e), re.IGNORECASE):
-                    res.append(str(e))
                     time.sleep(3)
                     continue
+                return res
         return res
 
     def update(self, condition: dict, newValue: dict, indexName: str, knowledgebaseId: str) -> bool:

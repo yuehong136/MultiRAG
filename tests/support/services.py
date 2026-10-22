@@ -53,6 +53,17 @@ def probe(service: str, configs: dict[str, Any]) -> str | None:
             if not version.startswith("8."):
                 raise ValueError("Metadata integration requires Elasticsearch 8")
             return version
+    if service == "opensearch":
+        from opensearchpy import OpenSearch
+
+        url = os.environ.get("METADATA_TEST_OS_URL")
+        if not url:
+            raise ValueError("Missing disposable metadata OS listener")
+        with OpenSearch(url, timeout=3) as client:
+            version = str(client.info()["version"]["number"])
+            if not version.startswith("2."):
+                raise ValueError("Metadata integration requires OpenSearch 2")
+            return version
     conf = configs.get(service)
     if not conf:
         raise ValueError(f"Missing configuration section: {service}")
@@ -145,6 +156,7 @@ class ServiceManager:
                 or service == "milvus"
                 or (service == "infinity" and os.environ.get("INFINITY_TEST_URI"))
                 or (service == "elasticsearch" and os.environ.get("METADATA_TEST_ES_URL"))
+                or (service == "opensearch" and os.environ.get("METADATA_TEST_OS_URL"))
             ):
                 # Never include exception text: drivers often include credentials.
                 raise ServiceError(f"Test service {service} is not ready ({type(exc).__name__}); provision it or enable Testcontainers") from None
@@ -192,6 +204,18 @@ class ServiceManager:
 
             container = DockerContainer(images[service]).with_exposed_ports(23817)
             port = 23817
+        elif service == "opensearch":
+            from testcontainers.core.container import DockerContainer
+
+            container = (
+                DockerContainer("opensearchproject/opensearch:2.19.6")
+                .with_exposed_ports(9200)
+                .with_env("discovery.type", "single-node")
+                .with_env("DISABLE_SECURITY_PLUGIN", "true")
+                .with_env("DISABLE_INSTALL_DEMO_CONFIG", "true")
+                .with_env("OPENSEARCH_JAVA_OPTS", "-Xms512m -Xmx512m")
+            )
+            port = 9200
         elif service == "elasticsearch":
             from testcontainers.core.container import DockerContainer
 
@@ -210,9 +234,10 @@ class ServiceManager:
         self.stack.callback(container.stop)
         container.start()
         host, mapped_port = container.get_container_host_ip(), int(container.get_exposed_port(port))
-        if service == "elasticsearch":
-            self.stack.callback(os.environ.pop, "METADATA_TEST_ES_URL", None)
-            os.environ["METADATA_TEST_ES_URL"] = f"http://{host}:{mapped_port}"
+        if service in {"elasticsearch", "opensearch"}:
+            key = "METADATA_TEST_ES_URL" if service == "elasticsearch" else "METADATA_TEST_OS_URL"
+            self.stack.callback(os.environ.pop, key, None)
+            os.environ[key] = f"http://{host}:{mapped_port}"
             return
         if service == "postgresql":
             conf.update(host=host, port=mapped_port)
