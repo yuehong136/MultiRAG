@@ -51,13 +51,42 @@ uv run --no-sync pytest tests/unit/test_agent_tool_result_contract.py tests/unit
 
 构造器保留 `key`、`model_name`、`base_url` 与扩展关键字的兼容入口；Qwen 原生 SDK
 沿用自己的端点配置。显式模型名原样传递，默认及 `None` 仍回退到 `gte-rerank`。
-成功响应按结果 `index` 写回与输入等长的浮点数组，未返回项保留零，返回值仍为
+成功响应按结果 `index` 写回与输入等长的浮点数组，合法零分保持零；缺失、重复、越界
+索引和缺失、非有限分数均报错，返回值仍为
 `(scores, used_tokens)`，供 `LLMBundle.similarity` 与检索混合排序消费。
 
-受控回归覆盖注册类、真实 SDK 参数构造及响应转换、乱序/部分结果映射、token 返回和
-含 `text` 的失败响应传播；网络边界使用替身，没有证明真实云端可用性。
-当前默认模型可用性、请求超时、没有 `text` 的错误响应及畸形成功结果处理仍需分别评估。
+每次 SDK 请求使用 30 秒 `request_timeout`；失败响应优先读取 `text`、`message`、`code`，
+没有 `text` 时仍保留供应商错误。空查询或空文档不发请求，返回等长零数组与零 token。
+受控回归覆盖注册类、真实 SDK 参数构造及响应转换、乱序/零分映射、token 返回和错误传播，
+没有证明真实云端或当前默认模型可用性。
 
 ```sh
 uv run --no-sync pytest tests/unit/test_qwen_rerank_contract.py -q
+```
+
+## Bedrock 图像描述
+
+`CvModel["Bedrock"]` 注册 [`cv.py`](./cv.py) 的 `BedrockCV`，供租户模型服务、
+`LLMBundle.describe_with_prompt` 和文档解析调用。通过 LiteLLM 的 `bedrock/` 模型前缀
+传递图像消息，返回描述和实际 token 用量；空描述或供应商失败报错。
+
+凭据沿用添加模型接口保存的 JSON 对象及 `is_tools` 信封。`access_key_secret` 使用
+`bedrock_ak` / `bedrock_sk`；`iam_role` 用 `aws_role_arn` 调用 STS；Web 的 `assume_role`
+选项使用 AWS 默认凭据链。`bedrock_region` 缺省或为空时为 `us-east-1`。
+STS 凭据按调用获取并关闭客户端，避免持有过期 session token。
+
+## HTTP 超时与重排错误
+
+活动模型模块中的直接 HTTP 调用均有有界超时：embedding / rerank 通常 30 秒，
+视觉与音频 60 秒；智谱 embedding 保留原有 120 秒。TTS 流结束、报错或消费者关闭
+生成器后关闭响应。超时仍由既有异常或显式 `**ERROR**` 合同向调用方报告。
+
+HTTP 重排先检查状态码，再严格校验与输入一一对应的索引及有限数值分数；供应商错误
+和不完整结果不作为零分成功。HuggingFace 支持带/不带协议、路径前缀和完整 `/rerank`
+端点，8 条一批并按各批局部索引还原输入顺序；后批失败立即终止。
+Jina 子类使用各自配置的端点；302.AI 实现同样的重排返回合同。
+
+```sh
+uv run --no-sync pytest tests/unit/test_bedrock_cv.py tests/unit/test_llm_http_timeouts.py tests/unit/test_rerank_robustness.py -q
+make integration TESTS=tests/integration/test_llm_tool_capability.py::test_saved_bedrock_and_huggingface_models_use_registered_consumers
 ```

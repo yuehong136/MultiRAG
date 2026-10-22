@@ -36,7 +36,7 @@ def test_registered_qwen_rerank_sdk_contract(
         calls.append(kwargs)
         return DashScopeAPIResponse(
             status_code=HTTPStatus.OK,
-            output={"results": [{"index": 2, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.3}]},
+            output={"results": [{"index": 2, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.3}, {"index": 1, "relevance_score": 0.0}]},
             usage={"total_tokens": 17},
         )
 
@@ -46,7 +46,7 @@ def test_registered_qwen_rerank_sdk_contract(
     assert provider is QWenRerank
     assert provider.__module__ == "core.llm.rerank"
     model = provider("unit-test-key", model_name, base_url="https://unused.invalid", extra="compatible")
-    texts = ["first", "unreturned", "third"]
+    texts = ["first", "zero score", "third"]
     scores, tokens = model.similarity("query", texts)
 
     assert len(calls) == 1
@@ -56,6 +56,7 @@ def test_registered_qwen_rerank_sdk_contract(
     assert call["input"] == {"query": "query", "documents": texts}
     assert call["top_n"] == len(texts)
     assert call["task"] == "text-rerank"
+    assert call["request_timeout"] == 30.0
     assert "base_url" not in call
     assert "extra" not in call
     if return_documents is None:
@@ -65,7 +66,7 @@ def test_registered_qwen_rerank_sdk_contract(
     np.testing.assert_array_equal(scores, [0.3, 0.0, 0.9])
     assert scores.dtype == np.dtype(float)
     assert tokens == 17
-    assert texts == ["first", "unreturned", "third"]
+    assert texts == ["first", "zero score", "third"]
 
 
 def test_qwen_rerank_constructor_keeps_default_and_positional_base_url() -> None:
