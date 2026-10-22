@@ -1114,7 +1114,7 @@ class VolcEngineEmbed(Base):
     _FACTORY_NAME = "VolcEngine"
     _supports_multimodal = True  # VolcEngine supports multimodal embeddings (images, videos)
 
-    def __init__(self, key, model_name, base_url="https://ark.cn-beijing.volces.com/api/v3", **kwargs):
+    def __init__(self, key: str | dict[str, Any], model_name: str, base_url: str | None = "https://ark.cn-beijing.volces.com/api/v3", **kwargs: Any) -> None:
         base_url = base_url or "https://ark.cn-beijing.volces.com/api/v3"
         key_payload: dict[str, Any]
         if isinstance(key, str):
@@ -1137,7 +1137,11 @@ class VolcEngineEmbed(Base):
 
         self.base_url = base_url.rstrip("/")
         self.multimodal_endpoint = append_path_segment(self.base_url, "embeddings/multimodal")
-        self.timeout = kwargs.get("timeout", 30)
+        self.timeout = kwargs.get("timeout")
+        if self.timeout is None:
+            self.timeout = 30
+        if isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float)) or not np.isfinite(self.timeout) or self.timeout <= 0:
+            raise ValueError("VolcEngine timeout must be a finite positive number")
         self.default_dimensions = kwargs.get("dimensions") or key_payload.get("dimensions")
         self.default_encoding_format = kwargs.get("encoding_format") or key_payload.get("encoding_format") or "float"
         self.session = requests.Session()

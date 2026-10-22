@@ -124,3 +124,17 @@ def test_fish_audio_timeout_and_context_cleanup(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(httpx.ReadTimeout, match="controlled timeout"):
         next(stream)
     assert closed == [True]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), True, "30"])
+def test_volcengine_rejects_unbounded_or_invalid_timeout(timeout: Any) -> None:
+    with pytest.raises(ValueError, match="finite positive"):
+        EmbeddingModel["VolcEngine"]('{"ark_api_key":"x"}', "model", timeout=timeout)
+
+
+def test_volcengine_none_timeout_uses_bounded_default() -> None:
+    model = EmbeddingModel["VolcEngine"]('{"ark_api_key":"x"}', "model", timeout=None)
+    try:
+        assert model.timeout == 30
+    finally:
+        model.session.close()
