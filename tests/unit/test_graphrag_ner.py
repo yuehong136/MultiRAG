@@ -91,3 +91,15 @@ def test_method_defaults_language_and_reranker_schema() -> None:
         assert SearchDatasetsRequest(question="q", dataset_ids=["a"], tenant_rerank_id=value).tenant_rerank_id == value
     with pytest.raises(ValidationError):
         SearchDatasetsRequest(question="q", dataset_ids=["a"], tenant_rerank_id="model-name")
+
+
+async def test_source_recovery_preserves_named_entity_case_and_type() -> None:
+    ext = ner.GraphExtractor(NoChat(), "English", entity_types=["organization", "geo"])
+    text = "I ate an apple while Apple acquired Beats in California."
+    entities, relations = await ext("doc", [text])
+    records = {entity["entity_name"]: entity for entity in entities}
+    assert records["APPLE"]["entity_type"] == "ORGANIZATION"
+    assert "BEATS" not in records  # The locked model labels Beats as NORP/category.
+    assert records["CALIFORNIA"]["entity_type"] == "GEO"
+    assert any({edge["src_id"], edge["tgt_id"]} == {"APPLE", "CALIFORNIA"} for edge in relations)
+    assert all(edge["description"] == text and edge["source_id"] == ["doc"] for edge in relations)

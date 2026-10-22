@@ -27,13 +27,19 @@ class NoChat:
 @pytest.mark.parametrize(
     ("language", "content", "expected"),
     [
-        ("English", "Barack Obama visited Microsoft in London.", {"BARACK OBAMA", "MICROSOFT", "LONDON"}),
+        ("English", "I ate an apple while Apple acquired Beats in California.", {"APPLE", "CALIFORNIA"}),
         ("Chinese", "张三在北京大学工作。李四在上海工作。", {"北京大学", "上海"}),
     ],
 )
 async def test_real_ner_config_graph_storage_and_retrieval(graphrag_api: dict[str, Any], language: str, content: str, expected: set[str]) -> None:
     env, kb, doc = graphrag_api, graphrag_api["kb"], graphrag_api["documents"][0]
-    cfg = {"use_graphrag": True, "method": "ner", "resolution": False, "community": False, "entity_types": ["organization", "person", "geo", "event", "category"]}
+    cfg = {
+        "use_graphrag": True,
+        "method": "ner",
+        "resolution": False,
+        "community": False,
+        "entity_types": ["organization", "geo"] if language == "English" else ["organization", "person", "geo", "event", "category"],
+    }
     response = request_api(env, "PUT", f"/datasets/{kb}", credential=env["jwt"][0], payload={"parser_config": {"graphrag": cfg}})
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
     reload = request_api(env, "GET", f"/datasets/{kb}", credential=env["jwt"][0]).json()
@@ -52,6 +58,9 @@ async def test_real_ner_config_graph_storage_and_retrieval(graphrag_api: dict[st
     assert result["ok_docs"] == [doc] and not result["failed_docs"], result
     graph = await utils.get_graph(env["tenant"], kb)
     assert graph is not None and expected <= set(graph.nodes) and graph.number_of_edges() > 0
+    if language == "English":
+        assert graph.nodes["APPLE"]["entity_type"].lower() == "organization"
+        assert graph.has_edge("APPLE", "CALIFORNIA")
     if language == "Chinese":
         assert "北京 大学" not in graph.nodes
     rows = native_rows(env)

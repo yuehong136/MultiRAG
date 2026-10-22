@@ -340,9 +340,11 @@ class GraphExtractor(Extractor):
             for keyword in ner_all_keywords(sentence):
                 # Stacking inserts spaces between tokens. Recover the actual
                 # source span (Chinese has no inter-word spaces), so the NER
-                # and keyword paths do not create duplicate identities.
+                # and keyword paths do not create duplicate identities. Keep
+                # original case: an earlier ordinary "apple" must not replace
+                # a later named "Apple" and lose its NER label.
                 pattern = r"\s*".join(re.escape(word) for word in keyword.split())
-                match = re.search(pattern, sentence.text, re.IGNORECASE) if pattern else None
+                match = re.search(pattern, sentence.text) if pattern else None
                 if match:
                     keywords.add(match.group().strip())
             for keyword in sorted(keywords):
