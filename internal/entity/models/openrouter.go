@@ -43,7 +43,7 @@ func openRouterChatBody(name string, messages []Message, config *ChatConfig, str
 func (o *OpenRouterModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
 	local, cancel := modelCallConfig(api)
 	defer cancel()
-	return encodeHTTP(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local)
+	return encodeHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local, config)
 }
 
 func (o *OpenRouterModel) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {

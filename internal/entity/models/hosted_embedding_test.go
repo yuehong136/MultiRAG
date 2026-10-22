@@ -20,7 +20,7 @@ func TestBaiduEmbeddingsHTTP(t *testing.T)  { testHostedEmbeddingsHTTP(t, "Baidu
 func TestOpenAIEmbeddingsHTTP(t *testing.T) { testHostedEmbeddingsHTTP(t, "OpenAI") }
 
 func TestHostedEmbeddingDimensionsHTTP(t *testing.T) {
-	for _, provider := range []string{"OpenAI", "Baidu"} {
+	for _, provider := range []string{"OpenAI", "Baidu", "OpenRouter"} {
 		t.Run(provider, func(t *testing.T) {
 			for _, config := range []*EmbeddingConfig{nil, {}, {Query: true, Dimension: 2}} {
 				t.Run(fmt.Sprint(config), func(t *testing.T) {
