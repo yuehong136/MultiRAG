@@ -461,7 +461,7 @@ class ComponentBase(ABC):
             # Graph.is_reff also accepts bare references and only checks the
             # component before '@'. Check mixed templates first so a suffix
             # cannot accidentally become part of the output field name.
-            if isinstance(v, str) and re.search(self.variable_ref_patt, v) and not re.fullmatch(self.variable_ref_patt, v):
+            if isinstance(v, str) and re.search(self.variable_ref_patt, v) and (not re.fullmatch(self.variable_ref_patt, v) or v != v.strip()):
                 elements = self.get_input_elements_from_text(v)
                 kv = {k: e.get("value", "") for k, e in elements.items()}
                 self.set_input_value(var, self.string_format(v, kv))

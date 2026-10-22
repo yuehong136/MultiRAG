@@ -30,6 +30,8 @@ def _component(value: Any) -> ComponentBase:
         ("{sys.query}@example.test", "Ada@example.test"),
         ("{UserFillUp:X@name}@example.test", "Ada@example.test"),
         ("{userfillup_test@name}@example.test", "Ada@example.test"),
+        (" {sys.query} ", " Ada "),
+        ("{UserFillUp:X@name} ", "Ada "),
         ("Question from {UserFillUp:X@name}: {sys.query}", "Question from Ada: Ada"),
         ("{env.flag}/{env.zero}/{env.empty}", "False/0/"),
         ("{sys.query}/{sys.query}", "Ada/Ada"),
