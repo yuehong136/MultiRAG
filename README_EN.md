@@ -1,612 +1,323 @@
-<div align="center">
-<h1>MultiRAG</h1>
-<p>Enterprise-grade backend engine for RAG, Agents, Workflows, and MCP</p>
-</div>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/readme-hero-dark.svg">
+    <img src="./.github/assets/readme-hero-light.svg" alt="MultiRAG — Turn knowledge into action. An open backend for RAG, agents, workflows and MCP." width="100%">
+  </picture>
+</p>
+
+<h1 align="center">MultiRAG</h1>
 
 <p align="center">
-  <a href="./README.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-DBEDFA"></a>
-  <a href="./README_EN.md"><img alt="English" src="https://img.shields.io/badge/English-DFE0E5"></a>
+  <strong>Turn your organization's knowledge into action.</strong><br>
+  Build your AI backend, from document understanding and retrieval to agents and tools.
 </p>
 
 <p align="center">
-  <a href="https://github.com/yuehong136/MultiRAG/releases/latest">
-    <img src="https://img.shields.io/github/v/release/yuehong136/MultiRAG?color=2e6cc4&label=release" alt="Latest Release">
-  </a>
-  <a href="https://github.com/yuehong136/MultiRAG/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-Apache--2.0-4c7ed8" alt="License">
-  </a>
-  <a href="https://www.python.org/downloads/release/python-3120/">
-    <img src="https://img.shields.io/badge/python-3.12%2B-3776ab" alt="Python 3.12+">
-  </a>
-  <a href="./pyproject.toml">
-    <img src="https://img.shields.io/badge/version-0.9.9-2f9e44" alt="Version 0.9.9">
-  </a>
+  <a href="./pyproject.toml"><img src="https://img.shields.io/badge/version-0.9.9-176B52?style=flat-square&amp;labelColor=202D29" alt="Project version 0.9.9"></a>
+  <a href="./pyproject.toml"><img src="https://img.shields.io/badge/Python-3.12%20%7C%203.13-176B52?style=flat-square&amp;labelColor=202D29" alt="Python 3.12 / 3.13"></a>
+  <a href="./api/apps/__init__.py"><img src="https://img.shields.io/badge/API-FastAPI-176B52?style=flat-square&amp;labelColor=202D29" alt="FastAPI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-176B52?style=flat-square&amp;labelColor=202D29" alt="Apache 2.0 license"></a>
 </p>
 
 <p align="center">
-  <a href="#-what-is-multirag">Overview</a> |
-  <a href="#-release-focus">Release Focus</a> |
-  <a href="#-core-capabilities">Capabilities</a> |
-  <a href="#self-hosting">Self-Hosting</a> |
-  <a href="#-development-from-source">Development</a> |
-  <a href="#-api-and-documentation">API & Docs</a>
+  <a href="./README.md">简体中文</a> · <strong>English</strong>
 </p>
 
-<details open>
-<summary><b>Table of Contents</b></summary>
+<p align="center">
+  <a href="#self-hosting">Quick start</a> ·
+  <a href="#capabilities">Features</a> ·
+  <a href="#api">API</a> ·
+  <a href="#documentation">Docs</a> ·
+  <a href="#contributing">Contribute</a>
+</p>
 
-- [What is MultiRAG?](#-what-is-multirag)
-- [Release Focus](#-release-focus)
-- [Core Capabilities](#-core-capabilities)
-- [System Architecture](#-system-architecture)
-- [Project Structure](#-project-structure)
-- [Self-Hosting](#self-hosting)
-- [Docker Profiles](#-docker-profiles)
-- [Docker Image Build](#-docker-image-build)
-- [Configuration](#-configuration)
-- [Development from Source](#-development-from-source)
-- [API and Documentation](#-api-and-documentation)
-- [Typical Use Cases](#-typical-use-cases)
-- [Contributing](#-contributing)
-- [License](#-license)
+---
+
+<a id="overview"></a>
+
+## From data to context to action
+
+MultiRAG is an open-source AI backend for knowledge-intensive applications. It connects **document parsing → knowledge indexing → retrieval and answers → agents / workflows → tool calls** in a stack you can host and extend.
+
+Build a knowledge assistant with source citations, internal search with scheduled data sync, a document processing service, or an agent connected to business tools. Integrate through REST, SSE, OpenAI-compatible endpoints and MCP.
+
+This repository contains the **Python / FastAPI backend, background task executor and integrations**. The Web client is maintained separately.
+
+<a id="capabilities"></a>
+
+## One backend for knowledge and tools
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>01 / Understand documents</h3>
+      <p>Parse PDFs, Office files, images and audio. Use DeepDoc, OCR, layout analysis and table processing, with configurable PDF Vision, PaddleOCR and Docling paths.</p>
+      <a href="./deepdoc/README.md">Explore document parsing →</a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>02 / Retrieve useful context</h3>
+      <p>Combine RAG, GraphRAG, hybrid retrieval and reranking with document metadata filters, parent-child chunks and source citations for search and answers.</p>
+      <a href="./docs/knowledge-base-guide.md">Build a knowledge base →</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>03 / Orchestrate tasks</h3>
+      <p>Connect models, retrieval, branches and tools through agents, Canvas and workflows. Components include file inputs, loops and document generation.</p>
+      <a href="./agent/component">Browse agent components →</a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>04 / Connect through MCP</h3>
+      <p>Call external tools as an MCP client, or expose dataset discovery and retrieval through a separate MCP server. Use Streamable HTTP with legacy SSE compatibility.</p>
+      <a href="./mcp/README.md">Integrate MCP →</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>05 / Bring your data</h3>
+      <p>Connect code repositories, collaboration platforms, cloud drives, messaging systems and relational databases. Sync business content into your knowledge base.</p>
+      <a href="./common/data_source/README.md">Explore connectors →</a>
+    </td>
+    <td width="50%" valign="top">
+      <h3>06 / Build your application</h3>
+      <p>Use REST resources, streaming conversations, OpenAI-compatible completions and an admin CLI. Deploy with Docker Compose and choose your models, storage and retrieval engine.</p>
+      <a href="./docs/references/http_api_reference.md">Read the API reference →</a>
+    </td>
+  </tr>
+</table>
+
+### Compose your stack
+
+| Layer | Integrations |
+| :--- | :--- |
+| Models | OpenAI, Anthropic, Gemini, Tongyi, Ollama, OpenAI-compatible services and more; Chat, Embedding, Rerank, Vision, TTS and speech recognition |
+| Retrieval | Milvus, Infinity, Elasticsearch, OpenSearch, OceanBase, SeekDB |
+| Data sources | GitHub / GitLab / Bitbucket, Jira / Confluence / Notion / Moodle, Google Drive / SharePoint / Box / Dropbox / WebDAV, Slack / Teams / Gmail, MySQL / PostgreSQL and more |
+| Infrastructure | PostgreSQL, Redis / Valkey; object storage adapters for MinIO, S3, OSS, Azure and more |
+
+See [model adapters](./core/llm/README.md), the [model catalog](./configs/llm_factories.json), [connectors](./common/data_source) and [retrieval backends](./common/doc_store) for implementations. Models, parsers and external systems require their respective credentials, services or local resources.
+
+<a id="architecture"></a>
+
+## How it works
+
+```mermaid
+flowchart LR
+    S["Documents / enterprise data"] --> P["Parse and sync<br/>DeepDoc · OCR · chunks"]
+    P --> K["Knowledge retrieval<br/>Indexes · GraphRAG · rerank"]
+    K --> A["Application runtime<br/>Chat · Agent · Workflow"]
+    A --> API["REST / SSE<br/>OpenAI-compatible API"]
+    K --> MS["MCP server<br/>Discovery and retrieval"]
+    A <--> MC["MCP client<br/>External tools"]
+    M["Model adapters<br/>Chat · Embedding · Rerank · Vision"] -.-> P
+    M -.-> K
+    M -.-> A
+```
+
+The API handles requests; the background task executor handles parsing, indexing and sync jobs. The MCP server runs separately. A relational database, object storage and the selected retrieval engine provide persistence.
+
+<a id="self-hosting"></a>
+
+## Quick start
+
+### Self-host with Docker Compose
+
+Start with **4 CPU cores / 16 GB RAM**; complex OCR, large models or larger datasets need more resources. Use Docker 24+ and Docker Compose 2.26+. Building locally also requires [uv](https://docs.astral.sh/uv/). The default image build targets `linux/amd64`.
+
+**1. Get the code and prepare an image**
+
+```bash
+git clone https://github.com/yuehong136/MultiRAG.git
+cd MultiRAG
+
+# Download build resources, then build the dependency and application images
+./scripts/build_docker_image.sh multirag:latest
+```
+
+If you already have an application image, set `MULTIRAG_IMAGE` in [`docker/.env`](./docker/.env) to its tag. Pin a validated image version for deployment. Build resources and runtime embedding / rerank models are managed separately, as described below.
+
+**2. Configure services**
+
+Review ports, database credentials and object storage credentials in [`docker/.env`](./docker/.env). At startup, the container generates its configuration from [`service_conf.yaml.template`](./docker/service_conf.yaml.template). Model settings can be supplied through its `LLM_*`, `CHAT_MODEL_*` and related variables. Keep real credentials out of version control.
+
+**3. Start CPU + Milvus**
+
+```bash
+cd docker
+export DOC_ENGINE=milvus DEVICE=cpu
+
+docker compose --profile cpu --profile milvus config --quiet
+docker compose --profile cpu --profile milvus up -d
+docker logs --tail 100 -f multirag
+```
+
+This starts the application, PostgreSQL, Redis / Valkey, object storage and the Milvus services. The default API address is `http://localhost:8123`; change it with `SVR_HTTP_PORT`.
+
+**4. Check services, then configure a knowledge base**
+
+```bash
+# Connectivity: expect pong
+curl --fail-with-body http://localhost:8123/api/v1/system/ping
+
+# Readiness: inspect database, cache, storage and other component states
+curl --fail-with-body http://localhost:8123/api/v1/system/healthz
+```
+
+Configure Chat / Embedding models, then follow the [knowledge base guide](./docs/knowledge-base-guide.md) to create a dataset, import content, parse it and test retrieval. `ping` confirms API connectivity; knowledge answers also require configured models, background execution and ready indexes.
+
+<details>
+<summary><strong>Other retrieval engines, GPU and Apple Silicon</strong></summary>
+
+Keep `DOC_ENGINE` aligned with the enabled profile when switching retrieval engines:
+
+```bash
+DOC_ENGINE=infinity DEVICE=cpu \
+  docker compose --profile cpu --profile infinity up -d
+
+DOC_ENGINE=milvus DEVICE=gpu \
+  docker compose --profile gpu --profile milvus --profile tei-gpu up -d
+```
+
+Run these commands from `docker/`. The `.env` file derives default profiles from `DOC_ENGINE` and `DEVICE`; additional `--profile` flags are additive.
+
+On Apple Silicon, use the dedicated Compose file and enable x86_64 emulation in your container runtime:
+
+```bash
+DOC_ENGINE=milvus DEVICE=cpu \
+  docker compose -f docker-compose-macos.yml --profile cpu --profile milvus up -d
+```
+
+See [Docker deployment](./docker/README.md) for GPU, TEI, Sandbox, Channel, HTTPS and Linux kernel settings. For the separate Channel supervisor and its credentials, see [Channel operations](./api/channels/README.md).
 
 </details>
 
-## 📌 What is MultiRAG?
+<details>
+<summary><strong>Runtime models, image-only deployment and database upgrades</strong></summary>
 
-MultiRAG is an enterprise-oriented AI backend project built around RAG, GraphRAG, Workflow orchestration, Agents, and MCP. It provides an end-to-end service layer for document understanding, ingestion, retrieval, QA, tool invocation, workflow execution, and open APIs.
+The application image does not bundle runtime embedding / rerank models. `MULTIRAG_MODEL_DIR` mounts a host directory at `/root/.ragdatav`. Place each model under its basename, such as `models/bge-reranker-v2-m3/`. Prepare complete files before using local models; Compose mounts this directory read-only by default.
 
-It is suitable for building:
-
-- enterprise knowledge base QA and retrieval-augmented systems
-- multi-source ingestion and unified retrieval platforms
-- Agent and MCP-powered backend services
-- document understanding, table extraction, and multimodal retrieval services
-- OpenAI-compatible capability layers for downstream products
-
-## 🔥 Release Focus
-
-Current repository version is `v0.9.9`. Compared with older docs, the project scope is significantly broader:
-
-- MCP client/server support with FastMCP 3 and Streamable HTTP
-- stronger Agent, Workflow, and Workflow v2 execution chains
-- broader enterprise connectors and relational DB integrations
-- backend support across Milvus, Infinity, Elasticsearch, OpenSearch, OceanBase, and SeekDB
-- richer OpenAI-compatible responses, including references and metadata-related enhancements
-- deeper document understanding with OCR, table rotation correction, PDF Vision, and PaddleOCR flows
-
-## ✨ Core Capabilities
-
-### Retrieval and knowledge augmentation
-
-- Supports standard RAG, GraphRAG, SQL retrieval, hybrid recall, and reranking
-- Supports document metadata storage, filtering, references, and conditional retrieval
-- Exposes OpenAI-compatible response formats for easier SDK and client integration
-- Supports multiple chunking strategies, retrieval thresholds, and ranking controls
-
-### Deep document understanding
-
-- Supports PDF, DOCX, PPT/PPTX, Excel, images, and other common formats
-- Built on DeepDoc for OCR, layout analysis, tables, and figures
-- Includes PaddleOCR, PaddleOCR-VL, PDF Vision, and Docling-based flows
-- Handles parent-child chunking, page fixes, table orientation detection, and correction
-
-### Agents, workflows, and MCP
-
-- Agent component system with tools, memory, file inputs, and multi-step execution
-- Workflow and Workflow v2 orchestration modules
-- MCP in both client and server directions
-- Structured tool outputs, SSE side-channel logs, and timeout control
-
-### Data source connectivity
-
-- Covers GitHub, GitLab, Bitbucket
-- Covers Jira, Confluence, Notion, Airtable, Asana, Moodle
-- Covers Google Drive, SharePoint, Dropbox, Box, Seafile, WebDAV
-- Covers Slack, Teams, Discord, Gmail, IMAP, Zendesk
-- Supports relational data connectors (MySQL / PostgreSQL)
-
-### Model and platform integration
-
-- Integrates with OpenAI, Anthropic, Gemini, Tongyi, DashScope, Volcengine, Groq, Ollama, Vertex AI, and more
-- Supports Chat, Embedding, Rerank, Vision, TTS, and Sequence2Text
-- Supports provider routing, factory configuration, enable/disable controls, and OpenAI-compatible access
-- The [model catalog](./configs/llm_factories.json) includes DeepSeek v4 `deepseek-v4-flash` and `deepseek-v4-pro`, routed through the existing [Python LiteLLM adapter](./core/llm/chat.py). Availability requires credentials and validation in the target deployment; catalog entries do not establish live provider acceptance.
-
-### Operations and engineering
-
-- Built on FastAPI for service deployment and extension
-- Includes Docker Compose deployment, source-based development, Admin APIs, CLI, and tests
-- Ships with task executors, health checks, system settings, logging, and permission controls
-
-## 🔎 System Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                              MultiRAG                               │
-├─────────────────────────────────────────────────────────────────────┤
-│ API / Protocol Layer                                                │
-│  - FastAPI REST APIs                                                │
-│  - OpenAI-compatible APIs                                           │
-│  - MCP Server / SSE Stream                                          │
-│  - Admin APIs / CLI                                                 │
-├─────────────────────────────────────────────────────────────────────┤
-│ Core Engine Layer                                                   │
-│  - RAG / GraphRAG / SQL Retrieval                                   │
-│  - Agent / Workflow / Workflow v2                                   │
-│  - LLM / Embedding / Rerank / Vision / TTS                          │
-│  - Task Executor / Sync / Background Jobs                           │
-├─────────────────────────────────────────────────────────────────────┤
-│ Parsing and Integration Layer                                       │
-│  - DeepDoc / OCR / Table / PDF Vision                               │
-│  - Enterprise Data Source Connectors                                │
-│  - MCP Client / Tool Invocation                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│ Storage Layer                                                       │
-│  - Vector/Search: Milvus / Infinity / ES / OpenSearch               │
-│  - Database: PostgreSQL / MySQL / OceanBase / SeekDB                │
-│  - Object Storage: MinIO / S3 / OSS / Azure Blob                    │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## 🗂️ Project Structure
-
-The repository has evolved from a single RAG service into a broader AI backend platform:
-
-```text
-multirag/
-├── api/             # FastAPI entrypoint, routers, DB models, service layer
-├── core/            # RAG/retrieval/LLM/parsing/execution core logic
-├── deepdoc/         # Document parsing, OCR, layout analysis
-├── agent/           # Agent components, tools, templates, plugins
-├── workflow/        # Workflow v1
-├── workflow_v2/     # Workflow v2
-├── common/          # Shared utilities, connectors, storage adapters
-├── mcp/             # MCP client/server
-├── memory/          # Memory-related capabilities
-├── admin/           # Admin server and CLI
-├── docker/          # Docker Compose, Nginx, deployment configs
-├── docs/            # Documentation and API references
-├── tests/           # Unit and integration tests
-└── tools/           # Firecrawl, chatgpt-on-wechat, and integrations
-```
-
-### Module overview
-
-#### API layer
-
-- [`api/apps`](./api/apps) contains routes for KB, documents, conversations, LLMs, connectors, MCP, workflows, system settings, and admin features
-- Supports REST APIs, SSE streaming, and OpenAI-compatible endpoints
-
-#### Core engine layer
-
-- [`core/llm`](./core/llm) handles model adapters, embeddings, rerankers, vision, and TTS
-- [`core/nlp`](./core/nlp) handles retrieval, search, query processing, and algorithms
-- [`core/svr`](./core/svr) handles task execution, synchronization, and background jobs
-
-#### Parsing and integration layer
-
-- [`deepdoc`](./deepdoc) handles advanced document and image understanding
-- [`common/data_source`](./common/data_source) contains enterprise connectors and sync logic
-- [`common/doc_store`](./common/doc_store) contains vector/search backend adapters
-
-<a id="-quick-start"></a>
-<a id="self-hosting"></a>
-
-## 🚀 Self-Hosting
-
-Deploy the MultiRAG backend with Docker Compose below; see the [Docker guide](./docker/README.md) for deployment options.
-For local development, see [Development from Source](#-development-from-source); for integration, see [API and Documentation](#-api-and-documentation).
-
-### Requirements
-
-- CPU `>= 4 cores`
-- RAM `>= 16 GB` (32 GB recommended)
-- Docker `>= 24`
-- Docker Compose `>= v2.26`
-- Python `>= 3.12` (for source deployment)
-
-### Docker startup (recommended)
-
-1. On Linux, check `vm.max_map_count` (especially for ES/Milvus):
+Prepare models from the repository root:
 
 ```bash
-sysctl vm.max_map_count
-sudo sysctl -w vm.max_map_count=262144
+uv run --script download_deps.py \
+  --runtime-models-only --runtime-model-dir ./models
 ```
 
-2. Clone the repository:
+With external database, object storage and retrieval services already available, use [`docker-compose-standalone.yml`](./docker/docker-compose-standalone.yml). Mount a complete configuration with `MULTIRAG_CONFIG_FILE`; no source checkout is required. See [Docker deployment](./docker/README.md) for configuration and model mount details.
+
+Before upgrading an existing instance, follow the [database migration guide](./docs/database-migration.md) to prepare backups and check schema and migration state.
+
+</details>
+
+<a id="development"></a>
+
+## Develop from source
+
+Python **`>=3.12,<3.14`** is supported. The required uv range is declared in [`pyproject.toml`](./pyproject.toml).
 
 ```bash
-git clone git@github.com:yuehong136/MultiRAG.git
-cd MultiRAG
-```
-
-3. Start services:
-
-```bash
-cd docker
-
-# minimal deployment (postgres + redis + minio + multirag)
-docker compose --profile cpu up -d
-
-# add Milvus
-docker compose --profile cpu --profile milvus up -d
-
-# add Elasticsearch
-docker compose --profile cpu --profile elasticsearch up -d
-
-# add Infinity
-docker compose --profile cpu --profile infinity up -d
-
-# add OceanBase
-docker compose --profile cpu --profile oceanbase up -d
-
-# add TEI
-docker compose --profile cpu --profile milvus --profile tei-cpu up -d
-
-# GPU mode
-docker compose --profile gpu --profile milvus --profile tei-gpu up -d
-```
-
-4. Verify startup:
-
-```bash
-docker logs -f multirag
-```
-
-   _The following output confirms that the system has successfully started：_
-
-   ```bash
-                __  ___      ____  _ ____  ___   ______
-               /  |/  /_  __/ / /_(_) __ \/   | / ____/
-              / /|_/ / / / / / __/ / /_/ / /| |/ / __   v0.9.9
-             / /  / / /_/ / / /_/ / _, _/ ___ / /_/ /
-            /_/  /_/\__,_/_/\__/_/_/ |_/_/  |_\____/
-
-INFO:     Uvicorn running on http://0.0.0.0:8123 (Press CTRL+C to quit)
-   ```
-5. Configure model and storage settings:
-
-- edit [`configs/service_conf.yaml`](./configs/service_conf.yaml)
-- or use [`docker/service_conf.yaml.template`](./docker/service_conf.yaml.template)
-
-6. Default API endpoint: `http://IP_OF_YOUR_MACHINE:8123`
-
-### macOS (Apple Silicon)
-
-```bash
-cd docker
-docker compose -f docker-compose-macos.yml --profile cpu up -d
-```
-
-Recommendations:
-
-- enable Rosetta x86_64 emulation in Docker Desktop
-- or use OrbStack with x86_64 emulation
-
-For more combinations, see [`docker/README.md`](./docker/README.md).
-
-### External model directory and image-only deployment
-
-The MultiRAG image no longer bundles runtime embedding or rerank models. Set
-`MULTIRAG_MODEL_DIR` to any host directory; its in-container target always
-remains `/root/.ragdatav`:
-
-```bash
-mkdir -p /data/multirag/models
-MULTIRAG_MODEL_DIR=/data/multirag/models \
-  docker compose -f docker/docker-compose.yml --profile cpu --profile milvus up -d
-```
-
-Keep the model basenames flat under the mounted directory, and only provide the
-local models your deployment uses:
-
-```text
-/data/multirag/models/
-├── bge-large-zh-v1.5/
-├── bge-reranker-v2-m3/
-├── bce-embedding-base_v1/
-└── bce-reranker-base_v1/
-```
-
-To prepare a mount-ready model directory separately:
-
-```bash
-HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py \
-  --runtime-models-only --runtime-model-dir /data/multirag/models
-```
-
-If a server has only the `datav/multirag:latest` image and no source checkout,
-copy [`docker-compose-standalone.yml`](./docker/docker-compose-standalone.yml)
-to it. This Compose file does not mount repository `configs/`, `entrypoint.sh`,
-or source files:
-
-```bash
-mkdir -p /opt/multirag && cd /opt/multirag
-# Place docker-compose-standalone.yml in the current directory.
-MULTIRAG_IMAGE=datav/multirag:latest \
-MULTIRAG_CONFIG_FILE=/data/multirag/service_conf.yaml \
-MULTIRAG_MODEL_DIR=/data/multirag/models \
-docker compose -f docker-compose-standalone.yml up -d
-```
-
-The standalone Compose file mounts models read-only. Upload complete model
-directories before startup; otherwise Hugging Face fallback downloads cannot
-write to the mount. `MULTIRAG_CONFIG_FILE` may point to any host filename,
-including an existing `service_config.yaml`; Compose mounts it read-only at the
-application's fixed `/multirag/configs/service_conf.yaml` path and sets
-`SKIP_CONFIG_GENERATE=1` so the entrypoint cannot overwrite it. The optional
-[`docker/.env.standalone.example`](./docker/.env.standalone.example) is a
-starting template for launch parameters.
-
-## 📦 Docker Profiles
-
-### Default baseline services
-
-- `postgres`
-- `redis`
-- `minio`
-
-### Optional profiles
-
-| Profile | Description |
-|---|---|
-| `cpu` | MultiRAG CPU main service |
-| `gpu` | MultiRAG GPU main service |
-| `milvus` | Milvus vector DB |
-| `elasticsearch` | Elasticsearch |
-| `opensearch` | OpenSearch |
-| `infinity` | Infinity vector DB |
-| `oceanbase` | OceanBase vector DB |
-| `tei-cpu` | TEI CPU service |
-| `tei-gpu` | TEI GPU service |
-| `sandbox` | Sandbox executor |
-| `kibana` | Kibana |
-
-### Common combinations
-
-| Command | Scenario |
-|---|---|
-| `docker compose --profile cpu up -d` | Minimal setup |
-| `docker compose --profile cpu --profile milvus up -d` | Typical RAG deployment |
-| `docker compose --profile cpu --profile infinity up -d` | Infinity-based retrieval |
-| `docker compose --profile cpu --profile oceanbase up -d` | OceanBase-based setup |
-| `docker compose --profile gpu --profile milvus --profile tei-gpu up -d` | GPU + Milvus + TEI |
-
-## 🔧 Docker Image Build
-
-### Build the dependency resource image
-
-The application image no longer relies on the floating
-`infiniflow/ragflow_deps:latest` image. Download build resources such as Tika,
-NLTK, Chrome, DeepDoc, and uv 0.12.5 (excluding runtime embedding/rerank
-models), then build the local dependency resource image:
-
-```bash
-HF_ENDPOINT=https://hf-mirror.com uv run --script download_deps.py --china-mirrors
-docker build --platform linux/amd64 -f Dockerfile.deps \
-  -t multirag_deps:uv0.12.5-tika3.3.0-build-only .
-```
-
-Teams and CI can push this image to an internal registry and select it with
-`MULTIRAG_DEPS_IMAGE` when building the application image.
-
-### Build the application image
-
-```bash
-NEED_MIRROR=1 ./scripts/build_docker_image.sh datav/multirag:latest
-```
-
-The script downloads build resources, builds the build-only dependency image,
-builds the application image, and verifies both uv and an empty
-`/root/.ragdatav`. The equivalent manual application build is:
-
-```bash
-docker build --platform linux/amd64 --build-arg NEED_MIRROR=1 \
-  --build-arg MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.12.5-tika3.3.0-build-only \
-  -f Dockerfile -t datav/multirag:latest .
-```
-
-To use a dependency image from an internal registry:
-
-```bash
-docker build --platform linux/amd64 \
-  --build-arg MULTIRAG_DEPS_IMAGE=registry.example.com/multirag_deps:uv0.12.5-tika3.3.0-build-only \
-  -f Dockerfile -t multirag:latest .
-```
-
-### Rebuild and restart
-
-```bash
-cd docker
-docker compose --profile cpu down
-docker compose --profile cpu up -d
-```
-
-## ⚙️ Configuration
-
-### Configuration layout
-
-```text
-configs/
-├── service_conf.yaml
-├── llm_factories.json
-└── alembic/
-
-docker/
-├── .env
-├── docker-compose.yml
-├── docker-compose-base.yml
-├── docker-compose-macos.yml
-└── service_conf.yaml.template
-```
-
-### Main config files
-
-- [`docker/.env`](./docker/.env) Docker variables (ports, passwords, service switches)
-- [`configs/service_conf.yaml`](./configs/service_conf.yaml) backend runtime settings (DB, LLM, storage, retrieval)
-- [`docker/docker-compose.yml`](./docker/docker-compose.yml) main compose file
-- [`docker/docker-compose-base.yml`](./docker/docker-compose-base.yml) infrastructure compose file
-
-### Common ports
-
-| Service | Default Port | Env Variable |
-|---|---|---|
-| Nginx HTTP | 80 | `SVR_WEB_HTTP_PORT` |
-| Nginx HTTPS | 443 | `SVR_WEB_HTTPS_PORT` |
-| Main API | 8123 | `SVR_HTTP_PORT` |
-| Admin API | 8130 | `ADMIN_SVR_HTTP_PORT` |
-| PostgreSQL | 5432 | `POSTGRES_PORT` |
-| Redis | 6379 | `REDIS_PORT` |
-| MinIO | 9000/9001 | `MINIO_PORT` / `MINIO_CONSOLE_PORT` |
-| Milvus | 19530 | `MILVUS_PORT` |
-| Elasticsearch | 9200 | `ES_PORT` |
-
-### Key config example
-
-```yaml
-# configs/service_conf.yaml
-user_default_llm:
-  factory: "OpenAI"
-  api_key: "your-api-key"
-  base_url: "https://api.openai.com/v1"
-  default_models:
-    chat_model: "gpt-4o-mini"
-    embedding_model: "text-embedding-3-large"
-
-retrieval:
-  doc_engine: "milvus"  # milvus / infinity / elasticsearch / opensearch
-```
-
-### Backend switching checklist
-
-- ensure matching Docker profile and config are aligned
-- verify Alembic migrations after upgrades
-- run retrieval/write regression checks for OceanBase, SeekDB, and Infinity
-
-## 🔨 Development from Source
-
-### 1. Install dependencies
-
-```bash
-uv sync --python 3.12 --all-extras
+uv sync --python 3.12 --group dev --frozen
 uv run --script download_deps.py
-```
 
-### 2. Start infrastructure services
-
-```bash
-docker compose -f docker/docker-compose-base.yml up -d
-```
-
-Enable extra backends as needed:
-
-```bash
+# Start development dependencies; match the retrieval engine to DOC_ENGINE
+export DOC_ENGINE=milvus
 docker compose -f docker/docker-compose-base.yml --profile milvus up -d
-docker compose -f docker/docker-compose-base.yml --profile infinity up -d
-docker compose -f docker/docker-compose-base.yml --profile oceanbase up -d
 ```
 
-### 3. Start the backend service
+Put local connection settings in the ignored `configs/local.service_conf.yaml`, or use `MULTIRAG_<SECTION>__<FIELD>` environment variables. Source processes connect through host addresses and mapped ports. File overrides replace entire top-level sections; see [configuration and resources](./docs/development.md#配置与资源).
+
+From the repository root, start the API and task executor in separate terminals. Both processes need the same configuration and `DOC_ENGINE`:
 
 ```bash
-export PYTHONPATH=$(pwd)
-uv run python -m api.multirag_server
+# Terminal A: API
+uv run --no-sync python -m api.multirag_server
+
+# Terminal B: parsing, indexing and other background tasks
+uv run --no-sync python -m core.svr.task_executor
 ```
 
-### 4. Run tests
+| Directory | Responsibility |
+| :--- | :--- |
+| [`api/`](./api) | FastAPI routes, authentication, database models and services |
+| [`core/`](./core) / [`deepdoc/`](./deepdoc) | Model adapters, retrieval, parsing, GraphRAG and task execution |
+| [`agent/`](./agent) / [`workflow/`](./workflow) / [`workflow_v2/`](./workflow_v2) | Agent components and workflow execution |
+| [`common/`](./common) | Configuration, resource lifecycle, connectors and storage adapters |
+| [`mcp/`](./mcp) / [`admin/`](./admin) | MCP server, example clients, admin service and CLI |
+| [`docker/`](./docker) / [`tests/`](./tests) | Deployment configuration, validation and tests |
+
+Extend the Python backend for production work. The parallel Go implementations in `server/`, `cmd/` and `internal/` are currently inactive.
+
+<a id="api"></a>
+
+## API and MCP access
+
+### REST API
+
+Business routes are mounted under `/api/v1`. Current examples include:
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `GET` / `POST` | `/api/v1/datasets` | List / create knowledge bases |
+| `POST` | `/api/v1/datasets/search` | Search across knowledge bases |
+| `GET` | `/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks` | Read document chunks |
+| `PATCH` | `/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}` | Update a chunk |
+| `POST` | `/api/v1/chat/completions` | Message-based chat completion |
+| `POST` | `/api/v1/agents/chat/completions` | Execute an agent / Canvas |
+
+Use a valid API key for protected business endpoints:
 
 ```bash
-uv run pytest
+# Set MULTIRAG_API_KEY to your API key first
+curl --fail-with-body http://localhost:8123/api/v1/datasets \
+  -H "Authorization: Bearer ${MULTIRAG_API_KEY}"
 ```
 
-Single-test example:
+See the [HTTP API reference](./docs/references/http_api_reference.md) and [REST interface notes](./api/apps/restful_apis/README.md) for payloads, authentication and streaming responses. A running service exposes `/openapi.json`; built-in `/docs` and `/redoc` pages are disabled by default.
 
-```bash
-uv run pytest tests/unit/test_image_filter.py
-```
+### MCP
 
-### 5. Run lint and formatting
+- **Outbound client**: agents call configured external MCP servers.
+- **Inbound server**: a separate process exposes `list_datasets`, `multirag_retrieval` and `datasets://list` through `/mcp`; legacy `/sse` remains available.
 
-```bash
-ruff check
-ruff format
-```
+Dependencies are pinned to **FastMCP `4.0.0b3` (beta) and MCP SDK `2.0.0`**. See the [MCP module guide](./mcp/README.md) for startup, transport compatibility, security configuration and implementation boundaries.
 
-### 6. Typical dev entry points
+<a id="documentation"></a>
 
-- service entry: [`api/multirag_server.py`](./api/multirag_server.py)
-- API routes: [`api/apps`](./api/apps)
-- core logic: [`core`](./core)
-- document parsing: [`deepdoc`](./deepdoc)
-- agents: [`agent`](./agent)
-- MCP: [`mcp`](./mcp)
-- workflows: [`workflow`](./workflow) / [`workflow_v2`](./workflow_v2)
+## Explore further
 
-## 📚 API and Documentation
+Most detailed guides are currently written in Chinese.
 
-### API domains
+| Your next step | Start here |
+| :--- | :--- |
+| Create a knowledge base and evaluate retrieval | [Knowledge base guide](./docs/knowledge-base-guide.md) |
+| Deploy, configure HTTPS, mount models or diagnose containers | [Docker deployment](./docker/README.md) |
+| Upgrade a database and prepare recovery | [Database migration](./docs/database-migration.md) |
+| Develop the backend and run tests | [Development](./docs/development.md) · [Testing](./tests/README.md) |
+| Integrate REST or MCP | [HTTP API](./docs/references/http_api_reference.md) · [MCP](./mcp/README.md) |
+| Connect external messaging channels | [Channel](./api/channels/README.md) |
+| Explore enterprise identity and MCP authorization design | [EIM project](./docs/enterprise-identity-mcp/README.md) |
+| Explore the target design for durable remote runs | [Run Platform](./docs/run-platform/README.md) (see its design and implementation status) |
 
-Main API domains include:
+<a id="contributing"></a>
 
-- knowledge base, dataset, document, and chunk management
-- chat, conversation, retrieval, and OpenAI-compatible APIs
-- LLM providers, model settings, and system configuration
-- agent, canvas, workflow, and workflow v2 execution
-- connectors, MCP server, admin, user, and tenant management
+## Build with us
 
-### Common endpoint examples
+Report problems through [Issues](https://github.com/yuehong136/MultiRAG/issues) and contribute improvements through [Pull Requests](https://github.com/yuehong136/MultiRAG/pulls). Read the [collaboration rules](./AGENTS.md) and [development guide](./docs/development.md) before you start.
 
-| Path | Method | Description |
-|---|---|---|
-| `/api/v1/chat/completions` | POST | Chat endpoint |
-| `/api/v1/datasets` | GET/POST | Knowledge base management |
-| `/api/v1/documents` | POST/DELETE | Document management |
-| `/api/v1/chunks` | GET | Chunk query |
-| `/api/v1/workflows` | GET/POST | Workflow management |
-| `/api/v1/agents` | POST | Agent execution |
-| `/api/v1/mcp/*` | GET/POST | MCP-related APIs |
+Choose checks by scope: validate content, paths and links for documentation; run focused lint and unit tests for code; add the appropriate integration checks for storage, retrieval or protocol changes. Common entry points:
 
-After startup, the OpenAPI schema is available at `/openapi.json`; the current [FastAPI entrypoint](./api/apps/__init__.py) disables the built-in `/docs` and `/redoc` pages.
+| Command | Scope |
+| :--- | :--- |
+| `make lint` / `make typecheck` / `make test` | Static checks, type checks and unit tests, respectively |
+| `make integration` | Core integration tests with isolated resources; narrow the selection with `TESTS=...` |
+| `make smoke` | Health endpoints on an already running service |
+| `make mcp-compat` | MCP modern / legacy protocol compatibility in both directions |
 
-### Documentation index
+Use `make verify` when you need the full local Python checks. Applicable CI checks validate the final combination. See [Testing](./tests/README.md) for suites and environment requirements. Follow the [security policy](./SECURITY.md) to report vulnerabilities.
 
-- Run Platform (remote Run API, events, state machine, and rollout): [`docs/run-platform/README.md`](./docs/run-platform/README.md)
-- Self-hosting: [Docker Compose quick start](#self-hosting)
-- Database upgrades and recovery: [`docs/database-migration.md`](./docs/database-migration.md)
-- System architecture: [overview on this page](#-system-architecture)
-- HTTP API reference: [`docs/references/http_api_reference.md`](./docs/references/http_api_reference.md)
-- Development and operations: [`docs/development.md`](./docs/development.md)
-- Model catalog: [`configs/llm_factories.json`](./configs/llm_factories.json)
-- Docker guide: [`docker/README.md`](./docker/README.md)
+---
 
-## 🛠️ Typical Use Cases
-
-- enterprise internal QA and intelligent search
-- multi-source ingestion and unified retrieval
-- Agent backends for business systems
-- document understanding and structured extraction
-- OpenAI-compatible platform services
-
-## 🤝 Contributing
-
-Issues and pull requests are welcome.
-
-Before contributing, review:
-
-- [`docs/development.md`](./docs/development.md)
-- [`docker/README.md`](./docker/README.md)
-- [`AGENTS.md`](./AGENTS.md)
-
-Before submitting changes, at least run:
-
-```bash
-uv run pytest
-ruff check
-ruff format
-```
-
-## 📄 License
-
-This project is licensed under Apache-2.0.
+<p align="center">
+  <strong>MultiRAG</strong> · Knowledge into action.<br>
+  Open source under the <a href="./LICENSE">Apache License 2.0</a>.
+</p>

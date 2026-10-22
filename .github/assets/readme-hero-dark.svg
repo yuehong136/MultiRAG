@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="440" viewBox="0 0 1280 440" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">MultiRAG — Turn knowledge into action.</title>
+  <desc id="desc">Documents and enterprise data flow through MultiRAG into retrieval, agents and MCP tools.</desc>
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#314A39"/>
+    </pattern>
+    <linearGradient id="panel" x1="700" y1="24" x2="1224" y2="416" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#182C21"/>
+      <stop offset="1" stop-color="#15251D"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="1278" height="438" rx="24" fill="#111C18" stroke="#314638" stroke-width="2"/>
+  <rect x="696" y="24" width="560" height="392" rx="18" fill="url(#panel)"/>
+  <rect x="696" y="24" width="560" height="392" rx="18" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <g transform="translate(56 46)">
+      <rect width="38" height="38" rx="11" fill="#254A34"/>
+      <path d="M10 26V12L19 21L28 12V26" stroke="#CCF883" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="52" y="29" fill="#EDF4E9" font-size="30" font-weight="700" letter-spacing="-1">MultiRAG</text>
+    </g>
+    <g font-family="'Courier New', monospace" font-size="12" letter-spacing="2" fill="#A2B6A8">
+      <text x="56" y="132">OPEN SOURCE / AI BACKEND</text>
+    </g>
+    <text x="52" y="210" fill="#EDF4E9" font-size="62" font-weight="700" letter-spacing="-3">Turn knowledge</text>
+    <text x="52" y="278" fill="#EDF4E9" font-size="62" font-weight="700" letter-spacing="-3">into action<tspan fill="#B0DE87">.</tspan></text>
+    <text x="56" y="323" fill="#A2B6A8" font-size="19">Your data. Your models. Your infrastructure.</text>
+    <path d="M56 369H88" stroke="#B0DE87" stroke-width="3" stroke-linecap="round"/>
+    <text x="102" y="374" fill="#EDF4E9" font-family="'Courier New', monospace" font-size="13" letter-spacing="1">RAG / AGENTS / WORKFLOWS / MCP</text>
+
+    <g stroke="#56775A" stroke-width="1.5">
+      <path d="M844 131V160Q844 174 858 174H962V191"/>
+      <path d="M1108 131V160Q1108 174 1094 174H978V191"/>
+      <path d="M970 270V296H806Q792 296 792 310V327"/>
+      <path d="M970 270V327"/>
+      <path d="M970 296H1134Q1148 296 1148 310V327"/>
+    </g>
+    <circle cx="970" cy="296" r="4" fill="#B0DE87"/>
+    <circle cx="970" cy="174" r="4" fill="#B0DE87"/>
+
+    <g>
+      <rect x="748" y="67" width="194" height="64" rx="12" fill="#1B3024" stroke="#314638"/>
+      <path d="M770 85H784L790 91V113H770V85Z" stroke="#B0DE87" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M784 85V92H790M775 100H785M775 105H783" stroke="#B0DE87" stroke-width="1.5"/>
+      <text x="804" y="105" fill="#EDF4E9" font-size="17" font-weight="600">Documents</text>
+
+      <rect x="1010" y="67" width="194" height="64" rx="12" fill="#1B3024" stroke="#314638"/>
+      <ellipse cx="1040" cy="90" rx="10" ry="5" stroke="#B0DE87" stroke-width="1.5"/>
+      <path d="M1030 90V106C1030 113 1050 113 1050 106V90M1030 98C1030 105 1050 105 1050 98" stroke="#B0DE87" stroke-width="1.5"/>
+      <text x="1063" y="95" fill="#EDF4E9" font-size="15" font-weight="600">Enterprise</text>
+      <text x="1063" y="114" fill="#A2B6A8" font-size="14">data sources</text>
+    </g>
+
+    <rect x="846" y="184" width="248" height="94" rx="18" fill="#254A34" stroke="#78A064" stroke-width="1.5"/>
+    <rect x="858" y="196" width="4" height="70" rx="2" fill="#CCF883"/>
+    <text x="880" y="225" fill="#F4F9EF" font-size="27" font-weight="700" letter-spacing="-0.5">MultiRAG</text>
+    <text x="880" y="251" fill="#C1D7C7" font-size="14">Parse. Retrieve. Orchestrate.</text>
+    <circle cx="1069" cy="207" r="4" fill="#CCF883"/>
+
+    <g>
+      <rect x="728" y="327" width="128" height="58" rx="12" fill="#1B3024" stroke="#314638"/>
+      <rect x="906" y="327" width="128" height="58" rx="12" fill="#1B3024" stroke="#314638"/>
+      <rect x="1084" y="327" width="128" height="58" rx="12" fill="#1B3024" stroke="#314638"/>
+      <text x="792" y="362" text-anchor="middle" fill="#EDF4E9" font-size="15" font-weight="700" letter-spacing="1">RAG</text>
+      <text x="970" y="362" text-anchor="middle" fill="#EDF4E9" font-size="15" font-weight="700" letter-spacing="1">AGENTS</text>
+      <text x="1148" y="362" text-anchor="middle" fill="#EDF4E9" font-size="15" font-weight="700" letter-spacing="1">MCP</text>
+    </g>
+    <text x="1212" y="46" text-anchor="end" fill="#A2B6A8" font-family="'Courier New', monospace" font-size="10" letter-spacing="1.5">KNOWLEDGE → ACTION</text>
+  </g>
+</svg>
