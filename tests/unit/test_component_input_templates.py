@@ -17,6 +17,7 @@ def _component(value: Any) -> ComponentBase:
     canvas.globals.update({"sys.query": "Ada", "env.data": {"items": [1, 2]}, "env.empty": None, "env.flag": False, "env.zero": 0})
     source = SimpleNamespace(output=lambda key: {"name": "Ada", "_references": None}.get(key))
     canvas.components["UserFillUp:X"] = {"obj": source, "name": "Input"}
+    canvas.components["userfillup_test"] = {"obj": source, "name": "Input"}
     component = ComponentBase.__new__(ComponentBase)
     component._canvas = canvas
     component._param = SimpleNamespace(inputs={"subject": {}}, subject=value)
@@ -28,6 +29,7 @@ def _component(value: Any) -> ComponentBase:
     [
         ("{sys.query}@example.test", "Ada@example.test"),
         ("{UserFillUp:X@name}@example.test", "Ada@example.test"),
+        ("{userfillup_test@name}@example.test", "Ada@example.test"),
         ("Question from {UserFillUp:X@name}: {sys.query}", "Question from Ada: Ada"),
         ("{env.flag}/{env.zero}/{env.empty}", "False/0/"),
         ("{sys.query}/{sys.query}", "Ada/Ada"),
