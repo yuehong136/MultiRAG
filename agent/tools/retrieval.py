@@ -22,7 +22,7 @@ from functools import partial
 from typing import Any
 
 from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
-from api.db.db_models import db_connection
+from api.db.db_models import Knowledgebase, db_connection
 from api.db.joint_services import memory_message_service
 from api.db.joint_services.tenant_model_service import build_bundle_by_id_async, build_default_bundle_async, build_named_bundle_async
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -177,8 +177,13 @@ class Retrieval(ToolBase, ABC):
             self.set_output("formalized_content", self._param.empty_response)
             return
 
-    def _resolve_kbs(self) -> tuple[list[str], list[str], list]:
+    def _resolve_kbs(self) -> tuple[list[str], list[str], list[Knowledgebase]]:
         """解析 dataset_ids（含 @变量 引用）→ (kb_ids, filtered_kb_ids, kbs)。纯同步 DB。"""
+        get_run_context = getattr(self._canvas, "get_run_context", None)
+        run_context = get_run_context() if get_run_context is not None else None
+        actor_id = run_context.platform_user_id if run_context is not None and run_context.principal is not None else self._canvas.get_tenant_id()
+        if not actor_id:
+            raise PermissionError("Dataset access requires an authenticated actor.")
         with db_connection() as db:
             kb_ids: list[str] = []
             for id in self._dataset_ids:
@@ -192,12 +197,18 @@ class Retrieval(ToolBase, ABC):
                     e, kb = KnowledgebaseService.get_by_name(db, nm_or_id, self._canvas._tenant_id)
                     if not e:
                         raise Exception(f"Dataset({nm_or_id}) does not exist.")
-                kb_ids.append(kb.id)
+                    kb_ids.append(kb.id)
 
-            filtered_kb_ids: list[str] = list({kb_id for kb_id in kb_ids if kb_id})
-            kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
-            if not kbs:
+            filtered_kb_ids = list(dict.fromkeys(kb_id for kb_id in kb_ids if kb_id))
+            if not filtered_kb_ids:
                 raise Exception("No dataset is selected.")
+            # A tenant ID selects resources; the runtime actor authorizes them.
+            # Check the full selection before any model, metadata or store IO.
+            if any(not KnowledgebaseService.accessible(db, kb_id, actor_id) for kb_id in filtered_kb_ids):
+                raise PermissionError("Dataset is missing or inaccessible.")
+            kbs = KnowledgebaseService.get_by_ids(db, filtered_kb_ids)
+            if len(kbs) != len(filtered_kb_ids):
+                raise PermissionError("Dataset is missing or inaccessible.")
             return kb_ids, filtered_kb_ids, kbs
 
     @staticmethod
@@ -229,9 +240,9 @@ class Retrieval(ToolBase, ABC):
         embd_mdl = None
         if embd_keys:
             if kbs[0].tenant_embd_id:
-                embd_mdl = await build_bundle_by_id_async(self._canvas.get_tenant_id(), kbs[0].tenant_embd_id)
+                embd_mdl = await build_bundle_by_id_async(kbs[0].tenant_id, kbs[0].tenant_embd_id)
             else:
-                embd_mdl = await build_named_bundle_async(self._canvas.get_tenant_id(), LLMType.EMBEDDING.value, kbs[0].embd_id)
+                embd_mdl = await build_named_bundle_async(kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id)
 
         rerank_mdl = None
         if self._param.rerank_id:
