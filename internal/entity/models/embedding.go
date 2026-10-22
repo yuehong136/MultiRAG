@@ -50,11 +50,21 @@ func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, 
 	return encodeHTTPWithConfig(client, baseURLs, suffix, name, texts, config, nil)
 }
 
-// encodeHTTPWithConfig carries optional dimensions through every batch and
-// validates the provider's vectors against the requested dimension.
-func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+type embeddingHTTPOptions struct {
+	optionalAPIKey bool
+	fallbackRegion bool
+	parameters     map[string]any
+}
+
+// encodeHTTPWithConfig carries optional dimensions and provider parameters through
+// every batch, retaining strict credentials and region selection by default.
+func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig, options ...embeddingHTTPOptions) ([][]float64, error) {
 	if len(texts) == 0 {
 		return [][]float64{}, nil
+	}
+	option := embeddingHTTPOptions{}
+	if len(options) > 0 {
+		option = options[0]
 	}
 	dimension := 0
 	if embeddingConfig != nil {
@@ -63,13 +73,25 @@ func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffi
 		}
 		dimension = embeddingConfig.Dimension
 	}
-	if name == nil || strings.TrimSpace(*name) == "" || config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
-		return nil, fmt.Errorf("embedding model name and API key are required")
+	if name == nil || strings.TrimSpace(*name) == "" {
+		return nil, fmt.Errorf("embedding model name is required")
+	}
+	key := ""
+	if config != nil && config.APIKey != nil {
+		key = strings.TrimSpace(*config.APIKey)
+	}
+	if key == "" && !option.optionalAPIKey {
+		return nil, fmt.Errorf("embedding API key is required")
 	}
 	if suffix == "" {
 		return nil, fmt.Errorf("embedding endpoint is not configured")
 	}
-	baseURL, err := resolveModelBaseURL(baseURLs, config.Region)
+	local, cancel := modelCallConfig(config)
+	defer cancel()
+	if option.fallbackRegion && local.Region != nil && strings.TrimRight(baseURLs[*local.Region], "/") == "" {
+		local.Region = nil
+	}
+	baseURL, err := resolveModelBaseURL(baseURLs, local.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +102,11 @@ func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffi
 	embeddings := make([][]float64, 0, len(texts))
 	for start := 0; start < len(texts); start += 32 {
 		end := min(start+32, len(texts))
-		payload := map[string]interface{}{"model": *name, "input": texts[start:end]}
+		payload := make(map[string]any, len(option.parameters)+3)
+		for field, value := range option.parameters {
+			payload[field] = value
+		}
+		payload["model"], payload["input"] = *name, texts[start:end]
 		if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
 			payload["dimensions"] = embeddingConfig.Dimension
 		}
@@ -88,12 +114,14 @@ func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffi
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(requestContext(config), http.MethodPost, endpoint, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(requestContext(local), http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*config.APIKey))
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("embedding request: %w", err)
@@ -152,7 +180,7 @@ func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffi
 		}
 		embeddings = append(embeddings, batch...)
 	}
-	if err := requestContext(config).Err(); err != nil {
+	if err := requestContext(local).Err(); err != nil {
 		return nil, err
 	}
 	return embeddings, nil
