@@ -18,8 +18,12 @@ type retrievalEmbeddingDriver struct {
 	vectors [][]float64
 }
 
-func (d *retrievalEmbeddingDriver) Encode(_ *string, _ []string, _ *models.APIConfig, _ *models.EmbeddingConfig) ([][]float64, error) {
-	return d.vectors, nil
+func (d *retrievalEmbeddingDriver) Embed(_ *string, _ []string, _ *models.APIConfig, _ *models.EmbeddingConfig) ([]models.EmbeddingData, error) {
+	data := make([]models.EmbeddingData, len(d.vectors))
+	for i, v := range d.vectors {
+		data[i] = models.EmbeddingData{Index: i, Embedding: v}
+	}
+	return data, nil
 }
 
 func TestRetrievalVectorRejectsMalformedResults(t *testing.T) {

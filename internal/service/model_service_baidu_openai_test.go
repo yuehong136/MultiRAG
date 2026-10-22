@@ -80,7 +80,7 @@ func TestBaiduOpenAICatalogBoundCapabilitiesHTTP(t *testing.T) {
 				}
 				bound := models.NewEmbeddingModel(driver, &name, api)
 				bound.EmbeddingConfig = &models.EmbeddingConfig{Query: true, Dimension: 2}
-				vectors, err := bound.Encode([]string{"a", "b"})
+				vectors, err := embeddingVectorsForTest(bound.Embed([]string{"a", "b"}))
 				if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1}, {1, 0}}) {
 					t.Fatal(vectors, err)
 				}

@@ -53,7 +53,7 @@ func TestAliyunEmbeddingConfiguredInstancesHTTP(t *testing.T) {
 				t.Fatal(err)
 			}
 			bound := models.NewEmbeddingModel(driver, &name, api)
-			got, err := bound.Encode([]string{"first", "second"})
+			got, err := embeddingVectorsForTest(bound.Embed([]string{"first", "second"}))
 			if err != nil || !reflect.DeepEqual(got, [][]float64{{1, 2}, {3, 4}}) {
 				t.Fatal(got, err)
 			}

@@ -14,21 +14,25 @@ type skillTestDriver struct {
 	vectors [][]float64
 }
 
-func (d *skillTestDriver) Encode(_ *string, _ []string, _ *models.APIConfig, cfg *models.EmbeddingConfig) ([][]float64, error) {
+func (d *skillTestDriver) Embed(_ *string, _ []string, _ *models.APIConfig, cfg *models.EmbeddingConfig) ([]models.EmbeddingData, error) {
 	d.query = cfg.Query
-	return d.vectors, nil
+	data := make([]models.EmbeddingData, len(d.vectors))
+	for i, v := range d.vectors {
+		data[i] = models.EmbeddingData{Index: i, Embedding: v}
+	}
+	return data, nil
 }
 func TestSkillQueryEmbeddingContract(t *testing.T) {
 	d := &skillTestDriver{vectors: [][]float64{{1, 0.1}}}
 	bound := &skillEmbeddingModel{EmbeddingModel: models.NewEmbeddingModel(d, nil, &models.APIConfig{})}
-	if _, e := bound.Encode(context.Background(), []string{"query"}, true); e != nil || !d.query {
+	if _, e := embeddingVectorsForTest(bound.Embed(context.Background(), []string{"query"}, true)); e != nil || !d.query {
 		t.Fatalf("query contract: %v", e)
 	}
-	if _, e := bound.Encode(context.Background(), []string{"document"}, false); e != nil || d.query {
+	if _, e := embeddingVectorsForTest(bound.Embed(context.Background(), []string{"document"}, false)); e != nil || d.query {
 		t.Fatalf("document contract: %v", e)
 	}
 	d.vectors = [][]float64{{0, 0}}
-	if _, e := bound.Encode(context.Background(), []string{"bad"}, false); e == nil {
+	if _, e := embeddingVectorsForTest(bound.Embed(context.Background(), []string{"bad"}, false)); e == nil {
 		t.Fatal("zero embedding accepted")
 	}
 }

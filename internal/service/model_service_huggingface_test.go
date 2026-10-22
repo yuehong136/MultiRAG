@@ -81,7 +81,7 @@ func TestHuggingFaceCatalogBoundCapabilitiesHTTP(t *testing.T) {
 			if err := driver.CheckConnection(api); err != nil {
 				t.Fatal(err)
 			}
-			vectors, err := driver.Encode(&name, []string{"a", "b"}, api, nil)
+			vectors, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a", "b"}, api, nil))
 			if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1}, {2, 0}}) {
 				t.Fatal(vectors, err)
 			}

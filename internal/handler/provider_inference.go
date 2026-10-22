@@ -31,7 +31,7 @@ func (h *ProviderHandler) EmbedText(c *gin.Context) {
 		jsonError(c, code, "Unable to embed texts")
 		return
 	}
-	jsonResponse(c, common.CodeSuccess, response.Data, "success")
+	jsonResponse(c, common.CodeSuccess, response, "success")
 }
 
 type RerankDocumentRequest struct {

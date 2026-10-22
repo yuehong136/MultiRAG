@@ -245,7 +245,7 @@ func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Mes
 	return io.ErrUnexpectedEOF
 }
 
-func (m *MinimaxModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *MinimaxModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
 	return nil, fmt.Errorf("embedding is not implemented for %s", m.Name())
 }
 

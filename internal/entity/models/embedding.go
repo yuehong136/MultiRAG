@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"strings"
@@ -44,23 +45,17 @@ func requestContext(config *APIConfig) context.Context {
 	return context.Background()
 }
 
-// encodeHTTP preserves the old OpenAI-compatible embedding path, with ordered
-// batch validation. SiliconFlow limits one request to 32 inputs.
-func encodeHTTP(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig) ([][]float64, error) {
-	return encodeHTTPWithConfig(client, baseURLs, suffix, name, texts, config, nil)
-}
-
 type embeddingHTTPOptions struct {
 	optionalAPIKey bool
 	fallbackRegion bool
 	parameters     map[string]any
 }
 
-// encodeHTTPWithConfig carries optional dimensions and provider parameters through
+// embedHTTPWithConfig carries optional dimensions and provider parameters through
 // every batch, retaining strict credentials and region selection by default.
-func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig, options ...embeddingHTTPOptions) ([][]float64, error) {
+func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix string, name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig, options ...embeddingHTTPOptions) ([]EmbeddingData, error) {
 	if len(texts) == 0 {
-		return [][]float64{}, nil
+		return []EmbeddingData{}, nil
 	}
 	option := embeddingHTTPOptions{}
 	if len(options) > 0 {
@@ -183,7 +178,7 @@ func encodeHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffi
 	if err := requestContext(local).Err(); err != nil {
 		return nil, err
 	}
-	return embeddings, nil
+	return embeddingData(embeddings), nil
 }
 
 // OpenAIEmbeddingDriver retains the legacy embedding capability without adding
@@ -197,9 +192,9 @@ func NewOpenAIEmbeddingDriver(baseURLs map[string]string, suffix URLSuffix) *Ope
 	if suffix.Embedding == "" {
 		suffix.Embedding = "embeddings"
 	}
-	return &OpenAIEmbeddingDriver{DummyModel: NewDummyModel(baseURLs, suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
+	return &OpenAIEmbeddingDriver{DummyModel: NewDummyModel(maps.Clone(baseURLs), suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
 }
 func (m *OpenAIEmbeddingDriver) Name() string { return "openai-compatible" }
-func (m *OpenAIEmbeddingDriver) Encode(name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, name, texts, config)
+func (m *OpenAIEmbeddingDriver) Embed(name *string, texts []string, config *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, name, texts, config, embeddingConfig)
 }

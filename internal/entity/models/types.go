@@ -23,8 +23,8 @@ type ModelDriver interface {
 	ChatStreamlyWithSender(modelName, message *string, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
 	// ChatStreamlyWithMessages preserves roles and request cancellation while streaming.
 	ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error
-	// Encode encodes a list of texts into embeddings with the selected configuration.
-	Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error)
+	// Embed returns indexed embeddings for a list of texts with the selected configuration.
+	Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error)
 	Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error)
 	// ListModels lists models supported by the configured provider instance.
 	ListModels(apiConfig *APIConfig) ([]string, error)
@@ -79,12 +79,11 @@ type EmbeddingConfig struct {
 	Dimension int
 }
 type RerankConfig struct{ TopN int }
-type EmbeddingResult struct {
-	Index     int `json:"index"`
-	Dimension int `json:"dimension"`
-}
-type EmbeddingResponse struct {
-	Data []EmbeddingResult `json:"data"`
+
+// EmbeddingData identifies a vector by its global input index.
+type EmbeddingData struct {
+	Index     int       `json:"index"`
+	Embedding []float64 `json:"embedding"`
 }
 type RerankResult struct {
 	Index          int     `json:"index"`

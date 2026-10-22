@@ -254,12 +254,15 @@ func (v *VolcEngine) CheckConnection(config *APIConfig) error {
 	return resp.Body.Close()
 }
 
-func (v *VolcEngine) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (v *VolcEngine) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	if len(texts) == 0 {
-		return [][]float64{}, nil
+		return []EmbeddingData{}, nil
 	}
 	if name == nil || strings.TrimSpace(*name) == "" {
 		return nil, fmt.Errorf("volcengine: embedding model name is required")
+	}
+	if config != nil && config.Dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be non-negative")
 	}
 	local, cancel := modelCallConfig(api)
 	defer cancel()
@@ -276,11 +279,18 @@ func (v *VolcEngine) Encode(name *string, texts []string, api *APIConfig, config
 		}
 		var result struct {
 			Data *struct {
-				Embedding []float64 `json:"embedding"`
+				Embedding []*float64 `json:"embedding"`
 			} `json:"data"`
 			Error json.RawMessage `json:"error"`
 		}
-		err = json.NewDecoder(response.Body).Decode(&result)
+		decoder := json.NewDecoder(response.Body)
+		err = decoder.Decode(&result)
+		if err == nil {
+			var trailing any
+			if decoder.Decode(&trailing) != io.EOF {
+				err = fmt.Errorf("trailing embedding response")
+			}
+		}
 		response.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("volcengine: decode embedding: %w", err)
@@ -291,7 +301,16 @@ func (v *VolcEngine) Encode(name *string, texts []string, api *APIConfig, config
 		if result.Data == nil {
 			return nil, fmt.Errorf("volcengine: missing embedding data")
 		}
-		vector := result.Data.Embedding
+		vector := make([]float64, len(result.Data.Embedding))
+		for i, value := range result.Data.Embedding {
+			if value == nil {
+				return nil, fmt.Errorf("volcengine: null embedding value")
+			}
+			vector[i] = *value
+		}
+		if config != nil && config.Dimension > 0 && len(vector) != config.Dimension {
+			return nil, fmt.Errorf("embedding dimension does not match request")
+		}
 		if err := ValidateEmbeddings([][]float64{vector}, 1); err != nil {
 			return nil, fmt.Errorf("volcengine: %w", err)
 		}
@@ -303,5 +322,5 @@ func (v *VolcEngine) Encode(name *string, texts []string, api *APIConfig, config
 	if err := requestContext(local).Err(); err != nil {
 		return nil, err
 	}
-	return vectors, nil
+	return embeddingData(vectors), nil
 }

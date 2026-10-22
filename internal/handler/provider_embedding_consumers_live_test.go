@@ -57,7 +57,7 @@ func checkEmbeddingProviderConsumers(t *testing.T, endpoint string, readback *sq
 	if err := readback.QueryRow("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_tenant_model_instance_api_key_nonempty'").Scan(&indexDefinition); err != nil || !strings.Contains(indexDefinition, "WHERE") {
 		t.Fatal("conditional unique index missing", indexDefinition, err)
 	}
-	for _, provider := range []string{"Gitee", "vllm", "ollama"} {
+	for _, provider := range []string{"Gitee", "vllm", "ollama", "LM-Studio", "OpenRouter"} {
 		t.Run(provider, func(t *testing.T) {
 			providerID := "g-" + provider
 			if err := dao.DB.Create(&entity.TenantModelProvider{ID: providerID, ProviderName: provider, TenantID: "owner-tenant"}).Error; err != nil {
@@ -66,7 +66,7 @@ func checkEmbeddingProviderConsumers(t *testing.T, endpoint string, readback *sq
 			var calls atomic.Int32
 			for i := range 2 {
 				key := ""
-				if provider == "Gitee" || i == 1 {
+				if (provider == "Gitee" || provider == "OpenRouter") || i == 1 {
 					key = fmt.Sprintf("g-%s-%d", provider, i)
 				}
 				path := "/instance/v1/embeddings"
@@ -152,8 +152,8 @@ func checkEmbeddingProviderConsumers(t *testing.T, endpoint string, readback *sq
 				if err != nil {
 					t.Fatal(err)
 				}
-				rows := result.(*cli.CommonResponse).Data
-				if len(rows) != 33 || rows[32]["index"] != float64(32) || rows[32]["dimension"] != float64(2) {
+				rows := result.(*cli.EmbeddingsResponse).Data
+				if len(rows) != 33 || rows[32].Index != 32 || len(rows[32].Embedding) != 2 {
 					t.Fatal("CLI embedding response", rows)
 				}
 			}

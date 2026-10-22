@@ -169,8 +169,8 @@ func TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL(t *testing.T) {
 					if err != nil || result == nil || calls.Load()-n != 2 {
 						t.Fatal(provider, instance, mode, result, err, calls.Load()-n)
 					}
-					rows := result.(*cli.CommonResponse).Data
-					if len(rows) != 33 || rows[32]["index"] != float64(32) || rows[32]["dimension"] != float64(2) {
+					rows := result.(*cli.EmbeddingsResponse).Data
+					if len(rows) != 33 || rows[32].Index != 32 || len(rows[32].Embedding) != 2 {
 						t.Fatal(rows)
 					}
 				} else {

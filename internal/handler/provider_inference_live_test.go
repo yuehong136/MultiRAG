@@ -81,10 +81,15 @@ func TestModelInferenceLiveHTTPAndSQL(t *testing.T) {
 				if body["dimensions"] != float64(2) {
 					t.Error("dimension missing", body)
 				}
-				if body["input"] == "bad" {
-					fmt.Fprint(w, `{"data":[{"embedding":[]}]}`)
+				input := body["input"].([]any)
+				if input[0] == "bad" {
+					fmt.Fprint(w, `{"data":[{"index":0,"embedding":[]}]}`)
 				} else {
-					fmt.Fprintf(w, `{"data":[{"embedding":[%d,2]}]}`, i+1)
+					data := make([]map[string]any, 0, len(input))
+					for j := len(input) - 1; j >= 0; j-- {
+						data = append(data, map[string]any{"index": j, "embedding": []float64{float64(i + 1), 2}})
+					}
+					json.NewEncoder(w).Encode(map[string]any{"data": data})
 				}
 			case "/v4/rerank":
 				if body["query"] == "bad" {
@@ -159,13 +164,16 @@ func TestModelInferenceLiveHTTPAndSQL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows := result.(*cli.CommonResponse).Data
 			if strings.HasPrefix(command, "embed") {
-				if len(rows) != 2 || rows[1]["index"] != float64(1) || rows[0]["dimension"] != float64(2) {
+				rows := result.(*cli.EmbeddingsResponse).Data
+				if len(rows) != 2 || rows[1].Index != 1 || len(rows[0].Embedding) != 2 {
 					t.Fatal(rows)
 				}
-			} else if len(rows) != 1 || rows[0]["index"] != float64(1) || rows[0]["relevance_score"] != float64(0) {
-				t.Fatal(rows)
+			} else {
+				rows := result.(*cli.CommonResponse).Data
+				if len(rows) != 1 || rows[0]["index"] != float64(1) || rows[0]["relevance_score"] != float64(0) {
+					t.Fatal(rows)
+				}
 			}
 		}
 	}

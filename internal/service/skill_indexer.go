@@ -26,6 +26,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 	"multirag/internal/tokenizer"
 	"path/filepath"
 	"strings"
@@ -293,7 +294,7 @@ func (s *SkillIndexerService) BatchIndexSkills(ctx context.Context, tenantID, sp
 		}
 
 		doc["_search_text"] = vectorTexts[i]
-		doc[vectorField] = vectors[i]
+		doc[vectorField] = vectors[i].Embedding
 
 		// For ES: add tokenized fields for BM25 search
 		if isES {
@@ -813,7 +814,7 @@ func (s *SkillIndexerService) generateEmbedding(ctx context.Context, text, embdI
 	}
 	truncatedText := truncate(text, maxLen-10)
 
-	vectors, err := embeddingModel.Encode(ctx, []string{truncatedText}, false)
+	vectors, err := embeddingModel.Embed(ctx, []string{truncatedText}, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode text: %w", err)
 	}
@@ -821,12 +822,12 @@ func (s *SkillIndexerService) generateEmbedding(ctx context.Context, text, embdI
 		return nil, fmt.Errorf("embedding returned empty result")
 	}
 
-	return vectors[0], nil
+	return vectors[0].Embedding, nil
 }
 
 // generateEmbeddings generates embeddings for multiple texts in batch
 // This is more efficient than calling generateEmbedding individually
-func (s *SkillIndexerService) generateEmbeddings(ctx context.Context, texts []string, embdID, tenantID string) ([][]float64, error) {
+func (s *SkillIndexerService) generateEmbeddings(ctx context.Context, texts []string, embdID, tenantID string) ([]models.EmbeddingData, error) {
 	common.Info(fmt.Sprintf("generateEmbeddings called: texts=%d, embdID=%s, tenantID=%s", len(texts), embdID, tenantID))
 
 	if s.modelProvider == nil {
@@ -856,7 +857,7 @@ func (s *SkillIndexerService) generateEmbeddings(ctx context.Context, texts []st
 
 	common.Info(fmt.Sprintf("Encoding %d texts", len(truncatedTexts)))
 	// Use batch encode API (consistent with Python's encode(texts: list))
-	vectors, err := embeddingModel.Encode(ctx, truncatedTexts, false)
+	vectors, err := embeddingModel.Embed(ctx, truncatedTexts, false)
 	if err != nil {
 		common.Error(fmt.Sprintf("Failed to encode texts: %v", err), err)
 		return nil, fmt.Errorf("failed to encode texts: %w", err)
@@ -864,7 +865,7 @@ func (s *SkillIndexerService) generateEmbeddings(ctx context.Context, texts []st
 
 	common.Info(fmt.Sprintf("Encoded successfully, got %d vectors", len(vectors)))
 	if len(vectors) > 0 {
-		common.Info(fmt.Sprintf("Vector dimension: %d", len(vectors[0])))
+		common.Info(fmt.Sprintf("Vector dimension: %d", len(vectors[0].Embedding)))
 	}
 
 	return vectors, nil
@@ -902,16 +903,16 @@ func (s *SkillIndexerService) getEmbeddingDimension(ctx context.Context, tenantI
 
 	// Use simple test text like Python does: embedding_model.encode(["ok"])
 	testText := "ok"
-	vectors, err := embeddingModel.Encode(ctx, []string{testText}, false)
+	vectors, err := embeddingModel.Embed(ctx, []string{testText}, false)
 	if err != nil {
 		return 0, fmt.Errorf("failed to encode test text: %w", err)
 	}
 
-	if len(vectors) == 0 || len(vectors[0]) == 0 {
+	if len(vectors) == 0 || len(vectors[0].Embedding) == 0 {
 		return 0, fmt.Errorf("embedding returned empty vector")
 	}
 
-	dimension := len(vectors[0])
+	dimension := len(vectors[0].Embedding)
 	common.Info(fmt.Sprintf("Got embedding dimension from API: %d", dimension))
 	return dimension, nil
 }

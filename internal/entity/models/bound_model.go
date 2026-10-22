@@ -17,15 +17,32 @@ type EmbeddingModel struct {
 func NewEmbeddingModel(driver ModelDriver, name *string, config *APIConfig) *EmbeddingModel {
 	return &EmbeddingModel{ModelDriver: driver, ModelName: name, APIConfig: config}
 }
-func (m *EmbeddingModel) Encode(texts []string) ([][]float64, error) {
-	embeddings, err := m.ModelDriver.Encode(m.ModelName, texts, m.APIConfig, m.EmbeddingConfig)
+func (m *EmbeddingModel) Embed(texts []string) ([]EmbeddingData, error) {
+	if m.EmbeddingConfig != nil && m.EmbeddingConfig.Dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be non-negative")
+	}
+	if err := requestContext(m.APIConfig).Err(); err != nil {
+		return nil, err
+	}
+	data, err := m.ModelDriver.Embed(m.ModelName, texts, m.APIConfig, m.EmbeddingConfig)
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateEmbeddings(embeddings, len(texts)); err != nil {
+	vectors, err := EmbeddingVectors(data, len(texts))
+	if err != nil {
 		return nil, err
 	}
-	return embeddings, nil
+	if m.EmbeddingConfig != nil {
+		for _, vector := range vectors {
+			if m.EmbeddingConfig.Dimension > 0 && len(vector) != m.EmbeddingConfig.Dimension {
+				return nil, fmt.Errorf("embedding dimension does not match request")
+			}
+		}
+	}
+	if err := requestContext(m.APIConfig).Err(); err != nil {
+		return nil, err
+	}
+	return embeddingData(vectors), nil
 }
 
 type RerankModel struct {

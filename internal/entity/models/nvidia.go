@@ -38,7 +38,7 @@ func nvidiaChatBody(name string, messages []Message, config *ChatConfig, stream 
 	return body, nil
 }
 
-func (n *NVIDIAModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (n *NVIDIAModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	inputType := "query"
 	if config != nil && !config.Query {
 		inputType = "passage"
@@ -50,7 +50,7 @@ func (n *NVIDIAModel) Encode(name *string, texts []string, api *APIConfig, confi
 	ctx, cancel := context.WithTimeout(requestContext(api), 30*time.Second)
 	defer cancel()
 	local.Context = ctx
-	return encodeHTTPWithConfig(n.httpClient, n.BaseURL, n.URLSuffix.Embedding, name, texts, &local, config, embeddingHTTPOptions{
+	return embedHTTPWithConfig(n.httpClient, n.BaseURL, n.URLSuffix.Embedding, name, texts, &local, config, embeddingHTTPOptions{
 		fallbackRegion: true,
 		parameters: map[string]any{
 			"input_type":      inputType,

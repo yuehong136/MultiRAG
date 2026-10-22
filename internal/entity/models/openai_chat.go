@@ -299,7 +299,7 @@ func (d *openAIChatDriver) ListModels(config *APIConfig) ([]string, error) {
 }
 
 // These capabilities are deliberately unavailable in this driver batch.
-func (d *openAIChatDriver) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (d *openAIChatDriver) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	return nil, fmt.Errorf("openai-compatible: embedding is not implemented")
 }
 func (d *openAIChatDriver) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {

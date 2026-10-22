@@ -56,7 +56,7 @@ func TestSiliconFlowEmbeddingBatchBoundariesAndDimensions(t *testing.T) {
 			for i := range texts {
 				texts[i], want[i] = strconv.Itoa(i), []float64{float64(i), 0}
 			}
-			vectors, err := model.Encode(texts)
+			vectors, err := embeddingVectorsForTest(model.Embed(texts))
 			var wantBatches []int
 			for start := 0; start < size; start += 32 {
 				wantBatches = append(wantBatches, min(32, size-start))
@@ -77,7 +77,7 @@ func TestSiliconFlowEmbeddingDimensionValidation(t *testing.T) {
 	defer server.Close()
 	driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 	for _, dimension := range []int{-1, 2} {
-		vectors, err := driver.Encode(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture")}, &EmbeddingConfig{Dimension: dimension})
+		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture")}, &EmbeddingConfig{Dimension: dimension}))
 		if err == nil || vectors != nil {
 			t.Fatal("invalid dimension yielded success", dimension, vectors, err)
 		}
@@ -120,7 +120,7 @@ func TestSiliconFlowEmbeddingLaterBatchFailure(t *testing.T) {
 			}))
 			defer server.Close()
 			driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-			vectors, err := driver.Encode(stringPtr("model"), make([]string, 65), &APIConfig{APIKey: stringPtr("fixture")}, nil)
+			vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), make([]string, 65), &APIConfig{APIKey: stringPtr("fixture")}, nil))
 			if err == nil || vectors != nil || calls.Load() != 2 {
 				t.Fatal("later failure returned partial success or issued another batch", vectors, err, calls.Load())
 			}
@@ -156,7 +156,7 @@ func TestSiliconFlowEmbeddingLaterBatchCancellation(t *testing.T) {
 	driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 	result := make(chan error, 1)
 	go func() {
-		vectors, err := driver.Encode(stringPtr("model"), make([]string, 65), &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil)
+		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), make([]string, 65), &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil))
 		if vectors != nil {
 			result <- fmt.Errorf("cancellation returned partial embeddings")
 			return

@@ -40,10 +40,10 @@ func openRouterChatBody(name string, messages []Message, config *ChatConfig, str
 	return body, nil
 }
 
-func (o *OpenRouterModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (o *OpenRouterModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	local, cancel := modelCallConfig(api)
 	defer cancel()
-	return encodeHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local, config)
+	return embedHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local, config)
 }
 
 func (o *OpenRouterModel) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {

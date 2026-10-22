@@ -412,9 +412,9 @@ func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Messa
 	return scanner.Err()
 }
 
-// Encode encodes a list of texts into embeddings
-func (m *GiteeModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig, embeddingHTTPOptions{fallbackRegion: true})
+// Embed returns indexed embeddings for a list of texts
+func (m *GiteeModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig, embeddingHTTPOptions{fallbackRegion: true})
 }
 
 func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {

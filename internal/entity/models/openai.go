@@ -10,10 +10,10 @@ func NewOpenAIModel(baseURL map[string]string, suffix URLSuffix) *OpenAIModel {
 	return &OpenAIModel{newOpenAIChatDriver(baseURL, suffix, "openai", openAIChatBody)}
 }
 
-func (o *OpenAIModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (o *OpenAIModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	local, cancel := modelCallConfig(api)
 	defer cancel()
-	return encodeHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local, config)
+	return embedHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, local, config)
 }
 
 var _ ModelDriver = (*OpenAIModel)(nil)

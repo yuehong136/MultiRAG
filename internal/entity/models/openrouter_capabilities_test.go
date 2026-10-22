@@ -58,7 +58,7 @@ func TestOpenRouterBoundCapabilitiesHTTP(t *testing.T) {
 	driver, _ := NewModelFactory().CreateModelDriver("OpenRouter", map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank", Balance: "credits"})
 	name := "model"
 	api := &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("")}
-	vectors, err := NewEmbeddingModel(driver, &name, api).Encode(make([]string, 33))
+	vectors, err := embeddingVectorsForTest(NewEmbeddingModel(driver, &name, api).Embed(make([]string, 33)))
 	if err != nil || len(vectors) != 33 || !reflect.DeepEqual(vectors[31], []float64{31, 2}) || !reflect.DeepEqual(vectors[32], []float64{0, 2}) {
 		t.Fatal(vectors, err)
 	}
@@ -113,7 +113,7 @@ func TestOpenRouterMalformedCapabilitiesHTTP(t *testing.T) {
 			var err error
 			switch test.path {
 			case "embeddings":
-				_, err = driver.Encode(&name, make([]string, test.count), api, nil)
+				_, err = embeddingVectorsForTest(driver.Embed(&name, make([]string, test.count), api, nil))
 			case "rerank":
 				_, err = NewRerankModel(driver, &name, api).Rerank("q", make([]string, test.count))
 			case "credits":
@@ -128,7 +128,7 @@ func TestOpenRouterMalformedCapabilitiesHTTP(t *testing.T) {
 
 func TestOpenRouterCapabilitiesPreflightAndHTTPStatus(t *testing.T) {
 	driver := NewOpenRouterModel(map[string]string{"default": "http://invalid.invalid"}, URLSuffix{})
-	if vectors, err := driver.Encode(nil, nil, nil, nil); err != nil || vectors == nil || len(vectors) != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, nil)); err != nil || vectors == nil || len(vectors) != 0 {
 		t.Fatal(vectors, err)
 	}
 	if scores, err := NewRerankModel(driver, nil, nil).Rerank("", nil); err != nil || scores == nil || len(scores) != 0 {
@@ -147,7 +147,7 @@ func TestOpenRouterCapabilitiesPreflightAndHTTPStatus(t *testing.T) {
 				var err error
 				switch path {
 				case "embeddings":
-					_, err = driver.Encode(&name, []string{"x"}, api, nil)
+					_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"x"}, api, nil))
 				case "rerank":
 					_, err = NewRerankModel(driver, &name, api).Rerank("q", []string{"x"})
 				case "credits":
@@ -186,7 +186,7 @@ func TestOpenRouterCapabilitiesCancellationHTTP(t *testing.T) {
 			var err error
 			switch path {
 			case "embeddings":
-				_, err = driver.Encode(&name, []string{"x"}, api, nil)
+				_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"x"}, api, nil))
 			case "rerank":
 				_, err = NewRerankModel(driver, &name, api).Rerank("q", []string{"x"})
 			case "credits":

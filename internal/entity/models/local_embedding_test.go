@@ -74,7 +74,7 @@ func TestLocalEmbeddingKeylessBatchesRegionAndDimensionHTTP(t *testing.T) {
 					for i := range texts {
 						texts[i] = strconv.Itoa(i)
 					}
-					vectors, err := driver.Encode(&name, texts, api, cfg)
+					vectors, err := embeddingVectorsForTest(driver.Embed(&name, texts, api, cfg))
 					if err != nil || vectors == nil || len(vectors) != count {
 						t.Fatal(vectors, err)
 					}
@@ -120,7 +120,7 @@ func TestLocalEmbeddingRejectsMalformedHTTP(t *testing.T) {
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 					defer server.Close()
 					driver := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL})
-					if vectors, err := driver.Encode(stringPtr("embed"), []string{"a", "b"}, nil, &EmbeddingConfig{Dimension: 2}); err == nil || vectors != nil {
+					if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a", "b"}, nil, &EmbeddingConfig{Dimension: 2})); err == nil || vectors != nil {
 						t.Fatal("malformed response accepted", vectors, err)
 					}
 				})
@@ -143,14 +143,14 @@ func TestLocalEmbeddingPreflightAuthAndCancellationHTTP(t *testing.T) {
 			defer server.Close()
 			driver := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL, "office": server.URL})
 			name, key, region := "embed", "optional", "office"
-			if got, err := driver.Encode(&name, []string{"a"}, &APIConfig{APIKey: &key, Region: &region}, nil); err != nil || len(got) != 1 {
+			if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{APIKey: &key, Region: &region}, nil)); err != nil || len(got) != 1 {
 				t.Fatal(got, err)
 			}
 			for _, invalid := range []struct {
 				name *string
 				cfg  *EmbeddingConfig
 			}{{nil, nil}, {stringPtr(" "), nil}, {&name, &EmbeddingConfig{Dimension: -1}}, {&name, &EmbeddingConfig{Dimension: 3}}} {
-				if got, err := driver.Encode(invalid.name, []string{"a"}, &APIConfig{APIKey: &key}, invalid.cfg); err == nil || got != nil {
+				if got, err := embeddingVectorsForTest(driver.Embed(invalid.name, []string{"a"}, &APIConfig{APIKey: &key}, invalid.cfg)); err == nil || got != nil {
 					t.Fatal("invalid config/response accepted")
 				}
 			}
@@ -158,13 +158,13 @@ func TestLocalEmbeddingPreflightAuthAndCancellationHTTP(t *testing.T) {
 				t.Fatal("invalid preflight reached provider", calls.Load())
 			}
 			for _, urls := range []map[string]string{nil, {"office": ""}} {
-				if got, err := localEmbeddingDriver(t, provider, urls).Encode(&name, []string{"a"}, nil, nil); err == nil || got != nil {
+				if got, err := embeddingVectorsForTest(localEmbeddingDriver(t, provider, urls).Embed(&name, []string{"a"}, nil, nil)); err == nil || got != nil {
 					t.Fatal("missing URL accepted")
 				}
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if got, err := driver.Encode(&name, []string{"a"}, &APIConfig{Context: ctx}, nil); !errors.Is(err, context.Canceled) || got != nil {
+			if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{Context: ctx}, nil)); !errors.Is(err, context.Canceled) || got != nil {
 				t.Fatal(got, err)
 			}
 			if calls.Load() != 2 {
@@ -200,7 +200,7 @@ func TestLocalEmbeddingLaterBatchFailureHTTP(t *testing.T) {
 						json.NewEncoder(w).Encode(map[string]any{"data": data})
 					}))
 					defer server.Close()
-					got, err := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL}).Encode(stringPtr("embed"), make([]string, 33), nil, nil)
+					got, err := embeddingVectorsForTest(localEmbeddingDriver(t, provider, map[string]string{"default": server.URL}).Embed(stringPtr("embed"), make([]string, 33), nil, nil))
 					if err == nil || got != nil || calls != 2 {
 						t.Fatal("partial success", len(got), err, calls)
 					}
@@ -226,7 +226,7 @@ func TestLocalEmbeddingCancellationDuringHTTP(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			go func() { <-started; cancel() }()
-			got, err := localEmbeddingDriver(t, provider, map[string]string{"default": server.URL}).Encode(stringPtr("embed"), []string{"a"}, &APIConfig{Context: ctx}, nil)
+			got, err := embeddingVectorsForTest(localEmbeddingDriver(t, provider, map[string]string{"default": server.URL}).Embed(stringPtr("embed"), []string{"a"}, &APIConfig{Context: ctx}, nil))
 			if !errors.Is(err, context.Canceled) || got != nil {
 				t.Fatal(got, err)
 			}

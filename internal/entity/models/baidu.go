@@ -59,10 +59,10 @@ func (b *BaiduModel) ChatWithMessages(name string, api *APIConfig, messages []Me
 	return response, nil
 }
 
-func (b *BaiduModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (b *BaiduModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	local, cancel := modelCallConfig(api)
 	defer cancel()
-	return encodeHTTPWithConfig(b.httpClient, b.BaseURL, b.URLSuffix.Embedding, name, texts, local, config)
+	return embedHTTPWithConfig(b.httpClient, b.BaseURL, b.URLSuffix.Embedding, name, texts, local, config)
 }
 
 func (b *BaiduModel) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {

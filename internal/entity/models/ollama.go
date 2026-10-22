@@ -272,7 +272,7 @@ func modelCallConfig(api *APIConfig) (*APIConfig, context.CancelFunc) {
 	return &local, cancel
 }
 
-// Encode uses Ollama's OpenAI-compatible vectors while chat keeps the native protocol.
-func (o *OllamaModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
+// Embed uses Ollama's OpenAI-compatible vectors while chat keeps the native protocol.
+func (o *OllamaModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
 }

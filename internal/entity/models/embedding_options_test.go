@@ -41,7 +41,7 @@ func TestEmbeddingHTTPOptionsPreserveStrictDefaults(t *testing.T) {
 	api := &APIConfig{Region: &region}
 	cfg := &EmbeddingConfig{Query: true, Dimension: 2}
 	for _, option := range []embeddingHTTPOptions{{}, {optionalAPIKey: true}} {
-		vectors, err := encodeHTTPWithConfig(server.Client(), urls, "embeddings", &name, []string{"a"}, api, cfg, option)
+		vectors, err := embedHTTPWithConfig(server.Client(), urls, "embeddings", &name, []string{"a"}, api, cfg, option)
 		if err == nil || vectors != nil {
 			t.Fatal("strict default bypassed", vectors, err)
 		}
@@ -49,8 +49,8 @@ func TestEmbeddingHTTPOptionsPreserveStrictDefaults(t *testing.T) {
 	if len(batches) != 0 {
 		t.Fatal("preflight reached provider")
 	}
-	vectors, err := encodeHTTPWithConfig(server.Client(), urls, "embeddings", &name, make([]string, 33), api, cfg, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true, parameters: map[string]any{"input_type": "query"}})
-	if err != nil || len(vectors) != 33 || vectors[0][0] != 0 || !reflect.DeepEqual(batches, []int{32, 1}) {
+	vectors, err := embedHTTPWithConfig(server.Client(), urls, "embeddings", &name, make([]string, 33), api, cfg, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true, parameters: map[string]any{"input_type": "query"}})
+	if err != nil || len(vectors) != 33 || vectors[0].Embedding[0] != 0 || !reflect.DeepEqual(batches, []int{32, 1}) {
 		t.Fatal(vectors, batches, err)
 	}
 	if api.Region != &region || region != "unknown" || !cfg.Query || cfg.Dimension != 2 {

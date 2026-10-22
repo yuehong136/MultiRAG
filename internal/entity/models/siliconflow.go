@@ -380,9 +380,9 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 	return scanner.Err()
 }
 
-// Encode encodes a list of texts into embeddings
-func (m *SiliconFlowModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig)
+// Embed returns indexed embeddings for a list of texts
+func (m *SiliconFlowModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig)
 }
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {

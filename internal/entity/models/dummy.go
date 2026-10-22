@@ -63,8 +63,8 @@ func (z *DummyModel) ChatStreamlyWithSender(modelName, message *string, apiConfi
 	return fmt.Errorf("not implemented")
 }
 
-// Encode encodes a list of texts into embeddings
-func (z *DummyModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+// Embed returns indexed embeddings for a list of texts
+func (z *DummyModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 

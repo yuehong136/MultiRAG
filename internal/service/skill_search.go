@@ -695,7 +695,7 @@ func (s *SkillSearchService) getEmbedding(ctx context.Context, text, embdID, ten
 	}
 	truncatedText := truncate(text, maxLen-10)
 
-	vectors, err := embeddingModel.Encode(ctx, []string{truncatedText}, true)
+	vectors, err := embeddingModel.Embed(ctx, []string{truncatedText}, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode query: %w", err)
 	}
@@ -703,7 +703,7 @@ func (s *SkillSearchService) getEmbedding(ctx context.Context, text, embdID, ten
 		return nil, fmt.Errorf("embedding returned empty result")
 	}
 
-	return vectors[0], nil
+	return vectors[0].Embedding, nil
 }
 
 // Helper functions

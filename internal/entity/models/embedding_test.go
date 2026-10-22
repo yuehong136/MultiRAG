@@ -50,11 +50,11 @@ func TestSiliconFlowBoundEmbeddingsBatchOrderAndRerank(t *testing.T) {
 	key, name, region := "key", "Qwen/model", "fixture"
 	config := &APIConfig{APIKey: &key, Region: &region}
 	model := NewEmbeddingModel(driver, &name, config)
-	vectors, err := model.Encode(make([]string, 33))
+	vectors, err := embeddingVectorsForTest(model.Embed(make([]string, 33)))
 	if err != nil || len(vectors) != 33 || !reflect.DeepEqual(vectors[0], []float64{1, 2}) || !reflect.DeepEqual(batches, []int{32, 1}) {
 		t.Fatalf("vectors=%v batches=%v error=%v", vectors, batches, err)
 	}
-	query, err := model.Encode([]string{"question"})
+	query, err := embeddingVectorsForTest(model.Embed([]string{"question"}))
 	if err != nil || !reflect.DeepEqual(query, [][]float64{{1, 2}}) {
 		t.Fatalf("query=%v error=%v", query, err)
 	}
@@ -66,7 +66,7 @@ func TestSiliconFlowBoundEmbeddingsBatchOrderAndRerank(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	config.Context = ctx
-	if _, err := model.Encode([]string{"q"}); !errors.Is(err, context.Canceled) {
+	if _, err := embeddingVectorsForTest(model.Embed([]string{"q"})); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error=%v", err)
 	}
 }
@@ -92,7 +92,7 @@ func TestSiliconFlowMalformedEmbeddingAndRerank(t *testing.T) {
 			config := &APIConfig{APIKey: &key}
 			var err error
 			if test.path == "embeddings" {
-				_, err = driver.Encode(&name, []string{"q"}, config, nil)
+				_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"q"}, config, nil))
 			} else {
 				_, err = NewRerankModel(driver, &name, config).Rerank("q", []string{"doc"})
 			}
@@ -143,7 +143,7 @@ func TestSiliconFlowRejectsDuplicateIndexesAndDimensions(t *testing.T) {
 			config := &APIConfig{APIKey: &key}
 			var err error
 			if test.path == "embeddings" {
-				_, err = driver.Encode(&name, []string{"a", "b"}, config, nil)
+				_, err = embeddingVectorsForTest(driver.Embed(&name, []string{"a", "b"}, config, nil))
 			} else {
 				_, err = NewRerankModel(driver, &name, config).Rerank("q", []string{"a", "b"})
 			}

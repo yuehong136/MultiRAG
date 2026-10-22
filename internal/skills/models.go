@@ -60,8 +60,13 @@ func (m *LegacyModels) Embed(ctx context.Context, tenant string, id int64, texts
 	if e != nil {
 		return nil, e
 	}
-	_ = query
-	vectors, e := driver.Encode(row.LLMName, texts, c, nil)
+	bound := models.NewEmbeddingModel(driver, row.LLMName, c)
+	bound.EmbeddingConfig = &models.EmbeddingConfig{Query: query}
+	data, e := bound.Embed(texts)
+	if e != nil {
+		return nil, fault(503, "EMBEDDING_FAILED")
+	}
+	vectors, e := models.EmbeddingVectors(data, len(texts))
 	if e != nil {
 		return nil, fault(503, "EMBEDDING_FAILED")
 	}

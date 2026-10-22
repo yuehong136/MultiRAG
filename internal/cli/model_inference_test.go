@@ -9,7 +9,7 @@ import (
 )
 
 func TestModelInferenceParserAndHTTP(t *testing.T) {
-	for _, input := range []string{"embed text ' a ' 'b' with 'm@i@p' dimension 16;", "rerank query 'q' document 'a' 'b' with 'm@i@p' top 1;"} {
+	for _, input := range []string{"embed text ' a ' 'b' with 'm@i@p' dimension 2;", "rerank query 'q' document 'a' 'b' with 'm@i@p' top 1;"} {
 		t.Run(input, func(t *testing.T) {
 			parser := NewParser(input)
 			cmd, err := parser.Parse(false)
@@ -25,10 +25,10 @@ func TestModelInferenceParserAndHTTP(t *testing.T) {
 					t.Error(body, r.URL)
 				}
 				if strings.HasPrefix(input, "embed") {
-					if r.URL.Path != "/api/v1/embeddings" || body["dimension"] != float64(16) || body["texts"].([]any)[0] != " a " {
+					if r.URL.Path != "/api/v1/embeddings" || body["dimension"] != float64(2) || body["texts"].([]any)[0] != " a " {
 						t.Error(body, r.URL)
 					}
-					fmt.Fprint(w, `{"code":0,"data":[{"index":0,"dimension":16},{"index":1,"dimension":16}]}`)
+					fmt.Fprint(w, `{"code":0,"data":[{"index":1,"embedding":[0,1]},{"index":0,"embedding":[1,0]}]}`)
 				} else {
 					if r.URL.Path != "/api/v1/rerank" || body["top_n"] != float64(1) || body["query"] != "q" {
 						t.Error(body, r.URL)

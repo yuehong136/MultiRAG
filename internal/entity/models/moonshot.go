@@ -228,12 +228,12 @@ func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Me
 	return io.ErrUnexpectedEOF
 }
 
-func (m *MoonshotModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *MoonshotModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
 	suffix := m.URLSuffix.Embedding
 	if suffix == "" {
 		suffix = "embeddings"
 	}
-	return encodeHTTP(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig)
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig, embeddingConfig)
 }
 
 func (m *MoonshotModel) ListModels(apiConfig *APIConfig) ([]string, error) {

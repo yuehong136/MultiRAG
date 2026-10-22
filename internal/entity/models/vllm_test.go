@@ -57,7 +57,7 @@ func TestVLLMModelChatAndDiscovery(t *testing.T) {
 	if err := driver.CheckConnection(config); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver.Encode(&name, []string{"q"}, config, nil); err == nil {
+	if _, err := embeddingVectorsForTest(driver.Embed(&name, []string{"q"}, config, nil)); err == nil {
 		t.Fatal("unconfigured embedding endpoint succeeded")
 	}
 }

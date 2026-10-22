@@ -13,8 +13,16 @@ type batchOnlyEmbedding struct {
 	encode func([]string) ([][]float64, error)
 }
 
-func (f batchOnlyEmbedding) Encode(_ *string, texts []string, _ *models.APIConfig, _ *models.EmbeddingConfig) ([][]float64, error) {
-	return f.encode(texts)
+func (f batchOnlyEmbedding) Embed(_ *string, texts []string, _ *models.APIConfig, _ *models.EmbeddingConfig) ([]models.EmbeddingData, error) {
+	vectors, err := f.encode(texts)
+	if err != nil {
+		return nil, err
+	}
+	data := make([]models.EmbeddingData, len(vectors))
+	for i, v := range vectors {
+		data[i] = models.EmbeddingData{Index: i, Embedding: v}
+	}
+	return data, nil
 }
 
 func TestBoundEmbeddingBatchAndSingleQuery(t *testing.T) {
@@ -25,15 +33,15 @@ func TestBoundEmbeddingBatchAndSingleQuery(t *testing.T) {
 		}
 		return vectors, nil
 	}}, nil, nil)
-	vectors, err := model.Encode([]string{"abcd", "中文"})
+	vectors, err := embeddingVectorsForTest(model.Embed([]string{"abcd", "中文"}))
 	if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 2}, {2, 2}}) {
 		t.Fatalf("batch=%v error=%v", vectors, err)
 	}
-	vectors, err = model.Encode([]string{"中文abc"})
+	vectors, err = embeddingVectorsForTest(model.Embed([]string{"中文abc"}))
 	if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 2}}) {
 		t.Fatalf("query=%v error=%v", vectors, err)
 	}
-	vectors, err = model.Encode(nil)
+	vectors, err = embeddingVectorsForTest(model.Embed(nil))
 	if err != nil || len(vectors) != 0 {
 		t.Fatalf("empty=%v error=%v", vectors, err)
 	}
@@ -42,17 +50,17 @@ func TestBoundEmbeddingBatchAndSingleQuery(t *testing.T) {
 func TestBoundEmbeddingRejectsInvalidResults(t *testing.T) {
 	for _, vectors := range [][][]float64{nil, {{}}, {{1}, {2}}} {
 		model := models.NewEmbeddingModel(batchOnlyEmbedding{encode: func([]string) ([][]float64, error) { return vectors, nil }}, nil, nil)
-		if result, err := model.Encode([]string{"question"}); err == nil || result != nil {
+		if result, err := embeddingVectorsForTest(model.Embed([]string{"question"})); err == nil || result != nil {
 			t.Fatalf("invalid=%v error=%v", result, err)
 		}
 	}
 	model := models.NewEmbeddingModel(batchOnlyEmbedding{encode: func([]string) ([][]float64, error) { return [][]float64{{1}, {2, 3}}, nil }}, nil, nil)
-	if result, err := model.Encode([]string{"first", "second"}); err == nil || result != nil {
+	if result, err := embeddingVectorsForTest(model.Embed([]string{"first", "second"})); err == nil || result != nil {
 		t.Fatalf("dimensions=%v error=%v", result, err)
 	}
 	want := errors.New("provider failure")
 	model.ModelDriver = batchOnlyEmbedding{encode: func([]string) ([][]float64, error) { return nil, want }}
-	if _, err := model.Encode([]string{"question"}); !errors.Is(err, want) {
+	if _, err := embeddingVectorsForTest(model.Embed([]string{"question"})); !errors.Is(err, want) {
 		t.Fatalf("provider error=%v", err)
 	}
 }

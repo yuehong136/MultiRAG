@@ -75,7 +75,7 @@ func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
 			t.Errorf("request path = %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data":[{"embedding":[1.5,2.5]}]}`)
+		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1.5,2.5]}]}`)
 	}))
 	t.Cleanup(server.Close)
 
@@ -90,17 +90,17 @@ func TestZhipuAIEmbeddingUsesConfiguredRegionURL(t *testing.T) {
 	modelName := "embedding-test"
 	apiKey := "test-key"
 
-	embeddings, err := model.Encode(
+	embeddings, err := embeddingVectorsForTest(model.Embed(
 		&modelName,
 		[]string{"hello"},
 		&APIConfig{APIKey: &apiKey, Region: &region},
 		&EmbeddingConfig{},
-	)
+	))
 	if err != nil {
-		t.Fatalf("Encode() error = %v", err)
+		t.Fatalf("Embed() error = %v", err)
 	}
 	if len(embeddings) != 1 || len(embeddings[0]) != 2 || embeddings[0][0] != 1.5 {
-		t.Fatalf("Encode() = %#v", embeddings)
+		t.Fatalf("Embed() = %#v", embeddings)
 	}
 }
 

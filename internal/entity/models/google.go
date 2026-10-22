@@ -315,10 +315,10 @@ func (t googleResponseTransport) RoundTrip(request *http.Request) (*http.Respons
 	return response, nil
 }
 
-// Encode uses the SDK's batchEmbedContents endpoint and retains provider order.
-func (g *GoogleModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+// Embed uses the SDK's batchEmbedContents endpoint and retains provider order.
+func (g *GoogleModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	if len(texts) == 0 {
-		return [][]float64{}, nil
+		return []EmbeddingData{}, nil
 	}
 	if modelName == nil || strings.TrimSpace(*modelName) == "" {
 		return nil, errors.New("Google model name is required")
@@ -387,7 +387,7 @@ func (g *GoogleModel) Encode(modelName *string, texts []string, apiConfig *APICo
 	if err := ValidateEmbeddings(vectors, len(texts)); err != nil {
 		return nil, err
 	}
-	return vectors, nil
+	return embeddingData(vectors), nil
 }
 func (g *GoogleModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
 	return nil, errors.New("Google balance lookup is unsupported")

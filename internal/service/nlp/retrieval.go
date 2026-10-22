@@ -628,13 +628,13 @@ func (s *RetrievalService) GetVector(txt string, embModel *models.EmbeddingModel
 		config.Query = true
 	}
 	queryModel.EmbeddingConfig = &config
-	embeddings, err := queryModel.Encode([]string{txt})
+	embeddings, err := queryModel.Embed([]string{txt})
 	if err != nil {
 		return nil, err
 	}
 
-	// Bound Encode validates exactly one nonempty vector before indexing.
-	vector := embeddings[0]
+	// Bound Embed validates exactly one nonempty vector before indexing.
+	vector := embeddings[0].Embedding
 	vectorSize := len(vector)
 	vectorColumnName := fmt.Sprintf("q_%d_vec", vectorSize)
 

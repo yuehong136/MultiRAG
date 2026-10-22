@@ -270,8 +270,8 @@ func (l *LMStudioModel) ListModels(config *APIConfig) ([]string, error) {
 	return names, nil
 }
 
-func (l *LMStudioModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTPWithConfig(l.httpClient, l.BaseURL, l.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
+func (l *LMStudioModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(l.httpClient, l.BaseURL, l.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
 }
 func (l *LMStudioModel) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
 	return nil, fmt.Errorf("lmstudio: rerank is not implemented")

@@ -43,7 +43,7 @@ func TestVolcEngineMultimodalEmbeddingHTTP(t *testing.T) {
 			driver, _ := NewModelFactory().CreateModelDriver("VolcEngine", map[string]string{"default": server.URL + "/ark/"}, URLSuffix{Embedding: "embeddings/multimodal"})
 			name := "doubao-embedding-vision-250615"
 			api := &APIConfig{APIKey: &instance, Region: stringPtr("")}
-			vectors, err := NewEmbeddingModel(driver, &name, api).Encode([]string{"first", "second"})
+			vectors, err := embeddingVectorsForTest(NewEmbeddingModel(driver, &name, api).Embed([]string{"first", "second"}))
 			if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 0}, {2, 0}}) || !reflect.DeepEqual(inputs, []string{"first", "second"}) {
 				t.Fatal(vectors, inputs, err)
 			}
@@ -56,7 +56,7 @@ func TestVolcEngineEmbeddingMalformedAndPartialFailureHTTP(t *testing.T) {
 		body   string
 		status int
 	}{
-		{`{}`, 200}, {`{"data":null}`, 200}, {`{"data":{"embedding":[]}}`, 200},
+		{`{}`, 200}, {`{"data":null}`, 200}, {`{"data":{"embedding":[null,2]}}`, 200}, {`{"data":{"embedding":[1,2]}} {}`, 200}, {`{"data":{"embedding":[]}}`, 200},
 		{`{"data":{"embedding":[1e999]}}`, 200}, {`{"data":{"embedding":["bad"]}}`, 200},
 		{`{"data":{"embedding":[1]}}`, 200},
 		{`{"data":{"embedding":[1]},"error":"private-body"}`, 200}, {`invalid`, 200}, {`private-body`, 429},
@@ -74,7 +74,7 @@ func TestVolcEngineEmbeddingMalformedAndPartialFailureHTTP(t *testing.T) {
 			defer server.Close()
 			driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings/multimodal"})
 			name := "m"
-			vectors, err := driver.Encode(&name, []string{"first", "second", "third"}, &APIConfig{APIKey: stringPtr("key")}, nil)
+			vectors, err := embeddingVectorsForTest(driver.Embed(&name, []string{"first", "second", "third"}, &APIConfig{APIKey: stringPtr("key")}, nil))
 			if err == nil || vectors != nil || calls.Load() != 2 || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(vectors, err, calls.Load())
 			}
@@ -91,7 +91,7 @@ func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 	defer server.Close()
 	driver := NewVolcEngine(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings/multimodal"})
 	name := "m"
-	if vectors, err := driver.Encode(nil, nil, nil, nil); err != nil || vectors == nil || len(vectors) != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, nil)); err != nil || vectors == nil || len(vectors) != 0 {
 		t.Fatal(vectors, err)
 	}
 	for _, test := range []struct {
@@ -102,7 +102,7 @@ func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 		{&name, nil}, {&name, &APIConfig{}}, {&name, &APIConfig{APIKey: stringPtr(" ")}},
 		{&name, &APIConfig{APIKey: stringPtr("key"), Region: stringPtr("missing")}},
 	} {
-		if vectors, err := driver.Encode(test.name, []string{"q"}, test.api, nil); err == nil || vectors != nil {
+		if vectors, err := embeddingVectorsForTest(driver.Embed(test.name, []string{"q"}, test.api, nil)); err == nil || vectors != nil {
 			t.Fatal(vectors, err)
 		}
 	}
@@ -111,7 +111,7 @@ func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := driver.Encode(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := embeddingVectorsForTest(driver.Embed(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	stopped := make(chan struct{})
@@ -129,7 +129,7 @@ func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 	}))
 	defer blocked.Close()
 	driver = NewVolcEngine(map[string]string{"default": blocked.URL}, URLSuffix{Embedding: "embeddings/multimodal"})
-	if _, err := driver.Encode(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := embeddingVectorsForTest(driver.Embed(&name, []string{"q"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	select {

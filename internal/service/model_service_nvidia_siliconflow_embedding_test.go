@@ -104,7 +104,7 @@ func TestNVIDIASiliconFlowEmbeddingConfiguredInstancesHTTP(t *testing.T) {
 				for i := range texts {
 					texts[i], want[i] = strconv.Itoa(i), []float64{float64(i), 0}
 				}
-				vectors, err := bound.Encode(texts)
+				vectors, err := embeddingVectorsForTest(bound.Embed(texts))
 				if err != nil || !reflect.DeepEqual(vectors, want) || calls.Load() != 2 || api.Context != nil || !bound.EmbeddingConfig.Query || bound.EmbeddingConfig.Dimension != 2 || provider.URL["default"] != original {
 					t.Fatal("bound embedding failed or mutated its configuration", vectors, err, calls.Load())
 				}

@@ -54,7 +54,7 @@ func TestNVIDIAEmbeddingParametersAndRegionsHTTP(t *testing.T) {
 				driver := NewNVIDIAModel(urls, URLSuffix{Embedding: "embeddings"})
 				urls["default"], urls["office"] = "http://mutated.invalid", "http://mutated.invalid"
 				api := &APIConfig{APIKey: stringPtr(" fixture "), Region: region}
-				vectors, err := driver.Encode(stringPtr("embed"), []string{"first", "second"}, api, config)
+				vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"first", "second"}, api, config))
 				if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1}, {1, 0}}) || calls.Load() != 1 || api.Context != nil || api.Region != region || *api.APIKey != " fixture " {
 					t.Fatal(vectors, err, calls.Load())
 				}
@@ -86,7 +86,7 @@ func TestNVIDIAEmbeddingRejectsMalformedHTTP(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewNVIDIAModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-			vectors, err := driver.Encode(stringPtr("model"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture")}, nil)
+			vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture")}, nil))
 			if err == nil || vectors != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(vectors, err)
 			}
@@ -105,29 +105,29 @@ func TestNVIDIAEmbeddingPreflightAndDeadline(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader("private-body")), Header: make(http.Header)}, nil
 	})
-	if vectors, err := driver.Encode(nil, nil, nil, &EmbeddingConfig{Dimension: -1}); err != nil || vectors == nil || len(vectors) != 0 || calls != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, &EmbeddingConfig{Dimension: -1})); err != nil || vectors == nil || len(vectors) != 0 || calls != 0 {
 		t.Fatal(vectors, err, calls)
 	}
 	api := &APIConfig{APIKey: stringPtr("fixture")}
 	for _, name := range []*string{nil, stringPtr(""), stringPtr(" ")} {
-		if vectors, err := driver.Encode(name, []string{"a"}, api, nil); err == nil || vectors != nil {
+		if vectors, err := embeddingVectorsForTest(driver.Embed(name, []string{"a"}, api, nil)); err == nil || vectors != nil {
 			t.Fatal("invalid name succeeded", vectors, err)
 		}
 	}
 	for _, invalid := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" ")}} {
-		if vectors, err := driver.Encode(stringPtr("embed"), []string{"a"}, invalid, nil); err == nil || vectors != nil {
+		if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, invalid, nil)); err == nil || vectors != nil {
 			t.Fatal("missing key succeeded", vectors, err)
 		}
 	}
-	if vectors, err := driver.Encode(stringPtr("embed"), []string{"a"}, api, &EmbeddingConfig{Dimension: -1}); err == nil || vectors != nil || calls != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, api, &EmbeddingConfig{Dimension: -1})); err == nil || vectors != nil || calls != 0 {
 		t.Fatal(vectors, err, calls)
 	}
 	for _, missing := range []*NVIDIAModel{NewNVIDIAModel(nil, URLSuffix{Embedding: "embeddings"}), NewNVIDIAModel(driver.BaseURL, URLSuffix{})} {
-		if vectors, err := missing.Encode(stringPtr("embed"), []string{"a"}, api, nil); err == nil || vectors != nil {
+		if vectors, err := embeddingVectorsForTest(missing.Embed(stringPtr("embed"), []string{"a"}, api, nil)); err == nil || vectors != nil {
 			t.Fatal("missing endpoint succeeded", vectors, err)
 		}
 	}
-	if vectors, err := driver.Encode(stringPtr("embed"), []string{"a"}, api, nil); err == nil || vectors != nil || !strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "private-body") || calls != 1 || api.Context != nil {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, api, nil)); err == nil || vectors != nil || !strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "private-body") || calls != 1 || api.Context != nil {
 		t.Fatal(vectors, err, calls)
 	}
 }
@@ -146,7 +146,7 @@ func TestNVIDIAEmbeddingCancellationHTTP(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		vectors, err := driver.Encode(stringPtr("embed"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil)
+		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("embed"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture"), Context: ctx}, nil))
 		if vectors != nil {
 			result <- fmt.Errorf("cancelled call returned vectors")
 			return

@@ -41,9 +41,12 @@ func huggingFaceChatBody(name string, messages []Message, config *ChatConfig, st
 	return body, nil
 }
 
-func (h *HuggingFaceModel) Encode(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (h *HuggingFaceModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+	if config != nil && config.Dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be non-negative")
+	}
 	if len(texts) == 0 {
-		return [][]float64{}, nil
+		return []EmbeddingData{}, nil
 	}
 	if name == nil || strings.TrimSpace(*name) == "" {
 		return nil, fmt.Errorf("huggingface: model name is required")
@@ -105,10 +108,17 @@ func (h *HuggingFaceModel) Encode(name *string, texts []string, api *APIConfig, 
 	if err := ValidateEmbeddings(vectors, len(texts)); err != nil {
 		return nil, err
 	}
+	if config != nil && config.Dimension > 0 {
+		for _, vector := range vectors {
+			if len(vector) != config.Dimension {
+				return nil, fmt.Errorf("embedding dimension does not match request")
+			}
+		}
+	}
 	if err := requestContext(local).Err(); err != nil {
 		return nil, err
 	}
-	return vectors, nil
+	return embeddingData(vectors), nil
 }
 
 func apiRegion(api *APIConfig) *string {

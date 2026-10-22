@@ -45,7 +45,7 @@ func TestGoogleRetrievalUsesQueryTaskWithoutMutatingBoundModel(t *testing.T) {
 			driver := models.NewGoogleModel(map[string]string{"default": server.URL}, models.URLSuffix{})
 			model := models.NewEmbeddingModel(driver, &name, &models.APIConfig{APIKey: &key})
 			model.EmbeddingConfig = config
-			if _, err := model.Encode([]string{"stored document"}); err != nil {
+			if _, err := embeddingVectorsForTest(model.Embed([]string{"stored document"})); err != nil {
 				t.Fatal(err)
 			}
 			expression, err := NewRetrievalService(nil).GetVector("search question", model, 7, 0.4)
@@ -55,7 +55,7 @@ func TestGoogleRetrievalUsesQueryTaskWithoutMutatingBoundModel(t *testing.T) {
 			if expression.VectorColumnName != "q_2_vec" || expression.TopN != 7 || !reflect.DeepEqual(expression.EmbeddingData, []float64{0, 1}) {
 				t.Fatal(expression)
 			}
-			if _, err := model.Encode([]string{"another document"}); err != nil {
+			if _, err := embeddingVectorsForTest(model.Embed([]string{"another document"})); err != nil {
 				t.Fatal(err)
 			}
 			if model.EmbeddingConfig != config || (config != nil && config.Query) || !reflect.DeepEqual(tasks, []string{"RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY", "RETRIEVAL_DOCUMENT"}) {

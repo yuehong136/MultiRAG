@@ -130,7 +130,10 @@ func TestGoogleEmbeddingLiveHTTPAndSQL(t *testing.T) {
 	router.POST("/api/v1/embeddings", h.EmbedText)
 	app := httptest.NewServer(router)
 	defer app.Close()
-	request := func(user, instance, model, first string, dimension int) (int, *int, []struct{ Index, Dimension int }) {
+	request := func(user, instance, model, first string, dimension int) (int, *int, []struct {
+		Index     int
+		Embedding []float64
+	}) {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"provider_name": "Google", "instance_name": instance, "model_name": model, "texts": []string{first, "second"}, "dimension": dimension})
 		req, _ := http.NewRequest(http.MethodPost, app.URL+"/api/v1/embeddings", bytes.NewReader(body))
@@ -150,7 +153,10 @@ func TestGoogleEmbeddingLiveHTTPAndSQL(t *testing.T) {
 		}
 		var result struct {
 			Code *int
-			Data []struct{ Index, Dimension int }
+			Data []struct {
+				Index     int
+				Embedding []float64
+			}
 		}
 		if response.StatusCode != http.StatusUnauthorized {
 			if err := json.Unmarshal(data, &result); err != nil || result.Code == nil {
@@ -161,7 +167,7 @@ func TestGoogleEmbeddingLiveHTTPAndSQL(t *testing.T) {
 	}
 	for _, instance := range []string{"one", "two"} {
 		status, code, data := request("owner", instance, "text-embedding-004", "first", 2)
-		if status != http.StatusOK || code == nil || *code != 0 || len(data) != 2 || data[0].Index != 0 || data[1].Index != 1 || data[0].Dimension != 2 || data[1].Dimension != 2 {
+		if status != http.StatusOK || code == nil || *code != 0 || len(data) != 2 || data[0].Index != 0 || data[1].Index != 1 || len(data[0].Embedding) != 2 || len(data[1].Embedding) != 2 {
 			t.Fatalf("embedding response status %d code %v data %v", status, code, data)
 		}
 	}

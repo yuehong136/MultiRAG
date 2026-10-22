@@ -91,21 +91,32 @@ func (p *SkillModelProvider) GetEmbeddingModel(tenant, ref string) (*skillEmbedd
 	}
 	return &skillEmbeddingModel{EmbeddingModel: models.NewEmbeddingModel(driver, row.LLMName, &models.APIConfig{APIKey: row.APIKey}), MaxTokens: maxTokens}, nil
 }
-func (m *skillEmbeddingModel) Encode(ctx context.Context, texts []string, query bool) ([][]float64, error) {
-	m.APIConfig.Context = ctx
-	m.EmbeddingConfig = &models.EmbeddingConfig{Query: query}
-	vectors, err := m.EmbeddingModel.Encode(texts)
+func (m *skillEmbeddingModel) Embed(ctx context.Context, texts []string, query bool) ([]models.EmbeddingData, error) {
+	// Keep contexts and query/document configuration local to this invocation.
+	bound := *m.EmbeddingModel
+	api := models.APIConfig{}
+	if bound.APIConfig != nil {
+		api = *bound.APIConfig
+	}
+	api.Context = ctx
+	config := models.EmbeddingConfig{}
+	if bound.EmbeddingConfig != nil {
+		config = *bound.EmbeddingConfig
+	}
+	config.Query = query
+	bound.APIConfig, bound.EmbeddingConfig = &api, &config
+	data, err := bound.Embed(texts)
 	if err != nil {
 		return nil, err
 	}
-	for _, vector := range vectors {
+	for _, item := range data {
 		norm := 0.0
-		for _, v := range vector {
+		for _, v := range item.Embedding {
 			norm += v * v
 		}
-		if len(vector) > 32768 || norm == 0 || math.IsInf(norm, 0) {
+		if len(item.Embedding) > 32768 || norm == 0 || math.IsInf(norm, 0) {
 			return nil, fmt.Errorf("EMBEDDING_INVALID")
 		}
 	}
-	return vectors, nil
+	return data, nil
 }

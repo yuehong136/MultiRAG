@@ -282,8 +282,8 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 	return io.ErrUnexpectedEOF
 }
 
-func (m *AliyunModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
-	return encodeHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig)
+func (m *AliyunModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig)
 }
 
 // ListModels checks the configured endpoint and returns model names.

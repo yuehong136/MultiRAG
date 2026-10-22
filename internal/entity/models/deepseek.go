@@ -404,12 +404,12 @@ func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Me
 	return scanner.Err()
 }
 
-func (m *DeepSeekModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([][]float64, error) {
+func (m *DeepSeekModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
 	suffix := m.URLSuffix.Embedding
 	if suffix == "" {
 		suffix = "embeddings"
 	}
-	return encodeHTTP(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig)
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig, embeddingConfig)
 }
 
 func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {

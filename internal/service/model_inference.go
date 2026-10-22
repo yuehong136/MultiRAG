@@ -31,7 +31,7 @@ func (m *ModelProviderService) userInferenceModel(provider, instance, name, user
 	return driver, resolved, common.CodeSuccess, nil
 }
 
-func (m *ModelProviderService) EmbedText(provider, instance, name, user string, texts []string, api *models.APIConfig, config *models.EmbeddingConfig) (*models.EmbeddingResponse, common.ErrorCode, error) {
+func (m *ModelProviderService) EmbedText(provider, instance, name, user string, texts []string, api *models.APIConfig, config *models.EmbeddingConfig) ([]models.EmbeddingData, common.ErrorCode, error) {
 	if len(texts) == 0 || config != nil && config.Dimension < 0 {
 		return nil, common.CodeBadRequest, fmt.Errorf("texts and non-negative dimension required")
 	}
@@ -39,19 +39,11 @@ func (m *ModelProviderService) EmbedText(provider, instance, name, user string, 
 	if err != nil {
 		return nil, code, err
 	}
-	vectors, err := driver.Encode(&name, texts, resolved, config)
+	bound := models.NewEmbeddingModel(driver, &name, resolved)
+	bound.EmbeddingConfig = config
+	response, err := bound.Embed(texts)
 	if err != nil {
 		return nil, common.CodeServerError, err
-	}
-	if err := models.ValidateEmbeddings(vectors, len(texts)); err != nil {
-		return nil, common.CodeServerError, err
-	}
-	response := &models.EmbeddingResponse{Data: make([]models.EmbeddingResult, len(vectors))}
-	for i, vector := range vectors {
-		if config != nil && config.Dimension > 0 && len(vector) != config.Dimension {
-			return nil, common.CodeServerError, fmt.Errorf("embedding dimension does not match request")
-		}
-		response.Data[i] = models.EmbeddingResult{Index: i, Dimension: len(vector)}
 	}
 	return response, common.CodeSuccess, nil
 }

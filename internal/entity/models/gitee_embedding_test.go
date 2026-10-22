@@ -46,7 +46,7 @@ func TestGiteeEmbeddingDimensionAndRegionHTTP(t *testing.T) {
 	}
 	api := &APIConfig{APIKey: &key, Region: &unknown}
 	cfg := &EmbeddingConfig{Dimension: 2, Query: true}
-	vectors, err := driver.Encode(&name, texts, api, cfg)
+	vectors, err := embeddingVectorsForTest(driver.Embed(&name, texts, api, cfg))
 	if err != nil || len(vectors) != 33 || calls != 2 {
 		t.Fatal(len(vectors), calls, err)
 	}
@@ -56,7 +56,7 @@ func TestGiteeEmbeddingDimensionAndRegionHTTP(t *testing.T) {
 		}
 	}
 	for _, keyless := range []*APIConfig{nil, {}, {APIKey: stringPtr(" ")}} {
-		if got, err := driver.Encode(&name, []string{"0"}, keyless, cfg); err == nil || got != nil {
+		if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"0"}, keyless, cfg)); err == nil || got != nil {
 			t.Fatal("missing key accepted")
 		}
 	}

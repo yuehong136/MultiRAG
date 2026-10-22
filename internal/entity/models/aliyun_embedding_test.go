@@ -50,7 +50,7 @@ func TestAliyunEmbeddingBatchRegionAndOrderHTTP(t *testing.T) {
 		texts[i] = fmt.Sprintf("text-%d", i)
 		want[i] = []float64{float64(i), 9}
 	}
-	got, err := bound.Encode(texts)
+	got, err := embeddingVectorsForTest(bound.Embed(texts))
 	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(batches, []int{32, 1}) || api.Context != nil {
 		t.Fatal(got, batches, err)
 	}
@@ -81,7 +81,7 @@ func TestAliyunEmbeddingRejectsInvalidResponsesHTTP(t *testing.T) {
 			defer server.Close()
 			driver := NewAliyunModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 			key, name := "fixture", "text-embedding-v4"
-			got, err := driver.Encode(&name, []string{"first", "second"}, &APIConfig{APIKey: &key}, nil)
+			got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"first", "second"}, &APIConfig{APIKey: &key}, nil))
 			if err == nil || got != nil || strings.Contains(err.Error(), "private-body") {
 				t.Fatal(got, err)
 			}
@@ -98,20 +98,20 @@ func TestAliyunEmbeddingPreflightAndCancel(t *testing.T) {
 	defer server.Close()
 	driver := NewAliyunModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 	key, name, unknown := "fixture", "text-embedding-v4", "missing"
-	if got, err := driver.Encode(nil, nil, nil, nil); err != nil || got == nil || len(got) != 0 {
+	if got, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, nil)); err != nil || got == nil || len(got) != 0 {
 		t.Fatal(got, err)
 	}
 	for _, tc := range []struct {
 		name *string
 		api  *APIConfig
 	}{{nil, &APIConfig{APIKey: &key}}, {&name, nil}, {&name, &APIConfig{}}, {&name, &APIConfig{APIKey: &key, Region: &unknown}}} {
-		if got, err := driver.Encode(tc.name, []string{"a"}, tc.api, nil); err == nil || got != nil {
+		if got, err := embeddingVectorsForTest(driver.Embed(tc.name, []string{"a"}, tc.api, nil)); err == nil || got != nil {
 			t.Fatal(got, err)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := driver.Encode(&name, []string{"a"}, &APIConfig{APIKey: &key, Context: ctx}, nil); !errors.Is(err, context.Canceled) || got != nil {
+	if got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a"}, &APIConfig{APIKey: &key, Context: ctx}, nil)); !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal(got, err)
 	}
 	if calls.Load() != 0 {
@@ -140,7 +140,7 @@ func TestAliyunEmbeddingCancelDuringHTTP(t *testing.T) {
 	go func() { <-started; cancel() }()
 	key, name := "fixture", "text-embedding-v4"
 	driver := NewAliyunModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
-	got, err := driver.Encode(&name, []string{"one"}, &APIConfig{APIKey: &key, Context: ctx}, nil)
+	got, err := embeddingVectorsForTest(driver.Embed(&name, []string{"one"}, &APIConfig{APIKey: &key, Context: ctx}, nil))
 	if !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatal(got, err)
 	}

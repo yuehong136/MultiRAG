@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"multirag/internal/entity/models"
 	"strings"
 )
 
@@ -54,6 +55,33 @@ func (c *MultiRAGClient) ModelInference(cmd *Command, rerank bool) (ResponseIf, 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("model inference: HTTP %d", resp.StatusCode)
 	}
+	if !rerank {
+		var raw struct {
+			Code    *int                    `json:"code"`
+			Data    *[]models.EmbeddingData `json:"data"`
+			Message string                  `json:"message"`
+		}
+		if err := json.Unmarshal(resp.Body, &raw); err != nil {
+			return nil, fmt.Errorf("invalid embedding response")
+		}
+		if raw.Code == nil || *raw.Code != 0 || raw.Data == nil {
+			return nil, fmt.Errorf("embedding failed or missing result")
+		}
+		vectors, err := models.EmbeddingVectors(*raw.Data, len(values))
+		if err != nil {
+			return nil, err
+		}
+		for _, vector := range vectors {
+			if number > 0 && len(vector) != number {
+				return nil, fmt.Errorf("invalid embedding dimension")
+			}
+		}
+		data := make([]models.EmbeddingData, len(vectors))
+		for i, vector := range vectors {
+			data[i] = models.EmbeddingData{Index: i, Embedding: vector}
+		}
+		return &EmbeddingsResponse{Code: *raw.Code, Data: data, Message: raw.Message}, nil
+	}
 	var raw struct {
 		Code    *int                      `json:"code"`
 		Data    *[]map[string]interface{} `json:"data"`
@@ -79,16 +107,10 @@ func (c *MultiRAGClient) ModelInference(cmd *Command, rerank bool) (ResponseIf, 
 			return nil, fmt.Errorf("invalid model inference index")
 		}
 		seen[int(index)] = true
-		field := "dimension"
-		if rerank {
-			field = "relevance_score"
-		}
+		field := "relevance_score"
 		value, ok := row[field].(float64)
 		if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 			return nil, fmt.Errorf("invalid model inference value")
-		}
-		if !rerank && (value <= 0 || value != math.Trunc(value) || number > 0 && value != float64(number)) {
-			return nil, fmt.Errorf("invalid embedding dimension")
 		}
 	}
 	return &CommonResponse{Code: *raw.Code, Data: *raw.Data, Message: raw.Message}, nil

@@ -293,8 +293,8 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	if second.httpClient.Transport != driver.httpClient.Transport {
 		t.Fatal("per-instance connection pool")
 	}
-	// The existing shared Encode contract suite exercises reordered and validated vectors through factory.
-	if vectors, err := driver.Encode(&name, nil, nil, nil); err != nil || len(vectors) != 0 {
+	// The existing shared Embed contract suite exercises reordered and validated vectors through factory.
+	if vectors, err := embeddingVectorsForTest(driver.Embed(&name, nil, nil, nil)); err != nil || len(vectors) != 0 {
 		t.Fatal(vectors, err)
 	}
 }

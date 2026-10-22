@@ -110,11 +110,11 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vector, err := embedding.Encode([]string{"q"})
+	vector, err := embeddingVectorsForTest(embedding.Embed([]string{"q"}))
 	if err != nil || !reflect.DeepEqual(vector, [][]float64{{1, 2}}) {
 		t.Fatalf("vector=%v, error=%v", vector, err)
 	}
-	queryVectors, err := embedding.Encode([]string{"question"})
+	queryVectors, err := embeddingVectorsForTest(embedding.Embed([]string{"question"}))
 	if err != nil || !reflect.DeepEqual(queryVectors, [][]float64{{1, 2}}) {
 		t.Fatalf("bound query=%v error=%v", queryVectors, err)
 	}
@@ -181,7 +181,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := legacy.Encode([]string{"q"}); err != nil {
+	if _, err := embeddingVectorsForTest(legacy.Embed([]string{"q"})); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&entity.TenantModelProvider{ID: "legacy-openai", TenantID: "legacy", ProviderName: "OpenAI"}).Error; err != nil {
@@ -191,7 +191,7 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing default instance compatibility: %v", err)
 	}
-	if _, err := legacy.Encode([]string{"q"}); err != nil {
+	if _, err := embeddingVectorsForTest(legacy.Embed([]string{"q"})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.GetEmbeddingModel("legacy", legacyName+"@missing@OpenAI"); err == nil {
@@ -246,7 +246,7 @@ func TestEmbeddingUsesResolvedBoundName(t *testing.T) {
 	key, name := "key", "resolved-name"
 	driver := models.NewSiliconFlowModel(map[string]string{"default": server.URL}, models.URLSuffix{Embedding: "embeddings"})
 	bound := models.NewEmbeddingModel(driver, &name, &models.APIConfig{APIKey: &key})
-	vectors, err := bound.Encode([]string{"q"})
+	vectors, err := embeddingVectorsForTest(bound.Embed([]string{"q"}))
 	if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 2}}) {
 		t.Fatalf("vectors=%v error=%v", vectors, err)
 	}

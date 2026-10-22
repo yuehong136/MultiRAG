@@ -16,12 +16,12 @@ type embeddingContractDriver struct {
 	config  *EmbeddingConfig
 }
 
-func (d *embeddingContractDriver) Encode(_ *string, _ []string, _ *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
+func (d *embeddingContractDriver) Embed(_ *string, _ []string, _ *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
 	d.config = config
-	return d.vectors, nil
+	return embeddingData(d.vectors), nil
 }
 
-func TestBoundEncodeValidatesBatchAndForwardsConfig(t *testing.T) {
+func TestBoundEmbedValidatesBatchAndForwardsConfig(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		texts   []string
@@ -42,7 +42,7 @@ func TestBoundEncodeValidatesBatchAndForwardsConfig(t *testing.T) {
 			driver := &embeddingContractDriver{vectors: test.vectors}
 			model := NewEmbeddingModel(driver, nil, nil)
 			model.EmbeddingConfig = &EmbeddingConfig{}
-			vectors, err := model.Encode(test.texts)
+			vectors, err := embeddingVectorsForTest(model.Embed(test.texts))
 			if (err == nil) != test.valid || !test.valid && vectors != nil {
 				t.Fatalf("vectors=%v error=%v", vectors, err)
 			}
@@ -53,7 +53,7 @@ func TestBoundEncodeValidatesBatchAndForwardsConfig(t *testing.T) {
 	}
 }
 
-func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
+func TestEmbeddingProvidersUseCanonicalEmbed(t *testing.T) {
 	for _, provider := range []string{"Aliyun", "OpenAI", "OpenAI-API-Compatible", "DeepSeek", "Moonshot", "Gitee", "SiliconFlow", "ZHIPU-AI"} {
 		t.Run(provider, func(t *testing.T) {
 			var requests atomic.Int32
@@ -70,15 +70,10 @@ func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
 					t.Errorf("model = %q, %v", body.Model, err)
 				}
 				var texts []string
-				if provider == "ZHIPU-AI" {
-					var text string
-					if err := json.Unmarshal(body.Input, &text); err != nil {
-						t.Error(err)
-					}
-					texts = []string{text}
-				} else if err := json.Unmarshal(body.Input, &texts); err != nil {
+				if err := json.Unmarshal(body.Input, &texts); err != nil {
 					t.Error(err)
 				}
+
 				data := make([]map[string]interface{}, 0, len(texts))
 				for i := len(texts) - 1; i >= 0; i-- {
 					value := 1.0
@@ -98,10 +93,10 @@ func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
 			}
 			name, key := "resolved-model", "fixture-key"
 			config := &APIConfig{APIKey: &key}
-			if vectors, err := driver.Encode(&name, nil, config, nil); err != nil || len(vectors) != 0 || requests.Load() != 0 {
+			if vectors, err := embeddingVectorsForTest(driver.Embed(&name, nil, config, nil)); err != nil || len(vectors) != 0 || requests.Load() != 0 {
 				t.Fatalf("empty input = %v, %v; requests=%d", vectors, err, requests.Load())
 			}
-			vectors, err := driver.Encode(&name, []string{"first", "second"}, config, &EmbeddingConfig{})
+			vectors, err := embeddingVectorsForTest(driver.Embed(&name, []string{"first", "second"}, config, &EmbeddingConfig{}))
 			if err != nil || !reflect.DeepEqual(vectors, [][]float64{{1, 9}, {2, 9}}) {
 				t.Fatalf("vectors=%v error=%v", vectors, err)
 			}
@@ -114,43 +109,28 @@ func TestEmbeddingProvidersUseCanonicalEncode(t *testing.T) {
 				t.Fatal(err)
 			}
 			name, key := "model", "fixture-key"
-			if _, err := driver.Encode(&name, []string{"text"}, &APIConfig{APIKey: &key}, nil); err == nil {
+			if _, err := embeddingVectorsForTest(driver.Embed(&name, []string{"text"}, &APIConfig{APIKey: &key}, nil)); err == nil {
 				t.Fatalf("%s fabricated embedding support", provider)
 			}
 		})
 	}
 }
 
-func TestZhipuEncodeRejectsEmptyAndInconsistentDimensions(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		data []string
-	}{
-		{"empty vector", []string{`{"data":[{"embedding":[]}]}`}},
-		{"mixed dimensions", []string{`{"data":[{"embedding":[1,2]}]}`, `{"data":[{"embedding":[1]}]}`}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var requests atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				index := int(requests.Add(1)) - 1
-				if index >= len(test.data) {
-					t.Error("unexpected embedding request")
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-				w.Write([]byte(test.data[index]))
-			}))
+func TestZhipuEmbedRejectsEmptyAndInconsistentDimensions(t *testing.T) {
+	for _, body := range []string{`{"data":[{"index":0,"embedding":[]},{"index":1,"embedding":[1]}]}`, `{"data":[{"index":0,"embedding":[1,2]},{"index":1,"embedding":[1]}]}`} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
 			defer server.Close()
 			driver := NewZhipuAIModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 			name, key := "model", "fixture-key"
-			if vectors, err := driver.Encode(&name, make([]string, len(test.data)), &APIConfig{APIKey: &key}, nil); err == nil || vectors != nil {
-				t.Fatalf("invalid embedding batch=%v error=%v", vectors, err)
+			if data, err := driver.Embed(&name, []string{"a", "b"}, &APIConfig{APIKey: &key}, nil); err == nil || data != nil {
+				t.Fatal(data, err)
 			}
 		})
 	}
 }
 
-func TestSiliconFlowEncodeValidatesDimensionsAcrossBatches(t *testing.T) {
+func TestSiliconFlowEmbedValidatesDimensionsAcrossBatches(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Input []string }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -169,7 +149,7 @@ func TestSiliconFlowEncodeValidatesDimensionsAcrossBatches(t *testing.T) {
 	defer server.Close()
 	driver := NewSiliconFlowModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "embeddings"})
 	name, key := "model", "fixture-key"
-	if vectors, err := driver.Encode(&name, make([]string, 33), &APIConfig{APIKey: &key}, nil); err == nil || vectors != nil {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(&name, make([]string, 33), &APIConfig{APIKey: &key}, nil)); err == nil || vectors != nil {
 		t.Fatalf("mixed batch dimensions=%v error=%v", vectors, err)
 	}
 }

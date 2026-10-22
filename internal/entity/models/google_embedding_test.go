@@ -66,7 +66,7 @@ func TestGoogleEmbeddingSDKBatchAndTaskConfig(t *testing.T) {
 			api := &APIConfig{Region: &region, APIKey: &key}
 			bound := NewEmbeddingModel(driver, &name, api)
 			bound.EmbeddingConfig = config
-			vectors, err := bound.Encode(texts)
+			vectors, err := embeddingVectorsForTest(bound.Embed(texts))
 			if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1, 2}, {3, 4, 5}, {6, 7, 8}}) || calls.Load() != 1 {
 				t.Fatalf("vectors %v, calls %d, err %v", vectors, calls.Load(), err)
 			}
@@ -97,7 +97,7 @@ func TestGoogleEmbeddingRejectsMalformedSDKResponses(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-			vectors, err := driver.Encode(stringPtr("text-embedding-004"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture-key")}, nil)
+			vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("text-embedding-004"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture-key")}, nil))
 			if err == nil || vectors != nil || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "private body") {
 				t.Fatalf("invalid response accepted or unsafe error: %v %v", vectors, err)
 			}
@@ -108,7 +108,7 @@ func TestGoogleEmbeddingRejectsMalformedSDKResponses(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"embeddings":[{"values":[1,2]}]}`) }))
 			defer server.Close()
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-			if vectors, err := driver.Encode(stringPtr("text-embedding-004"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture-key")}, &EmbeddingConfig{Dimension: dimension}); err == nil || vectors != nil {
+			if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("text-embedding-004"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture-key")}, &EmbeddingConfig{Dimension: dimension})); err == nil || vectors != nil {
 				t.Fatalf("dimension mismatch: %v %v", vectors, err)
 			}
 		})
@@ -123,7 +123,7 @@ func TestGoogleEmbeddingPreflightAndCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-	if vectors, err := driver.Encode(nil, nil, nil, nil); err != nil || vectors == nil || len(vectors) != 0 || calls.Load() != 0 {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(nil, nil, nil, nil)); err != nil || vectors == nil || len(vectors) != 0 || calls.Load() != 0 {
 		t.Fatalf("empty batch: %v %v", vectors, err)
 	}
 	for _, tc := range []struct {
@@ -143,13 +143,13 @@ func TestGoogleEmbeddingPreflightAndCancellation(t *testing.T) {
 		{stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: -1}},
 		{stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: math.MaxInt32 + 1}},
 	} {
-		if vectors, err := driver.Encode(tc.name, tc.texts, tc.api, tc.config); err == nil || vectors != nil {
+		if vectors, err := embeddingVectorsForTest(driver.Embed(tc.name, tc.texts, tc.api, tc.config)); err == nil || vectors != nil {
 			t.Fatalf("invalid input accepted: %v %v", vectors, err)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if vectors, err := driver.Encode(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil); !errors.Is(err, context.Canceled) || vectors != nil {
+	if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)); !errors.Is(err, context.Canceled) || vectors != nil {
 		t.Fatalf("cancel: %v %v", vectors, err)
 	}
 	if calls.Load() != 0 {
@@ -165,7 +165,7 @@ func TestGoogleEmbeddingErrorAndInFlightCancellation(t *testing.T) {
 		}))
 		defer server.Close()
 		driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
-		vectors, err := driver.Encode(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture-key")}, nil)
+		vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture-key")}, nil))
 		if err == nil || vectors != nil || !strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "internal detail") {
 			t.Fatalf("provider error: %v %v", vectors, err)
 		}
@@ -195,7 +195,7 @@ func TestGoogleEmbeddingErrorAndInFlightCancellation(t *testing.T) {
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 			done := make(chan error, 1)
 			go func() {
-				vectors, err := driver.Encode(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil)
+				vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("model"), []string{"a"}, &APIConfig{APIKey: stringPtr("key"), Context: ctx}, nil))
 				if vectors != nil {
 					t.Error("cancel returned vectors")
 				}

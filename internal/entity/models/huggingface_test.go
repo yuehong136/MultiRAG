@@ -45,7 +45,7 @@ func TestHuggingFaceEmbeddingHTTP(t *testing.T) {
 			driver := NewHuggingFaceModel(urls, URLSuffix{Embedding: "hf-inference/models"})
 			urls["default"] = "http://invalid"
 			key, name := "fixture", "org/model"
-			vectors, err := driver.Encode(&name, []string{"a", "b"}, &APIConfig{APIKey: &key}, nil)
+			vectors, err := embeddingVectorsForTest(driver.Embed(&name, []string{"a", "b"}, &APIConfig{APIKey: &key}, nil))
 			if (err == nil) != (body == `[[1,2],[3,4]]` || body == `[[0,2],[3,0]]`) {
 				t.Fatal(vectors, err)
 			}
@@ -83,15 +83,15 @@ func TestHuggingFaceEmbeddingCancelHTTP(t *testing.T) {
 	defer server.Close()
 	d := NewHuggingFaceModel(map[string]string{"default": server.URL}, URLSuffix{Embedding: "infer"})
 	key, name := "fixture", "org/m"
-	_, err := d.Encode(&name, []string{"a"}, &APIConfig{APIKey: &key, Context: ctx}, nil)
+	_, err := embeddingVectorsForTest(d.Embed(&name, []string{"a"}, &APIConfig{APIKey: &key, Context: ctx}, nil))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if v, err := d.Encode(nil, nil, nil, nil); err != nil || v == nil || len(v) != 0 {
+	if v, err := embeddingVectorsForTest(d.Embed(nil, nil, nil, nil)); err != nil || v == nil || len(v) != 0 {
 		t.Fatal(v, err)
 	}
 	for _, api := range []*APIConfig{nil, {}} {
-		if _, err := d.Encode(&name, []string{"a"}, api, nil); err == nil {
+		if _, err := embeddingVectorsForTest(d.Embed(&name, []string{"a"}, api, nil)); err == nil {
 			t.Fatal("missing key accepted")
 		}
 	}
