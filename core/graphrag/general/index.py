@@ -35,6 +35,7 @@ from core.graphrag.general.community_reports_extractor import CommunityReportsEx
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
 from core.graphrag.light.graph_extractor import GraphExtractor as LightKGExt
+from core.graphrag.ner.graph_extractor import GraphExtractor as NerKGExt
 from core.graphrag.persistence import GraphRAGLease, current_task, current_writer, delete_rows, graph_rows, settled_io
 from core.graphrag.phase_markers import PHASE_COMMUNITY, PHASE_RESOLUTION, clear_phase_markers, has_phase_marker, set_phase_marker
 from core.graphrag.utils import (
@@ -78,6 +79,14 @@ async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str) -> n
 def phase_revision(graph: nx.Graph, config: dict[str, Any]) -> str:
     material = {"graph": nx.node_link_data(graph, edges="edges"), "config": config.get("graphrag", {})}
     return sha256(json.dumps(material, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def _select_extractor(config: dict[str, Any]) -> type[Extractor]:
+    if config.get("method") == "general":
+        return GeneralKGExt
+    if config.get("method") == "ner":
+        return NerKGExt
+    return LightKGExt
 
 
 async def run_graphrag_for_kb(
@@ -129,7 +138,7 @@ async def run_graphrag(
     try:
         subgraph = await asyncio.wait_for(
             generate_subgraph(
-                LightKGExt if "method" not in row["kb_parser_config"].get("graphrag", {}) or row["kb_parser_config"]["graphrag"]["method"] != "general" else GeneralKGExt,
+                _select_extractor(row["kb_parser_config"].get("graphrag", {})),
                 tenant_id,
                 kb_id,
                 doc_id,
@@ -251,6 +260,8 @@ async def _run_graphrag_for_kb(
         current_chunk = ""
 
         raw_chunks = await settled_io(load_graph_source_chunks, tenant_id, kb_id, doc_id)
+        if kb_parser_config.get("graphrag", {}).get("method") == "ner":
+            return raw_chunks
         for content in raw_chunks:
             if num_tokens_from_string(current_chunk + content) < 4096:
                 current_chunk += content
@@ -290,7 +301,7 @@ async def _run_graphrag_for_kb(
             callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
             return
 
-        kg_extractor = LightKGExt if ("method" not in kb_parser_config.get("graphrag", {}) or kb_parser_config["graphrag"]["method"] != "general") else GeneralKGExt
+        kg_extractor = _select_extractor(kb_parser_config.get("graphrag", {}))
 
         deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
 

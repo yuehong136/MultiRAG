@@ -1,0 +1,1 @@
+"""Local spaCy GraphRAG extraction."""
