@@ -16,6 +16,7 @@ CPP_DIR="$PROJECT_ROOT/internal/cpp"
 BUILD_DIR="$CPP_DIR/cmake-build-release"
 MultiRAG_SERVER_BINARY="$PROJECT_ROOT/bin/server_main"
 ADMIN_SERVER_BINARY="$PROJECT_ROOT/bin/admin_server"
+MULTIRAG_CLI_BINARY="$PROJECT_ROOT/bin/multirag_cli"
 
 echo -e "${GREEN}=== MultiRAG Go Server Build Script ===${NC}"
 
@@ -71,9 +72,9 @@ build_cpp() {
     echo -e "${GREEN}✓ C++ static library built successfully${NC}"
 }
 
-# Build Go server
+# Build Go services and CLI
 build_go() {
-    print_section "Building Go server"
+    print_section "Building Go services and CLI"
     
     cd "$PROJECT_ROOT"
     
@@ -83,17 +84,21 @@ build_go() {
         exit 1
     fi
 
-    # Check for pcre2 library
-    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre2-8.a" ] || [ -f "/usr/local/lib/libpcre2-8.a" ]; then
+    # Match the static PCRE2 paths used by internal/binding/rag_analyzer.go.
+    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre2-8.a" ] \
+       || [ -f "/usr/local/lib/libpcre2-8.a" ] \
+       || [ -f "/opt/homebrew/lib/libpcre2-8.a" ]; then
         echo "✓ pcre2 library found"
     else
-        echo -e "${YELLOW}Warning: libpcre2-8.a not found. You may need to install libpcre2-dev:${NC}"
-        sudo apt -y install libpcre2-dev
+        echo -e "${RED}Error: libpcre2-8.a not found. Install PCRE2 development files before building.${NC}"
+        exit 1
     fi
     
-    echo "Building API server binary: $MultiRAG_SERVER_BINARY and $ADMIN_SERVER_BINARY"
+    mkdir -p "$PROJECT_ROOT/bin"
+    echo "Building Go binaries: $MultiRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, and $MULTIRAG_CLI_BINARY"
     GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -o "$MultiRAG_SERVER_BINARY" ./cmd/server_main.go
     GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -o "$ADMIN_SERVER_BINARY" ./cmd/admin_server.go
+    GOPROXY=${GOPROXY:-https://goproxy.cn,https://proxy.golang.org,direct} CGO_ENABLED=1 go build -o "$MULTIRAG_CLI_BINARY" ./cmd/multirag_cli.go
 
     if [ ! -f "$MultiRAG_SERVER_BINARY" ]; then
         echo -e "${RED}Error: Failed to build MultiRAG server binary${NC}"
@@ -105,8 +110,14 @@ build_go() {
         exit 1
     fi
 
+    if [ ! -f "$MULTIRAG_CLI_BINARY" ]; then
+        echo -e "${RED}Error: Failed to build MultiRAG CLI binary${NC}"
+        exit 1
+    fi
+
     echo -e "${GREEN}✓ Go server_main built successfully: $MultiRAG_SERVER_BINARY${NC}"
     echo -e "${GREEN}✓ Go admin_server built successfully: $ADMIN_SERVER_BINARY${NC}"
+    echo -e "${GREEN}✓ Go multirag_cli built successfully: $MULTIRAG_CLI_BINARY${NC}"
 }
 
 # Clean build artifacts
@@ -116,6 +127,7 @@ clean() {
     rm -rf "$BUILD_DIR"
     rm -f "$MultiRAG_SERVER_BINARY"
     rm -f "$ADMIN_SERVER_BINARY"
+    rm -f "$MULTIRAG_CLI_BINARY"
 
     echo -e "${GREEN}✓ Build artifacts cleaned${NC}"
 }
@@ -146,12 +158,12 @@ show_help() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Build script for MultiRAG Go server with C++ bindings.
+Build script for MultiRAG Go services and CLI with C++ bindings.
 
 OPTIONS:
-    --all, -a       Build everything (C++ library + Go server) [default]
+    --all, -a       Build everything (C++ library + Go services + CLI) [default]
     --cpp, -c       Build only C++ static library
-    --go, -g        Build only Go server (requires C++ library to be built)
+    --go, -g        Build Go services and CLI (requires C++ library to be built)
     --clean, -C     Clean all build artifacts
     --run, -r       Build and run the server
     --help, -h      Show this help message
@@ -159,13 +171,13 @@ OPTIONS:
 EXAMPLES:
     $0              # Build everything
     $0 --cpp        # Build only C++ library
-    $0 --go         # Build only Go server
+    $0 --go         # Build Go services and CLI
     $0 --run        # Build and run
     $0 --clean      # Clean build artifacts
 
 DEPENDENCIES:
     - cmake >= 4.0
-    - go >= 1.24
+    - go >= 1.25 (see go.mod and the pinned CI toolchain)
     - g++ with C++17/23 support
     - libpcre2-dev
 EOF
@@ -201,7 +213,7 @@ main() {
             build_cpp
             build_go
             echo -e "\n${GREEN}=== Build completed successfully! ===${NC}"
-            echo "Binary: $MultiRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY"
+            echo "Binaries: $MultiRAG_SERVER_BINARY, $ADMIN_SERVER_BINARY, $MULTIRAG_CLI_BINARY"
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
