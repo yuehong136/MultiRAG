@@ -8,7 +8,7 @@ from base64 import b64decode
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -770,7 +770,7 @@ async def forget_verify_otp(request: VerifyOtpRequest, db: AsyncSession = Depend
 
 
 @router.post("/auth/password/reset", summary="重置密码")
-async def forget_reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)):
+async def forget_reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)) -> JSONResponse:
     """
     OTP验证成功后重置密码
 
@@ -790,12 +790,11 @@ async def forget_reset_password(request: ResetPasswordRequest, db: AsyncSession 
     new_pwd = request.new_password
     new_pwd2 = request.confirm_new_password
 
-    # Check verified flag first
-    if not REDIS_CONN.get(verified_key(email)):
-        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="email not verified")
-
     if not all([email, new_pwd, new_pwd2]):
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and passwords are required")
+
+    if not REDIS_CONN.get(verified_key(email)):
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="email not verified")
 
     if new_pwd != new_pwd2:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="passwords do not match")
