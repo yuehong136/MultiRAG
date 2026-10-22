@@ -503,7 +503,7 @@ class MilvusConnection(MilvusConnectionBase):
                 return None
 
             filter_expr = f"pk == '{doc_id}'"
-            results = conn.query(collection_name, filter_expr, output_fields=["*"])
+            results = conn.query(collection_name, filter_expr, output_fields=["*"], consistency_level="Strong")
 
             if results and len(results) > 0:
                 # Direct chunk reads use the same logical list/position types

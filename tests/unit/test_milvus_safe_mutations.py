@@ -418,3 +418,18 @@ def test_tag_decoder_accepts_mapping_and_enforces_runtime_type_check() -> None:
     assert hit.data == before
     with pytest.raises(BeartypeCallHintParamViolation):
         decode_milvus_tag_fields([])
+
+
+def test_direct_get_observes_acknowledged_update_without_bounded_stale_rows(row_store: tuple[Any, _RowStore], monkeypatch: pytest.MonkeyPatch) -> None:
+    row = _source_row()
+    store, rpc = row_store
+    original_query = rpc.query
+
+    def query(collection_name: str, expr: str, output_fields: list[str], **kwargs: Any) -> list[dict[str, Any]]:
+        if kwargs.get("consistency_level") != "Strong":
+            return [row]
+        return original_query(collection_name, expr, output_fields, **kwargs)
+
+    monkeypatch.setattr(rpc, "query", query)
+    assert store.update({"id": row["id"]}, {"content_with_weight": "acknowledged content"}, "scratch", "kb-owned")
+    assert store.get(row["id"], "scratch", ["kb-owned"])["content_with_weight"] == "acknowledged content"
