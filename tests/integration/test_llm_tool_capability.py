@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +27,101 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources, settings
 
 pytestmark = pytest.mark.integration
+
+
+def test_saved_bedrock_and_huggingface_models_use_registered_consumers(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    import requests
+
+    from api.db.services import tenant_llm_service
+    from core.llm.cv import BedrockCV
+
+    owner = uuid.uuid4().hex
+    engine = bootstrapped_engine
+    with engine.connect() as connection:
+        scratch_version = connection.exec_driver_sql("select version()").scalar_one()
+    credentials = {"auth_mode": "assume_role", "bedrock_region": "", "is_tools": False}
+    with Session(engine) as db:
+        vision = TenantLLM(tenant_id=owner, llm_factory="Bedrock", llm_name="amazon.nova-pro-v1:0", mdl_type="image2text", api_key=json.dumps(credentials), api_base="")
+        rerank = TenantLLM(
+            tenant_id=owner,
+            llm_factory="HuggingFace",
+            llm_name="rerank___HuggingFace",
+            mdl_type="rerank",
+            api_key=json.dumps({"api_key": "x", "is_tools": False}),
+            api_base="http://provider.invalid/prefix/rerank/",
+        )
+        db.add_all([vision, rerank])
+        db.commit()
+        vision_id, rerank_id = vision.id, rerank.id
+    assert vision_id is not None and rerank_id is not None
+
+    @contextmanager
+    def scratch_connection() -> Iterator[Session]:
+        with Session(engine) as db:
+            yield db
+
+    # Keep the production usage UPDATE and commit, on this owned scratch DB.
+    monkeypatch.setattr(tenant_llm_service, "db_connection", scratch_connection)
+    calls: list[dict[str, Any]] = []
+    malformed = [False]
+
+    def completion(**kwargs: Any) -> litellm.ModelResponse:
+        assert kwargs["aws_region_name"] == "us-east-1"
+        assert "aws_access_key_id" not in kwargs
+        calls.append(kwargs)
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": " caption "}}], usage={"total_tokens": 12})
+
+    def post(url: str, **kwargs: Any) -> requests.Response:
+        assert url == "http://provider.invalid/prefix/rerank"
+        assert kwargs["timeout"] == 30
+        calls.append(kwargs)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps([] if malformed[0] else [{"index": 1, "score": 0.9}, {"index": 0, "score": 0.0}]).encode()
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(requests, "post", post)
+    try:
+        with Session(engine) as db:
+            config = get_model_config_by_id(db, vision_id, tenant_id=owner)
+            bundle = LLMBundle(db, owner, config)
+            assert type(bundle.mdl) is BedrockCV
+            assert bundle.describe_with_prompt(b"image", "describe") == "caption"
+        with Session(engine) as db:
+            assert db.get(TenantLLM, vision_id).used_tokens == 12
+            assert json.loads(db.get(TenantLLM, vision_id).api_key) == credentials
+            with pytest.raises(LookupError):
+                get_model_config_by_id(db, vision_id, tenant_id=uuid.uuid4().hex)
+
+        with Session(engine) as db:
+            bundle = LLMBundle(db, owner, get_model_config_by_id(db, rerank_id, tenant_id=owner))
+            scores, tokens = bundle.similarity("query", ["zero", "high"])
+            assert scores.tolist() == [0.0, 0.9]
+            assert tokens > 0
+        with Session(engine) as db:
+            used_tokens = db.get(TenantLLM, rerank_id).used_tokens
+            assert used_tokens > 0
+        malformed[0] = True
+        with Session(engine) as db:
+            bundle = LLMBundle(db, owner, get_model_config_by_id(db, rerank_id, tenant_id=owner))
+            with pytest.raises(ValueError, match="one result per input"):
+                bundle.similarity("query", ["zero", "high"])
+        with Session(engine) as db:
+            assert db.get(TenantLLM, rerank_id).used_tokens == used_tokens
+            assert db.get(TenantLLM, vision_id).used_tokens == 12
+        assert len(calls) == 3
+    finally:
+        with Session(engine) as db:
+            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+            db.commit()
+        with Session(engine) as db:
+            assert db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).first() is None
+        if path := os.getenv("A_MODEL_EVIDENCE_DIR"):
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "scratch-cleanup.json").write_text(json.dumps({"database": engine.url.database, "version": scratch_version, "owner": owner, "remaining_tenant_models": 0}) + "\n")
 
 
 @pytest.fixture
