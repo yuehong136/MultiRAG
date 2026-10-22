@@ -6,14 +6,16 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.db import UserAccountKind, UserTenantRole
-from api.db.db_models import Tenant, User, UserTenant
+from api.db.db_models import APIToken, Tenant, User, UserTenant
 from api.identity.legacy_owner import principal_from_legacy_owner_context
 from api.identity.principal import AuthenticationSource
+from api.utils.api_utils import SDKAuthError, _beta_token_tenant
 from common.constants import StatusEnum
 
 pytestmark = pytest.mark.integration
@@ -41,6 +43,30 @@ def _membership(user_id: str, tenant_id: str) -> UserTenant:
         invited_by=user_id,
         status=StatusEnum.VALID.value,
     )
+
+
+def test_beta_auth_uses_request_transaction_without_global_sessions(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant_id, token, beta = (uuid.uuid4().hex for _ in range(3))
+
+    def forbidden_global_session(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Beta auth opened a separate database session")
+
+    monkeypatch.setattr("api.db.db_models.SessionLocal", forbidden_global_session)
+    with Session(bootstrapped_engine) as db:
+        tenant = _tenant(tenant_id, "Uncommitted beta tenant")
+        db.add(tenant)
+        db.flush()
+        db.add(APIToken(tenant_id=tenant_id, token=token, beta=beta, name="beta-session-test"))
+        db.flush()
+        assert _beta_token_tenant(db, "Bearer " + beta) == tenant_id
+        tenant.status = "0"
+        db.flush()
+        with pytest.raises(SDKAuthError):
+            _beta_token_tenant(db, "Bearer " + beta)
+        db.rollback()
+    with Session(bootstrapped_engine) as reader:
+        assert reader.get(Tenant, tenant_id) is None
+        assert reader.scalar(select(APIToken.token).where(APIToken.beta == beta)) is None
 
 
 def test_legacy_owner_adapter_uses_one_live_personal_membership(

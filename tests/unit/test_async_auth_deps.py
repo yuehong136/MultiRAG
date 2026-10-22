@@ -98,9 +98,19 @@ async def test_async_token_required_disable_sdk(monkeypatch, async_db):
 
 async def test_async_beta_token_required_returns_tenant_id(monkeypatch: pytest.MonkeyPatch, async_db: AsyncSession) -> None:
     monkeypatch.setattr(APITokenService, "query", lambda s, **kw: _token_rows("tenant-beta") if kw.get("beta") == "beta-1" else [])
-    monkeypatch.setattr(Tenant, "query", lambda s, **kw: [types.SimpleNamespace(id="tenant-beta")] if kw == {"id": "tenant-beta", "status": "1"} else [])
+    monkeypatch.setattr(async_db.sync_session, "scalar", lambda statement: "tenant-beta")
+    monkeypatch.setattr(Tenant, "query", lambda *args, **kwargs: pytest.fail("Beta auth opened a global model query"))
 
     assert await async_beta_token_required(_req("Bearer beta-1"), async_db) == "tenant-beta"
+
+
+async def test_async_beta_token_required_rejects_missing_active_tenant(monkeypatch: pytest.MonkeyPatch, async_db: AsyncSession) -> None:
+    monkeypatch.setattr(APITokenService, "query", lambda s, **kw: _token_rows("tenant-beta"))
+    monkeypatch.setattr(async_db.sync_session, "scalar", lambda statement: None)
+    monkeypatch.setattr(Tenant, "query", lambda *args, **kwargs: pytest.fail("Beta auth opened a global model query"))
+
+    with pytest.raises(SDKAuthError):
+        await async_beta_token_required(_req("Bearer beta-1"), async_db)
 
 
 async def test_async_beta_token_required_rejects_invalid(monkeypatch, async_db):

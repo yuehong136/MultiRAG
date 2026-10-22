@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -291,7 +292,7 @@ def _beta_token_tenant(db: Session, authorization: str) -> str:
     if len(tokens) != 1:
         raise SDKAuthError("Authentication error: API key is invalid!")
     tenant_id = tokens[0].tenant_id
-    if not tenant_id or not Tenant.query(db, id=tenant_id, status=StatusEnum.VALID.value):
+    if not tenant_id or db.scalar(select(Tenant.id).where(Tenant.id == tenant_id, Tenant.status == StatusEnum.VALID.value)) is None:
         raise SDKAuthError("Authentication error: API key is invalid!")
     return tenant_id
 
