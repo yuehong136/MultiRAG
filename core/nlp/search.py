@@ -1168,81 +1168,74 @@ class Dealer:
 
         return sorted(chunks, key=lambda x: x["similarity"] * -1)[:topn]
 
-    def retrieval_by_children(self, chunks: list[dict], tenant_ids: list[str]):
-        """
-        处理父子关系的chunk，将子chunk合并到父chunk中
+    def retrieval_by_children(self, chunks: list[dict[str, Any]], tenant_ids: list[str]) -> list[dict[str, Any]]:
+        """Replace matched children with their scoped parent, or retain the children."""
+        from sqlalchemy import select
 
-        Args:
-            chunks: 检索到的chunk列表
-            tenant_ids: 租户ID列表
-
-        Returns:
-            处理后的chunks列表
-        """
-        if not chunks:
-            return []
-
-        # 从chunks中提取kb_id，构建索引名称
+        from api.db.db_models import Document
         from api.db.services.knowledgebase_service import KnowledgebaseService
 
-        kb_id_set = {ck.get("kb_id") for ck in chunks if ck.get("kb_id")}
+        if not chunks or not any(isinstance(ck.get("mom_id"), str) and ck["mom_id"].strip() for ck in chunks):
+            return list(chunks)
+
+        kb_ids = list(dict.fromkeys(_chunk_scalar(ck.get("kb_id")) for ck in chunks))
+        doc_ids = list(dict.fromkeys(_chunk_scalar(ck.get("doc_id")) for ck in chunks))
         with db_connection() as db:
-            kbs = KnowledgebaseService.get_by_ids(db, list(kb_id_set))
+            # Keep each KB bound to its own tenant and index; parent IDs may
+            # collide across datasets. Read scalar identities before closing SQL.
+            indices = {kb.id: index_name_one(kb.tenant_id, kb.name) for kb in KnowledgebaseService.get_by_ids(db, kb_ids) if kb.tenant_id in tenant_ids and kb.status == "1"}
+            live_docs = set(db.execute(select(Document.kb_id, Document.id).where(Document.id.in_(doc_ids), Document.kb_id.in_(indices), Document.status == "1")).tuples())
 
-        # 构建 tenant_id -> kb_names 的映射
-        tenant_kb_dict = {}
-        for kb in kbs:
-            tid = kb.tenant_id
-            if tid not in tenant_kb_dict:
-                tenant_kb_dict[tid] = []
-            tenant_kb_dict[tid].append(kb.name)
-
-        # 为每个 tenant_id 生成对应的索引名称
-        idx_nms = []
-        for tid in tenant_ids:
-            if tid in tenant_kb_dict:
-                idx_nms.extend(index_name(tid, tenant_kb_dict[tid]))
-
-        mom_chunks = defaultdict(list)
-        i = 0
-        while i < len(chunks):
-            ck = chunks[i]
-            mom_id = ck.get("mom_id")
-            if not isinstance(mom_id, str) or not mom_id.strip():
-                i += 1
+        parents: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+        result = []
+        seen = set()
+        for child in chunks:
+            kb_id, doc_id = _chunk_scalar(child.get("kb_id")), _chunk_scalar(child.get("doc_id"))
+            identity = (kb_id, doc_id, child.get("chunk_id"))
+            if identity in seen:
                 continue
-            mom_chunks[ck["mom_id"]].append(chunks.pop(i))
+            seen.add(identity)
+            parent_id = child.get("mom_id")
+            if not isinstance(parent_id, str) or not parent_id.strip():
+                result.append(child)
+            elif kb_id in indices and (kb_id, doc_id) in live_docs:
+                parents[(kb_id, doc_id, parent_id)].append(child)
 
-        if not mom_chunks:
-            return chunks
+        for (kb_id, doc_id, parent_id), children in parents.items():
+            parent = self.dataStore.get(parent_id, indices[kb_id], [kb_id])
+            if parent is None or _chunk_scalar(parent.get("kb_id")) != kb_id or _chunk_scalar(parent.get("doc_id")) != doc_id:
+                # Children already passed SQL and retrieval availability filters.
+                # Missing or incorrectly scoped parents must not erase their recall.
+                # Stored mothers intentionally have available_int=0; document
+                # availability was checked in SQL, not on the mother row.
+                logging.warning("Parent chunk unavailable; retaining %d child chunks.", len(children))
+                result.extend(children)
+                continue
+            vector = children[0].get("vector")
+            if vector is None:
+                vector = next((value for key, value in children[0].items() if key.endswith("_vec")), [0.0] * 1024)
+            similarity = float(np.mean([child["similarity"] for child in children]))
+            result.append(
+                {
+                    "chunk_id": parent_id,
+                    "content_ltks": " ".join(child["content_ltks"] for child in children),
+                    "text": parent["content_with_weight"],
+                    "doc_id": doc_id,
+                    "docnm_kwd": parent.get("docnm_kwd", ""),
+                    "kb_id": kb_id,
+                    "important_kwd": [keyword for child in children for keyword in child.get("important_kwd", [])],
+                    "image_id": parent.get("img_id", ""),
+                    "similarity": similarity,
+                    "vector_similarity": similarity,
+                    "term_similarity": similarity,
+                    "vector": vector,
+                    "positions": parent.get("position_int", []),
+                    "doc_type_kwd": parent.get("doc_type_kwd", ""),
+                    **({"document_metadata": children[0]["document_metadata"]} if children[0].get("document_metadata") else {}),
+                }
+            )
 
-        if not chunks:
-            chunks = []
-
-        vector_size = 1024
-        for id, cks in mom_chunks.items():
-            chunk = self.dataStore.get(id, idx_nms[0], [ck["kb_id"] for ck in cks])
-            d = {
-                "chunk_id": id,
-                "content_ltks": " ".join([ck["content_ltks"] for ck in cks]),
-                "text": chunk["content_with_weight"],
-                "doc_id": chunk["doc_id"],
-                "docnm_kwd": chunk.get("docnm_kwd", ""),
-                "kb_id": chunk["kb_id"],
-                "important_kwd": [kwd for ck in cks for kwd in ck.get("important_kwd", [])],
-                "image_id": chunk.get("img_id", ""),
-                "similarity": np.mean([ck["similarity"] for ck in cks]),
-                "vector_similarity": np.mean([ck["similarity"] for ck in cks]),
-                "term_similarity": np.mean([ck["similarity"] for ck in cks]),
-                "vector": [0.0] * vector_size,
-                "positions": chunk.get("position_int", []),
-                "doc_type_kwd": chunk.get("doc_type_kwd", ""),
-            }
-            for k in cks[0].keys():
-                if k[-4:] == "_vec":
-                    d["vector"] = cks[0][k]
-                    vector_size = len(cks[0][k])
-                    break
-            chunks.append(d)
-
-        return sorted(chunks, key=lambda x: x["similarity"] * -1)
+        unique: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for chunk in sorted(result, key=lambda chunk: -chunk["similarity"]):
+            unique.setdefault((_chunk_scalar(chunk.get("kb_id")), _chunk_scalar(chunk.get("doc_id")), chunk["chunk_id"]), chunk)
+        return list(unique.values())

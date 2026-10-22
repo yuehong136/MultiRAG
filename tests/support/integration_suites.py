@@ -40,6 +40,7 @@ DATABASE_TESTS = frozenset(
         "test_model_config_resolution.py",
         "test_pdf_page_task_defaults.py",
         "test_principal_auth.py",
+        "test_retrieval_parent_fallback.py",
         "test_sandbox_provider_settings.py",
         "test_sync_log_checkpoint.py",
         "test_task_log_limits.py",
