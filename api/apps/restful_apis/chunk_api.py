@@ -167,7 +167,7 @@ def _index_name(kb: Any) -> list[str]:
 
 def _embedding_model(db: Session, kb: Any) -> LLMBundle:
     if kb.tenant_embd_id:
-        config = get_model_config_by_id(db, kb.tenant_embd_id)
+        config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id)
     else:
         config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
     return LLMBundle(db, kb.tenant_id, config)
@@ -307,7 +307,7 @@ def _remove_chunks(user_id: str, dataset_id: str, document_id: str, request: Del
         if not request.chunk_ids:
             if not request.delete_all:
                 return get_result()
-            DocumentService.delete_chunk_images(doc, index_name)
+            DocumentService.delete_chunk_images(doc, index_name[0])
             deleted = settings.docStoreConn.delete({"doc_id": document_id}, index_name, dataset_id)
             if deleted:
                 DocumentService.decrement_chunk_num(db, document_id, dataset_id, 1, deleted, 0)
