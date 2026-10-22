@@ -17,10 +17,14 @@
 package models
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -28,14 +32,14 @@ import (
 	"google.golang.org/genai"
 )
 
-// GoogleModel implements the Gemini API text-chat and model-list capabilities.
+// GoogleModel implements Gemini text chat, embeddings and model discovery.
 type GoogleModel struct {
 	BaseURL   map[string]string
 	URLSuffix URLSuffix
 }
 
 func NewGoogleModel(baseURL map[string]string, urlSuffix URLSuffix) *GoogleModel {
-	return &GoogleModel{BaseURL: baseURL, URLSuffix: urlSuffix}
+	return &GoogleModel{BaseURL: maps.Clone(baseURL), URLSuffix: urlSuffix}
 }
 
 func (g *GoogleModel) Name() string { return "google" }
@@ -255,8 +259,129 @@ func (g *GoogleModel) ChatStreamly(modelName, apiKey, message *string, genConf m
 func (g *GoogleModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
 	return errors.New("Google channel-only streaming is unsupported; use the sender interface")
 }
+
+// googleResponseTransport rejects null objects before SDK conversion can panic,
+// and null embedding values before the SDK's []float32 decoding turns them into zero.
+type googleResponseTransport struct {
+	base       http.RoundTripper
+	embeddings bool
+}
+
+func (t googleResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(request)
+	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
+		return response, err
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		return nil, errors.New("could not read Google response")
+	}
+	var payload struct {
+		Embeddings []*struct {
+			Values []*float32 `json:"values"`
+		} `json:"embeddings"`
+		Models []map[string]json.RawMessage `json:"models"`
+		Error  json.RawMessage              `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || bytes.Equal(bytes.TrimSpace(body), []byte("null")) || len(payload.Error) != 0 && string(payload.Error) != "null" {
+		return nil, errors.New("invalid Google response")
+	}
+	if t.embeddings && len(payload.Embeddings) == 0 {
+		return nil, errors.New("invalid Google embedding response")
+	}
+	for _, model := range payload.Models {
+		if model == nil {
+			return nil, errors.New("invalid Google model response")
+		}
+	}
+	for _, embedding := range payload.Embeddings {
+		if embedding == nil {
+			return nil, errors.New("invalid Google embedding")
+		}
+		for _, value := range embedding.Values {
+			if value == nil {
+				return nil, errors.New("invalid Google embedding value")
+			}
+		}
+	}
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	return response, nil
+}
+
+// Encode uses the SDK's batchEmbedContents endpoint and retains provider order.
 func (g *GoogleModel) Encode(modelName *string, texts []string, apiConfig *APIConfig, config *EmbeddingConfig) ([][]float64, error) {
-	return nil, errors.New("Google embeddings are unsupported by this text-chat provider")
+	if len(texts) == 0 {
+		return [][]float64{}, nil
+	}
+	if modelName == nil || strings.TrimSpace(*modelName) == "" {
+		return nil, errors.New("Google model name is required")
+	}
+	for _, text := range texts {
+		if strings.TrimSpace(text) == "" {
+			return nil, errors.New("Google embedding text must not be blank")
+		}
+	}
+	embeddingConfig := &genai.EmbedContentConfig{TaskType: "RETRIEVAL_DOCUMENT"}
+	if config != nil {
+		if config.Dimension < 0 || config.Dimension > math.MaxInt32 {
+			return nil, errors.New("Google embedding dimension must be a non-negative int32")
+		}
+		if config.Dimension > 0 {
+			dimension := int32(config.Dimension)
+			embeddingConfig.OutputDimensionality = &dimension
+		}
+		if config.Query {
+			embeddingConfig.TaskType = "RETRIEVAL_QUERY"
+		}
+	}
+	ctx, cancel := googleContext(apiConfig)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	client, err := g.client(ctx, apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	// Each SDK client is request-scoped; other Google calls retain their transport.
+	client.ClientConfig().HTTPClient.Transport = googleResponseTransport{base: http.DefaultTransport, embeddings: true}
+	contents := make([]*genai.Content, len(texts))
+	for i, text := range texts {
+		contents[i] = genai.NewContentFromText(text, genai.RoleUser)
+	}
+	response, err := client.Models.EmbedContent(ctx, *modelName, contents, embeddingConfig)
+	if err != nil {
+		return nil, googleRequestError(ctx, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if response == nil || len(response.Embeddings) != len(texts) {
+		return nil, errors.New("Google embedding count does not match input")
+	}
+	vectors := make([][]float64, len(response.Embeddings))
+	for i, embedding := range response.Embeddings {
+		if embedding == nil {
+			return nil, errors.New("Google returned an invalid embedding")
+		}
+		if config != nil && config.Dimension > 0 && len(embedding.Values) != config.Dimension {
+			return nil, errors.New("Google embedding dimension does not match request")
+		}
+		vectors[i] = make([]float64, len(embedding.Values))
+		nonzero := false
+		for j, value := range embedding.Values {
+			vectors[i][j] = float64(value)
+			nonzero = nonzero || value != 0
+		}
+		if !nonzero {
+			return nil, errors.New("Google returned an empty or zero embedding")
+		}
+	}
+	if err := ValidateEmbeddings(vectors, len(texts)); err != nil {
+		return nil, err
+	}
+	return vectors, nil
 }
 func (g *GoogleModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
 	return nil, errors.New("Google balance lookup is unsupported")
@@ -269,6 +394,7 @@ func (g *GoogleModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	client.ClientConfig().HTTPClient.Transport = googleResponseTransport{base: http.DefaultTransport}
 	names := []string{}
 	seen := map[string]bool{}
 	token := ""
