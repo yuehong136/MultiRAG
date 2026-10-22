@@ -17,7 +17,7 @@ from api.db.joint_services import tenant_model_service as tms
 from api.db.services.llm_service import LLMBundle
 from api.identity.principal import AuthenticatedActor, AuthenticationContext, AuthenticationSource, IdentityAssurance, TenantMembershipEvidence, build_principal_from_authenticated_actor
 from api.identity.run_context import RunContext
-from tests.integration.test_dataset_access_permissions import permission_rows as permission_rows
+from tests.support.dataset_access_permissions import permission_rows as permission_rows
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def retrieval_scope(bootstrapped_engine: sa.Engine, permission_rows: dict[str, s
     monkeypatch.setattr(tms, "db_connection", connection)
     monkeypatch.setattr(tms, "LLMBundle", ProbeBundle)
     monkeypatch.setattr(tms.settings, "FACTORY_LLM_INFOS", [{"name": "ScopeFixture"}])
-    monkeypatch.setattr(module.settings, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, _: chunks))
+    monkeypatch.setitem(vars(module.settings), "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, _: chunks))
     try:
         with Session(bootstrapped_engine) as db:
             model = TenantLLM(tenant_id=ids["tenant"], llm_factory="ScopeFixture", llm_name="embedding", mdl_type="embedding", api_key="fixture", api_base="http://fixture.invalid")
@@ -139,7 +139,7 @@ async def test_denied_or_missing_selection_has_zero_downstream_io(retrieval_scop
         monkeypatch.setattr(module, name, forbidden)
     monkeypatch.setattr(obj, "_flatted_metas", forbidden)
     monkeypatch.setattr(obj, "_rank_feature", forbidden)
-    monkeypatch.setattr(module.settings, "retriever", SimpleNamespace(retrieval=forbidden))
+    monkeypatch.setitem(vars(module.settings), "retriever", SimpleNamespace(retrieval=forbidden))
     with Session(env["engine"]) as db:
         before = list(db.execute(sa.select(Knowledgebase.__table__).where(Knowledgebase.tenant_id == ids["tenant"])))
     with pytest.raises(PermissionError, match="missing or inaccessible"):
