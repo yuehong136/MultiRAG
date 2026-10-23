@@ -188,8 +188,12 @@ func TestNewProviderCancellationAndUnsupported(t *testing.T) {
 				}
 			}
 			if provider == "Novita" || provider == "LongCat" {
-				if _, e := d.Embed(nil, nil, nil, nil); e == nil {
-					t.Fatal("embedding")
+				if provider == "LongCat" {
+					if _, e := d.Embed(nil, nil, nil, nil); e == nil {
+						t.Fatal("embedding")
+					}
+				} else if data, e := d.Embed(nil, nil, nil, nil); e != nil || data == nil || len(data) != 0 {
+					t.Fatal("empty Novita embedding", data, e)
 				}
 				if _, e := d.Rerank(nil, "", nil, nil, nil); e == nil {
 					t.Fatal("rerank")

@@ -149,8 +149,8 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 	if _, e := d.Rerank(&name, "q", []string{"a"}, api, &RerankConfig{TopN: -1}); e == nil {
 		t.Fatal("negative top_n")
 	}
-	if _, e := d.ChatWithMessages("chat", api, []Message{{Role: "user", Content: "q"}}, nil); e == nil {
-		t.Fatal("unsupported chat")
+	if e := d.ChatStreamlyWithMessages("chat", []Message{{Role: "user", Content: "q"}}, api, nil, nil); e == nil {
+		t.Fatal("unsupported streaming chat")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

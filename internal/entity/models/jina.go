@@ -4,8 +4,7 @@ package models
 
 import "strings"
 
-// JinaModel implements embeddings, rerank and public model discovery. Chat is
-// intentionally unavailable in this catalog batch.
+// JinaModel implements non-streaming chat, embeddings, rerank and public model discovery.
 type JinaModel struct{ *openAIChatDriver }
 
 func NewJinaModel(urls map[string]string, suffix URLSuffix) *JinaModel {
@@ -15,7 +14,7 @@ func NewJinaModel(urls map[string]string, suffix URLSuffix) *JinaModel {
 }
 
 func (j *JinaModel) ChatWithMessages(name string, api *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
-	return j.DummyModel.ChatWithMessages(name, api, messages, config)
+	return j.openAIChatDriver.ChatWithMessages(name, api, messages, config)
 }
 func (j *JinaModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
 	return j.DummyModel.ChatStreamlyWithSender(name, message, api, config, sender)
