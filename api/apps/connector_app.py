@@ -18,13 +18,14 @@
 import time
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.services import connector_api_service, connector_oauth_service
-from api.db.db_models import get_db
+from api.db.db_models import User, get_db
+from api.db.services.connector_service import ConnectorAuthorizationError
 from api.utils.api_utils import get_data_error_result, get_json_result, server_error_response
 from common.constants import RetCode
 
@@ -196,11 +197,13 @@ def resume(connector_id: str, request: ResumeConnectorRequest, db: Session = Dep
     response_description="操作结果",
     deprecated=True,
 )
-def rebuild(connector_id: str, request: RebuildRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rebuild(connector_id: str, request: RebuildRequest, db: Session = Depends(get_db), user: User = Depends(manager)) -> JSONResponse:
     try:
         if not connector_api_service.accessible(db, connector_id, user.id):
             return _auth_error()
         return _respond(*connector_api_service.rebuild_connector(db, connector_id, request.kb_id, user.id))
+    except ConnectorAuthorizationError:
+        return _auth_error()
     except Exception as e:
         return server_error_response(e)
 

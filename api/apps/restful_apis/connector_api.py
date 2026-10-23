@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from api.apps.services import connector_api_service, connector_oauth_service
 from api.db.db_models import get_async_db
+from api.db.services.connector_service import ConnectorAuthorizationError
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from common.constants import RetCode
@@ -282,12 +283,14 @@ async def rebuild(
     request: RebuildRequest,
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
-):
+) -> JSONResponse:
     """重建连接器与指定知识库的关联，重新拉取全量数据。"""
     try:
         if not await _require_access(db, connector_id, user.id):
             return _auth_error()
         return _respond(*await db.run_sync(lambda s: connector_api_service.rebuild_connector(s, connector_id, request.kb_id, user.id)))  # TODO(async-phase4)
+    except ConnectorAuthorizationError:
+        return _auth_error()
     except Exception as e:
         return server_error_response(e)
 

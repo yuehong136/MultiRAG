@@ -40,6 +40,10 @@ class SyncTaskCancelled(RuntimeError):
     """A persisted pause/cancellation must survive worker completion or failure."""
 
 
+class ConnectorAuthorizationError(PermissionError):
+    """The caller cannot rebuild the requested connector and dataset."""
+
+
 def _to_utc(value: datetime | None) -> datetime | None:
     """Normalize connector timestamps at the persistence boundary.
 
@@ -235,18 +239,21 @@ class ConnectorService(CommonService):
 
     @classmethod
     def rebuild(cls, db: Session, connector_id: str, kb_id: str, tenant_id: str) -> str | None:
-        """
-        重建连接器与知识库的关联
+        """Rebuild an accessible, persisted connector/dataset binding.
 
-        Args:
-            db: 数据库会话
-            connector_id: 连接器ID
-            kb_id: 知识库ID
-            tenant_id: 租户ID
-
-        Returns:
-            错误信息（如果有）
+        ``tenant_id`` is the requesting user's ID in this legacy service. Check
+        both resources and their binding before any log/document deletion or
+        scheduling, including when called without an HTTP route's guard.
         """
+        from api.db.services.knowledgebase_service import KnowledgebaseService
+
+        if not cls.accessible(db, connector_id, tenant_id) or not KnowledgebaseService.accessible(db, kb_id, tenant_id):
+            logger.warning("connector rebuild denied: resource access connector_id=%s kb_id=%s user_id=%s", connector_id, kb_id, tenant_id)
+            raise ConnectorAuthorizationError("No authorization.")
+        if not Connector2KbService.query(db, connector_id=connector_id, kb_id=kb_id):
+            logger.warning("connector rebuild denied: missing binding connector_id=%s kb_id=%s user_id=%s", connector_id, kb_id, tenant_id)
+            raise ConnectorAuthorizationError("No authorization.")
+
         conn = cls.get_by_id(db, connector_id)
         if not conn:
             return "连接器不存在"
