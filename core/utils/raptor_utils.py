@@ -65,11 +65,7 @@ def _as_extra_dict(extra: Any) -> dict:
         try:
             parsed = json.loads(extra)
         except json.JSONDecodeError:
-            logging.warning(
-                "Ignoring malformed RAPTOR extra payload while collecting chunk metadata: %s",
-                extra[:200],
-                exc_info=True,
-            )
+            logging.warning("Ignoring malformed RAPTOR extra payload while collecting chunk metadata")
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}

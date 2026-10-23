@@ -1422,7 +1422,7 @@ def _commit_raptor_summaries(
         with Session(bind) as writer:
             kb = writer.scalar(select(Knowledgebase).where(Knowledgebase.id == dataset, Knowledgebase.tenant_id == tenant).with_for_update())
             task = writer.scalar(select(Task).where(Task.id == task_id).with_for_update())
-            if kb is None or kb.raptor_task_id != task_id or task is None or task.doc_id != GRAPH_RAPTOR_FAKE_DOC_ID:
+            if kb is None or kb.raptor_task_id != task_id or task is None or task.doc_id != GRAPH_RAPTOR_FAKE_DOC_ID or index != search.index_name_one(tenant, kb.name):
                 raise ValueError("RAPTOR task/dataset binding unavailable")
             original_chunk_ids = task.chunk_ids or ""
             replace_raptor_summaries(settings.docStoreConn, index, dataset, chunks, previous, lambda: bool(cancellation and cancellation.is_set()) or has_canceled(task_id), settings.DOC_BULK_SIZE)

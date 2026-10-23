@@ -38,7 +38,7 @@ def migration(raptor_storage: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -
 
     async def embedding(self: Raptor, text: str) -> np.ndarray:
         env["calls"]["embedding"] += 1
-        return np.array([0.5, 0.5])
+        return np.array([0.1, 0.2])
 
     monkeypatch.setattr(Raptor, "_check_task_canceled", lambda *args: None)
     monkeypatch.setattr(Raptor, "_chat", chat)

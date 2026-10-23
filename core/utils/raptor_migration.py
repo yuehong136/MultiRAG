@@ -3,6 +3,8 @@
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
+
 from common.doc_store.document_history import confirm_history_visibility, delete_document_history, document_history, restore_document_history
 from common.exceptions import TaskCanceledException
 from core.utils.raptor_utils import collect_raptor_chunk_ids
@@ -57,7 +59,21 @@ def replace_raptor_summaries(
                 for key, value in expected[identifier].items():
                     if key in {"id", "pk"}:
                         continue
-                    if key not in stored or stored[key] != value:
+                    if key not in stored:
+                        raise RuntimeError("RAPTOR inserted field could not be confirmed")
+                    actual_value = stored[key]
+                    if key == "kb_id":
+                        value = value[0] if isinstance(value, list) and len(value) == 1 else value
+                        actual_value = actual_value[0] if isinstance(actual_value, list) and len(actual_value) == 1 else actual_value
+                    if store.db_type() == "milvus" and (key == "vector" or key.endswith("_vec")):
+                        # Native FLOAT_VECTOR stores IEEE float32, while model
+                        # adapters may return Python doubles. Compare that exact
+                        # representation, including shape and finite values.
+                        expected_vector = np.asarray(value, dtype=np.float32)
+                        actual_vector = np.asarray(actual_value, dtype=np.float32)
+                        if not np.isfinite(expected_vector).all() or not np.array_equal(actual_vector, expected_vector):
+                            raise RuntimeError("RAPTOR inserted vector could not be confirmed")
+                    elif actual_value != value:
                         raise RuntimeError("RAPTOR inserted content could not be confirmed")
         if canceled():
             raise TaskCanceledException("RAPTOR replacement canceled")
