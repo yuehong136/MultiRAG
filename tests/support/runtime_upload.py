@@ -24,6 +24,7 @@ from sqlalchemy.pool import NullPool
 from api.db.db_models import APIToken, Tenant, User, UserTenant, get_async_db
 from common import resources, settings
 from common.config_utils import CONFIGS
+from tests.support.uvicorn_runtime import run_server
 
 
 @pytest.fixture
@@ -116,7 +117,7 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
         record["port"] = listener.getsockname()[1]
         base = f"http://127.0.0.1:{record['port']}"
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
 
         def stop_server() -> None:
             server.should_exit = True

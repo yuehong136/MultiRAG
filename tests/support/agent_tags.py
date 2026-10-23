@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from api.db.db_models import Tenant, User, UserCanvas, UserTenant, get_async_db, get_db
+from tests.support.uvicorn_runtime import run_server
 
 
 @contextmanager
@@ -87,7 +88,7 @@ def tags_http_api(engine: sa.Engine, evidence: Path) -> Iterator[dict[str, Any]]
         base = f"http://127.0.0.1:{manifest['port']}"
         save()
         server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error"))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
 
         def stop() -> None:
             server.should_exit = True

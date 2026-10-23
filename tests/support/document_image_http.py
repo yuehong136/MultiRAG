@@ -31,6 +31,7 @@ from core.utils.redis_conn import REDIS_CONN
 from tests.support.database import scratch_database
 from tests.support.document_image_read_service import _image, _json, _raw_object
 from tests.support.document_image_read_service import image_resources as image_resources
+from tests.support.uvicorn_runtime import run_server
 
 
 def _save(path: Path, value: Any) -> None:
@@ -128,7 +129,7 @@ def image_http_api(image_resources: dict[str, Any], monkeypatch: pytest.MonkeyPa
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error", access_log=False))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
         env.update(base=f"http://127.0.0.1:{port}", async_engine=async_engine, register=register)
         env["manifest"].update(listener={"host": "127.0.0.1", "port": port, "thread": thread.name, "command": "pytest in-process uvicorn"}, pid=os.getpid())
         register()

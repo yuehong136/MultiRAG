@@ -25,6 +25,7 @@ from api.db import UserTenantRole
 from api.db.db_models import API4Conversation, APIToken, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant, get_async_db, get_db
 from common.constants import StatusEnum
 from core.utils.redis_conn import REDIS_CONN
+from tests.support.uvicorn_runtime import run_server
 
 
 def message_dsl(content: str) -> dict[str, Any]:
@@ -124,7 +125,7 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
         listener.bind(("127.0.0.1", 0))
         base = f"http://127.0.0.1:{listener.getsockname()[1]}"
         server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error"))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
 
         def stop_server() -> None:
             server.should_exit = True

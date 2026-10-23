@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from api.db.db_models import APIToken, Document, Knowledgebase, Tenant, User, UserTenant, get_async_db
+from tests.support.uvicorn_runtime import run_server
 
 FIELDS = [{"key": "author", "description": "Author", "enum": ["Alice"], "restrictDefinedValues": True}]
 
@@ -97,7 +98,7 @@ def management_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPat
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
         env = {
             "engine": bootstrapped_engine,
             "base": f"http://127.0.0.1:{port}",
