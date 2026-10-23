@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 _DEFAULT_ALLOWED_SCHEMES = frozenset({"http", "https"})
+_NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 _LOCAL_DNS_PINS = threading.local()
 _GLOBAL_DNS_PINS: dict[str, str] = {}
 _GLOBAL_PIN_LOCK = threading.Lock()
@@ -96,8 +97,15 @@ def pin_dns_global(hostname: str, ip: str) -> Iterator[None]:
 def _effective_ip(
     ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+    """Check the IPv4 target carried by mapped, NAT64 or compatible IPv6."""
+    if not isinstance(ip, ipaddress.IPv6Address):
+        return ip
+    if ip.ipv4_mapped is not None:
         return ip.ipv4_mapped
+    if ip in _NAT64_WELL_KNOWN_PREFIX:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    if ip.packed[:12] == b"\x00" * 12:
+        return ipaddress.IPv4Address(ip.packed[12:])
     return ip
 
 
