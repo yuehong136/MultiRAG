@@ -79,9 +79,10 @@ async def _generate(env: dict[str, Any], builder: str, scope: str = "file") -> t
             doc_ids=[env["doc"]],
             db=db,
         )
-    for chunk in chunks:
-        chunk["id"] = chunk["pk"]
-        chunk["kb_id"] = env["dataset"]
+    schema = env["reader"].describe_collection(env["collection"])
+    chunks = task_executor._prepare_raptor_chunks(chunks, schema)
+    assert all(chunk["id"] == chunk["pk"] and chunk["id"] for chunk in chunks)
+    assert all(isinstance(chunk["extra"], dict) for chunk in chunks)
     return task, chunks, previous
 
 

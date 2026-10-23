@@ -1372,6 +1372,7 @@ async def run_raptor_for_kb(
                 "content_ltks": rag_tokenizer.tokenize(content),
                 "raptor_layer_int": layer_map[idx],
             }
+            chunk["id"] = chunk["pk"]
             chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
             if row.get("pagerank"):
                 chunk[PAGERANK_FLD] = int(row["pagerank"])
@@ -1399,6 +1400,15 @@ async def run_raptor_for_kb(
                 if summaries[doc]:
                     previous[doc] = summaries[doc]
     return results, tokens, previous
+
+
+def _prepare_raptor_chunks(chunks: list[dict[str, Any]], schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """Preserve summary identity and JSON metadata through legacy conversion."""
+    converted = [convert_data_types(chunk, schema) for chunk in chunks]
+    for source, chunk in zip(chunks, converted, strict=True):
+        chunk["id"] = chunk["pk"] = source["pk"]
+        chunk["extra"] = copy.deepcopy(source["extra"])
+    return converted
 
 
 def _commit_raptor_summaries(
@@ -2916,9 +2926,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
         collection_name = search.index_name_one(task_tenant_id, kb_name)
         if raptor_previous:
             schema = await get_schema(collection_name)
-            converted = [convert_data_types(chunk, schema) for chunk in chunks]
-            for chunk in converted:
-                chunk.setdefault("id", chunk["pk"])
+            converted = _prepare_raptor_chunks(chunks, schema)
             await _write_raptor_summaries(db.get_bind(), task_id, task_tenant_id, task_dataset_id, collection_name, converted, raptor_previous)
         progress_callback(prog=1.0, msg=f"RAPTOR done: {len(chunks)} summaries")
         return
