@@ -84,6 +84,83 @@ Both local and Aliyun use the shared result protocol: Python calls
 JavaScript `undefined`, exceptions and nonserializable values are failures.
 Structured return values are separate from stdout logs and artifacts.
 
+## Code output and chart attachments
+
+In the Agent editor, select a **Code** node and configure **Return value**.
+The node exposes exactly one business output: give it a nonempty name, such as
+`result`, and select the type returned by `main()`. Names cannot contain dots
+or use reserved system keys such as `content`, `actual_type`, `raw_result`,
+`attachments` or `_ERROR`.
+
+The **Output contract** section separates **Business output** from **System
+outputs**. Use the business value for downstream calculations; the runtime
+populates the system fields automatically:
+
+| Output | Meaning |
+| --- | --- |
+| Your business name, e.g. `result` | The complete value returned by `main()`, validated against the selected type. Object keys do not become separate node outputs. |
+| `content` | A text representation of the return value, followed by attachment content when available. Objects and arrays are formatted as JSON. |
+| `actual_type` | The inferred return type, such as `String`, `Number`, `Boolean`, `Object` or `Array<Number>`. |
+| `raw_result` | The returned value retained for inspection, including when the declared type does not match. |
+| `attachments` | A list of Markdown image or download links for artifacts that were collected and uploaded. It is empty when no artifacts are available. |
+| `_ERROR` | Execution or output-contract error details. Check this field before treating a run as successful. |
+
+### Generate a chart
+
+Select **Python**, set the return name to `result` and its type to **Object**,
+and use the following script with no input arguments. The selected execution
+environment must have `matplotlib` installed; package installation depends on
+the provider, as described above.
+
+```python
+def main() -> dict[str, str]:
+    from pathlib import Path
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    artifacts_dir = Path("artifacts")
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    output_path = artifacts_dir / "simple_plot.png"
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    try:
+        ax.plot([1, 2, 3, 4, 5], [2, 4, 6, 8, 10], marker="o")
+        ax.set(title="Simple Line Chart", xlabel="X", ylabel="Y")
+        ax.grid(True)
+        fig.tight_layout()
+        fig.savefig(output_path)
+    finally:
+        plt.close(fig)
+
+    return {
+        "message": "Plot generated",
+        "file_path": str(output_path),
+    }
+```
+
+Run the node's single-step test and inspect the **Code run inspector**:
+
+- **Business output value** contains the entire object with `message` and
+  `file_path`. The actual type is `Object`.
+- **Attachments** lists `simple_plot.png` after artifact collection and upload
+  succeed. The returned `file_path` is a sandbox-relative path; use the generated
+  attachment link to retrieve the file. Returning a path alone does not create
+  an attachment: the script must write the file below `artifacts/`.
+- **Content** contains the formatted object and the attachment text or parsing
+  fallback. Use this field when a downstream node needs one text value.
+- **Raw result**, **System outputs** and **Raw component output** provide the
+  corresponding values for troubleshooting. Artifact downloads require the
+  caller's existing access to the run or session.
+
+If the script returns an object while **Return value** expects `String`, the
+run reports a return-type mismatch and leaves the business output unset
+(`null`). Inspect `raw_result`, `actual_type` and `_ERROR`, then correct the
+script or declared type. A retained raw value or attachment is not evidence
+that the business contract succeeded.
+
 ## 🏗 Architecture
 
 <p align="center">
