@@ -17,12 +17,13 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from api.apps.services.app_list_scope import resolve_list_owner_ids
 from api.constants import DATASET_NAME_LIMIT
 from api.db.db_models import get_async_db
 from api.db.services import duplicate_name
@@ -30,7 +31,8 @@ from api.db.services.dialog_service import async_ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
+from api.identity.principal import Principal
+from api.utils.api_utils import async_current_tenant_id, async_current_user, get_error_data_result, get_result
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from common.constants import RetCode, StatusEnum
 from common.misc_utils import get_uuid
@@ -115,18 +117,9 @@ def _list_searches(
     page_size: int = 0,
     orderby: str = "create_time",
     desc: bool = True,
-    owner_ids: list[str] | None = None,
+    owner_ids: list[str],
 ) -> tuple[bool, Any, RetCode | None]:
-    owner_ids = owner_ids or []
-
-    if not owner_ids:
-        search_apps, total = SearchService.get_by_tenant_ids(db, [], tenant_id, page, page_size, orderby, desc, keywords)
-    else:
-        search_apps, _ = SearchService.get_by_tenant_ids(db, owner_ids, tenant_id, 0, 0, orderby, desc, keywords)
-        search_apps = [search_app for search_app in search_apps if search_app["tenant_id"] in owner_ids]
-        total = len(search_apps)
-        if page and page_size:
-            search_apps = search_apps[(page - 1) * page_size : page * page_size]
+    search_apps, total = SearchService.get_by_tenant_ids(db, owner_ids, tenant_id, page, page_size, orderby, desc, keywords, owner_ids_only=True)
 
     return True, {"search_apps": search_apps, "total": total}, None
 
@@ -230,24 +223,27 @@ async def list_searches(
     page_size: int = Query(0, description="Items per page; 0 disables pagination"),
     orderby: str = Query("create_time", description="Sort field"),
     desc: bool = Query(True, description="Sort descending"),
-    owner_ids: list[str] | None = Query(None, description="Owner tenant IDs"),
+    owner_ids: list[str] | None = Query(None, description="Filter active member tenant IDs; omitted selects all authorized tenants"),
     db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
+    principal: Principal = Depends(async_current_user),
+) -> Response:
     try:
+        owners = await resolve_list_owner_ids(db, principal.platform_user_id, owner_ids)
         success, result, retcode = await db.run_sync(  # TODO(async-phase4)
             lambda s: _list_searches(
                 s,
-                tenant_id,
+                principal.platform_user_id,
                 keywords=keywords,
                 page=page,
                 page_size=page_size,
                 orderby=orderby,
                 desc=desc,
-                owner_ids=owner_ids,
+                owner_ids=owners,
             )
         )
         return _respond(success, result, retcode)
+    except PermissionError as exc:
+        return _respond(False, str(exc), RetCode.OPERATING_ERROR)
     except Exception as e:
         logger.exception(e)
         return get_error_data_result(retmsg="Internal server error")

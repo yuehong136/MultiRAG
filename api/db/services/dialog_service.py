@@ -240,16 +240,18 @@ class DialogService(CommonService):
     def get_by_tenant_ids(
         cls,
         db: Session,
-        joined_tenant_ids,
-        user_id,
-        page_number,
-        items_per_page,
-        orderby,
-        desc,
-        keywords=None,
-        id=None,
-        name=None,
-    ):
+        joined_tenant_ids: list[str],
+        user_id: str,
+        page_number: int,
+        items_per_page: int,
+        orderby: str,
+        desc: bool,
+        keywords: str | None = None,
+        id: str | None = None,
+        name: str | None = None,
+        *,
+        owner_ids_only: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         获取对话列表（支持分页、搜索、排序）
 
@@ -287,11 +289,10 @@ class DialogService(CommonService):
         ]
 
         # 构建查询表达式
-        query = (
-            db.query(*fields)
-            .join(User, cls.model.tenant_id == User.id)
-            .filter(((cls.model.tenant_id.in_(joined_tenant_ids)) | (cls.model.tenant_id == user_id)) & (cls.model.status == StatusEnum.VALID.value))
-        )
+        tenant_scope = cls.model.tenant_id.in_(joined_tenant_ids)
+        if not owner_ids_only:
+            tenant_scope = tenant_scope | (cls.model.tenant_id == user_id)
+        query = db.query(*fields).join(User, cls.model.tenant_id == User.id).filter(tenant_scope & (cls.model.status == StatusEnum.VALID.value))
 
         if id:
             query = query.filter(cls.model.id == id)

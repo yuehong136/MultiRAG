@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -386,17 +387,39 @@ def test_build_chat_response_presents_stored_search_modes_in_documented_shape(db
     assert present({"type": "keyword"}) == {"type": "keyword"}
 
 
-def test_list_chats_returns_restful_shape(client, monkeypatch):
+def test_list_chats_returns_restful_shape(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """HTTP 契约式（路由切 AsyncSession 后直调形态失效）：桩保留类型契约。"""
     from sqlalchemy.orm import Session as _SyncSession
 
     _install_common_fakes(monkeypatch)
     sessions: list[object] = []
 
-    def fake_get_by_tenant_ids(_db, joined, user_id, page, page_size, orderby, desc, keywords, *, id=None, name=None):
+    async def scope(db: AsyncSession, actor_id: str, requested: list[str] | None) -> list[str]:
+        assert actor_id == "user-unit"
+        return ["tenant-unit"]
+
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("api.apps.restful_apis.chat"), "resolve_list_owner_ids", scope)
+
+    def fake_get_by_tenant_ids(
+        _db: _SyncSession,
+        joined: list[str],
+        user_id: str,
+        page: int,
+        page_size: int,
+        orderby: str,
+        desc: bool,
+        keywords: str,
+        *,
+        id: str | None = None,
+        name: str | None = None,
+        owner_ids_only: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
         sessions.append(_db)
-        assert joined == []
-        assert user_id == "tenant-unit"
+        assert joined == ["tenant-unit"]
+        assert user_id == "user-unit"
+        assert owner_ids_only is True
         assert page == 0
         assert page_size == 0
         assert orderby == "create_time"

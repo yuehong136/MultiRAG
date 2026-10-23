@@ -6,6 +6,8 @@
 @desc: 搜索服务
 """
 
+from typing import Any
+
 from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -78,9 +80,22 @@ class SearchService(CommonService):
 
     @classmethod
     def get_by_tenant_ids(
-        cls, db: Session, joined_tenant_ids: list, user_id: str, page_number: int = None, items_per_page: int = None, orderby: str = "update_time", desc_order: bool = True, keywords: str = None
-    ):
+        cls,
+        db: Session,
+        joined_tenant_ids: list[str],
+        user_id: str,
+        page_number: int | None = None,
+        items_per_page: int | None = None,
+        orderby: str = "update_time",
+        desc_order: bool = True,
+        keywords: str | None = None,
+        *,
+        owner_ids_only: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
         """根据租户ID获取搜索配置列表"""
+        tenant_scope = cls.model.tenant_id.in_(joined_tenant_ids)
+        if not owner_ids_only:
+            tenant_scope = or_(tenant_scope, cls.model.tenant_id == user_id)
         query = (
             db.query(
                 cls.model.id,
@@ -96,7 +111,7 @@ class SearchService(CommonService):
                 User.avatar.label("tenant_avatar"),
             )
             .join(User, cls.model.tenant_id == User.id)
-            .filter(and_(or_(cls.model.tenant_id.in_(joined_tenant_ids), cls.model.tenant_id == user_id), cls.model.status == StatusEnum.VALID.value))
+            .filter(and_(tenant_scope, cls.model.status == StatusEnum.VALID.value))
         )
 
         # 关键词搜索

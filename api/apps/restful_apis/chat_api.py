@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
+from api.apps.services.app_list_scope import resolve_list_owner_ids
 from api.db.db_models import get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
@@ -33,7 +34,8 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result
+from api.identity.principal import Principal
+from api.utils.api_utils import async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_data_result, get_result
 from api.utils.dataset_search import normalize_search_mode, search_mode_response
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
@@ -576,23 +578,22 @@ async def list_chats(
     page_size: int = Query(0, description="Items per page; 0 disables pagination"),
     orderby: str = Query("create_time", description="Sort field"),
     desc: bool = Query(True, description="Sort descending"),
-    owner_ids: list[str] | None = Query(None, description="Owner tenant IDs"),
+    owner_ids: list[str] | None = Query(None, description="Filter active member tenant IDs; omitted selects all authorized tenants"),
     db: AsyncSession = Depends(get_async_db),
-    tenant_id: str = Depends(async_current_tenant_id),
-):
+    principal: Principal = Depends(async_current_user),
+) -> Response:
+    try:
+        owners = await resolve_list_owner_ids(db, principal.platform_user_id, owner_ids)
+    except PermissionError as exc:
+        return _error(str(exc), RetCode.OPERATING_ERROR)
+    except Exception as exc:
+        logger.exception(exc)
+        return _error("Internal server error")
+
     def _list(s: Session) -> Response:
         try:
-            owners = owner_ids or []
             exact_keywords = "" if id or name else (keywords or "")
-            if owners:
-                chats, _ = DialogService.get_by_tenant_ids(s, owners, tenant_id, 0, 0, orderby, desc, exact_keywords, id=id, name=name)
-                chats = [chat for chat in chats if chat.get("tenant_id") in owners]
-                total = len(chats)
-                if page and page_size:
-                    start = (page - 1) * page_size
-                    chats = chats[start : start + page_size]
-            else:
-                chats, total = DialogService.get_by_tenant_ids(s, [], tenant_id, page, page_size, orderby, desc, exact_keywords, id=id, name=name)
+            chats, total = DialogService.get_by_tenant_ids(s, owners, principal.platform_user_id, page, page_size, orderby, desc, exact_keywords, id=id, name=name, owner_ids_only=True)
             return get_result(data={"chats": [build_chat_response(s, chat) for chat in chats], "total": total})
         except Exception as e:
             logger.exception(e)

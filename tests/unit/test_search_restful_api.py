@@ -7,14 +7,18 @@
 失败 ``{"code": <RetCode>, "message": ...}``（get_result 非 SUCCESS 时丢弃 data）。
 """
 
+from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
 
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_async_db, get_db
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
-from api.utils.api_utils import async_current_tenant_id, current_tenant_id
+from api.utils.api_utils import async_current_tenant_id, async_current_user, current_tenant_id
 from common.constants import RetCode
 
 
@@ -72,13 +76,34 @@ def test_search_create_rejects_empty_name(client):
     assert body["message"] == "Search name can't be empty."
 
 
-def test_search_list_returns_apps_and_total(client, monkeypatch):
+def test_search_list_returns_apps_and_total(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
     sessions: list[object] = []
     rows = [{"id": "s1", "tenant_id": "tenant-unit", "name": "demo"}]
 
-    def _get_by_tenant_ids(cls, s, joined_ids, user_id, page, page_size, orderby, desc, keywords):
+    async def scope(db: AsyncSession, actor_id: str, requested: list[str] | None) -> list[str]:
+        assert actor_id == "user-unit"
+        return ["tenant-unit"]
+
+    monkeypatch.setattr(importlib.import_module("api.apps.restful_apis.search"), "resolve_list_owner_ids", scope)
+
+    def _get_by_tenant_ids(
+        cls: type[SearchService],
+        s: Session,
+        joined_ids: list[str],
+        user_id: str,
+        page: int,
+        page_size: int,
+        orderby: str,
+        desc: bool,
+        keywords: str,
+        *,
+        owner_ids_only: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
         sessions.append(s)
-        assert (joined_ids, user_id) == ([], "tenant-unit")
+        assert (joined_ids, user_id) == (["tenant-unit"], "user-unit")
+        assert owner_ids_only is True
         return rows, 1
 
     monkeypatch.setattr(SearchService, "get_by_tenant_ids", classmethod(_get_by_tenant_ids))
@@ -177,7 +202,7 @@ def test_search_delete_success(client, monkeypatch):
     _assert_sync_facade(sessions)
 
 
-def test_search_routes_have_pure_async_dependency_tree(client, route_dependency_calls):
+def test_search_routes_have_pure_async_dependency_tree(client: Any, route_dependency_calls: Callable[[Any, str, str], set[Any]]) -> None:
     import api.apps as api_apps
 
     for method, path in (
@@ -191,5 +216,6 @@ def test_search_routes_have_pure_async_dependency_tree(client, route_dependency_
         assert get_db not in calls, f"{method} {path} 依赖树含同步 get_db"
         assert current_tenant_id not in calls, f"{method} {path} 依赖树含同步 current_tenant_id"
         assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
-        assert async_current_tenant_id in calls, f"{method} {path} 缺异步鉴权依赖"
+        auth = async_current_user if method == "GET" and path == "/api/v1/searches" else async_current_tenant_id
+        assert auth in calls, f"{method} {path} 缺异步鉴权依赖"
         assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
