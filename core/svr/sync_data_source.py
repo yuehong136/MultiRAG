@@ -39,6 +39,7 @@ from common.data_source import (
     MoodleConnector,
     NotionConnector,
     RDBMSConnector,
+    RestAPIConnector,
     RSSConnector,
     SeaFileConnector,
     ZendeskConnector,
@@ -1359,6 +1360,19 @@ class DingTalkAITable(SyncBase):
         return document_generator
 
 
+class REST_API(SyncBase):
+    SOURCE_NAME: str = FileSource.REST_API
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        cfg = RestAPIConnector.parse_storage_config(self.conf)
+        self.connector = RestAPIConnector.from_parsed_config(cfg)
+        self.connector.load_credentials(self.conf.get("credentials") or {})
+        start = task.get("poll_range_start")
+        if task.get("reindex") == "1" or start is None:
+            return self.connector.load_from_state()
+        return self.connector.poll_source(start.timestamp(), datetime.now(UTC).timestamp())
+
+
 class _RDBMSBase(SyncBase):
     DEFAULT_PORT: int = 0
 
@@ -1410,6 +1424,7 @@ class PostgreSQL(_RDBMSBase):
 
 
 func_factory = {
+    FileSource.REST_API: REST_API,
     FileSource.RSS: RSS,
     FileSource.S3: S3,
     FileSource.R2: R2,

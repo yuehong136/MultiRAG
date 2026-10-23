@@ -60,6 +60,7 @@ class ParserType(StrEnum):
 class FileSource(StrEnum):
     LOCAL = ""
     KNOWLEDGEBASE = "knowledgebase"
+    REST_API = "rest_api"
     RSS = "rss"
     S3 = "s3"
     NOTION = "notion"

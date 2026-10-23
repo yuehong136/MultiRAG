@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -206,6 +206,20 @@ async def get_connector(
         return _respond(*await db.run_sync(lambda s: connector_api_service.get_connector(s, connector_id)))  # TODO(async-phase4)
     except Exception as e:
         return server_error_response(e)
+
+
+@router.post("/connectors/{connector_id}/test", summary="测试已保存的 REST API 连接器")
+async def test_connector(
+    connector_id: str,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+) -> JSONResponse:
+    try:
+        if not await _require_access(db, connector_id, user.id):
+            return _auth_error()
+        return _respond(*await connector_api_service.test_connector(db, connector_id))
+    except Exception as exc:
+        return server_error_response(exc)
 
 
 @router.delete("/connectors/{connector_id}", summary="删除连接器", response_description="操作结果")

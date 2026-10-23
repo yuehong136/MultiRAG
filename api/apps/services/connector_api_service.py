@@ -20,15 +20,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db import InputType
 from api.db.db_models import Connector
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
-from common.constants import RetCode, TaskStatus
+from common.constants import FileSource, RetCode, TaskStatus
+from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
+from common.data_source.rest_api_connector import RestAPIConnector
 from common.misc_utils import get_uuid
 
 # 连接器写入后回读前的等待，沿用移植前的行为（上游同样有一秒 sleep）。
@@ -64,6 +68,11 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
     config = dict(req.get("config", {}))
     if state_key := _WORKER_STATE_FIELDS.get(req["source"]):
         config.pop(state_key, None)
+    if req["source"] == FileSource.REST_API:
+        try:
+            _validate_rest_settings(config)
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
     connector_id = get_uuid()
     ConnectorService.insert(
         db,
@@ -97,6 +106,11 @@ def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tup
         if state_key in (connector.config or {}):
             config[state_key] = connector.config[state_key]
         changes["config"] = config
+    if "config" in changes and connector.source == FileSource.REST_API:
+        try:
+            _validate_rest_settings(changes["config"])
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
     if changes:
         ConnectorService.update_by_id(db, connector_id, changes)
     return True, connector_id, None
@@ -143,3 +157,24 @@ def link_dataset_connector(db: Session, dataset_id: str, connector_id: str, auto
 def unlink_dataset_connector(db: Session, dataset_id: str, connector_id: str) -> bool:
     Connector2KbService.unlink_connector(db, dataset_id, connector_id)
     return True
+
+
+def _validate_rest_settings(config: dict[str, Any]) -> None:
+    """Schema and credential checks only: a normal save never probes a vendor."""
+    connector = RestAPIConnector.from_parsed_config(RestAPIConnector.parse_storage_config(config))
+    connector.load_credentials(config.get("credentials") or {})
+
+
+async def test_connector(db: AsyncSession, connector_id: str) -> tuple[bool, Any, RetCode | None]:
+    """Probe saved config after the route's tenant guard, without any writes."""
+    connector = await db.scalar(select(Connector).where(Connector.id == connector_id))
+    if connector is None:
+        return False, "Can't find this Connector!", RetCode.DATA_ERROR
+    if connector.source != FileSource.REST_API:
+        return False, "Connection testing is supported only for REST API connectors.", RetCode.DATA_ERROR
+    config = dict(connector.config or {})
+    try:
+        await asyncio.to_thread(RestAPIConnector.validate_config, config, config.get("credentials") or {})
+    except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+        return False, str(exc), RetCode.DATA_ERROR
+    return True, {"message": "Connection successful."}, None

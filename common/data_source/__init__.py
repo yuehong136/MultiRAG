@@ -39,6 +39,7 @@ from .models import BasicExpertInfo, Document, ImageSection, TextSection
 from .moodle_connector import MoodleConnector
 from .notion_connector import NotionConnector
 from .rdbms_connector import RDBMSConnector
+from .rest_api_connector import RestAPIConnector
 from .rss_connector import RSSConnector
 from .seafile_connector import SeaFileConnector
 from .sharepoint_connector import SharePointConnector
@@ -72,6 +73,7 @@ __all__ = [
     "NotionConnector",
     "RDBMSConnector",
     "RSSConnector",
+    "RestAPIConnector",
     "SeaFileConnector",
     "SharePointConnector",
     "SlackConnector",

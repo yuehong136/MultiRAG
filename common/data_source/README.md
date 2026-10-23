@@ -205,3 +205,51 @@ Gmail 和 Google Drive 的 `/api/v1/connectors/...` 与 `/v1/connector/...` OAut
 服务运行在本机。真实 Google 登录、consent、客户端及 redirect URI 注册、Workspace
 授权策略、refresh token 发放与 Gmail/Drive API 访问仍需使用部署环境的 Google 应用和
 测试账号验证；本机模拟成功不能证明这些外部条件已满足。
+
+## REST API 数据源
+
+`rest_api` 通过生产 Python 同步链把 JSON API 的每条记录转换为文本及 metadata。
+支持 GET/POST、无认证/API key header/Bearer/Basic，以及 page、offset、cursor 分页。
+`config.url` 与非空 `content_fields` 必填；字段支持 `country.name`、`tags[*].name`，
+`items_path` 使用 jsonpath-ng（例如 `$.data[*]`）。`headers`/`query_params` 接受对象、
+JSON 对象文本或逐行 `key=value`；`request_body` 接受 JSON 对象或对象文本，空字符串表示 `{}`。
+
+```json
+{
+  "url": "https://api.example.com/records",
+  "method": "GET",
+  "id_field": "id",
+  "content_fields": ["title", "body"],
+  "metadata_fields": ["category"],
+  "items_path": "$.data[*]",
+  "pagination_type": "cursor",
+  "pagination_config": {"cursor_param": "cursor", "next_cursor_path": "$.next", "has_next_page_path": "$.more"},
+  "poll_timestamp_field": "updated_at"
+}
+```
+
+- 认证字段放 `auth_config`：API key 使用 `header_name` 和 `api_key_value`；Bearer 使用
+  `token`；Basic 使用 `username`/`password`。可由 `credentials.api_key/token/username/password`
+  覆盖对应值。正常保存仅检查配置及认证字段，不探测远端。
+- `POST /api/v1/connectors/{id}/test` 不接受配置 body，仅测试已保存配置的第一页及内容映射。
+  租户鉴权先于配置读取及出网；不保存、不入库、不调度。成功响应沿用
+  `retcode/retmsg/data`，`data.message` 为 `Connection successful.`；配置/连接失败为 102。
+- page 参数：`page_param`（默认 `page`）、`start_page`（默认 1）、`page_size`、
+  `page_size_param`；offset 参数：`offset_param`（默认 `offset`）、`start_offset`（默认 0）、
+  `limit`、`limit_param`；cursor 参数：`cursor_param`（默认 `cursor`）、`initial_cursor`、
+  `next_cursor_path` 或 `next_cursor_field`。`has_next_page_path` 可指定明确布尔结束标志；
+  显式继续时空页不会提前结束。重复游标、缺失游标及超过 `max_pages` 都会失败，不提交成功游标。
+- `max_pages` 默认 1000（1–10000）；`request_delay` 默认 0.5 秒（0–60）；
+  `batch_size` 默认沿用 `INDEX_BATCH_SIZE`。单页响应最多 16 MiB。
+- `field_type_hints` 支持 string/number/date，`field_default_values` 提供缺省值；
+  `content_template` 使用 `{title}` 等占位符，嵌套字段名用下划线（`country_name`）。
+  配置错误、空内容、非法数字/日期、非对象记录均显式失败，不静默丢弃。
+- `id_field` 用于稳定身份；缺省按记录的规范 JSON 生成身份。身份继续按知识库及连接器隔离。
+  `poll_timestamp_field` 接受 ISO8601 或 Unix 秒，按 UTC 的 `[start,end)` 过滤；
+  未配置时每次全量获取，沿现有内容/metadata fingerprint 更新。失败可能保留已经入库的前批，
+  但成功检查点不会越过失败页，重试复用同一身份。本数据源不支持删除同步。
+- 每次请求及重定向都使用共享 SSRF guard 校验公共地址并固定 DNS，禁用环境代理/.netrc。
+  URL 不得含凭据；跨 origin GET 清除自定义 header、认证和原请求参数，跨 origin POST
+  重定向拒绝，以避免 body 泄漏。401/403 不重试；网络错误、429/5xx 最多尝试三次。
+
+本地验证使用受控 HTTP 和隔离 PostgreSQL/MinIO；不代表任意第三方 API、生产调度或真实供应商已验收。

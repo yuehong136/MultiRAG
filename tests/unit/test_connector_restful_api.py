@@ -80,6 +80,7 @@ _GUARDED_REST_CALLS = [
     ("delete", _REST, None),
     ("get", f"{_REST}/logs", None),
     ("post", f"{_REST}/resume", {"resume": True}),
+    ("post", f"{_REST}/test", None),
     ("post", f"{_REST}/rebuild", {"kb_id": "kb-1"}),
 ]
 
@@ -351,3 +352,35 @@ def test_link_also_requires_access_to_the_connector(client, monkeypatch, session
 
     assert resp.json()["retcode"] == RetCode.AUTHENTICATION_ERROR, resp.text
     assert touched == [], touched
+
+
+async def test_rest_test_service_reads_saved_config_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from common.data_source.rest_api_connector import RestAPIConnector
+
+    config = {"url": "https://example.test/items", "content_fields": ["title"]}
+    db = AsyncSession()
+    monkeypatch.setattr(db, "scalar", AsyncMock(return_value=_connector(source="rest_api", config=config)))
+    touched = []
+    monkeypatch.setattr(RestAPIConnector, "validate_config", lambda cfg, credentials: touched.append((cfg, credentials)))
+    result = await connector_api_service.test_connector(db, CONNECTOR_ID)
+    assert result == (True, {"message": "Connection successful."}, None)
+    assert touched == [(config, {})]
+    assert not db.new and not db.dirty
+    await db.close()
+
+
+def test_rest_config_save_checks_schema_without_probe(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    from common.data_source.rest_api_connector import RestAPIConnector
+
+    monkeypatch.setattr(RestAPIConnector, "validate_config", lambda *args: pytest.fail("Normal save probed network"))
+    writes = []
+    monkeypatch.setattr(ConnectorService, "insert", lambda *args, **kwargs: writes.append(kwargs))
+    result = connector_api_service.create_connector(db, {"name": "REST", "source": "rest_api", "config": {"url": "https://example.test", "content_fields": ["title"]}}, "owner")
+    assert result[0] is True and len(writes) == 1
+    writes.clear()
+    result = connector_api_service.create_connector(db, {"name": "bad", "source": "rest_api", "config": {"url": "invalid"}}, "owner")
+    assert result[0] is False and not writes
