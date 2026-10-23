@@ -6,10 +6,13 @@ import pytest
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Knowledgebase
+from core.graphrag.general import index as graph_index
 from core.svr import task_executor
 
 
-@pytest.mark.parametrize("graph_config", [None, {"use_graphrag": False, "method": "general", "entity_types": ["product"], "resolution": True}, {"use_graphrag": True, "method": "general"}])
+@pytest.mark.parametrize(
+    "graph_config", [None, {"use_graphrag": False, "method": "general", "entity_types": ["product"], "resolution": True, "batch_chunk_token_size": 1024}, {"use_graphrag": True, "method": "general"}]
+)
 @pytest.mark.parametrize("save_ok", [True, False])
 async def test_manual_graph_initializes_config_before_generation(db: Session, monkeypatch: pytest.MonkeyPatch, graph_config: dict[str, Any] | None, save_ok: bool) -> None:
     original = {"llm_id": "chat", "raptor": {"use_raptor": True}}
@@ -30,7 +33,7 @@ async def test_manual_graph_initializes_config_before_generation(db: Session, mo
     monkeypatch.setattr(task_executor, "LLMBundle", lambda *args, **kwargs: model)
     monkeypatch.setattr(task_executor, "init_kb", AsyncMock())
     graph = AsyncMock(return_value={})
-    monkeypatch.setattr(task_executor, "run_graphrag_for_kb", graph)
+    monkeypatch.setattr(graph_index, "run_graphrag_for_kb", graph)
     progress: list[dict[str, Any]] = []
     monkeypatch.setattr(task_executor, "set_progress", lambda *args, **kwargs: progress.append(kwargs))
     task = {
@@ -62,8 +65,10 @@ async def test_manual_graph_initializes_config_before_generation(db: Session, mo
         assert config["graphrag"]["method"] == "general"
         assert config["graphrag"]["entity_types"] == ["product"]
         assert config["graphrag"]["resolution"] is True
+        assert config["graphrag"]["batch_chunk_token_size"] == 1024
     else:
         assert config["graphrag"]["method"] == "light"
+        assert config["graphrag"]["batch_chunk_token_size"] == 4096
         assert "person" in config["graphrag"]["entity_types"]
     if save_ok:
         graph.assert_awaited_once()

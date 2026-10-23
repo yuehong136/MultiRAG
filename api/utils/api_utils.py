@@ -588,7 +588,7 @@ def flatten_parent_child_config(parser_config: dict[str, Any]) -> dict[str, Any]
     return parser_config
 
 
-def get_parser_config(chunk_method, parser_config):
+def get_parser_config(chunk_method: str, parser_config: dict[str, Any] | None) -> dict[str, Any]:
     if not chunk_method:
         chunk_method = "naive"
 
@@ -597,7 +597,7 @@ def get_parser_config(chunk_method, parser_config):
         "table_context_size": 0,
         "image_context_size": 0,
     }
-    key_mapping = {
+    key_mapping: dict[str, dict[str, Any] | None] = {
         "naive": {
             "layout_recognize": "DeepDOC",
             "chunk_token_num": 512,
@@ -624,6 +624,7 @@ def get_parser_config(chunk_method, parser_config):
                     "category",
                 ],
                 "method": "light",
+                "batch_chunk_token_size": 4096,
             },
             "parent_child": {
                 "use_parent_child": False,

@@ -27,7 +27,6 @@ from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import has_canceled
-from common import settings
 from common.connection_utils import timeout
 from common.exceptions import TaskCanceledException
 from core.graphrag.entity_resolution import EntityResolution
@@ -50,7 +49,6 @@ from core.graphrag.utils import (
     tidy_graph,
 )
 from core.nlp import rag_tokenizer, search
-from core.utils.redis_conn import RedisDistributedLock
 
 
 async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str) -> nx.Graph | None:
@@ -117,100 +115,6 @@ async def run_graphrag_for_kb(
             current_writer.reset(token)
 
 
-async def run_graphrag(
-    row: dict[str, Any],
-    language: str,
-    with_resolution: bool,
-    with_community: bool,
-    chat_model: Any,
-    embedding_model: Any,
-    callback: Callable[..., Any],
-) -> None:
-    enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
-    start = asyncio.get_running_loop().time()
-    tenant_id, kb_id, doc_id = row["tenant_id"], str(row["kb_id"]), row["doc_id"]
-    chunks = []
-    for d in settings.retriever.chunk_list(doc_id, tenant_id, [kb_id], max_count=10000, fields=["content_with_weight", "doc_id"], sort_by_position=True):
-        chunks.append(d["content_with_weight"])
-
-    timeout_sec = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
-
-    try:
-        subgraph = await asyncio.wait_for(
-            generate_subgraph(
-                _select_extractor(row["kb_parser_config"].get("graphrag", {})),
-                tenant_id,
-                kb_id,
-                doc_id,
-                chunks,
-                language,
-                row["kb_parser_config"]["graphrag"].get("entity_types", []),
-                chat_model,
-                embedding_model,
-                callback,
-            ),
-            timeout=timeout_sec,
-        )
-    except TimeoutError:
-        logging.error("generate_subgraph timeout")
-        raise
-
-    if not subgraph:
-        return
-
-    graphrag_task_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value=doc_id, timeout=1200)
-    await graphrag_task_lock.spin_acquire()
-    callback(msg=f"run_graphrag {doc_id} graphrag_task_lock acquired")
-
-    try:
-        subgraph_nodes = set(subgraph.nodes())
-        new_graph = await merge_subgraph(
-            tenant_id,
-            kb_id,
-            doc_id,
-            subgraph,
-            embedding_model,
-            callback,
-        )
-        assert new_graph is not None
-
-        if not with_resolution and not with_community:
-            return
-
-        if with_resolution:
-            await graphrag_task_lock.spin_acquire()
-            callback(msg=f"run_graphrag {doc_id} graphrag_task_lock acquired")
-            await resolve_entities(
-                new_graph,
-                subgraph_nodes,
-                tenant_id,
-                kb_id,
-                doc_id,
-                chat_model,
-                embedding_model,
-                callback,
-                task_id=row["id"],
-            )
-        if with_community:
-            await graphrag_task_lock.spin_acquire()
-            callback(msg=f"run_graphrag {doc_id} graphrag_task_lock acquired")
-            await extract_community(
-                new_graph,
-                tenant_id,
-                kb_id,
-                doc_id,
-                chat_model,
-                embedding_model,
-                callback,
-                task_id=row["id"],
-            )
-    finally:
-        graphrag_task_lock.release()
-    now = asyncio.get_running_loop().time()
-    callback(msg=f"GraphRAG for doc {doc_id} done in {now - start:.2f} seconds.")
-    return
-
-
 async def _run_graphrag_for_kb(
     row: dict[str, Any],
     doc_ids: list[str],
@@ -225,6 +129,10 @@ async def _run_graphrag_for_kb(
     max_parallel_docs: int = 4,
 ) -> dict[str, Any]:
     tenant_id, kb_id = row["tenant_id"], row["kb_id"]
+    graphrag_config = kb_parser_config.get("graphrag", {})
+    batch_chunk_token_size = graphrag_config.get("batch_chunk_token_size", 4096)
+    if type(batch_chunk_token_size) is not int or not 512 <= batch_chunk_token_size <= 8196:
+        raise ValueError("GraphRAG batch_chunk_token_size must be an integer from 512 to 8196")
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     start = asyncio.get_running_loop().time()
 
@@ -260,10 +168,10 @@ async def _run_graphrag_for_kb(
         current_chunk = ""
 
         raw_chunks = await settled_io(load_graph_source_chunks, tenant_id, kb_id, doc_id)
-        if kb_parser_config.get("graphrag", {}).get("method") == "ner":
+        if graphrag_config.get("method") == "ner":
             return raw_chunks
         for content in raw_chunks:
-            if num_tokens_from_string(current_chunk + content) < 4096:
+            if num_tokens_from_string(current_chunk + content) < batch_chunk_token_size:
                 current_chunk += content
             else:
                 if current_chunk:
@@ -275,16 +183,8 @@ async def _run_graphrag_for_kb(
 
         return chunks
 
-    all_doc_chunks: dict[str, list[str]] = {}
     total_chunks = 0
-    for doc_id in doc_ids:
-        chunks = await load_doc_chunks(doc_id)
-        all_doc_chunks[doc_id] = chunks
-        total_chunks += len(chunks)
-
-    if total_chunks == 0 and persisted_graph is None:
-        callback(msg=f"[GraphRAG] kb:{kb_id} has no available chunks in all documents, skip.")
-        return {"ok_docs": [], "failed_docs": doc_ids, "total_docs": len(doc_ids), "total_chunks": 0, "seconds": 0.0}
+    empty_docs: list[str] = []
 
     semaphore = asyncio.Semaphore(max_parallel_docs)
 
@@ -292,20 +192,16 @@ async def _run_graphrag_for_kb(
     failed_docs: list[tuple[str, str]] = []  # (doc_id, error)
 
     async def build_one(doc_id: str) -> None:
+        nonlocal total_chunks
         if has_canceled(row["id"]):
             callback(msg=f"Task {row['id']} cancelled, stopping execution.")
             raise TaskCanceledException(f"Task {row['id']} was cancelled")
 
-        chunks = all_doc_chunks.get(doc_id, [])
-        if not chunks:
-            callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
-            return
-
-        kg_extractor = _select_extractor(kb_parser_config.get("graphrag", {}))
-
-        deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
+        kg_extractor = _select_extractor(graphrag_config)
 
         async with semaphore:
+            if has_canceled(row["id"]):
+                raise TaskCanceledException(f"Task {row['id']} was cancelled")
             if doc_id in merged_doc_ids:
                 callback(msg=f"[GraphRAG] doc:{doc_id} already merged, skipping extraction.")
                 return
@@ -316,6 +212,15 @@ async def _run_graphrag_for_kb(
                 callback(msg=f"[GraphRAG] doc:{doc_id} subgraph found in store, skipping LLM extraction.")
                 return
             try:
+                chunks = await load_doc_chunks(doc_id)
+                if has_canceled(row["id"]):
+                    raise TaskCanceledException(f"Task {row['id']} was cancelled")
+                total_chunks += len(chunks)
+                if not chunks:
+                    empty_docs.append(doc_id)
+                    callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
+                    return
+                deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
                 msg = f"[GraphRAG] build_subgraph doc:{doc_id}"
                 callback(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
 
@@ -369,6 +274,10 @@ async def _run_graphrag_for_kb(
     if has_canceled(row["id"]):
         callback(msg=f"Task {row['id']} cancelled after document processing.")
         raise TaskCanceledException(f"Task {row['id']} was cancelled")
+
+    if len(empty_docs) == len(doc_ids) and persisted_graph is None and not subgraphs:
+        callback(msg=f"[GraphRAG] kb:{kb_id} has no available chunks in all documents, skip.")
+        return {"ok_docs": [], "failed_docs": doc_ids, "total_docs": len(doc_ids), "total_chunks": 0, "seconds": 0.0}
 
     ok_docs = [d for d in doc_ids if d in subgraphs]
     final_graph = persisted_graph

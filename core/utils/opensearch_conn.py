@@ -21,9 +21,11 @@ import math
 import os
 import re
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from opensearchpy import ConnectionTimeout, Index, NotFoundError, OpenSearch, Q, Search, UpdateByQuery
+from opensearchpy.helpers import scan
 
 from common import settings
 from common.constants import PAGERANK_FLD, TAG_FLD
@@ -171,6 +173,15 @@ class OSConnection(SearchMetadata, DocStoreConnection):
     """
     CRUD operations
     """
+
+    def iter_document_chunks(self, index_name: str, kb_id: str, doc_id: str, fields: list[str]) -> Iterator[dict[str, Any]]:
+        """Complete scoped scroll; the SDK clears its cursor on every exit."""
+        if not index_name or not kb_id or not doc_id:
+            raise ValueError("A document scroll requires an explicit dataset binding")
+        body: dict[str, Any] = {"_source": fields or False, "query": {"bool": {"filter": [{"term": {"kb_id": kb_id}}, {"term": {"doc_id": doc_id}}]}}}
+        for hit in scan(self.os, index=index_name, query=body, size=128, scroll="2m", raise_on_error=True, clear_scroll=True):
+            row = self.get_fields({"hits": {"hits": [hit]}}, fields).get(hit["_id"], {})
+            yield {**row, "id": hit["_id"]}
 
     def search(
         self,

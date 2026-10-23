@@ -2860,6 +2860,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
             kb_parser_config["graphrag"] = {
                 "entity_types": ["organization", "person", "geo", "event", "category"],
                 "method": "light",
+                "batch_chunk_token_size": 4096,
                 **(kb_parser_config.get("graphrag") or {}),
                 "use_graphrag": True,
             }
@@ -2874,7 +2875,6 @@ async def do_handle_task(db: Session, task: Any) -> None:
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
         async with kg_limiter:
-            # await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
             from core.graphrag.general.index import run_graphrag_for_kb
 
             result = await run_graphrag_for_kb(

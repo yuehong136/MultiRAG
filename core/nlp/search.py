@@ -1039,12 +1039,24 @@ class Dealer:
             raise Exception(error_msg)
         return tbl
 
-    def chunk_list(self, doc_id: str, tenant_id: str, kb_ids: list[str], max_count=1024, offset=0, fields=["docnm_kwd", "content_with_weight", "img_id"], sort_by_position: bool = False):
+    def chunk_list(
+        self, doc_id: str, tenant_id: str, kb_ids: list[str], max_count: int = 1024, offset: int = 0, fields: list[str] | None = None, sort_by_position: bool = False, retrieve_all: bool = False
+    ) -> list[dict[str, Any]]:
+        """Keep the default cap; explicit full reads use native scroll on ES/OS.
+
+        GraphRAG retains its separate complete Strong source snapshot contract.
+        Other engines page through their search contract and propagate failures.
+        """
         from api.db.services.knowledgebase_service import KnowledgebaseService
 
+        if not doc_id or not kb_ids:
+            return []
+        if retrieve_all and len(kb_ids) != 1:
+            raise ValueError("A complete document read requires one dataset binding")
+        fields = ["docnm_kwd", "content_with_weight", "img_id"] if fields is None else list(fields)
         condition = {"doc_id": doc_id}
 
-        fields_set = set(fields or [])
+        fields_set = set(fields)
         if sort_by_position:
             for need in ("page_num_int", "position_int", "top_int"):
                 if need not in fields_set:
@@ -1062,12 +1074,43 @@ class Dealer:
 
         # db = SessionLocal()
         with db_connection() as db:
-            kb = KnowledgebaseService.get_by_ids(db, kb_ids)[0]
-        for p in range(offset, max_count, bs):
-            limit = min(bs, max_count - p)
+            datasets = KnowledgebaseService.get_by_ids(db, kb_ids)
+            if not datasets:
+                return []
+            kb_name, kb_tenant = datasets[0].name, datasets[0].tenant_id
+        if retrieve_all and kb_tenant != tenant_id:
+            raise PermissionError("Document dataset tenant binding does not match")
+        if retrieve_all and offset < 0:
+            raise ValueError("A complete document read requires a nonnegative offset")
+        if retrieve_all and self.dataStore.db_type() == "milvus":
+            # Reuse the existing complete Strong document snapshot. Generic
+            # offset queries cannot safely cross Milvus's result-window limit.
+            raw_rows = self.dataStore.graph_source_rows(index_name_one(tenant_id, kb_name), kb_ids[0], doc_id)
+            rows = self.dataStore.get_fields(raw_rows, fields)
+            rows.pop("distance", None)
+            return [{**row, "id": identifier} for identifier, row in rows.items()][offset:]
+        if retrieve_all and self.dataStore.db_type() in {"elasticsearch", "opensearch"}:
+            res = list(self.dataStore.iter_document_chunks(index_name_one(tenant_id, kb_name), kb_ids[0], doc_id, fields))
+            if sort_by_position:
+
+                def position(row: dict[str, Any]) -> tuple[float, float, float, str]:
+                    values = []
+                    for key in ("page_num_int", "position_int", "top_int"):
+                        value = row.get(key, 0)
+                        while isinstance(value, (list, tuple)):
+                            value = value[0] if value else 0
+                        values.append(get_float(value))
+                    return values[0], values[1], values[2], row["id"]
+
+                res.sort(key=position)
+            return res[offset:]
+        p = offset
+        seen: set[str] = set()
+        while retrieve_all or p < max_count:
+            limit = bs if retrieve_all else min(bs, max_count - p)
             if limit <= 0:
                 break
-            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, limit, index_name(tenant_id, [kb.name]), kb_ids)
+            milvus_res = self.dataStore.search(fields, [], condition, [], orderBy, p, limit, index_name(tenant_id, [kb_name]), kb_ids)
             dict_chunks = self.dataStore.get_fields(milvus_res, fields)
             # 直接删除系统字段
             system_fields = ["distance"]
@@ -1075,11 +1118,17 @@ class Dealer:
                 dict_chunks.pop(field, None)  # 使用pop(key, None)避免KeyError
             for id, doc in dict_chunks.items():
                 doc["id"] = id
+            if retrieve_all and seen.intersection(dict_chunks):
+                raise RuntimeError("Repeated document page in complete chunk read")
+            seen.update(dict_chunks)
             if dict_chunks:
                 res.extend(dict_chunks.values())
             chunk_count = len(dict_chunks)
             if chunk_count == 0 or chunk_count < limit:
+                if retrieve_all and p + chunk_count < self.dataStore.get_total(milvus_res):
+                    raise RuntimeError("Incomplete document chunk read")
                 break
+            p += limit
         return res
 
     def all_tags(self, tenant_id: str, kb_ids: list[str], S: int = 1000) -> list[tuple[str, int]]:

@@ -308,3 +308,48 @@ async def test_parent_keeps_child_citation_vector_in_real_index(scored_store: di
     monkeypatch.setattr(settings, "DOC_ENGINE", env["manifest"]["backend"])
     await dialog_service._hydrate_chunk_vectors(env["dealer"], parents, [SimpleNamespace(id=env["kb"], name=env["name"], tenant_id=env["owner"])])
     assert parents[0]["vector"] == [1.0] + [0.0] * 511
+
+
+def test_complete_chunk_list_crosses_result_window_and_closes_failed_scroll(scored_store: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = scored_store
+    doc_id, count = env["ids"]["semantic"], 10005
+    writer = env["store"].es if hasattr(env["store"], "es") else env["store"].os
+    operations = []
+    identifiers = []
+    for number in range(1, count + 1):
+        identifier = uuid4().hex
+        identifiers.append(identifier)
+        operations.extend(
+            [
+                {"index": {"_index": env["index"], "_id": identifier}},
+                {"id": identifier, "kb_id": env["kb"], "doc_id": doc_id, "content_with_weight": f"source {number}", "page_num_int": number, "available_int": 1},
+            ]
+        )
+    reply = writer.bulk(body=operations, refresh=True)
+    assert reply["errors"] is False
+    assert env["reader"].count(index=env["index"], body={"query": {"term": {"doc_id": doc_id}}})["count"] == count + 1
+    fields = ["doc_id", "content_with_weight"]
+    assert len(env["dealer"].chunk_list(doc_id, env["owner"], [env["kb"]], max_count=130, fields=fields, sort_by_position=True)) == 130
+    complete = env["dealer"].chunk_list(doc_id, env["owner"], [env["kb"]], fields=fields, sort_by_position=True, retrieve_all=True)
+    assert len(complete) == count + 1 and len({row["id"] for row in complete}) == count + 1
+    assert {row["id"] for row in complete} == {doc_id, *identifiers}
+    assert complete[-1]["content_with_weight"] == "source 10005"
+    assert all(row["doc_id"] == doc_id for row in complete)
+    tail = env["dealer"].chunk_list(doc_id, env["owner"], [env["kb"]], offset=10000, fields=fields, sort_by_position=True, retrieve_all=True)
+    assert [row["id"] for row in tail] == [row["id"] for row in complete[10000:]]
+    with monkeypatch.context() as scope:
+        original_request = writer.transport.perform_request
+
+        def fail_scroll(method: str, target: str, *args: Any, **kwargs: Any) -> Any:
+            if method in {"GET", "POST"} and target.split("?", 1)[0] == "/_search/scroll":
+                raise RuntimeError("injected mid-scroll failure")
+            return original_request(method, target, *args, **kwargs)
+
+        # ES helpers clone clients through options(); the underlying transport
+        # is the real common boundary. DELETE remains live for cursor cleanup.
+        scope.setattr(writer.transport, "perform_request", fail_scroll)
+        with pytest.raises(RuntimeError, match="mid-scroll"):
+            env["dealer"].chunk_list(doc_id, env["owner"], [env["kb"]], fields=fields, retrieve_all=True)
+    assert env["reader"].indices.stats(index=env["index"])["indices"][env["index"]]["total"]["search"]["open_contexts"] == 0
+    env["manifest"]["retrieve_all"] = {"source_rows": count + 1, "legacy_cap": 130, "offset_tail": len(tail), "failed_scroll_closed": True}
+    env["manifest_file"].write_text(json.dumps(env["manifest"], indent=2))

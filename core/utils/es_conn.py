@@ -18,9 +18,11 @@ import copy
 import json
 import re
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from elastic_transport import ConnectionTimeout
+from elasticsearch.helpers import scan
 from elasticsearch_dsl import Q, Search, UpdateByQuery
 
 from common.constants import PAGERANK_FLD, TAG_FLD
@@ -137,6 +139,18 @@ class ESConnection(ESConnectionBase):
             template_res = self._es_search_once(index_names, q_count, track_total_hits=True)
         template_res["hits"]["hits"] = collected_hits
         return template_res
+
+    def iter_document_chunks(self, index_name: str, kb_id: str, doc_id: str, fields: list[str]) -> Iterator[dict[str, Any]]:
+        """Complete scoped scroll; the SDK clears its cursor on every exit."""
+        if not index_name or not kb_id or not doc_id:
+            raise ValueError("A document scroll requires an explicit dataset binding")
+        body: dict[str, Any] = {"_source": fields or False, "query": {"bool": {"filter": [{"term": {"kb_id": kb_id}}, {"term": {"doc_id": doc_id}}]}}}
+        vectors = [field for field in fields if field.endswith("_vec")]
+        if vectors:
+            body["fields"] = vectors
+        for hit in scan(self.es, index=index_name, query=body, size=128, scroll="2m", raise_on_error=True, clear_scroll=True):
+            row = self.get_fields({"hits": {"hits": [hit]}}, fields).get(hit["_id"], {})
+            yield {**row, "id": hit["_id"]}
 
     def search(
         self,

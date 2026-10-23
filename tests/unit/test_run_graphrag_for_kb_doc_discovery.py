@@ -9,7 +9,6 @@ DB / doc store 全部打桩（纯函数打桩形态，同 test_checkpoint_resume
 """
 
 from contextlib import contextmanager
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import core.graphrag.general.index as kg_index
@@ -23,6 +22,8 @@ def _fake_db():
 async def test_empty_doc_ids_fetches_doc_list_from_db(monkeypatch):
     monkeypatch.setattr(kg_index, "db_connection", _fake_db)
     monkeypatch.setattr(kg_index, "get_graph", AsyncMock(return_value=None))
+    monkeypatch.setattr(kg_index, "has_canceled", lambda *_: False)
+    monkeypatch.setattr(kg_index, "load_subgraph_from_store", AsyncMock(return_value=None))
     monkeypatch.setattr(kg_index, "load_graph_source_chunks", lambda *args: [])
 
     seen = {}
@@ -32,7 +33,6 @@ async def test_empty_doc_ids_fetches_doc_list_from_db(monkeypatch):
         return [{"id": "doc-1"}, {"id": "doc-2"}], 2
 
     monkeypatch.setattr(kg_index.DocumentService, "get_by_kb_id", classmethod(fake_get_by_kb_id))
-    monkeypatch.setattr(kg_index.settings, "retriever", SimpleNamespace(chunk_list=lambda *a, **k: []), raising=False)
 
     row = {"tenant_id": "t1", "kb_id": "kb1", "id": "task-1"}
     res = await kg_index._run_graphrag_for_kb(row, [], "English", {}, None, None, lambda msg=None, prog=None: None)
