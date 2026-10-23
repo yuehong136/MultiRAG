@@ -266,3 +266,22 @@ async def test_dealer_queries_bound_index_dataset_pairs_with_independent_readbac
         assert raw == {"id": ["outside"], "kb_id": ["second"]}
     finally:
         reader.disconnect()
+
+
+@pytest.mark.parametrize("index_name", ["chunks", ["chunks"]])
+def test_get_preserves_chunk_identity_through_real_roundtrip(infinity_scratch: tuple[Any, Any], index_name: str | list[str]) -> None:
+    store, reader = infinity_scratch
+    before = reader.output(["id", "doc_id", "available_int", "content"]).to_result()[0]
+    chunk = store.get("hidden", index_name, ["kb"])
+    assert chunk["id"] == "hidden" and chunk["doc_id"] == "doc"
+    assert chunk["available_int"] == 0 and chunk["content_with_weight"] == "availability regression"
+    assert store.get("absent", index_name, ["kb"]) is None
+    assert store.get("hidden", "absent_index", ["kb"]) is None
+    assert reader.output(["id", "doc_id", "available_int", "content"]).to_result()[0] == before
+    assert store.update({"id": "hidden"}, {"content_with_weight": "roundtrip updated"}, "chunks", "kb") is True
+    updated = store.get("hidden", index_name, ["kb"])
+    assert updated["id"] == "hidden" and updated["content_with_weight"] == "roundtrip updated" and updated["available_int"] == 0
+    assert reader.output(["id", "content"]).filter("id = 'hidden'").to_result()[0] == {"id": ["hidden"], "content": ["roundtrip updated"]}
+    assert store.delete({"id": "hidden"}, "chunks", "kb") == 1
+    assert store.get("hidden", index_name, ["kb"]) is None
+    assert set(reader.output(["id"]).to_result()[0]["id"]) == {"visible", "foreign"}

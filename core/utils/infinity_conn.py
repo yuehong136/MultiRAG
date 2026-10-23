@@ -292,23 +292,33 @@ class InfinityConnection(InfinityConnectionBase):
         self.logger.debug(f"INFINITY search final result: {res!s}")
         return res, total_hits_count
 
-    def get(self, chunk_id: str, index_name: str, knowledgebase_ids: list[str]) -> dict | None:
+    def get(self, chunk_id: str, index_name: str | list[str], knowledgebase_ids: list[str]) -> dict | None:
+        # REST chunk consumers pass the list returned by search.index_name().
+        indices = [index_name] if isinstance(index_name, str) else index_name
+        if len(indices) == 1:
+            bindings = [(indices[0], kb_id) for kb_id in knowledgebase_ids]
+        elif len(indices) == len(knowledgebase_ids):
+            bindings = list(zip(indices, knowledgebase_ids, strict=True))
+        else:
+            raise ValueError("Dataset/index binding is ambiguous")
+        escaped_id = chunk_id.replace("'", "''")
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
             df_list = []
-            assert isinstance(knowledgebase_ids, list)
             table_list = []
-            for knowledgebaseId in knowledgebase_ids:
+            for index, knowledgebase_id in bindings:
                 # Empty knowledgebaseId means use the index_name directly (metadata tables)
-                table_name = index_name if not knowledgebaseId else f"{index_name}_{knowledgebaseId}"
+                table_name = index if not knowledgebase_id else f"{index}_{knowledgebase_id}"
                 table_list.append(table_name)
                 try:
                     table_instance = db_instance.get_table(table_name)
-                except Exception:
+                except InfinityException as exc:
+                    if exc.error_code != ErrorCode.TABLE_NOT_EXIST:
+                        raise
                     self.logger.warning(f"Table not found: {table_name}, this dataset isn't created in Infinity. Maybe it is created in other document engine.")
                     continue
-                kb_res, _ = table_instance.output(["*"]).filter(f"id = '{chunk_id}'").to_df()
+                kb_res, _ = table_instance.output(["*"]).filter(f"id = '{escaped_id}'").to_df()
                 self.logger.debug(f"INFINITY get table: {table_list!s}, result: {kb_res!s}")
                 df_list.append(kb_res)
         finally:
@@ -331,7 +341,10 @@ class InfinityConnection(InfinityConnectionBase):
         ]:
             fields.add(field)
         res_fields = self.get_fields(res, list(fields))
-        return res_fields.get(chunk_id, None)
+        chunk = res_fields.get(chunk_id)
+        if chunk is not None:
+            chunk["id"] = chunk_id
+        return chunk
 
     def insert(self, documents: list[dict], index_name: str, knowledgebase_id: str = None) -> list[str]:
         """
