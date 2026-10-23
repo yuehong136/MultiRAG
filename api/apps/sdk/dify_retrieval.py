@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal, Self
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -21,7 +21,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.utils.api_utils import SDKAuthError, build_error_result, token_required
+from api.utils.api_utils import SDKAuthError, build_error_result, get_json_result, token_required
 from common import settings
 from common.constants import LLMType, RetCode
 from common.metadata_utils import convert_conditions, meta_filter
@@ -390,33 +390,12 @@ async def retrieval(
 
 @router.get(
     "/dify/retrieval",
-    summary="Dify 检索接口",
-    response_model=RetrievalResponse,
-    responses={
-        200: {"description": "检索成功"},
-        400: {"description": "Dify error_code=101: required arguments are missing / invalid or malformed arguments"},
-        403: {"description": "API key or dataset access denied"},
-        404: {"description": "知识库或文档块未找到"},
-        500: {"description": "服务器内部错误"},
-    },
+    summary="Dify 连通性检查",
 )
-async def retrieval_get(
-    knowledge_id: Annotated[str, Query(min_length=1, pattern=r"\S", description="知识库ID")],
-    query: Annotated[str, Query(min_length=1, pattern=r"\S", description="查询问题")],
-    use_kg: Annotated[bool, Query(description="是否使用知识图谱增强检索")] = False,
-    top_k: Annotated[int, Query(ge=1, le=10000, description="返回结果的最大数量")] = 1024,
-    score_threshold: Annotated[float, Query(ge=0.0, le=1.0, description="相似度阈值")] = 0.0,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required),
-) -> RetrievalResponse | Response:
-    """Dify-compatible retrieval API for GET connectivity checks."""
-    request_data = RetrievalRequest(
-        knowledge_id=knowledge_id,
-        query=query,
-        use_kg=use_kg,
-        retrieval_setting=RetrievalSetting(
-            score_threshold=score_threshold,
-            top_k=top_k,
-        ),
-    )
-    return await _run_retrieval(request_data, db, tenant_id)
+async def retrieval_health_check() -> JSONResponse:
+    """Check connectivity without authentication or retrieval; use POST to search.
+
+    Query parameters are ignored. This endpoint does not check storage or model
+    readiness and never resolves database, API-key or retrieval dependencies.
+    """
+    return get_json_result(data=True)

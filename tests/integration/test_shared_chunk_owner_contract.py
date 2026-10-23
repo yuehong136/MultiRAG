@@ -225,6 +225,12 @@ def _request(env: dict[str, Any], method: str, path: str, role: str = "member", 
 
 def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api: dict[str, Any]) -> None:
     env, ids = shared_api, shared_api["ids"]
+    before = _snapshot(env)
+    for headers in [{}, {"Authorization": "Bearer invalid-fixture-key"}]:
+        for params in [{}, {"knowledge_id": ids["private"], "query": "probe", "top_k": "invalid", "use_kg": "true"}]:
+            response = requests.get(env["base"] + "/api/v1/dify/retrieval", headers=headers, params=params, timeout=30)
+            assert response.status_code == 200 and response.json() == {"retcode": 0, "retmsg": "success", "data": True}, response.text
+            assert _snapshot(env) == before
     collection = f"/api/v1/datasets/{ids['team']}/documents/{ids['doc']}/chunks"
     response = _request(env, "POST", collection, json={"content": "shared owner index acceptance"})
     assert response.status_code == 200 and response.json()["code"] == 0, response.text
@@ -277,8 +283,10 @@ def test_shared_chunk_routes_and_dify_use_owner_with_denial_readback(shared_api:
         response = _request(env, "POST", "/api/v1/dify/retrieval", role=role, mode="tokens", json={"knowledge_id": ids[key], "query": "owner", "retrieval_setting": {"top_k": 3}})
         assert response.status_code == 200 and response.json()["records"], response.text
         assert response.json()["records"][0]["metadata"]["document_id"] == ids["private_doc" if key == "private" else "doc"]
+        before = _snapshot(env)
         response = _request(env, "GET", "/api/v1/dify/retrieval", role=role, mode="tokens", params={"knowledge_id": ids[key], "query": "owner", "top_k": "3", "score_threshold": "0"})
-        assert response.status_code == 200 and response.json()["records"], response.text
+        assert response.status_code == 200 and response.json() == {"retcode": 0, "retmsg": "success", "data": True}, response.text
+        assert _snapshot(env) == before
     # All visibility helper consumers use active membership/status and private creator rules.
     for role, expected in [("owner", {ids["team"], ids["private"]}), ("member", {ids["team"]}), ("outsider", set())]:
         with Session(env["engine"]) as db:
