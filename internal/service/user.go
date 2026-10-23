@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
@@ -283,10 +284,9 @@ func (s *UserService) Login(req *LoginRequest) (*entity.User, common.ErrorCode, 
 
 	// Generate new access token
 	token := utility.GenerateToken()
-	if err := s.UpdateUserAccessToken(user, token); err != nil {
-		return nil, common.CodeServerError, fmt.Errorf("failed to update access token: %w", err)
-	}
-
+	user.AccessToken = &token
+	now := time.Now().Truncate(time.Second)
+	user.LastLoginTime = &now
 	if err := s.userDAO.Update(user); err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("failed to update user: %w", err)
 	}
@@ -327,6 +327,8 @@ func (s *UserService) LoginByEmail(req *EmailLoginRequest) (*entity.User, common
 	// Generate new access token
 	token := utility.GenerateToken()
 	user.AccessToken = &token
+	now := time.Now().Truncate(time.Second)
+	user.LastLoginTime = &now
 
 	if err := s.userDAO.Update(user); err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("failed to update user: %w", err)
