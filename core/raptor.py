@@ -329,6 +329,8 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
                     "",
                     cnt,
                 )
+                if not cnt.strip():
+                    raise RuntimeError("RAPTOR summary is empty")
                 logging.debug(f"SUM: {cnt}")
 
                 self._check_task_canceled(task_id, "before embedding")

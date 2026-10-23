@@ -120,3 +120,18 @@ def test_ahc_obeys_max_cluster() -> None:
     assert len(set(labels)) == 2
     raptor._max_cluster = 1
     assert set(raptor._get_clusters_ahc(np.asarray([[0, 0], [1, 1], [10, 10]]))) == {0}
+
+
+async def test_empty_model_summary_fails_before_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    raptor = builder()
+
+    async def empty(*args: Any) -> str:
+        return "   "
+
+    async def no_embedding(*args: Any) -> np.ndarray:
+        pytest.fail("An empty summary must not consume an embedding call")
+
+    monkeypatch.setattr(raptor, "_chat", empty)
+    monkeypatch.setattr(raptor, "_embedding_encode", no_embedding)
+    with pytest.raises(RuntimeError, match="incomplete"):
+        await raptor([("a", np.array([1.0, 0.0])), ("b", np.array([0.0, 1.0]))], 0)
