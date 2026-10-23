@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from scripts.ci_checks import CORE_SHARDS, ROOT, RUNTIME_JOBS, audit_core, audit_go, changed_scope, core_partition, required_gate, requires_runtime
-from tests.support.integration_suites import suite_paths
+from tests.support.integration_suites import PARALLEL_TESTS, required_services, suite_paths
 
 
 @pytest.mark.parametrize("paths", [["AGENTS.md"], ["docs/development.md", "tests/README.md"]])
@@ -29,6 +29,16 @@ def test_new_core_files_are_never_omitted(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert Counter(path for i in range(CORE_SHARDS) for path in core_partition(i)) == Counter(paths)
     with pytest.raises(ValueError):
         core_partition(CORE_SHARDS)
+
+
+@pytest.mark.parametrize("name", ["test_agent_file_authorization.py", "test_legacy_document_counters.py"])
+def test_agent_files_and_worker_counters_keep_serial_storage_contract(name: str) -> None:
+    path = ROOT / "tests/integration" / name
+    assert path.is_file()
+    assert sum(path in core_partition(index) for index in range(CORE_SHARDS)) == 1
+    assert path not in suite_paths("db")
+    assert name not in PARALLEL_TESTS
+    assert required_services([path]) == {"postgresql", "redis", "minio", "milvus"}
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group", "push"])

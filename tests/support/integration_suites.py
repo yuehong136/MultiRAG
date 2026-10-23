@@ -107,7 +107,10 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_zendesk_deleted_sync.py",
     }
 )
-PARALLEL_TESTS = DATABASE_TESTS | ISOLATED_STORAGE_TESTS
+# These exercise process-wide runtime seams and worker imports. Keep the full
+# application service stack and serial execution even if another group grows.
+SERIAL_STORAGE_TESTS = frozenset({"test_agent_file_authorization.py", "test_legacy_document_counters.py"})
+PARALLEL_TESTS = (DATABASE_TESTS | ISOLATED_STORAGE_TESTS) - SERIAL_STORAGE_TESTS
 
 SUITES = ("core", "db", "system", "infinity", "consumer", "all", "eval", "eval-generation", "acceptance")
 
@@ -169,7 +172,9 @@ def required_services(paths: list[Path]) -> set[str]:
         if path.name == "test_metadata_lazy_pushdown.py":
             required.update(("postgresql", "elasticsearch"))
             continue
-        if path.name in INFINITY_TESTS:
+        if path.name in SERIAL_STORAGE_TESTS:
+            required.update(("postgresql", "redis", "minio", "milvus"))
+        elif path.name in INFINITY_TESTS:
             required.add("infinity")
         elif path.name in REDIS_TESTS:
             required.add("redis")

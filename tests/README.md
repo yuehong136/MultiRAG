@@ -53,7 +53,12 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 |---|---|
 | `dao.TestBaseModelTimeScratchPostgres` | PostgreSQL；`MULTIRAG_GO_TIME_DSN`，数据库名以 `multirag_after1c_a_time` 开头。 |
 | `handler.TestUserTimeHTTPCLIAndSQL` | 同一 PostgreSQL scratch；`MULTIRAG_GO_TIME_DSN`、私有 `MULTIRAG_GO_USER_CONFIG` 和 `MULTIRAG_GO_TIME_CLI`。 |
-| `handler.TestSpeechProvidersHTTPCLIAndSQL` | PostgreSQL scratch（`multirag_after1c_b_speech` 前缀）、私有 `MULTIRAG_SPEECH_CONFIG`、`MULTIRAG_SPEECH_CLI`；HTTP、供应商和播放器由用例自建或控制。 |
+| `handler.TestSpeechProvidersHTTPCLIAndSQL` | PostgreSQL scratch（名称匹配 `^multirag_after1c_b_speech_[a-z0-9_]{6,32}$`）、私有 `MULTIRAG_SPEECH_CONFIG`、`MULTIRAG_SPEECH_CLI`；HTTP、供应商和播放器由用例自建或控制。 |
+
+`test_agent_file_authorization.py` 与 `test_legacy_document_counters.py` 明确登记在
+`SERIAL_STORAGE_TESTS`，由 core 四分片完整分配；准备 PostgreSQL、Redis、MinIO 和 Milvus，
+使用 scratch SQL、独占对象桶和队列。前者覆盖真实鉴权及附件运行，后者覆盖原子计数和实际
+Graph/RAPTOR worker 分支；涉及进程级运行时接缝，不加入并行白名单，也不归入仅数据库套件。
 
 core/consumer/smoke 共用 [隔离环境准备](../.github/actions/setup-integration/action.yml)，
 各 hosted job 只清理自己创建的服务；Testcontainers 的生命周期仍由原有 ServiceManager 管理。
