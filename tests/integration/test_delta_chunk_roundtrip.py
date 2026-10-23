@@ -32,6 +32,8 @@ def test_manual_insert_nullable_readback_and_search(management_api: dict[str, An
     factory = "DeltaChunkEmbeddingFixture"
     record: dict[str, Any] = {"collection": collection, "database": env["engine"].url.database}
     evidence = env["record_path"].with_suffix(".chunk-roundtrip.json")
+    # Keep ownership recoverable even if the process stops before finally.
+    evidence.write_text(json.dumps(record, indent=2))
 
     class Embedding:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
