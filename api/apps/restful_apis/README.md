@@ -6,7 +6,8 @@
 图谱读取使用 `GET /datasets/{id}/graph`；不带 `doc_id` 时返回数据集聚合图，
 带 `doc_id` 时返回该数据集文档的子图和思维导图。`/graph/search` 仍返回聚合图；
 旧 REST `/knowledge_graph` 读取和删除继续作为 deprecated 兼容入口。
-`DELETE /datasets/{id}/graph` 删除索引任务及产物，旧删除入口仅删图谱产物，二者语义不同。
+`DELETE /datasets/{id}/graph` 和旧删除入口都会取消任务、清理图谱产物并解绑任务 ID/完成时间。
+旧入口固定全量清理并返回 `true`；正式入口接受 `wipe`/`task_id`，返回空对象。
 
 ## 聊天会话兼容
 
@@ -25,6 +26,9 @@ OpenAI 新旧补全路径继续由同一处理器提供，详见 [HTTP API](../.
 无活动消费者或兼容承诺的 `/api/v1/file/{get,list,create,upload,mv,rename,rm,...}`、
 chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files REST、chunk PATCH
 以及单项 path/批量 `ids`。旧 run、图片、change_parser 与 upload_info 的退出合同保持。
+旧 `POST /agents_openai/{agent_id}/chat/completions` 也已在 Agent REST 合并时退出；
+当前调用使用 `POST /agents/chat/completions`，body 传 `agent_id`、`openai-compatible=true`
+和 `messages`。旧路径返回 404，不运行 Agent。
 
 ## 文档与分块更新
 

@@ -28,6 +28,8 @@
 临时端点时使用 Makefile 入口。混合收集时 `integration` 标签仅作用于集成目录。
 质量评测不被普通 pytest 递归收集，使用以上显式入口运行。
 
+REST 各族的生产入口、已有测试和执行边界见 [REST 覆盖索引](REST_COVERAGE.md)。
+
 ## CI 分层与证据
 
 本地验证范围与证据复用以 [AGENTS.md](../AGENTS.md#验证) 为准。CI 入口为
