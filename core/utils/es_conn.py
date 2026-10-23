@@ -64,13 +64,12 @@ class ESConnection(ESConnectionBase):
     CRUD operations
     """
 
-    def _es_search_once(self, index_names: list[str], query: dict, track_total_hits: bool):
+    def _es_search_once(self, index_names: list[str], query: dict, track_total_hits: bool) -> Any:
         return self.es.search(
             index=index_names,
             body=query,
             timeout="600s",
             track_total_hits=track_total_hits,
-            _source=True,
         )
 
     def _search_with_search_after(self, index_names: list[str], query: dict, offset: int, limit: int):
@@ -212,6 +211,20 @@ class ESConnection(ESConnectionBase):
 
             elif isinstance(m, MatchDenseExpr):
                 assert bool_query is not None
+                if m.extra_options.get("exact"):
+                    # Score the complete, already authorized candidate set. ANN
+                    # top-k may omit negative or weak lexical candidates.
+                    if not condition.get("id") or len(match_expressions) != 1:
+                        raise ValueError("Exact vector scoring requires explicit candidate IDs")
+                    s = s.query(
+                        "script_score",
+                        query=scalar_filter,
+                        script={
+                            "source": f"doc['{m.vector_column_name}'].size() == 0 ? 1.0 : cosineSimilarity(params.vector, '{m.vector_column_name}') + 1.0",
+                            "params": {"vector": list(m.embedding_data)},
+                        },
+                    )
+                    continue
                 similarity = 0.0
                 if "similarity" in m.extra_options:
                     similarity = m.extra_options["similarity"]
@@ -268,6 +281,8 @@ class ESConnection(ESConnectionBase):
         # exclude_source_vectors is enabled (dense_vector not in _source).
         if select_fields:
             s = s.source(select_fields)
+        elif any(isinstance(expr, MatchDenseExpr) and expr.extra_options.get("exact") for expr in match_expressions):
+            s = s.source(False)
         q = s.to_dict()
         # ES 9.x: dense_vector fields excluded from _source; request them via fields.
         # Note: knn does NOT have a "fields" parameter - adding it inside the knn
@@ -284,6 +299,8 @@ class ESConnection(ESConnectionBase):
                 else:
                     # print(json.dumps(q, ensure_ascii=False))
                     res = self._es_search_once(index_names, q, track_total_hits=True)
+                if res.get("_shards", {}).get("failed", 0):
+                    raise RuntimeError("Partial search shard failure")
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("Es Timeout.")
                 self.logger.debug(f"ESConnection.search {index_names!s} res: " + str(res))

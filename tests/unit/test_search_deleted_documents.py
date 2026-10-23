@@ -106,6 +106,13 @@ async def test_retrieval_prunes_before_all_ranking_paths(monkeypatch: pytest.Mon
         return rank(result, *args, **kwargs)
 
     monkeypatch.setattr(dealer, "rerank", rank)
+    monkeypatch.setattr(dealer, "rerank_with_knn", rank)
+
+    async def scores(result: Dealer.SearchResult, *_args: Any) -> dict[str, float]:
+        assert "stale" not in result.ids and "stale" not in result.field
+        return dict.fromkeys(result.ids, 0.9)
+
+    monkeypatch.setattr(dealer, "_knn_scores", scores)
     monkeypatch.setattr(dealer, "rerank_by_model", model_rank)
     options = {"rerank_mdl": object() if external else None, "kb_ids": ["a", "b"], "rank_feature": {}, "highlight": True}
     first = await dealer.retrieval("query", "permission predicate", None, ["tenant"], ["name-a", "name-b"], 1, 1, **options)

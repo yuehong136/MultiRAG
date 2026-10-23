@@ -16,6 +16,7 @@
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -240,6 +241,17 @@ class ESConnectionBase(SearchMetadata, DocStoreConnection):
 
     def get_doc_ids(self, res):
         return [d["_id"] for d in res["hits"]["hits"]]
+
+    @staticmethod
+    def get_scores(res: Any) -> dict[str, float]:
+        """Read hit scores without treating malformed responses as zero matches."""
+        scores: dict[str, float] = {}
+        for hit in res["hits"]["hits"]:
+            identifier, raw = hit["_id"], hit["_score"]
+            if not isinstance(identifier, str) or not identifier or identifier in scores or isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+                raise ValueError("Invalid or duplicate candidate score")
+            scores[identifier] = float(raw)
+        return scores
 
     def _get_source(self, res):
         rr = []

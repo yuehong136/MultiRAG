@@ -17,6 +17,7 @@
 import copy
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -240,6 +241,21 @@ class OSConnection(SearchMetadata, DocStoreConnection):
             # the following codes implement KNN_search in OpenSearch using DSL
             # Besides, Opensearch's DSL for KNN_search query syntax differs from that in Elasticsearch, I also made some adaptions for it
             elif isinstance(m, MatchDenseExpr):
+                if m.extra_options.get("exact"):
+                    if not condition.get("id") or len(match_expressions) != 1:
+                        raise ValueError("Exact vector scoring requires explicit candidate IDs")
+                    candidate_queries.append(
+                        {
+                            "script_score": {
+                                "query": scalar_filter,
+                                "script": {
+                                    "source": "doc[params.field].size() == 0 ? 1.0 : 1.0 + cosineSimilarity(params.vector, doc[params.field])",
+                                    "params": {"vector": list(m.embedding_data), "field": m.vector_column_name},
+                                },
+                            }
+                        }
+                    )
+                    continue
                 # OpenSearch k and min_score are mutually exclusive. Dealer applies
                 # the similarity threshold after reranking; it is not a score boost.
                 candidate_queries.append(
@@ -284,6 +300,10 @@ class OSConnection(SearchMetadata, DocStoreConnection):
 
         if limit > 0:
             s = s[offset : offset + limit]
+        if select_fields:
+            s = s.source(select_fields)
+        elif any(isinstance(expr, MatchDenseExpr) and expr.extra_options.get("exact") for expr in match_expressions):
+            s = s.source(False)
         q = s.to_dict()
         if candidate_queries:
             # opensearch-py 2.7 has no kNN DSL class, so insert the raw clauses
@@ -299,8 +319,9 @@ class OSConnection(SearchMetadata, DocStoreConnection):
                     timeout=600,
                     # search_type="dfs_query_then_fetch",
                     track_total_hits=True,
-                    _source=True,
                 )
+                if res.get("_shards", {}).get("failed", 0):
+                    raise RuntimeError("Partial search shard failure")
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("OpenSearch Timeout.")
                 logger.debug(f"OSConnection.search {index_names!s} res: " + str(res))
@@ -564,6 +585,17 @@ class OSConnection(SearchMetadata, DocStoreConnection):
 
     def get_doc_ids(self, res):
         return [d["_id"] for d in res["hits"]["hits"]]
+
+    @staticmethod
+    def get_scores(res: Any) -> dict[str, float]:
+        """Read the second-pass score headers (also used by Elasticsearch)."""
+        scores: dict[str, float] = {}
+        for hit in res["hits"]["hits"]:
+            identifier, raw = hit["_id"], hit["_score"]
+            if not isinstance(identifier, str) or not identifier or identifier in scores or isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+                raise ValueError("Invalid or duplicate candidate score")
+            scores[identifier] = float(raw)
+        return scores
 
     def __getSource(self, res):
         rr = []

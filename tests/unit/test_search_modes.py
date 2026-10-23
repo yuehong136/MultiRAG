@@ -201,14 +201,16 @@ async def test_es_postranking_preserves_mode_weights(mode_dealer: Dealer, mode: 
     mode_dealer.search = AsyncMock(return_value=Dealer.SearchResult(total=2, ids=list(fields), query_vector=[1.0, 0.0], field=fields))
     mode_dealer._existing_doc_ids = AsyncMock(return_value={"doc"})
 
-    def rank(_result: Dealer.SearchResult, _question: str, sparse_weight: float, dense_weight: float, **_: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    mode_dealer._knn_scores = AsyncMock(return_value={"lexical": 0.0, "semantic": 1.0})
+
+    def rank(_result: Dealer.SearchResult, _question: str, _scores: dict[str, float], sparse_weight: float, dense_weight: float, **_: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         # Independent lexical and vector signals prefer opposite documents.
         lexical, dense = np.array([1.0, 0.0]), np.array([0.0, 1.0])
         return sparse_weight * lexical + dense_weight * dense, lexical, dense
 
-    mode_dealer.rerank = Mock(side_effect=rank)
+    mode_dealer.rerank_with_knn = Mock(side_effect=rank)
     result = await mode_dealer.retrieval("keywords", "", object(), "tenant", ["kb"], 1, 10, similarity_threshold=0, vector_similarity_weight=0.3, rank_feature={}, search_mode=mode)
-    assert mode_dealer.rerank.call_args.args[2:] == expected_weights
+    assert mode_dealer.rerank_with_knn.call_args.args[3:] == expected_weights
     assert result["chunks"][0]["chunk_id"] == expected_first
     assert result["total"] == 2
 

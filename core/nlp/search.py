@@ -396,7 +396,7 @@ class Dealer:
                 raise ValueError(f"{mode} search requires an embedding model")
             match_dense = deepcopy(req["_dense_query"]) if req.get("_dense_query") is not None else await self.get_vector(qst, emb_mdl, topk, req.get("similarity", 0.1))
             q_vec = match_dense.embedding_data
-            if self.dataStore.db_type() != "infinity":
+            if self.dataStore.db_type() not in {"infinity", "elasticsearch", "opensearch"}:
                 src.append(match_dense.vector_column_name)
         match_exprs = []
         if weight_sparse > 0:
@@ -576,7 +576,109 @@ class Dealer:
                 rank_fea.append(nor / np.sqrt(denor) / q_denor)
         return np.nan_to_num(np.array(rank_fea) * 10.0 + pageranks, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def rerank(self, sres, query, tkweight=0.3, vtweight=0.7, cfield="content_ltks", rank_feature: dict | None = None):
+    @staticmethod
+    def _rerank_tokens(sres: Any, cfield: str) -> list[list[str]]:
+        # 处理文本相似度比较所需的token列表
+        ins_tw = []
+        for i in sres.ids:
+            content_ltks = list(OrderedDict.fromkeys(sres.field[i][cfield].split()))
+            # 处理 title_tks 字段
+            title_tks = []
+            if "title_tks" in sres.field[i]:
+                if isinstance(sres.field[i]["title_tks"], str):
+                    title_tks = [t for t in sres.field[i]["title_tks"].split() if t]
+                elif isinstance(sres.field[i]["title_tks"], list):
+                    title_tks = [t for t in sres.field[i]["title_tks"] if t]
+
+            # 处理 question_tks 字段
+            question_tks = []
+            if "question_tks" in sres.field[i]:
+                if isinstance(sres.field[i]["question_tks"], str):
+                    question_tks = [t for t in sres.field[i]["question_tks"].split() if t]
+                elif isinstance(sres.field[i]["question_tks"], list):
+                    question_tks = [t for t in sres.field[i]["question_tks"] if t]
+
+            important_kwd = []
+            # 处理important_kwd字段，它可能是字符串或列表
+            if "important_kwd" in sres.field[i]:
+                if isinstance(sres.field[i]["important_kwd"], list):
+                    important_kwd = sres.field[i]["important_kwd"]
+                elif isinstance(sres.field[i]["important_kwd"], str):
+                    if sres.field[i]["important_kwd"]:
+                        important_kwd = [sres.field[i]["important_kwd"]]
+
+            # 合并所有token，给不同来源的token加权
+            tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks * 6
+            ins_tw.append(tks)
+
+        return ins_tw
+
+    async def _knn_scores(self, sres: SearchResult, idx_names: list[str], kb_ids: list[str], filters: dict[str, Any]) -> dict[str, float]:
+        """Recover exact cosine scores, retaining candidate and dataset bindings.
+
+        A bounded server-side exact pass avoids ANN omissions and the different
+        native ES/OpenSearch score transforms. Both scripts return cosine + 1.
+        """
+        if not sres.ids or not sres.query_vector or not kb_ids:
+            return {}
+        if len(idx_names) != len(kb_ids):
+            raise ValueError("Each selected dataset must have one index binding")
+        scores: dict[str, float] = {}
+        for index, kb_id in zip(idx_names, kb_ids, strict=True):
+            ids = [identifier for identifier in sres.ids if _chunk_scalar(sres.field[identifier].get("kb_id")) == kb_id]
+            if not ids:
+                continue
+            dense = MatchDenseExpr(f"q_{len(sres.query_vector)}_vec", sres.query_vector, "float", "cosine", len(ids), {"exact": True})
+            result = await thread_pool_exec(self.dataStore.search, [], [], {**filters, "id": ids}, [dense], OrderByExpr(), 0, len(ids), [index], [kb_id])
+            raw_scores = self.dataStore.get_scores(result)
+            if not set(raw_scores).issubset(ids):
+                raise ValueError("Vector scoring returned an unauthorized candidate")
+            for identifier, raw in raw_scores.items():
+                if not 0 <= raw <= 2.000001:
+                    raise ValueError("Vector scoring returned an invalid cosine score")
+                scores[identifier] = min(1.0, raw - 1.0)
+        return scores
+
+    async def fetch_chunk_vectors(self, chunk_ids: list[str], tenant_ids: str | list[str], kb_ids: list[str], dim: int, *, kb_names: list[str], doc_ids: list[str]) -> dict[str, list[float]]:
+        """Fetch citation vectors for one authorized dataset and its documents."""
+        if not chunk_ids or not kb_ids or not doc_ids:
+            return {}
+        indexes = index_name(tenant_ids, kb_names)
+        if len(kb_ids) != 1 or len(indexes) != 1 or dim <= 0:
+            raise ValueError("Citation vectors require one explicit dataset binding and dimension")
+        field = f"q_{dim}_vec"
+        result = await thread_pool_exec(
+            self.dataStore.search, [field, "doc_id"], [], {"id": list(dict.fromkeys(chunk_ids)), "doc_id": doc_ids, "available_int": 1}, [], OrderByExpr(), 0, len(chunk_ids), indexes, kb_ids
+        )
+        rows = self.dataStore.get_fields(result, [field, "doc_id"])
+        if not set(rows).issubset(chunk_ids):
+            raise ValueError("Citation hydration returned an unauthorized candidate")
+        vectors: dict[str, list[float]] = {}
+        for identifier, row in rows.items():
+            if field not in row:
+                # Lexical candidates may legitimately have no embedding. Keep
+                # their historical zero-vector citation semantics.
+                vectors[identifier] = [0.0] * dim
+                continue
+            vector = row[field]
+            if isinstance(vector, str):
+                vector = [float(value) for value in vector.split("\t")]
+            if not isinstance(vector, list) or len(vector) != dim or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in vector):
+                raise ValueError("Invalid citation vector")
+            vectors[identifier] = vector
+        return vectors
+
+    def rerank_with_knn(
+        self, sres: SearchResult, query: str, knn_scores: dict[str, float], tkweight: float = 0.3, vtweight: float = 0.7, cfield: str = "content_ltks", rank_feature: dict | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        _, keywords = self.qryr.question(query)
+        tksim = np.array(self.qryr.token_similarity(keywords, self._rerank_tokens(sres, cfield)), dtype=np.float64)
+        vtsim = np.array([knn_scores[identifier] for identifier in sres.ids], dtype=np.float64)
+        # Preserve FulltextQueryer's historical all-zero vector fallback.
+        sim = tksim if np.sum(vtsim) == 0 else tkweight * tksim + vtweight * vtsim
+        return sim + self._rank_feature_scores(rank_feature, sres), tksim, vtsim
+
+    def rerank(self, sres: SearchResult, query: str, tkweight: float = 0.3, vtweight: float = 0.7, cfield: str = "content_ltks", rank_feature: dict | None = None) -> tuple[Any, Any, Any]:
         """
         对搜索结果进行重排序
 
@@ -636,38 +738,7 @@ class Dealer:
 
         logging.info(f"rerank: 获取到 {len(ins_embd)} 个向量，其中 {zero_count} 个为零向量，dim_field={dim_field}")
 
-        # 处理文本相似度比较所需的token列表
-        ins_tw = []
-        for i in sres.ids:
-            content_ltks = list(OrderedDict.fromkeys(sres.field[i][cfield].split()))
-            # 处理 title_tks 字段
-            title_tks = []
-            if "title_tks" in sres.field[i]:
-                if isinstance(sres.field[i]["title_tks"], str):
-                    title_tks = [t for t in sres.field[i]["title_tks"].split() if t]
-                elif isinstance(sres.field[i]["title_tks"], list):
-                    title_tks = [t for t in sres.field[i]["title_tks"] if t]
-
-            # 处理 question_tks 字段
-            question_tks = []
-            if "question_tks" in sres.field[i]:
-                if isinstance(sres.field[i]["question_tks"], str):
-                    question_tks = [t for t in sres.field[i]["question_tks"].split() if t]
-                elif isinstance(sres.field[i]["question_tks"], list):
-                    question_tks = [t for t in sres.field[i]["question_tks"] if t]
-
-            important_kwd = []
-            # 处理important_kwd字段，它可能是字符串或列表
-            if "important_kwd" in sres.field[i]:
-                if isinstance(sres.field[i]["important_kwd"], list):
-                    important_kwd = sres.field[i]["important_kwd"]
-                elif isinstance(sres.field[i]["important_kwd"], str):
-                    if sres.field[i]["important_kwd"]:
-                        important_kwd = [sres.field[i]["important_kwd"]]
-
-            # 合并所有token，给不同来源的token加权
-            tks = content_ltks + title_tks * 2 + important_kwd * 5 + question_tks * 6
-            ins_tw.append(tks)
+        ins_tw = self._rerank_tokens(sres, cfield)
 
         ## For rank feature(tag_fea) scores.
         rank_fea = self._rank_feature_scores(rank_feature, sres)
@@ -834,10 +905,14 @@ class Dealer:
                     tsim = np.zeros(len(sim), dtype=np.float64)
                     vsim = np.zeros(len(sim), dtype=np.float64)
             elif db_type in ["elasticsearch", "opensearch"]:
-                # ElasticSearch doesn't normalize each way score before fusion.
-                logging.info("进入 ES rerank 分支")
-                sim, tsim, vsim = self.rerank(sres, question, weight_sparse, weight_dense, rank_feature=rank_feature)
-                logging.info(f"rerank 返回: sim={sim[:3] if len(sim) > 0 else []}, tsim={tsim[:3] if len(tsim) > 0 else []}, vsim={vsim[:3] if len(vsim) > 0 else []}")
+                if sres.query_vector:
+                    knn_scores = await self._knn_scores(sres, idxnms, search_kb_ids, self.get_filters(req))
+                    # A document may disappear or become unavailable between the
+                    # two reads. Do not invent a zero score for a missing hit.
+                    sres.ids = [identifier for identifier in sres.ids if identifier in knn_scores]
+                    sim, tsim, vsim = self.rerank_with_knn(sres, question, knn_scores, weight_sparse, weight_dense, rank_feature=rank_feature)
+                else:
+                    sim, tsim, vsim = self.rerank(sres, question, weight_sparse, weight_dense, rank_feature=rank_feature)
             else:
                 # 其它已归一化的引擎
                 sim_list = [sres.field[id].get("_score", 0.0) for id in sres.ids]
@@ -1229,6 +1304,7 @@ class Dealer:
                     "vector_similarity": similarity,
                     "term_similarity": similarity,
                     "vector": vector,
+                    **({"_citation_vector_chunk_id": children[0].get("_citation_vector_chunk_id", children[0]["chunk_id"])} if self.dataStore.db_type() in {"elasticsearch", "opensearch"} else {}),
                     "positions": parent.get("position_int", []),
                     "doc_type_kwd": parent.get("doc_type_kwd", ""),
                     **({"document_metadata": children[0]["document_metadata"]} if children[0].get("document_metadata") else {}),

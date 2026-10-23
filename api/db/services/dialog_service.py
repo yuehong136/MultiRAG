@@ -43,6 +43,31 @@ from core.prompts.generator import ASK_SUMMARY, PROMPT_JINJA_ENV, chunks_format,
 from core.utils.tavily_conn import Tavily
 
 
+async def _hydrate_chunk_vectors(retriever: Any, chunks: list[dict[str, Any]], kbs: list[Any]) -> None:
+    """Load only selected citation vectors using server-authorized KB bindings.
+
+    Operational errors remain failures; zero placeholders are a retrieval shape,
+    not a successful replacement for an unavailable embedding read.
+    """
+    if settings.DOC_ENGINE.lower() not in {"elasticsearch", "opensearch"} or not chunks:
+        return
+    dim = next((len(chunk["vector"]) for chunk in chunks if isinstance(chunk.get("vector"), list) and chunk["vector"]), 0)
+    if not dim:
+        return
+    for kb in kbs:
+        candidates = [chunk for chunk in chunks if chunk.get("kb_id") == kb.id and chunk.get("chunk_id") and chunk.get("doc_id") and not any(chunk.get("vector") or [])]
+        if not candidates:
+            continue
+        vectors = await retriever.fetch_chunk_vectors(
+            [chunk.get("_citation_vector_chunk_id", chunk["chunk_id"]) for chunk in candidates], kb.tenant_id, [kb.id], dim, kb_names=[kb.name], doc_ids=list({chunk["doc_id"] for chunk in candidates})
+        )
+        for chunk in candidates:
+            identifier = chunk.get("_citation_vector_chunk_id", chunk["chunk_id"])
+            if identifier not in vectors:
+                raise LookupError("A citation chunk is no longer available")
+            chunk["vector"] = vectors[identifier]
+
+
 def _normalize_internet_flag(value: object) -> bool | None:
     """Normalize supported request values without treating unknown input as enabled."""
     if isinstance(value, bool):
@@ -927,6 +952,7 @@ def chat(
             idx = set()
             normalized_answer = normalize_arabic_digits(answer) or ""
             if embd_mdl and not CITATION_MARKER_PATTERN.search(normalized_answer):
+                asyncio.run(_hydrate_chunk_vectors(retriever, kbinfos["chunks"], kbs))
                 answer, idx = retriever.insert_citations(
                     answer,
                     [ck["content_ltks"] for ck in kbinfos["chunks"]],
@@ -1313,7 +1339,7 @@ async def async_chat(
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
-    def decorate_answer(answer: str) -> dict[str, Any]:
+    async def decorate_answer(answer: str) -> dict[str, Any]:
         nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_generation
 
         refs = []
@@ -1326,6 +1352,7 @@ async def async_chat(
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
             idx = set()
             if embd_mdl and not re.search(r"\[ID:([0-9]+)\]", answer):
+                await _hydrate_chunk_vectors(retriever, kbinfos["chunks"], kbs)
                 answer, idx = retriever.insert_citations(
                     answer,
                     [ck["content_ltks"] for ck in kbinfos["chunks"]],
@@ -1423,7 +1450,7 @@ async def async_chat(
                 yield {"answer": value, "reference": {}, "audio_binary": tts(tts_mdl, value), "final": False}
             full_answer = last_state.full_text if last_state else ""
             if full_answer:
-                final = decorate_answer(_extract_visible_answer(thought + full_answer))
+                final = await decorate_answer(_extract_visible_answer(thought + full_answer))
                 # Keep retrieval outside model reasoning and retain it in persisted history.
                 final["answer"] = retrieval_trace + final["answer"]
                 final["final"] = True
@@ -1436,7 +1463,7 @@ async def async_chat(
                 answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
             user_content = msg[-1].get("content", "[content not available]")
             logging.debug(f"User: {user_content}|Assistant: {answer}")
-            res = decorate_answer(answer)
+            res = await decorate_answer(answer)
             res["audio_binary"] = tts(tts_mdl, answer)
             yield res
     finally:
@@ -2231,8 +2258,9 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
 
     msg = [{"role": "user", "content": question}]
 
-    def decorate_answer(answer):
+    def decorate_answer(answer: str) -> dict[str, Any]:
         nonlocal knowledges, kbinfos, sys_prompt
+        asyncio.run(_hydrate_chunk_vectors(retriever, kbinfos["chunks"], kbs))
         answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
         idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
         recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
@@ -2348,7 +2376,7 @@ async def async_ask(
 
     msg = [{"role": "user", "content": question}]
 
-    def decorate_answer(answer):
+    def decorate_answer(answer: str) -> dict[str, Any]:
         nonlocal knowledges, kbinfos, sys_prompt
         answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
         idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
@@ -2378,6 +2406,7 @@ async def async_ask(
     full_answer = last_state.full_text if last_state else ""
     # citation finalize：同步 embedding HTTP + 自开连接记账，不持有请求 Session
     # （bundles 已剥离 facade），整段外移工作线程，避免阻塞事件循环
+    await _hydrate_chunk_vectors(retriever, kbinfos["chunks"], kbs)
     final = await asyncio.to_thread(decorate_answer, _extract_visible_answer(full_answer))
     final["final"] = True
     yield final
