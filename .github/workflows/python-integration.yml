@@ -111,6 +111,14 @@ jobs:
         env:
           SHARD: ${{ inputs.shard }}
         run: uv run --no-sync python scripts/ci_checks.py core --index "$SHARD"
+      - name: MCP real-process protocol and Agent binding contracts
+        if: inputs.lane == 'core' && inputs.shard == 0
+        run: |
+          set -euo pipefail
+          mkdir -p .test-results/mcp
+          make mcp-compat | tee .test-results/mcp/matrix.log
+          PYTHONPATH=. uv run --no-sync python tests/compat/mcp/agent_tool_binding_probe.py \
+            --report-dir .test-results/mcp/agent-binding
       - name: Real independent consumers
         if: inputs.lane == 'consumer'
         env:

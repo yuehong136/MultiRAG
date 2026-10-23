@@ -17,7 +17,7 @@ CORE_SHARDS = 4
 RUNTIME_JOBS = frozenset({"typecheck", "unit", "integration", "integration-infinity", "consumer", "go", "smoke"})
 # These tests require separate owned HTTP/SQL harnesses; ordinary skips are errors.
 GO_LIVE_OPT_INS = {
-    "dao": {"TestTenantModelExtraScratchPostgres"},
+    "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
     "engine": {"TestSkillMilvusLiveUnpublishedFragments"},
     "handler": {
         "TestAfterBBBProvidersHTTPCLIAndSQL",
@@ -32,7 +32,9 @@ GO_LIVE_OPT_INS = {
         "TestModelClassProviderLiveHTTPAndSQL",
         "TestModelInferenceLiveHTTPAndSQL",
         "TestSkillCoreLiveServer",
+        "TestSpeechProvidersHTTPCLIAndSQL",
         "TestTaskLiveServer",
+        "TestUserTimeHTTPCLIAndSQL",
         "TestXAIInstanceLiveHTTPAndSQL",
     },
     "service": {"TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
