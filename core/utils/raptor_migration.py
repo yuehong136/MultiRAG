@@ -23,7 +23,7 @@ def replace_raptor_summaries(
     previous: dict[str, dict[str, dict[str, Any]]],
     canceled: Callable[[], bool],
     batch_size: int,
-) -> None:
+) -> dict[str, dict[str, dict[str, Any]]]:
     """Run under the dataset writer lock; compensate only this attempt's IDs."""
     if canceled():
         raise TaskCanceledException("RAPTOR replacement canceled")
@@ -41,6 +41,7 @@ def replace_raptor_summaries(
         if any(str(row.get("id", row.get("pk"))) == identifier for row in originals[doc]):
             raise RuntimeError("RAPTOR generation ID already exists")
         inserted.setdefault(doc, []).append(identifier)
+    written: dict[str, dict[str, dict[str, Any]]] = {doc: {} for doc in previous}
     mutated = False
     try:
         for start in range(0, len(chunks), batch_size):
@@ -54,6 +55,7 @@ def replace_raptor_summaries(
         for doc, identifiers in inserted.items():
             actual = {str(row.get("id", row.get("pk"))): row for row in document_history(store, index, dataset, doc)}
             expected = {str(row.get("id", row.get("pk"))): row for row in chunks if row["doc_id"] == doc}
+            written[doc] = {identifier: actual[identifier] for identifier in identifiers if identifier in actual}
             for identifier in identifiers:
                 stored = actual.get(identifier, {})
                 for key, value in expected[identifier].items():
@@ -85,6 +87,10 @@ def replace_raptor_summaries(
                 delete_document_history(store, index, dataset, doc, ids=list(old))
         if canceled():
             raise TaskCanceledException("RAPTOR replacement canceled")
+        for doc, expected in written.items():
+            if summary_rows(document_history(store, index, dataset, doc)) != expected:
+                raise RuntimeError("RAPTOR confirmed tree changed before completion")
+        return written
     except BaseException:
         if mutated:
             # Restore the complete old payload/vector for precisely affected IDs.

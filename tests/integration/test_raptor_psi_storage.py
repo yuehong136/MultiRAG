@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Knowledgebase, Task
+from api.db.db_models import Document, Knowledgebase, Task, UserTenant
 from common.doc_store.document_history import document_history
 from common.exceptions import TaskCanceledException
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
@@ -196,4 +196,118 @@ async def test_async_cancel_drains_native_replacement(migration: dict[str, Any],
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await pending
+    assert _read(env) == before
+
+
+@pytest.mark.parametrize("commit_mode", ["failed", "lost-reply"])
+async def test_sql_recovery_conflict_preserves_same_id_winner(migration: dict[str, Any], monkeypatch: pytest.MonkeyPatch, commit_mode: str) -> None:
+    env = migration
+    ordinary = [row for row in _read(env) if not row["raptor_kwd"]]
+    foreign = _read(env, env["other"])
+    task, chunks, previous = await _generate(env, "psi")
+    commit = Session.commit
+    injected = False
+    winner = {**copy.deepcopy(chunks[0]), "content_with_weight": "later native winner", "q_2_vec": [0.3, 0.4], "extra": {"raptor_method": "psi", "winner": True}}
+
+    def fail_after_native(db: Session) -> None:
+        nonlocal injected
+        if not injected:
+            injected = True
+            if commit_mode == "lost-reply":
+                commit(db)
+            assert env["store"].insert([winner], env["collection"], env["dataset"]) == []
+            raise RuntimeError("controlled SQL failure with later native edit")
+        commit(db)
+
+    monkeypatch.setattr(Session, "commit", fail_after_native)
+    with pytest.raises(RuntimeError, match="recovery conflict"):
+        _commit(env, task, chunks, previous)
+    after = _read(env)
+    summaries = [row for row in after if row["raptor_kwd"]]
+    assert len(summaries) == 1
+    assert summaries[0]["pk"] == winner["id"]
+    assert summaries[0]["content_with_weight"] == "later native winner"
+    assert summaries[0]["extra"] == winner["extra"]
+    np.testing.assert_array_equal(np.asarray(summaries[0]["q_2_vec"], dtype=np.float32), np.asarray(winner["q_2_vec"], dtype=np.float32))
+    assert [row for row in after if not row["raptor_kwd"]] == ordinary
+    assert _read(env, env["other"]) == foreign
+    env["record"]["readbacks"].append({"fault": f"sql-{commit_mode}-same-id-winner", "preserved": True, "rows": after})
+    env["save"]()
+
+
+async def test_clear_waits_for_canceled_writer_without_resurrection(migration: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import threading
+
+    from api.apps.services import dataset_api_service
+
+    env = migration
+    with Session(env["engine"]) as db:
+        db.add(UserTenant(id=uuid4().hex, tenant_id=env["tenant"], user_id=env["tenant"], role="owner", invited_by=env["tenant"], status="1"))
+        db.commit()
+    ordinary = [row for row in _read(env) if not row["raptor_kwd"]]
+    foreign = _read(env, env["other"])
+    task, chunks, previous = await _generate(env, "psi")
+    entered, release, cancel_signal = threading.Event(), threading.Event(), threading.Event()
+    original = env["store"].insert
+
+    def blocked(*args: Any, **kwargs: Any) -> Any:
+        receipt = original(*args, **kwargs)
+        entered.set()
+        assert release.wait(10)
+        return receipt
+
+    def cancel(key: str, value: str) -> bool:
+        assert key == f"{task}-cancel"
+        cancel_signal.set()
+        return True
+
+    monkeypatch.setattr(env["store"], "insert", blocked)
+    monkeypatch.setattr(task_executor, "has_canceled", lambda task_id: cancel_signal.is_set())
+    monkeypatch.setattr(dataset_api_service, "REDIS_CONN", SimpleNamespace(set=cancel))
+
+    def clear() -> tuple[bool, Any]:
+        with Session(env["engine"]) as db:
+            return dataset_api_service.delete_index(db, env["tenant"], env["dataset"], "raptor", expected_task_id=task)
+
+    pending = asyncio.create_task(task_executor._write_raptor_summaries(env["engine"], task, env["tenant"], env["dataset"], env["collection"], chunks, previous))
+    assert await asyncio.to_thread(entered.wait, 10)
+    clearing = asyncio.create_task(asyncio.to_thread(clear))
+    signaled = await asyncio.to_thread(cancel_signal.wait, 10)
+    if not signaled:
+        release.set()
+        await asyncio.gather(pending, clearing, return_exceptions=True)
+        pytest.fail("clear did not signal the owned task")
+    await asyncio.sleep(0.05)
+    blocked_by_writer = not clearing.done()
+    release.set()
+    assert blocked_by_writer
+    with pytest.raises(TaskCanceledException):
+        await pending
+    assert (await clearing)[0] is True
+    assert _read(env) == ordinary and _read(env, env["other"]) == foreign
+    with Session(env["engine"]) as db:
+        assert db.get(Task, task) is None
+        assert not db.get(Knowledgebase, env["dataset"]).raptor_task_id
+    env["record"]["readbacks"].append({"fault": "clear-during-native-write", "no_resurrection": True, "rows": _read(env)})
+    env["save"]()
+
+
+async def test_clear_invalid_receipt_keeps_task_binding(migration: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.apps.services import dataset_api_service
+
+    env = migration
+    task, _, _ = await _generate(env, "psi")
+    with Session(env["engine"]) as db:
+        db.add(UserTenant(id=uuid4().hex, tenant_id=env["tenant"], user_id=env["tenant"], role="owner", invited_by=env["tenant"], status="1"))
+        db.commit()
+    before = _read(env)
+    monkeypatch.setattr(dataset_api_service, "REDIS_CONN", SimpleNamespace(set=lambda *args: True))
+    monkeypatch.setattr(env["store"], "delete", lambda *args, **kwargs: None)
+    with Session(env["engine"]) as db:
+        success, message = dataset_api_service.delete_index(db, env["tenant"], env["dataset"], "raptor", expected_task_id=task)
+        assert not success and "acknowledged" in message
+    with Session(env["engine"]) as db:
+        assert db.get(Task, task) is not None
+        assert db.get(Knowledgebase, env["dataset"]).raptor_task_id == task
     assert _read(env) == before

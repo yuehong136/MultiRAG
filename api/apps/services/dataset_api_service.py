@@ -665,6 +665,12 @@ def _delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str,
 
     if task_id and not REDIS_CONN.set(f"{task_id}-cancel", "x"):
         return False, "Cannot request task cancellation"
+    if index_type == "raptor" and wipe:
+        # Signal cancellation first, then wait for the native writer to finish
+        # compensation. Otherwise its rollback can resurrect a cleared tree.
+        db.refresh(kb, with_for_update=True)
+        if getattr(kb, task_id_field, None) != task_id:
+            return False, "Task binding changed; refresh the trace before clearing."
     # Pause preserves binding/trace; a new run remains blocked while its writer drains.
     if not wipe:
         # Queued tasks may be acknowledged without entering the writer. Keep a
@@ -678,7 +684,22 @@ def _delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str,
     if index_type == "graph":
         wipe_graph(kb.tenant_id, dataset_id, index_name)
     elif index_type == "raptor":
-        settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, index_name, dataset_id)
+        receipt = settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, index_name, dataset_id)
+        if type(receipt) is not int or receipt < 0:
+            db.rollback()
+            return False, "RAPTOR summary deletion was not acknowledged."
+        if task_id:
+            db.execute(delete(Task).where(Task.id == task_id))
+        changed = db.execute(
+            update(Knowledgebase)
+            .where(Knowledgebase.id == kb.id, Knowledgebase.raptor_task_id == task_id)
+            .values(raptor_task_id="", raptor_task_finish_at=None, update_time=KnowledgebaseService.current_timestamp(), update_date=KnowledgebaseService.current_datetime())
+        )
+        if changed.rowcount != 1:
+            db.rollback()
+            return False, "RAPTOR task binding changed during clear."
+        db.commit()
+        return True, {}
     if task_id:
         TaskService.delete_by_id(db, task_id)
 

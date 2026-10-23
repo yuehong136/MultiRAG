@@ -1417,6 +1417,7 @@ def _commit_raptor_summaries(
     from common.doc_store.document_history import document_history, restore_document_history
 
     native_complete = False
+    native_snapshot: dict[str, dict[str, dict[str, Any]]] = {}
     original_chunk_ids = ""
     try:
         with Session(bind) as writer:
@@ -1425,7 +1426,9 @@ def _commit_raptor_summaries(
             if kb is None or kb.raptor_task_id != task_id or task is None or task.doc_id != GRAPH_RAPTOR_FAKE_DOC_ID or index != search.index_name_one(tenant, kb.name):
                 raise ValueError("RAPTOR task/dataset binding unavailable")
             original_chunk_ids = task.chunk_ids or ""
-            replace_raptor_summaries(settings.docStoreConn, index, dataset, chunks, previous, lambda: bool(cancellation and cancellation.is_set()) or has_canceled(task_id), settings.DOC_BULK_SIZE)
+            native_snapshot = replace_raptor_summaries(
+                settings.docStoreConn, index, dataset, chunks, previous, lambda: bool(cancellation and cancellation.is_set()) or has_canceled(task_id), settings.DOC_BULK_SIZE
+            )
             native_complete = True
             task.chunk_ids = " ".join(str(chunk.get("id", chunk.get("pk"))) for chunk in chunks)
             writer.commit()
@@ -1438,11 +1441,12 @@ def _commit_raptor_summaries(
                 task = recovery.scalar(select(Task).where(Task.id == task_id).with_for_update())
                 if kb is None or kb.raptor_task_id != task_id or task is None:
                     raise RuntimeError("RAPTOR SQL recovery lost task ownership") from None
+                current = {doc: summary_rows(document_history(settings.docStoreConn, index, dataset, doc)) for doc in previous}
+                if current != native_snapshot:
+                    raise RuntimeError("RAPTOR SQL recovery conflict: native payload changed") from None
+                # Validate every affected document before restoring any of them.
                 for doc, old in previous.items():
-                    current = summary_rows(document_history(settings.docStoreConn, index, dataset, doc))
-                    identifiers = {str(chunk.get("id", chunk.get("pk"))) for chunk in chunks if chunk["doc_id"] == doc}
-                    if set(current) != identifiers:
-                        raise RuntimeError("RAPTOR SQL recovery found a changed native tree") from None
+                    identifiers = set(native_snapshot[doc])
                     restore_document_history(settings.docStoreConn, index, dataset, doc, list(old.values()), ids=list(set(old) | identifiers))
                 task.chunk_ids = original_chunk_ids
                 recovery.commit()
