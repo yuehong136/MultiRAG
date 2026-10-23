@@ -133,6 +133,74 @@ def task_state(env: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 @pytest.mark.parametrize("credential_kind", ["jwt", "keys"])
+def test_legacy_run_trace_matches_canonical_task_and_denies_foreign_before_reads(index_api: dict[str, Any], credential_kind: str) -> None:
+    env = index_api
+    base = f"/datasets/{env['datasets'][0]}"
+    credential, foreign = env[credential_kind][0], env[credential_kind][1]
+    evidence: list[dict[str, Any]] = []
+    for index_type, task_type, column in CASES[:2]:
+        legacy_name = "graphrag" if index_type == "graph" else "raptor"
+        before_sql, before_tasks, before_native = sql_state(env), task_state(env), native_state(env)
+        before_queue = env["redis"].xlen(env["queue"])
+
+        def denied_without_reads() -> None:
+            statements: list[str] = []
+
+            def capture(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+                statements.append(statement)
+
+            sa.event.listen(sa.engine.Engine, "before_cursor_execute", capture)
+            try:
+                for method, suffix in [("POST", "run_"), ("GET", "trace_")]:
+                    statements.clear()
+                    response = request_api(env, method, base + "/" + suffix + legacy_name, credential=foreign)
+                    assert response.status_code == 200 and response.json()["code"] != 0, response.text
+                    assert response.json()["message"] == "No authorization." and not response.json().get("data")
+                    assert statements and not any(Task.__tablename__ in sql or Document.__tablename__ in sql for sql in statements), statements
+            finally:
+                sa.event.remove(sa.engine.Engine, "before_cursor_execute", capture)
+
+        denied_without_reads()
+        assert sql_state(env) == before_sql and task_state(env) == before_tasks and native_state(env) == before_native
+        assert env["redis"].xlen(env["queue"]) == before_queue
+        started = request_api(env, "POST", base + "/run_" + legacy_name, credential=credential)
+        assert started.status_code == 200 and started.json()["code"] == 0, started.text
+        result = started.json()["data"]
+        assert set(result) == {column + "_task_id"}
+        task_id = result[column + "_task_id"]
+        legacy = request_api(env, "GET", base + "/trace_" + legacy_name, credential=credential)
+        canonical = request_api(env, "GET", base + "/index", credential=credential, params={"type": index_type})
+        assert legacy.status_code == canonical.status_code == 200
+        assert legacy.json() == canonical.json() and legacy.json()["code"] == 0
+        assert legacy.json()["data"]["id"] == task_id
+        row = task_state(env)[task_id]
+        assert row["task_type"] == task_type and row["doc_id"] == GRAPH_RAPTOR_FAKE_DOC_ID
+        assert legacy.json()["data"]["task_type"] == row["task_type"] and legacy.json()["data"]["progress"] == row["progress"]
+        assert sql_state(env)[Knowledgebase.__tablename__][env["datasets"][0]][column + "_task_id"] == task_id
+        queued = json.loads(env["redis"].xrevrange(env["queue"], count=1)[0][1][b"message"])
+        assert queued["id"] == task_id and queued["task_type"] == task_type and queued["doc_ids"] == [env["documents"][0]]
+        active_sql, active_tasks, active_native = sql_state(env), task_state(env), native_state(env)
+        active_queue = env["redis"].xlen(env["queue"])
+        denied_without_reads()
+        assert sql_state(env) == active_sql and task_state(env) == active_tasks and native_state(env) == active_native
+        assert env["redis"].xlen(env["queue"]) == active_queue
+        evidence.append(
+            {
+                "legacyRun": "run_" + legacy_name,
+                "legacyTrace": "trace_" + legacy_name,
+                "task_id": task_id,
+                "task_type": task_type,
+                "sameCanonicalTrace": True,
+                "foreignTaskAndDocumentReads": 0,
+                "foreignWrites": 0,
+            }
+        )
+        cleared = request_api(env, "DELETE", base + "/index", credential=credential, params={"type": index_type})
+        assert cleared.json() == {"code": 0, "data": {}}
+    env["record_path"].with_suffix(".legacy-run-trace.json").write_text(json.dumps({"credential": credential_kind, "cases": evidence}, indent=2))
+
+
+@pytest.mark.parametrize("credential_kind", ["jwt", "keys"])
 def test_index_case_lifecycle_and_independent_readback(index_api: dict[str, Any], credential_kind: str) -> None:
     env = index_api
     token = env[credential_kind][0]
