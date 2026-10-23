@@ -1,12 +1,23 @@
 """Unit tests for api.utils.file_utils (filename_type, thumbnail_img, sanitize_path, read_potential_broken_pdf)."""
 
+import sys
+import threading
+from io import BytesIO
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import Mock
+
+import pdfplumber
 import pytest
+from PIL import Image
+from pypdf import PdfWriter
 
 from api.db import FileType
 from api.utils.file_utils import (
     GHOSTSCRIPT_TIMEOUT_SEC,
     MAX_BLOB_SIZE_PDF,
     MAX_BLOB_SIZE_THUMBNAIL,
+    LOCK_KEY_pdfplumber,
     filename_type,
     read_potential_broken_pdf,
     repair_pdf_with_ghostscript,
@@ -105,9 +116,74 @@ class TestThumbnailImg:
     def test_empty_filename_returns_none(self):
         assert thumbnail_img("", b"x") is None
 
+    @pytest.mark.parametrize("filename,blob", [(123, b"x"), ("x.pdf", 123), ("x.pdf", "invalid PDF")])
+    def test_invalid_inputs_return_none(self, filename: object, blob: Any) -> None:
+        assert thumbnail_img(filename, blob) is None
+
     def test_oversized_blob_returns_none(self):
         huge = b"x" * (MAX_BLOB_SIZE_THUMBNAIL + 1)
         assert thumbnail_img("x.pdf", huge) is None
+
+    @pytest.mark.parametrize("scenario", ["normal", "empty", "to_image", "save", "pages"])
+    def test_pdf_closes_and_unlocks(self, monkeypatch: pytest.MonkeyPatch, scenario: str) -> None:
+        writer = PdfWriter()
+        if scenario != "empty":
+            writer.add_blank_page(width=72, height=72)
+        content = BytesIO()
+        writer.write(content)
+        lock = threading.Lock()
+        monkeypatch.setitem(sys.modules, LOCK_KEY_pdfplumber, lock)
+        close = Mock(wraps=pdfplumber.PDF.close)
+
+        def close_pdf(pdf: pdfplumber.PDF) -> None:
+            assert lock.locked(), "PDF cleanup must remain under the shared lock"
+            close(pdf)
+
+        monkeypatch.setattr(pdfplumber.PDF, "close", close_pdf)
+        if scenario == "to_image":
+            monkeypatch.setattr(pdfplumber.page.Page, "to_image", Mock(side_effect=RuntimeError("render failure")))
+        elif scenario == "save":
+            image = SimpleNamespace(annotated=SimpleNamespace(save=Mock(side_effect=RuntimeError("save failure"))))
+            monkeypatch.setattr(pdfplumber.page.Page, "to_image", Mock(return_value=image))
+        elif scenario == "pages":
+
+            def fail_pages(_pdf: pdfplumber.PDF) -> None:
+                raise RuntimeError("page access failure")
+
+            monkeypatch.setattr(pdfplumber.PDF, "pages", property(fail_pages))
+
+        result = thumbnail_img("folder/TEST.PDF", content.getvalue())
+
+        assert close.call_count == 1
+        assert lock.acquire(blocking=False), "thumbnail generation leaked the shared lock"
+        lock.release()
+        if scenario == "normal":
+            assert result is not None
+            with Image.open(BytesIO(result)) as image:
+                assert image.format == "PNG"
+                assert image.size == (32, 32)
+        else:
+            assert result is None
+
+    def test_pdf_downsamples_until_thumbnail_fits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        content = BytesIO()
+        writer.write(content)
+        resolutions: list[float] = []
+
+        def to_image(_page: pdfplumber.page.Page, resolution: float) -> SimpleNamespace:
+            resolutions.append(resolution)
+
+            def save(buffered: BytesIO, format: str) -> None:
+                assert format == "png"
+                buffered.write(b"x" * (64000 if resolution > 8 else 100))
+
+            return SimpleNamespace(annotated=SimpleNamespace(save=save))
+
+        monkeypatch.setattr(pdfplumber.page.Page, "to_image", to_image)
+        assert thumbnail_img("x.pdf", content.getvalue()) == b"x" * 100
+        assert resolutions == [32, 16, 8]
 
 
 class TestThumbnail:

@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+from contextlib import AbstractContextManager
 from io import BytesIO
+from typing import Any, cast
 
 import pdfplumber
 from PIL import Image
@@ -83,7 +85,7 @@ def filename_type(filename):
     return FileType.OTHER.value
 
 
-def thumbnail_img(filename, blob):
+def thumbnail_img(filename: Any, blob: Any) -> bytes | None:
     """
     Generate thumbnail image bytes for PDF, image, or PPT. MySQL LongText max length is 65535.
 
@@ -109,31 +111,29 @@ def thumbnail_img(filename, blob):
 
     if re.match(r".*\.pdf$", filename):
         try:
-            with sys.modules[LOCK_KEY_pdfplumber]:
-                pdf = pdfplumber.open(BytesIO(blob))
-                if not pdf.pages:
-                    pdf.close()
-                    return None
-                buffered = BytesIO()
-                resolution = 32
-                img = None
-                for _ in range(10):
-                    # https://github.com/jsvine/pdfplumber?tab=readme-ov-file#creating-a-pageimage-with-to_image
-                    pdf.pages[0].to_image(resolution=resolution).annotated.save(buffered, format="png")
-                    img = buffered.getvalue()
-                    if len(img) >= 64000 and resolution >= 2:
-                        resolution = resolution / 2
-                        buffered = BytesIO()
-                    else:
-                        break
-                pdf.close()
-                return img
+            with cast(AbstractContextManager[object], sys.modules[LOCK_KEY_pdfplumber]):
+                with pdfplumber.open(BytesIO(blob)) as pdf:
+                    if not pdf.pages:
+                        return None
+                    buffered = BytesIO()
+                    resolution = 32.0
+                    img = None
+                    for _ in range(10):
+                        # https://github.com/jsvine/pdfplumber?tab=readme-ov-file#creating-a-pageimage-with-to_image
+                        pdf.pages[0].to_image(resolution=resolution).annotated.save(buffered, format="png")
+                        img = buffered.getvalue()
+                        if len(img) >= 64000 and resolution >= 2:
+                            resolution = resolution / 2
+                            buffered = BytesIO()
+                        else:
+                            break
+                    return img
         except Exception:
             return None
 
     if re.match(r".*\.(jpg|jpeg|png|tif|gif|icon|ico|webp)$", filename):
         try:
-            image = Image.open(BytesIO(blob))
+            image: Image.Image = Image.open(BytesIO(blob))
             image.load()
             if image.mode in ("RGBA", "P", "LA"):
                 image = image.convert("RGB")
