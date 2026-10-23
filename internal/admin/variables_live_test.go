@@ -216,6 +216,21 @@ func TestAdminVariablesCLIHTTPAndSQL(t *testing.T) {
 		}
 	}
 	binary := os.Getenv("MULTIRAG_AFTER9D_B_CLI_BINARY")
+	chunked, err := http.NewRequest("GET", httpServer.URL+"/api/v1/admin/variables", strings.NewReader(`{"var_name":"mail"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunked.Header.Set("Authorization", token)
+	chunked.TransferEncoding = []string{"chunked"}
+	chunked.ContentLength = -1
+	response, err := http.DefaultClient.Do(chunked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest || snapshot() != before {
+		t.Fatal("chunked GET body was acknowledged or changed settings")
+	}
 	if binary == "" {
 		t.Fatal("actual CLI binary required")
 	}

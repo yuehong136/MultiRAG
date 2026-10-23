@@ -925,7 +925,7 @@ func (h *Handler) ShowModel(c *gin.Context) {
 // GetVariables handle get variables
 // Python logic: if request body is empty, list all variables; otherwise get single variable by var_name from body
 func (h *Handler) GetVariables(c *gin.Context) {
-	if c.Request.ContentLength > 0 {
+	if c.Request.ContentLength != 0 || len(c.Request.TransferEncoding) > 0 {
 		errorResponse(c, "Use the var_name query parameter", 400)
 		return
 	}
