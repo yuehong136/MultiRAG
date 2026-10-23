@@ -24,6 +24,37 @@ def normalize_agent_event(event: Any) -> dict[str, Any]:
     return normalized
 
 
+def parse_agent_completion_chunk(chunk: Any) -> list[dict[str, Any]]:
+    """Decode complete SSE chunks, including batched frames and multiline data.
+
+    Keep failure envelopes intact so callers can read their error before
+    normalizing successful event data. Malformed frames must fail the run.
+    """
+    if isinstance(chunk, dict):
+        return [chunk]
+    if not isinstance(chunk, str):
+        raise ValueError("Invalid agent completion chunk.")
+    events: list[dict[str, Any]] = []
+    data_lines: list[str] = []
+    for line in [*chunk.splitlines(), ""]:
+        if not line:
+            payload = "\n".join(data_lines).strip()
+            data_lines = []
+            if not payload or payload == "[DONE]":
+                continue
+            event = json.loads(payload)
+            if not isinstance(event, dict):
+                raise ValueError("Invalid agent completion event.")
+            events.append(event)
+        elif not line.startswith(":"):
+            field, _, value = line.partition(":")
+            if field == "data":
+                data_lines.append(value.removeprefix(" "))
+            elif field not in {"event", "id", "retry"}:
+                raise ValueError("Invalid agent completion SSE field.")
+    return events
+
+
 class AgentCompletionAccumulator:
     def __init__(self, *, return_trace: bool = False) -> None:
         self.return_trace = return_trace

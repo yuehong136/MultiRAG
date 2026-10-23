@@ -38,6 +38,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
+from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event, parse_agent_completion_chunk
 from api.utils.agent_streaming import AgentStreamingResponse
 from api.utils.api_utils import (
     async_beta_token_required,
@@ -713,38 +714,15 @@ async def agent_bot_completions(
         return resp
 
     try:
-        full_content = ""
-        reference: dict[str, Any] = {}
-        terminal: dict[str, Any] | None = None
-        awaiting_inputs: dict[str, Any] | None = None
+        aggregate = AgentCompletionAccumulator(return_trace=bool(req.get("return_trace", False)))
         async with aclosing(agent_completion(db=db, tenant_id=tenant_id, agent_id=agent_id, **req)) as answers:
             async for answer in answers:
-                event = json.loads(answer[5:]) if isinstance(answer, str) else answer
-                if not isinstance(event, dict):
-                    raise ValueError("Invalid agent completion event.")
-                failure = agent_event_error(event)
-                if failure:
-                    return get_error_data_result(retmsg=failure)
-                data = event.get("data", {})
-                if not isinstance(data, dict):
-                    raise ValueError("Invalid agent completion data.")
-                if event.get("event") == "message":
-                    full_content += data["content"]
-                if data.get("reference"):
-                    reference.update(data["reference"])
-                if event.get("event") == "user_inputs":
-                    awaiting_inputs = event
-                elif event.get("event") in {"message_end", "workflow_finished"}:
-                    terminal = event
-        # A user-input pause can precede buffered message_end frames. Preserve
-        # its form/tips instead of presenting a pause as a finished answer.
-        terminal = awaiting_inputs or terminal
-        if terminal is None:
-            return get_error_data_result(retmsg="Agent completion returned no terminal event.")
-        terminal = copy.deepcopy(terminal)
-        terminal.setdefault("data", {})["content"] = full_content
-        terminal["data"]["reference"] = reference
-        return get_result(data=terminal)
+                for event in parse_agent_completion_chunk(answer):
+                    failure = agent_event_error(event)
+                    if failure:
+                        return get_error_data_result(retmsg=failure)
+                    aggregate.add(normalize_agent_event(event))
+        return get_result(data=aggregate.finish(require_terminal=True))
     except Exception as e:
         logging.exception(e)
         return get_error_data_result(retmsg=str(e) or "Unknown error")
