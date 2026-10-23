@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from collections import defaultdict
+from typing import Any
 
 from common.doc_store.doc_store_base import MatchTextExpr
 from common.query_base import QueryBase
@@ -11,10 +12,10 @@ from core.nlp import rag_tokenizer, synonym, term_weight
 class FulltextQueryer(QueryBase):
     """通用全文查询器，与具体向量数据库无关"""
 
-    def __init__(self, dataStore=None):
+    def __init__(self, dataStore: Any = None) -> None:
         self.tw = term_weight.Dealer()
         self.dataStore = dataStore  # 保留接口兼容，但实际未使用
-        self.syn = synonym.Dealer()
+        self.syn = synonym.Dealer(redis=synonym.redis_client())
         # 基础搜索字段（ES/OpenSearch/Infinity 兼容）
         self.query_fields = [
             "title_tks^10",

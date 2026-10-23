@@ -46,7 +46,7 @@ DATABASE_TESTS = frozenset(
         "test_task_log_limits.py",
     }
 )
-REDIS_TESTS = frozenset({"test_shared_auth_secret.py"})
+REDIS_TESTS = frozenset({"test_shared_auth_secret.py", "test_synonym_redis.py"})
 INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py"})
 
 ISOLATED_STORAGE_TESTS = frozenset(

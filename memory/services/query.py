@@ -42,9 +42,9 @@ def get_vector(txt, emb_mdl, topk=10, similarity=0.1):
 
 
 class MsgTextQuery(QueryBase):
-    def __init__(self):
+    def __init__(self) -> None:
         self.tw = term_weight.Dealer()
-        self.syn = synonym.Dealer()
+        self.syn = synonym.Dealer(redis=synonym.redis_client())
         self.query_fields = ["content"]
 
     def question(self, txt, tbl="messages", min_match: float = 0.6):
