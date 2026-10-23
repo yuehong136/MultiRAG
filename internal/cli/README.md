@@ -238,7 +238,7 @@ ASR; OpenRouter supports TTS. FishAudio streaming ASR and OpenRouter streaming T
 return **501 unsupported**. Gitee implements OCR for file and URL inputs. A catalog
 entry alone does not enable a driver capability. Missing results, provider errors,
 failed/truncated streams and nonzero business codes fail the CLI command. See the
-[Go media contract](../../../docs/ragflow-porting/go-media.md) for payloads and the
+[Go media contract](../../docs/ragflow-porting/go-media.md) for payloads and the
 controlled-adapter verification boundary.
 
 An explicit empty `text` is valid for silent audio or a blank page; missing/null
