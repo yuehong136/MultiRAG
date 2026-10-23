@@ -470,7 +470,7 @@ func (z *ZhipuAIModel) Embed(modelName *string, texts []string, apiConfig *APICo
 }
 
 func (z *ZhipuAIModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	return nil, fmt.Errorf("listing supported models is not available for Zhipu AI")
+	return listProviderModels(z.httpClient, z.BaseURL, z.URLSuffix.Models, apiConfig, true)
 }
 
 func (z *ZhipuAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
