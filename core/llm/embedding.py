@@ -19,9 +19,11 @@ import logging
 import os
 import re
 import threading
+import time
 from abc import ABC
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import dashscope
 import numpy as np
@@ -259,53 +261,113 @@ class BaiChuanEmbed(OpenAIEmbed):
         super().__init__(key, model_name, base_url)
 
 
+def _dashscope_native_http_api_url(base_url: str | None) -> str | None:
+    """Map known compatible roots; explicit custom endpoints must use the native API."""
+    normalized = (base_url or "").strip().rstrip("/")
+    if not normalized:
+        return None
+    error = "Tongyi-Qianwen base_url must be a native /api/v1 URL or a supported DashScope root"
+    try:
+        parsed = urlsplit(normalized)
+        # Accessing port also rejects malformed or out-of-range ports.
+        _ = parsed.port
+    except ValueError:
+        raise ValueError(error) from None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(c.isspace() for c in normalized)
+    ):
+        # Never include the configured URL: userinfo and queries may contain credentials.
+        raise ValueError(error)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/api/v1"):
+        return urlunsplit(parsed._replace(path=path))
+    if parsed.hostname in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"} and path in {"", "/compatible-mode/v1"}:
+        return urlunsplit(parsed._replace(path="/api/v1"))
+    raise ValueError(error)
+
+
 class QWenEmbed(Base):
     _FACTORY_NAME = "Tongyi-Qianwen"
 
-    def __init__(self, key, model_name="text-embedding-v4", **kwargs):
+    def __init__(self, key: str, model_name: str = "text-embedding-v4", base_url: str | None = None, **kwargs: Any) -> None:
         self.key = key
         self.model_name = model_name
+        self._dashscope_http_api_url = _dashscope_native_http_api_url(base_url)
 
-    def encode(self, texts: list):
-        import time
+    def _request_embeddings(self, texts: str | list[str], text_type: Literal["document", "query"], retries: int = 0) -> Mapping[str, Any]:
+        for attempt in range(retries + 1):
+            # The pinned SDK consumes base_address per request, without changing
+            # dashscope.base_http_api_url for other tenants or default-endpoint users.
+            response = dashscope.TextEmbedding.call(model=self.model_name, input=texts, api_key=self.key, text_type=text_type, base_address=self._dashscope_http_api_url)
+            if not isinstance(response, Mapping):
+                raise ValueError("Invalid Tongyi-Qianwen embedding response")
+            status = response.get("status_code")
+            if not isinstance(status, int) or isinstance(status, bool):
+                raise ValueError("Invalid Tongyi-Qianwen embedding response status")
+            if status == 200:
+                return response
+            if attempt < retries and (status in {408, 429} or 500 <= status < 600):
+                time.sleep(10)
+                continue
+            # Provider messages can echo credentials or input; keep errors bounded.
+            raise RuntimeError(f"Tongyi-Qianwen embedding request failed (HTTP {status})")
+        raise RuntimeError("Tongyi-Qianwen embedding retry limit exceeded")
 
-        import dashscope
+    @staticmethod
+    def _parse_embeddings(response: Mapping[str, Any], expected_count: int) -> tuple[np.ndarray, int]:
+        error = "Invalid Tongyi-Qianwen embedding response"
+        output = response.get("output")
+        entries = output.get("embeddings") if isinstance(output, Mapping) else None
+        if not isinstance(entries, list) or len(entries) != expected_count:
+            raise ValueError(f"{error}: embedding count mismatch")
+        ordered: list[list[float] | None] = [None] * expected_count
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"{error}: malformed embedding entry")
+            index = entry.get("text_index")
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < expected_count or ordered[index] is not None:
+                raise ValueError(f"{error}: invalid or duplicate text_index")
+            vector = entry.get("embedding")
+            if not isinstance(vector, list) or not vector or any(not isinstance(value, (int, float)) or isinstance(value, bool) for value in vector):
+                raise ValueError(f"{error}: malformed vector")
+            ordered[index] = vector
+        try:
+            vectors = np.array(ordered, dtype=float)
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError(f"{error}: inconsistent vector dimensions") from None
+        if not np.isfinite(vectors).all():
+            raise ValueError(f"{error}: non-finite vector")
+        usage = response.get("usage")
+        tokens = usage.get("total_tokens") if isinstance(usage, Mapping) else None
+        if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0:
+            raise ValueError(f"{error}: invalid total_tokens")
+        return vectors, tokens
 
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
         batch_size = 4
-        res = []
+        batches: list[np.ndarray] = []
         token_count = 0
         texts = [truncate(t, 2048) for t in texts]
         for i in range(0, len(texts), batch_size):
-            retry_max = 5
-            resp = dashscope.TextEmbedding.call(model=self.model_name, input=texts[i : i + batch_size], api_key=self.key, text_type="document")
-            while (resp["output"] is None or resp["output"].get("embeddings") is None) and retry_max > 0:
-                time.sleep(10)
-                resp = dashscope.TextEmbedding.call(model=self.model_name, input=texts[i : i + batch_size], api_key=self.key, text_type="document")
-                retry_max -= 1
-            if retry_max == 0 and (resp["output"] is None or resp["output"].get("embeddings") is None):
-                if resp.get("message"):
-                    log_exception(ValueError(f"Retry_max reached, calling embedding model failed: {resp['message']}"))
-                else:
-                    log_exception(ValueError("Retry_max reached, calling embedding model failed"))
-                raise
-            try:
-                embds = [[] for _ in range(len(resp["output"]["embeddings"]))]
-                for e in resp["output"]["embeddings"]:
-                    embds[e["text_index"]] = e["embedding"]
-                res.extend(embds)
-                token_count += total_token_count_from_response(resp)
-            except Exception as _e:
-                log_exception(_e, resp)
-                raise
-        return np.array(res), token_count
+            batch = texts[i : i + batch_size]
+            response = self._request_embeddings(batch, "document", retries=5)
+            vectors, tokens = self._parse_embeddings(response, len(batch))
+            if batches and vectors.shape[1] != batches[0].shape[1]:
+                raise ValueError("Invalid Tongyi-Qianwen embedding response: inconsistent vector dimensions across batches")
+            batches.append(vectors)
+            token_count += tokens
+        return np.concatenate(batches) if batches else np.array([]), token_count
 
-    def encode_queries(self, text):
-        resp = dashscope.TextEmbedding.call(model=self.model_name, input=text[:2048], api_key=self.key, text_type="query")
-        try:
-            return np.array(resp["output"]["embeddings"][0]["embedding"]), total_token_count_from_response(resp)
-        except Exception as _e:
-            log_exception(_e, resp)
-            raise Exception(f"Error: {resp}")
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        response = self._request_embeddings(text[:2048], "query")
+        vectors, tokens = self._parse_embeddings(response, 1)
+        return vectors[0], tokens
 
 
 class ZhipuEmbed(Base):
