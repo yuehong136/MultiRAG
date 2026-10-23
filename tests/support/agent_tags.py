@@ -39,6 +39,25 @@ def tags_http_api(engine: sa.Engine, evidence: Path) -> Iterator[dict[str, Any]]
 
     with ExitStack() as cleanup, pytest.MonkeyPatch.context() as patch:
         cleanup.callback(save)
+
+        def remove_replicas() -> None:
+            # Agent detail reads initialize runtime replicas. Every matching
+            # tenant and runtime user below belongs to this scratch fixture.
+            from core.utils.redis_conn import REDIS_CONN
+
+            client = REDIS_CONN.REDIS
+            assert client is not None
+            keys = []
+            for owner in owners:
+                for prefix in ("canvas:replica", "canvas:replica:lock"):
+                    keys.extend(client.scan_iter(match=f"{prefix}:*:{owner}:*"))
+            manifest["redis_keys"] = sorted(key.decode() for key in keys)
+            if keys:
+                client.delete(*keys)
+            assert all(not client.exists(key) for key in keys)
+            manifest["redis_keys_absent"] = True
+
+        cleanup.callback(remove_replicas)
         with sessions() as db:
             for index, owner in enumerate(owners):
                 db.add(User(id=owner, email=f"{owner}@tags.example.com", nickname=f"Tags {index}", password="unused", access_token="active"))

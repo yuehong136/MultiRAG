@@ -12,7 +12,6 @@ EVALS = ROOT / "tests" / "evals"
 ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
-        "test_agent_tags.py",
         "test_async_engine.py",
         "test_channel_candidate_gc.py",
         "test_channel_control_persistence.py",
@@ -54,6 +53,7 @@ INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_
 
 ISOLATED_STORAGE_TESTS = frozenset(
     {
+        "test_agent_tags.py",
         "test_agent_completion_close.py",
         "test_agent_execution_origin.py",
         "test_agent_list_operations.py",
