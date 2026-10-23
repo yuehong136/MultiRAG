@@ -6,7 +6,7 @@
 
 - 上游区间：`9d94527b1d98f18b8c09a32e24f0721c9a2cc5b1`（不含）至 `d7fb4bdb4ec50db877afda7dbed8e3bf7ba526c0`（含）；后续修复观察上限 `519e7d98a5651564d4e35d6648f006cba4baaf4f`。
 - fetch 快照 `origin/main=a55dccee4c211046b4e4d216a538bc60fae78dfd`；逐项完整 diff 的 SHA256 与 first-parent 顺序已核对。
-- 后端基线 `41f526497014c7e7108f905fa15922373e44952c`；最终源码组合 `e4e59f1c7bc4d7a0cfd6c8f3c86ed6fd7896763b`（含测试夹具适配）。本文单独作 documentation commit。
+- 后端基线 `41f526497014c7e7108f905fa15922373e44952c`；最终源码组合 `e28706423231d2be4d54a84a844d649cd8d10cfc`（含测试夹具与创建前资源登记）。本文单独作 documentation commit。
 - Web 基线 `170315a8b7d46b1b752b3f574e41b86738c7c2b3`，接受版本 `617be8b5f3785abff1d9fdd4d41e06ab43755c4c`，后端 [consumer pin](../../.github/consumer-web.json) 同值。
 - 本地最终 main/master/ref、WIP 逆向读回、资源与分支删除状态，以本机交付单 `delivery-complete.json` 为准。未 push、未部署；远程 `ci-required` 待运行。
 
@@ -53,6 +53,7 @@
 | 检索/元数据存储 | `search-storage` 30 pass：真实 ES8.11.3/OS2.19.6 评分/引用/完整 scroll、Infinity0.7.0 投影/残差、SQL 与空选择。 |
 | HTTP/实际 Web 消费者 | `http-consumers` 原始 116 pass、1 fail、exit1。唯一失败是已退出路由级 Agent 别名的捕获夹具；修正后 `runtime-attachments-final` 1 pass。完整会话清理/SDK、connector、模型、chunk、变量，以及 pin617be8b5 的文档/标签/会话删除客户端已实际执行；F 新 helper 的 document mode 已重新通过。 |
 | GraphRAG | `graph-lifecycle` 28 pass；覆盖批次预算/NER、10005 源块 Strong 完整有序读取和既有 checkpoint/lifecycle。`graph-web-final` 1 pass；亮色英文512/暗色中文2048保存与重载、NER禁用保值、真实 worker入口与SQL读回；拼贴图由集成 agent 审阅。 |
+| 中断可恢复登记 | `e2870642` 将 native chunk collection/database 计划在任何外部写入之前持久保存；`native-resource-registration` 在新建独占PG上实际单例1 pass，原生集合、SQL库、容器/卷/监听/临时配置清理读回。补强源于中断验收未及finally留下清单的证据缺口，不改变生产行为。 |
 | 冷启动/完整 lifespan | `cold-startup` exit0：原生产入口、健康/OpenAPI、匿名401、8个并发首次模型探测、真实SQL保存/失败零写入、Agent会话、chunk与strict smoke；自有API/provider/Redis/卷/SQL资源清理。该命令证明功能，不是性能基准。 |
 | Go 当前组合 | `go-build-vet` exit0：internal build/vet及三个独立main二进制。`go-combined-live` 18个叶用例、0skip，五个本批实际入口、112次受控供应商请求、同一个CLI二进制与独立SQL读回。 |
 | Go 扩大范围 | `go-scoped-race` exit0，1918叶pass、31个显式live opt-in skip；随后 `go-result-audit` exit1，存在4个基线未登记旧opt-in；不称无skip或CI全绿。额外5个旧catalog失败在A候选与冻结基线实际执行均复现。 |
