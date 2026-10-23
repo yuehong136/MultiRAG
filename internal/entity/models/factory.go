@@ -33,6 +33,8 @@ func NewModelFactory() *ModelFactory {
 func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string]string, urlSuffix URLSuffix) (ModelDriver, error) {
 	providerLower := strings.ToLower(providerName)
 	switch providerLower {
+	case "voyage ai":
+		return NewVoyageModel(baseURL, urlSuffix), nil
 	case "localai":
 		return NewLocalAIModel(baseURL, urlSuffix), nil
 	case "novita":
