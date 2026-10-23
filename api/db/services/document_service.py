@@ -217,7 +217,7 @@ class DocumentService(CommonService):
     def get_list(
         cls,
         db: Session,
-        kb_id,
+        kb_id: str,
         page_number: int,
         items_per_page: int,
         orderby: str,
@@ -228,7 +228,9 @@ class DocumentService(CommonService):
         suffix: list | None = None,
         run: list | None = None,
         doc_ids: list | None = None,
-    ):
+    ) -> tuple[list[dict[str, Any]], int]:
+        if doc_ids == []:
+            return [], 0
         # 1) 需要返回的列 —— 等价于 Peewee 的 select(*fields)
         #    确保 get_cls_model_fields() 返回的是 Column/ColumnElement 列对象，而不是字符串
         fields: list = cls.get_cls_model_fields()
@@ -259,7 +261,7 @@ class DocumentService(CommonService):
             base = base.where(cls.model.suffix.in_(suffix))
         if run:
             base = base.where(cls.model.run.in_(run))
-        if doc_ids:
+        if doc_ids is not None:
             base = base.where(cls.model.id.in_(doc_ids))
 
         # 4) 排序（避免与 sqlalchemy.desc 重名）
@@ -307,6 +309,8 @@ class DocumentService(CommonService):
         doc_ids: list | None = None,
         return_empty_metadata: bool = False,
     ) -> tuple[list[dict], int]:
+        if doc_ids == []:
+            return [], 0
         if suffix is None:
             suffix = []
         fields = cls.get_cls_model_fields()
