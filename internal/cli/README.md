@@ -231,7 +231,10 @@ Files are bounded to 20 MiB; audio input supports WAV/MP3. TTS returns base64 au
 including under `-o json`, and does not automatically write a local file.
 
 Built-in media inference drivers currently return **501 unsupported**. A catalog
-entry alone does not enable a driver capability. Empty results, provider errors,
+entry alone does not enable a driver capability. Missing results, provider errors,
 failed/truncated streams and nonzero business codes fail the CLI command. See the
 [Go media contract](../../docs/ragflow-porting/go-media.md) for payloads and the
 controlled-adapter verification boundary.
+
+An explicit empty `text` is valid for silent audio or a blank page; missing/null
+text and streams without any result event fail.

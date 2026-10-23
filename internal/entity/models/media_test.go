@@ -46,3 +46,16 @@ func TestBuiltInMediaCapabilitiesAreExplicit(t *testing.T) {
 		t.Fatal("cancel lost")
 	}
 }
+
+func TestMediaTextPresence(t *testing.T) {
+	empty := ""
+	if err := ValidateASRResponse(&ASRResponse{Text: &empty}); err != nil {
+		t.Fatal("silent transcription rejected", err)
+	}
+	if err := ValidateOCRResponse(&OCRResponse{Text: &empty}); err != nil {
+		t.Fatal("blank page rejected", err)
+	}
+	if ValidateASRResponse(&ASRResponse{}) == nil || ValidateOCRResponse(&OCRResponse{}) == nil {
+		t.Fatal("missing text treated as explicit empty")
+	}
+}

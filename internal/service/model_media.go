@@ -163,7 +163,7 @@ func (m *ModelProviderService) TranscribeAudioStream(provider, instance, name, u
 	if !ok {
 		return common.CodeNotImplemented, fmt.Errorf("%w: streaming ASR", models.ErrUnsupportedCapability)
 	}
-	size := 0
+	size, events := 0, 0
 	var sendErr error
 	err = capability.TranscribeAudioWithSender(&name, audio, resolved, copyASRConfig(config), func(result *models.ASRResponse) error {
 		if sendErr != nil {
@@ -174,7 +174,8 @@ func (m *ModelProviderService) TranscribeAudioStream(provider, instance, name, u
 			sendErr = models.ValidateASRResponse(result)
 		}
 		if sendErr == nil {
-			size += len(result.Text)
+			events++
+			size += len(*result.Text)
 			if size > models.MaxMediaBytes {
 				sendErr = fmt.Errorf("transcription stream exceeds 20 MiB")
 			} else {
@@ -189,7 +190,7 @@ func (m *ModelProviderService) TranscribeAudioStream(provider, instance, name, u
 	if err == nil {
 		err = mediaContext(resolved).Err()
 	}
-	if err == nil && size == 0 {
+	if err == nil && events == 0 {
 		err = fmt.Errorf("empty transcription stream")
 	}
 	if err != nil {

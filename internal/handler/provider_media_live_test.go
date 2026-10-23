@@ -38,6 +38,8 @@ import (
 	"multirag/internal/utility"
 )
 
+func mediaText(value string) *string { return &value }
+
 type controlledMediaFactory struct {
 	t                  *testing.T
 	constructed, calls atomic.Int32
@@ -77,6 +79,8 @@ func (d *controlledMediaDriver) TranscribeAudio(_ *string, audio []byte, api *mo
 		config.Prompt = "changed"
 	}
 	switch string(audio) {
+	case "silent":
+		return &models.ASRResponse{Text: mediaText("")}, nil
 	case "nil-result":
 		return nil, nil
 	case "empty-result":
@@ -87,22 +91,25 @@ func (d *controlledMediaDriver) TranscribeAudio(_ *string, audio []byte, api *mo
 		close(d.factory.canceled)
 		return nil, api.Context.Err()
 	}
-	return &models.ASRResponse{Text: "transcribed-" + d.instance}, nil
+	return &models.ASRResponse{Text: mediaText("transcribed-" + d.instance)}, nil
 }
 func (d *controlledMediaDriver) TranscribeAudioWithSender(_ *string, audio []byte, api *models.APIConfig, _ *models.ASRConfig, send func(*models.ASRResponse) error) error {
 	if err := d.check(api); err != nil {
 		return err
 	}
+	if string(audio) == "silent" {
+		return send(&models.ASRResponse{Text: mediaText("")})
+	}
 	if string(audio) == "empty-stream" {
 		return nil
 	}
-	if err := send(&models.ASRResponse{Text: "transcribed-"}); err != nil {
+	if err := send(&models.ASRResponse{Text: mediaText("transcribed-")}); err != nil {
 		return err
 	}
 	if string(audio) == "partial-error" {
 		return errors.New("controlled stream failure")
 	}
-	return send(&models.ASRResponse{Text: d.instance})
+	return send(&models.ASRResponse{Text: mediaText(d.instance)})
 }
 func (d *controlledMediaDriver) AudioSpeech(_ *string, text string, api *models.APIConfig, _ *models.TTSConfig) (*models.TTSResponse, error) {
 	if err := d.check(api); err != nil {
@@ -146,7 +153,10 @@ func (d *controlledMediaDriver) OCRFile(_ *string, content []byte, api *models.A
 	if string(content) == "empty-result" {
 		return &models.OCRResponse{}, nil
 	}
-	return &models.OCRResponse{Text: "recognized-" + d.instance}, nil
+	if string(content) == "blank" {
+		return &models.OCRResponse{Text: mediaText("")}, nil
+	}
+	return &models.OCRResponse{Text: mediaText("recognized-" + d.instance)}, nil
 }
 
 // Real router/JWT/SQL binding and CLI processes, with only the model driver controlled.
@@ -162,6 +172,7 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 	if binary == "" {
 		t.Fatal("candidate CLI binary required")
 	}
+	t.Log("owned-test-process", os.Getpid())
 	t.Chdir(filepath.Join("..", ".."))
 	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
@@ -409,6 +420,21 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 	if mismatch["code"] != float64(500) || mismatch["data"] != nil {
 		t.Fatal("wrong audio format succeeded", mismatchRaw)
 	}
+	for _, tc := range []struct{ kind, field, value string }{{"asr", "file", "silent"}, {"ocr", "content", "blank"}} {
+		p := payload(tc.kind, "a")
+		p[tc.field] = []byte(tc.value)
+		_, out, raw := call(api.URL, tc.kind, "owner", p)
+		if out["code"] != float64(0) || out["data"].(map[string]any)["text"] != "" {
+			t.Fatal("explicit empty text is a legal result", raw)
+		}
+	}
+	pSilent := payload("asr", "a")
+	pSilent["stream"] = true
+	pSilent["file"] = []byte("silent")
+	_, _, silentRaw := call(api.URL, "asr", "owner", pSilent)
+	if !strings.Contains(silentRaw, `"text":""`) || !strings.Contains(silentRaw, "event: done") {
+		t.Fatal("explicit silent stream failed", silentRaw)
+	}
 	// A real configured driver with no implemented capability returns 501, without network probing.
 	unsupported := serve(service.NewModelProviderService())
 	for _, kind := range []string{"asr", "tts", "ocr"} {
@@ -484,6 +510,37 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 	client.HTTPClient.Host = parsed.Hostname()
 	client.HTTPClient.Port = port
 	client.HTTPClient.LoginToken = tokens["owner"]
+	runCLI := func(endpoint, syntax string) ([]byte, error) {
+		process := exec.CommandContext(t.Context(), binary, "-h", endpoint, "-t", tokens["owner"], "-o", "json", syntax)
+		process.Dir = temp
+		var output bytes.Buffer
+		process.Stdout = &output
+		process.Stderr = &output
+		if err := process.Start(); err != nil {
+			return nil, err
+		}
+		t.Log("owned-cli-process-open", process.Process.Pid)
+		err := process.Wait()
+		t.Log("owned-cli-process-closed", process.Process.Pid, process.ProcessState.ExitCode())
+		return output.Bytes(), err
+	}
+	for _, fixture := range []struct{ name, data string }{{"silent.wav", "silent"}, {"blank.png", "blank"}} {
+		path := filepath.Join(temp, fixture.name)
+		t.Log("owned-file-resource", path)
+		if err := os.WriteFile(path, []byte(fixture.data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, syntax := range []string{fmt.Sprintf(`ASR WITH "asr@a@ZHIPU-AI" AUDIO %q;`, filepath.Join(temp, "silent.wav")), fmt.Sprintf(`STREAM ASR WITH "asr@a@ZHIPU-AI" AUDIO %q;`, filepath.Join(temp, "silent.wav")), fmt.Sprintf(`OCR WITH "ocr@a@ZHIPU-AI" FILE %q;`, filepath.Join(temp, "blank.png"))} {
+		output, err := runCLI(parsed.Host, syntax)
+		if err != nil {
+			t.Fatal("explicit empty CLI result failed", err, string(output))
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(output, &rows); err != nil || len(rows) != 1 || rows[0]["text"] != "" {
+			t.Fatal("explicit empty text missing from CLI output", string(output))
+		}
+	}
 	for _, syntax := range []string{fmt.Sprintf(`ASR WITH "asr@a@ZHIPU-AI" AUDIO %q;`, audioPath), `TTS WITH "tts@b@ZHIPU-AI" TEXT "hello";`, fmt.Sprintf(`OCR WITH "ocr@a@ZHIPU-AI" FILE %q;`, imagePath), fmt.Sprintf(`STREAM ASR WITH "asr@b@ZHIPU-AI" AUDIO %q;`, audioPath), `STREAM TTS WITH "tts@a@ZHIPU-AI" TEXT "hello";`} {
 		cmd, err := cli.NewParser(syntax).Parse(false)
 		if err != nil {
@@ -492,9 +549,7 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 		if _, err := client.ExecuteCommand(cmd); err != nil {
 			t.Fatal("CLI command failed", err)
 		}
-		process := exec.CommandContext(t.Context(), binary, "-h", parsed.Host, "-t", tokens["owner"], "-o", "json", syntax)
-		process.Dir = temp
-		output, err := process.CombinedOutput()
+		output, err := runCLI(parsed.Host, syntax)
 		if err != nil {
 			t.Fatalf("candidate CLI process failed: %s", output)
 		}
@@ -503,16 +558,12 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 		}
 	}
 	for _, syntax := range []string{`TTS WITH "tts@a@ZHIPU-AI" TEXT "empty-result";`, `STREAM TTS WITH "tts@a@ZHIPU-AI" TEXT "partial-error";`, `ASR WITH "asr@missing@ZHIPU-AI" AUDIO "missing.wav";`} {
-		process := exec.CommandContext(t.Context(), binary, "-h", parsed.Host, "-t", tokens["owner"], syntax)
-		process.Dir = temp
-		if output, err := process.CombinedOutput(); err == nil {
+		if output, err := runCLI(parsed.Host, syntax); err == nil {
 			t.Fatal("CLI failure exited zero", string(output))
 		}
 	}
 	unsupportedURL, _ := url.Parse(unsupported.URL)
-	process := exec.CommandContext(t.Context(), binary, "-h", unsupportedURL.Host, "-t", tokens["owner"], `STREAM TTS WITH "tts@a@ZHIPU-AI" TEXT "hello";`)
-	process.Dir = temp
-	if output, err := process.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("501")) {
+	if output, err := runCLI(unsupportedURL.Host, `STREAM TTS WITH "tts@a@ZHIPU-AI" TEXT "hello";`); err == nil || !bytes.Contains(output, []byte("501")) {
 		t.Fatal("unsupported CLI stream exit lost", err, string(output))
 	}
 	// Even if an adapter ignores a failed sender and returns nil, success is forbidden.

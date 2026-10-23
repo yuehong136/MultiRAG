@@ -108,6 +108,24 @@ func TestChatAudioFilePayload(t *testing.T) {
 	}
 }
 
+func TestMediaExplicitEmptyText(t *testing.T) {
+	for _, kind := range []string{"asr", "ocr"} {
+		row, err := mediaResult(kind, []byte(`{"text":""}`))
+		if err != nil || row["text"] != "" {
+			t.Fatal("explicit empty text rejected", row, err)
+		}
+		for _, raw := range []string{`{}`, `{"text":null}`} {
+			if _, err := mediaResult(kind, []byte(raw)); err == nil {
+				t.Fatal("missing text accepted", raw)
+			}
+		}
+	}
+	stream := "event: message\ndata: {\"text\":\"\"}\n\nevent: done\ndata: [DONE]\n\n"
+	if _, err := readMediaStream(strings.NewReader(stream), "asr"); err != nil {
+		t.Fatal("explicit silent stream rejected", err)
+	}
+}
+
 func TestMediaResponseBufferBounds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, strings.Repeat("x", 64)) }))
 	defer server.Close()

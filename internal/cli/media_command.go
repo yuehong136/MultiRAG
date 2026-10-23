@@ -147,7 +147,7 @@ func mediaResult(kind string, raw []byte) (map[string]any, error) {
 	if err := models.ValidateASRResponse(&r); err != nil {
 		return nil, err
 	}
-	return map[string]any{"text": r.Text}, nil
+	return map[string]any{"text": *r.Text}, nil
 }
 func readMediaStream(reader io.Reader, kind string) (ResponseIf, error) {
 	scanner := bufio.NewScanner(reader)
@@ -155,6 +155,7 @@ func readMediaStream(reader io.Reader, kind string) (ResponseIf, error) {
 	event := ""
 	var data strings.Builder
 	done := false
+	messages := 0
 	var text strings.Builder
 	var audio []byte
 	format := ""
@@ -192,6 +193,7 @@ func readMediaStream(reader io.Reader, kind string) (ResponseIf, error) {
 		if err != nil {
 			return err
 		}
+		messages++
 		if kind == "tts" {
 			part, err := base64.StdEncoding.Strict().DecodeString(row["audio"].(string))
 			if err != nil {
@@ -255,7 +257,7 @@ func readMediaStream(reader io.Reader, kind string) (ResponseIf, error) {
 			return nil, fmt.Errorf("empty speech stream")
 		}
 		row = map[string]any{"audio": base64.StdEncoding.EncodeToString(audio), "format": format}
-	} else if text.Len() == 0 {
+	} else if messages == 0 {
 		return nil, fmt.Errorf("empty transcription stream")
 	}
 	return &CommonDataResponse{Code: 0, Data: row}, nil

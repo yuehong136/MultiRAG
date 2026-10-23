@@ -36,10 +36,10 @@ type OCRDriver interface {
 }
 
 type ASRResponse struct {
-	Text string `json:"text"`
+	Text *string `json:"text"`
 }
 type OCRResponse struct {
-	Text string `json:"text"`
+	Text *string `json:"text"`
 }
 type TTSResponse struct {
 	Audio  []byte `json:"audio"`
@@ -86,14 +86,14 @@ func DecodeMediaData(encoded string) ([]byte, error) {
 	return data, nil
 }
 func ValidateASRResponse(r *ASRResponse) error {
-	if r == nil || r.Text == "" || len(r.Text) > MaxMediaBytes {
-		return fmt.Errorf("empty or oversized transcription result")
+	if r == nil || r.Text == nil || len(*r.Text) > MaxMediaBytes {
+		return fmt.Errorf("missing or oversized transcription result")
 	}
 	return nil
 }
 func ValidateOCRResponse(r *OCRResponse) error {
-	if r == nil || r.Text == "" || len(r.Text) > MaxMediaBytes {
-		return fmt.Errorf("empty or oversized OCR result")
+	if r == nil || r.Text == nil || len(*r.Text) > MaxMediaBytes {
+		return fmt.Errorf("missing or oversized OCR result")
 	}
 	return nil
 }
