@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import tiktoken
 from anyio import CancelScope
-from sqlalchemy import Select, and_, asc, func, or_, select
+from sqlalchemy import Select, and_, asc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
@@ -23,7 +23,7 @@ from sqlalchemy.sql import desc as sa_desc
 from agent.a2ui import validate_client_a2ui_messages
 from agent.canvas import Canvas
 from api.db import CanvasCategory, TenantPermission, UserTenantRole
-from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTemplate, User, UserCanvas, UserCanvasVersion, UserTenant
+from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTemplate, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant
 from api.db.services.agent_execution_service import execution_context, principal_for_resource_tenant, restore_execution_snapshot, save_agent_session, snapshot_digest
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
@@ -124,6 +124,7 @@ class UserCanvasService(CommonService):
                 cls.model.create_date,
                 cls.model.update_date,
                 cls.model.canvas_category,
+                cls.model.tags,
                 User.nickname,
                 User.avatar.label("tenant_avatar"),
             ]
@@ -164,8 +165,9 @@ class UserCanvasService(CommonService):
         orderby: str,
         desc: bool,
         keywords: str | None,
-        canvas_category=None,
-    ):
+        canvas_category: str | None = None,
+        tags: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         根据租户ID列表获取；支持 keywords（title 模糊）；排序+分页；返回(列表, 总数)
         """
@@ -180,6 +182,7 @@ class UserCanvasService(CommonService):
             User.avatar.label("tenant_avatar"),
             cls.model.update_time,
             cls.model.canvas_category,
+            cls.model.tags,
         ]
 
         base = (
@@ -202,6 +205,11 @@ class UserCanvasService(CommonService):
 
         if canvas_category:
             base = base.where(cls.model.canvas_category == canvas_category)
+
+        tag_list = [tag.strip() for tag in (tags or "").split(",") if tag.strip()]
+        if tag_list:
+            wrapped = func.concat(",", cls.model.tags, ",")
+            base = base.where(or_(*(wrapped.contains(f",{tag},", autoescape=True) for tag in tag_list)))
 
         order_col = getattr(cls.model, orderby)
         base = base.order_by(sa_desc(order_col) if desc else asc(order_col))
@@ -238,6 +246,64 @@ class UserCanvasService(CommonService):
                 agent["release_time"] = release_time_map.get(agent["id"])
 
         return agents_list, total
+
+    TAGS_FIELD_MAX = 512
+    TAG_MAX_LEN = 64
+
+    @classmethod
+    def normalize_tags(cls, tags: str | list[str]) -> str:
+        """Keep whole tokens, first spelling and order within the storage cap."""
+        cleaned = [tag.replace(",", " ").strip() for tag in tags] if isinstance(tags, list) else [tag.strip() for tag in tags.split(",")]
+        normalized: list[str] = []
+        seen: set[str] = set()
+        used = 0
+        for tag in cleaned:
+            tag = tag[: cls.TAG_MAX_LEN]
+            key = tag.lower()
+            if not tag or key in seen:
+                continue
+            extra = len(tag) + bool(normalized)
+            if used + extra > cls.TAGS_FIELD_MAX:
+                break
+            seen.add(key)
+            normalized.append(tag)
+            used += extra
+        return ",".join(normalized)
+
+    @classmethod
+    async def list_tags(cls, db: AsyncSession, user_id: str, canvas_category: str | None = None) -> list[dict[str, str | int]]:
+        """Count tags within the same active own/team scope as Agent listing."""
+        joined_ids = (
+            select(UserTenant.tenant_id)
+            .join(Tenant, Tenant.id == UserTenant.tenant_id)
+            .where(
+                UserTenant.user_id == user_id,
+                UserTenant.status == StatusEnum.VALID.value,
+                UserTenant.role.in_([UserTenantRole.NORMAL, UserTenantRole.ADMIN]),
+                Tenant.status == StatusEnum.VALID.value,
+            )
+        )
+        stmt = (
+            select(cls.model.tags)
+            .join(User, User.id == cls.model.user_id)
+            .where(or_(cls.model.user_id == user_id, and_(cls.model.user_id.in_(joined_ids), cls.model.permission == TenantPermission.TEAM.value)))
+        )
+        if canvas_category:
+            stmt = stmt.where(cls.model.canvas_category == canvas_category)
+        counts: dict[str, int] = {}
+        for value in await db.scalars(stmt):
+            for tag in {token.strip() for token in (value or "").split(",") if token.strip()}:
+                counts[tag] = counts.get(tag, 0) + 1
+        return [{"tag": tag, "count": count} for tag, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+    @classmethod
+    async def update_tags(cls, db: AsyncSession, canvas_id: str, user_id: str, tags: str | list[str]) -> bool:
+        """Authorize in the write itself; readers cannot mutate team Agents."""
+        updated_id = await db.scalar(update(cls.model).where(cls.model.id == canvas_id, cls.model.user_id == user_id).values(tags=cls.normalize_tags(tags)).returning(cls.model.id))
+        if updated_id is None:
+            return False
+        await db.commit()
+        return True
 
     @classmethod
     def accessible(cls, db: Session, canvas_id: str, tenant_id: str) -> bool:

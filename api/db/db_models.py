@@ -3318,6 +3318,7 @@ class UserCanvas(BaseModel):
     description: Mapped[str | None] = mapped_column(Text, index=False, nullable=True, doc="Canvas description")
     canvas_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, doc="Canvas type")
     canvas_category: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="agent_canvas", doc="Canvas category: agent_canvas|dataflow_canvas")
+    tags: Mapped[str] = mapped_column(String(512), index=True, nullable=False, default="", server_default=text("''"), doc="Comma-separated Agent tags")
     dsl: Mapped[dict | None] = mapped_column(JSONB, index=False, nullable=True, default={})
 
 

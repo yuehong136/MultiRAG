@@ -34,7 +34,7 @@ from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
-from api.db.db_models import API4Conversation, Task, UserCanvas, UserCanvasVersion, get_async_db, get_db
+from api.db.db_models import API4Conversation, Task, User, UserCanvas, UserCanvasVersion, get_async_db, get_db
 from api.db.services.agent_execution_service import execution_context, save_agent_session
 from api.db.services.canvas_service import (
     API4ConversationService,
@@ -98,6 +98,11 @@ def _mcp_delegation_error_response(error: McpDelegationError) -> JSONResponse:
 
 
 # ==================== Pydantic Models ====================
+
+
+class UpdateAgentTagsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    tags: str | list[str] = Field(..., description="Comma-separated tags or a list of tag strings; empty clears tags")
 
 
 class SaveCanvasRequest(BaseModel):
@@ -1500,6 +1505,27 @@ async def getversion(
         return get_data_error_result(retmsg=f"Error getting history file: {e}")
 
 
+@router.get("/agents/tags", summary="Aggregate visible Agent tags")
+async def list_agent_tags(
+    canvas_category: str | None = Query(None),
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+) -> JSONResponse:
+    return get_json_result(data=await UserCanvasService.list_tags(db, user.id, canvas_category))
+
+
+@router.put("/agents/{canvas_id}/tags", summary="Update tags on an owned Agent")
+async def update_agent_tags(
+    canvas_id: str,
+    request_body: UpdateAgentTagsRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user: Principal = Depends(async_current_user),
+) -> JSONResponse:
+    if not await UserCanvasService.update_tags(db, canvas_id, user.id, request_body.tags):
+        return get_json_result(data=False, retmsg="Agent not found or no permission.", retcode=RetCode.OPERATING_ERROR)
+    return get_json_result(data=True)
+
+
 @router.get("/agents", summary="列出Canvas", response_description="成功获取Canvas列表")
 def list_canvas(
     keywords: str = Query("", description="搜索关键词"),
@@ -1509,9 +1535,10 @@ def list_canvas(
     desc: bool = Query(True, description="是否降序"),
     canvas_category: str | None = Query(None, description="Canvas类别"),
     owner_ids: str = Query("", description="所有者ID列表，逗号分隔"),
+    tags: str = Query("", description="Exact comma-separated tags, matched with OR"),
     db: Session = Depends(get_db),
-    user=Depends(manager),
-):
+    user: User = Depends(manager),
+) -> JSONResponse:
     """
     获取Canvas列表
 
@@ -1525,6 +1552,7 @@ def list_canvas(
     - **desc**: 是否降序排列
     - **canvas_category**: Canvas类别筛选
     - **owner_ids**: 所有者ID列表，逗号分隔
+    - **tags**: 标签列表，逗号分隔；多个标签为 OR，按完整 token 匹配
 
     返回：
     - dict: 包含以下字段
@@ -1561,12 +1589,12 @@ def list_canvas(
 
     if not owner_id_list:
         # 默认模式：获取用户有权限的所有Canvas
-        canvas, total = UserCanvasService.get_by_tenant_ids(db, list(authorized_owner_ids), user.id, page, page_size, orderby, desc, keywords, canvas_category)
+        canvas, total = UserCanvasService.get_by_tenant_ids(db, list(authorized_owner_ids), user.id, page, page_size, orderby, desc, keywords, canvas_category, tags)
     else:
         # 指定所有者模式
         if set(owner_id_list) - authorized_owner_ids:
             return get_json_result(data=False, retmsg="Only authorized owner_ids can be queried.", retcode=RetCode.OPERATING_ERROR)
-        canvas, total = UserCanvasService.get_by_tenant_ids(db, owner_id_list, user.id, 0, 0, orderby, desc, keywords, canvas_category)
+        canvas, total = UserCanvasService.get_by_tenant_ids(db, owner_id_list, user.id, 0, 0, orderby, desc, keywords, canvas_category, tags)
 
     return get_json_result(data={"canvas": canvas, "total": total})
 
