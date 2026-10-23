@@ -648,14 +648,11 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         await db.rollback()
         return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
 
-    if stored_category != CanvasCategory.DataFlow:
-        try:
-            files, inputs = await FileService.resolve_agent_runtime_inputs(user.id, files, inputs)
-        except RuntimeAttachmentError as error:
-            return get_data_error_result(retmsg=str(error))
-
     try:
         replica_payload = await asyncio.to_thread(CanvasReplicaService.load_for_run, canvas_id=req["id"], tenant_id=tenant_id, runtime_user_id=user_id)
+        if stored_category != CanvasCategory.DataFlow:
+            runtime_dsl = replica_payload["dsl"] if replica_payload is not None else draft_dsl
+            files, inputs = await FileService.resolve_agent_runtime_inputs(user.id, files, inputs, dsl=runtime_dsl)
         if replica_payload is None:
             replica_payload = await asyncio.to_thread(
                 CanvasReplicaService.bootstrap,
@@ -677,6 +674,13 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     canvas_title = replica_payload.get("title", "")
     canvas_category = replica_payload.get("canvas_category", CanvasCategory.Agent)
     dsl_str = json.dumps(replica_dsl, ensure_ascii=False)
+    if stored_category != CanvasCategory.DataFlow:
+        try:
+            # Bootstrap can observe a concurrently created replica. Validate the
+            # executable snapshot as well before creating or scheduling Canvas.
+            await asyncio.to_thread(FileService.validate_agent_file_inputs, user.id, inputs, replica_dsl)
+        except RuntimeAttachmentError as error:
+            return get_data_error_result(retmsg=str(error))
 
     # DataFlow模式（只取所需字段，不让 ORM 对象活到流式期）
     if stored_category == CanvasCategory.DataFlow:

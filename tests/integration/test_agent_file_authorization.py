@@ -49,6 +49,7 @@ def agent_files(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setitem(resources._state, "storage", storage)
     io: list[str] = []
     writes: list[str] = []
+    object_calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def sql_write(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
         if statement.lstrip().split(maxsplit=1)[0].lower() in {"insert", "update", "delete"}:
@@ -59,6 +60,7 @@ def agent_files(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tm
 
         def observed(*args: Any, _original: Any = original, _method: str = method, **kwargs: Any) -> Any:
             io.append(_method)
+            object_calls.append((_method, args))
             return _original(*args, **kwargs)
 
         monkeypatch.setattr(storage, method, observed)
@@ -96,7 +98,9 @@ def agent_files(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tm
             db.commit()
         sa.event.listen(sa.engine.Engine, "before_cursor_execute", sql_write)
         cleanup.callback(sa.event.remove, sa.engine.Engine, "before_cursor_execute", sql_write)
-        yield dict(env, agents=agents, beta=beta, bucket=record["bucket"], storage=storage, object_client=client, io=io, writes=writes, record=record, record_path=record_path)
+        yield dict(
+            env, agents=agents, beta=beta, bucket=record["bucket"], storage=storage, object_client=client, io=io, object_calls=object_calls, writes=writes, record=record, record_path=record_path
+        )
 
 
 def snapshot(env: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
@@ -322,3 +326,123 @@ def test_foreign_uploaded_descriptor_denied_before_run_side_effects(agent_files:
     )
     assert response.json()["code"] != 0
     assert snapshot(env) == before and not env["writes"] and len(env["task_ids"]) == tasks
+
+
+def excel_dsl(ref: str = "{begin@sheet}") -> dict[str, Any]:
+    dsl = message_dsl("{Excel:read@markdown}")
+    dsl["components"]["begin"]["downstream"] = ["Excel:read"]
+    dsl["components"]["Message:answer"]["upstream"] = ["Excel:read"]
+    dsl["components"]["Excel:read"] = {
+        "obj": {"component_name": "ExcelProcessor", "params": {"input_files": [ref]}},
+        "upstream": ["begin"],
+        "downstream": ["Message:answer"],
+    }
+    return dsl
+
+
+def excel_input_forms(descriptor: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    return [
+        ("{begin@sheet}", {"type": "object", "value": descriptor}),
+        ("begin@sheet", {"type": "string", "value": descriptor}),
+        ("{begin@sheet}", {"type": "object", "value": {"file_id": descriptor["id"], "created_by": descriptor["created_by"], "filename": "spoof.csv"}}),
+        ("{begin@sheet.payload}", {"type": "object", "value": {"payload": descriptor}}),
+        ("{begin@sheet.-1}", {"type": "array<object>", "value": [descriptor]}),
+        ("{begin@sheet.payload.+0}", {"type": "string", "value": json.dumps({"payload": [descriptor]})}),
+        ("{begin@sheet.payload.00}", {"type": "object", "value": {"payload": json.dumps([descriptor])}}),
+        ("{begin@sheet}", {"type": "array<object>", "value": [[descriptor]]}),
+    ]
+
+
+def test_untyped_excel_inputs_denied_before_foreign_get_sql_or_runtime(agent_files: dict[str, Any]) -> None:
+    env = agent_files
+    descriptor = upload(env, agent="foreign", credential=f"Bearer {env['jwts'][1]}", files={"file": ("secret.csv", b"secret\nforeign-marker\n", "text/csv")}).json()["data"]
+    for ref, definition in excel_input_forms(descriptor):
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(UserCanvas).where(UserCanvas.id == env["agents"]["private"]).values(dsl=excel_dsl(ref)))
+            db.commit()
+        before = snapshot(env)
+        tasks = len(env["task_ids"])
+        env["writes"].clear()
+        env["object_calls"].clear()
+        for endpoint, headers, extra in [
+            (f"/api/v1/agentbots/{env['agents']['private']}/completions", {"Authorization": f"Bearer {env['beta']['owner']}"}, {}),
+            ("/api/v1/agents/chat/completions", {"Authorization": f"Bearer {env['jwts'][0]}"}, {"agent_id": env["agents"]["private"]}),
+        ]:
+            response = requests.post(f"{env['base']}{endpoint}", headers=headers, json={"inputs": {"sheet": definition}, "stream": False, **extra}, timeout=30)
+            assert response.json().get("retcode", response.json().get("code")) != 0, response.text
+            assert "foreign-marker" not in response.text
+        assert not env["writes"] and len(env["task_ids"]) == tasks and snapshot(env) == before
+        assert not [call for call in env["object_calls"] if call[0] == "get"]
+
+
+def test_excel_consumption_preserves_upload_metadata_forms_and_team_owner(agent_files: dict[str, Any]) -> None:
+    from tests.support.agent_update_release import update
+
+    env = agent_files
+    own = upload(env, credential=f"Bearer {env['beta']['owner']}", files={"file": ("actual.csv", b"value\nowned-marker\n", "text/csv")}).json()["data"]
+    forged = {**own, "created_by": env["owners"][1], "name": "fake.xlsx", "mime_type": "application/pdf"}
+    for ref, definition in excel_input_forms(forged):
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(UserCanvas).where(UserCanvas.id == env["agents"]["private"]).values(dsl=excel_dsl(ref)))
+            db.commit()
+        response = requests.post(
+            f"{env['base']}/api/v1/agentbots/{env['agents']['private']}/completions",
+            headers={"Authorization": f"Bearer {env['beta']['owner']}"},
+            json={"inputs": {"sheet": definition}, "stream": False},
+            timeout=30,
+        )
+        assert response.json()["code"] == 0 and "owned-marker" in response.text, response.text
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": env["agents"]["private"], "inputs": {"sheet": definition}, "stream": False}, timeout=30)
+    assert response.json()["retcode"] == 0 and "owned-marker" in response.text, response.text
+    member = upload(env, agent="team", credential=f"Bearer {env['jwts'][1]}", files={"file": ("member.csv", b"value\nmember-marker\n", "text/csv")}).json()["data"]
+    update(env, env["agents"]["team"], {"dsl": excel_dsl(), "release": True})
+    for definition in [{"type": "object", "value": {**member, "created_by": env["owners"][0]}}, {"type": "object", "value": {"id": member["id"]}}]:
+        response = requests.post(
+            f"{env['base']}/api/v1/agents/chat/completions",
+            headers={"Authorization": f"Bearer {env['jwts'][1]}"},
+            json={"agent_id": env["agents"]["team"], "release": True, "inputs": {"sheet": definition}, "stream": False},
+            timeout=30,
+        )
+        assert response.json()["retcode"] == 0 and "member-marker" in response.text, response.text
+    assert env["runtime_tenants"][-1] == env["owners"][0]
+    before = snapshot(env)
+    tasks = len(env["task_ids"])
+    env["writes"].clear()
+    env["object_calls"].clear()
+    response = requests.post(
+        f"{env['base']}/api/v1/agents/chat/completions",
+        headers={"Authorization": f"Bearer {env['jwts'][1]}"},
+        json={"agent_id": env["agents"]["team"], "release": True, "inputs": {"sheet": {"type": "object", "value": own}}, "stream": False},
+        timeout=30,
+    )
+    assert response.json()["retcode"] != 0 and not env["writes"] and len(env["task_ids"]) == tasks and snapshot(env) == before
+    assert not [call for call in env["object_calls"] if call[0] == "get"]
+
+
+def test_preflight_uses_executable_replica_resume_and_fillup_snapshot(agent_files: dict[str, Any]) -> None:
+    from api.apps.services.canvas_replica_service import CanvasReplicaService
+
+    env = agent_files
+    descriptor = upload(env, agent="foreign", credential=f"Bearer {env['jwts'][1]}").json()["data"]
+    dsl = excel_dsl("{UserFillUp:next@sheet.payload.-1}")
+    dsl["components"]["UserFillUp:next"] = {"obj": {"component_name": "UserFillUp", "params": {}}, "upstream": ["begin"], "downstream": ["Excel:read"]}
+    # Current SQL draft deliberately has no file consumer; executable snapshots
+    # come from the authenticated replica or existing session instead.
+    CanvasReplicaService.bootstrap(env["agents"]["private"], env["owners"][0], env["owners"][0], dsl)
+    session_id = uuid4().hex
+    with Session(env["engine"]) as db:
+        db.add(API4Conversation(id=session_id, dialog_id=env["agents"]["private"], user_id="display", source="agent", dsl=json.dumps(dsl), message=[]))
+        db.commit()
+    payload = {"inputs": {"sheet": {"type": "string", "value": json.dumps({"payload": [descriptor]})}}, "stream": False}
+    before = snapshot(env)
+    tasks = len(env["task_ids"])
+    env["object_calls"].clear()
+    env["writes"].clear()
+    response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": env["agents"]["private"], **payload}, timeout=30)
+    assert response.json()["retcode"] != 0, response.text
+    response = requests.post(
+        f"{env['base']}/api/v1/agentbots/{env['agents']['private']}/completions", headers={"Authorization": f"Bearer {env['beta']['owner']}"}, json={**payload, "session_id": session_id}, timeout=30
+    )
+    assert response.json()["code"] != 0, response.text
+    assert not env["writes"] and len(env["task_ids"]) == tasks and snapshot(env) == before
+    assert not [call for call in env["object_calls"] if call[0] == "get"]

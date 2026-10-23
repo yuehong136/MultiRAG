@@ -275,6 +275,8 @@ class ChatAgentAdapter:
         if file_ids and not self.upload_owner_id:
             raise RuntimeAttachmentError("Attachment owner is unavailable.")
         descriptors = await FileService.resolve_runtime_uploads(self.upload_owner_id or "", file_ids)
+        # Model tenancy can differ from the authenticated attachment caller.
+        self.canvas_mock.artifact_owner_id = self.upload_owner_id or ""
         try:
             parsed = await self.canvas_mock.get_files_async(descriptors)
             if any(not isinstance(item, str) or not item.strip() for item in parsed):

@@ -31,6 +31,7 @@ from common.constants import MAXIMUM_PAGE_NUMBER, FileSource, ParserType, TaskSt
 from common.misc_utils import get_uuid
 from common.safe_crawl import SafeCrawlNetwork
 from common.ssrf_guard import assert_url_is_safe, pin_dns
+from common.variable_utils import get_variable_param_value
 from core.llm.cv_model.models.gptv4 import GptV4
 
 
@@ -692,42 +693,77 @@ class FileService(CommonService):
             raise RuntimeError("Failed to store uploaded file.")
 
     @staticmethod
-    async def resolve_runtime_uploads(owner_id: str, file_ids: list[str]) -> list[dict[str, Any]]:
-        """Restore server-written descriptors from the authenticated owner's namespace."""
-
-        def restore() -> list[dict[str, Any]]:
-            descriptors: list[dict[str, Any]] = []
-            for location in dict.fromkeys(file_ids):
-                if not re.fullmatch(r"[0-9a-f]{32}", location):
-                    raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
-                key = FileService._runtime_descriptor_key(location)
-                bucket = f"{owner_id}-downloads"
-                if not settings.STORAGE_IMPL.obj_exist(bucket, key) or not settings.STORAGE_IMPL.obj_exist(bucket, location):
-                    raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
-                raw = FileService.get_blob(owner_id, key)
-                try:
-                    descriptor = json.loads(raw)
-                    valid = (
-                        isinstance(descriptor, dict)
-                        and descriptor.get("id") == location
-                        and descriptor.get("created_by") == owner_id
-                        and all(isinstance(descriptor.get(field), str) for field in ("name", "mime_type", "extension"))
-                        and type(descriptor.get("size")) is int
-                        and descriptor["size"] >= 0
-                        and isinstance(descriptor.get("created_at"), (int, float))
-                        and descriptor.get("preview_url") is None
-                    )
-                except (ValueError, TypeError):
-                    valid = False
-                if not valid:
-                    raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
-                descriptors.append(descriptor)
-            return descriptors
-
-        return await asyncio.to_thread(restore)
+    def resolve_runtime_upload(owner_id: str, location: str) -> dict[str, Any]:
+        """Restore one descriptor without accepting a caller-selected namespace."""
+        if not isinstance(location, str) or not re.fullmatch(r"[0-9a-f]{32}", location):
+            raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+        key = FileService._runtime_descriptor_key(location)
+        bucket = f"{owner_id}-downloads"
+        if not settings.STORAGE_IMPL.obj_exist(bucket, key) or not settings.STORAGE_IMPL.obj_exist(bucket, location):
+            raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+        raw = FileService.get_blob(owner_id, key)
+        try:
+            descriptor = json.loads(raw)
+            valid = (
+                isinstance(descriptor, dict)
+                and descriptor.get("id") == location
+                and descriptor.get("created_by") == owner_id
+                and all(isinstance(descriptor.get(field), str) for field in ("name", "mime_type", "extension"))
+                and type(descriptor.get("size")) is int
+                and descriptor["size"] >= 0
+                and isinstance(descriptor.get("created_at"), (int, float))
+                and descriptor.get("preview_url") is None
+            )
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+        return descriptor
 
     @staticmethod
-    async def resolve_agent_runtime_inputs(owner_id: str, files: list[Any] | None, inputs: dict[str, Any] | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    async def resolve_runtime_uploads(owner_id: str, file_ids: list[str]) -> list[dict[str, Any]]:
+        """Restore server-written descriptors from the authenticated owner's namespace."""
+        return await asyncio.to_thread(lambda: [FileService.resolve_runtime_upload(owner_id, location) for location in dict.fromkeys(file_ids)])
+
+    @staticmethod
+    def resolve_runtime_file_reference(owner_id: str, value: Any) -> dict[str, Any] | None:
+        """Match Excel's file-value forms without classifying ordinary objects."""
+        while isinstance(value, list) and value:
+            value = value[0]
+        if isinstance(value, dict):
+            location = value.get("id") or value.get("file_id")
+            if location:
+                return FileService.resolve_runtime_upload(owner_id, location)
+        return None
+
+    @staticmethod
+    def validate_agent_file_inputs(owner_id: str, inputs: dict[str, Any], dsl: str | dict[str, Any]) -> None:
+        """Preflight actual DSL file consumers, independently of client type labels."""
+        parsed = json.loads(dsl) if isinstance(dsl, str) else dsl
+        components = parsed.get("components", {})
+        for component in components.values():
+            obj = component.get("obj", {})
+            if obj.get("component_name") != "ExcelProcessor":
+                continue
+            for expression in obj.get("params", {}).get("input_files", []) or []:
+                expression = expression.strip("{").strip("}").strip(" ").strip("{").strip("}")
+                if "@" not in expression:
+                    continue
+                component_id, variable = expression.split("@")
+                source = components.get(component_id, {}).get("obj", {})
+                if source.get("component_name") not in {"Begin", "UserFillUp"}:
+                    continue
+                root, _, path = variable.partition(".")
+                definition = inputs.get(root)
+                if not isinstance(definition, dict):
+                    continue
+                value = get_variable_param_value(definition.get("value"), path)
+                FileService.resolve_runtime_file_reference(owner_id, value)
+
+    @staticmethod
+    async def resolve_agent_runtime_inputs(
+        owner_id: str, files: list[Any] | None, inputs: dict[str, Any] | None, *, dsl: str | dict[str, Any] | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Replace client file metadata/authority with owner-bound descriptors."""
 
         async def restore(values: list[Any]) -> list[dict[str, Any]]:
@@ -745,6 +781,8 @@ class FileService(CommonService):
                 continue
             restored = await restore(value if isinstance(value, list) else [value])
             restored_inputs[key] = {**definition, "value": restored if isinstance(value, list) else restored[0]}
+        if dsl is not None:
+            await asyncio.to_thread(FileService.validate_agent_file_inputs, owner_id, restored_inputs, dsl)
         return restored_files, restored_inputs
 
     @staticmethod

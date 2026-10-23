@@ -16,10 +16,10 @@
 import json
 import re
 from functools import partial
+from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
 from agent.persondata_input import decrypt_persondata_input_value, is_persondata_input
-from api.db.services.file_service import FileService
 
 
 class UserFillUpParam(ComponentParamBase):
@@ -36,7 +36,7 @@ class UserFillUpParam(ComponentParamBase):
 class UserFillUp(ComponentBase):
     component_name = "UserFillUp"
 
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("UserFillUp processing"):
             return
 
@@ -73,7 +73,7 @@ class UserFillUp(ComponentBase):
                     file_value = v["value"]
                     # Support both single file (backward compatibility) and multiple files
                     files = file_value if isinstance(file_value, list) else [file_value]
-                    v = FileService.get_files(files, layout_recognize=layout_recognize)
+                    v = self._canvas.get_files(files, layout_recognize=layout_recognize)
             elif is_persondata_input(v):
                 v = decrypt_persondata_input_value(v, self._canvas)
             else:

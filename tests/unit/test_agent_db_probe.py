@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import requests
 
 from api.apps.services import agent_db_probe as probe
 from common import ssrf_guard
@@ -132,3 +133,43 @@ def test_db2_false_cleanup_receipts_are_failures(monkeypatch: pytest.MonkeyPatch
         monkeypatch.setattr(probe, "import_module", lambda _: driver)
         with pytest.raises(RuntimeError, match="cleanup failed"):
             run("IBM DB2")
+
+
+@pytest.mark.parametrize("method", ["POST", "GET", "DELETE"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8080/private",
+        "http://[::1]:8080/private",
+        "http://[::ffff:127.0.0.1]:8080/private",
+        "https://db.example:8443/cancel",
+        "http://db.example:8081/page",
+        "http://db.example:0/page",
+        "http://evil.example:8080/page",
+        "http://user:password@db.example:8080/page",
+        "http://db.example:8080/page#fragment",
+    ],
+)
+def test_trino_every_method_rejects_unsafe_url_before_adapter(monkeypatch: pytest.MonkeyPatch, method: str, url: str) -> None:
+    monkeypatch.setattr(requests.Session, "send", lambda *_a, **_k: pytest.fail("unsafe URL reached transport"))
+    session = probe._TrinoProbeSession("http", "db.example", 8080, "1.1.1.1")
+    with pytest.raises(probe.DatabaseProbePolicyError):
+        session.send(requests.Request(method, url).prepare())
+    session.close()
+
+
+def test_trino_cleanup_only_error_closes_session_and_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = probe._TrinoProbeSession("http", "db.example", 8080, "1.1.1.1")
+    session._cancel_uri = "http://db.example:8080/v1/statement/query"
+    closed = []
+    response = requests.Response()
+    response.status_code = 500
+    response._content = b""
+    response._content_consumed = True
+    monkeypatch.setattr(session, "delete", lambda *_a, **_k: response)
+    monkeypatch.setattr(requests.Session, "close", lambda _: closed.append(True))
+    with pytest.raises(RuntimeError, match="cancellation failed"):
+        session.close()
+    assert closed == [True]
+    session.close()
+    assert closed == [True]

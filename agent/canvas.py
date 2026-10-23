@@ -41,6 +41,7 @@ from api.db.services.task_service import has_canceled
 from common.constants import LLMType
 from common.exceptions import TaskCanceledException
 from common.misc_utils import get_uuid, hash_str2int
+from common.variable_utils import get_variable_param_value
 from core.prompts.generator import chunks_format
 from core.utils.redis_conn import REDIS_CONN
 
@@ -241,33 +242,7 @@ class Graph:
         return self.get_variable_param_value(root_val, rest)
 
     def get_variable_param_value(self, obj: Any, path: str) -> Any:
-        cur = obj
-        if not path:
-            return cur
-        for key in path.split("."):
-            if cur is None:
-                return None
-
-            if isinstance(cur, str):
-                try:
-                    cur = json.loads(cur)
-                except Exception:
-                    return None
-
-            if isinstance(cur, dict):
-                cur = cur.get(key)
-                continue
-
-            if isinstance(cur, (list, tuple)):
-                try:
-                    idx = int(key)
-                    cur = cur[idx]
-                except Exception:
-                    return None
-                continue
-
-            cur = getattr(cur, key, None)
-        return cur
+        return get_variable_param_value(obj, path)
 
     def set_variable_value(self, exp: str, value):
         exp = exp.strip("{").strip("}").strip(" ").strip("{").strip("}")
@@ -819,16 +794,18 @@ class Canvas(Graph):
     def get_component_input_elements(self, cpnnm):
         return self.components[cpnnm]["obj"].get_input_elements()
 
-    async def get_files_async(self, files: list[dict] | None, layout_recognize: str = None) -> list[str]:
+    async def get_files_async(self, files: list[dict] | None, layout_recognize: str | None = None) -> list[str]:
         if not files:
             return []
 
-        def image_to_base64(file):
-            return "data:{};base64,{}".format(file["mime_type"], base64.b64encode(FileService.get_blob(file["created_by"], file["id"])).decode("utf-8"))
+        files = await FileService.resolve_runtime_uploads(self.artifact_owner_id, [file["id"] for file in files])
 
-        def parse_file(file):
-            blob = FileService.get_blob(file["created_by"], file["id"])
-            return FileService.parse(file["name"], blob, True, file["created_by"], layout_recognize)
+        def image_to_base64(file: dict[str, Any]) -> str:
+            return "data:{};base64,{}".format(file["mime_type"], base64.b64encode(FileService.get_blob(self.artifact_owner_id, file["id"])).decode("utf-8"))
+
+        def parse_file(file: dict[str, Any]) -> str:
+            blob = FileService.get_blob(self.artifact_owner_id, file["id"])
+            return FileService.parse(file["name"], blob, True, self.artifact_owner_id, layout_recognize)
 
         loop = asyncio.get_running_loop()
         tasks = []
@@ -839,7 +816,7 @@ class Canvas(Graph):
             tasks.append(loop.run_in_executor(self._thread_pool, parse_file, file))
         return await asyncio.gather(*tasks)
 
-    def get_files(self, files: list[dict] | None, layout_recognize: str = None) -> list[str]:
+    def get_files(self, files: list[dict] | None, layout_recognize: str | None = None) -> list[str]:
         """
         Synchronous wrapper for get_files_async, used by sync component invoke paths.
         """

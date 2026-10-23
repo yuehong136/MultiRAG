@@ -13,9 +13,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+from typing import Any
+
 from agent.component.fillup import UserFillUp, UserFillUpParam
 from agent.persondata_input import decrypt_persondata_input_value, is_persondata_input
-from api.db.services.file_service import FileService
 
 
 class BeginParam(UserFillUpParam):
@@ -38,7 +39,7 @@ class BeginParam(UserFillUpParam):
 class Begin(UserFillUp):
     component_name = "Begin"
 
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("Begin processing"):
             return
 
@@ -54,7 +55,7 @@ class Begin(UserFillUp):
                     file_value = v["value"]
                     # Support both single file (backward compatibility) and multiple files
                     files = file_value if isinstance(file_value, list) else [file_value]
-                    v = FileService.get_files(files, layout_recognize=layout_recognize)
+                    v = self._canvas.get_files(files, layout_recognize=layout_recognize)
             elif is_persondata_input(v):
                 v = decrypt_persondata_input_value(v, self._canvas)
             else:

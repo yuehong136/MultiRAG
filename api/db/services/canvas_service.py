@@ -502,14 +502,19 @@ async def completion(
         owner = await db.scalar(select(UserCanvas.user_id).where(UserCanvas.id == agent_id))
         if owner != tenant_id:
             raise PermissionError("Agent does not belong to the authenticated tenant.")
+    runtime_dsl = prepared_run.dsl if prepared_run is not None else None
     if session_id:
         session = await db.get(API4Conversation, session_id)
         if session is None:
             raise LookupError("Session not found!")
         if session.dialog_id != agent_id or session.source != "agent":
             raise PermissionError("Session does not belong to the requested agent.")
+        if runtime_dsl is None:
+            runtime_dsl = session.dsl if isinstance(session.dsl, str) else json.dumps(session.dsl, ensure_ascii=False)
         del session
-    files, inputs = await FileService.resolve_agent_runtime_inputs(prepared_run.caller_id if prepared_run is not None else tenant_id, files, inputs)
+    if runtime_dsl is None:
+        runtime_dsl = await db.run_sync(lambda s: UserCanvasService.get_agent_dsl_with_release(s, agent_id, release_mode=release_mode == "true", tenant_id=tenant_id)[1])  # TODO(async-phase4)
+    files, inputs = await FileService.resolve_agent_runtime_inputs(prepared_run.caller_id if prepared_run is not None else tenant_id, files, inputs, dsl=runtime_dsl)
 
     def _setup(s: Session) -> tuple[dict[str, Any], str, str]:
         """会话与 DSL 装配。产物**只有纯 dict/str**——ORM 对象不得跨下方的流式期存活。"""
@@ -542,21 +547,16 @@ async def completion(
                 conv.message = []
             if not isinstance(conv.dsl, str):
                 conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
-            return conv.to_dict(), conv.dsl, agent_id
+            return conv.to_dict(), runtime_dsl, agent_id
 
-        cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
-            s,
-            agent_id,
-            release_mode=release_mode == "true",
-            tenant_id=tenant_id,
-        )
+        dsl = runtime_dsl
         # 记录建会话时 canvas 的版本标题（按 release_mode 取已发布/最新版本）
-        version_title = UserCanvasVersionService.get_latest_version_title(s, cvs.id, release_mode=release_mode == "true")
+        version_title = UserCanvasVersionService.get_latest_version_title(s, agent_id, release_mode=release_mode == "true")
         # Use the persisted instance so SQLAlchemy-side defaults are populated.
         conv = API4ConversationService.save(
             s,
             id=get_uuid(),
-            dialog_id=cvs.id,
+            dialog_id=agent_id,
             user_id=user_id,
             message=[],
             source="agent",
@@ -566,7 +566,7 @@ async def completion(
         )
         if not conv.message:
             conv.message = []
-        return conv.to_dict(), dsl, cvs.id
+        return conv.to_dict(), dsl, agent_id
 
     conv, dsl, canvas_id = await db.run_sync(_setup)  # TODO(async-phase4)
     session_id = conv["id"]

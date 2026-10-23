@@ -25,6 +25,7 @@ import logging
 import os
 from abc import ABC
 from io import BytesIO
+from typing import Any
 
 import pandas as pd
 
@@ -110,42 +111,19 @@ class ExcelProcessor(ComponentBase, ABC):
         else:
             self.set_output("summary", f"Unknown operation: {operation}")
 
-    def _get_file_content(self, file_ref: str) -> tuple[bytes, str]:
-        """
-        Get file content from a variable reference.
-        Returns (content_bytes, filename).
-        """
-        value = self._canvas.get_variable_value(file_ref)
-        if value is None:
-            return None, None
+    def _get_file_content(self, file_ref: str) -> tuple[bytes | None, str | None]:
+        """Read a server descriptor from the trusted caller's upload namespace."""
+        return self._get_file_content_from_list(self._canvas.get_variable_value(file_ref))
 
-        # Handle different value formats
-        if isinstance(value, dict):
-            # File reference from Begin/UserFillUp component
-            file_id = value.get("id") or value.get("file_id")
-            created_by = value.get("created_by") or self._canvas.get_tenant_id()
-            filename = value.get("name") or value.get("filename", "unknown.xlsx")
-            if file_id:
-                content = FileService.get_blob(created_by, file_id)
-                return content, filename
-        elif isinstance(value, list) and len(value) > 0:
-            # List of file references - return first
-            return self._get_file_content_from_list(value[0])
-        elif isinstance(value, str):
-            # Could be base64 encoded or a path
-            if value.startswith("data:"):
-                import base64
+    def _get_file_content_from_list(self, value: Any) -> tuple[bytes | None, str | None]:
+        descriptor = FileService.resolve_runtime_file_reference(self._canvas.artifact_owner_id, value)
+        if descriptor is not None:
+            return FileService.get_blob(self._canvas.artifact_owner_id, descriptor["id"]), descriptor["name"]
+        if isinstance(value, str) and value.startswith("data:"):
+            import base64
 
-                # Extract base64 content
-                _, encoded = value.split(",", 1)
-                return base64.b64decode(encoded), "uploaded.xlsx"
-
-        return None, None
-
-    def _get_file_content_from_list(self, item) -> tuple[bytes, str]:
-        """Extract file content from a list item."""
-        if isinstance(item, dict):
-            return self._get_file_content(item)
+            _, encoded = value.split(",", 1)
+            return base64.b64decode(encoded), "uploaded.xlsx"
         return None, None
 
     def _parse_excel_to_dataframes(self, content: bytes, filename: str) -> dict[str, pd.DataFrame]:

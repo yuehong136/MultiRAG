@@ -24,8 +24,22 @@ Agent debug 与普通/公开会话运行，在消费消息文件或 Begin/UserFi
 公开运行先校验 Agent 属于凭据租户；恢复 session 先校验其 `dialog_id` 和 `source`。
 外部显示用 `user_id` 不能改变文件空间或 session 归属。
 
+文件权限不由请求的 `inputs[*].type` 决定。入口按实际执行的草稿 replica、发布快照或
+恢复会话 DSL，预检 ExcelProcessor 对 Begin/UserFillUp 输入的文件引用；对象、
+`file_id` 别名、嵌套数组和 JSON 字符串路径使用与 Canvas 相同的取值规则。
+这些直接输入在对象内容读取、SQL 写入和运行调度之前拒绝。普通业务对象不会仅因包含
+`id` 而被当作文件。动态组件输出及单组件调试仍在实际消费点校验：Begin/UserFillUp
+委托 Canvas，Canvas 和 ExcelProcessor 均使用进程内可信调用者身份恢复上传描述符，
+然后读取该空间的字节。TEAM 的资源租户与上传调用者可以不同，不回退到资源所有者。
+
 `POST /api/v1/agents/test_db_connection` 保留登录权限和原有数据库类型。它先按共享 SSRF
-策略解析主机，所有 DNS 结果均须为公网地址，并把校验后的 IP 交给驱动，阻止重绑定。
+策略解析主机，所有 DNS 结果均须为公网地址。原生数据库驱动连接校验后的 IP；
+Trino 保留原始主机名用于 HTTPS 证书、SNI 与 Host，所有 HTTP 请求固定到已校验 IP。
+Trino 的 POST、分页 GET 与取消 DELETE 只能访问最初的 scheme/host/port，拒绝
+userinfo、fragment、跨源 URI 和所有重定向；关闭环境及驱动代理和 netrc，认证不会离开该源。
+保留 `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` 配置的 HTTPS 信任。
+探测只接受 inline 结果，提前拒绝会让驱动另建会话的 spooling 响应。被拒响应中已验证的
+同源 continuation 仍用于取消；不向不安全 URI 发送清理请求。
 该用户输入入口没有私网例外。连接只执行固定探测查询；已获取的结果、cursor、连接和
 engine 在成功与失败时都释放。清理失败不会覆盖已有主错误，也不会被报告为成功。
 驱动错误和连接字符串不向响应或日志回显；SQLAlchemy URL 与原生驱动参数避免凭据
@@ -36,3 +50,9 @@ PostgreSQL 和自有 MinIO 对象验证授权矩阵、字节/描述符、合法�
 拒绝，独立检查 SQL、对象和运行副作用。PostgreSQL 正向探测只在测试边界把目标替换为
 隔离库；真实私网拒绝仍单独验证，生产策略不放开。其余驱动的故障释放用单元测试覆盖，
 不代表已连接真实 MSSQL、DB2 或 Trino 服务。
+
+`tests/manual/test_agent_trino_probe_transport.py` 是显式运行的可选驱动验收，需要独立
+安装官方 Trino 客户端及当前项目依赖。它使用自有 HTTPS/HTTP 服务、临时证书和真实
+Requests 会话，覆盖同源分页、Basic 认证、DNS 固定、代理、恶意 URI、redirect、
+spooling 和取消清理。初始主机校验仅在测试中替换以允许自有 loopback 服务；它不验证
+公网 Trino 服务、生产驱动版本或服务端部署。默认项目依赖与 CI 不因此增加 Trino。
