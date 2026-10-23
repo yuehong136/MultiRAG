@@ -177,3 +177,18 @@ func (h *DatasetsHandler) DeleteDatasets(c *gin.Context) {
 		"data": result,
 	})
 }
+
+// GetDataset handles GET /api/v1/datasets/:dataset_id.
+func (h *DatasetsHandler) GetDataset(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	data, code, err := h.datasetsService.GetDataset(c.Request.Context(), c.Param("dataset_id"), user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": common.CodeSuccess, "data": data})
+}

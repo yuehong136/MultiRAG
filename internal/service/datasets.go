@@ -17,6 +17,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,8 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 )
+
+var ErrDatasetAccessDenied = errors.New("dataset is not accessible")
 
 var (
 	datasetAllowedChunkMethods = map[string]struct{}{
@@ -61,6 +64,8 @@ var (
 // DatasetsService implements the RESTful dataset APIs from dataset_api.py.
 type DatasetsService struct {
 	kbDAO        *dao.KnowledgebaseDAO
+	documentDAO  *dao.DocumentDAO
+	connectorDAO *dao.ConnectorDAO
 	tenantDAO    *dao.TenantDAO
 	tenantLLMDAO *dao.TenantLLMDAO
 }
@@ -69,6 +74,8 @@ type DatasetsService struct {
 func NewDatasetsService() *DatasetsService {
 	return &DatasetsService{
 		kbDAO:        dao.NewKnowledgebaseDAO(),
+		documentDAO:  dao.NewDocumentDAO(),
+		connectorDAO: dao.NewConnectorDAO(),
 		tenantDAO:    dao.NewTenantDAO(),
 		tenantLLMDAO: dao.NewTenantLLMDAO(),
 	}
@@ -521,6 +528,32 @@ func (s *DatasetsService) DeleteDatasets(ids []string, deleteAll bool, tenantID 
 		"success_count": successCount,
 		"errors":        limitStrings(errorsList, 5),
 	}, common.CodeSuccess, nil
+}
+
+// GetDataset returns a readable dataset, its document size and public connector metadata.
+func (s *DatasetsService) GetDataset(ctx context.Context, datasetID, userID string) (map[string]interface{}, common.ErrorCode, error) {
+	datasetID, err := normalizeDatasetUUID1(strings.TrimSpace(datasetID))
+	if err != nil {
+		return nil, common.CodeDataError, err
+	}
+	kb, err := s.kbDAO.GetReadableByID(ctx, datasetID, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, common.CodeForbidden, ErrDatasetAccessDenied
+	}
+	if err != nil {
+		return nil, common.CodeServerError, errors.New("Database operation failed")
+	}
+	size, err := s.documentDAO.SumSizeByDatasetID(ctx, datasetID)
+	if err != nil {
+		return nil, common.CodeServerError, errors.New("Database operation failed")
+	}
+	connectors, err := s.connectorDAO.ListByDatasetID(ctx, datasetID, kb.TenantID)
+	if err != nil {
+		return nil, common.CodeServerError, errors.New("Database operation failed")
+	}
+	data := datasetToMap(kb)
+	data["size"], data["connectors"] = size, connectors
+	return data, common.CodeSuccess, nil
 }
 
 func (s *DatasetsService) deleteDataset(tenantID string, kb *entity.Knowledgebase) error {

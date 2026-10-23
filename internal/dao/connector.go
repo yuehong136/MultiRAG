@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"context"
 	"multirag/internal/entity"
 )
 
@@ -76,4 +77,26 @@ func (dao *ConnectorDAO) UpdateByID(id string, updates map[string]interface{}) e
 // DeleteByID delete connector by ID
 func (dao *ConnectorDAO) DeleteByID(id string) error {
 	return DB.Where("id = ?", id).Delete(&entity.Connector{}).Error
+}
+
+// ConnectorDatasetListItem is the public metadata for a linked connector.
+// Credentials and connector config are intentionally excluded.
+type ConnectorDatasetListItem struct {
+	ID        string `json:"id"`
+	Source    string `json:"source"`
+	Name      string `json:"name"`
+	AutoParse string `json:"auto_parse"`
+	Status    string `json:"status"`
+}
+
+// ListByDatasetID reads links only when the connector belongs to the dataset tenant.
+func (dao *ConnectorDAO) ListByDatasetID(ctx context.Context, datasetID, tenantID string) ([]*ConnectorDatasetListItem, error) {
+	connectors := make([]*ConnectorDatasetListItem, 0)
+	err := DB.WithContext(ctx).Model(&entity.Connector2Kb{}).
+		Select("connector.id, connector.source, connector.name, t_ai_connector2kb.auto_parse, connector.status").
+		Joins("JOIN t_ai_connectors AS connector ON t_ai_connector2kb.connector_id = connector.id").
+		Where("t_ai_connector2kb.kb_id = ? AND connector.tenant_id = ?", datasetID, tenantID).
+		Order("connector.id").
+		Scan(&connectors).Error
+	return connectors, err
 }

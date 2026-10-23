@@ -302,12 +302,9 @@ func (p *DatasetProvider) searchWithRetrieval(ctx stdctx.Context, opts *SearchOp
 	}
 
 	// Build retrieval request
-	// NOTE: MultiRAG's RetrievalTestRequest expects the field "kb_ids" (list),
-	// whereas RAGFlow's web handler reads "kb_id". We send "kb_ids" to match
-	// our Pydantic contract.
 	payload := map[string]interface{}{
-		"kb_ids":   kbIDs,
-		"question": opts.Query,
+		"dataset_ids": kbIDs,
+		"question":    opts.Query,
 	}
 
 	// Set top_k (default to 10 if not specified)
@@ -325,7 +322,7 @@ func (p *DatasetProvider) searchWithRetrieval(ctx stdctx.Context, opts *SearchOp
 	payload["similarity_threshold"] = threshold
 
 	// Call the Go retrieval API under /api/v1.
-	resp, err := p.httpClient.Request("POST", "/chunk/retrieval_test", "auto", nil, payload)
+	resp, err := p.httpClient.Request("POST", "/datasets/search", "auto", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval request failed: %w", err)
 	}
@@ -589,10 +586,9 @@ func (p *DatasetProvider) searchDocuments(ctx stdctx.Context, datasetName string
 	kbIDToName := map[string]string{kbID: datasetName}
 
 	// Build retrieval request for specific dataset
-	// NOTE: send "kb_ids" to match MultiRAG's RetrievalTestRequest (see searchWithRetrieval).
 	payload := map[string]interface{}{
-		"kb_ids":   []string{kbID},
-		"question": opts.Query,
+		"dataset_ids": []string{kbID},
+		"question":    opts.Query,
 	}
 
 	// Set top_k (default to 10 if not specified)
@@ -610,7 +606,7 @@ func (p *DatasetProvider) searchDocuments(ctx stdctx.Context, datasetName string
 	payload["similarity_threshold"] = threshold
 
 	// Call the Go retrieval API under /api/v1.
-	resp, err := p.httpClient.Request("POST", "/chunk/retrieval_test", "auto", nil, payload)
+	resp, err := p.httpClient.Request("POST", "/datasets/search", "auto", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("retrieval request failed: %w", err)
 	}

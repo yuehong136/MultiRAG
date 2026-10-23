@@ -154,3 +154,12 @@ func (dao *DocumentDAO) CountByTenantID(tenantID string) (int64, error) {
 	err := DB.Model(&entity.Document{}).Where("created_by = ?", tenantID).Count(&count).Error
 	return count, err
 }
+
+// SumSizeByDatasetID returns the total document size, including an empty dataset.
+func (dao *DocumentDAO) SumSizeByDatasetID(ctx context.Context, datasetID string) (int64, error) {
+	var total int64
+	err := DB.WithContext(ctx).Model(&entity.Document{}).
+		Select("COALESCE(SUM(size), 0)").Where("kb_id = ?", datasetID).
+		Scan(&total).Error
+	return total, err
+}

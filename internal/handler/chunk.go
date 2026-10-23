@@ -18,6 +18,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"multirag/internal/common"
 	"net/http"
 	"strings"
@@ -41,25 +42,8 @@ func NewChunkHandler(chunkService *service.ChunkService, userService *service.Us
 	}
 }
 
-// RetrievalTest performs retrieval test for chunks
-// @Summary Retrieval Test
-// @Description Test retrieval of chunks based on question and knowledge base
-// @Tags chunks
-// @Accept json
-// @Produce json
-// @Param request body service.RetrievalTestRequest true "retrieval test parameters"
-// @Success 200 {object} map[string]interface{}
-// @Router /v1/chunk/retrieval_test [post]
-func (h *ChunkHandler) RetrievalTest(c *gin.Context) {
-	h.retrievalTest(c, false)
-}
-
 // SearchDatasets handles POST /api/v1/datasets/search with dataset_ids.
 func (h *ChunkHandler) SearchDatasets(c *gin.Context) {
-	h.retrievalTest(c, true)
-}
-
-func (h *ChunkHandler) retrievalTest(c *gin.Context, datasetSearch bool) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
@@ -76,19 +60,15 @@ func (h *ChunkHandler) retrievalTest(c *gin.Context, datasetSearch bool) {
 		return
 	}
 
-	if datasetSearch {
-		if len(req.DatasetIDs) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": "dataset_ids must be a non-empty array"})
+	if len(req.DatasetIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": "dataset_ids must be a non-empty array"})
+		return
+	}
+	for _, id := range req.DatasetIDs {
+		if strings.TrimSpace(id) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": "dataset_ids must contain non-empty strings"})
 			return
 		}
-		for _, id := range req.DatasetIDs {
-			if strings.TrimSpace(id) == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": "dataset_ids must contain non-empty strings"})
-				return
-			}
-		}
-		// Keep the existing retrieval service and its per-dataset permission checks.
-		req.KbID = req.DatasetIDs
 	}
 
 	// Set default values for optional parameters
@@ -117,66 +97,12 @@ func (h *ChunkHandler) retrievalTest(c *gin.Context, datasetSearch bool) {
 		})
 		return
 	}
-	if req.KbID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "kb_id is required",
-		})
-		return
-	}
-
-	// Validate kb_id type: string or []string
-	switch v := req.KbID.(type) {
-	case string:
-		if v == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "kb_id cannot be empty string",
-			})
-			return
-		}
-	case []interface{}:
-		// Convert to []string
-		var kbIDs []string
-		for _, item := range v {
-			if str, ok := item.(string); ok && str != "" {
-				kbIDs = append(kbIDs, str)
-			} else {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"code":    400,
-					"message": "kb_id array must contain non-empty strings",
-				})
-				return
-			}
-		}
-		if len(kbIDs) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "kb_id array cannot be empty",
-			})
-			return
-		}
-		// Convert back to interface{} for service
-		req.KbID = kbIDs
-	case []string:
-		// Already correct type
-		if len(v) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "kb_id array cannot be empty",
-			})
-			return
-		}
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "kb_id must be string or array of strings",
-		})
-		return
-	}
-
 	// Call service with user ID for permission checks
-	resp, err := h.chunkService.RetrievalTest(&req, user.ID)
+	resp, err := h.chunkService.RetrievalTest(c.Request.Context(), &req, user.ID)
+	if errors.Is(err, service.ErrDatasetAccessDenied) {
+		jsonError(c, common.CodeForbidden, err.Error())
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

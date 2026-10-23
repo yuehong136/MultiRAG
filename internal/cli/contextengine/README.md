@@ -60,8 +60,7 @@ user_id/
 
 | Provider | Root | Backing APIs |
 |----------|------|--------------|
-| Dataset  | `datasets` | `GET /api/v1/datasets`, `GET /api/v1/datasets/{id}/documents`, `POST /api/v1/chunk/retrieval_test` |
+| Dataset  | `datasets` | `GET /api/v1/datasets`, `GET /api/v1/datasets/{id}/documents`, `POST /api/v1/datasets/search` |
 | File     | `files`    | `GET /api/v1/files`, `GET /api/v1/files/{id}` |
 
-> Note: the retrieval request uses the `kb_ids` field to match MultiRAG's
-> `RetrievalTestRequest` (RAGFlow's web handler reads `kb_id`).
+> Retrieval requests use `dataset_ids` with the dataset search REST contract.

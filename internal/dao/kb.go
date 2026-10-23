@@ -542,3 +542,15 @@ func (dao *KnowledgebaseDAO) GetKBIDsByTenantIDSimple(tenantID string) ([]string
 		Pluck("id", &kbIDs).Error
 	return kbIDs, err
 }
+
+// GetReadableByID binds private/team visibility and active membership in the read.
+// It avoids using a tenant-only lookup for a user-facing dataset operation.
+func (dao *KnowledgebaseDAO) GetReadableByID(ctx context.Context, id, userID string) (*entity.Knowledgebase, error) {
+	var kb entity.Knowledgebase
+	err := DB.WithContext(ctx).Model(&entity.Knowledgebase{}).
+		Where("id = ? AND status = ?", id, string(entity.StatusValid)).
+		Where("created_by = ? OR permission = ?", userID, string(entity.TenantPermissionTeam)).
+		Where("EXISTS (SELECT 1 FROM t_ai_user_tenants AS membership WHERE membership.tenant_id = t_ai_knowledgebases.tenant_id AND membership.user_id = ? AND membership.status = ?)", userID, "1").
+		First(&kb).Error
+	return &kb, err
+}

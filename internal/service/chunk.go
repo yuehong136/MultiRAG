@@ -18,7 +18,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"multirag/internal/server"
@@ -62,8 +64,7 @@ func NewChunkService() *ChunkService {
 
 // RetrievalTestRequest retrieval test request
 type RetrievalTestRequest struct {
-	DatasetIDs             []string               `json:"dataset_ids,omitempty"`
-	KbID                   interface{}            `json:"kb_id,omitempty"` // string or []string
+	DatasetIDs             []string               `json:"dataset_ids" binding:"required"`
 	Question               string                 `json:"question" binding:"required"`
 	Page                   *int                   `json:"page,omitempty"`
 	Size                   *int                   `json:"size,omitempty"`
@@ -104,8 +105,11 @@ type RetrievalTestResponse struct {
 //     - Builds doc_aggs by aggregating chunks per document
 //  7. knowledge graph retrieval (not implemented)
 //  8. Apply retrieval by children to group child chunks under parent chunks
-func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (*RetrievalTestResponse, error) {
-	common.Info("RetrievalTest started", zap.String("userID", userID), zap.Any("kbID", req.KbID), zap.String("question", req.Question))
+func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequest, userID string) (*RetrievalTestResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("retrieval request is required")
+	}
+	common.Info("RetrievalTest started", zap.String("userID", userID), zap.Any("kbID", req.DatasetIDs), zap.String("question", req.Question))
 
 	common.Debug(fmt.Sprintf("RetrievalTest request:\n"+
 		"    kbID=%v\n"+
@@ -120,7 +124,7 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 		"    rerankID=%v\n"+
 		"    keyword=%v\n"+
 		"    similarityThreshold=%v, vectorSimilarityWeight=%v",
-		req.KbID, req.Question,
+		req.DatasetIDs, req.Question,
 		ptrString(req.Page), ptrString(req.Size), req.DocIDs,
 		ptrString(req.UseKG), ptrString(req.TopK), req.CrossLanguages, ptrString(req.SearchID),
 		req.Filter,
@@ -132,52 +136,33 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 		return nil, fmt.Errorf("question is required")
 	}
 
-	ctx := context.Background()
-
-	// Determine kb_id list and check permission for each kb_id
-	var kbIDs []string
-	switch v := req.KbID.(type) {
-	case string:
-		kbIDs = []string{v}
-	case []string:
-		kbIDs = v
-	default:
-		return nil, fmt.Errorf("kb_id must be string or array of strings")
+	if len(req.DatasetIDs) == 0 {
+		return nil, fmt.Errorf("dataset_ids must be a non-empty array")
 	}
-	if len(kbIDs) == 0 {
-		return nil, fmt.Errorf("kb_id cannot be empty")
+	kbIDs := make([]string, 0, len(req.DatasetIDs))
+	seen := make(map[string]bool, len(req.DatasetIDs))
+	for _, id := range req.DatasetIDs {
+		if strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("dataset_ids must contain non-empty strings")
+		}
+		if !seen[id] {
+			kbIDs = append(kbIDs, id)
+			seen[id] = true
+		}
 	}
-
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user tenants: %w", err)
-	}
-	if len(tenants) == 0 {
-		return nil, fmt.Errorf("user has no accessible tenants")
-	}
-	common.Debug("Retrieved user tenants from database", zap.String("userID", userID), zap.Int("tenantCount", len(tenants)))
-
+	var err error
 	var tenantIDs []string
 	var kbRecords []*entity.Knowledgebase
-	for _, kbID := range kbIDs {
-		found := false
-		for _, tenant := range tenants {
-			kb, err := s.kbDAO.GetByIDAndTenantID(kbID, tenant.TenantID)
-			if err == nil && kb != nil {
-				common.Debug("Found knowledge base in database",
-					zap.String("kbID", kbID),
-					zap.String("tenantID", tenant.TenantID),
-					zap.String("kbName", kb.Name),
-					zap.String("embdID", kb.EmbdID))
-				tenantIDs = append(tenantIDs, tenant.TenantID)
-				kbRecords = append(kbRecords, kb)
-				found = true
-				break
+	for _, id := range kbIDs {
+		kb, err := s.kbDAO.GetReadableByID(ctx, id, userID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrDatasetAccessDenied
 			}
+			return nil, fmt.Errorf("read dataset failed: %w", err)
 		}
-		if !found {
-			return nil, fmt.Errorf("only owner of dataset is authorized for this operation")
-		}
+		tenantIDs = append(tenantIDs, kb.TenantID)
+		kbRecords = append(kbRecords, kb)
 	}
 
 	// Check if all kbs have the same embedding model
@@ -422,7 +407,7 @@ func (s *ChunkService) RetrievalTest(req *RetrievalTestRequest, userID string) (
 		delete(filteredChunks[i], "vector")
 	}
 
-	common.Info("RetrievalTest completed", zap.String("userID", userID), zap.Any("kbID", req.KbID), zap.String("question", req.Question), zap.Int64("chunkCount", int64(len(filteredChunks))))
+	common.Info("RetrievalTest completed", zap.String("userID", userID), zap.Any("kbID", req.DatasetIDs), zap.String("question", req.Question), zap.Int64("chunkCount", int64(len(filteredChunks))))
 
 	return &RetrievalTestResponse{
 		Chunks:  filteredChunks,

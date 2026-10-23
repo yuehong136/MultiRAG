@@ -155,6 +155,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			datasets := v1.Group("/datasets")
 			{
 				datasets.GET("", r.datasetsHandler.ListDatasets)
+				datasets.GET("/:dataset_id", r.datasetsHandler.GetDataset)
 				datasets.POST("", r.datasetsHandler.CreateDataset)
 				datasets.DELETE("", r.datasetsHandler.DeleteDatasets)
 				datasets.POST("/search", r.chunkHandler.SearchDatasets)
@@ -299,7 +300,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// Chunk routes
 		chunk := authorized.Group("/v1/chunk")
 		{
-			authorized.POST("/api/v1/chunk/retrieval_test", r.chunkHandler.RetrievalTest)
 			authorized.GET("/api/v1/chunk/get", r.chunkHandler.Get)
 			chunk.POST("/list", r.chunkHandler.List)
 			authorized.POST("/api/v1/chunk/update", r.chunkHandler.UpdateChunk) // Internal API only for GO
