@@ -372,7 +372,8 @@ async def test_cancellation_drains_cleanup_before_releasing_sql(session_upload_a
 def test_pinned_web_remove_conversation_client(session_upload_api: dict[str, Any]) -> None:
     env = session_upload_api
     root = Path(os.environ["WEB_SESSION_CLEANUP_CHECKOUT"])
-    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip() == "170315a8b7d46b1b752b3f574e41b86738c7c2b3"
+    expected = json.loads(Path(".github/consumer-web.json").read_text())["ref"]
+    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip() == expected
     descriptor = upload(env)
     session_id = seed_session(env, [descriptor])
     script = Path(__file__).resolve().parents[1] / "support/session_upload_web_consumer.mts"

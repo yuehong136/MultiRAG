@@ -38,6 +38,7 @@ DATABASE_TESTS = frozenset(
         "test_identity_schema.py",
         "test_mcp_interaction_repository.py",
         "test_mcp_interaction_schema.py",
+        "test_llm_embedding_inputs.py",
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
         "test_pdf_page_task_defaults.py",
@@ -50,7 +51,7 @@ DATABASE_TESTS = frozenset(
     }
 )
 REDIS_TESTS = frozenset({"test_shared_auth_secret.py", "test_synonym_redis.py"})
-INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py", "test_infinity_stable_release.py"})
+INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py", "test_infinity_stable_release.py", "test_metadata_infinity_pushdown.py"})
 
 ISOLATED_STORAGE_TESTS = frozenset(
     {
@@ -143,10 +144,13 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_dataset_management_http.py",
                 "test_dataset_embedding_http.py",
                 "test_connector_web_sync.py",
+                "test_connector_rebuild_authorization.py",
                 "test_github_sync_defaults.py",
                 "test_model_document_web_consumers.py",
                 "test_retrieval_rerank_authorization.py",
                 "test_document_file_http.py",
+                "test_session_upload_cleanup.py",
+                "test_metadata_web_consumers.py",
             )
         ]
     if suite == "core":
@@ -157,6 +161,18 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_runtime_cleanup_storage_protocol.py":
+            # Real cloud SDK clients use owned transports and OpenDAL memory.
+            continue
+        if path.name == "test_metadata_web_consumers.py":
+            required.update(("postgresql", "redis", "minio", "milvus", "infinity", "elasticsearch"))
+            continue
+        if path.name == "test_metadata_infinity_pushdown.py":
+            required.update(("postgresql", "infinity"))
+            continue
+        if path.name == "test_es_server_scoring.py":
+            required.update(("postgresql", "elasticsearch", "opensearch"))
+            continue
         if path.name == "test_raptor_search_storage.py":
             required.add("elasticsearch")
             continue

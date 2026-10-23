@@ -18,7 +18,7 @@ def test_database_suite_never_requires_unrelated_services() -> None:
     paths = suite_paths("db")
     assert {path.name for path in paths} == DATABASE_TESTS
     assert required_services(paths) == {"postgresql"}
-    assert required_services(suite_paths("infinity")) == {"infinity"}
+    assert required_services(suite_paths("infinity")) == {"infinity", "postgresql"}
     assert required_services([INTEGRATION / "new_test.py"]) == {"postgresql", "redis", "minio", "milvus"}
 
 
@@ -33,6 +33,21 @@ def test_metadata_es_dependency_is_prepared_before_collection() -> None:
 
 def test_keyword_id_contract_prepares_only_disposable_es() -> None:
     assert required_services([INTEGRATION / "test_es_conn_keyword_ids.py"]) == {"elasticsearch"}
+
+
+def test_infinity_metadata_prepares_sql_and_engine_before_collection() -> None:
+    path = INTEGRATION / "test_metadata_infinity_pushdown.py"
+    assert path in suite_paths("infinity") and path not in suite_paths("core")
+    assert path not in suite_paths("db")
+    assert required_services([path]) == {"postgresql", "infinity"}
+
+
+def test_runtime_storage_protocol_needs_no_infrastructure() -> None:
+    assert required_services([INTEGRATION / "test_runtime_cleanup_storage_protocol.py"]) == set()
+
+
+def test_server_scoring_requires_sql_and_both_search_engines() -> None:
+    assert required_services([INTEGRATION / "test_es_server_scoring.py"]) == {"postgresql", "elasticsearch", "opensearch"}
 
 
 def test_explicit_metadata_es_failure_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
