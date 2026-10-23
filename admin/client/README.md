@@ -59,9 +59,9 @@ It consists of a server-side Service and a command-line client (CLI), both imple
 
     **Parameters:**
     
-    - -h: RAGFlow admin server host address
+    - -h: MultiRAG admin server host address
     
-    - -p: RAGFlow admin server port
+    - -p: MultiRAG admin server port
 
 
 
