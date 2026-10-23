@@ -51,7 +51,7 @@ def tags_http_api(engine: sa.Engine, evidence: Path) -> Iterator[dict[str, Any]]
             for owner in owners:
                 for prefix in ("canvas:replica", "canvas:replica:lock"):
                     keys.extend(client.scan_iter(match=f"{prefix}:*:{owner}:*"))
-            manifest["redis_keys"] = sorted(key.decode() for key in keys)
+            manifest["redis_keys"] = sorted(key.decode() if isinstance(key, bytes) else key for key in keys)
             if keys:
                 client.delete(*keys)
             assert all(not client.exists(key) for key in keys)
