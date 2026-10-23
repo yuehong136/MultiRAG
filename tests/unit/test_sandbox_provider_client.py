@@ -130,6 +130,47 @@ def test_nonzero_provider_result_is_not_business_success(monkeypatch: pytest.Mon
     assert output["result"] is None
 
 
+@pytest.mark.parametrize("failure", ["stderr", "empty_http", "http_exception", "canceled_before_provider", "canceled_after_provider", "canceled_after_http"])
+def test_failed_execution_clears_all_previous_outputs(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    import requests
+
+    from agent.tools.code_exec import CodeExec
+
+    calls = 0
+
+    def canceled() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls == {"canceled_before_provider": 1, "canceled_after_provider": 3, "canceled_after_http": 4}.get(failure)
+
+    def execute(**_: Any) -> ExecutionResult:
+        if failure in {"empty_http", "http_exception", "canceled_after_http"}:
+            raise SandboxProviderNotConfigured("no provider selected")
+        return ExecutionResult("", "execution failed", 0, 0.1, {})
+
+    def post(**_: Any) -> SimpleNamespace:
+        if failure == "http_exception":
+            raise requests.ConnectionError("test executor unavailable")
+        return SimpleNamespace(status_code=200, json=lambda: {})
+
+    monkeypatch.setattr(client, "execute_code", execute)
+    monkeypatch.setattr(requests, "post", post)
+    tool = CodeExec.__new__(CodeExec)
+    tool._param = SimpleNamespace(outputs={name: {"value": "stale", "type": "Any"} for name in ("result", "attachments", "_ARTIFACTS", "_ATTACHMENT_CONTENT", "content", "raw_result", "actual_type")})
+    tool._canvas = SimpleNamespace(is_canceled=canceled)
+
+    output = tool._execute_code("python", "def main(): return 42", {})
+
+    assert output["_ERROR"]
+    assert output["result"] is None
+    assert output["raw_result"] is None
+    assert output["_ARTIFACTS"] is None
+    assert output["attachments"] == []
+    assert output["_ATTACHMENT_CONTENT"] == ""
+    assert output["content"] == ""
+    assert output["actual_type"] == ""
+
+
 @pytest.mark.parametrize("exit_code", [None, 1])
 def test_codeexec_keeps_legacy_http_when_no_provider_selected(monkeypatch: pytest.MonkeyPatch, exit_code: int | None) -> None:
     import requests

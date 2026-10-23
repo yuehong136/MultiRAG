@@ -325,9 +325,9 @@ class CodeExec(ToolBase, ABC):
     _lifecycle_configured = False
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> dict[str, Any]:
         if self.check_if_canceled("CodeExec processing"):
-            return
+            return self._execution_failed("Task has been canceled")
 
         lang = kwargs.get("lang", self._param.lang)
         script = kwargs.get("script", self._param.script)
@@ -349,7 +349,7 @@ class CodeExec(ToolBase, ABC):
             return self._execution_failed(f"Provider modules unavailable: {provider_error}")
 
         if self.check_if_canceled("CodeExec execution"):
-            return self.output()
+            return self._execution_failed("Task has been canceled")
 
         timeout_seconds = int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60))
 
@@ -359,13 +359,13 @@ class CodeExec(ToolBase, ABC):
                 from agent.sandbox.client import execute_code as sandbox_execute_code
 
                 if self.check_if_canceled("CodeExec execution"):
-                    return self.output()
+                    return self._execution_failed("Task has been canceled")
 
                 # Execute code using the provider system
                 result = sandbox_execute_code(code=code, language=language, timeout=timeout_seconds, arguments=arguments)
 
                 if self.check_if_canceled("CodeExec execution"):
-                    return self.output()
+                    return self._execution_failed("Task has been canceled")
 
                 if result.exit_code != 0:
                     return self._execution_failed(result.stderr or f"Provider execution exited with code {result.exit_code}")
@@ -389,20 +389,19 @@ class CodeExec(ToolBase, ABC):
             code_req = CodeExecutionRequest(code_b64=code_b64, language=language, arguments=arguments).model_dump()
         except Exception as e:
             if self.check_if_canceled("CodeExec execution"):
-                return self.output()
+                return self._execution_failed("Task has been canceled")
 
             return self._execution_failed("construct code request error: " + str(e))
 
         try:
             if self.check_if_canceled("CodeExec execution"):
-                self.set_output("_ERROR", "Task has been canceled")
-                return self.output()
+                return self._execution_failed("Task has been canceled")
 
             resp = requests.post(url=f"http://{settings.SANDBOX_HOST}:9385/run", json=code_req, timeout=timeout_seconds)
             logging.info(f"http://{settings.SANDBOX_HOST}:9385/run,  code_req: {code_req}, resp.status_code {resp.status_code}:")
 
             if self.check_if_canceled("CodeExec execution"):
-                return "Task has been canceled"
+                return self._execution_failed("Task has been canceled")
 
             if resp.status_code != 200:
                 resp.raise_for_status()
@@ -418,16 +417,13 @@ class CodeExec(ToolBase, ABC):
                     execution_metadata=self._build_http_execution_metadata(body),
                 )
             else:
-                self.set_output("_ERROR", "There is no response from sandbox")
-                return self.output()
+                return self._execution_failed("There is no response from sandbox")
 
         except Exception as e:
             if self.check_if_canceled("CodeExec execution"):
-                return self.output()
+                return self._execution_failed("Task has been canceled")
 
-            self.set_output("_ERROR", "Exception executing code: " + str(e))
-
-        return self.output()
+            return self._execution_failed("Exception executing code: " + str(e))
 
     def _execution_failed(self, message: str) -> dict[str, Any]:
         for key in self._param.outputs:
@@ -446,15 +442,14 @@ class CodeExec(ToolBase, ABC):
         stdout: str,
         stderr: str | None,
         source: str,
-        artifacts: list | None = None,
-        execution_metadata: dict | None = None,
-    ):
+        artifacts: list[Any] | None = None,
+        execution_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         has_structured_result = bool((execution_metadata or {}).get("result_present") is True)
         resolved_value, used_stdout_fallback = self._resolve_execution_result_value(stdout, execution_metadata)
 
         if stderr and not has_structured_result and not artifacts and not str(stdout or "").strip():
-            self.set_output("_ERROR", stderr)
-            return self.output()
+            return self._execution_failed(stderr)
 
         # Clear any stale error from previous runs or base class initialization
         self.set_output("_ERROR", "")

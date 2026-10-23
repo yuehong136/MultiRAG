@@ -14,118 +14,27 @@
 #  limitations under the License.
 #
 
-import importlib.util
-import sys
 import types
-from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 
-CODE_EXEC_MODULE_PATH = next(parent / "agent" / "tools" / "code_exec.py" for parent in Path(__file__).resolve().parents if (parent / "agent" / "tools" / "code_exec.py").exists())
+from agent.tools import code_exec
 
 
-def _load_module():
-    return _load_code_exec_runtime_module()
+def _load_module() -> types.ModuleType:
+    return code_exec
 
 
-def _build_code_exec(output_type: str):
+def _build_code_exec(output_type: str) -> code_exec.CodeExec:
     return _build_code_exec_with_outputs({"result": {"value": None, "type": output_type}})
 
 
-def _build_code_exec_with_outputs(outputs: dict[str, dict]):
-    module = _load_module()
-    tool = module.CodeExec.__new__(module.CodeExec)
+def _build_code_exec_with_outputs(outputs: dict[str, dict[str, Any]]) -> code_exec.CodeExec:
+    tool = code_exec.CodeExec.__new__(code_exec.CodeExec)
     tool._param = types.SimpleNamespace(outputs=outputs)
     tool._canvas = types.SimpleNamespace(get_tenant_id=lambda: "tenant-1")
     return tool
-
-
-def _load_code_exec_runtime_module():
-    agent_module = types.ModuleType("agent")
-    tools_module = types.ModuleType("agent.tools")
-    base_module = types.ModuleType("agent.tools.base")
-
-    class _FakeToolParamBase:
-        def __init__(self):
-            self.outputs = {}
-
-    class _FakeToolBase:
-        def output(self, var_nm=None):
-            if var_nm:
-                return self._param.outputs.get(var_nm, {}).get("value", "")
-            return {k: v.get("value") for k, v in self._param.outputs.items()}
-
-        def set_output(self, key, value):
-            if key not in self._param.outputs:
-                self._param.outputs[key] = {"value": None, "type": str(type(value))}
-            self._param.outputs[key]["value"] = value
-
-        def check_if_canceled(self, *_args, **_kwargs):
-            return False
-
-    base_module.ToolBase = _FakeToolBase
-    base_module.ToolMeta = dict
-    base_module.ToolParamBase = _FakeToolParamBase
-
-    api_module = types.ModuleType("api")
-    api_db_module = types.ModuleType("api.db")
-    api_db_services_module = types.ModuleType("api.db.services")
-    file_service_module = types.ModuleType("api.db.services.file_service")
-
-    class _FakeFileService:
-        @staticmethod
-        def parse(*_args, **_kwargs):
-            return ""
-
-    file_service_module.FileService = _FakeFileService
-
-    common_module = types.ModuleType("common")
-    common_settings_module = types.ModuleType("common.settings")
-    common_settings_module.SANDBOX_HOST = "sandbox"
-    common_settings_module.STORAGE_IMPL = types.SimpleNamespace(put=lambda *_args, **_kwargs: None)
-
-    connection_utils_module = types.ModuleType("common.connection_utils")
-
-    def _timeout(_seconds):
-        def _decorator(func):
-            return func
-
-        return _decorator
-
-    connection_utils_module.timeout = _timeout
-
-    constants_module = types.ModuleType("common.constants")
-    constants_module.SANDBOX_ARTIFACT_BUCKET = "bucket"
-    constants_module.SANDBOX_ARTIFACT_EXPIRE_DAYS = 7
-
-    agent_module.tools = tools_module
-    tools_module.base = base_module
-    api_module.db = api_db_module
-    api_db_module.services = api_db_services_module
-    api_db_services_module.file_service = file_service_module
-    common_module.settings = common_settings_module
-
-    stub_modules = {
-        "agent": agent_module,
-        "agent.tools": tools_module,
-        "agent.tools.base": base_module,
-        "api": api_module,
-        "api.db": api_db_module,
-        "api.db.services": api_db_services_module,
-        "api.db.services.file_service": file_service_module,
-        "common": common_module,
-        "common.settings": common_settings_module,
-        "common.connection_utils": connection_utils_module,
-        "common.constants": constants_module,
-    }
-
-    spec = importlib.util.spec_from_file_location("code_exec_runtime", CODE_EXEC_MODULE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    with patch.dict(sys.modules, stub_modules):
-        spec.loader.exec_module(module)
-    return module
 
 
 def test_select_business_output_ignores_system_outputs():
@@ -364,14 +273,16 @@ def test_process_execution_result_keeps_business_output_when_stderr_is_non_fatal
     assert result["content"] == '{\n  "foo": "bar"\n}'
 
 
-def test_process_execution_result_returns_early_for_stderr_only_without_artifacts():
+def test_process_execution_result_clears_outputs_for_stderr_only_without_artifacts() -> None:
     tool = _build_code_exec("String")
 
     result = tool._process_execution_result("", "hard failure", "unit-test")
 
     assert result["_ERROR"] == "hard failure"
     assert result.get("result") is None
-    assert result.get("content") is None
+    assert result["content"] == ""
+    assert result["attachments"] == []
+    assert result["_ARTIFACTS"] is None
 
 
 def test_process_execution_result_appends_artifact_content_to_canonical_content():
