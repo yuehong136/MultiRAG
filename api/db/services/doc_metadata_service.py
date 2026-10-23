@@ -274,6 +274,12 @@ class DocMetadataService:
         """
         if not kb_ids:
             return {}
+        if settings.DOC_ENGINE.lower() == "infinity":
+            groups = cls._metadata_groups(db, kb_ids)
+            if groups is None:
+                return {}
+            store = cls._store()
+            return aggregate_metadata_rows(row for tenant_id, selected in groups.items() for row in store.list_by_kb_ids(db, tenant_id, selected))
         tenant_id = cls._kb_tenant(db, kb_ids[0])
         if not tenant_id:
             return {}
@@ -313,8 +319,8 @@ class DocMetadataService:
     def filter_doc_ids_by_meta_pushdown(cls, db: Session, kb_ids: list[str], filters: list[dict[str, Any]], logic: str = "and") -> list[str] | None:
         """Return exact IDs, or None for an explicitly unsupported execution path.
 
-        SQL streams scoped rows; ES prunes indexed-field candidates and verifies
-        raw source values. RPC/DB failures propagate, including partial scrolls.
+        SQL streams scoped rows; ES/Infinity prune candidates and verify raw
+        source values. RPC/DB failures propagate, including partial scrolls.
         Comparison coercion and other engine types retain the aggregate fallback.
         Callers must authorize the complete KB selection before calling.
         """
@@ -323,12 +329,12 @@ class DocMetadataService:
         if not filters or any(flt.get("op") not in STREAMABLE_METADATA_OPERATORS for flt in filters):
             return None
         backend = settings.DOC_ENGINE.lower()
-        if backend not in {"milvus", "elasticsearch"}:
+        if backend not in {"milvus", "elasticsearch", "infinity"}:
             return None
         groups = cls._metadata_groups(db, kb_ids)
         if groups is None:
             return []
-        if backend == "elasticsearch":
+        if backend in {"elasticsearch", "infinity"}:
             return cls._filter_engine_groups(groups, filters, logic)
         store = cls._store()
         if not isinstance(store, SqlMetadataStore):
@@ -340,14 +346,14 @@ class DocMetadataService:
 
     @classmethod
     async def filter_doc_ids_by_meta_pushdown_async(cls, db: AsyncSession, kb_ids: list[str], filters: list[dict[str, Any]], logic: str = "and") -> list[str] | None:
-        """Keep SQL inside run_sync and blocking ES RPCs in a worker thread."""
+        """Keep SQL inside run_sync and blocking engine RPCs in a worker thread."""
         if not valid_metadata_conditions(filters) or not kb_ids:
             return []
         if not filters or any(flt.get("op") not in STREAMABLE_METADATA_OPERATORS for flt in filters):
             return None
         if settings.DOC_ENGINE.lower() == "milvus":
             return await db.run_sync(lambda session: cls.filter_doc_ids_by_meta_pushdown(session, kb_ids, filters, logic))  # TODO(async-phase4)
-        if settings.DOC_ENGINE.lower() != "elasticsearch":
+        if settings.DOC_ENGINE.lower() not in {"elasticsearch", "infinity"}:
             return None
         groups = await db.run_sync(lambda session: cls._metadata_groups(session, kb_ids))  # TODO(async-phase4)
         return [] if groups is None else await asyncio.to_thread(cls._filter_engine_groups, groups, filters, logic)

@@ -586,7 +586,13 @@ async def rank_memories_async(chat_mdl, goal: str, sub_goal: str, tool_call_summ
     return re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
 
 
-async def gen_meta_filter(chat_mdl, meta_data: dict, query: str, constraints: dict = None) -> dict:
+async def gen_meta_filter(chat_mdl: Any, meta_data: dict[str, Any], query: str, constraints: dict[str, str] | None = None) -> dict[str, Any]:
+    """Generate ``logic`` and ``conditions`` using available metadata values.
+
+    Each condition contains ``key``, ``op`` and ``value``. Optional constraints
+    bind selected keys to operators; execution and exact matching remain with
+    the caller's authorized metadata scope.
+    """
     meta_data_structure = {}
     for key, values in meta_data.items():
         meta_data_structure[key] = list(values.keys()) if isinstance(values, dict) else values

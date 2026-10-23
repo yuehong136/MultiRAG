@@ -161,6 +161,10 @@ class EngineMetadataStore(MetadataStore):
                 yield doc_id, cls._extract_metadata(source)
 
     def filter_candidates(self, tenant_id: str, kb_ids: list[str], filters: list[dict[str, Any]], logic: str) -> Iterator[tuple[str, dict[str, Any]]] | None:
+        if settings.DOC_ENGINE.lower() == "infinity":
+            from common.metadata_infinity_filter import iter_infinity_metadata
+
+            return iter_infinity_metadata(settings.docStoreConn, self._index_name(tenant_id), kb_ids, filters, logic)
         from common.metadata_es_filter import UnsupportedMetaFilter, build_meta_filter_query
 
         index = self._index_name(tenant_id)
@@ -175,6 +179,10 @@ class EngineMetadataStore(MetadataStore):
 
     @classmethod
     def _search_all(cls, index_name: str, condition: dict | None, kb_ids: list[str]) -> list[dict]:
+        if settings.DOC_ENGINE.lower() == "infinity" and condition == {"kb_id": kb_ids}:
+            from common.metadata_infinity_filter import iter_infinity_metadata
+
+            return [{"id": doc_id, "meta_fields": fields} for doc_id, fields in iter_infinity_metadata(settings.docStoreConn, index_name, kb_ids)]
         if settings.DOC_ENGINE.lower() in {"elasticsearch", "opensearch"} and condition == {"kb_id": kb_ids}:
             # Never translate an RPC error into a missing metadata index.
             if not settings.docStoreConn.doc_meta_index_exists(index_name):
