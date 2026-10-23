@@ -776,17 +776,16 @@ func (s *UserService) UpdateUserSettings(user *entity.User, req *UpdateSettingsR
 		user.Email = *req.Email
 	}
 	if req.Avatar != nil {
-		// In Go version, avatar might be stored differently
-		// For now, just update if field exists
+		user.Avatar = req.Avatar
 	}
 	if req.Language != nil {
-		// Store language preference
+		user.Language = req.Language
 	}
 	if req.ColorSchema != nil {
-		// Store color schema preference
+		user.ColorSchema = req.ColorSchema
 	}
 	if req.Timezone != nil {
-		// Store timezone preference
+		user.Timezone = req.Timezone
 	}
 
 	// Save updated user

@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"multirag/internal/entity"
+
+	"github.com/google/uuid"
 )
 
 type timeProbe struct {
@@ -67,8 +69,25 @@ func TestBaseModelTimeScratchPostgres(t *testing.T) {
 	previous := DB
 	DB = db
 	t.Cleanup(func() { DB = previous })
+	// Start from the pre-hook settings shape with populated historical values.
+	if _, err := readback.Exec(`CREATE TABLE IF NOT EXISTS t_ai_system_settings (
+		name varchar(128) PRIMARY KEY, source varchar(32) NOT NULL,
+		data_type varchar(32) NOT NULL, value text NOT NULL,
+		create_time bigint, create_date timestamptz, update_time bigint, update_date timestamptz);
+		INSERT INTO t_ai_system_settings(name,source,data_type,value,create_time,update_time)
+		VALUES ('legacy','old','string','retained',1700000000,1700000000123)
+		ON CONFLICT(name) DO UPDATE SET create_time=1700000000,update_time=1700000000123`); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.AutoMigrate(&timeProbe{}, &entity.SystemSettings{}); err != nil {
 		t.Fatal(err)
+	}
+	var legacyCreate, legacyUpdate int64
+	if err := readback.QueryRow("SELECT create_time,update_time FROM t_ai_system_settings WHERE name='legacy'").Scan(&legacyCreate, &legacyUpdate); err != nil {
+		t.Fatal(err)
+	}
+	if legacyCreate != 1700000000 || legacyUpdate != 1700000000123 {
+		t.Fatal("migration rewrote historical timestamps")
 	}
 	if err := db.Exec("TRUNCATE t_ai_time_probe, t_ai_system_settings").Error; err != nil {
 		t.Fatal(err)
@@ -290,7 +309,8 @@ func TestBaseModelTimeScratchPostgres(t *testing.T) {
 				t.Fatal("private time.Time schema changed", typ)
 			}
 		}
-		space := &entity.SkillSpace{ID: "private-space", TenantID: "owner", FolderID: "folder", Name: "private", CoreState: entity.JSONMap{"retained": true}}
+		spaceID := strings.ReplaceAll(uuid.NewString(), "-", "")
+		space := &entity.SkillSpace{ID: spaceID, TenantID: spaceID, FolderID: "folder", Name: "private", CoreState: entity.JSONMap{"retained": true}}
 		if err := NewSkillSpaceDAO().Create(space); err != nil {
 			t.Fatal(err)
 		}
@@ -306,7 +326,7 @@ func TestBaseModelTimeScratchPostgres(t *testing.T) {
 		if stamp.Before(before.Truncate(time.Microsecond)) || !strings.Contains(state, "retained") {
 			t.Fatal("private timestamp/state lost")
 		}
-		config, err := NewSkillSearchConfigDAO().CreateWithTenantSpace("owner", space.ID, "embedding")
+		config, err := NewSkillSearchConfigDAO().CreateWithTenantSpace(space.TenantID, space.ID, "embedding")
 		if err != nil {
 			t.Fatal(err)
 		}

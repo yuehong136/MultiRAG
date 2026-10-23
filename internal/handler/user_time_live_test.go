@@ -21,6 +21,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"multirag/internal/admin"
 	"multirag/internal/cli"
 	"multirag/internal/common"
 	"multirag/internal/dao"
@@ -30,10 +31,12 @@ import (
 	"multirag/internal/server"
 	"multirag/internal/server/local"
 	"multirag/internal/service"
+	"multirag/internal/utility"
 )
 
 // Real registered routes, RSA/CLI auth, and PostgreSQL; no identity middleware stub.
 func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
+	t.Log("owned-test-process", os.Getpid())
 	dsn, config := os.Getenv("MULTIRAG_GO_TIME_DSN"), os.Getenv("MULTIRAG_GO_USER_CONFIG")
 	if dsn == "" || config == "" {
 		if os.Getenv("REQUIRE_SERVICES") == "1" {
@@ -118,7 +121,7 @@ func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
 	routes := router.NewRouter(handler.NewAuthHandler(), userHandler, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	routes.Setup(app)
 	api := httptest.NewServer(app)
-	t.Cleanup(api.Close)
+	t.Cleanup(func() { api.Close(); t.Log("owned-http-resource-closed", api.URL) })
 	t.Log("owned-http-resource", api.URL)
 	type response struct {
 		status, code int
@@ -292,6 +295,18 @@ func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
 			t.Fatal("failed email database login partially persisted")
 		}
 	})
+	runCLI := func(process *exec.Cmd) error {
+		t.Helper()
+		var output bytes.Buffer
+		process.Stdout, process.Stderr = &output, &output
+		if err := process.Start(); err != nil {
+			return err
+		}
+		t.Log("owned-cli-process-open", process.Process.Pid)
+		err := process.Wait()
+		t.Log("owned-cli-process-closed", process.Process.Pid, process.ProcessState.ExitCode())
+		return err
+	}
 	t.Run("actual-cli-login", func(t *testing.T) {
 		binary := os.Getenv("MULTIRAG_GO_TIME_CLI")
 		if binary == "" {
@@ -314,7 +329,7 @@ func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
 		oldWrites++
 		before := time.Now()
 		process := exec.CommandContext(t.Context(), binary, "-h", parsed.Host, "-o", "json", "LOGIN USER 'owner@time.invalid' WITH PASSWORD '"+password+"';")
-		if _, err := process.CombinedOutput(); err != nil {
+		if err := runCLI(process); err != nil {
 			t.Fatal("candidate CLI login failed", err)
 		}
 		checkLogin("owner", before, oldToken, create, date)
@@ -323,7 +338,7 @@ func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
 		}
 		old, n := snapshot("owner"), writes("owner")
 		process = exec.CommandContext(t.Context(), binary, "-h", parsed.Host, "-o", "json", "LOGIN USER 'owner@time.invalid' WITH PASSWORD 'wrong-password';")
-		if _, err := process.CombinedOutput(); err == nil || snapshot("owner") != old || writes("owner") != n {
+		if err := runCLI(process); err == nil || snapshot("owner") != old || writes("owner") != n {
 			t.Fatal("CLI login failure lost exit/SQL contract")
 		}
 		client := cli.NewMultiRAGClient("user")
@@ -344,6 +359,145 @@ func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
 			t.Fatal("CLI session token missing")
 		}
 	})
+
+	t.Run("settings-presence-empty-identity", func(t *testing.T) {
+		type settings struct {
+			avatar, language, color, timezone sql.NullString
+			create, update                    int64
+			created, updated                  time.Time
+		}
+		read := func(id string) settings {
+			t.Helper()
+			var row settings
+			if err := readback.QueryRow("SELECT avatar,language,color_schema,timezone,create_time,update_time,create_date,update_date FROM t_ai_users WHERE id=$1", id).Scan(&row.avatar, &row.language, &row.color, &row.timezone, &row.create, &row.update, &row.created, &row.updated); err != nil {
+				t.Fatal(err)
+			}
+			return row
+		}
+		old := read("owner")
+		foreign := snapshot("foreign")
+		before := time.Now()
+		patch := map[string]any{"avatar": "owned-avatar", "language": "Chinese", "color_schema": "Dark", "timezone": "UTC", "id": "foreign", "user_id": "foreign"}
+		got := call("PATCH", "/api/v1/users/me", ownerToken, patch)
+		if got.status != 200 || got.code != 0 {
+			t.Fatal("settings update failed")
+		}
+		row := read("owner")
+		if row.avatar.String != "owned-avatar" || row.language.String != "Chinese" || row.color.String != "Dark" || row.timezone.String != "UTC" || row.create != old.create || !row.created.Equal(old.created) || row.update < before.UnixMilli() || row.updated.Unix() != row.update/1000 || snapshot("foreign") != foreign {
+			t.Fatal("settings SQL/identity/time mismatch")
+		}
+		profile := call("GET", "/api/v1/users/me", ownerToken, nil)
+		for _, key := range []string{"avatar", "language", "color_schema", "timezone"} {
+			if profile.data[key] != patch[key] {
+				t.Fatal("profile settings differ from SQL", key)
+			}
+		}
+		got = call("PATCH", "/api/v1/users/me", ownerToken, map[string]any{"nickname": "renamed", "language": nil})
+		if got.code != 0 {
+			t.Fatal("omitted settings update failed")
+		}
+		omitted := read("owner")
+		if omitted.avatar != row.avatar || omitted.language != row.language || omitted.color != row.color || omitted.timezone != row.timezone {
+			t.Fatal("omitted/null settings were cleared")
+		}
+		got = call("POST", "/v1/user/setting", ownerToken, map[string]any{"avatar": "", "language": "", "color_schema": "", "timezone": ""})
+		if got.code != 0 {
+			t.Fatal("legacy settings update failed")
+		}
+		cleared := read("owner")
+		for _, value := range []sql.NullString{cleared.avatar, cleared.language, cleared.color, cleared.timezone} {
+			if !value.Valid || value.String != "" {
+				t.Fatal("explicit empty setting was ignored or stored NULL")
+			}
+		}
+		// Profile retains its established defaults for empty language/theme/timezone.
+		profile = call("GET", "/api/v1/users/me", ownerToken, nil)
+		if profile.data["avatar"] != "" || profile.data["language"] != "English" || profile.data["color_schema"] != "Bright" || profile.data["timezone"] != "UTC+8\tAsia/Shanghai" {
+			t.Fatal("existing profile empty-value defaults changed")
+		}
+		for _, token := range []string{"", "invalid-jwt"} {
+			old := snapshot("owner")
+			got := call("PATCH", "/api/v1/users/me", token, patch)
+			if got.status != 401 || got.code == 0 || snapshot("owner") != old || snapshot("foreign") != foreign {
+				t.Fatal("unauthorized settings mutation")
+			}
+		}
+		oldWrite := snapshot("write-fail")
+		token, err := utility.SignUserJWT("write-fail@time.invalid", server.GetSecretKey())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = call("PATCH", "/api/v1/users/me", token, patch)
+		if got.code != int(common.CodeServerError) || snapshot("write-fail") != oldWrite {
+			t.Fatal("failed settings write changed SQL")
+		}
+	})
+	t.Run("shared-producers-time-readback", func(t *testing.T) {
+		before := time.Now()
+		got := call("POST", "/api/v1/users", "", map[string]any{"email": "registered@time.invalid", "nickname": "registered", "password": cipher(password)})
+		if got.status != 200 || got.code != 0 {
+			t.Fatal("actual user registration failed")
+		}
+		registeredID, ok := got.data["id"].(string)
+		if !ok || registeredID == "" {
+			t.Fatal("registered identity missing")
+		}
+		check := func(table, key, id string) {
+			t.Helper()
+			var create, update int64
+			var created, updated time.Time
+			if err := readback.QueryRow("SELECT create_time,update_time,create_date,update_date FROM "+table+" WHERE "+key+"=$1", id).Scan(&create, &update, &created, &updated); err != nil {
+				t.Fatal(err)
+			}
+			if create < before.UnixMilli() || create > time.Now().UnixMilli() || update < create || created.Unix() != create/1000 || updated.Unix() != update/1000 || created.Nanosecond() != 0 || updated.Nanosecond() != 0 {
+				t.Fatal("shared producer used wrong units", table)
+			}
+		}
+		check("t_ai_users", "id", registeredID)
+		check("t_ai_tenants", "id", registeredID)
+		check("t_ai_user_tenants", "user_id", registeredID)
+		check("t_ai_files", "tenant_id", registeredID)
+		var login sql.NullTime
+		if err := readback.QueryRow("SELECT last_login_time FROM t_ai_users WHERE id=$1", registeredID).Scan(&login); err != nil {
+			t.Fatal(err)
+		}
+		if login.Valid {
+			t.Fatal("registration must not fabricate a successful login")
+		}
+		// Admin creation uses a transaction spanning these same shared models.
+		created, err := admin.NewService().CreateUser("admin-created@time.invalid", cipher(password), "user")
+		if err != nil {
+			t.Fatal("admin user creation failed", err)
+		}
+		adminID, ok := created["id"].(string)
+		if !ok {
+			t.Fatal("admin-created identity missing")
+		}
+		check("t_ai_users", "id", adminID)
+		check("t_ai_tenants", "id", adminID)
+		check("t_ai_user_tenants", "user_id", adminID)
+		check("t_ai_files", "tenant_id", adminID)
+		apiToken, err := service.NewSystemService().CreateAPIToken(registeredID, &service.CreateAPITokenRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("t_ai_api_tokens", "token", apiToken.Token)
+		if err := db.AutoMigrate(&entity.TenantModelProvider{}, &entity.TenantModelInstance{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec("DELETE FROM tenant_model_instance WHERE provider_id='owned-time-provider'; DELETE FROM tenant_model_provider WHERE id='owned-time-provider'").Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&entity.TenantModelProvider{ID: "owned-time-provider", ProviderName: "owned", TenantID: registeredID}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&entity.TenantModelInstance{ID: "owned-time-instance", ProviderID: "owned-time-provider", InstanceName: "owned", APIKey: "owned-only-fixture", Status: "active"}).Error; err != nil {
+			t.Fatal(err)
+		}
+		check("tenant_model_provider", "id", "owned-time-provider")
+		check("tenant_model_instance", "id", "owned-time-instance")
+	})
+
 }
 
 func stringPointer(value string) *string { return &value }
