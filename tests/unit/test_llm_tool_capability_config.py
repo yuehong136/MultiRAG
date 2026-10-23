@@ -220,3 +220,62 @@ async def test_vision_tool_bridge_preserves_images_and_video_frames(monkeypatch:
         frames.assert_called_once_with(b"fixture-video", "clip.mp4")
     else:
         frames.assert_not_called()
+
+
+@pytest.mark.parametrize("factory", ["VLLM", "MiniMax", "VolcEngine"])
+@pytest.mark.parametrize("edit", ["omitted", "null", "empty", "explicit", "ark_only", "endpoint_only"])
+async def test_partial_credentials_are_merged_before_provider_probe(monkeypatch: pytest.MonkeyPatch, db: Session, factory: str, edit: str) -> None:
+    before: dict[str, Any] = {"is_tools": False}
+    if factory != "VLLM":
+        before["opaque"] = {"retain": True}
+    if factory == "VolcEngine":
+        before.update(ark_api_key="saved-ark", endpoint_id="saved-model")
+    else:
+        before["api_key"] = "saved-key"
+        if factory == "MiniMax":
+            before["group_id"] = "saved-group"
+    saved: list[dict[str, Any]] = []
+    probed: list[str] = []
+
+    class Probe:
+        def __init__(self, key: str, **kwargs: Any) -> None:
+            probed.append(key)
+
+        async def async_chat_streamly(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+            yield "ok"
+
+    def query(cls: type[TenantLLMService], session: Session, **filters: Any) -> list[SimpleNamespace]:
+        assert filters == {"tenant_id": "tenant", "llm_factory": factory, "llm_name": "fixture" + ("___VLLM" if factory == "VLLM" else "")}
+        return [SimpleNamespace(api_key=json.dumps(before), api_base="http://fixture.invalid/v1", max_tokens=4096)]
+
+    monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=factory)])
+    monkeypatch.setattr(llm_app, "ChatModel", {factory: Probe})
+    monkeypatch.setattr(TenantLLMService, "query", classmethod(query))
+    monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, filters, payload: saved.append(payload) or True))
+    fields: dict[str, Any] = {"llm_factory": factory, "llm_name": "fixture", "mdl_type": "chat"}
+    if edit == "null":
+        fields["api_key"] = None
+    elif edit == "empty":
+        fields["api_key"] = ""
+    elif edit == "explicit":
+        fields["api_key"] = {"ark_api_key": "new-ark"} if factory == "VolcEngine" else "new-key"
+    elif edit == "ark_only":
+        fields["ark_api_key"] = "new-ark"
+    elif edit == "endpoint_only":
+        fields["endpoint_id"] = "new-model"
+    response = await llm_app.add_llm(llm_app.AddLLMRequest(**fields), db, SimpleNamespace(id="tenant"))
+    assert json.loads(response.body)["retcode"] == 0
+    expected = dict(before)
+    if factory == "VolcEngine":
+        if edit in {"explicit", "ark_only"}:
+            expected["ark_api_key"] = "new-ark"
+        elif edit == "endpoint_only":
+            expected["endpoint_id"] = "new-model"
+    elif edit in {"explicit", "empty"}:
+        expected["api_key"] = "new-key" if edit == "explicit" else "x"
+    assert json.loads(saved[0]["api_key"]) == expected
+    if factory == "VLLM":
+        assert probed[0] == expected["api_key"]
+    else:
+        assert json.loads(probed[0]) == {k: v for k, v in expected.items() if k != "is_tools"}
+    assert saved[0]["api_base"] == "http://fixture.invalid/v1" and saved[0]["max_tokens"] == 4096

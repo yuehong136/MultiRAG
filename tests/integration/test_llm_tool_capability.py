@@ -378,3 +378,136 @@ def test_ollama_vision_native_tools_keep_image_payload(model_contract: dict[str,
         assert bool(first.get("tools")) is enabled
         assert base64.b64decode(first["messages"][0]["images"][0]) == base64.b64decode(png)
         assert calls == (["first"] if enabled else [])
+
+
+def test_partial_provider_credentials_commit_and_fail_without_overwriting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Registered save endpoint, real SDK probe and independent committed SQL reads."""
+    from tests.support.database import scratch_database
+
+    evidence = Path(os.environ.get("LLM_CREDENTIAL_EVIDENCE_DIR", str(tmp_path)))
+    monkeypatch.setitem(resources._state, "secret_key", "owned-credential-contract-signer")
+    from api.apps import llm_app
+
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "VolcEngine"}, {"name": "VLLM"}])
+    wire: list[dict[str, Any]] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "fixture.invalid"
+        body = json.loads(request.content)
+        key = request.headers.get("authorization")
+        wire.append({"model": body["model"], "authorization": key})
+        if key in {"Bearer x", "Bearer bad-key"} or not body["model"]:
+            return httpx.Response(401, json={"error": {"message": "Controlled credential rejection", "type": "authentication_error"}}, request=request)
+        result = {
+            "id": "controlled-probe",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": body["model"],
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        }
+        return httpx.Response(200, content=f"data: {json.dumps(result)}\n\ndata: [DONE]\n\n", headers={"content-type": "text/event-stream"}, request=request)
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(httpx.AsyncClient, "_transport_for_url", lambda self, url: transport)
+    with scratch_database(evidence) as engine:
+        owners = [uuid.uuid4().hex, uuid.uuid4().hex]
+        current_owner = [owners[0]]
+        for factory in ["VolcEngine", "VLLM"]:
+            with Session(engine) as db:
+                db.merge(LLMFactories(name=factory, tags="LLM", status="1"))
+                db.commit()
+        app = FastAPI()
+        app.include_router(llm_app.router, prefix="/v1/llm")
+
+        def session() -> Iterator[Session]:
+            with Session(engine) as db:
+                yield db
+
+        app.dependency_overrides[get_db] = session
+        app.dependency_overrides[llm_app.manager] = lambda: SimpleNamespace(id=current_owner[0])
+
+        def read(factory: str) -> str:
+            with Session(engine) as db:
+                return db.scalars(select(TenantLLM.api_key).where(TenantLLM.tenant_id == owners[0], TenantLLM.llm_factory == factory)).one()
+
+        with TestClient(app) as client:
+            for factory in ["VolcEngine", "VLLM"]:
+                common = {"llm_factory": factory, "llm_name": "owned-model", "mdl_type": "chat", "api_base": "http://fixture.invalid/v1"}
+                initial: dict[str, Any] = {"ark_api_key": "saved-ark", "endpoint_id": "saved-model", "opaque": {"retain": True}} if factory == "VolcEngine" else {"api_key": "saved-key"}
+                response = client.post("/v1/llm/add_llm", json={**common, "api_key": initial if factory == "VolcEngine" else "saved-key", "is_tools": False})
+                assert response.status_code == 200 and response.json()["retcode"] == 0, response.json()
+                for fields in [
+                    {},
+                    {"api_key": None},
+                    {"ark_api_key": "new-ark"},
+                    {"endpoint_id": "new-model"},
+                    {"api_key": {"ark_api_key": "explicit-ark"} if factory == "VolcEngine" else "explicit-key"},
+                ]:
+                    response = client.post("/v1/llm/add_llm", json={**common, **fields})
+                    assert response.status_code == 200 and response.json()["retcode"] == 0, response.json()
+                    saved = json.loads(read(factory))
+                    if factory == "VolcEngine":
+                        initial.update({k: v for k, v in fields.items() if k in {"ark_api_key", "endpoint_id"}})
+                        if isinstance(fields.get("api_key"), dict):
+                            initial.update(fields["api_key"])
+                        assert saved == {**initial, "is_tools": False}
+                        assert wire[-1] == {"model": initial["endpoint_id"], "authorization": f"Bearer {initial['ark_api_key']}"}
+                    else:
+                        if isinstance(fields.get("api_key"), str):
+                            initial["api_key"] = fields["api_key"]
+                        assert saved == {**initial, "is_tools": False}
+                        assert wire[-1]["authorization"] == f"Bearer {initial['api_key']}"
+                before = read(factory)
+                if factory == "VolcEngine":
+                    response = client.post("/v1/llm/add_llm", json={**common, "api_key": ""})
+                    assert response.json()["retcode"] == 0 and read(factory) == before
+                    bad = {"ark_api_key": "bad-key"}
+                else:
+                    bad = {"api_key": ""}
+                response = client.post("/v1/llm/add_llm", json={**common, **bad})
+                assert response.status_code == 200 and response.json()["retcode"] != 0
+                assert read(factory) == before
+                response = client.post("/v1/llm/add_llm", json={**common, "is_tools": "false"})
+                assert response.status_code == 422 and read(factory) == before
+                current_owner[0] = owners[1]
+                response = client.post("/v1/llm/add_llm", json=common)
+                assert response.status_code == 200 and response.json()["retcode"] != 0
+                assert read(factory) == before
+                with Session(engine) as db:
+                    assert db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owners[1])).first() is None
+                current_owner[0] = owners[0]
+                calls = len(wire)
+                app.dependency_overrides.pop(llm_app.manager)
+                response = client.post("/v1/llm/add_llm", json={**common, "api_key": "forbidden-key"})
+                assert response.status_code == 401 and len(wire) == calls and read(factory) == before
+                app.dependency_overrides[llm_app.manager] = lambda: SimpleNamespace(id=current_owner[0])
+            response = client.post(
+                "/v1/llm/add_llm",
+                json={
+                    "llm_factory": "VolcEngine",
+                    "llm_name": "fields-only",
+                    "mdl_type": "chat",
+                    "api_base": "http://fixture.invalid/v1",
+                    "ark_api_key": "fields-only-key",
+                    "endpoint_id": "fields-only-model",
+                },
+            )
+            assert response.status_code == 200 and response.json()["retcode"] == 0
+            with Session(engine) as db:
+                created = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owners[0], TenantLLM.llm_name == "fields-only")).one()
+                assert json.loads(created.api_key) == {"ark_api_key": "fields-only-key", "endpoint_id": "fields-only-model"}
+            assert wire[-1] == {"model": "fields-only-model", "authorization": "Bearer fields-only-key"}
+        (evidence / "credential-contract.json").write_text(
+            json.dumps(
+                {
+                    "factories": ["VolcEngine", "VLLM"],
+                    "independent_sql_readback": True,
+                    "sdk_wire_checked": True,
+                    "failed_probe_zero_write": True,
+                    "auth_denial_zero_probe_zero_write": True,
+                    "boundary": "real SDK, controlled HTTP transport; no real provider credential",
+                },
+                indent=2,
+            )
+            + "\n"
+        )
