@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"multirag/internal/common"
 	"multirag/internal/dao"
@@ -103,17 +102,11 @@ func (m *ModelProviderService) AddModelProvider(providerName, userID string) (co
 		return common.CodeServerError, errors.New("fail to get UUID")
 	}
 
-	now := time.Now().Unix()
-	nowDate := time.Now().Truncate(time.Second)
 	tenantModelProvider := &entity.TenantModelProvider{
 		ID:           providerID,
 		ProviderName: providerName,
 		TenantID:     tenantID,
 	}
-	tenantModelProvider.CreateTime = &now
-	tenantModelProvider.UpdateTime = &now
-	tenantModelProvider.CreateDate = &nowDate
-	tenantModelProvider.UpdateDate = &nowDate
 	err = m.modelProviderDAO.Create(tenantModelProvider)
 	if err != nil {
 		return common.CodeServerError, fmt.Errorf("fail to create model provider: %w", err)
@@ -236,8 +229,6 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 		return common.CodeBadRequest, err
 	}
 
-	now := time.Now().Unix()
-	nowDate := time.Now().Truncate(time.Second)
 	tenantModelProvider := &entity.TenantModelInstance{
 		ID:           instanceID,
 		InstanceName: instanceName,
@@ -246,10 +237,6 @@ func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName
 		Status:       "active",
 		Extra:        extra,
 	}
-	tenantModelProvider.CreateTime = &now
-	tenantModelProvider.UpdateTime = &now
-	tenantModelProvider.CreateDate = &nowDate
-	tenantModelProvider.UpdateDate = &nowDate
 	err = createProviderInstanceRow(provider.ID, tenantModelProvider)
 
 	if errors.Is(err, errProviderInstanceExists) {

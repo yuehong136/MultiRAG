@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"time"
 
 	"multirag/internal/dao"
 	"multirag/internal/engine"
@@ -198,19 +197,11 @@ func (s *DocumentService) GetDocumentsByAuthorID(authorID, page, pageSize int) (
 func (s *DocumentService) toResponse(doc *entity.Document) *DocumentResponse {
 	createdAt := ""
 	if doc.CreateTime != nil {
-		// Check if timestamp is in milliseconds (13 digits) or seconds (10 digits)
-		var ts int64
-		if *doc.CreateTime > 1000000000000 {
-			// Milliseconds - convert to seconds
-			ts = *doc.CreateTime / 1000
-		} else {
-			ts = *doc.CreateTime
-		}
-		createdAt = time.Unix(ts, 0).Format("2006-01-02 15:04:05")
+		createdAt = entity.TimeFromTimestamp(*doc.CreateTime).Format("2006-01-02 15:04:05")
 	}
 	updatedAt := ""
 	if doc.UpdateTime != nil {
-		updatedAt = time.Unix(*doc.UpdateTime, 0).Format("2006-01-02 15:04:05")
+		updatedAt = entity.TimeFromTimestamp(*doc.UpdateTime).Format("2006-01-02 15:04:05")
 	}
 	return &DocumentResponse{
 		ID:              doc.ID,

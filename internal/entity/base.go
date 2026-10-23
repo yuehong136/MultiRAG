@@ -19,7 +19,10 @@ package entity
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"reflect"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // BaseModel base model
@@ -29,6 +32,117 @@ type BaseModel struct {
 	CreateDate *time.Time `gorm:"column:create_date;index" json:"create_date,omitempty"`
 	UpdateTime *int64     `gorm:"column:update_time;index" json:"update_time,omitempty"`
 	UpdateDate *time.Time `gorm:"column:update_date;index" json:"update_date,omitempty"`
+}
+
+func autoModelTime() (int64, time.Time) {
+	now := time.Now().Local()
+	return now.UnixMilli(), now.Truncate(time.Second)
+}
+
+// TimeFromTimestamp reads historical epoch seconds and current epoch milliseconds.
+func TimeFromTimestamp(timestamp int64) time.Time {
+	if timestamp >= 1_000_000_000_000 || timestamp <= -1_000_000_000_000 {
+		return time.UnixMilli(timestamp)
+	}
+	return time.Unix(timestamp, 0)
+}
+
+func statementHasTimeField(tx *gorm.DB, fieldNames ...string) bool {
+	if tx == nil || tx.Statement == nil {
+		return false
+	}
+
+	switch dest := tx.Statement.Dest.(type) {
+	case map[string]interface{}:
+		for _, fieldName := range fieldNames {
+			if _, ok := dest[fieldName]; ok {
+				return true
+			}
+		}
+	case []map[string]interface{}:
+		for _, item := range dest {
+			for _, fieldName := range fieldNames {
+				if _, ok := item[fieldName]; ok {
+					return true
+				}
+			}
+		}
+	default:
+		// A separate Updates struct supplies explicit non-nil values. Save uses
+		// the model itself and must refresh its previously persisted timestamps.
+		model, destValue := reflect.ValueOf(tx.Statement.Model), reflect.ValueOf(tx.Statement.Dest)
+		sameModel := model.Kind() == reflect.Pointer && destValue.Kind() == reflect.Pointer && model.Pointer() == destValue.Pointer()
+		if !sameModel && tx.Statement.Schema != nil {
+			value := reflect.Indirect(reflect.ValueOf(tx.Statement.Dest))
+			if value.IsValid() && value.Kind() == reflect.Struct && value.Type() == tx.Statement.Schema.ModelType {
+				for _, name := range fieldNames {
+					if field := tx.Statement.Schema.LookUpField(name); field != nil {
+						if _, zero := field.ValueOf(tx.Statement.Context, value); !zero {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// BeforeCreate injects timestamps for models embedding BaseModel.
+func (m *BaseModel) BeforeCreate(tx *gorm.DB) error {
+	timestamp, dateTime := autoModelTime()
+
+	if m.CreateTime == nil {
+		m.CreateTime = &timestamp
+	}
+	if m.CreateDate == nil {
+		m.CreateDate = &dateTime
+	}
+	if m.UpdateTime == nil {
+		m.UpdateTime = &timestamp
+	}
+	if m.UpdateDate == nil {
+		m.UpdateDate = &dateTime
+	}
+
+	if tx != nil && tx.Statement != nil {
+		if !statementHasTimeField(tx, "create_time", "CreateTime") && m.CreateTime != nil {
+			tx.Statement.SetColumn("CreateTime", *m.CreateTime)
+		}
+		if !statementHasTimeField(tx, "create_date", "CreateDate") && m.CreateDate != nil {
+			tx.Statement.SetColumn("CreateDate", *m.CreateDate)
+		}
+		if !statementHasTimeField(tx, "update_time", "UpdateTime") && m.UpdateTime != nil {
+			tx.Statement.SetColumn("UpdateTime", *m.UpdateTime)
+		}
+		if !statementHasTimeField(tx, "update_date", "UpdateDate") && m.UpdateDate != nil {
+			tx.Statement.SetColumn("UpdateDate", *m.UpdateDate)
+		}
+	}
+	return nil
+}
+
+// BeforeUpdate injects update timestamps for models embedding BaseModel.
+func (m *BaseModel) BeforeUpdate(tx *gorm.DB) error {
+	timestamp, dateTime := autoModelTime()
+
+	if !statementHasTimeField(tx, "update_time", "UpdateTime") {
+		m.UpdateTime = &timestamp
+	}
+	if !statementHasTimeField(tx, "update_date", "UpdateDate") {
+		m.UpdateDate = &dateTime
+	}
+
+	if tx != nil && tx.Statement != nil {
+		if !statementHasTimeField(tx, "update_time", "UpdateTime") && m.UpdateTime != nil {
+			tx.Statement.SetColumn("UpdateTime", *m.UpdateTime)
+		}
+		if !statementHasTimeField(tx, "update_date", "UpdateDate") && m.UpdateDate != nil {
+			tx.Statement.SetColumn("UpdateDate", *m.UpdateDate)
+		}
+	}
+	return nil
 }
 
 // JSONMap is a map type that can store JSON data

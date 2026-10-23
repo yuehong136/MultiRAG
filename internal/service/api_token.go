@@ -17,8 +17,6 @@
 package service
 
 import (
-	"time"
-
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/utility"
@@ -68,9 +66,6 @@ type CreateAPITokenRequest struct {
 func (s *SystemService) CreateAPIToken(tenantID string, req *CreateAPITokenRequest) (*TokenResponse, error) {
 	apiTokenDAO := dao.NewAPITokenDAO()
 
-	now := time.Now().Unix()
-	nowDate := time.Now()
-
 	// Generate token and beta values
 	// token: "multirag-" + secrets.token_urlsafe(32)
 	apiToken := utility.GenerateAPIToken()
@@ -82,8 +77,6 @@ func (s *SystemService) CreateAPIToken(tenantID string, req *CreateAPITokenReque
 		Token:    apiToken,
 		Beta:     &betaAPIKey,
 	}
-	apiTokenData.CreateDate = &nowDate
-	apiTokenData.CreateTime = &now
 
 	if err := apiTokenDAO.Create(apiTokenData); err != nil {
 		return nil, err

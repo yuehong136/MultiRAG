@@ -208,8 +208,8 @@ func TestDatasetTimeHTTPAndSQL(t *testing.T) {
 	}
 	checkTime := func(stamp int64, date time.Time, before time.Time) {
 		t.Helper()
-		if stamp < before.UnixMilli() || stamp > time.Now().UnixMilli() || stamp%1000 != 0 || date.Nanosecond() != 0 || date.UnixMilli() != stamp {
-			t.Fatalf("timestamp/date do not share the expected millisecond instant: %d %s", stamp, date)
+		if stamp < before.UnixMilli() || stamp > time.Now().UnixMilli() || date.Nanosecond() != 0 || date.Unix() != stamp/1000 {
+			t.Fatalf("millisecond epoch and second-resolution date disagree: %d %s", stamp, date)
 		}
 	}
 	row := read()
