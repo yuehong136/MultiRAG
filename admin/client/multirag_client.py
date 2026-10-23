@@ -34,6 +34,13 @@ def _variable_response(response: Any) -> dict[str, Any]:
     return data
 
 
+def _variable_rows(response: Any) -> list[dict[str, Any]]:
+    rows = _variable_response(response).get("data")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise RuntimeError("Invalid variable list response")
+    return rows
+
+
 def show_help():
     """Help info"""
     help_text = """
@@ -681,13 +688,13 @@ class MultiRAGClient:
             raise RuntimeError("This command is only allowed in ADMIN mode")
         var_name = _variable_text(command["var_name"])
         response = self.http_client.request("GET", "admin/variables", params={"var_name": var_name}, use_api_base=True, auth_kind="admin")
-        self._print_table_simple(_variable_response(response).get("data"))
+        self._print_table_simple(_variable_rows(response))
 
     def list_variables(self, command: dict[str, Any]) -> None:
         if self.server_type != "admin":
             raise RuntimeError("This command is only allowed in ADMIN mode")
         response = self.http_client.request("GET", "admin/variables", use_api_base=True, auth_kind="admin")
-        self._print_table_simple(_variable_response(response).get("data"))
+        self._print_table_simple(_variable_rows(response))
 
     def list_configs(self, command: dict):
         if self.server_type != "admin":

@@ -61,3 +61,10 @@ def test_variable_cli_mode_and_get_query(cli_modules: tuple[Any, Any]) -> None:
     client._print_table_simple = lambda rows: None
     client.show_variable({"var_name": "mail"})
     assert calls == [{"params": {"var_name": "mail"}, "use_api_base": True, "auth_kind": "admin"}]
+
+
+@pytest.mark.parametrize("data", [None, "invalid", {}, [False], ["invalid"]])
+def test_variable_cli_rejects_malformed_rows(cli_modules: tuple[Any, Any], data: Any) -> None:
+    _, module = cli_modules
+    with pytest.raises(RuntimeError, match="Invalid variable list"):
+        module._variable_rows(SimpleNamespace(status_code=200, json=lambda: {"code": 0, "data": data}))
