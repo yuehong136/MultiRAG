@@ -38,25 +38,32 @@ func (s *DocumentService) ListDatasetDocuments(ctx context.Context, id, user str
 		}
 		return nil, common.CodeServerError, fmt.Errorf("dataset read failed")
 	}
-	query := s.db.WithContext(ctx).Model(&entity.Document{}).Where("kb_id = ? AND status = ?", id, "1")
+	query := s.db.WithContext(ctx).Model(&entity.Document{}).Table("t_ai_documents AS document").Where("document.kb_id = ? AND document.status = ?", id, "1")
 	if keywords != "" {
-		query = query.Where("name LIKE ?", "%"+keywords+"%")
+		query = query.Where("document.name LIKE ?", "%"+keywords+"%")
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("document count failed")
 	}
-	var documents []entity.Document
-	if err := query.Order("create_time DESC").Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&documents).Error; err != nil {
+	var rows []entity.DocumentListItem
+	if err := query.Select("document.*, pipeline.title AS pipeline_name, author.nickname AS nickname").
+		Joins("LEFT JOIN t_ai_user_canvases AS pipeline ON pipeline.id = document.pipeline_id AND pipeline.user_id = ?", kb.TenantID).
+		Joins("LEFT JOIN t_ai_users AS author ON author.id = document.created_by").
+		Order("document.create_time DESC").Order("document.id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error; err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("document list failed")
+	}
+	documents := make([]entity.Document, len(rows))
+	for i := range rows {
+		documents[i] = rows[i].Document
 	}
 	result := &DatasetDocuments{Docs: make([]map[string]any, 0, len(documents)), Total: total, Page: page, PageSize: pageSize}
 	metadata, err := s.datasetDocumentMetadata(ctx, kb, documents)
 	if err != nil {
 		return nil, common.CodeServerError, err
 	}
-	for _, doc := range documents {
-		row := map[string]any{"id": doc.ID, "name": doc.Name, "size": doc.Size, "type": doc.Type, "status": doc.Status, "created_at": doc.CreateTime, "parser_id": doc.ParserID, "progress": doc.Progress, "run": doc.Run}
+	for _, doc := range rows {
+		row := mapDocumentListItem(&doc)
 		if len(metadata[doc.ID]) > 0 {
 			row["meta_fields"] = metadata[doc.ID]
 		} else if emptyMetadata {

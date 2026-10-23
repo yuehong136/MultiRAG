@@ -46,6 +46,13 @@ type Document struct {
 	BaseModel
 }
 
+// DocumentListItem enriches one authorized document without requiring a file link.
+type DocumentListItem struct {
+	Document
+	PipelineName *string `gorm:"column:pipeline_name" json:"pipeline_name,omitempty"`
+	Nickname     *string `gorm:"column:nickname" json:"nickname,omitempty"`
+}
+
 // TableName specify table name
 func (Document) TableName() string {
 	return "t_ai_documents"

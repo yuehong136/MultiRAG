@@ -296,3 +296,9 @@ In `--admin` mode, use `LIST VARS;`, `SHOW VAR mail.;`, and
 prefix matching. Invalid values and denied requests return a nonzero process exit.
 The [variable types and examples](../../admin/client/README.md#系统变量admin)
 apply to both CLI implementations.
+
+
+`LIST DOCUMENTS FROM '<dataset-id-or-name>';` returns the authorized document page
+with token/chunk counts, parser configuration, pipeline/author names and timestamps.
+Run states use `UNSTART`, `RUNNING`, `CANCEL`, `DONE`, and `FAIL`. Documents without
+file links remain visible, and multiple file links do not duplicate a document.
