@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+import core.llm as provider_models
 from agent.component.agent_with_tools import Agent
 from api.apps import llm_app
 from api.db.joint_services import tenant_model_service
@@ -78,7 +79,7 @@ async def test_capability_edit_preserves_structured_credentials(monkeypatch: pyt
             yield "ok"
 
     monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name="MiniMax")])
-    monkeypatch.setattr(llm_app, "ChatModel", {"MiniMax": Probe})
+    monkeypatch.setattr(provider_models, "ChatModel", {"MiniMax": Probe})
     monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: [SimpleNamespace(api_key=json.dumps(before))]))
     monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, filters, payload: saved.append(payload) or True))
     payload: dict[str, Any] = {"llm_factory": "MiniMax", "llm_name": "fixture", "mdl_type": "chat"}
@@ -110,7 +111,7 @@ async def test_ocr_object_key_survives_capability_merge(monkeypatch: pytest.Monk
 
     record = SimpleNamespace(api_key=json.dumps(before if edit == "flat_saved" else {"api_key": before, "provider_order": "", "is_tools": True}), api_base="", max_tokens=0)
     monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=factory)])
-    monkeypatch.setattr(llm_app, "OcrModel", {factory: Probe})
+    monkeypatch.setattr(provider_models, "OcrModel", {factory: Probe})
     monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: [] if edit == "create" else [record]))
     monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, filters, payload: saved.append(payload) or True))
     payload: dict[str, Any] = {"llm_factory": factory, "llm_name": "fixture", "mdl_type": "ocr", "is_tools": False}
@@ -145,9 +146,7 @@ async def test_bundle_binds_and_dispatches_native_tools_only_when_enabled(monkey
             calls.append("tools")
             return "answer", 0
 
-    from api.db.services import tenant_llm_service
-
-    monkeypatch.setattr(tenant_llm_service, "ChatModel", {"Ollama": Model})
+    monkeypatch.setattr(provider_models, "ChatModel", {"Ollama": Model})
     monkeypatch.setattr(TenantLangfuseService, "filter_by_tenant", classmethod(lambda cls, *args, **kwargs: None))
     config = {"llm_name": "fixture", "llm_factory": "Ollama", "mdl_type": "chat", "api_key": TenantLLMService._encode_api_key_config("fixture-key", enabled), "api_base": "http://fixture.invalid"}
     bundle = LLMBundle(db, "tenant", config)
@@ -249,7 +248,7 @@ async def test_partial_credentials_are_merged_before_provider_probe(monkeypatch:
         return [SimpleNamespace(api_key=json.dumps(before), api_base="http://fixture.invalid/v1", max_tokens=4096)]
 
     monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=factory)])
-    monkeypatch.setattr(llm_app, "ChatModel", {factory: Probe})
+    monkeypatch.setattr(provider_models, "ChatModel", {factory: Probe})
     monkeypatch.setattr(TenantLLMService, "query", classmethod(query))
     monkeypatch.setattr(TenantLLMService, "filter_update", classmethod(lambda cls, db, filters, payload: saved.append(payload) or True))
     fields: dict[str, Any] = {"llm_factory": factory, "llm_name": "fixture", "mdl_type": "chat"}

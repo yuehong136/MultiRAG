@@ -28,8 +28,6 @@ from common import settings
 from common.constants import LLMType, ParserType, RetCode
 from common.string_utils import is_content_empty, remove_redundant_spaces
 from common.tag_feature_utils import validate_tag_features
-from core.app.qa import beAdoc, rmPrefix
-from core.nlp import rag_tokenizer, search
 
 router = APIRouter()
 
@@ -162,6 +160,8 @@ def _write_context(db: Session, user_id: str, dataset_id: str, document_id: str,
 
 
 def _index_name(kb: Any) -> list[str]:
+    from core.nlp import search
+
     return search.index_name(kb.tenant_id, [kb.name])
 
 
@@ -188,6 +188,8 @@ async def list_chunks(
     context = await db.run_sync(lambda session: _read_context(session, user_id, dataset_id, document_id))  # TODO(async-phase4)
     if context is None:
         return get_error_data_result(retmsg=f"You don't own the dataset or document {dataset_id}/{document_id}.")
+    from core.nlp import search
+
     kb, doc = context
     index_name = search.index_name(str(kb["tenant_id"]), [str(kb["name"])])
     result: dict[str, Any] = {"total": 0, "chunks": [], "doc": _map_doc(doc)}
@@ -234,6 +236,8 @@ async def get_chunk(
     context = await db.run_sync(lambda session: _read_context(session, user_id, dataset_id, document_id))  # TODO(async-phase4)
     if context is None:
         return get_error_data_result(retmsg=f"You don't own the dataset or document {dataset_id}/{document_id}.")
+    from core.nlp import search
+
     kb, _ = context
     index_name = search.index_name(str(kb["tenant_id"]), [str(kb["name"])])
     chunk = await asyncio.to_thread(settings.docStoreConn.get, chunk_id, index_name, [dataset_id])
@@ -252,6 +256,8 @@ def _add_chunk(user_id: str, dataset_id: str, document_id: str, request: AddChun
         if is_content_empty(req["content"]):
             return get_error_data_result(retmsg="`content` is required")
         chunk_id = xxhash.xxh64((req["content"] + document_id).encode()).hexdigest()
+        from core.nlp import rag_tokenizer
+
         tokenized = rag_tokenizer.tokenize(req["content"])
         chunk = {
             "id": chunk_id,
@@ -363,6 +369,8 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
         content = req.get("content", current.get("content_with_weight", ""))
         if is_content_empty(content):
             return get_error_data_result(retmsg="`content` is required")
+        from core.nlp import rag_tokenizer
+
         tokenized = rag_tokenizer.tokenize(content)
         patch: dict[str, Any] = {
             "id": chunk_id,
@@ -392,6 +400,8 @@ def _update_chunk(user_id: str, dataset_id: str, document_id: str, chunk_id: str
             parts = [part for part in re.split(r"[\n\t]", content) if len(part) > 1]
             if len(parts) != 2:
                 return get_error_data_result(retmsg="Q&A must be separated by TAB/ENTER key.")
+            from core.app.qa import beAdoc, rmPrefix
+
             question, answer = rmPrefix(parts[0]), rmPrefix(parts[1])
             patch = beAdoc(patch, parts[0], parts[1], not any(rag_tokenizer.is_chinese(text) for text in question + answer))
         model = _embedding_model(db, kb)

@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.orm import Session
 
-from api.db.services import tenant_llm_service
+import core.llm as provider_models
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from common.constants import LLMType
@@ -36,7 +36,7 @@ def test_model_instance_uses_model_specific_api_base(
     registry_name: str,
 ) -> None:
     monkeypatch.setattr(
-        tenant_llm_service,
+        provider_models,
         registry_name,
         {"RegionalProvider": _RecordingModel},
     )
@@ -68,7 +68,7 @@ def test_bundle_missing_provider_reports_resolved_model_type_without_credentials
     caplog: pytest.LogCaptureFixture,
     type_fields: dict[str, str],
 ) -> None:
-    monkeypatch.setattr(tenant_llm_service, "ChatModel", {})
+    monkeypatch.setattr(provider_models, "ChatModel", {})
     config = {
         **type_fields,
         "llm_factory": "UnavailableProvider",

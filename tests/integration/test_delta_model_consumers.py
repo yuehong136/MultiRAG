@@ -15,11 +15,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+import core.llm as provider_models
 from agent.canvas import Canvas
 from agent.component import agent_with_tools, html_report, llm
 from api.db.db_models import TenantLLM
 from api.db.joint_services import memory_message_service
-from api.db.services import dialog_service, tenant_llm_service
+from api.db.services import dialog_service
 from common import settings
 from core.prompts import generator
 
@@ -43,8 +44,8 @@ def scoped_models(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) 
             return "{}", 0
 
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": name} for name in factories])
-    monkeypatch.setattr(tenant_llm_service, "ChatModel", {factories[0]: Provider})
-    monkeypatch.setattr(tenant_llm_service, "CvModel", {factories[1]: Provider})
+    monkeypatch.setattr(provider_models, "ChatModel", {factories[0]: Provider})
+    monkeypatch.setattr(provider_models, "CvModel", {factories[1]: Provider})
     with Session(bootstrapped_engine) as db:
         for tenant, factory, name, kind, status in [
             (owner, factories[0], "same", "chat", "1"),

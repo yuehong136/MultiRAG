@@ -25,7 +25,6 @@ from common.constants import (
     PADDLEOCR_ENV_KEYS,
     LLMType,
 )
-from core.llm import ChatModel, CvModel, EmbeddingModel, OcrModel, RerankModel, Seq2txtModel, TTSModel
 
 
 class LLMFactoriesService(CommonService):
@@ -245,6 +244,8 @@ class TenantLLMService(CommonService):
 
         kwargs.update({"provider": model_config["llm_factory"]})
         if model_type == LLMType.EMBEDDING.value:
+            from core.llm import EmbeddingModel
+
             if model_config["llm_factory"] == "FastEmbed":
                 raise ValueError("FastEmbed is retired; configure a supported BAAI model and rebuild its vector index before switching")
             if model_config["llm_factory"] not in EmbeddingModel:
@@ -253,27 +254,37 @@ class TenantLLMService(CommonService):
             return EmbeddingModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
         elif model_type == LLMType.RERANK.value:
+            from core.llm import RerankModel
+
             if model_config["llm_factory"] not in RerankModel:
                 return None
             return RerankModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
         elif model_type == LLMType.IMAGE2TEXT.value:
+            from core.llm import CvModel
+
             if model_config["llm_factory"] not in CvModel:
                 logging.info(f"Debug: Image2Text model factory not supported: {model_config['llm_factory']}")
                 return None
             if model_config.get("is_tools"):
+                from core.llm import ChatModel
+
                 if model_config["llm_factory"] not in ChatModel:
                     raise ValueError("Native tools are unavailable for this vision provider")
                 kwargs["_tool_chat_model_factory"] = partial(ChatModel[model_config["llm_factory"]], model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
             return CvModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], lang, base_url=model_config["api_base"], **kwargs)
 
         elif model_type == LLMType.CHAT.value:
+            from core.llm import ChatModel
+
             if model_config["llm_factory"] not in ChatModel:
                 logging.info(f"Debug: Chat model factory not supported: {model_config['llm_factory']}")
                 return None
             return ChatModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"], **kwargs)
 
         elif model_type == LLMType.SPEECH2TEXT.value:
+            from core.llm import Seq2txtModel
+
             if model_config["llm_factory"] not in Seq2txtModel:
                 return None
             # Preserve existing providers while forwarding the gateway URL for FuturMix.
@@ -281,11 +292,15 @@ class TenantLLMService(CommonService):
             return Seq2txtModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], **speech_kwargs)
 
         elif model_type == LLMType.TTS.value:
+            from core.llm import TTSModel
+
             if model_config["llm_factory"] not in TTSModel:
                 return None
             return TTSModel[model_config["llm_factory"]](model_config["api_key"], model_config["llm_name"], base_url=model_config["api_base"])
 
         elif model_type == LLMType.OCR.value:
+            from core.llm import OcrModel
+
             if model_config["llm_factory"] not in OcrModel:
                 return None
             return OcrModel[model_config["llm_factory"]](

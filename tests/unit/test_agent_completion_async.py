@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from agent import canvas as agent_canvas
 from api.db.services import canvas_service
 from api.db.services.api_service import API4ConversationService
 from api.db.services.canvas_service import UserCanvasService
@@ -388,7 +389,7 @@ def test_restful_agent_delegation_refusal_is_not_an_unhandled_error(
     agent_route_stubs.app.dependency_overrides[get_async_db] = lambda: db
     monkeypatch.setattr(module.CanvasReplicaService, "load_for_run", lambda **kwargs: {"dsl": {}, "title": "debug"})
     monkeypatch.setattr(module, "require_canvas", authorized)
-    monkeypatch.setattr(module, "Canvas", reject_canvas)
+    monkeypatch.setattr(agent_canvas, "Canvas", reject_canvas)
     monkeypatch.setattr(module, "agent_completion", reject_completion)
     monkeypatch.setattr(canvas_service, "completion", reject_completion)
 
@@ -448,7 +449,7 @@ async def test_registered_debug_response_owns_bound_runtime(client: TestClient, 
     monkeypatch.setattr(UserCanvasService, "accessible", classmethod(lambda cls, db, cid, tid: True))
     monkeypatch.setattr(module.CanvasReplicaService, "load_for_run", lambda **kwargs: {"dsl": {}, "title": "debug"})
     monkeypatch.setattr(module.CanvasReplicaService, "commit_after_run", lambda **kwargs: calls.append("commit") or True)
-    monkeypatch.setattr(module, "Canvas", DebugCanvas)
+    monkeypatch.setattr(agent_canvas, "Canvas", DebugCanvas)
     monkeypatch.setattr(module, "bind_canvas_task", bind)
     monkeypatch.setattr(module, "require_canvas", authorized)
     monkeypatch.setattr(module, "finish_runtime", lambda task_id: calls.append("finish"))

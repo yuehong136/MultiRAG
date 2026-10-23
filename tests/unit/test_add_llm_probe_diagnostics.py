@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session
 
+import core.llm as provider_models
 from api.apps import llm_app
 from api.apps.llm_app import AddLLMRequest, add_llm
 from api.db.services.tenant_llm_service import TenantLLMService
@@ -55,7 +56,7 @@ def probe_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     _FakeChat.delay = 0.0
 
     monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=FACTORY)])
-    monkeypatch.setattr(llm_app, "ChatModel", {FACTORY: _FakeChat})
+    monkeypatch.setattr(provider_models, "ChatModel", {FACTORY: _FakeChat})
     monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: []))
 
     saved: list[dict[str, Any]] = []
@@ -158,7 +159,7 @@ async def test_blank_api_key_does_not_reach_sdk_as_none(probe_env: dict[str, Any
 
 @pytest.mark.asyncio
 async def test_unsupported_factory_is_a_message_not_a_crash(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_app, "ChatModel", {})
+    monkeypatch.setattr(provider_models, "ChatModel", {})
 
     body = await _call(_request(), db)
 
@@ -172,7 +173,7 @@ async def test_constructor_failure_is_a_message_not_a_500(probe_env: dict[str, A
         def __init__(self, key=None, model_name="", base_url="", **kwargs):
             raise ValueError("url cannot be None")
 
-    monkeypatch.setattr(llm_app, "ChatModel", {FACTORY: _Exploding})
+    monkeypatch.setattr(provider_models, "ChatModel", {FACTORY: _Exploding})
 
     body = await _call(_request(api_base=""), db)
 
@@ -268,7 +269,7 @@ class TestSetApiKeyProbe:
         _FakeChat.chunks = ["Hi", 2]
         _FakeChat.delay = 0.0
 
-        monkeypatch.setattr(llm_app, "ChatModel", {"ZHIPU-AI": _FakeChat})
+        monkeypatch.setattr(provider_models, "ChatModel", {"ZHIPU-AI": _FakeChat})
         monkeypatch.setattr(TenantLLMService, "query", classmethod(lambda cls, db, **filters: []))
         monkeypatch.setattr(
             llm_app.LLMService,
@@ -339,8 +340,8 @@ class TestSetApiKeyProbe:
                 time.sleep(5)
                 return [0.1], 1
 
-        monkeypatch.setattr(llm_app, "EmbeddingModel", {"ZHIPU-AI": _Hanging})
-        monkeypatch.setattr(llm_app, "RerankModel", {"ZHIPU-AI": _Hanging})
+        monkeypatch.setattr(provider_models, "EmbeddingModel", {"ZHIPU-AI": _Hanging})
+        monkeypatch.setattr(provider_models, "RerankModel", {"ZHIPU-AI": _Hanging})
         _FakeChat.delay = 5.0
 
         started = asyncio.get_running_loop().time()
@@ -374,8 +375,8 @@ async def test_verify_mode_reports_message_without_saving(probe_env: dict[str, A
 @pytest.mark.parametrize("model_type", ["chat", "rerank"])
 @pytest.mark.parametrize("verify", [False, True])
 async def test_unsupported_model_keeps_business_error_and_never_persists(probe_env: dict[str, Any], db: Session, monkeypatch: pytest.MonkeyPatch, model_type: str, verify: bool) -> None:
-    monkeypatch.setattr(llm_app, "ChatModel", {})
-    monkeypatch.setattr(llm_app, "RerankModel", {})
+    monkeypatch.setattr(provider_models, "ChatModel", {})
+    monkeypatch.setattr(provider_models, "RerankModel", {})
     body = await _call(_request(mdl_type=model_type, verify=verify), db)
     if verify:
         assert body["retcode"] == 0

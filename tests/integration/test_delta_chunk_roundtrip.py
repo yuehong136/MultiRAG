@@ -14,8 +14,8 @@ from pymilvus import MilvusClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+import core.llm as provider_models
 from api.db.db_models import Document, Knowledgebase, TenantLLM
-from api.db.services import tenant_llm_service
 from common import settings
 from common.config_utils import CONFIGS
 from common.doc_store.document_history import document_history
@@ -46,7 +46,7 @@ def test_manual_insert_nullable_readback_and_search(management_api: dict[str, An
             yield db
 
     monkeypatch.setattr(sys.modules["api.apps.restful_apis.chunk"], "db_connection", scratch_db)
-    monkeypatch.setattr(tenant_llm_service, "EmbeddingModel", {factory: Embedding})
+    monkeypatch.setattr(provider_models, "EmbeddingModel", {factory: Embedding})
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": factory}])
     cfg = CONFIGS["milvus"]
     reader = MilvusClient(uri=cfg["hosts"], user=cfg.get("username", ""), password=cfg.get("password", ""), db_name=cfg.get("db_name") or "default")

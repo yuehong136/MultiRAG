@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
-from agent.component.agent_with_tools import Agent, AgentParam
 from api.apps import manager
 from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
@@ -34,9 +33,7 @@ from common import settings
 from common.constants import LLMType, StatusEnum
 from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 from common.misc_utils import get_uuid, thread_pool_exec
-from core.llm import ChatModel, CvModel, EmbeddingModel, OcrModel, RerankModel, Seq2txtModel, TTSModel
 from core.prompts.generator import kb_prompt
-from core.utils.base64_image import test_image
 from core.utils.tavily_conn import Tavily
 
 
@@ -63,6 +60,8 @@ class ChatAgentAdapter:
 
         # 创建简化的Canvas mock - 只提供Agent需要的接口
         self.canvas_mock = self._create_canvas_mock()
+
+        from agent.component.agent_with_tools import Agent, AgentParam
 
         # 创建Agent参数，直接复用AgentParam
         agent_param = AgentParam()
@@ -935,6 +934,8 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
             break
         if not embd_passed and llm.mdl_type == LLMType.EMBEDDING.value:
             try:
+                from core.llm import EmbeddingModel
+
                 if factory not in EmbeddingModel:
                     raise LookupError(f"Embedding model from {factory} is not supported yet.")
                 mdl = EmbeddingModel[factory](candidate_key(llm.llm_name), llm.llm_name, base_url=base_url)
@@ -949,6 +950,8 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 msg += probe_failure(f"Fail to access embedding model({llm.llm_name}) using this api key.", e)
         elif not chat_passed and llm.mdl_type == LLMType.CHAT.value:
             try:
+                from core.llm import ChatModel
+
                 if factory not in ChatModel:
                     raise LookupError(f"Chat model from {factory} is not supported yet.")
                 mdl = ChatModel[factory](candidate_key(llm.llm_name), llm.llm_name, base_url=base_url, **extra)
@@ -978,6 +981,8 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
                 msg += probe_failure(f"Fail to access model({llm.fid}/{llm.llm_name}) using this api key.", e)
         elif not rerank_passed and llm.mdl_type == LLMType.RERANK.value:
             try:
+                from core.llm import RerankModel
+
                 if factory not in RerankModel:
                     raise LookupError(f"Re-rank model from {factory} is not supported yet.")
                 mdl = RerankModel[factory](candidate_key(llm.llm_name), llm.llm_name, base_url=base_url)
@@ -1245,8 +1250,11 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
     extra = {"provider": factory, "max_retries": 0}
     model_type = llm["mdl_type"]
     effective_tools = req["is_tools"] if "is_tools" in request.model_fields_set else saved_tools
-    if effective_tools and model_type == LLMType.IMAGE2TEXT.value and factory not in ChatModel:
-        return get_data_error_result(retmsg="Native tools are unavailable for this vision provider")
+    if effective_tools and model_type == LLMType.IMAGE2TEXT.value:
+        from core.llm import ChatModel
+
+        if factory not in ChatModel:
+            return get_data_error_result(retmsg="Native tools are unavailable for this vision provider")
     decoded_key, _, provider_payload = TenantLLMService._decode_api_key_config(llm["api_key"])
     model_api_key = provider_payload if provider_payload is not None else decoded_key
     model_base_url = llm.get("api_base", "")
@@ -1262,6 +1270,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
     match model_type:
         case LLMType.EMBEDDING.value:
             try:
+                from core.llm import EmbeddingModel
+
                 if factory not in EmbeddingModel:
                     raise LookupError(f"Embedding model from {factory} is not supported yet.")
                 mdl = EmbeddingModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
@@ -1275,6 +1285,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
                 msg += probe_failure(f"Fail to access embedding model({mdl_nm}).", e)
         case LLMType.CHAT.value:
             try:
+                from core.llm import ChatModel
+
                 if factory not in ChatModel:
                     raise LookupError(f"Chat model from {factory} is not supported yet.")
                 mdl = ChatModel[factory](
@@ -1312,6 +1324,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
 
         case LLMType.RERANK.value:
             try:
+                from core.llm import RerankModel
+
                 if factory not in RerankModel:
                     raise LookupError(f"RE-rank model from {factory} is not supported yet.")
                 mdl = RerankModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
@@ -1326,6 +1340,9 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
 
         case LLMType.IMAGE2TEXT.value:
             try:
+                from core.llm import CvModel
+                from core.utils.base64_image import test_image
+
                 if factory not in CvModel:
                     raise LookupError(f"Image to text model from {factory} is not supported yet.")
                 mdl = CvModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
@@ -1340,6 +1357,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
                 msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case LLMType.TTS.value:
             try:
+                from core.llm import TTSModel
+
                 if factory not in TTSModel:
                     raise LookupError(f"TTS model from {factory} is not supported yet.")
                 mdl = TTSModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
@@ -1356,6 +1375,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
                 msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case LLMType.OCR.value:
             try:
+                from core.llm import OcrModel
+
                 if factory not in OcrModel:
                     raise LookupError(f"OCR model from {factory} is not supported yet.")
                 mdl = OcrModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)
@@ -1369,6 +1390,8 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
                 msg += probe_failure(f"Fail to access model({factory}/{mdl_nm}).", e)
         case LLMType.SPEECH2TEXT.value:
             try:
+                from core.llm import Seq2txtModel
+
                 if factory not in Seq2txtModel:
                     raise LookupError(f"Speech model from {factory} is not supported yet.")
                 mdl = Seq2txtModel[factory](key=model_api_key, model_name=mdl_nm, base_url=model_base_url)

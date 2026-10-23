@@ -27,9 +27,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from agent.canvas import Canvas
-from agent.component.llm import LLM
-from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
 from api.apps.services.agent_db_probe import DatabaseProbePolicyError, probe_database
 from api.apps.services.agent_file_auth import require_agent_file_user, require_agent_upload_owner
@@ -65,9 +62,6 @@ from api.utils.api_utils import BusinessError, Principal, async_current_user, ge
 from common import settings
 from common.constants import RetCode
 from common.misc_utils import get_uuid, thread_pool_exec
-from core.flow.pipeline import Pipeline
-from core.nlp import search
-from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import finish_runtime, require_runtime_finish
 
 router = APIRouter()
@@ -453,7 +447,7 @@ def update_agent(
     return get_json_result(data=True)
 
 
-def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def get(canvas_id: str, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     获取指定Canvas的详细信息
 
@@ -477,6 +471,8 @@ def get(canvas_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     exists, canvas = UserCanvasService.get_by_canvas_id(db, canvas_id)
     if not exists or not canvas:
         return get_data_error_result(retmsg="canvas not found.")
+    from agent.dsl_migration import normalize_chunker_dsl
+
     canvas["dsl"] = normalize_chunker_dsl(canvas.get("dsl", {}))
     try:
         CanvasReplicaService.bootstrap(
@@ -684,6 +680,8 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
 
     # DataFlow模式（只取所需字段，不让 ORM 对象活到流式期）
     if stored_category == CanvasCategory.DataFlow:
+        from core.flow.pipeline import Pipeline
+
         task_id = get_uuid()
         Pipeline(dsl_str, tenant_id=resource_owner_id, doc_id=CANVAS_DEBUG_DOC_ID, task_id=task_id, flow_id=req["id"])
         await bind_canvas_task(db, task_id, tenant_id, req["id"], "dataflow")
@@ -702,6 +700,8 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         if resource_owner_id != tenant_id:
             raise PermissionError("Only the owner can run a draft agent.")
         run_context = execution_context(principal=user, tenant_id=resource_owner_id, agent_id=req["id"], dsl=dsl_str)
+        from agent.canvas import Canvas
+
         # 组件 __init__ 各自开连接查模型配置——整体入线程池
         canvas = await asyncio.to_thread(
             Canvas,
@@ -921,7 +921,7 @@ async def exp_agent_completion(
 
 
 @router.post("/agents/rerun", summary="重新运行Pipeline", response_description="成功重新运行")
-def rerun(request_body: RerunRequest, db: Session = Depends(get_db), user=Depends(manager)):
+def rerun(request_body: RerunRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     重新运行Pipeline处理任务
 
@@ -971,6 +971,8 @@ def rerun(request_body: RerunRequest, db: Session = Depends(get_db), user=Depend
         return get_data_error_result(retmsg=f"`{doc['name']}` is processing...")
 
     # 删除向量数据库中的数据
+    from core.nlp import search
+
     if settings.docStoreConn.index_exist(search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"]):
         settings.docStoreConn.delete({"doc_id": doc["id"]}, search.index_name(user.id, [doc["kb_name"]]), doc["kb_id"])
 
@@ -995,7 +997,7 @@ def rerun(request_body: RerunRequest, db: Session = Depends(get_db), user=Depend
     return get_json_result(data=True)
 
 
-def cancel(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def cancel(task_id: str, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     取消正在运行的任务
 
@@ -1018,6 +1020,8 @@ def cancel(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
     - 已完成的处理不会回滚
     """
     try:
+        from core.utils.redis_conn import REDIS_CONN
+
         REDIS_CONN.set(f"{task_id}-cancel", "x")
     except Exception as e:
         logging.exception(e)
@@ -1025,7 +1029,7 @@ def cancel(task_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post("/agents/{agent_id}/reset", summary="重置Canvas", response_description="成功重置Canvas")
-def reset(agent_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def reset(agent_id: str, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     重置Canvas状态
 
@@ -1071,6 +1075,8 @@ def reset(agent_id: str, db: Session = Depends(get_db), user=Depends(manager)):
         user_canvas = UserCanvasService.get_by_id(db, req["id"])
         if not user_canvas:
             return get_data_error_result(retmsg="canvas not found.")
+
+        from agent.canvas import Canvas
 
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         canvas.reset()
@@ -1157,7 +1163,7 @@ async def upload(
 
 
 @router.get("/agents/{id}/components/{component_id}/input-form", summary="获取组件输入表单", response_description="成功获取输入表单")
-def input_form(id: str, component_id: str, db: Session = Depends(get_db), user=Depends(manager)):
+def input_form(id: str, component_id: str, db: Session = Depends(get_db), user: Any = Depends(manager)) -> JSONResponse:
     """
     获取Canvas组件的输入表单配置
 
@@ -1199,6 +1205,8 @@ def input_form(id: str, component_id: str, db: Session = Depends(get_db), user=D
 
         if not UserCanvasService.query(db, user_id=user.id, id=id):
             return get_json_result(data=False, retmsg="Only owner of canvas authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
+
+        from agent.canvas import Canvas
 
         canvas = Canvas(json.dumps(user_canvas.dsl), user.id, canvas_id=user_canvas.id)
         return get_json_result(data=canvas.get_component_input_form(component_id))
@@ -1264,6 +1272,9 @@ async def debug(
         dsl_str, stored_canvas_id = await db.run_sync(  # TODO(async-phase4)
             lambda s: (lambda cvs: (json.dumps(cvs.dsl), cvs.id))(UserCanvasService.get_by_id(s, req["id"]))
         )
+
+        from agent.canvas import Canvas
+        from agent.component.llm import LLM
 
         def _build_canvas() -> Canvas:
             canvas = Canvas(dsl_str, user.id, canvas_id=stored_canvas_id)
@@ -1597,6 +1608,8 @@ async def trace(
     - 日志存储在Redis中
     """
     try:
+        from core.utils.redis_conn import REDIS_CONN
+
         redis = REDIS_CONN.REDIS
         if redis is None:
             raise RuntimeError("Agent log storage is unavailable.")
@@ -1719,6 +1732,8 @@ async def set_session(
         prepared = await prepare_agent_run(db, canvas_id, user.id, release_mode=str(request_body.get("release", "")).strip().lower() == "true", principal=user)
         if prepared.runtime_tenant_id != user.id:
             raise PermissionError("Only the owner can create an agent session here.")
+
+        from agent.canvas import Canvas
 
         def build_canvas() -> Canvas:
             canvas = Canvas(prepared.dsl, prepared.runtime_tenant_id, canvas_id=canvas_id, run_context=prepared.run_context)
@@ -1862,7 +1877,7 @@ def get_agent(canvas_id: str, db: Session = Depends(get_db), user=Depends(manage
 @router.api_route("/agents/{agent_id}/webhook", methods=["POST", "GET", "PUT", "PATCH", "DELETE", "HEAD"], summary="Webhook触发代理")
 @router.api_route("/agents/{agent_id}/webhook/test", methods=["POST", "GET", "PUT", "PATCH", "DELETE", "HEAD"], summary="Webhook测试")
 # async-db-ok: blocking service calls are dispatched through thread_pool_exec
-async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)):
+async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)) -> Response:
     """
     通过Webhook触发代理执行（增强版）
 
@@ -1994,7 +2009,7 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
 
         raise Exception(f"IP {client_ip} is not allowed by whitelist")
 
-    def _validate_rate_limit(security_cfg):
+    def _validate_rate_limit(security_cfg: dict[str, Any]) -> None:
         """Simple in-memory rate limiting using Redis token bucket."""
         rl = security_cfg.get("rate_limit")
         if not rl:
@@ -2023,6 +2038,8 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
         now = time.time()
 
         try:
+            from core.utils.redis_conn import REDIS_CONN
+
             res = REDIS_CONN.lua_token_bucket(
                 keys=[key],
                 args=[capacity, rate, now, cost],
@@ -2141,6 +2158,8 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
         dsl_str = cvs.dsl
 
     try:
+        from agent.canvas import Canvas
+
         canvas = Canvas(
             dsl_str,
             cvs.user_id,
@@ -2386,8 +2405,10 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
     execution_mode = webhook_cfg.get("execution_mode", "Immediately")
     response_cfg = webhook_cfg.get("response", {})
 
-    def append_webhook_trace(agent_id: str, start_ts: float, event: dict, ttl=600):
+    def append_webhook_trace(agent_id: str, start_ts: float, event: dict[str, Any], ttl: int = 600) -> None:
         """Append event to webhook trace log in Redis."""
+        from core.utils.redis_conn import REDIS_CONN
+
         key = f"webhook-trace-{agent_id}-logs"
 
         raw = REDIS_CONN.get(key)
@@ -2549,7 +2570,7 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
 
 
 @router.get("/agents/{agent_id}/webhook/logs", summary="获取Webhook跟踪日志")
-async def webhook_trace(agent_id: str, request: Request):
+async def webhook_trace(agent_id: str, request: Request) -> JSONResponse:
     """
     获取Webhook执行的跟踪日志
 
@@ -2580,6 +2601,8 @@ async def webhook_trace(agent_id: str, request: Request):
     if since_ts:
         since_ts = float(since_ts)
     webhook_id = request.query_params.get("webhook_id")
+
+    from core.utils.redis_conn import REDIS_CONN
 
     key = f"webhook-trace-{agent_id}-logs"
     raw = REDIS_CONN.get(key)

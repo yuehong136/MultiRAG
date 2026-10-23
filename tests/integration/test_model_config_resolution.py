@@ -11,9 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+import core.llm as provider_models
 from api.db.db_models import LLM, LLMFactories, TenantLLM, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
-from api.db.services import tenant_llm_service
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources, settings
 
@@ -31,7 +31,7 @@ def test_image_fallback_reloads_chat_registration_as_cv(bootstrapped_engine: Eng
         def describe_with_prompt(self, image: bytes, prompt: str) -> tuple[str, int]:
             return f"{self.model_name}: {prompt}", 1
 
-    monkeypatch.setattr(tenant_llm_service, "CvModel", {"VisionFixture": VisionModel})
+    monkeypatch.setattr(provider_models, "CvModel", {"VisionFixture": VisionModel})
     with Session(bootstrapped_engine) as db:
         for factory, tags in [("VisionFixture", "LLM, IMAGE2TEXT "), ("TextFixture", "LLM")]:
             db.add(LLMFactories(name=factory, tags="LLM", status="1"))
@@ -88,7 +88,7 @@ def test_provider_credentials_survive_probe_save_and_reload(bootstrapped_engine:
             yield "fixture answer"
             yield 1
 
-    monkeypatch.setattr(llm_app, "ChatModel", {factory: ProbeModel})
+    monkeypatch.setattr(provider_models, "ChatModel", {factory: ProbeModel})
     monkeypatch.setattr(llm_app, "get_allowed_llm_factories", lambda db: [SimpleNamespace(name=factory)])
     app = FastAPI()
     app.include_router(llm_app.router, prefix="/v1/llm")

@@ -1,6 +1,8 @@
 import importlib
 import inspect
 from enum import StrEnum
+from threading import RLock
+from typing import Any
 
 
 class SupportedLiteLLMProvider(StrEnum):
@@ -125,55 +127,60 @@ LITELLM_PROVIDER_PREFIX = {
     SupportedLiteLLMProvider.FuturMix: "openai/",
 }
 
-ChatModel = globals().get("ChatModel", {})
-CvModel = globals().get("CvModel", {})
-EmbeddingModel = globals().get("EmbeddingModel", {})
-RerankModel = globals().get("RerankModel", {})
-Seq2txtModel = globals().get("Seq2txtModel", {})
-TTSModel = globals().get("TTSModel", {})
-OcrModel = globals().get("OcrModel", {})
-
-
-MODULE_MAPPING = {
-    "chat": ChatModel,
-    "cv": CvModel,
-    "embedding": EmbeddingModel,
-    "rerank": RerankModel,
-    "sequence2txt": Seq2txtModel,
-    "tts": TTSModel,
-    "ocr_model": OcrModel,
+# Keep provider metadata available to direct chat/cv imports without loading
+# every unrelated model family during application registration.
+_REGISTRY_MODULES = {
+    "ChatModel": "chat",
+    "CvModel": "cv",
+    "EmbeddingModel": "embedding",
+    "RerankModel": "rerank",
+    "Seq2txtModel": "sequence2txt",
+    "TTSModel": "tts",
+    "OcrModel": "ocr_model",
 }
+_REGISTRY_LOCKS = {name: RLock() for name in _REGISTRY_MODULES}
 
-package_name = __name__
 
-for module_name, mapping_dict in MODULE_MAPPING.items():
-    full_module_name = f"{package_name}.{module_name}"
-    module = importlib.import_module(full_module_name)
-
+def _build_registry(module_name: str) -> dict[str, type[Any]]:
+    module = importlib.import_module(f"{__name__}.{module_name}")
+    mapping: dict[str, type[Any]] = {}
     base_class = None
-    lite_llm_base_class = None
     for name, obj in inspect.getmembers(module):
-        if inspect.isclass(obj):
-            if name == "Base":
-                base_class = obj
-            elif name == "LiteLLMBase":
-                lite_llm_base_class = obj
-                assert hasattr(obj, "_FACTORY_NAME"), "LiteLLMbase should have _FACTORY_NAME field."
-                if hasattr(obj, "_FACTORY_NAME"):
-                    if isinstance(obj._FACTORY_NAME, list):
-                        for factory_name in obj._FACTORY_NAME:
-                            mapping_dict[factory_name] = obj
-                    else:
-                        mapping_dict[obj._FACTORY_NAME] = obj
+        if not inspect.isclass(obj):
+            continue
+        if name == "Base":
+            base_class = obj
+        elif name == "LiteLLMBase":
+            assert hasattr(obj, "_FACTORY_NAME"), "LiteLLMbase should have _FACTORY_NAME field."
+            factories = obj._FACTORY_NAME
+            for factory in factories if isinstance(factories, list) else [factories]:
+                mapping[factory] = obj
 
     if base_class is not None:
         for _, obj in inspect.getmembers(module):
             if inspect.isclass(obj) and issubclass(obj, base_class) and obj is not base_class and hasattr(obj, "_FACTORY_NAME"):
-                if isinstance(obj._FACTORY_NAME, list):
-                    for factory_name in obj._FACTORY_NAME:
-                        mapping_dict[factory_name] = obj
-                else:
-                    mapping_dict[obj._FACTORY_NAME] = obj
+                factories = obj._FACTORY_NAME
+                for factory in factories if isinstance(factories, list) else [factories]:
+                    mapping[factory] = obj
+    return mapping
+
+
+def __getattr__(name: str) -> dict[str, type[Any]]:
+    if name not in _REGISTRY_MODULES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    with _REGISTRY_LOCKS[name]:
+        existing = globals().get(name)
+        if existing is not None:
+            return existing
+        # Publish only a complete dictionary. An import/discovery failure stays
+        # visible to the caller and the next request can retry initialization.
+        mapping = _build_registry(_REGISTRY_MODULES[name])
+        globals()[name] = mapping
+        return mapping
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | _REGISTRY_MODULES.keys())
 
 
 __all__ = [
