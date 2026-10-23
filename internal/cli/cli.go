@@ -1200,6 +1200,15 @@ SQL Commands (User Mode):
   REMOVE ALL CHUNKS FROM DOCUMENT 'doc_id';              - Remove all chunks of a document
   SET METADATA OF DOCUMENT 'doc_id' TO '{...}';          - Set/merge document metadata (JSON)
 
+Media Commands (User Mode):
+  ASR WITH 'model@instance@provider' AUDIO './speech.wav';
+  TTS WITH 'model@instance@provider' TEXT 'hello';
+  OCR WITH 'model@instance@provider' FILE './image.png';
+  STREAM ASR ...; / STREAM TTS ...;                       - Stream media results
+  CHAT WITH 'model@instance@provider' AUDIO './speech.wav';
+  WAV/MP3 files are limited to 20 MiB. Drivers must implement the capability;
+  built-in ASR/TTS/OCR drivers currently return an unsupported error (code 501).
+
 SQL Commands (Admin Mode):
   LOGIN USER 'email';                                    - Login as admin
   LOGOUT;                                                - End the current session

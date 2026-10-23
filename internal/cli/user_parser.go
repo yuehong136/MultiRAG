@@ -1371,8 +1371,8 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 			} else if p.curToken.Type != TokenEffort && p.curToken.Type != TokenVerbosity {
 				return nil, fmt.Errorf("expected model, EFFORT or VERBOSITY after WITH")
 			}
-		case TokenMessage, TokenImage, TokenVideo, TokenFile:
-			kind := map[int]string{TokenMessage: "text", TokenImage: "image_url", TokenVideo: "video_url", TokenFile: "file_url"}[p.curToken.Type]
+		case TokenMessage, TokenImage, TokenVideo, TokenFile, TokenAudio:
+			kind := map[int]string{TokenMessage: "text", TokenImage: "image_url", TokenVideo: "video_url", TokenFile: "file_url", TokenAudio: "input_audio"}[p.curToken.Type]
 			p.nextToken()
 			if p.curToken.Type != TokenQuotedString {
 				return nil, fmt.Errorf("%s requires a quoted value", kind)
@@ -1381,8 +1381,6 @@ func (p *Parser) parseChatCommand() (*Command, error) {
 				inputs = append(inputs, chatInput{Kind: kind, Value: p.curToken.Value})
 				p.nextToken()
 			}
-		case TokenAudio:
-			return nil, fmt.Errorf("audio chat input is not supported")
 		case TokenEffort, TokenVerbosity:
 			option := p.curToken.Type
 			p.nextToken()
@@ -1437,8 +1435,12 @@ func (p *Parser) parseStreamCommand() (*Command, error) {
 		command, err = p.parseChatCommand()
 	case TokenThink:
 		command, err = p.parseThinkCommand()
+	case TokenASR:
+		command, err = p.parseMediaCommand("asr")
+	case TokenTTS:
+		command, err = p.parseMediaCommand("tts")
 	default:
-		return nil, fmt.Errorf("expected CHAT or THINK CHAT after STREAM")
+		return nil, fmt.Errorf("expected CHAT, THINK CHAT, ASR or TTS after STREAM")
 	}
 	if err != nil {
 		return nil, err

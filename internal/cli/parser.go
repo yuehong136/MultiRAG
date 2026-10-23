@@ -192,6 +192,12 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseInferenceCommand(false)
 	case TokenReranker:
 		return p.parseInferenceCommand(true)
+	case TokenASR:
+		return p.parseMediaCommand("asr")
+	case TokenTTS:
+		return p.parseMediaCommand("tts")
+	case TokenOCR:
+		return p.parseMediaCommand("ocr")
 	case TokenUse:
 		return p.parseUseCommand()
 	case TokenCheck:

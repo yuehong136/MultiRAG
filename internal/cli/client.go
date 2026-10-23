@@ -247,6 +247,12 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ModelInference(cmd, false)
 	case "rerank_user_document":
 		return c.ModelInference(cmd, true)
+	case "asr_user_command":
+		return c.MediaCommand(cmd, "asr")
+	case "tts_user_command":
+		return c.MediaCommand(cmd, "tts")
+	case "ocr_user_command":
+		return c.MediaCommand(cmd, "ocr")
 	case "chat_to_model":
 		return c.ChatToModel(cmd)
 	case "use_model":

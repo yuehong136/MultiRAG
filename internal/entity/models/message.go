@@ -49,6 +49,19 @@ func ContentParts(content any) ([]map[string]any, error) {
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 				return nil, fmt.Errorf("%s requires an HTTP(S) URL", kind)
 			}
+		case "input_audio":
+			audio, ok := part["input_audio"].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("input_audio must be an object")
+			}
+			data, dataOK := audio["data"].(string)
+			format, formatOK := audio["format"].(string)
+			if !dataOK || !formatOK {
+				return nil, fmt.Errorf("input_audio requires base64 data and format")
+			}
+			if _, err := DecodeAudioInput(data, format); err != nil {
+				return nil, err
+			}
 		case "image_url":
 			img, ok := part["image_url"].(map[string]any)
 			if !ok {

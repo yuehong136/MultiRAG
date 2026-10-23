@@ -220,3 +220,18 @@ including zero for missing IDs. Task logs and chunk contents are not included.
 SQL dataset search (`SEARCH 'question' ON DATASETS 'name1,name2';`) and its sequential/concurrent
 benchmark modes call `POST /api/v1/datasets/search` with `dataset_ids` and Bearer
 authentication. Dataset names resolve through `GET /api/v1/datasets` first.
+
+## Media commands
+
+`ASR WITH 'model@instance@provider' AUDIO './speech.wav';`,
+`TTS WITH 'model@instance@provider' TEXT 'hello';` and
+`OCR WITH 'model@instance@provider' FILE './image.png';` use the protected media APIs.
+ASR/TTS accept a `STREAM` prefix. `CHAT ... AUDIO './speech.wav';` sends base64 audio.
+Files are bounded to 20 MiB; audio input supports WAV/MP3. TTS returns base64 audio,
+including under `-o json`, and does not automatically write a local file.
+
+Built-in media inference drivers currently return **501 unsupported**. A catalog
+entry alone does not enable a driver capability. Empty results, provider errors,
+failed/truncated streams and nonzero business codes fail the CLI command. See the
+[Go media contract](../../docs/ragflow-porting/go-media.md) for payloads and the
+controlled-adapter verification boundary.

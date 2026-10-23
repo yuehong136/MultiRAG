@@ -45,6 +45,7 @@ const (
 	CodeNotFound               ErrorCode = 404
 	CodeConflict               ErrorCode = 409
 	CodeServerError            ErrorCode = 500
+	CodeNotImplemented         ErrorCode = 501
 )
 
 var errorMessages = map[ErrorCode]string{
@@ -74,6 +75,7 @@ var errorMessages = map[ErrorCode]string{
 	CodeNotFound:               "Resource not found",
 	CodeConflict:               "Resource conflict",
 	CodeServerError:            "Internal server error",
+	CodeNotImplemented:         "Not implemented",
 }
 
 func (e ErrorCode) Message() string {

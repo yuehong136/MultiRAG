@@ -55,7 +55,7 @@ func encodeProviderInstanceExtra(region, baseURL string) (string, error) {
 	raw, err = json.Marshal(extra)
 	return string(raw), err
 }
-func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModelInstance) (models.ModelDriver, *models.APIConfig, error) {
+func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModelInstance, factories ...models.DriverFactory) (models.ModelDriver, *models.APIConfig, error) {
 	if provider == nil {
 		return nil, nil, fmt.Errorf("provider not found")
 	}
@@ -79,7 +79,11 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 	if instance.APIKey == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") && !strings.EqualFold(provider.Name, "LM-Studio") {
 		return nil, nil, fmt.Errorf("model API key is missing")
 	}
-	driver, err := models.NewModelFactory().CreateModelDriver(provider.Name, map[string]string{"default": baseURL, extra.Region: baseURL}, provider.URLSuffix)
+	var factory models.DriverFactory = models.NewModelFactory()
+	if len(factories) > 0 && factories[0] != nil {
+		factory = factories[0]
+	}
+	driver, err := factory.CreateModelDriver(provider.Name, map[string]string{"default": baseURL, extra.Region: baseURL}, provider.URLSuffix)
 	return driver, &models.APIConfig{APIKey: &instance.APIKey, Region: &extra.Region}, err
 }
 

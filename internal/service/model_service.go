@@ -32,8 +32,15 @@ import (
 )
 
 func NewModelProviderService() *ModelProviderService {
+	return NewModelProviderServiceWithFactory(nil)
+}
+
+// NewModelProviderServiceWithFactory uses the same SQL binding policy with a driver factory.
+// A nil factory selects the built-in drivers.
+func NewModelProviderServiceWithFactory(factory modelModule.DriverFactory) *ModelProviderService {
 	return &ModelProviderService{
 		providerManager:      dao.GetModelProviderManager(),
+		driverFactory:        factory,
 		modelProviderDAO:     dao.NewTenantModelProviderDAO(),
 		modelInstanceDAO:     dao.NewTenantModelInstanceDAO(),
 		modelDAO:             dao.NewTenantModelDAO(),
@@ -44,6 +51,7 @@ func NewModelProviderService() *ModelProviderService {
 }
 
 type ModelProviderService struct {
+	driverFactory        modelModule.DriverFactory
 	providerManager      *entity.ProviderManager
 	modelProviderDAO     *dao.TenantModelProviderDAO
 	modelInstanceDAO     *dao.TenantModelInstanceDAO
@@ -724,7 +732,7 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 	if len(chatDefaults) > 0 {
 		applyModelChatDefaults(model, chatDefaults[0])
 	}
-	driver, config, err := instanceModelDriver(providerInfo, instance)
+	driver, config, err := instanceModelDriver(providerInfo, instance, m.driverFactory)
 	return driver, name, config, err
 }
 

@@ -8,6 +8,7 @@ import (
 	"multirag/internal/entity/models"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -41,8 +42,25 @@ func chatContent(message string, raw any) (any, error) {
 			parts = append(parts, parsed...)
 		}
 	}
+	audioCount := 0
 	for _, input := range inputs {
 		value := input.Value
+		if input.Kind == "input_audio" {
+			audioCount++
+			if audioCount > 1 {
+				return nil, fmt.Errorf("only one audio file is supported")
+			}
+			format := strings.ToLower(strings.TrimPrefix(filepath.Ext(value), "."))
+			if format != "wav" && format != "mp3" {
+				return nil, fmt.Errorf("audio file must be wav or mp3")
+			}
+			data, err := readMediaFile(value)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": base64.StdEncoding.EncodeToString(data), "format": format}})
+			continue
+		}
 		if input.Kind == "text" {
 			parts = append(parts, map[string]any{"type": "text", "text": value})
 			continue

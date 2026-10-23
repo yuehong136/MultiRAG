@@ -80,7 +80,7 @@ func TestChatMediaParserAndPayload(t *testing.T) {
 }
 
 func TestChatMediaRejectsUnsupportedOrInvalidInput(t *testing.T) {
-	for _, input := range []string{`CHAT AUDIO "a.wav";`, `CHAT MESSAGE;`, `CHAT IMAGE;`, `CHAT;`, `CHAT WITH "a@b@c";`, `CHAT MESSAGE "q" nonsense;`} {
+	for _, input := range []string{`CHAT AUDIO;`, `CHAT MESSAGE;`, `CHAT IMAGE;`, `CHAT;`, `CHAT WITH "a@b@c";`, `CHAT MESSAGE "q" nonsense;`} {
 		if _, err := NewParser(input).Parse(false); err == nil {
 			t.Errorf("accepted %s", input)
 		}
