@@ -118,14 +118,25 @@ class LLMBundle(LLM4Tenant):
             raise ValueError(f"Model config for {self.model_config.get('llm_name')} is missing tenant model id")
         return bool(await TenantLLMService.increase_usage_by_id_async(model_id, used_tokens))
 
-    def encode(self, texts: list):
+    def encode(self, texts: list[str | None]) -> tuple[Any, int]:
         if self.langfuse:
             generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
 
-        safe_texts = []
-        for text in texts:
+        safe_texts: list[str] = []
+        for index, text in enumerate(texts):
+            # Keep one embedding per input even when parsing produced a blank chunk.
+            if text is None or not text.strip():
+                marker = "None" if text is None else "whitespace-only"
+                logging.warning(
+                    "LLMBundle.encode: empty input at index %d (%s) coerced to placeholder 'None' for model %s",
+                    index,
+                    marker,
+                    self.llm_name,
+                )
+                safe_texts.append("None")
+                continue
             token_size = num_tokens_from_string(text)
-            if token_size > self.max_length:
+            if token_size > self.max_length * 0.95:
                 target_len = int(self.max_length * 0.95)
                 safe_texts.append(text[:target_len])
             else:
@@ -144,9 +155,18 @@ class LLMBundle(LLM4Tenant):
 
         return embeddings, used_tokens
 
-    def encode_queries(self, query: str):
+    def encode_queries(self, query: str | None) -> tuple[Any, int]:
         if self.langfuse:
             generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="encode_queries", model=self.llm_name, input={"query": query})
+
+        if query is None or not query.strip():
+            marker = "None" if query is None else "whitespace-only"
+            logging.warning(
+                "LLMBundle.encode_queries: empty query (%s) coerced to placeholder 'None' for model %s",
+                marker,
+                self.llm_name,
+            )
+            query = "None"
 
         # 避免在外部模型调用期间持有 idle-in-transaction
         self._release_db_before_long_io()
