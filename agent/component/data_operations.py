@@ -16,6 +16,7 @@
 import ast
 import os
 from abc import ABC
+from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
 from api.utils.api_utils import timeout
@@ -48,7 +49,7 @@ class DataOperations(ComponentBase, ABC):
         return {k: {"name": o.get("name", ""), "type": "line"} for input_item in (self._param.query or []) for k, o in self.get_input_elements_from_text(input_item).items()}
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         self.input_objects = []
         inputs = getattr(self._param, "query", None)
         if not isinstance(inputs, (list, tuple)):
@@ -66,7 +67,7 @@ class DataOperations(ComponentBase, ABC):
                 continue
         if self._param.operations == "select_keys":
             self._select_keys()
-        elif self._param.operations == "recursive_eval":
+        elif self._param.operations == "literal_eval":
             self._literal_eval()
         elif self._param.operations == "combine":
             self._combine()

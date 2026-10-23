@@ -91,19 +91,19 @@ class VariableAssigner(ComponentBase, ABC):
     def _overwrite(self, parameter):
         return self._canvas.get_variable_value(parameter)
 
-    def _clear(self, variable):
+    def _clear(self, variable: Any) -> Any:
         if isinstance(variable, list):
             return []
         elif isinstance(variable, str):
             return ""
         elif isinstance(variable, dict):
             return {}
+        elif isinstance(variable, bool):
+            return False
         elif isinstance(variable, int):
             return 0
         elif isinstance(variable, float):
             return 0.0
-        elif isinstance(variable, bool):
-            return False
         else:
             return None
 

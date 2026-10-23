@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from abc import ABC
+from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
 
@@ -47,7 +48,7 @@ class LoopItem(ComponentBase, ABC):
                 return
         self._idx += 1
 
-    def evaluate_condition(self, var, operator, value):
+    def evaluate_condition(self, var: Any, operator: str, value: Any) -> bool:
         if isinstance(var, str):
             if operator == "contains":
                 return value in var
@@ -66,6 +67,16 @@ class LoopItem(ComponentBase, ABC):
             elif operator == "not empty":
                 return var != ""
 
+        elif isinstance(var, bool):
+            if operator == "is":
+                return var is value
+            elif operator == "is not":
+                return var is not value
+            elif operator == "empty":
+                return var is None
+            elif operator == "not empty":
+                return var is not None
+
         elif isinstance(var, (int, float)):
             if operator == "=":
                 return var == value
@@ -79,16 +90,6 @@ class LoopItem(ComponentBase, ABC):
                 return var >= value
             elif operator == "≤":
                 return var <= value
-            elif operator == "empty":
-                return var is None
-            elif operator == "not empty":
-                return var is not None
-
-        elif isinstance(var, bool):
-            if operator == "is":
-                return var is value
-            elif operator == "is not":
-                return var is not value
             elif operator == "empty":
                 return var is None
             elif operator == "not empty":
