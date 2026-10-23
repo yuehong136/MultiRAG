@@ -28,17 +28,26 @@ type openAIChatDriver struct {
 	parseContent         func(json.RawMessage) (string, string, error)
 	waitForStreamEOF     bool
 	inlineThink          bool
+	rejectNonzeroCode    bool
 }
 
 // One pool is shared across request-scoped drivers; credentials stay on requests.
-var openAIChatTransport = func() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+var openAIChatTransport = newOpenAIChatTransport()
+
+func newOpenAIChatTransport() *http.Transport {
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	var transport *http.Transport
+	if ok {
+		transport = defaultTransport.Clone()
+	} else {
+		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 10
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ResponseHeaderTimeout = 60 * time.Second
 	return transport
-}()
+}
 
 func newOpenAIChatDriver(baseURL map[string]string, suffix URLSuffix, provider string, buildBody func(string, []Message, *ChatConfig, bool) (map[string]interface{}, error)) *openAIChatDriver {
 	return &openAIChatDriver{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Transport: openAIChatTransport}, provider: provider, buildBody: buildBody}
@@ -126,12 +135,18 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 			} `json:"message"`
 		} `json:"choices"`
 		Error json.RawMessage `json:"error"`
+		Code  json.RawMessage `json:"code"`
 	}
 	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("openai-compatible: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
 		return nil, fmt.Errorf("openai-compatible: provider returned an error")
+	}
+	if d.rejectNonzeroCode {
+		if err := validateModelResponseCode(result.Code); err != nil {
+			return nil, err
+		}
 	}
 	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("openai-compatible: no text answer")
@@ -265,12 +280,18 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			} `json:"choices"`
 			Error json.RawMessage `json:"error"`
 			Usage json.RawMessage `json:"usage"`
+			Code  json.RawMessage `json:"code"`
 		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			return fmt.Errorf("openai-compatible: decode stream: %w", err)
 		}
 		if len(event.Error) != 0 && string(event.Error) != "null" {
 			return fmt.Errorf("openai-compatible: provider stream error")
+		}
+		if d.rejectNonzeroCode {
+			if err := validateModelResponseCode(event.Code); err != nil {
+				return err
+			}
 		}
 		if len(event.Choices) == 0 {
 			if len(event.Usage) > 0 && string(event.Usage) != "null" {
@@ -387,6 +408,17 @@ func (d *openAIChatDriver) CheckConnection(api *APIConfig) error {
 }
 
 var _ ModelDriver = (*openAIChatDriver)(nil)
+
+func validateModelResponseCode(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var code *int
+	if err := json.Unmarshal(raw, &code); err != nil || code == nil || *code != 0 {
+		return fmt.Errorf("openai-compatible: invalid response code or provider error")
+	}
+	return nil
+}
 
 // decodeContent preserves the string-only contract unless a provider explicitly
 // opts into its structured response format.

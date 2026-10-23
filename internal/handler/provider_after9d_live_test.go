@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,12 +137,16 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 	type providerCase struct {
 		name, chat, embedding string
 		stream                bool
+		dimension             int
 	}
 	providers := []providerCase{
-		{"Novita", "deepseek/deepseek-v4-pro", "baai/bge-m3", true},
-		{"Jina", "jina-vlm", "", false},
-		{"Anthropic", "claude-sonnet-4-5-20250929", "", false},
-		{"CometAPI", "gpt-4o", "text-embedding-3-small", true},
+		{"Novita", "deepseek/deepseek-v4-pro", "baai/bge-m3", true, 2},
+		{"Jina", "jina-vlm", "", false, 2},
+		{"Anthropic", "claude-sonnet-4-5-20250929", "", false, 2},
+		{"CometAPI", "gpt-4o", "text-embedding-3-small", true, 2},
+		{"SiliconFlow", "qwen/qwen3-8b", "Qwen/Qwen3-Embedding-0.6B", true, 2},
+		{"DeepInfra", "deepseek-ai/DeepSeek-V3.2", "Qwen/Qwen3-Embedding-4B", true, 32},
+		{"XunFei", "spark-x", "", true, 2},
 	}
 	for _, provider := range providers {
 		if code, err := svc.AddModelProvider(provider.name, "a-owner"); err != nil || code != common.CodeSuccess {
@@ -151,6 +156,17 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 			key := provider.name + "-" + instance
 			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
+				if r.Method == http.MethodGet && (provider.name == "CometAPI" || provider.name == "DeepInfra") && !strings.HasSuffix(r.URL.Path, "/payment/checklist") {
+					if r.Header.Get("Authorization") != "" {
+						t.Error("public discovery received credentials")
+					}
+					if provider.name == "DeepInfra" {
+						json.NewEncoder(w).Encode([]map[string]any{{"model_name": provider.chat}})
+					} else {
+						json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": provider.chat}}})
+					}
+					return
+				}
 				if provider.name == "Anthropic" {
 					if r.Header.Get("x-api-key") != key || r.Header.Get("anthropic-version") != "2023-06-01" {
 						t.Error("native credentials crossed instances")
@@ -158,14 +174,53 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 				} else if r.Header.Get("Authorization") != "Bearer "+key {
 					t.Error("credentials crossed instances")
 				}
+				if r.Method == http.MethodGet {
+					if strings.HasSuffix(r.URL.Path, "/payment/checklist") {
+						fmt.Fprint(w, `{"stripe_balance":-1}`)
+					} else {
+						json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": provider.chat}}})
+					}
+					return
+				}
+				if provider.name == "DeepInfra" && strings.HasSuffix(r.URL.Path, "/audio/transcriptions") {
+					if err := r.ParseMultipartForm(1024); err != nil {
+						t.Error(err)
+						return
+					}
+					defer r.MultipartForm.RemoveAll()
+					file, _, err := r.FormFile("file")
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer file.Close()
+					data, _ := io.ReadAll(file)
+					if string(data) != "owned audio bytes" || r.FormValue("model") != "bosonai/HiggsAudioV2.5" {
+						t.Error("ASR SQL binding/input lost")
+					}
+					fmt.Fprint(w, `{"text":"transcription"}`)
+					return
+				}
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 					w.WriteHeader(400)
 					return
 				}
+				if provider.name == "DeepInfra" && strings.Contains(r.URL.Path, "/text-to-speech/") {
+					if body["model_id"] != "hexgrad/Kokoro-82M" || body["output_format"] != "wav" || !strings.Contains(r.URL.Path, "/voice_id") {
+						t.Error("speech SQL binding/options lost", body, r.URL.Path)
+					}
+					if body["text"] == "bad" {
+						w.WriteHeader(503)
+						return
+					}
+					w.Header().Set("Content-Type", "audio/wav")
+					w.Write([]byte{0, 255, 1, 128, 9})
+					return
+				}
 				if strings.HasSuffix(r.URL.Path, "/embeddings") {
-					if body["model"] != provider.embedding || body["dimensions"] != float64(2) {
+					if body["model"] != provider.embedding || body["dimensions"] != float64(provider.dimension) {
 						t.Error("embedding config lost", body)
 					}
 					inputs, _ := body["input"].([]any)
@@ -179,13 +234,19 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 					}
 					data := make([]map[string]any, 0, len(inputs))
 					for i := len(inputs) - 1; i >= 0; i-- {
-						data = append(data, map[string]any{"index": i, "embedding": []float64{float64(i), 0}})
+						vector := make([]float64, provider.dimension)
+						vector[0] = float64(i)
+						data = append(data, map[string]any{"index": i, "embedding": vector})
 					}
 					json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 					return
 				}
 				definition := dao.GetModelProviderManager().FindProvider(provider.name)
-				if r.URL.Path != "/instance/"+definition.URLSuffix.Chat || body["model"] != provider.chat {
+				expectedPath, expectedName := "/instance/"+definition.URLSuffix.Chat, provider.chat
+				if provider.name == "XunFei" && body["model"] == "lite" {
+					expectedPath, expectedName = "/instance/v1/chat/completions", "lite"
+				}
+				if r.URL.Path != expectedPath || body["model"] != expectedName {
 					t.Error("configured chat endpoint/name lost", r.URL.Path, body)
 				}
 				messages, _ := body["messages"].([]any)
@@ -247,7 +308,7 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 	}
 	t.Logf("candidate-cli-sha256 %x", sha256.Sum256(binaryData))
 	parsed, _ := url.Parse(api.URL)
-	runCLI := func(identity, syntax string, success bool, want string) {
+	runCLI := func(identity, syntax string, success bool, want string) []byte {
 		t.Helper()
 		process := exec.CommandContext(t.Context(), binary, "-h", parsed.Host, "-t", tokens[identity], "-o", "json", syntax)
 		output, err := process.CombinedOutput()
@@ -258,6 +319,7 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 		if snapshot() != before {
 			t.Fatal("inference changed persisted state")
 		}
+		return output
 	}
 	for _, provider := range providers {
 		for _, instance := range []string{"one", "two"} {
@@ -282,16 +344,72 @@ func TestAfter9dProvidersHTTPCLIAndSQL(t *testing.T) {
 				if provider.embedding != "" {
 					emb := provider.embedding + "@" + instance + "@" + provider.name
 					n = calls.Load()
-					runCLI("a-owner", fmt.Sprintf(`EMBED TEXT %s WITH %q DIMENSION 2;`, strings.Repeat("'a' ", 33), emb), true, "")
-					runCLI("a-owner", fmt.Sprintf(`EMBED TEXT %s 'bad' WITH %q DIMENSION 2;`, strings.Repeat("'a' ", 32), emb), false, "")
+					output := runCLI("a-owner", fmt.Sprintf(`EMBED TEXT %s WITH %q DIMENSION %d;`, strings.Repeat("'a' ", 33), emb, provider.dimension), true, "")
+					var rows []struct{ Index, Dimension int }
+					if err := json.Unmarshal(output, &rows); err != nil || len(rows) != 33 || rows[32].Index != 32 || rows[32].Dimension != provider.dimension {
+						t.Fatal("CLI summary lost global order/computed dimension", err)
+					}
+					runCLI("a-owner", fmt.Sprintf(`EMBED TEXT %s 'bad' WITH %q DIMENSION %d;`, strings.Repeat("'a' ", 32), emb, provider.dimension), false, "")
 					if calls.Load()-n != 4 {
 						t.Fatal("embedding did not batch", calls.Load()-n)
+					}
+					status, result, _ := call("POST", "/api/v1/embeddings", "a-owner", map[string]any{"provider_name": provider.name, "instance_name": instance, "model_name": provider.embedding, "texts": []string{"a", "b"}, "dimension": provider.dimension})
+					data, ok := result["data"].([]any)
+					if status != 200 || result["code"] != float64(0) || !ok || len(data) != 2 {
+						t.Fatal("embedding HTTP vector contract", result)
+					}
+					for index, item := range data {
+						row, ok := item.(map[string]any)
+						if !ok {
+							t.Fatal("missing indexed vector")
+						}
+						vector, ok := row["embedding"].([]any)
+						if !ok || row["index"] != float64(index) || len(vector) != provider.dimension || vector[0] != float64(index) || vector[1] != float64(0) {
+							t.Fatal("HTTP vector identity/dimension lost", row)
+						}
+					}
+					if snapshot() != before {
+						t.Fatal("HTTP embedding changed persisted state")
+					}
+				}
+				runCLI("a-owner", fmt.Sprintf(`LIST SUPPORTED MODELS FROM %q %q;`, provider.name, instance), true, provider.chat)
+				if provider.name == "DeepInfra" || provider.name == "XunFei" {
+					runCLI("a-owner", fmt.Sprintf(`CHECK INSTANCE %q FROM %q;`, instance, provider.name), true, "")
+				}
+				if provider.name == "DeepInfra" {
+					file := filepath.Join(t.TempDir(), "audio.wav")
+					if err := os.WriteFile(file, []byte("owned audio bytes"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					runCLI("a-owner", fmt.Sprintf(`ASR WITH 'bosonai/HiggsAudioV2.5@%s@DeepInfra' AUDIO %q;`, instance, file), true, "transcription")
+					for _, prefix := range []string{"", "STREAM "} {
+						syntax := fmt.Sprintf(`%sTTS WITH 'hexgrad/Kokoro-82M@%s@DeepInfra' TEXT 'hello' PARAM '{"voice_id":"voice_id"}' FORMAT wav;`, prefix, instance)
+						output := runCLI("a-owner", syntax, true, "")
+						var rows []map[string]any
+						if err := json.Unmarshal(output, &rows); err != nil || len(rows) != 1 {
+							t.Fatal("CLI media output", err)
+						}
+						encoded, ok := rows[0]["audio"].(string)
+						if !ok {
+							t.Fatal("missing audio")
+						}
+						data, err := base64.StdEncoding.Strict().DecodeString(encoded)
+						if err != nil || !bytes.Equal(data, []byte{0, 255, 1, 128, 9}) || rows[0]["format"] != "wav" {
+							t.Fatal("CLI binary audio corruption", err)
+						}
+					}
+					runCLI("a-owner", fmt.Sprintf(`TTS WITH 'hexgrad/Kokoro-82M@%s@DeepInfra' TEXT 'bad' PARAM '{"voice_id":"voice_id"}' FORMAT wav;`, instance), false, "")
+					if err := os.Remove(file); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := os.Stat(file); !os.IsNotExist(err) {
+						t.Fatal("owned audio file remains")
 					}
 				}
 				n = calls.Load()
 				runCLI("a-other", fmt.Sprintf(`CHAT WITH %q MESSAGE "q";`, composite), false, "")
-				_, denied, _ := call("POST", "/api/v1/chat/completions", "", map[string]any{"provider_name": provider.name, "instance_name": instance, "model_name": provider.chat, "message": "q"})
-				if denied["code"] == float64(0) || calls.Load() != n || snapshot() != before {
+				status, denied, _ := call("POST", "/api/v1/chat/completions", "", map[string]any{"provider_name": provider.name, "instance_name": instance, "model_name": provider.chat, "message": "q"})
+				if status != http.StatusUnauthorized || denied["code"] == float64(0) || calls.Load() != n || snapshot() != before {
 					t.Fatal("denial side effects")
 				}
 			})

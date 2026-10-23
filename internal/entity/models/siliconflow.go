@@ -75,16 +75,18 @@ func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConf
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
+	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if err != nil {
+		return nil, err
 	}
-
-	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Chat)
+	if m.URLSuffix.Chat == "" {
+		return nil, fmt.Errorf("siliconflow: chat endpoint is missing")
+	}
+	url := joinModelURL(baseURL, m.URLSuffix.Chat)
 
 	modelClass := chatModelClass(modelName, chatModelConfig)
 	if (modelClass == "qwen" || modelClass == "glm") && m.URLSuffix.AsyncChat != "" {
-		url = fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.AsyncChat)
+		url = joinModelURL(baseURL, m.URLSuffix.AsyncChat)
 	}
 
 	// Build request body
@@ -223,12 +225,14 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 		return err
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
+	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if err != nil {
+		return err
 	}
-
-	url := fmt.Sprintf("%s/chat/completions", m.BaseURL[region])
+	if m.URLSuffix.Chat == "" {
+		return fmt.Errorf("siliconflow: chat endpoint is missing")
+	}
+	url := joinModelURL(baseURL, m.URLSuffix.Chat)
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
@@ -389,12 +393,14 @@ func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("siliconflow: model discovery API key is required")
 	}
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
+	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if err != nil {
+		return nil, err
 	}
-
-	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Models)
+	if m.URLSuffix.Models == "" {
+		return nil, fmt.Errorf("siliconflow: models endpoint is missing")
+	}
+	url := joinModelURL(baseURL, m.URLSuffix.Models)
 
 	// Build request body
 	reqBody := map[string]interface{}{}

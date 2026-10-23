@@ -14,7 +14,7 @@ import (
 )
 
 func TestAfter9dHostedChatHTTP(t *testing.T) {
-	for _, provider := range []string{"CometAPI"} {
+	for _, provider := range []string{"CometAPI", "DeepInfra", "XunFei"} {
 		t.Run(provider, func(t *testing.T) {
 			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/office/chat" || r.Header.Get("Authorization") != "Bearer key" || r.Header.Get("Content-Type") != "application/json" {
@@ -73,7 +73,7 @@ func TestAfter9dHostedChatHTTP(t *testing.T) {
 }
 
 func TestAfter9dHostedChatFailuresHTTP(t *testing.T) {
-	for _, provider := range []string{"CometAPI"} {
+	for _, provider := range []string{"CometAPI", "DeepInfra", "XunFei"} {
 		t.Run(provider, func(t *testing.T) {
 			for _, body := range []string{`null`, `{}`, `{"choices":[]}`, `{"choices":[{"message":{"content":" "}}]}`, `{"choices":[{"message":{"content":5}}]}`, `{"choices":[{"message":{"content":"ok"}}],"error":{"message":"private-body"}}`, `{"choices":[{"message":{"content":"ok"}}]} {}`} {
 				t.Run(body, func(t *testing.T) {
