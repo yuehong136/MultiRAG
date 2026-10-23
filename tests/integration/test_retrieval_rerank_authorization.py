@@ -27,12 +27,15 @@ from sqlalchemy.pool import NullPool
 from api.db.db_models import APIToken, Document, Knowledgebase, Task, Tenant, TenantLLM, User, UserTenant, get_async_db, get_db
 from api.db.joint_services import tenant_model_service as models
 from api.db.services.tenant_llm_service import TenantLLMService
-from common import settings
+from common import resources
 from tests.support.database import scratch_database
 
 
 @pytest.fixture
 def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service: None) -> Iterator[dict[str, Any]]:
+    # This database-only contract owns its signer and controlled retrieval boundary.
+    # It must also work after another test imported the cached application.
+    monkeypatch.setitem(resources._state, "secret_key", "rerank-auth-contract-signer")
     from api.apps import app
     from api.apps.sdk import doc, session
     from api.apps.services import dataset_search_service
@@ -105,7 +108,7 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
         providers = Mock(return_value=SimpleNamespace())
         monkeypatch.setattr(TenantLLMService, "model_instance", providers)
         fetch = AsyncMock(return_value={"total": 0, "chunks": [], "doc_aggs": []})
-        monkeypatch.setattr(settings, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, *_: chunks))
+        monkeypatch.setitem(resources._state, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, *_: chunks))
         for module, name in ((doc, "label_question"), (session, "_label_question_with_conn"), (dataset_search_service, "label_question")):
             monkeypatch.setattr(module, name, lambda *_: {})
         translation, metadata, schedule = AsyncMock(), AsyncMock(), Mock()

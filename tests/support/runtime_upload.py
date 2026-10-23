@@ -28,6 +28,13 @@ from common.config_utils import CONFIGS
 
 @pytest.fixture
 def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
+    # A previous database-only test may have imported api.apps with only a signer.
+    # Explicitly initialize this fixture's real storage/search dependencies even
+    # when that application module is already cached.
+    if not all(name in resources._state for name in ("storage", "doc_store", "retriever", "kg_retriever")):
+        from common.bootstrap import ensure_initialized
+
+        ensure_initialized(force=True)
     from api.apps import app, manager
 
     owner_ids = [uuid4().hex, uuid4().hex]
