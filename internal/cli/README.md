@@ -226,6 +226,9 @@ authentication. Dataset names resolve through `GET /api/v1/datasets` first.
 `ASR WITH 'model@instance@provider' AUDIO './speech.wav';`,
 `TTS WITH 'model@instance@provider' TEXT 'hello';` and
 `OCR WITH 'model@instance@provider' FILE './image.png';` use the protected media APIs.
+OCR also accepts `URL 'https://example.com/image.png'` instead of `FILE`; the provider
+fetches the image. Gitee supports both inputs. File input is limited to 20 MiB and
+media calls to 120 seconds. Drivers without the requested capability return code 501.
 ASR/TTS accept a `STREAM` prefix. `CHAT ... AUDIO './speech.wav';` sends base64 audio.
 Files are bounded to 20 MiB; audio input supports WAV/MP3. TTS returns base64 audio,
 including under `-o json`, and does not automatically write a local file.

@@ -20,8 +20,11 @@ func (p *Parser) parseMediaCommand(kind string) (*Command, error) {
 	if kind == "ocr" {
 		token, field = TokenFile, "file"
 	}
+	if kind == "ocr" && p.curToken.Type == TokenURL {
+		token, field = TokenURL, "url"
+	}
 	if p.curToken.Type != token {
-		return nil, fmt.Errorf("expected AUDIO, TEXT or FILE input for %s", kind)
+		return nil, fmt.Errorf("expected AUDIO, TEXT, FILE or OCR URL input for %s", kind)
 	}
 	p.nextToken()
 	value, err := p.parseQuotedString()

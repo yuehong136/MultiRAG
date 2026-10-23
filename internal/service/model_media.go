@@ -117,21 +117,40 @@ func (m *ModelProviderService) OCRFile(provider, instance, name, user string, co
 	if err := models.ValidateMediaBytes(content); err != nil {
 		return nil, common.CodeBadRequest, err
 	}
+	return m.ocrInput(provider, instance, name, user, content, "", api, config)
+}
+func (m *ModelProviderService) OCRURL(provider, instance, name, user, imageURL string, api *models.APIConfig, config *models.OCRConfig) (*models.OCRResponse, common.ErrorCode, error) {
+	if err := models.ValidateOCRURL(imageURL); err != nil {
+		return nil, common.CodeBadRequest, err
+	}
+	return m.ocrInput(provider, instance, name, user, nil, imageURL, api, config)
+}
+func (m *ModelProviderService) ocrInput(provider, instance, name, user string, content []byte, imageURL string, api *models.APIConfig, config *models.OCRConfig) (*models.OCRResponse, common.ErrorCode, error) {
 	driver, resolved, cancel, code, err := m.mediaModel(provider, instance, name, user, entity.ModelTypeOCR, api)
 	if err != nil {
 		return nil, code, err
 	}
 	defer cancel()
-	capability, ok := driver.(models.OCRDriver)
-	if !ok {
-		return nil, common.CodeNotImplemented, fmt.Errorf("%w: OCR", models.ErrUnsupportedCapability)
-	}
+
 	cfg := models.OCRConfig{}
 	if config != nil {
 		cfg = *config
 		cfg.Language = slices.Clone(config.Language)
 	}
-	result, err := capability.OCRFile(&name, content, resolved, &cfg)
+	var result *models.OCRResponse
+	if imageURL != "" {
+		capability, ok := driver.(models.OCRURLDriver)
+		if !ok {
+			return nil, common.CodeNotImplemented, fmt.Errorf("%w: OCR URL", models.ErrUnsupportedCapability)
+		}
+		result, err = capability.OCRURL(&name, imageURL, resolved, &cfg)
+	} else {
+		capability, ok := driver.(models.OCRDriver)
+		if !ok {
+			return nil, common.CodeNotImplemented, fmt.Errorf("%w: OCR", models.ErrUnsupportedCapability)
+		}
+		result, err = capability.OCRFile(&name, content, resolved, &cfg)
+	}
 	if err == nil {
 		err = mediaContext(resolved).Err()
 	}

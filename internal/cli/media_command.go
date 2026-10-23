@@ -63,6 +63,18 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 			field = "file"
 			path = "/file/ocr"
 		}
+		if kind == "ocr" {
+			if imageURL, ok := cmd.Params["url"].(string); ok {
+				if _, hasFile := cmd.Params["file"]; hasFile {
+					return nil, fmt.Errorf("provide FILE or URL, exclusively")
+				}
+				if err := models.ValidateOCRURL(imageURL); err != nil {
+					return nil, err
+				}
+				payload["url"] = imageURL
+				break
+			}
+		}
 		filename, ok := cmd.Params[field].(string)
 		if !ok || filename == "" {
 			return nil, fmt.Errorf("media file required")

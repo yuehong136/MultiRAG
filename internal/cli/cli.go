@@ -1204,6 +1204,7 @@ Media Commands (User Mode):
   ASR WITH 'model@instance@provider' AUDIO './speech.wav';
   TTS WITH 'model@instance@provider' TEXT 'hello';
   OCR WITH 'model@instance@provider' FILE './image.png';
+  OCR WITH 'model@instance@provider' URL 'https://example.com/image.png';
   STREAM ASR ...; / STREAM TTS ...;                       - Stream media results
   CHAT WITH 'model@instance@provider' AUDIO './speech.wav';
   WAV/MP3 files are limited to 20 MiB. Drivers must implement the capability;

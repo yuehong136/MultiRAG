@@ -32,7 +32,8 @@ type AudioSpeechRequest struct {
 }
 type OCRFileRequest struct {
 	mediaIdentity
-	Content  string   `json:"content" binding:"required"`
+	Content  *string  `json:"content"`
+	URL      *string  `json:"url"`
 	Language []string `json:"language,omitempty"`
 }
 
@@ -141,12 +142,26 @@ func (h *ProviderHandler) OCRFile(c *gin.Context) {
 	if !ok {
 		return
 	}
-	content, err := models.DecodeMediaData(req.Content)
-	if err != nil {
-		jsonError(c, common.CodeBadRequest, err.Error())
+	if (req.Content == nil) == (req.URL == nil) {
+		jsonError(c, common.CodeBadRequest, "provide content or URL, exclusively")
 		return
 	}
-	data, code, err := h.modelProviderService.OCRFile(req.ProviderName, req.InstanceName, req.ModelName, user, content, &models.APIConfig{Context: c.Request.Context()}, &models.OCRConfig{Language: req.Language})
+	var data *models.OCRResponse
+	var code common.ErrorCode
+	var err error
+	api := &models.APIConfig{Context: c.Request.Context()}
+	config := &models.OCRConfig{Language: req.Language}
+	if req.URL != nil {
+		data, code, err = h.modelProviderService.OCRURL(req.ProviderName, req.InstanceName, req.ModelName, user, *req.URL, api, config)
+	} else {
+		var content []byte
+		content, err = models.DecodeMediaData(*req.Content)
+		if err != nil {
+			jsonError(c, common.CodeBadRequest, err.Error())
+			return
+		}
+		data, code, err = h.modelProviderService.OCRFile(req.ProviderName, req.InstanceName, req.ModelName, user, content, api, config)
+	}
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return

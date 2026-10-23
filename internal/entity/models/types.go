@@ -41,6 +41,7 @@ type ChatResponse struct {
 
 // URLSuffix represents the URL suffixes for different API endpoints
 type URLSuffix struct {
+	OCR         string `json:"ocr"`
 	Chat        string `json:"chat"`
 	AsyncChat   string `json:"async_chat"`
 	AsyncResult string `json:"async_result"`

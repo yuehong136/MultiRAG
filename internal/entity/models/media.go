@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -33,6 +34,19 @@ type TTSStreamDriver interface {
 }
 type OCRDriver interface {
 	OCRFile(*string, []byte, *APIConfig, *OCRConfig) (*OCRResponse, error)
+}
+
+// OCRURLDriver forwards an image URL to the provider without fetching it locally.
+type OCRURLDriver interface {
+	OCRURL(*string, string, *APIConfig, *OCRConfig) (*OCRResponse, error)
+}
+
+func ValidateOCRURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || len(value) > 8192 || strings.TrimSpace(value) != value || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return fmt.Errorf("OCR URL must be an HTTP(S) image URL without credentials or fragment")
+	}
+	return nil
 }
 
 type ASRResponse struct {

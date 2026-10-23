@@ -36,7 +36,7 @@ func TestBuiltInMediaCapabilitiesAreExplicit(t *testing.T) {
 		if _, ok := driver.(TTSStreamDriver); ok {
 			t.Error("unexpected streaming TTS capability", provider)
 		}
-		if _, ok := driver.(OCRDriver); ok {
+		if _, ok := driver.(OCRDriver); ok && provider != "gitee" {
 			t.Error("unexpected OCR capability", provider)
 		}
 	}

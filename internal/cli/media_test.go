@@ -149,3 +149,32 @@ func TestMediaResponseBufferBounds(t *testing.T) {
 		t.Fatal("unbounded multiline SSE frame", err)
 	}
 }
+
+func TestOCRURLParserAndClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/api/v1/file/ocr" || !strings.Contains(string(raw), `"url":"https://example.com/image.png"`) || strings.Contains(string(raw), `"content"`) {
+			t.Errorf("request %s %s", r.URL.Path, raw)
+		}
+		io.WriteString(w, `{"code":0,"data":{"text":"识别🙂"}}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	client := NewMultiRAGClient("user")
+	client.HTTPClient.Host = u.Hostname()
+	client.HTTPClient.Port = port
+	client.HTTPClient.APIKey = "fixture"
+	cmd, err := NewParser(`OCR WITH "HunyuanOCR@instance@Gitee" URL "https://example.com/image.png";`).Parse(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExecuteCommand(cmd); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{`OCR WITH "a@b@c" URL "https://example.com/x" FILE "x";`, `OCR WITH "a@b@c" URL;`, `OCR WITH "a@b@c" URL "https://example.com/x" extra;`} {
+		if _, err := NewParser(input).Parse(false); err == nil {
+			t.Fatal("invalid grammar accepted")
+		}
+	}
+}
