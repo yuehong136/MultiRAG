@@ -369,7 +369,9 @@ func TestAfterBBBProvidersHTTPCLIAndSQL(t *testing.T) {
 	if err := dao.DB.Exec(`UPDATE tenant_model_instance SET status='active' WHERE status='disabled'`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if snapshot() != before {
+	after := snapshot()
+	t.Logf("provider-state-sha256 before=%x after=%x", sha256.Sum256([]byte(before)), sha256.Sum256([]byte(after)))
+	if after != before {
 		t.Fatal("inference or denial mutated provider state")
 	}
 	// Call cancellation uses the incoming request context (driver coverage also
