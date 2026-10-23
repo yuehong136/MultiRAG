@@ -31,6 +31,9 @@ _VALID_TOKEN = "eim-f2-valid"
 _INSUFFICIENT_TOKEN = "eim-f2-insufficient"
 _CALL_STATUS: dict[str, str] = {}
 _REQUEST_HEADERS: dict[str, str] = {}
+_BINDING_SERVER_ID: str | None = None
+_BINDING_CALLS: list[dict[str, Any]] = []
+_BINDING_REQUESTS = 0
 
 server = MCPServer(
     "eim-f2-modern",
@@ -44,6 +47,7 @@ async def compat_echo(value: str) -> dict[str, Any]:
     """Return structured data and the MCP routing headers seen by the server."""
     return {
         "echo": value,
+        **_record_binding_call("compat_echo", {"value": value}),
         "server_era": "modern",
         "request_headers": {key: _REQUEST_HEADERS.get(key) for key in ("mcp-protocol-version", "mcp-method", "mcp-name", "mcp-session-id") if _REQUEST_HEADERS.get(key) is not None},
     }
@@ -52,7 +56,27 @@ async def compat_echo(value: str) -> dict[str, Any]:
 @server.tool(structured_output=True)
 async def compat_fail() -> None:
     """Return a deterministic MCP tool error."""
+    _record_binding_call("compat_fail", {})
     raise RuntimeError("eim-f2 fixture tool error")
+
+
+def _record_binding_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if _BINDING_SERVER_ID is None:
+        return {}
+    user = _REQUEST_HEADERS.get("authorization", "").rsplit("-", 1)[-1]
+    result = {"server_id": _BINDING_SERVER_ID, "user": user, "canonical_name": name, "arguments": arguments}
+    _BINDING_CALLS.append(result)
+    return result
+
+
+async def compat_echo_0(value: str) -> dict[str, Any]:
+    """A canonical MCP name which collides with the native tool's alias."""
+    return _record_binding_call("compat_echo_0", {"value": value})
+
+
+async def compat_echo_2(value: str) -> dict[str, Any]:
+    """Reserve a canonical name that a duplicate tool's alias might use."""
+    return _record_binding_call("compat_echo_2", {"value": value})
 
 
 @server.tool(structured_output=True)
@@ -86,6 +110,7 @@ class CompatibilityMiddleware:
         receive: Callable[[], Awaitable[dict[str, Any]]],
         send: Callable[[dict[str, Any]], Awaitable[None]],
     ) -> None:
+        global _BINDING_REQUESTS
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
@@ -96,9 +121,17 @@ class CompatibilityMiddleware:
 
         downstream_scope = scope
         path = scope.get("path", "")
+        if _BINDING_SERVER_ID is not None:
+            if path == "/__compat/bindings":
+                body = json.dumps({"calls": _BINDING_CALLS, "requests": _BINDING_REQUESTS}).encode()
+                await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body", "body": body})
+                return
+            _BINDING_REQUESTS += 1
         if path.startswith("/protected"):
             token = headers.get("authorization", "").removeprefix("Bearer ")
-            if token != _VALID_TOKEN:
+            valid_tokens = {_VALID_TOKEN} if _BINDING_SERVER_ID is None else {f"fixture-{_BINDING_SERVER_ID}-{user}" for user in ("alice", "bob")}
+            if token not in valid_tokens:
                 status = 403 if token == _INSUFFICIENT_TOKEN else 401
                 body = b'{"error":"insufficient_scope"}' if status == 403 else b'{"error":"unauthorized"}'
                 await send(
@@ -518,7 +551,12 @@ async def _probe(
     return result
 
 
-def _serve() -> None:
+def _serve(binding_server_id: str | None = None) -> None:
+    global _BINDING_SERVER_ID
+    _BINDING_SERVER_ID = binding_server_id
+    if binding_server_id is not None:
+        server.tool(structured_output=True)(compat_echo_0)
+        server.tool(structured_output=True)(compat_echo_2)
     listener, port = _bound_loopback_socket()
     app = CompatibilityMiddleware(
         server.streamable_http_app(
@@ -575,6 +613,7 @@ def _serve_handshake(protocol_version: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--binding-server-id", choices=("a", "b"))
     parser.add_argument("--serve-handshake")
     parser.add_argument("--probe")
     parser.add_argument("--mode", default="auto")
@@ -586,7 +625,7 @@ def main() -> None:
     parser.add_argument("--tool")
     args = parser.parse_args()
     if args.serve:
-        _serve()
+        _serve(args.binding_server_id)
         return
     if args.serve_handshake:
         _serve_handshake(args.serve_handshake)
