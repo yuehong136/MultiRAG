@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -157,6 +158,7 @@ func (g *GiteeModel) ShowTask(id string, api *APIConfig) (*ParseTask, error) {
 	if err := ValidateParseTask(result, true); err != nil {
 		return nil, err
 	}
+	sort.SliceStable(result.Segments, func(i, j int) bool { return result.Segments[i].Index < result.Segments[j].Index })
 	return result, nil
 }
 

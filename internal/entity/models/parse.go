@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -18,6 +19,22 @@ type TaskReader interface {
 type TaskSegment struct {
 	Index   int    `json:"index"`
 	Content string `json:"content"`
+}
+
+// UnmarshalJSON distinguishes a legal zero index from an omitted or null field.
+func (s *TaskSegment) UnmarshalJSON(raw []byte) error {
+	var fields struct {
+		Index   *int    `json:"index"`
+		Content *string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("invalid parse segment")
+	}
+	if fields.Index == nil || fields.Content == nil {
+		return fmt.Errorf("parse segment requires index and content")
+	}
+	s.Index, s.Content = *fields.Index, *fields.Content
+	return nil
 }
 
 type ParseTask struct {

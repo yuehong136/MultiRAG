@@ -89,11 +89,15 @@ func TestGiteeParseTaskContract(t *testing.T) {
 		}
 	}
 	status = "success"
-	for _, bad := range []string{`{}`, `{"segments":[]}`, `{"segments":[{"index":1,"content":"one"},{"index":1,"content":"two"}]}`, `{"segments":[{"index":1,"content":""}]}`} {
+	for _, bad := range []string{`{}`, `{"segments":[]}`, `{"segments":[{"index":1,"content":"one"},{"index":1,"content":"two"}]}`, `{"segments":[{"index":1,"content":""}]}`, `{"segments":[{"content":"one"}]}`, `{"segments":[{"index":null,"content":"one"}]}`, `{"segments":[{"index":0,"content":null}]}`} {
 		output = bad
 		if _, err := driver.ShowTask("job-1", api); err == nil {
 			t.Fatal("invalid result accepted")
 		}
+	}
+	output = `{"segments":[{"index":2,"content":"two"},{"index":0,"content":"zero"},{"index":1,"content":"one"}]}`
+	if result, err := driver.ShowTask("job-1", api); err != nil || len(result.Segments) != 3 || result.Segments[0].Index != 0 || result.Segments[1].Index != 1 || result.Segments[2].Index != 2 {
+		t.Fatal("legal zero or stable segment order lost", result, err)
 	}
 	before := calls
 	if _, err := driver.ShowTask("../secret", api); err == nil {
