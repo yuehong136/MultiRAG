@@ -3,13 +3,17 @@
 import asyncio
 import json
 import subprocess
+from datetime import datetime
 from itertools import pairwise
 from typing import Any
 from uuid import uuid4
 
 import networkx as nx
 import pytest
+import sqlalchemy as sa
 
+from api.apps.services import dataset_api_service
+from api.db.db_models import Knowledgebase
 from common import settings
 from common.exceptions import TaskCanceledException
 from core.graphrag import utils
@@ -19,6 +23,85 @@ from tests.support.dataset_management_http import management_api as management_a
 from tests.support.dataset_management_http import request_api
 from tests.support.graphrag_acceptance import DocumentExtractor, Model, add_source_document, api, native_rows, observe, worker
 from tests.support.graphrag_acceptance import graphrag_api as graphrag_api
+
+
+@pytest.mark.parametrize("endpoint", ["knowledge_graph", "graph", "index?type=graph"])
+async def test_graph_delete_clears_task_finish_and_ui_readback(graphrag_api: dict[str, Any], endpoint: str) -> None:
+    env = graphrag_api
+    await worker(env, api(env, "POST")["data"]["task_id"], Model())
+    # The controlled GraphRAG helper runs the graph entry point, not the outer
+    # executor that normally records the KB completion timestamp.
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["kb"]).values(graphrag_task_finish_at=datetime(2026, 1, 1)))
+    before = observe(env, "completed before " + endpoint)
+    assert before["dataset"]["graphrag_task_id"] and before["dataset"]["graphrag_task_finish_at"]
+    assert any(before["markers"].values())
+    path = f"/datasets/{env['kb']}/{endpoint}"
+    denied = request_api(env, "DELETE", path, credential=env["jwt"][1]).json()
+    assert denied["code"] != 0
+    unchanged = observe(env, "denied " + endpoint)
+    assert unchanged["rows"] == before["rows"] and unchanged["dataset"] == before["dataset"] and unchanged["task_rows"] == before["task_rows"]
+    reply = request_api(env, "DELETE", path, credential=env["jwt"][0]).json()
+    assert reply == {"code": 0, "data": True if endpoint == "knowledge_graph" else {}}
+    after = observe(env, "cleared " + endpoint)
+    assert after["dataset"]["graphrag_task_id"] == "" and after["dataset"]["graphrag_task_finish_at"] is None
+    assert after["task_rows"] == [] and not any(after["markers"].values())
+    assert not any(row.get("knowledge_graph_kwd") in {"graph", "subgraph", "entity", "relation", "community_report"} for row in after["rows"])
+    assert api(env, "GET") == {"code": 0, "data": {}}
+    graph = request_api(env, "GET", f"/datasets/{env['kb']}/graph", credential=env["jwt"][0]).json()
+    assert graph == {"code": 0, "data": {"graph": {}, "mind_map": {}}}
+    detail = request_api(env, "GET", f"/datasets/{env['kb']}", credential=env["jwt"][0]).json()["data"]
+    assert detail["graphrag_task_id"] == "" and detail["graphrag_task_finish_at"] is None
+    assert detail["chunk_count"] == detail["document_count"] == 1
+
+
+@pytest.mark.parametrize("endpoint", ["knowledge_graph", "graph", "index?type=graph"])
+@pytest.mark.parametrize("failure", ["cancel", "snapshot", "delete"])
+async def test_failed_graph_clear_never_unbinds_completed_task(graphrag_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, endpoint: str, failure: str) -> None:
+    env = graphrag_api
+    await worker(env, api(env, "POST")["data"]["task_id"], Model())
+    before = observe(env, "before failed " + endpoint + " " + failure)
+    if failure == "cancel":
+        original = dataset_api_service.REDIS_CONN.set
+
+        def cancel(key: str, *args: Any, **kwargs: Any) -> Any:
+            return False if key.endswith("-cancel") else original(key, *args, **kwargs)
+
+        monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", cancel)
+    else:
+
+        def fail(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("injected graph clear " + failure + " failure")
+
+        monkeypatch.setattr(dataset_api_service, "graph_rows" if failure == "snapshot" else "delete_rows", fail)
+    result = request_api(env, "DELETE", f"/datasets/{env['kb']}/{endpoint}", credential=env["jwt"][0]).json()
+    assert result["code"] != 0
+    after = observe(env, "failed " + endpoint + " " + failure)
+    assert after["dataset"] == before["dataset"] and after["task_rows"] == before["task_rows"]
+    assert after["rows"] == before["rows"] and after["markers"] == before["markers"]
+
+
+@pytest.mark.parametrize("endpoint", ["graph", "index?type=graph"])
+async def test_failed_graph_binding_update_preserves_sql_task_mapping(graphrag_api: dict[str, Any], endpoint: str) -> None:
+    env = graphrag_api
+    await worker(env, api(env, "POST")["data"]["task_id"], Model())
+    before = observe(env, "before SQL clear failure")
+
+    def fail_binding_update(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        if statement.lstrip().upper().startswith("UPDATE") and "graphrag_task_id" in statement:
+            raise RuntimeError("injected graph task binding SQL failure")
+
+    sa.event.listen(env["engine"], "before_cursor_execute", fail_binding_update)
+    try:
+        result = request_api(env, "DELETE", f"/datasets/{env['kb']}/{endpoint}", credential=env["jwt"][0]).json()
+        assert result["code"] != 0
+    finally:
+        sa.event.remove(env["engine"], "before_cursor_execute", fail_binding_update)
+    after = observe(env, "SQL failure retained retryable mapping")
+    assert after["dataset"] == before["dataset"] and after["task_rows"] == before["task_rows"]
+    # Native wiping precedes SQL commit; a failed SQL transaction cannot undo
+    # that acknowledged external operation. The complete SQL mapping is kept.
+    assert not any(row.get("knowledge_graph_kwd") in dataset_api_service.GRAPH_KINDS for row in after["rows"])
 
 
 async def test_nullable_native_graph_rows_resume_and_prune_by_kind(graphrag_api: dict[str, Any]) -> None:

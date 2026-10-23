@@ -683,6 +683,20 @@ def _delete_index(db: Session, tenant_id: str, dataset_id: str, index_type: str,
     index_name = search.index_name_one(kb.tenant_id, kb.name)
     if index_type == "graph":
         wipe_graph(kb.tenant_id, dataset_id, index_name)
+        # Keep the trace and KB binding atomic. CommonService CRUD helpers each
+        # commit independently and would lose the trace if unbinding failed.
+        if task_id:
+            db.execute(delete(Task).where(Task.id == task_id))
+        changed = db.execute(
+            update(Knowledgebase)
+            .where(Knowledgebase.id == kb.id, Knowledgebase.graphrag_task_id == task_id)
+            .values(graphrag_task_id="", graphrag_task_finish_at=None, update_time=KnowledgebaseService.current_timestamp(), update_date=KnowledgebaseService.current_datetime())
+        )
+        if changed.rowcount != 1:
+            db.rollback()
+            return False, "Graph task binding changed during clear."
+        db.commit()
+        return True, {}
     elif index_type == "raptor":
         receipt = settings.docStoreConn.delete({"raptor_kwd": ["raptor"]}, index_name, dataset_id)
         if type(receipt) is not int or receipt < 0:

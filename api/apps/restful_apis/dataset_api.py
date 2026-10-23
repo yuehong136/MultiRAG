@@ -583,7 +583,7 @@ async def delete_knowledge_graph(
         return get_error_data_result(retmsg="Internal server error")
 
 
-# @deprecated —— 由 POST /datasets/{dataset_id}/index?type=graph 取代；生产前端仍在调用。
+# Compatibility: retains graphrag_task_id; Web uses POST /datasets/{dataset_id}/index?type=graph.
 @router.post("/datasets/{dataset_id}/run_graphrag", summary="运行GraphRAG任务", deprecated=True)
 async def run_graphrag(
     dataset_id: str,
@@ -598,7 +598,7 @@ async def run_graphrag(
         return get_error_data_result(retmsg="Internal server error")
 
 
-# @deprecated —— 由 GET /datasets/{dataset_id}/index?type=graph 取代；生产前端仍在调用。
+# Compatibility trace; Web uses GET /datasets/{dataset_id}/index?type=graph.
 @router.get("/datasets/{dataset_id}/trace_graphrag", summary="追踪GraphRAG任务状态", deprecated=True)
 async def trace_graphrag(
     dataset_id: str,
@@ -613,7 +613,7 @@ async def trace_graphrag(
         return get_error_data_result(retmsg="Internal server error")
 
 
-# @deprecated —— 由 POST /datasets/{dataset_id}/index?type=raptor 取代；生产前端仍在调用。
+# Compatibility: retains raptor_task_id; Web uses POST /datasets/{dataset_id}/index?type=raptor.
 @router.post("/datasets/{dataset_id}/run_raptor", summary="运行RAPTOR任务", deprecated=True)
 async def run_raptor(
     dataset_id: str,
@@ -628,7 +628,7 @@ async def run_raptor(
         return get_error_data_result(retmsg="Internal server error")
 
 
-# @deprecated —— 由 GET /datasets/{dataset_id}/index?type=raptor 取代；生产前端仍在调用。
+# Compatibility trace preserves the legacy missing-task error; Web uses GET /datasets/{dataset_id}/index?type=raptor.
 @router.get("/datasets/{dataset_id}/trace_raptor", summary="追踪RAPTOR任务状态", deprecated=True)
 async def trace_raptor(
     dataset_id: str,

@@ -79,10 +79,10 @@ async def test_trace_index_reads_the_column_for_its_type(async_db, monkeypatch, 
     assert await dataset_api_service.trace_index(async_db, "tenant-unit", "kb1", "raptor") == (True, {})
 
 
-def test_delete_index_cancels_task_and_wipes_only_graph_artifacts(db, kb_access, monkeypatch):
+def test_delete_index_cancels_task_and_wipes_only_graph_artifacts(db: Any, kb_access: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     cancelled: list[str] = []
     deleted: list[dict] = []
-    saved: dict[str, object] = {}
+    statements: list[Any] = []
 
     kb_access.graphrag_task_id = "g1"
     monkeypatch.setattr(dataset_api_service.REDIS_CONN, "set", lambda key, value: cancelled.append(key) or True)
@@ -92,14 +92,16 @@ def test_delete_index_cancels_task_and_wipes_only_graph_artifacts(db, kb_access,
     monkeypatch.setattr(dataset_api_service, "delete_rows", lambda *args: deleted.append({"knowledge_graph_kwd": dataset_api_service.GRAPH_KINDS}))
     monkeypatch.setattr(dataset_api_service, "clear_phase_markers", lambda *args: None)
     monkeypatch.setattr(settings, "docStoreConn", types.SimpleNamespace(delete=lambda cond, idx, kb_id: deleted.append(cond)))
-    monkeypatch.setattr(KnowledgebaseService, "update_by_id", classmethod(lambda cls, s, kb_id, payload: saved.update(payload) or True))
+    monkeypatch.setattr(db, "execute", lambda statement: statements.append(statement) or types.SimpleNamespace(rowcount=1))
+    monkeypatch.setattr(db, "commit", lambda: None)
 
     success, result = dataset_api_service.delete_index(db, "tenant-unit", "kb1", "graph")
 
     assert (success, result) == (True, {})
     assert cancelled == ["g1-cancel"]
     assert deleted == [{"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report"]}]
-    assert saved == {"graphrag_task_id": "", "graphrag_task_finish_at": None}
+    saved = statements[-1].compile().params
+    assert saved["graphrag_task_id"] == "" and saved["graphrag_task_finish_at"] is None
 
 
 def test_delete_index_leaves_doc_store_untouched_for_mindmap(db, kb_access, monkeypatch):
