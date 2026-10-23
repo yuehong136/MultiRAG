@@ -217,8 +217,11 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 	}
 	// Capability mismatch stays an explicit failure without model-name heuristics.
 	provider.Models = append(provider.Models, &entity.Model{Name: "vision-only", ModelTypes: []string{"image2text"}})
-	if _, err := svc.modelProviderService.GetChatModel("session-tenant", "vision-only@fixture@Moonshot"); err == nil {
-		t.Fatal("unsupported image capability accepted")
+	if _, err := svc.modelProviderService.GetChatModel("session-tenant", "vision-only@fixture@Moonshot"); err != nil {
+		t.Fatalf("vision chat capability rejected: %v", err)
+	}
+	if _, err := svc.modelProviderService.GetEmbeddingModel("session-tenant", "vision-only@fixture@Moonshot"); err == nil {
+		t.Fatal("vision capability accepted for embeddings")
 	}
 	if model, err := svc.modelProviderService.GetChatModel("session-tenant", ""); err != nil || model.ModelConfig.Thinking == nil || !*model.ModelConfig.Thinking {
 		t.Fatalf("default model/thinking %v %v", model, err)

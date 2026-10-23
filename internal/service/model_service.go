@@ -722,7 +722,7 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 	}
 	supported := false
 	for _, typ := range model.ModelTypes {
-		if typ == string(modelType) {
+		if modelTypeMatches(typ, modelType) {
 			supported = true
 		}
 	}
@@ -747,7 +747,21 @@ func (m *ModelProviderService) getLegacyModelConfig(tenantID, providerName, name
 	if legacy.Status == "0" {
 		return nil, "", nil, errModelDisabled
 	}
-	if legacy.ModelType != nil && *legacy.ModelType != string(modelType) {
+	if legacy.ModelType == nil || strings.TrimSpace(*legacy.ModelType) == "" {
+		// A nullable legacy declaration can use a known catalog capability;
+		// an unknown custom model has no evidence authorizing any capability.
+		definition, err := m.providerManager.GetModelByName(providerInfo.Name, name)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("legacy model type is missing")
+		}
+		supported := false
+		for _, typ := range definition.ModelTypes {
+			supported = supported || modelTypeMatches(typ, modelType)
+		}
+		if !supported {
+			return nil, "", nil, fmt.Errorf("model type mismatch")
+		}
+	} else if !modelTypeMatches(*legacy.ModelType, modelType) {
 		return nil, "", nil, fmt.Errorf("model type mismatch")
 	}
 	if legacy.APIKey == nil || *legacy.APIKey == "" {
@@ -762,4 +776,14 @@ func (m *ModelProviderService) getLegacyModelConfig(tenantID, providerName, name
 	}
 	driver, err := modelModule.NewModelFactory().CreateModelDriver(providerInfo.Name, urls, providerInfo.URLSuffix)
 	return driver, name, &modelModule.APIConfig{APIKey: legacy.APIKey}, err
+}
+
+// Chat accepts the multimodal capability as well as text chat. Media remains
+// specific: OCR must never select a TTS or image-to-text declaration.
+func modelTypeMatches(raw string, expected entity.ModelType) bool {
+	actual, err := normalizeCustomModelType(raw)
+	if err != nil {
+		return false
+	}
+	return actual == expected || expected == entity.ModelTypeChat && actual == entity.ModelTypeImage2Text
 }

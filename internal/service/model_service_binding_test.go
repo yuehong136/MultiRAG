@@ -200,8 +200,8 @@ func TestModelBindingScratchPostgres(t *testing.T) {
 	if err := db.Model(&entity.TenantLLM{}).Where("tenant_id = ?", "legacy").Update("mdl_type", nil).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.GetEmbeddingModel("legacy", legacyName+"@OpenAI"); err != nil {
-		t.Fatalf("nullable legacy model type: %v", err)
+	if _, err := svc.GetEmbeddingModel("legacy", legacyName+"@OpenAI"); err == nil {
+		t.Fatal("unknown nullable legacy capability accepted")
 	}
 	if err := db.Create(&entity.TenantLLM{TenantID: "custom", LLMFactory: "OpenAI-API-Compatible", LLMName: &legacyName, APIKey: &key, Status: "1"}).Error; err != nil {
 		t.Fatal(err)
