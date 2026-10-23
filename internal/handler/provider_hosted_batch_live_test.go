@@ -112,6 +112,9 @@ func TestHostedProviderRoutesScratchPostgres(t *testing.T) {
 				}
 				switch {
 				case strings.HasSuffix(r.URL.Path, "embeddings"):
+					if p == "Mistral" && (b["output_dimension"] != float64(2) || b["dimensions"] != nil) {
+						t.Error("Mistral native dimension missing", b)
+					}
 					data := []any{}
 					for j := range b["input"].([]any) {
 						data = append(data, map[string]any{"index": j, "embedding": []float64{0, float64(i + 1)}})

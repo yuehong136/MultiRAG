@@ -161,3 +161,27 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 		t.Fatal("rejected operation reached supplier")
 	}
 }
+
+func TestMistralNativeEmbeddingDimensionHTTP(t *testing.T) {
+	var calls atomic.Int32
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["output_dimension"] != float64(2) || body["dimensions"] != nil || body["query"] != nil {
+			t.Error("native dimensions lost", body)
+		}
+		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,1]}]}`)
+	}))
+	defer fixture.Close()
+	d := NewMistralModel(map[string]string{"default": fixture.URL}, URLSuffix{Embedding: "embeddings"})
+	api := &APIConfig{APIKey: stringPtr("key")}
+	if rows, err := d.Embed(stringPtr("mistral-embed"), []string{"q"}, api, &EmbeddingConfig{Query: true, Dimension: 2}); err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	if rows, err := d.Embed(stringPtr("mistral-embed"), []string{"q"}, api, &EmbeddingConfig{Dimension: -1}); err == nil || rows != nil || calls.Load() != 1 {
+		t.Fatal(rows, err, calls.Load())
+	}
+}

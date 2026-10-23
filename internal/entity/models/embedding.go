@@ -49,6 +49,7 @@ type embeddingHTTPOptions struct {
 	optionalAPIKey bool
 	fallbackRegion bool
 	parameters     map[string]any
+	dimensionField string
 }
 
 // embedHTTPWithConfig carries optional dimensions and provider parameters through
@@ -103,7 +104,11 @@ func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix
 		}
 		payload["model"], payload["input"] = *name, texts[start:end]
 		if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
-			payload["dimensions"] = embeddingConfig.Dimension
+			field := option.dimensionField
+			if field == "" {
+				field = "dimensions"
+			}
+			payload[field] = embeddingConfig.Dimension
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {

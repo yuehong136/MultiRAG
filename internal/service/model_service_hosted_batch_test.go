@@ -111,6 +111,9 @@ func TestHostedProviderBindingScratchPostgres(t *testing.T) {
 					}
 					switch {
 					case strings.HasSuffix(r.URL.Path, "embeddings"):
+						if providerName == "Mistral" && (b["output_dimension"] != float64(2) || b["dimensions"] != nil) {
+							t.Error("Mistral native dimension missing", b)
+						}
 						inputs := b["input"].([]any)
 						data := make([]map[string]any, len(inputs))
 						for j := range inputs {

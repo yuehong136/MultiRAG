@@ -19,7 +19,7 @@ func NewMistralModel(urls map[string]string, suffix URLSuffix) *MistralModel {
 }
 
 func (m *MistralModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, name, texts, api, config)
+	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{dimensionField: "output_dimension"})
 }
 
 // Mistral reasoning models can return typed text/thinking parts in either a
