@@ -25,7 +25,7 @@ func TestAdminVariableGrammarAndMode(t *testing.T) {
 			t.Fatal("user mode accepted admin variable command")
 		}
 	}
-	for _, text := range []string{"SET VAR mail.port;", "SET VAR mail.port 0 extra;", "SET VAR mail.port 0", "SET VAR mail.port -;"} {
+	for _, text := range []string{"SET VAR mail.port;", "SET VAR mail.port 0 extra;", "SET VAR mail.port 0", "SET VAR mail.port -;", "SET VAR mail.port 0; extra;", "SHOW VAR mail extra;", "SHOW VAR mail; extra;", "LIST VARS extra;", "LIST VARS; extra;"} {
 		if _, err := NewParser(text).Parse(true); err == nil {
 			t.Fatal("malformed grammar accepted", text)
 		}

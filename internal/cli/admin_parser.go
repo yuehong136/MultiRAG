@@ -53,7 +53,7 @@ func (p *Parser) parseAdminListCommand() (*Command, error) {
 		return NewCommand("list_roles"), nil
 	case TokenVars:
 		p.nextToken()
-		if err := p.expectSemicolon(); err != nil {
+		if err := p.finishParseCommand(); err != nil {
 			return nil, err
 		}
 		return NewCommand("list_variables"), nil
@@ -187,7 +187,7 @@ func (p *Parser) parseShowVariable() (*Command, error) {
 	cmd.Params["var_name"] = varName
 
 	p.nextToken()
-	if err := p.expectSemicolon(); err != nil {
+	if err := p.finishParseCommand(); err != nil {
 		return nil, err
 	}
 	return cmd, nil
@@ -666,10 +666,7 @@ func (p *Parser) parseSetVariable() (*Command, error) {
 	cmd.Params["var_value"] = varValue
 
 	p.nextToken()
-	if p.curToken.Type != TokenSemicolon {
-		return nil, fmt.Errorf("expected semicolon after variable value")
-	}
-	if err := p.expectSemicolon(); err != nil {
+	if err := p.finishParseCommand(); err != nil {
 		return nil, err
 	}
 	return cmd, nil
