@@ -13,7 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.db.services.file_service as file_service_module
-from api.db.services.canvas_service import UserCanvasService
 from api.db.services.document_service import DocumentService
 from api.db.services.file_service import FileService
 
@@ -264,26 +263,28 @@ def test_file_api_upload_info_rejects_file_plus_url(client, upload_info_stub):
 
 
 def test_canvas_upload_shape(client, upload_info_stub, monkeypatch):
-    monkeypatch.setattr(UserCanvasService, "get_by_canvas_id", classmethod(lambda cls, s, cid: (True, {"user_id": "owner-1"})))
+    from api.apps.services.agent_file_auth import require_agent_upload_owner
 
+    client.app.dependency_overrides[require_agent_upload_owner] = lambda: "caller-1"
     resp = client.post("/api/v1/agents/c1/upload", files={"file": ("b.txt", b"data", "text/plain")})
-
     assert resp.status_code == 200
     body = resp.json()
     assert body["retcode"] == 0
     assert body["data"] == {"id": "loc1", "name": "b.txt"}
-    assert upload_info_stub == [("owner-1", "b.txt", None)]
+    assert upload_info_stub == [("caller-1", "b.txt", None)]
 
 
-def test_canvas_upload_missing_canvas_shape(client, upload_info_stub, monkeypatch):
-    monkeypatch.setattr(UserCanvasService, "get_by_canvas_id", classmethod(lambda cls, s, cid: (False, None)))
+def test_canvas_upload_denied_before_upload(client, upload_info_stub, monkeypatch):
+    from api.apps.services.agent_file_auth import require_agent_upload_owner
+    from api.utils.api_utils import BusinessError
+    from common.constants import RetCode
 
+    def denied() -> str:
+        raise BusinessError("Make sure you have permission to access the agent.", RetCode.OPERATING_ERROR)
+
+    client.app.dependency_overrides[require_agent_upload_owner] = denied
     resp = client.post("/api/v1/agents/missing/upload", files={"file": ("b.txt", b"data", "text/plain")})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["retcode"] != 0
-    assert body["retmsg"] == "canvas not found."
+    assert resp.status_code == 200 and resp.json()["retcode"] != 0
     assert upload_info_stub == []
 
 

@@ -16,7 +16,6 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from functools import partial
 from typing import Any
-from urllib.parse import quote_plus
 from uuid import uuid4
 
 import jwt
@@ -24,7 +23,7 @@ from anyio import CancelScope
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import create_engine, delete, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -32,6 +31,8 @@ from agent.canvas import Canvas
 from agent.component.llm import LLM
 from agent.dsl_migration import normalize_chunker_dsl
 from api.apps import manager
+from api.apps.services.agent_db_probe import DatabaseProbePolicyError, probe_database
+from api.apps.services.agent_file_auth import require_agent_file_user, require_agent_upload_owner
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
 from api.db.db_models import API4Conversation, Task, User, UserCanvas, UserCanvasVersion, get_async_db, get_db
@@ -50,7 +51,7 @@ from api.db.services.canvas_service import (
     completion as agent_completion,
 )
 from api.db.services.document_service import DocumentService
-from api.db.services.file_service import FileService
+from api.db.services.file_service import FileService, RuntimeAttachmentError, UploadInfoArgumentError
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_cancellation_service import bind_canvas_task, require_canvas
@@ -647,6 +648,12 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         await db.rollback()
         return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
 
+    if stored_category != CanvasCategory.DataFlow:
+        try:
+            files, inputs = await FileService.resolve_agent_runtime_inputs(user.id, files, inputs)
+        except RuntimeAttachmentError as error:
+            return get_data_error_result(retmsg=str(error))
+
     try:
         replica_payload = await asyncio.to_thread(CanvasReplicaService.load_for_run, canvas_id=req["id"], tenant_id=tenant_id, runtime_user_id=user_id)
         if replica_payload is None:
@@ -1072,7 +1079,13 @@ def reset(agent_id: str, db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.post("/agents/{canvas_id}/upload", summary="上传文件到Canvas", response_description="成功上传文件")
-async def upload(canvas_id: str, url: str | None = Query(None, description="URL地址，用于下载网页内容"), file: list[UploadFile] | None = File(None), db: AsyncSession = Depends(get_async_db)):
+async def upload(
+    canvas_id: str,
+    url: str | None = Query(None, description="URL地址，用于下载网页内容"),
+    file: list[UploadFile] | None = File(None),
+    db: AsyncSession = Depends(get_async_db),
+    owner_id: str = Depends(require_agent_upload_owner),
+) -> JSONResponse:
     """
     上传文件到Canvas或从URL下载内容
 
@@ -1130,19 +1143,13 @@ async def upload(canvas_id: str, url: str | None = Query(None, description="URL�
     - 文件会存储在用户的存储空间中
     - 自动检测PDF文件的完整性
     """
-    exists, canvas = await db.run_sync(lambda s: UserCanvasService.get_by_canvas_id(s, canvas_id))  # TODO(async-phase4)
-    if not exists or not canvas:
-        return get_data_error_result(retmsg="canvas not found.")
-
-    user_id = canvas["user_id"]
-    file_objs = file if file else []
     try:
-        if len(file_objs) == 1:
-            return get_json_result(data=await FileService.upload_info(db, user_id, file_objs[0], url))
-        results = [await FileService.upload_info(db, user_id, f) for f in file_objs]
-        return get_json_result(data=results)
-    except Exception as e:
-        return server_error_response(e)
+        return get_json_result(data=await FileService.upload_infos(db, owner_id, file, url))
+    except UploadInfoArgumentError as error:
+        return get_data_error_result(retmsg=str(error))
+    except Exception:
+        logging.warning("Agent runtime file upload failed")
+        return get_json_result(data=False, retmsg="Unable to upload agent file.", retcode=RetCode.EXCEPTION_ERROR)
 
 
 @router.get("/agents/{id}/components/{component_id}/input-form", summary="获取组件输入表单", response_description="成功获取输入表单")
@@ -1296,132 +1303,16 @@ async def debug(
 
 
 @router.post("/agents/test_db_connection", summary="测试数据库连接", response_description="成功测试数据库连接")
-def test_db_connect(request_body: TestDBConnectRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    """
-    测试数据库连接配置是否正确
-
-    概要：验证数据库连接参数，确保可以成功连接到目标数据库。
-
-    参数：
-    - **request_body**: 请求体
-        - db_type: 数据库类型（mysql, mariadb, postgres, mssql, IBM DB2）
-        - database: 数据库名
-        - username: 用户名
-        - host: 主机地址
-        - port: 端口号
-        - password: 密码
-
-    返回：
-    - dict: 测试结果
-        - data: "Database Connection Successful!" 表示连接成功
-
-    支持的数据库：
-    1. **MySQL/MariaDB**: 使用SQLAlchemy + pymysql
-    2. **PostgreSQL**: 使用SQLAlchemy + psycopg2
-    3. **MS SQL Server**: 使用pyodbc，需要ODBC Driver 17
-    4. **IBM DB2**: 使用ibm_db
-
-    功能：
-    1. 根据数据库类型创建连接
-    2. 执行简单查询验证连接
-    3. 关闭连接
-    4. 返回测试结果
-
-    测试查询：
-    - MySQL/PostgreSQL: SELECT 1
-    - MS SQL Server: SELECT 1
-    - IBM DB2: SELECT 1 FROM sysibm.sysdummy1
-
-    异常处理：
-    - 如果数据库类型不支持，返回 "Unsupported database type"
-    - 如果连接失败，返回详细错误信息
-
-    注意：
-    - 连接测试后立即关闭
-    - 不会执行任何数据修改操作
-    - 需要安装对应数据库的驱动
-    """
-    req = request_body.model_dump()
-
+def test_db_connect(request_body: TestDBConnectRequest, user: User = Depends(manager)) -> JSONResponse:
+    """Probe a public database destination and release every acquired resource."""
     try:
-        if req["db_type"] in ["mysql", "mariadb"]:
-            url = f"mysql+pymysql://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}"
-            engine = create_engine(url)
-        elif req["db_type"] == "oceanbase":
-            url = f"mysql+pymysql://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}?charset=utf8mb4"
-            engine = create_engine(url)
-        elif req["db_type"] == "postgres":
-            url = f"postgresql+psycopg2://{quote_plus(req['username'])}:{quote_plus(req['password'])}@{req['host']}:{req['port']}/{req['database']}"
-            engine = create_engine(url)
-        elif req["db_type"] == "mssql":
-            import pyodbc
-
-            connection_string = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={req['host']},{req['port']};DATABASE={req['database']};UID={req['username']};PWD={req['password']};"
-            db_conn = pyodbc.connect(connection_string)
-            cursor = db_conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-        elif req["db_type"] == "IBM DB2":
-            import ibm_db
-
-            conn_str = f"DATABASE={req['database']};HOSTNAME={req['host']};PORT={req['port']};PROTOCOL=TCPIP;UID={req['username']};PWD={req['password']};"
-            redacted_conn_str = f"DATABASE={req['database']};HOSTNAME={req['host']};PORT={req['port']};PROTOCOL=TCPIP;UID={req['username']};PWD=****;"
-            logging.info(redacted_conn_str)
-            conn = ibm_db.connect(conn_str, "", "")
-            stmt = ibm_db.exec_immediate(conn, "SELECT 1 FROM sysibm.sysdummy1")
-            ibm_db.fetch_assoc(stmt)
-            ibm_db.close(conn)
-            return get_json_result(data="Database Connection Successful!")
-        elif req["db_type"] == "trino":
-
-            def _parse_catalog_schema(db_name: str):
-                if not db_name:
-                    return None, None
-                if "." in db_name:
-                    catalog_name, schema_name = db_name.split(".", 1)
-                elif "/" in db_name:
-                    catalog_name, schema_name = db_name.split("/", 1)
-                else:
-                    catalog_name, schema_name = db_name, "default"
-                return catalog_name, schema_name
-
-            try:
-                import os
-
-                import trino
-            except Exception as e:
-                return server_error_response(f"Missing dependency 'trino'. Please install: pip install trino, detail: {e}")
-
-            catalog, schema = _parse_catalog_schema(req["database"])
-            if not catalog:
-                return server_error_response("For Trino, 'database' must be 'catalog.schema' or at least 'catalog'.")
-
-            http_scheme = "https" if os.environ.get("TRINO_USE_TLS", "0") == "1" else "http"
-
-            auth = None
-            if http_scheme == "https" and req.get("password"):
-                auth = trino.auth.BasicAuthentication(req.get("username") or "ragflow", req["password"])
-
-            conn = trino.dbapi.connect(
-                host=req["host"], port=int(req["port"] or 8080), user=req["username"] or "ragflow", catalog=catalog, schema=schema or "default", http_scheme=http_scheme, auth=auth
-            )
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.fetchall()
-            cur.close()
-            conn.close()
-            return get_json_result(data="Database Connection Successful!")
-        else:
-            return server_error_response("Unsupported database type.")
-
-        if req["db_type"] != "mssql":
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            engine.dispose()
-
-        return get_json_result(data="Database Connection Successful!")
-    except Exception as e:
-        return server_error_response(e)
+        probe_database(**request_body.model_dump())
+    except DatabaseProbePolicyError as error:
+        return get_data_error_result(retmsg=str(error))
+    except Exception:
+        logging.warning("Database connection probe failed")
+        return get_json_result(data=False, retmsg="Database connection failed.", retcode=RetCode.EXCEPTION_ERROR)
+    return get_json_result(data="Database Connection Successful!")
 
 
 @router.get("/agents/{canvas_id}/versions", summary="获取Canvas版本历史", response_description="成功获取版本列表")
@@ -1944,38 +1835,19 @@ def prompts(db: Session = Depends(get_db), user=Depends(manager)):
 
 
 @router.get("/agents/download", summary="下载文件", response_description="成功下载文件")
-def download(id: str = Query(..., description="文件ID"), created_by: str = Query(..., description="创建者ID"), db: Session = Depends(get_db)):
-    """
-    下载Canvas中上传的文件
-
-    概要：根据文件ID和创建者ID下载文件内容。
-
-    参数：
-    - **id**: 文件ID（存储位置）
-    - **created_by**: 创建者ID（用户ID）
-
-    返回：
-    - 文件二进制内容
-
-    功能：
-    1. 从存储系统获取文件内容
-    2. 返回二进制数据
-
-    业务场景：
-    - 下载Canvas中使用的文件
-    - 预览文档内容
-    - 导出处理结果
-
-    注意：
-    - 需要提供正确的创建者ID
-    - 返回原始二进制内容
-    - 不包含文件名等元信息
-    """
-    blob = FileService.get_blob(created_by, id)
-
-    response = Response(content=blob)
-    response.headers["Content-Type"] = "application/octet-stream"
-    return response
+async def download(id: str = Query(..., pattern=r"^[0-9a-f]{32}$", description="上传文件ID"), user: Principal = Depends(require_agent_file_user)) -> Response:
+    """Download a runtime upload from the authenticated caller's namespace."""
+    try:
+        descriptors = await FileService.resolve_runtime_uploads(user.id, [id])
+        blob = await asyncio.to_thread(FileService.get_blob, user.id, descriptors[0]["id"])
+    except RuntimeAttachmentError:
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    except Exception:
+        logging.warning("Agent runtime file download failed")
+        return get_json_result(data=False, retmsg="Unable to download agent file.", retcode=RetCode.EXCEPTION_ERROR)
+    if not isinstance(blob, bytes):
+        return get_json_result(data=False, retmsg="Unable to download agent file.", retcode=RetCode.EXCEPTION_ERROR)
+    return Response(content=blob, media_type="application/octet-stream", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/agents/{canvas_id}", summary="获取Canvas详情", response_description="成功获取Canvas详情")

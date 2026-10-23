@@ -727,6 +727,27 @@ class FileService(CommonService):
         return await asyncio.to_thread(restore)
 
     @staticmethod
+    async def resolve_agent_runtime_inputs(owner_id: str, files: list[Any] | None, inputs: dict[str, Any] | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Replace client file metadata/authority with owner-bound descriptors."""
+
+        async def restore(values: list[Any]) -> list[dict[str, Any]]:
+            if any(not isinstance(value, dict) or not isinstance(value.get("id"), str) for value in values):
+                raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
+            return await FileService.resolve_runtime_uploads(owner_id, [value["id"] for value in values])
+
+        restored_files = await restore(files or [])
+        restored_inputs = dict(inputs or {})
+        for key, definition in restored_inputs.items():
+            if not isinstance(definition, dict) or not isinstance(definition.get("type"), str) or "file" not in definition["type"].lower():
+                continue
+            value = definition.get("value")
+            if value is None and definition.get("optional"):
+                continue
+            restored = await restore(value if isinstance(value, list) else [value])
+            restored_inputs[key] = {**definition, "value": restored if isinstance(value, list) else restored[0]}
+        return restored_files, restored_inputs
+
+    @staticmethod
     async def upload_info(
         db: AsyncSession,
         user_id: str,

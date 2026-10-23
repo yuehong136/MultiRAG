@@ -27,6 +27,7 @@ from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTempl
 from api.db.services.agent_execution_service import execution_context, principal_for_resource_tenant, restore_execution_snapshot, save_agent_session, snapshot_digest
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
+from api.db.services.file_service import FileService
 from api.db.services.task_cancellation_service import bind_canvas_task
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.identity.mcp_delegation.contracts import McpDelegationError
@@ -494,6 +495,21 @@ async def completion(
     is_new_session = not session_id
     if prepared_run is not None and (prepared_run.agent_id != agent_id or prepared_run.caller_id != tenant_id):
         raise PermissionError("Prepared run identity is inconsistent.")
+
+    if prepared_run is None:
+        # Beta/ordinary SDK runs have an owner credential, not TEAM authority.
+        # Validate the path even on resume before restoring any uploaded bytes.
+        owner = await db.scalar(select(UserCanvas.user_id).where(UserCanvas.id == agent_id))
+        if owner != tenant_id:
+            raise PermissionError("Agent does not belong to the authenticated tenant.")
+    if session_id:
+        session = await db.get(API4Conversation, session_id)
+        if session is None:
+            raise LookupError("Session not found!")
+        if session.dialog_id != agent_id or session.source != "agent":
+            raise PermissionError("Session does not belong to the requested agent.")
+        del session
+    files, inputs = await FileService.resolve_agent_runtime_inputs(prepared_run.caller_id if prepared_run is not None else tenant_id, files, inputs)
 
     def _setup(s: Session) -> tuple[dict[str, Any], str, str]:
         """会话与 DSL 装配。产物**只有纯 dict/str**——ORM 对象不得跨下方的流式期存活。"""

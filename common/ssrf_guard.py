@@ -112,6 +112,31 @@ def _safe_url_label(url: str) -> str:
         return "(invalid URL)"
 
 
+def assert_host_is_safe(host: str) -> str:
+    """Return a pinned public IP for raw database connections.
+
+    Validate every DNS answer, including IPv4-mapped IPv6, using the same
+    public-address policy as outbound URLs. No infrastructure/private override
+    applies to a user-supplied probe destination.
+    """
+    if not host or host != host.strip() or any(char in host for char in "/\\@;{}?#%") or any(char.isspace() or ord(char) < 32 for char in host):
+        raise ValueError("Invalid database host.")
+    try:
+        addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError as error:
+        raise ValueError("Could not resolve database host.") from error
+    public_ip = None
+    for _family, _type, _proto, _canonname, sockaddr in addresses:
+        address = ipaddress.ip_address(sockaddr[0])
+        if not _effective_ip(address).is_global:
+            raise ValueError("Database host must resolve only to public addresses.")
+        if public_ip is None:
+            public_ip = str(address)
+    if public_ip is None:
+        raise ValueError("Database host resolved to no addresses.")
+    return public_ip
+
+
 def assert_url_is_safe(
     url: str,
     *,

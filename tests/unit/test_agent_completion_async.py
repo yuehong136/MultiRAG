@@ -73,14 +73,21 @@ class _FakeCanvas:
 class _RecordingAsyncSession(AsyncSession):
     """继承真类过 beartype；记录 run_sync / rollback 的调用序，锁事务释放时机。"""
 
-    def __init__(self, conv_row: dict):
+    def __init__(self, conv_row: dict, owner_id: str = "tenant-unit") -> None:
         super().__init__()
         self.calls: list[str] = []
         self._conv_row = conv_row
+        self.owner_id = owner_id
 
     async def run_sync(self, fn, *args, **kwargs):
         self.calls.append("run_sync")
         return fn(Session(), *args, **kwargs)
+
+    async def scalar(self, statement: Any, **kwargs: Any) -> str:
+        return self.owner_id
+
+    async def get(self, entity: Any, ident: Any, **kwargs: Any) -> Any:
+        return API4ConversationService.get_by_id(Session(), ident)
 
     async def rollback(self):
         self.calls.append("rollback")
@@ -267,7 +274,7 @@ async def test_terminal_failure_restores_history_prefix(completion_stubs: dict[s
 
     monkeypatch.setattr(canvas_service, "Canvas", HistoryCanvas)
     monkeypatch.setattr(canvas_service, "require_runtime_finish", finish)
-    frames = [frame async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant", "agent-1", session_id="sess-1", query="current question")]
+    frames = [frame async for frame in canvas_service.completion(_RecordingAsyncSession({}, owner_id="tenant"), "tenant", "agent-1", session_id="sess-1", query="current question")]
     assert '"event": "error"' in frames[-1]
     _, payload = completion_stubs["payload"]
     stored = json.loads(payload["dsl"])
