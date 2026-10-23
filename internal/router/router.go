@@ -159,6 +159,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				datasets.POST("", r.datasetsHandler.CreateDataset)
 				datasets.DELETE("", r.datasetsHandler.DeleteDatasets)
 				datasets.POST("/search", r.chunkHandler.SearchDatasets)
+				datasets.GET("/:dataset_id/documents", r.documentHandler.ListDatasetDocuments)
 			}
 
 			// Author routes

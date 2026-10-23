@@ -134,6 +134,7 @@ const (
 	TokenChunk
 	TokenChunks
 	TokenDocument
+	TokenDocuments
 	TokenTag
 	TokenOCR
 	TokenRegion

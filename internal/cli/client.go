@@ -253,6 +253,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.MediaCommand(cmd, "tts")
 	case "ocr_user_command":
 		return c.MediaCommand(cmd, "ocr")
+	case "list_dataset_documents":
+		return c.ListDatasetDocuments(cmd)
 	case "parse_file_user_command":
 		return c.ParseFileCommand(cmd)
 	case "list_tasks_user_command":

@@ -108,6 +108,8 @@ func (p *Parser) parseListCommand() (*Command, error) {
 			return nil, err
 		}
 		return NewCommand("list_user_chats"), nil
+	case TokenDocuments:
+		return p.parseListDatasetDocuments()
 	case TokenFiles:
 		return p.parseListFiles()
 	case TokenQuotedString:

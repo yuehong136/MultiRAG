@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
@@ -73,7 +74,7 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 	}
 	local.InitAdminStatus(0, "owned after410 acceptance")
 	tokens := map[string]string{}
-	for _, id := range []string{"owner", "foreign", "revoked", "disabled"} {
+	for _, id := range []string{"owner", "member", "foreign", "revoked", "disabled"} {
 		status := "1"
 		if id == "disabled" {
 			status = "0"
@@ -86,7 +87,11 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		if id == "revoked" {
 			relation = "0"
 		}
-		if err := dao.DB.Create(&entity.UserTenant{ID: "a410-" + id, UserID: "a410-" + id, TenantID: "a410-" + id, Role: "owner", InvitedBy: "a410-" + id, Status: &relation}).Error; err != nil {
+		tenant, role := "a410-"+id, "owner"
+		if id == "member" {
+			tenant, role = "a410-owner", "normal"
+		}
+		if err := dao.DB.Create(&entity.UserTenant{ID: "a410-" + id, UserID: "a410-" + id, TenantID: tenant, Role: role, InvitedBy: "a410-" + id, Status: &relation}).Error; err != nil {
 			t.Fatal(err)
 		}
 		token, err := utility.SignUserJWT(email, server.GetSecretKey())
@@ -193,9 +198,58 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 	if err := dao.DB.Create(&entity.TenantModel{ID: "a410-vllm-ranker", ProviderID: "a410-vllm", InstanceID: "a410-vllm-one", ModelName: "ranker", ModelType: "rerank", Status: "active", Extra: `{"max_tokens":8192,"model_types":["rerank"]}`}).Error; err != nil {
 		t.Fatal(err)
 	}
+
+	active := "1"
+	tenantName := "owned fixture"
+	if err := dao.DB.Create(&entity.Tenant{ID: "a410-owner", Name: &tenantName, Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	datasetIDs := map[string]string{}
+	t.Cleanup(func() {
+		if err := dao.DB.Where("id LIKE ?", "a410-%").Delete(&entity.Document{}).Error; err != nil {
+			t.Error(err)
+		}
+		if err := dao.DB.Where("tenant_id LIKE ?", "a410-%").Delete(&entity.Knowledgebase{}).Error; err != nil {
+			t.Error(err)
+		}
+		if err := dao.DB.Where("id = ?", "a410-owner").Delete(&entity.Tenant{}).Error; err != nil {
+			t.Error(err)
+		}
+	})
+	for _, kind := range []string{"private", "shared", "empty", "foreign", "disabled"} {
+		id, err := uuid.NewUUID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		datasetIDs[kind] = strings.ReplaceAll(id.String(), "-", "")
+		tenant, permission, status := "a410-owner", "me", "1"
+		if kind == "shared" {
+			permission = "team"
+		}
+		if kind == "foreign" {
+			tenant = "a410-foreign"
+		}
+		if kind == "disabled" {
+			status = "0"
+		}
+		if err := dao.DB.Create(&entity.Knowledgebase{ID: datasetIDs[kind], TenantID: tenant, CreatedBy: tenant, Name: "a410-" + kind, Permission: permission, EmbdID: "unconfigured", Status: &status}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 3 {
+		name := fmt.Sprintf("document-%d", i)
+		meta := entity.JSONMap{"source": "approved"}
+		status := "1"
+		if i == 2 {
+			status = "0"
+		}
+		if err := dao.DB.Create(&entity.Document{ID: fmt.Sprintf("a410-doc-%d", i), KbID: datasetIDs["shared"], Name: &name, Type: "txt", Suffix: "txt", CreatedBy: "a410-owner", Status: &status, ParserConfig: entity.JSONMap{}, MetaFields: &meta}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	snapshot := func() string {
 		var result string
-		if err := readback.QueryRow(`SELECT (SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_provider x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_instance x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_users x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_user_tenants x)`).Scan(&result); err != nil {
+		if err := readback.QueryRow(`SELECT (SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_provider x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_instance x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_users x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_user_tenants x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_knowledgebases x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_documents x)`).Scan(&result); err != nil {
 			t.Fatal(err)
 		}
 		return result
@@ -307,6 +361,41 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		}
 		if calls.Load() != count {
 			t.Fatal("denial called vLLM")
+		}
+	})
+
+	t.Run("dataset-documents", func(t *testing.T) {
+		if out := runCLI("LIST DOCUMENTS FROM 'a410-shared';", true); !strings.Contains(out, "approved") || !strings.Contains(out, `"total": 2`) {
+			t.Fatal(out)
+		}
+		runCLI("LIST DOCUMENTS FROM '"+datasetIDs["shared"]+"';", true)
+		for _, identity := range []string{"owner", "member"} {
+			out := request(identity, "GET", "/datasets/"+datasetIDs["shared"]+"/documents?page=2&page_size=1", nil)
+			if out["code"] != float64(0) {
+				t.Fatal("shared read failed", out)
+			}
+			data := out["data"].(map[string]any)
+			if data["total"] != float64(2) || len(data["docs"].([]any)) != 1 {
+				t.Fatal("pagination failed", data)
+			}
+		}
+		for _, identity := range []string{"", "foreign", "revoked", "disabled"} {
+			if out := request(identity, "GET", "/datasets/"+datasetIDs["shared"]+"/documents", nil); out["code"] == float64(0) || out["data"] != nil {
+				t.Fatal("dataset denial failed", out)
+			}
+		}
+		for _, kind := range []string{"private", "foreign", "disabled"} {
+			if out := request("member", "GET", "/datasets/"+datasetIDs[kind]+"/documents", nil); out["code"] == float64(0) {
+				t.Fatal("private/foreign/disabled read leaked", out)
+			}
+		}
+		for _, query := range []string{"?page=0", "?page=-1", "?page_size=101", "?page=nope", "?return_empty_metadata=bad"} {
+			if out := request("owner", "GET", "/datasets/"+datasetIDs["shared"]+"/documents"+query, nil); out["code"] != float64(400) {
+				t.Fatal("invalid query accepted", out)
+			}
+		}
+		if out := request("owner", "GET", "/datasets/"+datasetIDs["empty"]+"/documents", nil); out["code"] != float64(0) || len(out["data"].(map[string]any)["docs"].([]any)) != 0 {
+			t.Fatal("empty list failed", out)
 		}
 	})
 	if after := snapshot(); after != before {

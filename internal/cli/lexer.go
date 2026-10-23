@@ -395,6 +395,8 @@ func (l *Lexer) lookupIdent(ident string) Token {
 		return Token{Type: TokenChunk, Value: ident}
 	case "CHUNKS":
 		return Token{Type: TokenChunks, Value: ident}
+	case "DOCUMENTS":
+		return Token{Type: TokenDocuments, Value: ident}
 	case "DOCUMENT":
 		return Token{Type: TokenDocument, Value: ident}
 	case "TAGS":
