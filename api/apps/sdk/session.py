@@ -13,12 +13,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
 from agent.canvas import Canvas
-from api.db.db_models import db_connection, get_async_db, get_db
+from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import (
     build_bundle_by_id_async,
     build_default_bundle_async,
@@ -32,7 +33,7 @@ from api.db.services.canvas_service import completion as agent_completion
 from api.db.services.conversation_service import ConversationService, async_completion, async_iframe_completion, validate_iframe_access
 from api.db.services.dialog_service import DialogService, async_ask, gen_mindmap
 from api.db.services.doc_metadata_service import DocMetadataService
-from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_canvas_version import UserCanvasVersionService
@@ -918,6 +919,17 @@ async def retrieval_test_embedded(
             return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
         tenant_ids = owned_tenants
 
+        kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
+        if {kb.id for kb in kbs} != set(kb_ids):
+            return get_error_data_result(retmsg="Knowledgebase not found!")
+        KnowledgebaseService.ensure_same_embedding_model(kbs)
+        kb = kbs[0]
+        allowed_rerank_tenant_ids = {tenant_id, *[dataset.tenant_id for dataset in kbs]}
+        if body.tenant_rerank_id is not None:
+            allowed_model = await db.scalar(select(TenantLLM.id).where(TenantLLM.id == body.tenant_rerank_id, TenantLLM.tenant_id.in_(allowed_rerank_tenant_ids)))
+            if allowed_model is None:
+                return get_json_result(data=False, retmsg="No authorization for rerank model.", retcode=RetCode.AUTHENTICATION_ERROR)
+
         if req.get("search_id", ""):
             detail = await db.run_sync(lambda s: SearchService.get_detail(s, req["search_id"]))  # TODO(async-phase4)
             if not detail:
@@ -954,11 +966,6 @@ async def retrieval_test_embedded(
             if not req.get("rerank_id"):
                 rerank_id = search_config.get("rerank_id", "")
 
-        kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
-        if not kbs:
-            return get_error_data_result(retmsg="Knowledgebase not found!")
-        kb = kbs[0]
-
         if langs:
             question = await cross_languages(kb.tenant_id, None, question, langs)
 
@@ -968,8 +975,8 @@ async def retrieval_test_embedded(
             embd_mdl = await build_named_bundle_async(kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
 
         rerank_mdl = None
-        if req.get("tenant_rerank_id"):
-            rerank_mdl = await build_bundle_by_id_async(kb.tenant_id, req["tenant_rerank_id"])
+        if body.tenant_rerank_id is not None:
+            rerank_mdl = await build_bundle_by_id_async(tenant_id, body.tenant_rerank_id, db=db, allowed_tenant_ids=allowed_rerank_tenant_ids)
         elif rerank_id:
             rerank_mdl = await build_named_bundle_async(kb.tenant_id, LLMType.RERANK.value, rerank_id)
 
@@ -1010,6 +1017,8 @@ async def retrieval_test_embedded(
         ranks["labels"] = labels
 
         return get_json_result(data=ranks)
+    except EmbeddingModelMismatchError as e:
+        return get_json_result(data=False, retmsg=str(e), retcode=RetCode.DATA_ERROR)
     except Exception as e:
         if str(e).find("not_found") > 0:
             return get_json_result(data=False, retmsg="No chunk found! Check the chunk status please!", retcode=RetCode.DATA_ERROR)

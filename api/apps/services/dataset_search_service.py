@@ -24,15 +24,15 @@ from core.nlp import search
 from core.prompts.generator import cross_languages, keyword_extraction
 
 
-async def _bundle(db: AsyncSession, tenant_id: str, model_type: LLMType, *, model_id: int | None = None, name: str | None = None) -> LLMBundle:
+async def _bundle(db: AsyncSession, tenant_id: str, model_type: LLMType, *, model_id: int | None = None, name: str | None = None, allowed_tenant_ids: set[str] | None = None) -> LLMBundle:
     def build(s: Session) -> LLMBundle:
         if model_id:
-            config = get_model_config_by_id(s, model_id)
+            config = get_model_config_by_id(s, model_id, allowed_tenant_ids=allowed_tenant_ids)
         elif name:
             config = get_model_config_by_type_and_name(s, tenant_id, model_type.value, name)
         else:
             config = get_tenant_default_model_by_type(s, tenant_id, model_type)
-        bundle = LLMBundle(s, tenant_id, config)
+        bundle = LLMBundle(s, config["tenant_id"] if allowed_tenant_ids is not None else tenant_id, config)
         # The sync facade must not escape run_sync or roll back ORM objects.
         bundle.db = None
         return bundle
@@ -113,7 +113,7 @@ async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatas
     embedding = await _bundle(db, kb.tenant_id, LLMType.EMBEDDING, model_id=kb.tenant_embd_id, name=kb.embd_id)
     reranker = None
     if request.tenant_rerank_id or request.rerank_id:
-        reranker = await _bundle(db, kb.tenant_id, LLMType.RERANK, model_id=request.tenant_rerank_id, name=request.rerank_id)
+        reranker = await _bundle(db, kb.tenant_id, LLMType.RERANK, model_id=request.tenant_rerank_id, name=request.rerank_id, allowed_tenant_ids={tenant_id, *tenant_ids})
     if request.keyword:
         chat = await _bundle(db, kb.tenant_id, LLMType.CHAT)
         question += "," + await keyword_extraction(chat, question)

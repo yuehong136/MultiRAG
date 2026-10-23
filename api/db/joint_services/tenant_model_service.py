@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import TenantLLM, db_connection
@@ -41,13 +42,34 @@ def resolve_model_type(db: Session, tenant_id: str, model_ref: str) -> list[str]
     return [model.mdl_type]
 
 
-def get_model_config_by_id(db: Session, tenant_model_id: int, *, tenant_id: str | None = None) -> dict[str, Any]:
-    filters: dict = {"id": tenant_model_id}
-    if tenant_id is not None:
-        filters["tenant_id"] = tenant_id
-    tenant_model = TenantLLMService.get_or_none(db, **filters)
+def get_model_config_by_id(
+    db: Session,
+    tenant_model_id: int,
+    *,
+    tenant_id: str | None = None,
+    allowed_tenant_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Apply the trusted tenant scope in SQL, before loading model credentials.
+
+    Management callers may retain their existing unscoped lookup. Retrieval
+    callers must pass the authenticated tenant and authorized dataset owners.
+    An explicit empty scope never falls back to an unscoped lookup.
+    """
+    if allowed_tenant_ids is not None:
+        scope = {identifier for identifier in allowed_tenant_ids if identifier}
+        if tenant_id is not None:
+            scope &= {tenant_id}
+        if not scope:
+            raise LookupError("No authorization for tenant model.")
+        tenant_model = db.scalar(select(TenantLLM).where(TenantLLM.id == tenant_model_id, TenantLLM.tenant_id.in_(scope)))
+    else:
+        filters: dict[str, Any] = {"id": tenant_model_id}
+        if tenant_id is not None:
+            filters["tenant_id"] = tenant_id
+        tenant_model = TenantLLMService.get_or_none(db, **filters)
     if not tenant_model:
-        raise LookupError(f"Tenant Model with id {tenant_model_id} not found")
+        reason = "not found or not authorized" if allowed_tenant_ids is not None else "not found"
+        raise LookupError(f"Tenant Model with id {tenant_model_id} {reason}")
 
     return TenantLLMService.resolve_model_config(db, tenant_model.to_dict())
 
@@ -192,14 +214,31 @@ async def build_named_bundle_async(tenant_id: str, model_type: str, llm_id: str,
     return await asyncio.to_thread(_build)
 
 
-async def build_bundle_by_id_async(tenant_id: str, tenant_model_id: int, **kwargs: Any) -> LLMBundle:
-    """按租户模型行 id 构造 LLMBundle（事件循环安全）。"""
+async def build_bundle_by_id_async(
+    tenant_id: str,
+    tenant_model_id: int,
+    *,
+    db: AsyncSession | None = None,
+    allowed_tenant_ids: set[str] | None = None,
+    **kwargs: Any,
+) -> LLMBundle:
+    """Build by ID with a request session, or a short session for task callers."""
 
-    def _build() -> LLMBundle:
-        with db_connection() as db:
-            model_config = get_model_config_by_id(db, tenant_model_id, tenant_id=tenant_id)
-            bundle = LLMBundle(db, tenant_id, model_config, **kwargs)
+    def build(session: Session) -> LLMBundle:
+        if allowed_tenant_ids is None:
+            model_config = get_model_config_by_id(session, tenant_model_id, tenant_id=tenant_id)
+        else:
+            model_config = get_model_config_by_id(session, tenant_model_id, allowed_tenant_ids=allowed_tenant_ids)
+        # Usage and tracing follow the authorized model's actual owner.
+        bundle = LLMBundle(session, model_config.get("tenant_id", tenant_id), model_config, **kwargs)
         bundle.db = None
         return bundle
 
-    return await asyncio.to_thread(_build)
+    if db is not None:
+        return await db.run_sync(build)  # TODO(async-phase4): legacy model construction
+
+    def build_with_connection() -> LLMBundle:
+        with db_connection() as session:
+            return build(session)
+
+    return await asyncio.to_thread(build_with_connection)

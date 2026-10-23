@@ -354,6 +354,8 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
     # 获取所有知识库
     kbs = KnowledgebaseService.get_by_ids(db, kb_ids)
+    if {kb.id for kb in kbs} != set(kb_ids):
+        return get_error_data_result(retmsg="Dataset not found!")
     kb_names = [kb.name for kb in kbs]
 
     try:
@@ -363,6 +365,15 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             retmsg=str(e),
             retcode=RetCode.DATA_ERROR,
         )
+
+    # Resolve only after the complete dataset selection is authorized, and
+    # before metadata/model work can read credentials or call a provider.
+    rerank_config = None
+    if request.tenant_rerank_id is not None:
+        try:
+            rerank_config = get_model_config_by_id(db, request.tenant_rerank_id, allowed_tenant_ids={tenant_id, *[kb.tenant_id for kb in kbs]})
+        except LookupError:
+            return get_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg="No authorization for rerank model.")
 
     if request.use_kg and (request.document_ids or request.metadata_condition):
         return get_result(retcode=RetCode.BAD_REQUEST, retmsg="Knowledge graph enhancement cannot be combined with document or metadata filters.")
@@ -453,9 +464,8 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
         embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
 
         rerank_mdl = None
-        if req.get("tenant_rerank_id"):
-            rerank_config = get_model_config_by_id(db, req["tenant_rerank_id"])
-            rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
+        if rerank_config is not None:
+            rerank_mdl = LLMBundle(db, rerank_config["tenant_id"], rerank_config)
         elif req.get("rerank_id"):
             rerank_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.RERANK.value, req["rerank_id"])
             rerank_mdl = LLMBundle(db, kb.tenant_id, rerank_config)
