@@ -12,7 +12,7 @@ from timeit import default_timer as timer
 from typing import Any, Literal
 from uuid import UUID
 
-from langfuse import Langfuse
+from langfuse import Langfuse, LangfuseGeneration
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -646,6 +646,31 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
+def _chat_usage_details(input_tokens: int, output_tokens: int, messages: list[dict[str, Any]], answer: str) -> dict[str, int] | None:
+    # The shared token helper returns zero on encoding failure. Do not present
+    # that sentinel as measured zero usage for nonempty text.
+    has_input_text = False
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            has_input_text = has_input_text or bool(content)
+        elif isinstance(content, list):
+            has_input_text = has_input_text or any(isinstance(part, dict) and bool(part.get("text")) for part in content)
+    if (input_tokens == 0 and has_input_text) or (output_tokens == 0 and answer):
+        logging.warning("Langfuse chat token estimate unavailable; omitting usage")
+        return None
+    return {"input": input_tokens, "output": output_tokens, "total": input_tokens + output_tokens}
+
+
+def _end_chat_observation(generation: LangfuseGeneration | None) -> None:
+    if generation is not None:
+        try:
+            generation.end()
+        except Exception:
+            # Tracing failures must neither replace the answer nor expose credentials.
+            logging.warning("Langfuse chat observation end failed; continuing without tracing")
+
+
 def chat(
     dialog: Any,
     messages: list[dict[str, Any]],
@@ -678,6 +703,7 @@ def chat(
     check_llm_ts = timer()
 
     langfuse_tracer = None
+    langfuse_generation: LangfuseGeneration | None = None
     trace_context = {}
     langfuse_keys = TenantLangfuseService.filter_by_tenant(db, tenant_id=dialog.tenant_id)
     if langfuse_keys:
@@ -687,7 +713,7 @@ def chat(
             langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
         except Exception:
-            logging.warning("Langfuse tracer init failed; tracing disabled for this request", exc_info=True)
+            logging.warning("Langfuse tracer init failed; tracing disabled for this request")
             langfuse_tracer = None
             trace_context = {}
 
@@ -887,8 +913,8 @@ def chat(
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
-    def decorate_answer(answer):
-        nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
+    def decorate_answer(answer: str) -> dict[str, Any]:
+        nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_generation
 
         refs = []
         ans = answer.split("</think>")
@@ -959,52 +985,73 @@ def chat(
             f"  - Token speed: {int(tk_num / (generate_result_time_cost / 1000.0))}/s"
         )
 
-        # Add a condition check to call the end method only if langfuse_tracer exists
-        if langfuse_tracer and "langfuse_generation" in locals():
+        if langfuse_generation is not None:
             langfuse_output = "\n" + re.sub(r"^.*?(### Query:.*)", r"\1", prompt, flags=re.DOTALL)
             langfuse_output = {"time_elapsed:": re.sub(r"\n", "  \n", langfuse_output), "created_at": time.time()}
-            langfuse_generation.update(output=langfuse_output)
-            langfuse_generation.end()
+            generation, langfuse_generation = langfuse_generation, None
+            try:
+                # Local text estimates, not provider-reported billing usage.
+                generation.update(
+                    output=langfuse_output,
+                    usage_details=_chat_usage_details(used_token_count, tk_num, msg, think + answer),
+                )
+            except Exception:
+                logging.warning("Langfuse chat observation update failed; continuing without tracing")
+            finally:
+                _end_chat_observation(generation)
 
         return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
-    if langfuse_tracer:
-        langfuse_generation = langfuse_tracer.start_observation(
-            as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
-        )
+    if langfuse_tracer is not None:
+        try:
+            langfuse_generation = langfuse_tracer.start_observation(
+                as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+            )
+        except Exception:
+            logging.warning("Langfuse chat observation start failed; continuing without tracing")
 
-    if stream:
-        last_ans = ""
-        answer = ""
-        if llm_type == "chat":
-            stream_gen = chat_mdl.chat_streamly(prompt + prompt4citation, msg[1:], gen_conf)
+    try:
+        if stream:
+            last_ans = ""
+            answer = ""
+            received_answer = False
+            if llm_type == "chat":
+                stream_gen = chat_mdl.chat_streamly(prompt + prompt4citation, msg[1:], gen_conf)
+            else:
+                stream_gen = chat_mdl.chat_streamly(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
+            for ans in stream_gen:
+                received_answer = True
+                if thought:
+                    ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+                answer = ans
+                delta_ans = ans[len(last_ans) :]
+                if num_tokens_from_string(delta_ans) < 16:
+                    continue
+                last_ans = answer
+                yield {"answer": retrieval_trace + thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+            delta_ans = answer[len(last_ans) :]
+            if delta_ans:
+                yield {"answer": retrieval_trace + thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+            if not received_answer:
+                # Preserve the sync empty-answer response without inventing usage
+                # when the model stream did not produce even one item.
+                _end_chat_observation(langfuse_generation)
+                langfuse_generation = None
+            final = decorate_answer(thought + answer)
+            final["answer"] = retrieval_trace + final["answer"]
+            yield final
         else:
-            stream_gen = chat_mdl.chat_streamly(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
-        for ans in stream_gen:
-            if thought:
-                ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
-            answer = ans
-            delta_ans = ans[len(last_ans) :]
-            if num_tokens_from_string(delta_ans) < 16:
-                continue
-            last_ans = answer
-            yield {"answer": retrieval_trace + thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
-        delta_ans = answer[len(last_ans) :]
-        if delta_ans:
-            yield {"answer": retrieval_trace + thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
-        final = decorate_answer(thought + answer)
-        final["answer"] = retrieval_trace + final["answer"]
-        yield final
-    else:
-        if llm_type == "chat":
-            answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf)
-        else:
-            answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
-        user_content = msg[-1].get("content", "[content not available]")
-        logging.debug(f"User: {user_content}|Assistant: {answer}")
-        res = decorate_answer(answer)
-        res["audio_binary"] = tts(tts_mdl, answer)
-        yield res
+            if llm_type == "chat":
+                answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf)
+            else:
+                answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
+            user_content = msg[-1].get("content", "[content not available]")
+            logging.debug(f"User: {user_content}|Assistant: {answer}")
+            res = decorate_answer(answer)
+            res["audio_binary"] = tts(tts_mdl, answer)
+            yield res
+    finally:
+        _end_chat_observation(langfuse_generation)
 
     return None
 
@@ -1048,6 +1095,7 @@ async def async_chat(
     check_llm_ts = timer()
 
     langfuse_tracer = None
+    langfuse_generation: LangfuseGeneration | None = None
     trace_context = {}
     langfuse_keys = await db.run_sync(lambda s: TenantLangfuseService.filter_by_tenant(s, tenant_id=dialog.tenant_id))  # TODO(async-phase4)
     if langfuse_keys:
@@ -1057,7 +1105,7 @@ async def async_chat(
             langfuse_tracer = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
             trace_context = {"trace_id": langfuse_tracer.create_trace_id()}
         except Exception:
-            logging.warning("Langfuse tracer init failed; tracing disabled for this request", exc_info=True)
+            logging.warning("Langfuse tracer init failed; tracing disabled for this request")
             langfuse_tracer = None
             trace_context = {}
 
@@ -1265,8 +1313,8 @@ async def async_chat(
     if "max_tokens" in gen_conf:
         gen_conf["max_tokens"] = min(gen_conf["max_tokens"], max_tokens - used_token_count)
 
-    def decorate_answer(answer):
-        nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
+    def decorate_answer(answer: str) -> dict[str, Any]:
+        nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_generation
 
         refs = []
         ans = answer.split("</think>")
@@ -1334,50 +1382,65 @@ async def async_chat(
             f"  - Token speed: {int(tk_num / (generate_result_time_cost / 1000.0))}/s"
         )
 
-        if langfuse_tracer and "langfuse_generation" in locals():
+        if langfuse_generation is not None:
             langfuse_output = "\n" + re.sub(r"^.*?(### Query:.*)", r"\1", prompt, flags=re.DOTALL)
             langfuse_output = {"time_elapsed:": re.sub(r"\n", "  \n", langfuse_output), "created_at": time.time()}
-            langfuse_generation.update(output=langfuse_output)
-            langfuse_generation.end()
+            generation, langfuse_generation = langfuse_generation, None
+            try:
+                # Local text estimates, not provider-reported billing usage.
+                generation.update(
+                    output=langfuse_output,
+                    usage_details=_chat_usage_details(used_token_count, tk_num, msg, think + answer),
+                )
+            except Exception:
+                logging.warning("Langfuse chat observation update failed; continuing without tracing")
+            finally:
+                _end_chat_observation(generation)
 
         return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
-    if langfuse_tracer:
-        langfuse_generation = langfuse_tracer.start_observation(
-            as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
-        )
+    if langfuse_tracer is not None:
+        try:
+            langfuse_generation = langfuse_tracer.start_observation(
+                as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+            )
+        except Exception:
+            logging.warning("Langfuse chat observation start failed; continuing without tracing")
 
-    if stream:
-        if llm_type == "chat":
-            stream_iter = chat_mdl.async_chat_streamly_delta(prompt + prompt4citation, msg[1:], gen_conf)
+    try:
+        if stream:
+            if llm_type == "chat":
+                stream_iter = chat_mdl.async_chat_streamly_delta(prompt + prompt4citation, msg[1:], gen_conf)
+            else:
+                stream_iter = chat_mdl.async_chat_streamly_delta(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
+            last_state = None
+            async for kind, value, state in _stream_with_think_delta(stream_iter):
+                last_state = state
+                if kind == "marker":
+                    flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
+                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, **flags}
+                    continue
+                yield {"answer": value, "reference": {}, "audio_binary": tts(tts_mdl, value), "final": False}
+            full_answer = last_state.full_text if last_state else ""
+            if full_answer:
+                final = decorate_answer(_extract_visible_answer(thought + full_answer))
+                # Keep retrieval outside model reasoning and retain it in persisted history.
+                final["answer"] = retrieval_trace + final["answer"]
+                final["final"] = True
+                final["audio_binary"] = None
+                yield final
         else:
-            stream_iter = chat_mdl.async_chat_streamly_delta(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
-        last_state = None
-        async for kind, value, state in _stream_with_think_delta(stream_iter):
-            last_state = state
-            if kind == "marker":
-                flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
-                yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, **flags}
-                continue
-            yield {"answer": value, "reference": {}, "audio_binary": tts(tts_mdl, value), "final": False}
-        full_answer = last_state.full_text if last_state else ""
-        if full_answer:
-            final = decorate_answer(_extract_visible_answer(thought + full_answer))
-            # Keep retrieval outside model reasoning and retain it in persisted history.
-            final["answer"] = retrieval_trace + final["answer"]
-            final["final"] = True
-            final["audio_binary"] = None
-            yield final
-    else:
-        if llm_type == "chat":
-            answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf)
-        else:
-            answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
-        user_content = msg[-1].get("content", "[content not available]")
-        logging.debug(f"User: {user_content}|Assistant: {answer}")
-        res = decorate_answer(answer)
-        res["audio_binary"] = tts(tts_mdl, answer)
-        yield res
+            if llm_type == "chat":
+                answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf)
+            else:
+                answer = await chat_mdl.async_chat(prompt + prompt4citation, msg[1:], gen_conf, images=image_files)
+            user_content = msg[-1].get("content", "[content not available]")
+            logging.debug(f"User: {user_content}|Assistant: {answer}")
+            res = decorate_answer(answer)
+            res["audio_binary"] = tts(tts_mdl, answer)
+            yield res
+    finally:
+        _end_chat_observation(langfuse_generation)
 
     return
 
