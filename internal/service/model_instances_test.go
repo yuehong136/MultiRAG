@@ -91,3 +91,23 @@ func TestCustomModelMultipleCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalAIInstanceWithoutKey(t *testing.T) {
+	provider := &entity.Provider{Name: "LocalAI", URLSuffix: models.URLSuffix{Models: "models"}}
+	for _, base := range []string{"http://one.invalid/v1", "http://two.invalid/v1"} {
+		raw, err := encodeProviderInstanceExtra("", base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		driver, api, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: raw})
+		if err != nil || driver.Name() != "LocalAI" || api.APIKey == nil || *api.APIKey != "" {
+			t.Fatalf("%T %v %v", driver, api, err)
+		}
+		if driver.(*models.LocalAIModel).BaseURL["default"] != base {
+			t.Fatal("instance URL lost")
+		}
+	}
+	if _, _, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: "{}"}); err == nil {
+		t.Fatal("missing tenant URL accepted")
+	}
+}

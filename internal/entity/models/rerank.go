@@ -41,7 +41,27 @@ func ValidateRerankResponse(response *RerankResponse, count int, config *RerankC
 	return nil
 }
 
-func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name *string, query string, texts []string, api *APIConfig, config *RerankConfig, extras map[string]any) (*RerankResponse, error) {
+type rerankHTTPOptions struct {
+	optionalAPIKey bool
+	topField       string
+	resultField    string
+}
+
+func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name *string, query string, texts []string, api *APIConfig, config *RerankConfig, extras map[string]any, options ...rerankHTTPOptions) (*RerankResponse, error) {
+	option := rerankHTTPOptions{topField: "top_n", resultField: "results"}
+	if len(options) > 0 {
+		option = options[0]
+		if option.topField == "" {
+			option.topField = "top_n"
+		}
+		if option.resultField == "" {
+			option.resultField = "results"
+		}
+	}
+	key := ""
+	if api != nil && api.APIKey != nil {
+		key = strings.TrimSpace(*api.APIKey)
+	}
 	top, err := RerankTopN(len(texts), config)
 	if err != nil {
 		return nil, err
@@ -49,17 +69,19 @@ func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name
 	if len(texts) == 0 {
 		return &RerankResponse{Data: []RerankResult{}}, nil
 	}
-	if name == nil || strings.TrimSpace(*name) == "" || api == nil || api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "" {
+	if name == nil || strings.TrimSpace(*name) == "" || (key == "" && !option.optionalAPIKey) {
 		return nil, fmt.Errorf("rerank model name and API key are required")
 	}
 	if suffix == "" {
 		return nil, fmt.Errorf("rerank endpoint is not configured")
 	}
-	base, err := resolveModelBaseURL(urls, api.Region)
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	base, err := resolveModelBaseURL(urls, local.Region)
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]any{"model": *name, "query": query, "documents": texts, "top_n": top, "return_documents": false}
+	body := map[string]any{"model": *name, "query": query, "documents": texts, option.topField: top, "return_documents": false}
 	for key, value := range extras {
 		if value == nil {
 			delete(body, key)
@@ -71,14 +93,14 @@ func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
 	req, err := http.NewRequestWithContext(requestContext(local), http.MethodPost, joinModelURL(base, suffix), bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("rerank request: %w", err)
@@ -87,13 +109,15 @@ func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("rerank request failed (HTTP %d)", resp.StatusCode)
 	}
+	type result struct {
+		Index *int     `json:"index"`
+		Score *float64 `json:"relevance_score"`
+	}
 	var raw struct {
-		Results []struct {
-			Index *int     `json:"index"`
-			Score *float64 `json:"relevance_score"`
-		} `json:"results"`
-		Error json.RawMessage `json:"error"`
-		Code  string          `json:"code"`
+		Results []result        `json:"results"`
+		Data    []result        `json:"data"`
+		Error   json.RawMessage `json:"error"`
+		Code    string          `json:"code"`
 	}
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(&raw); err != nil {
@@ -106,8 +130,12 @@ func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name
 	if raw.Code != "" || len(raw.Error) > 0 && string(raw.Error) != "null" {
 		return nil, fmt.Errorf("rerank provider returned an error")
 	}
-	response := &RerankResponse{Data: make([]RerankResult, 0, len(raw.Results))}
-	for _, result := range raw.Results {
+	items := raw.Results
+	if option.resultField == "data" {
+		items = raw.Data
+	}
+	response := &RerankResponse{Data: make([]RerankResult, 0, len(items))}
+	for _, result := range items {
 		if result.Index == nil || result.Score == nil {
 			return nil, fmt.Errorf("rerank result missing index/score")
 		}
