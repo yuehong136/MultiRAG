@@ -286,7 +286,8 @@ func TestOpenAIInputAndLocalEmbedding(t *testing.T) {
 	if _, err := driver.ChatStreamly(&name, &key, &name, nil); err == nil {
 		t.Fatal("channel stream fabricated")
 	}
-	if openAIChatTransport.ResponseHeaderTimeout != 60*time.Second || driver.httpClient.Timeout != 0 {
+	transport, ok := openAIChatTransport.(*http.Transport)
+	if !ok || transport.ResponseHeaderTimeout != 60*time.Second || driver.httpClient.Timeout != 0 {
 		t.Fatal("transport timeouts")
 	}
 	second := NewOpenAIModel(nil, URLSuffix{})

@@ -34,11 +34,15 @@ type openAIChatDriver struct {
 // One pool is shared across request-scoped drivers; credentials stay on requests.
 var openAIChatTransport = newOpenAIChatTransport()
 
-func newOpenAIChatTransport() *http.Transport {
+func newOpenAIChatTransport() http.RoundTripper {
 	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
 	var transport *http.Transport
-	if ok {
+	if ok && defaultTransport != nil {
 		transport = defaultTransport.Clone()
+	} else if !ok && http.DefaultTransport != nil {
+		// Preserve caller routing, tracing and policy wrappers that cannot
+		// be cloned as standard connection pools.
+		return http.DefaultTransport
 	} else {
 		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
 	}
