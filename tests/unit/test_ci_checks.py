@@ -111,18 +111,29 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
         {"Action": "pass", "Package": package, "Test": "TestUnit"},
         {"Action": "skip", "Package": package, "Test": "TestChatSessionLiveHTTPAndSQL"},
         {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL"},
+        {"Action": "skip", "Package": package, "Test": "TestDatasetTimeHTTPAndSQL"},
+        {"Action": "start", "Package": "multirag/internal/service"},
+        {"Action": "skip", "Package": "multirag/internal/service", "Test": "TestHostedProviderBindingScratchPostgres"},
+        {"Action": "pass", "Package": "multirag/internal/service"},
         {"Action": "pass", "Package": package},
     ]
     path.write_text("\n".join(map(json.dumps, events)))
     result = audit_go(path)
     assert result["counts"]["pass_test"] == 1
-    assert result["unverified_live_opt_ins"] == [f"{package}::TestChatSessionLiveHTTPAndSQL", f"{package}::TestModelInferenceLiveHTTPAndSQL"]
+    assert result["unverified_live_opt_ins"] == [
+        f"{package}::TestChatSessionLiveHTTPAndSQL",
+        f"{package}::TestModelInferenceLiveHTTPAndSQL",
+        f"{package}::TestDatasetTimeHTTPAndSQL",
+        "multirag/internal/service::TestHostedProviderBindingScratchPostgres",
+    ]
     for bad in [
         [],
         events[:-1],
         [*events, {"Action": "fail", "Package": package}],
         [*events, {"Action": "skip", "Package": package, "Test": "TestOrdinary"}],
         [*events, {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL/unknown"}],
+        [*events, {"Action": "skip", "Package": package, "Test": "TestDatasetTimeHTTPAndSQL/unknown"}],
+        [*events, {"Action": "skip", "Package": "multirag/internal/service", "Test": "TestHostedProviderBindingScratchPostgres/unknown"}],
     ]:
         path.write_text("\n".join(map(json.dumps, bad)))
         with pytest.raises(ValueError):

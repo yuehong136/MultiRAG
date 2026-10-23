@@ -21,6 +21,7 @@ GO_LIVE_OPT_INS = {
     "engine": {"TestSkillMilvusLiveUnpublishedFragments"},
     "handler": {
         "TestChatSessionLiveHTTPAndSQL",
+        "TestDatasetTimeHTTPAndSQL",
         "TestDocumentStatusLiveServer",
         "TestHybridAuthLiveServer",
         "TestOllamaInstanceLiveHTTPAndSQL",
@@ -32,7 +33,7 @@ GO_LIVE_OPT_INS = {
         "TestTaskLiveServer",
         "TestXAIInstanceLiveHTTPAndSQL",
     },
-    "service": {"TestChatSessionScratchPostgres", "TestModelBindingScratchPostgres"},
+    "service": {"TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
     "service/nlp": {"TestRetrievalScratchPostgresInfinity"},
     "skills": {"TestSkillsLiveServer"},
 }
