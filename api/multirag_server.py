@@ -1,6 +1,11 @@
+import os
 import time
 
 start_ts = time.time()
+
+# LiteLLM otherwise fetches its model cost map during import. Set this before
+# bootstrap and API imports so server startup does not require external access.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from agent.plugin import GlobalPluginManager
 from common.log_utils import init_root_logger
@@ -15,7 +20,6 @@ bootstrap.ensure_initialized()
 
 import faulthandler
 import logging
-import os
 import signal
 import sys
 import threading
