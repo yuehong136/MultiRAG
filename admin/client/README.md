@@ -137,3 +137,23 @@ multirag> list services;
 | 8  | task_executor | -               | -     | task_executor   | Alive   | {'message_queue_type': 'redis'}                                                                                                            |
 +----+---------------+-----------------+-------+-----------------+---------+--------------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+
+## 系统变量（Admin）
+
+`LIST VARS;` 按名称排序，返回 `data_type`、`name`、`setting_type=config`、`value`。
+`SHOW VAR mail.server;` 优先精确查询；无同名变量时，`SHOW VAR mail.;` 返回名称前缀匹配项。
+前缀中的 `%`、`_` 按字面匹配。
+
+```sql
+SET VAR mail.port 0;
+SET VAR mail.use_tls false;
+SET VAR mail.server 'local host';
+SET VAR mail.password '';
+SET VAR sandbox.local '{"timeout":30}';
+```
+
+变量写入使用其声明的 `string`、`integer`/`int`、`bool`/`boolean` 或 `json` 类型校验。
+布尔值仅接受 `true`、`false`，无效值在写库前拒绝。新键以 `sandbox.` 开头时声明为 JSON，
+以 `.enabled` 结尾时声明为 bool，其余声明为 string。`SHOW VAR` 使用 GET query `var_name`。
+单命令执行遇到解析、鉴权或变量请求失败时返回非零退出码；交互模式显示错误后继续等待输入。

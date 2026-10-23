@@ -13,6 +13,27 @@ except Exception:
     MultipartEncoder = None
 
 
+def _variable_text(value: Any) -> str:
+    while isinstance(value, Tree):
+        if len(value.children) != 1:
+            raise ValueError("Invalid variable argument")
+        value = value.children[0]
+    result = str(value)
+    if len(result) >= 2 and result[0] == result[-1] and result[0] in {"'", '"'}:
+        return result[1:-1]
+    return result
+
+
+def _variable_response(response: Any) -> dict[str, Any]:
+    data = response.json()
+    if response.status_code != 200 or not isinstance(data, dict):
+        raise RuntimeError("Variable request failed")
+    codes = [data[key] for key in ("code", "retcode") if key in data]
+    if not codes or any(type(code) is not int or code != 0 for code in codes):
+        raise RuntimeError(str(data.get("message") or data.get("retmsg") or "Variable request was not acknowledged"))
+    return data
+
+
 def show_help():
     """Help info"""
     help_text = """
@@ -646,44 +667,27 @@ class MultiRAGClient:
         else:
             print(f"Fail to show version, code: {res_json.get('code')}, message: {res_json.get('message')}")
 
-    def set_variable(self, command: dict):
+    def set_variable(self, command: dict[str, Any]) -> None:
         if self.server_type != "admin":
-            print("This command is only allowed in ADMIN mode")
-            return
-        var_name_tree: Tree = command["var_name"]
-        var_name = var_name_tree.children[0].strip("'\"")
-        var_value_tree: Tree = command["var_value"]
-        var_value = var_value_tree.children[0].strip("'\"")
+            raise RuntimeError("This command is only allowed in ADMIN mode")
+        var_name = _variable_text(command["var_name"])
+        var_value = _variable_text(command["var_value"])
         response = self.http_client.request("PUT", "admin/variables", json_body={"var_name": var_name, "var_value": var_value}, use_api_base=True, auth_kind="admin")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            print(res_json.get("message", "Set variable successfully"))
-        else:
-            print(f"Fail to set variable {var_name} to {var_value}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        result = _variable_response(response)
+        print(result.get("message") or "Set variable successfully")
 
-    def show_variable(self, command: dict):
+    def show_variable(self, command: dict[str, Any]) -> None:
         if self.server_type != "admin":
-            print("This command is only allowed in ADMIN mode")
-            return
-        var_name_tree: Tree = command["var_name"]
-        var_name = var_name_tree.children[0].strip("'\"")
+            raise RuntimeError("This command is only allowed in ADMIN mode")
+        var_name = _variable_text(command["var_name"])
         response = self.http_client.request("GET", "admin/variables", params={"var_name": var_name}, use_api_base=True, auth_kind="admin")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            self._print_table_simple(res_json.get("data"))
-        else:
-            print(f"Fail to get variable {var_name}, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        self._print_table_simple(_variable_response(response).get("data"))
 
-    def list_variables(self, command: dict):
+    def list_variables(self, command: dict[str, Any]) -> None:
         if self.server_type != "admin":
-            print("This command is only allowed in ADMIN mode")
-            return
+            raise RuntimeError("This command is only allowed in ADMIN mode")
         response = self.http_client.request("GET", "admin/variables", use_api_base=True, auth_kind="admin")
-        res_json = response.json()
-        if response.status_code == 200 and res_json.get("code") == 0:
-            self._print_table_simple(res_json.get("data"))
-        else:
-            print(f"Fail to list variables, code: {res_json.get('code')}, message: {res_json.get('message')}")
+        self._print_table_simple(_variable_response(response).get("data"))
 
     def list_configs(self, command: dict):
         if self.server_type != "admin":

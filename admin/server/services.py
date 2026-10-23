@@ -8,7 +8,7 @@ from config import SERVICE_CONFIGS
 from sqlalchemy.orm import Session
 
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
-from api.db.db_models import APIToken
+from api.db.db_models import APIToken, SystemSettings
 from api.db.joint_services.user_account_service import create_new_user, delete_user_data
 from api.db.services import UserService
 from api.db.services.api_service import APITokenService
@@ -405,58 +405,68 @@ class ServiceMgr:
 
 class SettingsMgr:
     @staticmethod
-    def get_all(db: Session) -> list[dict]:
-        settings = SystemSettingsService.get_all(db)
-        return [
-            {
-                "name": setting.name,
-                "source": setting.source,
-                "data_type": setting.data_type,
-                "value": setting.value,
-            }
-            for setting in settings
-        ]
+    def _format_setting(setting: SystemSettings) -> dict[str, str]:
+        return {"name": setting.name, "setting_type": "config", "data_type": setting.data_type, "value": setting.value}
 
     @staticmethod
-    def get_by_name(db: Session, name: str) -> list[dict]:
+    def _validate_value(name: str, data_type: str, value: str) -> None:
+        match data_type.lower():
+            case "string":
+                return
+            case "integer" | "int":
+                if not re.fullmatch(r"[+-]?[0-9]+", value):
+                    raise AdminException(f"Invalid integer value for {name}")
+            case "bool" | "boolean":
+                if value not in {"true", "false"}:
+                    raise AdminException(f"Invalid bool value for {name}: expected true or false")
+            case "json":
+
+                def reject_constant(constant: str) -> None:
+                    raise ValueError(f"Invalid JSON constant: {constant}")
+
+                try:
+                    json.loads(value, parse_constant=reject_constant)
+                except ValueError as exc:
+                    raise AdminException(f"Invalid JSON value for {name}") from exc
+            case _:
+                raise AdminException(f"Unsupported data type for {name}: {data_type}")
+
+    @staticmethod
+    def _infer_data_type(name: str) -> str:
+        if name.startswith("sandbox."):
+            return "json"
+        if name.endswith(".enabled"):
+            return "bool"
+        return "string"
+
+    @staticmethod
+    def get_all(db: Session) -> list[dict[str, str]]:
+        settings = SystemSettingsService.get_all(db, reverse=False, order_by="name")
+        return [SettingsMgr._format_setting(setting) for setting in settings]
+
+    @staticmethod
+    def get_by_name(db: Session, name: str) -> list[dict[str, str]]:
         settings = SystemSettingsService.get_by_name(db, name)
         if not settings:
+            settings = SystemSettingsService.get_by_name_prefix(db, name)
+        if not settings:
             raise AdminException(f"Can't get setting: {name}")
-        return [
-            {
-                "name": setting.name,
-                "source": setting.source,
-                "data_type": setting.data_type,
-                "value": setting.value,
-            }
-            for setting in settings
-        ]
+        return [SettingsMgr._format_setting(setting) for setting in settings]
 
     @staticmethod
-    def update_by_name(db: Session, name: str, value: str):
+    def update_by_name(db: Session, name: str, value: str) -> None:
+        if not name.strip():
+            raise AdminException("Var name is required")
         settings = SystemSettingsService.get_by_name(db, name)
         if len(settings) == 1:
-            setting = settings[0]
-            setting.value = value
-            setting_dict = setting.to_dict()
-            SystemSettingsService.update_by_name(db, name, setting_dict)
+            SettingsMgr._validate_value(name, settings[0].data_type, value)
+            SystemSettingsService.update_by_name(db, name, {"value": value})
         elif len(settings) > 1:
             raise AdminException(f"Can't update more than 1 setting: {name}")
         else:
-            # 不存在则新建（沙箱 provider 配置等新键首次写入时走到这里）
-            if name.startswith("sandbox."):
-                data_type = "json"
-            elif name.endswith(".enabled"):
-                data_type = "boolean"
-            else:
-                data_type = "string"
-            SystemSettingsService.save(
-                db,
-                name=name,
-                value=str(value),
-                source="admin",
-                data_type=data_type,
-            )
+            data_type = SettingsMgr._infer_data_type(name)
+            SettingsMgr._validate_value(name, data_type, value)
+            SystemSettingsService.save(db, name=name, value=value, source="admin", data_type=data_type)
 
 
 class ConfigMgr:

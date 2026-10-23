@@ -16,7 +16,12 @@ class SystemSettingsService(CommonService):
 
     @classmethod
     def get_by_name(cls, db: Session, name: str) -> list[SystemSettings]:
-        stmt = select(cls.model).where(cls.model.name == name)
+        stmt = select(cls.model).where(cls.model.name == name).order_by(cls.model.name.asc())
+        return list(db.scalars(stmt).all())
+
+    @classmethod
+    def get_by_name_prefix(cls, db: Session, name_prefix: str) -> list[SystemSettings]:
+        stmt = select(cls.model).where(cls.model.name.startswith(name_prefix, autoescape=True)).order_by(cls.model.name.asc())
         return list(db.scalars(stmt).all())
 
     @classmethod

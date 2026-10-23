@@ -43,6 +43,8 @@ class MultiRAGCLI(Cmd):
             if result.get("type") == "meta" and result.get("command") in ["q", "quit", "exit"]:
                 return True
 
+        except (RuntimeError, ValueError) as exc:
+            print(f"Error: {exc}")
         except KeyboardInterrupt:
             print("\nUse '\\q' to quit")
         except EOFError:
@@ -109,14 +111,13 @@ class MultiRAGCLI(Cmd):
                 print(str(e))
                 print("Can't access server for login (connection failed)")
 
-    def execute_command(self, parsed_command: dict[str, Any]):
+    def execute_command(self, parsed_command: dict[str, Any] | Tree) -> None:
         command_dict: dict
         if isinstance(parsed_command, Tree):
             command_dict = parsed_command.children[0]
         else:
             if parsed_command["type"] == "error":
-                print(f"Error: {parsed_command['message']}")
-                return
+                raise ValueError(parsed_command["message"])
             else:
                 command_dict = parsed_command
 
@@ -133,11 +134,11 @@ class MultiRAGCLI(Cmd):
             """)
             self.cmdloop()
 
-    def run_single_command(self, args: dict[str, Any]):
-        if self.verify_auth(args, single_command=True, auth=args.get("auth", True)):
-            command: str = args["command"]
-            result = self.parse_command(command)
-            self.execute_command(result)
+    def run_single_command(self, args: dict[str, Any]) -> None:
+        if not self.verify_auth(args, single_command=True, auth=args.get("auth", True)):
+            raise RuntimeError("Authentication failed")
+        command: str = args["command"]
+        self.execute_command(self.parse_command(command))
 
     def parse_connection_args(self, args: list[str]) -> dict[str, Any]:
         parser = argparse.ArgumentParser(description="MultiRAG CLI Client", add_help=False)
@@ -162,7 +163,9 @@ class MultiRAGCLI(Cmd):
                     auth = False
 
             if remaining_args:
-                command = remaining_args[0]
+                return {"error": "Invalid connection arguments"}
+            if parsed_args.command is not None:
+                command = parsed_args.command
                 return {
                     "host": parsed_args.host,
                     "port": port,
@@ -183,19 +186,17 @@ class MultiRAGCLI(Cmd):
             return {"error": "Invalid connection arguments"}
 
 
-def main():
+def main() -> None:
     cli = MultiRAGCLI()
 
-    args = cli.parse_connection_args(sys.argv)
+    args = cli.parse_connection_args(sys.argv[1:])
     if "error" in args:
-        print("Error: Invalid connection arguments")
-        return
+        raise ValueError("Invalid connection arguments")
 
     if "command" in args:
         # single command mode
         if "password" not in args:
-            print("Error: password is missing")
-            return
+            raise ValueError("password is missing")
         cli.run_single_command(args)
     else:
         # interactive mode
@@ -203,4 +204,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc

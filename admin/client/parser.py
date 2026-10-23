@@ -230,7 +230,7 @@ show_user_permission: SHOW USER PERMISSION quoted_string ";"
 grant_admin: GRANT ADMIN quoted_string ";"
 revoke_admin: REVOKE ADMIN quoted_string ";"
 
-set_variable: SET VAR identifier identifier ";"
+set_variable: SET VAR identifier variable_value ";"
 show_variable: SHOW VAR identifier ";"
 list_variables: LIST VARS ";"
 list_configs: LIST CONFIGS ";"
@@ -307,6 +307,8 @@ benchmark: BENCHMARK NUMBER NUMBER sql_command
 action_list: identifier (COMMA identifier)*
 
 identifier: WORD
+variable_value: WORD | NUMBER | VARIABLE_STRING
+VARIABLE_STRING: /'[^']*'/ | /"[^"]*"/
 quoted_string: QUOTED_STRING
 status: ON | WORD
 
