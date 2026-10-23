@@ -20,6 +20,7 @@ GO_LIVE_OPT_INS = {
     "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
     "engine": {"TestSkillMilvusLiveUnpublishedFragments"},
     "handler": {
+        "TestAfter410GoHTTPCLIAndSQL",
         "TestAfterBBBProvidersHTTPCLIAndSQL",
         "TestChatSessionLiveHTTPAndSQL",
         "TestDatasetTimeHTTPAndSQL",

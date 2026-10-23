@@ -12,6 +12,7 @@ EVALS = ROOT / "tests" / "evals"
 ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
+        "test_agent_retrieval_top_k.py",
         "test_async_engine.py",
         "test_channel_candidate_gc.py",
         "test_channel_control_persistence.py",
@@ -49,17 +50,19 @@ DATABASE_TESTS = frozenset(
     }
 )
 REDIS_TESTS = frozenset({"test_shared_auth_secret.py", "test_synonym_redis.py"})
-INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py"})
+INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py", "test_infinity_stable_release.py"})
 
 ISOLATED_STORAGE_TESTS = frozenset(
     {
         "test_agent_tags.py",
         "test_agent_completion_close.py",
         "test_agent_execution_origin.py",
+        "test_agent_literal_bool_semantics.py",
         "test_agent_list_operations.py",
         "test_agent_session_references.py",
         "test_agent_update_release.py",
         "test_agentbot_list_operations.py",
+        "test_agentbot_structured_output.py",
         "test_asana_deleted_sync.py",
         "test_azure_storage_protocol.py",
         "test_blob_connector_fingerprint.py",
@@ -83,6 +86,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_dropbox_deleted_sync.py",
         "test_file_batch_delete.py",
         "test_gitlab_deleted_sync.py",
+        "test_github_sync_defaults.py",
         "test_gmail_deleted_sync.py",
         "test_integration_resource_cleanup.py",
         "test_memory_principal_isolation.py",
@@ -139,6 +143,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_dataset_management_http.py",
                 "test_dataset_embedding_http.py",
                 "test_connector_web_sync.py",
+                "test_github_sync_defaults.py",
                 "test_model_document_web_consumers.py",
                 "test_retrieval_rerank_authorization.py",
                 "test_document_file_http.py",
