@@ -93,6 +93,7 @@ Bitbucket 清单覆盖配置 workspace、repository 或 project 内的全部 OPE
 Pull Request，使用与入库相同的来源 ID，无 `updated_on` 时间窗口。现有轻量 PR 枚举被复用；
 缺失仓库/PR 身份、异常集合、分页循环及显式权限错误均失败。PR 映射失败不会确认检查点
 或继续删除；正常内容同步保留原检查点和更新时间窗口。
+账号、范围字段和知识库关联步骤见 [添加 Bitbucket 数据源](bitbucket/README.md)。
 
 GitLab 清单覆盖配置的代码文件、MR 和 issue；代码按默认分支递归分页，沿用内容导入的
 路径排除规则与文件 URL，MR/issue 沿用 `web_url` 和 `state_filter`（默认 `all`）。
