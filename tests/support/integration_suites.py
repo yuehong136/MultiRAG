@@ -12,6 +12,7 @@ EVALS = ROOT / "tests" / "evals"
 ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
+        "test_agent_tags.py",
         "test_async_engine.py",
         "test_channel_candidate_gc.py",
         "test_channel_control_persistence.py",
@@ -42,6 +43,7 @@ DATABASE_TESTS = frozenset(
         "test_pdf_page_task_defaults.py",
         "test_principal_auth.py",
         "test_retrieval_parent_fallback.py",
+        "test_retrieval_rerank_authorization.py",
         "test_sandbox_provider_settings.py",
         "test_sync_log_checkpoint.py",
         "test_task_log_limits.py",
@@ -88,6 +90,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_paddleocr_service_contract.py",
         "test_pdf_outline_metadata.py",
         "test_pipeline_parser_cleanup.py",
+        "test_rest_api_sync.py",
         "test_runtime_chat_attachments.py",
         "test_runtime_document_upload.py",
         "test_runtime_upload_browser_guard.py",
@@ -134,6 +137,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_dataset_embedding_http.py",
                 "test_connector_web_sync.py",
                 "test_model_document_web_consumers.py",
+                "test_retrieval_rerank_authorization.py",
                 "test_document_file_http.py",
             )
         ]
