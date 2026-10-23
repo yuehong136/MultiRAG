@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from abc import ABC
+from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
 
@@ -37,7 +38,25 @@ class LoopParam(ComponentParamBase):
 
 
 class Loop(ComponentBase, ABC):
+    _param: LoopParam
     component_name = "Loop"
+
+    @staticmethod
+    def _is_missing_required_field(value: Any) -> bool:
+        # Names, types, modes and variable references are nonempty DSL strings.
+        return not isinstance(value, str) or not value
+
+    @classmethod
+    def _is_incomplete_loop_variable(cls, item: Any) -> bool:
+        if not isinstance(item, dict):
+            return True
+        if any(cls._is_missing_required_field(item.get(field)) for field in ("variable", "input_mode", "type")):
+            return True
+        if item["input_mode"] == "variable":
+            return cls._is_missing_required_field(item.get("value"))
+        if item["input_mode"] == "constant":
+            return item.get("value") is None
+        return True
 
     def get_start(self):
         for cid in self._canvas.components.keys():
@@ -46,13 +65,13 @@ class Loop(ComponentBase, ABC):
             if self._canvas.get_component(cid)["parent_id"] == self._id:
                 return cid
 
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("Loop processing"):
             return
 
         for item in self._param.loop_variables:
-            if any([not item.get("variable"), not item.get("input_mode"), not item.get("value"), not item.get("type")]):
-                assert "Loop Variable is not complete."
+            if self._is_incomplete_loop_variable(item):
+                raise ValueError("Loop Variable is not complete.")
             if item["input_mode"] == "variable":
                 self.set_output(item["variable"], self._canvas.get_variable_value(item["value"]))
             elif item["input_mode"] == "constant":

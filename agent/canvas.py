@@ -289,12 +289,12 @@ class Graph:
             root_val = {}
         cpn["obj"].set_output(root_key, self.set_variable_param_value(root_val, rest, value))
 
-    def set_variable_param_value(self, obj: Any, path: str, value) -> Any:
+    def set_variable_param_value(self, obj: Any, path: str, value: Any) -> Any:
         cur = obj
         keys = path.split(".")
         if not path:
             return value
-        for key in keys:
+        for key in keys[:-1]:
             if key not in cur or not isinstance(cur[key], dict):
                 cur[key] = {}
             cur = cur[key]

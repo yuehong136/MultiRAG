@@ -39,22 +39,28 @@ class VariableAssignerParam(ComponentParamBase):
 
 
 class VariableAssigner(ComponentBase, ABC):
+    _param: VariableAssignerParam
     component_name = "VariableAssigner"
+    _NO_PARAMETER_OPERATORS = {"clear", "remove_first", "remove_last"}
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if not isinstance(self._param.variables, list):
             return
-        else:
-            for item in self._param.variables:
-                if any([not item.get("variable"), not item.get("operator"), not item.get("parameter")]):
-                    assert "Variable is not complete."
-                variable = item["variable"]
-                operator = item["operator"]
-                parameter = item["parameter"]
-                variable_value = self._canvas.get_variable_value(variable)
-                new_variable = self._operate(variable_value, operator, parameter)
-                self._canvas.set_variable_value(variable, new_variable)
+
+        for item in self._param.variables:
+            if not isinstance(item, dict):
+                raise ValueError("Variable is not complete.")
+            variable = item.get("variable")
+            operator = item.get("operator")
+            parameter = item.get("parameter")
+            if not isinstance(variable, str) or not variable or not isinstance(operator, str) or not operator:
+                raise ValueError("Variable is not complete.")
+            if operator not in self._NO_PARAMETER_OPERATORS and parameter is None:
+                raise ValueError("Variable is not complete.")
+            variable_value = self._canvas.get_variable_value(variable)
+            new_variable = self._operate(variable_value, operator, parameter)
+            self._canvas.set_variable_value(variable, new_variable)
 
     def _operate(self, variable, operator, parameter):
         if operator == "overwrite":
