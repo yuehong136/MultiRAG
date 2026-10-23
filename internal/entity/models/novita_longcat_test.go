@@ -198,8 +198,8 @@ func TestNewProviderCancellationAndUnsupported(t *testing.T) {
 			if _, e := d.Balance(nil); e == nil {
 				t.Fatal("balance")
 			}
-			if _, ok := d.(OCRDriver); ok {
-				t.Fatal("invented OCR")
+			if _, ok := d.(OCRDriver); ok != (provider == "Mistral") {
+				t.Fatal("OCR capability mismatch")
 			}
 			if _, ok := d.(ASRDriver); ok {
 				t.Fatal("invented ASR")
