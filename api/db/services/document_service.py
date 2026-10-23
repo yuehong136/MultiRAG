@@ -3053,7 +3053,7 @@ class DocumentService(CommonService):
             queue_tasks(db, doc, bucket, name, 0)
 
 
-def queue_raptor_o_graphrag_tasks(db: Session, sample_doc: dict[str, Any], ty: str, priority: int, fake_doc_id: str = "", doc_ids: list[str] = []) -> str:
+def queue_raptor_o_graphrag_tasks(db: Session, sample_doc: dict[str, Any], ty: str, priority: int, fake_doc_id: str = "", doc_ids: list[str] | None = None) -> str:
     """
     You can provide a fake_doc_id to bypass the restriction of tasks at the knowledgebase level.
     Optionally, specify a list of doc_ids to determine which documents participate in the task.
@@ -3083,7 +3083,7 @@ def queue_raptor_o_graphrag_tasks(db: Session, sample_doc: dict[str, Any], ty: s
     task["digest"] = hasher.hexdigest()
     bulk_insert_into_db(db, Task, [task], True)
 
-    task["doc_ids"] = doc_ids
+    task["doc_ids"] = list(doc_ids) if doc_ids is not None else []
     DocumentService.begin2parse(db, task["doc_id"], keep_progress=True)
     assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]

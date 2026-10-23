@@ -6,6 +6,11 @@ begin2parse 一律使用 fake_doc_id（GRAPH_RAPTOR_FAKE_DOC_ID）。
 DB / Redis 全部打桩（纯函数打桩形态），共享 fixtures 见 tests/unit/conftest.py。
 """
 
+from typing import Any
+
+import pytest
+from sqlalchemy.orm import Session
+
 import api.db.services.document_service as docsvc
 
 
@@ -38,3 +43,26 @@ def test_redis_message_keeps_fake_doc_id_and_doc_ids(monkeypatch, db):
     _run(monkeypatch, db, cap)
     assert cap["msg"]["doc_id"] == "graph_raptor_x"
     assert cap["msg"]["doc_ids"] == ["real-doc-1", "real-doc-2"]
+
+
+def test_omitted_document_selections_have_independent_payloads(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    messages: list[dict[str, Any]] = []
+    _run(monkeypatch, db, {})
+    monkeypatch.setattr(docsvc.REDIS_CONN, "queue_product", lambda queue, message: messages.append(message) or True)
+    for _ in range(2):
+        docsvc.queue_raptor_o_graphrag_tasks(db, {"id": "real-doc-1"}, "graphrag", 0, "graph_raptor_x")
+    messages[0]["doc_ids"].append("mutated-after-enqueue")
+    assert messages[1]["doc_ids"] == []
+    assert messages[1]["doc_id"] == "graph_raptor_x"
+
+
+@pytest.mark.parametrize("selection", [None, [], ["real-doc-1", "real-doc-2"]])
+def test_document_selection_is_snapshotted_without_changing_empty_semantics(monkeypatch: pytest.MonkeyPatch, db: Session, selection: list[str] | None) -> None:
+    capture: dict[str, Any] = {}
+    _run(monkeypatch, db, {})
+    monkeypatch.setattr(docsvc.REDIS_CONN, "queue_product", lambda queue, message: capture.setdefault("message", message) or True)
+    expected = list(selection or [])
+    docsvc.queue_raptor_o_graphrag_tasks(db, {"id": "real-doc-1"}, "graphrag", 0, "graph_raptor_x", selection)
+    if selection is not None:
+        selection.append("mutated-after-enqueue")
+    assert capture["message"]["doc_ids"] == expected
