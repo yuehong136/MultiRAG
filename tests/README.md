@@ -60,6 +60,13 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 使用 scratch SQL、独占对象桶和队列。前者覆盖真实鉴权及附件运行，后者覆盖原子计数和实际
 Graph/RAPTOR worker 分支；涉及进程级运行时接缝，不加入并行白名单，也不归入仅数据库套件。
 
+Agent 数据库 probe 的可选 Trino 驱动另有显式专项：在独立 Python 环境安装固定版本的
+Trino 及测试依赖后，运行 `python -m pytest tests/manual/test_agent_trino_probe_transport.py -q`，
+报告需记录实际版本和源码输入。该文件缺少依赖直接失败，不用 skip 代替；普通 unit/core
+不自动安装此可选驱动。专项使用自有 TLS coordinator，仅替换首跳地址准入以访问自有端点，
+保留真实官方客户端、域名/证书、分页 GET、取消 DELETE、redirect、DNS 固定和凭据边界；
+不代表真实 Trino 服务验收。
+
 core/consumer/smoke 共用 [隔离环境准备](../.github/actions/setup-integration/action.yml)，
 各 hosted job 只清理自己创建的服务；Testcontainers 的生命周期仍由原有 ServiceManager 管理。
 质量 lane 额外安装 eval 组；普通 core 不再下载中文 embedding 模型。
