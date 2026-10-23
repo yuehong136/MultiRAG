@@ -233,11 +233,27 @@ ASR/TTS accept a `STREAM` prefix. `CHAT ... AUDIO './speech.wav';` sends base64 
 Files are bounded to 20 MiB; audio input supports WAV/MP3. TTS returns base64 audio,
 including under `-o json`, and does not automatically write a local file.
 
-Built-in media inference drivers currently return **501 unsupported**. A catalog
-entry alone does not enable a driver capability. Missing results, provider errors,
+Gitee implements OCR for file and URL inputs. Other built-in media capabilities
+return **501 unsupported**. A catalog entry alone does not enable a driver capability. Missing results, provider errors,
 failed/truncated streams and nonzero business codes fail the CLI command. See the
 [Go media contract](../../docs/ragflow-porting/go-media.md) for payloads and the
 controlled-adapter verification boundary.
 
 An explicit empty `text` is valid for silent audio or a blank page; missing/null
 text and streams without any result event fail.
+
+
+## LocalAI and Voyage AI
+
+Use the canonical provider names `LocalAI` and `Voyage AI`. LocalAI instances need
+an explicit tenant base URL (for example `http://127.0.0.1:8080/v1`); their API key
+is optional. The Go driver supports history chat, SSE, embeddings, reranking,
+model discovery and connection checks. The three reasoning response fields
+`reasoning_content`, `reasoning` and `thinking` are read in that order.
+
+Voyage AI supports embeddings and reranking only. It sends `output_dimension`
+and `top_k` on those endpoints. Discovery and connection checks return an error
+without spending quota on an inference probe. Neither provider declares a Go
+media capability. Provider HTTP acceptance with controlled responses establishes
+the adapter contract; live provider quality and production behavior need separate
+verification.

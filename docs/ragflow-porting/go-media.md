@@ -10,6 +10,7 @@ STREAM ASR WITH 'asr-model@instance@provider' AUDIO './speech.mp3';
 TTS WITH 'tts-model@instance@provider' TEXT 'hello';
 STREAM TTS WITH 'tts-model@instance@provider' TEXT 'hello';
 OCR WITH 'ocr-model@instance@provider' FILE './image.png';
+OCR WITH 'HunyuanOCR@instance@Gitee' URL 'https://example.com/image.png';
 CHAT WITH 'chat-model@instance@provider' AUDIO './speech.wav';
 ```
 
@@ -27,7 +28,7 @@ Google 当前适配器仍明确拒绝不支持的音频内容。
 | --- | --- | --- |
 | `/audio/transcriptions` | `file` 为 base64；可选 `format`、`language`、`prompt`、`stream` | `{"text":"..."}` |
 | `/audio/speech` | `text`；可选 `voice`、`format`、`stream` | `{"audio":"<base64>","format":"wav"}` |
-| `/file/ocr` | `content` 为 base64；可选 `language` | `{"text":"..."}` |
+| `/file/ocr` | `content` 为 base64 或 `url` 为 HTTP(S) 图片地址，二选一；可选 `language` | `{"text":"..."}` |
 
 JSON 数字数组不能替代 base64 字符串。解码后的文件、结果与累计流输出均限制为
 20 MiB，JSON 请求体也有编码长度上限。文本结果必须显式包含非 null 的 `text`；空字符串可表示静音或空白页，缺失字段不能作为成功。
@@ -46,12 +47,16 @@ instance，再校验实例启用、模型启用和类型。ASR、TTS、OCR 分�
 `speech2text`、`tts`、`ocr`。凭据、region 和 base URL 只来自 SQL 实例配置；请求不能覆盖。
 每次调用使用独立配置和最长 120 秒的上下文，并保留请求取消。
 
-`ASRDriver`、`ASRStreamDriver`、`TTSDriver`、`TTSStreamDriver`、`OCRDriver` 是可选接口，
+`ASRDriver`、`ASRStreamDriver`、`TTSDriver`、`TTSStreamDriver`、`OCRDriver`、`OCRURLDriver` 是可选接口，
 没有扩张所有 `ModelDriver` 的必选方法。目录中的模型类型并不证明驱动已经实现推理。
-当前内置驱动没有实现这五项媒体能力：命令和路由返回业务码 **501**；流返回错误事件。
+Gitee 实现 `OCRDriver` 和 `OCRURLDriver`：向配置的 `images/ocr` 发送 multipart
+`model` 与 `image`（文件字节或 URL），把响应 `text_result` 映射为 `text`。
+URL 最长 8 KiB，拒绝非 HTTP(S)、凭据和 fragment；由供应商下载图片。
+其余未实现的媒体能力返回业务码 **501**；流返回错误事件。LocalAI 和 Voyage AI 不声明媒体能力。
 不搬入 panic 方法、空响应或批量重复的 unsupported 桩。
 `NewModelProviderServiceWithFactory` 允许受控适配器复用同一套真实 SQL 绑定，默认构造器仍使用内置 factory。
 
-本地验收使用受控媒体适配器，运行真实 JWT、注册路由、HTTP、CLI 二进制及隔离 PostgreSQL，
+本地验收运行真实 JWT、注册路由、HTTP、CLI 二进制及隔离 PostgreSQL；通用媒体合同
+使用受控适配器，Gitee OCR 则运行内置驱动并控制供应商 HTTP 响应。
 独立读回证明失败无 SQL 写入，并分别验证内置驱动的 unsupported 路径。
 这些证据不代表真实供应商音频/OCR 或生产验收。
