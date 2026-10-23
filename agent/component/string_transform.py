@@ -57,7 +57,7 @@ class StringTransform(Message, ABC):
         return {k: {"name": o["name"], "type": "line"} for k, o in self.get_input_elements_from_text(self._param.script).items()}
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("StringTransform processing"):
             return
 
@@ -66,12 +66,12 @@ class StringTransform(Message, ABC):
         else:
             self._merge(kwargs)
 
-    def _split(self, line: str | None = None):
+    def _split(self, line: str | None = None) -> None:
         if self.check_if_canceled("StringTransform split processing"):
             return
 
-        var = self._canvas.get_variable_value(self._param.split_ref) if not line else line
-        if not var:
+        var = self._canvas.get_variable_value(self._param.split_ref) if line is None else line
+        if var is None:
             var = ""
         assert isinstance(var, str), f"The input variable is not a string: {type(var)}"
         self.set_input_value(self._param.split_ref, var)
@@ -83,7 +83,7 @@ class StringTransform(Message, ABC):
             res.append(s)
         self.set_output("result", res)
 
-    def _merge(self, kwargs: dict[str, str] = {}):
+    def _merge(self, kwargs: dict[str, Any] | None = None) -> None:
         if self.check_if_canceled("StringTransform merge processing"):
             return
 
@@ -98,9 +98,7 @@ class StringTransform(Message, ABC):
                 pass
 
         for k, v in kwargs.items():
-            if not v:
-                v = ""
-            script = re.sub(k, lambda match: v, script)
+            script = script.replace(k, self._stringify_message_value(v, fallback_to_str=True))
 
         self.set_output("result", script)
 

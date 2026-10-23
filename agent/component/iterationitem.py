@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from abc import ABC
+from typing import Any
 
 from agent.component.base import ComponentBase, ComponentParamBase
 
@@ -34,7 +35,7 @@ class IterationItem(ComponentBase, ABC):
         super().__init__(canvas, id, param)
         self._idx = 0
 
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("IterationItem processing"):
             return
 
@@ -56,7 +57,9 @@ class IterationItem(ComponentBase, ABC):
         if self.check_if_canceled("IterationItem processing"):
             return
 
-        self.set_output("item", arr[self._idx])
+        current_item = arr[self._idx]
+        self.set_output("item", current_item)
+        self.set_output("result", current_item)
         self.set_output("index", self._idx)
 
         self._idx += 1

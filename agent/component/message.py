@@ -147,15 +147,16 @@ class Message(ComponentBase):
     def get_kwargs(
         self,
         script: str,
-        kwargs: dict = {},
+        kwargs: dict[str, Any] | None = None,
         delimiter: str | None = None,
         downloads: list[dict[str, Any]] | None = None,
     ) -> tuple[str, dict[str, str | list | Any]]:
+        kwargs = dict(kwargs) if kwargs is not None else {}
         for k, v in self.get_input_elements_from_text(script).items():
             if k in kwargs:
                 continue
             v = v["value"]
-            if not v:
+            if v is None:
                 v = ""
             ans = ""
             if isinstance(v, partial):
@@ -191,20 +192,20 @@ class Message(ComponentBase):
         all_content = ""
         cache = {}
         downloads: list[dict[str, Any]] = []
-        for r in re.finditer(self.variable_ref_patt, rand_cnt, flags=re.DOTALL):
+        for r, ref in self._iter_input_references(rand_cnt):
             if self.check_if_canceled("Message streaming"):
                 return
 
             all_content += rand_cnt[s : r.start()]
             yield rand_cnt[s : r.start()]
             s = r.end()
-            exp = r.group(1)
+            exp = r.group(1) or r.group(2)
             if exp in cache:
                 yield cache[exp]
                 all_content += cache[exp]
                 continue
 
-            v = self._canvas.get_variable_value(exp)
+            v = self._canvas.get_variable_value(ref)
             if v is None:
                 v = ""
             if isinstance(v, partial):

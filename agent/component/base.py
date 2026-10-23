@@ -21,6 +21,7 @@ import os
 import re
 import time
 from abc import ABC
+from collections.abc import Iterator
 from typing import Any
 
 import pandas as pd
@@ -342,6 +343,7 @@ class ComponentBase(ABC):
     component_name: str
     thread_limiter = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
     variable_ref_patt = r"\{* *\{([a-zA-Z_:0-9]+@[A-Za-z0-9_.-]+|sys\.[A-Za-z0-9_.]+|env\.[A-Za-z0-9_.]+)\} *\}*"
+    iteration_alias_patt = r"\{* *\{(item|index|result)\} *\}*"
 
     def __str__(self):
         """
@@ -461,10 +463,13 @@ class ComponentBase(ABC):
             # Graph.is_reff also accepts bare references and only checks the
             # component before '@'. Check mixed templates first so a suffix
             # cannot accidentally become part of the output field name.
-            if isinstance(v, str) and re.search(self.variable_ref_patt, v) and (not re.fullmatch(self.variable_ref_patt, v) or v != v.strip()):
-                elements = self.get_input_elements_from_text(v)
-                kv = {k: e.get("value", "") for k, e in elements.items()}
-                self.set_input_value(var, self.string_format(v, kv))
+            if isinstance(v, str) and (elements := self.get_input_elements_from_text(v)):
+                match = re.fullmatch(f"{self.variable_ref_patt}|{self.iteration_alias_patt}", v)
+                if match and v == v.strip():
+                    # A reference is a value, whereas a mixed template is text.
+                    self.set_input_value(var, elements[match.group(1) or match.group(2)]["value"])
+                else:
+                    self.set_input_value(var, self.string_format(v, {k: e["value"] for k, e in elements.items()}))
             elif isinstance(v, str) and self._canvas.is_reff(v):
                 self.set_input_value(var, self._canvas.get_variable_value(v))
             else:
@@ -478,14 +483,30 @@ class ComponentBase(ABC):
 
         return {var: self.get_input_value(var) for var, o in self.get_input_elements().items()}
 
-    def get_input_elements_from_text(self, txt: str) -> dict[str, dict[str, str]]:
+    def _resolve_iteration_alias_ref(self, exp: str) -> str | None:
+        if exp not in {"item", "index", "result"}:
+            return None
+        parent = self.get_parent()
+        if not parent or parent.component_name.lower() != "iteration":
+            return None
+        # Use the same start node as the scheduler, always in this direct scope.
+        start = parent.get_start()
+        return f"{start}@{exp}" if start else None
+
+    def _iter_input_references(self, txt: str) -> Iterator[tuple[re.Match[str], str]]:
+        for match in re.finditer(f"{self.variable_ref_patt}|{self.iteration_alias_patt}", txt, flags=re.IGNORECASE | re.DOTALL):
+            ref = match.group(1) or self._resolve_iteration_alias_ref(match.group(2))
+            if ref:
+                yield match, ref
+
+    def get_input_elements_from_text(self, txt: str) -> dict[str, dict[str, Any]]:
         res = {}
-        for r in re.finditer(self.variable_ref_patt, txt, flags=re.IGNORECASE | re.DOTALL):
-            exp = r.group(1)
-            cpn_id, var_nm = exp.split("@") if exp.find("@") > 0 else ("", exp)
+        for match, ref in self._iter_input_references(txt):
+            exp = match.group(1) or match.group(2)
+            cpn_id, var_nm = ref.split("@", 1) if "@" in ref else ("", ref)
             res[exp] = {
                 "name": (self._canvas.get_component_name(cpn_id) + f"@{var_nm}") if cpn_id else exp,
-                "value": self._canvas.get_variable_value(exp),
+                "value": self._canvas.get_variable_value(ref),
                 "_retrieval": self._canvas.get_variable_value(f"{cpn_id}@_references") if cpn_id else None,
                 "_cpn_id": cpn_id,
             }
