@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from jinja2 import Template
@@ -185,8 +186,8 @@ def html2pdf(
     source: str,
     timeout: int = 2,
     install_driver: bool = True,
-    print_options=None,
-):
+    print_options: dict[str, Any] | None = None,
+) -> bytes:
     if print_options is None:
         print_options = {}
     result = __get_pdf_from_html(source, timeout, install_driver, print_options)
@@ -236,9 +237,9 @@ def _managed_chromedriver_service() -> Service:
     return Service(str(driver_path))
 
 
-def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_options: dict):
+def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_options: dict[str, Any]) -> bytes:
     webdriver_options = Options()
-    webdriver_prefs: dict = {}
+    webdriver_prefs: dict[str, Any] = {}
     webdriver_options.add_argument("--headless")
     webdriver_options.add_argument("--disable-gpu")
     webdriver_options.add_argument("--no-sandbox")
@@ -253,11 +254,14 @@ def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_opt
     else:
         driver = webdriver.Chrome(options=webdriver_options)
 
-    driver.get(path)
-
+    conversion_failed = False
     try:
-        WebDriverWait(driver, timeout).until(staleness_of(driver.find_element(by=By.TAG_NAME, value="html")))
-    except TimeoutException:
+        driver.get(path)
+        try:
+            WebDriverWait(driver, timeout).until(staleness_of(driver.find_element(by=By.TAG_NAME, value="html")))
+        except TimeoutException:
+            pass
+
         calculated_print_options = {
             "landscape": False,
             "displayHeaderFooter": False,
@@ -266,8 +270,18 @@ def __get_pdf_from_html(path: str, timeout: int, install_driver: bool, print_opt
         }
         calculated_print_options.update(print_options)
         result = __send_devtools(driver, "Page.printToPDF", calculated_print_options)
-        driver.quit()
         return base64.b64decode(result["data"])
+    except BaseException:
+        conversion_failed = True
+        raise
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            if not conversion_failed:
+                raise
+            # Teardown must not replace the original conversion error.
+            logging.exception("Failed to quit WebDriver after HTML-to-PDF conversion failed")
 
 
 def is_valid_url(url: str) -> bool:
