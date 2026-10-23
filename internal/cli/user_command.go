@@ -1325,7 +1325,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 
 	if stream {
 		startTime := time.Now()
-		reader, err := c.HTTPClient.RequestStream("POST", url, "web", nil, payload)
+		reader, err := c.HTTPClient.RequestStream("POST", url, "api", nil, payload)
 		if err != nil {
 			return nil, chatRequestError(err)
 		}
@@ -1385,7 +1385,7 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 		return &StreamMessageResponse{Code: 0, Message: fullMessage.String(), Duration: duration}, nil
 	}
 
-	resp, err := c.HTTPClient.Request("POST", url, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", url, "api", nil, payload)
 	if err != nil {
 		return nil, chatRequestError(err)
 	}
@@ -1419,7 +1419,7 @@ func (c *MultiRAGClient) CheckProviderConnection(cmd *Command) (ResponseIf, erro
 	}
 
 	url := fmt.Sprintf("/providers/%s/instances/%s/connection", providerName, instanceName)
-	resp, err := c.HTTPClient.Request(http.MethodGet, url, "web", nil, nil)
+	resp, err := c.HTTPClient.Request(http.MethodGet, url, "api", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check provider connection: %w", err)
 	}

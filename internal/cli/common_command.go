@@ -314,7 +314,11 @@ func (c *MultiRAGClient) ListSupportedModels(cmd *Command) (ResponseIf, error) {
 	if c.ServerType == "admin" {
 		endpoint = fmt.Sprintf("/admin/providers/%s/instances/%s/models?supported=true", providerName, instanceName)
 	}
-	resp, err := c.HTTPClient.Request("GET", endpoint, "web", nil, nil)
+	authKind := "api"
+	if c.ServerType == "admin" {
+		authKind = "admin"
+	}
+	resp, err := c.HTTPClient.Request("GET", endpoint, authKind, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list supported models: %w", err)
 	}

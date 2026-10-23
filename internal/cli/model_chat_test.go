@@ -135,7 +135,7 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/api/v1/chat/completions" || r.Header.Get("Authorization") != "fixture-login" {
+				if r.URL.Path != "/api/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer fixture-login" {
 					t.Errorf("route/auth = %s %q", r.URL.Path, r.Header.Get("Authorization"))
 				}
 				var body map[string]interface{}
@@ -237,5 +237,39 @@ func TestChatCLIPreservesBracketText(t *testing.T) {
 	client.CurrentModel = &CurrentModel{Provider: "vllm", Instance: "fixture", Model: "test"}
 	if _, err := client.ChatToModel(&Command{Params: map[string]interface{}{"message": "[todo] explain this"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatUsesAPITokenWithoutLogin(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer fixture-api" {
+				t.Error("API token missing")
+			}
+			if stream {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "event: message\ndata: [MESSAGE]answer\n\nevent: done\ndata: [DONE]\n\n")
+			} else {
+				fmt.Fprint(w, `{"code":0,"answer":"answer"}`)
+			}
+		}))
+		u, _ := url.Parse(srv.URL)
+		port, _ := strconv.Atoi(u.Port())
+		client := NewMultiRAGClient("user")
+		client.HTTPClient.Host = u.Hostname()
+		client.HTTPClient.Port = port
+		client.HTTPClient.APIKey = "fixture-api"
+		input := `CHAT WITH "model@instance@LocalAI" MESSAGE "hello";`
+		if stream {
+			input = "STREAM " + input
+		}
+		cmd, err := NewParser(input).Parse(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ExecuteUserCommand(cmd); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
 	}
 }
