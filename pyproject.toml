@@ -236,9 +236,8 @@ eval = [
     "pydantic-evals==2.54.0",
 ]
 
-test = [
-    "tensorflow-cpu>=2.17.0; sys_platform == 'linux'",
-]
+# Keep the legacy group callable; active test tooling is in dev.
+test = []
 
 [tool.uv]
 # 工具链防漂：本地与 CI 必须同一 minor 的 uv（锁文件由 0.12.x 产出；
