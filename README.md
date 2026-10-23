@@ -289,6 +289,7 @@ curl --fail-with-body http://localhost:8123/api/v1/datasets \
 | 你想做什么 | 从这里开始 |
 | :--- | :--- |
 | 创建知识库，检查资料与检索效果 | [知识库使用指南](./docs/knowledge-base-guide.md) |
+| 配置本地 Chat / Embedding 模型 | [Ollama 使用说明](./docs/ollama.md) |
 | 部署、配置 HTTPS、挂载模型或诊断容器 | [Docker 部署](./docker/README.md) |
 | 升级数据库与准备恢复 | [数据库迁移](./docs/database-migration.md) |
 | 开发后端与运行测试 | [开发细则](./docs/development.md) · [测试说明](./tests/README.md) |
