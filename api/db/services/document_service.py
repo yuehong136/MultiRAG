@@ -2390,88 +2390,36 @@ class DocumentService(CommonService):
         return [dict(row._mapping) for row in rows]
 
     @classmethod
-    def increment_chunk_num(cls, db: Session, doc_id, kb_id, token_num, chunk_num, duration):
+    def increment_chunk_num(cls, db: Session, doc_id: str, kb_id: str, token_num: int, chunk_num: int, duration: float | int) -> int:
+        """Commit both scoped counter deltas, leaving modification times unchanged.
+
+        Legacy callers own an autobegun request Session and expect this helper
+        to commit on success. A savepoint rolls back both updates on failure,
+        even if the caller catches the exception and later commits that Session.
+        Work preceding the savepoint remains owned by the caller.
         """
-        更新文档和知识库的片段数量、令牌数量和处理时长（SQLAlchemy 2.0 Core 风格）。
-
-        本方法通过查询指定ID的文档和知识库，在数据库中更新它们的令牌数量、片段数量和处理时长。
-        如果文档未找到，则抛出LookupError异常。
-
-        注意：此方法故意不更新 update_time/update_date。
-        这是因为文档解析过程中频繁增加 chunk 数量不应该刷新"最后修改时间"，
-        用户通常认为修改文件名或解析配置才算修改，而后台处理进度不算。
-
-        参数:
-        - db: 数据库会话对象，用于执行数据库查询和更新操作。
-        - doc_id: 需要更新的文档的ID。
-        - kb_id: 需要更新的知识库的ID。
-        - token_num: 需要增加的令牌数量。
-        - chunk_num: 需要增加的片段数量。
-        - duration: 需要增加的处理时长。
-
-        返回:
-        - kb_update: 知识库更新的影响行数。
-        """
-        # 更新文档的令牌数量、片段数量和处理时长
-        doc_stmt = (
-            update(cls.model)
-            .where(cls.model.id == doc_id)
-            .values({cls.model.token_num: cls.model.token_num + token_num, cls.model.chunk_num: cls.model.chunk_num + chunk_num, cls.model.process_duration: cls.model.process_duration + duration})
-        )
-        doc_result = db.execute(doc_stmt)
-
-        # 如果文档更新影响行数为0，表示未找到文档，抛出异常
-        if doc_result.rowcount == 0:
-            logging.warning("Document not found which is supposed to be there")
-
-        # 更新知识库的令牌数量和片段数量
-        kb_stmt = (
-            update(Knowledgebase).where(Knowledgebase.id == kb_id).values({Knowledgebase.token_num: Knowledgebase.token_num + token_num, Knowledgebase.chunk_num: Knowledgebase.chunk_num + chunk_num})
-        )
-        kb_result = db.execute(kb_stmt)
+        with db.begin_nested():
+            doc_result = db.execute(
+                update(cls.model)
+                .where(cls.model.id == doc_id, cls.model.kb_id == kb_id)
+                .values(
+                    token_num=cls.model.token_num + token_num,
+                    chunk_num=cls.model.chunk_num + chunk_num,
+                    process_duration=cls.model.process_duration + duration,
+                )
+            )
+            if doc_result.rowcount != 1:
+                raise LookupError("Document not found which is supposed to be there")
+            kb_result = db.execute(update(Knowledgebase).where(Knowledgebase.id == kb_id).values(token_num=Knowledgebase.token_num + token_num, chunk_num=Knowledgebase.chunk_num + chunk_num))
+            if kb_result.rowcount != 1:
+                raise LookupError("Knowledgebase not found which is supposed to be there")
         db.commit()
         return kb_result.rowcount
 
     @classmethod
-    def decrement_chunk_num(cls, db: Session, doc_id: str, kb_id: str, token_num: int, chunk_num: int, duration: int):
-        """
-        减少文档和知识库的片段数量、令牌数量和处理时长（SQLAlchemy 2.0 Core 风格）。
-
-        本方法通过查询指定ID的文档和知识库，在数据库中更新它们的令牌数量、片段数量和处理时长。
-        如果文档未找到，则抛出LookupError异常。
-
-        注意：此方法故意不更新 update_time/update_date
-
-        参数:
-        - db: 数据库会话对象，用于执行数据库查询和更新操作。
-        - doc_id: 需要更新的文档的ID。
-        - kb_id: 需要更新的知识库的ID。
-        - token_num: 需要减少的令牌数量。
-        - chunk_num: 需要减少的片段数量。
-        - duration: 需要增加的处理时长。
-
-        返回:
-        - kb_update: 知识库更新的影响行数。
-        """
-        # 更新文档的令牌数量、片段数量和处理时长
-        doc_stmt = (
-            update(cls.model)
-            .where(cls.model.id == doc_id)
-            .values({cls.model.token_num: cls.model.token_num - token_num, cls.model.chunk_num: cls.model.chunk_num - chunk_num, cls.model.process_duration: cls.model.process_duration + duration})
-        )
-        doc_result = db.execute(doc_stmt)
-
-        # 如果文档更新影响行数为0，表示未找到文档，抛出异常
-        if doc_result.rowcount == 0:
-            raise LookupError("Document not found which is supposed to be there")
-
-        # 更新知识库的令牌数量和片段数量
-        kb_stmt = (
-            update(Knowledgebase).where(Knowledgebase.id == kb_id).values({Knowledgebase.token_num: Knowledgebase.token_num - token_num, Knowledgebase.chunk_num: Knowledgebase.chunk_num - chunk_num})
-        )
-        kb_result = db.execute(kb_stmt)
-        db.commit()
-        return kb_result.rowcount
+    def decrement_chunk_num(cls, db: Session, doc_id: str, kb_id: str, token_num: int, chunk_num: int, duration: float | int) -> int:
+        """Subtract scoped document/KB counters and add elapsed processing time."""
+        return cls.increment_chunk_num(db, doc_id, kb_id, -token_num, -chunk_num, duration)
 
     @classmethod
     def delete_document_and_update_kb_counts(cls, db: Session, doc_id: str) -> bool:
