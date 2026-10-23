@@ -89,19 +89,19 @@ func (s *DocumentService) datasetDocumentMetadata(ctx context.Context, kb *entit
 		ids = append(ids, doc.ID)
 		allowed[doc.ID] = true
 	}
-	result, err := s.docEngine.Search(ctx, &types.SearchRequest{IndexNames: []string{BuildMetadataIndexName(kb.TenantID)}, KbIDs: []string{kb.ID}, Limit: len(ids), Filter: map[string]any{"doc_id": ids}})
+	result, err := s.docEngine.Search(ctx, &types.SearchRequest{IndexNames: []string{BuildMetadataIndexName(kb.TenantID)}, KbIDs: []string{kb.ID}, Limit: len(ids), SelectFields: []string{"id", "kb_id", "meta_fields"}, Filter: map[string]any{"id": ids}})
 	if err != nil || result == nil {
 		return nil, fmt.Errorf("document metadata read failed")
 	}
 	for _, chunk := range result.Chunks {
-		id, ok := chunk["doc_id"].(string)
-		if !ok || !allowed[id] {
+		id, ok := chunk["id"].(string)
+		if !ok || !allowed[id] || chunk["kb_id"] != kb.ID {
 			return nil, fmt.Errorf("metadata document scope mismatch")
 		}
 		if _, duplicate := metadata[id]; duplicate {
 			return nil, fmt.Errorf("duplicate document metadata")
 		}
-		fields, err := ExtractMetaFields(chunk)
+		fields, err := decodeDocumentMetadata(chunk["meta_fields"])
 		if err != nil {
 			return nil, fmt.Errorf("invalid document metadata")
 		}

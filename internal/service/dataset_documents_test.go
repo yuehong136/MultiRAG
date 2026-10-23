@@ -40,13 +40,13 @@ func TestDatasetDocumentsMetadataSourceAndScope(t *testing.T) {
 	if _, err := standalone.datasetDocumentMetadata(t.Context(), kb, documents); err == nil {
 		t.Fatal("configured missing engine silently used SQL")
 	}
-	fixture := &datasetMetadataFixture{result: &types.SearchResult{Chunks: []map[string]any{{"doc_id": "one", "meta_fields": map[string]any{"source": "configured-engine"}}, {"doc_id": "two", "meta_fields": map[string]any{}}}}}
+	fixture := &datasetMetadataFixture{result: &types.SearchResult{Chunks: []map[string]any{{"id": "one", "kb_id": "kb", "meta_fields": map[string]any{"source": "configured-engine"}}, {"id": "two", "kb_id": "kb", "meta_fields": map[string]any{}}}}}
 	svc := &DocumentService{docEngine: fixture, engineType: server.EngineInfinity}
 	result, err := svc.datasetDocumentMetadata(t.Context(), kb, documents)
 	if err != nil || result["one"]["source"] != "configured-engine" || fixture.calls != 1 {
 		t.Fatal(result, err, fixture.calls)
 	}
-	if fixture.context != t.Context() || !reflect.DeepEqual(fixture.request.IndexNames, []string{"multirag_doc_meta_tenant"}) || !reflect.DeepEqual(fixture.request.KbIDs, []string{"kb"}) || !reflect.DeepEqual(fixture.request.Filter["doc_id"], []string{"one", "two"}) {
+	if fixture.context != t.Context() || !reflect.DeepEqual(fixture.request.IndexNames, []string{"multirag_doc_meta_tenant"}) || !reflect.DeepEqual(fixture.request.KbIDs, []string{"kb"}) || !reflect.DeepEqual(fixture.request.Filter["id"], []string{"one", "two"}) {
 		t.Fatal("metadata query escaped page/tenant or context")
 	}
 	fixture.err = errors.New("private engine error")
@@ -54,7 +54,7 @@ func TestDatasetDocumentsMetadataSourceAndScope(t *testing.T) {
 		t.Fatal("engine failure silently fell back to SQL")
 	}
 	fixture.err = nil
-	for _, chunks := range [][]map[string]any{{{"doc_id": "foreign", "meta_fields": map[string]any{}}}, {{"doc_id": "one"}, {"doc_id": "one"}}} {
+	for _, chunks := range [][]map[string]any{{{"id": "foreign", "meta_fields": map[string]any{}}}, {{"id": "one", "kb_id": "kb"}, {"id": "one", "kb_id": "kb"}}} {
 		fixture.result = &types.SearchResult{Chunks: chunks}
 		if _, err := svc.datasetDocumentMetadata(t.Context(), kb, documents); err == nil {
 			t.Fatal("out-of-scope/duplicate metadata accepted")

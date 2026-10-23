@@ -97,7 +97,11 @@ func (c *MultiRAGClient) ListDatasetDocuments(cmd *Command) (ResponseIf, error) 
 	if err != nil {
 		return nil, err
 	}
-	return decodeDatasetDocuments(response)
+	result, err := decodeDatasetDocuments(response)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func decodeDatasetDocuments(response *Response) (*ListDocumentsResponse, error) {

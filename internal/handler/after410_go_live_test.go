@@ -20,8 +20,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	infinitysdk "github.com/infiniflow/infinity-go-sdk"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	"multirag/internal/engine"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
 	"multirag/internal/router"
@@ -29,6 +31,8 @@ import (
 	"multirag/internal/server/local"
 	"multirag/internal/service"
 	"multirag/internal/utility"
+	"net"
+	"strconv"
 )
 
 // This acceptance uses the actual CLI process, registered JWT routes, scratch SQL
@@ -312,6 +316,36 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 			}
 		}
 	}
+
+	configuredID, err := uuid.NewUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuredDataset := strings.ReplaceAll(configuredID.String(), "-", "")
+	if err := dao.DB.Create(&entity.Tenant{ID: "a410_configured", Name: &tenantName, Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dao.DB.Create(&entity.UserTenant{ID: "a410-configured-membership", UserID: "a410-owner", TenantID: "a410_configured", Role: "normal", InvitedBy: "a410-owner", Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dao.DB.Create(&entity.Knowledgebase{ID: configuredDataset, TenantID: "a410_configured", CreatedBy: "a410-owner", Name: "a410-configured", Permission: "me", EmbdID: "unconfigured", Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		name := fmt.Sprintf("configured-%d", i)
+		meta := entity.JSONMap{"source": "SQL-fallback-must-not-leak"}
+		if err := dao.DB.Create(&entity.Document{ID: fmt.Sprintf("a410-config-doc-%d", i), KbID: configuredDataset, Name: &name, Type: "txt", Suffix: "txt", CreatedBy: "a410-owner", Status: &active, ParserConfig: entity.JSONMap{}, MetaFields: &meta}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if err := dao.DB.Where("tenant_id = ?", "a410_configured").Delete(&entity.Knowledgebase{}).Error; err != nil {
+			t.Error(err)
+		}
+		if err := dao.DB.Where("id = ?", "a410_configured").Delete(&entity.Tenant{}).Error; err != nil {
+			t.Error(err)
+		}
+	})
 	snapshot := func() string {
 		var result string
 		if err := readback.QueryRow(`SELECT (SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_provider x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_instance x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_users x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_user_tenants x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_knowledgebases x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_documents x)`).Scan(&result); err != nil {
@@ -328,10 +362,10 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 	api := httptest.NewServer(app)
 	defer api.Close()
 	t.Log("owned-api-listener", api.URL)
-	request := func(identity, method, path string, body any) map[string]any {
+	requestAt := func(endpoint, identity, method, path string, body any) map[string]any {
 		t.Helper()
 		raw, _ := json.Marshal(body)
-		req, _ := http.NewRequestWithContext(t.Context(), method, api.URL+"/api/v1"+path, bytes.NewReader(raw))
+		req, _ := http.NewRequestWithContext(t.Context(), method, endpoint+"/api/v1"+path, bytes.NewReader(raw))
 		req.Header.Set("Content-Type", "application/json")
 		if identity != "" {
 			req.Header.Set("Authorization", "Bearer "+tokens[identity])
@@ -347,22 +381,29 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		}
 		return result
 	}
+	request := func(identity, method, path string, body any) map[string]any {
+		return requestAt(api.URL, identity, method, path, body)
+	}
 	binaryData, err := os.ReadFile(binary)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("candidate-cli-sha256 %x", sha256.Sum256(binaryData))
-	parsed, _ := url.Parse(api.URL)
-	runCLI := func(syntax string, success bool) string {
+	runCLIAt := func(endpoint, syntax string, success bool) string {
+		parsed, _ := url.Parse(endpoint)
 		t.Helper()
 		p := exec.CommandContext(t.Context(), binary, "-h", parsed.Host, "-t", tokens["owner"], "-o", "json", syntax)
 		out, err := p.CombinedOutput()
 		if (err == nil) != success {
 			t.Fatalf("CLI success=%v: %v %s", success, err, out)
 		}
+		if !success && (p.ProcessState.ExitCode() != 1 || strings.Contains(string(out), "panic:")) {
+			t.Fatalf("CLI error must be a normal exit 1: %s", out)
+		}
 		t.Log("owned-cli-process-reaped", p.ProcessState.Pid(), p.ProcessState.ExitCode())
 		return string(out)
 	}
+	runCLI := func(syntax string, success bool) string { return runCLIAt(api.URL, syntax, success) }
 	t.Run("parse", func(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "document.pdf")
 		if err := os.WriteFile(file, []byte("document bytes"), 0600); err != nil {
@@ -506,6 +547,150 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		if calls.Load() != count {
 			t.Fatal("speech denial called provider")
 		}
+	})
+
+	t.Run("configured-infinity-metadata", func(t *testing.T) {
+		uri := os.Getenv("MULTIRAG_AFTER410_INFINITY_URI")
+		if uri == "" {
+			t.Fatal("owned Infinity 0.7.0 URI required")
+		}
+		dbName := "multirag_after410_a"
+		tableName := "multirag_doc_meta_a410_configured"
+		if err := engine.Init(&server.DocEngineConfig{Type: server.EngineInfinity, Infinity: &server.InfinityConfig{URI: uri, DBName: dbName}}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { engine.Close() })
+		host, portText, err := net.SplitHostPort(uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil {
+			t.Fatal(err)
+		}
+		independent, err := infinitysdk.Connect(infinitysdk.NetworkAddress{IP: host, Port: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() {
+			engine.Close()
+			independent.Disconnect()
+			admin, err := infinitysdk.Connect(infinitysdk.NetworkAddress{IP: host, Port: port})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer admin.Disconnect()
+			if _, err := admin.DropDatabase(dbName, infinitysdk.ConflictTypeIgnore); err != nil {
+				t.Error(err)
+			}
+			if _, err := admin.GetDatabase(dbName); err == nil {
+				t.Error("owned Infinity database survived cleanup")
+			}
+		})
+		store := engine.Get()
+		if err := store.CreateMetadata(t.Context(), tableName); err != nil {
+			t.Fatal(err)
+		}
+		metadata := []map[string]any{}
+		for i := range 3 {
+			metadata = append(metadata, map[string]any{"id": fmt.Sprintf("a410-config-doc-%d", i), "kb_id": configuredDataset, "meta_fields": map[string]any{"source": "real-Infinity", "page": i}})
+		}
+		metadata = append(metadata, map[string]any{"id": "a410-foreign-metadata", "kb_id": "foreign-dataset", "meta_fields": map[string]any{"source": "private-foreign-metadata"}})
+		if failed, err := store.InsertMetadata(t.Context(), metadata, "a410_configured"); err != nil || len(failed) > 0 {
+			t.Fatal(failed, err)
+		}
+		indexDB, err := independent.GetDatabase(dbName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		table, err := indexDB.GetTable(tableName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexSnapshot := func() []byte {
+			t.Helper()
+			raw, err := table.Output([]string{"id", "kb_id", "meta_fields"}).ToResult()
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return encoded
+		}
+		indexBefore := indexSnapshot()
+		server.GetConfig().DocEngine.Type = server.EngineInfinity
+		configuredApp := gin.New()
+		configuredApp.Use(gin.Recovery())
+		configuredRoutes := router.NewRouter(handler.NewAuthHandler(), nil, nil, handler.NewDocumentHandler(service.NewDocumentService()), handler.NewDatasetsHandler(service.NewDatasetsService()), handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, service.NewModelProviderService()), nil)
+		configuredRoutes.Setup(configuredApp)
+		configuredAPI := httptest.NewServer(configuredApp)
+		defer configuredAPI.Close()
+		t.Log("owned-configured-api-listener", configuredAPI.URL)
+		path := "/datasets/" + configuredDataset + "/documents"
+		out := runCLIAt(configuredAPI.URL, "LIST DOCUMENTS FROM '"+configuredDataset+"';", true)
+		if !strings.Contains(out, "real-Infinity") || strings.Contains(out, "SQL-fallback") || strings.Contains(out, "private-foreign") {
+			t.Fatal("configured metadata source leaked or missing", out)
+		}
+		page := requestAt(configuredAPI.URL, "owner", "GET", path+"?page=2&page_size=1", nil)
+		if page["code"] != float64(0) || len(page["data"].(map[string]any)["docs"].([]any)) != 1 {
+			t.Fatal("configured page failed", page)
+		}
+		for _, identity := range []string{"", "member", "foreign", "revoked", "disabled"} {
+			out := requestAt(configuredAPI.URL, identity, "GET", path, nil)
+			if out["code"] == float64(0) || out["data"] != nil || strings.Contains(fmt.Sprint(out), "real-Infinity") {
+				t.Fatal("configured metadata denial leaked", out)
+			}
+		}
+		if after := indexSnapshot(); !bytes.Equal(indexBefore, after) {
+			t.Fatal("metadata reads/denials changed Infinity")
+		}
+
+		for _, empty := range []string{"{}", "null"} {
+			if _, err := table.Update("id = 'a410-config-doc-0'", map[string]any{"meta_fields": empty}); err != nil {
+				t.Fatal(err)
+			}
+			emptyBefore := indexSnapshot()
+			out := requestAt(configuredAPI.URL, "owner", "GET", path, nil)
+			if out["code"] != float64(0) {
+				t.Fatal("valid empty metadata failed", out)
+			}
+			for _, row := range out["data"].(map[string]any)["docs"].([]any) {
+				doc := row.(map[string]any)
+				if doc["id"] == "a410-config-doc-0" && len(doc["meta_fields"].(map[string]any)) != 0 {
+					t.Fatal("valid empty metadata changed", doc)
+				}
+			}
+			if after := indexSnapshot(); !bytes.Equal(emptyBefore, after) {
+				t.Fatal("empty metadata read wrote Infinity")
+			}
+		}
+		if _, err := table.Update("id = 'a410-config-doc-0'", map[string]any{"meta_fields": `"private-invalid-metadata"`}); err != nil {
+			t.Fatal("seed malformed root type", err)
+		}
+		badBefore := indexSnapshot()
+		outMap := requestAt(configuredAPI.URL, "owner", "GET", path, nil)
+		if outMap["code"] == float64(0) || outMap["data"] != nil || strings.Contains(fmt.Sprint(outMap), "private-invalid") || strings.Contains(fmt.Sprint(outMap), "SQL-fallback") {
+			t.Fatal("malformed metadata success/leak", outMap)
+		}
+		runCLIAt(configuredAPI.URL, "LIST DOCUMENTS FROM '"+configuredDataset+"';", false)
+		if after := indexSnapshot(); !bytes.Equal(badBefore, after) {
+			t.Fatal("malformed metadata request changed Infinity")
+		}
+		if err := engine.Close(); err != nil {
+			t.Fatal(err)
+		}
+		outMap = requestAt(configuredAPI.URL, "owner", "GET", path, nil)
+		if outMap["code"] == float64(0) || outMap["data"] != nil {
+			t.Fatal("engine failure falsely succeeded", outMap)
+		}
+		if after := indexSnapshot(); !bytes.Equal(badBefore, after) {
+			t.Fatal("failed metadata request changed Infinity")
+		}
+		t.Logf("Infinity-independent-readback-sha256 valid=%x malformed=%x", sha256.Sum256(indexBefore), sha256.Sum256(badBefore))
 	})
 	if after := snapshot(); after != before {
 		t.Fatal("inference changed SQL state")

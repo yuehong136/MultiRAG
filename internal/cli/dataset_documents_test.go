@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -59,5 +60,25 @@ func TestDatasetDocumentNameResolution(t *testing.T) {
 	}
 	if _, err := c.documentDatasetID("9e235004-bd89-41f1-9fca-acde48001122"); err == nil {
 		t.Fatal("non-UUID1 accepted")
+	}
+}
+
+func TestDatasetDocumentClientErrorReturnsNilInterface(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":500,"message":"invalid document metadata","data":null}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	host, port, _ := net.SplitHostPort(u.Host)
+	number, _ := strconv.Atoi(port)
+	c := NewMultiRAGClient("user")
+	c.HTTPClient.Host = host
+	c.HTTPClient.Port = number
+	c.HTTPClient.LoginToken = "controlled"
+	cmd := NewCommand("list_dataset_documents")
+	cmd.Params["dataset"] = "9e235004bd8911f19fcaacde48001122"
+	result, err := c.ListDatasetDocuments(cmd)
+	if err == nil || result != nil {
+		t.Fatal("failed command returned a typed nil response", result, err)
 	}
 }
