@@ -155,6 +155,10 @@ const (
 	TokenQuery
 	TokenTop
 	TokenDimension
+	TokenFormat
+	TokenParam
+	TokenPlay
+	TokenSave
 	TokenPanic
 
 	// Literals

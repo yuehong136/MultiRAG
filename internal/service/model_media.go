@@ -39,13 +39,18 @@ func (m *ModelProviderService) mediaModel(provider, instance, name, user string,
 	return driver, resolved, cancel, common.CodeSuccess, nil
 }
 
-func copyASRConfig(config *models.ASRConfig) *models.ASRConfig {
+func copyASRConfig(config *models.ASRConfig) (*models.ASRConfig, error) {
 	result := models.ASRConfig{}
 	if config != nil {
 		result = *config
 		result.Language = slices.Clone(config.Language)
+		var err error
+		result.Params, err = models.CloneMediaParams(config.Params)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &result
+	return &result, nil
 }
 func (m *ModelProviderService) TranscribeAudio(provider, instance, name, user string, audio []byte, api *models.APIConfig, config *models.ASRConfig) (*models.ASRResponse, common.ErrorCode, error) {
 	if err := models.ValidateMediaBytes(audio); err != nil {
@@ -63,7 +68,11 @@ func (m *ModelProviderService) TranscribeAudio(provider, instance, name, user st
 	if !ok {
 		return nil, common.CodeNotImplemented, fmt.Errorf("%w: ASR", models.ErrUnsupportedCapability)
 	}
-	result, err := capability.TranscribeAudio(&name, audio, resolved, copyASRConfig(config))
+	cfg, err := copyASRConfig(config)
+	if err != nil {
+		return nil, common.CodeBadRequest, err
+	}
+	result, err := capability.TranscribeAudio(&name, audio, resolved, cfg)
 	if err == nil {
 		err = mediaContext(resolved).Err()
 	}
@@ -95,8 +104,18 @@ func (m *ModelProviderService) AudioSpeech(provider, instance, name, user, text 
 	cfg := models.TTSConfig{}
 	if config != nil {
 		cfg = *config
+		cfg.Params, err = models.CloneMediaParams(config.Params)
+		if err != nil {
+			return nil, common.CodeBadRequest, err
+		}
 	}
 	wantedFormat := cfg.Format
+	if wantedFormat == "" && len(cfg.Params) > 0 {
+		wantedFormat, err = models.SpeechFormat(&cfg)
+		if err != nil {
+			return nil, common.CodeBadRequest, err
+		}
+	}
 	result, err := capability.AudioSpeech(&name, text, resolved, &cfg)
 	if err == nil {
 		err = mediaContext(resolved).Err()
@@ -184,7 +203,11 @@ func (m *ModelProviderService) TranscribeAudioStream(provider, instance, name, u
 	}
 	size, events := 0, 0
 	var sendErr error
-	err = capability.TranscribeAudioWithSender(&name, audio, resolved, copyASRConfig(config), func(result *models.ASRResponse) error {
+	cfg, err := copyASRConfig(config)
+	if err != nil {
+		return common.CodeBadRequest, err
+	}
+	err = capability.TranscribeAudioWithSender(&name, audio, resolved, cfg, func(result *models.ASRResponse) error {
 		if sendErr != nil {
 			return sendErr
 		}
@@ -239,8 +262,18 @@ func (m *ModelProviderService) AudioSpeechStream(provider, instance, name, user,
 	cfg := models.TTSConfig{}
 	if config != nil {
 		cfg = *config
+		cfg.Params, err = models.CloneMediaParams(config.Params)
+		if err != nil {
+			return common.CodeBadRequest, err
+		}
 	}
 	size, format := 0, cfg.Format
+	if format == "" && len(cfg.Params) > 0 {
+		format, err = models.SpeechFormat(&cfg)
+		if err != nil {
+			return common.CodeBadRequest, err
+		}
+	}
 	var sendErr error
 	err = capability.AudioSpeechWithSender(&name, text, resolved, &cfg, func(result *models.TTSResponse) error {
 		if sendErr != nil {

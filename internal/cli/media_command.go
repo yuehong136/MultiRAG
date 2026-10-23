@@ -49,6 +49,16 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 	}
 	payload := map[string]any{"model_name": parts[0], "instance_name": parts[1], "provider_name": parts[2]}
 	path := "/audio/transcriptions"
+	params := map[string]any{}
+	if raw, ok := cmd.Params["param_str"].(string); ok {
+		if err := json.Unmarshal([]byte(raw), &params); err != nil || params == nil {
+			return nil, fmt.Errorf("PARAM must be a JSON object")
+		}
+		if _, err := models.CloneMediaParams(params); err != nil {
+			return nil, err
+		}
+	}
+	var speechConfig *models.TTSConfig
 	switch kind {
 	case "tts":
 		path = "/audio/speech"
@@ -57,6 +67,14 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 			return nil, err
 		}
 		payload["text"] = text
+		speechConfig = &models.TTSConfig{Params: params}
+		if format, ok := cmd.Params["format"].(string); ok {
+			speechConfig.Format = format
+		}
+		if err := models.ValidateTTSConfig(speechConfig); err != nil {
+			return nil, err
+		}
+		payload["tts_config"] = speechConfig
 	case "asr", "ocr":
 		field := "audio_file"
 		if kind == "ocr" {
@@ -89,7 +107,7 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 			if format != "wav" && format != "mp3" {
 				return nil, fmt.Errorf("audio file must be wav or mp3")
 			}
-			payload["format"] = format
+			payload["asr_config"] = &models.ASRConfig{Format: format, Params: params}
 		} else {
 			payload["content"] = data
 		}
@@ -107,7 +125,14 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 			return nil, err
 		}
 		defer reader.Close()
-		return readMediaStream(reader, kind)
+		result, err := readMediaStream(reader, kind)
+		if err != nil {
+			return nil, err
+		}
+		if kind == "tts" {
+			return finishSpeechOutput(result, cmd, parts[0], speechConfig)
+		}
+		return result, nil
 	}
 	response, err := c.HTTPClient.RequestBounded("POST", path, "api", nil, payload, int64(base64.StdEncoding.EncodedLen(models.MaxMediaBytes)+64*1024))
 	if err != nil {
@@ -131,7 +156,11 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 	if err != nil {
 		return nil, err
 	}
-	return &CommonDataResponse{Code: 0, Data: row}, nil
+	result := &CommonDataResponse{Code: 0, Data: row}
+	if kind == "tts" {
+		return finishSpeechOutput(result, cmd, parts[0], speechConfig)
+	}
+	return result, nil
 }
 func mediaResult(kind string, raw []byte) (map[string]any, error) {
 	if kind == "tts" {

@@ -2,10 +2,12 @@ package models
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode"
 )
 
 const MaxMediaBytes = 20 * 1024 * 1024
@@ -60,13 +62,15 @@ type TTSResponse struct {
 	Format string `json:"format"`
 }
 type ASRConfig struct {
-	Language []string `json:"language,omitempty"`
-	Prompt   string   `json:"prompt,omitempty"`
-	Format   string   `json:"format,omitempty"`
+	Params   map[string]any `json:"params,omitempty"`
+	Language []string       `json:"language,omitempty"`
+	Prompt   string         `json:"prompt,omitempty"`
+	Format   string         `json:"format,omitempty"`
 }
 type TTSConfig struct {
-	Voice  string `json:"voice,omitempty"`
-	Format string `json:"format,omitempty"`
+	Params map[string]any `json:"params,omitempty"`
+	Voice  string         `json:"voice,omitempty"`
+	Format string         `json:"format,omitempty"`
 }
 type OCRConfig struct {
 	Language []string `json:"language,omitempty"`
@@ -138,14 +142,91 @@ func ValidateSpeechText(text string) error {
 }
 
 func ValidateASRConfig(config *ASRConfig) error {
+	if config != nil {
+		if _, err := CloneMediaParams(config.Params); err != nil {
+			return err
+		}
+	}
 	if config != nil && config.Format != "" && config.Format != "wav" && config.Format != "mp3" {
 		return fmt.Errorf("ASR format must be wav or mp3")
 	}
 	return nil
 }
 func ValidateTTSConfig(config *TTSConfig) error {
-	if config != nil && config.Format != "" && !ValidAudioFormat(config.Format) {
-		return fmt.Errorf("invalid speech format")
+	if config != nil {
+		if _, err := CloneMediaParams(config.Params); err != nil {
+			return err
+		}
 	}
-	return nil
+	_, err := SpeechFormat(config)
+	return err
+}
+
+const MaxMediaParamsBytes = 64 * 1024
+
+// CloneMediaParams bounds dynamic options and isolates nested objects from adapters.
+// Identity, credentials, input and streaming are selected by the trusted call chain.
+func CloneMediaParams(params map[string]any) (map[string]any, error) {
+	for key := range params {
+		if key == "" || len(key) > 128 || strings.IndexFunc(key, unicode.IsControl) >= 0 || strings.ContainsAny(key, `"\`) {
+			return nil, fmt.Errorf("invalid media param name")
+		}
+		switch strings.ToLower(key) {
+		case "model", "text", "input", "stream", "file", "audio", "api_key", "authorization", "base_url", "url", "region":
+			return nil, fmt.Errorf("media params cannot override %s", key)
+		}
+	}
+	raw, err := json.Marshal(params)
+	if err != nil || len(raw) > MaxMediaParamsBytes {
+		return nil, fmt.Errorf("media params must be JSON and at most 64 KiB")
+	}
+	result := map[string]any{}
+	if params != nil {
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, fmt.Errorf("invalid media params")
+		}
+	}
+	return result, nil
+}
+
+// SpeechFormat uses the explicit format first, then known provider parameter paths.
+func SpeechFormat(config *TTSConfig) (string, error) {
+	format := ""
+	if config != nil {
+		values := []any{}
+		for _, key := range []string{"format", "response_format"} {
+			if v, ok := config.Params[key]; ok {
+				values = append(values, v)
+			}
+		}
+		if v, ok := config.Params["audio_setting"]; ok {
+			settings, ok := v.(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("audio_setting must be an object")
+			}
+			if v, ok := settings["format"]; ok {
+				values = append(values, v)
+			}
+		}
+		for _, v := range values {
+			next, ok := v.(string)
+			if !ok || !ValidAudioFormat(next) {
+				return "", fmt.Errorf("invalid speech format in params")
+			}
+			if config.Format == "" && format != "" && format != next {
+				return "", fmt.Errorf("conflicting speech formats in params")
+			}
+			format = next
+		}
+		if config.Format != "" {
+			format = config.Format
+		}
+	}
+	if format == "" {
+		format = "mp3"
+	}
+	if !ValidAudioFormat(format) {
+		return "", fmt.Errorf("invalid speech format")
+	}
+	return format, nil
 }

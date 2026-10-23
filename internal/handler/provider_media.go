@@ -8,6 +8,7 @@ import (
 	"multirag/internal/common"
 	"multirag/internal/entity/models"
 	"net/http"
+	"slices"
 )
 
 type mediaIdentity struct {
@@ -17,18 +18,20 @@ type mediaIdentity struct {
 }
 type TranscribeAudioRequest struct {
 	mediaIdentity
-	File     string   `json:"file" binding:"required"`
-	Language []string `json:"language,omitempty"`
-	Prompt   string   `json:"prompt,omitempty"`
-	Format   string   `json:"format,omitempty"`
-	Stream   bool     `json:"stream"`
+	ASRConfig *models.ASRConfig `json:"asr_config,omitempty"`
+	File      string            `json:"file" binding:"required"`
+	Language  []string          `json:"language,omitempty"`
+	Prompt    string            `json:"prompt,omitempty"`
+	Format    string            `json:"format,omitempty"`
+	Stream    bool              `json:"stream"`
 }
 type AudioSpeechRequest struct {
 	mediaIdentity
-	Text   string `json:"text" binding:"required"`
-	Voice  string `json:"voice,omitempty"`
-	Format string `json:"format,omitempty"`
-	Stream bool   `json:"stream"`
+	TTSConfig *models.TTSConfig `json:"tts_config,omitempty"`
+	Text      string            `json:"text" binding:"required"`
+	Voice     string            `json:"voice,omitempty"`
+	Format    string            `json:"format,omitempty"`
+	Stream    bool              `json:"stream"`
 }
 type OCRFileRequest struct {
 	mediaIdentity
@@ -101,7 +104,31 @@ func (h *ProviderHandler) TranscribeAudio(c *gin.Context) {
 		return
 	}
 	api := &models.APIConfig{Context: c.Request.Context()}
-	config := &models.ASRConfig{Language: req.Language, Prompt: req.Prompt, Format: req.Format}
+	config := &models.ASRConfig{}
+	if req.ASRConfig != nil {
+		*config = *req.ASRConfig
+	}
+	if req.Format != "" {
+		if config.Format != "" && config.Format != req.Format {
+			jsonError(c, common.CodeBadRequest, "conflicting ASR formats")
+			return
+		}
+		config.Format = req.Format
+	}
+	if req.Prompt != "" {
+		if config.Prompt != "" && config.Prompt != req.Prompt {
+			jsonError(c, common.CodeBadRequest, "conflicting ASR prompts")
+			return
+		}
+		config.Prompt = req.Prompt
+	}
+	if len(req.Language) > 0 {
+		if len(config.Language) > 0 && !slices.Equal(config.Language, req.Language) {
+			jsonError(c, common.CodeBadRequest, "conflicting ASR languages")
+			return
+		}
+		config.Language = req.Language
+	}
 	if req.Stream {
 		mediaStream(c, func(send func(any) error) (common.ErrorCode, error) {
 			return h.modelProviderService.TranscribeAudioStream(req.ProviderName, req.InstanceName, req.ModelName, user, audio, api, config, func(r *models.ASRResponse) error { return send(r) })
@@ -122,7 +149,24 @@ func (h *ProviderHandler) AudioSpeech(c *gin.Context) {
 		return
 	}
 	api := &models.APIConfig{Context: c.Request.Context()}
-	config := &models.TTSConfig{Voice: req.Voice, Format: req.Format}
+	config := &models.TTSConfig{}
+	if req.TTSConfig != nil {
+		*config = *req.TTSConfig
+	}
+	if req.Format != "" {
+		if config.Format != "" && config.Format != req.Format {
+			jsonError(c, common.CodeBadRequest, "conflicting speech formats")
+			return
+		}
+		config.Format = req.Format
+	}
+	if req.Voice != "" {
+		if config.Voice != "" && config.Voice != req.Voice {
+			jsonError(c, common.CodeBadRequest, "conflicting speech voices")
+			return
+		}
+		config.Voice = req.Voice
+	}
 	if req.Stream {
 		mediaStream(c, func(send func(any) error) (common.ErrorCode, error) {
 			return h.modelProviderService.AudioSpeechStream(req.ProviderName, req.InstanceName, req.ModelName, user, req.Text, api, config, func(r *models.TTSResponse) error { return send(r) })

@@ -24,16 +24,16 @@ func TestBuiltInMediaCapabilitiesAreExplicit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := driver.(ASRDriver); ok {
+		if _, ok := driver.(ASRDriver); ok != (provider == "fishaudio") {
 			t.Error("unexpected ASR capability", provider)
 		}
-		if _, ok := driver.(TTSDriver); ok {
+		if _, ok := driver.(TTSDriver); ok != (provider == "fishaudio" || provider == "minimax" || provider == "openrouter") {
 			t.Error("unexpected TTS capability", provider)
 		}
 		if _, ok := driver.(ASRStreamDriver); ok {
 			t.Error("unexpected streaming ASR capability", provider)
 		}
-		if _, ok := driver.(TTSStreamDriver); ok {
+		if _, ok := driver.(TTSStreamDriver); ok != (provider == "fishaudio" || provider == "minimax") {
 			t.Error("unexpected streaming TTS capability", provider)
 		}
 		if _, ok := driver.(OCRDriver); ok && provider != "gitee" {

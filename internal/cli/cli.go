@@ -1208,7 +1208,10 @@ Media Commands (User Mode):
   STREAM ASR ...; / STREAM TTS ...;                       - Stream media results
   CHAT WITH 'model@instance@provider' AUDIO './speech.wav';
   WAV/MP3 files are limited to 20 MiB. Drivers must implement the capability;
-  built-in ASR/TTS/OCR drivers currently return an unsupported error (code 501).
+  ASR/TTS accept PARAM '{...}'. TTS accepts FORMAT wav, SAVE 'directory', PLAY.
+  MiniMax/FishAudio support TTS streaming; OpenRouter supports TTS; FishAudio supports ASR.
+  Gitee supports OCR. Other missing capabilities return code 501.
+  SAVE/PLAY are explicit; default TTS creates no local file. PLAY uses afplay or mpv/ffplay.
 
 SQL Commands (Admin Mode):
   LOGIN USER 'email';                                    - Login as admin

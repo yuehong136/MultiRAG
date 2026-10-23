@@ -233,10 +233,12 @@ ASR/TTS accept a `STREAM` prefix. `CHAT ... AUDIO './speech.wav';` sends base64 
 Files are bounded to 20 MiB; audio input supports WAV/MP3. TTS returns base64 audio,
 including under `-o json`, and does not automatically write a local file.
 
-Gitee implements OCR for file and URL inputs. Other built-in media capabilities
-return **501 unsupported**. A catalog entry alone does not enable a driver capability. Missing results, provider errors,
+MiniMax supports TTS and streaming TTS; FishAudio supports TTS, streaming TTS and
+ASR; OpenRouter supports TTS. FishAudio streaming ASR and OpenRouter streaming TTS
+return **501 unsupported**. Gitee implements OCR for file and URL inputs. A catalog
+entry alone does not enable a driver capability. Missing results, provider errors,
 failed/truncated streams and nonzero business codes fail the CLI command. See the
-[Go media contract](../../docs/ragflow-porting/go-media.md) for payloads and the
+[Go media contract](../../../docs/ragflow-porting/go-media.md) for payloads and the
 controlled-adapter verification boundary.
 
 An explicit empty `text` is valid for silent audio or a blank page; missing/null
@@ -257,3 +259,29 @@ without spending quota on an inference probe. Neither provider declares a Go
 media capability. Provider HTTP acceptance with controlled responses establishes
 the adapter contract; live provider quality and production behavior need separate
 verification.
+
+ASR and TTS accept `PARAM` with a quoted JSON object (up to 64 KiB). The object is
+sent as `asr_config.params` or `tts_config.params`; model identity, credentials,
+input bytes/text and streaming cannot be overridden through it. ASR reads the
+client file and uploads its bytes, never a path for the server to open.
+
+```sql
+TTS WITH 'speech-2.8-hd@voice@MiniMax' TEXT 'hello' PARAM '{"voice_setting":{"voice_id":"English_radiant_girl","speed":1},"audio_setting":{"sample_rate":32000}}' FORMAT wav SAVE './audio';
+STREAM TTS WITH 's2-pro@voice@FishAudio' TEXT 'hello' PARAM '{"reference_id":"voice-id"}' FORMAT mp3 PLAY;
+ASR WITH 'transcribe-1@voice@FishAudio' AUDIO './speech.wav' PARAM '{"language":"en","ignore_timestamps":true}';
+```
+
+TTS `FORMAT` overrides the format in provider params and preserves other nested
+settings; otherwise known format fields in params apply, with MP3 as the default.
+`SAVE 'directory'` creates a private audio file in that directory and returns
+`saved_path`. Filenames are sanitized and unique, including models containing `/`.
+`PLAY` explicitly invokes macOS `afplay`, or installed `mpv`/`ffplay`; player failure
+fails the command. PLAY alone uses a temporary file and removes it after playback.
+Without SAVE or PLAY the command returns audio without creating a local file.
+
+MiniMax streams require successful business codes and final `data.status=2`;
+repeated final aggregate audio is validated and not appended twice. FishAudio's
+SSE endpoint uses a clean EOF after complete events. The API emits its own done
+only after provider completion; malformed chunks, transport errors, partial SSE
+frames, cancellation and failed senders remain errors. These adapters were verified
+with controlled provider HTTP, not real supplier credentials.

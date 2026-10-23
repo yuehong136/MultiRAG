@@ -32,15 +32,56 @@ func (p *Parser) parseMediaCommand(kind string) (*Command, error) {
 		return nil, err
 	}
 	p.nextToken()
-	// Check the current token: expectSemicolon alone also accepts a semicolon after an extra token.
+
+	cmd := NewCommand(kind + "_user_command")
+	cmd.Params["composite_model_name"] = name
+	cmd.Params[field] = value
+	seen := map[int]bool{}
+	for p.curToken.Type != TokenSemicolon && p.curToken.Type != TokenEOF {
+		option := p.curToken.Type
+		if seen[option] {
+			return nil, fmt.Errorf("duplicate media option: %s", p.curToken.Value)
+		}
+		seen[option] = true
+		key := ""
+		switch option {
+		case TokenParam:
+			if kind == "ocr" {
+				return nil, fmt.Errorf("PARAM is available for ASR and TTS")
+			}
+			key = "param_str"
+		case TokenFormat, TokenSave, TokenPlay:
+			if kind != "tts" {
+				return nil, fmt.Errorf("FORMAT, SAVE and PLAY are available for TTS")
+			}
+			if option == TokenPlay {
+				cmd.Params["play"] = true
+				p.nextToken()
+				continue
+			}
+			if option == TokenFormat {
+				key = "format"
+			} else {
+				key = "save_path"
+			}
+		default:
+			return nil, fmt.Errorf("unexpected media option: %s", p.curToken.Value)
+		}
+		p.nextToken()
+		if p.curToken.Type != TokenQuotedString && (option == TokenParam || p.curToken.Type != TokenIdentifier) {
+			return nil, fmt.Errorf("expected value for media option")
+		}
+		cmd.Params[key] = p.curToken.Value
+		if option == TokenSave {
+			cmd.Params["save"] = true
+		}
+		p.nextToken()
+	}
 	if p.curToken.Type != TokenSemicolon {
 		return nil, fmt.Errorf("expected semicolon")
 	}
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
 	}
-	cmd := NewCommand(kind + "_user_command")
-	cmd.Params["composite_model_name"] = name
-	cmd.Params[field] = value
 	return cmd, nil
 }

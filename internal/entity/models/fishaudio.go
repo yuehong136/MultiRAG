@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// FishAudioModel exposes discovery and credit balance; audio remains unsupported.
+// FishAudioModel supports speech synthesis, transcription, discovery and credit balance.
 type FishAudioModel struct {
 	*DummyModel
 	driver *openAIChatDriver
