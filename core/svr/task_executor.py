@@ -1,5 +1,8 @@
+import os
 import time
 
+# Set this before the earliest parser/LLM import; preserve an explicit operator choice.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 start_ts = time.time()
 
 import asyncio
@@ -8,7 +11,6 @@ import copy
 import faulthandler
 import json
 import logging
-import os
 import random
 import re
 import signal
@@ -56,11 +58,9 @@ from common.string_utils import split_and_sanitize_terms, truncate_utf8_bytes
 from common.token_utils import num_tokens_from_string, truncate
 from common.versions import get_multirag_version
 from core.app import audio, book, email, laws, manual, naive, one, paper, picture, presentation, qa, resume, table, tag
-from core.graphrag.general.index import run_graphrag_for_kb
 from core.graphrag.utils import chat_limiter, get_llm_cache, get_tags_from_cache, set_llm_cache, set_tags_to_cache
 from core.nlp import add_positions, concat_img, rag_tokenizer, search
 from core.prompts.generator import content_tagging, gen_metadata, keyword_extraction, question_proposal, run_toc_from_text
-from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.svr import executor_metrics
 from core.utils.base64_image import image2id
 from core.utils.raptor_migration import replace_raptor_summaries, summary_rows
@@ -2274,6 +2274,8 @@ async def run_analyze_v2_task(
                             chunk_metadata.append({"positions": positions, "image": chunk.get("image"), "page_nums": sorted({p[0] for p in positions}) if positions else []})
 
                     raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
+                    from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
+
                     raptor = Raptor(
                         max_cluster=raptor_config.get("max_cluster", 64),
                         llm_model=raptor_chat_mdl,
@@ -2363,6 +2365,8 @@ async def run_analyze_v2_task(
                         raptor_inputs.append((text, embd))
 
                 raptor_prompt = raptor_config.get("prompt") or "Please summarize the following content:\n{cluster_content}"
+                from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
+
                 raptor = Raptor(
                     max_cluster=raptor_config.get("max_cluster", 64),
                     llm_model=raptor_chat_mdl,
@@ -2856,6 +2860,8 @@ async def do_handle_task(db: Session, task: Any) -> None:
         with_community = graphrag_conf.get("community", False)
         async with kg_limiter:
             # await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
+            from core.graphrag.general.index import run_graphrag_for_kb
+
             result = await run_graphrag_for_kb(
                 row=task,
                 doc_ids=task.get("doc_ids", []),

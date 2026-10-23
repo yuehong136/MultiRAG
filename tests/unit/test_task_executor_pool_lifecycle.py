@@ -114,7 +114,11 @@ async def test_pre_toc_exits_do_not_allocate_a_pool(db: Session, monkeypatch: py
     else:
         lifecycle.task["task_type"] = "raptor" if exit_kind == "raptor_skip" else exit_kind
         monkeypatch.setattr(task_executor, "run_dataflow", AsyncMock())
-        monkeypatch.setattr(task_executor, "run_graphrag_for_kb", AsyncMock(return_value={}))
+        from core.graphrag.general import index as graph_index
+
+        monkeypatch.setattr(graph_index, "run_graphrag_for_kb", AsyncMock(return_value={}))
+        if exit_kind == "raptor_skip":
+            monkeypatch.setattr(task_executor, "run_raptor_for_kb", AsyncMock(return_value=([], 0, {})))
         monkeypatch.setattr(task_executor, "should_skip_raptor", lambda *args: True)
         monkeypatch.setattr(task_executor, "get_skip_reason", lambda *args: "structured")
     if fails:
