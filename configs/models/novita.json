@@ -5,10 +5,18 @@
   },
   "url_suffix": {
     "chat": "openai/v1/chat/completions",
-    "models": "openai/v1/models"
+    "models": "openai/v1/models",
+    "embedding": "openai/v1/embeddings"
   },
   "class": "novita",
   "models": [
+    {
+      "name": "baai/bge-m3",
+      "max_tokens": 8192,
+      "model_types": [
+        "embedding"
+      ]
+    },
     {
       "name": "deepseek/deepseek-v4-pro",
       "max_tokens": 65536,

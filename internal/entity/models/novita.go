@@ -24,6 +24,10 @@ func novitaChatBody(name string, messages []Message, config *ChatConfig, stream 
 	return body, nil
 }
 
+func (n *NovitaModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(n.httpClient, n.BaseURL, n.URLSuffix.Embedding, name, texts, api, config)
+}
+
 var _ ModelDriver = (*NovitaModel)(nil)
 
 const (
