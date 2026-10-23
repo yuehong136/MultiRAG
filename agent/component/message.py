@@ -176,6 +176,10 @@ class Message(ComponentBase):
         _kwargs = {}
         for n, v in kwargs.items():
             _n = re.sub("[@:.]", "_", n)
+            if n in {"item", "index", "result"} and f"{{{n}}}" in script:
+                # Short aliases also occur in ordinary prose and in values.
+                # Use a distinct token so substituting them stays literal.
+                _n = f"__iteration_{get_uuid()}__"
             script = re.sub(r"\{%s\}" % re.escape(n), _n, script)
             _kwargs[_n] = v
         return script, _kwargs

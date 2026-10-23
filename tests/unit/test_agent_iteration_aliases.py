@@ -141,3 +141,27 @@ def test_string_transform_merge_isolated_and_split_preserves_empty_input() -> No
             transform._split()
     finally:
         canvas._thread_pool.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("component", ["message", "transform"])
+def test_alias_substitution_preserves_literal_alias_words(monkeypatch: pytest.MonkeyPatch, component: str) -> None:
+    template = "Literal item, index and result: {item}|{index}|{result}"
+    canvas = _canvas(["value"], template, stream=False)
+    canvas.get_component_obj("IterationItem:outer")._invoke()
+    try:
+        if component == "message":
+            node = canvas.get_component_obj("Message:child")
+            monkeypatch.setattr(node, "_save_to_memory", lambda *args: None)
+            node._invoke()
+            actual = node.output("content")
+        else:
+            param = StringTransformParam()
+            param.method = "merge"
+            param.script = template
+            node = StringTransform(canvas, "StringTransform:child", param)
+            canvas.components[node._id] = {"obj": node, "parent_id": "Iteration:outer"}
+            node._merge()
+            actual = node.output("result")
+        assert actual == "Literal item, index and result: value|0|value"
+    finally:
+        canvas._thread_pool.shutdown(wait=True)
