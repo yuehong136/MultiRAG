@@ -55,7 +55,7 @@ if LOCK_KEY_pdfplumber not in sys.modules:
 
 
 class RAGFlowPdfParser:
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         """
         If you have trouble downloading HuggingFace models, -_^ this might help!!
 
@@ -77,8 +77,8 @@ class RAGFlowPdfParser:
         if layout_recognizer_type not in ["onnx", "ascend"]:
             raise RuntimeError("Unsupported layout recognizer type.")
 
-        if hasattr(self, "model_speciess"):
-            recognizer_domain = "layout." + self.model_speciess
+        if hasattr(self, "model_species"):
+            recognizer_domain = "layout." + self.model_species
         else:
             recognizer_domain = "layout"
 

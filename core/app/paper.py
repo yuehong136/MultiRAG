@@ -30,8 +30,8 @@ from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper
 
 
 class Pdf(PdfParser):
-    def __init__(self):
-        self.model_speciess = ParserType.PAPER.value
+    def __init__(self) -> None:
+        self.model_species = ParserType.PAPER.value
         super().__init__()
 
     def __call__(self, filename: Any, binary: Any = None, from_page: int = 0, to_page: int = MAXIMUM_PAGE_NUMBER, zoomin: int | float = 3, callback: Any = None) -> Any:
