@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from typing import Any, NoReturn
 
 import pytest
@@ -36,15 +37,27 @@ PROTECTED_ROUTES = [
 ]
 
 
-def unexpected_io(*args: Any, **kwargs: Any) -> NoReturn:
-    raise AssertionError("Unauthenticated or retired request reached database/agent execution")
+@pytest.fixture
+def io_guard() -> tuple[list[str], Callable[..., NoReturn]]:
+    calls: list[str] = []
+
+    def unexpected_io(*args: Any, **kwargs: Any) -> NoReturn:
+        # A handler may catch AssertionError and return a nonzero business code.
+        # Keep the side-effect record independently of exception propagation.
+        calls.append("database-or-agent-execution")
+        raise AssertionError("Unauthenticated or retired request reached database/agent execution")
+
+    return calls, unexpected_io
 
 
 @pytest.mark.parametrize(("method", "path"), PROTECTED_ROUTES, ids=[f"{method} {path}" for method, path in PROTECTED_ROUTES])
-def test_rest_families_refuse_missing_identity_before_database_io(client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str) -> None:
+def test_rest_families_refuse_missing_identity_before_database_io(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str, io_guard: tuple[list[str], Callable[..., NoReturn]]
+) -> None:
     from api.apps import manager
     from api.utils import api_utils
 
+    calls, unexpected_io = io_guard
     for dependency in (manager, api_utils.async_current_user, api_utils.current_tenant_id, api_utils.async_current_tenant_id):
         client.app.dependency_overrides.pop(dependency, None)
     monkeypatch.setattr(Session, "execute", unexpected_io)
@@ -55,9 +68,11 @@ def test_rest_families_refuse_missing_identity_before_database_io(client: TestCl
     if response.status_code == 200:
         payload = response.json()
         assert payload.get("retcode", payload.get("code")) not in {None, 0}, payload
+    assert calls == []
 
 
-def test_retired_agent_openai_path_does_not_enter_completion(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retired_agent_openai_path_does_not_enter_completion(client: TestClient, monkeypatch: pytest.MonkeyPatch, io_guard: tuple[list[str], Callable[..., NoReturn]]) -> None:
+    calls, unexpected_io = io_guard
     module = sys.modules["api.apps.restful_apis.agent"]
     for name in ("prepare_agent_run", "completion_openai", "agent_completion"):
         monkeypatch.setattr(module, name, unexpected_io)
@@ -68,12 +83,15 @@ def test_retired_agent_openai_path_does_not_enter_completion(client: TestClient,
     assert response.status_code == 404
     assert response.json() == {"code": 404, "message": f"Not Found: {path}", "data": None, "error": "Not Found"}
     assert "/api/v1/agents_openai/{agent_id}/chat/completions" not in client.app.openapi()["paths"]
+    assert calls == []
 
 
-def test_missing_route_uses_json_404_without_database_io(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_route_uses_json_404_without_database_io(client: TestClient, monkeypatch: pytest.MonkeyPatch, io_guard: tuple[list[str], Callable[..., NoReturn]]) -> None:
+    calls, unexpected_io = io_guard
     monkeypatch.setattr(AsyncSession, "execute", unexpected_io)
     monkeypatch.setattr(AsyncSession, "run_sync", unexpected_io)
     path = "/api/v1/__missing_route__"
     response = client.get(path)
     assert response.status_code == 404
     assert response.json() == {"code": 404, "message": f"Not Found: {path}", "data": None, "error": "Not Found"}
+    assert calls == []
