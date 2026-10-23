@@ -116,6 +116,13 @@ class MultiRAGGCS:
                 time.sleep(1)
         return None
 
+    def get_bytes(self, bucket: str, filename: str, tenant_id: str | None = None) -> bytes | None:
+        """Only an explicit SDK not-found response represents an absent object."""
+        try:
+            return self.client.bucket(self.bucket_name).blob(self._get_blob_path(bucket, filename)).download_as_bytes()
+        except NotFound:
+            return None
+
     def obj_exist(self, bucket, filename, tenant_id=None):
         # RENAMED PARAMETER: bucket_name -> bucket
         try:

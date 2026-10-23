@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,16 +15,18 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.restful_apis.chat_api import apply_feedback_to_session_payload
+from api.db import UserTenantRole
 from api.db.db_models import APIToken, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
+from api.db.services.file_service import RuntimeUploadCleanupError
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
-from common.constants import LLMType, RetCode
+from common.constants import LLMType, RetCode, StatusEnum
 from common.misc_utils import get_uuid
 from core.prompts.generator import chunks_format
 from core.prompts.template import load_prompt
@@ -422,22 +424,38 @@ def getsse(dialog_id: str, db: Session = Depends(get_db), request: Request = Non
 
 
 @router.post("/rm", summary="[Deprecated] 删除会话", response_description="成功删除会话", deprecated=True)
-def rm(request: RemoveConversationRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    try:
-        for cid in request.conversation_ids:
-            conv = ConversationService.get_by_id(db, cid)
+async def rm(request: RemoveConversationRequest, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> Response:
+    def authorized_sessions(session: Session) -> list[tuple[str, str, str]] | Response:
+        # Preflight the entire legacy batch before deleting any SQL or objects.
+        tenants = UserTenantService.query(session, user_id=user.platform_user_id, status=StatusEnum.VALID.value)
+        scopes: list[tuple[str, str, str]] = []
+        for cid in dict.fromkeys(request.conversation_ids):
+            conv = ConversationService.get_by_id(session, cid)
             if not conv:
                 return get_data_error_result(retmsg="Conversation not found!")
-            tenants = UserTenantService.query(db, user_id=user.id)
             for tenant in tenants:
-                if DialogService.query(db, tenant_id=tenant.tenant_id, id=conv.dialog_id):
+                if tenant.role in {UserTenantRole.OWNER, UserTenantRole.ADMIN, UserTenantRole.NORMAL} and DialogService.query(session, tenant_id=tenant.tenant_id, id=conv.dialog_id):
+                    scopes.append((cid, conv.dialog_id, tenant.tenant_id))
                     break
             else:
                 return get_json_result(data=False, retmsg="Only owner of conversation authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
-            ConversationService.delete_by_id(db, cid)
+        return scopes
+
+    try:
+        scopes = await db.run_sync(authorized_sessions)  # TODO(async-phase4)
+        if isinstance(scopes, Response):
+            return scopes
+        for cid, chat_id, tenant_id in scopes:
+            if not await ConversationService.delete_with_runtime_uploads(db, tenant_id=tenant_id, chat_id=chat_id, session_id=cid, owner_id=user.platform_user_id):
+                return get_data_error_result(retmsg="Conversation not found!")
         return get_json_result(data=True)
-    except Exception as e:
-        return server_error_response(e)
+    except RuntimeUploadCleanupError:
+        logging.exception("Session upload cleanup failed")
+        return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="Session upload cleanup could not be confirmed; retry deletion.", data=False)
+    except Exception:
+        await db.rollback()
+        logging.exception("Session deletion failed")
+        return get_json_result(retcode=RetCode.EXCEPTION_ERROR, retmsg="Internal server error", data=False)
 
 
 @router.get("/list", summary="[Deprecated] 列出会话", response_description="成功列出会话", deprecated=True)

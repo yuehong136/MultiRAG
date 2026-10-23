@@ -47,6 +47,10 @@ class RuntimeAttachmentError(ValueError):
     """An owner-scoped runtime attachment cannot be restored or parsed."""
 
 
+class RuntimeUploadCleanupError(RuntimeError):
+    """Runtime upload deletion could not be confirmed and must be retried."""
+
+
 class FileService(CommonService):
     model = File
     _ALLOWED_CRAWL_SCHEMES = frozenset({"http", "https"})
@@ -701,7 +705,11 @@ class FileService(CommonService):
         bucket = f"{owner_id}-downloads"
         if not settings.STORAGE_IMPL.obj_exist(bucket, key) or not settings.STORAGE_IMPL.obj_exist(bucket, location):
             raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
-        raw = FileService.get_blob(owner_id, key)
+        return FileService._parse_runtime_descriptor(owner_id, location, FileService.get_blob(owner_id, key))
+
+    @staticmethod
+    def _parse_runtime_descriptor(owner_id: str, location: str, raw: bytes | str | None) -> dict[str, Any]:
+        """Validate server-written authority independently of payload availability."""
         try:
             descriptor = json.loads(raw)
             valid = (
@@ -719,6 +727,44 @@ class FileService(CommonService):
         if not valid:
             raise RuntimeAttachmentError("Attachment is missing or unavailable to this user.")
         return descriptor
+
+    @staticmethod
+    def remove_runtime_uploads(owner_id: str, locations: list[str]) -> None:
+        """Remove trusted, unreferenced uploads, keeping descriptors until blobs are gone.
+
+        The caller must check remaining session references. Missing or invalid
+        descriptors confer no deletion authority; never fall back to client metadata.
+        A descriptor whose payload was already removed remains usable on retry.
+        """
+        bucket = f"{owner_id}-downloads"
+        try:
+            if not locations:
+                return
+            storage = settings.STORAGE_IMPL
+            reader = getattr(storage, "get_bytes", None)
+            if not callable(reader):
+                raise RuntimeUploadCleanupError("Storage does not support confirmed session upload cleanup.")
+            for location in dict.fromkeys(locations):
+                if not isinstance(location, str) or not re.fullmatch(r"[0-9a-f]{32}", location):
+                    continue
+                key = FileService._runtime_descriptor_key(location)
+                # Legacy obj_exist() can return False on transport errors. Only
+                # a strict reader's explicit not-found result proves absence.
+                raw = reader(bucket, key)
+                if raw is None:
+                    continue
+                try:
+                    FileService._parse_runtime_descriptor(owner_id, location, raw)
+                except RuntimeAttachmentError:
+                    continue
+                for object_key in (location, key):
+                    receipt = storage.rm(bucket, object_key)
+                    if receipt is False or reader(bucket, object_key) is not None:
+                        raise RuntimeUploadCleanupError("Session upload cleanup could not be confirmed; retry deletion.")
+        except RuntimeUploadCleanupError:
+            raise
+        except Exception as exc:
+            raise RuntimeUploadCleanupError("Session upload cleanup could not be confirmed; retry deletion.") from exc
 
     @staticmethod
     async def resolve_runtime_uploads(owner_id: str, file_ids: list[str]) -> list[dict[str, Any]]:

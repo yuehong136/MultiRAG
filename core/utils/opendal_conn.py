@@ -84,9 +84,17 @@ class OpenDALStorage:
     def get(self, bucket, fnm, tenant_id=None):
         return self._operator.read(f"{bucket}/{fnm}")
 
-    def rm(self, bucket, fnm, tenant_id=None):
-        self._operator.delete(f"{bucket}/{fnm}")
-        self._operator.__init__()
+    def get_bytes(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        try:
+            return self._operator.read(f"{bucket}/{fnm}")
+        except opendal.exceptions.NotFound:
+            return None
+
+    def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
+        try:
+            self._operator.delete(f"{bucket}/{fnm}")
+        except opendal.exceptions.NotFound:
+            return
 
     def scan(self, bucket, fnm, tenant_id=None):
         return self._operator.scan(f"{bucket}/{fnm}")

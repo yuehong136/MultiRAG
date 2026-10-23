@@ -29,6 +29,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_type_
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_chat, gen_mindmap
+from api.db.services.file_service import RuntimeUploadCleanupError
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -1072,45 +1073,49 @@ async def delete_sessions(
     request: DeleteSessionsRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
-    def _delete(s: Session) -> Response:
-        if not _owned_chat_exists(s, tenant_id, chat_id):
-            return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
+    user: Principal = Depends(async_current_user),
+) -> Response:
+    if not await db.run_sync(lambda s: _owned_chat_exists(s, tenant_id, chat_id)):  # TODO(async-phase4)
+        return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
 
-        try:
-            req = request.model_dump()
-            session_ids = req.get("ids")
-            if not session_ids:
-                if req.get("delete_all") is True:
-                    session_ids = [conv.id for conv in ConversationService.query(s, dialog_id=chat_id)]
-                    if not session_ids:
-                        return get_result(data={})
-                else:
+    try:
+        session_ids = request.ids
+        if not session_ids:
+            if request.delete_all:
+                session_ids = await db.run_sync(lambda s: [conv.id for conv in ConversationService.query(s, dialog_id=chat_id)])  # TODO(async-phase4)
+                if not session_ids:
                     return get_result(data={})
+            else:
+                return get_result(data={})
 
-            unique_ids, duplicate_messages = check_duplicate_ids(session_ids, "session")
-            errors: list[str] = []
-            success_count = 0
-            for sid in unique_ids:
-                if not ConversationService.query(s, id=sid, dialog_id=chat_id):
+        unique_ids, duplicate_messages = check_duplicate_ids(session_ids, "session")
+        errors: list[str] = []
+        success_count = 0
+        cleanup_failed = False
+        for sid in unique_ids:
+            try:
+                if not await ConversationService.delete_with_runtime_uploads(db, tenant_id=tenant_id, chat_id=chat_id, session_id=sid, owner_id=user.platform_user_id):
                     errors.append(f"The chat doesn't own the session {sid}")
                     continue
-                success_count += ConversationService.delete_by_id(s, sid)
+                success_count += 1
+            except RuntimeUploadCleanupError:
+                logger.exception("Session upload cleanup failed")
+                cleanup_failed = True
+                errors.append(f"Session {sid} upload cleanup could not be confirmed; retry deletion.")
 
-            all_errors = errors + duplicate_messages
-            if all_errors:
-                if success_count > 0:
-                    return get_result(
-                        data={"success_count": success_count, "errors": all_errors},
-                        retmsg=f"Partially deleted {success_count} sessions with {len(all_errors)} errors",
-                    )
-                return _error("; ".join(all_errors))
-            return get_result(data=True)
-        except Exception as e:
-            logger.exception(e)
-            return _error("Internal server error")
-
-    return await db.run_sync(_delete)  # TODO(async-phase4)
+        all_errors = errors + duplicate_messages
+        if all_errors:
+            if success_count > 0:
+                return get_result(
+                    data={"success_count": success_count, "errors": all_errors},
+                    retmsg=f"Partially deleted {success_count} sessions with {len(all_errors)} errors",
+                )
+            return _error("; ".join(all_errors), RetCode.EXCEPTION_ERROR if cleanup_failed else RetCode.DATA_ERROR)
+        return get_result(data=True)
+    except Exception as e:
+        await db.rollback()
+        logger.exception(e)
+        return _error("Internal server error")
 
 
 @router.delete(

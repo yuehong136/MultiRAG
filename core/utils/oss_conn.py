@@ -134,6 +134,10 @@ class MultiRAGOSS:
     def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
             self.conn.delete_object(Bucket=bucket, Key=fnm)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in {"NoSuchKey", "NoSuchBucket", "NotFound", "404"}:
+                return
+            raise
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
             raise
@@ -151,6 +155,22 @@ class MultiRAGOSS:
                 self.__open__()
                 time.sleep(1)
         return None
+
+    @use_prefix_path
+    @use_default_bucket
+    def get_bytes(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        """Keep the existing prefix mapping and distinguish missing objects from failures."""
+        body = None
+        try:
+            body = self.conn.get_object(Bucket=bucket, Key=fnm)["Body"]
+            return body.read()
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in {"NoSuchKey", "NoSuchBucket", "NotFound", "404"}:
+                return None
+            raise
+        finally:
+            if body is not None:
+                body.close()
 
     @use_prefix_path
     @use_default_bucket

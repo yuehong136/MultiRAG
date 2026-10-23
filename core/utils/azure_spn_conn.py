@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from azure.core import MatchConditions
-from azure.core.exceptions import ResourceExistsError, ResourceModifiedError
+from azure.core.exceptions import ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
 from azure.identity import AzureAuthorityHosts, ClientSecretCredential
 from azure.storage.filedatalake import DataLakeServiceClient, FileSasPermissions, FileSystemClient, generate_file_sas
 
@@ -82,6 +82,8 @@ class MultiRAGAzureSpnBlob:
     def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
             self.conn.delete_file(f"{bucket}/{fnm}")
+        except ResourceNotFoundError:
+            return
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
             raise
@@ -98,6 +100,13 @@ class MultiRAGAzureSpnBlob:
                 self.__open__()
                 time.sleep(2**attempt)
         return None
+
+    def get_bytes(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        """Read the exact logical namespace, propagating operational failures."""
+        try:
+            return self.conn.get_file_client(f"{bucket}/{fnm}").download_file().readall()
+        except ResourceNotFoundError:
+            return None
 
     def obj_exist(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bool:
         try:

@@ -40,6 +40,12 @@ class ConversationService(CommonService):
     model = Conversation
 
     @classmethod
+    async def delete_with_runtime_uploads(cls, db: AsyncSession, *, tenant_id: str, chat_id: str, session_id: str, owner_id: str) -> bool:
+        from api.db.services.runtime_attachment_service import RuntimeAttachmentService
+
+        return await RuntimeAttachmentService.delete_session(db, tenant_id=tenant_id, chat_id=chat_id, session_id=session_id, owner_id=owner_id)
+
+    @classmethod
     def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, is_desc, id=None, name=None, user_id=None):
         stmt = select(cls.model).where(cls.model.dialog_id == dialog_id)
 

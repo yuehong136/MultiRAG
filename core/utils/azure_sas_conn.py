@@ -4,6 +4,7 @@ import time
 from io import BytesIO
 from typing import Any
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import ContainerClient
 
 from common import settings
@@ -52,6 +53,8 @@ class MultiRAGAzureSasBlob:
     def rm(self, bucket: str, fnm: str, tenant_id: str | None = None) -> None:
         try:
             self.conn.delete_blob(f"{bucket}/{fnm}")
+        except ResourceNotFoundError:
+            return
         except Exception:
             logging.exception(f"Fail rm {bucket}/{fnm}")
             raise
@@ -68,6 +71,13 @@ class MultiRAGAzureSasBlob:
                 self.__open__()
                 time.sleep(2**attempt)
         return None
+
+    def get_bytes(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bytes | None:
+        """Read the exact logical namespace, propagating operational failures."""
+        try:
+            return self.conn.download_blob(f"{bucket}/{fnm}").readall()
+        except ResourceNotFoundError:
+            return None
 
     def obj_exist(self, bucket: str, fnm: str, tenant_id: str | None = None) -> bool:
         try:
