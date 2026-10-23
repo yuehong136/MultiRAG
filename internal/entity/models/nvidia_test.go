@@ -67,7 +67,7 @@ func TestNVIDIADiscoveryOptionalKeyHTTP(t *testing.T) {
 	}
 }
 
-func TestNVIDIAThinkingAndUnsupportedCapabilities(t *testing.T) {
+func TestNVIDIAThinkingAndUnsupportedBalance(t *testing.T) {
 	history := []Message{{Role: "user", Content: "q"}}
 	for _, mode := range []string{"omitted", "enabled", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
@@ -108,9 +108,7 @@ func TestNVIDIAThinkingAndUnsupportedCapabilities(t *testing.T) {
 		})
 	}
 	driver := NewNVIDIAModel(nil, URLSuffix{})
-	name := "m"
 	for _, call := range []func() error{
-		func() error { _, e := NewRerankModel(driver, &name, nil).Rerank("q", []string{"d"}); return e },
 		func() error { _, e := driver.Balance(nil); return e },
 	} {
 		if err := call(); err == nil {

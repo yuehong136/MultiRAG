@@ -20,7 +20,7 @@ func TestNVIDIAEmbeddingCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := manager.FindProvider("NVIDIA")
-	if provider == nil || provider.URLSuffix.Embedding != "embeddings" || len(provider.Models) != 62 {
+	if provider == nil || provider.URLSuffix.Embedding != "embeddings" || len(provider.Models) != 64 {
 		t.Fatal("NVIDIA embedding catalog missing")
 	}
 	for name, tokens := range map[string]int{

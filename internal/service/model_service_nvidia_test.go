@@ -22,7 +22,7 @@ func TestNVIDIAConfiguredInstancesHTTP(t *testing.T) {
 		t.Fatal("NVIDIA config/factory")
 	}
 	// All target catalog models remain available as provider metadata, not driver capability promises.
-	if len(provider.Models) != 62 {
+	if len(provider.Models) != 64 {
 		t.Fatalf("catalog models=%d", len(provider.Models))
 	}
 	original := provider.URL["default"]
