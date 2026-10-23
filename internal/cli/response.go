@@ -284,3 +284,21 @@ func (r *CESearchResponse) PrintOut() {
 		fmt.Printf("%d, %s\n", r.Code, r.Message)
 	}
 }
+
+// MessageResponse prints the server's acknowledged command confirmation.
+type MessageResponse struct {
+	Code         int    `json:"code"`
+	Message      string `json:"message"`
+	outputFormat OutputFormat
+}
+
+func (r *MessageResponse) Type() string                        { return "message" }
+func (r *MessageResponse) TimeCost() float64                   { return 0 }
+func (r *MessageResponse) SetOutputFormat(format OutputFormat) { r.outputFormat = format }
+func (r *MessageResponse) PrintOut() {
+	if r.outputFormat == OutputFormatJSON {
+		PrintTableSimpleByFormat([]map[string]any{{"code": r.Code, "message": r.Message}}, r.outputFormat)
+		return
+	}
+	fmt.Println(r.Message)
+}

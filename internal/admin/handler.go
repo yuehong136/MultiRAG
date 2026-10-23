@@ -925,50 +925,37 @@ func (h *Handler) ShowModel(c *gin.Context) {
 // GetVariables handle get variables
 // Python logic: if request body is empty, list all variables; otherwise get single variable by var_name from body
 func (h *Handler) GetVariables(c *gin.Context) {
-	// Check if request has body content
-	if c.Request.ContentLength == 0 || c.Request.ContentLength == -1 {
-		// List all variables
-		variables, err := h.service.GetAllVariables()
-		if err != nil {
-			errorResponse(c, err.Error(), 500)
+	if c.Request.ContentLength > 0 {
+		errorResponse(c, "Use the var_name query parameter", 400)
+		return
+	}
+	varName, specified := c.GetQuery("var_name")
+	var variables []map[string]interface{}
+	var err error
+	if specified {
+		if strings.TrimSpace(varName) == "" {
+			errorResponse(c, "Var name is required", 400)
 			return
 		}
-		success(c, variables, "")
-		return
+		variables, err = h.service.GetVariable(varName)
+	} else {
+		variables, err = h.service.GetAllVariables()
 	}
-
-	// Get single variable by var_name from request body
-	var req struct {
-		VarName string `json:"var_name"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		errorResponse(c, "Invalid request body", 400)
-		return
-	}
-
-	if req.VarName == "" {
-		errorResponse(c, "Var name is required", 400)
-		return
-	}
-
-	variable, err := h.service.GetVariable(req.VarName)
 	if err != nil {
-		// Check if it's an AdminException
 		if adminErr, ok := err.(*AdminException); ok {
 			errorResponse(c, adminErr.Message, 400)
-			return
+		} else {
+			errorResponse(c, "Failed to read variables", 500)
 		}
-		errorResponse(c, err.Error(), 500)
 		return
 	}
-
-	success(c, variable, "")
+	success(c, variables, "")
 }
 
 // SetVariableHTTPRequest set variable request
 type SetVariableHTTPRequest struct {
-	VarName  string `json:"var_name" binding:"required"`
-	VarValue string `json:"var_value" binding:"required"`
+	VarName  string  `json:"var_name" binding:"required"`
+	VarValue *string `json:"var_value" binding:"required"`
 }
 
 // SetVariable handle set variable
@@ -985,12 +972,12 @@ func (h *Handler) SetVariable(c *gin.Context) {
 		return
 	}
 
-	if req.VarValue == "" {
+	if req.VarValue == nil {
 		errorResponse(c, "Var value is required", 400)
 		return
 	}
 
-	if err := h.service.SetVariable(req.VarName, req.VarValue); err != nil {
+	if err := h.service.SetVariable(req.VarName, *req.VarValue); err != nil {
 		// Check if it's an AdminException
 		if adminErr, ok := err.(*AdminException); ok {
 			errorResponse(c, adminErr.Message, 400)

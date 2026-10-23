@@ -285,3 +285,14 @@ SSE endpoint uses a clean EOF after complete events. The API emits its own done
 only after provider completion; malformed chunks, transport errors, partial SSE
 frames, cancellation and failed senders remain errors. These adapters were verified
 with controlled provider HTTP, not real supplier credentials.
+
+
+### Admin system variables
+
+In `--admin` mode, use `LIST VARS;`, `SHOW VAR mail.;`, and
+`SET VAR mail.port 0;`. `SET VAR mail.use_tls false;` preserves false, and
+`SET VAR mail.password '';` writes an explicit empty string. `SHOW VAR` sends
+`var_name` as a GET query parameter and uses exact-name priority before literal
+prefix matching. Invalid values and denied requests return a nonzero process exit.
+The [variable types and examples](../../admin/client/README.md#系统变量admin)
+apply to both CLI implementations.

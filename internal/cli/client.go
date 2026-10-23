@@ -129,6 +129,12 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 		return c.ShowCurrentUser(cmd)
 	case "list_admin_tasks":
 		return c.ListAdminTasks(cmd)
+	case "list_variables":
+		return c.ListVariables(cmd)
+	case "show_variable":
+		return c.ShowVariable(cmd)
+	case "set_variable":
+		return c.SetVariable(cmd)
 	case "list_users":
 		return c.ListUsers(cmd)
 	case "list_datasets":

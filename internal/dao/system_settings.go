@@ -18,6 +18,7 @@ package dao
 
 import (
 	"errors"
+	"strings"
 
 	"multirag/internal/entity"
 
@@ -36,7 +37,7 @@ func NewSystemSettingsDAO() *SystemSettingsDAO {
 // Returns all system settings records from database
 func (d *SystemSettingsDAO) GetAll() ([]entity.SystemSettings, error) {
 	var settings []entity.SystemSettings
-	err := DB.Find(&settings).Error
+	err := DB.Order("name ASC").Find(&settings).Error
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +48,19 @@ func (d *SystemSettingsDAO) GetAll() ([]entity.SystemSettings, error) {
 // Returns settings records that match the given name
 func (d *SystemSettingsDAO) GetByName(name string) ([]entity.SystemSettings, error) {
 	var settings []entity.SystemSettings
-	err := DB.Where("name = ?", name).Find(&settings).Error
+	err := DB.Where("name = ?", name).Order("name ASC").Find(&settings).Error
 	if err != nil {
 		return nil, err
 	}
 	return settings, nil
+}
+
+// GetByNamePrefix matches a literal prefix, including SQL wildcard characters.
+func (d *SystemSettingsDAO) GetByNamePrefix(namePrefix string) ([]entity.SystemSettings, error) {
+	escaped := strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`).Replace(namePrefix)
+	var settings []entity.SystemSettings
+	err := DB.Where("name LIKE ? ESCAPE '!'", escaped+"%").Order("name ASC").Find(&settings).Error
+	return settings, err
 }
 
 // UpdateByName update system settings by name

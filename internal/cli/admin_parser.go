@@ -656,7 +656,7 @@ func (p *Parser) parseSetVariable() (*Command, error) {
 	}
 
 	p.nextToken()
-	varValue, err := p.parseIdentifier()
+	varValue, err := p.parseVariableValue()
 	if err != nil {
 		return nil, err
 	}
@@ -666,6 +666,9 @@ func (p *Parser) parseSetVariable() (*Command, error) {
 	cmd.Params["var_value"] = varValue
 
 	p.nextToken()
+	if p.curToken.Type != TokenSemicolon {
+		return nil, fmt.Errorf("expected semicolon after variable value")
+	}
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
 	}
