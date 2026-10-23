@@ -186,7 +186,7 @@
       ]
     },
     {
-      "name": "mistralai/mistral-medium-3-5-128b",
+      "name": "mistralai/mistral-medium-3.5-128b",
       "max_tokens": 131072,
       "model_types": [
         "chat",
@@ -419,7 +419,7 @@
       ]
     },
     {
-      "name": "nvidia/riva-translate-4b-instruct-v1_1",
+      "name": "nvidia/riva-translate-4b-instruct-v1.1",
       "max_tokens": 4096,
       "model_types": [
         "chat"
@@ -447,7 +447,7 @@
       ]
     },
     {
-      "name": "qwen/qwen3-5-122b-a10b",
+      "name": "qwen/qwen3.5-122b-a10b",
       "max_tokens": 131072,
       "model_types": [
         "chat"
@@ -505,7 +505,7 @@
       }
     },
     {
-      "name": "z-ai/glm-4.7",
+      "name": "z-ai/glm4.7",
       "max_tokens": 131072,
       "model_types": [
         "chat"
