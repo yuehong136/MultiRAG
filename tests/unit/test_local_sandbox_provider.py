@@ -175,9 +175,20 @@ def test_replaced_instance_is_rejected_before_script_write(provider: LocalProvid
 
 def test_child_environment_does_not_inherit_credentials(provider: LocalProvider, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-do-not-forward")
-    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "1")
-    result = run_code(provider, 'import os\ndef main():\n    return {"secret": os.getenv("AWS_SECRET_ACCESS_KEY"), "threads": os.getenv("OPENBLAS_NUM_THREADS")}')
-    assert result.metadata["result_value"] == {"secret": None, "threads": "1"}
+    names = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+    for name in names:
+        monkeypatch.setenv(name, "1")
+    monkeypatch.setenv("PYTHONPATH", "/test/parent-only")
+    result = run_code(provider, "import os\ndef main(names):\n    return {name: os.getenv(name) for name in names}", arguments={"names": [*names, "AWS_SECRET_ACCESS_KEY", "PYTHONPATH"]})
+    assert result.metadata["result_value"] == dict.fromkeys(names, "1") | {"AWS_SECRET_ACCESS_KEY": None, "PYTHONPATH": None}
+
+
+def test_unset_thread_controls_are_not_invented(provider: LocalProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    names = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    result = run_code(provider, "import os\ndef main(names):\n    return {name: os.getenv(name) for name in names}", arguments={"names": names})
+    assert result.metadata["result_value"] == dict.fromkeys(names)
 
 
 @pytest.mark.parametrize("payload", [[], None, "text", {"present": True}, {"present": 1, "value": 3, "type": "json"}])

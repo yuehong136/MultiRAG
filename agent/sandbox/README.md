@@ -13,6 +13,10 @@ the self-managed provider; the opt-in local provider runs host processes.
 
 ## Provider selection and local development
 
+The Agent **Code** component (`CodeExec`) runs Python or JavaScript through a
+sandbox provider. Configure the provider in the Python API and worker processes
+that execute the workflow before using the editor or single-step debug.
+
 `SANDBOX_PROVIDER_TYPE` overrides the `sandbox.provider_type` system setting.
 When neither selects a provider, CodeExec may use the existing HTTP executor.
 A selected provider's invalid configuration, missing dependency, timeout or
@@ -46,6 +50,15 @@ export SANDBOX_LOCAL_WORK_DIR=/tmp/multirag-codeexec
 ```
 
 The commented [environment example](../../docker/.env) lists all limits.
+To limit native math threads when NumPy/OpenBLAS reports `pthread_create failed`,
+set `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+`NUMEXPR_NUM_THREADS`, `BLIS_NUM_THREADS` and `VECLIB_MAXIMUM_THREADS` to `1` in
+the execution process environment. Only these six optional controls are
+forwarded alongside the small environment below; unset controls remain unset.
+Install extra Python packages into the interpreter selected by
+`SANDBOX_LOCAL_PYTHON_BIN`, not the executor-manager environment.
+
+
 Defaults: timeout 30 seconds, memory 512 MiB, combined stdout/stderr 1 MiB,
 20 artifacts, and 10 MiB per artifact. Requested timeout is capped by the
 provider timeout. Output is bounded while reading; timeout, output overflow and
@@ -79,6 +92,10 @@ Structured return values are separate from stdout logs and artifacts.
 
 ## 🚀 Quick Start
 
+Commands in the following container quickstart run from `agent/sandbox/`
+(relative to the repository root). These prerequisites apply to `self_managed`;
+the `local` development provider does not require Docker or gVisor.
+
 ### 📋 Prerequisites
 
 #### Required
@@ -97,7 +114,7 @@ Structured return values are separate from stdout logs and artifacts.
 
 > ⚠️ **New Docker CLI requirement**
 >
-> If you see `client version 1.43 is too old. Minimum supported API version is 1.44`, pull the latest `infiniflow/sandbox-executor-manager:latest` (rebuilt with Docker CLI `29.1.0`) or rebuild it in `./sandbox/executor_manager`. Older images shipped Docker 24.x, which cannot talk to newer Docker daemons.
+> If you see `client version 1.43 is too old. Minimum supported API version is 1.44`, pull the latest `infiniflow/sandbox-executor-manager:latest` (rebuilt with Docker CLI `29.1.0`) or rebuild it in `./executor_manager`. Older images shipped Docker 24.x, which cannot talk to newer Docker daemons.
 
 ### 🐳 Build Docker Base Images
 
@@ -118,6 +135,19 @@ Then, build the executor manager image:
 docker build -t sandbox-executor-manager:latest ./executor_manager
 ```
 
+For published runtime images, tag them with the names used by standalone Compose:
+
+```bash
+docker pull infiniflow/sandbox-base-python:latest
+docker pull infiniflow/sandbox-base-nodejs:latest
+docker tag infiniflow/sandbox-base-python:latest sandbox-base-python:latest
+docker tag infiniflow/sandbox-base-nodejs:latest sandbox-base-nodejs:latest
+```
+
+The main Docker Compose deployment instead reads the image names from
+`docker/.env`; keep `SANDBOX_BASE_PYTHON_IMAGE` and `SANDBOX_BASE_NODEJS_IMAGE`
+aligned with the images available on that Docker host.
+
 All three Dockerfiles default to `NEED_MIRROR=1`, using the Tsinghua apt/Python
 mirrors and the npm mirror where applicable. To use the upstream Debian, PyPI
 and npm registries instead, pass `--build-arg NEED_MIRROR=0` to each manual build:
@@ -132,18 +162,57 @@ docker build --build-arg NEED_MIRROR=0 -t sandbox-executor-manager:latest ./exec
 
 ### 📦 Running with MultiRAG
 
-1. Ensure gVisor is correctly installed.
-2. Configure your `.env` in `docker/.env`:
+Choose the provider for the Python backend, using the environment example in
+[`docker/.env`](../../docker/.env):
 
-   - Uncomment sandbox-related variables.
-   - Enable sandbox profile at the bottom.
-3. Add the following line to `/etc/hosts` as recommended:
+- `self_managed`: set `SANDBOX_PROVIDER_TYPE=self_managed`, configure
+  `SANDBOX_HOST` and `SANDBOX_EXECUTOR_MANAGER_PORT`, and include `sandbox` in
+  `COMPOSE_PROFILES` when the main Compose deployment manages the executor.
+  gVisor and runtime base images are required on the executor's Docker host.
+- `local`: set `SANDBOX_PROVIDER_TYPE=local` and `SANDBOX_LOCAL_ENABLED=true`,
+  then configure the interpreter, working directory and limits above. The
+  `sandbox` Compose profile is unnecessary. Inside a backend container, local
+  code executes in that container under its runtime account.
 
-   ```text
-   127.0.0.1 sandbox-executor-manager
+For a host-run backend, export the variables in both the API and task-worker
+process environments and use `uv run python -m api.multirag_server` and
+`uv run python -m core.svr.task_executor` from the repository root (see
+[service setup](../../docs/development.md#服务与运行)). Editing `docker/.env`
+alone does not export values into a host process. With Compose, that file is
+loaded into the main backend services by `env_file`.
+
+`SANDBOX_ENABLED=1` enables the legacy `settings.SANDBOX_HOST` facade used by
+HTTP fallback; it is not the opt-in gate for the explicit local provider.
+`SANDBOX_ARTIFACT_BUCKET` and `SANDBOX_ARTIFACT_EXPIRE_DAYS` configure generated
+file storage. Keep the backend's storage and Redis services configured: artifact
+URLs are bound to the server-derived owner, run and optional Agent session.
+For a host-run backend, map the executor hostname in `/etc/hosts` only if that
+hostname does not already resolve. Compose services use their internal DNS.
+
+#### Check the Code component
+
+1. Add a Code node and select Python. Define `main()` and one business output
+   whose type matches the returned JSON value. `attachments` is a reserved
+   system output and must not be used as a business output name.
+2. To generate a file, create `artifacts/` inside the execution directory:
+
+   ```python
+   from pathlib import Path
+
+   def main() -> str:
+       Path("artifacts").mkdir(exist_ok=True)
+       Path("artifacts/report.csv").write_text("name,value\nexample,1\n")
+       return "Report ready"
    ```
 
-4. Start MultiRAG service.
+3. Run single-step debug. Check the business result and the attachments section;
+   `attachments` contains Markdown image/download links that can also be
+   referenced by downstream nodes. Downloading requires the same authenticated
+   owner and matching run/session binding. A successful run with no files clears
+   attachments, and an execution failure clears previous result/file outputs.
+
+These setup instructions do not start, restart or upgrade an existing service.
+Apply deployment changes through the [deployment procedure](../../docker/README.md).
 
 ---
 
@@ -386,12 +455,12 @@ Follow this checklist to troubleshoot:
 
   **Fix:**
 
-  Pull the refreshed image that bundles Docker CLI `29.1.0`, or rebuild it in `./sandbox/executor_manager`:
+  Pull the refreshed image that bundles Docker CLI `29.1.0`, or rebuild it in `./executor_manager`:
 
   ```bash
   docker pull infiniflow/sandbox-executor-manager:latest
   # or
-  docker build -t sandbox-executor-manager:latest ./sandbox/executor_manager
+  docker build -t sandbox-executor-manager:latest ./executor_manager
   ```
 
 - [ ] **Have you enabled sandbox-related configurations in MultiRAG?**
