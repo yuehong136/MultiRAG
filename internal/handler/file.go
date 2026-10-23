@@ -187,8 +187,15 @@ func (h *FileHandler) GetParentFolder(c *gin.Context) {
 	}
 	userID := user.ID
 
-	// Get file_id from query
-	fileID := c.Query("file_id")
+	fileID := c.Param("id")
+	queryID := c.Query("file_id")
+	if fileID != "" && queryID != "" && fileID != queryID {
+		jsonError(c, common.CodeBadRequest, "file_id conflicts with path id")
+		return
+	}
+	if fileID == "" {
+		fileID = queryID
+	}
 	if fileID == "" {
 		jsonError(c, common.CodeBadRequest, "file_id is required")
 		return

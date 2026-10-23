@@ -866,6 +866,12 @@ type SetTenantInfoRequest struct {
 
 // SetTenantInfo updates tenant model configuration
 func (s *UserService) SetTenantInfo(userID string, req *SetTenantInfoRequest) error {
+	if req.TenantID == "" {
+		req.TenantID = userID
+	}
+	if req.TenantID != userID {
+		return fmt.Errorf("no authorization to update tenant models")
+	}
 	tenantDAO := dao.NewTenantDAO()
 
 	_, err := tenantDAO.GetByID(req.TenantID)

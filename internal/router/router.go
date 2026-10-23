@@ -107,7 +107,11 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
 		authorized.GET("/api/v1/users/me", r.userHandler.Info)
 		authorized.PATCH("/api/v1/users/me", r.userHandler.Setting)
+		authorized.GET("/api/v1/users/me/models", r.tenantHandler.TenantInfo)
+		authorized.PATCH("/api/v1/users/me/models", r.userHandler.SetTenantInfo)
 		authorized.GET("/api/v1/tenants", r.tenantHandler.TenantList)
+		authorized.GET("/api/v1/tenant/list", r.tenantHandler.TenantList)
+		authorized.GET("/api/v1/connectors/", r.connectorHandler.ListConnectors)
 		authorized.GET("/api/v1/chats/:chat_id/sessions", r.chatSessionHandler.ListChatSessions)
 		// User info endpoint
 		authorized.GET("/v1/user/info", r.userHandler.Info)
@@ -224,6 +228,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				files.DELETE("", r.fileHandler.DeleteFiles)
 				files.POST("/move", r.fileHandler.MoveFiles)
 				files.GET("/:id/ancestors", r.fileHandler.GetFileAncestors)
+				files.GET("/:id/parent", r.fileHandler.GetParentFolder)
 				files.GET("/:id", r.fileHandler.Download)
 			}
 
