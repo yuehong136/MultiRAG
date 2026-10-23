@@ -317,6 +317,129 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		}
 	}
 
+	for pi, providerName := range []string{"Baidu", "Mistral", "PaddleOCR", "CoHere"} {
+		providerID := fmt.Sprintf("a410-ocr-%d", pi)
+		if err := dao.DB.Create(&entity.TenantModelProvider{ID: providerID, TenantID: "a410-owner", ProviderName: providerName}).Error; err != nil {
+			t.Fatal(err)
+		}
+		for _, instance := range []string{"one", "two"} {
+			key := providerName + "-" + instance
+			providerBase := ""
+			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path == "/result.jsonl" {
+					if r.Header.Get("Authorization") != "" {
+						t.Error("Paddle result download leaked token")
+					}
+					fmt.Fprintf(w, `{"result":{"ocrResults":[{"prunedResult":{"rec_texts":[%q,%q]}}]}}`, "page zero "+key, "page one "+key)
+					return
+				}
+				if r.Header.Get("Authorization") != "Bearer "+key {
+					t.Error("OCR/ASR SQL credentials lost or crossed instances")
+				}
+				if providerName == "CoHere" {
+					if r.URL.Path != "/audio/transcriptions" {
+						t.Error("Cohere ASR path lost")
+					}
+					if err := r.ParseMultipartForm(1 << 20); err != nil {
+						t.Error(err)
+						return
+					}
+					defer r.MultipartForm.RemoveAll()
+					f, _, err := r.FormFile("file")
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer f.Close()
+					raw, _ := io.ReadAll(f)
+					if string(raw) != "audio bytes" || r.FormValue("language") != "en" || r.FormValue("model") != "cohere-transcribe-03-2026" {
+						t.Error("Cohere ASR payload lost")
+					}
+					fmt.Fprintf(w, `{"text":%q}`, "transcription "+key)
+					return
+				}
+				if providerName == "PaddleOCR" {
+					if r.URL.Path == "/api/v2/ocr/jobs/job" {
+						fmt.Fprintf(w, `{"data":{"state":"done","resultUrl":{"jsonUrl":%q}}}`, providerBase+"/result.jsonl")
+						return
+					}
+					if r.URL.Path != "/api/v2/ocr/jobs" {
+						t.Error("Paddle job path lost")
+					}
+					if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+						if err := r.ParseMultipartForm(1 << 20); err != nil {
+							t.Error(err)
+							return
+						}
+						defer r.MultipartForm.RemoveAll()
+						f, _, err := r.FormFile("file")
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						defer f.Close()
+						raw, _ := io.ReadAll(f)
+						if string(raw) != "%PDF-1.4 document" {
+							t.Error("Paddle CLI binary lost")
+						}
+					} else {
+						var body map[string]any
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Error(err)
+						}
+						if body["fileUrl"] != "https://files.invalid/doc.pdf" {
+							t.Error("Paddle URL lost")
+						}
+					}
+					fmt.Fprint(w, `{"data":{"jobId":"job"}}`)
+					return
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if providerName == "Baidu" {
+					if r.URL.Path != "/v2/ocr/paddleocr" || body["model"] != "paddleocr-vl-0.9b" || body["fileType"] != float64(0) {
+						t.Error("Baidu OCR contract lost")
+					}
+					fmt.Fprintf(w, `{"result":{"layoutParsingResults":[{"markdown":{"text":%q}},{"markdown":{"text":%q}}]}}`, "page zero "+key, "page one "+key)
+				} else {
+					if r.URL.Path != "/v1/ocr" || body["model"] != "mistral-ocr-2512" {
+						t.Error("Mistral OCR path/model lost")
+					}
+					fmt.Fprintf(w, `{"pages":[{"index":1,"markdown":%q},{"index":0,"markdown":%q}]}`, "page one "+key, "page zero "+key)
+				}
+			}))
+			providerBase = fixture.URL
+			t.Cleanup(fixture.Close)
+			t.Log("owned-provider-listener", fixture.URL)
+			base := fixture.URL
+			switch providerName {
+			case "Baidu":
+				base += "/v2"
+			case "Mistral":
+				base += "/v1"
+			case "PaddleOCR":
+				base += "/api"
+			}
+			extra, _ := json.Marshal(map[string]string{"base_url": base, "region": "default"})
+			apiKey := key
+			if providerName == "PaddleOCR" && instance == "two" {
+				raw, _ := json.Marshal(map[string]any{"api_key": map[string]string{"paddleocr_access_token": key}})
+				apiKey = string(raw)
+			}
+			instanceID := fmt.Sprintf("a410-ocr-%d-%s", pi, instance)
+			if err := dao.DB.Create(&entity.TenantModelInstance{ID: instanceID, ProviderID: providerID, InstanceName: instance, Status: "active", APIKey: apiKey, Extra: string(extra)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := dao.DB.Create(&entity.TenantModel{ID: instanceID + "-disabled", ProviderID: providerID, InstanceID: instanceID, ModelName: "disabled-ocr", ModelType: "ocr", Status: "disabled", Extra: `{"max_tokens":8192,"model_types":["ocr"]}`}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 	configuredID, err := uuid.NewUUID()
 	if err != nil {
 		t.Fatal(err)
@@ -546,6 +669,47 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		}
 		if calls.Load() != count {
 			t.Fatal("speech denial called provider")
+		}
+	})
+
+	t.Run("ocr-and-cohere", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "document.pdf")
+		if err := os.WriteFile(file, []byte("%PDF-1.4 document"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, providerName := range []string{"Baidu", "Mistral", "PaddleOCR"} {
+			model := map[string]string{"Baidu": "paddleocr-vl-0.9b", "Mistral": "mistral-ocr-2512", "PaddleOCR": "PaddleOCR-VL-1.5"}[providerName]
+			for _, instance := range []string{"one", "two"} {
+				for _, input := range []string{"FILE '" + file + "'", "URL 'https://files.invalid/doc.pdf'"} {
+					out := runCLI("OCR WITH '"+model+"@"+instance+"@"+providerName+"' "+input+";", true)
+					if !strings.Contains(out, "page zero "+providerName+"-"+instance) || !strings.Contains(out, "page one "+providerName+"-"+instance) {
+						t.Fatal("OCR pages/instance lost", out)
+					}
+				}
+			}
+			count := calls.Load()
+			for _, identity := range []string{"", "member", "foreign", "revoked", "disabled"} {
+				if out := request(identity, "POST", "/file/ocr", map[string]any{"provider_name": providerName, "instance_name": "one", "model_name": model, "content": base64.StdEncoding.EncodeToString([]byte("bytes"))}); out["code"] == float64(0) || out["data"] != nil {
+					t.Fatal("OCR tenant denial failed", out)
+				}
+			}
+			for _, model := range []string{"disabled-ocr", "missing"} {
+				if out := request("owner", "POST", "/file/ocr", map[string]any{"provider_name": providerName, "instance_name": "one", "model_name": model, "content": base64.StdEncoding.EncodeToString([]byte("bytes"))}); out["code"] == float64(0) {
+					t.Fatal("OCR disabled/model denial failed", out)
+				}
+			}
+			if calls.Load() != count {
+				t.Fatal("denied OCR made provider call")
+			}
+		}
+		audio := filepath.Join(t.TempDir(), "audio.wav")
+		if err := os.WriteFile(audio, []byte("audio bytes"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, instance := range []string{"one", "two"} {
+			if out := runCLI("ASR WITH 'cohere-transcribe-03-2026@"+instance+"@CoHere' AUDIO '"+audio+"' PARAM '{\"language\":\"en\"}';", true); !strings.Contains(out, "transcription CoHere-"+instance) {
+				t.Fatal(out)
+			}
 		}
 	})
 

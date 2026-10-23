@@ -45,6 +45,8 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewMistralModel(baseURL, urlSuffix), nil
 	case "jina":
 		return NewJinaModel(baseURL, urlSuffix), nil
+	case "paddleocr":
+		return NewPaddleOCRModel(baseURL, urlSuffix), nil
 	case "cohere":
 		return NewCoHereModel(baseURL, urlSuffix), nil
 	case "fishaudio":
