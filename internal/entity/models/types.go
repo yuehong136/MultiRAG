@@ -41,18 +41,21 @@ type ChatResponse struct {
 
 // URLSuffix represents the URL suffixes for different API endpoints
 type URLSuffix struct {
-	TTS         string `json:"tts"`
-	ASR         string `json:"asr"`
-	OCR         string `json:"ocr"`
-	Chat        string `json:"chat"`
-	AsyncChat   string `json:"async_chat"`
-	AsyncResult string `json:"async_result"`
-	Embedding   string `json:"embedding"`
-	Rerank      string `json:"rerank"`
-	Models      string `json:"models"`
-	Balance     string `json:"balance"`
-	Files       string `json:"files"`
-	Status      string `json:"status"`
+	TTS           string `json:"tts"`
+	ASR           string `json:"asr"`
+	OCR           string `json:"ocr"`
+	Chat          string `json:"chat"`
+	AsyncChat     string `json:"async_chat"`
+	AsyncResult   string `json:"async_result"`
+	Embedding     string `json:"embedding"`
+	Rerank        string `json:"rerank"`
+	Models        string `json:"models"`
+	Balance       string `json:"balance"`
+	Files         string `json:"files"`
+	Status        string `json:"status"`
+	DocumentParse string `json:"doc_parse"`
+	Tasks         string `json:"tasks"`
+	Task          string `json:"task"`
 }
 
 type ChatConfig struct {

@@ -137,6 +137,7 @@ const (
 	TokenTag
 	TokenOCR
 	TokenRegion
+	TokenTask
 	TokenTasks
 	TokenURL
 	TokenMessage

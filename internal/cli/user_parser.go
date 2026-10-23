@@ -110,6 +110,8 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return NewCommand("list_user_chats"), nil
 	case TokenFiles:
 		return p.parseListFiles()
+	case TokenQuotedString:
+		return p.parseProviderTask(false)
 	default:
 		return nil, fmt.Errorf("unknown LIST target: %s", p.curToken.Value)
 	}
@@ -171,6 +173,8 @@ func (p *Parser) parseShowCommand() (*Command, error) {
 	p.nextToken() // consume SHOW
 
 	switch p.curToken.Type {
+	case TokenQuotedString:
+		return p.parseProviderTask(true)
 	case TokenVersion:
 		p.nextToken()
 		if err := p.expectSemicolon(); err != nil {
@@ -856,6 +860,9 @@ func (p *Parser) parseSearchCommand() (*Command, error) {
 
 func (p *Parser) parseParseCommand() (*Command, error) {
 	p.nextToken() // consume PARSE
+	if p.curToken.Type == TokenWith || p.curToken.Type == TokenFile || p.curToken.Type == TokenURL {
+		return p.parseFileCommand()
+	}
 
 	if p.curToken.Type == TokenDataset {
 		return p.parseParseDataset()

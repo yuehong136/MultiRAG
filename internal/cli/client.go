@@ -253,6 +253,12 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.MediaCommand(cmd, "tts")
 	case "ocr_user_command":
 		return c.MediaCommand(cmd, "ocr")
+	case "parse_file_user_command":
+		return c.ParseFileCommand(cmd)
+	case "list_tasks_user_command":
+		return c.ProviderTaskCommand(cmd, false)
+	case "show_task_user_command":
+		return c.ProviderTaskCommand(cmd, true)
 	case "chat_to_model":
 		return c.ChatToModel(cmd)
 	case "use_model":

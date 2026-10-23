@@ -111,7 +111,7 @@ func normalizeCustomModelType(raw string) (entity.ModelType, error) {
 		raw = string(entity.ModelTypeSpeech2Text)
 	}
 	switch entity.ModelType(raw) {
-	case entity.ModelTypeChat, entity.ModelTypeImage2Text, entity.ModelTypeSpeech2Text, entity.ModelTypeEmbedding, entity.ModelTypeRerank, entity.ModelTypeTTS, entity.ModelTypeOCR:
+	case entity.ModelTypeChat, entity.ModelTypeImage2Text, entity.ModelTypeSpeech2Text, entity.ModelTypeEmbedding, entity.ModelTypeRerank, entity.ModelTypeTTS, entity.ModelTypeOCR, documentParseType:
 		return entity.ModelType(raw), nil
 	default:
 		return "", fmt.Errorf("invalid model type")
