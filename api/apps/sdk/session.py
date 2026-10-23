@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
-from agent.canvas import Canvas
 from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import (
     build_bundle_by_id_async,
@@ -217,6 +216,8 @@ def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest 
         return get_error_data_result(retmsg=str(e))
 
     session_id = get_uuid()
+    from agent.canvas import Canvas
+
     canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
     canvas.reset()
 
@@ -734,7 +735,7 @@ def begin_inputs(
     release: str | None = Query(None),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(beta_token_required),
-):
+) -> JSONResponse:
     release_mode = str(release or "").strip().lower() == "true"
     try:
         cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
@@ -747,6 +748,8 @@ def begin_inputs(
         return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
     except PermissionError as e:
         return get_error_data_result(retmsg=str(e))
+
+    from agent.canvas import Canvas
 
     canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
     return get_result(

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.orm import Session
 
+from agent import canvas as agent_canvas
 from api.apps.restful_apis import agent_api as canvas_app_module
 from api.apps.sdk import session as session_module
 from api.db import CanvasCategory, TenantPermission
@@ -133,7 +134,7 @@ def test_create_agent_session_uses_release_dsl(monkeypatch) -> None:
         def __str__(self):
             return json.dumps({"normalized": True}, ensure_ascii=False)
 
-    monkeypatch.setattr(session_module, "Canvas", FakeCanvas)
+    monkeypatch.setattr(agent_canvas, "Canvas", FakeCanvas)
     monkeypatch.setattr(
         session_module.API4ConversationService,
         "save",

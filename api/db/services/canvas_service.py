@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import desc as sa_desc
 
 from agent.a2ui import validate_client_a2ui_messages
-from agent.canvas import Canvas
 from api.db import CanvasCategory, TenantPermission, UserTenantRole
 from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTemplate, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant
 from api.db.services.agent_execution_service import execution_context, principal_for_resource_tenant, restore_execution_snapshot, save_agent_session, snapshot_digest
@@ -570,6 +569,8 @@ async def completion(
 
     conv, dsl, canvas_id = await db.run_sync(_setup)  # TODO(async-phase4)
     session_id = conv["id"]
+
+    from agent.canvas import Canvas
 
     def _build_canvas() -> Canvas:
         # A task id identifies one execution attempt, not the reusable Agent.

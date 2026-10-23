@@ -115,7 +115,7 @@ def completion_stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         def to_dict(self):
             return dict(conv_row)
 
-    monkeypatch.setattr(canvas_service, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(agent_canvas, "Canvas", _FakeCanvas)
 
     async def bind_task(*args: Any, **kwargs: Any) -> None:
         pass
@@ -273,7 +273,7 @@ async def test_terminal_failure_restores_history_prefix(completion_stubs: dict[s
     def finish(task_id: str) -> None:
         raise TaskCanceledException("cancelled") if failure == "cancel" else ConnectionError("Redis unavailable")
 
-    monkeypatch.setattr(canvas_service, "Canvas", HistoryCanvas)
+    monkeypatch.setattr(agent_canvas, "Canvas", HistoryCanvas)
     monkeypatch.setattr(canvas_service, "require_runtime_finish", finish)
     frames = [frame async for frame in canvas_service.completion(_RecordingAsyncSession({}, owner_id="tenant"), "tenant", "agent-1", session_id="sess-1", query="current question")]
     assert '"event": "error"' in frames[-1]
