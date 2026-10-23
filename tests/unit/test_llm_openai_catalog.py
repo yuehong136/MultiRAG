@@ -35,7 +35,7 @@ def openai_catalog(monkeypatch: pytest.MonkeyPatch, db: Session) -> list[LLM]:
     monkeypatch.setattr(init_data.DocumentService, "get_all_kb_doc_count", lambda *args: {})
     monkeypatch.setattr(init_data.KnowledgebaseService, "get_all_ids", lambda *args: [])
     init_data.init_llm_factory(db)
-    for name in ("gpt-5.5", "gpt-5.4"):
+    for name in ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"):
         matches = [row for row in rows if row.llm_name == name]
         assert len(matches) == 1
         row = matches[0]
@@ -70,7 +70,7 @@ def test_default_openai_catalog_reaches_registered_list(monkeypatch: pytest.Monk
     data = body["data"]
     if mdl_type != "embedding":
         models = {row["llm_name"]: row for row in data["OpenAI"]}
-        for name in ("gpt-5.5", "gpt-5.4"):
+        for name in ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"):
             assert models[name]["available"] is True
             assert models[name]["id"] in {row.id for row in tenants if row.llm_name == name}
             assert models[name]["max_tokens"] == 400000

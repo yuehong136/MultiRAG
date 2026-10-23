@@ -14,7 +14,7 @@ func TestOpenAILatestCatalogModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"gpt-5.5", "gpt-5.4"} {
+	for _, name := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"} {
 		model, err := manager.GetModelByName("OpenAI", name)
 		if err != nil || model == nil || model.MaxTokens != 400000 || !model.ModelTypeMap["chat"] || !model.ModelTypeMap["vision"] {
 			t.Fatal("OpenAI model metadata missing", name, model, err)
