@@ -333,10 +333,11 @@ class CodeExec(ToolBase, ABC):
         script = kwargs.get("script", self._param.script)
         arguments = {}
         for k, v in self._param.arguments.items():
-            if kwargs.get(k):
+            if k in kwargs:
                 arguments[k] = kwargs[k]
                 continue
-            arguments[k] = self._canvas.get_variable_value(v) if v else None
+            reference = self._resolve_iteration_alias_ref(v.strip("{} ")) if isinstance(v, str) else None
+            arguments[k] = self._canvas.get_variable_value(reference or v) if v else None
 
         return self._execute_code(language=lang, code=script, arguments=arguments)
 
