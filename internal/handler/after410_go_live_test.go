@@ -165,6 +165,34 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
+	vllm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/rerank" || r.Header.Get("Authorization") != "" {
+			t.Error("keyless vLLM contract lost")
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		if body["model"] != "ranker" || body["top_n"] != float64(2) {
+			t.Error("vLLM payload lost")
+		}
+		fmt.Fprint(w, `{"results":[{"index":1,"relevance_score":0.8},{"index":0,"relevance_score":0}]}`)
+	}))
+	defer vllm.Close()
+	t.Log("owned-provider-listener", vllm.URL)
+	if err := dao.DB.Create(&entity.TenantModelProvider{ID: "a410-vllm", TenantID: "a410-owner", ProviderName: "vllm"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	vextra, _ := json.Marshal(map[string]string{"base_url": vllm.URL, "region": "default"})
+	if err := dao.DB.Create(&entity.TenantModelInstance{ID: "a410-vllm-one", ProviderID: "a410-vllm", InstanceName: "one", Status: "active", Extra: string(vextra)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dao.DB.Create(&entity.TenantModel{ID: "a410-vllm-ranker", ProviderID: "a410-vllm", InstanceID: "a410-vllm-one", ModelName: "ranker", ModelType: "rerank", Status: "active", Extra: `{"max_tokens":8192,"model_types":["rerank"]}`}).Error; err != nil {
+		t.Fatal(err)
+	}
 	snapshot := func() string {
 		var result string
 		if err := readback.QueryRow(`SELECT (SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_provider x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_instance x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_users x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_user_tenants x)`).Scan(&result); err != nil {
@@ -257,6 +285,28 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		}
 		if calls.Load() != count {
 			t.Fatal("denial called provider")
+		}
+	})
+
+	t.Run("vllm-rerank", func(t *testing.T) {
+		out := runCLI("RERANK QUERY 'query' DOCUMENT 'one' 'two' WITH 'ranker@one@vllm' TOP 0;", true)
+		if !strings.Contains(out, "0.8") || !strings.Contains(out, "0") {
+			t.Fatal(out)
+		}
+		bound, err := service.NewModelProviderService().GetRerankModel("a410-owner", "ranker@one@vllm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		scores, err := bound.Rerank("query", []string{"one", "two"})
+		if err != nil || len(scores) != 2 || scores[0] != 0 || scores[1] != .8 {
+			t.Fatal("input-order score mapping lost", scores, err)
+		}
+		count := calls.Load()
+		if out := request("foreign", "POST", "/rerank", map[string]any{"provider_name": "vllm", "instance_name": "one", "model_name": "ranker", "query": "query", "documents": []string{"one", "two"}}); out["code"] == float64(0) {
+			t.Fatal("vLLM tenant isolation lost")
+		}
+		if calls.Load() != count {
+			t.Fatal("denial called vLLM")
 		}
 	})
 	if after := snapshot(); after != before {
