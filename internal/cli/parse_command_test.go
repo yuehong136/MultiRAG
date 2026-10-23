@@ -1,6 +1,15 @@
 package cli
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"testing"
+)
 
 func TestParseAndProviderTaskSyntax(t *testing.T) {
 	for input, kind := range map[string]string{
@@ -40,5 +49,42 @@ func TestParseTaskEnvelopeStrictness(t *testing.T) {
 	}
 	if _, err := parseTaskResponse(&Response{StatusCode: 200, Body: []byte(`{"retcode":0,"data":{"task_id":"job","status":"pending"}}`)}, "task", false); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseFileUsesSelectedModel(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["model_name"] != "MinerU2.5" || body["provider_name"] != "Gitee" || body["instance_name"] != "one" || r.URL.Path != "/api/v1/file/parse" {
+			t.Error("selected model lost", body)
+		}
+		fmt.Fprint(w, `{"code":0,"data":{"task_id":"job","status":"pending"}}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	host, port, _ := net.SplitHostPort(u.Host)
+	number, _ := strconv.Atoi(port)
+	c := NewMultiRAGClient("user")
+	c.HTTPClient.Host = host
+	c.HTTPClient.Port = number
+	c.HTTPClient.LoginToken = "controlled"
+	for _, syntax := range []string{"USE MODEL 'MinerU2.5@one@Gitee';", "PARSE URL 'https://files.invalid/doc.pdf';"} {
+		cmd, err := NewParser(syntax).Parse(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.ExecuteUserCommand(cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.CurrentModel = &CurrentModel{Model: "MinerU2.5", Instance: "", Provider: "Gitee"}
+	cmd, _ := NewParser("PARSE URL 'https://files.invalid/doc.pdf';").Parse(false)
+	if _, err := c.ExecuteUserCommand(cmd); err == nil || calls != 1 {
+		t.Fatal("invalid selected model called provider", err, calls)
 	}
 }
