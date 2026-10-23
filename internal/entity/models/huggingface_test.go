@@ -96,3 +96,52 @@ func TestHuggingFaceEmbeddingCancelHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestHuggingFaceConfiguredSuffixAndRegionHTTP(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/tenant/v1/custom-chat":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["stream"] == true {
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+			} else {
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+			}
+		case "/tenant/custom-infer/org/m":
+			fmt.Fprint(w, `[[0,1]]`)
+		default:
+			t.Error(r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	driver := NewHuggingFaceModel(map[string]string{"default": "http://unused.invalid", "office": server.URL + "/tenant/v1/"}, URLSuffix{Chat: "custom-chat", Embedding: "custom-infer"})
+	api := &APIConfig{APIKey: stringPtr("fixture"), Region: stringPtr("office")}
+	messages := []Message{{Role: "user", Content: "q"}}
+	response, err := driver.ChatWithMessages("m", api, messages, nil)
+	if err != nil || response == nil || *response.Answer != "ok" {
+		t.Fatal(response, err)
+	}
+	if err := driver.ChatStreamlyWithMessages("m", messages, api, nil, func(c, r *string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("org/m"), []string{"a"}, api, nil))
+	if err != nil || !reflect.DeepEqual(vectors, [][]float64{{0, 1}}) {
+		t.Fatal(vectors, err)
+	}
+	if !reflect.DeepEqual(paths, []string{"/tenant/v1/custom-chat", "/tenant/v1/custom-chat", "/tenant/custom-infer/org/m"}) {
+		t.Fatal(paths)
+	}
+	invalid := &APIConfig{APIKey: stringPtr("fixture"), Region: stringPtr("unknown")}
+	if _, err := driver.Embed(stringPtr("org/m"), []string{"a"}, invalid, nil); err == nil {
+		t.Fatal("unknown region fell back")
+	}
+	if len(paths) != 3 || api.Context != nil || driver.httpClient.Transport != openAIChatTransport {
+		t.Fatal("caller/pool changed")
+	}
+}
