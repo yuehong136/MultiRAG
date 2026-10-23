@@ -58,14 +58,21 @@ func readMediaBody(reader io.Reader, limit int) ([]byte, error) {
 	}
 	return raw, nil
 }
-func readSpeechBytes(resp *http.Response, format string) (*TTSResponse, error) {
+func validateSpeechMIME(resp *http.Response, format string) error {
 	typ, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || (!strings.HasPrefix(typ, "audio/") && typ != "application/octet-stream") {
-		return nil, fmt.Errorf("provider did not return audio")
+		return fmt.Errorf("provider did not return audio")
 	}
 	expected := map[string]string{"audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/flac": "flac", "audio/opus": "opus", "audio/aac": "aac"}[typ]
 	if expected != "" && expected != format {
-		return nil, fmt.Errorf("provider audio MIME does not match requested format")
+		return fmt.Errorf("provider audio MIME does not match requested format")
+	}
+	return nil
+}
+
+func readSpeechBytes(resp *http.Response, format string) (*TTSResponse, error) {
+	if err := validateSpeechMIME(resp, format); err != nil {
+		return nil, err
 	}
 	audio, err := readMediaBody(resp.Body, MaxMediaBytes)
 	if err != nil {
@@ -76,6 +83,37 @@ func readSpeechBytes(resp *http.Response, format string) (*TTSResponse, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func streamSpeechBytes(resp *http.Response, format string, api *APIConfig, send func(*TTSResponse) error) error {
+	if err := validateSpeechMIME(resp, format); err != nil {
+		return err
+	}
+	buffer, total := make([]byte, 32*1024), 0
+	for {
+		n, err := resp.Body.Read(buffer)
+		if n > 0 {
+			if total+n > MaxMediaBytes {
+				return fmt.Errorf("speech stream exceeds limit")
+			}
+			if err := requestContext(api).Err(); err != nil {
+				return err
+			}
+			if err := send(&TTSResponse{Audio: bytes.Clone(buffer[:n]), Format: format}); err != nil {
+				return err
+			}
+			total += n
+		}
+		if err != nil {
+			if err != io.EOF {
+				return err
+			}
+			if total == 0 {
+				return fmt.Errorf("empty speech stream")
+			}
+			return requestContext(api).Err()
+		}
+	}
 }
 
 // scanMediaSSE requires complete event framing. A partial final frame is not EOF success.

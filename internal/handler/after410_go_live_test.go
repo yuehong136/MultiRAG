@@ -247,6 +247,71 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
+	for pi, providerName := range []string{"SiliconFlow", "StepFun"} {
+		providerID := fmt.Sprintf("a410-speech-%d", pi)
+		if err := dao.DB.Create(&entity.TenantModelProvider{ID: providerID, TenantID: "a410-owner", ProviderName: providerName}).Error; err != nil {
+			t.Fatal(err)
+		}
+		for _, instance := range []string{"one", "two"} {
+			key := providerName + "-" + instance
+			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Header.Get("Authorization") != "Bearer "+key {
+					t.Error("speech instance credentials crossed")
+				}
+				if strings.HasSuffix(r.URL.Path, "/transcriptions") {
+					if err := r.ParseMultipartForm(1 << 20); err != nil {
+						t.Error(err)
+						return
+					}
+					defer r.MultipartForm.RemoveAll()
+					f, _, err := r.FormFile("file")
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer f.Close()
+					raw, _ := io.ReadAll(f)
+					if string(raw) != "audio bytes" || r.FormValue("model") != "FunAudioLLM/SenseVoiceSmall" || r.FormValue("language") != "en" {
+						t.Error("ASR consumer bytes/fields lost")
+					}
+					fmt.Fprint(w, `{"text":"transcription"}`)
+					return
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if body["input"] == "provider-error" {
+					w.WriteHeader(502)
+					fmt.Fprint(w, "private-provider-body")
+					return
+				}
+				if body["voice"] != "selected" || body["response_format"] != "wav" {
+					t.Error("TTS consumer params lost")
+				}
+				audio := []byte("speech-" + key + "\x00\xff")
+				if body["stream_format"] == "sse" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprintf(w, "data: {\"type\":\"speech.audio.delta\",\"audio\":%q}\n\n", base64.StdEncoding.EncodeToString(audio))
+					if body["input"] != "missing-final" {
+						fmt.Fprint(w, "data: {\"type\":\"speech.audio.done\"}\n\n")
+					}
+				} else {
+					w.Header().Set("Content-Type", "audio/wav")
+					w.Write(audio)
+				}
+			}))
+			t.Cleanup(fixture.Close)
+			t.Log("owned-provider-listener", fixture.URL)
+			extra, _ := json.Marshal(map[string]string{"base_url": fixture.URL, "region": "default"})
+			if err := dao.DB.Create(&entity.TenantModelInstance{ID: fmt.Sprintf("a410-speech-%d-%s", pi, instance), ProviderID: providerID, InstanceName: instance, Status: "active", APIKey: key, Extra: string(extra)}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	snapshot := func() string {
 		var result string
 		if err := readback.QueryRow(`SELECT (SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_provider x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model_instance x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM tenant_model x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_users x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_user_tenants x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_knowledgebases x)||(SELECT jsonb_agg(to_jsonb(x) ORDER BY id)::text FROM t_ai_documents x)`).Scan(&result); err != nil {
@@ -396,6 +461,50 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		}
 		if out := request("owner", "GET", "/datasets/"+datasetIDs["empty"]+"/documents", nil); out["code"] != float64(0) || len(out["data"].(map[string]any)["docs"].([]any)) != 0 {
 			t.Fatal("empty list failed", out)
+		}
+	})
+
+	t.Run("speech-providers", func(t *testing.T) {
+		for _, providerName := range []string{"SiliconFlow", "StepFun"} {
+			model := "fnlp/MOSS-TTSD-v0.5"
+			if providerName == "StepFun" {
+				model = "step-tts-2"
+			}
+			for _, instance := range []string{"one", "two"} {
+				for _, stream := range []string{"", "STREAM "} {
+					output := runCLI(stream+"TTS WITH '"+model+"@"+instance+"@"+providerName+"' TEXT 'hello' FORMAT 'wav' PARAM '{\"voice\":\"selected\"}' SAVE '"+t.TempDir()+"';", true)
+					var rows []map[string]any
+					if err := json.Unmarshal([]byte(output), &rows); err != nil || len(rows) != 1 {
+						t.Fatal("bad speech CLI output", output)
+					}
+					path, _ := rows[0]["saved_path"].(string)
+					audio, err := os.ReadFile(path)
+					if err != nil || string(audio) != "speech-"+providerName+"-"+instance+"\x00\xff" {
+						t.Fatal("binary speech output lost", path, err)
+					}
+				}
+			}
+			out := request("owner", "POST", "/audio/speech", map[string]any{"provider_name": providerName, "instance_name": "one", "model_name": model, "text": "provider-error", "tts_config": map[string]any{"voice": "selected", "format": "wav"}})
+			if out["code"] == float64(0) || strings.Contains(fmt.Sprint(out), "private-provider-body") {
+				t.Fatal("provider failure accepted/leaked", out)
+			}
+		}
+		file := filepath.Join(t.TempDir(), "input.wav")
+		if err := os.WriteFile(file, []byte("audio bytes"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if out := runCLI("ASR WITH 'FunAudioLLM/SenseVoiceSmall@one@SiliconFlow' AUDIO '"+file+"' PARAM '{\"language\":\"en\"}';", true); !strings.Contains(out, "transcription") {
+			t.Fatal(out)
+		}
+		runCLI("STREAM TTS WITH 'step-tts-2@one@StepFun' TEXT 'missing-final' FORMAT 'wav' PARAM '{\"voice\":\"selected\"}';", false)
+		count := calls.Load()
+		for _, identity := range []string{"", "foreign", "revoked", "disabled"} {
+			if out := request(identity, "POST", "/audio/speech", map[string]any{"provider_name": "SiliconFlow", "instance_name": "one", "model_name": "fnlp/MOSS-TTSD-v0.5", "text": "hello"}); out["code"] == float64(0) || out["data"] != nil {
+				t.Fatal("speech denial failed", out)
+			}
+		}
+		if calls.Load() != count {
+			t.Fatal("speech denial called provider")
 		}
 	})
 	if after := snapshot(); after != before {
