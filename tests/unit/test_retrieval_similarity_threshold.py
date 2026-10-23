@@ -17,8 +17,8 @@ from core.nlp.search import Dealer
 async def test_threshold_survives_document_scope(monkeypatch: pytest.MonkeyPatch, backend: str, external: bool, selected: bool, mode: dict[str, Any]) -> None:
     dealer = Dealer.__new__(Dealer)
     dealer.dataStore = SimpleNamespace(db_type=lambda: backend)
-    fields = {key: {"doc_id": key, "kb_id": "kb", "docnm_kwd": key, "content_with_weight": key, "_score": score} for key, score in [("low", 0.1), ("high", 0.9), ("boundary", 0.5)]}
-    result = Dealer.SearchResult(total=3, ids=list(fields), field=fields, query_vector=[0.1, 0.2])
+    fields = {key: {"doc_id": key, "kb_id": "dataset", "docnm_kwd": key, "content_with_weight": key, "_score": score} for key, score in [("low", 0.1), ("high", 0.9), ("boundary", 0.5)]}
+    result = Dealer.SearchResult(total=3, ids=list(fields), field=fields, query_vector=[] if "sparse" in mode else [0.1, 0.2])
     fetch = AsyncMock(return_value=result)
     monkeypatch.setattr(dealer, "search", fetch)
     monkeypatch.setattr(dealer, "_existing_doc_ids", AsyncMock(return_value=set(fields)))
@@ -27,6 +27,9 @@ async def test_threshold_survives_document_scope(monkeypatch: pytest.MonkeyPatch
         scores = np.array([row["_score"] for row in fields.values()])
         return scores, scores, scores
 
+    knn = AsyncMock(return_value={key: row["_score"] for key, row in fields.items()})
+    monkeypatch.setattr(dealer, "_knn_scores", knn)
+    monkeypatch.setattr(dealer, "rerank_with_knn", rank)
     monkeypatch.setattr(dealer, "rerank", rank)
     monkeypatch.setattr(dealer, "rerank_by_model", rank)
     documents = list(fields) if selected else None
@@ -38,3 +41,10 @@ async def test_threshold_survives_document_scope(monkeypatch: pytest.MonkeyPatch
     assert [chunk["chunk_id"] for page in (first, second) for chunk in page["chunks"]] == expected[:2]
     assert {doc["doc_id"] for doc in first["doc_aggs"]} == set(expected)
     assert fetch.call_args.args[0]["doc_ids"] == documents
+
+    if backend in {"elasticsearch", "opensearch"} and not external and "sparse" not in mode:
+        assert knn.await_count == 2
+        assert knn.call_args.args[2] == ["dataset"]
+        assert knn.call_args.args[3].get("doc_id") == documents
+    else:
+        knn.assert_not_awaited()

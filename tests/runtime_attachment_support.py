@@ -1,6 +1,5 @@
 """Capture only the model boundary; keep the real chat adapter, Agent and Canvas."""
 
-import sys
 from collections.abc import AsyncGenerator
 from contextlib import nullcontext
 from copy import deepcopy
@@ -15,7 +14,6 @@ def capture_chat_model(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     import agent.component.llm as llm_module
     from api.db.services.tenant_llm_service import TenantLLMService
 
-    route_module = sys.modules["api.apps.llm"]
     state: dict[str, Any] = {"calls": [], "tools": False, "failure": None}
 
     class CapturedModel:
@@ -40,7 +38,7 @@ def capture_chat_model(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         monkeypatch.setattr(module, "LLMBundle", CapturedModel)
         monkeypatch.setattr(module, "resolve_model_type", lambda *_args: ["image2text"])
     monkeypatch.setattr(TenantLLMService, "get_my_llms", classmethod(lambda *_args: [SimpleNamespace(llm_name="capture-model", mdl_type="image2text")]))
-    original_agent = route_module.Agent
+    original_agent = agent_module.Agent
 
     def real_agent(canvas: Any, component_id: str, param: Any) -> Any:
         agent = original_agent(canvas, component_id, param)
@@ -49,7 +47,7 @@ def capture_chat_model(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             agent.tools = {"capture_tool": object()}
         return agent
 
-    monkeypatch.setattr(route_module, "Agent", real_agent)
+    monkeypatch.setattr(agent_module, "Agent", real_agent)
     return state
 
 
