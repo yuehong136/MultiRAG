@@ -192,6 +192,7 @@ def test_agentbot_user_inputs_pause_and_resume(agentbot_api: dict[str, Any], str
         paused = [frame for frame in frames if frame["event"] == "user_inputs"]
         assert len(paused) == 1 and not any(frame["event"] == "workflow_finished" for frame in frames)
         terminal = paused[0]
+        assert next(i for i, frame in enumerate(frames) if frame["event"] == "message_end") < frames.index(terminal)
     else:
         assert response.json()["code"] == 0
         terminal = response.json()["data"]
@@ -199,10 +200,13 @@ def test_agentbot_user_inputs_pause_and_resume(agentbot_api: dict[str, Any], str
     assert terminal["session_id"] == state["id"] and terminal["data"]["tips"] == "Provide items"
     assert terminal["data"]["inputs"]["items"]["type"] == "array" and state["dsl"]["path"][0] == "UserFillUp:input"
     assert [m["content"] for m in state["message"]] == ["list round", "Before input"]
+    pause_metadata = {"inputs": terminal["data"]["inputs"], "tips": "Provide items", "answer_completed": True}
+    assert state["message"][1]["runtime_pause"] == pause_metadata
     response = run_agentbot(env, agent_id, stream=stream, session_id=state["id"], inputs={"items": {"type": "array", "value": list("abcde")}})
     assert_agentbot_success(response, stream, state["id"], ["a", "b"])
     state = session_state(env, agent_id, state["id"])
     assert_runtime(state, ["a", "b"], 2)
     assert state["dsl"]["globals"]["sys.conversation_turns"] == 2
     assert len(state["message"]) == 4 and state["message"][1]["content"] == "Before input"
+    assert state["message"][1]["runtime_pause"] == pause_metadata and "runtime_pause" not in state["message"][-1]
     assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key(env, agent_id)) == replica

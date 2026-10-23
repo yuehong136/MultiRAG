@@ -567,6 +567,7 @@ async def completion(
     if run_context is None or run_context.principal is None:
         run_kwargs["user_id"] = legacy_user_id
     terminal_frames: list[dict[str, Any]] = []
+    runtime_pause: dict[str, Any] | None = None
     aggregate = AgentCompletionAccumulator()
     finish_attempted = False
     round_persisted = False
@@ -604,6 +605,12 @@ async def completion(
                     return
                 aggregate.add(ans)
                 if ans.get("event") in {"message_end", "workflow_finished", "user_inputs"}:
+                    if ans["event"] == "user_inputs":
+                        runtime_pause = {
+                            "inputs": copy.deepcopy(ans["data"].get("inputs", {})),
+                            "tips": ans["data"].get("tips", ""),
+                            "answer_completed": any(frame["event"] == "message_end" for frame in terminal_frames),
+                        }
                     terminal_frames.append(ans)
                     continue
                 if ans["event"] == "message":
@@ -634,10 +641,16 @@ async def completion(
         finish_attempted = True
         await asyncio.to_thread(require_runtime_finish, canvas.task_id)
         # Validate terminal payloads before a successful SQL commit as well.
-        success_frames = ["data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n" for terminal in sorted(terminal_frames, key=lambda frame: frame["event"] == "message_end")]
+        # Pauses retain the Canvas order so clients can separate a completed
+        # answer from its next input form. Completed workflows keep their
+        # existing workflow_finished -> message_end delivery contract.
+        ordered_terminals = terminal_frames if runtime_pause is not None else sorted(terminal_frames, key=lambda frame: frame["event"] == "message_end")
+        success_frames = ["data:" + json.dumps(terminal, ensure_ascii=False) + "\n\n" for terminal in ordered_terminals]
 
         # 结束：写入 assistant 消息、引用、错误，并更新持久层
         assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
+        if runtime_pause is not None:
+            assistant_message["runtime_pause"] = runtime_pause
         if a2ui_commands:
             assistant_message["a2ui"] = {
                 "commands": a2ui_commands,
@@ -658,7 +671,7 @@ async def completion(
         if written != 1:
             raise RuntimeError("Failed to persist agent result.")
         round_persisted = True
-        # Preserve the existing shared API order: workflow end then message end.
+        # Successful terminal frames become visible only after persistence.
         for frame in success_frames:
             yield frame
     except (asyncio.CancelledError, GeneratorExit):

@@ -143,6 +143,46 @@ async def test_completion_releases_connection_before_streaming(completion_stubs)
     assert payload["message"][1]["content"] == "hello"
 
 
+@pytest.mark.parametrize("end_before_pause", [False, True])
+async def test_pause_retains_event_order_and_committed_history(completion_stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch, end_before_pause: bool) -> None:
+    inputs = {"approval": {"type": "line", "value": False}, "count": {"type": "number", "value": 0}}
+    terminals = [
+        {"event": "message_end", "data": {"reference": {"chunks": []}}},
+        {"event": "user_inputs", "data": {"inputs": inputs, "tips": "Approve draft"}},
+    ]
+    if not end_before_pause:
+        terminals.reverse()
+
+    async def pause(self: _FakeCanvas, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+        yield {"event": "message", "data": {"content": "Draft"}}
+        for event in terminals:
+            yield event
+
+    monkeypatch.setattr(_FakeCanvas, "run", pause)
+    answers = canvas_service.completion(_RecordingAsyncSession({}), "tenant-unit", "agent-1", session_id="sess-1", query="hi")
+    assert json.loads((await anext(answers))[5:])["event"] == "message"
+    assert "payload" not in completion_stubs
+    frames = [json.loads(frame[5:]) async for frame in answers]
+    assert [frame["event"] for frame in frames] == [event["event"] for event in terminals]
+    _, payload = completion_stubs["payload"]
+    assistant = payload["message"][-1]
+    assert assistant["content"] == "Draft"
+    assert assistant["runtime_pause"] == {"inputs": inputs, "tips": "Approve draft", "answer_completed": end_before_pause}
+
+
+async def test_completed_workflow_keeps_existing_terminal_contract(completion_stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    async def completed(self: _FakeCanvas, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+        yield {"event": "message", "data": {"content": "Done"}}
+        yield {"event": "message_end", "data": {}}
+        yield {"event": "workflow_finished", "data": {}}
+
+    monkeypatch.setattr(_FakeCanvas, "run", completed)
+    frames = [json.loads(frame[5:]) async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant-unit", "agent-1", session_id="sess-1", query="hi")]
+    assert [frame["event"] for frame in frames] == ["message", "workflow_finished", "message_end"]
+    _, payload = completion_stubs["payload"]
+    assert "runtime_pause" not in payload["message"][-1]
+
+
 async def test_completion_raises_when_session_missing(monkeypatch):
     monkeypatch.setattr(API4ConversationService, "get_by_id", classmethod(lambda cls, s, sid: None))
     db = _RecordingAsyncSession({})
