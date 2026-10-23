@@ -19,6 +19,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections import Counter
 from copy import deepcopy
+from typing import Any
 
 from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.pdf_chunk_metadata import (
@@ -71,12 +72,17 @@ class BaseTitleChunker(ABC):
         await self.set_chunks(chunks)
         self.process.callback(1, "Done.")
 
-    def extract_line_records(self):
-        if self.from_upstream.output_format in {"markdown", "text", "html"}:
-            payload = getattr(self.from_upstream, f"{self.from_upstream.output_format}_result") or ""
-            return [{"text": line, "doc_type_kwd": "text", "img_id": None, "layout": "", PDF_POSITIONS_KEY: []} for line in payload.split("\n") if line]
+    def extract_line_records(self) -> list[dict[str, Any]]:
+        output_format = self.from_upstream.output_format
+        if output_format in {"markdown", "text", "html"}:
+            payload = getattr(self.from_upstream, f"{output_format}_result") or ""
+            lines = payload.split("\n")
+            # Markdown/HTML indentation and trailing spaces carry formatting.
+            if output_format == "text":
+                lines = [line.strip() for line in lines]
+            return [{"text": line, "doc_type_kwd": "text", "img_id": None, "layout": "", PDF_POSITIONS_KEY: []} for line in lines if line.strip()]
 
-        items = self.from_upstream.chunks if self.from_upstream.output_format == "chunks" else self.from_upstream.json_result
+        items = self.from_upstream.chunks if output_format == "chunks" else self.from_upstream.json_result
         return [
             {
                 "text": str(item.get("text") or ""),
