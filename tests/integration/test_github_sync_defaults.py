@@ -23,10 +23,10 @@ from scripts.acceptance.api import ProductAPI, response_data
 from scripts.acceptance.browser import WebAcceptance
 from scripts.acceptance.evidence import Evidence
 from tests.support.connector_deleted_sync import connector_sync_api as connector_sync_api
+from tests.support.github_sync_defaults import GithubTransport, github_config
+from tests.support.github_sync_defaults import github_transport as github_transport
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
-from tests.unit.test_github_sync_defaults import GithubTransport, github_config
-from tests.unit.test_github_sync_defaults import github_transport as github_transport
 
 
 @pytest.fixture(scope="module")
