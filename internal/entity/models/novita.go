@@ -69,8 +69,8 @@ func splitNovitaThink(raw string) (visible, reasoning string) {
 // novitaThinkExtractor maintains state across streaming chunks so
 // that a <think>...</think> block spanning multiple SSE events still
 // gets split correctly between content and reasoning. The buffer
-// preserves up to (len(closingMarker)-1) trailing bytes of each
-// chunk in case the next chunk completes a partial tag.
+// preserves only actual ASCII marker prefixes at the end of a chunk
+// in case the next chunk completes a partial tag.
 type novitaThinkExtractor struct {
 	buf    strings.Builder
 	inside bool
@@ -102,24 +102,20 @@ func (e *novitaThinkExtractor) Feed(chunk string) []novitaThinkSegment {
 		}
 		idx := strings.Index(s, marker)
 		if idx < 0 {
-			// No closing/opening marker yet. Emit everything except a
-			// possible partial-tag suffix at the very end. Reserve
-			// (max marker length - 1) trailing bytes so we don't
-			// emit "<thin" as content when the next chunk completes
-			// it to "<think>".
-			reserve := len(marker) - 1
-			if len(otherMarker)-1 > reserve {
-				reserve = len(otherMarker) - 1
+			// Buffer only a suffix that really is a marker prefix. Every
+			// marker is ASCII and begins with '<', so the emitted prefix ends
+			// on a UTF-8 boundary for valid decoded SSE content. Arbitrarily
+			// reserving seven bytes can split a Chinese/emoji rune and JSON
+			// senders would replace its fragments with U+FFFD.
+			reserve := 0
+			for _, candidate := range []string{marker, otherMarker} {
+				for size := 1; size < len(candidate) && size <= len(s); size++ {
+					if strings.HasSuffix(s, candidate[:size]) {
+						reserve = max(reserve, size)
+					}
+				}
 			}
 			safe := len(s) - reserve
-			if safe < 0 {
-				safe = 0
-			}
-			// Don't reserve if the trailing bytes can't possibly be
-			// the start of a tag (no '<' suffix).
-			if safe < len(s) && !strings.Contains(s[safe:], "<") {
-				safe = len(s)
-			}
 			if safe > 0 {
 				if e.inside {
 					out = append(out, novitaThinkSegment{reasoning: s[:safe]})

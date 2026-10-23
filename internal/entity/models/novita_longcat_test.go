@@ -91,8 +91,9 @@ func TestNewChatProviderStreamsHTTP(t *testing.T) {
 			}
 			happy := frame(content, reason)
 			if provider == "Novita" {
-				happy = frame("<thi", "reason") + frame("nk>inline</th", "") + frame("ink>answer", "")
-				reason += "inline"
+				content = "中文😀answer"
+				happy = frame("中文😀<t", "reason") + frame("hink>原因😀</th", "") + frame("ink>answer", "")
+				reason += "原因😀"
 			}
 			for _, test := range []struct {
 				name, events string
@@ -242,6 +243,50 @@ func TestMistralNovitaDiscoveryHTTP(t *testing.T) {
 			}
 			if calls != 2 {
 				t.Fatal("preflight called supplier", calls)
+			}
+		})
+	}
+}
+
+func TestNovitaThinkUnicodeSerializedSegments(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		chunks            []string
+		answer, reasoning string
+	}{
+		{"opening", []string{"中文😀<t", "hink>原因😀</think>答案"}, "中文😀答案", "原因😀"},
+		{"closing", []string{"<think>中文😀</t", "hink>答案😀"}, "答案😀", "中文😀"},
+		{"literal", []string{"中文😀<x", " 普通<", "文本😀"}, "中文😀<x 普通<文本😀", ""},
+		{"flush outside", []string{"中文😀<t"}, "中文😀<t", ""},
+		{"flush inside", []string{"<think>中文😀</t"}, "", "中文😀</t"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			extractor := &novitaThinkExtractor{}
+			var a, r strings.Builder
+			consume := func(segment novitaThinkSegment) {
+				// This is the JSON boundary used by HTTP senders. Invalid UTF-8 would be
+				// silently replaced by U+FFFD here even if raw concatenation looks correct.
+				data, err := json.Marshal([]string{segment.content, segment.reasoning})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded []string
+				if err := json.Unmarshal(data, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				a.WriteString(decoded[0])
+				r.WriteString(decoded[1])
+			}
+			for _, chunk := range test.chunks {
+				for _, segment := range extractor.Feed(chunk) {
+					consume(segment)
+				}
+			}
+			if tail := extractor.Flush(); tail != nil {
+				consume(*tail)
+			}
+			if a.String() != test.answer || r.String() != test.reasoning {
+				t.Fatalf("serialized answer=%q reasoning=%q", a.String(), r.String())
 			}
 		})
 	}
