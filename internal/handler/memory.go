@@ -20,6 +20,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -238,6 +239,10 @@ func (h *MemoryHandler) UpdateMemory(c *gin.Context) {
 	// Call service layer to update memory
 	result, err := h.memoryService.UpdateMemory(userID, memoryID, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrMemoryAccessDenied) {
+			jsonError(c, common.CodeForbidden, err.Error())
+			return
+		}
 		errMsg := err.Error()
 		// Check if it's a "not found" error
 		if strings.Contains(errMsg, "not found") {

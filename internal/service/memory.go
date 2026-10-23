@@ -68,6 +68,8 @@ const (
 )
 
 // validForgettingPolicies defines which forgetting policies are valid
+var ErrMemoryAccessDenied = errors.New("no authorization to update memory")
+
 var validForgettingPolicies = map[ForgettingPolicy]bool{
 	ForgettingPolicyFIFO: true,
 }
@@ -396,6 +398,16 @@ func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) 
 //   - *CreateMemoryResponse: The updated memory details
 //   - error: Error if validation fails or update fails
 func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *UpdateMemoryRequest) (*CreateMemoryResponse, error) {
+	currentMemory, err := s.memoryDAO.GetByID(memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("memory '%s' not found", memoryID)
+	}
+	if currentMemory.TenantID != tenantID {
+		return nil, ErrMemoryAccessDenied
+	}
+	if req == nil {
+		return nil, errors.New("memory update is required")
+	}
 	updateDict := make(map[string]interface{})
 
 	if req.Name != nil {
@@ -403,48 +415,70 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 		if err := common.ValidateName(memoryName); err != nil {
 			return nil, err
 		}
-		memoryName, err := common.DuplicateName(func(name string, tid string) bool {
-			existing, _ := s.memoryDAO.GetByNameAndTenant(name, tid)
-			return len(existing) > 0
-		}, memoryName, tenantID)
-		if err != nil {
-			return nil, err
+		if memoryName != strings.TrimSpace(currentMemory.Name) {
+			var lookupErr error
+			memoryName, err = common.DuplicateName(func(name, tid string) bool {
+				existing, queryErr := s.memoryDAO.GetByNameAndTenant(name, tid)
+				if queryErr != nil {
+					lookupErr = queryErr
+					return false
+				}
+				for _, memory := range existing {
+					if memory.ID != memoryID {
+						return true
+					}
+				}
+				return false
+			}, memoryName, tenantID)
+			if lookupErr != nil {
+				return nil, errors.New("failed to check memory name")
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		updateDict["name"] = memoryName
 	}
 
 	if req.Permissions != nil {
-		perm := TenantPermission(strings.ToLower(*req.Permissions))
+		perm := TenantPermission(strings.ToLower(strings.TrimSpace(*req.Permissions)))
 		if !validPermissions[perm] {
 			return nil, fmt.Errorf("unknown permission '%s'", *req.Permissions)
 		}
-		updateDict["permissions"] = perm
+		updateDict["permissions"] = string(perm)
 	}
 
 	if req.LLMID != nil {
-		updateDict["llm_id"] = *req.LLMID
+		updateDict["llm_id"] = strings.TrimSpace(*req.LLMID)
 	}
 
 	if req.EmbdID != nil {
-		updateDict["embd_id"] = *req.EmbdID
+		updateDict["embd_id"] = strings.TrimSpace(*req.EmbdID)
 	}
 
 	if req.TenantLLMID != nil {
-		if llmID, err := strconv.ParseInt(*req.TenantLLMID, 10, 64); err == nil {
-			updateDict["tenant_llm_id"] = llmID
+		llmID, err := strconv.ParseInt(strings.TrimSpace(*req.TenantLLMID), 10, 64)
+		if err != nil {
+			return nil, errors.New("invalid tenant_llm_id")
 		}
+		updateDict["tenant_llm_id"] = llmID
 	}
 
 	if req.TenantEmbdID != nil {
-		if embdID, err := strconv.ParseInt(*req.TenantEmbdID, 10, 64); err == nil {
-			updateDict["tenant_embd_id"] = embdID
+		embdID, err := strconv.ParseInt(strings.TrimSpace(*req.TenantEmbdID), 10, 64)
+		if err != nil {
+			return nil, errors.New("invalid tenant_embd_id")
 		}
+		updateDict["tenant_embd_id"] = embdID
 	}
 
-	if req.MemoryType != nil && len(req.MemoryType) > 0 {
+	if req.MemoryType != nil {
+		if len(req.MemoryType) == 0 {
+			return nil, errors.New("memory type must not be empty")
+		}
 		memoryTypeSet := make(map[string]bool)
 		for _, mt := range req.MemoryType {
-			lowerMT := strings.ToLower(mt)
+			lowerMT := strings.ToLower(strings.TrimSpace(mt))
 			if _, ok := dao.MemoryTypeMap[lowerMT]; !ok {
 				return nil, fmt.Errorf("memory type '%s' is not supported", mt)
 			}
@@ -466,11 +500,11 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 	}
 
 	if req.ForgettingPolicy != nil {
-		fp := ForgettingPolicy(strings.ToLower(*req.ForgettingPolicy))
+		fp := ForgettingPolicy(strings.ToUpper(strings.TrimSpace(*req.ForgettingPolicy)))
 		if !validForgettingPolicies[fp] {
 			return nil, fmt.Errorf("forgetting policy '%s' is not supported", *req.ForgettingPolicy)
 		}
-		updateDict["forgetting_policy"] = fp
+		updateDict["forgetting_policy"] = string(fp)
 	}
 
 	if req.Temperature != nil {
@@ -502,10 +536,7 @@ func (s *MemoryService) UpdateMemory(tenantID string, memoryID string, req *Upda
 		}
 	}
 
-	currentMemory, err := s.memoryDAO.GetByID(memoryID)
-	if err != nil {
-		return nil, fmt.Errorf("memory '%s' not found", memoryID)
-	}
+	updateDict = memoryUpdateDiff(currentMemory, updateDict)
 
 	if len(updateDict) == 0 {
 		return formatRetDataFromMemory(currentMemory), nil
