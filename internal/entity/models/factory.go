@@ -33,6 +33,14 @@ func NewModelFactory() *ModelFactory {
 func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string]string, urlSuffix URLSuffix) (ModelDriver, error) {
 	providerLower := strings.ToLower(providerName)
 	switch providerLower {
+	case "novita":
+		return NewNovitaModel(baseURL, urlSuffix), nil
+	case "longcat":
+		return NewLongCatModel(baseURL, urlSuffix), nil
+	case "mistral":
+		return NewMistralModel(baseURL, urlSuffix), nil
+	case "jina":
+		return NewJinaModel(baseURL, urlSuffix), nil
 	case "cohere":
 		return NewCoHereModel(baseURL, urlSuffix), nil
 	case "fishaudio":

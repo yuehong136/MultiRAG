@@ -25,6 +25,9 @@ type openAIChatDriver struct {
 	splitReasoning       bool
 	openRouterReasoning  bool
 	optionalDiscoveryKey bool
+	parseContent         func(json.RawMessage) (string, string, error)
+	waitForStreamEOF     bool
+	inlineThink          bool
 }
 
 // One pool is shared across request-scoped drivers; credentials stay on requests.
@@ -117,24 +120,41 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content          *string `json:"content"`
-				ReasoningContent *string `json:"reasoning_content"`
-				Reasoning        *string `json:"reasoning"`
+				Content          json.RawMessage `json:"content"`
+				ReasoningContent *string         `json:"reasoning_content"`
+				Reasoning        *string         `json:"reasoning"`
 			} `json:"message"`
 		} `json:"choices"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("openai-compatible: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
 		return nil, fmt.Errorf("openai-compatible: provider returned an error")
 	}
-	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil || *result.Choices[0].Message.Content == "" {
+	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("openai-compatible: no text answer")
 	}
 	message := result.Choices[0].Message
-	answer, reasoning := message.Content, message.ReasoningContent
+	content, extraReasoning, err := d.decodeContent(message.Content)
+	if err != nil {
+		return nil, err
+	}
+	if d.inlineThink {
+		var inline string
+		content, inline = splitNovitaThink(content)
+		if inline != "" {
+			extraReasoning += inline
+		}
+	}
+	answer, reasoning := &content, message.ReasoningContent
+	if extraReasoning != "" {
+		if reasoning != nil && *reasoning != "" {
+			extraReasoning += "\n" + *reasoning
+		}
+		reasoning = &extraReasoning
+	}
 	if d.openRouterReasoning && message.Reasoning != nil {
 		reasoning = message.Reasoning
 	}
@@ -179,7 +199,45 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 	defer resp.Body.Close()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	receivedAnswer := false
+	receivedAnswer, finished := false, false
+	extractor := &novitaThinkExtractor{}
+	emit := func(content, reasoning string) error {
+		if err := requestContext(apiConfig).Err(); err != nil {
+			return err
+		}
+		if reasoning != "" {
+			if err := sender(nil, &reasoning); err != nil {
+				return err
+			}
+		}
+		if err := requestContext(apiConfig).Err(); err != nil {
+			return err
+		}
+		if content != "" {
+			if err := sender(&content, nil); err != nil {
+				return err
+			}
+			receivedAnswer = receivedAnswer || strings.TrimSpace(content) != ""
+		}
+		return nil
+	}
+	complete := func() error {
+		if err := requestContext(apiConfig).Err(); err != nil {
+			return err
+		}
+		if d.inlineThink {
+			if tail := extractor.Flush(); tail != nil {
+				if err := emit(tail.content, tail.reasoning); err != nil {
+					return err
+				}
+			}
+		}
+		if !receivedAnswer {
+			return fmt.Errorf("openai-compatible: stream returned no text answer")
+		}
+		done := "[DONE]"
+		return sender(&done, nil)
+	}
 	for scanner.Scan() {
 		if err := requestContext(apiConfig).Err(); err != nil {
 			return err
@@ -193,21 +251,16 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			continue
 		}
 		if data == "[DONE]" {
-			if !receivedAnswer {
-				return fmt.Errorf("openai-compatible: stream returned no text answer")
-			}
-			if err := requestContext(apiConfig).Err(); err != nil {
-				return err
-			}
-			return sender(&data, nil)
+			return complete()
 		}
+
 		var event struct {
 			Choices []struct {
 				FinishReason *string `json:"finish_reason"`
 				Delta        struct {
-					Content         *string `json:"content"`
-					Reasoning       *string `json:"reasoning_content"`
-					RouterReasoning *string `json:"reasoning"`
+					Content         json.RawMessage `json:"content"`
+					Reasoning       *string         `json:"reasoning_content"`
+					RouterReasoning *string         `json:"reasoning"`
 				} `json:"delta"`
 			} `json:"choices"`
 			Error json.RawMessage `json:"error"`
@@ -237,13 +290,30 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 		if err := requestContext(apiConfig).Err(); err != nil {
 			return err
 		}
-		if delta.Content != nil && *delta.Content != "" {
-			if err := sender(delta.Content, nil); err != nil {
+		content, reasoning, err := d.decodeContent(delta.Content)
+		if err != nil {
+			return err
+		}
+		if reasoning != "" {
+			if err := sender(nil, &reasoning); err != nil {
 				return err
 			}
-			receivedAnswer = receivedAnswer || strings.TrimSpace(*delta.Content) != ""
 		}
+		if d.inlineThink {
+			for _, segment := range extractor.Feed(content) {
+				if err := emit(segment.content, segment.reasoning); err != nil {
+					return err
+				}
+			}
+		} else if err := emit(content, ""); err != nil {
+			return err
+		}
+
 		if finish := event.Choices[0].FinishReason; finish != nil && *finish != "" {
+			if d.waitForStreamEOF {
+				finished = true
+				continue
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("openai-compatible: stream returned no text answer")
 			}
@@ -259,6 +329,9 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 	}
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	if d.waitForStreamEOF && finished {
+		return complete()
 	}
 	return io.ErrUnexpectedEOF
 }
@@ -314,3 +387,19 @@ func (d *openAIChatDriver) CheckConnection(api *APIConfig) error {
 }
 
 var _ ModelDriver = (*openAIChatDriver)(nil)
+
+// decodeContent preserves the string-only contract unless a provider explicitly
+// opts into its structured response format.
+func (d *openAIChatDriver) decodeContent(raw json.RawMessage) (string, string, error) {
+	if d.parseContent != nil {
+		return d.parseContent(raw)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "", nil
+	}
+	var content string
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return "", "", fmt.Errorf("openai-compatible: invalid content: %w", err)
+	}
+	return content, "", nil
+}
