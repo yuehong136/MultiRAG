@@ -1,5 +1,8 @@
 # Infinity dev6 版本与验收
 
+> 本页保留 dev6 的历史验收记录。当前 SDK／镜像配套与验证见
+> [Infinity dev7](infinity-dev7.md)。
+
 Python 后端的 `infinity-sdk` 固定为 `0.7.0-dev6`，Compose 的可选 `infinity`
 profile 使用 `infiniflow/infinity:v0.7.0-dev6`。升级时同时采用这两个版本；
 不改变默认文档引擎、启用的 profile、连接配置、数据卷或数据库名。
