@@ -1,4 +1,7 @@
-# Infinity dev7 版本与验收
+# Infinity dev7 历史版本与验收
+
+本页保存 2026-10-23 的历史冻结输入。当前 SDK 和 Compose 已升级为正式 `0.7.0`，
+现行版本及本轮证据见 [Infinity stable](infinity-stable.md)；下列 dev7 结果不作当前运行证明。
 
 Python SDK 固定为 `0.7.0-dev7`，Compose 的可选 `infinity` profile 使用
 `infiniflow/infinity:v0.7.0-dev7`。两者配套升级，锁文件仅变更 Infinity SDK

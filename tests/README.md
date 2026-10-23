@@ -54,6 +54,7 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 | `dao.TestBaseModelTimeScratchPostgres` | PostgreSQL；`MULTIRAG_GO_TIME_DSN`，数据库名以 `multirag_after1c_a_time` 开头。 |
 | `handler.TestUserTimeHTTPCLIAndSQL` | 同一 PostgreSQL scratch；`MULTIRAG_GO_TIME_DSN`、私有 `MULTIRAG_GO_USER_CONFIG` 和 `MULTIRAG_GO_TIME_CLI`。 |
 | `handler.TestSpeechProvidersHTTPCLIAndSQL` | PostgreSQL scratch（名称匹配 `^multirag_after1c_b_speech_[a-z0-9_]{6,32}$`）、私有 `MULTIRAG_SPEECH_CONFIG`、`MULTIRAG_SPEECH_CLI`；HTTP、供应商和播放器由用例自建或控制。 |
+| `handler.TestAfter410GoHTTPCLIAndSQL` | PostgreSQL scratch（数据库必须为 `multirag_after410_a_20261024`）、私有 `MULTIRAG_AFTER410_CONFIG` 与同源码构建的 `MULTIRAG_AFTER410_CLI`，另需独占 Infinity 0.7.0 的 `MULTIRAG_AFTER410_INFINITY_URI`（仅用自有 `multirag_after410_a` 数据库）；真实 CLI、注册 JWT 路由与 SQL，外部模型供应商由用例控制。 |
 
 `test_agent_file_authorization.py` 与 `test_legacy_document_counters.py` 明确登记在
 `SERIAL_STORAGE_TESTS`，由 core 四分片完整分配；准备 PostgreSQL、Redis、MinIO 和 Milvus，
