@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
+	"multirag/internal/entity/models"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -103,5 +105,29 @@ func TestChatAudioFilePayload(t *testing.T) {
 	file.Close()
 	if _, err := readMediaFile(large); err == nil {
 		t.Fatal("oversized file accepted")
+	}
+}
+
+func TestMediaResponseBufferBounds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, strings.Repeat("x", 64)) }))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	port, _ := strconv.Atoi(u.Port())
+	client := NewHTTPClient()
+	client.Host = u.Hostname()
+	client.Port = port
+	if _, err := client.RequestBounded("GET", "/media", "api", nil, nil, 32); err == nil {
+		t.Fatal("oversized HTTP response buffered")
+	}
+	if _, err := client.RequestBounded("GET", "/media", "api", nil, nil, 0); err == nil {
+		t.Fatal("nonpositive limit accepted")
+	}
+	if _, err := client.RequestBounded("GET", "/media", "api", nil, nil, math.MaxInt64); err == nil {
+		t.Fatal("overflowing response limit accepted")
+	}
+	// Many small data lines must not evade the per-frame bound.
+	body := "event: message\n" + strings.Repeat("data: xxxxxxxx\n", base64.StdEncoding.EncodedLen(models.MaxMediaBytes)/9+10000)
+	if _, err := readMediaStream(strings.NewReader(body), "asr"); err == nil || !strings.Contains(err.Error(), "frame exceeds") {
+		t.Fatal("unbounded multiline SSE frame", err)
 	}
 }

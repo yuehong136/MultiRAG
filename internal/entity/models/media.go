@@ -71,7 +71,7 @@ func DecodeAudioInput(encoded, format string) ([]byte, error) {
 	return DecodeMediaData(encoded)
 }
 
-// DecodeMediaData accepts bounded canonical base64; JSON arrays are not file input.
+// DecodeMediaData accepts bounded standard base64; JSON arrays are not file input.
 func DecodeMediaData(encoded string) ([]byte, error) {
 	if len(encoded) > base64.StdEncoding.EncodedLen(MaxMediaBytes) {
 		return nil, fmt.Errorf("media exceeds 20 MiB")

@@ -97,7 +97,7 @@ func (c *MultiRAGClient) MediaCommand(cmd *Command, kind string) (ResponseIf, er
 		defer reader.Close()
 		return readMediaStream(reader, kind)
 	}
-	response, err := c.HTTPClient.Request("POST", path, "api", nil, payload)
+	response, err := c.HTTPClient.RequestBounded("POST", path, "api", nil, payload, int64(base64.StdEncoding.EncodedLen(models.MaxMediaBytes)+64*1024))
 	if err != nil {
 		return nil, err
 	}
@@ -153,17 +153,18 @@ func readMediaStream(reader io.Reader, kind string) (ResponseIf, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), base64.StdEncoding.EncodedLen(models.MaxMediaBytes)+64*1024)
 	event := ""
-	var data []string
+	var data strings.Builder
 	done := false
 	var text strings.Builder
 	var audio []byte
 	format := ""
 	dispatch := func() error {
-		if len(data) == 0 {
+		if data.Len() == 0 {
+			event = ""
 			return nil
 		}
-		raw := strings.Join(data, "\n")
-		defer func() { data = nil; event = "" }()
+		raw := data.String()
+		defer func() { data.Reset(); event = "" }()
 		if done {
 			return fmt.Errorf("media event after completion")
 		}
@@ -229,7 +230,14 @@ func readMediaStream(reader io.Reader, kind string) (ResponseIf, error) {
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		}
 		if strings.HasPrefix(line, "data:") {
-			data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			part := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data.Len()+len(part)+1 > base64.StdEncoding.EncodedLen(models.MaxMediaBytes)+64*1024 {
+				return nil, fmt.Errorf("media stream frame exceeds limit")
+			}
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(part)
 		}
 	}
 	if err := scanner.Err(); err != nil {

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
 )
@@ -113,6 +114,18 @@ func (r *Response) JSON() (map[string]interface{}, error) {
 
 // Request makes an HTTP request
 func (c *HTTPClient) Request(method, path string, authKind string, headers map[string]string, jsonBody map[string]interface{}) (*Response, error) {
+	return c.request(method, path, authKind, headers, jsonBody, 0)
+}
+
+// RequestBounded rejects oversized responses before buffering their complete body.
+func (c *HTTPClient) RequestBounded(method, path, authKind string, headers map[string]string, jsonBody map[string]interface{}, maxBytes int64) (*Response, error) {
+	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
+		return nil, fmt.Errorf("positive response limit required")
+	}
+	return c.request(method, path, authKind, headers, jsonBody, maxBytes)
+}
+
+func (c *HTTPClient) request(method, path, authKind string, headers map[string]string, jsonBody map[string]interface{}, maxBytes int64) (*Response, error) {
 	url := c.BuildURL(path)
 	mergedHeaders := c.Headers(authKind, headers)
 
@@ -144,11 +157,18 @@ func (c *HTTPClient) Request(method, path string, authKind string, headers map[s
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	var responseReader io.Reader = resp.Body
+	if maxBytes > 0 {
+		responseReader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	respBody, err := io.ReadAll(responseReader)
 	if err != nil {
 		return nil, err
 	}
 
+	if maxBytes > 0 && int64(len(respBody)) > maxBytes {
+		return nil, fmt.Errorf("HTTP response exceeds %d bytes", maxBytes)
+	}
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Body:       respBody,
