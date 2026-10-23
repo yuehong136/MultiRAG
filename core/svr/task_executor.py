@@ -63,7 +63,17 @@ from core.prompts.generator import content_tagging, gen_metadata, keyword_extrac
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.svr import executor_metrics
 from core.utils.base64_image import image2id
-from core.utils.raptor_utils import get_skip_reason, should_skip_raptor
+from core.utils.raptor_migration import replace_raptor_summaries, summary_rows
+from core.utils.raptor_utils import (
+    RAPTOR_TREE_BUILDER,
+    _as_extra_dict,
+    collect_raptor_methods,
+    get_raptor_clustering_method,
+    get_raptor_tree_builder,
+    get_skip_reason,
+    make_raptor_summary_chunk_id,
+    should_skip_raptor,
+)
 from core.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from core.utils.table_metadata import TABLE_ROW_KEY, collect_table_metadata, merge_table_parser_config_from_kb
 from core.utils.task_runtime import finish_runtime
@@ -1241,32 +1251,26 @@ async def run_dataflow(db: Session, task: dict) -> Any:
     await finish_status_write(asyncio.to_thread(record_task_pipeline, db.get_bind(), task_id, doc_id, task_dataset_id, dataflow_id, str(pipeline)))
 
 
-async def has_raptor_chunks(doc_id: str, tenant_id: str, kb_id: str) -> bool:
-    """Return True if RAPTOR chunks already exist for doc_id in the doc store.
+async def _raptor_history(doc_id: str, tenant_id: str, kb_id: str) -> list[dict[str, Any]]:
+    from common.doc_store.document_history import document_history
 
-    Queries directly for raptor_kwd="raptor" rows so a non-RAPTOR leading
-    chunk cannot produce a false-negative result.  Uses thread_pool_exec so
-    the blocking doc-store call does not stall the event loop.
-    """
-    from common.doc_store.doc_store_base import OrderByExpr
+    def read() -> list[dict[str, Any]]:
+        with db_connection() as reader:
+            kb = KnowledgebaseService.get_by_id(reader, kb_id)
+            if kb is None or kb.tenant_id != tenant_id:
+                raise ValueError("RAPTOR dataset binding unavailable")
+            index = search.index_name_one(tenant_id, kb.name)
+        return document_history(settings.docStoreConn, index, kb_id, doc_id)
 
-    try:
-        with db_connection() as db:
-            kb = KnowledgebaseService.get_by_id(db, kb_id)
-            kb_name = kb.name if kb else "default"
-        collection_name = search.index_name_one(tenant_id, kb_name)
-        condition = {"doc_id": doc_id, "raptor_kwd": ["raptor"]}
-        res = await thread_pool_exec(settings.docStoreConn.search, ["raptor_kwd"], [], condition, [], OrderByExpr(), 0, 1, collection_name, [kb_id])
-        field_map = settings.docStoreConn.get_fields(res, ["raptor_kwd"])
-        found = bool(field_map)
-        if found:
-            logging.info("Checkpoint hit: RAPTOR chunks for doc %s (tenant=%s kb=%s) already exist", doc_id, tenant_id, kb_id)
-        else:
-            logging.info("Checkpoint miss: no RAPTOR chunks for doc %s (tenant=%s kb=%s)", doc_id, tenant_id, kb_id)
-        return found
-    except Exception:
-        logging.exception("Failed to check RAPTOR chunks for doc %s", doc_id)
-        return False
+    return await thread_pool_exec(read)
+
+
+async def get_raptor_chunk_field_map(doc_id: str, tenant_id: str, kb_id: str) -> dict[str, dict[str, Any]]:
+    return summary_rows(await _raptor_history(doc_id, tenant_id, kb_id))
+
+
+async def has_raptor_chunks(doc_id: str, tenant_id: str, kb_id: str, tree_builder: str = RAPTOR_TREE_BUILDER) -> bool:
+    return tree_builder in collect_raptor_methods(await get_raptor_chunk_field_map(doc_id, tenant_id, kb_id))
 
 
 @timeout(3600)
@@ -1277,113 +1281,186 @@ async def run_raptor_for_kb(
     embd_mdl: Any,
     vector_size: int,
     callback: Callable[..., Any] | None = None,
-    doc_ids: list[str] = [],
+    doc_ids: list[str] | None = None,
     db: Session | None = None,
-) -> tuple[list[dict[str, Any]], int]:
-    fake_doc_id = GRAPH_RAPTOR_FAKE_DOC_ID
+) -> tuple[list[dict[str, Any]], int, dict[str, dict[str, dict[str, Any]]]]:
+    from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 
-    raptor_config = kb_parser_config.get("raptor", {})
+    config = kb_parser_config.get("raptor", {})
+    ext = config.get("ext") or {}
+    builder = get_raptor_tree_builder(config)
+    clustering = get_raptor_clustering_method(config)
+    vector_field = "vector" if vector_size == 768 else f"q_{vector_size}_vec"
+    doc_ids = list(dict.fromkeys(doc_ids or []))
+    info = {}
+    if db is not None and doc_ids:
+        info = {doc.id: {"name": doc.name, "type": doc.type, "parser_id": doc.parser_id, "parser_config": doc.parser_config or {}} for doc in DocumentService.get_by_ids(db, doc_ids)}
+        # LLM/embedding work must not keep a business transaction open.
+        db.commit()
+    snapshots = {doc: await _raptor_history(doc, row["tenant_id"], row["kb_id"]) for doc in [*doc_ids, GRAPH_RAPTOR_FAKE_DOC_ID]}
+    summaries = {doc: summary_rows(rows) for doc, rows in snapshots.items()}
+    previous: dict[str, dict[str, dict[str, Any]]] = {}
+    results: list[dict[str, Any]] = []
+    tokens = 0
 
-    if vector_size != 768:
-        vctr_nm = "q_%d_vec" % vector_size
-    else:
-        vctr_nm = "vector"
+    def report(**kwargs: Any) -> None:
+        if callback:
+            callback(**kwargs)
 
-    res = []
-    tk_count = 0
-    max_errors = int(os.environ.get("RAPTOR_MAX_ERRORS", 3))
-    doc_name_by_id = {}
-    if db is not None:
-        unique_doc_ids = list(set(doc_ids))
-        if unique_doc_ids:
-            for doc in DocumentService.get_by_ids(db, unique_doc_ids, cols=["id", "name"]):
-                if doc.name:
-                    doc_name_by_id[doc.id] = doc.name
+    def complete_target(doc: str) -> bool:
+        fields = summaries[doc]
+        if not fields:
+            return False
+        for value in fields.values():
+            extra = _as_extra_dict(value.get("extra"))
+            if extra.get("raptor_method", "raptor") != builder:
+                return False
+            if builder == "raptor" and extra.get("raptor_clustering_method", "gmm") != clustering:
+                return False
+        return True
 
-    async def generate(chunks: list[tuple[str, np.ndarray]], did: str) -> None:
-        nonlocal tk_count, res
+    sources: dict[str, list[tuple[str, np.ndarray]]] = {}
+    for doc in doc_ids:
+        details = info.get(doc, row)
+        if should_skip_raptor(details.get("type"), details.get("parser_id", ""), details.get("parser_config", {}), config):
+            report(msg=f"[RAPTOR] doc:{doc} skipped: {get_skip_reason(details.get('type'), details.get('parser_id', ''), details.get('parser_config', {}))}")
+            continue
+        rows = sorted(snapshots[doc], key=lambda value: value.get("chunk_order_int", 0))
+        sources[doc] = [
+            (value["content_with_weight"], np.asarray(value[vector_field]))
+            for value in rows
+            if str(value.get("id", value.get("pk"))) not in summaries[doc] and value.get("content_with_weight") and value.get(vector_field) is not None and not value.get("knowledge_graph_kwd")
+        ]
+
+    async def generate(inputs: list[tuple[str, np.ndarray]], doc: str) -> bool:
+        nonlocal tokens
+        if len(inputs) <= 1:
+            return False
         raptor = Raptor(
-            raptor_config.get("max_cluster", 64),
+            config.get("max_cluster", 64),
             chat_mdl,
             embd_mdl,
-            raptor_config["prompt"],
-            raptor_config["max_token"],
-            raptor_config["threshold"],
-            max_errors=max_errors,
+            config["prompt"],
+            config["max_token"],
+            config["threshold"],
+            max_errors=int(os.environ.get("RAPTOR_MAX_ERRORS", 3)),
+            tree_builder=builder,
+            clustering_method=clustering,
+            psi_exact_max_leaves=ext.get("psi_exact_max_leaves", 4096),
+            psi_bucket_size=ext.get("psi_bucket_size", 1024),
         )
-        original_length = len(chunks)
-        chunks, layers = await raptor(chunks, kb_parser_config["raptor"]["random_seed"], callback, row["id"])
-        effective_doc_name = row["name"] if did == fake_doc_id else doc_name_by_id.get(did, row["name"])
-        doc = {"doc_id": did, "kb_id": [str(row["kb_id"])], "docnm_kwd": effective_doc_name, "title_tks": rag_tokenizer.tokenize(effective_doc_name), "raptor_kwd": "raptor"}
-        if row["pagerank"]:
-            doc[PAGERANK_FLD] = int(row["pagerank"])
+        built, layers = await raptor(inputs, config.get("random_seed", 0), callback, row["id"])
+        generated = built[len(inputs) :]
+        if not generated:
+            return False
+        previous[doc] = summaries[doc]
+        name = row["name"] if doc == GRAPH_RAPTOR_FAKE_DOC_ID else info.get(doc, {}).get("name") or row["name"]
+        layer_map = {idx: level for level, (start, end) in enumerate(layers) for idx in range(start, end)}
+        for idx, (content, vector) in enumerate(generated, start=len(inputs)):
+            chunk = {
+                "doc_id": doc,
+                "kb_id": [str(row["kb_id"])],
+                "docnm_kwd": name,
+                "title_tks": rag_tokenizer.tokenize(name),
+                "raptor_kwd": "raptor",
+                "extra": {"raptor_method": builder, "raptor_clustering_method": clustering},
+                "pk": make_raptor_summary_chunk_id(content, f"{doc}:{builder}:{clustering}:{row['id']}"),
+                "create_time": str(datetime.now())[:19],
+                "create_timestamp_flt": datetime.now().timestamp(),
+                vector_field: vector.tolist(),
+                "content_with_weight": content,
+                "content_ltks": rag_tokenizer.tokenize(content),
+                "raptor_layer_int": layer_map[idx],
+            }
+            chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
+            if row.get("pagerank"):
+                chunk[PAGERANK_FLD] = int(row["pagerank"])
+            results.append(chunk)
+            tokens += num_tokens_from_string(content)
+        return True
 
-        chunk_layer = {ci: layer_idx for layer_idx, (start, end) in enumerate(layers) if layer_idx > 0 for ci in range(start, end)}
-        for idx, (content, vctr) in enumerate(chunks[original_length:], start=original_length):
-            d = copy.deepcopy(doc)
-            d["pk"] = xxhash.xxh64((content + str(did)).encode("utf-8")).hexdigest()
-            d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-            d["create_timestamp_flt"] = datetime.now().timestamp()
-            d[vctr_nm] = vctr.tolist()
-            # d["vector"] = vctr.tolist() # todo 怎么合理发挥我们支持两种向量字段的特性呢？
-            d["content_with_weight"] = content
-            d["content_ltks"] = rag_tokenizer.tokenize(content)
-            d["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(d["content_ltks"])
-            d["raptor_layer_int"] = chunk_layer.get(idx, 1)
-            res.append(d)
-            tk_count += num_tokens_from_string(content)
-
-    if raptor_config.get("scope", "file") == "file":
-        for x, doc_id in enumerate(doc_ids):
-            # CHECKPOINT: skip docs that already have RAPTOR chunks in the doc store
-            if await has_raptor_chunks(doc_id, row["tenant_id"], row["kb_id"]):
-                callback(msg=f"[RAPTOR] doc:{doc_id} already has RAPTOR chunks, skipping.")
-                callback(prog=(x + 1.0) / len(doc_ids))
-                continue
-
-            chunks = []
-            skipped_chunks = 0
-            for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
-                # Skip chunks that don't have the required vector field (may have been indexed with different embedding model)
-                if vctr_nm not in d or d[vctr_nm] is None:
-                    skipped_chunks += 1
-                    logging.warning(f"RAPTOR: Chunk missing vector field '{vctr_nm}' in doc {doc_id}, skipping")
-                    continue
-                chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
-
-            if skipped_chunks > 0:
-                callback(msg=f"[WARN] Skipped {skipped_chunks} chunks without vector field '{vctr_nm}' for doc {doc_id}. Consider re-parsing the document with the current embedding model.")
-
-            if not chunks:
-                logging.warning(f"RAPTOR: No valid chunks with vectors found for doc {doc_id}")
-                callback(msg=f"[WARN] No valid chunks with vectors found for doc {doc_id}, skipping")
-                continue
-
-            await generate(chunks, doc_id)
-            callback(prog=(x + 1.0) / len(doc_ids))
+    if config.get("scope", "file") == "file":
+        all_available = bool(sources)
+        for doc, inputs in sources.items():
+            available = complete_target(doc)
+            if not available:
+                available = await generate(inputs, doc)
+            all_available = all_available and available
+        # Do not remove a dataset tree if any eligible file failed to produce a tree.
+        if all_available and summaries[GRAPH_RAPTOR_FAKE_DOC_ID]:
+            previous[GRAPH_RAPTOR_FAKE_DOC_ID] = summaries[GRAPH_RAPTOR_FAKE_DOC_ID]
     else:
-        chunks = []
-        skipped_chunks = 0
-        for doc_id in doc_ids:
-            for d in settings.retriever.chunk_list(doc_id, row["tenant_id"], [str(row["kb_id"])], fields=["content_with_weight", vctr_nm], sort_by_position=True):
-                # Skip chunks that don't have the required vector field
-                if vctr_nm not in d or d[vctr_nm] is None:
-                    skipped_chunks += 1
-                    logging.warning(f"RAPTOR: Chunk missing vector field '{vctr_nm}' in doc {doc_id}, skipping")
-                    continue
-                chunks.append((d["content_with_weight"], np.array(d[vctr_nm])))
+        target = GRAPH_RAPTOR_FAKE_DOC_ID
+        available = complete_target(target)
+        if not available:
+            available = await generate([item for chunks in sources.values() for item in chunks], target)
+        if available:
+            for doc in sources:
+                if summaries[doc]:
+                    previous[doc] = summaries[doc]
+    return results, tokens, previous
 
-        if skipped_chunks > 0:
-            callback(msg=f"[WARN] Skipped {skipped_chunks} chunks without vector field '{vctr_nm}'. Consider re-parsing documents with the current embedding model.")
 
-        if not chunks:
-            logging.error(f"RAPTOR: No valid chunks with vectors found in any document for kb {row['kb_id']}")
-            callback(msg=f"[ERROR] No valid chunks with vectors found. Please ensure documents are parsed with the current embedding model (vector size: {vector_size}).")
-            return res, tk_count
+def _commit_raptor_summaries(
+    bind: Engine | Connection,
+    task_id: str,
+    tenant: str,
+    dataset: str,
+    index: str,
+    chunks: list[dict[str, Any]],
+    previous: dict[str, dict[str, dict[str, Any]]],
+    cancellation: threading.Event | None = None,
+) -> None:
+    from sqlalchemy import select
 
-        await generate(chunks, fake_doc_id)
+    from api.db.db_models import Knowledgebase, Task
+    from common.doc_store.document_history import document_history, restore_document_history
 
-    return res, tk_count
+    native_complete = False
+    original_chunk_ids = ""
+    try:
+        with Session(bind) as writer:
+            kb = writer.scalar(select(Knowledgebase).where(Knowledgebase.id == dataset, Knowledgebase.tenant_id == tenant).with_for_update())
+            task = writer.scalar(select(Task).where(Task.id == task_id).with_for_update())
+            if kb is None or kb.raptor_task_id != task_id or task is None or task.doc_id != GRAPH_RAPTOR_FAKE_DOC_ID:
+                raise ValueError("RAPTOR task/dataset binding unavailable")
+            original_chunk_ids = task.chunk_ids or ""
+            replace_raptor_summaries(settings.docStoreConn, index, dataset, chunks, previous, lambda: bool(cancellation and cancellation.is_set()) or has_canceled(task_id), settings.DOC_BULK_SIZE)
+            native_complete = True
+            task.chunk_ids = " ".join(str(chunk.get("id", chunk.get("pk"))) for chunk in chunks)
+            writer.commit()
+    except BaseException:
+        if native_complete:
+            # A failed/lost SQL commit is recovered only while the same task still
+            # owns the dataset and its native tree has not changed since our write.
+            with Session(bind) as recovery:
+                kb = recovery.scalar(select(Knowledgebase).where(Knowledgebase.id == dataset, Knowledgebase.tenant_id == tenant).with_for_update())
+                task = recovery.scalar(select(Task).where(Task.id == task_id).with_for_update())
+                if kb is None or kb.raptor_task_id != task_id or task is None:
+                    raise RuntimeError("RAPTOR SQL recovery lost task ownership") from None
+                for doc, old in previous.items():
+                    current = summary_rows(document_history(settings.docStoreConn, index, dataset, doc))
+                    identifiers = {str(chunk.get("id", chunk.get("pk"))) for chunk in chunks if chunk["doc_id"] == doc}
+                    if set(current) != identifiers:
+                        raise RuntimeError("RAPTOR SQL recovery found a changed native tree") from None
+                    restore_document_history(settings.docStoreConn, index, dataset, doc, list(old.values()), ids=list(set(old) | identifiers))
+                task.chunk_ids = original_chunk_ids
+                recovery.commit()
+        raise
+
+
+async def _write_raptor_summaries(bind: Engine | Connection, task_id: str, tenant: str, dataset: str, index: str, chunks: list[dict[str, Any]], previous: dict[str, dict[str, dict[str, Any]]]) -> None:
+    cancellation = threading.Event()
+    owned = asyncio.create_task(asyncio.to_thread(_commit_raptor_summaries, bind, task_id, tenant, dataset, index, chunks, previous, cancellation))
+    try:
+        await asyncio.shield(owned)
+    except asyncio.CancelledError:
+        cancellation.set()
+        try:
+            await finish_status_write(owned)
+        except TaskCanceledException:
+            pass
+        raise
 
 
 async def _detect_hierarchical_structure(chunks, title_chunker_config):
@@ -2729,17 +2806,6 @@ async def do_handle_task(db: Session, task: Any) -> None:
                 progress_callback(prog=-1.0, msg="Internal error: Invalid RAPTOR configuration")
                 return
 
-        # Check if Raptor should be skipped for structured data
-        file_type = task.get("type", "")
-        parser_id = task.get("parser_id", "")
-        raptor_config = kb_parser_config.get("raptor", {})
-
-        if should_skip_raptor(file_type, parser_id, task_parser_config, raptor_config):
-            skip_reason = get_skip_reason(file_type, parser_id, task_parser_config)
-            logging.info(f"Skipping Raptor for document {task_document_name}: {skip_reason}")
-            progress_callback(prog=1.0, msg=f"Raptor skipped: {skip_reason}")
-            return
-
         # bind detached LLM bundles for RAPTOR to avoid sharing the business session
         # RAPTOR runs parallel async tasks that share LLMBundle; if self.db is set,
         # concurrent encode()/chat() calls would race on _release_db_before_long_io().
@@ -2749,7 +2815,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
         raptor_embedding_model = LLMBundle(None, task_tenant_id, raptor_embd_config, lang=task_language)
         # run RAPTOR
         async with kg_limiter:
-            chunks, token_count = await run_raptor_for_kb(
+            chunks, token_count, raptor_previous = await run_raptor_for_kb(
                 row=task,
                 kb_parser_config=kb_parser_config,
                 chat_mdl=chat_model,
@@ -2835,6 +2901,17 @@ async def do_handle_task(db: Session, task: Any) -> None:
         logging.info(progress_message)
         progress_callback(msg=progress_message)
         needs_toc = task["parser_id"].lower() == "naive" and task["parser_config"].get("toc_extraction", False)
+
+    if task_type == "raptor":
+        collection_name = search.index_name_one(task_tenant_id, kb_name)
+        if raptor_previous:
+            schema = await get_schema(collection_name)
+            converted = [convert_data_types(chunk, schema) for chunk in chunks]
+            for chunk in converted:
+                chunk.setdefault("id", chunk["pk"])
+            await _write_raptor_summaries(db.get_bind(), task_id, task_tenant_id, task_dataset_id, collection_name, converted, raptor_previous)
+        progress_callback(prog=1.0, msg=f"RAPTOR done: {len(chunks)} summaries")
+        return
 
     executor: concurrent.futures.ThreadPoolExecutor | None = None
     toc_thread: asyncio.Future[Any] | None = None

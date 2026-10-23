@@ -381,15 +381,28 @@ class RaptorConfig(Base):
     max_cluster: Annotated[int, Field(default=64, ge=1, le=1024)]
     random_seed: Annotated[int, Field(default=0, ge=0)]
     scope: Annotated[Literal["file", "dataset"], Field(default="file")]
+    clustering_method: Annotated[Literal["gmm", "ahc"], Field(default="gmm")]
+    tree_builder: Annotated[Literal["raptor", "psi"], Field(default="raptor")]
     auto_disable_for_structured_data: Annotated[bool, Field(default=True)]
     ext: Annotated[dict[str, Any], Field(default_factory=dict)]
+
+    @field_validator("ext")
+    @classmethod
+    def validate_raptor_ext(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for key, choices in {"tree_builder": {"raptor", "psi"}, "clustering_method": {"gmm", "ahc"}}.items():
+            if key in value and (not isinstance(value[key], str) or value[key] not in choices):
+                raise ValueError(f"Invalid RAPTOR {key}")
+        for key in ("psi_exact_max_leaves", "psi_bucket_size"):
+            if key in value and (type(value[key]) is not int or not 2 <= value[key] <= 4096):
+                raise ValueError(f"RAPTOR {key} must be an integer from 2 to 4096")
+        return value
 
 
 def validate_dataset_raptor_scope(config: Any) -> None:
     """Check an explicit scope without defaulting or filtering a partial config."""
     raptor = config.get("raptor") if isinstance(config, dict) else None
-    if isinstance(raptor, dict) and "scope" in raptor:
-        RaptorConfig.model_validate({"scope": raptor["scope"]})
+    if isinstance(raptor, dict):
+        RaptorConfig.model_validate({key: value for key, value in raptor.items() if key in RaptorConfig.model_fields})
 
 
 class GraphragConfig(Base):

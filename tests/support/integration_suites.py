@@ -23,6 +23,7 @@ DATABASE_TESTS = frozenset(
         "test_database_process_recovery.py",
         "test_dialog_sql_scope.py",
         "test_dataset_access_permissions.py",
+        "test_dataset_raptor_scope.py",
         "test_document_existence.py",
         "test_enterprise_subject_repository.py",
         "test_identity_channel_credentials.py",
@@ -66,7 +67,6 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_dataset_async_management.py",
         "test_dataset_index_http.py",
         "test_dataset_management_http.py",
-        "test_dataset_raptor_scope.py",
         "test_dataset_search_http.py",
         "test_debug_response_start.py",
         "test_document_delete_scope.py",
@@ -145,6 +145,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_raptor_psi_storage.py":
+            required.update(("postgresql", "milvus"))
+            continue
         if path.name == "test_document_ingest.py":
             required.update(("elasticsearch", "opensearch"))
         if path.name == "test_es_os_doc_visibility.py":

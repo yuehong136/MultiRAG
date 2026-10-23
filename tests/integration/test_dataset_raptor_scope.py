@@ -116,3 +116,25 @@ def test_scope_create_save_and_independent_reload(management_api: dict[str, Any]
     assert reloaded.status_code == 200 and reloaded.json()["code"] == 0
     assert reloaded.json()["data"]["parser_config"] == stored
     assert _task_count(env) == tasks_before
+
+
+@pytest.mark.parametrize("method", ["gmm", "ahc"])
+def test_raptor_ext_save_and_independent_reload(scope_api: dict[str, Any], method: str) -> None:
+    env = scope_api
+    dataset = env["datasets"][0]
+    config = {"raptor": {"max_cluster": 317, "ext": {"tree_builder": "psi", "clustering_method": method, "psi_bucket_size": 64}}}
+    response = request_api(env, "PUT", f"/datasets/{dataset}", credential=env["keys"][0], payload={"parser_config": config})
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    actual = sql_state(env)[Knowledgebase.__tablename__][dataset]["parser_config"]
+    assert actual["raptor"]["ext"] == config["raptor"]["ext"]
+    reloaded = request_api(env, "GET", f"/datasets/{dataset}", credential=env["keys"][0])
+    assert reloaded.json()["data"]["parser_config"] == actual
+
+
+@pytest.mark.parametrize("ext", [{"tree_builder": "bad"}, {"clustering_method": None}, {"psi_bucket_size": 1}, {"psi_exact_max_leaves": 4097}])
+def test_invalid_raptor_ext_patch_is_atomic(scope_api: dict[str, Any], ext: dict[str, Any]) -> None:
+    env = scope_api
+    before = sql_state(env)
+    response = request_api(env, "PUT", f"/datasets/{env['datasets'][0]}", credential=env["keys"][0], payload={"description": "must not persist", "parser_config": {"raptor": {"ext": ext}}})
+    assert response.status_code == 422
+    assert sql_state(env) == before

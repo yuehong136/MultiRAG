@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from core import raptor as raptor_module
 from core.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
 from core.svr import task_executor
 
@@ -50,8 +51,10 @@ async def test_indexed_raptor_summaries_keep_their_layer(monkeypatch: pytest.Mon
                 np.testing.assert_array_equal(vector, expected)
             return chunks + summaries, [(0, 3), (3, 5), (5, 6)]
 
-    async def no_existing_raptor_chunks(doc_id: str, tenant_id: str, kb_id: str) -> bool:
-        return False
+    async def history(doc_id: str, tenant_id: str, kb_id: str) -> list[dict[str, Any]]:
+        if doc_id == "graph_raptor_x":
+            return []
+        return [{"id": str(i), "doc_id": doc_id, "content_with_weight": text, "q_3_vec": vector.tolist()} for i, (text, vector) in enumerate(original)]
 
     def fake_chunk_list(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return [{"content_with_weight": text, "q_3_vec": vector.tolist()} for text, vector in original]
@@ -59,8 +62,8 @@ async def test_indexed_raptor_summaries_keep_their_layer(monkeypatch: pytest.Mon
     def callback(**kwargs: Any) -> None:
         pass
 
-    monkeypatch.setattr(task_executor, "Raptor", FakeRaptor)
-    monkeypatch.setattr(task_executor, "has_raptor_chunks", no_existing_raptor_chunks)
+    monkeypatch.setattr(raptor_module, "RecursiveAbstractiveProcessing4TreeOrganizedRetrieval", FakeRaptor)
+    monkeypatch.setattr(task_executor, "_raptor_history", history)
     monkeypatch.setattr(
         task_executor.settings,
         "retriever",
@@ -70,9 +73,11 @@ async def test_indexed_raptor_summaries_keep_their_layer(monkeypatch: pytest.Mon
 
     row = {"tenant_id": "tenant", "kb_id": "kb", "id": "task", "name": "knowledge base", "pagerank": 0}
     config = {"raptor": {"scope": "file", "prompt": "{cluster_content}", "max_token": 512, "threshold": 0.1, "random_seed": 42}}
-    indexed, token_count = await task_executor.run_raptor_for_kb(row, config, None, None, 3, callback=callback, doc_ids=["doc"])
+    indexed, token_count, previous = await task_executor.run_raptor_for_kb(row, config, None, None, 3, callback=callback, doc_ids=["doc"])
 
     assert [chunk["content_with_weight"] for chunk in indexed] == ["summary 0", "summary 1", "summary 2"]
     assert [chunk["raptor_layer_int"] for chunk in indexed] == [1, 1, 2]
     assert all(chunk["raptor_kwd"] == "raptor" and chunk["doc_id"] == "doc" for chunk in indexed)
     assert token_count > 0
+    assert previous == {"doc": {}}
+    assert all(chunk["extra"]["raptor_method"] == "raptor" for chunk in indexed)
