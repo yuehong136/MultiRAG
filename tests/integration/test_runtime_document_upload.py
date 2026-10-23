@@ -78,6 +78,7 @@ def test_http_runtime_upload_storage_and_real_consumers(runtime_upload_api: dict
         assert read_object(env["storage"], env["bucket"], f"{owner}-downloads/{descriptor['id']}") == b"compatibility bytes"
         assert json.loads(read_object(env["storage"], env["bucket"], f"{owner}-downloads/{descriptor['id']}.upload.json")) == descriptor
     canvas = Canvas.__new__(Canvas)
+    canvas.artifact_owner_id = env["owners"][1]
     with ThreadPoolExecutor(max_workers=2) as pool:
         canvas._thread_pool = pool
         parsed = asyncio.run(canvas.get_files_async(multiple))
