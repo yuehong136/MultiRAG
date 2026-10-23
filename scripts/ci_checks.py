@@ -24,6 +24,7 @@ GO_LIVE_OPT_INS = {
         "TestDatasetTimeHTTPAndSQL",
         "TestDocumentStatusLiveServer",
         "TestHybridAuthLiveServer",
+        "TestHostedProviderRoutesScratchPostgres",
         "TestOllamaInstanceLiveHTTPAndSQL",
         "TestProviderInstancesLiveHTTPAndSQL",
         "TestGoogleProviderLiveHTTPAndSQL",

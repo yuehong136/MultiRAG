@@ -112,6 +112,7 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
         {"Action": "skip", "Package": package, "Test": "TestChatSessionLiveHTTPAndSQL"},
         {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL"},
         {"Action": "skip", "Package": package, "Test": "TestDatasetTimeHTTPAndSQL"},
+        {"Action": "skip", "Package": package, "Test": "TestHostedProviderRoutesScratchPostgres"},
         {"Action": "start", "Package": "multirag/internal/service"},
         {"Action": "skip", "Package": "multirag/internal/service", "Test": "TestHostedProviderBindingScratchPostgres"},
         {"Action": "pass", "Package": "multirag/internal/service"},
@@ -124,6 +125,7 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
         f"{package}::TestChatSessionLiveHTTPAndSQL",
         f"{package}::TestModelInferenceLiveHTTPAndSQL",
         f"{package}::TestDatasetTimeHTTPAndSQL",
+        f"{package}::TestHostedProviderRoutesScratchPostgres",
         "multirag/internal/service::TestHostedProviderBindingScratchPostgres",
     ]
     for bad in [
@@ -133,6 +135,7 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
         [*events, {"Action": "skip", "Package": package, "Test": "TestOrdinary"}],
         [*events, {"Action": "skip", "Package": package, "Test": "TestModelInferenceLiveHTTPAndSQL/unknown"}],
         [*events, {"Action": "skip", "Package": package, "Test": "TestDatasetTimeHTTPAndSQL/unknown"}],
+        [*events, {"Action": "skip", "Package": package, "Test": "TestHostedProviderRoutesScratchPostgres/unknown"}],
         [*events, {"Action": "skip", "Package": "multirag/internal/service", "Test": "TestHostedProviderBindingScratchPostgres/unknown"}],
     ]:
         path.write_text("\n".join(map(json.dumps, bad)))
