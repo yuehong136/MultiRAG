@@ -116,6 +116,44 @@ async def test_classic_task_batch_order_weighting_and_copies(monkeypatch: pytest
         assert encoder.calls == []
 
 
+async def test_classic_embedding_normalizes_blank_inputs_without_losing_positions(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RejectBlankEncoder(Encoder):
+        def encode(self, texts: list[str], **kwargs: Any) -> Any:
+            assert all(text.strip() for text in texts), "Provider rejects blank embedding inputs"
+            return super().encode(texts, **kwargs)
+
+    encoder = RejectBlankEncoder("float32")
+    monkeypatch.setattr(task_executor.settings, "EMBEDDING_BATCH_SIZE", 2)
+    contents = [
+        "0",
+        "",
+        " \t\n",
+        "\u00a0\u2003\u3000",
+        "<table><tr><td></td></tr></table>",
+        "<table><caption>\n</caption><tr><th>\t</th><td>\u2003</td></tr></table>",
+        "  42  ",
+        "<table><tr><td>73</td></tr></table>",
+        "8",
+        "fallback",
+    ]
+    expected = ["0", "None", "None", "None", "None", "None", "  42  ", "   73   ", "8", "None"]
+    docs = [{"docnm_kwd": "title", "content_with_weight": content} for content in contents]
+    # Questions retain their existing priority over content, including blank ones.
+    docs[-1]["question_kwd"] = [" \t", "\u3000"]
+    progress: list[dict[str, Any]] = []
+
+    tokens = await task_executor.embedding(docs, encoder, {"filename_embd_weight": 0.25}, lambda **kw: progress.append(kw))
+
+    assert encoder.calls == [["title"], *[expected[i : i + 2] for i in range(0, len(expected), 2)]]
+    assert tokens == (len(docs) + 1) * 3
+    assert len(progress) == 5
+    assert [doc["content_with_weight"] for doc in docs] == contents
+    for doc, text in zip(docs, expected, strict=True):
+        value = float(text) if text.isdigit() else 100.0
+        np.testing.assert_allclose(doc["vector"], [25 + 0.75 * value] * 3)
+        assert doc["vector"] == doc["q_3_vec"]
+
+
 @pytest.mark.parametrize("size", [0, 1, 2, 5])
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 async def test_dataflow_batches_reach_index_in_order_with_token_total(monkeypatch: pytest.MonkeyPatch, db: Session, size: int, dtype: str) -> None:

@@ -2120,7 +2120,7 @@ def test_retired_document_run_http_matrix_has_no_private_execution(ingest_api: d
         evidence(env, "manifest", env["ingest_manifest"])
 
 
-@pytest.mark.parametrize("path", ["classic", "dataflow"])
+@pytest.mark.parametrize("path", ["classic", "classic_blank", "dataflow"])
 def test_embedding_batches_preserve_stored_vectors_and_token_ledgers(ingest_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, path: str) -> None:
     import numpy as np
 
@@ -2136,16 +2136,22 @@ def test_embedding_batches_preserve_stored_vectors_and_token_ledgers(ingest_api:
     assert post(env, [doc_id])["code"] == 0
     task_id = tasks(env, doc_id)[0]["id"]
     calls: list[list[str]] = []
+    contents = [str(i) for i in range(5)]
+    normalized = contents.copy()
+    if path == "classic_blank":
+        contents = ["0", "<table><tr><td></td></tr></table>", "\u00a0\u2003\u3000", " \t\n", "4"]
+        normalized = ["0", "None", "None", "None", "4"]
 
     class Encoder:
         max_length = 128
 
         def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+            assert all(text.strip() for text in texts), "Provider rejects blank embedding inputs"
             calls.append(list(texts))
             return np.array([[float(t) if t.isdigit() else 10.0] * 768 for t in texts], dtype=np.float32), len(texts) * 3
 
     async def parsed(*args: Any) -> list[dict[str, Any]]:
-        return [source(env, doc_id, text=str(i)) for i in range(5)]
+        return [source(env, doc_id, text=text) for text in contents]
 
     async def pipeline_output(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"chunks": [{"text": str(i)} for i in range(5)], "embedding_token_consumption": 7}
@@ -2163,16 +2169,17 @@ def test_embedding_batches_preserve_stored_vectors_and_token_ledgers(ingest_api:
         asyncio.run(worker.do_handle_task(db, task))
     rows = sorted(index_snapshot(env), key=lambda row: row["chunk_order_int"])
     assert len(rows) == 5
-    assert [row["content_with_weight"] for row in rows] == [str(i) for i in range(5)]
+    assert [row["content_with_weight"] for row in rows] == contents
     for i, row in enumerate(rows):
-        expected = 2.5 + 0.75 * i if path == "classic" else i
+        content_vector = float(normalized[i]) if normalized[i].isdigit() else 10.0
+        expected = i if path == "dataflow" else 2.5 + 0.75 * content_vector
         np.testing.assert_allclose(row["q_768_vec"], [expected] * 768)
         # Baseline dataflow writes q_*_vec only; convert_data_types fills the
         # standard vector with zeros. Preserve and expose that existing storage
         # contract here; changing it is separate from accumulation parity.
-        np.testing.assert_allclose(row["vector"], [expected if path == "classic" else 0.0] * 768)
-    assert calls[-3:] == [["0", "1"], ["2", "3"], ["4"]]
-    tokens = 18 if path == "classic" else 22
+        np.testing.assert_allclose(row["vector"], [0.0 if path == "dataflow" else expected] * 768)
+    assert calls[-3:] == [normalized[:2], normalized[2:4], normalized[4:]]
+    tokens = 22 if path == "dataflow" else 18
     with Session(env["engine"]) as db:
         doc, kb, task_row = db.get(Document, doc_id), db.get(Knowledgebase, env["kb"]), db.get(Task, task_id)
         assert doc is not None and kb is not None and task_row is not None

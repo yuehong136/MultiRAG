@@ -1063,7 +1063,8 @@ async def embedding(docs: list[dict[str, Any]], mdl: Any, parser_config: dict[st
         if not c:
             c = d["content_with_weight"]
         c = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", c)
-        if not c:
+        if not c.strip():
+            logging.debug("embedding(): normalized whitespace-only chunk to placeholder 'None' (len=%d)", len(c))
             c = "None"
         cnts.append(c)
 
