@@ -201,7 +201,7 @@ func TestLocalAIConstructorCustomDefaultTransport(t *testing.T) {
 	if d.Name() != "LocalAI" || d.httpClient.Timeout != 0 {
 		t.Fatal("constructor")
 	}
-	tr := d.httpClient.Transport.(*http.Transport)
+	tr := providerHTTPTransport()
 	if tr.TLSHandshakeTimeout <= 0 || tr.ResponseHeaderTimeout <= 0 {
 		t.Fatal("transport deadline")
 	}

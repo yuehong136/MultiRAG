@@ -16,7 +16,7 @@ type VoyageModel struct {
 }
 
 func NewVoyageModel(urls map[string]string, suffix URLSuffix) *VoyageModel {
-	return &VoyageModel{DummyModel: NewDummyModel(maps.Clone(urls), suffix), httpClient: &http.Client{Transport: providerHTTPTransport()}}
+	return &VoyageModel{DummyModel: NewDummyModel(maps.Clone(urls), suffix), httpClient: &http.Client{Transport: providerModelTransport}}
 }
 func (v *VoyageModel) Name() string { return "Voyage AI" }
 func (v *VoyageModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {

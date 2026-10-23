@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,7 +42,7 @@ func listProviderModels(client *http.Client, urls map[string]string, suffix stri
 		} `json:"data"`
 		Error any `json:"error"`
 	}
-	if err := decodeCoHereJSON(io.LimitReader(resp.Body, MaxMediaBytes+1), &result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("decode model discovery: %w", err)
 	}
 	if result.Error != nil || result.Data == nil {
@@ -62,4 +63,16 @@ func listProviderModels(client *http.Client, urls map[string]string, suffix stri
 		return nil, err
 	}
 	return names, nil
+}
+
+// Read one bounded JSON value so oversized whitespace cannot hide trailing data.
+func decodeBoundedModelJSON(reader io.Reader, target any) error {
+	raw, err := io.ReadAll(io.LimitReader(reader, MaxMediaBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > MaxMediaBytes {
+		return fmt.Errorf("model response exceeds 20 MiB")
+	}
+	return decodeCoHereJSON(bytes.NewReader(raw), target)
 }

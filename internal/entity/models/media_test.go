@@ -19,7 +19,7 @@ func TestInputAudioContentValidation(t *testing.T) {
 	}
 }
 func TestBuiltInMediaCapabilitiesAreExplicit(t *testing.T) {
-	for _, provider := range []string{"cohere", "fishaudio", "stepfun", "baichuan", "upstage", "lm-studio", "xai", "ollama", "vllm", "volcengine", "openrouter", "nvidia", "huggingface", "baidu", "openai", "openai-api-compatible", "google", "zhipu-ai", "deepseek", "moonshot", "minimax", "gitee", "siliconflow", "aliyun", "unsupported-provider"} {
+	for _, provider := range []string{"LocalAI", "Voyage AI", "novita", "longcat", "cohere", "fishaudio", "stepfun", "baichuan", "upstage", "lm-studio", "xai", "ollama", "vllm", "volcengine", "openrouter", "nvidia", "huggingface", "baidu", "openai", "openai-api-compatible", "google", "zhipu-ai", "deepseek", "moonshot", "minimax", "gitee", "siliconflow", "aliyun", "unsupported-provider"} {
 		driver, err := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": "http://127.0.0.1:1"}, URLSuffix{})
 		if err != nil {
 			t.Fatal(err)

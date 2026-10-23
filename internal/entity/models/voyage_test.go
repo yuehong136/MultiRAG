@@ -115,5 +115,77 @@ func TestVoyageConstructorCustomDefaultTransport(t *testing.T) {
 	if d.Name() != "Voyage AI" {
 		t.Fatal("canonical name")
 	}
-	d.httpClient.CloseIdleConnections()
+	providerHTTPTransport().CloseIdleConnections()
+}
+
+func TestVoyageStrictEmbeddings(t *testing.T) {
+	for _, body := range []string{
+		`{"data":[{"embedding":[1]}]}`,
+		`{"data":[{"index":null,"embedding":[1]}]}`,
+		`{"data":[{"index":0,"embedding":[null]}]}`,
+		`{"data":[{"index":0,"embedding":[1,2]}]}`,
+		`{"data":[{"index":1,"embedding":[1]}]}`,
+		`{"data":[{"index":0,"embedding":[1e999]}]}`,
+		`{"data":[]}`,
+		`{"data":[{"index":0,"embedding":[1]}],"error":"failed"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+			defer srv.Close()
+			d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings"})
+			name, key := "m", "fixture"
+			if _, err := d.Embed(&name, []string{"x"}, &APIConfig{APIKey: &key}, &EmbeddingConfig{Dimension: 1}); err == nil {
+				t.Fatal("malformed embedding accepted")
+			}
+		})
+	}
+}
+func TestVoyageBatchDimensionsAndDefaultTopK(t *testing.T) {
+	embeddingCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path == "/embeddings" {
+			embeddingCalls++
+			if body["output_dimension"] != float64(1) || body["dimensions"] != nil || body["query"] != nil {
+				t.Error("batch dimension/metadata", body)
+			}
+			inputs := body["input"].([]any)
+			want := 32
+			if embeddingCalls == 2 {
+				want = 1
+			}
+			if len(inputs) != want {
+				t.Error("batch size", len(inputs))
+			}
+			items := []map[string]any{}
+			for i := len(inputs) - 1; i >= 0; i-- {
+				items = append(items, map[string]any{"index": i, "embedding": []float64{1}})
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": items})
+			return
+		}
+		if body["top_k"] != float64(2) || body["top_n"] != nil {
+			t.Error("default/clamped top_k", body)
+		}
+		io.WriteString(w, `{"data":[{"index":1,"relevance_score":1},{"index":0,"relevance_score":0}]}`)
+	}))
+	defer srv.Close()
+	d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings", Rerank: "rerank"})
+	name, key := "m", "fixture"
+	api := &APIConfig{APIKey: &key}
+	texts := make([]string, 33)
+	for i := range texts {
+		texts[i] = "x"
+	}
+	result, err := d.Embed(&name, texts, api, &EmbeddingConfig{Dimension: 1, Query: true})
+	if err != nil || len(result) != 33 || result[32].Index != 32 || embeddingCalls != 2 {
+		t.Fatalf("batch %v %v", result, err)
+	}
+	for _, config := range []*RerankConfig{nil, {TopN: 0}, {TopN: 99}} {
+		result, err := d.Rerank(&name, "q", []string{"a", "b"}, api, config)
+		if err != nil || len(result.Data) != 2 {
+			t.Fatalf("default top %v %v", result, err)
+		}
+	}
 }

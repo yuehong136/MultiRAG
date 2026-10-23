@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +52,21 @@ func TestZhipuDiscovery(t *testing.T) {
 				t.Fatal("invalid discovery accepted")
 			}
 		})
+	}
+}
+
+func TestProviderDiscoveryRejectsHTTPErrorAndOversizedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("private provider error"))
+	}))
+	defer srv.Close()
+	d := NewZhipuAIModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models"})
+	if _, err := d.ListModels(nil); err == nil || !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "private provider error") {
+		t.Fatal("HTTP error contract", err)
+	}
+	var result any
+	if err := decodeBoundedModelJSON(strings.NewReader(`{"data":[]}`+strings.Repeat(" ", MaxMediaBytes)+`{}`), &result); err == nil {
+		t.Fatal("oversized trailing JSON accepted")
 	}
 }

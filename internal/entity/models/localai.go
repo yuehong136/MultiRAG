@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,18 +25,21 @@ type LocalAIModel struct {
 }
 
 func NewLocalAIModel(urls map[string]string, suffix URLSuffix) *LocalAIModel {
-	return &LocalAIModel{DummyModel: NewDummyModel(maps.Clone(urls), suffix), httpClient: &http.Client{Transport: providerHTTPTransport()}, streamIdleTimeout: 60 * time.Second}
+	return &LocalAIModel{DummyModel: NewDummyModel(maps.Clone(urls), suffix), httpClient: &http.Client{Transport: providerModelTransport}, streamIdleTimeout: 60 * time.Second}
 }
 func (l *LocalAIModel) Name() string { return "LocalAI" }
 
-// providerHTTPTransport preserves standard dial/TLS deadlines even when the
-// process has installed a custom default RoundTripper.
+// Request-scoped drivers share connections; credentials remain on requests.
+var providerModelTransport = providerHTTPTransport()
+
+// providerHTTPTransport retains dial and TLS deadlines with custom defaults.
+
 func providerHTTPTransport() *http.Transport {
 	var transport *http.Transport
 	if standard, ok := http.DefaultTransport.(*http.Transport); ok && standard != nil {
 		transport = standard.Clone()
 	} else {
-		transport = &http.Transport{Proxy: http.ProxyFromEnvironment, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: time.Second}
+		transport = &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: time.Second}
 	}
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 10
@@ -130,7 +134,7 @@ func (l *LocalAIModel) ChatWithMessages(name string, api *APIConfig, messages []
 		} `json:"choices"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := decodeCoHereJSON(io.LimitReader(resp.Body, MaxMediaBytes+1), &result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, err
 	}
 	if len(result.Error) > 0 && string(result.Error) != "null" {
