@@ -1,5 +1,6 @@
 """Dify errors use its own envelope and preserve strict retrieval limits."""
 
+import logging
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -137,19 +138,29 @@ def test_normalized_post_request_uses_strict_settings(client: TestClient, monkey
     assert request.retrieval_setting.top_k == 12 and request.retrieval_setting.score_threshold == 0.66
 
 
-def test_denial_precedes_metadata_model_and_index(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_denial_precedes_metadata_model_and_index(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     module = sys.modules["api.apps.sdk.dify_retrieval"]
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: SimpleNamespace(tenant_id="owner"))
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", lambda *_: False)
     metadata = Mock(side_effect=AssertionError("Denied request accessed metadata"))
     bundle = Mock(side_effect=AssertionError("Denied request initialized model"))
+    retriever = SimpleNamespace(retrieval=AsyncMock(), retrieval_by_children=Mock())
+    kg_retriever = SimpleNamespace(retrieval=AsyncMock())
     monkeypatch.setattr(module.DocMetadataService, "get_flatted_meta_by_kbs", metadata)
     monkeypatch.setattr(module, "LLMBundle", bundle)
+    monkeypatch.setattr(module.settings, "retriever", retriever)
+    monkeypatch.setattr(module.settings, "kg_retriever", kg_retriever)
     client.app.dependency_overrides[token_required] = lambda: "attacker"
-    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "private"})
+    with caplog.at_level(logging.WARNING):
+        response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "SECRET_REQUEST_CONTENT", "use_kg": True})
     assert response.status_code == 403 and response.json()["error_code"] == 109
     metadata.assert_not_called()
     bundle.assert_not_called()
+    retriever.retrieval.assert_not_called()
+    retriever.retrieval_by_children.assert_not_called()
+    kg_retriever.retrieval.assert_not_called()
+    assert "tenant_id=attacker knowledge_id=kb" in caplog.text
+    assert "SECRET_REQUEST_CONTENT" not in caplog.text
 
 
 def test_post_lookup_failure_does_not_fall_back_to_health(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,3 +175,91 @@ def test_post_lookup_failure_does_not_fall_back_to_health(client: TestClient, mo
     assert response.json()["error_msg"] == "controlled lookup failure"
     assert "data" not in response.json()
     bundle.assert_not_called()
+
+
+@pytest.fixture
+def allowed_retrieval(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    kb = SimpleNamespace(id="kb", name="Knowledge", tenant_id="owner", tenant_embd_id=17, embd_id="embedding")
+    monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: kb)
+    monkeypatch.setattr(module.KnowledgebaseService, "accessible", lambda *_: True)
+    monkeypatch.setattr(module, "get_model_config_by_id", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(module, "get_tenant_default_model_by_type", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(module, "LLMBundle", lambda *_: object())
+    monkeypatch.setattr(module, "label_question", lambda *_: {})
+    monkeypatch.setattr(module.DocMetadataService, "get_flatted_meta_by_kbs", lambda *_: {})
+    metadata = Mock(return_value={"doc": {"author": "alice"}})
+    documents = Mock(return_value=[SimpleNamespace(id="doc")])
+    monkeypatch.setattr(module.DocMetadataService, "get_metadata_for_documents", metadata)
+    monkeypatch.setattr(module.DocumentService, "get_by_ids", documents)
+    chunks = [{"doc_id": "doc", "content_with_weight": "text", "similarity": 0.8, "docnm_kwd": "Title", "vector": [0.1]}]
+    retriever = SimpleNamespace(retrieval=AsyncMock(return_value={"chunks": chunks}), retrieval_by_children=Mock(side_effect=lambda rows, _: rows))
+    kg = SimpleNamespace(retrieval=AsyncMock(return_value={"doc_id": "", "content_with_weight": "Graph aggregate", "similarity": 1.0, "docnm_kwd": "Related content in Knowledge Graph"}))
+    monkeypatch.setattr(module.settings, "retriever", retriever)
+    monkeypatch.setattr(module.settings, "kg_retriever", kg)
+    client.app.dependency_overrides[token_required] = lambda: "member"
+    return SimpleNamespace(module=module, chunks=chunks, retriever=retriever, kg=kg, documents=documents, metadata=metadata)
+
+
+def test_metadata_and_real_kg_aggregate_keep_owner_scope(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace) -> None:
+    ctx = allowed_retrieval
+    monkeypatch.setattr(ctx.module, "meta_filter", lambda *_: ["doc"])
+    response = client.post(
+        "/api/v1/dify/retrieval",
+        json={"knowledge_id": "kb", "query": "text", "use_kg": True, "metadata_condition": {"conditions": [{"name": "author", "comparison_operator": "is", "value": "alice"}]}},
+    )
+    assert response.status_code == 200, response.text
+    records = response.json()["records"]
+    assert [row["content"] for row in records] == ["Graph aggregate", "text"]
+    assert records[0]["metadata"] == {"doc_id": "", "document_id": ""}
+    assert records[1]["metadata"] == {"doc_id": "doc", "document_id": "doc", "author": "alice"}
+    assert ctx.retriever.retrieval.call_args.kwargs["tenant_id"] == "owner"
+    assert ctx.retriever.retrieval.call_args.kwargs["doc_ids"] == ["doc"]
+    assert ctx.kg.retrieval.call_args.args[1:3] == (["owner"], ["kb"])
+    assert ctx.documents.call_count == ctx.metadata.call_count == 1
+    assert ctx.documents.call_args.args[1] == ["doc"]
+
+
+def test_missing_sql_documents_are_filtered_without_losing_kg(client: TestClient, allowed_retrieval: SimpleNamespace) -> None:
+    ctx = allowed_retrieval
+    ctx.chunks.extend(
+        [
+            {"doc_id": "gone", "content_with_weight": "stale"},
+            {"doc_id": "doc", "content_with_weight": "second"},
+            {"doc_id": "", "content_with_weight": "unbound ordinary chunk"},
+        ]
+    )
+    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "use_kg": True})
+    assert response.status_code == 200, response.text
+    assert [row["content"] for row in response.json()["records"]] == ["Graph aggregate", "text", "second"]
+    assert ctx.documents.call_count == 1 and ctx.documents.call_args.args[1] == ["doc", "gone"]
+
+
+def test_metadata_zero_matches_stays_restricted(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace) -> None:
+    ctx = allowed_retrieval
+    monkeypatch.setattr(ctx.module, "meta_filter", lambda *_: [])
+    response = client.post(
+        "/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "metadata_condition": {"conditions": [{"name": "author", "comparison_operator": "is", "value": "nobody"}]}}
+    )
+    assert response.status_code == 200, response.text
+    assert ctx.retriever.retrieval.call_args.kwargs["doc_ids"] == ["-999"]
+
+
+@pytest.mark.parametrize("message,status", [("chunk_not_found_error", 404), ("controlled retrieval failure", 500)])
+def test_retrieval_failure_uses_error_envelope(client: TestClient, allowed_retrieval: SimpleNamespace, message: str, status: int) -> None:
+    allowed_retrieval.retriever.retrieval.side_effect = RuntimeError(message)
+    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text"})
+    assert response.status_code == status, response.text
+    assert response.json()["error_code"] == status and "records" not in response.json()
+    allowed_retrieval.documents.assert_not_called()
+
+
+def test_missing_kb_precedes_access_and_all_retrieval_work(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: None)
+    accessible = Mock(side_effect=AssertionError("Missing KB reached authorization"))
+    monkeypatch.setattr(module.KnowledgebaseService, "accessible", accessible)
+    client.app.dependency_overrides[token_required] = lambda: "owner"
+    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "missing", "query": "text"})
+    assert response.status_code == 404 and response.json()["error_code"] == 404
+    accessible.assert_not_called()

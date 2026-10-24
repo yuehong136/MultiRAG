@@ -307,6 +307,9 @@ async def _run_retrieval(
         )
         ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], [kb.tenant_id])
 
+        # KG aggregates have no SQL document; keep only this trusted synthetic
+        # result exempt from the ordinary source-document existence check.
+        kg_chunk: dict[str, Any] | None = None
         # 知识图谱增强检索
         if use_kg:
             kg_chat_config = get_tenant_default_model_by_type(db, kb.tenant_id, LLMType.CHAT)
@@ -318,6 +321,7 @@ async def _run_retrieval(
                 LLMBundle(db, kb.tenant_id, kg_chat_config),
             )
             if kg_result.get("content_with_weight"):
+                kg_chunk = kg_result
                 ranks["chunks"].insert(0, kg_result)
 
         # 构建响应
@@ -328,12 +332,15 @@ async def _run_retrieval(
 
         records: list[RetrievalRecord] = []
         for chunk in chunks:
+            doc_id = chunk.get("doc_id", "")
+            if doc_id not in existing_doc_ids and not (chunk is kg_chunk and not doc_id):
+                continue
             chunk.pop("vector", None)  # 移除向量数据
 
-            meta = dict(metadata_map.get(chunk["doc_id"], {})) if chunk["doc_id"] in existing_doc_ids else {}
-            meta["doc_id"] = chunk["doc_id"]
+            meta = dict(metadata_map.get(doc_id, {})) if doc_id in existing_doc_ids else {}
+            meta["doc_id"] = doc_id
             # Dify expects metadata.document_id for external retrieval sources.
-            meta["document_id"] = chunk["doc_id"]
+            meta["document_id"] = doc_id
             records.append(
                 RetrievalRecord(
                     content=chunk.get("content_with_weight", ""),
