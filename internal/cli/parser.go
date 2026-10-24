@@ -202,6 +202,8 @@ func (p *Parser) parseUserCommand() (*Command, error) {
 		return p.parseUseCommand()
 	case TokenCheck:
 		return p.parseCheckCommand()
+	case TokenGet:
+		return p.parseGetCommand()
 	case TokenUpdate:
 		return p.parseUpdateCommand()
 	case TokenRemove:

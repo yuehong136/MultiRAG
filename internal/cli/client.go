@@ -290,6 +290,10 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.InsertDatasetFromFile(cmd)
 	case "insert_metadata_from_file":
 		return c.InsertMetadataFromFile(cmd)
+	case "get_chunk":
+		return c.GetChunk(cmd)
+	case "list_metadata":
+		return c.ListMetadata(cmd)
 	case "update_chunk":
 		return c.UpdateChunk(cmd)
 	case "set_meta":

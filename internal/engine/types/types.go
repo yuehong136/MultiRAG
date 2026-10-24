@@ -31,6 +31,8 @@ type SearchRequest struct {
 
 	// Filtering
 	Filter map[string]interface{} // Filters for search
+	// IncludeUnavailable is for scoped administrative reads, never a retrieval default.
+	IncludeUnavailable bool
 
 	// Match expressions
 	MatchExprs []interface{} // List of match expressions: [matchText, matchDense, fusionExpr]

@@ -118,45 +118,32 @@ func (h *ChunkHandler) SearchDatasets(c *gin.Context) {
 	})
 }
 
-// Get retrieves a single chunk by ID
-// @Summary Get Chunk
-// @Description Get a single chunk by its ID
-// @Tags chunks
-// @Produce json
-// @Param chunk_id query string true "chunk id"
-// @Success 200 {object} map[string]interface{}
-// @Router /v1/chunk/get [get]
+// Get handles GET /api/v1/datasets/:dataset_id/documents/:document_id/chunks/:chunk_id.
 func (h *ChunkHandler) Get(c *gin.Context) {
-	user, errorCode, errorMessage := GetUser(c)
-	if errorCode != common.CodeSuccess {
-		jsonError(c, errorCode, errorMessage)
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
 		return
 	}
-
-	chunkID := c.Query("chunk_id")
-	if chunkID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "chunk_id is required",
-		})
+	req := &service.GetChunkRequest{DatasetID: c.Param("dataset_id"), DocumentID: c.Param("document_id"), ChunkID: c.Param("chunk_id")}
+	response, err := h.chunkService.Get(c.Request.Context(), req, user.ID)
+	if errors.Is(err, service.ErrInvalidChunkScope) {
+		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
-
-	req := &service.GetChunkRequest{ChunkID: chunkID}
-	resp, err := h.chunkService.Get(req, user.ID)
+	if errors.Is(err, service.ErrDatasetAccessDenied) {
+		jsonError(c, common.CodeForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrChunkNotFound) {
+		jsonError(c, common.CodeNotFound, err.Error())
+		return
+	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": err.Error(),
-		})
+		jsonError(c, common.CodeServerError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"data":    resp.Chunk,
-		"message": "success",
-	})
+	jsonResponse(c, common.CodeSuccess, response.Chunk, "success")
 }
 
 // List lists the chunks of a document
@@ -326,12 +313,18 @@ func (h *ChunkHandler) UpdateChunk(c *gin.Context) {
 	req.DocumentID = documentID
 	req.ChunkID = chunkID
 
-	err := h.chunkService.UpdateChunk(&req, user.ID)
+	err := h.chunkService.UpdateChunk(c.Request.Context(), &req, user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": err.Error(),
-		})
+		code := common.CodeServerError
+		switch {
+		case errors.Is(err, service.ErrDatasetAccessDenied):
+			code = common.CodeForbidden
+		case errors.Is(err, service.ErrChunkNotFound):
+			code = common.CodeNotFound
+		case errors.Is(err, service.ErrInvalidChunkScope):
+			code = common.CodeDataError
+		}
+		jsonError(c, code, err.Error())
 		return
 	}
 
@@ -374,12 +367,18 @@ func (h *ChunkHandler) Remove(c *gin.Context) {
 		return
 	}
 
-	deletedCount, err := h.chunkService.RemoveChunks(&req, user.ID)
+	deletedCount, err := h.chunkService.RemoveChunks(c.Request.Context(), &req, user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": err.Error(),
-		})
+		code := common.CodeServerError
+		switch {
+		case errors.Is(err, service.ErrDatasetAccessDenied):
+			code = common.CodeForbidden
+		case errors.Is(err, service.ErrChunkNotFound):
+			code = common.CodeNotFound
+		case errors.Is(err, service.ErrInvalidChunkScope):
+			code = common.CodeDataError
+		}
+		jsonError(c, code, err.Error())
 		return
 	}
 

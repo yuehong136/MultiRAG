@@ -19,16 +19,31 @@ package elasticsearch
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"multirag/internal/engine/types"
 )
 
 // GetChunk gets a chunk by ID from an Elasticsearch index.
 func (e *elasticsearchEngine) GetChunk(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error) {
+	if len(kbIDs) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(indexName) == "" || strings.TrimSpace(chunkID) == "" {
+		return nil, fmt.Errorf("index and chunk IDs are required")
+	}
+	seen := map[string]bool{}
+	for _, id := range kbIDs {
+		if strings.TrimSpace(id) == "" || seen[id] {
+			return nil, fmt.Errorf("distinct non-empty dataset IDs are required")
+		}
+		seen[id] = true
+	}
 	searchReq := &types.SearchRequest{
-		IndexNames: []string{indexName},
-		KbIDs:      kbIDs,
-		Limit:      1,
+		IndexNames:         []string{indexName},
+		KbIDs:              kbIDs,
+		Limit:              1,
+		IncludeUnavailable: true,
 		Filter: map[string]interface{}{
 			"id": chunkID,
 		},

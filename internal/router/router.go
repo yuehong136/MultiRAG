@@ -166,6 +166,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 				datasets.DELETE("", r.datasetsHandler.DeleteDatasets)
 				datasets.POST("/search", r.chunkHandler.SearchDatasets)
 				datasets.GET("/:dataset_id/documents", r.documentHandler.ListDatasetDocuments)
+				datasets.GET("/:dataset_id/documents/:document_id/chunks/:chunk_id", r.chunkHandler.Get)
+				datasets.GET("/metadata/flattened", r.datasetsHandler.ListMetadataFlattened)
+				datasets.DELETE("/:dataset_id/tags", r.datasetsHandler.RemoveTags)
 			}
 
 			// Author routes
@@ -296,7 +299,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 			kbByID := kb.Group("/:kb_id")
 			{
 				kbByID.GET("/tags", r.knowledgebaseHandler.ListTags)
-				authorized.POST("/api/v1/kb/:kb_id/rm_tags", r.knowledgebaseHandler.RemoveTags)
 				kbByID.POST("/rename_tag", r.knowledgebaseHandler.RenameTag)
 				kbByID.GET("/knowledge_graph", r.knowledgebaseHandler.KnowledgeGraph)
 				kbByID.DELETE("/knowledge_graph", r.knowledgebaseHandler.DeleteKnowledgeGraph)
@@ -314,7 +316,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// Chunk routes
 		chunk := authorized.Group("/v1/chunk")
 		{
-			authorized.GET("/api/v1/chunk/get", r.chunkHandler.Get)
 			chunk.POST("/list", r.chunkHandler.List)
 			authorized.POST("/api/v1/chunk/update", r.chunkHandler.UpdateChunk) // Internal API only for GO
 			authorized.POST("/api/v1/chunk/rm", r.chunkHandler.Remove)

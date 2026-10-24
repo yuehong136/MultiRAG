@@ -66,7 +66,7 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 	// Build filter clauses (default: available=1, meaning available_int >= 1)
 	// Reference: rag/utils/es_conn.py L60-L78
 	filterClauses := buildFilterClauses(req.KbIDs, 1)
-	if _, explicit := req.Filter["available_int"]; explicit {
+	if _, explicit := req.Filter["available_int"]; explicit || req.IncludeUnavailable {
 		filterClauses = nil
 		if len(req.KbIDs) > 0 {
 			filterClauses = append(filterClauses, map[string]interface{}{"terms": map[string]interface{}{"kb_id": req.KbIDs}})

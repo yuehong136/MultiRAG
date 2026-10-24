@@ -1599,31 +1599,19 @@ func (c *MultiRAGClient) UpdateChunk(cmd *Command) (ResponseIf, error) {
 	}
 
 	// Look up dataset_id from dataset_name
-	datasetID, err := c.getDatasetID(datasetName)
+	datasetID, err := c.documentDatasetID(datasetName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dataset ID: %w", err)
 	}
 
-	// Try to get doc_id from the chunk get endpoint
-	getResp, err := c.HTTPClient.Request("GET", "/chunk/get?chunk_id="+chunkID, "web", nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get chunk info: %w", err)
+	docID, _ := cmd.Params["doc_id"].(string)
+	if strings.TrimSpace(docID) == "" {
+		return nil, fmt.Errorf("document ID is required")
 	}
-
-	var docID string
-	if getResp.StatusCode == 200 {
-		getJSON, err := getResp.JSON()
-		if err == nil {
-			if data, ok := getJSON["data"].(map[string]interface{}); ok {
-				if d, ok := data["doc_id"].(string); ok {
-					docID = d
-				}
-			}
-		}
-	}
-
-	if docID == "" {
-		return nil, fmt.Errorf("could not find document_id for chunk %s. Please provide document_id explicitly", chunkID)
+	getCommand := NewCommand("get_chunk")
+	getCommand.Params["chunk_id"], getCommand.Params["doc_id"], getCommand.Params["dataset_name"] = chunkID, docID, datasetID
+	if _, err := c.GetChunk(getCommand); err != nil {
+		return nil, fmt.Errorf("read chunk before update: %w", err)
 	}
 
 	// Parse the JSON body
@@ -1631,95 +1619,29 @@ func (c *MultiRAGClient) UpdateChunk(cmd *Command) (ResponseIf, error) {
 	if err := json.Unmarshal([]byte(jsonBody), &payload); err != nil {
 		return nil, fmt.Errorf("invalid JSON body: %w", err)
 	}
+	if payload == nil {
+		return nil, fmt.Errorf("chunk update must be a JSON object")
+	}
 
 	// Add IDs to payload
 	payload["dataset_id"] = datasetID
 	payload["document_id"] = docID
 	payload["chunk_id"] = chunkID
 
-	resp, err := c.HTTPClient.Request("POST", "/chunk/update", "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/chunk/update", "api", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update chunk: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to update chunk: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("update chunk", resp); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to update chunk: %s", chunkID)
-	} else {
-		result.Message = fmt.Sprintf("Failed to update chunk: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: fmt.Sprintf("Chunk %s updated", chunkID)}, nil
 }
 
 // RmTags removes tags from chunks in a dataset
 func (c *MultiRAGClient) RmTags(cmd *Command) (ResponseIf, error) {
-	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
-	}
-
-	datasetName, ok := cmd.Params["dataset_name"].(string)
-	if !ok {
-		return nil, fmt.Errorf("dataset_name not provided")
-	}
-
-	kbID, err := c.getDatasetID(datasetName)
-	if err != nil {
-		return nil, err
-	}
-
-	tags, ok := cmd.Params["tags"].([]string)
-	if !ok {
-		return nil, fmt.Errorf("tags not provided")
-	}
-
-	payload := map[string]interface{}{
-		"tags": tags,
-	}
-
-	resp, err := c.HTTPClient.Request("POST", "/kb/"+kbID+"/rm_tags", "web", nil, payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to remove tags: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to remove tags: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
-	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to remove tags from dataset: %s", kbID)
-	} else {
-		result.Message = fmt.Sprintf("Failed to remove tags: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return c.removeDatasetTags(cmd)
 }
 
 // SetMeta sets (merges) metadata for a document
@@ -1795,41 +1717,19 @@ func (c *MultiRAGClient) RemoveChunks(cmd *Command) (ResponseIf, error) {
 		payload["chunk_ids"] = chunkIDs
 	}
 
-	resp, err := c.HTTPClient.Request("POST", "/chunk/rm", "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", "/chunk/rm", "api", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove chunks: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to remove chunks: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("remove chunks", resp); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	var envelope struct {
+		Data *int64 `json:"data"`
 	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
+	if err := json.Unmarshal(resp.Body, &envelope); err != nil || envelope.Data == nil || *envelope.Data < 0 {
+		return nil, fmt.Errorf("invalid chunk deletion count")
 	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		deletedCount := int64(0)
-		switch data := resJSON["data"].(type) {
-		case float64:
-			deletedCount = int64(data)
-		case map[string]interface{}:
-			if count, ok := data["deleted_count"].(float64); ok {
-				deletedCount = int64(count)
-			}
-		}
-		result.Message = fmt.Sprintf("Success to remove chunks from document %s: %d chunks deleted", docID, deletedCount)
-	} else {
-		result.Message = fmt.Sprintf("Failed to remove chunks: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: fmt.Sprintf("%d chunks deleted from %s", *envelope.Data, docID)}, nil
 }

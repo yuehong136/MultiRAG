@@ -37,6 +37,42 @@ go build -o multirag_cli ./cmd/multirag_cli.go
 Connection flags: `-h host[:port]`, `-u/--user`, `-p/--password`, `-t/--token`,
 `-f/--config <multirag.yml>`, `-o/--output table|plain|json`, `--admin`.
 
+### Dataset chunks and metadata
+
+User-mode chunk reads and updates require the dataset and document identity.
+Dataset references may be UUID1 IDs or exact, unambiguous names. Statements use
+a terminating semicolon; single-command mode adds one when omitted.
+
+```sql
+GET CHUNK 'chunk-id' OF DATASET 'knowledge' DOCUMENT 'document-id';
+LIST METADATA OF DATASET 'knowledge' 'another dataset';
+UPDATE CHUNK 'chunk-id' OF DATASET 'knowledge' DOCUMENT 'document-id' SET '{"content":"updated","available":false}';
+REMOVE TAGS 'obsolete', 'old' FROM DATASET 'knowledge';
+REMOVE CHUNKS 'chunk-one' 'chunk-two' FROM DOCUMENT 'document-id';
+```
+
+`GET CHUNK` uses the dataset/document path and includes disabled chunks while
+retrieval retains its availability filter. Metadata requires authorization for
+every requested dataset and returns field/value/document mappings; `-o json`
+preserves this object, while table/plain output lists its values deterministically.
+Chunk IDs in `REMOVE CHUNKS` are space separated. Tag removal uses the dataset
+REST endpoint and validates the full tag list before writing. Store errors are
+returned to the caller; multiple tag removals may partly complete on a later
+storage failure, so retrying the same tags is supported.
+
+For a configured local document-parser provider, model declarations accept
+`DOC_PARSE`. File submission and task polling keep the standard syntax:
+
+```sql
+ADD MODEL 'pipeline' TO PROVIDER 'mineru_local' INSTANCE 'one' WITH DOC_PARSE TOKENS 8192;
+PARSE WITH 'pipeline@one@mineru_local' FILE './document.pdf';
+SHOW 'one@mineru_local' TASK 'task-id';
+```
+
+The local parser requires a configured instance URL. Submission returns a pending
+task; poll the task for completed segments. Its URL submission and task listing
+capabilities remain unavailable.
+
 ## Architecture
 
 ```

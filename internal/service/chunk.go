@@ -50,11 +50,19 @@ type ChunkService struct {
 }
 
 // NewChunkService creates chunk service
-func NewChunkService() *ChunkService {
+func NewChunkService(documentEngines ...engine.DocEngine) *ChunkService {
 	cfg := server.GetConfig()
+	var engineType server.EngineType
+	if cfg != nil {
+		engineType = cfg.DocEngine.Type
+	}
+	store := engine.Get()
+	if len(documentEngines) > 0 {
+		store = documentEngines[0]
+	}
 	return &ChunkService{
-		docEngine:      engine.Get(),
-		engineType:     cfg.DocEngine.Type,
+		docEngine:      store,
+		engineType:     engineType,
 		embeddingCache: utility.NewEmbeddingLRU(1000), // default capacity
 		kbDAO:          dao.NewKnowledgebaseDAO(),
 		userTenantDAO:  dao.NewUserTenantDAO(),
@@ -473,101 +481,110 @@ func buildRetrievalTestResults(chunks []map[string]interface{}) []map[string]int
 
 // GetChunkRequest request for getting a single chunk
 type GetChunkRequest struct {
-	ChunkID string `json:"chunk_id"`
+	ChunkID    string `json:"chunk_id"`
+	DatasetID  string `json:"dataset_id"`
+	DocumentID string `json:"document_id"`
 }
 
 // GetChunkResponse response for getting a single chunk
 type GetChunkResponse struct {
-	Chunk map[string]interface{} `json:"chunk"`
+	Chunk    map[string]interface{} `json:"chunk"`
+	tenantID string
 }
 
-// Get retrieves a single chunk by ID across the user's accessible tenants.
-func (s *ChunkService) Get(req *GetChunkRequest, userID string) (*GetChunkResponse, error) {
+var ErrChunkNotFound = errors.New("chunk not found in the requested document")
+var ErrInvalidChunkScope = errors.New("dataset, document and chunk IDs are required")
+
+// Get reads only the authorized dataset and validates the stored document binding.
+func (s *ChunkService) Get(ctx context.Context, req *GetChunkRequest, userID string) (*GetChunkResponse, error) {
+	if req == nil || strings.TrimSpace(req.ChunkID) == "" || strings.TrimSpace(req.DocumentID) == "" || strings.TrimSpace(req.DatasetID) == "" {
+		return nil, ErrInvalidChunkScope
+	}
+	datasetID, err := normalizeDatasetUUID1(req.DatasetID)
+	if err != nil {
+		return nil, ErrInvalidChunkScope
+	}
+	kb, err := s.kbDAO.GetReadableByID(ctx, datasetID, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrDatasetAccessDenied
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authorize dataset: %w", err)
+	}
+	if kb.ID == "" || strings.TrimSpace(kb.TenantID) == "" {
+		return nil, fmt.Errorf("authorized dataset identity is missing")
+	}
+	var doc entity.Document
+	err = dao.DB.WithContext(ctx).Where("id = ? AND kb_id = ? AND status = ?", req.DocumentID, kb.ID, string(entity.StatusValid)).First(&doc).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrChunkNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read document: %w", err)
+	}
 	if s.docEngine == nil {
 		return nil, fmt.Errorf("doc engine not initialized")
 	}
-	if req.ChunkID == "" {
-		return nil, fmt.Errorf("chunk_id is required")
-	}
-
-	ctx := context.Background()
-
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	raw, err := s.docEngine.GetChunk(ctx, "multirag_"+kb.TenantID, req.ChunkID, []string{kb.ID})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user tenants: %w", err)
+		return nil, fmt.Errorf("read chunk: %w", err)
 	}
-	if len(tenants) == 0 {
-		return nil, fmt.Errorf("user has no accessible tenants")
+	if raw == nil {
+		return nil, ErrChunkNotFound
 	}
-
-	var chunk map[string]interface{}
-	for _, tenant := range tenants {
-		kbIDs, err := s.kbDAO.GetKBIDsByTenantID(tenant.TenantID)
-		if err != nil {
+	c, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid stored chunk object")
+	}
+	if c["id"] != req.ChunkID || c["doc_id"] != doc.ID {
+		return nil, ErrChunkNotFound
+	}
+	scopes, _, err := types.ConditionValues(c["kb_id"])
+	if err != nil || len(scopes) != 1 || scopes[0] != kb.ID {
+		return nil, fmt.Errorf("stored chunk dataset identity mismatch")
+	}
+	// Format to match Python output
+	result := make(map[string]interface{})
+	skipFields := map[string]bool{
+		"authors": true, "_id": true, "_score": true, "SCORE": true,
+	}
+	for k, v := range c {
+		if skipFields[k] || strings.HasSuffix(k, "_vec") || strings.Contains(k, "_sm_") || strings.HasSuffix(k, "_tks") || strings.HasSuffix(k, "_ltks") {
 			continue
 		}
-
-		indexName := fmt.Sprintf("multirag_%s", tenant.TenantID)
-
-		doc, err := s.docEngine.GetChunk(ctx, indexName, req.ChunkID, kbIDs)
-		if err != nil {
-			continue
-		}
-		if doc == nil {
-			continue
-		}
-		c, ok := doc.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Format to match Python output
-		result := make(map[string]interface{})
-		skipFields := map[string]bool{
-			"id": true, "authors": true, "_score": true, "SCORE": true,
-		}
-		for k, v := range c {
-			if skipFields[k] || strings.HasSuffix(k, "_vec") || strings.Contains(k, "_sm_") || strings.HasSuffix(k, "_tks") || strings.HasSuffix(k, "_ltks") {
-				continue
-			}
-			switch k {
-			case "content":
-				result["content_with_weight"] = v
-			case "docnm":
-				result["docnm_kwd"] = v
-			case "important_keywords":
-				utility.SetFieldArray(result, "important_kwd", v)
-			case "questions":
-				utility.SetFieldArray(result, "question_kwd", v)
-			case "entities_kwd", "entity_kwd", "entity_type_kwd", "from_entity_kwd",
-				"name_kwd", "raptor_kwd", "removed_kwd", "source_id", "tag_kwd",
-				"to_entity_kwd", "toc_kwd", "authors_tks", "doc_type_kwd":
-				if utility.IsEmpty(v) {
-					result[k] = []interface{}{}
-				} else {
-					result[k] = v
-				}
-			case "tag_feas":
-				if utility.IsEmpty(v) {
-					result[k] = map[string]interface{}{}
-				} else {
-					result[k] = v
-				}
-			case "create_timestamp_flt", "rank_flt", "weight_flt":
-				if floatVal, ok := utility.ToFloat64(v); ok {
-					result[k] = utility.JSONFloat64(floatVal)
-				}
-			default:
+		switch k {
+		case "content":
+			result["content_with_weight"] = v
+		case "docnm":
+			result["docnm_kwd"] = v
+		case "important_keywords":
+			utility.SetFieldArray(result, "important_kwd", v)
+		case "questions":
+			utility.SetFieldArray(result, "question_kwd", v)
+		case "entities_kwd", "entity_kwd", "entity_type_kwd", "from_entity_kwd",
+			"name_kwd", "raptor_kwd", "removed_kwd", "source_id", "tag_kwd",
+			"to_entity_kwd", "toc_kwd", "authors_tks", "doc_type_kwd":
+			if utility.IsEmpty(v) {
+				result[k] = []interface{}{}
+			} else {
 				result[k] = v
 			}
+		case "tag_feas":
+			if utility.IsEmpty(v) {
+				result[k] = map[string]interface{}{}
+			} else {
+				result[k] = v
+			}
+		case "create_timestamp_flt", "rank_flt", "weight_flt":
+			if floatVal, ok := utility.ToFloat64(v); ok {
+				result[k] = utility.JSONFloat64(floatVal)
+			}
+		default:
+			result[k] = v
 		}
-		return &GetChunkResponse{Chunk: result}, nil
 	}
-
-	if chunk == nil {
-		return nil, fmt.Errorf("chunk not found")
-	}
-	return &GetChunkResponse{Chunk: chunk}, nil
+	result["id"], result["doc_id"], result["kb_id"] = req.ChunkID, doc.ID, kb.ID
+	return &GetChunkResponse{Chunk: result, tenantID: kb.TenantID}, nil
 }
 
 // ListChunksRequest request for listing chunks of a document
@@ -775,61 +792,17 @@ type UpdateChunkRequest struct {
 }
 
 // UpdateChunk updates a chunk's fields
-func (s *ChunkService) UpdateChunk(req *UpdateChunkRequest, userID string) error {
-	if s.docEngine == nil {
-		return fmt.Errorf("doc engine not initialized")
+func (s *ChunkService) UpdateChunk(ctx context.Context, req *UpdateChunkRequest, userID string) error {
+	if req == nil {
+		return ErrInvalidChunkScope
 	}
-
-	if req.ChunkID == "" {
-		return fmt.Errorf("chunk_id is required")
-	}
-
-	ctx := context.Background()
-
-	// Get user's tenants
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	read, err := s.Get(ctx, &GetChunkRequest{DatasetID: req.DatasetID, DocumentID: req.DocumentID, ChunkID: req.ChunkID}, userID)
 	if err != nil {
-		return fmt.Errorf("failed to get user tenants: %w", err)
+		return err
 	}
-	if len(tenants) == 0 {
-		return fmt.Errorf("user has no accessible tenants")
-	}
-
-	// Find the tenant that owns this dataset
-	var targetTenantID string
-	for _, tenant := range tenants {
-		kb, err := s.kbDAO.GetByIDAndTenantID(req.DatasetID, tenant.TenantID)
-		if err == nil && kb != nil {
-			targetTenantID = tenant.TenantID
-			break
-		}
-	}
-	if targetTenantID == "" {
-		return fmt.Errorf("user does not have access to this dataset")
-	}
-
-	// Verify document belongs to dataset
-	docDAO := dao.NewDocumentDAO()
-	doc, err := docDAO.GetByID(req.DocumentID)
-	if err != nil || doc == nil {
-		return fmt.Errorf("document not found")
-	}
-	if doc.KbID != req.DatasetID {
-		return fmt.Errorf("document does not belong to this dataset")
-	}
-
-	// Fetch existing chunk first (like Python does)
-	indexName := fmt.Sprintf("multirag_%s", targetTenantID)
-	existingChunk, err := s.docEngine.GetChunk(ctx, indexName, req.ChunkID, []string{req.DatasetID})
-	if err != nil {
-		return fmt.Errorf("failed to get existing chunk: %w", err)
-	}
-
-	existing, ok := existingChunk.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("invalid chunk format")
-	}
-
+	existing := read.Chunk
+	datasetID := existing["kb_id"].(string)
+	indexName := "multirag_" + read.tenantID
 	// Build update dict like Python does (doc.py update_chunk)
 	d := make(map[string]interface{})
 
@@ -899,10 +872,11 @@ func (s *ChunkService) UpdateChunk(req *UpdateChunkRequest, userID string) error
 
 	// Call update
 	condition := map[string]interface{}{
-		"id": req.ChunkID,
+		"id":     req.ChunkID,
+		"doc_id": req.DocumentID,
 	}
 
-	err = s.docEngine.UpdateChunks(ctx, condition, d, indexName, req.DatasetID)
+	err = s.docEngine.UpdateChunks(ctx, condition, d, indexName, datasetID)
 	if err != nil {
 		return fmt.Errorf("failed to update chunk: %w", err)
 	}
@@ -920,48 +894,39 @@ type RemoveChunksRequest struct {
 // RemoveChunks removes chunks from the dataset table.
 // If ChunkIDs is empty and DeleteAll is true, removes all chunks for the document.
 // Otherwise removes only the specified chunks.
-func (s *ChunkService) RemoveChunks(req *RemoveChunksRequest, userID string) (int64, error) {
+func (s *ChunkService) RemoveChunks(ctx context.Context, req *RemoveChunksRequest, userID string) (int64, error) {
+	if req == nil || strings.TrimSpace(req.DocID) == "" {
+		return 0, ErrInvalidChunkScope
+	}
+	if (len(req.ChunkIDs) > 0) == req.DeleteAll {
+		return 0, fmt.Errorf("provide either chunk_ids or delete_all")
+	}
+	seen := map[string]bool{}
+	for _, id := range req.ChunkIDs {
+		if strings.TrimSpace(id) == "" || seen[id] {
+			return 0, fmt.Errorf("distinct non-empty chunk IDs required")
+		}
+		seen[id] = true
+	}
+	var doc entity.Document
+	err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", req.DocID, string(entity.StatusValid)).First(&doc).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, ErrChunkNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read document: %w", err)
+	}
+	kb, err := s.kbDAO.GetReadableByID(ctx, doc.KbID, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, ErrDatasetAccessDenied
+	}
+	if err != nil {
+		return 0, fmt.Errorf("authorize dataset: %w", err)
+	}
 	if s.docEngine == nil {
 		return 0, fmt.Errorf("doc engine not initialized")
 	}
-
-	if req.DocID == "" {
-		return 0, fmt.Errorf("doc_id is required")
-	}
-
-	ctx := context.Background()
-
-	// Get user's tenants
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get user tenants: %w", err)
-	}
-	if len(tenants) == 0 {
-		return 0, fmt.Errorf("user has no accessible tenants")
-	}
-
-	// Verify document exists and belongs to a dataset (do this first to get doc.KbID)
-	docDAO := dao.NewDocumentDAO()
-	doc, err := docDAO.GetByID(req.DocID)
-	if err != nil || doc == nil {
-		return 0, fmt.Errorf("document not found")
-	}
-
-	// Find the tenant that owns this document
-	var targetTenantID string
-	for _, tenant := range tenants {
-		kb, err := s.kbDAO.GetByIDAndTenantID(doc.KbID, tenant.TenantID)
-		if err == nil && kb != nil {
-			targetTenantID = tenant.TenantID
-			break
-		}
-	}
-	if targetTenantID == "" {
-		return 0, fmt.Errorf("user does not have access to this document")
-	}
-
-	indexName := fmt.Sprintf("multirag_%s", targetTenantID)
-
+	indexName := "multirag_" + kb.TenantID
 	// Build condition
 	condition := make(map[string]interface{})
 	switch {

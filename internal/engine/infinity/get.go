@@ -31,25 +31,26 @@ import (
 
 // GetChunk gets a chunk by ID
 func (e *infinityEngine) GetChunk(ctx context.Context, tableName, chunkID string, kbIDs []string) (interface{}, error) {
+	if len(kbIDs) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(chunkID) == "" {
+		return nil, fmt.Errorf("chunk ID is required")
+	}
+	tableNames := make([]string, 0, len(kbIDs))
+	seen := map[string]bool{}
+	for _, kbID := range kbIDs {
+		if err := validateChunkScope(tableName, kbID); err != nil {
+			return nil, err
+		}
+		if seen[kbID] {
+			return nil, fmt.Errorf("duplicate dataset scope")
+		}
+		seen[kbID] = true
+		tableNames = append(tableNames, buildChunkTableName(tableName, kbID))
+	}
 	if e.client == nil || e.client.conn == nil {
 		return nil, fmt.Errorf("Infinity client not initialized")
-	}
-
-	// Build list of table names to search
-	var tableNames []string
-	if strings.HasPrefix(tableName, "multirag_doc_meta_") {
-		tableNames = []string{tableName}
-	} else {
-		// Search in tables like <tableName>_<kb_id> for each kbID
-		if len(kbIDs) > 0 {
-			for _, kbID := range kbIDs {
-				tableNames = append(tableNames, buildChunkTableName(tableName, kbID))
-			}
-		}
-		// Also try the base tableName
-		if len(kbIDs) == 0 {
-			tableNames = append(tableNames, tableName)
-		}
 	}
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)

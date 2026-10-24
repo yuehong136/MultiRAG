@@ -110,6 +110,8 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return NewCommand("list_user_chats"), nil
 	case TokenDocuments:
 		return p.parseListDatasetDocuments()
+	case TokenMetadata:
+		return p.parseListMetadata()
 	case TokenFiles:
 		return p.parseListFiles()
 	case TokenQuotedString:
@@ -1513,68 +1515,29 @@ func (p *Parser) parseCheckCommand() (*Command, error) {
 	return cmd, nil
 }
 
-// Internal
-// parseUpdateCommand parses: UPDATE CHUNK 'chunk_id' OF DATASET 'dataset_name' SET '{"content": "..."}'
+// parseUpdateCommand shares the dataset/document/chunk identity with GET.
 func (p *Parser) parseUpdateCommand() (*Command, error) {
-	p.nextToken() // consume UPDATE
-
-	if p.curToken.Type == TokenChunk {
-		return p.parseUpdateChunk()
+	p.nextToken()
+	if p.curToken.Type != TokenChunk {
+		return nil, fmt.Errorf("expected CHUNK after UPDATE")
 	}
-
-	return nil, fmt.Errorf("unknown UPDATE target: %s", p.curToken.Value)
-}
-
-// parseUpdateChunk parses: UPDATE CHUNK 'chunk_id' OF DATASET 'dataset_name' SET '{"content": "..."}'
-func (p *Parser) parseUpdateChunk() (*Command, error) {
-	p.nextToken() // consume CHUNK
-
-	// Parse chunk_id
-	chunkID, err := p.parseQuotedString()
+	cmd, err := p.parseChunkIdentity("update_chunk")
 	if err != nil {
-		return nil, fmt.Errorf("expected chunk_id: %w", err)
+		return nil, err
 	}
-
-	cmd := NewCommand("update_chunk")
-	cmd.Params["chunk_id"] = chunkID
-
-	p.nextToken()
-	if p.curToken.Type != TokenOf {
-		return nil, fmt.Errorf("expected OF after chunk_id")
-	}
-	p.nextToken()
-
-	if p.curToken.Type != TokenDataset {
-		return nil, fmt.Errorf("expected DATASET after OF")
-	}
-	p.nextToken()
-
-	// Parse dataset_name
-	datasetName, err := p.parseQuotedString()
-	if err != nil {
-		return nil, fmt.Errorf("expected dataset_name: %w", err)
-	}
-	cmd.Params["dataset_name"] = datasetName
-
-	p.nextToken()
 	if p.curToken.Type != TokenSet {
-		return nil, fmt.Errorf("expected SET after dataset_name")
+		return nil, fmt.Errorf("expected SET after document ID")
 	}
 	p.nextToken()
-
-	// Parse JSON body
-	jsonBody, err := p.parseQuotedString()
+	body, err := p.parseQuotedString()
 	if err != nil {
-		return nil, fmt.Errorf("expected JSON body: %w", err)
+		return nil, err
 	}
-	cmd.Params["json_body"] = jsonBody
-
+	cmd.Params["json_body"] = body
 	p.nextToken()
-	// Semicolon is optional
-	if p.curToken.Type == TokenSemicolon {
-		p.nextToken()
+	if err := p.finishDatasetCommand(); err != nil {
+		return nil, err
 	}
-
 	return cmd, nil
 }
 
@@ -1639,16 +1602,16 @@ func (p *Parser) parseRemoveTags() (*Command, error) {
 	}
 	cmd.Params["dataset_name"] = datasetName
 
-	// Semicolon is optional
-	if p.curToken.Type == TokenSemicolon {
-		p.nextToken()
+	p.nextToken()
+	if err := p.finishDatasetCommand(); err != nil {
+		return nil, err
 	}
 
 	return cmd, nil
 }
 
 // parseRemoveChunk parses:
-//   - REMOVE CHUNKS 'chunk_id1', 'chunk_id2' FROM DOCUMENT 'doc_id';
+//   - REMOVE CHUNKS 'chunk_id1' 'chunk_id2' FROM DOCUMENT 'doc_id';
 //   - REMOVE ALL CHUNKS FROM DOCUMENT 'doc_id';
 func (p *Parser) parseRemoveChunk() (*Command, error) {
 	cmd := NewCommand("remove_chunks")
@@ -1664,27 +1627,27 @@ func (p *Parser) parseRemoveChunk() (*Command, error) {
 	} else {
 		// curToken is TokenChunks, consume it first
 		p.nextToken()
-		// Multiple chunks: REMOVE CHUNKS 'id1', 'id2' FROM DOCUMENT 'doc_id'
+		// Multiple quoted IDs separated by spaces.
 		// Parse first chunk ID
 		chunkID, err := p.parseQuotedString()
-		if err != nil {
-			return nil, fmt.Errorf("expected chunk_id: %w", err)
+		if err != nil || strings.TrimSpace(chunkID) == "" {
+			return nil, fmt.Errorf("non-empty chunk ID required")
 		}
 		chunkIDs := []string{chunkID}
 
-		// Parse additional chunk IDs separated by commas
-		for {
-			p.nextToken()
-			if p.curToken.Type == TokenComma {
-				p.nextToken()
-				chunkID, err := p.parseQuotedString()
-				if err != nil {
-					return nil, fmt.Errorf("expected chunk_id after comma: %w", err)
-				}
-				chunkIDs = append(chunkIDs, chunkID)
-			} else {
-				break
+		p.nextToken()
+		for p.curToken.Type == TokenQuotedString {
+			id, err := p.parseQuotedString()
+			if err != nil || strings.TrimSpace(id) == "" {
+				return nil, fmt.Errorf("non-empty chunk ID required")
 			}
+			for _, existing := range chunkIDs {
+				if existing == id {
+					return nil, fmt.Errorf("duplicate chunk ID")
+				}
+			}
+			chunkIDs = append(chunkIDs, id)
+			p.nextToken()
 		}
 		cmd.Params["chunk_ids"] = chunkIDs
 	}
@@ -1703,13 +1666,13 @@ func (p *Parser) parseRemoveChunk() (*Command, error) {
 
 	// Parse doc_id
 	docID, err := p.parseQuotedString()
-	if err != nil {
-		return nil, fmt.Errorf("expected doc_id: %w", err)
+	if err != nil || strings.TrimSpace(docID) == "" {
+		return nil, fmt.Errorf("non-empty document ID required")
 	}
 	cmd.Params["doc_id"] = docID
 	p.nextToken()
 
-	if err := p.expectSemicolon(); err != nil {
+	if err := p.finishDatasetCommand(); err != nil {
 		return nil, err
 	}
 
