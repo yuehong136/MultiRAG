@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from scripts.run_integration import main, parallel_arguments, selected_paths
+from scripts.run_integration import main, parallel_arguments, registered_overlay, selected_paths
 from tests.support import services
 from tests.support.integration_suites import DATABASE_TESTS, INTEGRATION, ROOT, required_services, suite_paths
 
@@ -200,6 +201,73 @@ def test_runner_reports_unselected_backends_and_restores_environment(tmp_path: P
     assert "tests/integration/test_infinity_available_filter.py" in report["unselected_paths"]
     assert os.environ["REQUIRE_SERVICES"] == "previous"
     assert os.environ.get("MULTIRAG_CONFIG_OVERLAY_FILE") == overlay
+
+
+def test_overlay_is_registered_before_creation_and_private_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_mkdir = Path.mkdir
+    observed: list[Path] = []
+
+    def mkdir(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path.name.startswith("multirag-integration-"):
+            records = [json.loads(p.read_text()) for p in tmp_path.glob("overlay-*.json")]
+            assert len(records) == 1 and records[0]["directory"] == str(path)
+            assert records[0]["status"] == "registered-before-creation"
+            observed.append(path)
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    manifest: dict[str, Any] = {}
+    with pytest.raises(RuntimeError, match="controlled interruption"), registered_overlay(tmp_path, manifest) as overlay:
+        assert overlay.stat().st_mode & 0o777 == 0o600
+        assert overlay.parent.stat().st_mode & 0o777 == 0o700
+        overlay.write_text('{"password":"private-test-secret"}')
+        raise RuntimeError("controlled interruption")
+    journal = Path(manifest["temporary_resource_journal"])
+    record = json.loads(journal.read_text())
+    assert record["pid"] == os.getpid() and record["started_unix_ns"] > 0
+    assert record["cleanup"] == {"overlay_absent": True, "directory_absent": True}
+    assert record["status"] == "cleaned" and len(record["overlay_sha256"]) == 64
+    assert "private-test-secret" not in journal.read_text()
+    assert len(observed) == 1 and not observed[0].exists()
+
+
+@pytest.mark.parametrize("termination", [signal.SIGTERM, signal.SIGKILL])
+def test_interrupted_overlay_is_cleaned_or_exactly_recoverable(tmp_path: Path, termination: int) -> None:
+    source = """
+import signal, sys
+from pathlib import Path
+from scripts.run_integration import registered_overlay
+with registered_overlay(Path(sys.argv[1]), {}) as overlay:
+    overlay.write_text('{"password":"private-child-secret"}')
+    print('ready', flush=True)
+    signal.pause()
+"""
+    child = subprocess.Popen([sys.executable, "-u", "-c", source, str(tmp_path)], env={**os.environ, "PYTHONPATH": str(ROOT)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout is not None and child.stdout.readline().strip() == "ready"
+        journal = next(tmp_path.glob("overlay-*.json"))
+        record = json.loads(journal.read_text())
+        assert record["pid"] == child.pid
+        overlay, directory = Path(record["overlay"]), Path(record["directory"])
+        child.send_signal(termination)
+        child.communicate(timeout=10)
+        record = json.loads(journal.read_text())
+        if termination == signal.SIGTERM:
+            assert child.returncode == 128 + signal.SIGTERM
+            assert record["status"] == "cleaned"
+            assert record["cleanup"] == {"overlay_absent": True, "directory_absent": True}
+        else:
+            assert child.returncode == -signal.SIGKILL and record["status"] == "created"
+            assert overlay.is_file() and directory.is_dir()
+            # Recovery acts only on this child's pre-registered paths.
+            overlay.unlink()
+            directory.rmdir()
+        assert not overlay.exists() and not directory.exists()
+        assert "private-child-secret" not in journal.read_text()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.communicate(timeout=10)
 
 
 def test_existing_service_is_probed_once_and_never_stopped(monkeypatch: pytest.MonkeyPatch) -> None:

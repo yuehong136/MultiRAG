@@ -5,23 +5,95 @@ Use ``make integration TESTS=tests/integration/test_async_engine.py`` or
 """
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
 import platform
 import shlex
+import signal
 import sys
 import tempfile
+import threading
 import time
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+import psutil
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tests.support import services
 from tests.support.integration_suites import ACCEPTANCE, EVALS, INTEGRATION, PARALLEL_TESTS, SUITES, required_services, suite_paths
+
+
+def _write_overlay_record(path: Path, record: dict[str, Any]) -> None:
+    """Persist ownership atomically without recording the private configuration."""
+    pending = path.with_suffix(".pending")
+    with open(pending, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+        json.dump(record, stream, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    pending.replace(path)
+
+
+@contextmanager
+def registered_overlay(report_dir: Path, manifest: dict[str, Any]) -> Iterator[Path]:
+    """Register the exact private paths before creation, including interrupted runs."""
+    identifier = uuid.uuid4().hex
+    directory = Path(tempfile.gettempdir()) / f"multirag-integration-{identifier}"
+    overlay = directory / "services.json"
+    journal = report_dir / f"overlay-{identifier}.json"
+    record: dict[str, Any] = {
+        "pid": os.getpid(),
+        "parent_pid": os.getppid(),
+        "process_started_unix": psutil.Process().create_time(),
+        "started_unix_ns": time.time_ns(),
+        "run_id": identifier,
+        "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "directory": str(directory),
+        "overlay": str(overlay),
+        "status": "registered-before-creation",
+    }
+    manifest["temporary_resource_journal"] = str(journal)
+    _write_overlay_record(journal, record)
+    previous = signal.getsignal(signal.SIGTERM)
+    handle_signals = threading.current_thread() is threading.main_thread()
+
+    def terminate(signum: int, _frame: Any) -> None:
+        raise SystemExit(128 + signum)
+
+    created_directory = False
+    created_overlay = False
+    try:
+        if handle_signals:
+            signal.signal(signal.SIGTERM, terminate)
+        directory.mkdir(mode=0o700)
+        created_directory = True
+        with open(overlay, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)):
+            created_overlay = True
+        record["status"] = "created"
+        _write_overlay_record(journal, record)
+        yield overlay
+    finally:
+        if handle_signals:
+            signal.signal(signal.SIGTERM, previous)
+        try:
+            if created_overlay and overlay.exists():
+                record["overlay_sha256"] = hashlib.sha256(overlay.read_bytes()).hexdigest()
+                overlay.unlink()
+            if created_directory:
+                directory.rmdir()
+        finally:
+            record["cleanup"] = {"overlay_absent": not overlay.exists(), "directory_absent": not directory.exists()}
+            record["status"] = "cleaned" if all(record["cleanup"].values()) else "cleanup-required"
+            _write_overlay_record(journal, record)
 
 
 def target_arguments(args: list[str]) -> list[str]:
@@ -171,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     from common.config_utils import CONFIGS
 
     try:
-        with services.ServiceManager(CONFIGS) as manager, tempfile.TemporaryDirectory(prefix="multirag-integration-") as directory:
+        with services.ServiceManager(CONFIGS) as manager, registered_overlay(report_dir, manifest) as overlay:
             services.ACTIVE_MANAGER = manager
             os.environ["REQUIRE_SERVICES"] = "1"
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -182,9 +254,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest["prepare_seconds"] = round(time.monotonic() - start, 4)
             # Typed config and child processes read overlays, while legacy code
             # reads CONFIGS. Keep them on exactly the same temporary endpoints.
-            overlay = Path(directory) / "services.json"
             overlay.write_text(json.dumps(CONFIGS))
-            overlay.chmod(0o600)
             os.environ["MULTIRAG_CONFIG_OVERLAY_FILE"] = str(overlay)
             hosts = service_hosts(CONFIGS)
             if options.suite == "eval-generation" and os.environ.get("MULTIRAG_EVAL_BASE_URL"):
@@ -197,6 +267,10 @@ def main(argv: list[str] | None = None) -> int:
 
             print(f"Integration suite={options.suite}; workers={workers}; services={','.join(required)}; reports={report_dir}", flush=True)
             manifest["exit_code"] = int(pytest.main(args))
+    except (KeyboardInterrupt, SystemExit) as exc:
+        manifest["exit_code"] = exc.code if isinstance(exc, SystemExit) and isinstance(exc.code, int) else 130
+        manifest["interruption"] = type(exc).__name__
+        raise
     except services.ServiceError as exc:
         # ServiceManager intentionally produces credential-free messages.
         print(str(exc), file=sys.stderr)
