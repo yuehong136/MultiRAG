@@ -84,10 +84,35 @@ def test_get_storage_error_propagates_and_returns_connection(failure: Exception)
     assert caught.value is failure and len(releases) == 1
 
 
-def test_get_metadata_table_and_quoted_id() -> None:
-    store, visited, releases, predicates = connection({"metadata": pd.DataFrame([{"id": "O'Reilly", "content": "body"}])})
-    assert store.get("O'Reilly", "metadata", [""])["id"] == "O'Reilly"
-    assert visited == ["metadata"] and predicates == ["id = 'O''Reilly'"] and len(releases) == 1
+def test_get_scoped_metadata_table_and_quoted_id() -> None:
+    store, visited, releases, predicates = connection({"multirag_doc_meta_tenant": pd.DataFrame([{"id": "O'Reilly", "kb_id": "kb'one", "content": "body"}])})
+    assert store.get("O'Reilly", "multirag_doc_meta_tenant", ["kb'one"])["id"] == "O'Reilly"
+    assert visited == ["multirag_doc_meta_tenant"] and predicates == ["id = 'O''Reilly' AND kb_id = 'kb''one'"] and len(releases) == 1
+
+
+@pytest.mark.parametrize("index_name", ["chunks", ["chunks"], "multirag_doc_meta_tenant"])
+def test_get_empty_scope_never_borrows_a_connection(index_name: str | list[str]) -> None:
+    store, visited, releases, _ = connection({})
+    store.connPool.get_conn = lambda: pytest.fail("empty scope borrowed a connection")
+    assert store.get("chunk", index_name, []) is None
+    assert visited == releases == []
+
+
+@pytest.mark.parametrize("scope", [[""], [" "], ["kb", ""], ["kb", "kb"]])
+def test_get_invalid_scope_fails_before_storage(scope: list[str]) -> None:
+    store, visited, releases, _ = connection({})
+    store.connPool.get_conn = lambda: pytest.fail("invalid scope borrowed a connection")
+    with pytest.raises(ValueError):
+        store.get("chunk", "chunks", scope)
+    assert visited == releases == []
+
+
+@pytest.mark.parametrize("index_name", ["", " ", [], [""]])
+def test_get_invalid_index_fails_before_storage(index_name: str | list[str]) -> None:
+    store, visited, releases, _ = connection({})
+    with pytest.raises(ValueError):
+        store.get("chunk", index_name, ["kb"])
+    assert visited == releases == []
 
 
 def test_chunk_detail_consumes_infinity_get_with_the_actual_index_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

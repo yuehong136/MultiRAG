@@ -293,8 +293,16 @@ class InfinityConnection(InfinityConnectionBase):
         return res, total_hits_count
 
     def get(self, chunk_id: str, index_name: str | list[str], knowledgebase_ids: list[str]) -> dict | None:
+        if not knowledgebase_ids:
+            return None
+        if not chunk_id.strip() or any(not kb_id.strip() for kb_id in knowledgebase_ids):
+            raise ValueError("Chunk and dataset IDs must be non-empty")
+        if len(set(knowledgebase_ids)) != len(knowledgebase_ids):
+            raise ValueError("Duplicate dataset scope")
         # REST chunk consumers pass the list returned by search.index_name().
         indices = [index_name] if isinstance(index_name, str) else index_name
+        if not indices or any(not index.strip() for index in indices):
+            raise ValueError("Index names must be non-empty")
         if len(indices) == 1:
             bindings = [(indices[0], kb_id) for kb_id in knowledgebase_ids]
         elif len(indices) == len(knowledgebase_ids):
@@ -308,8 +316,12 @@ class InfinityConnection(InfinityConnectionBase):
             df_list = []
             table_list = []
             for index, knowledgebase_id in bindings:
-                # Empty knowledgebaseId means use the index_name directly (metadata tables)
-                table_name = index if not knowledgebase_id else f"{index}_{knowledgebase_id}"
+                is_metadata = index.startswith("multirag_doc_meta_")
+                table_name = index if is_metadata else f"{index}_{knowledgebase_id}"
+                predicate = f"id = '{escaped_id}'"
+                if is_metadata:
+                    escaped_kb_id = knowledgebase_id.replace("'", "''")
+                    predicate += f" AND kb_id = '{escaped_kb_id}'"
                 table_list.append(table_name)
                 try:
                     table_instance = db_instance.get_table(table_name)
@@ -318,7 +330,7 @@ class InfinityConnection(InfinityConnectionBase):
                         raise
                     self.logger.warning(f"Table not found: {table_name}, this dataset isn't created in Infinity. Maybe it is created in other document engine.")
                     continue
-                kb_res, _ = table_instance.output(["*"]).filter(f"id = '{escaped_id}'").to_df()
+                kb_res, _ = table_instance.output(["*"]).filter(predicate).to_df()
                 self.logger.debug(f"INFINITY get table: {table_list!s}, result: {kb_res!s}")
                 df_list.append(kb_res)
         finally:

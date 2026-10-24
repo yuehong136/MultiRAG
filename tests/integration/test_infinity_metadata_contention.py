@@ -130,7 +130,7 @@ def test_concurrent_create_and_drop_with_independent_readback(
 
 def test_metadata_crud_preserves_json_and_returns_every_lease(metadata_store: tuple[Any, Any, TrackedPool]) -> None:
     store, reader, pool = metadata_store
-    table_name = "ragflow_doc_meta_contract"
+    table_name = "multirag_doc_meta_contract"
     original = {"category": "研发", "tags": ["one", "two"], "enabled": False, "rank": 0}
     replacement = {"category": "updated", "tags": [], "enabled": True}
     assert store.create_doc_meta_idx(table_name) is True
@@ -143,7 +143,10 @@ def test_metadata_crud_preserves_json_and_returns_every_lease(metadata_store: tu
         return json.loads(data["meta_fields"][0])
 
     assert read_metadata() == original
-    stored = store.get("doc", table_name, [""])
+    before = pool.acquired
+    assert store.get("doc", table_name, []) is None
+    assert pool.acquired == before
+    stored = store.get("doc", table_name, ["kb"])
     assert stored is not None and json.loads(stored["meta_fields"]) == original
     assert store.update({"id": "doc", "kb_id": "kb"}, {"meta_fields": replacement}, table_name, "") is True
     assert read_metadata() == replacement

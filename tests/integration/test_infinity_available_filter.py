@@ -111,6 +111,39 @@ def test_delete_only_matching_disabled_rows_with_independent_readback(infinity_s
     assert set(table.output(["id"]).to_result()[0]["id"]) == {"visible", "foreign"}
 
 
+def test_get_requires_scope_and_preserves_bound_table_identity(infinity_scratch: tuple[Any, Any]) -> None:
+    store, reader = infinity_scratch
+    database = store.connPool.get_conn().get_database(store.dbName)
+    raw = database.create_table("chunks", {"id": {"type": "varchar"}, "content": {"type": "varchar"}})
+    raw.insert([{"id": "raw-only", "content": "must not escape scope"}])
+    assert store.get("raw-only", "chunks", []) is None
+    for scope in [[""], [" "], ["kb", ""], ["kb", "kb"]]:
+        with pytest.raises(ValueError):
+            store.get("raw-only", "chunks", scope)
+    assert store.get("raw-only", "chunks", ["kb"]) is None
+    assert store.get("hidden", ["chunks"], ["kb"])["available_int"] == 0
+    database.get_table("chunks_kb").insert([{"id": "O'Reilly", "doc_id": "doc", "content": "quoted", "available_int": 1, "q_2_vec": [0.0, 1.0]}])
+    assert store.get("O'Reilly", "chunks", ["kb"])["content_with_weight"] == "quoted"
+    second = database.create_table("other_second", {"id": {"type": "varchar"}, "content": {"type": "varchar"}})
+    second.insert([{"id": "bound", "content": "second"}])
+    assert store.get("bound", ["chunks", "other"], ["kb", "second"])["content_with_weight"] == "second"
+    assert store.get("bound", ["chunks", "other"], ["second", "kb"]) is None
+    assert set(reader.output(["id"]).to_result()[0]["id"]) == {"hidden", "visible", "foreign", "O'Reilly"}
+
+
+def test_get_metadata_binds_dataset_inside_shared_tenant_table(infinity_scratch: tuple[Any, Any]) -> None:
+    store, _ = infinity_scratch
+    database = store.connPool.get_conn().get_database(store.dbName)
+    table_name = "multirag_doc_meta_tenant"
+    table = database.create_table(table_name, {"id": {"type": "varchar"}, "kb_id": {"type": "varchar"}, "meta_fields": {"type": "varchar"}})
+    table.insert([{"id": "same", "kb_id": "one", "meta_fields": '{"source":"one"}'}, {"id": "same", "kb_id": "two", "meta_fields": '{"source":"two"}'}])
+    assert store.get("same", table_name, []) is None
+    assert store.get("same", table_name, ["absent"]) is None
+    assert store.get("same", table_name, ["one"])["meta_fields"] == '{"source":"one"}'
+    assert store.get("same", table_name, ["two"])["meta_fields"] == '{"source":"two"}'
+    assert table.output(["id"]).to_result()[0]["id"] == ["same", "same"]
+
+
 @pytest.mark.parametrize("fusion", [False, True])
 def test_vector_scope_does_not_require_a_lexical_match(infinity_scratch: tuple[Any, Any], fusion: bool) -> None:
     store, reader = infinity_scratch
