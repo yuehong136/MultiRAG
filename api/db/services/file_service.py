@@ -561,6 +561,8 @@ class FileService(CommonService):
             try:
                 doc = DocumentService.get_by_id(db, doc_id)
                 if not doc:
+                    if delete_preconditions is not None:
+                        continue
                     raise Exception("Document not found!")
                 tenant_id = DocumentService.get_tenant_id(db, doc_id)
                 if not tenant_id:

@@ -339,3 +339,14 @@ def test_conditional_delete_skips_table_and_folder_writes_when_revision_changed(
 def test_conditional_delete_never_falls_back_to_unconditional_missing_precondition() -> None:
     with pytest.raises(ValueError, match="every document"):
         FileService.delete_docs(_build_session(), ["doc-1"], "tenant-1", delete_preconditions={})
+
+
+def test_conditional_delete_ignores_document_removed_by_another_deleter(monkeypatch: pytest.MonkeyPatch) -> None:
+    precondition = DocumentDeletePrecondition("kb-1", "s3", 7, None, "hash")
+    monkeypatch.setattr(DocumentService, "get_by_id", lambda *_: None)
+    forbidden = MagicMock(side_effect=AssertionError("missing conditional target caused writes"))
+    monkeypatch.setattr(FileService, "get_root_folder", forbidden)
+    monkeypatch.setattr(DocumentService, "get_tenant_id", forbidden)
+    monkeypatch.setattr(DocumentService, "remove_document", forbidden)
+    assert FileService.delete_docs(_build_session(), ["doc-1"], "tenant-1", delete_preconditions={"doc-1": precondition}) == ""
+    forbidden.assert_not_called()
