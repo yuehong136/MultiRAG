@@ -20,7 +20,7 @@
 #include "../encoding.h"
 
 #define INITIAL_DICTIONARY_SIZE 1024
-#define ENTRY_BUFF_SIZE 128
+#define ENTRY_BUFF_SIZE 4096
 #define ENTRY_WBUFF_SIZE ENTRY_BUFF_SIZE / sizeof(size_t)
 
 struct _text_dictionary {
@@ -68,11 +68,14 @@ int parse_entry(const char *buff, entry *entry_i) {
         ucs4_buff = utf8_to_ucs4(buff, length);
         if (ucs4_buff == (ucs4_t *)-1) {
             /* 發生錯誤 回退內存申請 */
-            ssize_t i;
-            for (i = value_i - 1; i >= 0; --i)
-                free(entry_i->value[i]);
+            while (value_i > 0) {
+                free(entry_i->value[--value_i]);
+                entry_i->value[value_i] = NULL;
+            }
             free(entry_i->value);
+            entry_i->value = NULL;
             free(entry_i->key);
+            entry_i->key = NULL;
             return -1;
         }
 
@@ -81,6 +84,9 @@ int parse_entry(const char *buff, entry *entry_i) {
         free(ucs4_buff);
     }
 
+    /* An exact power-of-two value count still needs a separate terminator slot. */
+    if (value_i >= value_count)
+        value_count = value_i + 1;
     entry_i->value = (ucs4_t **)realloc(entry_i->value, value_count * sizeof(ucs4_t *));
     entry_i->value[value_i] = NULL;
 
@@ -95,22 +101,33 @@ dictionary_t dictionary_text_open(const char *filename) {
     text_dictionary->lexicon = (entry *)malloc(sizeof(entry) * text_dictionary->entry_count);
     text_dictionary->word_buff = NULL;
 
-    static char buff[ENTRY_BUFF_SIZE];
+    char buff[ENTRY_BUFF_SIZE];
 
     FILE *fp = fopen(filename, "rb");
     if (fp == NULL) {
+        text_dictionary->entry_count = 0;
         dictionary_text_close((dictionary_t)text_dictionary);
         return (dictionary_t)-1;
     }
 
     size_t i = 0;
     while (fgets(buff, ENTRY_BUFF_SIZE, fp)) {
+        /* Never parse a partial entry or reinterpret its tail as another entry. */
+        size_t buff_len = strlen(buff);
+        if (buff_len == ENTRY_BUFF_SIZE - 1 && buff[buff_len - 1] != '\n') {
+            int c;
+            while ((c = fgetc(fp)) != '\n' && c != EOF)
+                ;
+            continue;
+        }
+
         if (i >= text_dictionary->entry_count) {
             text_dictionary->entry_count += text_dictionary->entry_count;
             text_dictionary->lexicon = (entry *)realloc(text_dictionary->lexicon, sizeof(entry) * text_dictionary->entry_count);
         }
 
         if (parse_entry(buff, text_dictionary->lexicon + i) == -1) {
+            fclose(fp);
             text_dictionary->entry_count = i;
             dictionary_text_close((dictionary_t)text_dictionary);
             return (dictionary_t)-1;
@@ -129,7 +146,8 @@ dictionary_t dictionary_text_open(const char *filename) {
     text_dictionary->lexicon = (entry *)realloc(text_dictionary->lexicon, sizeof(entry) * text_dictionary->entry_count);
     text_dictionary->word_buff = (ucs4_t *)malloc(sizeof(ucs4_t) * (text_dictionary->max_length + 1));
 
-    qsort(text_dictionary->lexicon, text_dictionary->entry_count, sizeof(text_dictionary->lexicon[0]), qsort_entry_cmp);
+    if (text_dictionary->entry_count > 1)
+        qsort(text_dictionary->lexicon, text_dictionary->entry_count, sizeof(text_dictionary->lexicon[0]), qsort_entry_cmp);
 
     return (dictionary_t)text_dictionary;
 }
