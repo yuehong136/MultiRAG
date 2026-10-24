@@ -265,11 +265,14 @@ class Retrieval(ToolBase, ABC):
 
                 return await asyncio.to_thread(read_ids)
 
-            def _resolve_manual_filter(flt: dict) -> dict:
+            def _resolve_manual_filter(flt: dict[str, Any]) -> dict[str, Any]:
+                # Keep the variable expression reusable across Iteration rounds,
+                # even when the caller passes the configured filter directly.
+                resolved = dict(flt)
                 pat = re.compile(self.variable_ref_patt)
                 s = flt.get("value", "")
                 if not isinstance(s, str):
-                    return flt
+                    return resolved
                 out_parts = []
                 last = 0
 
@@ -289,12 +292,17 @@ class Retrieval(ToolBase, ABC):
                     else:
                         rep = json.dumps(v, ensure_ascii=False)
 
-                    out_parts.append(rep)
+                    # The shared pattern also consumes spaces outside braces.
+                    # Preserve those literal separators around the replacement.
+                    matched = m.group(0)
+                    leading = matched[: len(matched) - len(matched.lstrip(" "))]
+                    trailing = matched[len(matched.rstrip(" ")) :]
+                    out_parts.append(leading + rep + trailing)
                     last = m.end()
 
                 out_parts.append(s[last:])
-                flt["value"] = "".join(out_parts)
-                return flt
+                resolved["value"] = "".join(out_parts)
+                return resolved
 
             chat_mdl = None
             if self._param.meta_data_filter.get("method") in ["auto", "semi_auto"]:
