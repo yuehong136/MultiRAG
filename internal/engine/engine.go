@@ -66,6 +66,12 @@ type DocEngine interface {
 	Close() error
 }
 
+// ManagementChunkReader explicitly opts into reading disabled chunks after SQL
+// authorization. Ordinary GetChunk callers retain the engine's retrieval policy.
+type ManagementChunkReader interface {
+	GetChunkForManagement(ctx context.Context, baseName, chunkID string, datasetIDs []string) (interface{}, error)
+}
+
 // Type returns the engine type (helper method for runtime type checking)
 // This is a workaround since we can't import elasticsearch or infinity packages directly
 func Type(docEngine DocEngine) EngineType {

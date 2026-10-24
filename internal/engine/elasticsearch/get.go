@@ -26,6 +26,14 @@ import (
 
 // GetChunk gets a chunk by ID from an Elasticsearch index.
 func (e *elasticsearchEngine) GetChunk(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error) {
+	return e.getChunk(ctx, indexName, chunkID, kbIDs, false)
+}
+
+func (e *elasticsearchEngine) GetChunkForManagement(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error) {
+	return e.getChunk(ctx, indexName, chunkID, kbIDs, true)
+}
+
+func (e *elasticsearchEngine) getChunk(ctx context.Context, indexName, chunkID string, kbIDs []string, includeUnavailable bool) (interface{}, error) {
 	if len(kbIDs) == 0 {
 		return nil, nil
 	}
@@ -43,7 +51,7 @@ func (e *elasticsearchEngine) GetChunk(ctx context.Context, indexName, chunkID s
 		IndexNames:         []string{indexName},
 		KbIDs:              kbIDs,
 		Limit:              1,
-		IncludeUnavailable: true,
+		IncludeUnavailable: includeUnavailable,
 		Filter: map[string]interface{}{
 			"id": chunkID,
 		},

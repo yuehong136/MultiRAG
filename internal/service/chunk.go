@@ -525,7 +525,11 @@ func (s *ChunkService) Get(ctx context.Context, req *GetChunkRequest, userID str
 	if s.docEngine == nil {
 		return nil, fmt.Errorf("doc engine not initialized")
 	}
-	raw, err := s.docEngine.GetChunk(ctx, "multirag_"+kb.TenantID, req.ChunkID, []string{kb.ID})
+	readChunk := s.docEngine.GetChunk
+	if reader, ok := s.docEngine.(engine.ManagementChunkReader); ok {
+		readChunk = reader.GetChunkForManagement
+	}
+	raw, err := readChunk(ctx, "multirag_"+kb.TenantID, req.ChunkID, []string{kb.ID})
 	if err != nil {
 		return nil, fmt.Errorf("read chunk: %w", err)
 	}
