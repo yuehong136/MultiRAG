@@ -82,7 +82,7 @@ RUN mkdir -p /usr/share/infinity/resource && \
     cp -r /tmp/resource/* /usr/share/infinity/resource && \
     rm -rf /tmp/resource
 
-ARG NGINX_VERSION=1.29.5-1~noble
+ARG NGINX_VERSION=1.31.3-1~noble
 RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg && \
