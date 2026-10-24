@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import AsyncIterator
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -790,7 +791,7 @@ async def transcription(
     stream: str = "false",
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     stream_mode = stream.lower() == "true"
     allowed_exts = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm", ".opus", ".wma"}
 
@@ -801,6 +802,7 @@ async def transcription(
 
     fd, temp_audio_path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
+    stream_owns_file = False
     try:
         content = await file.read()
         with open(temp_audio_path, "wb") as temp_file:
@@ -831,9 +833,11 @@ async def transcription(
                 except Exception as e:
                     logging.error("Failed to remove temp audio file: %s", str(e))
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        response = StreamingResponse(event_stream(), media_type="text/event-stream")
+        stream_owns_file = True
+        return response
     finally:
-        if not stream_mode:
+        if not stream_owns_file:
             try:
                 os.remove(temp_audio_path)
             except FileNotFoundError:
@@ -1206,7 +1210,7 @@ async def session_completion(
     request: SessionCompletionRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     """聊天补全统一入口。
 
     - 无 chat_id:直连 LLM 聊天(临时默认 dialog,不落库);
@@ -1289,7 +1293,7 @@ async def session_completion(
                 formatted["chat_id"] = chat_id
             return formatted
 
-        async def stream_response():
+        async def stream_response() -> AsyncIterator[str]:
             try:
                 async for ans in async_chat(dialog, messages, db, True, **req):
                     yield "data:" + json.dumps({"code": 0, "message": "", "data": _format_answer(ans)}, ensure_ascii=False) + "\n\n"
