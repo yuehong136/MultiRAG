@@ -129,6 +129,7 @@ const (
 	TokenFile
 	TokenMetadata
 	TokenTable
+	TokenDocParse
 	TokenUpdate
 	TokenRemove
 	TokenChunk

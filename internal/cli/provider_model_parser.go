@@ -61,6 +61,8 @@ func (p *Parser) parseAddModel() (*Command, error) {
 			selected = "tts"
 		case TokenOCR:
 			selected = "ocr"
+		case TokenDocParse:
+			selected = "doc_parse"
 		case TokenTokens:
 			if tokens != 0 {
 				return nil, fmt.Errorf("duplicate token limit")
