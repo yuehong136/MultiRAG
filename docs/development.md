@@ -76,13 +76,17 @@ CGO 需要真实的 `internal/cpp/cmake-build-release/librag_tokenizer_c_api.a`�
 为 CI 验证平台，要求 CMake 4、PCRE2 和 SIMDe 开发头文件。依赖应预先安装；
 Go 构建阶段缺少 PCRE2 时直接报错，不自动调用系统包管理器。
 
-[CGO 链接声明](../internal/binding/rag_analyzer.go)还列有 macOS Intel 和 Apple Silicon
-的 PCRE2 路径，但这不代表现有 CMake 配置和编译器组合都可直接用于 macOS。
-不要跨平台复用静态库；已有本机 native 库时可以单独验证 Go 构建。
+macOS 使用 Apple Clang，依赖可由 Homebrew 提前安装：`brew install cmake pcre2 simde`。
+CMake 仅在 macOS 查询 Homebrew prefix，并查找 PCRE2 静态库；使用自定义依赖目录时，
+可设置 `CMAKE_PREFIX_PATH` 和 `CXXFLAGS`。构建脚本使用 CMake 的并行构建入口，
+不要求 macOS 提供 `nproc`。[CGO 链接声明](../internal/binding/rag_analyzer.go)使用
+Apple Silicon 的 `/opt/homebrew/lib/libpcre2-8.a` 或 Intel 的
+`/usr/local/lib/libpcre2-8.a`；自定义 PCRE2 路径还需与 CGO 声明一致。
+不要跨平台复用静态库；源码、依赖或工具链变化后重建 native 库，再重新链接 Go 消费者。
 
 ### 构建三个入口
 
-在依赖已就绪的 Linux 环境中，首次构建：
+在依赖已就绪的 Linux 或 macOS 环境中，首次构建：
 
 ```bash
 ./build.sh --all
