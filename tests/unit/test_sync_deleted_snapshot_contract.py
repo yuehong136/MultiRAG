@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from api.db.services.connector_service import connector_doc_id_candidates, resolve_connector_doc_id
-from common.constants import FileSource
+from common.constants import ConnectorTaskType, FileSource
 from common.data_source.interfaces import collect_slim_document_snapshot
 from common.data_source.models import SlimDocument
 from core.svr import sync_data_source as sync_module
@@ -69,7 +69,8 @@ def sync_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(sync_module.DocumentService, "list_doc_headers_by_kb_and_source_type", lambda *args: [])
     monkeypatch.setattr(sync_module.KnowledgebaseService, "get_by_id", lambda *args: object())
     monkeypatch.setattr(sync_module.SyncLogsService, "increase_docs", lambda *args: None)
-    monkeypatch.setattr(sync_module.ConnectorService, "cleanup_stale_documents_for_task", lambda *args: calls.append(("cleanup", args[-1])) or (1, []))
+    monkeypatch.setattr(sync_module.ConnectorService, "cleanup_stale_documents_for_task", lambda *args, **kwargs: calls.append(("cleanup", args[-1])) or (1, []))
+    monkeypatch.setattr(sync_module.ConnectorService, "prune_candidates", lambda *args: {})
     monkeypatch.setattr(sync_module.SyncLogsService, "start", lambda *args: calls.append("start"))
     monkeypatch.setattr(sync_module.SyncLogsService, "fail", lambda *args: calls.append("fail"))
     monkeypatch.setattr(sync_module.SyncLogsService, "complete_and_schedule_next", lambda *args: calls.append("complete"))
@@ -98,6 +99,9 @@ class FakeSync(sync_module.SyncBase):
         self.documents = documents
         self.generated = False
 
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        pass
+
     async def _generate(self, task: dict[str, Any]) -> Iterator[list[Any]]:
         def batches() -> Iterator[list[Any]]:
             self.generated = True
@@ -111,13 +115,13 @@ class FakeSync(sync_module.SyncBase):
 async def test_complete_empty_snapshot_prunes_and_completes_for_each_enabled_source(sync_env: dict[str, Any], source: str) -> None:
     sync = FakeSync(SnapshotConnector(empty=True))
     sync.SOURCE_NAME = source
-    await sync(task())
+    await sync({**task(), "task_type": ConnectorTaskType.PRUNE})
     assert sync_env["calls"] == ["start", ("cleanup", ()), "complete"]
 
 
 async def test_listing_failure_never_writes_deletes_or_completes(sync_env: dict[str, Any]) -> None:
     sync = FakeSync(SnapshotConnector(failure=True), documents=True)
-    await sync(task())
+    await sync({**task(), "task_type": ConnectorTaskType.PRUNE})
     assert sync_env["calls"] == ["start", "fail"]
     assert not sync.generated
 
@@ -143,18 +147,15 @@ async def test_ingestion_errors_skip_pruning_and_completion(sync_env: dict[str, 
 
 
 async def test_cleanup_errors_fail_without_scheduling_next(sync_env: dict[str, Any]) -> None:
-    sync_env["monkeypatch"].setattr(sync_module.ConnectorService, "cleanup_stale_documents_for_task", lambda *args: (0, ["delete failed"]))
-    await FakeSync(SnapshotConnector())(task())
+    sync_env["monkeypatch"].setattr(sync_module.ConnectorService, "cleanup_stale_documents_for_task", lambda *args, **kwargs: (0, ["delete failed"]))
+    await FakeSync(SnapshotConnector())({**task(), "task_type": ConnectorTaskType.PRUNE})
     assert sync_env["calls"] == ["start", "fail"]
 
 
-async def test_objects_ingested_after_empty_listing_are_protected_from_pruning(sync_env: dict[str, Any]) -> None:
+async def test_sync_does_not_collect_or_prune_even_when_deletion_is_enabled(sync_env: dict[str, Any]) -> None:
     sync_env["monkeypatch"].setattr(sync_module.SyncLogsService, "duplicate_and_parse", lambda *args: ([], [args[2][0]["id"]]))
     await FakeSync(SnapshotConnector(empty=True), documents=True)(task())
-    assert sync_env["calls"][0] == "start"
-    assert sync_env["calls"][1][0] == "cleanup"
-    assert [doc.id for doc in sync_env["calls"][1][1]] == ["remote-1"]
-    assert sync_env["calls"][-1] == "complete"
+    assert sync_env["calls"] == ["start", "complete"]
 
 
 async def test_timeout_during_listing_cannot_publish_partial_snapshot(sync_env: dict[str, Any]) -> None:
@@ -175,6 +176,7 @@ async def test_timeout_during_listing_cannot_publish_partial_snapshot(sync_env: 
     sync = FakeSync(SlowSource(), documents=True)
     current = task()
     current["timeout_secs"] = 0.01
+    current["task_type"] = ConnectorTaskType.PRUNE
     try:
         await sync(current)
         assert sync_env["calls"] == ["start", "fail"]

@@ -3694,11 +3694,11 @@ class Connector(BaseModel):
     source: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Data source")
     input_type: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="poll/event/..")
     config: Mapped[dict] = mapped_column(JSONB, index=False, nullable=False, default=dict)
-    refresh_freq: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
-    prune_freq: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
-    timeout_secs: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=3600)
+    refresh_freq: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=5)
+    prune_freq: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=5)
+    timeout_secs: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=1740)
     indexing_start: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
-    status: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True, default="schedule", doc="schedule")
+    status: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True, default="0", doc="Processing status")
 
     def __str__(self):
         return self.name
@@ -3862,6 +3862,7 @@ class SyncLogs(BaseModel):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, index=False, nullable=False)
     connector_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False, doc="Connector ID")
+    task_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="sync", server_default="sync")
     status: Mapped[str] = mapped_column(String(128), index=True, nullable=False, doc="Processing status")
     from_beginning: Mapped[str | None] = mapped_column(String(1), index=False, nullable=True, default="0")
     new_docs_indexed: Mapped[int] = mapped_column(Integer, index=False, nullable=False, default=0)
@@ -3879,6 +3880,7 @@ class SyncLogs(BaseModel):
         return {
             "id": self.id,
             "connector_id": self.connector_id,
+            "task_type": self.task_type,
             "status": self.status,
             "from_beginning": self.from_beginning,
             "new_docs_indexed": self.new_docs_indexed,

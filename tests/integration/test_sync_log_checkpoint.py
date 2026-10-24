@@ -4,12 +4,12 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from api.db import InputType
-from api.db.db_models import Connector, SyncLogs
+from api.db.db_models import Connector, Connector2Kb, SyncLogs
 from api.db.services.connector_service import SyncLogsService
 from common.constants import FileSource, TaskStatus
 
 
-def test_checkpoint_and_next_schedule_commit_as_one_timestamptz_flow(bootstrapped_engine):
+def test_checkpoint_and_next_schedule_commit_as_one_timestamptz_flow(bootstrapped_engine: Engine) -> None:
     connector_id = "connector-checkpoint-integration"
     kb_id = "kb-checkpoint-integration"
     task_id = "sync-checkpoint-integration"
@@ -31,6 +31,7 @@ def test_checkpoint_and_next_schedule_commit_as_one_timestamptz_flow(bootstrappe
                 status=TaskStatus.RUNNING,
             )
         )
+        db.add(Connector2Kb(id="checkpoint-binding-integration", connector_id=connector_id, kb_id=kb_id))
         db.add(
             SyncLogs(
                 id=task_id,

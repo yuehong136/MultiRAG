@@ -113,6 +113,8 @@ async def test_coordinator_keeps_strict_snapshot_semantics(sync_env: dict[str, A
     patch = sync_env["monkeypatch"]
     patch.setattr(sync, "RDBMSConnector", Source)
     current = task()
+    if mode in {"complete", "empty", "failure"}:
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     if mode == "reindex":

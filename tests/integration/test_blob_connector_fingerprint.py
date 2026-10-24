@@ -11,6 +11,7 @@ import pytest
 import sqlalchemy as sa
 import xxhash
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Connector, Connector2Kb, Document, Knowledgebase, SyncLogs
@@ -18,7 +19,7 @@ from api.db.services.connector_service import SyncLogsService, connector_doc_id_
 from api.db.services.document_service import DocumentService
 from common import settings
 from common.config_utils import CONFIGS
-from common.constants import TaskStatus
+from common.constants import ConnectorTaskType, TaskStatus
 from common.data_source.blob_connector import BlobStorageConnector, _normalize_etag
 from common.data_source.config import BlobType
 from core.svr.sync_data_source import S3
@@ -58,6 +59,13 @@ def s3_sync(connector_sync_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch)
     conf = {"bucket_name": bucket, "prefix": "docs", "sync_deleted_files": True, "credentials": {}}
 
     def cleanup_source() -> None:
+        try:
+            client.head_bucket(Bucket=bucket)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in {"404", "NoSuchBucket"}:
+                state["source_bucket_removed"] = True
+                return
+            raise
         for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket):
             for obj in page.get("Contents", []):
                 client.delete_object(Bucket=bucket, Key=obj["Key"])
@@ -79,11 +87,12 @@ def s3_sync(connector_sync_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch)
 
     with ExitStack() as cleanup:
         cleanup.callback(client.close)
-        client.create_bucket(Bucket=bucket)
+        env["record_path"].write_text(__import__("json").dumps(env["record"]))
         cleanup.callback(cleanup_source)
+        client.create_bucket(Bucket=bucket)
         cleanup.callback(cleanup_sql)
         with Session(env["engine"]) as db:
-            db.add(Connector(id=connector, tenant_id=env["owners"][0], name="S3 fingerprint scratch", source="s3", input_type="poll", config=conf, status=TaskStatus.SCHEDULE))
+            db.add(Connector(id=connector, tenant_id=env["owners"][0], name="S3 fingerprint scratch", source="s3", input_type="poll", config=conf, prune_freq=5, status=TaskStatus.SCHEDULE))
             db.add(Connector2Kb(id=uuid4().hex, connector_id=connector, kb_id=env["kb"], auto_parse="0"))
             db.commit()
         yield {**env, "client": client, "source_bucket": bucket, "connector": connector, "driver": S3(conf), "state": state}
@@ -103,8 +112,13 @@ async def run_sync(env: dict[str, Any], *, reindex: bool = False, success: bool 
     start = datetime(2025, 1, 1, tzinfo=UTC)
     with Session(env["engine"]) as db:
         previous_count = db.scalar(sa.select(sa.func.count()).select_from(SyncLogs).where(SyncLogs.connector_id == env["connector"]))
-        db.add(SyncLogs(id=task_id, connector_id=env["connector"], kb_id=env["kb"], status=TaskStatus.SCHEDULE, poll_range_start=start))
-        db.commit()
+        pending = SyncLogsService.get_latest_task(db, env["connector"], env["kb"])
+        reused = pending is not None and pending.status == TaskStatus.SCHEDULE
+        if reused:
+            task_id = pending.id
+        else:
+            db.add(SyncLogs(id=task_id, connector_id=env["connector"], kb_id=env["kb"], status=TaskStatus.SCHEDULE, poll_range_start=start))
+            db.commit()
     env["state"]["gets"].clear()
     await env["driver"](
         {
@@ -121,7 +135,7 @@ async def run_sync(env: dict[str, Any], *, reindex: bool = False, success: bool 
     with env["engine"].connect() as db:
         log = dict(db.execute(sa.select(SyncLogs.__table__).where(SyncLogs.id == task_id)).mappings().one())
         assert log["status"] == (TaskStatus.DONE if success else TaskStatus.FAIL), log["full_exception_trace"]
-        assert db.scalar(sa.select(sa.func.count()).select_from(SyncLogs).where(SyncLogs.connector_id == env["connector"])) == previous_count + (2 if success else 1)
+        assert db.scalar(sa.select(sa.func.count()).select_from(SyncLogs).where(SyncLogs.connector_id == env["connector"])) == previous_count + (1 if success else 0) + (0 if reused else 1)
         if not success:
             assert log["poll_range_start"] == start
             assert log["docs_removed_from_index"] == 0 and log["error_msg"]
@@ -131,6 +145,33 @@ async def run_sync(env: dict[str, Any], *, reindex: bool = False, success: bool 
         {"task_id": task_id, "status": log["status"], "gets": gets, "versions": {key: row["content_hash"] for key, row in current.items()}, "removed": log["docs_removed_from_index"]}
     )
     return current, gets
+
+
+async def run_prune(env: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    with Session(env["engine"]) as db:
+        task = SyncLogsService.schedule(db, env["connector"], env["kb"], task_type=ConnectorTaskType.PRUNE, run_immediately=True)
+        if task is None:
+            task = SyncLogsService.get_latest_task(db, env["connector"], env["kb"], ConnectorTaskType.PRUNE)
+        identifier = task.id
+    before = list(env["state"]["gets"])
+    await env["driver"](
+        {
+            "id": identifier,
+            "connector_id": env["connector"],
+            "kb_id": env["kb"],
+            "tenant_id": env["owners"][0],
+            "task_type": ConnectorTaskType.PRUNE,
+            "poll_range_start": None,
+            "reindex": "0",
+            "auto_parse": False,
+            "timeout_secs": 60,
+        }
+    )
+    assert env["state"]["gets"] == before
+    with Session(env["engine"]) as db:
+        log = db.get(SyncLogs, identifier)
+        assert log.status == TaskStatus.DONE, log.full_exception_trace
+    return rows(env)
 
 
 def assert_objects(env: dict[str, Any], current: dict[str, dict[str, Any]], expected: dict[str, bytes]) -> None:
@@ -194,6 +235,7 @@ async def test_etag_sync_skips_unchanged_fetches_only_changed_and_retains_namesp
     env["client"].delete_object(Bucket=env["source_bucket"], Key="docs/gone.txt")
     changed, gets = await run_sync(env)
     assert gets == ["docs/changed.txt"]
+    changed = await run_prune(env)
     assert_objects(env, changed, {"static.txt": b"static", "changed.txt": b"changed!"})
     assert_index(env, set(changed))
     with env["engine"].connect() as db:
@@ -295,6 +337,8 @@ async def test_size_exclusion_retains_document_and_empty_inventory_removes_it(s3
     assert_index(env, set(initial))
     env["client"].delete_object(Bucket=env["source_bucket"], Key="docs/limited.txt")
     empty, gets = await run_sync(env)
-    assert empty == {} and gets == []
+    assert gets == []
+    empty = await run_prune(env)
+    assert empty == {}
     assert_objects(env, empty, {})
     assert_index(env, set())

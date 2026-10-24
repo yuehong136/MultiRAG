@@ -123,6 +123,8 @@ async def test_asana_driver_gate(sync_env: dict[str, Any], mode: str) -> None:
     patch.setattr(sync_module.SyncLogsService, "duplicate_and_parse", lambda db, kb, docs, *args: ([], [doc["id"] for doc in docs]))
     driver = sync_module.Asana({"asana_workspace_id": "workspace", "sync_deleted_files": mode != "disabled", "credentials": {"asana_api_token_secret": "synthetic"}})
     current = task()
+    if mode == "incremental":
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     if mode == "reindex":

@@ -99,6 +99,8 @@ async def test_real_driver_gate_and_failure(sync_env: dict[str, Any], mode: str)
         patch.setattr(module, "_article_to_document", lambda *args: (_ for _ in ()).throw(ValueError("body")))
     driver = sync_module.Zendesk({"sync_deleted_files": mode != "disabled", "credentials": {}})
     current = task()
+    if mode in ["incremental", "tickets"]:
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     if mode == "reindex":

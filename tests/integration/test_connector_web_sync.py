@@ -1,17 +1,10 @@
 """Real Web checkbox save, reload and independent scratch SQL readback."""
 
-import json
 import os
-import signal
-import socket
-import subprocess
-import time
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
 import pytest
-import requests
 from playwright.sync_api import expect, sync_playwright
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -21,43 +14,8 @@ from scripts.acceptance.api import ProductAPI, response_data
 from scripts.acceptance.browser import WebAcceptance
 from scripts.acceptance.evidence import Evidence
 from tests.support.connector_deleted_sync import connector_sync_api as connector_sync_api
+from tests.support.connector_web import connector_web as connector_web
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
-
-
-@pytest.fixture(scope="module")
-def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    checkout = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
-    assert (checkout / "node_modules").is_dir(), "Installed Web checkout is required"
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    base = f"http://127.0.0.1:{port}"
-    log_path = tmp_path_factory.mktemp("connector_web") / "vite.log"
-    with log_path.open("w") as log:
-        process = subprocess.Popen(["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", str(port), "--strictPort"], cwd=checkout, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            deadline = time.monotonic() + 40
-            while time.monotonic() < deadline and process.poll() is None:
-                try:
-                    if requests.get(base, timeout=1).status_code == 200:
-                        break
-                except requests.RequestException:
-                    pass
-                time.sleep(0.1)
-            else:
-                pytest.fail("Owned Web server failed to start")
-            yield base
-        finally:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            process.wait(timeout=10)
-            with socket.socket() as listener:
-                assert listener.connect_ex(("127.0.0.1", port)) != 0
-            evidence_dir = Path(os.environ.get("CONNECTOR_WEB_EVIDENCE", ".test-results/connector-web"))
-            evidence_dir.mkdir(parents=True, exist_ok=True)
-            (evidence_dir / "web-server-cleanup.json").write_text(json.dumps({"pid": process.pid, "port": port, "listener_closed": True}))
 
 
 @pytest.mark.external_consumer

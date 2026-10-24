@@ -114,6 +114,8 @@ async def test_real_driver_gates_deletion(sync_env: dict[str, Any], mode: str) -
     monkeypatch.setattr(sync_module.SyncLogsService, "duplicate_and_parse", lambda db, kb, docs, *args: (["failed"] if mode == "ingest-failure" else [], [doc["id"] for doc in docs]))
     driver = sync_module.Gitlab({"project_owner": "group", "project_name": "project", "state_filter": "opened", "sync_deleted_files": mode != "disabled", "include_code_files": True, "batch_size": 1})
     current = task()
+    if mode in ["incremental", "listing-failure"]:
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     if mode == "reindex":

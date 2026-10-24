@@ -71,12 +71,9 @@ async def test_real_driver_deletion_gate_and_failed_ingestion(sync_env: dict[str
     elif mode == "reindex":
         current["reindex"] = "1"
     await driver(current)
-    assert source.listed == (mode in {"incremental", "content-failure"})
+    assert not source.listed
     if mode == "content-failure":
         assert sync_env["calls"] == ["start", "fail"]
-    elif mode == "incremental":
-        assert sync_env["calls"][1][0] == "cleanup" and sync_env["calls"][-1] == "complete"
-        assert source.snapshot_started is not None and source.windows[0][1] <= source.snapshot_started
     else:
         assert sync_env["calls"] == ["start", "complete"]
 

@@ -21,13 +21,13 @@ from sqlalchemy.sql import desc as sa_desc
 from sqlalchemy.sql.elements import ColumnElement
 
 from api.db import InputType
-from api.db.db_models import Connector, Connector2Kb, Knowledgebase, SyncLogs
+from api.db.db_models import Connector, Connector2Kb, Document, Knowledgebase, SyncLogs
 from api.db.services.common_service import CommonService
 from api.db.services.doc_metadata_service import DocMetadataService
-from api.db.services.document_service import DocumentService
+from api.db.services.document_service import DocumentDeletePrecondition, DocumentService
 from api.db.services.file_service import FileService
 from api.utils.common import hash128
-from common.constants import TaskStatus
+from common.constants import ConnectorTaskType, TaskStatus
 from common.data_source.imap_connector import imap_scope_signature
 from common.data_source.models import SlimDocument
 from common.data_source.rdbms_connector import RDBMSConnector, rdbms_scope_signature
@@ -58,14 +58,15 @@ def _to_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-def _schedule_time_condition(dialect: str, now: ColumnElement[datetime] | None = None) -> ColumnElement[bool]:
+def _schedule_time_condition(dialect: str, now: ColumnElement[datetime] | None = None, task_type: str = ConnectorTaskType.SYNC) -> ColumnElement[bool]:
     """Compare UTC wall-clock timestamps without rounding elapsed minutes."""
+    frequency = Connector.prune_freq if task_type == ConnectorTaskType.PRUNE else Connector.refresh_freq
     if dialect == "postgresql":
         utc_now = func.timezone("UTC", func.now()) if now is None else now
-        cutoff = utc_now - func.make_interval(0, 0, 0, 0, 0, Connector.refresh_freq)
+        cutoff = utc_now - func.make_interval(0, 0, 0, 0, 0, frequency)
     elif dialect in {"mysql", "mariadb"}:
         utc_now = func.utc_timestamp(6) if now is None else now
-        cutoff = func.timestampadd(literal_column("MINUTE"), -Connector.refresh_freq, utc_now)
+        cutoff = func.timestampadd(literal_column("MINUTE"), -frequency, utc_now)
     else:
         raise ValueError(f"Connector scheduling does not support database dialect {dialect}")
     return SyncLogs.update_date < cutoff
@@ -190,36 +191,54 @@ class ConnectorService(CommonService):
         return has_access
 
     @classmethod
-    def resume(cls, db: Session, connector_id: str, status: str):
-        """
-        恢复连接器任务状态
+    def lock(cls, db: Session, connector_id: str) -> Connector | None:
+        return db.scalar(select(cls.model).where(cls.model.id == connector_id).with_for_update().execution_options(populate_existing=True))
 
-        Args:
-            db: 数据库会话
-            connector_id: 连接器ID
-            status: 目标状态
-        """
-        c2k_list = Connector2KbService.query(db, connector_id=connector_id)
-        for c2k in c2k_list:
-            task = SyncLogsService.get_latest_task(db, connector_id, c2k.kb_id)
-            if not task:
-                if status == TaskStatus.SCHEDULE:
-                    SyncLogsService.schedule(db, connector_id, c2k.kb_id)
-                    cls.update_by_id(db, connector_id, {"status": status})
-                    return
-                continue
+    @staticmethod
+    def prune_enabled(connector: Connector) -> bool:
+        return (connector.config or {}).get("sync_deleted_files") is True and connector.prune_freq > 0
 
-            if task.status == TaskStatus.DONE:
-                if status == TaskStatus.SCHEDULE:
-                    SyncLogsService.schedule(db, connector_id, c2k.kb_id, poll_range_start=task.poll_range_end, total_docs_indexed=task.total_docs_indexed)
-                    cls.update_by_id(db, connector_id, {"status": status})
-                    return
+    @classmethod
+    def cancel_tasks(cls, db: Session, connector_id: str, *, commit: bool = True) -> None:
+        connector = cls.lock(db, connector_id)
+        if connector is None:
+            return
+        db.execute(update(SyncLogs).where(SyncLogs.connector_id == connector_id, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING])).values(status=TaskStatus.CANCEL))
+        connector.status = TaskStatus.CANCEL
+        db.flush()
+        if commit:
+            db.commit()
 
-            task_dict = task.to_dict()
-            task_dict["status"] = status
-            SyncLogsService.update_by_id(db, task_dict["id"], task_dict)
-
-        cls.update_by_id(db, connector_id, {"status": status})
+    @classmethod
+    def schedule_tasks(cls, db: Session, connector_id: str, *, commit: bool = True) -> None:
+        """Schedule every binding/type once; retries retain their original window."""
+        connector = cls.lock(db, connector_id)
+        if connector is None:
+            return
+        connector.status = TaskStatus.SCHEDULE
+        db.flush()
+        for binding in Connector2KbService.query(db, connector_id=connector_id):
+            for task_type in ConnectorTaskType:
+                if task_type == ConnectorTaskType.PRUNE and not cls.prune_enabled(connector):
+                    continue
+                latest = SyncLogsService.get_latest_task(db, connector_id, binding.kb_id, task_type)
+                checkpoint = latest.poll_range_end if latest and latest.status == TaskStatus.DONE else latest.poll_range_start if latest else None
+                SyncLogsService.schedule(
+                    db,
+                    connector_id,
+                    binding.kb_id,
+                    checkpoint,
+                    reindex=bool(latest and latest.status != TaskStatus.DONE and latest.from_beginning == "1"),
+                    total_docs_indexed=latest.total_docs_indexed if latest else 0,
+                    task_type=task_type,
+                    run_immediately=True,
+                    commit=False,
+                )
+        running = db.scalar(select(SyncLogs.id).where(SyncLogs.connector_id == connector_id, SyncLogs.status == TaskStatus.RUNNING).limit(1))
+        if running:
+            connector.status = TaskStatus.RUNNING
+        if commit:
+            db.commit()
 
     @classmethod
     def list(cls, db: Session, tenant_id: str) -> list[dict]:
@@ -260,8 +279,21 @@ class ConnectorService(CommonService):
         SyncLogsService.filter_delete(db, [SyncLogs.connector_id == connector_id, SyncLogs.kb_id == kb_id])
         docs = DocumentService.query(db, source_type=f"{conn.source}/{conn.id}", kb_id=kb_id)
         err = FileService.delete_docs(db, [d.id for d in docs], tenant_id)
-        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True)
+        if err:
+            return err
+        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True, run_immediately=True)
+        if cls.prune_enabled(conn):
+            SyncLogsService.schedule(db, connector_id, kb_id, task_type=ConnectorTaskType.PRUNE, run_immediately=True)
         return err
+
+    @classmethod
+    def prune_candidates(cls, db: Session, kb_id: str, source_type: str) -> dict[str, tuple[int | None, datetime | None, str | None]]:
+        return {
+            identifier: (updated, date, fingerprint)
+            for identifier, updated, date, fingerprint in db.execute(
+                select(Document.id, Document.update_time, Document.update_date, Document.content_hash).where(Document.kb_id == kb_id, Document.source_type == source_type)
+            )
+        }
 
     @classmethod
     def cleanup_stale_documents_for_task(
@@ -273,6 +305,8 @@ class ConnectorService(CommonService):
         tenant_id: str,
         file_list: Sequence[SlimDocument],
         delete_batch_size: int = 100,
+        *,
+        candidates: dict[str, tuple[int | None, datetime | None, str | None]] | None = None,
     ) -> tuple[int, list[str]]:
         """
         删除源端已不存在、但本地仍保留的连接器文档。
@@ -295,36 +329,54 @@ class ConnectorService(CommonService):
             kb_id,
             source_type,
         )
-        stale_doc_ids = [doc["id"] for doc in existing_docs if doc["id"] not in retain_doc_ids]
+        stale_doc_ids = [doc["id"] for doc in existing_docs if doc["id"] not in retain_doc_ids and (candidates is None or doc["id"] in candidates)]
         if not stale_doc_ids:
             return 0, []
 
         stale_doc_id_set = set(stale_doc_ids)
         errors = []
         cancellation: SyncTaskCancelled | None = None
+        # The actual delete transaction checks each captured document revision.
+        if candidates is not None:
+            delete_batch_size = 1
         for offset in range(0, len(stale_doc_ids), delete_batch_size):
             try:
                 SyncLogsService.raise_if_cancelled(db, task_id)
             except SyncTaskCancelled as exc:
                 cancellation = exc
                 break
-            err = FileService.delete_docs(
-                db,
-                stale_doc_ids[offset : offset + delete_batch_size],
-                tenant_id,
-            )
+            batch = stale_doc_ids[offset : offset + delete_batch_size]
+            if candidates is not None:
+                identifier = batch[0]
+                unchanged = db.scalar(
+                    select(Document.id).where(
+                        Document.id == identifier,
+                        Document.kb_id == kb_id,
+                        Document.source_type == source_type,
+                        Document.update_time == candidates[identifier][0],
+                        Document.update_date == candidates[identifier][1],
+                        Document.content_hash == candidates[identifier][2],
+                    )
+                )
+                if unchanged is None:
+                    stale_doc_id_set.discard(identifier)
+                    continue
+            if candidates is None:
+                err = FileService.delete_docs(db, batch, tenant_id)
+            else:
+                preconditions = {identifier: DocumentDeletePrecondition(kb_id, source_type, *candidates[identifier]) for identifier in batch}
+                err = FileService.delete_docs(db, batch, tenant_id, delete_preconditions=preconditions)
             if err:
                 errors.append(err)
 
-        remaining_doc_ids = {
-            doc["id"]
-            for doc in DocumentService.list_doc_headers_by_kb_and_source_type(
-                db,
-                kb_id,
-                source_type,
-            )
-            if doc["id"] in stale_doc_id_set
-        }
+        if candidates is None:
+            remaining_doc_ids = {doc["id"] for doc in DocumentService.list_doc_headers_by_kb_and_source_type(db, kb_id, source_type) if doc["id"] in stale_doc_id_set}
+        else:
+            current = cls.prune_candidates(db, kb_id, source_type)
+            # A conditional delete may have preserved a concurrent update. It is
+            # neither a removed document nor an undeleted stale document/error.
+            stale_doc_id_set.difference_update(identifier for identifier, revision in current.items() if identifier in candidates and revision != candidates[identifier])
+            remaining_doc_ids = current.keys() & stale_doc_id_set
         removed_count = len(stale_doc_id_set) - len(remaining_doc_ids)
         if remaining_doc_ids and not errors and cancellation is None:
             errors.append(f"{len(remaining_doc_ids)} stale document(s) remain after deletion")
@@ -349,136 +401,123 @@ class SyncLogsService(CommonService):
 
     @classmethod
     def raise_if_cancelled(cls, db: Session, task_id: str) -> None:
-        if db.scalar(select(cls.model.status).where(cls.model.id == task_id)) == TaskStatus.CANCEL:
-            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
+        status = db.scalar(select(cls.model.status).where(cls.model.id == task_id))
+        if status is None or status == TaskStatus.CANCEL:
+            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled or removed")
 
     @classmethod
-    def list_sync_tasks(cls, db: Session, connector_id: str | None = None, page_number: int | None = None, items_per_page: int = 15) -> tuple[list[dict], int]:
-        """
-        获取同步任务列表
-
-        Args:
-            db: 数据库会话
-            connector_id: 连接器ID（可选）
-            page_number: 页码（可选）
-            items_per_page: 每页数量
-
-        Returns:
-            同步任务列表
-        """
-        # 基础查询字段
-        columns = [
-            cls.model.id,
-            cls.model.connector_id,
-            cls.model.kb_id,
-            cls.model.update_date,
-            cls.model.update_time,  # 添加 update_time，用于 ORDER BY（PostgreSQL DISTINCT 要求）
-            cls.model.poll_range_start,
-            cls.model.poll_range_end,
-            cls.model.new_docs_indexed,
-            cls.model.total_docs_indexed,
-            cls.model.error_msg,
-            cls.model.full_exception_trace,
-            cls.model.error_count,
-            Connector.name,
-            Connector.source,
-            Connector.tenant_id,
-            Connector.timeout_secs,
-            Knowledgebase.name.label("kb_name"),
-            Knowledgebase.avatar.label("kb_avatar"),
-            Connector2Kb.auto_parse,
-            cls.model.from_beginning.label("reindex"),
-            cls.model.status,
-        ]
-        if not connector_id:
-            columns.append(Connector.config)
-
-        # 构建基础查询 (SQLAlchemy 2.0 style)
-        stmt = (
-            select(*columns)
+    def _task_query(cls) -> Any:
+        return (
+            select(
+                cls.model.id,
+                cls.model.connector_id,
+                cls.model.task_type,
+                cls.model.kb_id,
+                cls.model.update_date,
+                cls.model.create_date,
+                cls.model.update_time,
+                cls.model.poll_range_start,
+                cls.model.poll_range_end,
+                cls.model.new_docs_indexed,
+                cls.model.total_docs_indexed,
+                cls.model.docs_removed_from_index,
+                cls.model.error_msg,
+                cls.model.full_exception_trace,
+                cls.model.error_count,
+                cls.model.time_started,
+                Connector.name,
+                Connector.source,
+                Connector.tenant_id,
+                Connector.timeout_secs,
+                Connector.refresh_freq,
+                Connector.prune_freq,
+                Knowledgebase.name.label("kb_name"),
+                Knowledgebase.avatar.label("kb_avatar"),
+                Connector2Kb.auto_parse,
+                cls.model.from_beginning.label("reindex"),
+                cls.model.status,
+            )
             .select_from(cls.model)
             .join(Connector, cls.model.connector_id == Connector.id)
             .join(Connector2Kb, (cls.model.kb_id == Connector2Kb.kb_id) & (cls.model.connector_id == Connector2Kb.connector_id))
             .join(Knowledgebase, cls.model.kb_id == Knowledgebase.id)
         )
 
-        if connector_id:
-            stmt = stmt.where(cls.model.connector_id == connector_id)
-        else:
-            time_condition = _schedule_time_condition(db.get_bind().dialect.name)
-            stmt = stmt.where(Connector.input_type == InputType.POLL, Connector.status == TaskStatus.SCHEDULE, cls.model.status == TaskStatus.SCHEDULE, time_condition)
-
-        stmt = stmt.distinct().order_by(sa_desc(cls.model.update_time))
-        total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar()
-
-        if page_number:
-            offset = (page_number - 1) * items_per_page
-            stmt = stmt.offset(offset).limit(items_per_page)
-
-        rows = db.execute(stmt).mappings().all()
-        tasks = [dict(row) for row in rows]
-        # MySQL DATETIME has no offset; worker cursors always represent UTC.
+    @staticmethod
+    def _task_dicts(db: Session, statement: Any) -> list[dict[str, Any]]:
+        tasks = [dict(row) for row in db.execute(statement).mappings()]
         for task in tasks:
-            for field in ("update_date", "poll_range_start", "poll_range_end"):
+            for field in ("update_date", "poll_range_start", "poll_range_end", "time_started", "create_date"):
                 task[field] = _to_utc(task[field])
-        return tasks, total
+        return tasks
+
+    @classmethod
+    def list_sync_tasks(cls, db: Session, connector_id: str | None = None, page_number: int | None = None, items_per_page: int = 15) -> tuple[list[dict], int]:
+        """Dashboard history; the dispatcher uses separate unpaginated due queries."""
+        statement = cls._task_query()
+        if connector_id:
+            statement = statement.where(cls.model.connector_id == connector_id)
+        statement = statement.distinct().order_by(sa_desc(cls.model.update_time), sa_desc(cls.model.id))
+        total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
+        if page_number:
+            statement = statement.offset((page_number - 1) * items_per_page).limit(items_per_page)
+        return cls._task_dicts(db, statement), total
+
+    @classmethod
+    def _list_due_tasks(cls, db: Session, task_type: ConnectorTaskType) -> list[dict[str, Any]]:
+        statement = (
+            cls._task_query()
+            .add_columns(Connector.config)
+            .where(
+                Connector.input_type == InputType.POLL,
+                Connector.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING]),
+                cls.model.status == TaskStatus.SCHEDULE,
+                cls.model.task_type == task_type,
+                _schedule_time_condition(db.get_bind().dialect.name, task_type=task_type),
+            )
+            .distinct()
+            .order_by(sa_desc(cls.model.update_time))
+        )
+        tasks = cls._task_dicts(db, statement)
+        if task_type == ConnectorTaskType.PRUNE:
+            tasks = [task for task in tasks if (task["config"] or {}).get("sync_deleted_files") is True and task["prune_freq"] > 0]
+        return tasks
+
+    @classmethod
+    def list_due_sync_tasks(cls, db: Session) -> list[dict[str, Any]]:
+        return cls._list_due_tasks(db, ConnectorTaskType.SYNC)
+
+    @classmethod
+    def list_due_prune_tasks(cls, db: Session) -> list[dict[str, Any]]:
+        return cls._list_due_tasks(db, ConnectorTaskType.PRUNE)
 
     @classmethod
     def start(cls, db: Session, task_id: str, connector_id: str) -> None:
-        """
-        开始同步任务
-
-        Args:
-            db: 数据库会话
-            task_id: 任务ID
-            connector_id: 连接器ID
-        """
-        current_status = db.scalar(select(cls.model.status).where(cls.model.id == task_id).with_for_update())
-        if current_status == TaskStatus.CANCEL:
-            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
-        now = datetime.now(UTC)
-        timestamp = cls.current_timestamp()
-        db.execute(update(cls.model).where(cls.model.id == task_id).values(status=TaskStatus.RUNNING, time_started=now, update_date=now, update_time=timestamp))
-        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.RUNNING, update_date=now, update_time=timestamp))
-        db.commit()
-
-    @classmethod
-    def done(cls, db: Session, task_id: str, connector_id: str):
-        """
-        完成同步任务
-
-        Args:
-            db: 数据库会话
-            task_id: 任务ID
-            connector_id: 连接器ID
-        """
-        now = datetime.now(UTC)
-        timestamp = cls.current_timestamp()
-        db.execute(update(cls.model).where(cls.model.id == task_id).values(status=TaskStatus.DONE, update_date=now, update_time=timestamp))
-        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.DONE, update_date=now, update_time=timestamp))
+        connector = ConnectorService.lock(db, connector_id)
+        current = db.scalar(select(cls.model).where(cls.model.id == task_id).with_for_update().execution_options(populate_existing=True))
+        if connector is None or connector.status in (TaskStatus.CANCEL, TaskStatus.FAIL) or current is None or current.connector_id != connector_id or current.status != TaskStatus.SCHEDULE:
+            raise SyncTaskCancelled(f"Sync task {task_id} is no longer scheduled")
+        if current.task_type == ConnectorTaskType.PRUNE and not ConnectorService.prune_enabled(connector):
+            current.status = TaskStatus.CANCEL
+            db.commit()
+            raise SyncTaskCancelled(f"Pruning is disabled for {connector_id}")
+        current.status = TaskStatus.RUNNING
+        current.time_started = datetime.now(UTC)
+        connector.status = TaskStatus.RUNNING
         db.commit()
 
     @classmethod
     def fail(cls, db: Session, task_id: str, connector_id: str, error_msg: str, full_exception_trace: str = "", poll_range_start: datetime | None = None) -> None:
         """Fail atomically and retain the original window for a complete retry."""
-        current_status = db.scalar(select(cls.model.status).where(cls.model.id == task_id).with_for_update())
-        if current_status == TaskStatus.CANCEL:
+        connector = ConnectorService.lock(db, connector_id)
+        current = db.scalar(select(cls.model).where(cls.model.id == task_id).with_for_update().execution_options(populate_existing=True))
+        if connector is None or connector.status == TaskStatus.CANCEL or current is None or current.connector_id != connector_id or current.status != TaskStatus.RUNNING:
             return
-        now = datetime.now(UTC)
-        timestamp = cls.current_timestamp()
-        db.execute(
-            update(cls.model)
-            .where(cls.model.id == task_id)
-            .values(
-                status=TaskStatus.FAIL,
-                error_msg=error_msg,
-                full_exception_trace=full_exception_trace,
-                poll_range_start=_to_utc(poll_range_start),
-                update_date=now,
-                update_time=timestamp,
-            )
-        )
-        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.FAIL, update_date=now, update_time=timestamp))
+        current.status = TaskStatus.FAIL
+        current.error_msg = error_msg
+        current.full_exception_trace = full_exception_trace
+        current.poll_range_start = _to_utc(poll_range_start)
+        connector.status = TaskStatus.FAIL
         db.commit()
 
     @classmethod
@@ -490,53 +529,50 @@ class SyncLogsService(CommonService):
         poll_range_start: datetime | None = None,
         reindex: bool = False,
         total_docs_indexed: int = 0,
+        *,
+        task_type: str = ConnectorTaskType.SYNC,
+        run_immediately: bool = False,
+        commit: bool = True,
     ) -> SyncLogs | None:
-        """
-        调度同步任务
-
-        Args:
-            db: 数据库会话
-            connector_id: 连接器ID
-            kb_id: 知识库ID
-            poll_range_start: 轮询起始时间
-            reindex: 是否重新索引
-            total_docs_indexed: 已索引文档总数
-        """
-        poll_range_start = _to_utc(poll_range_start)
-        log_count = db.scalar(select(func.count()).select_from(cls.model).where(cls.model.kb_id == kb_id, cls.model.connector_id == connector_id)) or 0
-        if log_count > 100:
-            old_ids = list(db.scalars(select(cls.model.id).where(cls.model.kb_id == kb_id, cls.model.connector_id == connector_id).order_by(cls.model.update_time.asc()).limit(70)))
-            if old_ids:
-                deleted = db.execute(delete(cls.model).where(cls.model.id.in_(old_ids))).rowcount
-                logger.info("[SyncLogService] Cleaned %s old logs.", deleted)
-
+        """Stage one task per binding/type under the connector lock."""
+        task_type = ConnectorTaskType(task_type)
+        connector = ConnectorService.lock(db, connector_id)
+        if connector is None:
+            raise RuntimeError("Connector is unavailable")
         existing = db.scalar(
-            select(cls.model.id).where(
-                cls.model.kb_id == kb_id,
-                cls.model.connector_id == connector_id,
-                cls.model.status == TaskStatus.SCHEDULE,
-            )
+            select(cls.model).where(cls.model.kb_id == kb_id, cls.model.connector_id == connector_id, cls.model.task_type == task_type, cls.model.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING]))
         )
         if existing:
-            logger.warning("%s--%s already has a scheduled sync task.", kb_id, connector_id)
-            db.rollback()
             return None
-
-        now = datetime.now(UTC)
-        timestamp = cls.current_timestamp()
+        terminal = (
+            select(cls.model.id)
+            .where(cls.model.kb_id == kb_id, cls.model.connector_id == connector_id, cls.model.status.in_([TaskStatus.DONE, TaskStatus.FAIL, TaskStatus.CANCEL]))
+            .order_by(sa_desc(cls.model.update_time))
+            .offset(100)
+        )
+        old_ids = list(db.scalars(terminal))
+        if old_ids:
+            db.execute(delete(cls.model).where(cls.model.id.in_(old_ids)))
         task = cls.model(
             id=get_uuid(),
             kb_id=kb_id,
             status=TaskStatus.SCHEDULE,
             connector_id=connector_id,
-            poll_range_start=poll_range_start,
+            task_type=task_type,
+            poll_range_start=_to_utc(poll_range_start),
             from_beginning="1" if reindex else "0",
             total_docs_indexed=total_docs_indexed,
         )
         db.add(task)
-        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.SCHEDULE, update_date=now, update_time=timestamp))
-        db.commit()
-        db.refresh(task)
+        if connector.status not in (TaskStatus.RUNNING, TaskStatus.FAIL):
+            connector.status = TaskStatus.SCHEDULE
+        db.flush()
+        if run_immediately:
+            # Insert hooks stamp update_date; adjust only the scheduling clock
+            # after flush, in this transaction, without corrupting log ordering.
+            db.execute(update(cls.model).where(cls.model.id == task.id).values(update_date=datetime(1970, 1, 1, tzinfo=UTC)))
+        if commit:
+            db.commit()
         return task
 
     @classmethod
@@ -546,43 +582,34 @@ class SyncLogsService(CommonService):
         task_id: str,
         connector_id: str,
         kb_id: str,
-        checkpoint: datetime,
+        checkpoint: datetime | None,
         *,
         rdbms_state: dict[str, Any] | None = None,
-    ) -> str:
-        """Commit task completion, its checkpoint, and the next task atomically."""
-        checkpoint = _to_utc(checkpoint)
-        if checkpoint is None:
-            raise ValueError("A completed sync task requires a checkpoint")
-
-        current = db.scalar(select(cls.model).where(cls.model.id == task_id).with_for_update())
-        if current is None:
-            raise RuntimeError(f"Sync task {task_id} no longer exists")
-        if current.status == TaskStatus.CANCEL:
-            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled")
-
-        if rdbms_state is not None:
-            ConnectorService.stage_rdbms_sync_state(db, connector_id, kb_id, rdbms_state)
-        now = datetime.now(UTC)
-        timestamp = cls.current_timestamp()
+    ) -> str | None:
+        """Commit completion/checkpoint and the next task of the same type atomically."""
+        connector = ConnectorService.lock(db, connector_id)
+        current = db.scalar(select(cls.model).where(cls.model.id == task_id).with_for_update().execution_options(populate_existing=True))
+        if connector is None or connector.status == TaskStatus.CANCEL or current is None or current.connector_id != connector_id or current.kb_id != kb_id or current.status != TaskStatus.RUNNING:
+            raise SyncTaskCancelled(f"Sync task {task_id} was cancelled or removed")
+        if not Connector2KbService.query(db, connector_id=connector_id, kb_id=kb_id):
+            raise SyncTaskCancelled("Connector binding was removed")
+        if current.task_type == ConnectorTaskType.SYNC:
+            checkpoint = _to_utc(checkpoint)
+            if checkpoint is None:
+                raise ValueError("A completed sync task requires a checkpoint")
+            if rdbms_state is not None:
+                ConnectorService.stage_rdbms_sync_state(db, connector_id, kb_id, rdbms_state)
+            current.poll_range_end = checkpoint
         current.status = TaskStatus.DONE
-        current.poll_range_end = checkpoint
-        current.update_date = now
-        current.update_time = timestamp
-
-        next_task = cls.model(
-            id=get_uuid(),
-            kb_id=kb_id,
-            status=TaskStatus.SCHEDULE,
-            connector_id=connector_id,
-            poll_range_start=checkpoint,
-            from_beginning="0",
-            total_docs_indexed=current.total_docs_indexed,
-        )
-        db.add(next_task)
-        db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.SCHEDULE, update_date=now, update_time=timestamp))
+        db.flush()
+        next_task = None
+        if current.task_type == ConnectorTaskType.SYNC or ConnectorService.prune_enabled(connector):
+            next_task = cls.schedule(db, connector_id, kb_id, checkpoint, total_docs_indexed=current.total_docs_indexed, task_type=current.task_type, commit=False)
+        if connector.status != TaskStatus.FAIL:
+            running = db.scalar(select(cls.model.id).where(cls.model.connector_id == connector_id, cls.model.status == TaskStatus.RUNNING).limit(1))
+            connector.status = TaskStatus.RUNNING if running else TaskStatus.SCHEDULE
         db.commit()
-        return next_task.id
+        return next_task.id if next_task else None
 
     @classmethod
     def increase_docs(cls, db: Session, task_id: str, max_update: datetime, doc_num: int, err_msg: str = "", error_count: int = 0) -> int:
@@ -715,7 +742,7 @@ class SyncLogsService(CommonService):
         return errs, doc_ids
 
     @classmethod
-    def get_latest_task(cls, db: Session, connector_id: str, kb_id: str) -> SyncLogs | None:
+    def get_latest_task(cls, db: Session, connector_id: str, kb_id: str, task_type: str = ConnectorTaskType.SYNC) -> SyncLogs | None:
         """
         获取最新的同步任务
 
@@ -727,7 +754,12 @@ class SyncLogsService(CommonService):
         Returns:
             最新的同步任务，如果没有则返回 None
         """
-        stmt = select(cls.model).where(cls.model.connector_id == connector_id, cls.model.kb_id == kb_id).order_by(sa_desc(cls.model.update_time)).limit(1)
+        stmt = (
+            select(cls.model)
+            .where(cls.model.connector_id == connector_id, cls.model.kb_id == kb_id, cls.model.task_type == task_type)
+            .order_by(sa_desc(cls.model.update_time), sa_desc(cls.model.id))
+            .limit(1)
+        )
         return db.execute(stmt).scalar_one_or_none()
 
 
@@ -785,7 +817,10 @@ class Connector2KbService(CommonService):
             return
 
         cls.insert(db, **{"id": get_uuid(), "connector_id": connector_id, "kb_id": kb_id, "auto_parse": auto_parse})
-        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True)
+        SyncLogsService.schedule(db, connector_id, kb_id, reindex=True, run_immediately=True)
+        connector = ConnectorService.get_by_id(db, connector_id)
+        if connector and ConnectorService.prune_enabled(connector):
+            SyncLogsService.schedule(db, connector_id, kb_id, task_type=ConnectorTaskType.PRUNE, run_immediately=True)
 
     @classmethod
     def unlink_connector(cls, db: Session, kb_id: str, connector_id: str) -> None:

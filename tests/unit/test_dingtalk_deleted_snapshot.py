@@ -44,6 +44,8 @@ async def test_driver_reuses_complete_snapshot_coordinator(sync_env: dict[str, A
         {"table_id": "table", "operator_id": "operator", "batch_size": "invalid", "credentials": {"access_token": "synthetic"}, "sync_deleted_files": mode != "disabled"}
     )
     current = task()
+    if mode in ["complete", "empty", "listing-error"]:
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     elif mode == "reindex":

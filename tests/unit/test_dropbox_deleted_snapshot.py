@@ -112,6 +112,8 @@ async def test_real_dropbox_driver_gates_deletion(sync_env: dict[str, Any], mode
     monkeypatch.setattr(sync_module.SyncLogsService, "duplicate_and_parse", lambda db, kb, docs, *args: (["failed"] if mode == "ingest-failure" else [], [doc["id"] for doc in docs]))
     driver = sync_module.Dropbox({"sync_deleted_files": mode != "disabled", "credentials": {"dropbox_access_token": "synthetic"}})
     current = task()
+    if mode == "incremental":
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     elif mode == "reindex":

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Connector, Connector2Kb, Document, File2Document, Knowledgebase, SyncLogs
 from api.db.services.connector_service import SyncLogsService, connector_doc_id_candidates
 from common import settings
-from common.constants import FileSource, TaskStatus
+from common.constants import ConnectorTaskType, FileSource, TaskStatus
 from core.svr import sync_data_source
 from tests.support.document_parse_retirement import parse_api as parse_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
@@ -106,10 +106,11 @@ async def test_real_dropbox_driver_reconciles_only_after_complete_success(parse_
     original = datetime(2025, 12, 1, tzinfo=UTC)
     ids = {name: connector_doc_id_candidates(kb_id, connector_id, f"dropbox:id:{name}")[-1] for name in ["retained", "stale"]}
     conf = {"sync_deleted_files": True, "batch_size": 2, "credentials": {"dropbox_access_token": "synthetic"}}
+    task_type = ConnectorTaskType.SYNC if mode in {"content-error", "ingestion-error", "timestamp-error"} else ConnectorTaskType.PRUNE
     with Session(env["engine"]) as db:
         db.add(Connector(id=connector_id, tenant_id=owner, name="Dropbox scratch", source=FileSource.DROPBOX, input_type="poll", config=conf, status=TaskStatus.SCHEDULE))
         db.add(Connector2Kb(id=link_id, connector_id=connector_id, kb_id=kb_id))
-        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, status=TaskStatus.SCHEDULE, poll_range_start=original))
+        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, task_type=task_type, status=TaskStatus.SCHEDULE, poll_range_start=original))
         db.commit()
         errors, created = SyncLogsService.duplicate_and_parse(
             db,
@@ -136,7 +137,17 @@ async def test_real_dropbox_driver_reconciles_only_after_complete_success(parse_
     if mode == "ingestion-error":
         monkeypatch.setattr(SyncLogsService, "duplicate_and_parse", lambda *args: (["controlled ingestion error"], []))
     driver = sync_data_source.Dropbox(conf)
-    current = {"id": task_id, "connector_id": connector_id, "kb_id": kb_id, "tenant_id": owner, "poll_range_start": original, "reindex": "0", "auto_parse": False, "timeout_secs": 30}
+    current = {
+        "task_type": task_type,
+        "id": task_id,
+        "connector_id": connector_id,
+        "kb_id": kb_id,
+        "tenant_id": owner,
+        "poll_range_start": original,
+        "reindex": "0",
+        "auto_parse": False,
+        "timeout_secs": 30,
+    }
     try:
         await driver(current)
         success = mode in {"complete", "empty"}

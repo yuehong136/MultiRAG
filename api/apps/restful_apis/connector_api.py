@@ -7,7 +7,6 @@ Routes are mounted under ``/api/v1`` by ``api.apps.register_page``:
     GET    /connectors/{connector_id}               连接器详情
     DELETE /connectors/{connector_id}               删除连接器
     GET    /connectors/{connector_id}/logs          同步日志
-    POST   /connectors/{connector_id}/resume        恢复/暂停调度
     POST   /connectors/{connector_id}/rebuild       重建与知识库的关联
     POST   /connectors/google/oauth/web/start       启动 Google OAuth
     GET    /connectors/google-drive/oauth/web/callback
@@ -32,10 +31,11 @@ Routes are mounted under ``/api/v1`` by ``api.apps.register_page``:
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -58,24 +58,23 @@ class CreateConnectorRequest(BaseModel):
     name: str
     source: str
     config: dict | None = None
-    refresh_freq: int | None = 60  # 刷新频率（分钟）
-    prune_freq: int | None = 0  # 修剪频率（分钟）
-    timeout_secs: int | None = 3600  # 超时时间（秒）
+    refresh_freq: StrictInt = Field(default=5, ge=0)  # 刷新频率（分钟）
+    prune_freq: StrictInt = Field(default=5, ge=0)  # 修剪频率（分钟）
+    timeout_secs: StrictInt = Field(default=1740, ge=1)  # 超时时间（秒）
 
 
 class UpdateConnectorRequest(BaseModel):
-    """更新连接器调度配置请求（仅这四个字段可改）"""
+    """更新配置、状态及调度"""
+
+    model_config = ConfigDict(extra="forbid")
 
     config: dict | None = None
-    refresh_freq: int | None = None
-    prune_freq: int | None = None
-    timeout_secs: int | None = None
+    refresh_freq: StrictInt | None = Field(default=None, ge=0)
+    prune_freq: StrictInt | None = Field(default=None, ge=0)
+    timeout_secs: StrictInt | None = Field(default=None, ge=1)
 
-
-class ResumeConnectorRequest(BaseModel):
-    """恢复/暂停连接器请求"""
-
-    resume: bool = True  # True: 恢复调度, False: 取消调度
+    status: Literal["2", "5"] | None = None
+    reschedule: StrictBool = False
 
 
 class RebuildRequest(BaseModel):
@@ -188,7 +187,8 @@ async def update_connector(
         if not success:
             return _respond(success, result, retcode)
 
-        await asyncio.sleep(connector_api_service.WRITE_SETTLE_SECS)
+        if any(field in req for field in ("config", "refresh_freq", "prune_freq", "timeout_secs")):
+            await asyncio.sleep(connector_api_service.WRITE_SETTLE_SECS)
         return _respond(*await db.run_sync(lambda s: connector_api_service.get_connector(s, connector_id)))  # TODO(async-phase4)
     except Exception as e:
         return server_error_response(e)
@@ -256,23 +256,6 @@ async def list_logs(
             return _auth_error()
         logs = await db.run_sync(lambda s: connector_api_service.list_logs(s, connector_id, page, page_size))  # TODO(async-phase4)
         return get_json_result(data=logs)
-    except Exception as e:
-        return server_error_response(e)
-
-
-@router.post("/connectors/{connector_id}/resume", summary="恢复或暂停连接器", response_description="操作结果")
-async def resume(
-    connector_id: str,
-    request: ResumeConnectorRequest,
-    db: AsyncSession = Depends(get_async_db),
-    user: Principal = Depends(async_current_user),
-):
-    """恢复（``resume=true``）或取消（``resume=false``）连接器的同步调度。"""
-    try:
-        if not await _require_access(db, connector_id, user.id):
-            return _auth_error()
-        resumed = await db.run_sync(lambda s: connector_api_service.resume_connector(s, connector_id, request.resume))  # TODO(async-phase4)
-        return get_json_result(data=resumed)
     except Exception as e:
         return server_error_response(e)
 

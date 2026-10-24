@@ -13,9 +13,9 @@ import signal
 import sys
 import threading
 import traceback
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator, Sequence
 from datetime import UTC, datetime
-from typing import Any, TypeAlias
+from typing import Any
 
 from box_sdk_gen import AccessToken, BoxOAuth, OAuthConfig
 
@@ -25,7 +25,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
 from common.config_utils import show_configs
-from common.constants import FileSource
+from common.constants import ConnectorTaskType, FileSource
 from common.data_source import (
     AirtableConnector,
     AsanaConnector,
@@ -53,14 +53,12 @@ from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
 from common.data_source.imap_connector import _as_utc, imap_scope_signature
 from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
-from common.data_source.models import ConnectorFailure, Document, KeyRecord, SeafileSyncScope, SlimDocument
+from common.data_source.models import ConnectorFailure, Document, KeyRecord, SeafileSyncScope
 from common.data_source.rdbms_connector import rdbms_scope_signature
 from common.data_source.webdav_connector import WebDAVConnector
 from common.log_utils import init_root_logger
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
 from common.versions import get_multirag_version
-
-GenerateDocumentsResult: TypeAlias = GenerateDocumentsOutput | tuple[GenerateDocumentsOutput, tuple[SlimDocument, ...] | None]
 
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -111,7 +109,7 @@ class SyncBase:
                 checkpoint = await asyncio.wait_for(self._run_task_logic(task), timeout=task["timeout_secs"])
 
             with db_connection() as db:
-                completion = {"rdbms_state": self._completion_state()} if isinstance(self, _RDBMSBase) else {}
+                completion = {"rdbms_state": self._completion_state()} if isinstance(self, _RDBMSBase) and task.get("task_type", ConnectorTaskType.SYNC) == ConnectorTaskType.SYNC else {}
                 SyncLogsService.complete_and_schedule_next(
                     db,
                     task["id"],
@@ -148,27 +146,49 @@ class SyncBase:
         except Exception:
             logging.exception("Failed to persist sync task failure: task_id=%s", task.get("id"))
 
-    async def _run_task_logic(self, task: dict) -> datetime:
-        generate_output = await self._generate(task)
-        if isinstance(generate_output, tuple):
-            document_batch_generator, file_list = generate_output
-        else:
-            document_batch_generator = generate_output
-            file_list = None
+    async def _run_task_logic(self, task: dict[str, Any]) -> datetime | None:
+        task_type = ConnectorTaskType(task.get("task_type", ConnectorTaskType.SYNC))
+        if task_type == ConnectorTaskType.PRUNE:
+            await self._run_prune_task_logic(task)
+            return None
+        return await self._run_sync_task_logic(task)
 
-        if file_list is None and self.SOURCE_NAME in DELETED_FILE_SYNC_SOURCES and self.conf.get("sync_deleted_files") and task.get("reindex") != "1" and task.get("poll_range_start"):
-            # Listing can block on remote pagination. Cancellation of this await
-            # never hands a partially collected snapshot to the deletion service.
-            file_list = await asyncio.to_thread(collect_slim_document_snapshot, self.connector)
+    async def _run_prune_task_logic(self, task: dict[str, Any]) -> None:
+        if self.SOURCE_NAME not in DELETED_FILE_SYNC_SOURCES or self.conf.get("sync_deleted_files") is not True:
+            raise ValueError("Deleted-file synchronization is not enabled for this source")
+        with db_connection() as db:
+            SyncLogsService.raise_if_cancelled(db, task["id"])
+            candidates = ConnectorService.prune_candidates(db, task["kb_id"], f"{self.SOURCE_NAME}/{task['connector_id']}")
+        await self._initialize_connector(task)
+        # No fallback invocation: any pagination, permission, TypeError, timeout
+        # or malformed snapshot fails the task before destructive reconciliation.
+        snapshot = await asyncio.to_thread(collect_slim_document_snapshot, self.connector)
+        with db_connection() as db:
+            SyncLogsService.raise_if_cancelled(db, task["id"])
+            removed, errors = ConnectorService.cleanup_stale_documents_for_task(
+                db,
+                task["id"],
+                task["connector_id"],
+                task["kb_id"],
+                task["tenant_id"],
+                snapshot,
+                candidates=candidates,
+            )
+        if errors:
+            raise RuntimeError("Deleted-file reconciliation failed: " + "; ".join(errors))
+        logging.info("[%s] prune summary: deleted=%s", self.SOURCE_NAME, removed)
 
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    async def _run_sync_task_logic(self, task: dict[str, Any]) -> datetime:
+        document_batch_generator = await self._generate(task)
         with db_connection() as db:
             SyncLogsService.raise_if_cancelled(db, task["id"])
             existing_doc_ids = {doc["id"] for doc in DocumentService.list_doc_headers_by_kb_and_source_type(db, task["kb_id"], f"{self.SOURCE_NAME}/{task['connector_id']}")}
 
         doc_num = 0
         failed_docs = 0
-        removed_docs = 0
-        ingested_source_ids: set[str] = set()
         next_update = datetime(1970, 1, 1, tzinfo=UTC)
 
         if task["poll_range_start"]:
@@ -209,7 +229,6 @@ class SyncBase:
                 doc_num += len(docs)
                 failed_docs += len(err)
                 existing_doc_ids.update(dids)
-                ingested_source_ids.update(doc.id for doc in document_batch)
 
             except SyncTaskCancelled:
                 raise
@@ -228,27 +247,10 @@ class SyncBase:
         prefix = self._get_source_prefix()
         if failed_docs > 0:
             raise RuntimeError(f"{failed_docs} document(s) failed during synchronization; checkpoint was not committed")
-        if file_list is not None:
-            # An object can appear after enumeration and before incremental
-            # ingestion. Never prune a source object just imported this run.
-            file_list = (*file_list, *(SlimDocument(id=source_id) for source_id in ingested_source_ids))
-            with db_connection() as db:
-                removed_docs, cleanup_errors = ConnectorService.cleanup_stale_documents_for_task(
-                    db,
-                    task["id"],
-                    task["connector_id"],
-                    task["kb_id"],
-                    task["tenant_id"],
-                    file_list,
-                )
-            if cleanup_errors:
-                raise RuntimeError("Deleted-file reconciliation failed; retry to reconcile: " + "; ".join(cleanup_errors))
-
-        removed_info = f", {removed_docs} deleted" if file_list is not None else ""
-        logging.info(f"{prefix}{doc_num} docs synchronized till {next_update}{removed_info}")
+        logging.info("%s%s docs synchronized till %s", prefix, doc_num, next_update)
         return next_update
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsResult:
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
         raise NotImplementedError
 
     def _get_source_prefix(self):
@@ -286,19 +288,17 @@ class _BlobLikeBase(SyncBase):
             yield batch
         logging.info("[%s] fingerprint sync: %d bypassed, %d fetched, %d excluded (connector_id=%s, kb_id=%s)", self.SOURCE_NAME, bypassed, fetched, excluded, task["connector_id"], task["kb_id"])
 
-    async def _generate(self, task: dict[str, Any]) -> tuple[GenerateDocumentsOutput, tuple[SlimDocument, ...] | None]:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         bucket_type = self.conf.get("bucket_type", self.DEFAULT_BUCKET_TYPE)
         self.connector = BlobStorageConnector(bucket_type=bucket_type, bucket_name=self.conf["bucket_name"], prefix=self.conf.get("prefix", ""))
         self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         records = await asyncio.to_thread(lambda: list(self.connector.list_keys()))
-        # The same complete inventory retains bypassed objects, large objects
-        # and fetched objects. No second, potentially different listing is used.
-        file_list = None
-        if self.conf.get("sync_deleted_files") and task["reindex"] != "1" and task.get("poll_range_start"):
-            file_list = tuple(SlimDocument(id=record.key) for record in records if not record.deleted)
-        logging.info("Connect to %s: %s(prefix/%s) fingerprint sync", bucket_type, self.conf["bucket_name"], self.conf.get("prefix", ""))
-        return self._fingerprint_filtered_generator(task, records), file_list
+        logging.info("Connect to %s: %s(prefix/%s) fingerprint sync", self.conf.get("bucket_type", self.DEFAULT_BUCKET_TYPE), self.conf["bucket_name"], self.conf.get("prefix", ""))
+        return self._fingerprint_filtered_generator(task, records)
 
 
 class S3(_BlobLikeBase):
@@ -324,7 +324,7 @@ class GOOGLE_CLOUD_STORAGE(_BlobLikeBase):
 class RSS(SyncBase):
     SOURCE_NAME: str = FileSource.RSS
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = RSSConnector(
             feed_url=self.conf["feed_url"],
             batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE),
@@ -332,6 +332,8 @@ class RSS(SyncBase):
         self.connector.load_credentials(self.conf.get("credentials", {}))
         self.connector.validate_connector_settings()
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task["reindex"] == "1" or not task["poll_range_start"]:
             return self.connector.load_from_state()
 
@@ -344,7 +346,7 @@ class RSS(SyncBase):
 class Confluence(SyncBase):
     SOURCE_NAME: str = FileSource.CONFLUENCE
 
-    async def _generate(self, task: dict):
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         from common.data_source.config import DocumentSource
         from common.data_source.interfaces import StaticCredentialsProvider
 
@@ -377,6 +379,8 @@ class Confluence(SyncBase):
         credentials_provider = StaticCredentialsProvider(tenant_id=task["tenant_id"], connector_name=DocumentSource.CONFLUENCE, credential_json=self.conf["credentials"])
         self.connector.set_credentials_provider(credentials_provider)
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         # Determine the time range for synchronization based on reindex or poll_range_start
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = 0.0
@@ -432,7 +436,7 @@ class Confluence(SyncBase):
 class IMAP(SyncBase):
     SOURCE_NAME: str = FileSource.IMAP
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         from common.data_source.config import DocumentSource
         from common.data_source.interfaces import StaticCredentialsProvider
 
@@ -453,8 +457,20 @@ class IMAP(SyncBase):
                     db, task["connector_id"], task["kb_id"], task["id"], imap_scope_signature(self.conf), default_start, reindex=reindex, incremental=poll_start is not None
                 )
 
-        initial_start = await asyncio.to_thread(persist_scope)
-        start_time = initial_start if reindex or poll_start is None else _as_utc(poll_start).timestamp()
+        if task.get("task_type") == ConnectorTaskType.PRUNE:
+            scopes = self.conf.get("imap_sync_scopes", {})
+            if not isinstance(scopes, dict):
+                raise ValueError("Invalid persisted IMAP synchronization scopes")
+            saved = scopes.get(task["kb_id"])
+            if saved is not None and (not isinstance(saved, dict) or saved.get("scope") != imap_scope_signature(self.conf)):
+                raise ValueError("IMAP scope changed; rebuild this knowledge base")
+            initial_start = float(saved["start"]) if saved else 0.0
+            if not math.isfinite(initial_start) or initial_start < 0:
+                raise ValueError("Invalid IMAP initial range")
+        else:
+            initial_start = await asyncio.to_thread(persist_scope)
+        self._initial_start = initial_start
+        self._snapshot_end = end_time
         self.connector = ImapConnector(
             host=self.conf["imap_host"],
             port=int(self.conf.get("imap_port") or 993),
@@ -464,6 +480,12 @@ class IMAP(SyncBase):
         )
         credentials_provider = StaticCredentialsProvider(tenant_id=task["tenant_id"], connector_name=DocumentSource.IMAP, credential_json=self.conf["credentials"])
         self.connector.set_credentials_provider(credentials_provider)
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        end_time = self._snapshot_end
+        poll_start = task.get("poll_range_start")
+        start_time = self._initial_start if task.get("reindex") == "1" or poll_start is None else _as_utc(poll_start).timestamp()
         _begin_info = f"from {datetime.fromtimestamp(start_time, UTC)}"
         raw_batch_size = self.conf.get("sync_batch_size") or self.conf.get("batch_size") or INDEX_BATCH_SIZE
         try:
@@ -516,10 +538,12 @@ class IMAP(SyncBase):
 class Zendesk(SyncBase):
     SOURCE_NAME: str = FileSource.ZENDESK
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = ZendeskConnector(content_type=self.conf.get("zendesk_content_type", "articles"))
         self.connector.load_credentials(self.conf["credentials"])
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         end_time = datetime.now(UTC).timestamp()
         if task["reindex"] == "1" or not task.get("poll_range_start"):
             start_time = 0
@@ -582,9 +606,12 @@ class Zendesk(SyncBase):
 class Notion(SyncBase):
     SOURCE_NAME: str = FileSource.NOTION
 
-    async def _generate(self, task: dict):
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = NotionConnector(root_page_id=self.conf["root_page_id"])
         self.connector.load_credentials(self.conf["credentials"])
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         document_generator = (
             self.connector.load_from_state()
             if task["reindex"] == "1" or not task["poll_range_start"]
@@ -648,7 +675,7 @@ class Discord(SyncBase):
 class Gmail(SyncBase):
     SOURCE_NAME: str = FileSource.GMAIL
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         # Gmail sync reuses the generic LoadConnector/PollConnector interface
         # implemented by common.data_source.gmail_connector.GmailConnector.
         #
@@ -682,6 +709,8 @@ class Gmail(SyncBase):
                     task["connector_id"],
                 )
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         # Decide between full reindex and incremental polling by time range.
         if task["reindex"] == "1" or not task.get("poll_range_start"):
             start_time = None
@@ -713,10 +742,12 @@ class Gmail(SyncBase):
 class Dropbox(SyncBase):
     SOURCE_NAME: str = FileSource.DROPBOX
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = DropboxConnector(batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE))
         self.connector.load_credentials(self.conf["credentials"])
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task["reindex"] == "1" or not task["poll_range_start"]:
             document_generator = self.connector.load_from_state()
             _begin_info = "totally"
@@ -732,7 +763,7 @@ class Dropbox(SyncBase):
 class GoogleDrive(SyncBase):
     SOURCE_NAME: str = FileSource.GOOGLE_DRIVE
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         connector_kwargs = {
             "include_shared_drives": self.conf.get("include_shared_drives", False),
             "include_my_drives": self.conf.get("include_my_drives", False),
@@ -754,6 +785,8 @@ class GoogleDrive(SyncBase):
         if new_credentials:
             self._persist_rotated_credentials(task["connector_id"], new_credentials)
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = 0.0
             _begin_info = "totally"
@@ -822,7 +855,7 @@ class Jira(SyncBase):
     def _get_source_prefix(self):
         return "[Jira]"
 
-    async def _generate(self, task: dict):
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         connector_kwargs = {
             "jira_base_url": self.conf["base_url"],
             "project_key": self.conf.get("project_key"),
@@ -847,6 +880,8 @@ class Jira(SyncBase):
         self.connector.load_credentials(credentials)
         self.connector.validate_connector_settings()
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = 0.0
             _begin_info = "totally"
@@ -900,12 +935,12 @@ class Jira(SyncBase):
 
         logging.info(
             "[Jira] Connect to Jira %s %s (start=%s, end=%s, sync_batch_size=%s, overlap_buffer_s=%s)",
-            connector_kwargs["jira_base_url"],
+            self.conf["base_url"],
             _begin_info,
             start_time,
             end_time,
             batch_size,
-            getattr(self.connector, "time_buffer_seconds", connector_kwargs.get("time_buffer_seconds")),
+            getattr(self.connector, "time_buffer_seconds", self.conf.get("time_buffer_seconds")),
         )
         return document_batches()
 
@@ -942,7 +977,7 @@ class Teams(SyncBase):
 class WebDAV(SyncBase):
     SOURCE_NAME: str = FileSource.WEBDAV
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         try:
             batch_size = int(self.conf.get("batch_size", INDEX_BATCH_SIZE))
         except (TypeError, ValueError):
@@ -953,6 +988,8 @@ class WebDAV(SyncBase):
         self.connector.set_allow_images(self.conf.get("allow_images", False))
         self.connector.load_credentials(self.conf["credentials"])
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         logging.info(f"Task info: reindex={task['reindex']}, poll_range_start={task['poll_range_start']}")
 
         if task["reindex"] == "1" or not task["poll_range_start"]:
@@ -974,11 +1011,13 @@ class WebDAV(SyncBase):
 class Moodle(SyncBase):
     SOURCE_NAME: str = FileSource.MOODLE
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = MoodleConnector(moodle_url=self.conf["moodle_url"], batch_size=self.conf.get("batch_size", INDEX_BATCH_SIZE))
 
         self.connector.load_credentials(self.conf["credentials"])
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         # Determine the time range for synchronization based on reindex or poll_range_start
         poll_start = task.get("poll_range_start")
 
@@ -999,7 +1038,7 @@ class Moodle(SyncBase):
 class BOX(SyncBase):
     SOURCE_NAME: str = FileSource.BOX
 
-    async def _generate(self, task: dict):
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = BoxConnector(
             folder_id=self.conf.get("folder_id", "0"),
         )
@@ -1020,6 +1059,9 @@ class BOX(SyncBase):
         auth.token_storage.store(token)
 
         self.connector.load_credentials(auth)
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         poll_start = task["poll_range_start"]
 
         if task["reindex"] == "1" or poll_start is None:
@@ -1038,7 +1080,7 @@ class BOX(SyncBase):
 class Airtable(SyncBase):
     SOURCE_NAME: str = FileSource.AIRTABLE
 
-    async def _generate(self, task: dict):
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         """
         Sync files from Airtable attachments.
         """
@@ -1054,6 +1096,8 @@ class Airtable(SyncBase):
 
         self.connector.load_credentials({"airtable_access_token": credentials["airtable_access_token"]})
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         poll_start = task.get("poll_range_start")
 
         if task.get("reindex") == "1" or poll_start is None:
@@ -1079,7 +1123,7 @@ class Airtable(SyncBase):
 class Asana(SyncBase):
     SOURCE_NAME: str = FileSource.ASANA
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = AsanaConnector(
             self.conf.get("asana_workspace_id"),
             self.conf.get("asana_project_ids"),
@@ -1092,6 +1136,8 @@ class Asana(SyncBase):
 
         self.connector.load_credentials({"asana_api_token_secret": credentials["asana_api_token_secret"]})
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             document_generator = self.connector.load_from_state()
             _begin_info = "totally"
@@ -1121,11 +1167,10 @@ class Asana(SyncBase):
 class Github(SyncBase):
     SOURCE_NAME: str = FileSource.GITHUB
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         """
         Sync files from Github repositories.
         """
-        from common.data_source.connector_runner import ConnectorRunner
 
         self.connector = GithubConnector(
             repo_owner=self.conf.get("repository_owner"),
@@ -1140,6 +1185,10 @@ class Github(SyncBase):
 
         self.connector.load_credentials({"github_access_token": credentials["github_access_token"]})
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        from common.data_source.connector_runner import ConnectorRunner
+
+        await self._initialize_connector(task)
         if task.get("reindex") == "1" or not task.get("poll_range_start"):
             start_time = datetime.fromtimestamp(0, tz=UTC)
             _begin_info = "totally"
@@ -1179,7 +1228,7 @@ class Github(SyncBase):
 class Gitlab(SyncBase):
     SOURCE_NAME: str = FileSource.GITLAB
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         """
         Sync files from GitLab attachments.
         """
@@ -1201,6 +1250,8 @@ class Gitlab(SyncBase):
             }
         )
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task["reindex"] == "1" or not task["poll_range_start"]:
             document_generator = self.connector.load_from_state()
             _begin_info = "totally"
@@ -1219,7 +1270,7 @@ class Gitlab(SyncBase):
 class Bitbucket(SyncBase):
     SOURCE_NAME: str = FileSource.BITBUCKET
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = BitbucketConnector(
             workspace=self.conf.get("workspace"),
             repositories=self.conf.get("repository_slugs"),
@@ -1233,6 +1284,8 @@ class Bitbucket(SyncBase):
             }
         )
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         if task["reindex"] == "1" or not task["poll_range_start"]:
             start_time = datetime.fromtimestamp(0, tz=UTC)
             _begin_info = "totally"
@@ -1273,7 +1326,7 @@ class Bitbucket(SyncBase):
 class SeaFile(SyncBase):
     SOURCE_NAME: str = FileSource.SEAFILE
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         conf = self.conf
         self.connector = SeaFileConnector(
             seafile_url=conf["seafile_url"],
@@ -1285,6 +1338,9 @@ class SeaFile(SyncBase):
         )
         self.connector.load_credentials(conf["credentials"])
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        conf = self.conf
+        await self._initialize_connector(task)
         poll_start = task.get("poll_range_start")
         if task["reindex"] == "1" or poll_start is None:
             document_generator = self.connector.load_from_state()
@@ -1316,7 +1372,7 @@ class SeaFile(SyncBase):
 class DingTalkAITable(SyncBase):
     SOURCE_NAME: str = FileSource.DINGTALK_AI_TABLE
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         """
         Sync records from DingTalk AI Table (Notable).
         """
@@ -1338,6 +1394,8 @@ class DingTalkAITable(SyncBase):
 
         self.connector.load_credentials({"access_token": credentials["access_token"]})
 
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         poll_start = task.get("poll_range_start")
 
         if task.get("reindex") == "1" or poll_start is None:
@@ -1376,7 +1434,7 @@ class REST_API(SyncBase):
 class _RDBMSBase(SyncBase):
     DEFAULT_PORT: int = 0
 
-    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
         self.connector = RDBMSConnector(
             db_type=self.SOURCE_NAME,
             host=self.conf.get("host", "localhost"),
@@ -1391,6 +1449,9 @@ class _RDBMSBase(SyncBase):
         )
         self.connector.load_credentials(self.conf.get("credentials") or {})
         self.connector.scope_signature = rdbms_scope_signature(self.conf, self.SOURCE_NAME)
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
         start = None
         scopes = self.conf.get("rdbms_sync_scopes", {})
         if not isinstance(scopes, dict):
@@ -1457,7 +1518,7 @@ func_factory = {
 }
 
 
-async def _gather_connector_tasks(tasks: list[asyncio.Task[None]]) -> None:
+async def _gather_connector_tasks(tasks: Sequence[Awaitable[None]]) -> None:
     """Wait for every connector task without letting one failure cancel its peers."""
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
@@ -1465,11 +1526,12 @@ async def _gather_connector_tasks(tasks: list[asyncio.Task[None]]) -> None:
             logging.error("Unhandled connector task failure", exc_info=(type(result), result, result.__traceback__))
 
 
-async def dispatch_tasks():
+async def dispatch_tasks() -> None:
     while True:
         try:
             with db_connection() as db:
-                list(SyncLogsService.list_sync_tasks(db)[0])
+                SyncLogsService.list_due_sync_tasks(db)
+                SyncLogsService.list_due_prune_tasks(db)
             break
         except Exception as e:
             logging.warning(f"DB is not ready yet: {e}")
@@ -1477,7 +1539,8 @@ async def dispatch_tasks():
 
     tasks = []
     with db_connection() as db:
-        for task in SyncLogsService.list_sync_tasks(db)[0]:
+        due = [*SyncLogsService.list_due_sync_tasks(db), *SyncLogsService.list_due_prune_tasks(db)]
+        for task in due:
             if task["poll_range_start"]:
                 task["poll_range_start"] = task["poll_range_start"].astimezone(UTC)
             if task["poll_range_end"]:

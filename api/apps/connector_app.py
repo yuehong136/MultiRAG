@@ -47,12 +47,6 @@ class SetConnectorRequest(BaseModel):
     timeout_secs: int | None = 3600  # 超时时间（秒）
 
 
-class ResumeConnectorRequest(BaseModel):
-    """恢复/暂停连接器请求"""
-
-    resume: bool = True  # True: 恢复调度, False: 取消调度
-
-
 class RebuildRequest(BaseModel):
     """重建连接器请求"""
 
@@ -172,21 +166,6 @@ def list_logs(
         if not connector_api_service.accessible(db, connector_id, user.id):
             return _auth_error()
         return get_json_result(data=connector_api_service.list_logs(db, connector_id, page, page_size))
-    except Exception as e:
-        return server_error_response(e)
-
-
-@router.put(
-    "/{connector_id}/resume",
-    summary="[Deprecated] 恢复或暂停连接器（请改用 POST /api/v1/connectors/{connector_id}/resume）",
-    response_description="操作结果",
-    deprecated=True,
-)
-def resume(connector_id: str, request: ResumeConnectorRequest, db: Session = Depends(get_db), user=Depends(manager)):
-    try:
-        if not connector_api_service.accessible(db, connector_id, user.id):
-            return _auth_error()
-        return get_json_result(data=connector_api_service.resume_connector(db, connector_id, request.resume))
     except Exception as e:
         return server_error_response(e)
 

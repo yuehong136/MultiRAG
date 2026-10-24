@@ -9,16 +9,29 @@ GetObject。`reindex=1` 强制重新下载。缺少 ETag 时保守下载，其�
 使用正文哈希。ETag 是源版本标记，不作为正文 MD5 校验。
 
 下载后使用该次 GET 返回的 ETag，避免 LIST 与 GET 之间对象更新时保存旧指纹。
-枚举和下载错误使本轮失败，保留原检查点，不执行删除核对；显式尺寸限制可跳过正文，
-对象仍在完整保留清单中。开启删除同步时复用同一份完整枚举，未变化对象同样保留。
+枚举和下载错误使 sync 失败并保留原检查点。显式尺寸限制可跳过正文；独立 prune
+使用完整的身份清单，未变化或因尺寸跳过下载的对象仍被保留，prune 不调用 GetObject。
 新文档 ID 使用知识库和连接器命名空间，已有历史 ID 仅在本知识库、本连接器来源内复用。
 
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV、RSS（当前 feed 成员镜像）。
-首次导入与重建不执行删除核对；后续同步启用
-开关时，调度器先收集完整源清单，成功入库本轮增量后再删除过期文档。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV、RSS（当前 feed 成员镜像）、Moodle、IMAP、MySQL 和 PostgreSQL。
+
+每个知识库关联分别维护 `sync`（增量入库）和 `prune`（完整清单核对删除）任务，日志的
+`task_type` 区分二者。sync 使用 `refresh_freq`；prune 仅在开关为 true 且 `prune_freq > 0`
+时运行，两个频率均以分钟计。创建默认未启动，频率均为 5 分钟，任务超时默认 1740 秒；
+历史日志迁移后为 sync，历史连接器配置不改写。
+
+`PATCH /api/v1/connectors/{id}` 接受配置、频率、超时、`status="2"`（停止）、
+`status="5"`（恢复）及 `reschedule=true`（保存后取消旧任务并重排）。状态操作不等待配置
+写入的 settle 时间。显式启动、恢复、首次关联及重建立即排队，周期完成只排同一类型的
+下一轮；重复启动不重复创建活动任务。全部 KB 都被处理。旧 resume 端点已随 Web 调用迁移
+退出，OAuth 回调保持原路径兼容。
+
+停止同时取消 sync/prune；关闭删除开关或把 prune 频率设为 0 会取消活动 prune。任务失败
+保留失败状态，停止后续周期调度；恢复重试 sync 的原始窗口。sync 的完成、检查点、RDBMS
+游标与下一轮任务在同一事务提交；取消或移除的任务不能由晚到的完成回调重新拉起。
 
 ## 清单合同
 
@@ -31,12 +44,14 @@ S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbuck
 | 完整非空清单 | 保留清单内文档，删除该知识库、该连接器来源下缺失的文档 |
 | 成功的完整空清单 | 删除该来源的全部本地文档，包括最后一份文件 |
 | 权限、分页、网络或枚举错误 | 本轮失败；部分清单不进入删除服务，也不调度成功的下一轮 |
-| 内容入库或删除核对失败 | 本轮失败；入库失败不执行删除，删除失败不确认完成 |
-| 开关关闭、首次导入、重建 | 沿用内容导入流程，不执行删除核对 |
+| 内容入库失败 | sync 失败，不提交成功检查点；不会在 sync 内执行删除 |
+| 删除核对失败 | prune 失败，不确认完成或排成功的下一轮 |
+| 开关关闭或 prune_freq 为 0 | 不调度 prune，sync 仍可运行 |
 
-协调器以 `None` 表示未取得快照，以正常耗尽后的空 tuple 表示成功空快照，不能用
-清单的真假值决定是否删除。快照后、正文读取时才出现的对象，只要本轮成功入库，就加入
-保留集合；这一保护不代表源端提供原子快照，也不覆盖独立进程绕过同步协调器的并发写入。
+prune 只接受正常耗尽后得到的完整 tuple，空 tuple 是合法空清单；异常不会回退调用或
+降级为空清单。获取清单前冻结当前 KB 和来源的本地候选及其版本；在实际删除事务内逐项
+锁定并核对更新时间、精确日期及内容指纹。清单采集或删除预检后新建、更新的文档留给下一轮核对，避免并发
+入库被旧清单误删。源端本身仍不提供跨页原子快照。
 
 清单表示配置范围内的源对象存在性。Blob 保留扩展名、图片及路径范围约束，尺寸增长或
 暂时下载失败不会让存在对象从清单消失。Jira 清单使用项目、自定义 JQL、标签与附件配置，
@@ -60,14 +75,14 @@ Google Drive 按现有 OAuth/服务账号配置遍历个人 Drive、Shared Drive
 清单只保存文档 ID，不下载正文、不读取权限。文件身份沿用入库 URL/回退 ID，
 所有清单查询不加增量时间窗口。完整空 Drive/文件夹可核对删除；`incompleteSearch`、
 权限拒绝、失效分页或未遍历完指定范围均失败。文件夹访问先验证根存在，再递归子文件夹。
-清单的遍历状态不影响后续内容检查点；内容窗口终点在清单前捕获，刷新凭据仍按原服务持久化。
+清单的遍历状态不影响后续内容检查点；sync 与 prune 分别创建连接器实例，刷新凭据仍按原服务持久化。
 OAuth 的 `my_drive_emails` 模式当前内容链不支持，删除同步明确拒绝；该模式应使用服务账号。
 
 Gmail 清单按当前可读邮箱完整分页枚举线程 ID，不读取正文、不加入增量时间窗口。
 开启删除同步时 OAuth 只枚举配置的自身邮箱；Workspace 服务账号必须完整读取域用户，
 且包含配置的主邮箱，再完整读取每个邮箱。目录/邮箱拒绝访问、禁用邮箱、异常响应、
 失效分页、循环 token 或任一正文读取失败都使本轮失败，不能降级成单邮箱或跳过后删除。
-开关关闭时保留原内容读取和错误跳过行为；首次导入与重建仍不执行删除核对。
+开关关闭时保留原内容读取和错误跳过行为；首次导入与重建的 sync 同样不执行删除核对。
 
 Gmail 不返回 Drive 的 `kind`，清单请求显式读取 `resultSizeEstimate` 并校验其非负整数形状；
 缺少线程集合或集合为空的终页须明确报告零结果，否则拒绝作为完整空清单。
@@ -106,7 +121,7 @@ GitLab 的嵌套目录与分页依赖 [Repository Tree API](https://docs.gitlab.
 Dropbox 清单与正文共用递归元数据枚举，完整耗尽各文件夹分页；清单不下载正文，
 不使用 `client_modified` 时间窗口。源身份保持 `dropbox:{Dropbox 文件 ID}`，下载使用文件 ID，
 防止枚举后同一路径被另一文件占用；重复名称沿用包含目录的展示名。内容增量仍按
-`client_modified` 过滤，首次导入和全量重建仍读取全部正文且不执行删除核对。
+`client_modified` 过滤，首次导入和全量重建的 sync 读取全部正文；删除由独立 prune 负责。
 文件夹、分页、权限、元数据或正文下载失败会中断同步；无效/循环 cursor、缺失文件身份
 或目录路径不能成为可信清单。范围仍排除不可下载文件和已删除条目，参见
 [Dropbox 列表 API](https://dropbox-sdk-python.readthedocs.io/en/latest/api/dropbox.html#dropbox.dropbox_client.Dropbox.files_list_folder)。
@@ -135,26 +150,26 @@ Zendesk ticket 正文保持 `zendesk_ticket_{id}`，排除 `status=deleted`，�
 不要求 Guide 内容标签权限。**Ticket 删除同步暂不支持**：`incremental/tickets.json` 即使
 从 `start_time=0` 导出并到达 `end_of_stream`，仍不返回最近一分钟的数据，不能证明完整。
 因此 tickets 的清单接口在发起请求前明确失败；启用 `sync_deleted_files` 的后续同步失败、
-保留原检查点与全部本地文档，关闭开关仍可同步正文。首次导入/重建遵循统一规则，不核对删除。
+保留原检查点与全部本地文档，关闭开关仍可同步正文。正文首次导入/重建由 sync 负责，tickets 不支持独立 prune。
 该限制见 [Zendesk Incremental Exports](https://developer.zendesk.com/api-reference/ticketing/ticket-management/incremental_exports/)。
 后续需要源 ID 持久映射及删除候选的源端存在性复核；不能用搜索索引或不含归档记录的 tickets
 列表直接替换导出来宣称完整。UI 仅在 articles 模式展示删除开关，改为 tickets 时提交关闭值。
 
 WebDAV 的正文与 slim 清单共用 `remote_path` 递归范围、扩展名、图片开关及大小上限，
 身份沿用 `webdav:{base_url}:{file_path}`（路径保留 SDK 返回的形式，不对历史 ID 改写）。
-清单不下载正文、不按修改时间过滤；增量终点在清单之前捕获。完整空目录可以清理。
+清单不下载正文、不按修改时间过滤；sync 与 prune 独立执行。完整空目录可以清理。
 根目录缺失、子目录失败、207 逐项/属性错误、重复或越界路径、未知资源类型或大小元数据
 均中断本轮，不能把部分目录当作完整快照。大小兼容整数及数字字符串，包括 WebDAV4 的
-`content_length`；超出大小上限的文件在正文和清单中都排除。正文下载失败同样阻断删除。
+`content_length`；超出大小上限的文件在正文和清单中都排除。正文下载失败使 sync 失败，不在正文路径执行删除。
 缩小路径范围、关闭图片或文件增长到大小上限之外会改变索引资格；开启删除同步前应确认。
 恢复旧文件但修改时间未进入增量窗口时，需重建以补回正文。服务器成功响应却静默隐藏
 对象的权限行为仍无法识别；需要在实际 Nextcloud/ownCloud 等部署中验证凭据和可见范围。
 
 RSS 开启 `sync_deleted_files` 后，以本次成功解析的单份 feed 的全部条目作为保留清单，
 正文和清单共用 `rss:md5(id 或 link 或 title 或 feed_url)`，不按正文增量时间过滤清单。
-HTTP 结果在本轮缓存，清单与正文使用同一份 feed。此模式镜像当前 feed 成员：**条目因
+HTTP 结果在各任务内缓存，sync 与 prune 分别获取 feed。此模式镜像当前 feed 成员：**条目因
 窗口滚动而移出 feed，也会删除本地历史文档，即使原文章仍然存在**。开关默认关闭，
-首次导入与重建仍不核对删除；缩小 feed 范围前应确认此语义。
+sync 的首次导入与重建不核对删除；启用 prune 或缩小 feed 范围前应确认此语义。
 
 RSS 不验证 `fh:complete`，不遍历 `next` 或 `prev-archive`，不能宣称覆盖网站全部文章。
 [RFC 5005](https://www.rfc-editor.org/info/rfc5005/) 区分完整、分页与归档 feed；普通分页
@@ -170,8 +185,8 @@ RSS 不验证 `fh:complete`，不遍历 `next` 或 `prev-archive`，不能宣称
 
 新文档 ID 同时限定知识库和连接器。已经由当前知识库、当前连接器持有的历史 ID 原位
 复用；删除核对识别原始源 ID 哈希、连接器限定哈希与知识库限定哈希，避免升级重复入库。
-其他来源和其他知识库不参与删除候选计算。本轮清单生成后才出现、随后成功导入的源对象
-也保留，避免源端在两次枚举之间新增对象而被本轮误删。枚举后、导入批次前、删除批次前
+其他来源和其他知识库不参与删除候选计算。采集清单期间新建或更新的本地文档受版本
+核对保护；后续 prune 再独立确认其源端身份。枚举后、导入批次前、删除批次前
 及最终调度提交时检查取消状态；取消不会被成功完成或失败处理覆盖，已提交的删除仍按读回
 结果记录数量。失败恢复保留本轮开始的增量边界，不让批次进度越过未成功导入的源文件。
 

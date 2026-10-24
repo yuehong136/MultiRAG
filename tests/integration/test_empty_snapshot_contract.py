@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
+from api.db.db_models import Knowledgebase
+from api.db.services.connector_service import SyncLogsService, connector_doc_id_candidates
 from common.constants import FileSource
 from common.data_source.models import Document, SlimDocument
 from core.svr.sync_data_source import SyncBase
@@ -25,6 +28,18 @@ async def test_snapshot_outcome_readback(connector_sync_api: dict[str, Any], mon
             if mode in {"listing-error", "partial"}:
                 raise PermissionError("controlled enumeration failure")
             self.listed = True
+            if mode == "concurrent":
+                env = connector_sync_api
+                with Session(env["engine"]) as db:
+                    errors, ids = SyncLogsService.duplicate_and_parse(
+                        db,
+                        db.get(Knowledgebase, env["kb"]),
+                        [{"id": connector_doc_id_candidates(env["kb"], self.task["connector_id"], "new")[-1], "semantic_identifier": "new", "extension": ".txt", "blob": b"new body"}],
+                        env["owners"][0],
+                        f"s3/{self.task['connector_id']}",
+                        auto_parse=False,
+                    )
+                    assert not errors and len(ids) == 1
 
         def documents(self) -> Iterator[list[Document]]:
             if mode == "concurrent":
@@ -34,8 +49,12 @@ async def test_snapshot_outcome_readback(connector_sync_api: dict[str, Any], mon
     class Driver(SyncBase):
         SOURCE_NAME = FileSource.S3
 
-        async def _generate(self, task: dict[str, Any]) -> Iterator[list[Document]]:
+        async def _initialize_connector(self, task: dict[str, Any]) -> None:
             self.connector = Source()
+            self.connector.task = task
+
+        async def _generate(self, task: dict[str, Any]) -> Iterator[list[Document]]:
+            await self._initialize_connector(task)
             return self.connector.documents()
 
     await assert_deleted_sync(connector_sync_api, monkeypatch, Driver, FileSource.S3, {name: name for name in ["retained", "stale", "new"]}, {"sync_deleted_files": mode != "disabled"}, mode)

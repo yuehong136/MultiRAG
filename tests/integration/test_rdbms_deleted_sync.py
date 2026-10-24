@@ -14,7 +14,7 @@ from api.apps.services import connector_api_service
 from api.db.db_models import Connector, Connector2Kb, Document, Knowledgebase, SyncLogs
 from api.db.services.connector_service import ConnectorService, SyncLogsService, connector_doc_id_candidates
 from api.db.services.doc_metadata_service import DocMetadataService
-from common.constants import TaskStatus
+from common.constants import ConnectorTaskType, TaskStatus
 from common.data_source.interfaces import collect_slim_document_snapshot
 from common.data_source.rdbms_connector import RDBMSConnector, rdbms_scope_signature
 from core.svr.sync_data_source import MySQL, PostgreSQL
@@ -125,7 +125,7 @@ async def test_same_title_metadata_cursor_commit_and_replay(connector_sync_api: 
                     db.add(current)
                     db.commit()
                 else:
-                    current = db.scalar(sa.select(SyncLogs).where(SyncLogs.connector_id == identifier, SyncLogs.status == TaskStatus.SCHEDULE))
+                    current = db.scalar(sa.select(SyncLogs).where(SyncLogs.connector_id == identifier, SyncLogs.task_type == ConnectorTaskType.SYNC, SyncLogs.status == TaskStatus.SCHEDULE))
                 task = {
                     "id": current.id,
                     "connector_id": identifier,
@@ -138,6 +138,13 @@ async def test_same_title_metadata_cursor_commit_and_replay(connector_sync_api: 
                 }
                 config = db.get(Connector, identifier).config
             await driver_type(config)(task)
+            with Session(env["engine"]) as db:
+                prune = SyncLogsService.get_latest_task(db, identifier, env["kb"], ConnectorTaskType.PRUNE)
+                if prune is None or prune.status != TaskStatus.SCHEDULE:
+                    prune = SyncLogsService.schedule(db, identifier, env["kb"], task_type=ConnectorTaskType.PRUNE)
+                prune_id = prune.id
+                config = db.get(Connector, identifier).config
+            await driver_type(config)({**task, "id": prune_id, "task_type": ConnectorTaskType.PRUNE, "poll_range_start": None})
             with Session(env["engine"]) as db:
                 assert db.get(SyncLogs, task["id"]).status == TaskStatus.DONE
                 saved = db.get(Connector, identifier).config["rdbms_sync_scopes"][env["kb"]]
@@ -172,6 +179,8 @@ def test_cursor_completion_rollback_parallel_kbs_and_config_save(bootstrapped_en
     signature = rdbms_scope_signature(conf, "postgresql")
     with Session(engine) as db:
         db.add(Connector(id=identifier, tenant_id=uuid4().hex, name="cursor state", source="postgresql", input_type="poll", config=conf))
+        for kb_id in ("a", "b"):
+            db.add(Connector2Kb(id=uuid4().hex, connector_id=identifier, kb_id=kb_id))
         db.commit()
 
     def complete(kb: str, value: Decimal, fail: bool = False) -> None:
@@ -203,6 +212,7 @@ def test_cursor_completion_rollback_parallel_kbs_and_config_save(bootstrapped_en
     finally:
         with Session(engine) as db:
             db.execute(sa.delete(SyncLogs).where(SyncLogs.connector_id == identifier))
+            db.execute(sa.delete(Connector2Kb).where(Connector2Kb.connector_id == identifier))
             db.execute(sa.delete(Connector).where(Connector.id == identifier))
             db.commit()
 

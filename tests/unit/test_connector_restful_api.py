@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from api.apps.services import connector_api_service, connector_oauth_service
+from api.db.db_models import Connector
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.constants import RetCode, TaskStatus
@@ -79,7 +80,6 @@ _GUARDED_REST_CALLS = [
     ("patch", _REST, {"refresh_freq": 30}),
     ("delete", _REST, None),
     ("get", f"{_REST}/logs", None),
-    ("post", f"{_REST}/resume", {"resume": True}),
     ("post", f"{_REST}/test", None),
     ("post", f"{_REST}/rebuild", {"kb_id": "kb-1"}),
 ]
@@ -87,7 +87,6 @@ _GUARDED_REST_CALLS = [
 _GUARDED_WEB_CALLS = [
     ("get", _WEB, None),
     ("get", f"{_WEB}/logs", None),
-    ("put", f"{_WEB}/resume", {"resume": True}),
     ("put", f"{_WEB}/rebuild", {"kb_id": "kb-1"}),
     ("post", f"{_WEB}/rm", None),
     ("post", "/v1/connector/set", {"id": CONNECTOR_ID, "refresh_freq": 30}),
@@ -99,7 +98,7 @@ def test_by_id_routes_reject_foreign_connectors(client, monkeypatch, sessions, m
     """别人的连接器一律拒绝，且不得触达任何读写。"""
     _stub_accessible(monkeypatch, sessions, False)
     touched: list[str] = []
-    for name in ("get_by_id", "update_by_id", "delete_by_id", "resume", "rebuild", "list"):
+    for name in ("get_by_id", "update_by_id", "delete_by_id", "cancel_tasks", "schedule_tasks", "rebuild", "list"):
         monkeypatch.setattr(ConnectorService, name, classmethod(lambda cls, *a, _n=name, **kw: touched.append(_n)))
     monkeypatch.setattr(SyncLogsService, "list_sync_tasks", classmethod(lambda cls, *a, **kw: touched.append("logs")))
 
@@ -148,7 +147,7 @@ def test_create_persists_owner_and_rereads(client, monkeypatch, sessions):
     assert body["retcode"] == RetCode.SUCCESS, body
     assert body["data"]["id"] == CONNECTOR_ID, body
     assert inserted[0]["tenant_id"] == "user-unit", inserted
-    assert inserted[0]["status"] == TaskStatus.SCHEDULE, inserted
+    assert inserted[0]["status"] == TaskStatus.UNSTART, inserted
     _assert_sync_facade(sessions)
 
 
@@ -161,7 +160,11 @@ def test_update_only_writes_the_four_schedule_fields(client, monkeypatch, sessio
     updates: list[dict] = []
     _stub_accessible(monkeypatch, sessions, True)
     _stub_get(monkeypatch, sessions)
-    monkeypatch.setattr(ConnectorService, "update_by_id", classmethod(lambda cls, s, cid, payload: sessions.append(s) or updates.append(payload)))
+    found = Connector(id=CONNECTOR_ID, source="google_drive", config={}, prune_freq=0)
+    monkeypatch.setattr(ConnectorService, "lock", lambda *args: found)
+    monkeypatch.setattr(Session, "flush", lambda *args: None)
+    monkeypatch.setattr(Session, "commit", lambda *args: updates.append({"config": found.config, "refresh_freq": found.refresh_freq, "timeout_secs": found.timeout_secs}))
+    monkeypatch.setattr(Session, "execute", lambda *args, **kwargs: None)
 
     resp = client.patch(_REST, json={"refresh_freq": 30, "timeout_secs": 90, "config": {"token": "y"}})
 
@@ -174,6 +177,7 @@ def test_update_only_writes_the_four_schedule_fields(client, monkeypatch, sessio
 def test_update_reports_missing_connector(client, monkeypatch, sessions):
     _stub_accessible(monkeypatch, sessions, True)
     _stub_get(monkeypatch, sessions, connector=None)
+    monkeypatch.setattr(ConnectorService, "lock", lambda *args: None)
 
     resp = client.patch(_REST, json={"refresh_freq": 30})
 
@@ -185,25 +189,21 @@ def test_update_reports_missing_connector(client, monkeypatch, sessions):
 def test_delete_cancels_tasks_before_removing(client, monkeypatch, sessions):
     calls: list[str] = []
     _stub_accessible(monkeypatch, sessions, True)
-    monkeypatch.setattr(ConnectorService, "resume", classmethod(lambda cls, s, cid, status: sessions.append(s) or calls.append(f"resume:{status}")))
+    monkeypatch.setattr(ConnectorService, "cancel_tasks", classmethod(lambda cls, s, cid: sessions.append(s) or calls.append("cancel")))
     monkeypatch.setattr(ConnectorService, "delete_by_id", classmethod(lambda cls, s, cid: sessions.append(s) or calls.append("delete")))
 
     resp = client.delete(_REST)
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"retcode": RetCode.SUCCESS, "retmsg": "success", "data": True}
-    assert calls == [f"resume:{TaskStatus.CANCEL}", "delete"], calls
+    assert calls == ["cancel", "delete"], calls
     _assert_sync_facade(sessions)
 
 
-def test_resume_maps_the_flag_to_task_status(client, monkeypatch, sessions):
-    statuses: list[str] = []
-    _stub_accessible(monkeypatch, sessions, True)
-    monkeypatch.setattr(ConnectorService, "resume", classmethod(lambda cls, s, cid, status: sessions.append(s) or statuses.append(status)))
-
-    assert client.post(f"{_REST}/resume", json={"resume": True}).status_code == 200
-    assert client.post(f"{_REST}/resume", json={"resume": False}).status_code == 200
-    assert statuses == [TaskStatus.SCHEDULE, TaskStatus.CANCEL], statuses
+def test_resume_endpoints_are_retired(client):
+    assert client.post(f"{_REST}/resume", json={"resume": True}).status_code == 404
+    assert client.put(f"{_WEB}/resume", json={"resume": True}).status_code == 404
+    assert not any("/resume" in path and "connector" in path for path in client.app.openapi()["paths"])
 
 
 def test_rebuild_surfaces_service_errors(client, monkeypatch, sessions):
@@ -384,3 +384,15 @@ def test_rest_config_save_checks_schema_without_probe(db: Session, monkeypatch: 
     writes.clear()
     result = connector_api_service.create_connector(db, {"name": "bad", "source": "rest_api", "config": {"url": "invalid"}}, "owner")
     assert result[0] is False and not writes
+
+
+@pytest.mark.parametrize("payload", [{"refresh_freq": True}, {"prune_freq": 1.5}, {"timeout_secs": 0}, {"refresh_freq": "5"}, {"status": "1"}, {"reschedule": "true"}, {"data": {"status": "5"}}])
+def test_invalid_patch_contract_never_enters_service(client, monkeypatch, payload):
+    monkeypatch.setattr(connector_api_service, "update_connector", lambda *args: pytest.fail("Invalid payload reached writes"))
+    assert client.patch(_REST, json=payload).status_code == 422
+
+
+@pytest.mark.parametrize("payload", [{"refresh_freq": True}, {"prune_freq": 1.5}, {"timeout_secs": 0}, {"refresh_freq": "5"}])
+def test_invalid_create_schedule_is_rejected(client, monkeypatch, payload):
+    monkeypatch.setattr(ConnectorService, "insert", lambda *args, **kwargs: pytest.fail("Invalid payload reached writes"))
+    assert client.post("/api/v1/connectors", json={"name": "scratch", "source": "s3", **payload}).status_code == 422

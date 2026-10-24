@@ -1,5 +1,6 @@
 """Connector deletion acceptance with isolated SQL, object and vector readback."""
 
+import json
 from collections.abc import Iterator
 from contextlib import ExitStack
 from datetime import UTC, datetime
@@ -15,7 +16,7 @@ from api.db import db_models
 from api.db.db_models import Connector, Connector2Kb, Document, File, File2Document, Knowledgebase, SyncLogs, Task, get_db
 from api.db.services.connector_service import SyncLogsService, connector_doc_id_candidates
 from common import settings
-from common.constants import TaskStatus
+from common.constants import ConnectorTaskType, TaskStatus
 from core.nlp import search
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
@@ -37,12 +38,15 @@ def connector_sync_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
     owner, kb_id, name = env["owners"][0], uuid4().hex, f"connector_{uuid4().hex}"
     env["kb"] = kb_id
     env["collection"] = search.index_name_one(owner, name)
+    env["record"].update(connector_kb=kb_id, connector_collection=env["collection"])
+    env["record_path"].write_text(json.dumps(env["record"]))
     store = settings.docStoreConn
     assert store.db_type() == "milvus" and not store.has_collection(env["collection"])
 
     def remove_index() -> None:
         store.delete_idx(env["collection"], kb_id)
         assert not store.has_collection(env["collection"])
+        env["record"]["connector_collection_removed"] = True
 
     def remove_sql() -> None:
         with Session(env["engine"]) as db:
@@ -76,7 +80,7 @@ async def assert_deleted_sync(env: dict[str, Any], monkeypatch: pytest.MonkeyPat
     original = datetime(2025, 12, 1, tzinfo=UTC)
     ids = {name: connector_doc_id_candidates(kb_id, connector_id, source_ids[name])[-1] for name in ["retained", "stale"]}
     with Session(env["engine"]) as db:
-        db.add(Connector(id=connector_id, tenant_id=owner, name="Dropbox scratch", source=source_name, input_type="poll", config=conf, status=TaskStatus.SCHEDULE))
+        db.add(Connector(id=connector_id, tenant_id=owner, name="Dropbox scratch", source=source_name, input_type="poll", config=conf, prune_freq=5, status=TaskStatus.SCHEDULE))
         db.add(Connector2Kb(id=link_id, connector_id=connector_id, kb_id=kb_id))
         db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, status=TaskStatus.SCHEDULE, poll_range_start=original))
         db.commit()
@@ -104,7 +108,21 @@ async def assert_deleted_sync(env: dict[str, Any], monkeypatch: pytest.MonkeyPat
     if mode == "ingestion-error":
         monkeypatch.setattr(SyncLogsService, "duplicate_and_parse", lambda *args: (["controlled ingestion error"], []))
     driver = driver_type(conf)
-    current = {"id": task_id, "connector_id": connector_id, "kb_id": kb_id, "tenant_id": owner, "poll_range_start": original, "reindex": "0", "auto_parse": False, "timeout_secs": 30}
+    task_type = ConnectorTaskType.SYNC if mode in {"disabled", "ingestion-error", "content-error", "download-error", "timestamp-error"} else ConnectorTaskType.PRUNE
+    with Session(env["engine"]) as db:
+        db.execute(sa.update(SyncLogs).where(SyncLogs.id == task_id).values(task_type=task_type))
+        db.commit()
+    current = {
+        "task_type": task_type,
+        "id": task_id,
+        "connector_id": connector_id,
+        "kb_id": kb_id,
+        "tenant_id": owner,
+        "poll_range_start": original,
+        "reindex": "0",
+        "auto_parse": False,
+        "timeout_secs": 30,
+    }
     try:
         await driver(current)
         success = mode in {"complete", "empty", "disabled", "concurrent"}

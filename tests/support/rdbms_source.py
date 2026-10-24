@@ -65,6 +65,18 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
 
             role = "mrag_rdbms_" + uuid4().hex[:12]
             password = secrets.token_urlsafe(24)
+
+            def remove_role() -> None:
+                with engine.begin() as connection:
+                    if connection.scalar(sa.text("SELECT count(*) FROM pg_roles WHERE rolname=:role"), {"role": role}):
+                        connection.exec_driver_sql(f'DROP OWNED BY "{role}"')
+                        connection.exec_driver_sql(f'DROP ROLE "{role}"')
+                    assert connection.scalar(sa.text("SELECT count(*) FROM pg_roles WHERE rolname=:role"), {"role": role}) == 0
+                record["role_absent"] = True
+
+            cleanup.callback(remove_role)
+            record.update(role=role, database=engine.url.database)
+            save()
             native = engine.raw_connection()
             try:
                 with native.cursor() as cursor:
@@ -72,16 +84,6 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
                 native.commit()
             finally:
                 native.close()
-
-            def remove_role() -> None:
-                with engine.begin() as connection:
-                    connection.exec_driver_sql(f'DROP OWNED BY "{role}"')
-                    connection.exec_driver_sql(f'DROP ROLE "{role}"')
-                    assert connection.scalar(sa.text("SELECT count(*) FROM pg_roles WHERE rolname=:role"), {"role": role}) == 0
-                record["role_absent"] = True
-
-            cleanup.callback(remove_role)
-            record["role"] = role
             credentials = {"username": role, "password": password}
             config = {"host": raw["host"], "port": raw["port"], "database": engine.url.database}
             record["database"] = engine.url.database
@@ -96,14 +98,9 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
             sa.Column("active", sa.Boolean),
             sa.Column("stamp", sa.DateTime(timezone=True)),
         )
-        table.create(engine)
-        if backend == "postgresql":
-            with engine.begin() as connection:
-                connection.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{role}"')
-                connection.exec_driver_sql(f'GRANT SELECT ON "{table.name}" TO "{role}"')
 
         def remove_table() -> None:
-            table.drop(engine)
+            table.drop(engine, checkfirst=True)
             assert table.name not in sa.inspect(engine).get_table_names()
             record["table_absent"] = True
             if backend == "postgresql":
@@ -111,6 +108,13 @@ def rdbms_source(pg_scratch_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[
 
         cleanup.callback(remove_table)
         record["table"] = table.name
+        save()
+        table.create(engine)
+        if backend == "postgresql":
+            with engine.begin() as connection:
+                connection.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+                connection.exec_driver_sql(f'GRANT SELECT ON "{table.name}" TO "{role}"')
+
         with engine.begin() as connection:
             connection.execute(
                 table.insert(),

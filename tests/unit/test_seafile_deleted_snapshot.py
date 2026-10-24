@@ -92,6 +92,8 @@ async def test_real_driver_deletion_switch(sync_env: dict[str, Any], mode: str) 
         patch.setattr(result, "poll_source", lambda *args: (_ for _ in ()).throw(PermissionError("body")))
     driver = sync_module.SeaFile({"seafile_url": "https://seafile.test", "sync_deleted_files": mode != "disabled", "credentials": {}})
     current = task()
+    if mode in ["incremental"]:
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     elif mode == "reindex":

@@ -23,14 +23,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db import InputType
-from api.db.db_models import Connector
+from api.db.db_models import Connector, SyncLogs
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
-from common.constants import FileSource, RetCode, TaskStatus
+from common.constants import ConnectorTaskType, FileSource, RetCode, TaskStatus
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
 from common.data_source.rest_api_connector import RestAPIConnector
 from common.misc_utils import get_uuid
@@ -43,6 +43,21 @@ _UPDATABLE_FIELDS = ("prune_freq", "refresh_freq", "config", "timeout_secs")
 AUTH_ERROR = "No authorization."
 
 _WORKER_STATE_FIELDS = {"imap": "imap_sync_scopes", "mysql": "rdbms_sync_scopes", "postgresql": "rdbms_sync_scopes"}
+
+
+def _validate_schedule(req: dict[str, Any]) -> str | None:
+    for name, minimum in (("refresh_freq", 0), ("prune_freq", 0), ("timeout_secs", 1)):
+        if name in req and (type(req[name]) is not int or req[name] < minimum):
+            return f"{name} must be an integer >= {minimum}"
+    if isinstance(req.get("config"), dict) and "sync_deleted_files" in req["config"] and type(req["config"]["sync_deleted_files"]) is not bool:
+        return "sync_deleted_files must be a boolean"
+    if "reschedule" in req and type(req["reschedule"]) is not bool:
+        return "reschedule must be a boolean"
+    if "status" in req and req["status"] not in (TaskStatus.CANCEL, TaskStatus.SCHEDULE):
+        return "status must be cancel (2) or schedule (5)"
+    if req.get("reschedule") and req.get("status") == TaskStatus.CANCEL:
+        return "reschedule cannot be combined with cancel"
+    return None
 
 
 def accessible(db: Session, connector_id: str, user_id: str) -> bool:
@@ -65,7 +80,9 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
     if not req.get("name") or not req.get("source"):
         return False, "创建连接器时 name 和 source 为必填项", RetCode.DATA_ERROR
 
-    config = dict(req.get("config", {}))
+    if error := _validate_schedule(req):
+        return False, error, RetCode.ARGUMENT_ERROR
+    config = dict(req.get("config") or {})
     if state_key := _WORKER_STATE_FIELDS.get(req["source"]):
         config.pop(state_key, None)
     if req["source"] == FileSource.REST_API:
@@ -82,17 +99,19 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
         source=req["source"],
         input_type=InputType.POLL,
         config=config,
-        refresh_freq=int(req.get("refresh_freq", 5)),
-        prune_freq=int(req.get("prune_freq", 720)),
-        timeout_secs=int(req.get("timeout_secs", 60 * 29)),
-        status=TaskStatus.SCHEDULE,
+        refresh_freq=req.get("refresh_freq", 5),
+        prune_freq=req.get("prune_freq", 5),
+        timeout_secs=req.get("timeout_secs", 60 * 29),
+        status=TaskStatus.UNSTART,
     )
     return True, connector_id, None
 
 
 def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tuple[bool, Any, RetCode | None]:
     """改连接器的调度配置，成功时返回 id（回读同上，由网关发起）。"""
-    connector = ConnectorService.get_by_id(db, connector_id)
+    if error := _validate_schedule(req):
+        return False, error, RetCode.ARGUMENT_ERROR
+    connector = ConnectorService.lock(db, connector_id)
     if connector is None:
         return False, "Can't find this Connector!", RetCode.DATA_ERROR
 
@@ -112,18 +131,29 @@ def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tup
         except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
             return False, str(exc), RetCode.DATA_ERROR
     if changes:
-        ConnectorService.update_by_id(db, connector_id, changes)
+        for field, value in changes.items():
+            setattr(connector, field, value)
+        db.flush()
+        if not ConnectorService.prune_enabled(connector):
+            db.execute(
+                update(SyncLogs)
+                .where(SyncLogs.connector_id == connector_id, SyncLogs.task_type == ConnectorTaskType.PRUNE, SyncLogs.status.in_([TaskStatus.SCHEDULE, TaskStatus.RUNNING]))
+                .values(status=TaskStatus.CANCEL)
+            )
+    if req.get("reschedule"):
+        ConnectorService.cancel_tasks(db, connector_id, commit=False)
+        ConnectorService.schedule_tasks(db, connector_id, commit=False)
+    elif req.get("status") == TaskStatus.CANCEL:
+        ConnectorService.cancel_tasks(db, connector_id, commit=False)
+    elif req.get("status") == TaskStatus.SCHEDULE:
+        ConnectorService.schedule_tasks(db, connector_id, commit=False)
+    db.commit()
     return True, connector_id, None
 
 
 def list_logs(db: Session, connector_id: str, page: int, page_size: int) -> dict:
     logs, total = SyncLogsService.list_sync_tasks(db, connector_id, page, page_size)
     return {"total": total, "logs": logs}
-
-
-def resume_connector(db: Session, connector_id: str, resume: bool) -> bool:
-    ConnectorService.resume(db, connector_id, TaskStatus.SCHEDULE if resume else TaskStatus.CANCEL)
-    return True
 
 
 def rebuild_connector(db: Session, connector_id: str, kb_id: str, tenant_id: str) -> tuple[bool, Any, RetCode | None]:
@@ -134,7 +164,7 @@ def rebuild_connector(db: Session, connector_id: str, kb_id: str, tenant_id: str
 
 
 def remove_connector(db: Session, connector_id: str) -> bool:
-    ConnectorService.resume(db, connector_id, TaskStatus.CANCEL)
+    ConnectorService.cancel_tasks(db, connector_id)
     ConnectorService.delete_by_id(db, connector_id)
     return True
 

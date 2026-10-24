@@ -122,6 +122,8 @@ async def test_driver_scope_and_snapshot_coordinator(sync_env: dict[str, Any], m
         "sync_deleted_files": mode != "disabled",
     }
     current = task()
+    if mode in ["complete", "empty", "read-error"]:
+        current["task_type"] = "prune"
     if mode == "first":
         current["poll_range_start"] = None
     elif mode == "reindex":
@@ -130,7 +132,7 @@ async def test_driver_scope_and_snapshot_coordinator(sync_env: dict[str, Any], m
     calls = sync_env["calls"]
     assert calls[0] == "start" and calls[-1] == ("fail" if mode in {"read-error", "persistence-error"} else "complete")
     assert any(isinstance(call, tuple) and call[0] == "cleanup" for call in calls) == (mode in {"complete", "empty"})
-    assert scopes == [{"reindex": mode == "reindex", "incremental": mode != "first"}]
+    assert scopes == ([] if current.get("task_type") == "prune" else [{"reindex": mode == "reindex", "incremental": mode != "first"}])
     if mode == "persistence-error":
         assert source.calls == []
 

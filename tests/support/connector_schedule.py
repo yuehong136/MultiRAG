@@ -51,7 +51,7 @@ def assert_schedule_readback(engine: Engine) -> dict[str, Any]:
                 db.execute(update(SyncLogs).where(SyncLogs.id == task_ids[case]).values(update_date=server_now - timedelta(minutes=5) + timedelta(seconds=delta)))
             db.commit()
         with Session(engine) as db:
-            tasks, _ = SyncLogsService.list_sync_tasks(db)
+            tasks = SyncLogsService.list_due_sync_tasks(db)
             owned = [task for task in tasks if task["connector_id"] == connector_id]
             assert [task["id"] for task in owned] == [task_ids["before"]]
             assert owned[0]["poll_range_start"] == instant and owned[0]["poll_range_start"].tzinfo is UTC
@@ -59,18 +59,18 @@ def assert_schedule_readback(engine: Engine) -> dict[str, Any]:
             db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.CANCEL))
             db.commit()
         with Session(engine) as db:
-            assert not any(task["connector_id"] == connector_id for task in SyncLogsService.list_sync_tasks(db)[0])
+            assert not any(task["connector_id"] == connector_id for task in SyncLogsService.list_due_sync_tasks(db))
             # Explicit log inspection bypasses the due/status filter.
             assert len(SyncLogsService.list_sync_tasks(db, connector_id)[0]) == 3
             db.execute(update(Connector).where(Connector.id == connector_id).values(status=TaskStatus.SCHEDULE, input_type="event"))
             db.commit()
         with Session(engine) as db:
-            assert not any(task["connector_id"] == connector_id for task in SyncLogsService.list_sync_tasks(db)[0])
+            assert not any(task["connector_id"] == connector_id for task in SyncLogsService.list_due_sync_tasks(db))
             db.execute(update(Connector).where(Connector.id == connector_id).values(input_type=InputType.POLL))
             db.execute(update(SyncLogs).where(SyncLogs.id == task_ids["before"]).values(status=TaskStatus.CANCEL))
             db.commit()
         with Session(engine) as db:
-            assert not any(task["connector_id"] == connector_id for task in SyncLogsService.list_sync_tasks(db)[0])
+            assert not any(task["connector_id"] == connector_id for task in SyncLogsService.list_due_sync_tasks(db))
         return {
             "dialect": dialect,
             "exact_boundary": {"before": True, "equal": False, "after": False},

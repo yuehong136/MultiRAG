@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Connector, Connector2Kb, Document, File2Document, Knowledgebase, SyncLogs, Task
 from api.db.services.connector_service import ConnectorService, SyncLogsService, connector_doc_id_candidates
 from common import settings
-from common.constants import FileSource, TaskStatus
+from common.constants import ConnectorTaskType, FileSource, TaskStatus
 from common.data_source.models import Document as SourceDocument
 from common.data_source.models import NotionSearchResponse, SlimDocument
 from common.data_source.notion_connector import NotionConnector
@@ -59,6 +59,9 @@ async def test_shared_external_id_isolated_across_kbs_and_connectors(connector_s
             self.body = b"shared original body"
             self.ingest = True
 
+        async def _initialize_connector(self, task: dict[str, Any]) -> None:
+            pass
+
         async def _generate(self, task: dict[str, Any]) -> Iterator[list[SourceDocument]]:
             doc = SourceDocument(
                 id=external_id, source=self.SOURCE_NAME, semantic_identifier="shared-key", extension=".txt", blob=self.body, size_bytes=len(self.body), doc_updated_at=datetime(2026, 2, 1, tzinfo=UTC)
@@ -91,7 +94,11 @@ async def test_shared_external_id_isolated_across_kbs_and_connectors(connector_s
         with Session(env["engine"]) as db:
             db.add(Knowledgebase(id=other_kb, tenant_id=owner, created_by=owner, name=other_name, embd_id="scratch-embedding", parser_id="naive", parser_config={}))
             for connector in [connector_id, other_connector]:
-                db.add(Connector(id=connector, tenant_id=owner, name="identity scratch", source=FileSource.S3, input_type="poll", config={"sync_deleted_files": True}, status=TaskStatus.SCHEDULE))
+                db.add(
+                    Connector(
+                        id=connector, tenant_id=owner, name="identity scratch", source=FileSource.S3, input_type="poll", config={"sync_deleted_files": True}, prune_freq=5, status=TaskStatus.SCHEDULE
+                    )
+                )
             for current in tasks.values():
                 db.add(Connector2Kb(id=uuid4().hex, connector_id=current["connector_id"], kb_id=current["kb_id"]))
                 db.add(SyncLogs(id=current["id"], connector_id=current["connector_id"], kb_id=current["kb_id"], status=TaskStatus.SCHEDULE))
@@ -149,6 +156,10 @@ async def test_shared_external_id_isolated_across_kbs_and_connectors(connector_s
         # A successful nonempty listing with no changed content retains the
         # historical/current row. Empty listing prunes only this KB+connector.
         driver.ingest = False
+        with Session(env["engine"]) as db:
+            prune = SyncLogsService.schedule(db, connector_id, kb_id, task_type=ConnectorTaskType.PRUNE)
+            assert prune is not None
+            tasks["original"].update(id=prune.id, task_type=ConnectorTaskType.PRUNE)
         await driver._run_task_logic(tasks["original"])
         with Session(env["engine"]) as db:
             assert db.get(Document, identities["original"][0]) is not None
@@ -179,9 +190,11 @@ async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_
     neighbor_id, running_id = uuid4().hex, uuid4().hex
     key = f"{running_id}-cancel"
     with Session(env["engine"]) as db:
-        db.add(Connector(id=connector_id, tenant_id=owner, name="snapshot scratch", source=source_key, input_type="poll", config={"sync_deleted_files": True}, status=TaskStatus.SCHEDULE))
+        db.add(
+            Connector(id=connector_id, tenant_id=owner, name="snapshot scratch", source=source_key, input_type="poll", config={"sync_deleted_files": True}, prune_freq=5, status=TaskStatus.SCHEDULE)
+        )
         db.add(Connector2Kb(id=link_id, connector_id=connector_id, kb_id=kb_id))
-        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, status=TaskStatus.SCHEDULE, from_beginning="0"))
+        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, task_type=ConnectorTaskType.PRUNE, status=TaskStatus.SCHEDULE, from_beginning="0"))
         db.commit()
         kb = db.get(Knowledgebase, kb_id)
         assert kb is not None
@@ -224,7 +237,7 @@ async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_
         def retrieve_all_slim_docs_perm_sync(self, callback: Any = None) -> Iterator[list[SlimDocument]]:
             if self.cancel_on_list:
                 with Session(env["engine"]) as db:
-                    ConnectorService.resume(db, connector_id, TaskStatus.CANCEL)
+                    ConnectorService.cancel_tasks(db, connector_id)
             if not self.empty:
                 yield [SlimDocument(id="retained")]
             if self.failure:
@@ -233,12 +246,16 @@ async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_
     class Driver(sync_data_source.SyncBase):
         SOURCE_NAME = source_key
 
+        async def _initialize_connector(self, task: dict[str, Any]) -> None:
+            pass
+
         async def _generate(self, task: dict[str, Any]) -> Iterator[list[Any]]:
             return iter(())
 
     driver = Driver({"sync_deleted_files": True})
     driver.connector = Source()
     current = {
+        "task_type": ConnectorTaskType.PRUNE,
         "id": task_id,
         "connector_id": connector_id,
         "kb_id": kb_id,
@@ -268,7 +285,9 @@ async def test_complete_snapshot_prunes_only_owned_source_and_empty_prunes_last_
             assert db.get(SyncLogs, task_id).status == TaskStatus.CANCEL
             assert db.get(Connector, connector_id).status == TaskStatus.CANCEL
             assert db.scalar(sa.select(sa.func.count()).select_from(SyncLogs).where(SyncLogs.connector_id == connector_id)) == 1
-            ConnectorService.resume(db, connector_id, TaskStatus.SCHEDULE)
+            ConnectorService.schedule_tasks(db, connector_id)
+            task_id = SyncLogsService.get_latest_task(db, connector_id, kb_id, ConnectorTaskType.PRUNE).id
+            current["id"] = task_id
         driver.connector.cancel_on_list = False
         await driver(current)
         with Session(env["engine"]) as db:
@@ -315,9 +334,13 @@ async def test_notion_workspace_search_cannot_authorize_deletion(parse_api: dict
     document_id = connector_doc_id_candidates(kb_id, connector_id, "existing-page")[-1]
     original = datetime(2026, 1, 1, tzinfo=UTC)
     with Session(env["engine"]) as db:
-        db.add(Connector(id=connector_id, tenant_id=owner, name="Notion scratch", source=FileSource.NOTION, input_type="poll", config={"sync_deleted_files": True}, status=TaskStatus.SCHEDULE))
+        db.add(
+            Connector(
+                id=connector_id, tenant_id=owner, name="Notion scratch", source=FileSource.NOTION, input_type="poll", config={"sync_deleted_files": True}, prune_freq=5, status=TaskStatus.SCHEDULE
+            )
+        )
         db.add(Connector2Kb(id=link_id, connector_id=connector_id, kb_id=kb_id))
-        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, status=TaskStatus.SCHEDULE, poll_range_start=original))
+        db.add(SyncLogs(id=task_id, connector_id=connector_id, kb_id=kb_id, task_type=ConnectorTaskType.PRUNE, status=TaskStatus.SCHEDULE, poll_range_start=original))
         db.commit()
         kb = db.get(Knowledgebase, kb_id)
         assert kb is not None
@@ -334,6 +357,9 @@ async def test_notion_workspace_search_cannot_authorize_deletion(parse_api: dict
     class Driver(sync_data_source.SyncBase):
         SOURCE_NAME = FileSource.NOTION
 
+        async def _initialize_connector(self, task: dict[str, Any]) -> None:
+            pass
+
         async def _generate(self, task: dict[str, Any]) -> Iterator[list[Any]]:
             return iter(())
 
@@ -349,7 +375,19 @@ async def test_notion_workspace_search_cannot_authorize_deletion(parse_api: dict
     before_objects = {obj.object_name for obj in env["storage"].list_objects(env["bucket"], recursive=True)}
     assert before_objects
     try:
-        await driver({"id": task_id, "connector_id": connector_id, "kb_id": kb_id, "tenant_id": owner, "poll_range_start": original, "reindex": "0", "auto_parse": False, "timeout_secs": 30})
+        await driver(
+            {
+                "task_type": ConnectorTaskType.PRUNE,
+                "id": task_id,
+                "connector_id": connector_id,
+                "kb_id": kb_id,
+                "tenant_id": owner,
+                "poll_range_start": original,
+                "reindex": "0",
+                "auto_parse": False,
+                "timeout_secs": 30,
+            }
+        )
         assert search_calls == []
         with Session(env["engine"]) as db:
             assert db.get(Document, document_id) is not None
