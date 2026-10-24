@@ -20,8 +20,10 @@ GO_LIVE_OPT_INS = {
     "admin": {"TestAdminVariablesCLIHTTPAndSQL"},
     "router": {"TestRESTAliasesHTTPAndSQL", "TestMemoryUpdateHTTPAndSQL", "TestDocumentListHTTPCLIAndSQL"},
     "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
-    "engine": {"TestSkillMilvusLiveUnpublishedFragments"},
+    "engine": {"TestSkillMilvusLiveUnpublishedFragments", "TestEngineStoresLive"},
     "handler": {
+        "TestAfterD7ProvidersHTTPCLIAndSQL",
+        "TestDatasetGraphHTTPAndSQL",
         "TestAfter9dProvidersHTTPCLIAndSQL",
         "TestAfter410GoHTTPCLIAndSQL",
         "TestAfterBBBProvidersHTTPCLIAndSQL",

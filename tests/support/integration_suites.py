@@ -140,10 +140,12 @@ def suite_paths(suite: str) -> list[Path]:
         return [
             INTEGRATION / name
             for name in (
+                "test_agent_draft_session_persistence.py",
                 "test_dataset_search_http.py",
                 "test_dataset_management_http.py",
                 "test_dataset_embedding_http.py",
                 "test_connector_web_sync.py",
+                "test_connector_dashboard_consumer.py",
                 "test_connector_rebuild_authorization.py",
                 "test_github_sync_defaults.py",
                 "test_model_document_web_consumers.py",
@@ -161,6 +163,15 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name == "test_connector_task_controls.py":
+            required.add("postgresql")
+            continue
+        if path.name == "test_tts_cache.py":
+            required.update(("postgresql", "redis"))
+            continue
+        if path.name == "test_retrieval_manual_filter_iteration.py":
+            required.update(("postgresql", "elasticsearch"))
+            continue
         if path.name == "test_runtime_cleanup_storage_protocol.py":
             # Real cloud SDK clients use owned transports and OpenDAL memory.
             continue

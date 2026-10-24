@@ -20,6 +20,13 @@ runs:
         sudo apt-get install -y --no-install-recommends build-essential libpcre2-dev libsimde-dev
         uv tool install cmake==4.0.3
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Check OpenCC input boundaries with sanitizers
+      shell: bash
+      run: |
+        set -euo pipefail
+        cmake -S internal/cpp/tests -B .test-results/go/opencc-native -DENABLE_SANITIZERS=ON
+        cmake --build .test-results/go/opencc-native --parallel 2
+        ctest --test-dir .test-results/go/opencc-native --output-on-failure --output-junit opencc-junit.xml
     - uses: actions/cache@v4
       id: native
       with:
