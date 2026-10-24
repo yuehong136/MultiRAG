@@ -272,12 +272,14 @@ func replicateAnswer(output json.RawMessage) (string, error) {
 		if err := json.Unmarshal(output, &parts); err != nil {
 			return "", fmt.Errorf("replicate: output must be text or text fragments")
 		}
+		var text strings.Builder
 		for _, part := range parts {
 			if part == nil {
 				return "", fmt.Errorf("replicate: missing output fragment")
 			}
-			answer += *part
+			text.WriteString(*part)
 		}
+		answer = text.String()
 	}
 	if strings.TrimSpace(answer) == "" {
 		return "", fmt.Errorf("replicate: no text answer")
