@@ -279,25 +279,27 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                 required = {*self.content_columns, *self.metadata_columns, *(column for column in (self.id_column, self.timestamp_column) if column)}
                 if len(set(columns)) != len(columns) or not required.issubset(columns):
                     raise ConnectorValidationError("RDBMS query has duplicate/missing configured columns")
-                while batch := cursor.fetchmany(self.batch_size):
-                    for values in batch:
-                        row = dict(zip(columns, values, strict=True)) if not isinstance(values, dict) else values
-                        if self.timestamp_column:
-                            value = row[self.timestamp_column]
-                            if value is None:
-                                raise ConnectorValidationError("RDBMS cursor column cannot contain NULL")
-                            self.serialize_cursor_value(value)
-                        content = self._content(row)
-                        if not content:
-                            continue
-                        identifier = self._document_id(row, content)
-                        fingerprint = hashlib.sha256(json.dumps(row, ensure_ascii=False, default=_json_value, sort_keys=True).encode()).hexdigest()
-                        if identifier in seen:
-                            if seen[identifier] != (index, fingerprint):
-                                raise ConnectorValidationError("RDBMS document ID collision; use a query with unique IDs")
-                            continue
-                        seen[identifier] = index, fingerprint
-                        yield row
+                # The C MySQL cursor in 9.3 repeats its cached row for
+                # fetchmany(1). Its iterator advances with fetchone instead;
+                # document batches are still grouped in _yield_documents.
+                for values in cursor:
+                    row = dict(zip(columns, values, strict=True)) if not isinstance(values, dict) else values
+                    if self.timestamp_column:
+                        value = row[self.timestamp_column]
+                        if value is None:
+                            raise ConnectorValidationError("RDBMS cursor column cannot contain NULL")
+                        self.serialize_cursor_value(value)
+                    content = self._content(row)
+                    if not content:
+                        continue
+                    identifier = self._document_id(row, content)
+                    fingerprint = hashlib.sha256(json.dumps(row, ensure_ascii=False, default=_json_value, sort_keys=True).encode()).hexdigest()
+                    if identifier in seen:
+                        if seen[identifier] != (index, fingerprint):
+                            raise ConnectorValidationError("RDBMS document ID collision; use a query with unique IDs")
+                        continue
+                    seen[identifier] = index, fingerprint
+                    yield row
 
     def _row_to_document(self, row: dict[str, Any]) -> Document:
         content = self._content(row)

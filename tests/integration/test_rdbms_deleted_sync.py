@@ -33,6 +33,44 @@ def source_connector(env: dict[str, Any], **changes: Any) -> RDBMSConnector:
     return result
 
 
+@pytest.mark.parametrize("batch_size", [1, 2, 3])
+def test_stream_exhausts_two_rows_and_preserves_document_batches(rdbms_source: dict[str, Any], batch_size: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = source_connector(rdbms_source, batch_size=batch_size)
+    connections: list[Any] = []
+    sessions: list[int] = []
+    connect = result._get_connection
+
+    def observed_connection() -> Any:
+        connection = connect()
+        connections.append(connection)
+        sessions.append(connection.connection_id if rdbms_source["backend"] == "mysql" else connection.get_backend_pid())
+        return connection
+
+    monkeypatch.setattr(result, "_get_connection", observed_connection)
+    batches = list(result.load_from_state())
+    documents = [document for batch in batches for document in batch]
+    assert [document.id for document in documents] == [f"DatabaseType.{rdbms_source['backend'].upper()}:{rdbms_source['config']['database']}:{identifier}" for identifier in (1, 2)]
+    assert [len(batch) for batch in batches] == ([1, 1] if batch_size == 1 else [2])
+    snapshot = collect_slim_document_snapshot(result)
+    assert [document.id for document in documents] == [document.id for document in snapshot]
+    # Reusing the connector creates a fresh, fully consumed read transaction.
+    assert [document.id for batch in result.load_from_state() for document in batch] == [document.id for document in documents]
+    assert len(connections) == 3
+    assert all(not connection.is_connected() if rdbms_source["backend"] == "mysql" else bool(connection.closed) for connection in connections)
+    with rdbms_source["engine"].connect() as db:
+        query = "SELECT count(*) FROM information_schema.PROCESSLIST WHERE ID IN :sessions" if rdbms_source["backend"] == "mysql" else "SELECT count(*) FROM pg_stat_activity WHERE pid IN :sessions"
+        assert db.scalar(sa.text(query).bindparams(sa.bindparam("sessions", expanding=True)), {"sessions": sessions}) == 0
+    rdbms_source["record"]["stream_exhaustion"] = {
+        "batch_size": batch_size,
+        "document_count": len(documents),
+        "snapshot_count": len(snapshot),
+        "replay_identical": True,
+        "connection_types": [type(connection).__module__ + "." + type(connection).__name__ for connection in connections],
+        "source_sessions_closed": sessions,
+        "independent_session_readback": True,
+    }
+
+
 def test_actual_query_ranges_types_hashes_metadata_and_empty(rdbms_source: dict[str, Any]) -> None:
     env = rdbms_source
     result = source_connector(env)

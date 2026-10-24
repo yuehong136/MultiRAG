@@ -1,4 +1,6 @@
+import asyncio
 import hashlib
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -171,3 +173,51 @@ def test_memoryview_content_has_stable_hash_and_title() -> None:
     assert docs[0].id == docs[1].id
     assert docs[0].blob == docs[1].blob and docs[0].semantic_identifier == docs[1].semantic_identifier
     assert docs[0].metadata == {"category": '{"base64": "AP8="}'}
+
+
+@pytest.mark.parametrize("mapping", [False, True])
+@pytest.mark.parametrize("failure", [None, "read", "cancel", "close"])
+def test_stream_batches_and_resource_closure_preserve_failures(monkeypatch: pytest.MonkeyPatch, mapping: bool, failure: str | None) -> None:
+    closed: list[str] = []
+    error = asyncio.CancelledError("controlled cancellation") if failure == "cancel" else RuntimeError(f"controlled {failure} failure")
+    columns = ["id", "body", "category", "seq"]
+
+    class Cursor:
+        description = [(name,) for name in columns]
+
+        def execute(self, query: str, parameters: tuple[Any, ...]) -> None:
+            pass
+
+        def __iter__(self) -> Iterator[Any]:
+            for identifier in (1, 2):
+                if failure in {"read", "cancel"} and identifier == 2:
+                    raise error
+                row = (identifier, f"record {identifier}", "owned", Decimal(identifier))
+                yield dict(zip(columns, row, strict=True)) if mapping else row
+
+        def close(self) -> None:
+            closed.append("cursor")
+            if failure == "close":
+                raise error
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def close(self) -> None:
+            closed.append("connection")
+
+    result = connector()
+    monkeypatch.setattr(result, "_get_connection", Connection)
+    stream = result.load_from_state()
+    first = next(stream)
+    assert len(first) == 1 and first[0].id.endswith(":1")
+    if failure:
+        with pytest.raises(type(error)) as raised:
+            list(stream)
+        assert raised.value is error
+    else:
+        remaining = list(stream)
+        assert [len(batch) for batch in remaining] == [1]
+        assert remaining[0][0].id.endswith(":2")
+    assert closed == ["cursor", "connection"]
