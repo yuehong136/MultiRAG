@@ -1059,6 +1059,10 @@ func (c *MultiRAGClient) ShowInstanceBalance(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
+	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("user authentication is required")
+	}
+
 	instanceName, ok := cmd.Params["instance_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("instance name not provided")
@@ -1069,15 +1073,15 @@ func (c *MultiRAGClient) ShowInstanceBalance(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("provider name not provided")
 	}
 
-	url := fmt.Sprintf("/providers/%s/instances/%s/balance", providerName, instanceName)
+	url := fmt.Sprintf("/providers/%s/instances/%s/balance", url.PathEscape(providerName), url.PathEscape(instanceName))
 
-	resp, err := c.HTTPClient.Request("GET", url, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", url, "api", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to show balance: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to show balance: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("show balance", resp); err != nil {
+		return nil, err
 	}
 
 	var result CommonDataResponse
@@ -1085,6 +1089,9 @@ func (c *MultiRAGClient) ShowInstanceBalance(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("show balance failed: invalid JSON (%w)", err)
 	}
 
+	if result.Data == nil {
+		return nil, fmt.Errorf("show balance returned no data")
+	}
 	if result.Code != 0 {
 		return nil, fmt.Errorf("%s", result.Message)
 	}

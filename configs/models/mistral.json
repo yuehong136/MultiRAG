@@ -102,6 +102,20 @@
       "model_types": [
         "ocr"
       ]
+    },
+    {
+      "name": "magistral-medium-latest",
+      "max_tokens": 40000,
+      "model_types": [
+        "chat"
+      ]
+    },
+    {
+      "name": "magistral-small-latest",
+      "max_tokens": 40000,
+      "model_types": [
+        "chat"
+      ]
     }
   ]
 }

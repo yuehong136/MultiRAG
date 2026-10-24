@@ -4,7 +4,9 @@
     "chat": "v1/chat/completions",
     "models": "v1/models",
     "rerank": "v1/rerank",
-    "embedding": "v1/embeddings"
+    "embedding": "v1/embeddings",
+    "asr": "v1/audio/transcriptions",
+    "tts": "v1/audio/speech"
   },
   "class": "local",
   "models": []
