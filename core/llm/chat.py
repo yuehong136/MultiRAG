@@ -39,6 +39,7 @@ from common.url_utils import append_path_segment, ensure_api_version, strip_trai
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
 from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request_options
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
+from core.llm.tool_decorator import resolve_tool_binding
 from core.nlp import is_chinese, is_english
 
 
@@ -321,12 +322,12 @@ class Base(ToolHistoryMixin, ABC):
     def _verbose_tool_use(self, name: str, args: dict[str, Any], res: Any) -> str:
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": str(res) if isinstance(res, Exception) else res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def bind_tools(self, toolcall_session, tools):
-        if not (toolcall_session and tools):
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        binding = resolve_tool_binding(toolcall_session, tools)
+        if binding is None:
             return
-        self.is_tools = True
-        self.toolcall_session = toolcall_session
-        self.tools = tools
+        self.toolcall_session, self.tools = binding
+        self.is_tools = bool(self.tools)
 
     async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
@@ -350,10 +351,18 @@ class Base(ToolHistoryMixin, ABC):
                     message = response.choices[0].message
                     _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
                     if not hasattr(message, "tool_calls") or not message.tool_calls:
+                        content = message.content
+                        if not content or not content.strip():
+                            if not ans.strip():
+                                return (
+                                    f"{ERROR_PREFIX}: {LLMErrorCode.ERROR_MODEL} - Model returned an empty final answer without tool calls (finish_reason={response.choices[0].finish_reason}).",
+                                    tk_count,
+                                )
+                            content = ""
                         if _reasoning:
                             ans += "<think>" + _reasoning + "</think>"
 
-                        ans += message.content or ""
+                        ans += content
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
 
@@ -636,6 +645,8 @@ class BaiChuanChat(Base):
             extra_body={"tools": [{"type": "web_search", "web_search": {"enable": True, "search_mode": "performance_first"}}]},
             **gen_conf,
         )
+        if not response.choices:
+            raise ValueError("LLM returned empty response")
         ans = response.choices[0].message.content.strip()
         if response.choices[0].finish_reason == "length":
             if is_chinese([ans]):
@@ -783,6 +794,8 @@ class MistralChat(Base):
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         response = self.client.chat(model=self.model_name, messages=history, **gen_conf)
+        if not response.choices:
+            raise ValueError("LLM returned empty response")
         ans = response.choices[0].message.content
         if response.choices[0].finish_reason == "length":
             if is_chinese(ans):
@@ -1335,7 +1348,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         for attempt in range(self.max_retries + 1):
             try:
                 async with self._completion(completion_args) as response:
-                    if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
+                    if not response.choices or not response.choices[0].message or not response.choices[0].message.content:
                         return "", 0
                     ans = response.choices[0].message.content.strip()
                     if response.choices[0].finish_reason == "length":
@@ -1448,12 +1461,12 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
     def _verbose_tool_use(self, name: str, args: dict[str, Any], res: Any) -> str:
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": str(res) if isinstance(res, Exception) else res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def bind_tools(self, toolcall_session, tools):
-        if not (toolcall_session and tools):
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        binding = resolve_tool_binding(toolcall_session, tools)
+        if binding is None:
             return
-        self.is_tools = True
-        self.toolcall_session = toolcall_session
-        self.tools = tools
+        self.toolcall_session, self.tools = binding
+        self.is_tools = bool(self.tools)
 
     async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
@@ -1481,9 +1494,17 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
 
                     if not hasattr(message, "tool_calls") or not message.tool_calls:
+                        content = message.content
+                        if not content or not content.strip():
+                            if not ans.strip():
+                                return (
+                                    f"{ERROR_PREFIX}: {LLMErrorCode.ERROR_MODEL} - Model returned an empty final answer without tool calls (finish_reason={response.choices[0].finish_reason}).",
+                                    tk_count,
+                                )
+                            content = ""
                         if _reasoning:
                             ans += f"<think>{_reasoning}</think>"
-                        ans += message.content or ""
+                        ans += content
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
                         return ans, tk_count

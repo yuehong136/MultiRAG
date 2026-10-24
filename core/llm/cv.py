@@ -34,6 +34,7 @@ from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
+from core.llm.tool_decorator import resolve_tool_binding
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
 
@@ -51,8 +52,13 @@ class Base(ABC):
         self._tool_chat_model: Any = None
         self._tool_chat_model_factory = kwargs.get("_tool_chat_model_factory")
 
-    def bind_tools(self, toolcall_session: Any, tools: list[dict[str, Any]]) -> None:
-        if not toolcall_session or not tools:
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        binding = resolve_tool_binding(toolcall_session, tools)
+        if binding is None:
+            return
+        toolcall_session, tools = binding
+        if not tools and self._tool_chat_model is None:
+            self.is_tools = False
             return
         if self._tool_chat_model is None:
             if self._tool_chat_model_factory is None:
@@ -461,18 +467,22 @@ class GptV4(Base):
         self.lang = lang
         super().__init__(**kwargs)
 
-    def describe(self, image):
+    def describe(self, image: Any) -> tuple[str, int]:
         b64 = self.image2base64(image)
         res = self.client.chat.completions.create(model=self.model_name, messages=self.prompt(b64), extra_body=self.extra_body)
+        if not res.choices:
+            raise ValueError("LLM returned empty response")
         return res.choices[0].message.content.strip(), total_token_count_from_response(res)
 
-    def describe_with_prompt(self, image, prompt=None):
+    def describe_with_prompt(self, image: Any, prompt: str | None = None) -> tuple[str, int]:
         b64 = self.image2base64(image)
         res = self.client.chat.completions.create(
             model=self.model_name,
             messages=self.vision_llm_prompt(b64, prompt),
             extra_body=self.extra_body,
         )
+        if not res.choices:
+            raise ValueError("LLM returned empty response")
         return res.choices[0].message.content.strip(), total_token_count_from_response(res)
 
 
@@ -708,7 +718,7 @@ class Zhipu4V(GptV4):
     def describe(self, image):
         return self.describe_with_prompt(image)
 
-    def describe_with_prompt(self, image, prompt=None):
+    def describe_with_prompt(self, image: Any, prompt: str | None = None) -> tuple[str, int]:
         b64 = self.image2base64(image)
         if prompt is None:
             prompt = "Describe this image."
@@ -718,6 +728,8 @@ class Zhipu4V(GptV4):
 
         resp = self.client.chat.completions.create(model=self.model_name, messages=messages, stream=False)
 
+        if not resp.choices:
+            raise ValueError("LLM returned empty response")
         content = resp.choices[0].message.content.strip()
         cleaned = re.sub(r"<\|(begin_of_box|end_of_box)\|>", "", content).strip()
 
