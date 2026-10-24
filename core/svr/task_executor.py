@@ -1291,7 +1291,7 @@ async def run_raptor_for_kb(
     ext = config.get("ext") or {}
     builder = get_raptor_tree_builder(config)
     clustering = get_raptor_clustering_method(config)
-    vector_field = "vector" if vector_size == 768 else f"q_{vector_size}_vec"
+    vector_field = "vector" if vector_size == 768 and not settings.DOC_ENGINE_INFINITY else f"q_{vector_size}_vec"
     doc_ids = list(dict.fromkeys(doc_ids or []))
     info = {}
     if db is not None and doc_ids:
@@ -1328,9 +1328,12 @@ async def run_raptor_for_kb(
             continue
         rows = sorted(snapshots[doc], key=lambda value: value.get("chunk_order_int", 0))
         sources[doc] = [
-            (value["content_with_weight"], np.asarray(value[vector_field]))
+            (value.get("content_with_weight", value.get("content")), np.asarray(value[vector_field]))
             for value in rows
-            if str(value.get("id", value.get("pk"))) not in summaries[doc] and value.get("content_with_weight") and value.get(vector_field) is not None and not value.get("knowledge_graph_kwd")
+            if str(value.get("id", value.get("pk"))) not in summaries[doc]
+            and value.get("content_with_weight", value.get("content"))
+            and value.get(vector_field) is not None
+            and not value.get("knowledge_graph_kwd")
         ]
 
     async def generate(inputs: list[tuple[str, np.ndarray]], doc: str) -> bool:

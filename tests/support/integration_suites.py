@@ -51,7 +51,9 @@ DATABASE_TESTS = frozenset(
     }
 )
 REDIS_TESTS = frozenset({"test_shared_auth_secret.py", "test_synonym_redis.py"})
-INFINITY_TESTS = frozenset({"test_infinity_available_filter.py", "test_infinity_metadata_contention.py", "test_infinity_stable_release.py", "test_metadata_infinity_pushdown.py"})
+INFINITY_TESTS = frozenset(
+    {"test_infinity_available_filter.py", "test_infinity_metadata_contention.py", "test_infinity_stable_release.py", "test_infinity_raptor_extra.py", "test_metadata_infinity_pushdown.py"}
+)
 
 ISOLATED_STORAGE_TESTS = frozenset(
     {

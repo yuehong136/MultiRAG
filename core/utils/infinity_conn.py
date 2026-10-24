@@ -464,6 +464,8 @@ class InfinityConnection(InfinityConnectionBase):
                             d[k] = v
                     elif re.search(r"_feas$", k):
                         d[k] = json.dumps(v)
+                    elif k == "extra":
+                        d[k] = json.dumps(v) if isinstance(v, dict) else v if v else ""
                     elif k == "chunk_data":
                         # Convert data dict to JSON string for storage
                         if isinstance(v, dict):
@@ -487,6 +489,8 @@ class InfinityConnection(InfinityConnectionBase):
                             d[k] = v if v else "{}"
                     else:
                         d[k] = v
+                # RAPTOR shares Milvus's primary-key alias with other stores.
+                d.pop("pk", None)
                 for k in [
                     "docnm_kwd",
                     "title_tks",
@@ -523,6 +527,7 @@ class InfinityConnection(InfinityConnectionBase):
 
         # if 'position_int' in newValue:
         #     logger.info(f"update position_int: {newValue['position_int']}")
+        new_value = copy.deepcopy(new_value)
         inf_conn = self.connPool.get_conn()
         # Empty knowledgebase_id means use the index_name directly (metadata tables)
         table_name = index_name if not knowledgebase_id else f"{index_name}_{knowledgebase_id}"
@@ -616,6 +621,8 @@ class InfinityConnection(InfinityConnectionBase):
                 elif k in ["page_num_int", "top_int"]:
                     assert isinstance(v, list)
                     new_value[k] = "_".join(f"{num:08x}" for num in v)
+                elif k == "extra":
+                    new_value[k] = json.dumps(v) if isinstance(v, dict) else v if v else ""
                 elif k == "meta_fields":
                     if isinstance(v, dict):
                         new_value[k] = json.dumps(v, ensure_ascii=False)

@@ -24,6 +24,9 @@
 核心门禁显式排除独立 Infinity 文件和 `external_consumer` 用例，不将缺失环境的 skip
 计作成功；CI 为 Infinity 单独运行必过 job，Web 消费者由对应专项命令证明。
 涉及 Infinity 或 Web 契约的修改必须运行专项。
+`test_infinity_raptor_extra.py` 覆盖新表与既有 chunk 表补列、`extra` 写入/更新、
+原生历史字段驱动的 RAPTOR 生成，以及替换失败后的独立读回与精确恢复。
+该用例使用受控摘要模型和真实 Infinity；不代表真实模型、SQL 任务提交或生产升级已验收。
 直接 `pytest tests/integration` 仍可用，但应用在收集期导入时可能访问服务；需要自动准备
 临时端点时使用 Makefile 入口。混合收集时 `integration` 标签仅作用于集成目录。
 质量评测不被普通 pytest 递归收集，使用以上显式入口运行。
