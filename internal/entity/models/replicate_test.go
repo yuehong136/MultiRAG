@@ -202,3 +202,53 @@ func TestReplicateDiscoveryCancellationAndSender(t *testing.T) {
 		t.Fatal("deadline lost", err)
 	}
 }
+
+func TestReplicateTextPartsAndMediaPreflight(t *testing.T) {
+	key := "key"
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var body struct {
+			Input map[string]any `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Input["prompt"] != "hello again" {
+			t.Error("text parts did not become text", body, err)
+		}
+		fmt.Fprint(w, `{"id":"pred-1","status":"succeeded","output":"answer"}`)
+	}))
+	defer srv.Close()
+	m := newReplicateTestModel(srv.URL)
+	texts := []map[string]any{{"type": "text", "text": "hello "}, {"type": "text", "text": "again"}}
+	for _, stream := range []bool{false, true} {
+		messages := []Message{{Role: "user", Content: texts}}
+		if stream {
+			if err := m.ChatStreamlyWithMessages("owner/model", messages, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+		} else if _, err := m.ChatWithMessages("owner/model", &APIConfig{APIKey: &key}, messages, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := calls.Load()
+	for _, kind := range []string{"image_url", "video_url", "file_url", "input_audio"} {
+		for _, stream := range []bool{false, true} {
+			part := map[string]any{"type": kind, kind: map[string]any{"url": "https://files.invalid/media"}}
+			if kind == "input_audio" {
+				part[kind] = map[string]any{"data": "eA==", "format": "wav"}
+			}
+			messages := []Message{{Role: "user", Content: []map[string]any{part}}}
+			var err error
+			if stream {
+				err = m.ChatStreamlyWithMessages("owner/model", messages, &APIConfig{APIKey: &key}, nil, func(*string, *string) error { return nil })
+			} else {
+				_, err = m.ChatWithMessages("owner/model", &APIConfig{APIKey: &key}, messages, nil)
+			}
+			if !errors.Is(err, ErrUnsupportedCapability) {
+				t.Fatal("media must fail before HTTP", kind, err)
+			}
+		}
+	}
+	if calls.Load() != before {
+		t.Fatal("unsupported media called provider")
+	}
+}

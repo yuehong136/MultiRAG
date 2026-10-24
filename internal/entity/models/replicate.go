@@ -106,11 +106,18 @@ func replicateInput(messages []Message, config *ChatConfig) (map[string]any, err
 	for _, message := range messages {
 		content, ok := message.Content.(string)
 		if !ok {
-			raw, err := json.Marshal(message.Content)
+			parts, err := ContentParts(message.Content)
 			if err != nil {
 				return nil, fmt.Errorf("replicate: invalid message")
 			}
-			content = string(raw)
+			var text strings.Builder
+			for _, part := range parts {
+				if part["type"] != "text" {
+					return nil, fmt.Errorf("%w: replicate chat accepts text only", ErrUnsupportedCapability)
+				}
+				text.WriteString(part["text"].(string))
+			}
+			content = text.String()
 		}
 		if message.Role == "system" {
 			systems = append(systems, content)
