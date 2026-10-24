@@ -1976,13 +1976,6 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "qwen/qwen2.5-coder-32b-instruct",
-                    "tags": "LLM,CHAT,32K",
-                    "max_tokens": 32768,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
                     "llm_name": "rakuten/rakutenai-7b-chat",
                     "tags": "LLM,CHAT,4K",
                     "max_tokens": 4096,
@@ -2704,13 +2697,6 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "Qwen/QVQ-72B-Preview",
-                    "tags": "LLM,CHAT,IMAGE2TEXT,32k",
-                    "max_tokens": 32000,
-                    "mdl_type": "image2text",
-                    "is_tools": false
-                },
-                {
                     "llm_name": "Pro/deepseek-ai/DeepSeek-V3.1",
                     "tags": "LLM,CHAT,160k",
                     "max_tokens": 160000,
@@ -3161,32 +3147,11 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "Qwen/Qwen2.5-VL-32B-Instruct",
-                    "tags": "LLM,CHAT,131k",
-                    "max_tokens": 131000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
                     "llm_name": "Qwen/QwQ-32B",
                     "tags": "LLM,CHAT,131k",
                     "max_tokens": 131000,
                     "mdl_type": "chat",
                     "is_tools": true
-                },
-                {
-                    "llm_name": "Qwen/Qwen2.5-VL-72B-Instruct",
-                    "tags": "LLM,CHAT,131k",
-                    "max_tokens": 131000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "Qwen/Qwen2.5-VL-7B-Instruct",
-                    "tags": "LLM,CHAT,33k",
-                    "max_tokens": 33000,
-                    "mdl_type": "chat",
-                    "is_tools": false
                 },
                 {
                     "llm_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
