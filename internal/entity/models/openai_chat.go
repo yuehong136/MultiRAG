@@ -24,6 +24,8 @@ type openAIChatDriver struct {
 	buildBody            func(string, []Message, *ChatConfig, bool) (map[string]interface{}, error)
 	splitReasoning       bool
 	openRouterReasoning  bool
+	reasoningAlias       bool
+	rootFinishReason     bool
 	optionalDiscoveryKey bool
 	parseContent         func(json.RawMessage) (string, string, error)
 	waitForStreamEOF     bool
@@ -107,6 +109,9 @@ func (d *openAIChatDriver) request(method, suffix string, config *APIConfig, bod
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if fields, ok := body.(map[string]interface{}); ok && fields["stream"] == true {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai-compatible request: %w", err)
@@ -175,6 +180,9 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 		reasoning = &extraReasoning
 	}
 	if d.openRouterReasoning && message.Reasoning != nil {
+		reasoning = message.Reasoning
+	}
+	if d.reasoningAlias && (reasoning == nil || *reasoning == "") {
 		reasoning = message.Reasoning
 	}
 	if reasoning == nil && d.splitReasoning {
@@ -282,9 +290,10 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 					RouterReasoning *string         `json:"reasoning"`
 				} `json:"delta"`
 			} `json:"choices"`
-			Error json.RawMessage `json:"error"`
-			Usage json.RawMessage `json:"usage"`
-			Code  json.RawMessage `json:"code"`
+			Error        json.RawMessage `json:"error"`
+			Usage        json.RawMessage `json:"usage"`
+			Code         json.RawMessage `json:"code"`
+			FinishReason *string         `json:"finish_reason"`
 		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			return fmt.Errorf("openai-compatible: decode stream: %w", err)
@@ -298,6 +307,9 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			}
 		}
 		if len(event.Choices) == 0 {
+			if d.rootFinishReason && event.FinishReason != nil && *event.FinishReason != "" {
+				return complete()
+			}
 			if len(event.Usage) > 0 && string(event.Usage) != "null" {
 				continue
 			}
@@ -309,6 +321,11 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 		}
 		if delta.Reasoning != nil && *delta.Reasoning != "" {
 			if err := sender(nil, delta.Reasoning); err != nil {
+				return err
+			}
+		}
+		if d.reasoningAlias && delta.RouterReasoning != nil && *delta.RouterReasoning != "" {
+			if err := sender(nil, delta.RouterReasoning); err != nil {
 				return err
 			}
 		}
@@ -334,7 +351,11 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			return err
 		}
 
-		if finish := event.Choices[0].FinishReason; finish != nil && *finish != "" {
+		finish := event.Choices[0].FinishReason
+		if d.rootFinishReason && (finish == nil || *finish == "") {
+			finish = event.FinishReason
+		}
+		if finish != nil && *finish != "" {
 			if d.waitForStreamEOF {
 				finished = true
 				continue
