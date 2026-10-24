@@ -17,9 +17,9 @@
 package handler
 
 import (
-	"net/http"
 	"multirag/internal/common"
 	"multirag/internal/service"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -367,29 +367,8 @@ func (h *KnowledgebaseHandler) RenameTag(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/kb/{kb_id}/knowledge_graph [get]
 func (h *KnowledgebaseHandler) KnowledgeGraph(c *gin.Context) {
-	user, errorCode, errorMessage := GetUser(c)
-	if errorCode != common.CodeSuccess {
-		jsonError(c, errorCode, errorMessage)
-		return
-	}
-
-	kbID := c.Param("kb_id")
-	if kbID == "" {
-		jsonError(c, common.CodeDataError, "kb_id is required")
-		return
-	}
-
-	if !h.kbService.Accessible(kbID, user.ID) {
-		jsonError(c, common.CodeAuthenticationError, "No authorization.")
-		return
-	}
-
-	result := map[string]interface{}{
-		"graph":    map[string]interface{}{},
-		"mind_map": map[string]interface{}{},
-	}
-
-	jsonResponse(c, common.CodeSuccess, result, "success")
+	c.Params = append(c.Params, gin.Param{Key: "dataset_id", Value: c.Param("kb_id")})
+	NewDatasetsHandler(service.NewDatasetsService()).GetKnowledgeGraph(c)
 }
 
 // DeleteKnowledgeGraph handles the delete knowledge graph request
@@ -403,24 +382,8 @@ func (h *KnowledgebaseHandler) KnowledgeGraph(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/kb/{kb_id}/knowledge_graph [delete]
 func (h *KnowledgebaseHandler) DeleteKnowledgeGraph(c *gin.Context) {
-	user, errorCode, errorMessage := GetUser(c)
-	if errorCode != common.CodeSuccess {
-		jsonError(c, errorCode, errorMessage)
-		return
-	}
-
-	kbID := c.Param("kb_id")
-	if kbID == "" {
-		jsonError(c, common.CodeDataError, "kb_id is required")
-		return
-	}
-
-	if !h.kbService.Accessible(kbID, user.ID) {
-		jsonError(c, common.CodeAuthenticationError, "No authorization.")
-		return
-	}
-
-	jsonResponse(c, common.CodeSuccess, true, "success")
+	c.Params = append(c.Params, gin.Param{Key: "dataset_id", Value: c.Param("kb_id")})
+	NewDatasetsHandler(service.NewDatasetsService()).DeleteKnowledgeGraph(c)
 }
 
 // GetMeta handles the get metadata request
