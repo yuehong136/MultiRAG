@@ -17,6 +17,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.orm import Session
 
+from api.db.db_models import TenantLLM
 from api.db.joint_services import tenant_model_service
 from api.db.services.tenant_llm_service import TenantLangfuseService, TenantLLMService
 from common.constants import LLMType
@@ -233,6 +234,7 @@ def tenant_models(monkeypatch: pytest.MonkeyPatch, db: Session, mineru_http: Any
     monkeypatch.setattr(TenantLangfuseService, "filter_by_tenant", staticmethod(lambda *args, **kwargs: None))
     state.parser = parser
     state.vision = vision
+    state.connection = connection
     try:
         yield state
     finally:
@@ -395,3 +397,40 @@ def test_symlink_outside_output_is_not_sent_to_vision(tmp_path: Path) -> None:
     outputs = [image_block(str(link))]
     MinerUParser()._enhance_images_with_vlm(outputs, Vision(), output_dir=output_dir)
     assert "vlm_description" not in outputs[0]
+
+
+@pytest.mark.parametrize("entrypoint", ["by_mineru", "parse_pdf"])
+def test_explicit_session_bundle_isolated_without_changing_caller_transaction(tenant_models: Any, mineru_http: Any, db: Session, entrypoint: str) -> None:
+    worker_session_access: list[str] = []
+    owner_thread = threading.get_ident()
+
+    class SessionProbe(Session):
+        def __getattribute__(self, name: str) -> Any:
+            if name in {"in_transaction", "dirty", "new", "deleted", "rollback"} and threading.get_ident() != owner_thread:
+                worker_session_access.append(name)
+            return super().__getattribute__(name)
+
+    with SessionProbe() as caller_session:
+        pending = TenantLLM(tenant_id="tenant-f", llm_factory="OpenAI-API-Compatible", llm_name="pending", mdl_type=LLMType.IMAGE2TEXT.value)
+        caller_session.add(pending)
+        transaction = caller_session.get_transaction()
+        assert transaction is not None and pending in caller_session.new
+        with tenant_models.connection():
+            bundle = naive.LLMBundle(db, "tenant-f", {"id": 20, "tenant_id": "tenant-f", "llm_name": "tenant-vision", "mdl_type": LLMType.IMAGE2TEXT.value}, lang="English")
+        bundle.db = caller_session
+        caller_state = vars(bundle).copy()
+
+        if entrypoint == "by_mineru":
+            sections, _, parser = naive.by_mineru("report.pdf", binary=make_pdf(1), tenant_id="tenant-f", mineru_llm_name="mineru@MinerU", vision_model=bundle)
+            assert parser is tenant_models.parser and tenant_models.defaults == []
+        else:
+            sections, _ = tenant_models.parser.parse_pdf("report.pdf", binary=make_pdf(1), vision_model=bundle)
+
+        assert mineru_http.description in sections[0][0]
+        assert worker_session_access == []
+        assert vars(bundle) == caller_state and bundle.db is caller_session
+        assert caller_session.get_transaction() is transaction
+        assert caller_session.in_transaction() and pending in caller_session.new
+        assert pending not in caller_session.dirty and pending not in caller_session.deleted
+        assert [path for path, _ in mineru_http.requests] == ["/file_parse", "/v1/chat/completions"]
+        assert tenant_models.usages == [(20, 7)]

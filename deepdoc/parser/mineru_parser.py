@@ -614,6 +614,7 @@ class MinerUParser(RAGFlowPdfParser):
         """Add optional image descriptions with at most four jobs in flight."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from contextlib import closing
+        from copy import copy
 
         image_jobs: list[tuple[int, dict[str, Any]]] = []
         output_root = output_dir.resolve() if output_dir is not None else None
@@ -631,6 +632,16 @@ class MinerUParser(RAGFlowPdfParser):
 
         from core.app.picture import vision_llm_chunk
         from core.prompts.generator import vision_llm_figure_describe_prompt
+
+        if getattr(vision_model, "db", None) is not None:
+            # Explicit callers may pass a session-bound bundle too. Clone only
+            # its wrapper: preserve the caller's bundle/session/transaction,
+            # while workers share the provider client without touching its DB.
+            detached_model = copy(vision_model)
+            if detached_model is vision_model:
+                raise TypeError("Cannot isolate a session-bound vision model")
+            detached_model.db = None
+            vision_model = detached_model
 
         if callback:
             callback(0.78, f"[MinerU] Generating VLM descriptions for {len(image_jobs)} images...")
