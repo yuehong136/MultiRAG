@@ -61,6 +61,15 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 | `handler.TestDatasetGraphHTTPAndSQL` | 同一自有 engine 配置与 PostgreSQL scratch；tenant/库名以 `multirag_afterd7_b_` 开头，禁止指向业务库。可附加固定 Web API 客户端验收，不等同浏览器 UI。 |
 | `handler.TestDatasetChunkMetadataCLIAndStores` | 私有 `MULTIRAG_GO_DATASET_CHUNK_CONFIG`、同源码新构建的 `MULTIRAG_GO_DATASET_CHUNK_CLI`，以及固定 Web 提交的 `WEB_DATASET_CHECKOUT`。分别设置 `MULTIRAG_ENGINE_LIVE_KIND=elasticsearch`、`infinity` 运行；使用 `multirag_after2836_e_` 自有 SQL/Infinity namespace，真实 CLI、JWT/SQL、chunk/tag/metadata 与 Web API 客户端，不等同浏览器 UI。 |
 | `service.TestAfter2836ModelsHTTPCLIAndSQL` | 私有 `MULTIRAG_AFTER2836_F_CONFIG`、当前源码 CLI `MULTIRAG_AFTER2836_F_CLI` 和预登记资源账本 `MULTIRAG_AFTER2836_F_RESOURCES`。仅访问 loopback scratch DB `multirag_after2836_f_20261024`；真实 SQL/JWT/CLI，模型供应商 HTTP 由用例控制。 |
+| `handler.TestDatasetReadHTTPAndSQL` | 私有 `MULTIRAG_DATASET_READ_CONFIG`，SQL 库必须为 `multirag_after9b_c`；`MULTIRAG_DATASET_READ_INFINITY_URI` 指向独占 Infinity 0.7.0 的同名库，并准备固定 NLP/native 字典。运行真实 HTTP、进程内 CLI、SQL 与 Infinity，身份及 embedding HTTP 受控。 |
+| `handler.TestGoogleEmbeddingLiveHTTPAndSQL` | 私有 `MULTIRAG_GOOGLE_EMBED_CONFIG`，SQL 库前缀 `multirag_google_embed_`。真实 genai SDK、HTTP handler 与 SQL；两个模型实例由 loopback HTTP 服务控制。 |
+| `handler.TestMediaHTTPCLIAndSQL` | 私有 `MULTIRAG_MEDIA_CONFIG`，SQL 库必须为 `multirag_after9b_c_media`；`MULTIRAG_MEDIA_CLI` 为同源码新构建 CLI。真实注册路由、JWT、SQL 与 CLI 子进程，模型驱动受控，覆盖流式、取消及失败语义。 |
+| `handler.TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL` | 私有 `MULTIRAG_H_EMBEDDING_CONFIG`，SQL 库前缀 `multirag_inference_h_`。真实进程内 CLI、handler 与 SQL 绑定，供应商 HTTP 受控，覆盖 33 个输入、顺序还原、后批失败及权限拒绝。 |
+
+这四个入口可通过 `MULTIRAG_GO_OPT_IN_RESOURCES` 指定预登记的资源清单（`journal`、
+`http`、`directories`）：HTTP 必须使用确切的 loopback 地址，日志在创建前写入，清理后
+独立核对 listener、目录与索引不存在。默认无配置的 skip 仅表示未运行；实际验收使用
+`REQUIRE_SERVICES=1`，报告另存运行时测试二进制、CLI、配置、字典和后端版本。
 
 CI 在 native cache 命中时也执行 OpenCC 输入边界的 ASan/UBSan 专项。新增 Python
 connector controls、prune worker、TTS cache、Manual filter 与 REST chat 用例保持保守串行；
