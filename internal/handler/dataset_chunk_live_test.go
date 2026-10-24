@@ -65,6 +65,14 @@ func (e *datasetChunkEngine) UpdateChunks(ctx context.Context, condition, value 
 	return e.DocEngine.UpdateChunks(ctx, condition, value, base, dataset)
 }
 
+func (e *datasetChunkEngine) DeleteChunks(ctx context.Context, condition map[string]any, base, dataset string) (int64, error) {
+	e.writes.Add(1)
+	if e.fail.Load() {
+		return 0, errors.New("controlled storage failure")
+	}
+	return e.DocEngine.DeleteChunks(ctx, condition, base, dataset)
+}
+
 // This opt-in binds registered routes, SQL authorization, both stores and a freshly built CLI.
 func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 	path := os.Getenv("MULTIRAG_GO_DATASET_CHUNK_CONFIG")
