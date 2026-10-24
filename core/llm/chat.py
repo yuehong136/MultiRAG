@@ -351,10 +351,18 @@ class Base(ToolHistoryMixin, ABC):
                     message = response.choices[0].message
                     _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
                     if not hasattr(message, "tool_calls") or not message.tool_calls:
+                        content = message.content
+                        if not content or not content.strip():
+                            if not ans.strip():
+                                return (
+                                    f"{ERROR_PREFIX}: {LLMErrorCode.ERROR_MODEL} - Model returned an empty final answer without tool calls (finish_reason={response.choices[0].finish_reason}).",
+                                    tk_count,
+                                )
+                            content = ""
                         if _reasoning:
                             ans += "<think>" + _reasoning + "</think>"
 
-                        ans += message.content or ""
+                        ans += content
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
 
@@ -637,6 +645,8 @@ class BaiChuanChat(Base):
             extra_body={"tools": [{"type": "web_search", "web_search": {"enable": True, "search_mode": "performance_first"}}]},
             **gen_conf,
         )
+        if not response.choices:
+            raise ValueError("LLM returned empty response")
         ans = response.choices[0].message.content.strip()
         if response.choices[0].finish_reason == "length":
             if is_chinese([ans]):
@@ -784,6 +794,8 @@ class MistralChat(Base):
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         response = self.client.chat(model=self.model_name, messages=history, **gen_conf)
+        if not response.choices:
+            raise ValueError("LLM returned empty response")
         ans = response.choices[0].message.content
         if response.choices[0].finish_reason == "length":
             if is_chinese(ans):
@@ -1336,7 +1348,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         for attempt in range(self.max_retries + 1):
             try:
                 async with self._completion(completion_args) as response:
-                    if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
+                    if not response.choices or not response.choices[0].message or not response.choices[0].message.content:
                         return "", 0
                     ans = response.choices[0].message.content.strip()
                     if response.choices[0].finish_reason == "length":
@@ -1482,9 +1494,17 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     _reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
 
                     if not hasattr(message, "tool_calls") or not message.tool_calls:
+                        content = message.content
+                        if not content or not content.strip():
+                            if not ans.strip():
+                                return (
+                                    f"{ERROR_PREFIX}: {LLMErrorCode.ERROR_MODEL} - Model returned an empty final answer without tool calls (finish_reason={response.choices[0].finish_reason}).",
+                                    tk_count,
+                                )
+                            content = ""
                         if _reasoning:
                             ans += f"<think>{_reasoning}</think>"
-                        ans += message.content or ""
+                        ans += content
                         if response.choices[0].finish_reason == "length":
                             ans = self._length_stop(ans)
                         return ans, tk_count

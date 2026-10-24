@@ -190,7 +190,7 @@ async def test_sdk_tool_continuation_wire_contract(monkeypatch: pytest.MonkeyPat
 
 @pytest.fixture
 def loopback_llm(request: pytest.FixtureRequest) -> Iterator[Any]:
-    state = SimpleNamespace(requests=[], url="")
+    state = SimpleNamespace(requests=[], url="", final_content="answer")
     evidence = Path(os.environ["B_MODEL_EVIDENCE_DIR"]) / f"{request.node.name}.json" if os.getenv("B_MODEL_EVIDENCE_DIR") else None
     if evidence:
         evidence.parent.mkdir(parents=True, exist_ok=True)
@@ -202,6 +202,10 @@ def loopback_llm(request: pytest.FixtureRequest) -> Iterator[Any]:
             state.requests.append(body)
             req = httpx.Request("POST", state.url + self.path)
             response = _http_response(req, stream=bool(body.get("stream")), final=len(state.requests) == 2)
+            if len(state.requests) == 2 and not body.get("stream"):
+                payload = response.json()
+                payload["choices"][0]["message"]["content"] = state.final_content
+                response = httpx.Response(200, json=payload)
             self.send_response(200)
             self.send_header("Content-Type", response.headers.get("content-type", "application/json"))
             self.send_header("Content-Length", str(len(response.content)))
@@ -290,5 +294,33 @@ async def _close_litellm_logging_for_test_loop() -> AsyncIterator[None]:
     """Drain SDK callbacks before pytest closes this test's event loop."""
     yield
     if GLOBAL_LOGGING_WORKER._bound_loop is asyncio.get_running_loop():
-        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=2)
+        if GLOBAL_LOGGING_WORKER._queue is not None:
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER._queue.join(), timeout=2)
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(), timeout=2)
+
+
+@pytest.mark.parametrize("factory", ["VLLM", "OpenAI"])
+async def test_bundle_empty_final_over_owned_loopback_http(monkeypatch: pytest.MonkeyPatch, db: Session, loopback_llm: Any, factory: str) -> None:
+    monkeypatch.setattr(TenantLangfuseService, "filter_by_tenant", classmethod(lambda cls, *args, **kwargs: None))
+    usages: list[tuple[int, int]] = []
+
+    async def record(cls: type[TenantLLMService], model_id: int, tokens: int) -> bool:
+        usages.append((model_id, tokens))
+        return True
+
+    monkeypatch.setattr(TenantLLMService, "increase_usage_by_id_async", classmethod(record))
+    loopback_llm.final_content = None
+    config = {"id": 17, "llm_name": "test-model", "llm_factory": factory, "mdl_type": "chat", "api_key": "controlled-key", "api_base": loopback_llm.url, "is_tools": True}
+    bundle = LLMBundle(db, "controlled-tenant", config, max_retries=0, max_rounds=1)
+    session = _Session()
+    bundle.bind_tools(session, TOOLS)
+    try:
+        answer = await bundle.async_chat("", [{"role": "user", "content": "hello"}], {})
+        assert answer.startswith("**ERROR**: MODEL_ERROR") and "without visible content" in answer
+        assert session.started == ["first", "second"] and len(loopback_llm.requests) == 2
+        assert usages == [(17, 10)]
+    finally:
+        if hasattr(bundle.mdl, "client"):
+            bundle.mdl.client.close()
+        if hasattr(bundle.mdl, "async_client"):
+            await bundle.mdl.async_client.close()

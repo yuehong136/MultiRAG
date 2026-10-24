@@ -469,7 +469,7 @@ class LLMBundle(LLM4Tenant):
         threading.Thread(target=worker, daemon=True).start()
         return queue
 
-    async def async_chat(self, system: str, history: list, gen_conf: dict[str, Any] | None = None, **kwargs) -> str:
+    async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> str:
         """异步 chat 方法"""
         if gen_conf is None:
             gen_conf = {}
@@ -500,6 +500,9 @@ class LLMBundle(LLM4Tenant):
         txt = self._remove_reasoning_content(txt)
         if not self.verbose_tool_use:
             txt = re.sub(r"<tool_call>.*?</tool_call>", "", txt, flags=re.DOTALL)
+
+        if self.is_tools and getattr(self.mdl, "is_tools", False) and not txt.strip():
+            txt = "**ERROR**: MODEL_ERROR - Model returned an empty final answer without visible content."
 
         if used_tokens and not await self._record_usage_async(used_tokens):
             logging.error(f"LLMBundle.async_chat can't update token usage for {self.tenant_id}/CHAT llm_name: {self.llm_name}, used_tokens: {used_tokens}")
