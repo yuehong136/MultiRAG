@@ -20,6 +20,7 @@ from api.db.services.document_image_lock import image_reference_key, image_write
 from api.db.services.document_image_service import _raster
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import insert_source_chunks
+from api.db.services.document_task_service import reconcile_task_chunk_count
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, get_error_data_result, get_result, server_error_response
@@ -283,10 +284,23 @@ def _add_chunk(user_id: str, dataset_id: str, document_id: str, request: AddChun
         vectors, token_count = model.encode([doc.name, "\n".join(chunk["question_kwd"]) or req["content"]])
         vector = 0.1 * vectors[0] + 0.9 * vectors[1]
         chunk[f"q_{len(vector)}_vec"] = vector.tolist()
-        insert_source_chunks(db.get_bind(), [chunk], _index_name(kb), dataset_id)
+        # Provider I/O can release the read transaction. Revalidate and hold
+        # the document through native upsert and SQL accounting, including
+        # concurrent requests that derive the same content-based chunk ID.
+        context = _write_context(db, user_id, dataset_id, document_id, lock_document=True)
+        if context is None:
+            return get_error_data_result(retmsg="You don't own the dataset or document.")
+        kb, doc = context
+        index_name = _index_name(kb)
+        # Bind the insertion helper to this transaction: its internal Session
+        # must not open a second connection waiting on our document lock.
+        insert_source_chunks(db.connection(), [chunk], index_name, dataset_id)
         if req["image_base64"]:
             store_chunk_image(dataset_id, chunk_id, base64.b64decode(req["image_base64"]))
-        DocumentService.increment_chunk_num(db, document_id, dataset_id, token_count, 1, 0)
+        # Use the producer's logical source accounting (excluding parents),
+        # so a retry repairs a previous native success followed by SQL failure.
+        reconcile_task_chunk_count(db, document_id, dataset_id, index_name[0])
+        DocumentService.increment_chunk_num(db, document_id, dataset_id, token_count, 0, 0)
         return get_result(data={"chunk": _chunk_payload(chunk_id, chunk)})
 
 
