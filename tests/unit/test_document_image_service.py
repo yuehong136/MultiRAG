@@ -1,6 +1,7 @@
 """Image bytes, authorization ordering and strict storage failure contracts."""
 
 import json
+import traceback
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from io import BytesIO
@@ -240,29 +241,106 @@ def test_strict_minio_missing_vs_transport(failure: str, missing: bool) -> None:
 
 
 @pytest.mark.parametrize("mode", ["good", "missing", "transport", "decrypt", "disabled"])
-@pytest.mark.parametrize("strict", [True, False])
-def test_strict_encrypted_reads_keep_cipher_and_fail_safely(mode: str, strict: bool) -> None:
+def test_strict_encrypted_reads_keep_cipher_and_fail_safely(mode: str, caplog: pytest.LogCaptureFixture) -> None:
     wrapper = object.__new__(EncryptedStorageWrapper)
     wrapper.encryption_enabled = mode != "disabled"
+    objects = {("logical", "key"): b"cipher"}
+    calls: list[str] = []
+    failure = OSError("secret transport detail") if mode == "transport" else ValueError("secret crypto detail")
 
-    def read(*args: Any) -> bytes | None:
+    def read(bucket: str, key: str, tenant_id: str | None) -> bytes | None:
+        assert (bucket, key, tenant_id) == ("logical", "key", "tenant")
+        calls.append("read")
         if mode == "transport":
-            raise OSError("secret")
-        return None if mode == "missing" else b"cipher"
+            raise failure
+        return None if mode == "missing" else objects[bucket, key]
 
     def decrypt(data: bytes) -> bytes:
         assert data == b"cipher"
+        calls.append("decrypt")
         if mode == "decrypt":
-            raise ValueError("secret crypto detail")
+            raise failure
         return b"plain"
 
-    wrapper.storage_impl = SimpleNamespace(**{"get_bytes" if strict else "get": read})
+    def forbidden(*args: Any) -> Any:
+        pytest.fail("strict encrypted read used a legacy read or write")
+
+    wrapper.storage_impl = SimpleNamespace(get_bytes=read, get=forbidden, put=forbidden)
     wrapper.crypto = SimpleNamespace(decrypt=decrypt)
     if mode in {"transport", "decrypt"}:
-        with pytest.raises(RuntimeError, match=r"^Object storage read failed\.$"):
-            wrapper.get_bytes("logical", "key")
+        with pytest.raises(RuntimeError, match=r"^Object storage read failed\.$") as error:
+            wrapper.get_bytes("logical", "key", "tenant")
+        assert error.value.__context__ is failure
+        assert error.value.__cause__ is None and error.value.__suppress_context__
+        assert "secret" not in "".join(traceback.format_exception(error.value)) + caplog.text
     else:
-        assert wrapper.get_bytes("logical", "key") == (None if mode == "missing" else b"cipher" if mode == "disabled" else b"plain")
+        assert wrapper.get_bytes("logical", "key", "tenant") == (None if mode == "missing" else b"cipher" if mode == "disabled" else b"plain")
+    assert calls == (["read"] if mode in {"missing", "transport", "disabled"} else ["read", "decrypt"])
+    assert objects == {("logical", "key"): b"cipher"}
+
+
+@pytest.mark.parametrize("strict_read", [None, False, b"not callable"])
+@pytest.mark.parametrize("encryption_enabled", [True, False])
+def test_strict_encrypted_reads_require_strict_adapter(strict_read: Any, encryption_enabled: bool, caplog: pytest.LogCaptureFixture) -> None:
+    wrapper = object.__new__(EncryptedStorageWrapper)
+    wrapper.encryption_enabled = encryption_enabled
+
+    def forbidden(*args: Any) -> Any:
+        pytest.fail("unsupported strict adapter reached legacy read, decryption or write")
+
+    wrapper.storage_impl = SimpleNamespace(get=forbidden, put=forbidden)
+    if strict_read is not None:
+        wrapper.storage_impl.get_bytes = strict_read
+    wrapper.crypto = SimpleNamespace(decrypt=forbidden)
+    namespace, key = "private-bucket", "secret-key"
+    with pytest.raises(RuntimeError, match=r"^Object storage read failed\.$") as error:
+        wrapper.get_bytes(namespace, key)
+    assert isinstance(error.value.__context__, RuntimeError)
+    assert str(error.value.__context__) == "Storage does not support strict object reads."
+    assert error.value.__cause__ is None and error.value.__suppress_context__
+    rendered = "".join(traceback.format_exception(error.value)) + caplog.text
+    assert "private-bucket" not in rendered and "secret-key" not in rendered
+
+
+@pytest.mark.parametrize("mode", ["missing", "transport", "decrypt", "unsupported"])
+def test_encrypted_image_service_distinguishes_absence_from_failure(mode: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    wrapper = object.__new__(EncryptedStorageWrapper)
+    wrapper.encryption_enabled = True
+    objects = {("private-bucket", "secret-key"): b"cipher"}
+    calls: list[str] = []
+
+    def read(bucket: str, key: str, tenant_id: str | None) -> bytes | None:
+        calls.append("read")
+        if mode == "transport":
+            raise OSError("secret transport detail")
+        return None if mode == "missing" else objects[bucket, key]
+
+    def decrypt(data: bytes) -> bytes:
+        calls.append("decrypt")
+        assert data == b"cipher"
+        raise ValueError("secret crypto detail")
+
+    def forbidden(*args: Any) -> Any:
+        pytest.fail("image service fell back to a legacy read or wrote storage")
+
+    wrapper.storage_impl = SimpleNamespace(get=forbidden, put=forbidden)
+    if mode != "unsupported":
+        wrapper.storage_impl.get_bytes = read
+    wrapper.crypto = SimpleNamespace(decrypt=decrypt)
+    monkeypatch.setitem(resources._state, "storage", wrapper)
+    failure = service.ImageUnavailable if mode == "missing" else service.ImageStorageFailure
+    message = r"^Image is unavailable\.$" if mode == "missing" else r"^Image could not be read\.$"
+    namespace, key = "private-bucket", "secret-key"
+    with pytest.raises(failure, match=message) as error:
+        service._read_object(namespace, key)
+    assert calls == ([] if mode == "unsupported" else ["read", "decrypt"] if mode == "decrypt" else ["read"])
+    assert objects == {("private-bucket", "secret-key"): b"cipher"}
+    if mode != "missing":
+        assert isinstance(error.value.__context__, RuntimeError)
+        assert str(error.value.__context__) == "Object storage read failed."
+        assert error.value.__cause__ is None and error.value.__suppress_context__
+    rendered = "".join(traceback.format_exception(error.value)) + caplog.text
+    assert all(value not in rendered for value in ("private-bucket", "secret-key", "secret transport detail", "secret crypto detail"))
 
 
 @pytest.mark.parametrize("ids", [[1], "doc", None])

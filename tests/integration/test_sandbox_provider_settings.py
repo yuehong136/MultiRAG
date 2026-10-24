@@ -123,11 +123,20 @@ def test_admin_variables_cli_routes_and_committed_sql(bootstrapped_engine: Engin
             return reader.execute(text("SELECT jsonb_agg(to_jsonb(s) ORDER BY name)::text FROM usr_ai.t_ai_system_settings s WHERE name LIKE 'batch18.%' OR name LIKE 'sandbox.batch18%'")).scalar_one()
 
     with TestClient(app) as client:
-        rows = client.get("/api/v1/admin/variables", headers=headers).json()["data"]
-        assert [row["name"] for row in rows] == sorted(row["name"] for row in rows)
+        # Names follow the database collation, which can differ from Python's
+        # Unicode ordering (for example literal_%a versus literalXXa in en_US).
+        with bootstrapped_engine.connect() as reader:
+            ordered_names = list(reader.scalars(text("SELECT name FROM usr_ai.t_ai_system_settings ORDER BY name ASC")))
+        response = client.get("/api/v1/admin/variables", headers=headers)
+        assert response.status_code == 200 and response.json()["code"] == 0
+        rows = response.json()["data"]
+        assert [row["name"] for row in rows] == ordered_names
         assert all(row["setting_type"] == "config" and "source" not in row for row in rows)
         response = client.get("/api/v1/admin/variables", params={"var_name": prefix + "mail."}, headers=headers).json()
         assert response["code"] == 0 and len(response["data"]) == 3
+        assert [row["name"] for row in response["data"]] == [name for name in ordered_names if name.startswith(prefix + "mail.")]
+        response = client.get("/api/v1/admin/variables", params={"var_name": prefix + "literal"}, headers=headers).json()
+        assert response["code"] == 0 and [row["name"] for row in response["data"]] == [name for name in ordered_names if name.startswith(prefix + "literal")]
         response = client.get("/api/v1/admin/variables", params={"var_name": prefix + "literal_%"}, headers=headers).json()
         assert [row["name"] for row in response["data"]] == [prefix + "literal_%a"]
         for name, value in [
@@ -200,6 +209,12 @@ def test_admin_variables_cli_routes_and_committed_sql(bootstrapped_engine: Engin
                 timeout=30,
             )
             assert (result.returncode == 0) == success, (command, result.returncode, result.stdout, result.stderr)
+            if command == "LIST VARS;":
+                with bootstrapped_engine.connect() as reader:
+                    ordered_names = list(reader.scalars(text("SELECT name FROM usr_ai.t_ai_system_settings ORDER BY name ASC")))
+                table = [[cell.strip() for cell in line.split("|")[1:-1]] for line in result.stdout.splitlines() if line.startswith("|")]
+                name_column = table[0].index("name")
+                assert [row[name_column] for row in table[1:]] == ordered_names
             if not success:
                 assert snapshot() == before
         # Live HTTP readback is separate from the CLI process and its login session.

@@ -89,14 +89,26 @@ def test_confirmed_append_uses_strict_bytes_despite_false_stat(image_storage: Im
 def test_legacy_none_is_not_absence_even_through_encryption(image_storage: ImageStorage, monkeypatch: pytest.MonkeyPatch, wrapped: bool) -> None:
     from core.utils.encrypted_storage import EncryptedStorageWrapper
 
-    monkeypatch.setattr(image_storage, "get", lambda *_args: None)
+    before = image_storage.data
+    reads: list[tuple[str, str, str | None]] = []
+
+    def legacy_read(bucket: str, name: str, tenant_id: str | None = None) -> None:
+        reads.append((bucket, name, tenant_id))
+
+    def forbidden(*args: Any) -> Any:
+        pytest.fail("confirmed append fell back to a legacy existence probe")
+
+    monkeypatch.setattr(image_storage, "get", legacy_read)
+    monkeypatch.setattr(image_storage, "obj_exist", forbidden)
     if wrapped:
         for method in ["rm", "health"]:
             monkeypatch.setattr(image_storage, method, lambda *_args: None, raising=False)
         monkeypatch.setattr(settings, "STORAGE_IMPL", EncryptedStorageWrapper(image_storage, key="test-image-key"))
-    with pytest.raises(RuntimeError, match="absence could not be confirmed"):
+    message = r"^Object storage read failed\.$" if wrapped else r"^Chunk image absence could not be confirmed\.$"
+    with pytest.raises(RuntimeError, match=message):
         image_utils.store_chunk_image("kb", "chunk", _image("blue", (2, 3)), verify=True)
-    assert not image_storage.writes
+    assert reads == ([] if wrapped else [("kb", "chunk", None)])
+    assert image_storage.data == before and not image_storage.writes
 
 
 def test_chunk_get_strips_native_vector(client: Any) -> None:
