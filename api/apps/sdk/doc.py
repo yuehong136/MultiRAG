@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Discriminator, Field, model_validator
 from sqlalchemy.orm import Session
 
+from api.db import FileType
 from api.db.db_models import APIToken, Document, Task, Tenant, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -18,6 +19,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
 from api.utils.api_utils import check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
 from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata, resolve_reference_metadata_preferences
+from api.utils.web_utils import document_content_type
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum, TaskStatus
 from common.metadata_utils import apply_meta_data_filter, convert_conditions
@@ -145,8 +147,10 @@ def download_document(dataset_id: str, document_id: str, db: Session = Depends(g
         return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
 
     file = BytesIO(file_stream)
-    encoded_filename = quote(doc.name)
-    return StreamingResponse(file, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
+    encoded_filename = quote(doc.name, safe="")
+    return StreamingResponse(
+        file, media_type=document_content_type(doc.name, visual=doc.type == FileType.VISUAL.value), headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+    )
 
 
 @router.get("/documents/{document_id}", summary="按文档ID下载文档")
@@ -186,8 +190,10 @@ def download_doc(
     if not file_stream:
         return construct_json_result(message="This file is empty.", code=RetCode.DATA_ERROR)
     file = BytesIO(file_stream)
-    encoded_filename = quote(doc[0].name)
-    return StreamingResponse(file, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"})
+    encoded_filename = quote(doc[0].name, safe="")
+    return StreamingResponse(
+        file, media_type=document_content_type(doc[0].name, visual=doc[0].type == FileType.VISUAL.value), headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+    )
 
 
 @router.post("/datasets/{dataset_id}/chunks", summary="解析文档")

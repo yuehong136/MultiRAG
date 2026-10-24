@@ -1,7 +1,6 @@
 """Safe binary responses shared by REST and the generated-file compatibility route."""
 
 import logging
-import re
 from collections.abc import Callable, Coroutine
 from pathlib import PurePosixPath
 from typing import Any
@@ -15,7 +14,7 @@ from starlette.exceptions import HTTPException
 
 from api.db.services.document_file_service import DocumentDownloadDenied, DocumentFile, DocumentFileStorageError, DocumentFileUnavailable, read_generated_attachment
 from api.utils.api_utils import Principal, async_current_user
-from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
+from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers, document_content_type
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +47,7 @@ class DocumentFileRoute(APIRoute):
 
 def document_file_response(file: DocumentFile, *, download: bool = False) -> Response:
     ext = PurePosixPath(file.name.lower()).suffix.removeprefix(".")
-    fallback = "image" if file.visual else "application"
-    content_type = CONTENT_TYPE_MAP.get(ext, f"{fallback}/{ext}") if re.fullmatch(r"[a-z0-9]{1,32}", ext) else "application/octet-stream"
+    content_type = document_content_type(file.name, visual=file.visual)
     response = Response(content=file.data, media_type=content_type)
     apply_safe_file_response_headers(response, content_type, ext)
     if download or response.headers.get("Content-Disposition") == "attachment":
