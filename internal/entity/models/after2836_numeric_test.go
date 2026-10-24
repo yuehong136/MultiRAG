@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type after2836NumericProvider struct {
@@ -22,6 +24,7 @@ func after2836NumericProviders() []after2836NumericProvider {
 		{"Xinference", "/v1/", "v1/embeddings", "v1/rerank", ""},
 		{"Xinference", "", "v1/embeddings", "v1/rerank", "key"},
 		{"Novita", "", "", "openai/v1/rerank", "key"},
+		{"n1n", "", "v1/embeddings", "v1/rerank", "key"},
 	}
 }
 
@@ -203,5 +206,91 @@ func TestAfter2836RerankRejectsMalformed(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAfter2836VectorFailuresAndInflightCancellation(t *testing.T) {
+	providers := append(after2836NumericProviders(), after2836NumericProvider{"Azure-OpenAI", "/openai", "embeddings", "", "key"})
+	for _, p := range providers {
+		for _, method := range []string{"embedding", "rerank"} {
+			if method == "embedding" && p.embedding == "" || method == "rerank" && p.rerank == "" {
+				continue
+			}
+			for _, mode := range []string{"http-error", "cancel"} {
+				t.Run(p.name+"/key="+p.key+"/"+method+"/"+mode, func(t *testing.T) {
+					started, stopped := make(chan struct{}), make(chan struct{})
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						defer close(stopped)
+						io.Copy(io.Discard, r.Body)
+						close(started)
+						if mode == "http-error" {
+							w.WriteHeader(503)
+							fmt.Fprint(w, "private-secret")
+							return
+						}
+						select {
+						case <-r.Context().Done():
+						case <-time.After(2 * time.Second):
+							t.Error("provider fixture did not observe cancellation")
+						}
+					}))
+					defer srv.Close()
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					if mode == "cancel" {
+						go func() { <-started; cancel() }()
+					}
+					api := &APIConfig{APIKey: &p.key, Context: ctx}
+					var err error
+					if method == "embedding" {
+						var data []EmbeddingData
+						data, err = p.driver(srv.URL).Embed(stringPtr("served"), []string{"a", "b"}, api, nil)
+						if data != nil {
+							t.Fatal("partial embedding returned", data)
+						}
+					} else {
+						var data *RerankResponse
+						data, err = p.driver(srv.URL).Rerank(stringPtr("served"), "q", []string{"a", "b"}, api, nil)
+						if data != nil {
+							t.Fatal("partial rerank returned", data)
+						}
+					}
+					if err == nil || strings.Contains(err.Error(), "private-secret") || mode == "cancel" && !errors.Is(err, context.Canceled) {
+						t.Fatal("failure lost or body leaked", err)
+					}
+					select {
+					case <-stopped:
+					case <-time.After(time.Second):
+						t.Fatal("upstream request leaked")
+					}
+				})
+			}
+		}
+		if p.embedding == "" {
+			continue
+		}
+		t.Run(p.name+"/key="+p.key+"/later-batch-error", func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 2 {
+					w.WriteHeader(503)
+					return
+				}
+				var body struct {
+					Input []string `json:"input"`
+				}
+				json.NewDecoder(r.Body).Decode(&body)
+				data := []map[string]any{}
+				for i := range body.Input {
+					data = append(data, map[string]any{"index": i, "embedding": []float64{0, 1}})
+				}
+				json.NewEncoder(w).Encode(map[string]any{"data": data})
+			}))
+			defer srv.Close()
+			data, err := p.driver(srv.URL).Embed(stringPtr("served"), make([]string, 33), &APIConfig{APIKey: &p.key}, nil)
+			if err == nil || data != nil || calls.Load() != 2 {
+				t.Fatal("later batch failure leaked partial vectors", data, err, calls.Load())
+			}
+		})
 	}
 }

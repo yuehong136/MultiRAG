@@ -195,8 +195,12 @@ func TestNewProviderCancellationAndUnsupported(t *testing.T) {
 				} else if data, e := d.Embed(nil, nil, nil, nil); e != nil || data == nil || len(data) != 0 {
 					t.Fatal("empty Novita embedding", data, e)
 				}
-				if _, e := d.Rerank(nil, "", nil, nil, nil); e == nil {
-					t.Fatal("rerank")
+				if provider == "LongCat" {
+					if _, e := d.Rerank(nil, "", nil, nil, nil); e == nil {
+						t.Fatal("rerank")
+					}
+				} else if data, e := d.Rerank(nil, "", nil, nil, nil); e != nil || data == nil || len(data.Data) != 0 {
+					t.Fatal("empty Novita rerank", data, e)
 				}
 			}
 			if _, e := d.Balance(nil); e == nil {

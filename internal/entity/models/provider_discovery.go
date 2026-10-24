@@ -2,6 +2,7 @@ package models
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,4 +76,28 @@ func decodeBoundedModelJSON(reader io.Reader, target any) error {
 		return fmt.Errorf("model response exceeds 20 MiB")
 	}
 	return decodeCoHereJSON(bytes.NewReader(raw), target)
+}
+
+func strictProviderModelNames(reader io.Reader) ([]string, error) {
+	var response struct {
+		Data *[]struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := decodeBoundedModelJSON(reader, &response); err != nil || response.Data == nil {
+		return nil, fmt.Errorf("invalid or missing provider model list")
+	}
+	if len(response.Error) > 0 && string(response.Error) != "null" {
+		return nil, fmt.Errorf("provider model list failed")
+	}
+	names, seen := make([]string, 0, len(*response.Data)), map[string]bool{}
+	for _, item := range *response.Data {
+		if item.ID == "" || strings.TrimSpace(item.ID) != item.ID || seen[item.ID] {
+			return nil, fmt.Errorf("invalid or duplicate provider model ID")
+		}
+		seen[item.ID] = true
+		names = append(names, item.ID)
+	}
+	return names, nil
 }

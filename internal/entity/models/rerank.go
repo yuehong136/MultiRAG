@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -119,13 +118,8 @@ func rerankHTTP(client *http.Client, urls map[string]string, suffix string, name
 		Error   json.RawMessage `json:"error"`
 		Code    string          `json:"code"`
 	}
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(&raw); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &raw); err != nil {
 		return nil, fmt.Errorf("decode rerank: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("rerank response has trailing content")
 	}
 	if raw.Code != "" || len(raw.Error) > 0 && string(raw.Error) != "null" {
 		return nil, fmt.Errorf("rerank provider returned an error")

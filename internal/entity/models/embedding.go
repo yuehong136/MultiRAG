@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"math"
 	"net/http"
@@ -50,6 +49,8 @@ type embeddingHTTPOptions struct {
 	fallbackRegion bool
 	parameters     map[string]any
 	dimensionField string
+	authHeader     string
+	omitModel      bool
 }
 
 // embedHTTPWithConfig carries optional dimensions and provider parameters through
@@ -103,6 +104,9 @@ func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix
 			payload[field] = value
 		}
 		payload["model"], payload["input"] = *name, texts[start:end]
+		if option.omitModel {
+			delete(payload, "model")
+		}
 		if embeddingConfig != nil && embeddingConfig.Dimension > 0 {
 			field := option.dimensionField
 			if field == "" {
@@ -120,7 +124,11 @@ func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if key != "" {
-			req.Header.Set("Authorization", "Bearer "+key)
+			if option.authHeader != "" {
+				req.Header.Set(option.authHeader, key)
+			} else {
+				req.Header.Set("Authorization", "Bearer "+key)
+			}
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -133,14 +141,7 @@ func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix
 			} `json:"data"`
 			Error json.RawMessage `json:"error"`
 		}
-		decoder := json.NewDecoder(resp.Body)
-		decodeErr := decoder.Decode(&result)
-		if decodeErr == nil {
-			var trailing any
-			if err := decoder.Decode(&trailing); err != io.EOF {
-				decodeErr = fmt.Errorf("embedding response has trailing content")
-			}
-		}
+		decodeErr := decodeBoundedModelJSON(resp.Body, &result)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("embedding request failed (HTTP %d)", resp.StatusCode)

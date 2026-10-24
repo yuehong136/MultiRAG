@@ -7,6 +7,7 @@ package models
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,11 @@ type openAIChatDriver struct {
 	waitForStreamEOF     bool
 	inlineThink          bool
 	rejectNonzeroCode    bool
+	authHeader           string
+	strictDiscovery      bool
+	strictStream         bool
+	azureContentFilter   bool
+	streamIdleTimeout    time.Duration
 }
 
 // One pool is shared across request-scoped drivers; credentials stay on requests.
@@ -104,7 +110,11 @@ func (d *openAIChatDriver) request(method, suffix string, config *APIConfig, bod
 		return nil, err
 	}
 	if key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
+		if d.authHeader != "" {
+			req.Header.Set(d.authHeader, key)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -137,7 +147,9 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	defer resp.Body.Close()
 	var result struct {
 		Choices []struct {
-			Message struct {
+			FinishReason         *string         `json:"finish_reason"`
+			ContentFilterResults json.RawMessage `json:"content_filter_results"`
+			Message              struct {
 				Content          json.RawMessage `json:"content"`
 				ReasoningContent *string         `json:"reasoning_content"`
 				Reasoning        *string         `json:"reasoning"`
@@ -146,7 +158,7 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 		Error json.RawMessage `json:"error"`
 		Code  json.RawMessage `json:"code"`
 	}
-	if err := decodeCoHereJSON(resp.Body, &result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("openai-compatible: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
@@ -159,6 +171,12 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	}
 	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("openai-compatible: no text answer")
+	}
+	if d.azureContentFilter {
+		choice := result.Choices[0]
+		if err := azureOpenAIFilterResult(choice.FinishReason, choice.ContentFilterResults, false); err != nil {
+			return nil, err
+		}
 	}
 	message := result.Choices[0].Message
 	content, extraReasoning, err := d.decodeContent(message.Content)
@@ -211,7 +229,7 @@ func (d *openAIChatDriver) ChatStreamlyWithSender(name, message *string, apiConf
 	return d.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, apiConfig, config, sender)
 }
 
-func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -219,11 +237,34 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 	if err != nil {
 		return err
 	}
+	var active func()
+	if d.streamIdleTimeout > 0 {
+		ctx, cancel := context.WithCancelCause(requestContext(apiConfig))
+		local := APIConfig{Context: ctx}
+		if apiConfig != nil {
+			local = *apiConfig
+			local.Context = ctx
+		}
+		apiConfig = &local
+		idleError := fmt.Errorf("%s stream idle timeout: %w", d.Name(), context.DeadlineExceeded)
+		timer := time.AfterFunc(d.streamIdleTimeout, func() { cancel(idleError) })
+		active = func() { timer.Reset(d.streamIdleTimeout) }
+		defer func() {
+			timer.Stop()
+			if context.Cause(ctx) == idleError {
+				streamErr = idleError
+			}
+			cancel(nil)
+		}()
+	}
 	resp, err := d.request(http.MethodPost, d.URLSuffix.Chat, apiConfig, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if active != nil {
+		resp.Body = &activeModelStream{ReadCloser: resp.Body, active: active}
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	receivedAnswer, finished := false, false
@@ -280,20 +321,22 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 		if data == "[DONE]" {
 			return complete()
 		}
+		if d.azureContentFilter {
+			metadata, err := azureOpenAIStreamFrame([]byte(data))
+			if err != nil {
+				return err
+			}
+			if metadata {
+				continue
+			}
+		}
 
 		var event struct {
-			Choices []struct {
-				FinishReason *string `json:"finish_reason"`
-				Delta        struct {
-					Content         json.RawMessage `json:"content"`
-					Reasoning       *string         `json:"reasoning_content"`
-					RouterReasoning *string         `json:"reasoning"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Error        json.RawMessage `json:"error"`
-			Usage        json.RawMessage `json:"usage"`
-			Code         json.RawMessage `json:"code"`
-			FinishReason *string         `json:"finish_reason"`
+			Choices      []*openAIStreamChoice `json:"choices"`
+			Error        json.RawMessage       `json:"error"`
+			Usage        json.RawMessage       `json:"usage"`
+			Code         json.RawMessage       `json:"code"`
+			FinishReason *string               `json:"finish_reason"`
 		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			return fmt.Errorf("openai-compatible: decode stream: %w", err)
@@ -315,7 +358,17 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			}
 			return fmt.Errorf("openai-compatible: stream event has no choices")
 		}
-		delta := event.Choices[0].Delta
+		choice := event.Choices[0]
+		if choice == nil || choice.Delta == nil {
+			if d.strictStream {
+				return fmt.Errorf("openai-compatible: invalid stream choice or delta")
+			}
+			if choice == nil {
+				continue
+			}
+			choice.Delta = &openAIStreamDelta{}
+		}
+		delta := choice.Delta
 		if d.openRouterReasoning && delta.RouterReasoning != nil {
 			delta.Reasoning = delta.RouterReasoning
 		}
@@ -354,7 +407,7 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			return err
 		}
 
-		finish := event.Choices[0].FinishReason
+		finish := choice.FinishReason
 		if d.rootFinishReason && (finish == nil || *finish == "") {
 			finish = event.FinishReason
 		}
@@ -384,6 +437,18 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 	}
 	return io.ErrUnexpectedEOF
 }
+
+type openAIStreamDelta struct {
+	Content         json.RawMessage `json:"content"`
+	Reasoning       *string         `json:"reasoning_content"`
+	RouterReasoning *string         `json:"reasoning"`
+}
+
+type openAIStreamChoice struct {
+	FinishReason *string            `json:"finish_reason"`
+	Delta        *openAIStreamDelta `json:"delta"`
+}
+
 func (d *openAIChatDriver) ListModels(config *APIConfig) ([]string, error) {
 	local, cancel := modelCallConfig(config)
 	defer cancel()
@@ -392,6 +457,13 @@ func (d *openAIChatDriver) ListModels(config *APIConfig) ([]string, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if d.strictDiscovery {
+		names, err := strictProviderModelNames(resp.Body)
+		if err == nil {
+			err = requestContext(local).Err()
+		}
+		return names, err
+	}
 	var result struct {
 		Data *[]struct {
 			ID string `json:"id"`
@@ -419,6 +491,22 @@ func (d *openAIChatDriver) ListModels(config *APIConfig) ([]string, error) {
 	}
 	return names, nil
 }
+
+// activeModelStream bounds inactivity even when a provider stalls within an SSE line.
+type activeModelStream struct {
+	io.ReadCloser
+	active func()
+}
+
+func (s *activeModelStream) Read(raw []byte) (int, error) {
+	n, err := s.ReadCloser.Read(raw)
+	if n > 0 {
+		s.active()
+	}
+	return n, err
+}
+
+func rejectModelRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // These capabilities are deliberately unavailable in this driver batch.
 func (d *openAIChatDriver) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {

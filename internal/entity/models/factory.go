@@ -39,6 +39,12 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewJieKouAIModel(baseURL, urlSuffix), nil
 	case "togetherai":
 		return NewTogetherAIModel(baseURL, urlSuffix), nil
+	case "n1n":
+		return NewN1NModel(baseURL, urlSuffix), nil
+	case "gpustack":
+		return NewGPUStackModel(baseURL, urlSuffix), nil
+	case "azure-openai":
+		return NewAzureOpenAIModel(baseURL, urlSuffix), nil
 	case "xinference":
 		return NewXinferenceModel(baseURL, urlSuffix), nil
 	case "replicate":
