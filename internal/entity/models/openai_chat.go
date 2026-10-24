@@ -325,6 +325,9 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			}
 		}
 		if d.reasoningAlias && delta.RouterReasoning != nil && *delta.RouterReasoning != "" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if err := sender(nil, delta.RouterReasoning); err != nil {
 				return err
 			}

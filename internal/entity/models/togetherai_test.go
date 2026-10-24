@@ -142,3 +142,20 @@ func TestTogetherAICancellationAndSender(t *testing.T) {
 		t.Fatal("stream=false accepted")
 	}
 }
+
+func TestTogetherAICancelBetweenReasoningFields(t *testing.T) {
+	key := "key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"primary\",\"reasoning\":\"alias\",\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n")
+	}))
+	defer srv.Close()
+	d := NewTogetherAIModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	err := d.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: &key, Context: ctx}, nil, func(*string, *string) error { calls++; cancel(); return nil })
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatal("callback continued after cancellation", calls, err)
+	}
+}
