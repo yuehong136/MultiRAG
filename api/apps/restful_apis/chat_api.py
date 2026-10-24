@@ -1309,6 +1309,7 @@ async def session_completion(
                     )
                     + "\n\n"
                 )
+                return
             yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
 
         if stream_mode:
