@@ -403,6 +403,15 @@ func TestAfter2836ModelsHTTPCLIAndSQL(t *testing.T) {
 						t.Error("n1n thinking false lost")
 					}
 					message := fmt.Sprint(body["messages"])
+					if strings.Contains(message, "filtered") {
+						if body["stream"] == true {
+							w.Header().Set("Content-Type", "text/event-stream")
+							fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n")
+						} else {
+							fmt.Fprint(w, `{"choices":[{"message":{"content":"partial"},"finish_reason":"content_filter"}]}`)
+						}
+						return
+					}
 					if strings.Contains(message, "bad") {
 						w.WriteHeader(502)
 						fmt.Fprint(w, "private-provider-body")
@@ -456,6 +465,17 @@ func TestAfter2836ModelsHTTPCLIAndSQL(t *testing.T) {
 					runCLI("after2836-f-owner", fmt.Sprintf(`CHAT WITH %q MESSAGE 'q' ;`, composite(p.chat)), true, "answer-"+p.name+"-"+instance)
 					runCLI("after2836-f-owner", fmt.Sprintf(`STREAM CHAT WITH %q MESSAGE 'q' ;`, composite(p.chat)), true, "answer-"+p.name+"-"+instance)
 					runCLI("after2836-f-owner", fmt.Sprintf(`CHAT WITH %q MESSAGE 'bad';`, composite(p.chat)), false, "")
+					if p.name == "n1n" || p.name == "GPUStack" || p.name == "Azure-OpenAI" {
+						for _, prefix := range []string{"", "STREAM "} {
+							runCLI("after2836-f-owner", fmt.Sprintf(`%sCHAT WITH %q MESSAGE 'filtered';`, prefix, composite(p.chat)), false, "")
+						}
+						for _, stream := range []bool{false, true} {
+							_, result, raw := request(http.MethodPost, "/api/v1/chat/completions", "after2836-f-owner", map[string]any{"provider_name": p.name, "instance_name": instance, "model_name": p.chat, "message": "filtered", "thinking": false, "stream": stream})
+							if !stream && result["code"] == float64(0) || stream && (!bytes.Contains(raw, []byte("error")) || bytes.Contains(raw, []byte("[DONE]"))) || snapshot() != before {
+								t.Fatal("filtered HTTP response reported success or changed SQL", p.name, stream, string(raw))
+							}
+						}
+					}
 				}
 				if p.embed != "" {
 					output := runCLI("after2836-f-owner", fmt.Sprintf(`EMBED TEXT %s WITH %q DIMENSION 2;`, strings.Repeat("'text' ", 33), composite(p.embed)), true, "")
@@ -552,5 +572,5 @@ func TestAfter2836ModelsHTTPCLIAndSQL(t *testing.T) {
 		}
 	}
 	rejectWithoutEffects("/api/v1/embeddings", map[string]any{"provider_name": "GPUStack", "instance_name": "one", "model_name": "tenant-chat", "texts": []string{"q"}, "dimension": 2})
-	t.Log("real SQL/registered JWT HTTP/current CLI passed for seven providers and fourteen isolated instances; vendor calls", calls.Load())
+	t.Log("configured seven providers/fourteen isolated instances; selected registered HTTP/current CLI cases passed with independent SQL readback; vendor calls", calls.Load())
 }

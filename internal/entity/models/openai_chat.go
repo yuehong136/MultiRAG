@@ -172,6 +172,11 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("openai-compatible: no text answer")
 	}
+	if d.strictStream {
+		if err := validateStrictChatFinish(result.Choices[0].FinishReason); err != nil {
+			return nil, err
+		}
+	}
 	if d.azureContentFilter {
 		choice := result.Choices[0]
 		if err := azureOpenAIFilterResult(choice.FinishReason, choice.ContentFilterResults, false); err != nil {
@@ -359,6 +364,11 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			return fmt.Errorf("openai-compatible: stream event has no choices")
 		}
 		choice := event.Choices[0]
+		if d.strictStream && choice != nil {
+			if err := validateStrictChatFinish(choice.FinishReason); err != nil {
+				return err
+			}
+		}
 		if choice == nil || choice.Delta == nil {
 			if d.strictStream {
 				return fmt.Errorf("openai-compatible: invalid stream choice or delta")
@@ -442,6 +452,13 @@ type openAIStreamDelta struct {
 	Content         json.RawMessage `json:"content"`
 	Reasoning       *string         `json:"reasoning_content"`
 	RouterReasoning *string         `json:"reasoning"`
+}
+
+func validateStrictChatFinish(reason *string) error {
+	if reason == nil || *reason == "" || *reason == "stop" || *reason == "length" {
+		return nil
+	}
+	return fmt.Errorf("model chat terminated unsuccessfully or with an unsupported reason")
 }
 
 type openAIStreamChoice struct {

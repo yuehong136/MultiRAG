@@ -317,3 +317,41 @@ func TestAfter2836NewChatParentDeadlineAndActiveStream(t *testing.T) {
 		})
 	}
 }
+
+func TestAfter2836StrictChatFinishReasons(t *testing.T) {
+	for _, p := range after2836ChatProviders() {
+		for _, reason := range []string{"stop", "length", "content_filter", "error", "unknown", "tool_calls"} {
+			t.Run(p.name+"/"+reason, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if body["stream"] == true {
+						fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n")
+						fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"last\"},\"finish_reason\":%q}]}\n", reason)
+					} else {
+						fmt.Fprintf(w, `{"choices":[{"message":{"content":"answer"},"finish_reason":%q}]}`, reason)
+					}
+				}))
+				defer srv.Close()
+				driver := p.driver(srv.URL)
+				valid := reason == "stop" || reason == "length"
+				result, err := driver.ChatWithMessages("served", &APIConfig{APIKey: stringPtr("key")}, []Message{{Role: "user", Content: "hi"}}, nil)
+				if valid != (err == nil) || !valid && result != nil {
+					t.Fatal("nonstream invalid terminal succeeded", result, err)
+				}
+				answer := ""
+				err = driver.ChatStreamlyWithMessages("served", []Message{{Role: "user", Content: "hi"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(c, r *string) error {
+					if c != nil {
+						answer += *c
+					}
+					return nil
+				})
+				if valid != (err == nil && answer == "firstlast[DONE]") || !valid && (strings.Contains(answer, "[DONE]") || strings.Contains(answer, "last")) {
+					t.Fatal("stream invalid terminal succeeded", answer, err)
+				}
+			})
+		}
+	}
+}
