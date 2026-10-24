@@ -3,6 +3,26 @@ project(rag_tokenizer)
 
 set(CMAKE_CXX_STANDARD 23)
 
+# Homebrew dependencies are outside the default Apple compiler search path.
+# Keep Linux's existing static library resolution for the CI builder image.
+if(APPLE)
+    execute_process(COMMAND brew --prefix
+            OUTPUT_VARIABLE HOMEBREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE BREW_RC)
+    if(BREW_RC EQUAL 0 AND HOMEBREW_PREFIX)
+        list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
+        include_directories(SYSTEM "${HOMEBREW_PREFIX}/include")
+    endif()
+    find_file(PCRE2_LIB NAMES libpcre2-8.a PATH_SUFFIXES lib REQUIRED)
+    set(TOKENIZER_CXX_LIB c++)
+    set(TOKENIZER_MATH_LIB m)
+else()
+    set(PCRE2_LIB libpcre2-8.a)
+    set(TOKENIZER_CXX_LIB stdc++)
+    set(TOKENIZER_MATH_LIB libm.a)
+endif()
+message(STATUS "PCRE2 static library: ${PCRE2_LIB}")
+
 # Option to enable AddressSanitizer
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
 
@@ -88,7 +108,7 @@ add_executable(rag_tokenizer
         ${darts_src}
         ${re2_src})
 
-target_link_libraries(rag_tokenizer stdc++ m libpcre2-8.a)
+target_link_libraries(rag_tokenizer ${TOKENIZER_CXX_LIB} m ${PCRE2_LIB})
 target_include_directories(rag_tokenizer PUBLIC "${CMAKE_SOURCE_DIR}")
 set_target_properties(rag_tokenizer PROPERTIES
         CXX_STANDARD 20
@@ -118,7 +138,7 @@ add_library(rag_tokenizer_c_api STATIC
         ${re2_src}
 )
 
-target_link_libraries(rag_tokenizer_c_api stdc++ libm.a libpcre2-8.a)
+target_link_libraries(rag_tokenizer_c_api ${TOKENIZER_CXX_LIB} ${TOKENIZER_MATH_LIB} ${PCRE2_LIB})
 target_include_directories(rag_tokenizer_c_api PUBLIC "${CMAKE_SOURCE_DIR}")
 set_target_properties(rag_tokenizer_c_api PROPERTIES
         CXX_STANDARD 20
@@ -130,7 +150,7 @@ add_executable(rag_analyzer_c_test
         rag_analyzer_c_test.cpp
 )
 
-target_link_libraries(rag_analyzer_c_test rag_tokenizer_c_api stdc++ libm.a libpcre2-8.a)
+target_link_libraries(rag_analyzer_c_test rag_tokenizer_c_api ${TOKENIZER_CXX_LIB} ${TOKENIZER_MATH_LIB} ${PCRE2_LIB})
 target_include_directories(rag_analyzer_c_test PUBLIC "${CMAKE_SOURCE_DIR}")
 set_target_properties(rag_analyzer_c_test PROPERTIES
         CXX_STANDARD 20

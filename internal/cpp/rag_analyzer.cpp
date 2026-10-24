@@ -24,6 +24,7 @@
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
+#include <sstream>
 #include <iostream>
 #include <cmath>
 #include <fstream>
@@ -143,7 +144,7 @@ std::string Join(const std::vector<T> &tokens, int start, int end, const std::st
 
 template <typename T>
 std::string Join(const std::vector<T> &tokens, int start, const std::string &delim = " ") {
-    return Join(tokens, start, tokens.size(), delim);
+    return Join(tokens, start, static_cast<int>(tokens.size()), delim);
 }
 
 std::string Join(const TermList &tokens, int start, int end, const std::string &delim = " ") {
