@@ -575,7 +575,7 @@ class MinerUParser(RAGFlowPdfParser):
                     item[key] = str((subdir / item[key]).resolve())
         return data
 
-    def _transfer_to_sections(self, outputs: list[dict[str, Any]], parse_method: str = None):
+    def _transfer_to_sections(self, outputs: list[dict[str, Any]], parse_method: str | None = None) -> list[tuple[str, str] | tuple[str, str, str]]:
         sections = []
         for output in outputs:
             match output["type"]:
@@ -587,6 +587,9 @@ class MinerUParser(RAGFlowPdfParser):
                         section = "FAILED TO PARSE TABLE"
                 case MinerUContentType.IMAGE:
                     section = "".join(output.get("image_caption", [])) + "\n" + "".join(output.get("image_footnote", []))
+                    description = (output.get("vlm_description") or "").strip()
+                    if description:
+                        section = section.strip("\n") + "\n" + description if section.strip() else description
                 case MinerUContentType.EQUATION:
                     section = output.get("text", "")
                 case MinerUContentType.CODE:
@@ -607,19 +610,73 @@ class MinerUParser(RAGFlowPdfParser):
     def _transfer_to_tables(self, outputs: list[dict[str, Any]]):
         return []
 
+    def _enhance_images_with_vlm(self, outputs: list[dict[str, Any]], vision_model: Any, callback: Callable[..., Any] | None = None, language: str = "English", output_dir: Path | None = None) -> None:
+        """Add optional image descriptions with at most four jobs in flight."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from contextlib import closing
+
+        image_jobs: list[tuple[int, dict[str, Any]]] = []
+        output_root = output_dir.resolve() if output_dir is not None else None
+        for idx, item in enumerate(outputs):
+            if item.get("type") != MinerUContentType.IMAGE or not item.get("img_path"):
+                continue
+            path = Path(item["img_path"])
+            if output_root is not None and not path.resolve().is_relative_to(output_root):
+                self.logger.warning("[MinerU] Skipping image #%s outside parser output directory", idx)
+                continue
+            if path.is_file():
+                image_jobs.append((idx, item))
+        if not image_jobs:
+            return
+
+        from core.app.picture import vision_llm_chunk
+        from core.prompts.generator import vision_llm_figure_describe_prompt
+
+        if callback:
+            callback(0.78, f"[MinerU] Generating VLM descriptions for {len(image_jobs)} images...")
+
+        # The shared local prompt helper has no language argument yet. Keep its
+        # figure rules, and apply the resolved language here without changing
+        # other parsers' prompts.
+        prompt = vision_llm_figure_describe_prompt() + f"\n\nWrite descriptions in {language or 'English'}, preserving visible text verbatim."
+
+        def worker(idx: int, item: dict[str, Any]) -> tuple[int, str]:
+            def report(prog: float | int, msg: str) -> None:
+                if prog < 0:
+                    self.logger.warning("[MinerU] VLM description failed for image #%s: %s", idx, msg)
+
+            try:
+                with closing(Image.open(item["img_path"])) as image:
+                    image.load()
+                    description = vision_llm_chunk(binary=image, vision_model=vision_model, prompt=prompt, callback=report)
+                return idx, (description or "").strip()
+            except Exception as exc:
+                self.logger.warning("[MinerU] VLM description failed for image #%s: %s", idx, exc)
+                return idx, ""
+
+        max_workers = 4
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Bound queued futures as well as active calls for long documents.
+            for offset in range(0, len(image_jobs), max_workers):
+                futures = [executor.submit(worker, idx, item) for idx, item in image_jobs[offset : offset + max_workers]]
+                for future in as_completed(futures):
+                    idx, description = future.result()
+                    if description:
+                        outputs[idx]["vlm_description"] = description
+
     def parse_pdf(
         self,
         filepath: str | PathLike[str],
-        binary: BytesIO | bytes,
-        callback: Callable | None = None,
+        binary: BytesIO | bytes | None,
+        callback: Callable[..., Any] | None = None,
         *,
         output_dir: str | None = None,
         backend: str = "pipeline",
         server_url: str | None = None,
         delete_output: bool = True,
         parse_method: str = "raw",
-        **kwargs,
-    ) -> tuple:
+        **kwargs: Any,
+    ) -> tuple[list[tuple[str, str] | tuple[str, str, str]], list[Any]]:
         import shutil
 
         self.outlines = extract_pdf_outlines(binary if binary is not None else filepath)
@@ -627,7 +684,7 @@ class MinerUParser(RAGFlowPdfParser):
         created_tmp_dir = False
 
         parser_cfg = kwargs.get("parser_config", {})
-        lang = parser_cfg.get("mineru_lang") or kwargs.get("lang", "English")
+        lang = parser_cfg.get("mineru_lang") or kwargs.get("lang") or "English"
         mineru_lang_code = LANGUAGE_TO_MINERU_MAP.get(lang, "ch")  # Defaults to Chinese if not matched
         mineru_method_raw_str = parser_cfg.get("mineru_parse_method", "auto")
         enable_formula = parser_cfg.get("mineru_formula_enable", True)
@@ -686,6 +743,13 @@ class MinerUParser(RAGFlowPdfParser):
             self.logger.info(f"[MinerU] Parsed {len(outputs)} blocks from PDF.")
             if callback:
                 callback(0.75, f"[MinerU] Parsed {len(outputs)} blocks from PDF.")
+
+            vision_model = kwargs.get("vision_model")
+            if vision_model is not None:
+                try:
+                    self._enhance_images_with_vlm(outputs, vision_model, callback=callback, language=lang, output_dir=final_out_dir)
+                except Exception as exc:
+                    self.logger.warning("[MinerU] VLM image enhancement failed: %s. Continuing without descriptions.", exc)
 
             return self._transfer_to_sections(outputs, parse_method), self._transfer_to_tables(outputs)
         finally:

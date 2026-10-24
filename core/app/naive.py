@@ -137,15 +137,24 @@ def by_mineru(
                     model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.OCR.value, mineru_llm_name)
                     ocr_model = LLMBundle(db, tenant_id, model_config, lang=lang)
                     pdf_parser = ocr_model.mdl
-                    sections, tables = pdf_parser.parse_pdf(
-                        filepath=filename,
-                        binary=binary,
-                        callback=callback,
-                        parse_method=parse_method,
-                        lang=lang,
-                        **kwargs,
-                    )
-                    return sections, tables, pdf_parser
+                    if "vision_model" not in kwargs:
+                        try:
+                            vision_config = get_tenant_default_model_by_type(db, tenant_id, LLMType.IMAGE2TEXT)
+                            vision_model = LLMBundle(db, tenant_id, vision_config, lang=lang)
+                            # Image workers must never share a SQLAlchemy Session.
+                            vision_model.db = None
+                            kwargs["vision_model"] = vision_model
+                        except Exception as exc:
+                            logging.info("[MinerU] No IMAGE2TEXT model available; skipping image enhancement: %s", exc)
+                sections, tables = pdf_parser.parse_pdf(
+                    filepath=filename,
+                    binary=binary,
+                    callback=callback,
+                    parse_method=parse_method,
+                    lang=lang,
+                    **kwargs,
+                )
+                return sections, tables, pdf_parser
             except Exception as e:
                 logging.error(f"Failed to parse pdf via LLMBundle MinerU ({mineru_llm_name}): {e}")
 
