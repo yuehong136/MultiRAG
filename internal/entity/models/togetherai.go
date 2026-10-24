@@ -66,4 +66,8 @@ func (t *TogetherAIModel) CheckConnection(api *APIConfig) error {
 	return err
 }
 
+func (t *TogetherAIModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+	return embedHTTPWithConfig(t.httpClient, t.BaseURL, t.URLSuffix.Embedding, name, texts, api, config)
+}
+
 var _ ModelDriver = (*TogetherAIModel)(nil)

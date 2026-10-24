@@ -97,7 +97,7 @@ func TestXinferenceStreamAndReasoning(t *testing.T) {
 	}
 }
 
-func TestXinferenceIdleCancellationAndUnsupported(t *testing.T) {
+func TestXinferenceIdleCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n")
@@ -114,12 +114,6 @@ func TestXinferenceIdleCancellationAndUnsupported(t *testing.T) {
 	cancel()
 	if _, err := x.ChatWithMessages("served-chat", &APIConfig{Context: ctx}, []Message{{Role: "user", Content: "hi"}}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal("request cancellation lost", err)
-	}
-	if _, err := x.Embed(nil, nil, nil, nil); !errors.Is(err, ErrUnsupportedCapability) {
-		t.Fatal("later embedding capability leaked", err)
-	}
-	if _, err := x.Rerank(nil, "", nil, nil, nil); !errors.Is(err, ErrUnsupportedCapability) {
-		t.Fatal("later rerank capability leaked", err)
 	}
 	stream := false
 	if err := x.ChatStreamlyWithMessages("served-chat", []Message{{Role: "user", Content: "hi"}}, nil, &ChatConfig{Stream: &stream}, func(*string, *string) error { return nil }); err == nil {

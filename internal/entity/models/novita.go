@@ -28,6 +28,10 @@ func (n *NovitaModel) Embed(name *string, texts []string, api *APIConfig, config
 	return embedHTTPWithConfig(n.httpClient, n.BaseURL, n.URLSuffix.Embedding, name, texts, api, config)
 }
 
+func (n *NovitaModel) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {
+	return rerankHTTP(n.httpClient, n.BaseURL, n.URLSuffix.Rerank, name, query, texts, api, config, map[string]any{"return_documents": nil})
+}
+
 var _ ModelDriver = (*NovitaModel)(nil)
 
 const (

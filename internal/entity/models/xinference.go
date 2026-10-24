@@ -7,7 +7,7 @@ import (
 )
 
 // XinferenceModel reuses the local OpenAI transport, optional authentication,
-// reasoning fields and idle-bounded streams for this chat-only provider batch.
+// reasoning fields, idle-bounded streams, embeddings and reranking.
 type XinferenceModel struct{ *LocalAIModel }
 
 func NewXinferenceModel(urls map[string]string, suffix URLSuffix) *XinferenceModel {
@@ -44,12 +44,12 @@ func (x *XinferenceModel) ChatStreamlyWithSender(name, message *string, api *API
 	return x.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
 }
 
-func (x *XinferenceModel) Embed(*string, []string, *APIConfig, *EmbeddingConfig) ([]EmbeddingData, error) {
-	return nil, fmt.Errorf("%w: xinference embedding", ErrUnsupportedCapability)
+func (x *XinferenceModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
+	return x.LocalAIModel.Embed(name, texts, api, config)
 }
 
-func (x *XinferenceModel) Rerank(*string, string, []string, *APIConfig, *RerankConfig) (*RerankResponse, error) {
-	return nil, fmt.Errorf("%w: xinference rerank", ErrUnsupportedCapability)
+func (x *XinferenceModel) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {
+	return x.LocalAIModel.Rerank(name, query, texts, api, config)
 }
 
 var _ ModelDriver = (*XinferenceModel)(nil)
