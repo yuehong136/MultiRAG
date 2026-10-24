@@ -1,34 +1,25 @@
 package entity
 
 import (
-	"path/filepath"
 	"testing"
 
 	"multirag/internal/entity/models"
 )
 
 func TestBaiduCatalogRegistration(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := manager.FindProvider("Baidu")
-	if provider == nil || provider.ModelDriver.Name() != "baidu" || len(provider.Models) != 8 || provider.URLSuffix.Chat != "chat/completions" || provider.URLSuffix.Models != "models" || provider.URLSuffix.Embedding != "embeddings" || provider.URLSuffix.Rerank != "rerank" {
-		t.Fatal("Baidu catalog/factory/endpoint wiring", provider)
-	}
-	if _, ok := provider.ModelDriver.(*models.BaiduModel); !ok {
-		t.Fatal("Baidu uses a fallback driver")
-	}
-	for name, capability := range map[string]string{"deepseek-v3.2": "chat", "ernie-5.0": "vision", "embedding-v1": "embedding", "qwen3-reranker-4b": "rerank"} {
-		model, err := manager.GetModelByName("baidu", name)
-		if err != nil || model == nil || !model.ModelTypeMap[capability] {
-			t.Fatal(name, model, err)
-		}
-	}
-	for _, name := range []string{"deepseek-v4-flash", "deepseek-v4-pro"} {
-		model, err := manager.GetModelByName("Baidu", name)
-		if err != nil || model.Thinking == nil || !model.Thinking.DefaultValue || !model.Thinking.ClearThinking {
-			t.Fatal(name, model, err)
-		}
-	}
+	manager := newCatalogManager(t)
+	requireCatalogProvider(t, manager, "Baidu", (*models.BaiduModel)(nil), models.URLSuffix{
+		Chat: "chat/completions", Models: "models", Embedding: "embeddings", Rerank: "rerank", OCR: "ocr/paddleocr",
+	})
+	// OCR extends the catalog; the original chat, vision, embedding and rerank
+	// contracts still have to resolve by name, with thinking opted in per model.
+	requireCatalogModels(t, manager, "Baidu", []catalogModelContract{
+		{"deepseek-v3.2", []string{"chat"}, nil},
+		{"deepseek-v4-flash", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"deepseek-v4-pro", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
+		{"ernie-5.0", []string{"vision"}, nil},
+		{"embedding-v1", []string{"embedding"}, nil},
+		{"qwen3-reranker-4b", []string{"rerank"}, nil},
+		{"paddleocr-vl-0.9b", []string{"ocr"}, nil},
+	})
 }

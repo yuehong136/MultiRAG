@@ -1,55 +1,70 @@
 package entity
 
 import (
-	"path/filepath"
-	"strings"
 	"testing"
+
+	"multirag/internal/entity/models"
 )
 
 func TestAddedProviderCatalogsAndFactory(t *testing.T) {
-	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager := newCatalogManager(t)
 	for _, test := range []struct {
-		provider, model, capability string
-		count                       int
+		provider string
+		driver   models.ModelDriver
+		suffix   models.URLSuffix
+		models   []catalogModelContract
 	}{
-		{"CoHere", "embed-v4.0", "embedding", 4},
-		{"FishAudio", "", "", 0},
-		{"StepFun", "step-1v-32k", "vision", 11},
-		{"Baichuan", "Baichuan-Text-Embedding", "embedding", 11},
-		{"Upstage", "solar-embedding-1-large-query", "embedding", 6},
+		{
+			"CoHere", (*models.CoHereModel)(nil),
+			models.URLSuffix{Chat: "v2/chat", Models: "v1/models", Rerank: "v2/rerank", Embedding: "v2/embed", ASR: "audio/transcriptions"},
+			[]catalogModelContract{
+				{"command-a-03-2025", []string{"chat"}, nil},
+				{"rerank-v4.0-pro", []string{"rerank"}, nil},
+				{"embed-v4.0", []string{"embedding"}, nil},
+				{"cohere-transcribe-03-2026", []string{"speech2text"}, nil},
+			},
+		},
+		{
+			"FishAudio", (*models.FishAudioModel)(nil),
+			models.URLSuffix{Models: "model", Balance: "wallet/self/api-credit", TTS: "v1/tts", ASR: "v1/asr"},
+			[]catalogModelContract{
+				{"s2-pro", []string{"tts"}, nil},
+				{"s1", []string{"tts"}, nil},
+				{"transcribe-1", []string{"asr"}, nil},
+			},
+		},
+		{
+			"StepFun", (*models.StepFunModel)(nil),
+			models.URLSuffix{Chat: "chat/completions", Models: "models", TTS: "audio/speech"},
+			[]catalogModelContract{
+				{"step-3.5-flash", []string{"chat"}, nil},
+				{"step-1v-32k", []string{"chat", "vision"}, nil},
+				{"step-tts-2", []string{"tts"}, nil},
+				{"stepaudio-2.5-tts", []string{"tts"}, nil},
+				{"step-tts-mini", []string{"tts"}, nil},
+			},
+		},
+		{
+			"Baichuan", (*models.BaichuanModel)(nil),
+			models.URLSuffix{Chat: "chat/completions", Embedding: "embeddings"},
+			[]catalogModelContract{
+				{"Baichuan4", []string{"chat"}, nil},
+				{"Baichuan-Text-Embedding", []string{"embedding"}, nil},
+			},
+		},
+		{
+			"Upstage", (*models.UpstageModel)(nil),
+			models.URLSuffix{Chat: "chat/completions", Models: "models", Embedding: "embeddings"},
+			[]catalogModelContract{
+				{"solar-pro3", []string{"chat"}, nil},
+				{"solar-embedding-1-large-query", []string{"embedding"}, nil},
+				{"solar-embedding-1-large-passage", []string{"embedding"}, nil},
+			},
+		},
 	} {
 		t.Run(test.provider, func(t *testing.T) {
-			provider := manager.FindProvider(test.provider)
-			if provider == nil || provider.ModelDriver == nil || provider.ModelDriver.Name() != strings.ToLower(test.provider) || len(provider.Models) != test.count {
-				t.Fatalf("catalog or factory missing: %#v", provider)
-			}
-			if test.model != "" {
-				model, err := manager.GetModelByName(test.provider, test.model)
-				if err != nil || model == nil || !model.ModelTypeMap[test.capability] {
-					t.Fatal(model, err)
-				}
-			}
+			requireCatalogProvider(t, manager, test.provider, test.driver, test.suffix)
+			requireCatalogModels(t, manager, test.provider, test.models)
 		})
-	}
-	cohere := manager.FindProvider("CoHere")
-	if cohere.URLSuffix.Embedding != "v2/embed" || cohere.URLSuffix.Chat != "v2/chat" || cohere.URLSuffix.Rerank != "v2/rerank" || cohere.URLSuffix.Models != "v1/models" {
-		t.Fatal("Cohere V2 endpoint wiring", cohere.URLSuffix)
-	}
-	fish := manager.FindProvider("FishAudio")
-	if fish.URLSuffix.Balance != "wallet/self/api-credit" {
-		t.Fatal("FishAudio balance endpoint", fish.URLSuffix)
-	}
-	volc := manager.FindProvider("VolcEngine")
-	if volc.URLSuffix.Models != "models" {
-		t.Fatal("active VolcEngine discovery endpoint lost")
-	}
-	for _, name := range []string{"doubao-embedding-vision-250615", "doubao-embedding-vision-251215"} {
-		model, err := manager.GetModelByName("VolcEngine", name)
-		if err != nil || model == nil || !model.ModelTypeMap["embedding"] {
-			t.Fatal(name, model, err)
-		}
 	}
 }
