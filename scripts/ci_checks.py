@@ -22,6 +22,7 @@ GO_LIVE_OPT_INS = {
     "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
     "engine": {"TestSkillMilvusLiveUnpublishedFragments", "TestEngineStoresLive"},
     "handler": {
+        "TestDatasetChunkMetadataCLIAndStores",
         "TestAfterD7ProvidersHTTPCLIAndSQL",
         "TestDatasetGraphHTTPAndSQL",
         "TestAfter9dProvidersHTTPCLIAndSQL",
@@ -43,7 +44,7 @@ GO_LIVE_OPT_INS = {
         "TestUserTimeHTTPCLIAndSQL",
         "TestXAIInstanceLiveHTTPAndSQL",
     },
-    "service": {"TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
+    "service": {"TestAfter2836ModelsHTTPCLIAndSQL", "TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
     "service/nlp": {"TestRetrievalScratchPostgresInfinity"},
     "skills": {"TestSkillsLiveServer"},
 }

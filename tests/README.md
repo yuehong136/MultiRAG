@@ -59,6 +59,8 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 | `handler.TestAfterD7ProvidersHTTPCLIAndSQL` | `MULTIRAG_AFTERD7_A_CONFIG` 为私有 Go 配置，loopback scratch DB 名 `multirag_afterd7_a_20261024`；`MULTIRAG_AFTERD7_A_CLI` 必须为当前源码新构建 CLI。真实 JWT/SQL/CLI，供应商 HTTP 受控。 |
 | `engine.TestEngineStoresLive` | 私有 `MULTIRAG_ENGINE_LIVE_CONFIG`；显式 `MULTIRAG_ENGINE_LIVE_KIND=elasticsearch` 或 `infinity`；固定稳定 Infinity 0.7.0、精确自有 tenant/索引/库。 |
 | `handler.TestDatasetGraphHTTPAndSQL` | 同一自有 engine 配置与 PostgreSQL scratch；tenant/库名以 `multirag_afterd7_b_` 开头，禁止指向业务库。可附加固定 Web API 客户端验收，不等同浏览器 UI。 |
+| `handler.TestDatasetChunkMetadataCLIAndStores` | 私有 `MULTIRAG_GO_DATASET_CHUNK_CONFIG`、同源码新构建的 `MULTIRAG_GO_DATASET_CHUNK_CLI`，以及固定 Web 提交的 `WEB_DATASET_CHECKOUT`。分别设置 `MULTIRAG_ENGINE_LIVE_KIND=elasticsearch`、`infinity` 运行；使用 `multirag_after2836_e_` 自有 SQL/Infinity namespace，真实 CLI、JWT/SQL、chunk/tag/metadata 与 Web API 客户端，不等同浏览器 UI。 |
+| `service.TestAfter2836ModelsHTTPCLIAndSQL` | 私有 `MULTIRAG_AFTER2836_F_CONFIG`、当前源码 CLI `MULTIRAG_AFTER2836_F_CLI` 和预登记资源账本 `MULTIRAG_AFTER2836_F_RESOURCES`。仅访问 loopback scratch DB `multirag_after2836_f_20261024`；真实 SQL/JWT/CLI，模型供应商 HTTP 由用例控制。 |
 
 CI 在 native cache 命中时也执行 OpenCC 输入边界的 ASan/UBSan 专项。新增 Python
 connector controls、prune worker、TTS cache、Manual filter 与 REST chat 用例保持保守串行；

@@ -177,6 +177,13 @@ Web 是独立仓库，本指南不配置前端代理。需要 Web 联调时，�
 
 Go 模型目录支持 MinerU URL 异步解析、Replicate prediction/SSE、Xinference 本地聊天、
 TogetherAI 聊天与 reasoning，以及 302.AI、JieKouAI 和 CometAPI 的非流式 ASR/TTS。
+另支持 MinerU_Local 文件内容任务（provider `mineru_local`、`doc_parse`、租户自定义 URL，
+key 可选）、TogetherAI embedding、Xinference embedding/rerank、Novita rerank、
+N1N chat/embedding/rerank、GPUStack chat 和 Azure OpenAI deployment chat/embedding。
+Azure 实例 URL 包含 `/openai`，使用 `api-key` 和 `api-version=2024-10-21`；
+模型发现与连接检查查询 `/models`，返回可访问的基础/微调模型 ID。实际调用仍须另外声明
+租户的 deployment ID，不能把发现结果当成已部署实例。过滤、损坏响应及不合法流终态报错，
+不会产生成功完成事件。这些 Go 驱动不代表已通过付费供应商验收。
 Xinference 必须指定实例 URL，可不提供 API key；托管供应商仍校验凭据和地址。
 CLI `FILE=URL` 解析不抓取文档，MinerU 驱动仅把 URL 交给服务。Replicate 聊天当前只接受
 文本消息，非文本内容在请求前报错；预测成功使用 `succeeded`，供应商错误和取消会终止流。
@@ -191,6 +198,12 @@ DELETE 只删除当前 dataset 的五类图谱记录，保留普通 chunk。`doc
 已有 Python 物理文档 ID 并合并字段。Infinity 使用显式表范围；固定 SDK 无法保留同时包含
 两种引号的字面量时直接报错。通用 Milvus 写入仍明确不可用，独立 Skills 存储合同保持原实现。
 这些能力属于 Go 并行实现，不代表 Python 生产实例已切换。
+
+Go chunk 直读使用 `GET /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}`；
+先校验有效 dataset、用户访问和有效文档，再绑定 tenant、dataset 与 native chunk 的身份。
+CLI `GET/UPDATE CHUNK` 显式提供 `DOCUMENT`，不再跨租户猜测文档。metadata flattened
+查询先授权完整 dataset 集合，再分别读取各 tenant 的 metadata；删除 tag 使用
+`DELETE /api/v1/datasets/{dataset_id}/tags`。完整 CLI 语法见 [CLI README](../internal/cli/README.md)。
 
 ### 定向验证
 
