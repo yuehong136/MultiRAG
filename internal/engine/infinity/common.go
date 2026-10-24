@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"multirag/internal/engine/types"
 	"strings"
 
 	"multirag/internal/common"
@@ -29,72 +31,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// Delete deletes rows from either a dataset table or metadata table.
-// If indexName starts with "multirag_doc_meta_", it's a metadata table.
-// Otherwise, it's a dataset table: {indexName}_{datasetID}
-func (e *infinityEngine) Delete(ctx context.Context, condition map[string]interface{}, indexName string, datasetID string) (int64, error) {
-	var tableName string
-	if strings.HasPrefix(indexName, "multirag_doc_meta_") {
-		tableName = indexName
-	} else {
-		tableName = fmt.Sprintf("%s_%s", indexName, datasetID)
-	}
-
-	db, err := e.client.conn.GetDatabase(e.client.dbName)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get database: %w", err)
-	}
-
-	table, err := db.GetTable(tableName)
-	if err != nil {
-		common.Warn(fmt.Sprintf("Table %s does not exist, skipping delete", tableName))
-		return 0, nil
-	}
-
-	// Get table columns for building filter
-	clmns := make(map[string]struct {
-		Type    string
-		Default interface{}
-	})
-	colsResp, err := table.ShowColumns()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get columns: %w", err)
-	}
-	result, ok := colsResp.(*infinity.QueryResult)
-	if ok {
-		if nameArr, ok := result.Data["name"]; ok {
-			if typeArr, ok := result.Data["type"]; ok {
-				if defArr, ok := result.Data["default"]; ok {
-					for i := 0; i < len(nameArr); i++ {
-						colName, _ := nameArr[i].(string)
-						colType, _ := typeArr[i].(string)
-						var colDefault interface{}
-						if i < len(defArr) {
-							colDefault = defArr[i]
-						}
-						clmns[colName] = struct {
-							Type    string
-							Default interface{}
-						}{colType, colDefault}
-					}
-				}
-			}
-		}
-	}
-
-	// Build filter from condition
-	filter := buildFilterFromCondition(condition, clmns)
-
-	delResp, err := table.Delete(filter)
-	if err != nil {
-		return 0, fmt.Errorf("failed to delete: %w", err)
-	}
-
-	return delResp.DeletedRows, nil
-}
-
 // DropTable deletes a table/index
-func (e *infinityEngine) DropTable(ctx context.Context, indexName string) error {
+func (e *infinityEngine) dropTable(ctx context.Context, indexName string) error {
+	if err := validateStoreName(indexName); err != nil {
+		return err
+	}
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
 		return fmt.Errorf("Failed to get database: %w", err)
@@ -109,7 +50,10 @@ func (e *infinityEngine) DropTable(ctx context.Context, indexName string) error 
 }
 
 // TableExists checks if table/index exists
-func (e *infinityEngine) TableExists(ctx context.Context, indexName string) (bool, error) {
+func (e *infinityEngine) tableExists(ctx context.Context, indexName string) (bool, error) {
+	if err := validateStoreName(indexName); err != nil {
+		return false, err
+	}
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
 		return false, fmt.Errorf("Failed to get database: %w", err)
@@ -117,9 +61,7 @@ func (e *infinityEngine) TableExists(ctx context.Context, indexName string) (boo
 
 	_, err = db.GetTable(indexName)
 	if err != nil {
-		// Check if error is "table not found"
-		errLower := strings.ToLower(err.Error())
-		if strings.Contains(errLower, "not found") || strings.Contains(errLower, "notexist") || strings.Contains(errLower, "doesn't exist") {
+		if isMissingTable(err) {
 			return false, nil
 		}
 		return false, err
@@ -310,4 +252,144 @@ func buildFilterFromCondition(condition map[string]interface{}, tableColumns map
 		return "1=1"
 	}
 	return strings.Join(conditions, " AND ")
+}
+
+func isMissingTable(err error) bool {
+	var missing *infinity.InfinityException
+	return errors.As(err, &missing) && infinity.ErrorCode(missing.ErrorCode) == infinity.ErrorCodeTableNotExist
+}
+func buildChunkTableName(base, dataset string) string {
+	if dataset == "skill" {
+		return base
+	}
+	return base + "_" + dataset
+}
+func buildMetadataTableName(tenant string) string { return "multirag_doc_meta_" + tenant }
+func validateStoreName(name string) error {
+	if !types.ValidFieldName(name) {
+		return fmt.Errorf("invalid exact store name %q", name)
+	}
+	return nil
+}
+func validateChunkScope(base, dataset string) error {
+	if strings.TrimSpace(base) == "" || strings.TrimSpace(dataset) == "" {
+		return fmt.Errorf("base name and dataset are required")
+	}
+	return validateStoreName(buildChunkTableName(base, dataset))
+}
+func (e *infinityEngine) ChunkStoreExists(ctx context.Context, base, dataset string) (bool, error) {
+	if err := validateChunkScope(base, dataset); err != nil {
+		return false, err
+	}
+	return e.tableExists(ctx, buildChunkTableName(base, dataset))
+}
+func (e *infinityEngine) DropChunkStore(ctx context.Context, base, dataset string) error {
+	if err := validateChunkScope(base, dataset); err != nil {
+		return err
+	}
+	return e.dropTable(ctx, buildChunkTableName(base, dataset))
+}
+func (e *infinityEngine) MetadataStoreExists(ctx context.Context, tenant string) (bool, error) {
+	if strings.TrimSpace(tenant) == "" {
+		return false, fmt.Errorf("tenant is required")
+	}
+	return e.tableExists(ctx, buildMetadataTableName(tenant))
+}
+func (e *infinityEngine) DropMetadataStore(ctx context.Context, tenant string) error {
+	if strings.TrimSpace(tenant) == "" {
+		return fmt.Errorf("tenant is required")
+	}
+	return e.dropTable(ctx, buildMetadataTableName(tenant))
+}
+
+func (e *infinityEngine) deleteRows(ctx context.Context, condition map[string]interface{}, tableName string) (int64, error) {
+	if err := validateStoreName(tableName); err != nil {
+		return 0, err
+	}
+
+	db, err := e.client.conn.GetDatabase(e.client.dbName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get database: %w", err)
+	}
+
+	table, err := db.GetTable(tableName)
+	if err != nil {
+		if isMissingTable(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	// Get table columns for building filter
+	clmns := make(map[string]struct {
+		Type    string
+		Default interface{}
+	})
+	colsResp, err := table.ShowColumns()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get columns: %w", err)
+	}
+	result, ok := colsResp.(*infinity.QueryResult)
+	if ok {
+		if nameArr, ok := result.Data["name"]; ok {
+			if typeArr, ok := result.Data["type"]; ok {
+				if defArr, ok := result.Data["default"]; ok {
+					for i := 0; i < len(nameArr); i++ {
+						colName, _ := nameArr[i].(string)
+						colType, _ := typeArr[i].(string)
+						var colDefault interface{}
+						if i < len(defArr) {
+							colDefault = defArr[i]
+						}
+						clmns[colName] = struct {
+							Type    string
+							Default interface{}
+						}{colType, colDefault}
+					}
+				}
+			}
+		}
+	}
+
+	// Build filter from condition
+	filter, err := strictFilterFromCondition(condition, clmns)
+	if err != nil {
+		return 0, err
+	}
+
+	delResp, err := table.Delete(filter)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete: %w", err)
+	}
+
+	return delResp.DeletedRows, nil
+}
+
+func (e *infinityEngine) DeleteChunks(ctx context.Context, condition map[string]interface{}, base, dataset string) (int64, error) {
+	if err := validateChunkScope(base, dataset); err != nil {
+		return 0, err
+	}
+	scoped := make(map[string]interface{}, len(condition)+1)
+	for k, v := range condition {
+		scoped[k] = v
+	}
+	if supplied, ok := scoped["kb_id"]; ok {
+		values, _, err := types.ConditionValues(supplied)
+		if err != nil {
+			return 0, err
+		}
+		for _, value := range values {
+			if value != dataset {
+				return 0, fmt.Errorf("conflicting dataset scope")
+			}
+		}
+	}
+	scoped["kb_id"] = dataset
+	return e.deleteRows(ctx, scoped, buildChunkTableName(base, dataset))
+}
+func (e *infinityEngine) DeleteMetadata(ctx context.Context, condition map[string]interface{}, tenant string) (int64, error) {
+	if strings.TrimSpace(tenant) == "" || len(condition) == 0 {
+		return 0, fmt.Errorf("tenant and metadata deletion condition are required")
+	}
+	return e.deleteRows(ctx, condition, buildMetadataTableName(tenant))
 }

@@ -754,7 +754,7 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 			}
 		})
 		store := engine.Get()
-		if err := store.CreateMetadata(t.Context(), tableName); err != nil {
+		if err := store.CreateMetadataStore(t.Context(), "a410_configured"); err != nil {
 			t.Fatal(err)
 		}
 		metadata := []map[string]any{}

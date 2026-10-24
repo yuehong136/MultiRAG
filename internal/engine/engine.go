@@ -36,27 +36,24 @@ type DocEngine interface {
 	// Search
 	Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error)
 
-	// Dataset operations
-	CreateDataset(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error
-	InsertDataset(ctx context.Context, documents []map[string]interface{}, indexName string, knowledgebaseID string) ([]string, error)
-	UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error
+	// Chunk stores use a base name and an explicit dataset scope. ES shares the
+	// tenant index; Infinity resolves its per-dataset physical table internally.
+	CreateChunkStore(ctx context.Context, baseName, datasetID string, vectorSize int, parserID string) error
+	InsertChunks(ctx context.Context, chunks []map[string]interface{}, baseName, datasetID string) ([]string, error)
+	UpdateChunks(ctx context.Context, condition, newValue map[string]interface{}, baseName, datasetID string) error
+	DeleteChunks(ctx context.Context, condition map[string]interface{}, baseName, datasetID string) (int64, error)
+	GetChunk(ctx context.Context, baseName, chunkID string, datasetIDs []string) (interface{}, error)
+	DropChunkStore(ctx context.Context, baseName, datasetID string) error
+	ChunkStoreExists(ctx context.Context, baseName, datasetID string) (bool, error)
 
-	// Chunk operations
-	GetChunk(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error)
-
-	// Document metadata operations
-	CreateMetadata(ctx context.Context, indexName string) error
-	InsertMetadata(ctx context.Context, documents []map[string]interface{}, tenantID string) ([]string, error)
-	// UpdateMetadata merges metaFields into a document's row in the per-tenant metadata table
-	// (multirag_doc_meta_<tenant>). Infinity is fully implemented; ES/Milvus are stubs, matching
-	// the rest of the metadata write path (InsertMetadata). This is the Go (#13928) SetMeta
-	// write side; production doc-metadata source of truth remains the Python DocMetadataService.
-	UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error
-
-	// Operations for both dataset and metadata tables
-	Delete(ctx context.Context, condition map[string]interface{}, indexName string, datasetID string) (int64, error)
-	DropTable(ctx context.Context, indexName string) error
-	TableExists(ctx context.Context, indexName string) (bool, error)
+	// Metadata stores are named by tenant, never inferred from a chunk base name.
+	CreateMetadataStore(ctx context.Context, tenantID string) error
+	InsertMetadata(ctx context.Context, metadata []map[string]interface{}, tenantID string) ([]string, error)
+	// UpdateMetadata merges keys into the document row; new keys win.
+	UpdateMetadata(ctx context.Context, docID, datasetID string, metaFields map[string]interface{}, tenantID string) error
+	DeleteMetadata(ctx context.Context, condition map[string]interface{}, tenantID string) (int64, error)
+	DropMetadataStore(ctx context.Context, tenantID string) error
+	MetadataStoreExists(ctx context.Context, tenantID string) (bool, error)
 
 	// Utility functions for search result processing
 	GetFields(chunks []map[string]interface{}, fields []string) map[string]map[string]interface{}

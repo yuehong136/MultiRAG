@@ -27,6 +27,7 @@ import (
 func (e *elasticsearchEngine) GetChunk(ctx context.Context, indexName, chunkID string, kbIDs []string) (interface{}, error) {
 	searchReq := &types.SearchRequest{
 		IndexNames: []string{indexName},
+		KbIDs:      kbIDs,
 		Limit:      1,
 		Filter: map[string]interface{}{
 			"id": chunkID,

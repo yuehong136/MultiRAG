@@ -115,7 +115,7 @@ func (s *DocumentService) changeDocumentStatus(ctx context.Context, datasetID, u
 			}
 		}
 	} else if !indexed && s.docEngine != nil {
-		indexed, err = s.docEngine.TableExists(ctx, prefix)
+		indexed, err = s.docEngine.ChunkStoreExists(ctx, prefix, datasetID)
 	}
 
 	if err == nil && indexed {

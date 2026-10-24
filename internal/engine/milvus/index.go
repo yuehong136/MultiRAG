@@ -1,79 +1,49 @@
-//
-//  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-//
-
 package milvus
 
 import (
 	"context"
 	"fmt"
-
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
 
-// CreateDataset creates a collection in Milvus
-func (e *milvusEngine) CreateDataset(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error {
-	// TODO: Implement collection creation with schema (vectorSize/parserID aware)
-	return fmt.Errorf("milvus CreateDataset not yet implemented")
+// Generic dataset writes remain unavailable. Skills use their independent,
+// implemented alias/replace/recovery contract in engine.SkillMilvus.
+func (e *milvusEngine) CreateChunkStore(context.Context, string, string, int, string) error {
+	return fmt.Errorf("milvus chunk stores are not implemented")
 }
-
-// CreateMetadata creates the document metadata collection in Milvus
-func (e *milvusEngine) CreateMetadata(ctx context.Context, indexName string) error {
-	// TODO: implement doc meta index for Milvus
-	return nil
+func (e *milvusEngine) InsertChunks(context.Context, []map[string]interface{}, string, string) ([]string, error) {
+	return nil, fmt.Errorf("milvus chunk inserts are not implemented")
 }
-
-// InsertDataset inserts documents into a dataset collection in Milvus
-func (e *milvusEngine) InsertDataset(ctx context.Context, documents []map[string]interface{}, indexName string, knowledgebaseID string) ([]string, error) {
-	// TODO: implement dataset insert for Milvus
-	return []string{}, nil
+func (e *milvusEngine) UpdateChunks(context.Context, map[string]interface{}, map[string]interface{}, string, string) error {
+	return fmt.Errorf("milvus chunk updates are not implemented")
 }
-
-// InsertMetadata inserts documents into tenant's metadata collection in Milvus
-func (e *milvusEngine) InsertMetadata(ctx context.Context, documents []map[string]interface{}, tenantID string) ([]string, error) {
-	// TODO: implement metadata insert for Milvus
-	return []string{}, nil
+func (e *milvusEngine) DeleteChunks(context.Context, map[string]interface{}, string, string) (int64, error) {
+	return 0, fmt.Errorf("milvus chunk deletion is not implemented")
 }
-
-// UpdateDataset updates chunks by condition in Milvus
-func (e *milvusEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
-	return fmt.Errorf("document status index updates are not implemented for this Go engine")
+func (e *milvusEngine) DropChunkStore(context.Context, string, string) error {
+	return fmt.Errorf("milvus chunk store deletion is not implemented")
 }
-
-// UpdateMetadata updates document metadata in tenant's metadata collection in Milvus
-func (e *milvusEngine) UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error {
-	// TODO: implement metadata update for Milvus
-	return nil
-}
-
-// DropTable drops a collection in Milvus
-func (e *milvusEngine) DropTable(ctx context.Context, indexName string) error {
-	return e.client.DropCollection(ctx, milvusclient.NewDropCollectionOption(indexName))
-}
-
-// TableExists checks if a collection exists in Milvus
-func (e *milvusEngine) TableExists(ctx context.Context, indexName string) (bool, error) {
-	has, err := e.client.HasCollection(ctx, milvusclient.NewHasCollectionOption(indexName))
-	if err != nil {
-		return false, err
+func (e *milvusEngine) ChunkStoreExists(ctx context.Context, base, dataset string) (bool, error) {
+	if base == "" || dataset == "" {
+		return false, fmt.Errorf("base name and dataset are required")
 	}
-	return has, nil
+	return e.client.HasCollection(ctx, milvusclient.NewHasCollectionOption(base+"_"+dataset))
 }
-
-// Delete deletes rows from either a dataset collection or metadata collection in Milvus
-func (e *milvusEngine) Delete(ctx context.Context, condition map[string]interface{}, indexName string, datasetID string) (int64, error) {
-	// TODO: implement delete for Milvus
-	return 0, nil
+func (e *milvusEngine) CreateMetadataStore(context.Context, string) error {
+	return fmt.Errorf("milvus metadata stores are not implemented")
+}
+func (e *milvusEngine) InsertMetadata(context.Context, []map[string]interface{}, string) ([]string, error) {
+	return nil, fmt.Errorf("milvus metadata inserts are not implemented")
+}
+func (e *milvusEngine) UpdateMetadata(context.Context, string, string, map[string]interface{}, string) error {
+	return fmt.Errorf("milvus metadata updates are not implemented")
+}
+func (e *milvusEngine) DeleteMetadata(context.Context, map[string]interface{}, string) (int64, error) {
+	return 0, fmt.Errorf("milvus metadata deletion is not implemented")
+}
+func (e *milvusEngine) DropMetadataStore(context.Context, string) error {
+	return fmt.Errorf("milvus metadata store deletion is not implemented")
+}
+func (e *milvusEngine) MetadataStoreExists(context.Context, string) (bool, error) {
+	return false, fmt.Errorf("milvus metadata stores are not implemented")
 }

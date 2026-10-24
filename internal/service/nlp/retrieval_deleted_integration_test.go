@@ -126,7 +126,7 @@ func TestRetrievalScratchPostgresInfinity(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if err := index.CreateDataset(context.Background(), "multirag_tenant", "kb", 2, "naive"); err != nil {
+	if err := index.CreateChunkStore(context.Background(), "multirag_tenant", "kb", 2, "naive"); err != nil {
 		t.Fatal(err)
 	}
 	chunks := []map[string]interface{}{}
@@ -140,7 +140,7 @@ func TestRetrievalScratchPostgresInfinity(t *testing.T) {
 		}
 		chunks = append(chunks, chunk)
 	}
-	if failed, err := index.InsertDataset(context.Background(), chunks, "multirag_tenant", "kb"); err != nil || len(failed) > 0 {
+	if failed, err := index.InsertChunks(context.Background(), chunks, "multirag_tenant", "kb"); err != nil || len(failed) > 0 {
 		t.Fatalf("index insert failed: %v %v", failed, err)
 	}
 	if _, err := pool.Exec(`DELETE FROM t_ai_documents WHERE id='gone'`); err != nil {

@@ -43,11 +43,13 @@ func (e *infinityEngine) GetChunk(ctx context.Context, tableName, chunkID string
 		// Search in tables like <tableName>_<kb_id> for each kbID
 		if len(kbIDs) > 0 {
 			for _, kbID := range kbIDs {
-				tableNames = append(tableNames, fmt.Sprintf("%s_%s", tableName, kbID))
+				tableNames = append(tableNames, buildChunkTableName(tableName, kbID))
 			}
 		}
 		// Also try the base tableName
-		tableNames = append(tableNames, tableName)
+		if len(kbIDs) == 0 {
+			tableNames = append(tableNames, tableName)
+		}
 	}
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
@@ -61,19 +63,25 @@ func (e *infinityEngine) GetChunk(ctx context.Context, tableName, chunkID string
 	for _, tblName := range tableNames {
 		table, err := db.GetTable(tblName)
 		if err != nil {
-			continue
+			if isMissingTable(err) {
+				continue
+			}
+			return nil, err
 		}
 
 		// Query with filter for the specific chunk ID
-		filter := fmt.Sprintf("id = '%s'", chunkID)
+		filter, err := strictFilterFromCondition(map[string]interface{}{"id": chunkID}, nil)
+		if err != nil {
+			return nil, err
+		}
 		result, err := table.Output([]string{"*"}).Filter(filter).ToResult()
 		if err != nil {
-			continue
+			return nil, err
 		}
 
 		qr, ok := result.(*infinity.QueryResult)
-		if !ok {
-			continue
+		if !ok || qr == nil {
+			return nil, fmt.Errorf("invalid chunk query result")
 		}
 
 		if len(qr.Data) == 0 {
@@ -97,7 +105,7 @@ func (e *infinityEngine) GetChunk(ctx context.Context, tableName, chunkID string
 				if existing, exists := allChunks[idVal]; exists {
 					// Merge: keep first non-empty value for each field
 					for k, v := range chunk {
-						if _, has := existing[k]; !has || utility.IsEmpty(v) {
+						if _, has := existing[k]; !has || (utility.IsEmpty(existing[k]) && !utility.IsEmpty(v)) {
 							existing[k] = v
 						}
 					}

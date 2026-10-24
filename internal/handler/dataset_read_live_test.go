@@ -163,19 +163,18 @@ func TestDatasetReadHTTPAndSQL(t *testing.T) {
 			}
 		}
 		t.Log("owned-index-resource", "multirag_after9b_c", "multirag_after9b_c_"+ids[kind])
-		if err := store.CreateDataset(context.Background(), "multirag_after9b_c", ids[kind], 2, "naive"); err != nil {
+		if err := store.CreateChunkStore(context.Background(), "multirag_after9b_c", ids[kind], 2, "naive"); err != nil {
 			t.Fatal(err)
 		}
 		defer func(kind string) {
-			tableName := "multirag_after9b_c_" + ids[kind]
-			if err := store.DropTable(context.Background(), tableName); err != nil {
+			if err := store.DropChunkStore(context.Background(), "multirag_after9b_c", ids[kind]); err != nil {
 				t.Error(err)
 			}
-			if _, err := indexDB.GetTable(tableName); err == nil {
+			if _, err := indexDB.GetTable("multirag_after9b_c_" + ids[kind]); err == nil {
 				t.Error("owned table survived cleanup")
 			}
 		}(kind)
-		failed, err := store.InsertDataset(context.Background(), []map[string]any{{"id": kind, "kb_id": ids[kind], "doc_id": docID, "available_int": 1, "content": "availability " + kind, "docnm": "document", "q_2_vec": []float64{0, 1}}}, "multirag_after9b_c", ids[kind])
+		failed, err := store.InsertChunks(context.Background(), []map[string]any{{"id": kind, "kb_id": ids[kind], "doc_id": docID, "available_int": 1, "content": "availability " + kind, "docnm": "document", "q_2_vec": []float64{0, 1}}}, "multirag_after9b_c", ids[kind])
 		if err != nil || len(failed) > 0 {
 			t.Fatal("real index insert failed", failed, err)
 		}

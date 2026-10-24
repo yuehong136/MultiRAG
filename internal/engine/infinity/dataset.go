@@ -30,17 +30,24 @@ import (
 	"go.uber.org/zap"
 
 	"multirag/internal/common"
+	"multirag/internal/engine/types"
 	"multirag/internal/utility"
 )
 
-// CreateDataset creates a dataset table in Infinity
+// CreateChunkStore creates a dataset table in Infinity
 // indexName is the table name prefix (e.g., "multirag_<tenant_id>")
 // The full table name is built as "{indexName}_{datasetID}"
-func (e *infinityEngine) CreateDataset(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error {
+func (e *infinityEngine) CreateChunkStore(ctx context.Context, indexName, datasetID string, vectorSize int, parserID string) error {
+	if vectorSize <= 0 {
+		return fmt.Errorf("positive vector dimension is required")
+	}
 	vecSize := vectorSize
 
 	// Build full table name: {indexName}_{datasetID}
-	tableName := fmt.Sprintf("%s_%s", indexName, datasetID)
+	if err := validateChunkScope(indexName, datasetID); err != nil {
+		return err
+	}
+	tableName := buildChunkTableName(indexName, datasetID)
 
 	// Use configured schema
 	fpMapping := filepath.Join(utility.GetProjectBaseDirectory(), "configs", e.mappingFileName)
@@ -62,7 +69,7 @@ func (e *infinityEngine) CreateDataset(ctx context.Context, indexName, datasetID
 	}
 
 	// Check if table already exists
-	exists, err := e.TableExists(ctx, tableName)
+	exists, err := e.tableExists(ctx, tableName)
 	if err != nil {
 		return fmt.Errorf("Failed to check if table exists: %w", err)
 	}
@@ -196,14 +203,36 @@ func (e *infinityEngine) CreateDataset(ctx context.Context, indexName, datasetID
 	return nil
 }
 
-// InsertDataset inserts chunks into a dataset table
+// InsertChunks inserts chunks into a dataset table
 // Table name format: {tableNamePrefix}_{knowledgebaseID}
 // Auto-create the table if it doesn't exist
-// Transform chunks before insert (see TransformChunkFields)
+// Transform chunks before insert (see transformChunkFields)
 // Delete existing rows with matching IDs before insert
-func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]interface{}, tableNamePrefix string, knowledgebaseID string) ([]string, error) {
-	tableName := fmt.Sprintf("%s_%s", tableNamePrefix, knowledgebaseID)
-	common.Info("InfinityConnection.InsertDataset called", zap.String("tableName", tableName), zap.Int("chunkCount", len(chunks)))
+func (e *infinityEngine) InsertChunks(ctx context.Context, chunks []map[string]interface{}, tableNamePrefix string, knowledgebaseID string) ([]string, error) {
+	if err := validateChunkScope(tableNamePrefix, knowledgebaseID); err != nil {
+		return nil, err
+	}
+	if len(chunks) == 0 {
+		return []string{}, nil
+	}
+	seen := map[string]bool{}
+	for _, chunk := range chunks {
+		id, ok := chunk["id"].(string)
+		if !ok || strings.TrimSpace(id) == "" || seen[id] {
+			return nil, fmt.Errorf("missing or duplicate chunk id")
+		}
+		seen[id] = true
+		values, _, err := types.ConditionValues(chunk["kb_id"])
+		if err != nil || len(values) != 1 || values[0] != knowledgebaseID {
+			return nil, fmt.Errorf("chunk belongs to another dataset")
+		}
+		if _, err = json.Marshal(chunk); err != nil {
+			return nil, err
+		}
+	}
+
+	tableName := buildChunkTableName(tableNamePrefix, knowledgebaseID)
+	common.Info("InfinityConnection.InsertChunks called", zap.String("tableName", tableName), zap.Int("chunkCount", len(chunks)))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -213,8 +242,7 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 	table, err := db.GetTable(tableName)
 	if err != nil {
 		// Table doesn't exist, try to create it
-		errMsg := strings.ToLower(err.Error())
-		if !strings.Contains(errMsg, "not found") && !strings.Contains(errMsg, "doesn't exist") {
+		if !isMissingTable(err) {
 			return nil, fmt.Errorf("Failed to get table %s: %w", tableName, err)
 		}
 
@@ -244,7 +272,7 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 		}
 
 		// Create table
-		if err := e.CreateDataset(ctx, tableNamePrefix, knowledgebaseID, vectorSize, parserID); err != nil {
+		if err := e.CreateChunkStore(ctx, tableNamePrefix, knowledgebaseID, vectorSize, parserID); err != nil {
 			return nil, fmt.Errorf("Failed to create table: %w", err)
 		}
 
@@ -284,20 +312,23 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 	// Transform chunks using helper function
 	insertChunks := make([]map[string]interface{}, len(chunks))
 	for i, chunk := range chunks {
-		insertChunks[i] = TransformChunkFields(chunk, embeddingCols)
+		insertChunks[i] = transformChunkFields(chunk, embeddingCols)
 	}
 
 	// Delete existing rows with matching IDs
 	if len(insertChunks) > 0 {
 		idList := make([]string, len(insertChunks))
 		for i, chunk := range insertChunks {
-			idList[i] = fmt.Sprintf("'%v'", chunk["id"])
+			idList[i], err = filterLiteral(chunk["id"].(string))
+			if err != nil {
+				return nil, err
+			}
 		}
 		filter := fmt.Sprintf("id IN (%s)", strings.Join(idList, ", "))
 		common.Debug(fmt.Sprintf("Deleting existing rows with filter: %s", filter))
 		delResp, delErr := table.Delete(filter)
 		if delErr != nil {
-			common.Warn(fmt.Sprintf("Failed to delete existing rows: %v", delErr))
+			return nil, fmt.Errorf("failed to replace existing chunks: %w", delErr)
 		} else {
 			common.Info(fmt.Sprintf("Deleted %d existing rows", delResp.DeletedRows))
 		}
@@ -309,15 +340,52 @@ func (e *infinityEngine) InsertDataset(ctx context.Context, chunks []map[string]
 		return nil, fmt.Errorf("Failed to insert chunks to dataset: %w", err)
 	}
 
-	common.Info("InfinityConnection.InsertDataset result", zap.String("tableName", tableName), zap.Int("count", len(insertChunks)))
+	common.Info("InfinityConnection.InsertChunks result", zap.String("tableName", tableName), zap.Int("count", len(insertChunks)))
 	return []string{}, nil
 }
 
-// UpdateDataset updates chunks in a dataset table
+// UpdateChunks updates chunks in a dataset table
 // Table name format: {tableNamePrefix}_{knowledgebaseID}
-func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
-	tableName := fmt.Sprintf("%s_%s", tableNamePrefix, knowledgebaseID)
-	common.Info("InfinityConnection.UpdateDataset called", zap.String("tableName", tableName), zap.Any("condition", condition))
+func (e *infinityEngine) UpdateChunks(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string) error {
+	return e.updateChunks(ctx, condition, newValue, tableNamePrefix, knowledgebaseID, true)
+}
+func (e *infinityEngine) updateChunks(ctx context.Context, condition map[string]interface{}, newValue map[string]interface{}, tableNamePrefix string, knowledgebaseID string, bindDataset bool) error {
+	if err := validateChunkScope(tableNamePrefix, knowledgebaseID); err != nil {
+		return err
+	}
+	copyValue := make(map[string]interface{}, len(newValue))
+	for k, v := range newValue {
+		if k == "id" || k == "kb_id" {
+			return fmt.Errorf("chunk identity cannot be changed")
+		}
+		copyValue[k] = v
+	}
+	newValue = copyValue
+	if len(newValue) == 0 {
+		return fmt.Errorf("empty chunk update")
+	}
+	scoped := make(map[string]interface{}, len(condition)+1)
+	for k, v := range condition {
+		scoped[k] = v
+	}
+	if supplied, ok := scoped["kb_id"]; ok {
+		values, _, err := types.ConditionValues(supplied)
+		if err != nil {
+			return err
+		}
+		for _, v := range values {
+			if v != knowledgebaseID {
+				return fmt.Errorf("conflicting dataset scope")
+			}
+		}
+	}
+	if bindDataset {
+		scoped["kb_id"] = knowledgebaseID
+	}
+	condition = scoped
+
+	tableName := buildChunkTableName(tableNamePrefix, knowledgebaseID)
+	common.Info("InfinityConnection.UpdateChunks called", zap.String("tableName", tableName), zap.Any("condition", condition))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -361,7 +429,10 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 	}
 
 	// Build filter string from condition
-	filter := buildFilterFromCondition(condition, clmns)
+	filter, err := strictFilterFromCondition(condition, clmns)
+	if err != nil {
+		return err
+	}
 	if target, ok := newValue["available_int"].(int); ok && len(newValue) == 1 && condition["doc_id"] != nil {
 		if _, hasParent := clmns["mom_id"]; hasParent {
 			parent, readErr := documentAvailabilityParents(table, filter)
@@ -390,7 +461,7 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 	delete(newValue, "remove")
 
 	// Transform new_value fields using helper function (no embeddings needed for update)
-	transformed := TransformChunkFields(newValue, nil)
+	transformed := transformChunkFields(newValue, nil)
 	for k, v := range transformed {
 		newValue[k] = v
 	}
@@ -404,6 +475,19 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 		delete(newValue, key)
 	}
 
+	for field := range newValue {
+		if _, ok := clmns[field]; !ok {
+			return fmt.Errorf("unknown update column %q", field)
+		}
+	}
+	for field, value := range removeValue {
+		if _, ok := clmns[field]; !ok || !types.ValidFieldName(field) {
+			return fmt.Errorf("unknown remove column %q", field)
+		}
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("remove value must be a string")
+		}
+	}
 	// Handle remove operations if any
 	if len(removeValue) > 0 {
 		colToRemove := make([]string, 0, len(removeValue))
@@ -415,7 +499,7 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 		// Query rows to be updated
 		queryResult, err := table.Output(colToRemove).Filter(filter).ToResult()
 		if err != nil {
-			common.Warn(fmt.Sprintf("Failed to query rows for remove operation: %v", err))
+			return fmt.Errorf("failed to query rows for remove operation: %w", err)
 		} else {
 			qr, ok := queryResult.(*infinity.QueryResult)
 			if ok && len(qr.Data) > 0 {
@@ -442,7 +526,10 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 										}
 									}
 									if len(newParts) != len(parts) {
-										idStr := fmt.Sprintf("%v", id)
+										idStr, literalErr := filterLiteral(fmt.Sprint(id))
+										if literalErr != nil {
+											return literalErr
+										}
 										if removeOpt[colName] == nil {
 											removeOpt[colName] = make(map[string][]string)
 										}
@@ -461,7 +548,7 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 						common.Info(fmt.Sprintf("INFINITY remove update: table=%s, idFilter=%s, column=%s, newValue=%v", tableName, idFilter, colName, newVal))
 						_, err := table.Update(idFilter, map[string]interface{}{colName: newVal})
 						if err != nil {
-							common.Warn(fmt.Sprintf("Failed to remove value from column %s: %v", colName, err))
+							return fmt.Errorf("failed to remove value from column %s: %w", colName, err)
 						}
 					}
 				}
@@ -470,17 +557,20 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 	}
 
 	// Execute the main update
+	if len(newValue) == 0 {
+		return nil
+	}
 	common.Info(fmt.Sprintf("INFINITY update: table=%s, filter=%s, newValue=%v", tableName, filter, newValue))
 	_, err = table.Update(filter, newValue)
 	if err != nil {
 		return fmt.Errorf("Failed to update chunks: %w", err)
 	}
 
-	common.Info("InfinityConnection.UpdateDataset completes", zap.String("tableName", tableName))
+	common.Info("InfinityConnection.UpdateChunks completes", zap.String("tableName", tableName))
 	return nil
 }
 
-// TransformChunkFields transforms chunk field names/values for insert/update.
+// transformChunkFields transforms chunk field names/values for insert/update.
 // It handles field name conversions and value transformations:
 // - docnm_kwd -> docnm
 // - title_kwd/title_sm_tks -> docnm (if docnm_kwd not set)
@@ -495,7 +585,7 @@ func (e *infinityEngine) UpdateDataset(ctx context.Context, condition map[string
 // - keyword fields with list values -> ### joined string
 // - chunk_data: dict -> JSON string
 // - Missing embeddings filled with zeros if embeddingCols provided
-func TransformChunkFields(chunk map[string]interface{}, embeddingCols [][2]interface{}) map[string]interface{} {
+func transformChunkFields(chunk map[string]interface{}, embeddingCols [][2]interface{}) map[string]interface{} {
 	d := make(map[string]interface{})
 
 	for k, v := range chunk {
@@ -618,4 +708,10 @@ func TransformChunkFields(chunk map[string]interface{}, embeddingCols [][2]inter
 	}
 
 	return d
+}
+
+// UpdateDataset is the independent DocumentStatusStore contract. Its private
+// connection and the service's SQL lock/recovery continue to own status changes.
+func (e *infinityEngine) UpdateDataset(ctx context.Context, condition, newValue map[string]interface{}, base, dataset string) error {
+	return e.updateChunks(ctx, condition, newValue, base, dataset, false)
 }

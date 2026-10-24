@@ -18,6 +18,7 @@ package infinity
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,8 +32,12 @@ import (
 	"multirag/internal/utility"
 )
 
-// CreateMetadata creates the document metadata table
-func (e *infinityEngine) CreateMetadata(ctx context.Context, indexName string) error {
+// CreateMetadataStore creates the document metadata table
+func (e *infinityEngine) CreateMetadataStore(ctx context.Context, tenantID string) error {
+	if strings.TrimSpace(tenantID) == "" {
+		return fmt.Errorf("tenant is required")
+	}
+	indexName := buildMetadataTableName(tenantID)
 	// Get database
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
@@ -40,7 +45,7 @@ func (e *infinityEngine) CreateMetadata(ctx context.Context, indexName string) e
 	}
 
 	// Check if table already exists
-	exists, err := e.TableExists(ctx, indexName)
+	exists, err := e.tableExists(ctx, indexName)
 	if err != nil {
 		return fmt.Errorf("Failed to check if table exists: %w", err)
 	}
@@ -115,7 +120,33 @@ func (e *infinityEngine) CreateMetadata(ctx context.Context, indexName string) e
 // Auto-create the table if it doesn't exist
 // Replace existing metadata with same id and kb_id
 func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[string]interface{}, tenantID string) ([]string, error) {
-	tableName := fmt.Sprintf("multirag_doc_meta_%s", tenantID)
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, fmt.Errorf("tenant is required")
+	}
+	if len(metadata) == 0 {
+		return []string{}, nil
+	}
+	seen := map[string]bool{}
+	for _, m := range metadata {
+		id, ok := m["id"].(string)
+		if !ok || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("metadata id is required")
+		}
+		kb, ok := m["kb_id"].(string)
+		if !ok || strings.TrimSpace(kb) == "" {
+			return nil, fmt.Errorf("metadata kb_id is required")
+		}
+		key := kb + "\x00" + id
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate metadata id")
+		}
+		seen[key] = true
+		if _, err := decodeMetadataFields(m["meta_fields"]); err != nil {
+			return nil, err
+		}
+	}
+
+	tableName := buildMetadataTableName(tenantID)
 	common.Info("InfinityConnection.InsertMetadata called", zap.String("tableName", tableName), zap.Int("metaCount", len(metadata)))
 
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
@@ -126,13 +157,12 @@ func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[stri
 	table, err := db.GetTable(tableName)
 	if err != nil {
 		// Table doesn't exist, try to create it
-		errMsg := strings.ToLower(err.Error())
-		if !strings.Contains(errMsg, "not found") && !strings.Contains(errMsg, "doesn't exist") {
+		if !isMissingTable(err) {
 			return nil, fmt.Errorf("Failed to get table %s: %w", tableName, err)
 		}
 
 		// Create metadata table
-		if createErr := e.CreateMetadata(ctx, tableName); createErr != nil {
+		if createErr := e.CreateMetadataStore(ctx, tenantID); createErr != nil {
 			return nil, fmt.Errorf("Failed to create metadata table: %w", createErr)
 		}
 
@@ -161,15 +191,21 @@ func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[stri
 		idList := make([]string, len(insertMetadata))
 		for i, m := range insertMetadata {
 			// Escape single quotes in values to prevent SQL injection
-			docID := fmt.Sprintf("'%s'", strings.ReplaceAll(fmt.Sprintf("%v", m["id"]), "'", "''"))
-			kbID := fmt.Sprintf("'%s'", strings.ReplaceAll(fmt.Sprintf("%v", m["kb_id"]), "'", "''"))
+			docID, literalErr := filterLiteral(m["id"].(string))
+			if literalErr != nil {
+				return nil, literalErr
+			}
+			kbID, literalErr := filterLiteral(m["kb_id"].(string))
+			if literalErr != nil {
+				return nil, literalErr
+			}
 			idList[i] = fmt.Sprintf("(id = %s AND kb_id = %s)", docID, kbID)
 		}
 		filter := strings.Join(idList, " OR ")
 		common.Debug(fmt.Sprintf("Deleting existing metadata with filter: %s", filter))
 		delResp, delErr := table.Delete(filter)
 		if delErr != nil {
-			common.Warn(fmt.Sprintf("Failed to delete existing metadata: %v", delErr))
+			return nil, fmt.Errorf("failed to replace existing metadata: %w", delErr)
 		} else if delResp.DeletedRows > 0 {
 			common.Info(fmt.Sprintf("Deleted %d existing metadata entries", delResp.DeletedRows))
 		}
@@ -190,81 +226,144 @@ func (e *infinityEngine) InsertMetadata(ctx context.Context, metadata []map[stri
 // (new keys win). If no row exists, it inserts a new row.
 // Table name format: multirag_doc_meta_{tenant_id}
 func (e *infinityEngine) UpdateMetadata(ctx context.Context, docID string, kbID string, metaFields map[string]interface{}, tenantID string) error {
-	tableName := fmt.Sprintf("multirag_doc_meta_%s", tenantID)
-	common.Info("InfinityConnection.UpdateMetadata called", zap.String("tableName", tableName), zap.String("docID", docID), zap.String("kbID", kbID))
-
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(docID) == "" || strings.TrimSpace(kbID) == "" {
+		return fmt.Errorf("tenant, document and dataset are required")
+	}
+	if _, err := decodeMetadataFields(metaFields); err != nil {
+		return err
+	}
+	tableName := buildMetadataTableName(tenantID)
 	db, err := e.client.conn.GetDatabase(e.client.dbName)
 	if err != nil {
-		return fmt.Errorf("failed to get database: %w", err)
+		return err
 	}
-
 	table, err := db.GetTable(tableName)
 	if err != nil {
-		return fmt.Errorf("failed to get metadata table %s: %w", tableName, err)
+		return err
 	}
-
-	// Build filter to find existing row by docID and kbID
-	escapedDocID := strings.ReplaceAll(docID, "'", "''")
-	escapedKbID := strings.ReplaceAll(kbID, "'", "''")
-	filter := fmt.Sprintf("id = '%s' AND kb_id = '%s'", escapedDocID, escapedKbID)
-
-	// Query existing metadata to merge with. Our Infinity SDK returns a
-	// *infinity.QueryResult (column-oriented Data), so read meta_fields[0] from it.
-	queryResult, err := table.Output([]string{"id", "kb_id", "meta_fields"}).Filter(filter).Limit(1).Offset(0).ToResult()
-	rowExists := false
+	filter, err := strictFilterFromCondition(map[string]interface{}{"id": docID, "kb_id": kbID}, nil)
 	if err != nil {
-		common.Warn(fmt.Sprintf("Failed to query existing metadata: %v", err))
-		// If query fails, treat as not exists and insert
-	} else if qr, ok := queryResult.(*infinity.QueryResult); ok && qr != nil && len(qr.Data["id"]) > 0 {
-		rowExists = true
-		if metaArr, ok := qr.Data["meta_fields"]; ok && len(metaArr) > 0 {
-			existingMetaFields := make(map[string]interface{})
-			switch v := metaArr[0].(type) {
-			case string:
-				if err := json.Unmarshal([]byte(v), &existingMetaFields); err != nil {
-					common.Warn(fmt.Sprintf("Failed to parse existing meta_fields: %v", err))
-					existingMetaFields = make(map[string]interface{})
-				}
-			case []byte:
-				if err := json.Unmarshal(v, &existingMetaFields); err != nil {
-					existingMetaFields = make(map[string]interface{})
-				}
-			case map[string]interface{}:
-				existingMetaFields = v
-			}
-
-			// Merge new meta_fields onto existing (new keys win)
-			for k, v := range metaFields {
-				existingMetaFields[k] = v
-			}
-			metaFields = existingMetaFields
+		return err
+	}
+	result, err := table.Output([]string{"id", "kb_id", "meta_fields"}).Filter(filter).Limit(2).ToResult()
+	if err != nil {
+		return fmt.Errorf("metadata read failed: %w", err)
+	}
+	rows, ok := result.(*infinity.QueryResult)
+	if !ok || rows == nil {
+		return fmt.Errorf("invalid metadata result")
+	}
+	count := len(rows.Data["id"])
+	if count > 1 {
+		return fmt.Errorf("duplicate metadata rows")
+	}
+	rows.Data["meta_fields"], err = decodeMetadataColumn(rows.Data["meta_fields"], count)
+	if err != nil {
+		return err
+	}
+	if count > 1 || len(rows.Data["kb_id"]) != count || len(rows.Data["meta_fields"]) != count {
+		return fmt.Errorf("duplicate or malformed metadata rows")
+	}
+	merged := map[string]interface{}{}
+	if count == 1 {
+		if rows.Data["id"][0] != docID || rows.Data["kb_id"][0] != kbID {
+			return fmt.Errorf("metadata scope mismatch")
+		}
+		merged, err = decodeMetadataFields(rows.Data["meta_fields"][0])
+		if err != nil {
+			return err
 		}
 	}
-
-	if rowExists {
-		// Row exists: update it with merged metadata
-		updatedFields := map[string]interface{}{
-			"meta_fields": utility.ConvertMapToJSONString(metaFields),
-		}
-		common.Info(fmt.Sprintf("UpdateMetadata: updating existing row, table=%s, filter=%s, newValue=%v", tableName, filter, updatedFields))
-		_, err = table.Update(filter, updatedFields)
-		if err != nil {
-			return fmt.Errorf("failed to update metadata: %w", err)
-		}
+	for k, v := range metaFields {
+		merged[k] = v
+	}
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	if count == 1 {
+		_, err = table.Update(filter, map[string]interface{}{"meta_fields": string(raw)})
 	} else {
-		// Row doesn't exist: insert new row
-		insertFields := map[string]interface{}{
-			"id":          docID,
-			"kb_id":       kbID,
-			"meta_fields": utility.ConvertMapToJSONString(metaFields),
+		_, err = table.Insert(map[string]interface{}{"id": docID, "kb_id": kbID, "meta_fields": string(raw)})
+	}
+	return err
+}
+func decodeMetadataFields(value interface{}) (map[string]interface{}, error) {
+	var fields map[string]interface{}
+	switch v := value.(type) {
+	case map[string]interface{}:
+		fields = make(map[string]interface{}, len(v))
+		for k, x := range v {
+			fields[k] = x
 		}
-		common.Info(fmt.Sprintf("UpdateMetadata: inserting new row, table=%s, newValue=%v", tableName, insertFields))
-		_, err = table.Insert(insertFields)
-		if err != nil {
-			return fmt.Errorf("failed to insert metadata: %w", err)
+	case string:
+		if err := json.Unmarshal([]byte(v), &fields); err != nil {
+			return nil, fmt.Errorf("invalid stored metadata JSON: %w", err)
+		}
+	case []byte:
+		if err := json.Unmarshal(v, &fields); err != nil {
+			return nil, fmt.Errorf("invalid stored metadata JSON: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("metadata must be an object")
+	}
+	if fields == nil {
+		return nil, fmt.Errorf("metadata must be an object")
+	}
+	if _, err := json.Marshal(fields); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
+// The pinned SDK leaves JSON columns as one length-prefixed byte vector. Split
+// it by row before consumers validate identities; never merge neighboring rows.
+func decodeMetadataColumn(values []interface{}, count int) ([]interface{}, error) {
+	if len(values) == 1 {
+		if raw, ok := values[0].([]byte); ok {
+			if json.Valid(raw) {
+				if count != 1 {
+					return nil, fmt.Errorf("incomplete metadata column")
+				}
+				object, err := decodeMetadataFields(raw)
+				if err != nil {
+					return nil, err
+				}
+				return []interface{}{object}, nil
+			}
+			decoded := make([]interface{}, 0, count)
+			for len(raw) > 0 {
+				if len(raw) < 4 {
+					return nil, fmt.Errorf("truncated metadata length prefix")
+				}
+				length := uint64(binary.LittleEndian.Uint32(raw[:4]))
+				raw = raw[4:]
+				if length == 0 || length > uint64(len(raw)) {
+					return nil, fmt.Errorf("invalid metadata length prefix")
+				}
+				object, err := decodeMetadataFields(raw[:int(length)])
+				if err != nil {
+					return nil, err
+				}
+				decoded = append(decoded, object)
+				raw = raw[int(length):]
+			}
+			if len(decoded) != count {
+				return nil, fmt.Errorf("metadata row count mismatch")
+			}
+			return decoded, nil
 		}
 	}
-
-	common.Info("InfinityConnection.UpdateMetadata completes", zap.String("tableName", tableName), zap.String("docID", docID))
-	return nil
+	if len(values) != count {
+		return nil, fmt.Errorf("incomplete metadata column")
+	}
+	decoded := make([]interface{}, count)
+	for i, value := range values {
+		fields, err := decodeMetadataFields(value)
+		if err != nil {
+			return nil, err
+		}
+		decoded[i] = fields
+	}
+	return decoded, nil
 }

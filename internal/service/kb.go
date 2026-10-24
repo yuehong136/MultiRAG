@@ -112,7 +112,7 @@ func (s *KnowledgebaseService) CreateDatasetInDocEngine(req *CreateDatasetTableR
 
 	// Call document engine to create table
 	// Full table name will be built as "{tableName}_{kb_id}"
-	err = s.docEngine.CreateDataset(context.Background(), tableName, req.KBID, vecSize, req.ParserID)
+	err = s.docEngine.CreateChunkStore(context.Background(), tableName, req.KBID, vecSize, req.ParserID)
 	if err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("failed to create dataset: %w", err)
 	}
@@ -133,10 +133,10 @@ func (s *KnowledgebaseService) DeleteDatasetInDocEngine(kbID string) (common.Err
 	}
 
 	// Build table name: multirag_<tenant_id>_<kb_id>
-	tableName := fmt.Sprintf("multirag_%s_%s", kb.TenantID, kbID)
+	tableName := fmt.Sprintf("multirag_%s", kb.TenantID)
 
 	// Call document engine to delete table
-	err = s.docEngine.DropTable(context.Background(), tableName)
+	err = s.docEngine.DropChunkStore(context.Background(), tableName, kbID)
 	if err != nil {
 		return common.CodeServerError, fmt.Errorf("failed to delete table: %w", err)
 	}
@@ -164,7 +164,7 @@ func (s *KnowledgebaseService) InsertDatasetFromFile(filePath string) (interface
 		return nil, common.CodeDataError, fmt.Errorf("no chunks found in file")
 	}
 
-	result, err := s.docEngine.InsertDataset(context.Background(), input.Chunks, input.TableNamePrefix, input.KnowledgebaseID)
+	result, err := s.docEngine.InsertChunks(context.Background(), input.Chunks, input.TableNamePrefix, input.KnowledgebaseID)
 	if err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("failed to insert into dataset: %w", err)
 	}
@@ -314,7 +314,7 @@ func (s *KnowledgebaseService) Accessible(kbID, userID string) bool {
 
 // RemoveTag removes a tag from documents in a dataset
 func (s *KnowledgebaseService) RemoveTag(condition map[string]interface{}, newValue map[string]interface{}, indexName, kbID string) error {
-	return s.docEngine.UpdateDataset(context.Background(), condition, newValue, indexName, kbID)
+	return s.docEngine.UpdateChunks(context.Background(), condition, newValue, indexName, kbID)
 }
 
 // GetByID retrieves a knowledge base by ID

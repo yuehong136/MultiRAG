@@ -52,7 +52,7 @@ func (e *elasticsearchEngine) Search(ctx context.Context, req *types.SearchReque
 
 // searchUnified handles the unified types.SearchRequest
 func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
-	if len(req.IndexNames) == 0 {
+	if req == nil || len(req.IndexNames) == 0 {
 		return nil, fmt.Errorf("index names cannot be empty")
 	}
 
@@ -66,6 +66,19 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 	// Build filter clauses (default: available=1, meaning available_int >= 1)
 	// Reference: rag/utils/es_conn.py L60-L78
 	filterClauses := buildFilterClauses(req.KbIDs, 1)
+	if _, explicit := req.Filter["available_int"]; explicit {
+		filterClauses = nil
+		if len(req.KbIDs) > 0 {
+			filterClauses = append(filterClauses, map[string]interface{}{"terms": map[string]interface{}{"kb_id": req.KbIDs}})
+		}
+	}
+	if len(req.Filter) > 0 {
+		filterQuery, err := conditionQuery(req.Filter)
+		if err != nil {
+			return nil, err
+		}
+		filterClauses = append(filterClauses, filterQuery)
+	}
 
 	// Build search query body
 	queryBody := make(map[string]interface{})
@@ -83,6 +96,8 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 		switch e := expr.(type) {
 		case string:
 			matchText = e
+		case *types.MatchTextExpr:
+			matchText = e.MatchingText
 		case *types.MatchDenseExpr:
 			hasVectorMatch = true
 			matchDense = e
@@ -134,7 +149,7 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 		// Add vector column to Source fields (matching Python ES: src.append(f"q_{len(q_vec)}_vec"))
 		// Only modify Source if it was explicitly set by the caller
 		if vectorFieldName != "" && len(req.SelectFields) > 0 {
-			sourceFields := req.SelectFields
+			sourceFields := append([]string(nil), req.SelectFields...)
 			// Check if vector column already in source
 			found := false
 			for _, f := range sourceFields {
@@ -146,10 +161,15 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 			if !found {
 				sourceFields = append(sourceFields, vectorFieldName)
 			}
-			req.SelectFields = sourceFields
+			queryBody["_source"] = sourceFields
 		}
 	}
 
+	if len(req.SelectFields) > 0 {
+		if _, ok := queryBody["_source"]; !ok {
+			queryBody["_source"] = req.SelectFields
+		}
+	}
 	queryBody["size"] = limit
 	queryBody["from"] = offset
 
@@ -276,6 +296,9 @@ func buildFilterClauses(kbIDs []string, available int) []map[string]interface{} 
 // Uses query_string if matchText is in query_string format, otherwise uses multi_match
 // boost is applied to the text match clause (query_string or multi_match)
 func buildESKeywordQuery(matchText string, filterClauses []map[string]interface{}, boost float64) map[string]interface{} {
+	if matchText == "" {
+		return map[string]interface{}{"bool": map[string]interface{}{"filter": filterClauses}}
+	}
 	var mustClause map[string]interface{}
 
 	// Use query_string for complex queries
@@ -310,6 +333,9 @@ func convertESResponse(esResp *SearchResponse, vectorFieldName string) []map[str
 		//// vectorField is list of float64, which need to be converted to float32
 
 		chunks[i] = hit.Source
+		if chunks[i] == nil {
+			chunks[i] = map[string]interface{}{}
+		}
 		chunks[i]["_score"] = hit.Score
 		chunks[i]["_id"] = hit.ID
 		//vectorField := hit.Source[vectorFieldName]

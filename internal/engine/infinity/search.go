@@ -38,6 +38,9 @@ import (
 // It supports three matching types: MatchTextExpr (full-text), MatchDenseExpr (vector), and FusionExpr (combined).
 // If no match expressions are provided, Search relies solely on filter (e.g., doc_id, available_int) to find results.
 func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+	if req == nil {
+		return nil, fmt.Errorf("search request is required")
+	}
 	common.Info("Search in Infinity started", zap.Any("indexNames", req.IndexNames))
 	if common.IsDebugEnabled() {
 		// Format match expressions for logging
@@ -107,6 +110,9 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		outputColumns = convertSelectFields(outputColumns)
 	}
 
+	if len(req.SelectFields) > 0 {
+		outputColumns = convertSelectFields(append([]string(nil), req.SelectFields...))
+	}
 	hasTextMatch := false
 	hasVectorMatch := false
 	var matchText *types.MatchTextExpr
@@ -151,44 +157,24 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 	}
 
 	var filterParts []string
-	if isMetadataTable && len(req.KbIDs) > 0 && req.KbIDs[0] != "" {
-		kbIDs := req.KbIDs
-		if len(kbIDs) == 1 {
-			filterParts = append(filterParts, fmt.Sprintf("kb_id = '%s'", kbIDs[0]))
-		} else {
-			kbIDStr := strings.Join(kbIDs, "', '")
-			filterParts = append(filterParts, fmt.Sprintf("kb_id IN ('%s')", kbIDStr))
+	if isMetadataTable && len(req.KbIDs) > 0 {
+		clause, err := strictFilterFromCondition(map[string]interface{}{"kb_id": req.KbIDs}, nil)
+		if err != nil {
+			return nil, err
 		}
+		filterParts = append(filterParts, clause)
 	}
-
 	if !isMetadataTable && (hasTextMatch || hasVectorMatch) {
-		if req.Filter != nil {
-			if availInt, ok := req.Filter["available_int"]; ok {
-				filterParts = append(filterParts, fmt.Sprintf("available_int=%v", availInt))
-			} else {
-				filterParts = append(filterParts, "available_int=1")
-			}
-		} else {
+		if _, exists := req.Filter["available_int"]; !exists {
 			filterParts = append(filterParts, "available_int=1")
 		}
 	}
-
-	// Build filter string from req.Filter
-	if req.Filter != nil {
-		filterCopy := req.Filter
-		if !isMetadataTable {
-			filterCopy = make(map[string]interface{})
-			for k, v := range req.Filter {
-				if k != "kb_id" {
-					filterCopy[k] = v
-				}
-			}
+	if len(req.Filter) > 0 {
+		clause, err := strictFilterFromCondition(req.Filter, nil)
+		if err != nil {
+			return nil, err
 		}
-
-		condStr := equivalentConditionToStr(filterCopy)
-		if condStr != "" {
-			filterParts = append(filterParts, condStr)
-		}
+		filterParts = append(filterParts, clause)
 	}
 	filterStr := strings.Join(filterParts, " AND ")
 
@@ -221,7 +207,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 				if kbID == "" {
 					tableNames = append(tableNames, indexName)
 				} else {
-					tableNames = append(tableNames, fmt.Sprintf("%s_%s", indexName, kbID))
+					tableNames = append(tableNames, buildChunkTableName(indexName, kbID))
 				}
 			}
 		}
@@ -248,7 +234,10 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		for _, tableName := range tableNames {
 			tbl, err := db.GetTable(tableName)
 			if err != nil {
-				continue
+				if isMissingTable(err) {
+					continue
+				}
+				return nil, err
 			}
 			table := tbl.Output(outputColumns)
 
@@ -420,9 +409,15 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 			// Execute query
 			df, err := table.ToDataFrame()
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("search table %s: %w", tableName, err)
 			}
 
+			if isMetadataTable {
+				df.ColumnData["meta_fields"], err = decodeMetadataColumn(df.ColumnData["meta_fields"], len(df.ColumnData["id"]))
+				if err != nil {
+					return nil, err
+				}
+			}
 			// Convert DataFrame to chunks format (column-oriented to row-oriented)
 			chunks := make([]map[string]interface{}, 0)
 			for colName, colData := range df.ColumnData {
