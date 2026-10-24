@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import binascii
 import datetime
 import inspect
 import json
@@ -44,6 +43,7 @@ from common.misc_utils import get_uuid, hash_str2int
 from common.variable_utils import get_variable_param_value
 from core.prompts.generator import chunks_format
 from core.utils.redis_conn import REDIS_CONN
+from core.utils.tts_cache import TTSModel, synthesize_with_cache
 
 if TYPE_CHECKING:
     from api.identity.run_context import RunContext
@@ -718,7 +718,7 @@ class Canvas(Graph):
             return False
         return True
 
-    def tts(self, tts_mdl, text):
+    def tts(self, tts_mdl: TTSModel | None, text: str) -> str | None:
         def clean_tts_text(text: str) -> str:
             if not text:
                 return ""
@@ -746,14 +746,7 @@ class Canvas(Graph):
         text = clean_tts_text(text)
         if not text:
             return None
-        bin = b""
-        try:
-            for chunk in tts_mdl.tts(text):
-                bin += chunk
-        except Exception as e:
-            logging.error(f"TTS failed: {e}, text={text!r}")
-            return None
-        return binascii.hexlify(bin).decode("utf-8")
+        return synthesize_with_cache(tts_mdl, text)
 
     def get_history(self, window_size):
         convs = []

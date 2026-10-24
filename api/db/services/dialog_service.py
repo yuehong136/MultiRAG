@@ -1,5 +1,4 @@
 import asyncio
-import binascii
 import logging
 import re
 import time
@@ -41,6 +40,7 @@ from core.graphrag.general.mind_map_extractor import MindMapExtractor
 from core.nlp.search import index_name
 from core.prompts.generator import ASK_SUMMARY, PROMPT_JINJA_ENV, chunks_format, citation_prompt, cross_languages, full_question, kb_prompt, keyword_extraction, message_fit_in
 from core.utils.tavily_conn import Tavily
+from core.utils.tts_cache import TTSModel, synthesize_with_cache
 
 
 async def _hydrate_chunk_vectors(retriever: Any, chunks: list[dict[str, Any]], kbs: list[Any]) -> None:
@@ -1923,20 +1923,13 @@ def clean_tts_text(text: str) -> str:
     return text
 
 
-def tts(tts_mdl, text):
+def tts(tts_mdl: TTSModel | None, text: str) -> str | None:
     if not tts_mdl or not text:
         return None
     text = clean_tts_text(text)
     if not text:
         return None
-    bin = b""
-    try:
-        for chunk in tts_mdl.tts(text):
-            bin += chunk
-    except Exception as e:
-        logging.error(f"TTS failed: {e}, text={text!r}")
-        return None
-    return binascii.hexlify(bin).decode("utf-8")
+    return synthesize_with_cache(tts_mdl, text)
 
 
 class _ThinkStreamState:
