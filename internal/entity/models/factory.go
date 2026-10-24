@@ -33,6 +33,10 @@ func NewModelFactory() *ModelFactory {
 func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string]string, urlSuffix URLSuffix) (ModelDriver, error) {
 	providerLower := strings.ToLower(providerName)
 	switch providerLower {
+	case "302.ai":
+		return NewAI302Model(baseURL, urlSuffix), nil
+	case "jiekouai":
+		return NewJieKouAIModel(baseURL, urlSuffix), nil
 	case "togetherai":
 		return NewTogetherAIModel(baseURL, urlSuffix), nil
 	case "xinference":
