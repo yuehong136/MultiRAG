@@ -155,6 +155,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_session_upload_cleanup.py",
                 "test_metadata_web_consumers.py",
                 "test_shared_chunk_owner_contract.py",
+                "test_sandbox_provider_settings.py",
             )
         ]
     if suite == "core":

@@ -124,6 +124,7 @@ jobs:
         env:
           WEB_DATASET_CHECKOUT: ${{ github.workspace }}/consumer-web
           WEB_COMPLETION_CHECKOUT: ${{ github.workspace }}/consumer-web
+          WEB_SANDBOX_CHECKOUT: ${{ github.workspace }}/consumer-web
         run: make integration-consumer
       - name: API startup and health
         if: inputs.lane == 'smoke'
