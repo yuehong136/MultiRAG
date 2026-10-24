@@ -279,6 +279,11 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 	if kind == "elasticsearch" {
 		t.Run("retrieval_parent_visibility_stays_default", func(t *testing.T) {
 			base := "multirag_" + cfg.Tenant
+			defer func() {
+				if count, err := store.DeleteChunks(ctx, map[string]any{"id": "visibility-parent"}, base, a); err != nil || count != 1 {
+					t.Errorf("owned parent cleanup: count=%d error=%v", count, err)
+				}
+			}()
 			parent := map[string]any{"id": "visibility-parent", "doc_id": "doc-a", "kb_id": a, "content_with_weight": "parent marker", "q_2_vec": []float64{0, 1}, "available_int": 0}
 			if failed, err := store.InsertChunks(ctx, []map[string]any{parent}, base, a); err != nil || len(failed) > 0 {
 				t.Fatal(failed, err)
@@ -287,7 +292,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 			if row, err := store.GetChunk(ctx, base, "visibility-parent", []string{a}); err != nil || row != nil {
 				t.Fatal("ordinary GetChunk exposed disabled parent", row, err)
 			}
-			if got := nlp.RetrievalByChildren([]map[string]any{child}, []string{base}, store, ctx); len(got) != 0 {
+			if got := nlp.RetrievalByChildren([]map[string]any{child}, []string{cfg.Tenant}, store, ctx); len(got) != 0 {
 				t.Fatal("disabled ES parent entered retrieval", got)
 			}
 			data := request(t, "GET", "/api/v1/datasets/"+a+"/documents/doc-a/chunks/visibility-parent", "owner", "", 0)["data"].(map[string]any)
@@ -297,11 +302,8 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 			if err := store.UpdateChunks(ctx, map[string]any{"id": "visibility-parent"}, map[string]any{"available_int": 1}, base, a); err != nil {
 				t.Fatal(err)
 			}
-			if got := nlp.RetrievalByChildren([]map[string]any{child}, []string{base}, store, ctx); len(got) != 1 || got[0]["content_with_weight"] != "parent marker" {
+			if got := nlp.RetrievalByChildren([]map[string]any{child}, []string{cfg.Tenant}, store, ctx); len(got) != 1 || got[0]["content_with_weight"] != "parent marker" {
 				t.Fatal("enabled parent no longer expands", got)
-			}
-			if count, err := store.DeleteChunks(ctx, map[string]any{"id": "visibility-parent"}, base, a); err != nil || count != 1 {
-				t.Fatal(count, err)
 			}
 		})
 	}
