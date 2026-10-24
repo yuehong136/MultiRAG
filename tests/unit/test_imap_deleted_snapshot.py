@@ -157,3 +157,17 @@ def test_failed_login_closes_connection(monkeypatch: pytest.MonkeyPatch, raised:
     with pytest.raises(RuntimeError):
         result._get_mail_client()
     assert client.closed
+
+
+def test_multiple_senders_convert_and_continue_next_message(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    raw = message("<multi@test>").replace(b"From: Sender <sender@test>", b"From: First <first@test>, Second <second@test>")
+    source = ImapSource(messages={"1": raw, "2": message("<next@test>", attachment=False)})
+    result = connector(monkeypatch, source)
+    monkeypatch.setattr(imap, "_PAGE_SIZE", 1)
+    documents = load(result, 0, datetime(2026, 12, 1, tzinfo=UTC).timestamp())
+    assert [document.id for document in documents] == ["<multi@test>", "<multi@test>#att:报告.txt", "<next@test>"]
+    assert documents[0].primary_owners is not None
+    assert [(owner.display_name, owner.email) for owner in documents[0].primary_owners] == [("Recipient", "recipient@test"), ("First", "first@test")]
+    assert source.logged_out > 0
+    assert "parsed_count=2" in caplog.text
+    assert "first@test" not in caplog.text and "second@test" not in caplog.text
