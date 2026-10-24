@@ -169,6 +169,39 @@ def test_runtime_failure_keeps_recoverable_session_without_success(release_api: 
     assert retry.json()["data"]["data"]["content"] == "runtime snapshot"
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_runtime_log_preserves_thinking_markers_on_creation_and_resume(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    env = release_api
+    agent_id = create_draft(env)
+    original = Canvas.run
+
+    async def reasoning_run(self: Canvas, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        yield {"event": "message", "data": {"content": "", "start_to_think": True}}
+        yield {"event": "message", "data": {"content": "controlled reasoning"}}
+        yield {"event": "message", "data": {"content": "", "end_to_think": True}}
+        async for item in original(self, **kwargs):
+            yield item
+
+    monkeypatch.setattr(Canvas, "run", reasoning_run)
+    session_id = None
+    for query in ("initial reasoning", "continued reasoning"):
+        response = env["client"].post(f"{env['base']}/api/v1/agents/chat/completions", json={"agent_id": agent_id, "session_id": session_id, "query": query, "stream": stream}, timeout=30)
+        if stream:
+            assert response.text.endswith("data:[DONE]\n\n"), response.text
+            received = sse_events(response.text)[0]["session_id"]
+        else:
+            assert response.json()["retcode"] == 0, response.text
+            received = response.json()["data"]["session_id"]
+        if session_id is not None:
+            assert received == session_id
+        session_id = received
+        with Session(env["engine"]) as db:
+            conversation = db.get(API4Conversation, session_id)
+            assert conversation is not None and conversation.message[-1]["content"] == "<think>controlled reasoning</think>runtime snapshot"
+        saved = env["client"].get(f"{env['base']}/api/v1/agents/{agent_id}/sessions/{session_id}", timeout=30).json()
+        assert saved["retcode"] == 0 and saved["data"]["messages"][-1]["content"] == "<think>controlled reasoning</think>runtime snapshot"
+
+
 def test_runtime_disconnect_persists_failed_attempt(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env = release_api
     agent_id = create_draft(env)

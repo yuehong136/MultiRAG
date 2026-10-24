@@ -818,6 +818,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         runtime_pause: dict[str, Any] | None = None
         a2ui_commands: list[dict[str, Any]] = []
         a2ui_surface_ids: set[str] = set()
+        logged_content = ""
         try:
             async with aclosing(canvas.run(query=query, files=files, inputs=inputs)) as run_events:
                 async for raw in run_events:
@@ -827,6 +828,12 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                     if failure:
                         raise RuntimeError(failure)
                     aggregate.add(ans)
+                    if ans.get("event") == "message":
+                        logged_content += ans["data"].get("content", "")
+                        if ans["data"].get("start_to_think", False):
+                            logged_content += "<think>"
+                        elif ans["data"].get("end_to_think", False):
+                            logged_content += "</think>"
                     if ans.get("event") == "node_finished" and aggregate.return_trace:
                         ans["data"]["trace"] = copy.deepcopy(aggregate.trace)
                     if ans.get("event") in {"message_end", "workflow_finished", "user_inputs"}:
@@ -850,7 +857,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             result = aggregate.finish(require_terminal=True)
             finish_attempted = True
             await asyncio.to_thread(require_runtime_finish, canvas.task_id)
-            assistant: dict[str, Any] = {"role": "assistant", "content": aggregate.content, "id": canvas.task_id, "created_at": time.time()}
+            assistant: dict[str, Any] = {"role": "assistant", "content": logged_content, "id": canvas.task_id, "created_at": time.time()}
             for field in ("structured", "trace"):
                 if field in result["data"]:
                     assistant[field] = copy.deepcopy(result["data"][field])
