@@ -8,6 +8,7 @@ import copy
 from collections.abc import Iterator
 from contextlib import ExitStack
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import pytest
@@ -157,10 +158,11 @@ def test_registered_routes_and_real_same_tenant_downloads(downloads: dict[str, A
     for key, content in [("private", b"private"), ("team", b"team"), ("local", b"local-source"), ("shared", b"shared-source")]:
         response = download(env, key)
         assert response.status_code == 200 and response.content == content
-        assert response.headers["Content-Type"] == "application/octet-stream"
+        assert response.headers["Content-Type"] == "text/plain; charset=utf-8"
         assert "filename*=UTF-8''" in response.headers["Content-Disposition"]
     response = download(env, "private", header=f"Bearer {env['keys'][0]}", dataset="private")
     assert response.status_code == 200 and response.content == b"private"
+    assert response.headers["Content-Type"] == "text/plain; charset=utf-8"
     response = download(env, "empty")
     assert response.json()["code"] != 0 and "empty" in response.json()["message"]
     assert snapshot(env) == before and len(env["reads"]) == 6
@@ -226,3 +228,25 @@ def test_storage_address_provenance_and_dataset_binding(downloads: dict[str, Any
     current = snapshot(env)
     assert download(env, "local").json()["code"] != 0
     assert not env["reads"] and snapshot(env) == current
+
+
+def test_real_download_mime_matrix_preserves_sql_and_objects(downloads: dict[str, Any]) -> None:
+    env = downloads
+    for name, kind, mime in [
+        ("报告 空间.PDF", "pdf", "application/pdf"),
+        ("table.CSV", "doc", "text/csv; charset=utf-8"),
+        ("photo.PNG", "visual", "image/png"),
+        ("readme", "doc", "application/octet-stream"),
+        ("unknown.custom", "doc", "application/custom"),
+        ("unsafe.bad;header", "doc", "application/octet-stream"),
+    ]:
+        with Session(env["engine"]) as db:
+            db.execute(sa.update(Document).where(Document.id == env["docs"]["private"]).values(name=name, type=kind))
+            db.commit()
+        before = snapshot(env)
+        for dataset in [None, "private"]:
+            response = download(env, "private", header=f"Bearer {env['keys'][0]}" if dataset else None, dataset=dataset)
+            assert response.status_code == 200 and response.content == b"private"
+            assert response.headers["Content-Type"] == mime
+            assert response.headers["Content-Disposition"] == f"attachment; filename*=UTF-8''{quote(name, safe='')}"
+        assert snapshot(env) == before

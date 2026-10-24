@@ -11,7 +11,7 @@ import stat
 from collections.abc import Sequence
 from email.message import EmailMessage
 from email.utils import formataddr
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -141,6 +141,14 @@ CONTENT_TYPE_MAP = {
     "ppt": "application/vnd.ms-powerpoint",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
+
+
+def document_content_type(name: str, *, visual: bool = False) -> str:
+    """Resolve stored filenames without accepting arbitrary MIME header values."""
+    ext = PurePosixPath(name.lower()).suffix.removeprefix(".")
+    if not re.fullmatch(r"[a-z0-9]{1,32}", ext):
+        return "application/octet-stream"
+    return CONTENT_TYPE_MAP.get(ext, f"{'image' if visual else 'application'}/{ext}")
 
 
 FORCE_ATTACHMENT_EXTENSIONS = {
