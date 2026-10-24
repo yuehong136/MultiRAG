@@ -938,6 +938,10 @@ func (c *MultiRAGClient) CreateProviderInstance(cmd *Command) (ResponseIf, error
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
+	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("please login first")
+	}
+
 	providerName, ok := cmd.Params["provider_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("provider name not provided")
@@ -962,33 +966,14 @@ func (c *MultiRAGClient) CreateProviderInstance(cmd *Command) (ResponseIf, error
 		"region":        cmd.Params["region"],
 	}
 
-	resp, err := c.HTTPClient.Request("POST", url, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("POST", url, "api", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider instance: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to create provider instance: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
-	}
-
-	var result SimpleResponse
-	if err = json.Unmarshal(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("create provider instance failed: invalid JSON (%w)", err)
-	}
-
-	if result.Code != 0 {
-		return nil, fmt.Errorf("%s", result.Message)
-	}
-
-	result.Duration = 0
-	return &result, nil
+	return modelMutationResponse(resp.StatusCode, resp.Body, "create provider instance")
 }
 
-// ListProviderInstances lists all instances of a provider
-// LIST INSTANCES FROM PROVIDER <name>
-
-// ListProviderInstances lists all instances of a provider
-// LIST INSTANCES FROM PROVIDER <name>
 func (c *MultiRAGClient) ListProviderInstances(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
@@ -1171,6 +1156,10 @@ func (c *MultiRAGClient) DropProviderInstance(cmd *Command) (ResponseIf, error) 
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
+	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("please login first")
+	}
+
 	instanceName, ok := cmd.Params["instance_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("instance name not provided")
@@ -1187,7 +1176,7 @@ func (c *MultiRAGClient) DropProviderInstance(cmd *Command) (ResponseIf, error) 
 
 	path := fmt.Sprintf("/providers/%s/instances", url.PathEscape(providerName))
 
-	resp, err := c.HTTPClient.Request("DELETE", path, "web", nil, payload)
+	resp, err := c.HTTPClient.Request("DELETE", path, "api", nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to drop instance: %w", err)
 	}
