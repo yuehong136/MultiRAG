@@ -3717,3 +3717,14 @@ worker lifespan、全量 Go endpoint parity、其他 session 写入/生成入口
 本地已完成起点 `7ec87f7c` 后至 `0580c137fa2e` 的 20 项，以及冻结 `c595f17f` 的独立八增量实际复验；
 逐项映射、机制比较、组合运行与清理见 [本批交付报告](batch-after-7ec87f7c.md)。最终源码 `d96b9b24`，Web `eed958f`。
 冻结上限仍为 `519e7d98a5651564d4e35d6648f006cba4baaf4f`；仅本地提交，不 push、不部署，远程 `ci-required` 待运行。
+
+## 2026-10-24 · 2836a934 后二十项
+
+冻结 first-parent 排除 `2836a934` 至 `440153c3` 的 20 项，已完成评估及适用移植与定向验收，
+串行进入实际主干；逐项处置、真实消费者、独立 MySQL 补修和证据边界见
+[本批集成记录](batch-after-2836a934.md)。实际 Web/pin 为 `2883cd89`；仅本地提交，未 push、未部署。
+
+扩展组合仍保留既有 Admin variables collation 失败、Go 旧目录计数断言及四个旧未登记
+opt-in skip；不称全量门禁通过，远程 `ci-required` 待运行。自有运行资源和分支按精确账本清理；
+managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 false；历史未登记 overlay
+无法确定归属，未猜测删除。不自动开启下一批或恢复旧自动化。
