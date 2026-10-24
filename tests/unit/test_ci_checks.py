@@ -151,3 +151,79 @@ def test_go_reports_reject_unexpected_skips_failures_and_truncation(tmp_path: Pa
         path.write_text("\n".join(map(json.dumps, bad)))
         with pytest.raises(ValueError):
             audit_go(path)
+
+
+@pytest.mark.parametrize(
+    "test",
+    ["TestDatasetReadHTTPAndSQL", "TestGoogleEmbeddingLiveHTTPAndSQL", "TestMediaHTTPCLIAndSQL", "TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL"],
+)
+def test_owned_handler_opt_ins_remain_unverified_when_skipped(tmp_path: Path, test: str) -> None:
+    path = tmp_path / "go.jsonl"
+    package = "multirag/internal/handler"
+    events = [
+        {"Action": "start", "Package": package},
+        {"Action": "pass", "Package": package, "Test": "TestOrdinary"},
+        {"Action": "skip", "Package": package, "Test": test},
+        {"Action": "pass", "Package": package},
+    ]
+    path.write_text("\n".join(map(json.dumps, events)))
+    assert audit_go(path) == {
+        "counts": {"pass_test": 1, "skip_test": 1, "pass_package": 1},
+        "unverified_live_opt_ins": [f"{package}::{test}"],
+    }
+    # A successful actual execution is reported as a pass, separately from the
+    # ordinary no-service run where the same explicit test was not executed.
+    events[2]["Action"] = "pass"
+    path.write_text("\n".join(map(json.dumps, events)))
+    assert audit_go(path) == {"counts": {"pass_test": 2, "pass_package": 1}, "unverified_live_opt_ins": []}
+
+
+@pytest.mark.parametrize(
+    ("package", "test"),
+    [
+        ("multirag/internal/handler", "TestDatasetReadHTTPAndSQL/unknown"),
+        ("multirag/internal/handler", "TestGoogleEmbeddingLiveHTTPAndSQL/unknown"),
+        ("multirag/internal/handler", "TestMediaHTTPCLIAndSQL/unknown"),
+        ("multirag/internal/handler", "TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL/unknown"),
+        ("multirag/internal/service", "TestDatasetReadHTTPAndSQL"),
+        ("multirag/internal/service", "TestGoogleEmbeddingLiveHTTPAndSQL"),
+        ("multirag/internal/service", "TestMediaHTTPCLIAndSQL"),
+        ("multirag/internal/service", "TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL"),
+    ],
+)
+def test_owned_opt_in_registration_does_not_allow_other_skips(tmp_path: Path, package: str, test: str) -> None:
+    path = tmp_path / "go.jsonl"
+    events = [
+        {"Action": "start", "Package": package},
+        {"Action": "pass", "Package": package, "Test": "TestOrdinary"},
+        {"Action": "skip", "Package": package, "Test": test},
+        {"Action": "pass", "Package": package},
+    ]
+    path.write_text("\n".join(map(json.dumps, events)))
+    with pytest.raises(ValueError, match="Unexpected Go skip"):
+        audit_go(path)
+
+
+@pytest.mark.parametrize("failure", ["failed_opt_in", "failed_package", "build_failed_package", "unfinished_package", "unfinished_other_package"])
+def test_allowed_opt_ins_do_not_hide_failed_or_unfinished_packages(tmp_path: Path, failure: str) -> None:
+    path = tmp_path / "go.jsonl"
+    package = "multirag/internal/handler"
+    events = [
+        {"Action": "start", "Package": package},
+        {"Action": "pass", "Package": package, "Test": "TestOrdinary"},
+        {"Action": "skip", "Package": package, "Test": "TestMediaHTTPCLIAndSQL"},
+        {"Action": "pass", "Package": package},
+    ]
+    if failure == "failed_opt_in":
+        events[2]["Action"] = "fail"
+    elif failure == "failed_package":
+        events[-1]["Action"] = "fail"
+    elif failure == "build_failed_package":
+        events.append({"Action": "build-fail", "Package": "multirag/internal/service"})
+    elif failure == "unfinished_package":
+        events.pop()
+    else:
+        events.append({"Action": "start", "Package": "multirag/internal/service"})
+    path.write_text("\n".join(map(json.dumps, events)))
+    with pytest.raises(ValueError, match=r"Failed Go event|Empty or incomplete Go evidence"):
+        audit_go(path)

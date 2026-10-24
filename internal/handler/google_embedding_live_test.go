@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,6 +32,7 @@ func TestGoogleEmbeddingLiveHTTPAndSQL(t *testing.T) {
 		}
 		t.Skip("requires owned Google embedding scratch config")
 	}
+	recordOwnedOptInTestBinary(t)
 	t.Chdir(filepath.Join("..", ".."))
 	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestGoogleEmbeddingLiveHTTPAndSQL(t *testing.T) {
 	}
 	t.Log("scratch backend:", version)
 	var calls atomic.Int32
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	provider := newOwnedOptInHTTPServer(t, "google-provider", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		instance := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")[0]
 		if (instance != "one" && instance != "two") || r.Header.Get("x-goog-api-key") != "controlled-"+instance {
@@ -128,7 +128,7 @@ func TestGoogleEmbeddingLiveHTTPAndSQL(t *testing.T) {
 	})
 	h := handler.NewProviderHandler(nil, service.NewModelProviderService())
 	router.POST("/api/v1/embeddings", h.EmbedText)
-	app := httptest.NewServer(router)
+	app := newOwnedOptInHTTPServer(t, "google-api", router)
 	defer app.Close()
 	request := func(user, instance, model, first string, dimension int) (int, *int, []struct {
 		Index     int

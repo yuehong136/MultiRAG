@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,6 +31,7 @@ func TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL(t *testing.T) {
 		}
 		t.Skip("requires owned embedding scratch database")
 	}
+	recordOwnedOptInTestBinary(t)
 	t.Chdir(filepath.Join("..", ".."))
 	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, instance := range []string{"one", "two"} {
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := newOwnedOptInHTTPServer(t, strings.ToLower(providerName)+"-"+instance, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				var body struct {
 					Input          []string
@@ -119,7 +119,7 @@ func TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL(t *testing.T) {
 		c.Next()
 	})
 	router.POST("/api/v1/embeddings", h.EmbedText)
-	api := httptest.NewServer(router)
+	api := newOwnedOptInHTTPServer(t, "embedding-api", router)
 	defer api.Close()
 	parsed, _ := url.Parse(api.URL)
 	port, _ := strconv.Atoi(parsed.Port())

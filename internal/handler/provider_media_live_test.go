@@ -168,6 +168,7 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 		}
 		t.Skip("requires owned media scratch database")
 	}
+	recordOwnedOptInTestBinary(t)
 	binary := os.Getenv("MULTIRAG_MEDIA_CLI")
 	if binary == "" {
 		t.Fatal("candidate CLI binary required")
@@ -264,17 +265,16 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 	factory := &controlledMediaFactory{t: t, started: make(chan struct{}), canceled: make(chan struct{})}
 	svc := service.NewModelProviderServiceWithFactory(factory)
 	gin.SetMode(gin.ReleaseMode)
-	serve := func(svc *service.ModelProviderService) *httptest.Server {
+	serve := func(name string, svc *service.ModelProviderService) *httptest.Server {
 		app := gin.New()
 		app.Use(gin.Recovery())
 		r := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, svc), nil)
 		r.Setup(app)
-		api := httptest.NewServer(app)
-		t.Cleanup(api.Close)
+		api := newOwnedOptInHTTPServer(t, name, app)
 		t.Log("owned-http-resource", api.URL)
 		return api
 	}
-	api := serve(svc)
+	api := serve("media-api", svc)
 	payload := func(kind, instance string) map[string]any {
 		p := map[string]any{"provider_name": "ZHIPU-AI", "instance_name": instance, "model_name": kind}
 		switch kind {
@@ -436,7 +436,7 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 		t.Fatal("explicit silent stream failed", silentRaw)
 	}
 	// A real configured driver with no implemented capability returns 501, without network probing.
-	unsupported := serve(service.NewModelProviderService())
+	unsupported := serve("media-unsupported", service.NewModelProviderService())
 	for _, kind := range []string{"asr", "tts", "ocr"} {
 		_, out, raw := call(unsupported.URL, kind, "owner", payload(kind, "a"))
 		if out["code"] != float64(501) || out["data"] != nil {
@@ -496,10 +496,11 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("candidate-cli-sha256 %x", sha256.Sum256(binaryData))
-	temp := t.TempDir()
+	temp := ownedOptInTempDir(t, "media-cli")
 	audioPath := filepath.Join(temp, "speech.wav")
 	imagePath := filepath.Join(temp, "image.png")
 	for _, path := range []string{audioPath, imagePath} {
+		recordOwnedOptInResource(t, "before-create", "temporary-file", path)
 		if err := os.WriteFile(path, []byte("controlled-input"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -516,17 +517,21 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 		var output bytes.Buffer
 		process.Stdout = &output
 		process.Stderr = &output
+		recordOwnedOptInResource(t, "before-create", "cli-process", binary)
 		if err := process.Start(); err != nil {
 			return nil, err
 		}
 		t.Log("owned-cli-process-open", process.Process.Pid)
+		recordOwnedOptInResource(t, "created", "cli-process", strconv.Itoa(process.Process.Pid))
 		err := process.Wait()
 		t.Log("owned-cli-process-closed", process.Process.Pid, process.ProcessState.ExitCode())
+		recordOwnedOptInResource(t, "exited", "cli-process", strconv.Itoa(process.Process.Pid))
 		return output.Bytes(), err
 	}
 	for _, fixture := range []struct{ name, data string }{{"silent.wav", "silent"}, {"blank.png", "blank"}} {
 		path := filepath.Join(temp, fixture.name)
 		t.Log("owned-file-resource", path)
+		recordOwnedOptInResource(t, "before-create", "temporary-file", path)
 		if err := os.WriteFile(path, []byte(fixture.data), 0600); err != nil {
 			t.Fatal(err)
 		}

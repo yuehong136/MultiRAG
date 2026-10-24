@@ -11,10 +11,10 @@ import (
 	"multirag/internal/engine"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -41,6 +41,7 @@ func TestDatasetReadHTTPAndSQL(t *testing.T) {
 		}
 		t.Skip("requires owned dataset scratch database")
 	}
+	recordOwnedOptInTestBinary(t)
 	t.Chdir(filepath.Join("..", ".."))
 	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
@@ -163,17 +164,27 @@ func TestDatasetReadHTTPAndSQL(t *testing.T) {
 			}
 		}
 		t.Log("owned-index-resource", "multirag_after9b_c", "multirag_after9b_c_"+ids[kind])
-		if err := store.CreateChunkStore(context.Background(), "multirag_after9b_c", ids[kind], 2, "naive"); err != nil {
-			t.Fatal(err)
-		}
+		recordOwnedOptInResource(t, "before-create", "infinity-table", "multirag_after9b_c.multirag_after9b_c_"+ids[kind])
 		defer func(kind string) {
 			if err := store.DropChunkStore(context.Background(), "multirag_after9b_c", ids[kind]); err != nil {
 				t.Error(err)
+				return
 			}
-			if _, err := indexDB.GetTable("multirag_after9b_c_" + ids[kind]); err == nil {
+			raw, err := indexDB.ListTables()
+			tables, ok := raw.(interface{ GetTableNames() []string })
+			if err != nil || !ok {
+				t.Error("owned table cleanup readback failed", err)
+				return
+			}
+			if slices.Contains(tables.GetTableNames(), "multirag_after9b_c_"+ids[kind]) {
 				t.Error("owned table survived cleanup")
+				return
 			}
+			recordOwnedOptInResource(t, "cleanup-readback-absent", "infinity-table", "multirag_after9b_c.multirag_after9b_c_"+ids[kind])
 		}(kind)
+		if err := store.CreateChunkStore(context.Background(), "multirag_after9b_c", ids[kind], 2, "naive"); err != nil {
+			t.Fatal(err)
+		}
 		failed, err := store.InsertChunks(context.Background(), []map[string]any{{"id": kind, "kb_id": ids[kind], "doc_id": docID, "available_int": 1, "content": "availability " + kind, "docnm": "document", "q_2_vec": []float64{0, 1}}}, "multirag_after9b_c", ids[kind])
 		if err != nil || len(failed) > 0 {
 			t.Fatal("real index insert failed", failed, err)
@@ -194,7 +205,7 @@ func TestDatasetReadHTTPAndSQL(t *testing.T) {
 		}
 	}
 	var embeddingCalls atomic.Int32
-	providerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	providerAPI := newOwnedOptInHTTPServer(t, "dataset-provider", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		embeddingCalls.Add(1)
 		if r.URL.Path != "/embeddings" || r.Header.Get("Authorization") != "Bearer controlled-key" {
 			t.Error("wrong provider endpoint or credential")
@@ -227,7 +238,7 @@ func TestDatasetReadHTTPAndSQL(t *testing.T) {
 	app.GET("/api/v1/datasets", datasets.ListDatasets)
 	chunks := handler.NewChunkHandler(service.NewChunkService(), nil)
 	app.POST("/api/v1/datasets/search", chunks.SearchDatasets)
-	api := httptest.NewServer(app)
+	api := newOwnedOptInHTTPServer(t, "dataset-api", app)
 	defer api.Close()
 	call := func(method, path, user, body string) (int, map[string]any, string) {
 		t.Helper()
@@ -313,7 +324,7 @@ func TestDatasetReadHTTPAndSQL(t *testing.T) {
 		t.Fatal("real CLI retrieval failed", err)
 	}
 	beforeDenials := embeddingCalls.Load()
-	// A mixed scope must fail before any model or document-engine access. No engine is installed.
+	// A mixed scope must fail before any model or document-engine access.
 	for _, selected := range [][]string{{ids["private"]}, {ids["shared"], ids["private"]}, {ids["foreign"]}, {ids["disabled"]}} {
 		body, _ := json.Marshal(map[string]any{"dataset_ids": selected, "question": "availability"})
 		_, out, raw := call("POST", "/api/v1/datasets/search", "member", string(body))
