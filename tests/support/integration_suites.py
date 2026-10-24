@@ -141,6 +141,7 @@ def suite_paths(suite: str) -> list[Path]:
             INTEGRATION / name
             for name in (
                 "test_agent_draft_session_persistence.py",
+                "test_app_list_web_consumers.py",
                 "test_dataset_search_http.py",
                 "test_dataset_management_http.py",
                 "test_dataset_embedding_http.py",
@@ -153,6 +154,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_document_file_http.py",
                 "test_session_upload_cleanup.py",
                 "test_metadata_web_consumers.py",
+                "test_shared_chunk_owner_contract.py",
             )
         ]
     if suite == "core":

@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Document
 from common import settings
-from tests.integration.test_dataset_search_http import request
-from tests.integration.test_dataset_search_http import search_api as search_api
+from tests.support.dataset_search_http import request
+from tests.support.dataset_search_http import search_api as search_api
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
