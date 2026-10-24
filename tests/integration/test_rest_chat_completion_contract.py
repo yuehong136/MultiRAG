@@ -5,7 +5,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.orm import Session
 
+from api.db.db_models import APIToken
 from common.constants import RetCode
 from common.token_utils import num_tokens_from_string
 from tests.support.rest_chat_contract import RestChatContract, sse_frames
@@ -22,7 +25,7 @@ def test_three_completion_modes_and_committed_history(rest_chat_contract: RestCh
     for mode in ("session", "auto", "direct"):
         before = ctx.snapshot()
         message_id = uuid4().hex
-        body: dict[str, Any] = {"messages": [{"id": message_id, "role": "user", "content": f"Question {mode}"}], "stream": stream}
+        body: dict[str, Any] = {"messages": [{"id": message_id, "role": "user", "content": f"Question {mode}"}], "stream": stream, "user_id": "forged-session-owner"}
         if mode != "direct":
             body["chat_id"] = chat["id"]
         if mode == "session":
@@ -50,6 +53,7 @@ def test_three_completion_modes_and_committed_history(rest_chat_contract: RestCh
                 persisted = ctx.read_session(answer["session_id"])
                 assert persisted is not None and persisted["dialog_id"] == chat["id"]
                 assert persisted["user_id"] == ctx.runtime["owners"][credential == "api_key"]
+                assert persisted["user_id"] != body["user_id"]
                 assert persisted["message"][-2]["id"] == message_id
                 assert persisted["message"][-1]["content"] == answer["answer"]
                 history = ctx.request("GET", f"/chats/{chat['id']}/sessions/{answer['session_id']}", credential=credential).json()
@@ -59,7 +63,8 @@ def test_three_completion_modes_and_committed_history(rest_chat_contract: RestCh
 
 
 @pytest.mark.parametrize("credential", ["jwt", "api_key"])
-def test_completion_rejections_never_invoke_provider_or_write(rest_chat_contract: RestChatContract, credential: str) -> None:
+@pytest.mark.parametrize("stream", [False, True])
+def test_completion_rejections_never_invoke_provider_or_write(rest_chat_contract: RestChatContract, credential: str, stream: bool) -> None:
     ctx = rest_chat_contract
     chat = ctx.create_chat(credential=credential)
     foreign = ctx.create_chat(credential="jwt" if credential == "api_key" else "api_key")
@@ -71,7 +76,9 @@ def test_completion_rejections_never_invoke_provider_or_write(rest_chat_contract
         ({"chat_id": foreign["id"]}, RetCode.AUTHENTICATION_ERROR),
         ({"chat_id": chat["id"], "session_id": other_session}, RetCode.DATA_ERROR),
     ):
-        response = ctx.request("POST", "/chat/completions", credential=credential, json={"messages": [{"role": "user", "content": "denied"}], "stream": False, **extra})
+        response = ctx.request(
+            "POST", "/chat/completions", credential=credential, json={"messages": [{"role": "user", "content": "denied"}], "stream": stream, "user_id": "forged-session-owner", **extra}
+        )
         assert response.status_code == 200 and response.json()["code"] == expected, response.text
         assert ctx.snapshot() == before and ctx.provider["calls"] == []
     assert ctx.request("POST", "/chat/completions", credential=None, json={"messages": [{"role": "user", "content": "denied"}]}).status_code == 401
@@ -119,3 +126,27 @@ def test_provider_failure_is_an_error_without_saved_assistant(rest_chat_contract
     else:
         assert response.json()["code"] != 0
     assert ctx.read_session(sid) == before
+
+
+def test_related_questions_uses_real_beta_auth_and_controlled_model(rest_chat_contract: RestChatContract) -> None:
+    ctx = rest_chat_contract
+    beta = uuid4().hex
+    ctx.runtime["beta"] = beta
+    ctx.runtime["record"]["rest_chat"]["beta_token_owner"] = ctx.runtime["owners"][1]
+    ctx.runtime["record_path"].write_text(json.dumps(ctx.runtime["record"]))
+    with Session(ctx.runtime["engine"]) as db:
+        db.execute(sa.update(APIToken).where(APIToken.token == ctx.runtime["api_key"]).values(beta=beta))
+        db.commit()
+    ctx.provider["answer"] = "1. related one\n2. related two"
+    before = ctx.snapshot()
+    response = ctx.request("POST", "/searchbots/related_questions", credential="beta", json={"question": "contract", "industry": "search"})
+    assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+    assert response.json()["data"] == ["related one", "related two"]
+    assert len(ctx.provider["calls"]) == 1 and ctx.snapshot() == before
+    response = ctx.request("POST", "/searchbots/related_questions", credential="beta", json={"industry": "search"})
+    assert response.status_code == 422 and len(ctx.provider["calls"]) == 1
+    ctx.runtime["invalid_beta"] = "invalid-fixture-beta"
+    for credential in (None, "invalid_beta"):
+        response = ctx.request("POST", "/searchbots/related_questions", credential=credential, json={"question": "contract"})
+        assert response.status_code == 401 and len(ctx.provider["calls"]) == 1
+        assert ctx.snapshot() == before

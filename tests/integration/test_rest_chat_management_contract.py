@@ -166,21 +166,25 @@ def test_concurrent_and_hundred_chat_batch_delete(rest_chat_contract: RestChatCo
         assert db.scalar(sa.select(sa.func.count()).select_from(Dialog).where(Dialog.id.in_(ids), Dialog.status == "0")) == 106
 
 
-def test_session_projection_partial_delete_and_denial(rest_chat_contract: RestChatContract) -> None:
+@pytest.mark.parametrize("credential", ["jwt", "api_key"])
+def test_session_projection_partial_delete_and_denial(rest_chat_contract: RestChatContract, credential: str) -> None:
     ctx = rest_chat_contract
-    chat, foreign = ctx.create_chat(prompt_config={"prologue": "welcome"}), ctx.create_chat(credential="api_key")
+    other = "jwt" if credential == "api_key" else "api_key"
+    owner = ctx.runtime["owners"][credential == "api_key"]
+    chat, foreign = ctx.create_chat(credential=credential, prompt_config={"prologue": "welcome"}), ctx.create_chat(credential=other)
     sessions = []
     for name in ("first", "second"):
-        body = ctx.request("POST", f"/chats/{chat['id']}/sessions", json={"name": f"  {name}  ", "user_id": "forged"}).json()
+        body = ctx.request("POST", f"/chats/{chat['id']}/sessions", credential=credential, json={"name": f"  {name}  ", "user_id": "forged"}).json()
         assert body["code"] == 0
         session = body["data"]
-        assert session["chat_id"] == chat["id"] and session["user_id"] == ctx.runtime["owners"][0]
+        assert session["chat_id"] == chat["id"] and session["user_id"] == owner
         assert session["messages"] == [{"role": "assistant", "content": "welcome"}]
         assert not {"dialog_id", "message"}.intersection(session)
-        assert ctx.read_session(session["id"])["name"] == name
+        persisted = ctx.read_session(session["id"])
+        assert persisted["name"] == name and persisted["user_id"] == owner
         sessions.append(session["id"])
-    foreign_session = ctx.request("POST", f"/chats/{foreign['id']}/sessions", credential="api_key", json={}).json()["data"]["id"]
-    listing = ctx.request("GET", f"/chats/{chat['id']}/sessions", params={"page": 1, "page_size": 1, "orderby": "name", "desc": False}).json()
+    foreign_session = ctx.request("POST", f"/chats/{foreign['id']}/sessions", credential=other, json={}).json()["data"]["id"]
+    listing = ctx.request("GET", f"/chats/{chat['id']}/sessions", credential=credential, params={"page": 1, "page_size": 1, "orderby": "name", "desc": False}).json()
     assert listing["code"] == 0 and [item["id"] for item in listing["data"]] == sessions[:1]
     before = ctx.snapshot()
     for method, path, body in (
@@ -188,12 +192,12 @@ def test_session_projection_partial_delete_and_denial(rest_chat_contract: RestCh
         ("PATCH", f"/chats/{chat['id']}/sessions/{foreign_session}", {"name": "denied"}),
         ("DELETE", f"/chats/{chat['id']}/sessions", {"ids": [foreign_session]}),
     ):
-        assert ctx.request(method, path, json=body).json()["code"] != 0
+        assert ctx.request(method, path, credential=credential, json=body).json()["code"] != 0
         assert ctx.snapshot() == before
-    result = ctx.request("DELETE", f"/chats/{chat['id']}/sessions", json={"ids": [sessions[0], sessions[0], foreign_session, "missing"]}).json()
+    result = ctx.request("DELETE", f"/chats/{chat['id']}/sessions", credential=credential, json={"ids": [sessions[0], sessions[0], foreign_session, "missing"]}).json()
     assert result["code"] == 0 and result["data"]["success_count"] == 1 and len(result["data"]["errors"]) == 3
     assert ctx.read_session(sessions[0]) is None and ctx.read_session(foreign_session) is not None
-    assert ctx.request("DELETE", f"/chats/{chat['id']}/sessions", json={"delete_all": True}).json()["code"] == 0
+    assert ctx.request("DELETE", f"/chats/{chat['id']}/sessions", credential=credential, json={"delete_all": True}).json()["code"] == 0
     with Session(ctx.runtime["engine"]) as db:
         assert not list(db.scalars(sa.select(Conversation).where(Conversation.dialog_id == chat["id"])))
 
