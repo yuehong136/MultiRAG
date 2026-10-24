@@ -143,6 +143,7 @@ def suite_paths(suite: str) -> list[Path]:
             INTEGRATION / name
             for name in (
                 "test_agent_draft_session_persistence.py",
+                "test_browser_web_consumer.py",
                 "test_app_list_web_consumers.py",
                 "test_dataset_search_http.py",
                 "test_dataset_management_http.py",

@@ -21,6 +21,12 @@ metadata is restored from the server descriptor in that owner's namespace;
 client names and owner fields confer no authority. Missing, foreign and revoked
 uploads fail before payload consumption. `downloaded_files` objects can be
 passed to another Browser node as upload references.
+For files attached to the current run, use `{sys.file_refs}`. This per-turn
+array contains only runtime IDs and is cleared when the next turn has no files;
+Browser restores their server descriptors before reading bytes. Existing
+`{sys.files}` and Begin file outputs remain parsed text/image content and are
+not raw upload references. Single-step debug accepts matching `sys.file_refs`
+values through the existing component input form.
 
 URL-sourced uploads validate all redirect targets and DNS answers, pin the
 connection, disable ambient proxies/netrc, bound response bytes, check a 120 second overall fetch deadline on partial

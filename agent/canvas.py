@@ -304,6 +304,7 @@ class Canvas(Graph):
             "sys.user_id": tenant_id,
             "sys.conversation_turns": 0,
             "sys.files": [],
+            "sys.file_refs": [],
             "sys.history": [],
             "sys.date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -322,6 +323,7 @@ class Canvas(Graph):
         self.history = self.dsl.get("history", [])
         if "globals" in self.dsl:
             self.globals = self.dsl["globals"]
+            self.globals.setdefault("sys.file_refs", [])
             if "sys.history" not in self.globals:
                 self.globals["sys.history"] = []
             if "sys.date" not in self.globals:
@@ -332,6 +334,7 @@ class Canvas(Graph):
                 "sys.user_id": "",
                 "sys.conversation_turns": 0,
                 "sys.files": [],
+                "sys.file_refs": [],
                 "sys.history": [],
                 "sys.date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -394,6 +397,9 @@ class Canvas(Graph):
 
     async def run(self, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.globals["sys.date"] = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+        # Raw IDs are a per-turn reference, never authority. File consumers
+        # restore server descriptors in the authenticated artifact owner's scope.
+        self.globals["sys.file_refs"] = [{"id": file["id"]} for file in kwargs.get("files") or []]
         st = time.perf_counter()
         self._loop = asyncio.get_running_loop()
         self.message_id = get_uuid()
