@@ -39,6 +39,7 @@ from common.url_utils import append_path_segment, ensure_api_version, strip_trai
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
 from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request_options
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
+from core.llm.tool_decorator import resolve_tool_binding
 from core.nlp import is_chinese, is_english
 
 
@@ -321,12 +322,12 @@ class Base(ToolHistoryMixin, ABC):
     def _verbose_tool_use(self, name: str, args: dict[str, Any], res: Any) -> str:
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": str(res) if isinstance(res, Exception) else res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def bind_tools(self, toolcall_session, tools):
-        if not (toolcall_session and tools):
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        binding = resolve_tool_binding(toolcall_session, tools)
+        if binding is None:
             return
-        self.is_tools = True
-        self.toolcall_session = toolcall_session
-        self.tools = tools
+        self.toolcall_session, self.tools = binding
+        self.is_tools = bool(self.tools)
 
     async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
@@ -1448,12 +1449,12 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
     def _verbose_tool_use(self, name: str, args: dict[str, Any], res: Any) -> str:
         return "<tool_call>" + json.dumps({"name": name, "args": args, "result": str(res) if isinstance(res, Exception) else res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
-    def bind_tools(self, toolcall_session, tools):
-        if not (toolcall_session and tools):
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        binding = resolve_tool_binding(toolcall_session, tools)
+        if binding is None:
             return
-        self.is_tools = True
-        self.toolcall_session = toolcall_session
-        self.tools = tools
+        self.toolcall_session, self.tools = binding
+        self.is_tools = bool(self.tools)
 
     async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}

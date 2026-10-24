@@ -91,7 +91,7 @@ class LLMBundle(LLM4Tenant):
     def __init__(self, db: Session | None, tenant_id: str, model_config: dict, lang: str = "Chinese", **kwargs):
         super().__init__(db, tenant_id, model_config, lang, **kwargs)
 
-    def bind_tools(self, toolcall_session, tools):
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
         if not self.is_tools:
             logging.warning(f"Model {self.llm_name} does not support tool call, but you have assigned one or more tools to it!")
             return

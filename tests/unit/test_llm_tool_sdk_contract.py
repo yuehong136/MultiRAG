@@ -2,17 +2,29 @@
 
 import asyncio
 import json
+import os
+import socket
+import threading
+from collections.abc import AsyncIterator, Iterator
 from copy import deepcopy
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from openai.types.chat import ChatCompletionMessageToolCall
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
+from sqlalchemy.orm import Session
 
+from api.db.services.llm_service import LLMBundle
+from api.db.services.tenant_llm_service import TenantLangfuseService, TenantLLMService
 from core.llm import ChatModel, chat
 from core.llm.chat_model.models.deepseek_chat import DeepSeekChat
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
+from core.llm.tool_decorator import tool
 
 CALLS = [
     {"id": "call-first", "type": "function", "function": {"name": "first", "arguments": '{ "query": "中文", "n": 1 }'}},
@@ -82,9 +94,9 @@ def _http_response(request: httpx.Request, *, stream: bool, final: bool) -> http
     return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"}, request=request)
 
 
-@pytest.mark.parametrize("backend", ["sync", "async", "litellm"])
+@pytest.mark.parametrize(("backend", "registration"), [("sync", "legacy"), ("async", "legacy"), ("litellm", "legacy"), ("async", "decorated"), ("litellm", "decorated")])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_sdk_tool_continuation_wire_contract(monkeypatch: pytest.MonkeyPatch, backend: str, stream: bool) -> None:
+async def test_sdk_tool_continuation_wire_contract(monkeypatch: pytest.MonkeyPatch, backend: str, registration: str, stream: bool) -> None:
     requests: list[dict[str, Any]] = []
     decoded_calls: list[Any] = []
 
@@ -119,7 +131,19 @@ async def test_sdk_tool_continuation_wire_contract(monkeypatch: pytest.MonkeyPat
     else:
         model = (DeepSeekChat if backend == "sync" else _ReasoningBase)("fixture-key", "deepseek-chat", "http://fixture.invalid/v1", max_retries=0, max_rounds=1)
     session = _Session()
-    model.bind_tools(session, TOOLS)
+    if registration == "legacy":
+        model.bind_tools(session, TOOLS)
+    else:
+
+        @tool
+        async def first(query: str, n: int) -> dict[str, str]:
+            return await session.tool_call_async("first", {"query": query, "n": n})
+
+        @tool
+        async def second(query: str) -> dict[str, str]:
+            return await session.tool_call_async("second", {"query": query})
+
+        model.bind_tools(tools=[first, second])
     history = [{"role": "user", "content": "hello"}]
     try:
         if backend == "sync":
@@ -162,3 +186,109 @@ async def test_sdk_tool_continuation_wire_contract(monkeypatch: pytest.MonkeyPat
         elif backend == "async":
             model.client.close()
             await model.async_client.close()
+
+
+@pytest.fixture
+def loopback_llm(request: pytest.FixtureRequest) -> Iterator[Any]:
+    state = SimpleNamespace(requests=[], url="")
+    evidence = Path(os.environ["B_MODEL_EVIDENCE_DIR"]) / f"{request.node.name}.json" if os.getenv("B_MODEL_EVIDENCE_DIR") else None
+    if evidence:
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        evidence.write_text(json.dumps({"owner": request.node.name, "registered": "127.0.0.1:0", "status": "before-bind"}))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            state.requests.append(body)
+            req = httpx.Request("POST", state.url + self.path)
+            response = _http_response(req, stream=bool(body.get("stream")), final=len(state.requests) == 2)
+            self.send_response(200)
+            self.send_header("Content-Type", response.headers.get("content-type", "application/json"))
+            self.send_header("Content-Length", str(len(response.content)))
+            self.end_headers()
+            self.wfile.write(response.content)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, name="test-llm-tool-loopback", daemon=True)
+    state.url = f"http://127.0.0.1:{server.server_port}/v1"
+    if evidence:
+        evidence.write_text(json.dumps({"owner": request.node.name, "listener": state.url, "status": "bound"}))
+    worker.start()
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+        with socket.socket() as probe:
+            closed = probe.connect_ex(("127.0.0.1", server.server_port)) != 0
+        assert not worker.is_alive() and closed
+        if evidence:
+            evidence.write_text(
+                json.dumps({"owner": request.node.name, "listener": state.url, "status": "closed", "requests": len(state.requests), "threadAlive": worker.is_alive(), "listenerClosed": closed})
+            )
+
+
+@pytest.mark.parametrize("factory", ["VLLM", "OpenAI"])
+@pytest.mark.parametrize("registration", ["legacy", "decorated"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_bundle_tool_roundtrip_over_owned_loopback_http(monkeypatch: pytest.MonkeyPatch, db: Session, loopback_llm: Any, factory: str, registration: str, stream: bool) -> None:
+    monkeypatch.setattr(TenantLangfuseService, "filter_by_tenant", classmethod(lambda cls, *args, **kwargs: None))
+    usages: list[tuple[int, int]] = []
+
+    async def record(cls: type[TenantLLMService], model_id: int, tokens: int) -> bool:
+        usages.append((model_id, tokens))
+        return True
+
+    monkeypatch.setattr(TenantLLMService, "increase_usage_by_id_async", classmethod(record))
+    config = {"id": 17, "llm_name": "test-model", "llm_factory": factory, "mdl_type": "chat", "api_key": "controlled-key", "api_base": loopback_llm.url, "is_tools": True}
+    bundle = LLMBundle(db, "controlled-tenant", config, max_retries=0, max_rounds=1)
+    session = _Session()
+    if registration == "legacy":
+        bundle.bind_tools(session, TOOLS)
+    else:
+
+        @tool
+        async def first(query: str, n: int) -> dict[str, str]:
+            return await session.tool_call_async("first", {"query": query, "n": n})
+
+        @tool
+        async def second(query: str) -> dict[str, str]:
+            return await session.tool_call_async("second", {"query": query})
+
+        bundle.bind_tools(tools=[first, second])
+    try:
+        history = [{"role": "user", "content": "hello"}]
+        if stream:
+            parts = [part async for part in bundle.async_chat_streamly("", history, {})]
+            answer = "".join(parts)
+        else:
+            answer = await bundle.async_chat("", history, {})
+        assert "answer" in answer and "**ERROR**" not in answer
+        assert session.started == ["first", "second"] and session.finished == ["second", "first"]
+        assert history == [{"role": "user", "content": "hello"}]
+        assert len(loopback_llm.requests) == 2
+        assert [msg["role"] for msg in loopback_llm.requests[1]["messages"]] == ["user", "assistant", "tool", "tool"]
+        assert all(item["type"] == "function" for item in loopback_llm.requests[0]["tools"])
+        # Preserve each existing backend's accounting for this SSE fixture:
+        # Base retains the last usage total; LiteLLM omits chunk usage here and
+        # falls back to content tokens. Registration must not change either.
+        expected_tokens = (5 if factory == "VLLM" else 1) if stream else 10
+        assert usages == [(17, expected_tokens)]
+    finally:
+        if hasattr(bundle.mdl, "client"):
+            bundle.mdl.client.close()
+        if hasattr(bundle.mdl, "async_client"):
+            await bundle.mdl.async_client.close()
+
+
+@pytest.fixture(autouse=True)
+async def _close_litellm_logging_for_test_loop() -> AsyncIterator[None]:
+    """Drain SDK callbacks before pytest closes this test's event loop."""
+    yield
+    if GLOBAL_LOGGING_WORKER._bound_loop is asyncio.get_running_loop():
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=2)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(), timeout=2)

@@ -34,6 +34,7 @@ from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
+from core.llm.tool_decorator import resolve_tool_binding
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
 
@@ -51,8 +52,13 @@ class Base(ABC):
         self._tool_chat_model: Any = None
         self._tool_chat_model_factory = kwargs.get("_tool_chat_model_factory")
 
-    def bind_tools(self, toolcall_session: Any, tools: list[dict[str, Any]]) -> None:
-        if not toolcall_session or not tools:
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        binding = resolve_tool_binding(toolcall_session, tools)
+        if binding is None:
+            return
+        toolcall_session, tools = binding
+        if not tools and self._tool_chat_model is None:
+            self.is_tools = False
             return
         if self._tool_chat_model is None:
             if self._tool_chat_model_factory is None:
