@@ -273,7 +273,10 @@ elif os.path.exists(p):
     try:
         lock = open(os.path.join(p, '.lock'), 'rb')
     except FileNotFoundError:
-        shutil.rmtree(p)
+        try:
+            shutil.rmtree(p)
+        except FileNotFoundError:
+            pass
     else:
         with lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -286,6 +289,11 @@ elif os.path.exists(p):
         instance = self._instances.get(instance_id)
         if instance is None:
             return False
+        transport = instance.client.get_transport()
+        if transport is None or not transport.is_active():
+            # A lost execution channel must not make cleanup permanently
+            # unretryable; retain ownership until a fresh connection confirms it.
+            instance.client = self._create_ssh_client()
         try:
             self._remove_workspace(instance.client, instance.workspace)
         finally:

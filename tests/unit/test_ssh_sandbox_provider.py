@@ -146,3 +146,17 @@ def test_failed_mkdir_does_not_delete_preexisting_workspace(monkeypatch: pytest.
     with pytest.raises(FileExistsError):
         provider.create_instance()
     assert closed == [True]
+
+
+def test_cleanup_reconnects_after_transport_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = SSHProvider()
+    closed: list[str] = []
+    old = SimpleNamespace(get_transport=lambda: SimpleNamespace(is_active=lambda: False))
+    fresh = SimpleNamespace(close=lambda: closed.append("fresh"))
+    provider._instances["owned"] = SimpleNamespace(client=old, workspace="/owned/multirag-codeexec-" + "a" * 32)
+    monkeypatch.setattr(provider, "_create_ssh_client", lambda: fresh)
+    cleaned: list[Any] = []
+    monkeypatch.setattr(provider, "_remove_workspace", lambda client, workspace: cleaned.append((client, workspace)))
+    assert provider.destroy_instance("owned") is True
+    assert cleaned == [(fresh, "/owned/multirag-codeexec-" + "a" * 32)]
+    assert closed == ["fresh"] and provider._instances == {}
