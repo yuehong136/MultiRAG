@@ -15,6 +15,7 @@
 #include "wordnet_lemmatizer.h"
 #include <fstream>
 #include <filesystem>
+#include <sstream>
 
 namespace fs = std::filesystem;
 

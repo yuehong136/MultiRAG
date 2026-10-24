@@ -33,7 +33,9 @@ check_cpp_deps() {
     command -v g++ >/dev/null 2>&1 || { echo -e "${RED}Error: g++ is required but not installed.${NC}"; exit 1; }
 
     # Check for pcre2 library
-    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre2-8.a" ] || [ -f "/usr/local/lib/libpcre2-8.a" ]; then
+    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre2-8.a" ] \
+       || [ -f "/usr/local/lib/libpcre2-8.a" ] \
+       || [ -f "/opt/homebrew/lib/libpcre2-8.a" ]; then
         echo "✓ pcre2 library found"
     else
         echo -e "${YELLOW}Warning: libpcre2-8.a not found. You may need to install libpcre2-dev:${NC}"
@@ -62,7 +64,7 @@ build_cpp() {
     cmake .. -DCMAKE_BUILD_TYPE=Release
     
     echo "Building librag_tokenizer_c_api.a..."
-    make rag_tokenizer_c_api -j$(nproc)
+    cmake --build . --target rag_tokenizer_c_api --parallel
     
     if [ ! -f "$BUILD_DIR/librag_tokenizer_c_api.a" ]; then
         echo -e "${RED}Error: Failed to build C++ static library${NC}"
