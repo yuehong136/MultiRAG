@@ -17,6 +17,7 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Mapping
 from copy import deepcopy
 from functools import partial
 from timeit import default_timer as timer
@@ -62,7 +63,9 @@ class LLMToolPluginCallSession(ToolCallSession):
         用于纯异步上下文（如 FastAPI async 端点），避免在已运行的事件循环中调用 asyncio.run()。
         """
         assert name in self.tools_map, f"LLM tool {name} does not exist"
-        logging.info(f"[ToolCall] invoke name={name} arguments={str(arguments)[:200]}")
+        if not isinstance(arguments, Mapping):
+            raise TypeError(f"Tool arguments for {name} must be an object, got {type(arguments).__name__}")
+        logging.info("[ToolCall] invoke name=%s", name)
         st = timer()
         tool_obj = self.tools_map[name]
         if isinstance(tool_obj, MCPToolBinding):

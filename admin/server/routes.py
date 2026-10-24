@@ -1,9 +1,10 @@
 import logging
 from datetime import datetime
+from typing import Any
 
 from auth import AdminAuth, admin_manager, login_admin, logout_admin
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from responses import APIResponse, error_response, success_response
 from roles import RoleMgr
 from services import ConfigMgr, EnvironmentsMgr, SandboxMgr, ServiceMgr, SettingsMgr, UserMgr, UserServiceMgr
@@ -592,9 +593,9 @@ def show_version(user=Depends(admin_manager)) -> APIResponse[dict]:
 class SandboxConfigSet(BaseModel):
     """设置沙箱 provider 配置请求"""
 
-    provider_type: str = Field(..., description="provider 标识，如 self_managed / aliyun_codeinterpreter / e2b")
-    config: dict = Field(default_factory=dict, description="provider 配置")
-    set_active: bool = Field(default=True, description="为 True 时同时切换激活 provider")
+    provider_type: str = Field(..., description="provider 标识，如 self_managed / local / ssh / aliyun_codeinterpreter / e2b")
+    config: dict[str, Any] = Field(default_factory=dict, description="provider 配置；省略密钥保留，显式空字符串清除")
+    set_active: StrictBool = Field(default=True, description="为 True 时同时切换激活 provider")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -611,7 +612,7 @@ class SandboxTestRequest(BaseModel):
     """测试沙箱 provider 连通性请求"""
 
     provider_type: str = Field(..., description="provider 标识")
-    config: dict = Field(default_factory=dict, description="provider 配置")
+    config: dict[str, Any] = Field(default_factory=dict, description="provider 配置；省略密钥保留，显式空字符串清除")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -648,10 +649,10 @@ def get_sandbox_provider_schema(provider_id: str, user=Depends(admin_manager)) -
 
 
 @admin_router.get("/sandbox/config", response_model=APIResponse[dict], summary="获取当前沙箱配置", description="获取当前激活的沙箱 provider 及其配置")
-def get_sandbox_config(user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
+def get_sandbox_config(provider_type: str | None = None, user: Any = Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
     """获取当前沙箱配置"""
     try:
-        res = SandboxMgr.get_config(db)
+        res = SandboxMgr.get_config(db, provider_type)
         return success_response(res)
     except AdminException as e:
         return error_response(e.message, e.code)
@@ -660,7 +661,7 @@ def get_sandbox_config(user=Depends(admin_manager), db: Session = Depends(get_db
 
 
 @admin_router.post("/sandbox/config", response_model=APIResponse[dict], summary="设置沙箱配置", description="设置沙箱 provider 配置")
-def set_sandbox_config(data: SandboxConfigSet, user=Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
+def set_sandbox_config(data: SandboxConfigSet, user: Any = Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
     """设置沙箱 provider 配置"""
     try:
         logging.info(f"set_sandbox_config: provider_type={data.provider_type}, set_active={data.set_active}")
@@ -676,10 +677,10 @@ def set_sandbox_config(data: SandboxConfigSet, user=Depends(admin_manager), db: 
 
 
 @admin_router.post("/sandbox/test", response_model=APIResponse[dict], summary="测试沙箱连通性", description="测试与沙箱 provider 的连通性")
-def test_sandbox_connection(data: SandboxTestRequest, user=Depends(admin_manager)) -> APIResponse[dict]:
+def test_sandbox_connection(data: SandboxTestRequest, user: Any = Depends(admin_manager), db: Session = Depends(get_db)) -> APIResponse[dict]:
     """测试与沙箱 provider 的连通性"""
     try:
-        res = SandboxMgr.test_connection(data.provider_type, data.config)
+        res = SandboxMgr.test_connection(db, data.provider_type, data.config)
         return success_response(res)
     except AdminException as e:
         return error_response(e.message, e.code)

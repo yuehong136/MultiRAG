@@ -1,7 +1,7 @@
 # MultiRAG Sandbox
 
 A pluggable code execution backend for MultiRAG. Container isolation applies to
-the self-managed provider; the opt-in local provider runs host processes.
+the self-managed provider. Local and SSH execution run as trusted host accounts.
 
 ## 🔧 Features
 
@@ -10,6 +10,65 @@ the self-managed provider; the opt-in local provider runs host processes.
 - 🔧 **Customizable Sandboxing** — Easily modify `seccomp` settings as needed.
 - 🧩 **Pluggable Runtime Support** — Easily extend to support any programming language.
 - ⚙️ **Developer Friendly** — Get started with a single command using `Makefile`.
+
+## Admin configuration
+
+Open **Settings > Code execution environment** (`/settings/sandbox`) in the Web
+client, then sign in using the separate administrator session when prompted.
+Choose a provider, fill in runtime fields, and choose whether saving activates
+it. **Test connection** executes a Python `main()` probe without changing the
+saved configuration. Local configuration, activation and testing require
+`SANDBOX_LOCAL_ENABLED=true` in Admin; execution also requires that flag on every
+API or worker process. The page reports environment overrides and read-only
+self-managed deployment defaults.
+
+The `/api/v1/admin/sandbox/` routes use Admin JWT authorization:
+
+- `GET providers` and `GET providers/{id}/schema` return provider availability
+  and typed fields, including secret, multiline, boolean, integer and read-only metadata.
+- `GET config?provider_type=id` reads a provider's saved values and runtime
+  defaults. Without the query it reads the selected provider, or presents
+  self-managed defaults when no selection was saved.
+- `POST config` accepts `{provider_type, config, set_active}`. It validates
+  fields, rejects read-only fields, and commits configuration plus selection
+  atomically. `set_active=false` only saves that provider's configuration.
+- `POST test` accepts `{provider_type, config}` and always destroys a created
+  instance, including after a failed execution. A failed cleanup is visible.
+
+Secret values are never returned through sandbox configuration or the generic
+Admin variables reader. `configured_secrets` lists saved secret field names.
+Omitting a secret retains it; an explicit empty string clears it. The Web form
+clears the unused SSH authentication method when switching modes and clears
+entered credentials after a successful save. Draft credentials remain only in
+component memory and survive background query refreshes.
+
+## SSH execution
+
+SSH requires a trusted POSIX account, Python 3, and Node.js for JavaScript.
+It provides encrypted transport, not isolation from the remote account's files
+or network. Use password **or** private-key authentication. Private keys may be
+OpenSSH/PEM contents or a readable file path on the MultiRAG server; encrypted
+keys can use a passphrase. Agent/key discovery is disabled.
+
+The provider loads system host keys and the optional server-side `known_hosts`
+file, then uses `RejectPolicy`. Unknown or changed host keys and an unreadable
+explicit trust store fail closed. Provision trusted keys through an independent
+channel before testing the connection; there is no automatic trust-on-first-use.
+
+The configured remote workspace root must already exist and be writable. Each
+execution uses an owned `0700` directory and a zip bundle containing the current
+stdlib-only process runner and structured-result protocol; the remote host does
+not need the full MultiRAG installation. Python and Node results preserve null,
+false and zero. The shared runner bounds output while reading, applies process
+limits, rejects artifact links/special files and kills the process group on
+success, failure, or timeout. Requests are limited to 8 MiB; collected artifact
+content is limited to 64 MiB total in addition to per-file/count limits.
+
+A workspace lock serializes remote execution and deletion. The remote supervisor
+keeps its own deadline and cleanup if the SSH connection is lost; an unreachable
+host can prevent the caller from independently confirming cleanup and is reported
+as a failure. These controls do not stop intentionally hostile code running as
+the same remote account from evading process limits or accessing account data.
 
 ## Provider selection and local development
 
@@ -29,9 +88,12 @@ setting, followed by the provider defaults. For `self_managed`, `SANDBOX_HOST`,
 `SANDBOX_EXECUTOR_MANAGER_POOL_SIZE` override its endpoint/pool settings. An explicit environment selection can initialize
 from environment/defaults when the settings DB is unavailable; malformed saved
 JSON remains an error. Other provider credentials retain their existing rules.
-The client caches successful initialization; `reload_provider()` invalidates
-that cache for the next call. Local execution checks its enable flag at
-initialization, so changing the flag requires cache invalidation as well.
+The client compares effective persisted/environment settings on every dispatch
+and caches only a successfully initialized provider for the same content.
+Changes saved by the separate Admin process are therefore visible to API and
+worker processes on their next call. In-flight executions retain their provider.
+`reload_provider()` also invalidates the current process cache. The local opt-in
+flag is included in cache validation; disabling it blocks the next execution.
 
 Local execution requires a POSIX host, Python and (for JavaScript) Node.js. It is
 **not a security sandbox**: code can access the runtime account's files and
@@ -49,7 +111,7 @@ export SANDBOX_LOCAL_NODE_BIN=node
 export SANDBOX_LOCAL_WORK_DIR=/tmp/multirag-codeexec
 ```
 
-The commented [environment example](../../docker/.env) lists all limits.
+The Admin schema lists all runtime limits and the read-only local enable flag.
 To limit native math threads when NumPy/OpenBLAS reports `pthread_create failed`,
 set `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
 `NUMEXPR_NUM_THREADS`, `BLIS_NUM_THREADS` and `VECLIB_MAXIMUM_THREADS` to `1` in
@@ -60,7 +122,7 @@ Install extra Python packages into the interpreter selected by
 
 
 Defaults: timeout 30 seconds, memory 512 MiB, combined stdout/stderr 1 MiB,
-20 artifacts, and 10 MiB per artifact. Requested timeout is capped by the
+20 artifacts, 10 MiB per artifact, and 64 MiB total artifact content. Requested timeout is capped by the
 provider timeout. Output is bounded while reading; timeout, output overflow and
 normal completion kill the execution process group. A fresh interpreter applies
 CPU, file-size and descriptor limits before starting user code, avoiding

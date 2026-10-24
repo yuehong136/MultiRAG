@@ -32,6 +32,7 @@ from .self_managed import SelfManagedProvider
 from .aliyun_codeinterpreter import AliyunCodeInterpreterProvider
 from .e2b import E2BProvider
 from .local import LocalProvider
+from .ssh import SSHProvider
 
 __all__ = [
     "AliyunCodeInterpreterProvider",
@@ -44,4 +45,5 @@ __all__ = [
     "SandboxInstance",
     "SandboxProvider",
     "SelfManagedProvider",
+    "SSHProvider",
 ]

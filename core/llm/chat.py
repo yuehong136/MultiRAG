@@ -116,6 +116,13 @@ def _apply_model_family_policies(
     return sanitized_gen_conf, sanitized_kwargs
 
 
+def _parse_tool_arguments(name: str, raw: str) -> dict[str, Any]:
+    arguments = json_repair.loads(raw)
+    if not isinstance(arguments, dict):
+        raise TypeError(f"Tool arguments for {name} must be a JSON object, got {type(arguments).__name__}")
+    return arguments
+
+
 class Base(ToolHistoryMixin, ABC):
     def __init__(self, key, model_name, base_url, **kwargs):
         timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
@@ -311,8 +318,8 @@ class Base(ToolHistoryMixin, ABC):
         logging.error(f"async base giving up: {msg}")
         return msg
 
-    def _verbose_tool_use(self, name, args, res):
-        return "<tool_call>" + json.dumps({"name": name, "args": args, "result": res}, ensure_ascii=False, indent=2) + "</tool_call>"
+    def _verbose_tool_use(self, name: str, args: dict[str, Any], res: Any) -> str:
+        return "<tool_call>" + json.dumps({"name": name, "args": args, "result": str(res) if isinstance(res, Exception) else res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
@@ -355,7 +362,7 @@ class Base(ToolHistoryMixin, ABC):
                     async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
-                            args = json_repair.loads(tc.function.arguments)
+                            args = _parse_tool_arguments(tc.function.name, tc.function.arguments)
                             if hasattr(self.toolcall_session, "tool_call_async"):
                                 result = await self.toolcall_session.tool_call_async(name, args)
                             else:
@@ -465,7 +472,7 @@ class Base(ToolHistoryMixin, ABC):
                     async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
-                            args = json_repair.loads(tc.function.arguments)
+                            args = _parse_tool_arguments(tc.function.name, tc.function.arguments)
                             if hasattr(self.toolcall_session, "tool_call_async"):
                                 result = await self.toolcall_session.tool_call_async(name, args)
                             else:
@@ -479,7 +486,7 @@ class Base(ToolHistoryMixin, ABC):
                     logging.info(f"[ToolLoop] executing {len(tcs)} tool(s): {[tc.function.name for tc in tcs]}")
                     for tc in tcs:
                         try:
-                            args = json_repair.loads(tc.function.arguments)
+                            args = _parse_tool_arguments(tc.function.name, tc.function.arguments)
                         except Exception:
                             args = {}
                         yield self._verbose_tool_use(tc.function.name, args, "Begin to call...")
@@ -1438,8 +1445,8 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         logging.error(f"async_chat_streamly giving up: {msg}")
         return msg
 
-    def _verbose_tool_use(self, name, args, res):
-        return "<tool_call>" + json.dumps({"name": name, "args": args, "result": res}, ensure_ascii=False, indent=2) + "</tool_call>"
+    def _verbose_tool_use(self, name: str, args: dict[str, Any], res: Any) -> str:
+        return "<tool_call>" + json.dumps({"name": name, "args": args, "result": str(res) if isinstance(res, Exception) else res}, ensure_ascii=False, indent=2) + "</tool_call>"
 
     def bind_tools(self, toolcall_session, tools):
         if not (toolcall_session and tools):
@@ -1484,7 +1491,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
-                            args = json_repair.loads(tc.function.arguments)
+                            args = _parse_tool_arguments(tc.function.name, tc.function.arguments)
                             if hasattr(self.toolcall_session, "tool_call_async"):
                                 result = await self.toolcall_session.tool_call_async(name, args)
                             else:
@@ -1595,7 +1602,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     async def _exec_tool(tc: Any) -> ToolResult:
                         name = tc.function.name
                         try:
-                            args = json_repair.loads(tc.function.arguments)
+                            args = _parse_tool_arguments(tc.function.name, tc.function.arguments)
                             if hasattr(self.toolcall_session, "tool_call_async"):
                                 result = await self.toolcall_session.tool_call_async(name, args)
                             else:
@@ -1609,7 +1616,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     logging.info(f"[ToolLoop] executing {len(tcs)} tool(s): {[tc.function.name for tc in tcs]}")
                     for tc in tcs:
                         try:
-                            args = json_repair.loads(tc.function.arguments)
+                            args = _parse_tool_arguments(tc.function.name, tc.function.arguments)
                         except Exception:
                             args = {}
                         yield self._verbose_tool_use(tc.function.name, args, "Begin to call...")

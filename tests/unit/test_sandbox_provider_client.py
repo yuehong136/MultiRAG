@@ -238,3 +238,32 @@ def test_provider_module_import_failure_is_reported(monkeypatch: pytest.MonkeyPa
     output = tool._execute_code("python", "def main(): return 1", {})
     assert "test provider module unavailable" in output["_ERROR"]
     assert output["result"] is None
+
+
+@pytest.mark.parametrize("execution_fails", [False, True])
+@pytest.mark.parametrize("cleanup_raises", [False, True])
+def test_cleanup_failure_is_visible_and_preserves_execution_cause(monkeypatch: pytest.MonkeyPatch, execution_fails: bool, cleanup_raises: bool) -> None:
+    original = ValueError("owned execution failure")
+    cleanup = ConnectionError("owned cleanup failure")
+    destroyed: list[str] = []
+
+    def execute(**kwargs: Any) -> ExecutionResult:
+        if execution_fails:
+            raise original
+        return ExecutionResult("", "", 0, 0, {"result_present": True, "result_value": False})
+
+    def destroy(instance_id: str) -> bool:
+        destroyed.append(instance_id)
+        if cleanup_raises:
+            raise cleanup
+        return False
+
+    provider = SimpleNamespace(create_instance=lambda **kwargs: SimpleNamespace(instance_id="owned-instance"), execute_code=execute, destroy_instance=destroy)
+    manager = SimpleNamespace(is_configured=lambda: True, get_provider=lambda: provider, get_provider_name=lambda: "owned")
+    monkeypatch.setattr(client, "get_provider_manager", lambda: manager)
+    with pytest.raises(RuntimeError, match="cleanup failed") as failure:
+        client.execute_code("def main(): return False")
+    assert destroyed == ["owned-instance"]
+    assert failure.value.__cause__ is original if execution_fails else failure.value.__cause__ is not None
+    if not execution_fails and cleanup_raises:
+        assert failure.value.__cause__ is cleanup

@@ -21,9 +21,11 @@ This module provides a unified interface for agent components to interact
 with the configured sandbox provider.
 """
 
+import hashlib
 import json
 import logging
 import os
+import sys
 import threading
 from typing import Any
 
@@ -39,33 +41,37 @@ logger = logging.getLogger(__name__)
 # selection must not turn into HTTP fallback on a subsequent request.
 _provider_manager: ProviderManager | None = None
 _provider_lock = threading.Lock()
+_provider_signature: str | None = None
 
 
 def get_provider_manager() -> ProviderManager:
-    global _provider_manager
+    global _provider_manager, _provider_signature
     with _provider_lock:
-        if _provider_manager is None:
+        provider_type, from_env = _resolve_provider_type()
+        config = _load_provider_config(provider_type, from_env)
+        signature = hashlib.sha256(json.dumps([provider_type, config, os.environ.get("SANDBOX_LOCAL_ENABLED", "")], sort_keys=True, allow_nan=False).encode()).hexdigest()
+        if _provider_manager is None or signature != _provider_signature:
             manager = ProviderManager()
-            _load_provider_from_settings(manager)
+            _load_provider_from_settings(manager, provider_type, config)
             _provider_manager = manager
+            _provider_signature = signature
         return _provider_manager
 
 
-def _load_provider_from_settings(manager: ProviderManager) -> None:
-    from agent.sandbox.providers import SelfManagedProvider, AliyunCodeInterpreterProvider, E2BProvider, LocalProvider
+def _load_provider_from_settings(manager: ProviderManager, provider_type: str, config: dict[str, Any]) -> None:
+    from agent.sandbox.providers import SelfManagedProvider, AliyunCodeInterpreterProvider, E2BProvider, LocalProvider, SSHProvider
 
-    provider_type, from_env = _resolve_provider_type()
     provider_classes = {
         "self_managed": SelfManagedProvider,
         "aliyun_codeinterpreter": AliyunCodeInterpreterProvider,
         "e2b": E2BProvider,
         "local": LocalProvider,
+        "ssh": SSHProvider,
     }
     provider_class = provider_classes.get(provider_type)
     if provider_class is None:
         raise SandboxProviderConfigError(f"Unknown sandbox provider type: {provider_type}")
     try:
-        config = _load_provider_config(provider_type, from_env)
         provider = provider_class()
         if not provider.initialize(config):
             raise SandboxProviderConfigError(f"Failed to initialize sandbox provider: {provider_type}")
@@ -145,9 +151,10 @@ def _load_provider_config_from_env(provider_type: str) -> dict[str, Any]:
 
 def reload_provider() -> None:
     """Forget cached settings; the next use initializes a fresh provider."""
-    global _provider_manager
+    global _provider_manager, _provider_signature
     with _provider_lock:
         _provider_manager = None
+        _provider_signature = None
 
 
 def execute_code(code: str, language: str = "python", timeout: int = 30, arguments: dict[str, Any] | None = None) -> ExecutionResult:
@@ -176,6 +183,8 @@ def execute_code(code: str, language: str = "python", timeout: int = 30, argumen
     provider = provider_manager.get_provider()
     assert provider is not None
 
+    logger.info("CodeExec using sandbox provider %s (language=%s, timeout=%s)", provider_manager.get_provider_name(), language, timeout)
+
     # Create a sandbox instance
     instance = provider.create_instance(template=language)
 
@@ -186,11 +195,13 @@ def execute_code(code: str, language: str = "python", timeout: int = 30, argumen
         return result
 
     finally:
-        # Clean up the instance
+        # Keep the execution error as the cause if execution and cleanup both fail.
+        execution_error = sys.exception()
         try:
-            provider.destroy_instance(instance.instance_id)
-        except Exception as e:
-            logger.warning(f"Failed to destroy sandbox instance {instance.instance_id}: {e}")
+            if provider.destroy_instance(instance.instance_id) is not True:
+                raise RuntimeError("Provider did not confirm instance destruction.")
+        except Exception as exc:
+            raise RuntimeError("Sandbox execution cleanup failed.") from execution_error or exc
 
 
 def health_check() -> bool:
