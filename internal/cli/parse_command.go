@@ -31,6 +31,9 @@ func (c *MultiRAGClient) ParseFileCommand(cmd *Command) (ResponseIf, error) {
 	if hasFile == hasURL {
 		return nil, fmt.Errorf("provide FILE or URL exclusively")
 	}
+	if hasFile && (strings.HasPrefix(strings.ToLower(file), "http://") || strings.HasPrefix(strings.ToLower(file), "https://")) {
+		documentURL, hasURL, hasFile = file, true, false
+	}
 	if hasFile {
 		content, err := readMediaFile(file)
 		if err != nil {
