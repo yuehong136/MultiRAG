@@ -11,6 +11,7 @@ import hashlib
 import json
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import AgentExecutionOrigin, API4Conversation
@@ -111,6 +112,35 @@ async def save_agent_session(db: AsyncSession, conversation: dict[str, Any], *, 
         await db.commit()
         await db.refresh(row)
         return row.to_dict()
+    except BaseException:
+        await db.rollback()
+        raise
+
+
+async def save_agent_session_turn(db: AsyncSession, conversation: dict[str, Any]) -> None:
+    """Commit one runtime attempt without changing identity or execution origin.
+
+    A replica write can fail after SQL committed the answer. Replacing that
+    attempt with its failure keeps the same round and removes its assistant
+    output, rather than appending a second, apparently successful turn.
+    """
+    try:
+        identifier = await db.scalar(
+            update(API4Conversation)
+            .where(API4Conversation.id == conversation["id"], API4Conversation.dialog_id == conversation["dialog_id"], API4Conversation.source == "agent")
+            .values(
+                message=copy.deepcopy(conversation["message"]),
+                reference=copy.deepcopy(conversation["reference"]),
+                dsl=copy.deepcopy(conversation["dsl"]),
+                errors=conversation.get("errors"),
+                round=(conversation.get("round") or 0) + 1,
+            )
+            .returning(API4Conversation.id)
+            .execution_options(synchronize_session=False)
+        )
+        if identifier != conversation["id"]:
+            raise RuntimeError("Failed to persist Agent session turn.")
+        await db.commit()
     except BaseException:
         await db.rollback()
         raise

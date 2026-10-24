@@ -65,3 +65,16 @@ def test_empty_and_create_history_remain_compatible(conversation: dict[str, Any]
     result = _normalize_agent_session(deepcopy(conversation))
     assert result["messages"] == conversation.get("message", conversation.get("messages", []))
     assert result["agent_id"] == conversation.get("agent_id")
+
+
+@pytest.mark.parametrize("reference", [[None], [{"reference": [{"id": "legacy"}]}], [{"chunks": None}], None])
+def test_runtime_history_normalizes_legacy_and_empty_references_without_mutation(reference: Any) -> None:
+    conversation = {"message": [{"role": "user", "prompt": "private"}, {"role": "assistant", "content": "answer"}], "reference": reference}
+    original = deepcopy(conversation)
+    result = _normalize_agent_session(conversation)
+    assert conversation == original
+    assert "prompt" not in result["messages"][0]
+    if reference and isinstance(reference[0], dict) and "reference" in reference[0]:
+        assert result["messages"][1]["reference"][0]["id"] == "legacy"
+    else:
+        assert result["messages"][1].get("reference", []) == []

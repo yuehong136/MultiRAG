@@ -454,6 +454,15 @@ async def test_registered_debug_response_owns_bound_runtime(client: TestClient, 
     monkeypatch.setattr(module, "require_canvas", authorized)
     monkeypatch.setattr(module, "finish_runtime", lambda task_id: calls.append("finish"))
     monkeypatch.setattr(module, "require_runtime_finish", lambda task_id: calls.append("finish"))
+
+    async def save_session(db: AsyncSession, conversation: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return {**conversation, "round": 0}
+
+    async def save_turn(db: AsyncSession, conversation: dict[str, Any]) -> None:
+        pass
+
+    monkeypatch.setattr(module, "save_agent_session", save_session)
+    monkeypatch.setattr(module, "save_agent_session_turn", save_turn)
     assert "/api/v1/agents/chat/completions" in client.app.openapi()["paths"]
     if window == "setup_cancel":
         with pytest.raises(asyncio.CancelledError):
@@ -665,6 +674,27 @@ async def test_terminal_decision_precedes_successful_append(completion_stubs: di
     monkeypatch.setattr(API4ConversationService, "append_message", classmethod(persist))
     frames = [json.loads(frame[5:]) async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant-unit", "agent-1", session_id="sess-1", query="test")]
     assert len(saved) == 1 and saved[0]["errors"] and [message["role"] for message in saved[0]["message"]] == ["user"]
+    assert frames[-1]["event"] == "error" and not any(frame["event"] == "message_end" for frame in frames)
+
+
+async def test_failed_session_append_does_not_retain_uncommitted_references(completion_stubs: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    from copy import deepcopy
+
+    previous = {"chunks": [{"id": "previous"}]}
+    current = {"chunks": [{"id": "uncommitted"}]}
+    saved: list[dict[str, Any]] = []
+
+    def persist(cls: type[API4ConversationService], db: Session, identifier: str, conversation: dict[str, Any]) -> int:
+        saved.append(deepcopy(conversation))
+        return 0 if len(saved) == 1 else 1
+
+    monkeypatch.setattr(_FakeCanvas, "get_reference", lambda self: current)
+    monkeypatch.setattr(API4ConversationService, "append_message", classmethod(persist))
+    prepared = canvas_service.PreparedAgentRun("agent-1", "tenant-unit", "tenant-unit", "{}", None, {"id": "sess-1", "message": [], "reference": [previous], "dsl": "{}"})
+    frames = [json.loads(frame[5:]) async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant-unit", "agent-1", session_id="sess-1", prepared_run=prepared, query="test")]
+    assert saved[0]["reference"] == [previous, current]
+    assert saved[1]["reference"] == [previous] and saved[1]["errors"]
+    assert [message["role"] for message in saved[1]["message"]] == ["user"]
     assert frames[-1]["event"] == "error" and not any(frame["event"] == "message_end" for frame in frames)
 
 

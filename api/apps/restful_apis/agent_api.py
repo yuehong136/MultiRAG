@@ -33,7 +33,7 @@ from api.apps.services.agent_file_auth import require_agent_file_user, require_a
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
 from api.db.db_models import API4Conversation, Task, User, UserCanvas, UserCanvasVersion, get_async_db, get_db
-from api.db.services.agent_execution_service import execution_context, save_agent_session
+from api.db.services.agent_execution_service import execution_context, save_agent_session, save_agent_session_turn
 from api.db.services.canvas_service import (
     API4ConversationService,
     CanvasTemplateService,
@@ -177,9 +177,17 @@ class CanvasSettingRequest(BaseModel):
     avatar: str | None = Field(None, description="头像URL")
 
 
+def _normalize_agent_reference_entry(reference: Any) -> dict[str, Any]:
+    if not isinstance(reference, dict):
+        return {"chunks": [], "doc_aggs": []}
+    chunks = reference.get("chunks", reference.get("reference", []))
+    doc_aggs = reference.get("doc_aggs", [])
+    return {"chunks": chunks if isinstance(chunks, (dict, list)) else [], "doc_aggs": doc_aggs if isinstance(doc_aggs, list) else []}
+
+
 def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(conversation)
-    normalized["messages"] = normalized.pop("message", normalized.get("messages", []))
+    normalized = copy.deepcopy(conversation)
+    normalized["messages"] = normalized.pop("message", normalized.get("messages", [])) or []
     for message in normalized["messages"]:
         message.pop("prompt", None)
     normalized["agent_id"] = normalized.pop("dialog_id", normalized.get("agent_id"))
@@ -190,6 +198,7 @@ def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
             references = [references]
         else:
             references = [value for _, value in sorted(references.items(), key=lambda item: int(item[0]))]
+    references = [_normalize_agent_reference_entry(reference) for reference in references] if isinstance(references, list) else []
     assistant_messages = [message for index, message in enumerate(normalized["messages"]) if index != 0 and message.get("role") != "user"]
     for message, reference in zip(assistant_messages, references or []):
         chunks = reference.get("chunks", [])
@@ -513,11 +522,14 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
 
     参数：
     - **request_body**: 请求体
-        - id: Canvas ID
+        - agent_id: Canvas ID
         - query: 查询文本（Agent模式使用）
         - files: 文件列表（DataFlow模式使用）
-        - inputs: 输入参数
-        - user_id: 用户ID（可选）
+        - inputs: Begin 节点变量名到输入值的字典
+        - release: true 选择发布版本；已有 session 始终恢复其首次执行版本
+        - return_trace: true 在结果中包含节点执行 trace，并保存到会话消息
+        - stream: 是否使用 SSE（默认 true）
+        - user_id: 实验用户标记（可选），不改变认证身份
 
     返回：
     - **Agent模式**: SSE流，实时返回推理过程
@@ -713,6 +725,8 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             run_context=run_context,
         )
         canvas.globals["sys.user_id"] = ""
+        session_id = get_uuid()
+        canvas.artifact_session_id = session_id
     except PermissionError as error:
         await db.rollback()
         return JSONResponse(status_code=403, content={"retcode": RetCode.OPERATING_ERROR, "retmsg": str(error), "data": False})
@@ -724,6 +738,27 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     finish_attempted = False
     runtime_closed = False
     runtime_bound = False
+    session_saved = False
+    round_persisted = False
+    conversation: dict[str, Any] = {}
+    prior_history = copy.deepcopy(canvas.history)
+    prior_sys_history = copy.deepcopy(canvas.globals["sys.history"])
+    if not isinstance(prior_sys_history, list):
+        raise ValueError("Invalid Agent runtime history.")
+
+    async def persist_failure(message: str) -> None:
+        nonlocal round_persisted
+        conversation["message"] = conversation["message"][:1]
+        conversation["reference"] = []
+        conversation["errors"] = message
+        canvas.history = prior_history + [entry for entry in canvas.history[len(prior_history) :] if entry[0] == "user"]
+        current_sys_history = canvas.globals["sys.history"]
+        if not isinstance(current_sys_history, list):
+            raise ValueError("Invalid Agent runtime history.")
+        canvas.globals["sys.history"] = prior_sys_history + [entry for entry in current_sys_history[len(prior_sys_history) :] if entry.startswith("user: ")]
+        conversation["dsl"] = json.loads(str(canvas))
+        await save_agent_session_turn(db, conversation)
+        round_persisted = True
 
     async def close_runtime() -> None:
         nonlocal finish_attempted, runtime_closed
@@ -732,9 +767,15 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         runtime_closed = True
         with CancelScope(shield=True):
             try:
+                message = "Agent completion disconnected."
                 if not finish_attempted:
                     finish_attempted = True
-                    await asyncio.to_thread(finish_runtime, canvas.task_id)
+                    outcome = await asyncio.to_thread(finish_runtime, canvas.task_id)
+                    if outcome == "cancel_requested":
+                        message = "Task canceled while Agent completion disconnected."
+                if session_saved and not round_persisted:
+                    await db.rollback()
+                    await persist_failure(message)
             finally:
                 if runtime_bound:
                     canvas.cancel_task()
@@ -744,6 +785,26 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     try:
         await bind_canvas_task(db, canvas.task_id, tenant_id, req["id"])
         runtime_bound = True
+        snapshot = json.loads(str(canvas))
+        version_title = await db.scalar(select(UserCanvasVersion.title).where(UserCanvasVersion.user_canvas_id == agent_id).order_by(UserCanvasVersion.create_time.desc()).limit(1))
+        conversation = await save_agent_session(
+            db,
+            {
+                "id": session_id,
+                "dialog_id": agent_id,
+                "user_id": user.id,
+                "exp_user_id": user_id,
+                "name": req.get("name", ""),
+                "message": [{"role": "user", "content": query, "id": canvas.task_id, "files": files, "created_at": time.time()}],
+                "reference": [],
+                "source": "agent",
+                "dsl": snapshot,
+                "version_title": version_title,
+            },
+            context=run_context,
+            snapshot=snapshot,
+        )
+        session_saved = True
         await db.rollback()
     except BaseException:
         await close_runtime()
@@ -752,12 +813,16 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     aggregate = AgentCompletionAccumulator(return_trace=bool(req.get("return_trace", False)))
 
     async def runtime_events() -> AsyncGenerator[dict[str, Any], None]:
-        nonlocal finish_attempted
+        nonlocal finish_attempted, round_persisted
         terminal_frames: list[dict[str, Any]] = []
+        runtime_pause: dict[str, Any] | None = None
+        a2ui_commands: list[dict[str, Any]] = []
+        a2ui_surface_ids: set[str] = set()
         try:
             async with aclosing(canvas.run(query=query, files=files, inputs=inputs)) as run_events:
                 async for raw in run_events:
                     ans = normalize_agent_event(raw)
+                    ans["session_id"] = session_id
                     failure = agent_event_error(ans) or (str(canvas.error) if canvas.error else None)
                     if failure:
                         raise RuntimeError(failure)
@@ -765,25 +830,64 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                     if ans.get("event") == "node_finished" and aggregate.return_trace:
                         ans["data"]["trace"] = copy.deepcopy(aggregate.trace)
                     if ans.get("event") in {"message_end", "workflow_finished", "user_inputs"}:
+                        if ans["event"] == "user_inputs":
+                            runtime_pause = {
+                                "inputs": copy.deepcopy(ans["data"].get("inputs", {})),
+                                "tips": ans["data"].get("tips", ""),
+                                "answer_completed": any(frame["event"] == "message_end" for frame in terminal_frames),
+                            }
                         terminal_frames.append(ans)
                         continue
+                    if ans.get("event") == "a2ui_command":
+                        data = ans["data"]
+                        if isinstance(data.get("commands"), list):
+                            a2ui_commands.extend(data["commands"])
+                        if isinstance(data.get("surface_ids"), list):
+                            a2ui_surface_ids.update(value for value in data["surface_ids"] if isinstance(value, str))
+                        elif isinstance(data.get("surface_id"), str):
+                            a2ui_surface_ids.add(data["surface_id"])
                     yield ans
-            aggregate.finish(require_terminal=True)
+            result = aggregate.finish(require_terminal=True)
             finish_attempted = True
             await asyncio.to_thread(require_runtime_finish, canvas.task_id)
-            commit_ok = await asyncio.to_thread(
-                CanvasReplicaService.commit_after_run,
-                canvas_id=req["id"],
-                tenant_id=tenant_id,
-                runtime_user_id=user_id,
-                dsl=json.loads(str(canvas)),
-                canvas_category=canvas_category,
-                title=canvas_title,
-            )
-            if not commit_ok:
-                raise RuntimeError("Failed to persist Canvas runtime replica.")
+            assistant: dict[str, Any] = {"role": "assistant", "content": aggregate.content, "id": canvas.task_id, "created_at": time.time()}
+            for field in ("structured", "trace"):
+                if field in result["data"]:
+                    assistant[field] = copy.deepcopy(result["data"][field])
+            if runtime_pause is not None:
+                assistant["runtime_pause"] = runtime_pause
+            if a2ui_commands:
+                assistant["a2ui"] = {"commands": a2ui_commands, "surface_ids": sorted(a2ui_surface_ids)}
+            conversation["message"].append(assistant)
+            reference = canvas.get_reference()
+            conversation["reference"] = [copy.deepcopy(reference) if isinstance(reference, dict) else {}]
+            conversation["dsl"] = json.loads(str(canvas))
+            conversation["errors"] = ""
+            # SQL is authoritative. A failed SQL commit must never update the
+            # shared draft replica; replica failure is persisted as a failed
+            # attempt before any successful terminal is released.
+            with CancelScope(shield=True):
+                await save_agent_session_turn(db, conversation)
+                commit_ok = await asyncio.to_thread(
+                    CanvasReplicaService.commit_after_run,
+                    canvas_id=req["id"],
+                    tenant_id=tenant_id,
+                    runtime_user_id=user_id,
+                    dsl=json.loads(str(canvas)),
+                    canvas_category=canvas_category,
+                    title=canvas_title,
+                )
+                if not commit_ok:
+                    await persist_failure("Failed to persist Canvas runtime replica.")
+                    raise RuntimeError("Failed to persist Canvas runtime replica.")
+                round_persisted = True
             for terminal in terminal_frames:
                 yield terminal
+        except Exception as error:
+            if not round_persisted:
+                await db.rollback()
+                await persist_failure(str(error))
+            raise
         finally:
             await close_runtime()
 
@@ -795,7 +899,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
             return get_json_result(data=aggregate.finish(require_terminal=True))
         except Exception:
             logging.exception("Agent runtime completion failed")
-            return get_data_error_result(retmsg="Agent runtime completion failed.")
+            return JSONResponse(content={"retcode": RetCode.DATA_ERROR, "retmsg": "Agent runtime completion failed.", "data": False, "session_id": session_id})
 
     async def sse() -> AsyncGenerator[str, None]:
         try:
@@ -804,7 +908,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                     yield "data:" + json.dumps(event, ensure_ascii=False) + "\n\n"
         except Exception as error:
             logging.exception("Agent runtime stream failed")
-            yield "data:" + json.dumps({"event": "error", "code": 500, "message": str(error), "data": False}, ensure_ascii=False) + "\n\n"
+            yield "data:" + json.dumps({"event": "error", "code": 500, "message": str(error), "data": False, "session_id": session_id}, ensure_ascii=False) + "\n\n"
             return
         yield "data:[DONE]\n\n"
 
@@ -878,7 +982,7 @@ async def exp_agent_completion(
                 parsed = normalize_agent_event(parse_answer(answer))
                 failure = agent_event_error(parsed)
                 if failure:
-                    return get_data_error_result(retmsg=failure)
+                    return JSONResponse(content={"retcode": RetCode.DATA_ERROR, "retmsg": failure, "data": False, "session_id": parsed.get("session_id")})
                 aggregate.add(parsed)
             return get_json_result(data=aggregate.finish())
         except Exception:

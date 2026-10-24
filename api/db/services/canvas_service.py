@@ -635,6 +635,7 @@ async def completion(
         user_message["metadata"] = metadata
     conv["message"].append(user_message)
     attempted_message_count = len(conv["message"])
+    prior_references = copy.deepcopy(conv.get("reference") or [])
 
     # 流式运行
     txt = ""
@@ -651,7 +652,7 @@ async def completion(
         run_kwargs["user_id"] = legacy_user_id
     terminal_frames: list[dict[str, Any]] = []
     runtime_pause: dict[str, Any] | None = None
-    aggregate = AgentCompletionAccumulator()
+    aggregate = AgentCompletionAccumulator(return_trace=bool(kwargs.get("return_trace", False)))
     finish_attempted = False
     round_persisted = False
     prior_history = copy.deepcopy(canvas.history)
@@ -664,6 +665,7 @@ async def completion(
         nonlocal round_persisted
         # Keep the attempted user input and failure, without an assistant success.
         conv["message"] = conv["message"][:attempted_message_count]
+        conv["reference"] = copy.deepcopy(prior_references)
         conv["errors"] = message
         # Canvas EOF has already appended its assistant output. Only a
         # successful SQL round may expose that output to the next model run.
@@ -732,6 +734,10 @@ async def completion(
 
         # 结束：写入 assistant 消息、引用、错误，并更新持久层
         assistant_message = {"role": "assistant", "content": txt, "created_at": time.time(), "id": message_id}
+        if aggregate.structured:
+            assistant_message["structured"] = copy.deepcopy(aggregate.structured)
+        if aggregate.return_trace:
+            assistant_message["trace"] = copy.deepcopy(aggregate.trace)
         if runtime_pause is not None:
             assistant_message["runtime_pause"] = runtime_pause
         if a2ui_commands:

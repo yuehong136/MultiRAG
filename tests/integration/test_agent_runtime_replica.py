@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from agent.canvas import Canvas
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import UserTenantRole
-from api.db.db_models import API4Conversation
+from api.db.db_models import AgentExecutionOrigin, API4Conversation
 from core.utils.redis_conn import REDIS_CONN
 from tests.support.agent_update_release import join_member, message_dsl, read_state, sse_events, update
 from tests.support.agent_update_release import release_api as release_api
@@ -56,7 +56,10 @@ def test_missing_replica_bootstraps_authorized_sql_draft(release_api: dict[str, 
     assert CanvasReplicaService.load_for_run(agent_id, env["owners"][1], runtime_user) is None
     assert read_state(env, agent_id) == before
     with Session(env["engine"]) as db:
-        assert db.scalar(sa.select(sa.func.count()).select_from(API4Conversation).where(API4Conversation.dialog_id == agent_id)) == 0
+        conversation = db.scalar(sa.select(API4Conversation).where(API4Conversation.dialog_id == agent_id))
+        assert conversation is not None and conversation.source == "agent"
+        assert conversation.message[-1]["content"] == "draft reply"
+        assert db.get(AgentExecutionOrigin, conversation.id).platform_user_id == owner
 
 
 def test_concurrent_initialization_keeps_one_replica(release_api: dict[str, Any]) -> None:
