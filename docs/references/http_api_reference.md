@@ -220,8 +220,9 @@ reset 不会将它们静默转换为空变量。
 发起请求的会话，禁止用该流返回的 ID 覆盖另一个已选会话。新建会话后使用 `data.id`。
 运行失败沿用上一节的 HTTP/业务码及 SSE error 语义。
 
-无 `session_id` 且 `release` 非 true 的普通运行使用 Redis 编辑器副本，不创建 SQL 会话，
-不能当作上述新会话重置操作。需要草稿新会话时先显式创建，再传该 `session_id` 运行。
+无 `session_id` 且 `release` 非 true 的普通运行使用 Redis 编辑器副本，并在运行前创建
+`source=agent` 的 SQL 会话与不可变执行来源。后续用返回的 `session_id` 继续该会话保存的
+DSL；草稿编辑、重新发布和请求身份字段不会替换其执行来源。显式创建草稿会话的入口仍可用。
 `openai-compatible: true` 的消息适配路径另用 OpenAI 响应形状，不能套用普通 SSE 会话 ID 合同。
 
 ### 列表操作组件与历史 DSL
@@ -278,16 +279,21 @@ OpenAI 消息适配的 strict 失败返回 `{"error":{"message":"...","type":"se
 缺失副本从已授权 SQL 草稿初始化；已有副本保留运行状态。`query` 非空时优先，
 否则使用 `question`；`custom_header` 传入 Canvas，身份仍由认证和服务端执行上下文确定。
 `user_id` 仅选择隔离副本，不授予资源访问权，也不填入模型可见的 `sys.user_id`。
+运行前保存认证用户、本次输入与固定执行来源；流式事件及非流式结果携带新 `session_id`。
+失败或无事件也返回可恢复的 ID，保存本次输入和错误，不保存成功助手答案。
 
 默认 `stream: true`；`stream: false` 返回 `retcode/retmsg` 信封，data 为终态事件，
 其中 data.content 合并 message，data.reference 保留引用，data.structured 按组件 ID
 归集；`return_trace: true` 才提供节点 trace。workflow_finished 保留 outputs，
 user_inputs 表示已保存的等待输入状态，调用者提交 inputs 后继续，不表示工作流已全部完成。
 
-执行结束、取消/完成 CAS 和 replica 提交确认后才发送成功终态与 `[DONE]`；
+执行结束、取消/完成 CAS、SQL 会话与 replica 提交确认后才发送成功终态与 `[DONE]`；
 存储读取失败不当作副本缺失，非法副本不自动覆盖。异常、无结果或仅计时/空 structured、
 取消获胜、提交锁/写入失败都不会返回业务成功。流式可已发送部分正文，失败后发送 error，
 不发送成功终态或 `[DONE]`；断连仍按既有取消/终态竞态与运行资源清理处理。
+成功日志保存正文、思考分隔标记、引用、DSL、structured、可选 trace 和等待输入状态；
+SQL 失败不更新 replica，replica 失败会将同轮日志改记为失败后返回错误。SQL 与 Redis
+仍是顺序提交，不提供两者之间的崩溃原子性。DataFlow 调试继续使用 Task/message_id 合同。
 
 已有 session 分支在 SQL 保存成功后才交付终态/表单，每轮引用追加保存，读取兼容历史
 单包/数组/按序号的字典；chunk citation map 保留 citation_id。会话不提交草稿 replica。
@@ -1947,7 +1953,7 @@ http://<your-server>:8123/redoc
 
 ---
 
-有关 Python SDK 的使用，请参阅 [Python API 参考](./python_api_reference.md)。
+Python 客户端按本文 HTTP 合同调用；当前仓库不再提供旧 SDK 的 `Session.ask` 接口。
 
 
 Go Ollama driver 使用原生 `POST /api/chat` 与 `GET /api/tags`，实例 base_url 为服务根 URL

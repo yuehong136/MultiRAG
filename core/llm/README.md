@@ -91,3 +91,14 @@ Jina 子类使用各自配置的端点；302.AI 实现同样的重排返回合�
 uv run --no-sync pytest tests/unit/test_bedrock_cv.py tests/unit/test_llm_http_timeouts.py tests/unit/test_rerank_robustness.py -q
 make integration TESTS=tests/integration/test_llm_tool_capability.py::test_saved_bedrock_and_huggingface_models_use_registered_consumers
 ```
+
+## 会话语音缓存
+
+Canvas 和 dialog 的 TTS 入口清理文本后共用 Redis 音频缓存。键对租户、已保存的模型、
+供应商、端点、凭据及声音配置和文本分别取哈希，不包含明文凭据或正文；用量、状态和时间戳
+不参与身份。命中直接复用完整音频，不再次调用供应商或增加用量。并发未命中可各自合成。
+
+`RAGFLOW_TTS_CACHE_TTL_SECONDS` 默认七天；非正值禁用读写，无效整数回退默认值。
+Redis 失败按原路径合成，损坏缓存、空音频、非法音频块及中途失败不会写缓存。
+独立 `/chat/audio/speech` 路由仍直接执行其语音合同。真实 Redis 与 SQL 计量读回见
+`tests/integration/test_tts_cache.py`；受控供应商结果不代表真实模型音质或供应商可用性。

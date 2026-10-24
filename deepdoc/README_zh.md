@@ -196,12 +196,20 @@ MinerU 的 ZIP 解包后，解析器按原始文件名和净化文件名寻找 `
 `Ambiguous output files`，不依赖文件系统遍历顺序；找不到归属明确的结果时报
 `Missing output file`。
 
+租户配置了 IMAGE2TEXT 模型时，MinerU 会为本次输出目录内的可读图片生成语义描述，
+追加到 caption/footnote 并进入 chunk 检索内容；位置和各 parse_method 的返回形状保持一致。
+显式 `vision_model`（包括 `None`）优先。缺模型、图片不可读、空描述或模型失败时保留原结果；
+外部路径及越界 symlink 不发送给视觉模型。描述使用解析语言，缺失或空值回退 English。
+最多四个任务在途，图片用后关闭；查询会话在网络调用前释放，显式会话绑定模型使用脱离
+Session 的包装副本，保留调用者对象和未提交事务。
+
 本地回归会实际写入 JSON 和资源文件，并以模拟 HTTP ZIP 响应走真实保存、解包和读取路径：
 
 ```bash
-uv run --no-sync pytest tests/unit/test_mineru_parser_output.py tests/unit/test_mineru_output_fallback.py -q
+uv run --no-sync pytest tests/unit/test_mineru_parser_output.py tests/unit/test_mineru_output_fallback.py tests/unit/test_mineru_vlm_descriptions.py -q
 ```
 
+图片描述回归另走实际 LLMBundle、CV 客户端和 naive.chunk 的本机受控 HTTP。
 这些测试不调用远程 MinerU，也不验证其模型推理、真实服务版本或生产 PDF 解析质量。
 
 ### 简历

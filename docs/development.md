@@ -173,6 +173,25 @@ CLI 输出每项的 `index` 与从向量长度计算的 `dimension`。输入顺�
 Web 是独立仓库，本指南不配置前端代理。需要 Web 联调时，按实际 Web 仓约定与当前
 后端契约验证；Go 构建成功只证明编译和链接，不能作为 Python 服务或 Web 验收证据。
 
+### 模型、图谱与存储合同
+
+Go 模型目录支持 MinerU URL 异步解析、Replicate prediction/SSE、Xinference 本地聊天、
+TogetherAI 聊天与 reasoning，以及 302.AI、JieKouAI 和 CometAPI 的非流式 ASR/TTS。
+Xinference 必须指定实例 URL，可不提供 API key；托管供应商仍校验凭据和地址。
+CLI `FILE=URL` 解析不抓取文档，MinerU 驱动仅把 URL 交给服务。Replicate 聊天当前只接受
+文本消息，非文本内容在请求前报错；预测成功使用 `succeeded`，供应商错误和取消会终止流。
+
+Go 的 `GET/DELETE /api/v1/datasets/{dataset_id}/graph` 先校验用户与 dataset 权限，
+再使用授权记录中的规范 ID 和 tenant。GET 返回聚合图并按权重裁剪到最多 256 节点、128 边；
+DELETE 只删除当前 dataset 的五类图谱记录，保留普通 chunk。`doc_id` 子图请求明确拒绝。
+图谱损坏、重复记录、后端读取/删除失败不会冒充空图或删除成功。
+
+`DocEngine` 的 chunk 和 metadata 写入使用独立的 `ChunkStore`、`MetadataStore` 方法，
+禁止依靠名称前缀猜测删除范围。ES 在共享 tenant 索引内按 dataset 删除；metadata 更新保留
+已有 Python 物理文档 ID 并合并字段。Infinity 使用显式表范围；固定 SDK 无法保留同时包含
+两种引号的字面量时直接报错。通用 Milvus 写入仍明确不可用，独立 Skills 存储合同保持原实现。
+这些能力属于 Go 并行实现，不代表 Python 生产实例已切换。
+
 ### 定向验证
 
 分词测试从 `RAG_DICT_PATH` 读取资源路径，未设置时使用仓库根下 `resource/`；

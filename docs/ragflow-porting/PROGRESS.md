@@ -3,6 +3,11 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2026-10-24 · after-d7fb4bdb-20 定向验收索引
+
+连续 20 项的本地实现、等价/不适用结论、接受映射、真实消费者、保留失败与恢复清理，见
+[d7fb4bdb 后续 20 项交付](batch-after-d7fb4bdb.md)。本地定向组合完成；完整 core/远程 CI 待运行，未 push、未部署。
+
 ## 2026-10-24 · after-9d94527b-20 定向验收索引
 
 连续 20 项的逐项结论、候选到实际接受提交、实际消费者/存储验收、保留失败与精确清理，见

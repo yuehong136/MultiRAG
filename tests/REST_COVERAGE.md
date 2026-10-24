@@ -6,9 +6,9 @@
 
 | 族 | 当前入口 | 主要 unit 覆盖 | 真实服务或消费者覆盖 |
 | --- | --- | --- | --- |
-| Agent | `/agents`、`/agents/chat/completions`、sessions、versions、webhook logs | `test_agent_completion_async.py`、`test_agent_update_release.py`、`test_agent_webhook_restful_routes.py` | `test_agent_route_migration.py`、`test_agent_runtime_completion.py`、`test_agent_permission_matrix.py`、`test_agent_completion_close.py` |
-| Chat CRUD | `/chats`、`/chats/{id}` | `test_chat_crud_routes.py`、`test_chat_restful_api.py` | `test_chatbot_authorization.py`、`test_agentbot_list_operations.py` |
-| Chat sessions/completion | `/chats/{id}/sessions`、`/chat/completions`、`/chat/recommendation` | `test_chat_session_compat.py`、`test_related_questions_routes.py`、`test_sdk_session_completions.py` | `test_chat_session_compat.py`、`test_runtime_chat_attachments.py` |
+| Agent | `/agents`、`/agents/chat/completions`、sessions、versions、webhook logs | `test_agent_completion_async.py`、`test_agent_update_release.py`、`test_agent_webhook_restful_routes.py` | `test_agent_route_migration.py`、`test_agent_runtime_completion.py`、`test_agent_permission_matrix.py`、`test_agent_completion_close.py`、`test_agent_draft_session_persistence.py` |
+| Chat CRUD | `/chats`、`/chats/{id}` | `test_chat_crud_routes.py`、`test_chat_restful_api.py` | `test_chatbot_authorization.py`、`test_agentbot_list_operations.py`、`test_rest_chat_management_contract.py` |
+| Chat sessions/completion | `/chats/{id}/sessions`、`/chat/completions`、`/chat/recommendation` | `test_chat_session_compat.py`、`test_related_questions_routes.py`、`test_sdk_session_completions.py` | `test_chat_session_compat.py`、`test_runtime_chat_attachments.py`、`test_rest_chat_completion_contract.py` |
 | Chunk | `/datasets/{id}/documents/{id}/chunks`、chunk PATCH/detail | `test_chunk_nullable_payload.py`、`test_chunk_content_validation.py`、`test_chunk_image_replacement.py`、`test_infinity_get.py` | `test_shared_chunk_owner_contract.py`、`test_chunk_image_replacement.py`；Infinity 读回见下文 |
 | Connector | `/connectors`、dataset connectors、OAuth start/result/callback | `test_connector_restful_api.py`、`test_connector_google_oauth_pkce.py` | `test_connector_web_sync.py`、`test_connector_google_oauth_pkce.py`、`test_connector_deleted_snapshot.py`；OAuth 供应商响应为受控边界 |
 | Dataset CRUD/search | `/datasets`、`/datasets/search`、`/datasets/{id}/search` | `test_dataset_restful_api.py`、`test_dataset_search_route.py`、`test_dataset_auth.py` | `test_dataset_management_http.py`、`test_dataset_search_http.py`、`test_dataset_access_permissions.py` |
@@ -20,7 +20,8 @@
 | Langfuse | `/langfuse/api-key` | `test_llm4tenant_langfuse.py`、`test_langfuse_host_boundary.py` | 供应商探测受控；没有 live Langfuse 验收 |
 | MCP | `/mcp/servers`、import、tools/test | `test_mcp_restful_api.py`、`test_mcp_tool_binding.py`、`test_mcp_delegation*.py` | `test_mcp_interaction_repository.py`、`test_mcp_skill_distribution.py`；真实 MCP 协议专项另见 `make mcp-compat` |
 | Memories/messages | `/memories`、config、`/messages`、search/content | `test_memory_restful_api.py`、`test_memory_authorization.py`、`test_memory_message_attribution.py` | `test_memory_authorization.py`、`test_memory_principal_isolation.py` |
-| OpenAI chat compatibility | `/openai/{id}/chat/completions`、deprecated `/chats_openai/{id}/chat/completions` | `test_openai_compatible_api.py` | 模型输出/传输故障受控；真实供应商与模型质量另验 |
+| Chat audio | `/chat/audio/transcription`、`/chat/audio/speech` | `test_chat_crud_routes.py` | `test_rest_chat_audio_contract.py`；供应商受控，临时文件及错误路径独立读回 |
+| OpenAI chat compatibility | `/openai/{id}/chat/completions`、deprecated `/chats_openai/{id}/chat/completions` | `test_openai_compatible_api.py` | `test_rest_chat_completion_contract.py`；模型输出/传输故障受控，真实供应商与模型质量另验 |
 | Plugin tools | `/plugin/tools` | `test_stats_plugin_restful_api.py`、`test_llm_tool_capability_config.py` | 当前表不宣称 live plugin 执行验收 |
 | Retrieval | `/datasets/search`、`/datasets/{id}/search`、SDK `/retrieval` | `test_dataset_search_route.py`、`test_sdk_retrieval_metadata_scope.py`、`test_dify_retrieval_contract.py` | `test_dataset_search_http.py`、`test_retrieval_parent_http.py`、`test_retrieval_parent_fallback.py` |
 | Search apps | `/searches`、`/searches/{id}/completions` | `test_search_restful_api.py`、`test_async_chat_routes.py` | `test_dialog_sql_scope.py`；模型边界受控 |

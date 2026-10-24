@@ -46,6 +46,19 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 - 必需的 core 第 0 分片另运行 `make mcp-compat` 和实际 Agent 注册/双同名服务 probe；现代/legacy、inbound/outbound 矩阵及绑定结果保存在 `.test-results/mcp/`。该专项使用自有 loopback 进程及受控模型、授权配置和签发边界，无需真实供应商密钥。
 - 本地真实模型质量评测从 core/smoke 拆到 [quality.yml](../.github/workflows/quality.yml)，每天 20:30 UTC 及手动运行；模型仍按原不可变版本校验。不移走 core 的事务、故障恢复或权限用例；修改质量资产/评测时本地运行相关检查，质量结果独立报告，不冒充组合合同通过。
 
+本批新增 Go 实际验收入口如下；它们在普通无服务 race 中仅登记为未验证的 opt-in。
+设置 `REQUIRE_SERVICES=1` 后缺失配置必须失败，不能以 skip 代替实际运行。
+
+| 测试 | 自有输入与边界 |
+|---|---|
+| `handler.TestAfterD7ProvidersHTTPCLIAndSQL` | `MULTIRAG_AFTERD7_A_CONFIG` 为私有 Go 配置，loopback scratch DB 名 `multirag_afterd7_a_20261024`；`MULTIRAG_AFTERD7_A_CLI` 必须为当前源码新构建 CLI。真实 JWT/SQL/CLI，供应商 HTTP 受控。 |
+| `engine.TestEngineStoresLive` | 私有 `MULTIRAG_ENGINE_LIVE_CONFIG`；显式 `MULTIRAG_ENGINE_LIVE_KIND=elasticsearch` 或 `infinity`；固定稳定 Infinity 0.7.0、精确自有 tenant/索引/库。 |
+| `handler.TestDatasetGraphHTTPAndSQL` | 同一自有 engine 配置与 PostgreSQL scratch；tenant/库名以 `multirag_afterd7_b_` 开头，禁止指向业务库。可附加固定 Web API 客户端验收，不等同浏览器 UI。 |
+
+CI 在 native cache 命中时也执行 OpenCC 输入边界的 ASan/UBSan 专项。新增 Python
+connector controls、prune worker、TTS cache、Manual filter 与 REST chat 用例保持保守串行；
+只有实际依赖外部 Web 的模块归入 consumer。Agent draft 和 connector dashboard 使用固定 Web SHA。
+
 时间与语音的 Go opt-in 需要以下自有资源；设置 `REQUIRE_SERVICES=1` 后缺失配置必须失败。
 测试不得指向业务库，CLI 必须从受验的同一源码组合构建。
 
