@@ -11,9 +11,11 @@ from api.db.db_models import Document
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import (
     DeleteDocumentSnapshot,
+    DocumentDeletePrecondition,
     DocumentService,
     OrphanFilePayload,
 )
+from api.db.services.file_service import FileService
 from api.utils.api_utils import RetCode
 
 
@@ -296,3 +298,44 @@ def test_remove_document_signals_deleted_tasks_and_only_skips_confirmed_missing_
     assert image_cleanup.called is (index_state is not False)
     assert store.search.called is (index_state is not False)
     assert store.delete.called is (index_state is not False)
+
+
+def test_conditional_delete_checks_revision_inside_owned_transaction() -> None:
+    db = _build_session(_FakeMappingResult(one=None))
+    db._in_transaction = True
+    precondition = DocumentDeletePrecondition("kb-1", "s3", 7, None, "hash")
+    assert DocumentService.remove_document(db, Document(id="doc-1"), "tenant-1", precondition=precondition) is False
+    db.rollback_mock.assert_called_once()
+    assert len(db.executed_statements) == 1
+    statement = db.executed_statements[0]
+    from sqlalchemy.dialects import postgresql
+
+    compiled = statement.compile(dialect=postgresql.dialect())
+    assert str(compiled).endswith("FOR UPDATE")
+    assert f"{Document.__tablename__}.update_date IS NULL" in str(compiled)
+    assert set(compiled.params.values()) == {"doc-1", "kb-1", "s3", 7, "hash"}
+
+
+def test_conditional_delete_skips_table_and_folder_writes_when_revision_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    precondition = DocumentDeletePrecondition("kb-1", "s3", 7, None, "hash")
+    document = Document(id="doc-1", kb_id="kb-1", parser_id="table")
+    monkeypatch.setattr(DocumentService, "get_by_id", lambda *_: document)
+    monkeypatch.setattr(DocumentService, "get_tenant_id", lambda *_: "tenant-1")
+    remove = MagicMock(return_value=False)
+    monkeypatch.setattr(DocumentService, "remove_document", remove)
+    forbidden = MagicMock(side_effect=AssertionError("conditional rejection wrote unrelated state"))
+    monkeypatch.setattr(FileService, "get_root_folder", forbidden)
+    monkeypatch.setattr(FileService, "init_knowledgebase_docs", forbidden)
+    monkeypatch.setattr(DocumentService, "count_by_kb_id", forbidden)
+    from api.db.services.knowledgebase_service import KnowledgebaseService
+
+    monkeypatch.setattr(KnowledgebaseService, "delete_field_map", forbidden)
+    db = _build_session()
+    assert FileService.delete_docs(db, ["doc-1"], "tenant-1", delete_preconditions={"doc-1": precondition}) == ""
+    remove.assert_called_once_with(db, document, "tenant-1", precondition=precondition)
+    forbidden.assert_not_called()
+
+
+def test_conditional_delete_never_falls_back_to_unconditional_missing_precondition() -> None:
+    with pytest.raises(ValueError, match="every document"):
+        FileService.delete_docs(_build_session(), ["doc-1"], "tenant-1", delete_preconditions={})

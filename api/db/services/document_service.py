@@ -47,6 +47,15 @@ class OrphanFilePayload:
 
 
 @dataclass(frozen=True)
+class DocumentDeletePrecondition:
+    kb_id: str
+    source_type: str
+    update_time: int | None
+    update_date: datetime | None
+    content_hash: str | None
+
+
+@dataclass(frozen=True)
 class DeleteDocumentSnapshot:
     doc_id: str
     kb_id: str
@@ -2072,11 +2081,22 @@ class DocumentService(CommonService):
 
     @classmethod
     @retry_transient_tx_conflict()
-    def _delete_document_db_state(cls, db: Session, doc_id: str) -> DeleteDocumentSnapshot | None:
+    def _delete_document_db_state(cls, db: Session, doc_id: str, *, precondition: DocumentDeletePrecondition | None = None) -> DeleteDocumentSnapshot | None:
         """Delete document-owned DB state inside a short SQLAlchemy 2.0 transaction."""
         cls._release_read_only_transaction(db)
 
         with db.begin():
+            predicates = [cls.model.id == doc_id]
+            if precondition is not None:
+                predicates.extend(
+                    [
+                        cls.model.kb_id == precondition.kb_id,
+                        cls.model.source_type == precondition.source_type,
+                        cls.model.update_time == precondition.update_time,
+                        cls.model.update_date == precondition.update_date,
+                        cls.model.content_hash == precondition.content_hash,
+                    ]
+                )
             doc_row = (
                 db.execute(
                     select(
@@ -2087,7 +2107,7 @@ class DocumentService(CommonService):
                         cls.model.thumbnail,
                         cls.model.location,
                     )
-                    .where(cls.model.id == doc_id)
+                    .where(*predicates)
                     .with_for_update()
                 )
                 .mappings()
@@ -2206,13 +2226,16 @@ class DocumentService(CommonService):
             )
 
     @classmethod
-    def remove_document(cls, db: Session, doc: Document, tenant_id: str, *, strict: bool = False) -> bool:
+    def remove_document(cls, db: Session, doc: Document, tenant_id: str, *, strict: bool = False, precondition: DocumentDeletePrecondition | None = None) -> bool:
         """Delete owned state; strict reports cleanup failures after SQL commit."""
         from api.db.services.task_service import cancel_all_task_of
 
-        snapshot = cls._delete_document_db_state(db, doc.id)
+        if precondition is None:
+            snapshot = cls._delete_document_db_state(db, doc.id)
+        else:
+            snapshot = cls._delete_document_db_state(db, doc.id, precondition=precondition)
         if snapshot is None:
-            return True
+            return precondition is None
         cleanup_ok = True
         doc_id = snapshot.doc_id
         tenant_id = snapshot.tenant_id or tenant_id

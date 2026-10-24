@@ -21,7 +21,7 @@ from api.db import KNOWLEDGEBASE_FOLDER_NAME, FileType
 from api.db.db_models import Document, File, File2Document, Knowledgebase, PythonSkillCoreSpace
 from api.db.services import duplicate_name
 from api.db.services.common_service import CommonService
-from api.db.services.document_service import DocumentService
+from api.db.services.document_service import DocumentDeletePrecondition, DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.skills.file_guard import SKILL_SOURCES
@@ -548,10 +548,13 @@ class FileService(CommonService):
         return settings.STORAGE_IMPL.put(bname, location, blob)
 
     @classmethod
-    def delete_docs(cls, db: Session, doc_ids, tenant_id):
-        root_folder = FileService.get_root_folder(db, tenant_id)
-        pf_id = root_folder["id"]
-        FileService.init_knowledgebase_docs(db, pf_id, tenant_id)
+    def delete_docs(cls, db: Session, doc_ids: Sequence[str], tenant_id: str, *, delete_preconditions: dict[str, DocumentDeletePrecondition] | None = None) -> str:
+        if delete_preconditions is None:
+            root_folder = FileService.get_root_folder(db, tenant_id)
+            pf_id = root_folder["id"]
+            FileService.init_knowledgebase_docs(db, pf_id, tenant_id)
+        elif any(doc_id not in delete_preconditions for doc_id in doc_ids):
+            raise ValueError("Conditional deletion requires a precondition for every document")
         errors = ""
         kb_table_num_map = {}
         for doc_id in doc_ids:
@@ -567,8 +570,12 @@ class FileService(CommonService):
                 doc_parser = doc.parser_id
                 kb_id = doc.kb_id
 
-                if not DocumentService.remove_document(db, doc, tenant_id):
-                    raise Exception("Database error (Document removal)!")
+                if delete_preconditions is None:
+                    if not DocumentService.remove_document(db, doc, tenant_id):
+                        raise Exception("Database error (Document removal)!")
+                elif not DocumentService.remove_document(db, doc, tenant_id, precondition=delete_preconditions[doc_id]):
+                    # A changed snapshot must not trigger parser/table cleanup.
+                    continue
 
                 if doc_parser == ParserType.TABLE:
                     if kb_id not in kb_table_num_map:
