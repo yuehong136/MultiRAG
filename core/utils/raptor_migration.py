@@ -1,9 +1,11 @@
 """Confirm complete summary replacement before removing a previous tree."""
 
+import json
 from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from common.doc_store.document_history import confirm_history_visibility, delete_document_history, document_history, restore_document_history
 from common.exceptions import TaskCanceledException
@@ -58,6 +60,11 @@ def replace_raptor_summaries(
             written[doc] = {identifier: actual[identifier] for identifier in identifiers if identifier in actual}
             for identifier in identifiers:
                 stored = actual.get(identifier, {})
+                backend = store.db_type()
+                if backend == "infinity" and stored:
+                    # Keep native rows for recovery; compare logical aliases through
+                    # the connector's read conversion instead of raw column names.
+                    stored = store.get_fields(pd.DataFrame([stored]), list(expected[identifier]))[identifier]
                 for key, value in expected[identifier].items():
                     if key in {"id", "pk"}:
                         continue
@@ -67,14 +74,23 @@ def replace_raptor_summaries(
                     if key == "kb_id":
                         value = value[0] if isinstance(value, list) and len(value) == 1 else value
                         actual_value = actual_value[0] if isinstance(actual_value, list) and len(actual_value) == 1 else actual_value
-                    if store.db_type() == "milvus" and (key == "vector" or key.endswith("_vec")):
-                        # Native FLOAT_VECTOR stores IEEE float32, while model
+                    if backend == "infinity":
+                        if key == "extra" and isinstance(value, dict):
+                            actual_value = json.loads(actual_value)
+                        elif store.field_keyword(key) and isinstance(value, str):
+                            value = [item for item in value.split("###") if item]
+                    if backend in {"milvus", "infinity"} and (key == "vector" or key.endswith("_vec")):
+                        # Native float vectors store IEEE float32, while model
                         # adapters may return Python doubles. Compare that exact
                         # representation, including shape and finite values.
                         expected_vector = np.asarray(value, dtype=np.float32)
                         actual_vector = np.asarray(actual_value, dtype=np.float32)
                         if not np.isfinite(expected_vector).all() or not np.array_equal(actual_vector, expected_vector):
                             raise RuntimeError("RAPTOR inserted vector could not be confirmed")
+                    elif backend == "infinity" and isinstance(value, float):
+                        # Infinity's mapping uses float32 scalar columns too.
+                        if not np.isfinite(value) or np.float32(actual_value) != np.float32(value):
+                            raise RuntimeError("RAPTOR inserted content could not be confirmed")
                     elif actual_value != value:
                         raise RuntimeError("RAPTOR inserted content could not be confirmed")
         if canceled():
