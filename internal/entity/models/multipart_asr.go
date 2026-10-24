@@ -12,7 +12,7 @@ import (
 
 // multipartASR writes all model/options fields before the audio file, for providers
 // that begin processing the file part before reading trailing form fields.
-func multipartASR(client *http.Client, base map[string]string, suffix string, name *string, audio []byte, api *APIConfig, config *ASRConfig) (*ASRResponse, error) {
+func multipartASR(client *http.Client, base map[string]string, suffix string, name *string, audio []byte, api *APIConfig, config *ASRConfig, options ...mediaHTTPOptions) (*ASRResponse, error) {
 	if name == nil || strings.TrimSpace(*name) == "" {
 		return nil, fmt.Errorf("ASR model required")
 	}
@@ -79,7 +79,7 @@ func multipartASR(client *http.Client, base map[string]string, suffix string, na
 	}
 	local, cancel := modelCallConfig(api)
 	defer cancel()
-	resp, err := mediaRequest(client, base, suffix, local, writer.FormDataContentType(), &body, "")
+	resp, err := mediaRequest(client, base, suffix, local, writer.FormDataContentType(), &body, "", options...)
 	if err != nil {
 		return nil, err
 	}

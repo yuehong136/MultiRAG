@@ -11,14 +11,25 @@ import (
 	"strings"
 )
 
-func mediaRequest(client *http.Client, base map[string]string, suffix string, api *APIConfig, contentType string, body io.Reader, model string) (*http.Response, error) {
-	if api == nil || api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "" {
+type mediaHTTPOptions struct{ optionalAPIKey bool }
+
+func mediaRequest(client *http.Client, base map[string]string, suffix string, api *APIConfig, contentType string, body io.Reader, model string, options ...mediaHTTPOptions) (*http.Response, error) {
+	key := ""
+	if api != nil && api.APIKey != nil {
+		key = strings.TrimSpace(*api.APIKey)
+	}
+	optionalKey := len(options) > 0 && options[0].optionalAPIKey
+	if key == "" && !optionalKey {
 		return nil, fmt.Errorf("media API key is required")
 	}
 	if suffix == "" {
 		return nil, fmt.Errorf("media endpoint suffix is missing")
 	}
-	endpoint, err := resolveModelBaseURL(base, api.Region)
+	var region *string
+	if api != nil {
+		region = api.Region
+	}
+	endpoint, err := resolveModelBaseURL(base, region)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +37,9 @@ func mediaRequest(client *http.Client, base map[string]string, suffix string, ap
 	if err != nil {
 		return nil, fmt.Errorf("create media request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	req.Header.Set("Content-Type", contentType)
 	if model != "" {
 		req.Header.Set("model", model)
@@ -41,12 +54,12 @@ func mediaRequest(client *http.Client, base map[string]string, suffix string, ap
 	}
 	return resp, nil
 }
-func mediaJSONRequest(client *http.Client, base map[string]string, suffix string, api *APIConfig, body map[string]any, model string) (*http.Response, error) {
+func mediaJSONRequest(client *http.Client, base map[string]string, suffix string, api *APIConfig, body map[string]any, model string, options ...mediaHTTPOptions) (*http.Response, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("invalid media request JSON")
 	}
-	return mediaRequest(client, base, suffix, api, "application/json", bytes.NewReader(raw), model)
+	return mediaRequest(client, base, suffix, api, "application/json", bytes.NewReader(raw), model, options...)
 }
 func readMediaBody(reader io.Reader, limit int) ([]byte, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))

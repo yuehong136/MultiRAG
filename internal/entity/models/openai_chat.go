@@ -26,6 +26,7 @@ type openAIChatDriver struct {
 	splitReasoning       bool
 	openRouterReasoning  bool
 	reasoningAlias       bool
+	reasoningFallback    bool
 	rootFinishReason     bool
 	optionalDiscoveryKey bool
 	parseContent         func(json.RawMessage) (string, string, error)
@@ -35,6 +36,7 @@ type openAIChatDriver struct {
 	authHeader           string
 	strictDiscovery      bool
 	strictStream         bool
+	terminalWithoutDelta bool
 	azureContentFilter   bool
 	streamIdleTimeout    time.Duration
 }
@@ -354,6 +356,11 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 				return err
 			}
 		}
+		if d.strictStream && d.rootFinishReason {
+			if err := validateStrictChatFinish(event.FinishReason); err != nil {
+				return err
+			}
+		}
 		if len(event.Choices) == 0 {
 			if d.rootFinishReason && event.FinishReason != nil && *event.FinishReason != "" {
 				return complete()
@@ -370,7 +377,7 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			}
 		}
 		if choice == nil || choice.Delta == nil {
-			if d.strictStream {
+			if d.strictStream && !(d.terminalWithoutDelta && choice != nil && choice.FinishReason != nil && *choice.FinishReason != "") {
 				return fmt.Errorf("openai-compatible: invalid stream choice or delta")
 			}
 			if choice == nil {
@@ -387,7 +394,7 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 				return err
 			}
 		}
-		if d.reasoningAlias && delta.RouterReasoning != nil && *delta.RouterReasoning != "" {
+		if d.reasoningAlias && delta.RouterReasoning != nil && *delta.RouterReasoning != "" && (!d.reasoningFallback || delta.Reasoning == nil || *delta.Reasoning == "") {
 			if err := requestContext(apiConfig).Err(); err != nil {
 				return err
 			}

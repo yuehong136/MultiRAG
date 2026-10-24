@@ -7,7 +7,8 @@
     "chat": "openai/v1/chat/completions",
     "models": "openai/v1/models",
     "embedding": "openai/v1/embeddings",
-    "rerank": "openai/v1/rerank"
+    "rerank": "openai/v1/rerank",
+    "balance": "openapi/v1/billing/balance/detail"
   },
   "class": "novita",
   "models": [

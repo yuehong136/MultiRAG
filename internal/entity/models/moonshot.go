@@ -3,9 +3,12 @@ package models
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -13,16 +16,18 @@ import (
 
 // MoonshotModel implements Moonshot text chat, reasoning streams and discovery.
 type MoonshotModel struct {
-	BaseURL    map[string]string
-	URLSuffix  URLSuffix
-	httpClient *http.Client
+	BaseURL           map[string]string
+	URLSuffix         URLSuffix
+	httpClient        *http.Client
+	streamIdleTimeout time.Duration
 }
 
 func NewMoonshotModel(baseURL map[string]string, urlSuffix URLSuffix) *MoonshotModel {
 	return &MoonshotModel{
-		BaseURL:    baseURL,
-		URLSuffix:  urlSuffix,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		BaseURL:           maps.Clone(baseURL),
+		URLSuffix:         urlSuffix,
+		httpClient:        &http.Client{Transport: openAIChatTransport, CheckRedirect: rejectModelRedirect},
+		streamIdleTimeout: 60 * time.Second,
 	}
 }
 
@@ -129,13 +134,15 @@ func (m *MoonshotModel) chat(modelName string, messages []Message, apiConfig *AP
 	if err != nil {
 		return nil, err
 	}
-	resp, err := m.requestChat(body, apiConfig)
+	local, cancel := modelCallConfig(apiConfig)
+	defer cancel()
+	resp, err := m.requestChat(body, local)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	var result aliyunChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("moonshot: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
@@ -150,6 +157,9 @@ func (m *MoonshotModel) chat(modelName string, messages []Message, apiConfig *AP
 		reasoning := strings.TrimPrefix(*message.ReasoningContent, "\n")
 		message.ReasoningContent = &reasoning
 	}
+	if err := requestContext(local).Err(); err != nil {
+		return nil, err
+	}
 	return &ChatResponse{Answer: message.Content, ReasoningContent: message.ReasoningContent}, nil
 }
 
@@ -160,7 +170,7 @@ func (m *MoonshotModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, modelConfig, sender)
 }
 
-func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) (streamErr error) {
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -168,15 +178,38 @@ func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Me
 	if err != nil {
 		return err
 	}
-	resp, err := m.requestChat(body, apiConfig)
+	ctx, cancel := context.WithCancelCause(requestContext(apiConfig))
+	local := APIConfig{Context: ctx}
+	if apiConfig != nil {
+		local = *apiConfig
+		local.Context = ctx
+	}
+	idle := m.streamIdleTimeout
+	if idle <= 0 {
+		idle = 60 * time.Second
+	}
+	idleError := fmt.Errorf("moonshot: stream idle timeout: %w", context.DeadlineExceeded)
+	timer := time.AfterFunc(idle, func() { cancel(idleError) })
+	defer func() {
+		timer.Stop()
+		if context.Cause(ctx) == idleError {
+			streamErr = idleError
+		}
+		cancel(nil)
+	}()
+	resp, err := m.requestChat(body, &local)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	resp.Body = &activeModelStream{ReadCloser: resp.Body, active: func() { timer.Reset(idle) }}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	receivedAnswer := false
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue
@@ -215,6 +248,9 @@ func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Me
 				return err
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if delta.Content != nil && *delta.Content != "" {
 			if err := sender(delta.Content, nil); err != nil {
 				return err
@@ -236,84 +272,74 @@ func (m *MoonshotModel) Embed(modelName *string, texts []string, apiConfig *APIC
 	return embedHTTPWithConfig(m.httpClient, m.BaseURL, suffix, modelName, texts, apiConfig, embeddingConfig)
 }
 
-func (m *MoonshotModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	if apiConfig == nil || apiConfig.APIKey == nil {
-		return nil, fmt.Errorf("API key is nil")
+func (m *MoonshotModel) get(suffix string, api *APIConfig) (*http.Response, error) {
+	if api == nil || api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "" {
+		return nil, fmt.Errorf("moonshot: API key required")
 	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if suffix == "" {
+		return nil, fmt.Errorf("moonshot: endpoint missing")
+	}
+	base, err := resolveModelBaseURL(m.BaseURL, api.Region)
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Models), http.NoBody)
+	req, err := http.NewRequestWithContext(requestContext(api), http.MethodGet, joinModelURL(base, suffix), nil)
 	if err != nil {
-		return nil, fmt.Errorf("create model list request: %w", err)
+		return nil, fmt.Errorf("moonshot: invalid endpoint")
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
-
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
+	req.Header.Set("Accept", "application/json")
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("list Moonshot models: %w", err)
+		return nil, fmt.Errorf("moonshot: GET failed: %w", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("list Moonshot models: status %d", resp.StatusCode)
+		resp.Body.Close()
+		return nil, fmt.Errorf("moonshot: GET failed (HTTP %d)", resp.StatusCode)
 	}
-
-	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode Moonshot model list: %w", err)
-	}
-	models := make([]string, 0, len(payload.Data))
-	for _, model := range payload.Data {
-		models = append(models, model.ID)
-	}
-	return models, nil
+	return resp, nil
 }
 
-func (m *MoonshotModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	if apiConfig == nil || apiConfig.APIKey == nil {
-		return nil, fmt.Errorf("API key is nil")
-	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+func (m *MoonshotModel) ListModels(api *APIConfig) ([]string, error) {
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	resp, err := m.get(m.URLSuffix.Models, local)
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Balance), http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("create balance request: %w", err)
+	defer resp.Body.Close()
+	names, err := strictProviderModelNames(resp.Body)
+	if err == nil {
+		err = requestContext(local).Err()
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	return names, err
+}
 
-	resp, err := m.httpClient.Do(req)
+func (m *MoonshotModel) Balance(api *APIConfig) (map[string]interface{}, error) {
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	resp, err := m.get(m.URLSuffix.Balance, local)
 	if err != nil {
-		return nil, fmt.Errorf("query Moonshot balance: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("query Moonshot balance: status %d", resp.StatusCode)
-	}
-
 	var payload struct {
 		Data struct {
 			AvailableBalance *float64 `json:"available_balance"`
 		} `json:"data"`
+		Error json.RawMessage `json:"error"`
 	}
-	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode Moonshot balance: %w", err)
+	if err := decodeBoundedModelJSON(resp.Body, &payload); err != nil || payload.Data.AvailableBalance == nil || len(payload.Error) > 0 && string(payload.Error) != "null" {
+		return nil, fmt.Errorf("moonshot: invalid balance response")
 	}
-	if payload.Data.AvailableBalance == nil {
-		return nil, fmt.Errorf("no balance in response")
+	amount := *payload.Data.AvailableBalance
+	if math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return nil, fmt.Errorf("moonshot: invalid balance amount")
 	}
-	return map[string]interface{}{
-		"balance":  *payload.Data.AvailableBalance,
-		"currency": "CNY",
-	}, nil
+	if err := requestContext(local).Err(); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"balance": amount, "currency": "CNY"}, nil
 }
 
 func (m *MoonshotModel) CheckConnection(apiConfig *APIConfig) error {
