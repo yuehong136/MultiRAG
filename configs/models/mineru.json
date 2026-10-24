@@ -1,0 +1,14 @@
+{
+  "name": "MinerU",
+  "url": {
+    "default": "https://mineru.net"
+  },
+  "url_suffix": {
+    "doc_parse": "api/v4/extract/task"
+  },
+  "class": "mineru",
+  "models": [
+    {"name": "vlm", "model_types": ["doc_parse"]},
+    {"name": "MinerU-HTML", "model_types": ["doc_parse"]}
+  ]
+}
