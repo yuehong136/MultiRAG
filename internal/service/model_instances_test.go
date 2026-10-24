@@ -111,3 +111,23 @@ func TestLocalAIInstanceWithoutKey(t *testing.T) {
 		t.Fatal("missing tenant URL accepted")
 	}
 }
+
+func TestMinerULocalInstanceWithoutKey(t *testing.T) {
+	provider := &entity.Provider{Name: "mineru_local", URLSuffix: models.URLSuffix{DocumentParse: "file_parse", Task: "tasks"}}
+	for _, base := range []string{"http://one.invalid", "http://two.invalid"} {
+		raw, err := encodeProviderInstanceExtra("", base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		driver, api, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: raw})
+		if err != nil || driver.Name() != "mineru_local" || api.APIKey == nil || *api.APIKey != "" || driver.(*models.MinerULocalModel).BaseURL["default"] != base {
+			t.Fatalf("%T %v %v", driver, api, err)
+		}
+		if _, ok := driver.(models.FileParser); !ok {
+			t.Fatal("registered local parser does not implement FileParser")
+		}
+	}
+	if _, _, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: "{}"}); err == nil {
+		t.Fatal("missing local endpoint accepted")
+	}
+}

@@ -45,6 +45,8 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewReplicateModel(baseURL, urlSuffix), nil
 	case "mineru":
 		return NewMinerUModel(baseURL, urlSuffix), nil
+	case "mineru_local":
+		return NewMinerULocalModel(baseURL, urlSuffix), nil
 	case "xunfei":
 		return NewXunFeiModel(baseURL, urlSuffix), nil
 	case "deepinfra":
