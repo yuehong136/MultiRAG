@@ -6,6 +6,11 @@ still require case helpers; this runner owns only its process group and paths.
 
 from __future__ import annotations
 
+import sys
+
+# The outer gate must not create a local helper cache before its journal exists.
+sys.dont_write_bytecode = True
+
 import argparse
 import hashlib
 import json
@@ -14,7 +19,6 @@ import shutil
 import signal
 import stat
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path

@@ -258,7 +258,7 @@ worktree、证据目录及借用资源，再创建独占证据目录；每次执
 原始 stdout/stderr 文件，不复用或覆盖历史执行。
 
 ```bash
-python3 scripts/run_registered.py \
+python3 -B scripts/run_registered.py \
   --evidence-root /absolute/owned/evidence \
   --label focused-python \
   --input scripts/run_registered.py --input scripts/resource_journal.py \
@@ -275,6 +275,7 @@ python3 scripts/run_registered.py \
 Go 和 Web 使用同一入口，将 `--` 后命令替换为绝对路径的 `go test ...` 或包管理器命令；
 使用已有运行时，不为此入口安装依赖。使用 `uv` 时传 `--no-sync`，避免修改借用的环境。
 
+入口用 `-B` 禁止解释器启动阶段的字节码缓存；runner 也在导入本地 helper 前禁用该进程的字节码写入。
 父进程必须成功创建、追加并 fsync journal，才会启动子进程；子进程还须追加、fsync
 实际 PID/父 PID/进程组身份，才能 exec 业务命令。失败即停止，无 journal 不会业务 import。
 TMP、常见 HF/Torch/ModelScope/tiktoken 缓存、Go 编译/模块缓存与 telemetry（独占目录、mode=off）、uv/npm 缓存均分配在
