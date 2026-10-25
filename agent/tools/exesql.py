@@ -18,14 +18,16 @@ import json
 import os
 import re
 from abc import ABC
+from importlib import import_module
+from typing import Any
 
 import pandas as pd
 import psycopg2
 import pymysql
-import pyodbc
 
 from agent.tools.base import ToolBase, ToolMeta, ToolParamBase
 from common.connection_utils import timeout
+from common.ssrf_guard import assert_host_is_safe
 
 
 class ExeSQLParam(ToolParamBase):
@@ -71,11 +73,11 @@ class ExeSQL(ToolBase, ABC):
     component_name = "ExeSQL"
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 60)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> str | None:
         if self.check_if_canceled("ExeSQL processing"):
             return
 
-        def convert_decimals(obj):
+        def convert_decimals(obj: Any) -> Any:
             import math
             from decimal import Decimal
 
@@ -114,17 +116,21 @@ class ExeSQL(ToolBase, ABC):
         if self.check_if_canceled("ExeSQL processing"):
             return
 
+        # The execution path must enforce the same public-host policy as the
+        # connection probe. Dial the validated IP to prevent DNS rebinding.
+        safe_host = assert_host_is_safe(self._param.host)
         sqls = sql.split(";")
         if self._param.db_type in ["mysql", "mariadb"]:
-            db = pymysql.connect(db=self._param.database, user=self._param.username, host=self._param.host, port=self._param.port, password=self._param.password)
+            db = pymysql.connect(db=self._param.database, user=self._param.username, host=safe_host, port=self._param.port, password=self._param.password)
         elif self._param.db_type == "oceanbase":
-            db = pymysql.connect(db=self._param.database, user=self._param.username, host=self._param.host, port=self._param.port, password=self._param.password, charset="utf8mb4")
+            db = pymysql.connect(db=self._param.database, user=self._param.username, host=safe_host, port=self._param.port, password=self._param.password, charset="utf8mb4")
         elif self._param.db_type == "postgres":
-            db = psycopg2.connect(dbname=self._param.database, user=self._param.username, host=self._param.host, port=self._param.port, password=self._param.password)
+            db = psycopg2.connect(dbname=self._param.database, user=self._param.username, host=safe_host, port=self._param.port, password=self._param.password)
         elif self._param.db_type == "mssql":
+            pyodbc = import_module("pyodbc")
             conn_str = (
                 r"DRIVER={ODBC Driver 17 for SQL Server};"
-                r"SERVER=" + self._param.host + "," + str(self._param.port) + ";"
+                r"SERVER=" + safe_host + "," + str(self._param.port) + ";"
                 r"DATABASE=" + self._param.database + ";"
                 r"UID=" + self._param.username + ";"
                 r"PWD=" + self._param.password
@@ -137,7 +143,7 @@ class ExeSQL(ToolBase, ABC):
             except Exception:
                 raise Exception("Missing dependency 'trino'. Please install: pip install trino")
 
-            def _parse_catalog_schema(db: str):
+            def _parse_catalog_schema(db: str) -> tuple[str | None, str | None]:
                 if not db:
                     return None, None
                 if "." in db:
@@ -159,16 +165,18 @@ class ExeSQL(ToolBase, ABC):
 
             try:
                 db = trino.dbapi.connect(
-                    host=self._param.host, port=int(self._param.port or 8080), user=self._param.username or "ragflow", catalog=catalog, schema=schema or "default", http_scheme=http_scheme, auth=auth
+                    host=safe_host, port=int(self._param.port or 8080), user=self._param.username or "ragflow", catalog=catalog, schema=schema or "default", http_scheme=http_scheme, auth=auth
                 )
             except Exception as e:
                 raise Exception("Database Connection Failed! \n" + str(e))
         elif self._param.db_type == "IBM DB2":
-            import ibm_db
+            ibm_db = import_module("ibm_db")
 
-            conn_str = f"DATABASE={self._param.database};HOSTNAME={self._param.host};PORT={self._param.port};PROTOCOL=TCPIP;UID={self._param.username};PWD={self._param.password};"
+            conn_str = f"DATABASE={self._param.database};HOSTNAME={safe_host};PORT={self._param.port};PROTOCOL=TCPIP;UID={self._param.username};PWD={self._param.password};"
             try:
                 conn = ibm_db.connect(conn_str, "", "")
+                if conn is False or conn is None:
+                    raise ConnectionError("DB2 connection was not established.")
             except Exception as e:
                 raise Exception("Database Connection Failed! \n" + str(e))
 
@@ -184,28 +192,42 @@ class ExeSQL(ToolBase, ABC):
                         continue
                     single_sql = re.sub(r"\[ID:[0-9]+\]", "", single_sql)
 
-                    stmt = ibm_db.exec_immediate(conn, single_sql)
-                    rows = []
-                    row = ibm_db.fetch_assoc(stmt)
-                    while row and len(rows) < self._param.max_records:
-                        if self.check_if_canceled("ExeSQL processing"):
-                            return
-                        rows.append(row)
-                        row = ibm_db.fetch_assoc(stmt)
-
-                    if not rows:
-                        sql_res.append({"content": "No record in the database!"})
+                    if re.match(r"^(insert|update|delete)\b", single_sql, flags=re.IGNORECASE):
+                        message = "For security reasons, INSERT, UPDATE, and DELETE statements are not supported."
+                        sql_res.append({"content": message})
+                        formalized_content.append(message)
                         continue
+                    try:
+                        stmt = ibm_db.exec_immediate(conn, single_sql)
+                        rows = []
+                        row = ibm_db.fetch_assoc(stmt)
+                        while row and len(rows) < self._param.max_records:
+                            if self.check_if_canceled("ExeSQL processing"):
+                                return
+                            rows.append(row)
+                            row = ibm_db.fetch_assoc(stmt)
 
-                    df = pd.DataFrame(rows)
-                    for col in df.columns:
-                        if pd.api.types.is_datetime64_any_dtype(df[col]):
-                            df[col] = df[col].dt.strftime("%Y-%m-%d")
+                        if not rows:
+                            sql_res.append({"content": "No record in the database!"})
+                            continue
 
-                    df = df.where(pd.notnull(df), None)
+                        df = pd.DataFrame(rows)
+                        for col in df.columns:
+                            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                                df[col] = df[col].dt.strftime("%Y-%m-%d")
 
-                    sql_res.append(convert_decimals(df.to_dict(orient="records")))
-                    formalized_content.append(df.to_markdown(index=False, floatfmt=".6f"))
+                        df = df.where(pd.notnull(df), None)
+
+                        sql_res.append(convert_decimals(df.to_dict(orient="records")))
+                        formalized_content.append(df.to_markdown(index=False, floatfmt=".6f"))
+                    except Exception as error:
+                        # Recovery must succeed before another statement is attempted.
+                        # A lost connection/failed rollback is a node failure.
+                        if ibm_db.rollback(conn) is False:
+                            raise ConnectionError("DB2 transaction recovery failed.") from error
+                        message = f"SQL Execution Failed: {single_sql}\n{error}"
+                        sql_res.append({"content": message})
+                        formalized_content.append(message)
             finally:
                 with contextlib.suppress(Exception):
                     ibm_db.close(conn)
@@ -235,24 +257,32 @@ class ExeSQL(ToolBase, ABC):
                     sql_res.append({"content": "For security reasons, INSERT, UPDATE, and DELETE statements are not supported."})
                     formalized_content.append("For security reasons, INSERT, UPDATE, and DELETE statements are not supported.")
                     continue
-                cursor.execute(single_sql)
-                if cursor.rowcount == 0:
-                    sql_res.append({"content": "No record in the database!"})
-                    break
-                if self._param.db_type == "mssql":
-                    single_res = pd.DataFrame.from_records(cursor.fetchmany(self._param.max_records), columns=[desc[0] for desc in cursor.description])
-                else:
-                    single_res = pd.DataFrame(list(cursor.fetchmany(self._param.max_records)))
-                    single_res.columns = [i[0] for i in cursor.description]
+                try:
+                    cursor.execute(single_sql)
+                    if cursor.rowcount == 0:
+                        sql_res.append({"content": "No record in the database!"})
+                        continue
+                    if self._param.db_type == "mssql":
+                        single_res = pd.DataFrame.from_records(cursor.fetchmany(self._param.max_records), columns=[desc[0] for desc in cursor.description])
+                    else:
+                        single_res = pd.DataFrame(list(cursor.fetchmany(self._param.max_records)))
+                        single_res.columns = [i[0] for i in cursor.description]
 
-                for col in single_res.columns:
-                    if pd.api.types.is_datetime64_any_dtype(single_res[col]):
-                        single_res[col] = single_res[col].dt.strftime("%Y-%m-%d")
+                    for col in single_res.columns:
+                        if pd.api.types.is_datetime64_any_dtype(single_res[col]):
+                            single_res[col] = single_res[col].dt.strftime("%Y-%m-%d")
 
-                single_res = single_res.where(pd.notnull(single_res), None)
+                    single_res = single_res.where(pd.notnull(single_res), None)
 
-                sql_res.append(convert_decimals(single_res.to_dict(orient="records")))
-                formalized_content.append(single_res.to_markdown(index=False, floatfmt=".6f"))
+                    sql_res.append(convert_decimals(single_res.to_dict(orient="records")))
+                    formalized_content.append(single_res.to_markdown(index=False, floatfmt=".6f"))
+                except Exception as error:
+                    # PostgreSQL rejects later statements until the failed transaction
+                    # is rolled back. Never suppress a failed recovery/connection loss.
+                    db.rollback()
+                    message = f"SQL Execution Failed: {single_sql}\n{error}"
+                    sql_res.append({"content": message})
+                    formalized_content.append(message)
         finally:
             with contextlib.suppress(Exception):
                 cursor.close()
