@@ -288,6 +288,7 @@ class LLM(ComponentBase):
         return pts, sys_prompt
 
     async def _generate_async(self, msg: list[dict[str, Any]], **kwargs: Any) -> str:
+        kwargs = {**self._get_chat_template_kwargs(), **kwargs}
         if not self.imgs:
             return await self.chat_mdl.async_chat(msg[0]["content"], msg[1:], self._param.gen_conf(), **kwargs)
         return await self.chat_mdl.async_chat(msg[0]["content"], msg[1:], self._param.gen_conf(), images=self.imgs, **kwargs)
@@ -298,6 +299,7 @@ class LLM(ComponentBase):
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         stream_kwargs = {"images": self.imgs} if self.imgs else {}
+        stream_kwargs.update(self._get_chat_template_kwargs())
         stream_kwargs.update(kwargs)
         async for value in self._reasoning_safe_stream(msg, stream_kwargs):
             yield value

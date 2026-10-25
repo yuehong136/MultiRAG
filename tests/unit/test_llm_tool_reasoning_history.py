@@ -233,3 +233,41 @@ async def test_stream_tool_loop_rejects_nonstream_object_without_index(monkeypat
     assert any(isinstance(part, str) and "**ERROR**" in part and "index" in part for part in parts)
     assert session.calls == []
     assert complete.call_count == 1
+
+
+@pytest.mark.parametrize("backend", ["base", "litellm"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_template_options_survive_tool_round_limit_fallback(monkeypatch: pytest.MonkeyPatch, backend: str, stream: bool) -> None:
+    if backend == "litellm":
+        model = chat.LiteLLMBase("fixture-key", "test-model", provider="OpenAI", max_retries=0, max_rounds=0)
+    else:
+        model = chat.Base("fixture-key", "test-model", "http://fixture.invalid/v1", max_retries=0, max_rounds=0)
+    session = _Session()
+    model.bind_tools(session, [{"type": "function", "function": {"name": "first"}}])
+    requests: list[dict[str, Any]] = []
+    responses = iter(
+        [
+            _tool_round("", [_call("first", "call-1")], stream=stream, alias=False),
+            _Stream([_chunk(content="answer")]) if stream else _response(None, ""),
+        ]
+    )
+
+    async def complete(**kwargs: Any) -> Any:
+        requests.append(kwargs)
+        return next(responses)
+
+    monkeypatch.setattr(chat, "total_token_count_from_response", lambda _: 0)
+    monkeypatch.setattr(chat, "num_tokens_from_string", lambda _: 0)
+    if backend == "litellm":
+        monkeypatch.setattr(chat.litellm, "acompletion", complete)
+    else:
+        model.async_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)))
+    options = {"enable_thinking": False, "limit": 0}
+    if stream:
+        parts = [part async for part in model.async_chat_streamly_with_tools("", [{"role": "user", "content": "query"}], {}, chat_template_kwargs=options)]
+        assert "answer" in "".join(part for part in parts if isinstance(part, str))
+    else:
+        answer, _ = await model.async_chat_with_tools("", [{"role": "user", "content": "query"}], {}, chat_template_kwargs=options)
+        assert "answer" in answer
+    assert len(requests) == 2 and session.calls == [("first", {"query": "hello"})]
+    assert all(request["extra_body"]["chat_template_kwargs"] == options for request in requests)

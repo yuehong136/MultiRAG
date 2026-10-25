@@ -341,7 +341,7 @@ class Base(ToolHistoryMixin, ABC):
         self.toolcall_session, self.tools = binding
         self.is_tools = bool(self.tools)
 
-    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
+    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, *, chat_template_kwargs: dict[str, Any] | None = None) -> tuple[str, int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         if system and history and history[0].get("role") != "system":
@@ -355,7 +355,9 @@ class Base(ToolHistoryMixin, ABC):
             try:
                 for _ in range(self.max_rounds + 1):
                     logging.info(f"{self.tools=}")
-                    response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, tools=self.tools, tool_choice="auto", **gen_conf)
+                    response = await self.async_client.chat.completions.create(
+                        model=self.model_name, messages=history, tools=self.tools, tool_choice="auto", **_chat_template_request_options({**gen_conf, "chat_template_kwargs": chat_template_kwargs})
+                    )
                     tk_count += total_token_count_from_response(response)
                     if not response.choices or not response.choices[0].message:
                         raise Exception(f"500 response structure error. Response: {response}")
@@ -401,7 +403,7 @@ class Base(ToolHistoryMixin, ABC):
 
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
-                response, token_count = await self._async_chat(history, gen_conf)
+                response, token_count = await self._async_chat(history, gen_conf, chat_template_kwargs=chat_template_kwargs)
                 ans += response
                 tk_count += token_count
                 return ans, tk_count
@@ -412,7 +414,9 @@ class Base(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> AsyncIterator[str | int]:
+    async def async_chat_streamly_with_tools(
+        self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, *, chat_template_kwargs: dict[str, Any] | None = None
+    ) -> AsyncIterator[str | int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
@@ -430,7 +434,14 @@ class Base(ToolHistoryMixin, ABC):
                     reasoning_content = ""
                     logging.info(f"{tools=}")
 
-                    response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **gen_conf)
+                    response = await self.async_client.chat.completions.create(
+                        model=self.model_name,
+                        messages=history,
+                        stream=True,
+                        tools=tools,
+                        tool_choice="auto",
+                        **_chat_template_request_options({**gen_conf, "chat_template_kwargs": chat_template_kwargs}),
+                    )
 
                     final_tool_calls = {}
                     answer = ""
@@ -519,7 +530,9 @@ class Base(ToolHistoryMixin, ABC):
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
 
-                response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **gen_conf)
+                response = await self.async_client.chat.completions.create(
+                    model=self.model_name, messages=history, stream=True, tools=tools, tool_choice="auto", **_chat_template_request_options({**gen_conf, "chat_template_kwargs": chat_template_kwargs})
+                )
 
                 async with response:
                     async for resp in response:
@@ -1481,7 +1494,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         self.toolcall_session, self.tools = binding
         self.is_tools = bool(self.tools)
 
-    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> tuple[str, int]:
+    async def async_chat_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, *, chat_template_kwargs: dict[str, Any] | None = None) -> tuple[str, int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         if system and history and history[0].get("role") != "system":
@@ -1496,7 +1509,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                 for _ in range(self.max_rounds + 1):
                     logging.info(f"{self.tools=}")
 
-                    completion_args = self._construct_completion_args(history=history, stream=False, tools=True, **gen_conf)
+                    completion_args = self._construct_completion_args(history=history, stream=False, tools=True, **{**gen_conf, "chat_template_kwargs": chat_template_kwargs})
                     async with self._completion(completion_args) as response:
                         tk_count += total_token_count_from_response(response)
 
@@ -1544,7 +1557,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
 
-                response, token_count = await self.async_chat("", history, gen_conf)
+                response, token_count = await self.async_chat("", history, gen_conf, chat_template_kwargs=chat_template_kwargs)
                 ans += response
                 tk_count += token_count
                 return ans, tk_count
@@ -1556,7 +1569,9 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
 
         raise AssertionError("Shouldn't be here.")
 
-    async def async_chat_streamly_with_tools(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None) -> AsyncIterator[str | int]:
+    async def async_chat_streamly_with_tools(
+        self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, *, chat_template_kwargs: dict[str, Any] | None = None
+    ) -> AsyncIterator[str | int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
         gen_conf = self._clean_conf(gen_conf)
         tools = self.tools
@@ -1574,7 +1589,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                     reasoning_content = ""
                     logging.info(f"{tools=}")
 
-                    completion_args = self._construct_completion_args(history=history, stream=True, tools=True, **gen_conf)
+                    completion_args = self._construct_completion_args(history=history, stream=True, tools=True, **{**gen_conf, "chat_template_kwargs": chat_template_kwargs})
                     async with self._completion(completion_args) as response:
                         final_tool_calls = {}
                         answer = ""
@@ -1662,7 +1677,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                 logging.warning(f"Exceed max rounds: {self.max_rounds}")
                 history.append({"role": "user", "content": f"Exceed max rounds: {self.max_rounds}"})
 
-                completion_args = self._construct_completion_args(history=history, stream=True, tools=True, **gen_conf)
+                completion_args = self._construct_completion_args(history=history, stream=True, tools=True, **{**gen_conf, "chat_template_kwargs": chat_template_kwargs})
                 response = await litellm.acompletion(
                     **completion_args,
                     drop_params=True,

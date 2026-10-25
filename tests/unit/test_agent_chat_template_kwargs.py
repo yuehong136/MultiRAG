@@ -109,10 +109,11 @@ def bundle(model: Any) -> LLMBundle:
     return value
 
 
+@pytest.mark.parametrize("tools", [False, True])
 @pytest.mark.parametrize("backend", ["base", "litellm"])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("value", [{}, {"enable_thinking": False, "limit": 0}])
-async def test_real_facade_encodes_template_options_at_sdk_boundary(monkeypatch: pytest.MonkeyPatch, backend: str, stream: bool, value: dict[str, Any]) -> None:
+async def test_real_facade_encodes_template_options_at_sdk_boundary(monkeypatch: pytest.MonkeyPatch, backend: str, stream: bool, tools: bool, value: dict[str, Any]) -> None:
     calls: list[dict[str, Any]] = []
 
     class Response:
@@ -145,6 +146,9 @@ async def test_real_facade_encodes_template_options_at_sdk_boundary(monkeypatch:
     monkeypatch.setattr("core.llm.chat.total_token_count_from_response", lambda _: 0)
     monkeypatch.setattr("core.llm.chat.num_tokens_from_string", lambda _: 0)
     facade = bundle(model)
+    model.max_rounds = 1
+    model.tools = [{"type": "function", "function": {"name": "unused"}}]
+    facade.is_tools = model.is_tools = tools
     if stream:
         assert [part async for part in facade.async_chat_streamly_delta("system", [{"role": "user", "content": "query"}], {}, chat_template_kwargs=value)] == ["answer"]
     else:
@@ -152,3 +156,20 @@ async def test_real_facade_encodes_template_options_at_sdk_boundary(monkeypatch:
     assert len(calls) == 1
     assert calls[0]["extra_body"]["chat_template_kwargs"] == value
     assert "chat_template_kwargs" not in calls[0]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_inherited_agent_generation_reads_canvas_options_without_explicit_kwargs(stream: bool) -> None:
+    model = Model()
+    component = object.__new__(llm.LLM)
+    component._id = "inherited-agent"
+    component._canvas = SimpleNamespace(globals={"sys.chat_template_kwargs": {"enable_thinking": False, "limit": 0}})
+    component._param = SimpleNamespace(gen_conf=lambda: {})
+    component.chat_mdl, component.imgs = model, []
+    component.check_if_canceled = lambda operation: False
+    messages = [{"role": "system", "content": "system"}, {"role": "user", "content": "query"}]
+    if stream:
+        assert [part async for part in component._generate_streamly(messages)] == ["answer"]
+    else:
+        assert await component._generate_async(messages) == '{"answer": 0}'
+    assert model.calls == [{"chat_template_kwargs": {"enable_thinking": False, "limit": 0}}]
