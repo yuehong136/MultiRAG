@@ -1,5 +1,6 @@
 import logging
 import sys
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -74,7 +75,7 @@ executor = ThreadPoolExecutor(max_workers=20)  # 可以根据服务器性能调�
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     FastAPI 应用生命周期管理
     在应用启动时执行初始化，在关闭时执行清理
@@ -136,7 +137,12 @@ async def lifespan(app: FastAPI):
     await start_skill_worker()
     await start_core_worker()
 
-    yield  # 这里暂停执行，等待应用程序运行
+    from api.apps.services.agent_background_tasks import stop_agent_tasks
+
+    try:
+        yield  # 这里暂停执行，等待应用程序运行
+    finally:
+        await stop_agent_tasks()
 
     await stop_core_worker()
     await stop_skill_worker()

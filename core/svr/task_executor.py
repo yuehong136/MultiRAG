@@ -20,7 +20,7 @@ import threading
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
-from multiprocessing.context import TimeoutError
+from multiprocessing.context import TimeoutError as ProcessTimeoutError
 from timeit import default_timer as timer
 from typing import Any
 
@@ -462,8 +462,16 @@ async def collect(db: Session) -> tuple[Any, Any]:
     return redis_msg, task
 
 
-async def get_storage_binary(bucket, name):
-    return await thread_pool_exec(settings.STORAGE_IMPL.get, bucket, name)
+async def get_storage_binary(bucket: str, name: str) -> bytes:
+    try:
+        binary = await thread_pool_exec(settings.STORAGE_IMPL.get_bytes, bucket, name)
+    except (TimeoutError, ProcessTimeoutError):
+        raise TimeoutError("Object storage read timed out.") from None
+    except Exception:
+        raise RuntimeError("Object storage read failed.") from None
+    if binary is None:
+        raise FileNotFoundError("Source file not found: storage returned no content.")
+    return binary
 
 
 def _persist_pdf_outline_metadata(db: Session, doc_id: str, outline: list[dict[str, Any]]) -> bool:
@@ -521,8 +529,14 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         st = timer()
         bucket, name = File2DocumentService.get_storage_address(db, doc_id=task["doc_id"])
         binary = await get_storage_binary(bucket, name)
+        if binary is None:
+            raise FileNotFoundError("Source file not found: storage returned no content.")
         logging.info("From minio({}) {}/{}".format(timer() - st, task["location"], task["name"]))
-    except TimeoutError:
+    except FileNotFoundError:
+        progress_callback(-1, "Source file not found: storage returned no content. Please upload the file again.")
+        logging.warning("Source file missing for document %s", task["doc_id"])
+        raise
+    except (TimeoutError, ProcessTimeoutError):
         progress_callback(-1, "Internal server error: Fetch file from minio timeout. Could you try it again.")
         logging.exception("Minio {}/{} got timeout: Fetch file from minio timeout.".format(task["location"], task["name"]))
         raise
@@ -1958,9 +1972,6 @@ async def run_analyze_v2_task(
                 # base64 数据已在前面删除
             else:
                 file_content = await get_storage_binary("multirag-temp", temp_file_path)
-                if not file_content:
-                    callback(prog=-1, msg="无法读取临时文件")
-                    return
                 logging.info(f"Task {task_id}: loaded file from MinIO ({len(file_content)} bytes)")
 
             # 解析文件（参考 PipelineAnalysisService._parse_uploaded_file）
@@ -2786,6 +2797,20 @@ async def do_handle_task(db: Session, task: Any) -> None:
         progress_callback(-1, msg="Task has been canceled.")
         return None
 
+    # Read and parse ordinary sources before probing an embedding provider or
+    # creating an index. Missing content must have no model/index side effects.
+    chunks: list[dict[str, Any]] = []
+    if task_type not in {"raptor", "graphrag", "mindmap"} and not task_type.startswith("dataflow"):
+        task["llm_id"] = doc_task_llm_id
+        start_ts = timer()
+        chunks = await build_chunks(task, progress_callback, db)
+        logging.info(f"Build document {task_document_name}: {timer() - start_ts:.2f}s")
+        if not chunks:
+            if task["parser_id"].lower() == "table":
+                await finish_status_write(asyncio.to_thread(write_task_table_metadata, db.get_bind(), task_id, task_doc_id, task_dataset_id, task.get("table_metadata", {})))
+            progress_callback(1.0, msg=f"No chunk built from {task_document_name}")
+            return
+
     try:
         # bind embedding model
         if task_embedding_id:
@@ -2906,16 +2931,6 @@ async def do_handle_task(db: Session, task: Any) -> None:
         pass
         return
     else:
-        # Standard chunking methods
-        task["llm_id"] = doc_task_llm_id
-        start_ts = timer()
-        chunks = await build_chunks(task, progress_callback, db)
-        logging.info(f"Build document {task_document_name}: {timer() - start_ts:.2f}s")
-        if not chunks:
-            if task["parser_id"].lower() == "table":
-                await finish_status_write(asyncio.to_thread(write_task_table_metadata, db.get_bind(), task_id, task_doc_id, task_dataset_id, task.get("table_metadata", {})))
-            progress_callback(1.0, msg=f"No chunk built from {task_document_name}")
-            return
         progress_callback(msg=f"Generate {len(chunks)} chunks")
         start_ts = timer()
         try:

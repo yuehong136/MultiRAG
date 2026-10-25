@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -21,8 +22,8 @@ import random
 import re
 import time
 from abc import ABC
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from contextlib import asynccontextmanager, closing
 from copy import deepcopy
 from enum import StrEnum
 from typing import Any
@@ -37,6 +38,7 @@ from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, SupportedLiteLLMProvider
+from core.llm.async_stream import iterate_owned_stream
 from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request_options
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.llm.tool_decorator import resolve_tool_binding
@@ -736,34 +738,52 @@ class LocalAIChat(Base):
 
 
 class LocalLLM(Base):
-    def __init__(self, key, model_name, base_url=None, **kwargs):
+    def __init__(self, key: str, model_name: str, base_url: str | None = None, **kwargs: Any) -> None:
+        # Jina clients belong to one invocation/loop. Retain the independent
+        # Base OpenAI/tool facades without sharing Jina across event loops.
         super().__init__(key, model_name, base_url=base_url, **kwargs)
-        from jina import Client
 
-        self.client = Client(port=12345, protocol="grpc", asyncio=True)
-
-    def _prepare_prompt(self, system, history, gen_conf):
+    def _prepare_prompt(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> Any:
         from core.svr.jina_server import Prompt
 
         if system and history and history[0].get("role") != "system":
             history.insert(0, {"role": "system", "content": system})
         return Prompt(message=history, gen_conf=gen_conf)
 
-    def _stream_response(self, endpoint, prompt):
+    def _create_client(self) -> Any:
+        from jina import Client
+
+        return Client(port=12345, protocol="grpc", asyncio=True)
+
+    def _request_stream(self, client: Any, endpoint: str, prompt: Any) -> Any:
         from core.svr.jina_server import Generation
 
+        return client.stream_doc(on=endpoint, inputs=prompt, return_type=Generation)
+
+    async def _responses(self, endpoint: str, prompt: Any) -> AsyncGenerator[str, None]:
+        client = self._create_client()
+        try:
+            res = self._request_stream(client, endpoint, prompt)
+            try:
+                async for response in res:
+                    yield response.text
+            finally:
+                await res.aclose()
+        finally:
+            close = getattr(client, "aclose", None) or getattr(client, "close", None)
+            if close is not None:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+
+    def _stream_response(self, endpoint: str, prompt: Any) -> Iterator[str | int]:
         answer = ""
         try:
-            res = self.client.stream_doc(on=endpoint, inputs=prompt, return_type=Generation)
-            loop = asyncio.get_event_loop()
-            try:
-                while True:
-                    answer = loop.run_until_complete(res.__anext__()).text
+            with closing(iterate_owned_stream(lambda: self._responses(endpoint, prompt))) as responses:
+                for answer in responses:
                     yield answer
-            except StopAsyncIteration:
-                pass
-        except Exception as e:
-            yield answer + "\n**ERROR**: " + str(e)
+        except Exception as error:
+            yield answer + "\n**ERROR**: " + str(error)
         yield num_tokens_from_string(answer)
 
     def chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
@@ -771,10 +791,15 @@ class LocalLLM(Base):
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
         prompt = self._prepare_prompt(system, history, gen_conf)
-        chat_gen = self._stream_response("/chat", prompt)
-        ans = next(chat_gen)
-        total_tokens = next(chat_gen)
-        return ans, total_tokens
+        answer = ""
+        total_tokens = 0
+        with closing(self._stream_response("/chat", prompt)) as responses:
+            for response in responses:
+                if isinstance(response, int):
+                    total_tokens = response
+                else:
+                    answer = response
+        return answer, total_tokens
 
     def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
         gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}

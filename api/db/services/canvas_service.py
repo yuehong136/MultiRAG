@@ -124,6 +124,7 @@ class UserCanvasService(CommonService):
                 cls.model.create_date,
                 cls.model.update_date,
                 cls.model.canvas_category,
+                cls.model.canvas_type,
                 cls.model.tags,
                 User.nickname,
                 User.avatar.label("tenant_avatar"),
@@ -182,6 +183,7 @@ class UserCanvasService(CommonService):
             User.avatar.label("tenant_avatar"),
             cls.model.update_time,
             cls.model.canvas_category,
+            cls.model.canvas_type,
             cls.model.tags,
         ]
 

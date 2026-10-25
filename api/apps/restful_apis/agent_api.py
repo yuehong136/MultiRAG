@@ -23,16 +23,17 @@ from anyio import CancelScope
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.apps import manager
+from api.apps.services.agent_background_tasks import start_agent_task
 from api.apps.services.agent_db_probe import DatabaseProbePolicyError, probe_database
 from api.apps.services.agent_file_auth import require_agent_file_user, require_agent_upload_owner
 from api.apps.services.canvas_replica_service import CanvasReplicaService
 from api.db import CanvasCategory
-from api.db.db_models import API4Conversation, Task, User, UserCanvas, UserCanvasVersion, get_async_db, get_db
+from api.db.db_models import API4Conversation, Task, User, UserCanvas, UserCanvasVersion, async_db_connection, get_async_db, get_db
 from api.db.services.agent_execution_service import execution_context, save_agent_session, save_agent_session_turn
 from api.db.services.canvas_service import (
     API4ConversationService,
@@ -107,6 +108,7 @@ class SaveCanvasRequest(BaseModel):
     description: str | None = Field(None, description="描述")
     avatar: str | None = Field(None, description="头像URL")
     permission: str | None = Field(None, description="权限设置")
+    canvas_type: str | None = Field("", max_length=32, description="Canvas label; independent of execution category")
     canvas_category: str | None = Field(None, description="Canvas类别")
     release: bool | str = Field(default="", description="是否发布")
 
@@ -117,6 +119,7 @@ class UpdateAgentRequest(BaseModel):
     description: str | None = None
     avatar: str | None = None
     permission: str | None = None
+    canvas_type: str | None = Field(None, max_length=32, description="Canvas label; empty clears, omitted preserves")
     canvas_category: str | None = None
     release: bool | None = None
 
@@ -352,6 +355,7 @@ def save(request_body: SaveCanvasRequest, db: Session = Depends(get_db), user=De
     if req.pop("id", None) is not None:
         return get_data_error_result(retmsg="Use PUT /agents/{agent_id} to update an agent.")
     req["release"] = bool(req.get("release", ""))
+    req["canvas_type"] = req.get("canvas_type") or ""
 
     # 处理DSL格式
     try:
@@ -2557,11 +2561,24 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
 
         body, content_type = parse_body(body_tpl)
 
-        async def background_run():
+        owner_id = str(cvs.user_id)
+
+        async def background_run() -> None:
             try:
-                async for ans in canvas.run(query="", user_id=cvs.user_id, webhook_payload=clean_request):
-                    if is_test:
-                        append_webhook_trace(agent_id, start_ts, ans)
+                async with aclosing(canvas.run(query="", user_id=owner_id, webhook_payload=clean_request)) as events:
+                    async for ans in events:
+                        if is_test:
+                            append_webhook_trace(agent_id, start_ts, ans)
+
+                # The request Session and ORM object may already be closed. Only
+                # persist runtime DSL, using a task-owned session and owner guard.
+                async with async_db_connection() as task_db:
+                    await task_db.execute(
+                        update(UserCanvas)
+                        .where(UserCanvas.id == agent_id, UserCanvas.user_id == owner_id)
+                        .values(dsl=json.loads(str(canvas)), update_time=UserCanvasService.current_timestamp(), update_date=UserCanvasService.current_datetime())
+                    )
+                    await task_db.commit()
 
                 if is_test:
                     append_webhook_trace(
@@ -2573,10 +2590,6 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
                             "success": True,
                         },
                     )
-
-                cvs.dsl = json.loads(str(canvas))
-                await thread_pool_exec(UserCanvasService.update_by_id, db, agent_id, cvs.to_dict())
-
             except Exception as e:
                 logging.exception("Webhook background run failed")
                 if is_test:
@@ -2602,7 +2615,7 @@ async def webhook(agent_id: str, request: Request, db: Session = Depends(get_db)
                     except Exception:
                         logging.exception("Failed to append webhook trace")
 
-        asyncio.create_task(background_run())
+        start_agent_task(background_run())
 
         if content_type == "application/json":
             return JSONResponse(content=body, status_code=status)

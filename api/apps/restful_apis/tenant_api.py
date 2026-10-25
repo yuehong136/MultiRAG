@@ -15,6 +15,8 @@ Routes are mounted under ``/api/v1`` by ``api.apps.register_page``:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends
@@ -84,9 +86,21 @@ async def require_role_manager(
     return role
 
 
+async def _send_invite_email(tenant_id: str, to_email: str, invite_url: str, inviter: str) -> None:
+    try:
+        await send_invite_email(to_email=to_email, invite_url=invite_url, tenant_id=tenant_id, inviter=inviter)
+    except asyncio.CancelledError:
+        logging.warning("Invite email cancelled: tenant_id=%s", tenant_id)
+        raise
+    except Exception:
+        # The invitation is committed before this best-effort notification. A
+        # failed message must not abort the rest of a batch or leak email data.
+        logging.error("Invite email failed: tenant_id=%s", tenant_id)
+
+
 def _schedule_invite_email(background_tasks: BackgroundTasks, tenant_id: str, to_email: str, inviter: str) -> None:
     background_tasks.add_task(
-        send_invite_email,
+        _send_invite_email,
         to_email=to_email,
         invite_url=settings.MAIL_FRONTEND_URL,
         tenant_id=tenant_id,
