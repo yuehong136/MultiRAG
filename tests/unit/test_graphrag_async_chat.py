@@ -88,3 +88,20 @@ async def test_process_single_content_passes_task_id_to_gleaning_calls(monkeypat
 
     assert seen_task_ids == ["task-123", "task-123", "task-123"]
     assert len(out_results) == 1
+
+
+@pytest.mark.parametrize("kind", ["general", "light"])
+async def test_extraction_progress_numbers_chunks_from_one(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    from typing import Any
+    from unittest.mock import AsyncMock
+
+    from core.graphrag.light.graph_extractor import GraphExtractor as LightExtractor
+
+    cls = GraphExtractor if kind == "general" else LightExtractor
+    extractor = cls(CountingLLM(["empty result"]), entity_types=["person"], max_gleanings=1)
+    monkeypatch.setattr(extractor, "_async_chat", AsyncMock(return_value="empty result"))
+    messages: list[str] = []
+    extractor.callback = lambda *args, **kwargs: messages.append(kwargs.get("msg", ""))
+    results: list[Any] = []
+    await extractor._process_single_content(("doc", "content"), 0, 1, results)
+    assert len(results) == 1 and "chunk 1 1/1 done" in messages[-1]

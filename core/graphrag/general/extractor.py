@@ -20,6 +20,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from copy import deepcopy
+from typing import Any
 
 import networkx as nx
 
@@ -92,6 +93,8 @@ class Extractor:
                 if not self._is_truncated_cache(response):
                     await thread_pool_exec(set_llm_cache, self._llm.llm_name, system, response, history, gen_conf)
                 break
+            except TaskCanceledException:
+                raise
             except TimeoutError:
                 logging.warning("_async_chat timed out after 20 minutes")
                 raise  # timeout is not a transient error; do not retry
@@ -119,52 +122,30 @@ class Extractor:
                 maybe_edges[(if_relation["src_id"], if_relation["tgt_id"])].append(if_relation)
         return dict(maybe_nodes), dict(maybe_edges)
 
-    async def __call__(self, doc_id: str, chunks: list[str], callback: Callable | None = None, task_id: str = ""):
+    async def __call__(self, doc_id: str, chunks: list[str], callback: Callable[..., Any] | None = None, task_id: str = "") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         self.callback = callback
         start_ts = asyncio.get_running_loop().time()
 
-        async def extract_all(doc_id, chunks, max_concurrency=MAX_CONCURRENT_PROCESS_AND_EXTRACT_CHUNK, task_id=""):
-            out_results = []
-            error_count = 0
-            max_errors = int(os.environ.get("GRAPHRAG_MAX_ERRORS", 3))
-
+        async def extract_all(doc_id: str, chunks: list[str], max_concurrency: int = MAX_CONCURRENT_PROCESS_AND_EXTRACT_CHUNK, task_id: str = "") -> list[Any]:
+            out_results: list[Any] = []
             limiter = asyncio.Semaphore(max_concurrency)
 
-            async def worker(chunk_key_dp: tuple[str, str], idx: int, total: int, task_id=""):
-                nonlocal error_count
+            async def worker(chunk_key_dp: tuple[str, str], idx: int, total: int, task_id: str = "") -> None:
                 async with limiter:
                     if task_id and has_canceled(task_id):
                         raise TaskCanceledException(f"Task {task_id} was cancelled during entity extraction")
-
-                    try:
-                        await self._process_single_content(chunk_key_dp, idx, total, out_results, task_id)
-                    except Exception as e:
-                        error_count += 1
-                        error_msg = f"Error processing chunk {idx + 1}/{total}: {e!s}"
-                        logging.warning(error_msg)
-                        if self.callback:
-                            self.callback(msg=error_msg)
-
-                        if error_count > max_errors:
-                            raise Exception(f"Maximum error count ({max_errors}) reached. Last errors: {e!s}")
+                    # A partial extraction cannot be committed as a full checkpoint.
+                    # Let the outer document retry own failures and cancellation.
+                    await self._process_single_content(chunk_key_dp, idx, total, out_results, task_id)
 
             tasks = [asyncio.create_task(worker((doc_id, ck), i, len(chunks), task_id)) for i, ck in enumerate(chunks)]
-
             try:
                 await asyncio.gather(*tasks, return_exceptions=False)
-            except Exception as e:
-                logging.error(f"Error in worker: {e!s}")
-                for t in tasks:
-                    t.cancel()
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
-
-            if error_count > 0:
-                warning_msg = f"Completed with {error_count} errors (out of {len(chunks)} chunks processed)"
-                logging.warning(warning_msg)
-                if self.callback:
-                    self.callback(msg=warning_msg)
-
             return out_results
 
         if task_id and has_canceled(task_id):
@@ -196,7 +177,7 @@ class Extractor:
         tasks = [asyncio.create_task(self._merge_nodes(en_nm, ents, all_entities_data, task_id)) for en_nm, ents in maybe_nodes.items()]
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
+        except BaseException as e:
             logging.error(f"Error merging nodes: {e}")
             for t in tasks:
                 t.cancel()
@@ -222,7 +203,7 @@ class Extractor:
             tasks.append(asyncio.create_task(self._merge_edges(src, tgt, rels, all_relationships_data, task_id)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
+        except BaseException as e:
             logging.error(f"Error during relationships merging: {e}")
             for t in tasks:
                 t.cancel()

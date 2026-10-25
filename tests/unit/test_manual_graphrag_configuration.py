@@ -14,7 +14,8 @@ from core.svr import task_executor
     "graph_config", [None, {"use_graphrag": False, "method": "general", "entity_types": ["product"], "resolution": True, "batch_chunk_token_size": 1024}, {"use_graphrag": True, "method": "general"}]
 )
 @pytest.mark.parametrize("save_ok", [True, False])
-async def test_manual_graph_initializes_config_before_generation(db: Session, monkeypatch: pytest.MonkeyPatch, graph_config: dict[str, Any] | None, save_ok: bool) -> None:
+@pytest.mark.parametrize("language", [None, "missing", "", "English"])
+async def test_manual_graph_initializes_config_before_generation(db: Session, monkeypatch: pytest.MonkeyPatch, graph_config: dict[str, Any] | None, save_ok: bool, language: str | None) -> None:
     original = {"llm_id": "chat", "raptor": {"use_raptor": True}}
     if graph_config is not None:
         original["graphrag"] = graph_config
@@ -50,7 +51,13 @@ async def test_manual_graph_initializes_config_before_generation(db: Session, mo
         "language": "Chinese",
         "parser_config": {},
     }
+    if language == "missing":
+        task.pop("language")
+    else:
+        task["language"] = language
     await task_executor.do_handle_task(db, task)
+    if graph.await_count:
+        assert graph.call_args.kwargs["language"] == ("Chinese" if language in (None, "missing") else language)
     if graph_config and graph_config.get("use_graphrag"):
         assert saved == []
         graph.assert_awaited_once()

@@ -22,6 +22,7 @@ from api.identity.principal import AuthenticationSource, Principal
 from common import settings
 from common.connection_utils import timeout
 from common.constants import RetCode, StatusEnum
+from common.graphrag_config import GraphRAGExecutionConfig
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.misc_utils import thread_pool_exec
 
@@ -615,6 +616,7 @@ def get_parser_config(chunk_method: str, parser_config: dict[str, Any] | None) -
                 "random_seed": 0,
             },
             "graphrag": {
+                **GraphRAGExecutionConfig().model_dump(),
                 "use_graphrag": False,
                 "entity_types": [
                     "organization",
@@ -624,7 +626,6 @@ def get_parser_config(chunk_method: str, parser_config: dict[str, Any] | None) -
                     "category",
                 ],
                 "method": "light",
-                "batch_chunk_token_size": 4096,
             },
             "parent_child": {
                 "use_parent_child": False,

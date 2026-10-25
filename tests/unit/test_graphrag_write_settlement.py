@@ -54,3 +54,57 @@ async def test_bounded_writes_drain_running_threads_and_stop_dispatch(monkeypatc
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("kind", ["node", "edge"])
+async def test_phase_timeout_drains_embedding_before_retry_and_releases_limit(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    from common.asyncio_utils import LoopLocalSemaphore
+    from core.graphrag.general import index
+
+    started, release, finished = (threading.Event() for _ in range(3))
+    calls, active, peak = 0, 0, 0
+
+    class Embedding:
+        llm_name = "settlement-test"
+
+        def encode(self, texts: list[str]) -> tuple[list[list[float]], int]:
+            nonlocal calls, active, peak
+            calls += 1
+            active += 1
+            peak = max(peak, active)
+            try:
+                if calls == 1:
+                    started.set()
+                    assert release.wait(5)
+                    finished.set()
+                return [[0.25, 0.75]], 0
+            finally:
+                active -= 1
+
+    limiter = LoopLocalSemaphore(1)
+    monkeypatch.setattr(utils, "chat_limiter", limiter)
+    monkeypatch.setattr(utils, "get_embed_cache", lambda *args: None)
+    monkeypatch.setattr(utils, "set_embed_cache", lambda *args: None)
+    output: list[dict[str, Any]] = []
+    meta = {"description": "description", "source_id": ["doc"], "entity_type": "person", "weight": 1, "keywords": ["related"]}
+
+    async def operation() -> None:
+        if kind == "node":
+            await utils.graph_node_to_chunk("kb", Embedding(), "A", meta, output)
+        else:
+            await utils.graph_edge_to_chunk("kb", Embedding(), "A", "B", meta, output)
+
+    running = asyncio.create_task(index._run_with_retry("embedding", operation, attempts=2, timeout_seconds=0.05, backoff_seconds=0, backoff_max_seconds=0))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        await asyncio.sleep(0.08)
+        assert calls == 1 and limiter.locked() and not running.done()
+        release.set()
+        await asyncio.wait_for(running, 2)
+        assert finished.is_set() and calls == 2 and peak == 1 and not limiter.locked()
+        assert len(output) == 1
+    finally:
+        release.set()
+        if not running.done():
+            running.cancel()
+        await asyncio.gather(running, return_exceptions=True)

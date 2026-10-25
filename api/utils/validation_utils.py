@@ -39,6 +39,7 @@ from pydantic_core import PydanticCustomError
 from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from common.constants import RetCode
+from common.graphrag_config import GraphRAGExecutionConfig
 from common.metadata_config import MetadataConfig, MetadataField
 
 
@@ -405,13 +406,12 @@ def validate_dataset_raptor_scope(config: Any) -> None:
         RaptorConfig.model_validate({key: value for key, value in raptor.items() if key in RaptorConfig.model_fields})
 
 
-class GraphragConfig(Base):
+class GraphragConfig(GraphRAGExecutionConfig, Base):
     use_graphrag: Annotated[bool, Field(default=False)]
     entity_types: Annotated[list[str], Field(default_factory=lambda: ["organization", "person", "geo", "event", "category"])]
     method: Annotated[Literal["light", "general", "ner"], Field(default="light")]
     community: Annotated[bool, Field(default=False)]
     resolution: Annotated[bool, Field(default=False)]
-    batch_chunk_token_size: Annotated[int, Field(default=4096, ge=512, le=8196)]
 
 
 class ParentChildConfig(Base):

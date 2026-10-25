@@ -27,8 +27,9 @@ from networkx.readwrite import json_graph
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
+from common.asyncio_utils import LoopLocalSemaphore
 from common.connection_utils import timeout
-from common.misc_utils import get_uuid, thread_pool_exec
+from common.misc_utils import get_uuid
 from core.graphrag.persistence import checked_insert, delete_rows, graph_rows, settled_io, validate_chunks
 from core.graphrag.phase_markers import clear_phase_markers
 from core.nlp import rag_tokenizer, search
@@ -38,7 +39,7 @@ GRAPH_FIELD_SEP = "<SEP>"
 
 ErrorHandlerFn = Callable[[BaseException | None, str | None, dict | None], None]
 
-chat_limiter = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
+chat_limiter = LoopLocalSemaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
 
 
 _INSERT_BULK_SIZE = max(1, int(os.environ.get("GRAPHRAG_INSERT_BULK_SIZE", 64)))
@@ -385,7 +386,7 @@ async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: di
     if ebd is None:
         async with chat_limiter:
             timeout = 3 if enable_timeout_assertion else 30000000
-            ebd, _ = await asyncio.wait_for(thread_pool_exec(embd_mdl.encode, [ent_name]), timeout=timeout)
+            ebd, _ = await asyncio.wait_for(settled_io(embd_mdl.encode, [ent_name]), timeout=timeout)
         ebd = ebd[0]
         set_embed_cache(embd_mdl.llm_name, ent_name, ebd)
     assert ebd is not None
@@ -442,7 +443,7 @@ async def graph_edge_to_chunk(kb_id: str, embd_mdl: Any, from_ent_name: str, to_
     if ebd is None:
         async with chat_limiter:
             timeout = 3 if enable_timeout_assertion else 300000000
-            ebd, _ = await asyncio.wait_for(thread_pool_exec(embd_mdl.encode, [txt + f": {meta['description']}"]), timeout=timeout)
+            ebd, _ = await asyncio.wait_for(settled_io(embd_mdl.encode, [txt + f": {meta['description']}"]), timeout=timeout)
         ebd = ebd[0]
         set_embed_cache(embd_mdl.llm_name, txt, ebd)
     assert ebd is not None

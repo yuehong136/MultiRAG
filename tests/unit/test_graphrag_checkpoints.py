@@ -42,7 +42,7 @@ def checkpoint_env(monkeypatch: pytest.MonkeyPatch) -> Store:
     for module in [utils, index]:
         monkeypatch.setattr(module, "db_connection", fake_db)
         monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *args: SimpleNamespace(name="scratch"))
-    monkeypatch.setattr(index, "GraphRAGLease", lambda *args: Lease())
+    monkeypatch.setattr(index, "GraphRAGLease", lambda *args, **kwargs: Lease())
     monkeypatch.setattr(index, "has_canceled", lambda *args: False)
     monkeypatch.setattr(persistence, "has_canceled", lambda *args: False)
     monkeypatch.setattr(index, "load_graph_source_chunks", lambda *args: ["source"])
@@ -180,7 +180,7 @@ async def test_community_ids_are_stable_and_query_or_prune_failure_propagates(ch
     monkeypatch.setattr(index, "CommunityReportsExtractor", lambda *args: Reports())
 
     async def run() -> None:
-        await index.extract_community.__wrapped__(graph(), "tenant", "kb", None, extractor, None, lambda **kwargs: None)
+        await index.extract_community(graph(), "tenant", "kb", None, extractor, None, lambda **kwargs: None)
 
     await run()
     identifiers = set(store.rows)
@@ -321,3 +321,51 @@ async def test_rebuild_prefers_stable_checkpoint_over_legacy_rows_in_any_order(c
     rebuilt = await utils.rebuild_graph("tenant", "kb")
     assert rebuilt is not None and set(rebuilt.nodes()) == {"A", "B"}
     assert rebuilt.graph["source_id"] == ["doc"]
+
+
+@pytest.mark.parametrize("phase", ["resolution", "community"])
+async def test_retry_uses_fresh_deep_graph_and_only_marks_completed_phase(checkpoint_env: Store, monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    await seed(checkpoint_env)
+    attempts: list[list[str]] = []
+
+    async def fail_then_succeed(value: nx.Graph, *args: Any, **kwargs: Any) -> None:
+        attempts.append(list(value.nodes["A"]["source_id"]))
+        value.nodes["A"]["source_id"].append("mutated")
+        if len(attempts) == 1:
+            raise RuntimeError("transient phase failure")
+
+    monkeypatch.setattr(index, "resolve_entities", fail_then_succeed if phase == "resolution" else AsyncMock())
+    monkeypatch.setattr(index, "extract_community", fail_then_succeed if phase == "community" else AsyncMock())
+    config = {"graphrag": {"retry_backoff_seconds": 0}}
+    await index.run_graphrag_for_kb({"tenant_id": "tenant", "kb_id": "kb", "id": "task"}, ["doc"], "English", config, None, None, lambda **kwargs: None)
+    assert attempts == [["doc"], ["doc"]]
+
+
+async def test_build_retry_reuses_checkpoint_after_postwrite_error(checkpoint_env: Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+    checkpoint: nx.Graph | None = None
+
+    async def load(*args: Any) -> nx.Graph | None:
+        return checkpoint
+
+    async def build(*args: Any, **kwargs: Any) -> nx.Graph:
+        nonlocal calls, checkpoint
+        calls += 1
+        checkpoint = graph()
+        raise RuntimeError("interrupted after checkpoint publication")
+
+    monkeypatch.setattr(index, "load_subgraph_from_store", load)
+    monkeypatch.setattr(index, "generate_subgraph", build)
+    embedding = SimpleNamespace(llm_name="scratch", encode=lambda texts: (np.ones((len(texts), 2)), 0))
+    result = await index.run_graphrag_for_kb(
+        {"tenant_id": "tenant", "kb_id": "kb", "id": "task"},
+        ["doc"],
+        "English",
+        {"graphrag": {"retry_backoff_seconds": 0}},
+        None,
+        embedding,
+        lambda **kwargs: None,
+        with_resolution=False,
+        with_community=False,
+    )
+    assert result["ok_docs"] == ["doc"] and calls == 1

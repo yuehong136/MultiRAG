@@ -44,11 +44,13 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID, TaskService, has_canceled
 from common import settings
+from common.asyncio_utils import LoopLocalSemaphore
 from common.config_utils import show_configs
 from common.connection_utils import timeout
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
 from common.exceptions import TaskCanceledException
 from common.file_utils import get_project_base_directory
+from common.graphrag_config import GraphRAGExecutionConfig
 from common.log_ctx import bind_log_context, clear_log_context
 from common.log_utils import init_root_logger
 from common.metadata_utils import build_metadata_config, turn2jsonschema, update_metadata_to
@@ -184,11 +186,11 @@ CURRENT_TASKS = {}
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "3"))
 MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))
-task_limiter = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
-chunk_limiter = asyncio.Semaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-embed_limiter = asyncio.Semaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-minio_limiter = asyncio.Semaphore(MAX_CONCURRENT_MINIO)
-kg_limiter = asyncio.Semaphore(2)
+task_limiter = LoopLocalSemaphore(MAX_CONCURRENT_TASKS)
+chunk_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
+embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
+minio_limiter = LoopLocalSemaphore(MAX_CONCURRENT_MINIO)
+kg_limiter = LoopLocalSemaphore(2)
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))
 stop_event = threading.Event()
 
@@ -509,6 +511,7 @@ def _persist_task_pdf_outline(bind: Engine | Connection, task_id: str, document_
 
 @timeout(60 * 80, 1)
 async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., Any], db: Session) -> list[dict[str, Any]]:
+    task_language = task.get("language") if task.get("language") is not None else "Chinese"
     if task["size"] > settings.DOC_MAXIMUM_SIZE:
         set_progress(db, task["id"], prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         return []
@@ -540,7 +543,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
                 binary=binary,
                 from_page=task["from_page"],
                 to_page=task["to_page"],
-                lang=task["language"],
+                lang=task_language,
                 callback=progress_callback,
                 kb_id=task["kb_id"],
                 parser_config=merge_table_parser_config_from_kb(task),
@@ -617,7 +620,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         st = timer()
         progress_callback(msg="Start to generate keywords for every chunk ...")
         model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
-        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task_language)
 
         async def doc_keyword_extraction(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "keywords", {"topn": topn})
@@ -655,7 +658,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         st = timer()
         progress_callback(msg="Start to generate questions for every chunk ...")
         model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
-        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task_language)
 
         async def doc_question_proposal(chat_mdl, d, topn):
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "question", {"topn": topn})
@@ -689,7 +692,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
         st = timer()
         progress_callback(msg="Start to generate meta-data for every chunk ...")
         model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
-        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task_language)
 
         async def gen_metadata_task(chat_mdl: Any, d: dict[str, Any]) -> None:
             cached = get_llm_cache(chat_mdl.llm_name, d["content_with_weight"], "metadata", metadata_conf)
@@ -738,7 +741,7 @@ async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., An
             all_tags = json.loads(all_tags)
 
         model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
-        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
+        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task_language)
 
         docs_to_tag = []
         for d in docs:
@@ -2695,6 +2698,9 @@ async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor
 async def do_handle_task(db: Session, task: Any) -> None:
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)
+    if task.get("language") is None:
+        task["language"] = "Chinese"
+        logging.warning("Task %s has no language set, falling back to Chinese", task.get("id"))
 
     # 预处理 auth 列，转换为列表，处理 None 值
     def convert_auth(auth_str: Any) -> Any:
@@ -2861,6 +2867,7 @@ async def do_handle_task(db: Session, task: Any) -> None:
             # A manually queued graph task enables GraphRAG, as RAPTOR does.
             # Preserve user settings when filling the required defaults.
             kb_parser_config["graphrag"] = {
+                **GraphRAGExecutionConfig().model_dump(),
                 "entity_types": ["organization", "person", "geo", "event", "category"],
                 "method": "light",
                 "batch_chunk_token_size": 4096,

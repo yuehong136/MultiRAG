@@ -804,7 +804,7 @@ def chunk(
     binary: bytes | None = None,
     from_page: int = 0,
     to_page: int = MAXIMUM_PAGE_NUMBER,
-    lang: str = "Chinese",
+    lang: str | None = "Chinese",
     callback: Callable[..., Any] | None = None,
     **kwargs: Any,
 ) -> list[dict[str, Any]]:
@@ -817,6 +817,8 @@ def chunk(
     urls = set()
     url_res = []
 
+    if lang is None:
+        lang = "Chinese"
     is_english = lang.lower() == "english"  # is_english(cks)
     parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
 
