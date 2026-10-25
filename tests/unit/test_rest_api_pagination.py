@@ -14,6 +14,7 @@ from tests.support.resource_journal import ResourceJournal
 # Route defaults and zero semantics stay local; every nonzero page is <=100.
 ROUTES = [
     ("/datasets", 30, False),
+    ("/files", 15, False),
     ("/datasets/kb/ingestions", 0, True),
     ("/datasets/kb/documents", 30, False),
     ("/datasets/kb/documents/doc/chunks", 30, False),

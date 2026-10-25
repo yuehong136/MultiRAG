@@ -36,7 +36,7 @@ REST 列表的 `page_size` 最大为 100。超限、负数、空值、非整数�
 | 端点 | 默认 `page_size` | 是否接受 `page_size=0` |
 |---|---:|---|
 | 数据集、文档、文档分块 | 30 | 否 |
-| Connector 同步日志 | 15 | 否 |
+| 文件列表、Connector 同步日志 | 15 | 否 |
 | Memory 列表与消息 | 50 | 否 |
 | Agent、Chat、Search、MCP Server 列表；数据集摄取日志 | 0 | 是，保留原不分页语义 |
 | Agent 与 Chat 会话 | 30 | 是，沿用各自服务语义 |
