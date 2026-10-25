@@ -14,6 +14,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry import ConnectionErrorRetryHandler
 from slack_sdk.http_retry.builtin_interval_calculators import FixedValueRetryIntervalCalculator
+from slack_sdk.web.slack_response import SlackResponse
 
 from common.data_source.config import _SLACK_LIMIT, ENABLE_EXPENSIVE_EXPERT_CALLS, FAST_TIMEOUT, INDEX_BATCH_SIZE, MAX_CHANNELS_TO_LOG, MAX_RETRIES, SLACK_NUM_THREADS
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError, UnexpectedValidationError
@@ -52,6 +53,30 @@ _DISALLOWED_MSG_SUBTYPES = {
 }
 
 
+class _GuardedWebClient(WebClient):
+    def __init__(self, check_active: Callable[[], None], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._check_active = check_active
+        self._configured_timeout = float(self.timeout)
+
+    def api_call(self, api_method: str, **kwargs: Any) -> SlackResponse:
+        self._check_active()
+        remaining = getattr(self._check_active, "remaining_seconds", lambda: self._configured_timeout)()
+        self.timeout = min(self._configured_timeout, remaining)
+        response = super().api_call(api_method, **kwargs)
+        self._check_active()
+        return response.validate()
+
+
+class _StrictSlackTextCleaner(SlackTextCleaner):
+    def _replace_user_ids_with_names(self, message: str) -> str:
+        # The shared cleaner tolerates failed lookups. In ingestion, permission
+        # and rate-limit failures must not publish incomplete text as success.
+        for user_id in set(re.findall(r"<@(.*?)>", message)):
+            message = message.replace(f"<@{user_id}>", "@" + self._get_slack_name(user_id))
+        return message
+
+
 def default_msg_filter(message: MessageType) -> SlackMessageFilterReason | None:
     """Default message filter"""
     # Filter bot messages
@@ -75,6 +100,8 @@ def _pages(call: Callable[..., Any], field: str, check_active: Callable[[], None
         if check_active is not None:
             check_active()
         response = call(cursor=cursor, limit=_SLACK_LIMIT, **kwargs)
+        if check_active is not None:
+            check_active()
         response.validate()
         payload = response.data
         if not isinstance(payload, dict) or not isinstance(payload.get(field), list) or any(not isinstance(item, dict) for item in payload[field]):
@@ -463,11 +490,11 @@ class SlackConnector(
             ],
         )
 
-        self.client = WebClient(token=bot_token, timeout=30, retry_handlers=[connection_error_retry_handler])
+        self.client = _GuardedWebClient(check_active=self._check_active, token=bot_token, timeout=30, retry_handlers=[connection_error_retry_handler])
 
         # For fast response requests
-        self.fast_client = WebClient(token=bot_token, timeout=FAST_TIMEOUT)
-        self.text_cleaner = SlackTextCleaner(client=self.client)
+        self.fast_client = _GuardedWebClient(check_active=self._check_active, token=bot_token, timeout=FAST_TIMEOUT)
+        self.text_cleaner = _StrictSlackTextCleaner(client=self.client)
         self.credentials_provider = credentials_provider
         self.user_cache = {}
 
@@ -488,6 +515,7 @@ class SlackConnector(
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start:
             raise ConnectorValidationError("Invalid Slack polling window")
         if self.channels == []:
+            self._check_active()
             return
         channels = filter_channels(get_channels(self.client, check_active=self._check_active), self.channels, self.channel_regex_enabled)
         batch: list[Document] = []
@@ -507,6 +535,7 @@ class SlackConnector(
                     if canonical_ts in seen_thread_ts:
                         continue
                     processed = _process_message(message, self.client, channel, self.text_cleaner, self.user_cache, seen_thread_ts, None, latest=str(end), check_active=self._check_active)
+                    self._check_active()
                     if processed.failure is not None:
                         raise ConnectorValidationError("Slack message processing failed: " + processed.failure.failure_message) from processed.failure.exception
                     seen_thread_ts.add(canonical_ts)
@@ -514,8 +543,10 @@ class SlackConnector(
                     if document is not None and start < document.doc_updated_at.timestamp() <= end:
                         batch.append(document)
                         if len(batch) >= self.batch_size:
+                            self._check_active()
                             yield batch
                             batch = []
+        self._check_active()
         if batch:
             yield batch
 

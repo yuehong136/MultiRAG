@@ -31,12 +31,19 @@ GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
 class _ReadOnlyGraphRequest(GraphRequest):
     """Keep SDK mapping/authentication, with bounded reads and strict pages."""
 
+    def __init__(self, check_active: Callable[[], None], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._check_active = check_active
+
     def execute_request_direct(self, request: RequestOptions) -> requests.Response:
         target = urlsplit(request.url)
         if request.method != "GET" or target.scheme != "https" or target.netloc != "graph.microsoft.com":
             raise ConnectorValidationError("Unexpected SharePoint Graph request")
         self.beforeExecute.notify(request)
-        response = requests.get(request.url, headers=request.headers, auth=request.auth, verify=request.verify, proxies=request.proxies, timeout=(10, 60))
+        self._check_active()
+        remaining = getattr(self._check_active, "remaining_seconds", lambda: 60.0)()
+        response = requests.get(request.url, headers=request.headers, auth=request.auth, verify=request.verify, proxies=request.proxies, timeout=(min(10.0, remaining), min(60.0, remaining)))
+        self._check_active()
         response.raise_for_status()
         return response
 
@@ -65,9 +72,13 @@ class _ReadOnlyGraphRequest(GraphRequest):
 
 
 class _ReadOnlyGraphClient(GraphClient):
+    def __init__(self, token_callback: Callable[[], dict[str, Any]], check_active: Callable[[], None]) -> None:
+        super().__init__(token_callback)
+        self._check_active = check_active
+
     def pending_request(self) -> GraphRequest:
         if self._pending_request is None:
-            self._pending_request = _ReadOnlyGraphRequest(tenant=self._tenant, environment=self._environment)
+            self._pending_request = _ReadOnlyGraphRequest(check_active=self._check_active, tenant=self._tenant, environment=self._environment)
             self._pending_request.with_access_token(self._token_callback)
             self._pending_request.beforeExecute += self._build_specific_query
         return self._pending_request
@@ -100,13 +111,19 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
             nonlocal app
             self._check_active()
             if app is None:
-                app = msal.ConfidentialClientApplication(client_id=client_id, client_credential=client_secret, authority=f"https://login.microsoftonline.com/{tenant_id}", timeout=30)
+                app = msal.ConfidentialClientApplication(
+                    client_id=client_id,
+                    client_credential=client_secret,
+                    authority=f"https://login.microsoftonline.com/{tenant_id}",
+                    timeout=min(30.0, getattr(self._check_active, "remaining_seconds", lambda: 30.0)()),
+                )
             token = app.acquire_token_for_client(scopes=GRAPH_SCOPES)
+            self._check_active()
             if not isinstance(token, dict) or not token.get("access_token"):
                 raise ConnectorMissingCredentialError("Failed to acquire SharePoint access token")
             return token
 
-        self.graph_client = _ReadOnlyGraphClient(acquire_token)
+        self.graph_client = _ReadOnlyGraphClient(acquire_token, self._check_active)
         self.graph_client.pending_request().beforeExecute += lambda _request: self._check_active()
         return None
 
@@ -188,6 +205,7 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
             raise ConnectorValidationError("Missing SharePoint file name")
         modified = self._modified_dt(drive_item)
         blob = drive_item.get_content().execute_query().value
+        self._check_active()
         if not isinstance(blob, bytes):
             raise ConnectorValidationError("Invalid SharePoint file content")
         metadata = {"drive": drive_name, "drive_id": drive_id, "drive_item_id": drive_item.id}
@@ -211,7 +229,10 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
         for drive in self._iter_drives():
             for drive_item in self._walk_files(drive.root):
                 if start < self._modified_dt(drive_item).timestamp() <= end:
-                    yield self._drive_item_to_document(drive_item, drive.id, drive.name or "")
+                    document = self._drive_item_to_document(drive_item, drive.id, drive.name or "")
+                    self._check_active()
+                    yield document
+        self._check_active()
 
     def load_from_checkpoint(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch, checkpoint: ConnectorCheckpoint) -> Generator[Document | ConnectorFailure, None, ConnectorCheckpoint]:
         if checkpoint.has_more:
@@ -223,8 +244,10 @@ class SharePointConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPe
         for document in self._generate_documents(start, end):
             batch.append(document)
             if len(batch) >= self.batch_size:
+                self._check_active()
                 yield batch
                 batch = []
+        self._check_active()
         if batch:
             yield batch
 

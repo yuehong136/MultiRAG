@@ -19,7 +19,7 @@ class GraphHTTP:
         self.after_request: Any = None
 
     def __call__(self, url: str, **kwargs: Any) -> requests.Response:
-        assert kwargs["timeout"] == (10, 60)
+        assert 0 < kwargs["timeout"][0] <= 10 and 0 < kwargs["timeout"][1] <= 60
         assert kwargs["headers"]["Authorization"] == "Bearer controlled-token"
         path = unquote(urlsplit(url).path)
         self.calls.append(url)
@@ -110,11 +110,17 @@ class SlackHTTP:
             if self.mode == "thread-error":
                 data = {"ok": False, "error": "missing_scope"}
         elif method == "users.info":
-            data.update(user={"real_name": "Alice", "profile": {"display_name": "Alice"}})
+            if params.get("user") == "UBAD" and self.mode.startswith("mention-"):
+                data = {"ok": False, "error": "missing_scope" if self.mode == "mention-scope" else "ratelimited"}
+            else:
+                data.update(user={"real_name": "Alice", "profile": {"display_name": "Alice"}})
         elif method == "auth.test":
             data.update(url="https://controlled.slack.com")
         else:
             raise AssertionError(method)
+        if self.mode.startswith("mention-") and method == "conversations.replies":
+            for message in data.get("messages", []):
+                message["text"] = "hello <@UBAD>"
         if self.after_request is not None:
             self.after_request(method)
         return SlackResponse(client=client, http_verb="GET", api_url=api_url, req_args=req_args, data=data, headers={}, status_code=200)

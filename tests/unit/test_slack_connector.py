@@ -148,3 +148,15 @@ def test_missing_credentials_and_empty_checkpoint() -> None:
     with pytest.raises(StopIteration) as stop:
         next(generator)
     assert stop.value.value.has_more is False
+
+
+@pytest.mark.parametrize("mode", ["mention-scope", "mention-ratelimit"])
+def test_cached_sender_does_not_hide_mention_lookup_errors(slack: tuple[Any, Any], mode: str) -> None:
+    from common.data_source.models import BasicExpertInfo
+
+    connector, http = slack
+    connector.user_cache["U1"] = BasicExpertInfo(display_name="Cached Alice")
+    http.mode = mode
+    with pytest.raises(SlackApiError):
+        list(connector.load_from_state())
+    assert [call["params"]["user"] for call in http.calls if call["method"] == "users.info"] == ["UBAD"]

@@ -34,10 +34,13 @@ This trades additional history/reply API calls for correctness and is subject
 to Slack rate limits. Rate-limit failures remain retryable task failures.
 
 Both sources check task cancellation and deadline between requests/pages.
-Graph reads have 10-second connect / 60-second read timeouts, MSAL requests a
-30-second timeout, and Slack uses a 30-second SDK timeout. A synchronous request
-already in flight may run until its transport timeout before cancellation is
-observed. No source ACLs are mapped into local dataset authorization.
+Graph connect/read timeouts are capped at 10/60 seconds, and Slack requests
+at 30 seconds, with both constrained by the remaining task budget before each
+API call. MSAL uses a 30-second cap, reduced to the remaining budget when its
+client is created. Slack connection retries are
+finite but can span several transport timeouts before control returns. In-flight
+calls and SDK retry loops may therefore delay cancellation; post-request, batch
+and final completion guards prevent late successful writes or completion. No source ACLs are mapped into local dataset authorization.
 
 Deleted-file synchronization remains disabled for both sources: a token's
 visible site/channel inventory is not proven authoritative after permission
