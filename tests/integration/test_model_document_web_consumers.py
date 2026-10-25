@@ -19,13 +19,62 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agent.component.docs_generator import DocGenerator, DocGeneratorParam
 from agent.component.message import Message
-from api.db.db_models import LLM, LLMFactories, TenantLLM, UserCanvas, UserCanvasVersion, get_db
+from api.db.db_models import LLM, Conversation, Dialog, LLMFactories, TenantLLM, UserCanvas, UserCanvasVersion, get_db
 from api.db.services.tenant_llm_service import TenantLLMService
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 pytestmark = pytest.mark.external_consumer
+
+
+def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, record_property: Callable[[str, object], None]) -> None:
+    from api import apps
+
+    env = runtime_upload_api
+    sessions = sessionmaker(env["engine"])
+    monkeypatch.setattr(apps, "SessionLocal", sessions)
+
+    def scratch_db() -> Iterator[Session]:
+        with sessions() as db:
+            yield db
+
+    monkeypatch.setitem(apps.app.dependency_overrides, get_db, scratch_db)
+    monkeypatch.setattr(TenantLLMService, "ensure_mineru_from_env", classmethod(lambda cls, db, tenant_id: None))
+    monkeypatch.setattr(TenantLLMService, "ensure_opendataloader_from_env", classmethod(lambda cls, db, tenant_id: None))
+    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
+    script = Path(__file__).resolve().parents[1] / "support/chat_model_web_consumer.mts"
+    try:
+        with sessions() as db:
+            db.merge(LLMFactories(name="Ollama", tags="LLM", status="1"))
+            for name, kind in [("vision", "image2text"), ("text", "chat")]:
+                db.add(TenantLLM(tenant_id=env["owners"][0], llm_factory="Ollama", llm_name=name, mdl_type=kind, api_key="controlled-no-provider", status="1"))
+            db.commit()
+        completed = subprocess.run(
+            [str(checkout / "node_modules/.bin/tsx"), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],
+            cwd=checkout,
+            env={**os.environ, "DOMAIN_ACCEPTANCE_BASE": env["base"], "DOMAIN_ACCEPTANCE_TOKEN": env["jwt"]},
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        result = json.loads(completed.stdout.splitlines()[-1])
+        with sessions() as db:
+            for identifier, kind in zip(result["ids"], ["image2text", "chat"], strict=True):
+                row = db.get(Dialog, identifier)
+                assert row is not None and row.tenant_id == env["owners"][0]
+                assert row.llm_setting == {"temperature": 0, "model_type": kind}
+                assert row.prompt_config["quote"] is False
+        record_property("actual_web_chat_model_sql_readback", json.dumps(result))
+    finally:
+        with sessions() as db:
+            ids = list(db.scalars(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])))
+            db.execute(delete(Conversation).where(Conversation.dialog_id.in_(ids)))
+            db.execute(delete(Dialog).where(Dialog.tenant_id == env["owners"][0]))
+            db.execute(delete(TenantLLM).where(TenantLLM.tenant_id.in_(env["owners"])))
+            db.commit()
+            assert db.scalar(select(Dialog.id).where(Dialog.tenant_id == env["owners"][0])) is None
 
 
 def run_web(env: dict[str, Any], mode: str, **values: str) -> dict[str, Any]:
