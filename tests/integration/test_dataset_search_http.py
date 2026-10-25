@@ -79,7 +79,7 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
             config = {"method": method, "manual": conditions, "logic": logic, "semi_auto": ["category", "version"]}
             body = request(env, "POST", "/search", json={**payload, "doc_ids": documents, "meta_data_filter": config}).json()
             assert body["code"] == 0, body
-            mode_expected = semi_expected if method == "semi_auto" and semi_expected is not None else expected
+            mode_expected = set() if documents == [] else (semi_expected if method == "semi_auto" and semi_expected is not None else expected)
             assert {row["doc_id"] for row in body["data"]["chunks"]} == mode_expected, (method, body)
             assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == mode_expected, body
             assert body["data"]["total"] == len(mode_expected), body
@@ -105,7 +105,7 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
     check(None, [current], "and", {env["second_doc"]})
     check([], [current], "and", {env["second_doc"]})
 
-    for documents, expected in ((None, set(both)), ([], set(both)), ([env["doc"]], {env["doc"]})):
+    for documents, expected in ((None, set(both)), ([], set()), ([env["doc"]], {env["doc"]})):
         body = request(env, "POST", "/search", json={**payload, "doc_ids": documents}).json()
         assert body["code"] == 0 and {row["doc_id"] for row in body["data"]["chunks"]} == expected, body
     raw = env["reader"].query(env["collections"]["dataset"], filter="knowledge_graph_kwd == ''", output_fields=["doc_id", "available_int"], consistency_level="Strong")
@@ -133,8 +133,10 @@ def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: py
         {"search_id": env["saved_search"]},
     ):
         response = request(env, "POST", "/search", json={"question": "availability", "use_kg": True, **constraint})
-        assert response.status_code == 200 and response.json()["code"] == 400, response.text
-        assert "cannot be combined" in response.json()["message"]
+        expected_code = 109 if "search_id" in constraint else 400
+        assert response.status_code == 200 and response.json()["code"] == expected_code, response.text
+        if expected_code == 400:
+            assert "cannot be combined" in response.json()["message"]
     for constraint in (
         {"document_ids": [env["doc"]]},
         {"metadata_condition": {"conditions": []}},
@@ -153,7 +155,10 @@ def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: py
     sdk_models.assert_not_called()
     graph.assert_not_called()
 
-    payload = {"question": "availability", "use_kg": True, "doc_ids": [], "meta_data_filter": {}}
+    empty = request(env, "POST", "/search", json={"question": "availability", "use_kg": True, "doc_ids": []}).json()
+    assert empty["code"] == 400
+    graph.assert_not_called()
+    payload = {"question": "availability", "use_kg": True, "meta_data_filter": {}}
     unrestricted = request(env, "POST", "/search", json=payload).json()
     assert unrestricted["code"] == 0 and unrestricted["data"]["chunks"][0]["content_with_weight"] == "unrestricted graph", unrestricted
     legacy = requests.post(
@@ -898,3 +903,174 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
             db.commit()
         with Session(env["engine"]) as db:
             assert not db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))).all()
+
+
+def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+    created = requests.post(
+        env["base"] + "/api/v1/searches",
+        headers={"Authorization": "Bearer " + env["jwt"]},
+        json={"name": "Weight scratch", "search_config": {"vector_similarity_weight": 0, "similarity_threshold": 0, "kb_ids": [env["dataset"]], "cross_languages": [], "keyword": False}},
+        timeout=30,
+    )
+    assert created.status_code == 200 and created.json()["code"] == 0, created.text
+    identifier = created.json()["data"]["search_id"]
+    lexical = {
+        **env["rows"]["dataset"][1],
+        "id": uuid4().hex,
+        "content_with_weight": "lexicalonly lexicalonly lexicalonly",
+        "content_ltks": "lexicalonly lexicalonly lexicalonly",
+        "vector": [-0.2] * 768,
+        "q_768_vec": [-0.2] * 768,
+    }
+    assert settings.docStoreConn.insert([lexical], env["collections"]["dataset"], env["dataset"]) == []
+    env["reader"].flush(env["collections"]["dataset"], timeout=60)
+    from api.db.services import dialog_service
+
+    class SearchBundle:
+        max_length = 4096
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.db = None
+
+        def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+            return np.array([0.2] * 768), len(text)
+
+        def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+            return np.array([[0.2] * 768 for _ in texts]), len(texts)
+
+        async def async_chat_streamly_delta(self, *args: Any, **kwargs: Any) -> Any:
+            yield "lexicalonly answer"
+
+    monkeypatch.setattr(dialog_service, "LLMBundle", SearchBundle)
+    monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_a, **_kw: {})
+    monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda *_a, **_kw: {})
+    evidence: dict[str, Any] = {}
+    try:
+        for weight in [0, 1]:
+            updated = requests.put(
+                env["base"] + "/api/v1/searches/" + identifier,
+                headers={"Authorization": "Bearer " + env["jwt"]},
+                json={"name": "Weight scratch", "search_config": {"vector_similarity_weight": weight}},
+                timeout=30,
+            )
+            assert updated.status_code == 200 and updated.json()["code"] == 0, updated.text
+            with Session(env["engine"]) as db:
+                saved = db.get(Search, identifier)
+                assert saved.search_config["vector_similarity_weight"] == weight
+                assert saved.search_config["cross_languages"] == [] and saved.search_config["keyword"] is False
+            for datasets in [[env["dataset"]], [env["dataset"], env["second"]]]:
+                response = request(
+                    env, "POST", "/search", json={"question": "lexicalonly", "dataset_ids": datasets, "search_id": identifier, "vector_similarity_weight": 1 - weight, "similarity_threshold": 0.9}
+                )
+                body = response.json()
+                assert response.status_code == 200 and body["code"] == 0, response.text
+                assert body["data"]["chunks"], body
+                first = body["data"]["chunks"][0]["chunk_id"]
+                assert (first == lexical["id"]) is (weight == 0), body
+                evidence[f"{weight}-{len(datasets)}"] = body["data"]
+            completed = requests.post(env["base"] + "/api/v1/searches/" + identifier + "/completions", headers={"Authorization": "Bearer " + env["jwt"]}, json={"question": "lexicalonly"}, timeout=30)
+            frames = [json.loads(line[5:]) for line in completed.text.splitlines() if line.startswith("data:")]
+            assert completed.status_code == 200 and frames and all(frame["code"] == 0 for frame in frames), completed.text
+            final = next(frame["data"] for frame in frames if isinstance(frame.get("data"), dict) and frame["data"].get("final"))
+            assert final["reference"]["chunks"], final
+            assert (final["reference"]["chunks"][0]["id"] == lexical["id"]) is (weight == 0), final
+            evidence[f"{weight}-async-ask"] = final
+        empty_selection = requests.put(
+            env["base"] + "/api/v1/searches/" + identifier, headers={"Authorization": "Bearer " + env["jwt"]}, json={"name": "Weight scratch", "search_config": {"doc_ids": []}}, timeout=30
+        )
+        assert empty_selection.json()["code"] == 0, empty_selection.text
+        completed = requests.post(env["base"] + "/api/v1/searches/" + identifier + "/completions", headers={"Authorization": "Bearer " + env["jwt"]}, json={"question": "lexicalonly"}, timeout=30)
+        frames = [json.loads(line[5:]) for line in completed.text.splitlines() if line.startswith("data:")]
+        assert completed.status_code == 200 and frames and all(frame["code"] == 0 for frame in frames), completed.text
+        final = next(frame["data"] for frame in frames if isinstance(frame.get("data"), dict) and frame["data"].get("final"))
+        assert final["reference"]["chunks"] == []
+        evidence["explicit-empty-async-ask"] = final
+        rejected = requests.put(
+            env["base"] + "/api/v1/searches/" + identifier,
+            headers={"Authorization": "Bearer " + env["jwt"]},
+            json={"name": "Weight scratch", "search_config": {"vector_similarity_weight": 2}},
+            timeout=30,
+        )
+        assert rejected.json()["code"] != 0
+        with Session(env["engine"]) as db:
+            assert db.get(Search, identifier).search_config["vector_similarity_weight"] == 1
+        env["record_path"].with_suffix(".saved-weight-readback.json").write_text(json.dumps(evidence))
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(Search).where(Search.id == identifier))
+            db.commit()
+
+
+def test_mcp_unsafe_urls_have_no_sql_object_or_probe_side_effects(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from api.db.db_models import MCPServer
+
+    env = runtime_upload_api
+    route = sys.modules["api.apps.restful_apis.mcp"]
+    probe = Mock(side_effect=AssertionError("unsafe URL reached external MCP probe"))
+    monkeypatch.setattr(route, "get_mcp_tools", probe)
+    monkeypatch.setattr(route, "MCPToolCallSession", probe)
+    identifier = uuid4().hex
+    owner = env["owners"][0]
+    with Session(env["engine"]) as db:
+        db.add(MCPServer(id=identifier, name="Owned MCP", tenant_id=owner, url="https://public.example/mcp", server_type="sse", variables={}, headers={}))
+        db.commit()
+    before_objects = {item.object_name for item in env["storage"].list_objects(env["bucket"], recursive=True)}
+    headers = {"Authorization": "Bearer " + env["jwt"]}
+    base = env["base"] + "/api/v1/mcp/servers"
+    try:
+        for url in ["http://127.0.0.1/private", "http://[::1]/private", "file:///etc/passwd"]:
+            payload = {"name": "Blocked MCP", "url": url, "server_type": "sse"}
+            for method, path, body in [("POST", base, payload), ("PUT", base + "/" + identifier, payload), ("POST", base + "/" + identifier + "/test", {"url": url, "server_type": "sse"})]:
+                result = requests.request(method, path, headers=headers, json=body, timeout=30)
+                assert result.status_code == 200 and result.json()["retcode"] == int(RetCode.DATA_ERROR), result.text
+            result = requests.post(
+                base + "/import", headers=headers, json={"mcpServers": {"Blocked MCP": {"type": "sse", "url": url}, "Invalid type": {"type": [], "url": "https://public.example"}}}, timeout=30
+            )
+            assert result.status_code == 200 and result.json()["retcode"] == 0, result.text
+            assert all(not entry["success"] for entry in result.json()["data"]["results"])
+        with Session(env["engine"]) as db:
+            stored = db.get(MCPServer, identifier)
+            assert stored.name == "Owned MCP" and stored.url == "https://public.example/mcp"
+            assert list(db.scalars(sa.select(MCPServer.id).where(MCPServer.tenant_id == owner))) == [identifier]
+        assert {item.object_name for item in env["storage"].list_objects(env["bucket"], recursive=True)} == before_objects
+        probe.assert_not_called()
+        env["record_path"].with_suffix(".mcp-denial-readback.json").write_text(
+            json.dumps({"server": identifier, "unchanged": True, "created_servers": [], "created_objects": [], "external_probe_calls": probe.call_count})
+        )
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(MCPServer).where(MCPServer.id == identifier))
+            db.commit()
+
+
+def test_http_document_scope_presence_survives_all_metadata_modes(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+    condition = {"key": "category", "op": "is", "value": "match"}
+    monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": [condition], "logic": "and"}))
+    evidence: dict[str, Any] = {}
+    for mode in ["dense", "sparse", "hybrid", "fusion"]:
+        for method in ["manual", "auto", "semi_auto"]:
+            for documents in [None, []]:
+                response = request(
+                    env,
+                    "POST",
+                    "/search",
+                    json={
+                        "question": "availability",
+                        "dataset_ids": [env["dataset"], env["second"]],
+                        "search_mode": {"type": mode},
+                        "similarity_threshold": 0,
+                        "doc_ids": documents,
+                        "meta_data_filter": {"method": method, "manual": [condition], "semi_auto": ["category"]},
+                    },
+                )
+                body = response.json()
+                assert response.status_code == 200 and body["code"] == 0, response.text
+                expected = {env["doc"], env["second_doc"]} if documents is None else set()
+                assert {chunk["doc_id"] for chunk in body["data"]["chunks"]} == expected, (mode, method, documents, body)
+                assert body["data"]["total"] == len(expected), body
+                evidence[f"{mode}-{method}-{documents}"] = body["data"]
+    env["record_path"].with_suffix(".empty-scope-readback.json").write_text(json.dumps(evidence))

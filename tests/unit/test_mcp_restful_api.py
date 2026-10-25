@@ -2,7 +2,9 @@
 
 import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_async_db, get_db
@@ -10,6 +12,13 @@ from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.user_service import TenantService
 from api.utils.api_utils import async_current_user
 from common.constants import RetCode
+
+
+@pytest.fixture(autouse=True)
+def public_mcp_dns(client: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    # These orchestration contracts replace the external MCP/DNS boundary.
+    monkeypatch.setattr(_route_module(), "validate_mcp_url", AsyncMock())
+    monkeypatch.setattr(TenantService, "get_by_id", classmethod(lambda *_a: Obj(id="user-unit")))
 
 
 class Obj(SimpleNamespace):

@@ -150,6 +150,11 @@ async def test_kg_result_and_children_do_not_replace_total(search_env: SearchEnv
 async def test_kg_rejects_constraints_before_model_and_metadata_io(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, constraint: dict[str, Any]) -> None:
     db, rows, retrieval = search_env
     rows.pop()
+    if constraint.get("search_id"):
+        from api.db.services.user_service import UserTenantService
+
+        monkeypatch.setattr(db, "scalar", AsyncMock(return_value=SimpleNamespace(tenant_id="owner-a", search_config={})))
+        monkeypatch.setattr(UserTenantService, "get_membership", lambda *_a, **_k: SimpleNamespace(role="owner"))
     metadata = AsyncMock()
     graph = AsyncMock()
     monkeypatch.setattr(service, "apply_meta_data_filter", metadata)
@@ -164,11 +169,16 @@ async def test_kg_rejects_constraints_before_model_and_metadata_io(search_env: S
 
 
 @pytest.mark.parametrize("constraint", [{"doc_ids": ["doc"]}, {"meta_data_filter": {"method": "manual", "manual": [{"key": "missing", "op": "is", "value": "none"}]}}, {"search_id": "saved"}])
-def test_kg_constraint_http_rejection(client: TestClient, search_env: SearchEnv, constraint: dict[str, Any]) -> None:
+def test_kg_constraint_http_rejection(client: TestClient, search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, constraint: dict[str, Any]) -> None:
     from api.db.db_models import get_async_db
 
     db, rows, retrieval = search_env
     rows.pop()
+    if constraint.get("search_id"):
+        from api.db.services.user_service import UserTenantService
+
+        monkeypatch.setattr(db, "scalar", AsyncMock(return_value=SimpleNamespace(tenant_id="owner-a", search_config={})))
+        monkeypatch.setattr(UserTenantService, "get_membership", lambda *_a, **_k: SimpleNamespace(role="owner"))
     client.app.dependency_overrides[get_async_db] = lambda: db
     response = client.post("/api/v1/datasets/a/search", json={"question": "q", "use_kg": True, **constraint})
     assert response.status_code == 200 and response.json()["code"] == 400, response.text
@@ -176,14 +186,14 @@ def test_kg_constraint_http_rejection(client: TestClient, search_env: SearchEnv,
     retrieval.assert_not_called()
 
 
-async def test_kg_accepts_empty_document_and_metadata_selection(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_kg_rejects_explicit_empty_document_selection(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch) -> None:
     db, rows, _ = search_env
     rows.pop()
     graph = AsyncMock(return_value={"content_with_weight": "graph"})
     monkeypatch.setattr(settings, "kg_retriever", SimpleNamespace(retrieval=graph))
     success, result, code = await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", use_kg=True, doc_ids=[], meta_data_filter={}))
-    assert success and code == RetCode.SUCCESS and len(result["chunks"]) == 2
-    graph.assert_awaited_once()
+    assert not success and code == RetCode.BAD_REQUEST
+    graph.assert_not_called()
 
 
 async def test_bundle_detaches_sync_facade(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -360,3 +370,62 @@ def test_collection_search_exposes_storage_failure(client: TestClient, monkeypat
     response = client.post("/api/v1/datasets/search", json={"question": "q", "dataset_ids": ["a"]})
     assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR
     assert "data" not in response.json()
+
+
+@pytest.mark.parametrize("datasets", [["a"], ["a", "b"]])
+async def test_saved_search_controls_override_request_without_truthiness(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, datasets: list[str]) -> None:
+    from api.db.services.user_service import UserTenantService
+
+    db, rows, retrieval = search_env
+    if len(datasets) == 1:
+        rows.pop()
+    config = {"similarity_threshold": 0, "vector_similarity_weight": 0, "top_k": 7, "keyword": False, "use_kg": False, "cross_languages": [], "rerank_id": "", "doc_ids": []}
+    monkeypatch.setattr(db, "scalar", AsyncMock(return_value=SimpleNamespace(tenant_id="owner-a", search_config=config)))
+    monkeypatch.setattr(UserTenantService, "get_membership", lambda *_a, **_k: SimpleNamespace(role="owner"))
+    language = AsyncMock()
+    keywords = AsyncMock()
+    monkeypatch.setattr(service, "cross_languages", language)
+    monkeypatch.setattr(service, "keyword_extraction", keywords)
+    request = SearchDatasetsRequest(
+        question="q",
+        dataset_ids=datasets,
+        search_id="saved",
+        similarity_threshold=0.8,
+        vector_similarity_weight=0.9,
+        keyword=True,
+        use_kg=True,
+        cross_languages=["French"],
+        rerank_id="request",
+        doc_ids=["request"],
+    )
+    assert (await service.search_datasets(db, "user", request))[0]
+    assert retrieval.call_args.args[7:11] == (0, 0, 7, [])
+    assert retrieval.call_args.kwargs["search_mode"] == {"hybrid": {"weight_sparse": 1, "weight_dense": 0}}
+    assert retrieval.call_args.kwargs["rerank_mdl"] is None
+    language.assert_not_called()
+    keywords.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -0.1, 1.1, True, "0.3"])
+async def test_saved_search_invalid_weight_fails_before_model_io(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    from api.db.services.user_service import UserTenantService
+
+    db, rows, retrieval = search_env
+    rows.pop()
+    monkeypatch.setattr(db, "scalar", AsyncMock(return_value=SimpleNamespace(tenant_id="owner-a", search_config={"vector_similarity_weight": value})))
+    monkeypatch.setattr(UserTenantService, "get_membership", lambda *_a, **_k: SimpleNamespace(role="owner"))
+    assert (await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", search_id="saved")))[2] == RetCode.ARGUMENT_ERROR
+    service._bundle.assert_not_called()
+    retrieval.assert_not_called()
+
+
+async def test_saved_search_omitted_weight_falls_back_to_request(search_env: SearchEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.services.user_service import UserTenantService
+
+    db, rows, retrieval = search_env
+    rows.pop()
+    monkeypatch.setattr(db, "scalar", AsyncMock(return_value=SimpleNamespace(tenant_id="owner-a", search_config={})))
+    monkeypatch.setattr(UserTenantService, "get_membership", lambda *_a, **_k: SimpleNamespace(role="owner"))
+    assert (await service.search_dataset(db, "user", "a", SearchDatasetRequest(question="q", search_id="saved", vector_similarity_weight=0.9)))[0]
+    assert retrieval.call_args.args[8] == 0.9
+    assert retrieval.call_args.kwargs["search_mode"]["hybrid"]["weight_dense"] == 0.9

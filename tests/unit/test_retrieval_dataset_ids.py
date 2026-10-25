@@ -84,6 +84,7 @@ async def test_agent_retrieval_preserves_dataset_tenant_bindings(monkeypatch: py
     await retrieval._retrieve_kb("query")
     assert fetch.call_args.args[3:5] == (["owner", "owner", "other"], ["name-a", "name-b", "name-c"])
     assert fetch.call_args.kwargs["kb_ids"] == ["a", "b", "c"]
+    assert fetch.call_args.kwargs["doc_ids"] is None
 
 
 async def test_agent_typed_manual_filter_skips_metadata_aggregation(db: "Session", monkeypatch: pytest.MonkeyPatch) -> None:

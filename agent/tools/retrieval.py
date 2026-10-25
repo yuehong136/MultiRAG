@@ -252,7 +252,7 @@ class Retrieval(ToolBase, ABC):
         vars = {k: o["value"] for k, o in vars.items()}
         query = self.string_format(query_text, vars)
 
-        doc_ids = []
+        doc_ids: list[str] | None = None
         if self._param.meta_data_filter != {}:
 
             async def load_metadata() -> dict[str, Any]:

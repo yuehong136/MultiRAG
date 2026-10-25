@@ -35,6 +35,7 @@ class _FakeBundle:
 
 @pytest.fixture
 def final_answer_stubs(monkeypatch):
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})

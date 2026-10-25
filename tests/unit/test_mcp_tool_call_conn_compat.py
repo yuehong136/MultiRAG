@@ -313,7 +313,8 @@ async def test_sdk2_transport_mode_and_header_wiring(
         async def __aexit__(self, *_args: object) -> None:
             return None
 
-    def fake_sse(url: str, *, headers: dict[str, str]) -> object:
+    def fake_sse(url: str, *, headers: dict[str, str], httpx_client_factory: Any) -> object:
+        assert httpx_client_factory.__name__ == "create_public_mcp_http_client"
         observed.update(transport="sse", url=url, transport_headers=headers)
         return object()
 

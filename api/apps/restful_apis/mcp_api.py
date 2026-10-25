@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from api.utils.web_utils import get_float, safe_json_parse
 from common.constants import VALID_MCP_SERVER_TYPES
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.misc_utils import get_uuid, thread_pool_exec
+from common.safe_mcp_http import validate_mcp_url
 
 router = APIRouter()
 
@@ -170,7 +171,7 @@ async def create(
     request: CreateMCPServerRequest,
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
-):
+) -> Response:
     request_data = request.model_dump()
     server_type = request.server_type
     if server_type not in VALID_MCP_SERVER_TYPES:
@@ -199,6 +200,10 @@ async def create(
         variables.pop("tools", None)
         timeout = get_float(request_data, "timeout", 10)
 
+        try:
+            await validate_mcp_url(request.url)
+        except (ValueError, TypeError):
+            return get_data_error_result(retmsg="Invalid MCP URL.")
         probe = MCPServer(id=server_name, name=server_name, url=request.url, server_type=server_type, variables=variables, headers=headers)
         server_tools, error_message = await thread_pool_exec(get_mcp_tools, [probe], timeout)
         if error_message:
@@ -231,7 +236,7 @@ async def update(
     request: UpdateMCPServerRequest,
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
-):
+) -> Response:
     try:
         existing = await db.run_sync(  # TODO(async-phase4)
             lambda session: server.to_dict() if (server := MCPServerService.get_by_id(session, mcp_id)) is not None and server.tenant_id == user.id else None
@@ -248,7 +253,7 @@ async def update(
         server_name = request.name or existing["name"]
         if len(server_name.encode("utf-8")) > 255:
             return get_data_error_result(retmsg=f"Invalid MCP name or length is {len(server_name)} which is large than 255.")
-        url = request.url or existing["url"]
+        url = request.url if "url" in request.model_fields_set else existing["url"]
         if not url:
             return get_data_error_result(retmsg="Invalid url.")
 
@@ -257,6 +262,10 @@ async def update(
         variables.pop("tools", None)
         timeout = request.timeout
 
+        try:
+            await validate_mcp_url(url)
+        except (ValueError, TypeError):
+            return get_data_error_result(retmsg="Invalid MCP URL.")
         probe = MCPServer(id=server_name, name=server_name, url=url, server_type=server_type, variables=variables, headers=headers)
         server_tools, error_message = await thread_pool_exec(get_mcp_tools, [probe], timeout)
         if error_message:
@@ -324,12 +333,14 @@ async def import_multiple(
     request: ImportMCPServersRequest,
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
-):
+) -> Response:
     if not request.mcp_servers:
         return get_data_error_result(retmsg="No MCP servers provided.")
 
     results: list[JsonObject] = []
     try:
+        if not await db.run_sync(lambda session: TenantService.get_by_id(session, user.id)):  # TODO(async-phase4)
+            return get_data_error_result(retmsg="Tenant not found.")
         for server_name, config in request.mcp_servers.items():
             if not all(key in config for key in {"type", "url"}):
                 results.append({"server": server_name, "success": False, "message": "Missing required fields (type or url)"})
@@ -342,6 +353,15 @@ async def import_multiple(
                         "message": f"Invalid MCP name or length is {len(server_name)} which is large than 255.",
                     }
                 )
+                continue
+
+            if not isinstance(config["type"], str) or config["type"] not in VALID_MCP_SERVER_TYPES:
+                results.append({"server": server_name, "success": False, "message": "Unsupported MCP server type."})
+                continue
+            try:
+                await validate_mcp_url(config["url"])
+            except (ValueError, TypeError):
+                results.append({"server": server_name, "success": False, "message": "Invalid MCP URL."})
                 continue
 
             base_name = server_name
@@ -401,12 +421,16 @@ async def test_mcp(
     mcp_id: str,
     request: TestMCPServerRequest,
     user: Principal = Depends(async_current_user),
-):
+) -> Response:
     if not request.url:
         return get_data_error_result(retmsg="Invalid MCP url.")
     if request.server_type not in VALID_MCP_SERVER_TYPES:
         return get_data_error_result(retmsg="Unsupported MCP server type.")
 
+    try:
+        await validate_mcp_url(request.url)
+    except (ValueError, TypeError):
+        return get_data_error_result(retmsg="Invalid MCP URL.")
     headers = safe_json_parse(request.headers or {})
     variables = safe_json_parse(request.variables or {})
     server = MCPServer(id=mcp_id, server_type=request.server_type, url=request.url, headers=headers, variables=variables)

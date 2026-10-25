@@ -25,7 +25,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.identity.run_context import RunContext
-from api.utils.dataset_search import normalize_search_mode
+from api.utils.dataset_search import normalize_search_mode, saved_search_mode, validate_search_config
 from api.utils.reference_metadata import enrich_reference_metadata, enrich_reference_metadata_async, reference_dataset_id, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, ParserType, StatusEnum
@@ -2177,7 +2177,7 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
     if search_config is None:
         search_config = {}
     metadata_preferences = resolve_reference_metadata_preferences(None, search_config)
-    doc_ids = search_config.get("doc_ids", [])
+    doc_ids = search_config.get("doc_ids")
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
     chat_llm_name = search_config.get("chat_id", chat_llm_name)
@@ -2283,13 +2283,18 @@ async def async_ask(
     """异步版本的 ask（AsyncSession；遗留同步 service 经 run_sync 桥接）"""
     if search_config is None:
         search_config = {}
+    search_config = validate_search_config(search_config)
     metadata_preferences = resolve_reference_metadata_preferences(None, search_config)
-    doc_ids = search_config.get("doc_ids", [])
+    doc_ids = search_config.get("doc_ids")
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
     chat_llm_name = search_config.get("chat_id", chat_llm_name)
     rerank_id = search_config.get("rerank_id", "")
     meta_data_filter = search_config.get("meta_data_filter")
+
+    for selected_id in kb_ids:
+        if not await db.run_sync(lambda s, identifier=selected_id: KnowledgebaseService.accessible(s, identifier, tenant_id)):  # TODO(async-phase4)
+            raise PermissionError("No authorization for the selected dataset.")
 
     kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
     KnowledgebaseService.ensure_same_embedding_model(kbs)
@@ -2360,7 +2365,7 @@ async def async_ask(
             rerank_mdl=rerank_mdl,
             rank_feature=rank_feature,
             kb_ids=[kb.id for kb in kbs],
-            search_mode=None,
+            search_mode=saved_search_mode(search_config),
         )
 
     await enrich_reference_metadata_async(db, kbinfos["chunks"], metadata_preferences)
@@ -2371,7 +2376,14 @@ async def async_ask(
 
     def decorate_answer(answer: str) -> dict[str, Any]:
         nonlocal knowledges, kbinfos, sys_prompt
-        answer, idx = retriever.insert_citations(answer, [ck["content_ltks"] for ck in kbinfos["chunks"]], [ck["vector"] for ck in kbinfos["chunks"]], embd_mdl, tkweight=0.7, vtweight=0.3)
+        answer, idx = retriever.insert_citations(
+            answer,
+            [ck["content_ltks"] for ck in kbinfos["chunks"]],
+            [ck["vector"] for ck in kbinfos["chunks"]],
+            embd_mdl,
+            tkweight=1 - search_config.get("vector_similarity_weight", 0.3),
+            vtweight=search_config.get("vector_similarity_weight", 0.3),
+        )
         idx = {kbinfos["chunks"][int(i)]["doc_id"] for i in idx}
         recall_docs = [d for d in kbinfos["doc_aggs"] if d["doc_id"] in idx]
         if not recall_docs:
@@ -2409,7 +2421,7 @@ async def gen_mindmap(db: AsyncSession, question: str, kb_ids: list[str], tenant
     if search_config is None:
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
-    doc_ids = search_config.get("doc_ids", [])
+    doc_ids = search_config.get("doc_ids")
     rerank_id = search_config.get("rerank_id", "")
     rerank_mdl = None
     kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)

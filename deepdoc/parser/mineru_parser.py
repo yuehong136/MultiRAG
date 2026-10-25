@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import html
 import json
 import logging
 import os
@@ -575,6 +576,21 @@ class MinerUParser(RAGFlowPdfParser):
                     item[key] = str((subdir / item[key]).resolve())
         return data
 
+    @staticmethod
+    def _sanitize_section_text(section: str) -> str:
+        """Strip recognized HTML markup, preserving comparison/math text."""
+        section = html.unescape(section)
+        section = re.sub(r"(?is)<\s*br\s*/?\s*>", "\n", section)
+        section = re.sub(r"(?is)</\s*(?:p|div|li|tr|h[1-6]|table|caption)\s*>", "\n", section)
+        section = re.sub(r"(?is)</\s*(?:td|th)\s*>", "\t", section)
+        # A generic <[^>]+> also eats 'x < y and y > z' and mathematical
+        # expressions. Restrict removal to actual HTML elements.
+        tags = r"(?:html|body|table|thead|tbody|tfoot|tr|td|th|caption|p|div|span|a|b|i|u|em|strong|sup|sub|code|pre|ul|ol|li|h[1-6]|img|hr|br|font|small|blockquote)"
+        section = re.sub(r"(?is)</?" + tags + r"(?:\s+[^<>]*?)?\s*/?>", "", section)
+        section = re.sub(r"[ \t]+\n", "\n", section)
+        section = re.sub(r"\n{3,}", "\n\n", section)
+        return section.strip()
+
     def _transfer_to_sections(self, outputs: list[dict[str, Any]], parse_method: str | None = None) -> list[tuple[str, str] | tuple[str, str, str]]:
         sections = []
         for output in outputs:
@@ -598,6 +614,11 @@ class MinerUParser(RAGFlowPdfParser):
                     section = "\n".join(output.get("list_items", []))
                 case MinerUContentType.DISCARDED:
                     continue  # Skip discarded blocks entirely
+
+            section = self._sanitize_section_text(section)
+            if not section:
+                self.logger.debug("[MinerU] Skip section after sanitization: type=%s", output.get("type"))
+                continue
 
             if section and parse_method in {"manual", "pipeline"}:
                 sections.append((section, output["type"], self._line_tag(output)))

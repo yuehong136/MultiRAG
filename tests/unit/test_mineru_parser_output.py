@@ -121,3 +121,21 @@ def test_run_mineru_api_wraps_request_errors(parser, tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="api failed with exception"):
         parser._run_mineru_api(pdf, tmp_path, module.MinerUParseOptions())
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("&lt;table&gt;&lt;tr&gt;&lt;td&gt;Alpha&lt;/td&gt;&lt;td&gt;Beta&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;", "Alpha\tBeta"),
+        ("x &lt; y and y &gt; z", "x < y and y > z"),
+        (r"$a < b$ and $c > d$", r"$a < b$ and $c > d$"),
+        ("<p>One<br>Two</p>", "One\nTwo"),
+    ],
+)
+def test_mineru_html_cleanup_preserves_math_and_cell_boundaries(text: str, expected: str) -> None:
+    assert MinerUParser._sanitize_section_text(text) == expected
+
+
+def test_mineru_skips_empty_html_sections(parser: MinerUParser) -> None:
+    outputs = [{"type": "text", "text": "&lt;td&gt;&lt;/td&gt;", "page_idx": 0, "bbox": [0, 0, 1, 1]}]
+    assert parser._transfer_to_sections(outputs, "pipeline") == []

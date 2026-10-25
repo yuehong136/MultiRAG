@@ -62,11 +62,13 @@ def _fake_kb():
     )
 
 
-async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypatch, async_db):
+@pytest.mark.parametrize("weight", [0, 0.4, 1])
+async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypatch, async_db, weight: float) -> None:
     _FakeBundle.instances = []
     kb = _fake_kb()
     captured = {}
 
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: [kb]))
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
@@ -76,6 +78,7 @@ async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypa
     monkeypatch.setattr(dialog_service, "chunks_format", lambda refs: refs["chunks"])
 
     async def _retrieval(**kwargs):
+        captured["retrieval"] = kwargs
         return {
             "chunks": [{"content_ltks": "tok", "vector": [0.1], "doc_id": "d1"}],
             "doc_aggs": [{"doc_id": "d1", "doc_name": "doc"}],
@@ -83,14 +86,19 @@ async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypa
 
     def _insert_citations(answer, chunks, vectors, emb_mdl, tkweight=0.7, vtweight=0.3):
         captured["thread"] = threading.current_thread()
+        captured["citation_weights"] = (tkweight, vtweight)
         return answer, {0}
 
     monkeypatch.setattr(settings, "retriever", types.SimpleNamespace(retrieval=_retrieval, insert_citations=_insert_citations))
 
     frames = []
-    async for frame in async_ask(async_db, "q", ["kb1"], "t1"):
+    async for frame in async_ask(async_db, "q", ["kb1"], "t1", search_config={"vector_similarity_weight": weight}):
         frames.append(frame)
 
+    assert captured["retrieval"]["doc_ids"] is None
+    assert captured["retrieval"]["vector_similarity_weight"] == weight
+    assert captured["retrieval"]["search_mode"] == {"hybrid": {"weight_sparse": 1 - weight, "weight_dense": weight}}
+    assert captured["citation_weights"] == (1 - weight, weight)
     assert frames[-1]["final"] is True
     assert frames[-1]["reference"]["doc_aggs"] == [{"doc_id": "d1", "doc_name": "doc"}]
     assert "".join(f["answer"] for f in frames[:-1]) == "你好"
@@ -222,3 +230,14 @@ def test_conversation_ask_legacy_retcode_frames(auth_client, ask_route_stubs):
     frames = _sse_frames(resp.text)
     assert frames[0] == {"retcode": 0, "retmsg": "", "data": {"answer": "你好", "reference": {}, "final": False}}
     assert frames[-1] == {"retcode": 0, "retmsg": "", "data": True}
+
+
+async def test_async_ask_denies_selected_dataset_before_model_or_retrieval(async_db: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: False))
+    resolve = Mock()
+    monkeypatch.setattr(dialog_service, "_resolve_model_config", resolve)
+    with pytest.raises(PermissionError, match="No authorization"):
+        _ = [event async for event in async_ask(async_db, "q", ["foreign"], "user")]
+    resolve.assert_not_called()

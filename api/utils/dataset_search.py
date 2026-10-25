@@ -4,7 +4,7 @@ search-mode contract that chats store and retrieval consumes."""
 import math
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Discriminator, Field, model_validator
+from pydantic import BaseModel, Discriminator, Field, field_validator, model_validator
 
 from api.utils.reference_metadata import ReferenceMetadata
 
@@ -120,6 +120,13 @@ class SearchDatasetRequest(BaseModel):
     search_id: str | None = None
     meta_data_filter: dict[str, Any] | None = None
 
+    @field_validator("similarity_threshold", "vector_similarity_weight", mode="before")
+    @classmethod
+    def validate_similarity_number(cls, value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+            raise ValueError("similarity weights must be finite numbers")
+        return value
+
     @model_validator(mode="after")
     def validate_question(self) -> "SearchDatasetRequest":
         self.question = self.question.strip()
@@ -136,3 +143,29 @@ class SearchDatasetRequest(BaseModel):
 
 class SearchDatasetsRequest(SearchDatasetRequest):
     dataset_ids: list[str] = Field(min_length=1)
+
+
+SEARCH_CONFIG_FIELDS = frozenset({"similarity_threshold", "vector_similarity_weight", "top_k", "use_kg", "cross_languages", "rerank_id", "tenant_rerank_id", "keyword", "doc_ids", "search_mode"})
+
+
+def validate_search_config(config: Any) -> dict[str, Any]:
+    """Validate partial saved settings without discarding other application keys."""
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise ValueError("search_config must be a JSON object")
+    values = {key: value for key, value in config.items() if key in SEARCH_CONFIG_FIELDS}
+    if "search_mode" in values:
+        values["search_mode"] = search_mode_response(values["search_mode"])
+    normalized = SearchDatasetRequest.model_validate({**values, "question": "validation"})
+    if "kb_ids" in config and (not isinstance(config["kb_ids"], list) or any(not isinstance(item, str) or not item for item in config["kb_ids"])):
+        raise ValueError("kb_ids must be an array of dataset identifiers")
+    return {**config, **normalized.model_dump(exclude_unset=True, exclude={"question"})}
+
+
+def saved_search_mode(config: dict[str, Any]) -> dict[str, Any]:
+    """The search-app slider weights lexical and vector candidates together."""
+    if config.get("search_mode") is not None:
+        return normalize_search_mode(config["search_mode"]) or {"dense": {}}
+    weight = config.get("vector_similarity_weight", 0.3)
+    return {"hybrid": {"weight_sparse": 1 - weight, "weight_dense": weight}}
