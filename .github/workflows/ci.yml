@@ -206,6 +206,18 @@ jobs:
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci_go
+          POSTGRES_PASSWORD: '123456'
+          POSTGRES_DB: multirag_go_models_a_skills_ci
+        ports: ['5432/tcp']
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=536870912
+          --health-cmd "pg_isready -U ci_go -d multirag_go_models_a_skills_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -250,6 +262,8 @@ jobs:
             go build -o ".test-results/go/bin/$command" "./cmd/$command.go"
           done
       - name: Go race regression (live opt-ins remain explicit)
+        env:
+          MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_go_models_a_skills_ci?sslmode=disable
         run: |
           set -euo pipefail
           go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
