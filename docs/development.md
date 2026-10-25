@@ -285,8 +285,10 @@ TMP、常见 HF/Torch/ModelScope/tiktoken 缓存、Go 编译/模块缓存、uv/n
 
 成功、失败和可捕获的 SIGINT/SIGTERM/SIGHUP 都保留业务原始 exit，关闭自有进程组，
 删除本次 TMP/缓存目录并读回；case journals 转存为 `<run_id>.cases/`，持续保留。
-清理未完成返回 125，原始 exit 单独保留。运行者仍须从独立进程读回 PID/进程组、路径和
-case 资源状态。SIGKILL/主机崩溃不能执行 finally；journal 保留精确身份供后续恢复。
+清理前先持久化原始业务 exit；自有缓存的只读目录会增加 owner 权限后删除，
+不跟随其中的符号链接修改借用目标。清理异常返回 125，并记录原始 exit、错误类别和
+未清路径；进程组仍存活或 case 收据无法转存时保留目录供精确恢复。运行者仍须从独立进程
+读回 PID/进程组、路径和 case 资源状态。SIGKILL/主机崩溃不能执行 finally；journal 保留精确身份供后续恢复。
 命令不得 daemonize/setsid 逃离进程组，此类入口需要专用进程所有权 helper，不能宣称被自动收尾。
 
 外层 journal **仅覆盖上述进程组和路径**，不会自动观察业务资源：

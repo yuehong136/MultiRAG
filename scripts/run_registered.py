@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -49,6 +50,17 @@ def stop_group(process: subprocess.Popen[bytes]) -> bool:
     except ProcessLookupError:
         return True
     return False
+
+
+def remove_owned_tree(path: Path) -> None:
+    """Make only owned directories removable, without following borrowed links."""
+    os.chmod(path, stat.S_IMODE(path.lstat().st_mode) | stat.S_IRWXU, follow_symlinks=False)
+    for directory, children, _files in os.walk(path, followlinks=False):
+        for child_name in children:
+            child_path = Path(directory) / child_name
+            if not child_path.is_symlink():
+                os.chmod(child_path, stat.S_IMODE(child_path.lstat().st_mode) | stat.S_IRWXU, follow_symlinks=False)
+    shutil.rmtree(path)
 
 
 def child(journal_path: str, command: list[str]) -> int:
@@ -163,33 +175,50 @@ def main(argv: list[str] | None = None) -> int:
         for signum in previous:
             signal.signal(signum, signal.SIG_IGN)
         try:
-            absent = stop_group(process) if process is not None else True
+            cleanup_errors: list[str] = []
+            try:
+                absent = stop_group(process) if process is not None else True
+            except OSError as exc:
+                absent = False
+                cleanup_errors.append("process-group:" + type(exc).__name__)
             if process is not None:
                 raw_exit = process.returncode
-            # Keep case journals outside the temporary subtree for independent readback.
-            if created:
-                cases = owned / "cases"
-                if cases.exists():
-                    journal.event("retain-case-journals", source=str(cases), destination=str(root / (run_id + ".cases")))
-                    cases.rename(root / (run_id + ".cases"))
-                shutil.rmtree(owned)
-            if not absent or owned.exists():
+            try:
+                journal.event("command-exit", run_id=run_id, raw_exit=raw_exit, cancelled_signal=cancelled)
+            except OSError as exc:
+                cleanup_errors.append("exit-journal:" + type(exc).__name__)
+            # Keep the subtree for recovery if its process group still exists or
+            # evidence cannot be retained. Never delete paths used by live work.
+            if created and absent:
+                try:
+                    cases = owned / "cases"
+                    if cases.exists():
+                        journal.event("retain-case-journals", source=str(cases), destination=str(root / (run_id + ".cases")))
+                        cases.rename(root / (run_id + ".cases"))
+                    remove_owned_tree(owned)
+                except OSError as exc:
+                    cleanup_errors.append("owned-paths:" + type(exc).__name__)
+            if not absent or owned.exists() or cleanup_errors:
                 exit_code = 125
-            journal.event(
-                "finished",
-                run_id=run_id,
-                raw_exit=raw_exit,
-                exit_code=exit_code,
-                cancelled_signal=cancelled,
-                pgid=process.pid if process else None,
-                process_group_absent=absent,
-                owned_absent=not owned.exists(),
-            )
+            try:
+                journal.event(
+                    "finished",
+                    run_id=run_id,
+                    raw_exit=raw_exit,
+                    exit_code=exit_code,
+                    cancelled_signal=cancelled,
+                    pgid=process.pid if process else None,
+                    process_group_absent=absent,
+                    owned_absent=not owned.exists(),
+                    cleanup_errors=cleanup_errors,
+                )
+            except OSError:
+                exit_code = 125
         finally:
             journal.close()
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
-    print(json.dumps({"run_id": run_id, "journal": str(journal_path), "exit_code": exit_code}))
+    print(json.dumps({"run_id": run_id, "journal": str(journal_path), "exit_code": exit_code, "raw_exit": raw_exit}))
     return exit_code
 
 

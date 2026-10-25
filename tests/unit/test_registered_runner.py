@@ -143,6 +143,34 @@ class RegisteredRunnerTest(unittest.TestCase):
         self.assertEqual(finished["raw_exit"], 0)
         self.assertEqual(finished["exit_code"], 125)
 
+    def test_readonly_module_cache_is_removed_without_changing_borrowed_link_target(self) -> None:
+        borrowed = self.root / "borrowed"
+        borrowed.mkdir()
+        (borrowed / "unchanged").write_text("shared")
+        borrowed.chmod(0o555)
+        try:
+            program = f'import os,pathlib; p=pathlib.Path(os.environ["GOMODCACHE"])/"module"; p.mkdir(); (p/"file").write_text("x"); p.chmod(0o555); (p.parent/"borrowed").symlink_to({str(borrowed)!r},target_is_directory=True)'
+            result = subprocess.run(self.command(program), capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(borrowed.stat().st_mode & 0o777, 0o555)
+            self.assertEqual((borrowed / "unchanged").read_text(), "shared")
+            self.assert_clean(self.events())
+        finally:
+            borrowed.chmod(0o700)
+
+    def test_path_cleanup_error_keeps_raw_exit_and_recoverable_identity(self) -> None:
+        module = self.load_runner()
+        with patch.object(module, "remove_owned_tree", side_effect=PermissionError("owned test path")):
+            result = module.main(self.command("raise SystemExit(7)")[2:])
+        events = self.events()
+        finished = next(event for event in events if event["event"] == "finished")
+        self.assertEqual(result, 125)
+        self.assertEqual(finished["raw_exit"], 7)
+        self.assertEqual(finished["exit_code"], 125)
+        self.assertFalse(finished["owned_absent"])
+        self.assertEqual(finished["cleanup_errors"], ["owned-paths:PermissionError"])
+        self.assertTrue(any(event["event"] == "command-exit" and event["raw_exit"] == 7 for event in events))
+
     def test_journal_create_write_and_fsync_failure_never_launch(self) -> None:
         module = self.load_runner()
         arguments = ["--evidence-root", str(self.root), "--label", "failure", "--input", str(RUNNER), "--", sys.executable, "-c", "raise AssertionError('business executed')"]
