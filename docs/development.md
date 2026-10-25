@@ -277,7 +277,7 @@ Go 和 Web 使用同一入口，将 `--` 后命令替换为绝对路径的 `go t
 
 父进程必须成功创建、追加并 fsync journal，才会启动子进程；子进程还须追加、fsync
 实际 PID/父 PID/进程组身份，才能 exec 业务命令。失败即停止，无 journal 不会业务 import。
-TMP、常见 HF/Torch/ModelScope/tiktoken 缓存、Go 编译/模块缓存、uv/npm 缓存均分配在
+TMP、常见 HF/Torch/ModelScope/tiktoken 缓存、Go 编译/模块缓存与 telemetry（独占目录、mode=off）、uv/npm 缓存均分配在
 事前登记的本次独占目录。默认 HF/Transformers 离线；允许下载时明确传
 `--allow-model-download`，仍须确认加载器实际使用已登记缓存。显式配置的项目模型路径、
 自定义缓存及业务输出不被环境变量自动拦截，使用前必须登记并接入对应 helper；无法确认时

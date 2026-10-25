@@ -137,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             "XDG_CACHE_HOME": "cache",
             "GOCACHE": "go-cache",
             "GOMODCACHE": "go-modules",
+            "TEST_TELEMETRY_DIR": "go-telemetry",
             "TIKTOKEN_CACHE_DIR": "models/tiktoken",
             "MODELSCOPE_CACHE": "models/modelscope",
             "SENTENCE_TRANSFORMERS_HOME": "models/sentence-transformers",
@@ -151,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
             directory = owned / relative
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             env[key] = str(directory)
+        # Go 1.25 reads telemetry mode from this directory, not GOTELEMETRY env.
+        (owned / "go-telemetry/mode").write_text("off\n")
         env.update({"MULTIRAG_RUN_ID": run_id, "MULTIRAG_RUN_JOURNAL": str(journal_path), "MULTIRAG_PROVIDER_TEST_JOURNAL": str(journal_path), "PYTHONDONTWRITEBYTECODE": "1"})
         # Override inherited model cache aliases that would otherwise bypass HF_HOME.
         env["HUGGINGFACE_HUB_CACHE"] = str(owned / "models/huggingface/hub")
