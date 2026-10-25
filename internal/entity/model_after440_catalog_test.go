@@ -11,7 +11,7 @@ func TestAfter440ProviderCatalogCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, count := range map[string]int{"Avian": 6, "Astraflow": 18, "Perplexity": 6} {
+	for name, count := range map[string]int{"Avian": 6, "Astraflow": 21, "Perplexity": 6} {
 		p := manager.FindProvider(name)
 		if p == nil || len(p.Models) != count || p.ModelDriver.Name() == "dummy" {
 			t.Fatal(name, p)
@@ -21,6 +21,9 @@ func TestAfter440ProviderCatalogCapabilities(t *testing.T) {
 		provider, name, capability string
 		tokens                     int
 	}{
+		{"Astraflow", "text-embedding-3-large", "embedding", 16384},
+		{"Astraflow", "bge-reranker-v2-m3", "rerank", 8192},
+		{"Astraflow", "IndexTeam/IndexTTS-2", "tts", 0},
 		{"Replicate", "replicate/all-mpnet-base-v2:b6b7585c9640cd7a9572c6e129c9549d79c9c31f0d3fdce7baac7c67ca38f305", "embedding", 384},
 		{"Perplexity", "pplx-embed-v1-0.6b", "embedding", 32000},
 		{"Mistral", "magistral-medium-latest", "chat", 40000},

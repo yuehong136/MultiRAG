@@ -131,3 +131,31 @@ func TestMinerULocalInstanceWithoutKey(t *testing.T) {
 		t.Fatal("missing local endpoint accepted")
 	}
 }
+
+func TestPaddleOCRLocalInstanceWithoutKey(t *testing.T) {
+	provider := &entity.Provider{Name: "PaddleOCR_Local", URLSuffix: models.URLSuffix{OCR: "layout-parsing"}}
+	for _, base := range []string{"http://one.invalid", "http://two.invalid"} {
+		raw, err := encodeProviderInstanceExtra("office", base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		driver, api, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: raw})
+		if err != nil || driver.Name() != "paddleocr_local" || api.APIKey == nil || *api.APIKey != "" || api.Region == nil || *api.Region != "office" {
+			t.Fatalf("local OCR instance binding failed: %T %v", driver, err)
+		}
+		if _, ok := driver.(models.OCRDriver); !ok {
+			t.Fatal("local OCR capability missing")
+		}
+	}
+	if _, _, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: "{}"}); err == nil {
+		t.Fatal("missing local endpoint accepted")
+	}
+	provider.Name = "PaddleOCR"
+	raw, err := encodeProviderInstanceExtra("", "http://hosted.invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: raw}); err == nil {
+		t.Fatal("hosted provider without credentials accepted")
+	}
+}

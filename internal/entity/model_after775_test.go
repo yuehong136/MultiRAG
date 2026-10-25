@@ -28,7 +28,7 @@ func TestAfter775ProviderCatalogs(t *testing.T) {
 			if name == "PPIO" && len(p.Models) != 21 {
 				t.Fatal("full PPIO catalog footprint", len(p.Models))
 			}
-			if name == "TogetherAI" || name == "ZHIPU-AI" || name == "OpenRouter" {
+			if name == "TogetherAI" || name == "ZHIPU-AI" || name == "OpenRouter" || name == "Groq" {
 				if _, ok := p.ModelDriver.(models.ASRDriver); !ok || p.URLSuffix.ASR != "audio/transcriptions" {
 					t.Fatal("ASR contract missing")
 				}
