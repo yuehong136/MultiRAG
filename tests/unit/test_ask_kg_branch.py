@@ -59,6 +59,7 @@ def ask_stubs(monkeypatch):
 
 
 async def test_async_ask_empty_kbs_use_dealer_not_kg(monkeypatch, async_db, ask_stubs):
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
 
     with pytest.raises(_Sentinel) as exc:
@@ -70,6 +71,7 @@ async def test_async_ask_empty_kbs_use_dealer_not_kg(monkeypatch, async_db, ask_
 
 async def test_async_ask_kg_branch_uses_positional_convention(monkeypatch, async_db, ask_stubs):
     kb = _fake_kb(parser_id=dialog_service.ParserType.KG)
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: [kb]))
 
     with pytest.raises(_Sentinel) as exc:
@@ -86,6 +88,7 @@ async def test_async_ask_kg_branch_uses_positional_convention(monkeypatch, async
 
 
 def test_sync_ask_empty_kbs_use_dealer_not_kg(monkeypatch, db, ask_stubs):
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
 
     with pytest.raises(_Sentinel) as exc:
@@ -97,6 +100,7 @@ def test_sync_ask_empty_kbs_use_dealer_not_kg(monkeypatch, db, ask_stubs):
 
 def test_sync_ask_kg_branch_uses_positional_convention(monkeypatch, db, ask_stubs):
     kb = _fake_kb(parser_id=dialog_service.ParserType.KG)
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: [kb]))
 
     with pytest.raises(_Sentinel) as exc:

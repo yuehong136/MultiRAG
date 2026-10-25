@@ -898,3 +898,64 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
             db.commit()
         with Session(env["engine"]) as db:
             assert not db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))).all()
+
+
+def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(search_api: dict[str, Any]) -> None:
+    env = search_api
+    created = requests.post(
+        env["base"] + "/api/v1/searches",
+        headers={"Authorization": "Bearer " + env["jwt"]},
+        json={"name": "Weight scratch", "search_config": {"vector_similarity_weight": 0, "similarity_threshold": 0, "kb_ids": [env["dataset"]], "cross_languages": [], "keyword": False}},
+        timeout=30,
+    )
+    assert created.status_code == 200 and created.json()["code"] == 0, created.text
+    identifier = created.json()["data"]["search_id"]
+    lexical = {
+        **env["rows"]["dataset"][1],
+        "id": uuid4().hex,
+        "content_with_weight": "lexicalonly lexicalonly lexicalonly",
+        "content_ltks": "lexicalonly lexicalonly lexicalonly",
+        "vector": [-0.2] * 768,
+        "q_768_vec": [-0.2] * 768,
+    }
+    assert settings.docStoreConn.insert([lexical], env["collections"]["dataset"], env["dataset"]) == []
+    env["reader"].flush(env["collections"]["dataset"], timeout=60)
+    evidence: dict[str, Any] = {}
+    try:
+        for weight in [0, 1]:
+            updated = requests.put(
+                env["base"] + "/api/v1/searches/" + identifier,
+                headers={"Authorization": "Bearer " + env["jwt"]},
+                json={"name": "Weight scratch", "search_config": {"vector_similarity_weight": weight}},
+                timeout=30,
+            )
+            assert updated.status_code == 200 and updated.json()["code"] == 0, updated.text
+            with Session(env["engine"]) as db:
+                saved = db.get(Search, identifier)
+                assert saved.search_config["vector_similarity_weight"] == weight
+                assert saved.search_config["cross_languages"] == [] and saved.search_config["keyword"] is False
+            for datasets in [[env["dataset"]], [env["dataset"], env["second"]]]:
+                response = request(
+                    env, "POST", "/search", json={"question": "lexicalonly", "dataset_ids": datasets, "search_id": identifier, "vector_similarity_weight": 1 - weight, "similarity_threshold": 0.9}
+                )
+                body = response.json()
+                assert response.status_code == 200 and body["code"] == 0, response.text
+                assert body["data"]["chunks"], body
+                first = body["data"]["chunks"][0]["chunk_id"]
+                assert (first == lexical["id"]) is (weight == 0), body
+                evidence[f"{weight}-{len(datasets)}"] = body["data"]
+        rejected = requests.put(
+            env["base"] + "/api/v1/searches/" + identifier,
+            headers={"Authorization": "Bearer " + env["jwt"]},
+            json={"name": "Weight scratch", "search_config": {"vector_similarity_weight": 2}},
+            timeout=30,
+        )
+        assert rejected.json()["code"] != 0
+        with Session(env["engine"]) as db:
+            assert db.get(Search, identifier).search_config["vector_similarity_weight"] == 1
+        env["record_path"].with_suffix(".saved-weight-readback.json").write_text(json.dumps(evidence))
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(Search).where(Search.id == identifier))
+            db.commit()
+

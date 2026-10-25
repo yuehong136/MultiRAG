@@ -219,3 +219,16 @@ def test_search_routes_have_pure_async_dependency_tree(client: Any, route_depend
         auth = async_current_user if method == "GET" and path == "/api/v1/searches" else async_current_tenant_id
         assert auth in calls, f"{method} {path} 缺异步鉴权依赖"
         assert get_async_db in calls, f"{method} {path} 缺 AsyncSession 依赖"
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, True, "0.3"])
+def test_search_create_rejects_invalid_weight_before_save(client: Any, monkeypatch: pytest.MonkeyPatch, value: Any) -> None:
+    from unittest.mock import Mock
+
+    _stub_tenant_exists(monkeypatch, [])
+    monkeypatch.setattr(SearchService, "query", classmethod(lambda *_a, **_k: []))
+    save = Mock()
+    monkeypatch.setattr(SearchService, "save", save)
+    response = client.post("/api/v1/searches", json={"name": "invalid", "search_config": {"vector_similarity_weight": value}})
+    assert response.json()["code"] == int(RetCode.DATA_ERROR)
+    save.assert_not_called()

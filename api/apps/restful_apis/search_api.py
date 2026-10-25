@@ -33,6 +33,7 @@ from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.identity.principal import Principal
 from api.utils.api_utils import async_current_tenant_id, async_current_user, get_error_data_result, get_result
+from api.utils.dataset_search import validate_search_config
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from common.constants import RetCode, StatusEnum
 from common.misc_utils import get_uuid
@@ -100,6 +101,7 @@ def _create_search(db: Session, tenant_id: str, req: dict[str, Any]) -> tuple[bo
     req["created_by"] = tenant_id
 
     try:
+        req["search_config"] = validate_search_config(req.get("search_config"))
         resolve_reference_metadata_preferences(None, req.get("search_config"))
     except ValueError as exc:
         return False, str(exc), RetCode.DATA_ERROR
@@ -175,6 +177,7 @@ def _update_search(
     if not isinstance(new_config, dict):
         return False, "search_config must be a JSON object", RetCode.DATA_ERROR
     try:
+        validate_search_config({**current_config, **new_config})
         resolve_reference_metadata_preferences(None, new_config)
     except ValueError as exc:
         return False, str(exc), RetCode.DATA_ERROR
@@ -298,8 +301,8 @@ async def completions(
     request: SearchCompletionRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
-    """基于 search app 配置的检索问答(SSE 流式)。kb_ids 优先取 search_config,body 兜底。"""
+) -> Response:
+    """Use saved search settings; only an omitted kb_ids falls back to the body."""
     if not await db.run_sync(lambda s: SearchService.accessible4deletion(s, search_id, tenant_id)):  # TODO(async-phase4)
         return _respond(False, "No authorization.", RetCode.AUTHENTICATION_ERROR)
 
@@ -307,10 +310,13 @@ async def completions(
     if not search_app:
         return get_error_data_result(retmsg=f"Cannot find search {search_id}")
 
-    search_config = search_app.get("search_config", {})
+    try:
+        search_config = validate_search_config(search_app.get("search_config", {}))
+    except ValueError:
+        return get_error_data_result(retmsg="Invalid saved search configuration.")
     include, fields = resolve_reference_metadata_preferences(request.model_dump(), search_config)
     search_config = {**search_config, "reference_metadata": {"include": include, "fields": None if fields is None else sorted(fields)}}
-    kb_ids = search_config.get("kb_ids") or request.kb_ids or []
+    kb_ids = search_config.get("kb_ids", request.kb_ids if request.kb_ids is not None else [])
     if not kb_ids:
         return get_error_data_result(retmsg="`kb_ids` is required.")
 

@@ -1,4 +1,11 @@
-"""Dataset retrieval and document graph orchestration for REST consumers."""
+"""Dataset retrieval and document graph orchestration for REST consumers.
+
+Authorized saved searches override request controls by field presence, including
+zero weights, false switches and empty selections. The search-app slider uses
+hybrid lexical/vector candidates unless an explicit search mode is configured.
+Dataset requests retain dense defaults; an explicitly supplied vector weight
+without a mode selects the same weighted search behavior.
+"""
 
 import asyncio
 import json
@@ -13,7 +20,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_id, g
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
+from api.utils.dataset_search import SEARCH_CONFIG_FIELDS, SearchDatasetRequest, SearchDatasetsRequest, saved_search_mode, validate_search_config
 from api.utils.reference_metadata import enrich_reference_metadata_async, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum
@@ -44,7 +51,7 @@ async def search_dataset(db: AsyncSession, tenant_id: str, dataset_id: str, requ
     dataset_ids = list(dict.fromkeys(request.dataset_ids if request.dataset_ids is not None else [dataset_id]))
     if dataset_id not in dataset_ids:
         return False, "Path dataset must be included in dataset_ids.", RetCode.ARGUMENT_ERROR
-    return await search_datasets(db, tenant_id, SearchDatasetsRequest.model_validate({**request.model_dump(), "dataset_ids": dataset_ids}))
+    return await search_datasets(db, tenant_id, SearchDatasetsRequest.model_validate({**request.model_dump(exclude_unset=True), "dataset_ids": dataset_ids}))
 
 
 async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatasetsRequest) -> tuple[bool, Any, RetCode]:
@@ -64,14 +71,6 @@ async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatas
         return False, str(exc), RetCode.DATA_ERROR
     kb = kbs[0]
     tenant_ids = list(dict.fromkeys(item.tenant_id for item in kbs))
-    if request.tenant_rerank_id is not None:
-        allowed_model = await db.scalar(select(TenantLLM.id).where(TenantLLM.id == request.tenant_rerank_id, TenantLLM.tenant_id.in_({tenant_id, *tenant_ids})))
-        if allowed_model is None:
-            return False, "No authorization for rerank model.", RetCode.AUTHENTICATION_ERROR
-    # KG aggregates are dataset-wide and cannot honor document predicates.
-    # Saved searches may supply filters even when the request has none.
-    if request.use_kg and (request.doc_ids or request.meta_data_filter or request.search_id):
-        return False, "Knowledge graph enhancement cannot be combined with document filters, metadata filters, or a saved search.", RetCode.BAD_REQUEST
     metadata_filter = request.meta_data_filter or {}
     search_config: dict[str, Any] = {}
     if request.search_id:
@@ -86,8 +85,18 @@ async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatas
         membership = await db.run_sync(lambda s: UserTenantService.get_membership(s, tenant_id=saved_search.tenant_id, user_id=tenant_id))  # TODO(async-phase4)
         if membership is None or not UserTenantService.can_access_tenant_resources(membership.role):
             return False, "No authorization.", RetCode.AUTHENTICATION_ERROR
-        search_config = saved_search.search_config or {}
+        try:
+            search_config = validate_search_config(saved_search.search_config or {})
+            request = SearchDatasetsRequest.model_validate({**request.model_dump(), **{key: value for key, value in search_config.items() if key in SEARCH_CONFIG_FIELDS}})
+        except ValueError:
+            return False, "Invalid saved search configuration.", RetCode.ARGUMENT_ERROR
         metadata_filter = search_config.get("meta_data_filter", {})
+    if request.tenant_rerank_id is not None:
+        allowed_model = await db.scalar(select(TenantLLM.id).where(TenantLLM.id == request.tenant_rerank_id, TenantLLM.tenant_id.in_({tenant_id, *tenant_ids})))
+        if allowed_model is None:
+            return False, "No authorization for rerank model.", RetCode.AUTHENTICATION_ERROR
+    if request.use_kg and (request.doc_ids is not None or metadata_filter or request.search_id):
+        return False, "Knowledge graph enhancement cannot be combined with document filters, metadata filters, or a saved search.", RetCode.BAD_REQUEST
     doc_ids = request.doc_ids
     question = request.question
     if metadata_filter:
@@ -133,7 +142,9 @@ async def search_datasets(db: AsyncSession, tenant_id: str, request: SearchDatas
         rerank_mdl=reranker,
         highlight=request.highlight,
         rank_feature=labels,
-        search_mode=request.get_search_mode_dict(),
+        search_mode=saved_search_mode(request.model_dump())
+        if request.search_mode is None and (request.search_id or "vector_similarity_weight" in request.model_fields_set)
+        else request.get_search_mode_dict(),
         kb_ids=dataset_ids,
     )
     if request.use_kg:
