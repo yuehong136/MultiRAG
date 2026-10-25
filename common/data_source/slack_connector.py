@@ -2,6 +2,7 @@
 
 import itertools
 import logging
+import math
 import re
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry import ConnectionErrorRetryHandler
 from slack_sdk.http_retry.builtin_interval_calculators import FixedValueRetryIntervalCalculator
+from slack_sdk.web.slack_response import SlackResponse
 
 from common.data_source.config import _SLACK_LIMIT, ENABLE_EXPENSIVE_EXPERT_CALLS, FAST_TIMEOUT, INDEX_BATCH_SIZE, MAX_CHANNELS_TO_LOG, MAX_RETRIES, SLACK_NUM_THREADS
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError, CredentialExpiredError, InsufficientPermissionsError, UnexpectedValidationError
@@ -20,21 +22,18 @@ from common.data_source.interfaces import CheckpointedConnectorWithPermSync, Cre
 from common.data_source.models import (
     BasicExpertInfo,
     ChannelType,
-    CheckpointOutput,
     ConnectorCheckpoint,
     ConnectorFailure,
     Document,
-    DocumentFailure,
     GenerateSlimDocumentOutput,
     MessageType,
     ProcessedSlackMessage,
     SecondsSinceUnixEpoch,
     SlackMessageFilterReason,
     SlimDocument,
-    TextSection,
     ThreadType,
 )
-from common.data_source.utils import SlackTextCleaner, expert_info_from_slack_id, get_message_link, make_paginated_slack_api_call
+from common.data_source.utils import SlackTextCleaner, expert_info_from_slack_id
 
 # Disallowed message subtypes list
 _DISALLOWED_MSG_SUBTYPES = {
@@ -54,6 +53,30 @@ _DISALLOWED_MSG_SUBTYPES = {
 }
 
 
+class _GuardedWebClient(WebClient):
+    def __init__(self, check_active: Callable[[], None], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._check_active = check_active
+        self._configured_timeout = float(self.timeout)
+
+    def api_call(self, api_method: str, **kwargs: Any) -> SlackResponse:
+        self._check_active()
+        remaining = getattr(self._check_active, "remaining_seconds", lambda: self._configured_timeout)()
+        self.timeout = min(self._configured_timeout, remaining)
+        response = super().api_call(api_method, **kwargs)
+        self._check_active()
+        return response.validate()
+
+
+class _StrictSlackTextCleaner(SlackTextCleaner):
+    def _replace_user_ids_with_names(self, message: str) -> str:
+        # The shared cleaner tolerates failed lookups. In ingestion, permission
+        # and rate-limit failures must not publish incomplete text as success.
+        for user_id in set(re.findall(r"<@(.*?)>", message)):
+            message = message.replace(f"<@{user_id}>", "@" + self._get_slack_name(user_id))
+        return message
+
+
 def default_msg_filter(message: MessageType) -> SlackMessageFilterReason | None:
     """Default message filter"""
     # Filter bot messages
@@ -70,15 +93,47 @@ def default_msg_filter(message: MessageType) -> SlackMessageFilterReason | None:
     return None
 
 
+def _pages(call: Callable[..., Any], field: str, check_active: Callable[[], None] | None = None, **kwargs: Any) -> Generator[dict[str, Any], None, None]:
+    cursor: str | None = None
+    seen: set[str] = set()
+    while True:
+        if check_active is not None:
+            check_active()
+        response = call(cursor=cursor, limit=_SLACK_LIMIT, **kwargs)
+        if check_active is not None:
+            check_active()
+        response.validate()
+        payload = response.data
+        if not isinstance(payload, dict) or not isinstance(payload.get(field), list) or any(not isinstance(item, dict) for item in payload[field]):
+            raise ConnectorValidationError("Malformed Slack collection response")
+        metadata = payload.get("response_metadata", {})
+        if not isinstance(metadata, dict):
+            raise ConnectorValidationError("Malformed Slack pagination metadata")
+        next_cursor = metadata.get("next_cursor", "")
+        if not isinstance(next_cursor, str) or next_cursor in seen:
+            raise ConnectorValidationError("Slack pagination did not advance")
+        has_more = payload.get("has_more", False)
+        if type(has_more) is not bool or (has_more and not next_cursor):
+            raise ConnectorValidationError("Incomplete Slack pagination")
+        yield payload
+        if not next_cursor:
+            return
+        seen.add(next_cursor)
+        cursor = next_cursor
+
+
 def _collect_paginated_channels(
     client: WebClient,
     exclude_archived: bool,
     channel_types: list[str],
+    check_active: Callable[[], None] | None = None,
 ) -> list[ChannelType]:
     """收集分页的频道列表"""
     channels: list[ChannelType] = []
-    for result in make_paginated_slack_api_call(
+    for result in _pages(
         client.conversations_list,
+        "channels",
+        check_active,
         exclude_archived=exclude_archived,
         types=channel_types,
     ):
@@ -92,6 +147,7 @@ def get_channels(
     exclude_archived: bool = True,
     get_public: bool = True,
     get_private: bool = True,
+    check_active: Callable[[], None] | None = None,
 ) -> list[ChannelType]:
     channel_types = []
     if get_public:
@@ -99,26 +155,13 @@ def get_channels(
     if get_private:
         channel_types.append("private_channel")
 
-    # First try to get public and private channels
-    try:
-        channels = _collect_paginated_channels(
-            client=client,
-            exclude_archived=exclude_archived,
-            channel_types=channel_types,
-        )
-    except SlackApiError as e:
-        msg = f"Unable to fetch private channels due to: {e}."
-        if not get_public:
-            logging.warning(msg + " Public channels are not enabled.")
-            return []
-
-        logging.warning(msg + " Trying again with public channels only.")
-        channel_types = ["public_channel"]
-        channels = _collect_paginated_channels(
-            client=client,
-            exclude_archived=exclude_archived,
-            channel_types=channel_types,
-        )
+    # A private-channel or permission error must not become a successful partial sync.
+    channels = _collect_paginated_channels(client, exclude_archived, channel_types, check_active)
+    identifiers: set[str] = set()
+    for channel in channels:
+        if not isinstance(channel.get("id"), str) or not channel["id"] or not isinstance(channel.get("name"), str) or not channel["name"] or channel["id"] in identifiers:
+            raise ConnectorValidationError("Invalid or duplicate Slack channel")
+        identifiers.add(channel["id"])
     return channels
 
 
@@ -128,21 +171,26 @@ def get_channel_messages(
     oldest: str | None = None,
     latest: str | None = None,
     callback: Any = None,
+    check_active: Callable[[], None] | None = None,
 ) -> Generator[list[MessageType], None, None]:
     """Get all messages in a channel"""
+    if check_active is not None:
+        check_active()
     # Join channel so bot can access messages
     if not channel["is_member"]:
         client.conversations_join(
             channel=channel["id"],
-            is_private=channel["is_private"],
         )
         logging.info(f"Successfully joined '{channel['name']}'")
 
-    for result in make_paginated_slack_api_call(
+    for result in _pages(
         client.conversations_history,
+        "messages",
+        check_active,
         channel=channel["id"],
         oldest=oldest,
         latest=latest,
+        inclusive=True,
     ):
         if callback:
             if callback.should_stop():
@@ -152,16 +200,33 @@ def get_channel_messages(
         yield cast(list[MessageType], result["messages"])
 
 
-def get_thread(client: WebClient, channel_id: str, thread_id: str) -> ThreadType:
+def get_thread(client: WebClient, channel_id: str, thread_id: str, latest: str | None = None, check_active: Callable[[], None] | None = None) -> ThreadType:
     threads: list[MessageType] = []
-    for result in make_paginated_slack_api_call(client.conversations_replies, channel=channel_id, ts=thread_id):
-        threads.extend(result["messages"])
-    return threads
+    seen: set[str] = set()
+    for result in _pages(client.conversations_replies, "messages", check_active, channel=channel_id, ts=thread_id, latest=latest, inclusive=True):
+        for message in result["messages"]:
+            ts = message.get("ts")
+            if not isinstance(ts, str) or not ts or ts in seen:
+                raise ConnectorValidationError("Invalid or duplicate Slack thread message")
+            seen.add(ts)
+            if latest is None or float(ts) <= float(latest):
+                threads.append(message)
+    if not threads:
+        raise ConnectorValidationError("Slack returned an empty thread")
+    return sorted(threads, key=lambda message: float(message["ts"]))
 
 
 def get_latest_message_time(thread: ThreadType) -> datetime:
-    max_ts = max([float(msg.get("ts", 0)) for msg in thread])
-    return datetime.fromtimestamp(max_ts, tz=UTC)
+    timestamps = [float(message["ts"]) for message in thread]
+    for message in thread:
+        if "edited" in message:
+            edited = message["edited"]
+            if not isinstance(edited, dict) or not isinstance(edited.get("ts"), str):
+                raise ConnectorValidationError("Invalid Slack message edit timestamp")
+            timestamps.append(float(edited["ts"]))
+    if any(not math.isfinite(value) or value < 0 for value in timestamps):
+        raise ConnectorValidationError("Invalid Slack message timestamp")
+    return datetime.fromtimestamp(max(timestamps), tz=UTC)
 
 
 def _build_doc_id(channel_id: str, thread_ts: str) -> str:
@@ -187,26 +252,22 @@ def thread_to_doc(
         experts = [expert_info_from_slack_id(user_id=sender_id, client=client, user_cache=user_cache) for sender_id in all_sender_ids if sender_id]
         valid_experts = [expert for expert in experts if expert]
 
-    first_message = slack_cleaner.index_clean(cast(str, thread[0]["text"]))
+    cleaned_messages = [slack_cleaner.index_clean(cast(str, message["text"])) for message in thread]
+    first_message = cleaned_messages[0]
     snippet = first_message[:50].rstrip() + "..." if len(first_message) > 50 else first_message
-
     doc_sem_id = f"{initial_sender_name} in #{channel['name']}: {snippet}".replace("\n", " ")
-
+    blob = "\n\n".join(cleaned_messages).encode("utf-8")
     return Document(
-        id=_build_doc_id(channel_id=channel_id, thread_ts=thread[0]["ts"]),
-        sections=[
-            TextSection(
-                link=get_message_link(event=m, client=client, channel_id=channel_id),
-                text=slack_cleaner.index_clean(cast(str, m["text"])),
-            )
-            for m in thread
-        ],
+        id=_build_doc_id(channel_id=channel_id, thread_ts=thread[0].get("thread_ts") or thread[0]["ts"]),
         source="slack",
         semantic_identifier=doc_sem_id,
+        extension=".txt",
+        blob=blob,
+        size_bytes=len(blob),
         doc_updated_at=get_latest_message_time(thread),
         primary_owners=valid_experts,
         metadata={"Channel": channel["name"]},
-        external_access=channel_access,
+        externale_access=channel_access,
     )
 
 
@@ -215,7 +276,7 @@ def filter_channels(
     channels_to_connect: list[str] | None,
     regex_enabled: bool,
 ) -> list[ChannelType]:
-    if not channels_to_connect:
+    if channels_to_connect is None:
         return all_channels
 
     if regex_enabled:
@@ -291,17 +352,19 @@ def _message_to_doc(
     seen_thread_ts: set[str],
     channel_access: Any | None,
     msg_filter_func: Callable[[MessageType], SlackMessageFilterReason | None] = default_msg_filter,
+    latest: str | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> tuple[Document | None, SlackMessageFilterReason | None]:
     """Convert message to document"""
     filtered_thread: ThreadType | None = None
     filter_reason: SlackMessageFilterReason | None = None
-    thread_ts = message.get("thread_ts")
+    thread_ts = message.get("thread_ts") or (message["ts"] if message.get("reply_count") else None)
     if thread_ts:
         # If thread_ts exists, need to process thread
         if thread_ts in seen_thread_ts:
             return None, None
 
-        thread = get_thread(client=client, channel_id=channel["id"], thread_id=thread_ts)
+        thread = get_thread(client=client, channel_id=channel["id"], thread_id=thread_ts, latest=latest, check_active=check_active)
 
         filtered_thread = []
         for message in thread:
@@ -328,6 +391,8 @@ def _message_to_doc(
         user_cache=user_cache,
         channel_access=channel_access,
     )
+    if thread_ts:
+        doc.id = _build_doc_id(channel["id"], thread_ts)
     return doc, None
 
 
@@ -340,77 +405,24 @@ def _process_message(
     seen_thread_ts: set[str],
     channel_access: Any | None,
     msg_filter_func: Callable[[MessageType], SlackMessageFilterReason | None] = default_msg_filter,
+    latest: str | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> ProcessedSlackMessage:
     thread_ts = message.get("thread_ts")
     thread_or_message_ts = thread_ts or message["ts"]
-    try:
-        doc, filter_reason = _message_to_doc(
-            message=message,
-            client=client,
-            channel=channel,
-            slack_cleaner=slack_cleaner,
-            user_cache=user_cache,
-            seen_thread_ts=seen_thread_ts,
-            channel_access=channel_access,
-            msg_filter_func=msg_filter_func,
-        )
-        return ProcessedSlackMessage(
-            doc=doc,
-            thread_or_message_ts=thread_or_message_ts,
-            filter_reason=filter_reason,
-            failure=None,
-        )
-    except Exception as e:
-        (logging.exception(f"Error processing message {message['ts']}"))
-        return ProcessedSlackMessage(
-            doc=None,
-            thread_or_message_ts=thread_or_message_ts,
-            filter_reason=None,
-            failure=ConnectorFailure(
-                failed_document=DocumentFailure(
-                    document_id=_build_doc_id(channel_id=channel["id"], thread_ts=thread_or_message_ts),
-                    document_link=get_message_link(message, client, channel["id"]),
-                ),
-                failure_message=str(e),
-                exception=e,
-            ),
-        )
-
-
-def _get_all_doc_ids(
-    client: WebClient,
-    channels: list[str] | None = None,
-    channel_name_regex_enabled: bool = False,
-    msg_filter_func: Callable[[MessageType], SlackMessageFilterReason | None] = default_msg_filter,
-    callback: Any = None,
-) -> GenerateSlimDocumentOutput:
-    all_channels = get_channels(client)
-    filtered_channels = filter_channels(all_channels, channels, channel_name_regex_enabled)
-
-    for channel in filtered_channels:
-        channel_id = channel["id"]
-        external_access = None  # Simplified version, not handling permissions
-        channel_message_batches = get_channel_messages(
-            client=client,
-            channel=channel,
-            callback=callback,
-        )
-
-        for message_batch in channel_message_batches:
-            slim_doc_batch: list[SlimDocument] = []
-            for message in message_batch:
-                filter_reason = msg_filter_func(message)
-                if filter_reason:
-                    continue
-
-                slim_doc_batch.append(
-                    SlimDocument(
-                        id=_build_doc_id(channel_id=channel_id, thread_ts=message["ts"]),
-                        external_access=external_access,
-                    )
-                )
-
-            yield slim_doc_batch
+    doc, filter_reason = _message_to_doc(
+        message=message,
+        client=client,
+        channel=channel,
+        slack_cleaner=slack_cleaner,
+        user_cache=user_cache,
+        seen_thread_ts=seen_thread_ts,
+        channel_access=channel_access,
+        msg_filter_func=msg_filter_func,
+        latest=latest,
+        check_active=check_active,
+    )
+    return ProcessedSlackMessage(doc=doc, thread_or_message_ts=thread_or_message_ts, filter_reason=filter_reason, failure=None)
 
 
 class SlackConnector(
@@ -427,7 +439,13 @@ class SlackConnector(
         batch_size: int = INDEX_BATCH_SIZE,
         num_threads: int = SLACK_NUM_THREADS,
         use_redis: bool = False,  # Simplified version, not using Redis
+        check_active: Callable[[], None] | None = None,
     ) -> None:
+        if type(batch_size) is not int or batch_size <= 0:
+            raise ConnectorValidationError("Slack batch_size must be a positive integer")
+        if type(channel_regex_enabled) is not bool:
+            raise ConnectorValidationError("Slack channel_regex_enabled must be a boolean")
+        self._check_active = check_active or (lambda: None)
         self.channels = channels
         self.channel_regex_enabled = channel_regex_enabled
         self.batch_size = batch_size
@@ -445,7 +463,9 @@ class SlackConnector(
 
     @channels.setter
     def channels(self, channels: list[str] | None) -> None:
-        self._channels = [channel.removeprefix("#") for channel in channels] if channels else None
+        if channels is not None and (not isinstance(channels, list) or any(not isinstance(channel, str) or not channel.strip().removeprefix("#") for channel in channels)):
+            raise ConnectorValidationError("Slack channels must be null or a list of nonempty names")
+        self._channels = None if channels is None else [channel.strip().removeprefix("#") for channel in channels]
 
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         """Load credentials"""
@@ -454,7 +474,9 @@ class SlackConnector(
     def set_credentials_provider(self, credentials_provider: Any) -> None:
         """Set credentials provider"""
         credentials = credentials_provider.get_credentials()
-        bot_token = credentials["slack_bot_token"]
+        bot_token = credentials.get("slack_bot_token")
+        if not isinstance(bot_token, str) or not bot_token.strip():
+            raise ConnectorMissingCredentialError("Slack bot token is missing")
 
         # Simplified version, not using Redis
         connection_error_retry_handler = ConnectionErrorRetryHandler(
@@ -468,12 +490,13 @@ class SlackConnector(
             ],
         )
 
-        self.client = WebClient(token=bot_token, retry_handlers=[connection_error_retry_handler])
+        self.client = _GuardedWebClient(check_active=self._check_active, token=bot_token, timeout=30, retry_handlers=[connection_error_retry_handler])
 
         # For fast response requests
-        self.fast_client = WebClient(token=bot_token, timeout=FAST_TIMEOUT)
-        self.text_cleaner = SlackTextCleaner(client=self.client)
+        self.fast_client = _GuardedWebClient(check_active=self._check_active, token=bot_token, timeout=FAST_TIMEOUT)
+        self.text_cleaner = _StrictSlackTextCleaner(client=self.client)
         self.credentials_provider = credentials_provider
+        self.user_cache = {}
 
     def retrieve_all_slim_docs_perm_sync(
         self,
@@ -482,42 +505,73 @@ class SlackConnector(
         if self.client is None:
             raise ConnectorMissingCredentialError("Slack")
 
-        return _get_all_doc_ids(
-            client=self.client,
-            channels=self.channels,
-            channel_name_regex_enabled=self.channel_regex_enabled,
-            callback=callback,
-        )
+        for documents in self._fetch_document_batches(callback=callback):
+            yield [SlimDocument(id=document.id) for document in documents]
 
-    def load_from_checkpoint(
-        self,
-        start: SecondsSinceUnixEpoch,
-        end: SecondsSinceUnixEpoch,
-        checkpoint: ConnectorCheckpoint,
-    ) -> CheckpointOutput:
-        """Load documents from checkpoint"""
-        # Simplified version, not implementing full checkpoint functionality
-        logging.warning("Checkpoint functionality not implemented in simplified version")
-        return []
+    def _fetch_document_batches(self, start: float = 0.0, end: float | None = None, callback: Any = None) -> Generator[list[Document], None, None]:
+        if self.client is None or self.text_cleaner is None:
+            raise ConnectorMissingCredentialError("Slack")
+        end = datetime.now(UTC).timestamp() if end is None else end
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start:
+            raise ConnectorValidationError("Invalid Slack polling window")
+        if self.channels == []:
+            self._check_active()
+            return
+        channels = filter_channels(get_channels(self.client, check_active=self._check_active), self.channels, self.channel_regex_enabled)
+        batch: list[Document] = []
+        for channel in channels:
+            seen_thread_ts: set[str] = set()
+            # History excludes replies to old parents. Scan parents as well,
+            # then filter by the complete thread's latest message time.
+            for messages in get_channel_messages(self.client, channel, latest=str(end), callback=callback, check_active=self._check_active):
+                for message in messages:
+                    self._check_active()
+                    ts = message.get("ts")
+                    if not isinstance(ts, str) or not ts or not isinstance(message.get("text"), str):
+                        raise ConnectorValidationError("Invalid Slack message")
+                    if message.get("thread_ts") is not None and (not isinstance(message["thread_ts"], str) or not message["thread_ts"]):
+                        raise ConnectorValidationError("Invalid Slack thread identity")
+                    canonical_ts = message.get("thread_ts") or ts
+                    if canonical_ts in seen_thread_ts:
+                        continue
+                    processed = _process_message(message, self.client, channel, self.text_cleaner, self.user_cache, seen_thread_ts, None, latest=str(end), check_active=self._check_active)
+                    self._check_active()
+                    if processed.failure is not None:
+                        raise ConnectorValidationError("Slack message processing failed: " + processed.failure.failure_message) from processed.failure.exception
+                    seen_thread_ts.add(canonical_ts)
+                    document = processed.doc
+                    if document is not None and start < document.doc_updated_at.timestamp() <= end:
+                        batch.append(document)
+                        if len(batch) >= self.batch_size:
+                            self._check_active()
+                            yield batch
+                            batch = []
+        self._check_active()
+        if batch:
+            yield batch
+
+    def load_from_state(self) -> Generator[list[Document], None, None]:
+        return self._fetch_document_batches()
+
+    def poll_source(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch) -> Generator[list[Document], None, None]:
+        return self._fetch_document_batches(start, end)
+
+    def load_from_checkpoint(self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch, checkpoint: ConnectorCheckpoint) -> Generator[Document | ConnectorFailure, None, ConnectorCheckpoint]:
+        if checkpoint.has_more:
+            for batch in self.poll_source(start, end):
+                yield from batch
+        return ConnectorCheckpoint(has_more=False)
 
     def load_from_checkpoint_with_perm_sync(
-        self,
-        start: SecondsSinceUnixEpoch,
-        end: SecondsSinceUnixEpoch,
-        checkpoint: ConnectorCheckpoint,
-    ) -> CheckpointOutput:
-        """Load documents from checkpoint (with permission sync)"""
-        # Simplified version, not implementing full checkpoint functionality
-        logging.warning("Checkpoint functionality not implemented in simplified version")
-        return []
+        self, start: SecondsSinceUnixEpoch, end: SecondsSinceUnixEpoch, checkpoint: ConnectorCheckpoint
+    ) -> Generator[Document | ConnectorFailure, None, ConnectorCheckpoint]:
+        return self.load_from_checkpoint(start, end, checkpoint)
 
     def build_dummy_checkpoint(self) -> ConnectorCheckpoint:
-        """Build dummy checkpoint"""
-        return ConnectorCheckpoint()
+        return ConnectorCheckpoint(has_more=True)
 
     def validate_checkpoint_json(self, checkpoint_json: str) -> ConnectorCheckpoint:
-        """Validate checkpoint JSON"""
-        return ConnectorCheckpoint()
+        return ConnectorCheckpoint.model_validate_json(checkpoint_json, strict=True)
 
     def validate_connector_settings(self) -> None:
         """Validate connector settings"""
@@ -541,14 +595,15 @@ class SlackConnector(
                     raise CredentialExpiredError(f"Invalid or expired Slack bot token ({error_msg}).")
                 raise UnexpectedValidationError(f"Slack API returned a failure: {error_msg}")
 
+            users_response = self.fast_client.users_info(user="USLACKBOT")
+            users_response.validate()
+            if not users_response.get("ok", False):
+                raise InsufficientPermissionsError("Slack token requires users:read")
+
         except SlackApiError as e:
             slack_error = e.response.get("error", "")
             if slack_error == "ratelimited":
-                retry_after = int(e.response.headers.get("Retry-After", 1))
-                logging.warning(
-                    f"Slack API rate limited during validation. Retry suggested after {retry_after} seconds. Proceeding with validation, but be aware that connector operations might be throttled."
-                )
-                return
+                raise UnexpectedValidationError("Slack validation was rate limited; retry later") from e
             elif slack_error == "missing_scope":
                 raise InsufficientPermissionsError(
                     "Slack bot token lacks the necessary scope to list/access channels. Please ensure your Slack app has 'channels:read' (and/or 'groups:read' for private channels)."
@@ -562,29 +617,3 @@ class SlackConnector(
             raise e
         except Exception as e:
             raise UnexpectedValidationError(f"Unexpected error during Slack settings validation: {e}")
-
-
-if __name__ == "__main__":
-    # Example usage
-    import os
-
-    slack_channel = os.environ.get("SLACK_CHANNEL")
-    connector = SlackConnector(
-        channels=[slack_channel] if slack_channel else None,
-    )
-
-    # Simplified version, directly using credentials dictionary
-    credentials = {"slack_bot_token": os.environ.get("SLACK_BOT_TOKEN", "test-token")}
-
-    class SimpleCredentialsProvider:
-        def get_credentials(self):
-            return credentials
-
-    provider = SimpleCredentialsProvider()
-    connector.set_credentials_provider(provider)
-
-    try:
-        connector.validate_connector_settings()
-        print("Slack connector settings validated successfully")
-    except Exception as e:
-        print(f"Validation failed: {e}")
