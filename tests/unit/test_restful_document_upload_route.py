@@ -12,6 +12,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
@@ -253,3 +254,18 @@ def test_upload_rejects_invalid_table_overrides_without_service_calls(client: ob
     result = client.post(_PATH, files=[("file", ("a.csv", b"x\ny\n", "text/csv"))], data={"parser_config": value})
     assert result.json()["code"] == int(RetCode.ARGUMENT_ERROR)
     assert calls == []
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_partial_upload_preserves_error_and_confirms_only_successful_documents(client: TestClient, monkeypatch: pytest.MonkeyPatch, raw: bool) -> None:
+    sessions: list[object] = []
+    _stub_happy_chain(monkeypatch, sessions)
+    monkeypatch.setattr(FileService, "upload_document", classmethod(lambda cls, s, k, fc, uid, **kw: (["failed.exe: unsupported"], [(dict(_RAW_DOC), b"blob")])))
+    response = client.post(_PATH, params={"return_raw_files": str(raw).lower()}, files=[("file", ("a.pdf", b"content")), ("file", ("failed.exe", b"bad"))])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == int(RetCode.SERVER_ERROR) and payload["message"] == "failed.exe: unsupported"
+    confirmed = payload["data"]["uploaded"]
+    assert len(confirmed) == 1 and confirmed[0]["id"] == "doc1"
+    assert confirmed[0]["dataset_id"] == "kb1" and confirmed[0]["run"] == "UNSTART"
+    assert "blob" not in confirmed[0]

@@ -20,13 +20,13 @@ from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from api.db.db_models import get_async_db
 from api.identity.principal import AuthenticationSource
 from api.utils.api_utils import Principal, async_current_user, get_error_argument_result, get_json_result
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import RetCode
 from common.exceptions import ArgumentException, NotFoundException
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-MEMORY_LIST_MAX_PAGE_SIZE = 1000
 
 
 # ==================== Pydantic Models (V2 风格) ====================
@@ -125,7 +125,7 @@ async def delete_memory(memory_id: str, user: Principal = Depends(async_current_
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get("/memories", summary="获取Memory列表", response_description="成功获取Memory列表")
+@router.get("/memories", summary="获取Memory列表", response_description="成功获取Memory列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_memory(
     tenant_id: list[str] | None = Query(None, description="租户ID列表"),
     owner_ids: list[str] | None = Query(None, description="所有者租户ID列表；仅缩小可见范围"),
@@ -133,11 +133,10 @@ async def list_memory(
     storage_type: str | None = Query(None, description="存储类型"),
     keywords: str | None = Query(None, description="搜索关键词"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(50, ge=1, description="每页数量"),
+    page_size: int = Query(50, description="每页数量", ge=1, le=REST_API_MAX_PAGE_SIZE),
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
-    effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     filter_params = {}
     if tenant_id is not None:
         filter_params["tenant_id"] = tenant_id
@@ -148,7 +147,7 @@ async def list_memory(
     if storage_type is not None:
         filter_params["storage_type"] = storage_type
     try:
-        result = await db.run_sync(lambda s: memory_api_service.list_memory(s, user.id, filter_params, keywords or "", page, effective_page_size))  # TODO(async-phase4)
+        result = await db.run_sync(lambda s: memory_api_service.list_memory(s, user.id, filter_params, keywords or "", page, page_size))  # TODO(async-phase4)
         return get_json_result(data=result)
     except Exception as e:
         logger.error(e)
@@ -168,21 +167,20 @@ async def get_memory_config(memory_id: str, db: AsyncSession = Depends(get_async
         return get_json_result(data=False, retmsg="Internal server error", retcode=RetCode.SERVER_ERROR)
 
 
-@router.get("/memories/{memory_id}", summary="获取Memory详情", response_description="成功获取Memory详情及消息列表")
+@router.get("/memories/{memory_id}", summary="获取Memory详情", response_description="成功获取Memory详情及消息列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def get_memory_messages(
     memory_id: str,
     agent_id: list[str] | None = Query(None, description="Agent ID列表"),
     keywords: str | None = Query(None, description="搜索关键词"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(50, ge=1, description="每页数量"),
+    page_size: int = Query(50, description="每页数量", ge=1, le=REST_API_MAX_PAGE_SIZE),
     user: Principal = Depends(async_current_user),
 ) -> JSONResponse:
-    effective_page_size = min(page_size, MEMORY_LIST_MAX_PAGE_SIZE)
     if agent_id and len(agent_id) == 1 and "," in agent_id[0]:
         agent_id = agent_id[0].split(",")
     try:
         # msg_store 列表与 DB 富化交错：整块在工作线程 + 自开短会话执行
-        result = await memory_api_service.get_memory_messages_async(memory_id, agent_id or [], keywords.strip() if keywords else "", page, effective_page_size, user_id=user.id)
+        result = await memory_api_service.get_memory_messages_async(memory_id, agent_id or [], keywords.strip() if keywords else "", page, page_size, user_id=user.id)
         return get_json_result(data=result)
     except NotFoundException as e:
         logger.error(e)

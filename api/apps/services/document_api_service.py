@@ -50,8 +50,10 @@ def batch_update_document_metadata(
     if not isinstance(updates, list) or not isinstance(deletes, list):
         raise MetadataBatchUpdateError("updates and deletes must be lists.")
 
-    metadata_condition = selector.get("metadata_condition") or {}
-    if metadata_condition and not isinstance(metadata_condition, dict):
+    metadata_condition = selector.get("metadata_condition")
+    if metadata_condition is None:
+        metadata_condition = {}
+    if not isinstance(metadata_condition, dict):
         raise MetadataBatchUpdateError("metadata_condition must be an object.")
 
     raw_document_ids = selector.get("document_ids")

@@ -162,9 +162,8 @@ def _resolve_api_key() -> str:
 class MultiRAGConnector:
     _MAX_DATASET_CACHE = 32
     _CACHE_TTL = 300
-    # 后端 /api/v1/datasets 目前未对 page_size 设上限；若 RESTful 层将来引入
-    # max page size，此值必须同步下调，否则超限请求会被静默截断。
-    _DATASET_PAGE_SIZE = 1000
+    # Match the public REST limit; list_datasets_structured walks every page.
+    _DATASET_PAGE_SIZE = 100
 
     def __init__(self, base_url: str, version: str = "v1"):
         self.base_url = base_url
@@ -282,11 +281,15 @@ class MultiRAGConnector:
         datasets: list[dict] = []
         seen_ids: set[str] = set()
         page = 1
+        expected_total: int | None = None
 
         while True:
             logging.debug("list_datasets_structured fetching /datasets page=%s page_size=%s", page, self._DATASET_PAGE_SIZE)
             res_json = await self._fetch_datasets_page(api_key=api_key, page=page, page_size=self._DATASET_PAGE_SIZE)
-            page_datasets = res_json.get("data", [])
+            page_datasets = res_json.get("data")
+            if not isinstance(page_datasets, list) or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in page_datasets):
+                raise ToolError("Invalid dataset list response.")
+            previous = len(seen_ids)
             for d in page_datasets:
                 if not d.get("id") or d["id"] in seen_ids:
                     continue
@@ -302,10 +305,21 @@ class MultiRAGConnector:
                         "embd_id": embedding_model,
                     }
                 )
-            total = res_json.get("total")
-            # total 缺失时保守收敛到单页，避免异常响应导致死循环。
-            if not page_datasets or total is None or len(seen_ids) >= total:
+            totals = [res_json[key] for key in ("total_datasets", "total") if key in res_json]
+            if totals and (any(type(value) is not int or value < len(seen_ids) for value in totals) or len(set(totals)) != 1):
+                raise ToolError("Invalid dataset total.")
+            if totals:
+                declared_total = totals[0]
+                if expected_total is not None and declared_total != expected_total:
+                    raise ToolError("Dataset total changed between pages.")
+                expected_total = declared_total
+            total = expected_total
+            if total is not None and len(seen_ids) == total:
                 break
+            if total is None and len(page_datasets) < self._DATASET_PAGE_SIZE:
+                break
+            if not page_datasets or len(seen_ids) == previous:
+                raise ToolError("Dataset pagination stopped before the declared total.")
             page += 1
 
         logging.info("list_datasets_structured resolved %s accessible datasets", len(datasets))

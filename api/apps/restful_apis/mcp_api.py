@@ -13,6 +13,7 @@ from api.db.db_models import MCPServer, get_async_db
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.user_service import TenantService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, get_mcp_tools, server_error_response
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.web_utils import get_float, safe_json_parse
 from common.constants import VALID_MCP_SERVER_TYPES
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
@@ -119,11 +120,11 @@ def _owned_server_payload(db: Session, mcp_id: str, tenant_id: str) -> JsonObjec
     }
 
 
-@router.get("/mcp/servers", summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表")
+@router.get("/mcp/servers", summary="获取MCP服务器列表", response_description="成功获取MCP服务器列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_mcp(
     keywords: str = Query(""),
     page: int = Query(0, ge=0),
-    page_size: int = Query(0, ge=0),
+    page_size: int = Query(0, ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time"),
     desc: bool = Query(True),
     mcp_ids: Annotated[list[str] | None, Query()] = None,

@@ -28,6 +28,23 @@ Authorization: Bearer <your-api-key>
 - Content-Type: `application/json`
 - 请求体使用 JSON 格式
 
+### 分页
+
+REST 列表的 `page_size` 最大为 100。超限、负数、空值、非整数或重复的分页参数返回 HTTP 422，
+不会静默截断。省略参数时沿用各端点的默认值：
+
+| 端点 | 默认 `page_size` | 是否接受 `page_size=0` |
+|---|---:|---|
+| 数据集、文档、文档分块 | 30 | 否 |
+| 文件列表、Connector 同步日志 | 15 | 否 |
+| Memory 列表与消息 | 50 | 否 |
+| Agent、Chat、Search、MCP Server 列表；数据集摄取日志 | 0 | 是，保留原不分页语义 |
+| Agent 与 Chat 会话 | 30 | 是，沿用各自服务语义 |
+
+`POST /retrieval` 的 JSON `page_size` 默认为 30，只接受 1–100 的整数，不接受字符串或布尔值。
+分页读取完整目录时逐页请求；数据集列表在顶层 `total_datasets` 返回总数。
+MCP 数据集发现与管理 CLI 的用户数据集列表使用每页 100 条并读取全部页。
+
 ### 响应格式
 
 多数业务端点使用 JSON 信封。二进制响应和端点专用错误格式以各小节为准。常见成功响应结构：
@@ -297,6 +314,14 @@ SQL 失败不更新 replica，replica 失败会将同轮日志改记为失败后
 
 已有 session 分支在 SQL 保存成功后才交付终态/表单，每轮引用追加保存，读取兼容历史
 单包/数组/按序号的字典；chunk citation map 保留 citation_id。会话不提交草稿 replica。
+
+### 文档批量上传结果
+
+`POST /datasets/{dataset_id}/documents` 逐文件上传，不自动启动解析。
+全部成功沿用 `code=0` 和现有列表响应；部分失败保留 HTTP 200、非零 `code=500` 与错误 `message`，
+并在 `data.uploaded` 中返回已确认成功的文档。该可选清单始终使用普通映射字段
+（`id/name/dataset_id/run=UNSTART` 等），不含文件字节，也不受 `return_raw_files` 影响。
+全部失败沿用原错误信封，不包含该清单。客户端只确认清单中的文件，重试剩余失败文件，避免重复上传成功项。
 
 ### 文件关联数据集
 

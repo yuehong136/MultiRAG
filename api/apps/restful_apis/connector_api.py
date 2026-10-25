@@ -44,6 +44,7 @@ from api.db.db_models import get_async_db
 from api.db.services.connector_service import ConnectorAuthorizationError
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from common.constants import RetCode
 
 router = APIRouter()
@@ -242,11 +243,11 @@ async def rm_connector(
         return server_error_response(e)
 
 
-@router.get("/connectors/{connector_id}/logs", summary="获取同步日志", response_description="同步日志列表")
+@router.get("/connectors/{connector_id}/logs", summary="获取同步日志", response_description="同步日志列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_logs(
     connector_id: str,
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(15, ge=1, description="每页条数"),
+    page_size: int = Query(15, description="每页条数", ge=1, le=REST_API_MAX_PAGE_SIZE),
     db: AsyncSession = Depends(get_async_db),
     user: Principal = Depends(async_current_user),
 ):

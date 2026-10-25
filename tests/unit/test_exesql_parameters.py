@@ -17,8 +17,9 @@ def test_protected_database_refused_before_tool_construction(monkeypatch: pytest
         calls.append("database connection")
         pytest.fail("refused tool must never open a database connection")
 
-    for driver in (exesql.pymysql, exesql.psycopg2, exesql.pyodbc):
+    for driver in (exesql.pymysql, exesql.psycopg2):
         monkeypatch.setattr(driver, "connect", forbidden)
+    monkeypatch.setattr(exesql, "import_module", forbidden)
     param = ExeSQLParam()
     param.database = "rag_flow"
     param.username = "external-user"

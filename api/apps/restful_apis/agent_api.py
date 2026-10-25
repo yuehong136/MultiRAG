@@ -60,6 +60,7 @@ from api.identity.mcp_delegation.contracts import DelegationErrorCode, McpDelega
 from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event
 from api.utils.agent_streaming import AgentStreamingResponse
 from api.utils.api_utils import BusinessError, Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from common import settings
 from common.constants import RetCode
 from common.misc_utils import get_uuid, thread_pool_exec
@@ -1549,11 +1550,11 @@ async def update_agent_tags(
     return get_json_result(data=True)
 
 
-@router.get("/agents", summary="列出Canvas", response_description="成功获取Canvas列表")
+@router.get("/agents", summary="列出Canvas", response_description="成功获取Canvas列表", dependencies=[Depends(validate_rest_api_pagination)])
 def list_canvas(
     keywords: str = Query("", description="搜索关键词"),
     page: int = Query(0, description="页码"),
-    page_size: int = Query(0, description="每页数量"),
+    page_size: int = Query(0, description="每页数量", ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     canvas_category: str | None = Query(None, description="Canvas类别"),
@@ -1739,13 +1740,13 @@ async def trace(
         return server_error_response(e)
 
 
-@router.get("/agents/{canvas_id}/sessions", summary="获取Canvas会话列表", response_description="成功获取会话列表")
+@router.get("/agents/{canvas_id}/sessions", summary="获取Canvas会话列表", response_description="成功获取会话列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def sessions(
     canvas_id: str,
     user_id: str | None = Query(None, description="用户ID筛选"),
     exp_user_id: str | None = Query(None, description="实验用户ID筛选"),
     page: int = Query(1, description="页码"),
-    page_size: int = Query(30, description="每页数量"),
+    page_size: int = Query(30, description="每页数量", ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("update_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     keywords: str | None = Query(None, description="搜索关键词"),

@@ -40,6 +40,7 @@ from api.db.services.user_service import TenantService, UserTenantService
 from api.identity.principal import Principal
 from api.utils.api_utils import async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_data_result, get_result
 from api.utils.dataset_search import normalize_search_mode, search_mode_response
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from common.constants import LLMType, RetCode, StatusEnum
@@ -618,13 +619,13 @@ async def create_chat(
     return await db.run_sync(_create)  # TODO(async-phase4)
 
 
-@router.get("/chats", summary="List chats")
+@router.get("/chats", summary="List chats", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_chats(
     id: str | None = Query(None, description="Chat ID filter"),
     name: str | None = Query(None, description="Chat name filter"),
     keywords: str | None = Query("", description="Keyword filter"),
     page: int = Query(0, description="Page number; 0 disables pagination"),
-    page_size: int = Query(0, description="Items per page; 0 disables pagination"),
+    page_size: int = Query(0, description="Items per page; 0 disables pagination", ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time", description="Sort field"),
     desc: bool = Query(True, description="Sort descending"),
     owner_ids: list[str] | None = Query(None, description="Filter active member tenant IDs; omitted selects all authorized tenants"),
@@ -1013,13 +1014,13 @@ async def create_session(
     return await db.run_sync(_create)  # TODO(async-phase4)
 
 
-@router.get("/chats/{chat_id}/sessions", summary="List chat sessions")
+@router.get("/chats/{chat_id}/sessions", summary="List chat sessions", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_sessions(
     chat_id: str,
     id: str | None = Query(None, description="Session ID filter"),
     name: str | None = Query(None, description="Session name filter"),
     page: int = Query(1, description="Page number"),
-    page_size: int = Query(30, description="Items per page; 0 disables pagination"),
+    page_size: int = Query(30, description="Items per page; 0 disables pagination", ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time", description="Sort field"),
     desc: bool = Query(True, description="Sort descending"),
     user_id: str | None = Query(None, description="Session user ID filter"),

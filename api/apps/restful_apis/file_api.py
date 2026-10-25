@@ -39,6 +39,7 @@ from api.skills import core_files
 from api.skills.package import MAX_FILE_SIZE, MAX_FILES, MAX_TOTAL_SIZE
 from api.skills.schemas import SkillError
 from api.utils.api_utils import async_current_tenant_id, construct_json_result, get_error_argument_result, get_error_data_result, get_result, server_error_response
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_headers
 from common.constants import RetCode
 from common.misc_utils import thread_pool_exec
@@ -154,12 +155,12 @@ async def create_or_upload(
         return get_error_data_result(retmsg="Internal server error")
 
 
-@router.get("/files", summary="列出文件夹下的文件")
+@router.get("/files", summary="列出文件夹下的文件", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_files(
     parent_id: str | None = Query(None, description="父文件夹ID"),
     keywords: str = Query("", description="搜索关键字"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(15, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(15, ge=1, le=REST_API_MAX_PAGE_SIZE, description="每页数量"),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     db: AsyncSession = Depends(get_async_db),

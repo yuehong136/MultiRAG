@@ -913,19 +913,48 @@ class MultiRAGClient:
         else:
             print(f"Fail to list chunks, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
 
-    def list_user_datasets(self, command: dict):
+    def list_user_datasets(self, command: dict) -> None:
         if self.server_type != "user":
             print("This command is only allowed in USER mode")
             return
-        # 迁移至 RESTful：GET /api/v1/datasets（page_size 放大以保留旧 kb/list 列全部的行为）
-        response = self.http_client.request("GET", "datasets?page_size=1000", use_api_base=True, auth_kind="web")
-        res_json = response.json()
-        if response.status_code == 200:
-            data = res_json.get("data", {})
-            datasets = data.get("kbs", []) if isinstance(data, dict) else data
-            self._print_table_simple(datasets)
-        else:
-            print(f"Fail to list datasets, code: {res_json.get('code', res_json.get('retcode'))}, message: {res_json.get('message', res_json.get('retmsg'))}")
+        datasets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        page = 1
+        expected_total: int | None = None
+        while True:
+            response = self.http_client.request("GET", f"datasets?page={page}&page_size=100", use_api_base=True, auth_kind="web")
+            payload = response.json()
+            if response.status_code != 200 or payload.get("code", payload.get("retcode")) != 0:
+                print(f"Fail to list datasets, code: {payload.get('code', payload.get('retcode'))}, message: {payload.get('message', payload.get('retmsg'))}")
+                return
+            data = payload.get("data")
+            rows = data.get("kbs") if isinstance(data, dict) else data
+            if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows):
+                raise ValueError("Invalid dataset list response")
+            previous = len(seen)
+            for row in rows:
+                if row["id"] not in seen:
+                    datasets.append(row)
+                    seen.add(row["id"])
+            totals = [payload[key] for key in ("total_datasets", "total") if key in payload]
+            if isinstance(data, dict) and "total" in data:
+                totals.append(data["total"])
+            if totals and (any(type(value) is not int or value < len(seen) for value in totals) or len(set(totals)) != 1):
+                raise ValueError("Invalid dataset total")
+            if totals:
+                declared_total = totals[0]
+                if expected_total is not None and declared_total != expected_total:
+                    raise ValueError("Dataset total changed between pages")
+                expected_total = declared_total
+            total = expected_total
+            if total is not None and len(seen) == total:
+                break
+            if total is None and len(rows) < 100:
+                break
+            if not rows or len(seen) == previous:
+                raise ValueError("Dataset pagination stopped before the declared total")
+            page += 1
+        self._print_table_simple(datasets)
 
     def list_user_agents(self, command: dict):
         if self.server_type != "user":
