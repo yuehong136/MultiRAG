@@ -27,6 +27,7 @@ DATABASE_TESTS = frozenset(
         "test_dataset_raptor_scope.py",
         "test_document_existence.py",
         "test_enterprise_subject_repository.py",
+        "test_evaluation_token_usage.py",
         "test_identity_channel_credentials.py",
         "test_identity_directory_events.py",
         "test_identity_onboarding.py",
