@@ -178,6 +178,15 @@ def test_invalid_create_and_update_have_zero_sql_effect(contracts: dict[str, Any
         response = request_api(env, "PUT", "/datasets/" + data["id"], credential=env["keys"][0], payload=payload)
         assert response.status_code == 422, response.text
         assert sql_state(env) == before
+    for extension in [{"chunk_token_num": 0}, {"built_in_metadata": [{"type": "string"}]}]:
+        for wrapped in [False, True]:
+            payload = {"parser_config": {"ext": extension}}
+            if wrapped:
+                payload = {"ext": payload}
+            before = sql_state(env)
+            response = request_api(env, "PUT", "/datasets/" + data["id"], credential=env["keys"][0], payload=payload)
+            assert response.status_code == 422, response.text
+            assert sql_state(env) == before
 
 
 def test_update_partial_parser_avatar_omission_and_methods_http_sql(contracts: dict[str, Any]) -> None:

@@ -474,13 +474,24 @@ def validate_partial_parser_config(config: dict[str, Any] | None) -> None:
         return
     if len(json.dumps(config, ensure_ascii=False)) > 65535:
         raise ValueError("Parser config exceeds size limit (max 65,535 characters)")
-    patch = {key: value for key, value in config.items() if key in ParserConfig.model_fields}
+    extension = config.get("ext") or {}
+    if not isinstance(extension, dict):
+        raise ValueError("Parser config ext must be a JSON object")
+    # The service flattens this legacy extension before merging with storage.
+    # Validate the same effective values rather than only their outer siblings.
+    effective = {**config, **extension}
+    patch = {key: value for key, value in effective.items() if key in ParserConfig.model_fields}
     for key, model in (("raptor", RaptorConfig), ("graphrag", GraphragConfig), ("parent_child", ParentChildConfig)):
         if isinstance(patch.get(key), dict):
             patch[key] = {name: value for name, value in patch[key].items() if name in model.model_fields}
     ParserConfig.model_validate(patch)
-    validate_parser_metadata(config)
-    normalize_table_parser_config(config)
+    validate_parser_metadata(effective)
+    normalize_table_parser_config(effective)
+    for key in ("table_column_mode", "table_column_roles", "table_column_names"):
+        if key in extension:
+            extension[key] = effective[key]
+        elif key in config:
+            config[key] = effective[key]
 
 
 def validate_upload_parser_config(value: Any) -> dict[str, Any]:

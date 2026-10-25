@@ -80,6 +80,22 @@ def test_partial_parser_extensions_survive() -> None:
         UpdateDatasetRequest(ext={"parser_config": {"raptor": {"max_token": 0}}})
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("extension", [{"chunk_token_num": 0}, {"auto_keywords": -1}, {"built_in_metadata": [{"type": "string"}]}, {"raptor": {"max_token": 0}}])
+def test_partial_parser_effective_extension_validation(extension: dict[str, Any], wrapped: bool) -> None:
+    payload: dict[str, Any] = {"parser_config": {"ext": extension}}
+    if wrapped:
+        payload = {"ext": payload}
+    with pytest.raises(ValidationError):
+        UpdateDatasetRequest.model_validate(payload)
+
+
+def test_partial_parser_extension_table_roles_are_normalized_without_losing_extensions() -> None:
+    patch = {"ext": {"table_column_roles": {"title": "vectorize"}, "future": {"zero": 0}}}
+    result = UpdateDatasetRequest(parser_config=patch).model_dump(exclude_unset=True)
+    assert result == {"parser_config": {"ext": {"table_column_roles": {"title": "indexing"}, "future": {"zero": 0}}}}
+
+
 def test_delete_rejects_duplicates_before_execution() -> None:
     with pytest.raises(ValidationError, match="Duplicate ids"):
         DeleteDatasetRequest(ids=["a", "a"])
