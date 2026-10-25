@@ -11,6 +11,7 @@ from uuid import uuid4
 import sqlalchemy as sa
 
 from common.config_utils import CONFIGS
+from tests.support.resource_journal import ResourceJournal
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,14 +57,17 @@ def scratch_database(evidence: Path) -> Iterator[sa.Engine]:
     from api.db.db_models import Base
 
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
+    journal = ResourceJournal("scratch_database")
     name = f"multirag_test_{uuid4().hex[:12]}"
     manifest = {"database": name, "pid": os.getpid(), "created": False, "absent": False, "private_config": None, "containers": []}
     path = evidence / f"{name}.database.json"
 
     def save() -> None:
+        journal.event("database-state", **manifest)
         path.write_text(json.dumps(manifest, indent=2))
         path.chmod(0o600)
 
+    journal.event("reserve-database", database=name, manifest=str(path), borrowed="configured PostgreSQL service; never delete service")
     admin_url = _pg_url(CONFIGS["postgresql"]["dbname"])
     assert _pg_role_can_create_db(admin_url), "HTTP verification requires isolated scratch database creation"
     with ExitStack() as cleanup:

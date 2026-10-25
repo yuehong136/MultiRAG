@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 from tests.support import services
 from tests.support.integration_suites import ACCEPTANCE, EVALS, INTEGRATION, PARALLEL_TESTS, SUITES, required_services, suite_paths
+from tests.support.resource_journal import ResourceJournal
 
 
 def _write_overlay_record(path: Path, record: dict[str, Any]) -> None:
@@ -46,6 +47,7 @@ def _write_overlay_record(path: Path, record: dict[str, Any]) -> None:
 @contextmanager
 def registered_overlay(report_dir: Path, manifest: dict[str, Any]) -> Iterator[Path]:
     """Register the exact private paths before creation, including interrupted runs."""
+    case_journal = ResourceJournal("integration-overlay")
     identifier = uuid.uuid4().hex
     directory = Path(tempfile.gettempdir()) / f"multirag-integration-{identifier}"
     overlay = directory / "services.json"
@@ -62,6 +64,7 @@ def registered_overlay(report_dir: Path, manifest: dict[str, Any]) -> Iterator[P
         "status": "registered-before-creation",
     }
     manifest["temporary_resource_journal"] = str(journal)
+    case_journal.event("overlay-state", **record)
     _write_overlay_record(journal, record)
     previous = signal.getsignal(signal.SIGTERM)
     handle_signals = threading.current_thread() is threading.main_thread()
@@ -79,6 +82,7 @@ def registered_overlay(report_dir: Path, manifest: dict[str, Any]) -> Iterator[P
         with open(overlay, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)):
             created_overlay = True
         record["status"] = "created"
+        case_journal.event("overlay-state", **record)
         _write_overlay_record(journal, record)
         yield overlay
     finally:
@@ -93,6 +97,7 @@ def registered_overlay(report_dir: Path, manifest: dict[str, Any]) -> Iterator[P
         finally:
             record["cleanup"] = {"overlay_absent": not overlay.exists(), "directory_absent": not directory.exists()}
             record["status"] = "cleaned" if all(record["cleanup"].values()) else "cleanup-required"
+            case_journal.event("overlay-state", **record)
             _write_overlay_record(journal, record)
 
 

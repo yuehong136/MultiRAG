@@ -27,17 +27,28 @@ func providerResourceRecord(t *testing.T, value map[string]any) {
 	t.Helper()
 	path := os.Getenv("MULTIRAG_PROVIDER_TEST_JOURNAL")
 	if path == "" {
+		if os.Getenv("MULTIRAG_RUN_ID") != "" {
+			t.Fatal("registered run requires provider resource journal")
+		}
 		return
 	}
 	providerJournalMu.Lock()
 	defer providerJournalMu.Unlock()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	flags := os.O_APPEND | os.O_WRONLY
+	if os.Getenv("MULTIRAG_RUN_ID") == "" {
+		flags |= os.O_CREATE
+	}
+	f, err := os.OpenFile(path, flags, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
 	value["case"] = t.Name()
+	value["parent_run_id"] = os.Getenv("MULTIRAG_RUN_ID")
 	if err := json.NewEncoder(f).Encode(value); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -51,11 +62,13 @@ func providerTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 		t.Fatal(err)
 	}
 	run := hex.EncodeToString(token)
-	providerResourceRecord(t, map[string]any{"action": "intent", "run_id": run, "kind": "http-listener", "address": "127.0.0.1:0"})
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	address := fmt.Sprintf("127.0.0.1:%d", 20000+(int(token[0])*256+int(token[1]))%30000)
+	providerResourceRecord(t, map[string]any{"action": "intent", "run_id": run, "kind": "http-listener", "address": address})
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { listener.Close() })
 	addr := listener.Addr().String()
 	providerResourceRecord(t, map[string]any{"action": "allocated", "run_id": run, "kind": "http-listener", "address": addr})
 	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler}}

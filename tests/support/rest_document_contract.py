@@ -2,14 +2,11 @@
 
 import asyncio
 import copy
-import json
-import os
 import socket
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack, contextmanager
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -27,28 +24,9 @@ from api.db.db_models import APIToken, Base, Knowledgebase, Tenant, User, UserTe
 from common import resources, settings
 from common.config_utils import CONFIGS
 from tests.support.database import _pg_url
+from tests.support.resource_journal import ResourceJournal
 from tests.support.runtime_upload import read_object
 from tests.support.uvicorn_runtime import run_server
-
-
-class ResourceJournal:
-    """Append and fsync before creation; later events never replace identities."""
-
-    def __init__(self, case: str) -> None:
-        self.run_id = uuid4().hex
-        root = Path(os.environ.get("REST_DOCUMENT_RESOURCE_DIR", "/tmp/multirag-rest-document-resources"))
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.path = root / f"{self.run_id}.jsonl"
-        self.lock = threading.RLock()
-        with self.path.open("x"):
-            self.path.chmod(0o600)
-        self.event("case", nodeid=case, pid=os.getpid())
-
-    def event(self, event: str, **fields: Any) -> None:
-        with self.lock, self.path.open("a") as stream:
-            stream.write(json.dumps({"run_id": self.run_id, "event": event, **fields}, default=str) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
 
 
 @pytest.fixture

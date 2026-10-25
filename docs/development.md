@@ -249,3 +249,57 @@ Python integration 若卡住，先用
 
 本轮整理参考 [OpenAI：Rethinking skills and prompts for GPT-6 Astra](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra)。
 验证描述和链接只能证明文档结构有效；实际完成率、停顿和测试开销需在后续任务中观察。
+
+## 事前登记验证命令
+
+需要严格资源证据的批次，从首次测试、应用 import、Go 编译或模型加载前，使用
+stdlib 入口 [run_registered.py](../scripts/run_registered.py)。先由任务所有者持久化登记
+worktree、证据目录及借用资源，再创建独占证据目录；每次执行生成新的 UUID journal、
+原始 stdout/stderr 文件，不复用或覆盖历史执行。
+
+```bash
+python3 scripts/run_registered.py \
+  --evidence-root /absolute/owned/evidence \
+  --label focused-python \
+  --input scripts/run_registered.py --input scripts/resource_journal.py \
+  --input tests/unit/test_registered_runner.py \
+  --input pyproject.toml --input uv.lock --input .github/consumer-web.json \
+  --borrowed /absolute/existing/venv \
+  -- /absolute/existing/venv/bin/python -m pytest --noconftest \
+     tests/unit/test_registered_runner.py -q \
+     --junitxml=/absolute/owned/evidence/unique-junit.xml
+```
+
+`--input` 重复提供本次实际源码、配置、锁文件和消费者 pin，journal 只记哈希；
+`--borrowed` 只填非秘密资源身份。命令参数和输出会保留，不在参数中传凭据。
+Go 和 Web 使用同一入口，将 `--` 后命令替换为绝对路径的 `go test ...` 或包管理器命令；
+使用已有运行时，不为此入口安装依赖。使用 `uv` 时传 `--no-sync`，避免修改借用的环境。
+
+父进程必须成功创建、追加并 fsync journal，才会启动子进程；子进程还须追加、fsync
+实际 PID/父 PID/进程组身份，才能 exec 业务命令。失败即停止，无 journal 不会业务 import。
+TMP、常见 HF/Torch/ModelScope/tiktoken 缓存、Go 编译/模块缓存、uv/npm 缓存均分配在
+事前登记的本次独占目录。默认 HF/Transformers 离线；允许下载时明确传
+`--allow-model-download`，仍须确认加载器实际使用已登记缓存。显式配置的项目模型路径、
+自定义缓存及业务输出不被环境变量自动拦截，使用前必须登记并接入对应 helper；无法确认时
+停止该入口的严格验收。受控写入 partial 文件只验证缓存路径收尾，不证明真实模型下载。
+
+成功、失败和可捕获的 SIGINT/SIGTERM/SIGHUP 都保留业务原始 exit，关闭自有进程组，
+删除本次 TMP/缓存目录并读回；case journals 转存为 `<run_id>.cases/`，持续保留。
+清理未完成返回 125，原始 exit 单独保留。运行者仍须从独立进程读回 PID/进程组、路径和
+case 资源状态。SIGKILL/主机崩溃不能执行 finally；journal 保留精确身份供后续恢复。
+命令不得 daemonize/setsid 逃离进程组，此类入口需要专用进程所有权 helper，不能宣称被自动收尾。
+
+外层 journal **仅覆盖上述进程组和路径**，不会自动观察业务资源：
+
+- Python 的 `tests.support.resource_journal.ResourceJournal` 提供 append-only case 身份；
+  REST document fixture 在 SQL/对象/索引/队列/监听器创建前 reserve，独立读回清理。
+  `scratch_database` 和 integration overlay 也保留追加历史，原有快照继续供既有调用方读取。
+- Go 当前接入的是 `providerResourceRecord` / `providerTestServer`，使用外层已创建的
+  `MULTIRAG_PROVIDER_TEST_JOURNAL`，每次写入 fsync，精确监听地址先 reserve 后 Listen。
+  其他历史 journal 环境名、直接 `httptest.NewServer`、`net.Listen` 或临时文件创建不会自动接入；
+  执行线必须先适配自己实际运行的 case。
+- 外部 DB、对象、索引和队列的失败/取消恢复仍由 case helper 及其精确身份负责；借用服务
+  绝不由 runner 删除。case 未提供事前登记与独立读回时，严格证据不足，不能用父进程日志抵扣。
+
+历史遗漏保持原结论，不以新的补跑倒填事前记录。局部 runner/helper 回归通过不代表全库、
+真实供应商、常驻 worker、生产或远程 CI 验证通过。
