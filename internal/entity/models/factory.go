@@ -43,6 +43,12 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewAI302Model(baseURL, urlSuffix), nil
 	case "jiekouai":
 		return NewJieKouAIModel(baseURL, urlSuffix), nil
+	case "ppio":
+		return NewPPIOModel(baseURL, urlSuffix), nil
+	case "tokenpony":
+		return NewTokenPonyModel(baseURL, urlSuffix), nil
+	case "groq":
+		return NewGroqModel(baseURL, urlSuffix), nil
 	case "togetherai":
 		return NewTogetherAIModel(baseURL, urlSuffix), nil
 	case "n1n":

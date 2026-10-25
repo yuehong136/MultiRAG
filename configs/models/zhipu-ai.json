@@ -11,7 +11,9 @@
     "embedding": "embeddings",
     "rerank": "rerank",
     "files": "files",
-    "models": "models"
+    "models": "models",
+    "asr": "audio/transcriptions",
+    "tts": "audio/speech"
   },
   "class": "glm",
   "models": [

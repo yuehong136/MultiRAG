@@ -13,6 +13,10 @@ import (
 // multipartASR writes all model/options fields before the audio file, for providers
 // that begin processing the file part before reading trailing form fields.
 func multipartASR(client *http.Client, base map[string]string, suffix string, name *string, audio []byte, api *APIConfig, config *ASRConfig, options ...mediaHTTPOptions) (*ASRResponse, error) {
+	return multipartASRForm(client, base, suffix, name, audio, api, config, false, options...)
+}
+
+func multipartASRForm(client *http.Client, base map[string]string, suffix string, name *string, audio []byte, api *APIConfig, config *ASRConfig, repeatedFields bool, options ...mediaHTTPOptions) (*ASRResponse, error) {
 	if name == nil || strings.TrimSpace(*name) == "" {
 		return nil, fmt.Errorf("ASR model required")
 	}
@@ -44,6 +48,12 @@ func multipartASR(client *http.Client, base map[string]string, suffix string, na
 			fields["prompt"] = config.Prompt
 		}
 	}
+	if repeatedFields {
+		if _, exists := fields["file_base64"]; exists {
+			return nil, fmt.Errorf("ASR params cannot override audio input")
+		}
+		fields["stream"] = false
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("model", *name); err != nil {
@@ -55,15 +65,7 @@ func multipartASR(client *http.Client, base map[string]string, suffix string, na
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		value, ok := fields[key].(string)
-		if !ok {
-			raw, err := json.Marshal(fields[key])
-			if err != nil {
-				return nil, fmt.Errorf("invalid ASR option")
-			}
-			value = string(raw)
-		}
-		if err := writer.WriteField(key, value); err != nil {
+		if err := writeMultipartASRField(writer, key, fields[key], repeatedFields); err != nil {
 			return nil, err
 		}
 	}
@@ -84,6 +86,35 @@ func multipartASR(client *http.Client, base map[string]string, suffix string, na
 		return nil, err
 	}
 	defer resp.Body.Close()
+	return readASRResponse(resp, local)
+}
+
+func writeMultipartASRField(writer *multipart.Writer, key string, value any, repeated bool) error {
+	if repeated {
+		if value == nil {
+			return nil
+		}
+		if values, ok := value.([]any); ok {
+			for _, item := range values {
+				if err := writeMultipartASRField(writer, key, item, false); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	text, ok := value.(string)
+	if !ok {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("invalid ASR option")
+		}
+		text = string(raw)
+	}
+	return writer.WriteField(key, text)
+}
+
+func readASRResponse(resp *http.Response, api *APIConfig) (*ASRResponse, error) {
 	raw, err := readMediaBody(resp.Body, MaxMediaBytes+MaxMediaParamsBytes)
 	if err != nil {
 		return nil, err
@@ -103,7 +134,7 @@ func multipartASR(client *http.Client, base map[string]string, suffix string, na
 	if err := ValidateASRResponse(response); err != nil {
 		return nil, err
 	}
-	if err := requestContext(local).Err(); err != nil {
+	if err := requestContext(api).Err(); err != nil {
 		return nil, err
 	}
 	return response, nil
