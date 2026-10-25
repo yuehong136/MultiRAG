@@ -46,8 +46,11 @@ make install  # uv sync --group dev --frozen
 
 docker compose -f docker/docker-compose-base.yml up -d
 uv run python -m api.multirag_server
-uv run python -m core.svr.task_executor
+uv run python -m core.svr.task_executor -i 1
 ```
+
+worker 的 `-i` / `--index` 默认值为 `0`；旧位置参数已退出。仅支持共享队列的
+`-t common`，索引、consumer 名称与 metrics 的关系见 [worker 入口](../core/svr/README.md)。
 
 地址和端口以生效配置为准。健康端点为 `GET /api/v1/system/ping` 与
 `GET /api/v1/system/healthz`；诊断还需核对组件状态、业务响应和相关日志，HTTP 200 本身不代表业务成功。
