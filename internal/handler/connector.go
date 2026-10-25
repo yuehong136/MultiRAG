@@ -17,8 +17,8 @@
 package handler
 
 import (
-	"net/http"
 	"multirag/internal/common"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 
@@ -70,4 +70,24 @@ func (h *ConnectorHandler) ListConnectors(c *gin.Context) {
 		"data":    result.Connectors,
 		"message": "success",
 	})
+}
+
+// GetConnector returns connector metadata without source configuration or credentials.
+// @Summary Get Connector
+// @Tags connector
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/v1/connectors/{connector_id} [get]
+func (h *ConnectorHandler) GetConnector(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	detail, code, err := h.connectorService.GetConnector(c.Request.Context(), c.Param("connector_id"), user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, detail, "success")
 }

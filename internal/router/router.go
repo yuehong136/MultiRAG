@@ -112,6 +112,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authorized.GET("/api/v1/tenants", r.tenantHandler.TenantList)
 		authorized.GET("/api/v1/tenant/list", r.tenantHandler.TenantList)
 		authorized.GET("/api/v1/connectors/", r.connectorHandler.ListConnectors)
+		authorized.GET("/api/v1/connectors/:connector_id", r.connectorHandler.GetConnector)
 		authorized.GET("/api/v1/chats/:chat_id/sessions", r.chatSessionHandler.ListChatSessions)
 		// User info endpoint
 		authorized.GET("/v1/user/info", r.userHandler.Info)

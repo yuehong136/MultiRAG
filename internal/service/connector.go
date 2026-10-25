@@ -17,7 +17,13 @@
 package service
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"multirag/internal/common"
 	"multirag/internal/dao"
+
+	"gorm.io/gorm"
 )
 
 // ConnectorService connector service
@@ -66,4 +72,26 @@ func (s *ConnectorService) ListConnectors(userID string) (*ListConnectorsRespons
 	return &ListConnectorsResponse{
 		Connectors: connectors,
 	}, nil
+}
+
+// GetConnector returns safe metadata under the current tenant resource access policy.
+func (s *ConnectorService) GetConnector(ctx context.Context, connectorID, userID string) (*dao.ConnectorDetail, common.ErrorCode, error) {
+	if connectorID == "" {
+		return nil, common.CodeDataError, fmt.Errorf("connector_id is required")
+	}
+	if userID == "" {
+		return nil, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	detail, err := s.connectorDAO.GetAccessibleDetail(ctx, connectorID, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to read connector.")
+	}
+	if detail.IndexingStart != nil {
+		timestamp := detail.IndexingStart.UTC()
+		detail.IndexingStart = &timestamp
+	}
+	return detail, common.CodeSuccess, nil
 }

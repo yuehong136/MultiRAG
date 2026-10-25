@@ -19,6 +19,7 @@ package dao
 import (
 	"context"
 	"multirag/internal/entity"
+	"time"
 )
 
 // ConnectorDAO connector data access object
@@ -99,4 +100,35 @@ func (dao *ConnectorDAO) ListByDatasetID(ctx context.Context, datasetID, tenantI
 		Order("connector.id").
 		Scan(&connectors).Error
 	return connectors, err
+}
+
+// ConnectorDetail is public connector metadata. Config and credentials are never selected.
+type ConnectorDetail struct {
+	ID            string     `json:"id"`
+	TenantID      string     `json:"tenant_id"`
+	Name          string     `json:"name"`
+	Source        string     `json:"source"`
+	InputType     string     `json:"input_type"`
+	RefreshFreq   int64      `json:"refresh_freq"`
+	PruneFreq     int64      `json:"prune_freq"`
+	TimeoutSecs   int64      `json:"timeout_secs"`
+	IndexingStart *time.Time `json:"indexing_start,omitempty"`
+	Status        string     `json:"status"`
+}
+
+// GetAccessibleDetail applies the current connector resource access policy in SQL.
+// Unknown IDs and inaccessible tenants both produce gorm.ErrRecordNotFound.
+func (dao *ConnectorDAO) GetAccessibleDetail(ctx context.Context, connectorID, userID string) (*ConnectorDetail, error) {
+	var detail ConnectorDetail
+	membership := DB.WithContext(ctx).Model(&entity.UserTenant{}).
+		Select("1").Where("user_id = ? AND tenant_id = t_ai_connectors.tenant_id AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"})
+	err := DB.WithContext(ctx).Model(&entity.Connector{}).
+		Select("id", "tenant_id", "name", "source", "input_type", "refresh_freq", "prune_freq", "timeout_secs", "indexing_start", "status").
+		Where("id = ?", connectorID).
+		Where("tenant_id = ? OR EXISTS (?)", userID, membership).
+		Take(&detail).Error
+	if err != nil {
+		return nil, err
+	}
+	return &detail, nil
 }
