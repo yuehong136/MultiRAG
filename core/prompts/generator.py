@@ -856,6 +856,27 @@ TOC_FROM_TEXT_SYSTEM = load_prompt("toc_from_text_system")
 TOC_FROM_TEXT_USER = load_prompt("toc_from_text_user")
 
 
+def _normalize_toc_levels(levels: Any, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize model shapes while keeping each title bound to its source."""
+    if not isinstance(levels, list):
+        return []
+    result = []
+    for item, source in zip(levels, sources):
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            item = {"level": item[0], "title": item[1]}
+        if not isinstance(item, dict):
+            continue
+        level, title = item.get("level"), item.get("title")
+        if type(level) is int:
+            level = str(level)
+        if not isinstance(level, str) or not re.fullmatch(r"[1-9][0-9]*", level):
+            continue
+        if not isinstance(title, str) or not title or title != source.get("title"):
+            continue
+        result.append({"level": level, "title": title, "chunk_id": source.get("chunk_id", "")})
+    return result
+
+
 # Generate TOC from text chunks with text llms
 async def gen_toc_from_text(txt_info: dict, chat_mdl, callback=None):
     if callback:
@@ -943,24 +964,22 @@ async def run_toc_from_text(chunks, chat_mdl, callback=None):
 
     # Assign hierarchy levels using LLM
     toc_with_levels = await assign_toc_levels(raw_structure, chat_mdl, {"temperature": 0.0, "top_p": 0.9})
+    toc_with_levels = _normalize_toc_levels(toc_with_levels, filtered)
     if not toc_with_levels:
         return []
 
     # Merge structure and content (by index)
     prune = len(toc_with_levels) > 512
-    max_lvl = "0"
-    sorted_list = sorted([t.get("level", "0") for t in toc_with_levels if isinstance(t, dict)])
-    if sorted_list:
-        max_lvl = sorted_list[-1]
+    max_lvl = max(int(item["level"]) for item in toc_with_levels)
     merged = []
-    for _, (toc_item, src_item) in enumerate(zip(toc_with_levels, filtered)):
-        if prune and toc_item.get("level", "0") >= max_lvl:
+    for toc_item in toc_with_levels:
+        if prune and int(toc_item["level"]) >= max_lvl:
             continue
         merged.append(
             {
                 "level": toc_item.get("level", "0"),
                 "title": toc_item.get("title", ""),
-                "chunk_id": src_item.get("chunk_id", ""),
+                "chunk_id": toc_item["chunk_id"],
             }
         )
 

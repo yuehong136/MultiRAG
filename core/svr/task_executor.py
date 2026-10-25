@@ -17,7 +17,7 @@ import signal
 import socket
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from functools import partial
 from multiprocessing.context import TimeoutError as ProcessTimeoutError
@@ -40,11 +40,10 @@ from api.db.services.document_status_service import finish_status_write, insert_
 from api.db.services.document_task_service import SupersededDocumentTask, increment_task_document, put_task_image, record_task_pipeline, write_task_metadata, write_task_table_metadata
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle
+from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID, TaskService, has_canceled
 from common import settings
-from common.asyncio_utils import LoopLocalSemaphore
 from common.config_utils import show_configs
 from common.connection_utils import timeout
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
@@ -64,6 +63,8 @@ from core.graphrag.utils import chat_limiter, get_llm_cache, get_tags_from_cache
 from core.nlp import add_positions, concat_img, rag_tokenizer, search
 from core.prompts.generator import content_tagging, gen_metadata, keyword_extraction, question_proposal, run_toc_from_text
 from core.svr import executor_metrics
+from core.svr.task_executor_limiter import chunk_limiter, embed_limiter, kg_limiter, minio_limiter, task_limiter
+from core.svr.worker_cli import parse_worker_args
 from core.utils.base64_image import image2id
 from core.utils.raptor_migration import replace_raptor_summaries, summary_rows
 from core.utils.raptor_utils import (
@@ -173,7 +174,7 @@ TASK_TYPE_TO_PIPELINE_TASK_TYPE = {
 
 UNACKED_ITERATOR = None
 
-CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
+CONSUMER_NO = "0"
 CONSUMER_NAME = "task_executor_" + CONSUMER_NO
 BOOT_AT = datetime.now().astimezone().isoformat(timespec="milliseconds")
 PENDING_TASKS = 0
@@ -183,14 +184,6 @@ FAILED_TASKS = 0
 
 CURRENT_TASKS = {}
 
-MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
-MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "3"))
-MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))
-task_limiter = LoopLocalSemaphore(MAX_CONCURRENT_TASKS)
-chunk_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-minio_limiter = LoopLocalSemaphore(MAX_CONCURRENT_MINIO)
-kg_limiter = LoopLocalSemaphore(2)
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))
 stop_event = threading.Event()
 
@@ -518,6 +511,7 @@ def _persist_task_pdf_outline(bind: Engine | Connection, task_id: str, document_
 
 
 @timeout(60 * 80, 1)
+@llm_bundle_scope()
 async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., Any], db: Session) -> list[dict[str, Any]]:
     task_language = task.get("language") if task.get("language") is not None else "Chinese"
     if task["size"] > settings.DOC_MAXIMUM_SIZE:
@@ -816,11 +810,8 @@ def _owned_task_progress(task_id: str, from_page: int, to_page: int, prog: float
         set_progress(callback_db, task_id, from_page, to_page, prog=prog, msg=msg)
 
 
-def build_TOC(task, docs, progress_callback):
+def build_TOC(task: dict[str, Any], docs: list[dict[str, Any]], progress_callback: Callable[..., Any]) -> dict[str, Any] | None:
     progress_callback(msg="Start to generate table of content ...")
-    with db_connection() as db:
-        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
-        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
     docs = sorted(
         docs,
         key=lambda d: (
@@ -828,7 +819,15 @@ def build_TOC(task, docs, progress_callback):
             d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0),
         ),
     )
-    toc: list[dict] = asyncio.run(run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback))
+
+    @llm_bundle_scope()
+    async def generate() -> list[dict[str, Any]]:
+        with db_connection() as db:
+            model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+            chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
+        return await run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback)
+
+    toc = asyncio.run(generate())
     logging.info("------------ T O C -------------\n" + json.dumps(toc, ensure_ascii=False, indent="  "))
 
     def get_chunk_id(doc):
@@ -871,7 +870,8 @@ def build_TOC(task, docs, progress_callback):
     return None
 
 
-async def _get_embedding_dimension(row: dict) -> int:
+@llm_bundle_scope()
+async def _get_embedding_dimension(row: dict[str, Any]) -> int:
     """获取 embedding 模型的向量维度"""
     default_dim = 768
     if not row.get("embd_id") or not row.get("tenant_id"):
@@ -1106,7 +1106,7 @@ async def embedding(docs: list[dict[str, Any]], mdl: Any, parser_config: dict[st
     cnts = np.concatenate(cnts_batches, axis=0) if len(cnts_batches) > 1 else cnts_batches[0]
 
     filename_embd_weight = parser_config.get("filename_embd_weight", 0.1)  # due to the db support none value
-    if not filename_embd_weight:
+    if filename_embd_weight is None:
         filename_embd_weight = 0.1
     title_w = float(filename_embd_weight)
     if tts.ndim == 2 and cnts.ndim == 2 and tts.shape == cnts.shape:
@@ -1129,7 +1129,8 @@ async def embedding(docs: list[dict[str, Any]], mdl: Any, parser_config: dict[st
     return tk_count
 
 
-async def run_dataflow(db: Session, task: dict) -> Any:
+@llm_bundle_scope()
+async def run_dataflow(db: Session, task: dict[str, Any]) -> Any:
     from api.db.services.canvas_service import UserCanvasService
     from core.flow.pipeline import Pipeline
 
@@ -1836,6 +1837,7 @@ def _post_process_result(raw_output, post_process):
 
 
 @timeout(3600)
+@llm_bundle_scope()
 async def run_analyze_v2_task(
     task: dict[str, Any],
     chat_mdl: Any,
@@ -2691,7 +2693,7 @@ async def insert_chunks(
     return True
 
 
-async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor, toc_future: asyncio.Future[Any] | None, result_observed: bool) -> None:
+async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor, toc_future: Awaitable[Any] | None, result_observed: bool) -> None:
     """Join owned TOC work off-loop before the task releases its session."""
     executor.shutdown(wait=False, cancel_futures=True)
 
@@ -2706,6 +2708,7 @@ async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor
 
 
 @timeout(60 * 60 * 3, 1)
+@llm_bundle_scope()
 async def do_handle_task(db: Session, task: Any) -> None:
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)
@@ -3292,7 +3295,11 @@ async def main():
     logging.error("BUG!!! You should not reach here!!!")
 
 
-def run_task_executor() -> None:
+def run_task_executor(argv: list[str] | None = None) -> None:
+    global CONSUMER_NO, CONSUMER_NAME
+    args = parse_worker_args(argv)
+    CONSUMER_NO = args.index
+    CONSUMER_NAME = "task_executor_" + CONSUMER_NO
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
     try:

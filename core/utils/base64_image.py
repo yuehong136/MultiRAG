@@ -1,7 +1,9 @@
 import base64
 import logging
+from collections.abc import Callable
 from functools import partial
 from io import BytesIO
+from typing import Any
 
 from PIL import Image
 
@@ -12,11 +14,11 @@ test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAAA6ElEQVR4nO3
 test_image = base64.b64decode(test_image_base64)
 
 
-async def image2id(d: dict, storage_put_func: partial, objname: str, bucket: str = "imagetemps"):
+async def image2id(d: dict[str, Any], storage_put_func: Callable[..., Any], objname: str, bucket: str = "imagetemps") -> None:
     import logging
     from io import BytesIO
 
-    from core.svr.task_executor import minio_limiter
+    from core.svr.task_executor_limiter import minio_limiter
 
     if "image" not in d:
         return

@@ -125,7 +125,7 @@ function task_exe() {
   local jemalloc="$(pkg-config --variable=libdir jemalloc)/libjemalloc.so"
   echo "[entrypoint] TaskExecutor ${hid}_${cid} 启动..."
   while true; do
-    LD_PRELOAD="${jemalloc}" "${PY}" -m core.svr.task_executor "${hid}_${cid}" &
+    LD_PRELOAD="${jemalloc}" "${PY}" -m core.svr.task_executor -i "${hid}_${cid}" -t common &
     wait
     sleep 1
   done &

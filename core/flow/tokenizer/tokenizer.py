@@ -22,7 +22,7 @@ import numpy as np
 from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle
+from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from common import settings
 from common.connection_utils import timeout
 from common.constants import LLMType
@@ -33,7 +33,7 @@ from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.pdf_chunk_metadata import finalize_pdf_chunk
 from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer
-from core.svr.task_executor import embed_limiter
+from core.svr.task_executor_limiter import embed_limiter
 
 
 class TokenizerParam(ProcessParamBase):
@@ -54,6 +54,7 @@ class TokenizerParam(ProcessParamBase):
 class Tokenizer(ProcessBase):
     component_name = "Tokenizer"
 
+    @llm_bundle_scope()
     async def _embedding(self, name: str, chunks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
         # Tokenization may legitimately produce zero chunks; embedding should be a no-op.
         if not chunks:
