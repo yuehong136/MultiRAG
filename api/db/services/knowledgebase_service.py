@@ -146,9 +146,9 @@ class KnowledgebaseService(CommonService):
             query = query.filter(func.lower(cls.model.name).ilike(f"%{keywords}%"))
         # 根据desc参数确定排序方式
         if desc:
-            query = query.order_by(getattr(cls.model, orderby).desc())
+            query = query.order_by(getattr(cls.model, orderby).desc(), cls.model.id.desc())
         else:
-            query = query.order_by(getattr(cls.model, orderby).asc())
+            query = query.order_by(getattr(cls.model, orderby).asc(), cls.model.id.asc())
 
         # 获取总记录数
         total = query.count()
@@ -204,9 +204,9 @@ class KnowledgebaseService(CommonService):
 
         # 根据desc参数确定排序方式
         if desc:
-            query = query.order_by(getattr(cls.model, orderby).desc())
+            query = query.order_by(getattr(cls.model, orderby).desc(), cls.model.id.desc())
         else:
-            query = query.order_by(getattr(cls.model, orderby).asc())
+            query = query.order_by(getattr(cls.model, orderby).asc(), cls.model.id.asc())
 
         # 获取所有匹配的数据
         kbs = query.all()
@@ -543,9 +543,9 @@ class KnowledgebaseService(CommonService):
 
         # 根据desc参数确定排序方式
         if desc:
-            query = query.order_by(getattr(cls.model, orderby).desc())
+            query = query.order_by(getattr(cls.model, orderby).desc(), cls.model.id.desc())
         else:
-            query = query.order_by(getattr(cls.model, orderby).asc())
+            query = query.order_by(getattr(cls.model, orderby).asc(), cls.model.id.asc())
 
         # 获取总数
         total = query.count()

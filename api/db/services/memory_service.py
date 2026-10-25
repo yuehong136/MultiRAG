@@ -194,7 +194,7 @@ class MemoryService(CommonService):
         count = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
         # 排序和分页
-        stmt = stmt.order_by(desc(cls.model.update_time))
+        stmt = stmt.order_by(desc(cls.model.update_time), desc(cls.model.id))
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
         # 执行查询

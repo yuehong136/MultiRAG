@@ -330,9 +330,9 @@ class DialogService(CommonService):
 
         # 根据 desc 参数确定排序方式
         if desc:
-            query = query.order_by(getattr(cls.model, orderby).desc())
+            query = query.order_by(getattr(cls.model, orderby).desc(), cls.model.id.desc())
         else:
-            query = query.order_by(getattr(cls.model, orderby).asc())
+            query = query.order_by(getattr(cls.model, orderby).asc(), cls.model.id.asc())
 
         # 获取总记录数
         total = query.count()

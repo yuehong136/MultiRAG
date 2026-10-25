@@ -46,7 +46,9 @@ class ConversationService(CommonService):
         return await RuntimeAttachmentService.delete_session(db, tenant_id=tenant_id, chat_id=chat_id, session_id=session_id, owner_id=owner_id)
 
     @classmethod
-    def get_list(cls, db: Session, dialog_id, page_number, items_per_page, orderby, is_desc, id=None, name=None, user_id=None):
+    def get_list(
+        cls, db: Session, dialog_id: str, page_number: int, items_per_page: int, orderby: str, is_desc: bool, id: str | None = None, name: str | None = None, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
         stmt = select(cls.model).where(cls.model.dialog_id == dialog_id)
 
         if id:
@@ -58,7 +60,7 @@ class ConversationService(CommonService):
         if not hasattr(cls.model, orderby):
             raise ValueError(f"'{orderby}' is not a valid attribute of '{cls.model.__name__}'")
         order_col = getattr(cls.model, orderby)
-        stmt = stmt.order_by(order_col.desc() if is_desc else order_col.asc())
+        stmt = stmt.order_by(order_col.desc() if is_desc else order_col.asc(), cls.model.id.desc() if is_desc else cls.model.id.asc())
 
         # page_size=0 follows the REST API convention of disabling pagination.
         if items_per_page > 0:

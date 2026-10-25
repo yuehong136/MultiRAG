@@ -1,3 +1,5 @@
+from typing import Any
+
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.functions import func
@@ -19,7 +21,9 @@ class MCPServerService(CommonService):
     model = MCPServer
 
     @classmethod
-    def get_servers(cls, db: Session, tenant_id: str, id_list: list[str] | None, page_number, items_per_page, orderby, desc, keywords):
+    def get_servers(
+        cls, db: Session, tenant_id: str, id_list: list[str] | None, page_number: int | None, items_per_page: int | None, orderby: str, desc: bool, keywords: str | None
+    ) -> list[dict[str, Any]] | None:
         """Retrieve all MCP servers associated with a tenant.
 
         This method fetches all MCP servers for a given tenant, ordered by creation time.
@@ -52,9 +56,9 @@ class MCPServerService(CommonService):
         if keywords:
             query = query.filter(func.lower(cls.model.name).contains(keywords.lower()))
         if desc:
-            query = query.order_by(getattr(cls.model, orderby).desc())
+            query = query.order_by(getattr(cls.model, orderby).desc(), cls.model.id.desc())
         else:
-            query = query.order_by(getattr(cls.model, orderby).asc())
+            query = query.order_by(getattr(cls.model, orderby).asc(), cls.model.id.asc())
         if page_number and items_per_page:
             offset = (page_number - 1) * items_per_page
             query = query.offset(offset).limit(items_per_page)

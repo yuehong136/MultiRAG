@@ -24,6 +24,7 @@ DATABASE_TESTS = frozenset(
         "test_database_process_recovery.py",
         "test_dialog_sql_scope.py",
         "test_dataset_access_permissions.py",
+        "test_rest_list_pagination_order.py",
         "test_dataset_raptor_scope.py",
         "test_document_existence.py",
         "test_enterprise_subject_repository.py",

@@ -147,7 +147,7 @@ class API4ConversationService(CommonService):
 
         # 排序
         order_col = getattr(cls.model, orderby)
-        base = base.order_by(sa_desc(order_col) if desc else asc(order_col))
+        base = base.order_by(sa_desc(order_col) if desc else asc(order_col), sa_desc(cls.model.id) if desc else asc(cls.model.id))
 
         # 统计总数
         total = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()

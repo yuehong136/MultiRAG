@@ -124,9 +124,9 @@ class SearchService(CommonService):
 
         order_column = getattr(cls.model, orderby)
         if desc_order:
-            query = query.order_by(desc(order_column))
+            query = query.order_by(desc(order_column), desc(cls.model.id))
         else:
-            query = query.order_by(asc(order_column))
+            query = query.order_by(asc(order_column), asc(cls.model.id))
 
         # 获取总数
         count = query.count()
