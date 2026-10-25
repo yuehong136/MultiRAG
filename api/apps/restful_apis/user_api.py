@@ -190,7 +190,7 @@ async def login(request: LoginRequest, db: AsyncSession = Depends(get_async_db))
             retmsg="This account has been disabled, please contact the administrator!",
         )
     elif user:
-        response_data = user.to_dict()
+        response_data = user.to_dict(for_self=True)
         user.access_token = get_uuid()
         current_ts = current_timestamp()
         current_date = datetime_format(datetime.now())
@@ -419,7 +419,7 @@ async def setting_user(
 @router.get("/users/me", summary="获取用户信息")
 async def user_profile(db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)):
     payload = await db.run_sync(  # TODO(async-phase4)
-        lambda s: user_obj.to_dict() if (user_obj := UserService.get_by_id(s, user.id)) is not None else None
+        lambda s: user_obj.to_dict(for_self=True) if (user_obj := UserService.get_by_id(s, user.id)) is not None else None
     )
     if payload is None:
         return get_data_error_result(retmsg="User not found!")
@@ -546,7 +546,7 @@ async def user_add(request: RegisterRequest, db: AsyncSession = Depends(get_asyn
             raise Exception(f"Same email: {email_address} exists!")
         user = users[0]
         access_token = manager.create_access_token(data={"sub": user.email})
-        return construct_response(data=user.to_dict(), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
+        return construct_response(data=user.to_dict(for_self=True), auth=access_token, retmsg=f"{nickname}, welcome aboard!")
     except Exception as e:
         await db.run_sync(lambda s: rollback_user_registration(s, user_id))  # TODO(async-phase4)
         logging.error("User registration failed safely: %s", type(e).__name__)

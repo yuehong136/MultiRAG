@@ -76,7 +76,7 @@ def test_user_profile_uses_the_request_async_session(client, client_user, monkey
     def _get_by_id(cls, db, user_id):
         sessions.append(db)
         assert user_id == client_user.id
-        return SimpleNamespace(to_dict=lambda: profile)
+        return SimpleNamespace(to_dict=lambda **kwargs: profile)
 
     monkeypatch.setattr(UserService, "get_by_id", classmethod(_get_by_id))
 

@@ -723,13 +723,12 @@ class User(BaseModel):
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1")
     is_superuser: Mapped[bool | None] = mapped_column(Boolean, index=True, nullable=True, default=False)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return the public user projection; credentials never cross this boundary."""
+    def to_dict(self, *, for_self: bool = False) -> dict[str, Any]:
+        """Return a whitelist projection; only self responses include email."""
 
-        return {
+        result = {
             "id": self.id,
             "avatar": self.avatar,
-            "email": self.email,
             "account_kind": self.account_kind,
             "is_active": self.is_active,
             "is_anonymous": self.is_anonymous,
@@ -740,6 +739,10 @@ class User(BaseModel):
             "last_login_time": self.last_login_time,
             "is_superuser": self.is_superuser,
         }
+
+        if for_self:
+            result["email"] = self.email
+        return result
 
 
 class Tenant(BaseModel):
