@@ -3754,3 +3754,12 @@ managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 fals
 - 840 项 Python 单测通过；临时脚本导入门禁失败修复后 39 项 harness 定向复跑通过。最终后端集成 31、真实 Web 上传联合验收 1、MCP 矩阵 22 行及 Agent 工具绑定通过。Go 模型 race 387 顶层/2,844 命名用例、真实 JWT HTTP/CLI/SQL 15 子场景、build/vet/三个 cmd 新链接及适用静态检查通过；首错和补跑保留，不称全库门禁全绿。
 - I 最终独立读回 21 个 scratch DB、235 个桶、260 个集合、39 个 Redis 精确键、14 个前缀、333 个 fixture 标识和 1,075 个监听端口不存在；私有 staging 清理，借用目标保留。原始 28 项 WIP 保留，本块独立暂存；七个历史 protected managed 树保留。
 - 最终 main SHA、输入绑定、恢复 bundle 和本批普通 worktree/分支清理见外部目录 `20261025-batch-after-f9ce07ce/delivery-complete.json`。未 push、未部署，远程 `ci-required` 待运行；未发布 Web pin 远程尚不可取。真实供应商、常驻 worker 与生产未验收，不创建自动化、不滚动下一批。
+
+
+## 2026-10-25：4776bfa8 后二十项本地串行集成
+
+- 冻结范围排除 `4776bfa8` 至 `0fb85a66`，直接后修上限 `519e7d98`；完整逐项处置和质量依据见 [本批记录](batch-after-4776bfa8.md)。
+- A/B/D/G 串行进入后端应用源码组合 `ffe549eb78658d3a941fc356ba924cb4849601b6`；C 的 Web master 与 consumer pin 为 `2d3bdf757361d3eabd5d5339e609850e65b83d23`。`ecffd503` 随后只补 CI 必需 Go 测试的专用 PostgreSQL，其余收口只改文档。
+- 当前组合 Python 定向单元 675、真实 HTTP/SQL/存储合同 16、固定 Web 实际 API adapter 2 项通过，零 skip。Go 全 internal race 与 skills 实服务补跑按完整包组合为 3628 passed、43 个声明 opt-in skip、5 个无测试包，skip 审计通过；ES/Infinity 实际 CLI/HTTP/SQL 各 12、受控 provider 消费者 9 项通过。静态检查、build/vet/三个 cmd 新链接通过。Web 候选 79 Node/38 Vitest、build/lint 与真实浏览器通过，依赖 overlay 和受控 API 边界单列。
+- 保留首错并修复有效 parser ext 验证、服务端身份字段覆盖和 ES 文件名聚合；Go 缺服务首错以实际 scratch PostgreSQL 补跑解决，未放宽 skip。原始回执、复用证据、未验项目与输入 hash 见批次记录，不称全库或远程 CI 全绿。
+- 原始 28 项 WIP 保留，本块独立暂存。恢复 bundle、六个普通 worktree/分支清理、精确运行资源独立读回及最终 actual main/Web/pin 绑定见外部目录 `20261025-batch-after-4776bfa8/delivery-complete.json`；七个历史 managed worktree、SDK 树及借用资产保留。未 push、未部署，远程 `ci-required` 待运行，未发布 Web pin 远程暂不可取；不创建自动化、不继续下一批。
