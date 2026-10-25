@@ -18,6 +18,11 @@
 | 数据库 schema/数据迁移文档与 MySQL/Peewee 工具 | `docs/database-migration.md`、`api/db/schema_bootstrap.py`、`configs/alembic/`、`docker/migration.sh` | 按 PostgreSQL/SQLAlchemy/Alembic 与本地六卷归档能力适配；模型建表、迁移版本、业务数据和完整恢复分别核验，不复制上游工具或初始化开关，见 [数据库迁移指南](../database-migration.md) |
 | `api/apps/restful_apis/task_api.py`、已退役的旧 Canvas cancel | `api/apps/restful_apis/task_api.py` + `api/db/services/task_cancellation_service.py` + `core/utils/task_runtime.py`；Go `internal/handler/task.go` + `internal/service/task.go` | SQL 文档/图任务与可信 Agent/DataFlow 运行登记共同授权；Python/Go 共用 Redis v1 归属、CAS、24 小时 TTL 及 SQL 取消标记。Web POST 迁移已验收，旧 PUT 路由及独占文件已删除；POST/PATCH 保留，不增加 GET，见 [HTTP API](../references/http_api_reference.md#task-api) |
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
+| 模块级 asyncio semaphore | `common/asyncio_utils.py:LoopLocalSemaphore` | 每个事件 loop 使用原生 semaphore；锁保护映射，清理已关闭 loop，保留真实等待与取消语义，不跨 loop 复用 asyncio 原语。 |
+| GraphRAG 执行重试和超时 | `common/graphrag_config.py`、`core/graphrag/general/index.py`、`persistence.py` | API 与任务重放共用严格数值合同；writer lease 覆盖全部尝试，取消和同步 I/O 排空后才重试或释放。按已持久化 checkpoint 恢复，不引入缺少图/模型/prompt 修订的子阶段缓存。默认与零值语义见 [执行说明](../../core/graphrag/README.md)。 |
+| 评测 token 用量 | `api/db/services/evaluation_service.py` + `EvaluationResult.token_usage` | 保留同步 Session 事务；使用 cl100k_base 估算，结果携带 estimated/tokenizer/prompt_source，不冒充真实供应商计费。未启用已退役评测 HTTP 路由。 |
+| Agent chat_template_kwargs | `agent/canvas.py`、`agent/component/llm.py`、`core/llm/chat.py` | 对象或 null，逐次运行及每轮调用复制，经 SDK extra_body 传递；工具调用和 fallback 同样消费，保留既有授权、暂停与工具结果合同。 |
+| 用户响应投影 | `User.to_dict`、`restful_apis/user_api.py` | 通用白名单省略邮箱与凭据；登录、个人资料和自身注册响应显式使用 for_self，保留外部账号的 nullable email；密码重置仅返回布尔结果。 |
 | 会话删除与聊天上传对象回收 | `api/db/services/runtime_attachment_service.py`、`FileService` + REST/legacy conversation 删除 | 删除权限来自服务端已登记的 owner downloads 描述符；保留其他会话和 API4 引用。对象确认不存在后才删描述符，存储错误保留会话供重试；同 owner 删除串行、取消排空。新增引用写入不共享删除锁，SQL 与对象存储没有全局原子事务。 |
 | Python 模型注册与启动导入 | `core/llm/__init__.py` + `TenantLLMService`、`llm_app.py`，Canvas 调用入口 | 每类别首次访问在自有 RLock 内完整构建并发布注册表；失败不缓存半成品。租户模型和探测在运行时取注册表；Canvas 构造导入放到既有授权和预检之后。保留全部工厂与直接 provider 模块消费者。 |
 | embedding 空输入防护 | `api/db/services/llm_service.py:LLMBundle` | 批次元素与 query 的 None、空串、纯空白在分词与供应商之前变成字面量 `None`；保留顺序、数量、调用者列表、真实向量、模型 ID 计量与合法零用量。错误继续传播，长输入在超过上限 95% 时使用既有截断长度。 |

@@ -1436,6 +1436,10 @@ POST /chats
 | top_k | integer | 否 | 召回候选数量 |
 | rerank_id | string | 否 | Rerank 模型 ID |
 
+Web Studio 与 Explore 保存模型时，从已授权且启用的模型元数据解析
+`llm_setting.model_type`（`chat` 或 `image2text`）；未知、禁用、无法取得或有歧义的
+模型在发请求前报错。显式启用且为零的生成参数保留，禁用参数不发送。
+
 ### 获取助手
 
 获取指定聊天助手配置。
@@ -1508,24 +1512,34 @@ DELETE /chats
 **请求**
 
 ```
-POST /agents/{agent_id}/run
+POST /agents/chat/completions
 ```
 
 **请求体**
 
 ```json
 {
-  "inputs": {
-    "query": "User input..."
-  },
+  "agent_id": "agent-uuid",
+  "query": "User input...",
+  "inputs": {},
   "stream": true
 }
 ```
+
+`chat_template_kwargs` 可作为顶层 JSON 对象或 `null` 传入；省略或 `null` 表示本次
+没有覆盖值，JSON 字符串、数组和其他标量在执行及数据库写入前被拒绝。Canvas 在每次运行
+重置并复制该对象，普通、结构化、流式及工具调用的每轮模型请求经 SDK `extra_body`
+传递；保留空对象、`false` 和 `0`，不修改共享模型配置或泄漏到下次运行。
 
 ## Go Provider API（并行实现）
 
 本节描述 Go `internal/` 的独立实现；当前 Web 模型页仍使用 Python `/v1/llm/*`。
 提供商管理基础路径为 `/api/v1/providers`，模型聊天入口为 `/api/v1/chat/completions`；现有认证与用户/tenant 约束继续适用。
+
+PPIO、TokenPony、Groq 接入聊天和严格模型发现，保留实例凭据隔离、完整历史、推理文本、
+取消及流终止校验。TogetherAI 接入 rerank、multipart ASR、二进制 TTS 和 base64 SSE TTS；
+Zhipu 接入 ASR 与普通/流式 TTS；OpenRouter 接入有界 JSON base64 ASR 并保留已有 TTS。
+具体能力按当前目录和驱动校验，不能由 Go 目录推断 Python 或真实供应商兼容性。
 
 Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rerank`）；租户模型
 的 `model_type`、旧 `mdl_type` 和按类型筛选继续使用这些能力值。`class` 表达模型系列

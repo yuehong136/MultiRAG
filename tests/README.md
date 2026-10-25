@@ -59,6 +59,7 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 
 | 测试 | 自有输入与边界 |
 |---|---|
+| `handler.TestAfter775ProvidersHTTPCLIAndSQL` | 私有 `MULTIRAG_AFTER775_D_CONFIG`、同源码新构建 CLI `MULTIRAG_AFTER775_D_CLI` 和预登记资源清单 `MULTIRAG_AFTER775_D_RESOURCES`；loopback scratch DB 必须为 `multirag_after775_d_20261025`。实际 JWT、SQL、CLI 与受控供应商 HTTP；未覆盖真实付费供应商。 |
 | `handler.TestAfter440ProvidersHTTPCLIAndSQL` | 私有 `MULTIRAG_AFTER440_D_CONFIG` 和同源码新构建 CLI `MULTIRAG_AFTER440_D_CLI`；loopback scratch DB 必须为 `multirag_after440_d_20261025`。真实 JWT/SQL/CLI，供应商 HTTP 受控；未配置时作为已登记 opt-in 单列，不称真实供应商验收。 |
 | `handler.TestAfterD7ProvidersHTTPCLIAndSQL` | `MULTIRAG_AFTERD7_A_CONFIG` 为私有 Go 配置，loopback scratch DB 名 `multirag_afterd7_a_20261024`；`MULTIRAG_AFTERD7_A_CLI` 必须为当前源码新构建 CLI。真实 JWT/SQL/CLI，供应商 HTTP 受控。 |
 | `engine.TestEngineStoresLive` | 私有 `MULTIRAG_ENGINE_LIVE_CONFIG`；显式 `MULTIRAG_ENGINE_LIVE_KIND=elasticsearch` 或 `infinity`；固定稳定 Infinity 0.7.0、精确自有 tenant/索引/库。 |
