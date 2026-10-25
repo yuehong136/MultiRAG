@@ -9,7 +9,7 @@ import (
 func TestOpenRouterAndVolcEngineCatalogContracts(t *testing.T) {
 	manager := newCatalogManager(t)
 	requireCatalogProvider(t, manager, "OpenRouter", (*models.OpenRouterModel)(nil), models.URLSuffix{
-		Chat: "chat/completions", Models: "models", Embedding: "embeddings", Rerank: "rerank", Balance: "credits", TTS: "audio/speech",
+		Chat: "chat/completions", Models: "models", Embedding: "embeddings", Rerank: "rerank", Balance: "credits", TTS: "audio/speech", ASR: "audio/transcriptions",
 	})
 	// Only the named reasoning chat models opt in to thinking. TTS must remain
 	// visible as TTS without becoming a chat model or inheriting thinking defaults.
@@ -18,6 +18,7 @@ func TestOpenRouterAndVolcEngineCatalogContracts(t *testing.T) {
 		{"minimax/minimax-m2.5", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
 		{"tencent/hy3-preview", []string{"chat"}, &ModelThinking{DefaultValue: true, ClearThinking: true}},
 		{"openai/gpt-audio-mini", []string{"tts"}, nil},
+		{"openai/whisper-large-v3", []string{"asr"}, nil},
 	})
 	requireCatalogProvider(t, manager, "VolcEngine", (*models.VolcEngine)(nil), models.URLSuffix{
 		Chat: "chat/completions", Files: "files", Models: "models", Embedding: "embeddings/multimodal",
