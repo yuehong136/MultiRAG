@@ -27,6 +27,7 @@ from networkx.readwrite import json_graph
 from api.db.db_models import db_connection
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from common import settings
+from common.asyncio_utils import LoopLocalSemaphore
 from common.connection_utils import timeout
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.graphrag.persistence import checked_insert, delete_rows, graph_rows, settled_io, validate_chunks
@@ -38,7 +39,7 @@ GRAPH_FIELD_SEP = "<SEP>"
 
 ErrorHandlerFn = Callable[[BaseException | None, str | None, dict | None], None]
 
-chat_limiter = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
+chat_limiter = LoopLocalSemaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
 
 
 _INSERT_BULK_SIZE = max(1, int(os.environ.get("GRAPHRAG_INSERT_BULK_SIZE", 64)))

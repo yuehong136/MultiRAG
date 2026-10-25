@@ -70,7 +70,7 @@ class GraphExtractor(Extractor):
         self._left_token_count = llm_invoker.max_length - num_tokens_from_string(self._entity_extract_prompt.format(**self._context_base, input_text=""))
         self._left_token_count = max(llm_invoker.max_length * 0.6, self._left_token_count)
 
-    async def _process_single_content(self, chunk_key_dp: tuple[str, str], chunk_seq: int, num_chunks: int, out_results, task_id=""):
+    async def _process_single_content(self, chunk_key_dp: tuple[str, str], chunk_seq: int, num_chunks: int, out_results: list[Any], task_id: str = "") -> None:
         token_count = 0
         chunk_key = chunk_key_dp[0]
         content = chunk_key_dp[1]
@@ -121,5 +121,5 @@ class GraphExtractor(Extractor):
         if self.callback:
             self.callback(
                 0.5 + 0.1 * len(out_results) / num_chunks,
-                msg=f"Entities extraction of chunk {chunk_seq} {len(out_results)}/{num_chunks} done, {len(maybe_nodes)} nodes, {len(maybe_edges)} edges, {token_count} tokens.",
+                msg=f"Entities extraction of chunk {chunk_seq + 1} {len(out_results)}/{num_chunks} done, {len(maybe_nodes)} nodes, {len(maybe_edges)} edges, {token_count} tokens.",
             )

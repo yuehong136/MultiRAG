@@ -16,8 +16,8 @@
 import asyncio
 import json
 import logging
-import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from hashlib import sha256
 from typing import Any
 
@@ -27,8 +27,8 @@ from api.db.db_models import db_connection
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import has_canceled
-from common.connection_utils import timeout
 from common.exceptions import TaskCanceledException
+from common.graphrag_config import GraphRAGExecutionConfig
 from core.graphrag.entity_resolution import EntityResolution
 from core.graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from core.graphrag.general.extractor import Extractor
@@ -49,6 +49,72 @@ from core.graphrag.utils import (
     tidy_graph,
 )
 from core.nlp import rag_tokenizer, search
+
+
+def _has_cancel_and_exit(task_id: str, message: str, callback: Callable[..., Any] | None = None) -> None:
+    if task_id and has_canceled(task_id):
+        if callback:
+            callback(msg=message)
+        raise TaskCanceledException(f"Task {task_id} was cancelled")
+    lease = current_writer.get()
+    if lease is not None:
+        lease.check()
+
+
+async def _await_attempt[T](operation: Awaitable[T], task_id: str, label: str, callback: Callable[..., Any] | None) -> T:
+    """Own and drain the attempt, including cancellation during executor IO."""
+    task = asyncio.ensure_future(operation)
+    try:
+        while not task.done():
+            _has_cancel_and_exit(task_id, f"Task {task_id} cancelled during {label}.", callback)
+            await asyncio.wait({task}, timeout=0.25)
+        result = task.result()
+        _has_cancel_and_exit(task_id, f"Task {task_id} cancelled after {label}.", callback)
+        return result
+    finally:
+        if not task.done():
+            task.cancel()
+        drain = asyncio.gather(task, return_exceptions=True)
+        while not drain.done():
+            try:
+                await asyncio.shield(drain)
+            except asyncio.CancelledError:
+                continue
+        drain.result()
+
+
+async def _run_with_retry[T](
+    label: str,
+    coro_factory: Callable[[], Awaitable[T]],
+    *,
+    attempts: int,
+    timeout_seconds: int | float,
+    backoff_seconds: int | float,
+    backoff_max_seconds: int | float,
+    callback: Callable[..., Any] | None = None,
+    task_id: str = "",
+) -> T:
+    for attempt in range(1, attempts + 1):
+        _has_cancel_and_exit(task_id, f"Task {task_id} cancelled before {label}.", callback)
+        try:
+            operation = _await_attempt(coro_factory(), task_id, label, callback)
+            if timeout_seconds > 0:
+                return await asyncio.wait_for(operation, timeout=timeout_seconds)
+            return await operation
+        except (TaskCanceledException, asyncio.CancelledError):
+            raise
+        except Exception as error:
+            _has_cancel_and_exit(task_id, f"Task {task_id} cancelled after {label} failed.", callback)
+            if callback:
+                callback(msg=f"[GraphRAG] {label} failed attempt {attempt}/{attempts}: {error!r}")
+            if attempt == attempts:
+                raise
+            delay = min(backoff_max_seconds, backoff_seconds * 2 ** (attempt - 1))
+            deadline = asyncio.get_running_loop().time() + delay
+            while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
+                _has_cancel_and_exit(task_id, f"Task {task_id} cancelled before retrying {label}.", callback)
+                await asyncio.sleep(min(0.25, remaining))
+    raise ValueError("GraphRAG retry attempts must be positive")
 
 
 async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str) -> nx.Graph | None:
@@ -100,19 +166,24 @@ async def run_graphrag_for_kb(
     with_community: bool = True,
     max_parallel_docs: int = 4,
 ) -> dict[str, Any]:
-    async with GraphRAGLease(row["tenant_id"], str(row["kb_id"])) as lease:
-        token = current_writer.set(lease)
-        task_token = current_task.set(row["id"])
-        try:
-            return await _run_graphrag_for_kb(
-                row, doc_ids, language, kb_parser_config, chat_model, embedding_model, callback, with_resolution=with_resolution, with_community=with_community, max_parallel_docs=max_parallel_docs
-            )
-        except TaskCanceledException:
-            callback(prog=-1, msg=f"Task {row['id']} cancelled after GraphRAG writes settled.")
-            raise
-        finally:
-            current_task.reset(task_token)
-            current_writer.reset(token)
+    config = GraphRAGExecutionConfig.model_validate(kb_parser_config.get("graphrag", {}))
+    task_token = current_task.set(row["id"])
+    try:
+        _has_cancel_and_exit(row["id"], f"Task {row['id']} cancelled before acquiring writer lease.", callback)
+        async with GraphRAGLease(row["tenant_id"], str(row["kb_id"]), wait=config.lock_wait_seconds) as lease:
+            token = current_writer.set(lease)
+            try:
+                _has_cancel_and_exit(row["id"], f"Task {row['id']} cancelled after acquiring writer lease.", callback)
+                return await _run_graphrag_for_kb(
+                    row, doc_ids, language, kb_parser_config, chat_model, embedding_model, callback, with_resolution=with_resolution, with_community=with_community, max_parallel_docs=max_parallel_docs
+                )
+            finally:
+                current_writer.reset(token)
+    except TaskCanceledException:
+        callback(prog=-1, msg=f"Task {row['id']} cancelled after GraphRAG writes settled.")
+        raise
+    finally:
+        current_task.reset(task_token)
 
 
 async def _run_graphrag_for_kb(
@@ -130,10 +201,23 @@ async def _run_graphrag_for_kb(
 ) -> dict[str, Any]:
     tenant_id, kb_id = row["tenant_id"], row["kb_id"]
     graphrag_config = kb_parser_config.get("graphrag", {})
-    batch_chunk_token_size = graphrag_config.get("batch_chunk_token_size", 4096)
-    if type(batch_chunk_token_size) is not int or not 512 <= batch_chunk_token_size <= 8196:
-        raise ValueError("GraphRAG batch_chunk_token_size must be an integer from 512 to 8196")
-    enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
+    config = GraphRAGExecutionConfig.model_validate(graphrag_config)
+    batch_chunk_token_size = config.batch_chunk_token_size
+    if type(max_parallel_docs) is not int or max_parallel_docs < 1:
+        raise ValueError("GraphRAG max_parallel_docs must be positive")
+
+    async def retry[T](label: str, operation: Callable[[], Awaitable[T]], attempts: int | None, timeout_seconds: int) -> T:
+        return await _run_with_retry(
+            label,
+            operation,
+            attempts=attempts or config.retry_attempts,
+            timeout_seconds=timeout_seconds,
+            backoff_seconds=config.retry_backoff_seconds,
+            backoff_max_seconds=config.retry_backoff_max_seconds,
+            callback=callback,
+            task_id=row["id"],
+        )
+
     start = asyncio.get_running_loop().time()
 
     if not doc_ids:
@@ -158,6 +242,7 @@ async def _run_graphrag_for_kb(
         callback(msg=f"[GraphRAG] kb:{kb_id} has no processable doc_id.")
         return {"ok_docs": [], "failed_docs": [], "total_docs": 0, "total_chunks": 0, "seconds": 0.0}
 
+    callback(msg=f"[GraphRAG] dataset:{kb_id} has {len(doc_ids)} documents to process.")
     persisted_graph = await get_graph(tenant_id, kb_id)
     merged_doc_ids = set(persisted_graph.graph.get("source_id", [])) if persisted_graph is not None else set()
 
@@ -168,6 +253,7 @@ async def _run_graphrag_for_kb(
         current_chunk = ""
 
         raw_chunks = await settled_io(load_graph_source_chunks, tenant_id, kb_id, doc_id)
+        callback(msg=f"[GraphRAG] loaded {len(raw_chunks)} source chunks for doc:{doc_id}")
         if graphrag_config.get("method") == "ner":
             return raw_chunks
         for content in raw_chunks:
@@ -181,6 +267,7 @@ async def _run_graphrag_for_kb(
         if current_chunk:
             chunks.append(current_chunk)
 
+        callback(msg=f"[GraphRAG] combined {len(raw_chunks)} source chunks to {len(chunks)} chunks for LLM extraction for doc:{doc_id}")
         return chunks
 
     total_chunks = 0
@@ -207,7 +294,7 @@ async def _run_graphrag_for_kb(
                 return
             # CHECKPOINT: bounded by semaphore so doc-store lookups respect max_parallel_docs
             existing_sg = await load_subgraph_from_store(tenant_id, kb_id, doc_id)
-            if existing_sg:
+            if existing_sg is not None:
                 subgraphs[doc_id] = existing_sg
                 callback(msg=f"[GraphRAG] doc:{doc_id} subgraph found in store, skipping LLM extraction.")
                 return
@@ -220,32 +307,20 @@ async def _run_graphrag_for_kb(
                     empty_docs.append(doc_id)
                     callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
                     return
-                deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
+                deadline = max(config.build_subgraph_min_timeout_seconds, len(chunks) * config.build_subgraph_timeout_per_chunk_seconds)
                 msg = f"[GraphRAG] build_subgraph doc:{doc_id}"
                 callback(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
 
-                try:
-                    sg = await asyncio.wait_for(
-                        generate_subgraph(
-                            kg_extractor,
-                            tenant_id,
-                            kb_id,
-                            doc_id,
-                            chunks,
-                            language,
-                            kb_parser_config.get("graphrag", {}).get("entity_types", []),
-                            chat_model,
-                            embedding_model,
-                            callback,
-                            task_id=row["id"],
-                        ),
-                        timeout=deadline,
+                async def build_attempt() -> nx.Graph | None:
+                    checkpoint = await load_subgraph_from_store(tenant_id, kb_id, doc_id)
+                    if checkpoint is not None:
+                        return checkpoint
+                    return await generate_subgraph(
+                        kg_extractor, tenant_id, kb_id, doc_id, chunks, language, graphrag_config.get("entity_types", []), chat_model, embedding_model, callback, task_id=row["id"]
                     )
-                except TimeoutError:
-                    failed_docs.append((doc_id, "timeout"))
-                    callback(msg=f"{msg} FAILED: timeout")
-                    return
-                if sg:
+
+                sg = await retry(f"build_subgraph doc:{doc_id}", build_attempt, config.build_subgraph_retry_attempts, deadline)
+                if sg is not None:
                     subgraphs[doc_id] = sg
                     callback(msg=f"{msg} done")
                 else:
@@ -286,7 +361,18 @@ async def _run_graphrag_for_kb(
             raise TaskCanceledException(f"Task {row['id']} was cancelled")
         # Invalidate before mutation, including a failed/partial new merge.
         clear_phase_markers(kb_id)
-        final_graph = await merge_subgraph(tenant_id, kb_id, doc_id, subgraphs[doc_id], embedding_model, callback)
+
+        async def merge_attempt() -> nx.Graph:
+            current_graph = await get_graph(tenant_id, kb_id)
+            if current_graph is not None and doc_id in current_graph.graph.get("source_id", []):
+                # A prior attempt may have committed the authoritative checkpoint
+                # before pruning failed. Settle cleanup without merging twice.
+                change = GraphChange(added_updated_nodes=set(current_graph.nodes()), added_updated_edges=set(current_graph.edges()))
+                await set_graph(tenant_id, kb_id, embedding_model, current_graph, change, callback)
+                return current_graph
+            return await merge_subgraph(tenant_id, kb_id, doc_id, deepcopy(subgraphs[doc_id]), embedding_model, callback)
+
+        final_graph = await retry(f"merge_subgraph doc:{doc_id}", merge_attempt, config.merge_retry_attempts, config.merge_timeout_seconds)
     if failed_docs:
         raise RuntimeError(f"GraphRAG failed to build {len(failed_docs)} document subgraphs")
     if final_graph is None:
@@ -297,17 +383,33 @@ async def _run_graphrag_for_kb(
     subgraph_nodes = {node for graph in subgraphs.values() for node in graph.nodes()} or set(final_graph.nodes())
     revision = phase_revision(final_graph, kb_parser_config)
     if with_resolution and not has_phase_marker(kb_id, PHASE_RESOLUTION, revision):
-        await resolve_entities(final_graph, subgraph_nodes, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+
+        async def resolution_attempt() -> nx.Graph:
+            candidate = deepcopy(final_graph)
+            await resolve_entities(candidate, subgraph_nodes, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+            return candidate
+
+        final_graph = await retry("entity resolution", resolution_attempt, config.resolution_retry_attempts, config.resolution_timeout_seconds)
         revision = phase_revision(final_graph, kb_parser_config)
         if has_canceled(row["id"]):
             raise TaskCanceledException(f"Task {row['id']} was cancelled")
-        current_writer.get().check()
+        lease = current_writer.get()
+        if lease is None:
+            raise RuntimeError("GraphRAG phase completion requires a writer lease")
+        lease.check()
         set_phase_marker(kb_id, PHASE_RESOLUTION, revision)
     if with_community and not has_phase_marker(kb_id, PHASE_COMMUNITY, revision):
-        await extract_community(final_graph, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+
+        async def community_attempt() -> None:
+            await extract_community(deepcopy(final_graph), tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+
+        await retry("community extraction", community_attempt, config.community_retry_attempts, config.community_timeout_seconds)
         if has_canceled(row["id"]):
             raise TaskCanceledException(f"Task {row['id']} was cancelled")
-        current_writer.get().check()
+        lease = current_writer.get()
+        if lease is None:
+            raise RuntimeError("GraphRAG phase completion requires a writer lease")
+        lease.check()
         set_phase_marker(kb_id, PHASE_COMMUNITY, revision)
 
     now = asyncio.get_running_loop().time()
@@ -342,6 +444,7 @@ async def generate_subgraph(
     if contains:
         callback(msg=f"Graph already contains {doc_id}")
         return None
+    _has_cancel_and_exit(task_id, f"Task {task_id} cancelled before entity extraction.", callback)
     start = asyncio.get_running_loop().time()
     ext = extractor(
         llm_bdl,
@@ -378,6 +481,7 @@ async def generate_subgraph(
         )
     if ignored_rels:
         callback(msg=f"ignored {ignored_rels} relations due to missing entities.")
+    _has_cancel_and_exit(task_id, f"Task {task_id} cancelled before tidying subgraph.", callback)
     tidy_graph(subgraph, callback, check_attribute=False)
 
     subgraph.graph["source_id"] = [doc_id]
@@ -395,6 +499,7 @@ async def generate_subgraph(
         kb_name = kb.name
 
     index_name = search.index_name_one(tenant_id, kb_name)
+    _has_cancel_and_exit(task_id, f"Task {task_id} cancelled before saving subgraph.", callback)
     previous = await settled_io(graph_rows, index_name, kb_id, ["subgraph"], doc_id)
     await insert_chunks_bounded([{"id": cid, **chunk}], tenant_id, kb_id, index_name=index_name, callback=callback)
     stale = [r["pk"] for r in previous if r["pk"] != cid and r.get("source_id") in ([doc_id], doc_id)]
@@ -404,7 +509,6 @@ async def generate_subgraph(
     return subgraph
 
 
-@timeout(60 * 3)
 async def merge_subgraph(
     tenant_id: str,
     kb_id: str,
@@ -434,7 +538,6 @@ async def merge_subgraph(
     return new_graph
 
 
-@timeout(60 * 30, 1)
 async def resolve_entities(
     graph: nx.Graph,
     subgraph_nodes: set[str],
@@ -470,7 +573,6 @@ async def resolve_entities(
     callback(msg=f"Graph resolution done in {now - start:.2f}s.")
 
 
-@timeout(60 * 30, 1)
 async def extract_community(
     graph: nx.Graph,
     tenant_id: str,

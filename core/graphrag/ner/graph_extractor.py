@@ -387,8 +387,7 @@ class GraphExtractor(Extractor):
         callback: Callable[..., Any] | None = None,
         task_id: str = "",
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        # Unlike the generic LLM extractor's tolerated per-chunk failures, a
-        # deterministic local inference failure must not publish a partial graph.
+        # Local inference failures must propagate without publishing a partial graph.
         self.callback = callback
         nodes: dict[str, list[dict[str, Any]]] = defaultdict(list)
         edges: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)

@@ -126,10 +126,11 @@ def writer_active(tenant_id: str, kb_id: str) -> bool:
 class GraphRAGLease:
     """One writer per tenant/dataset, including wipe; renew across long LLM phases."""
 
-    def __init__(self, tenant_id: str, kb_id: str, *, wait: float = 30, ttl: int = 1200) -> None:
+    def __init__(self, tenant_id: str, kb_id: str, *, wait: int | float = 30, ttl: int = 1200) -> None:
         self.key = writer_key(tenant_id, kb_id)
         self.lock = Lock(REDIS_CONN.REDIS, self.key, timeout=ttl, blocking_timeout=wait, thread_local=False)
         self.ttl = ttl
+        self.wait = wait
         self.stop = threading.Event()
         self.failure: BaseException | None = None
         self.renewal: threading.Thread | None = None
@@ -137,9 +138,18 @@ class GraphRAGLease:
     def __enter__(self) -> "GraphRAGLease":
         if not self.lock.acquire():
             raise RuntimeError("GraphRAG writer is still active; retry after cancellation settles")
+        self._start_renewal()
+        return self
+
+    def _start_renewal(self) -> None:
         self.renewal = threading.Thread(target=self._renew, daemon=True)
         self.renewal.start()
-        return self
+
+    def _try_enter(self) -> bool:
+        if not self.lock.acquire(blocking=False):
+            return False
+        self._start_renewal()
+        return True
 
     def _renew(self) -> None:
         while not self.stop.wait(self.ttl / 3):
@@ -161,9 +171,20 @@ class GraphRAGLease:
             self.lock.release()
 
     async def __aenter__(self) -> "GraphRAGLease":
-        # Acquire must finish even if the requesting coroutine is cancelled.
+        # Poll nonblocking Redis acquisition so task cancellation remains bounded.
+        # Each in-flight acquire still settles before cleanup/release.
+        deadline = asyncio.get_running_loop().time() + self.wait
         try:
-            return await settled_io(self.__enter__)
+            while True:
+                task_id = current_task.get()
+                if task_id and has_canceled(task_id):
+                    raise TaskCanceledException(f"Task {task_id} was cancelled while waiting for GraphRAG writer")
+                if await settled_io(self._try_enter):
+                    return self
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("GraphRAG writer is still active; lock acquisition timed out")
+                await asyncio.sleep(min(0.25, remaining))
         except BaseException:
             await settled_io(self.__exit__, None, None, None)
             raise
