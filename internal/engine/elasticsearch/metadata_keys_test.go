@@ -130,3 +130,21 @@ func TestESResultConsumersHaveStableIDsCountsAndSafeHighlight(t *testing.T) {
 		t.Fatal("mutated caller")
 	}
 }
+
+func TestESDocumentNamesAggregateLiterally(t *testing.T) {
+	e := &elasticsearchEngine{}
+	chunks := []map[string]interface{}{
+		{"docnm_kwd": "Report, Q1.pdf"},
+		{"docnm_kwd": "Report, Q1.pdf"},
+		{"docnm_kwd": " spaced name.txt "},
+		{"docnm_kwd": []string{"array, name.txt"}},
+	}
+	expected := []map[string]interface{}{
+		{"key": "Report, Q1.pdf", "count": 2},
+		{"key": " spaced name.txt ", "count": 1},
+		{"key": "array, name.txt", "count": 1},
+	}
+	if actual := e.GetAggregation(chunks, "docnm_kwd"); !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("document names changed during aggregation: %#v", actual)
+	}
+}

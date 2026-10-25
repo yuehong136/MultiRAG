@@ -29,13 +29,20 @@ func (e *elasticsearchEngine) GetDocIDs(chunks []map[string]interface{}) []strin
 func (e *elasticsearchEngine) GetAggregation(chunks []map[string]interface{}, field string) []map[string]interface{} {
 	counts := map[string]int{}
 	add := func(value string) {
-		if value = strings.TrimSpace(value); value != "" {
+		if field == "tag_kwd" {
+			value = strings.TrimSpace(value)
+		}
+		if value != "" {
 			counts[value]++
 		}
 	}
 	for _, chunk := range chunks {
 		switch value := chunk[field].(type) {
 		case string:
+			if field != "tag_kwd" {
+				add(value)
+				continue
+			}
 			separator := ","
 			if field == "tag_kwd" && strings.Contains(value, "###") {
 				separator = "###"
