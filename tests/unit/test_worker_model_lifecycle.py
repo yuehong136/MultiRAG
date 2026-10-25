@@ -161,6 +161,67 @@ async def test_real_openai_sdk_sync_and_async_clients_are_closed(db: Session, mo
     assert client.is_closed() and async_client.is_closed()
 
 
+@pytest.mark.parametrize("body", ["business_failure", "success", "canceled"])
+async def test_scope_cleanup_cancellation_priority_and_isolation(db: Session, providers: list[Any], body: str) -> None:
+    from api.db.services import llm_service
+
+    close_started, release_close, body_started = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = ValueError("original business failure")
+    restored = []
+
+    async def delayed_close() -> None:
+        close_started.set()
+        await release_close.wait()
+
+    async def operation() -> None:
+        try:
+            async with llm_bundle_scope():
+                LLMBundle(db, "first", CONFIG)
+                LLMBundle(db, "second", CONFIG)
+                providers[-1].async_client.close.side_effect = delayed_close
+                body_started.set()
+                if body == "business_failure":
+                    raise original
+                if body == "canceled":
+                    await asyncio.Event().wait()
+        finally:
+            restored.append(llm_service._owned_bundles.get() is None)
+
+    work = asyncio.create_task(operation())
+    try:
+        await asyncio.wait_for(body_started.wait(), 2)
+        if body == "canceled":
+            work.cancel()
+        await asyncio.wait_for(close_started.wait(), 2)
+        work.cancel()
+        await asyncio.sleep(0.01)
+        work.cancel()
+        await asyncio.sleep(0.01)
+        assert not work.done()
+        release_close.set()
+        if body == "business_failure":
+            with pytest.raises(ValueError) as failure:
+                await work
+            assert failure.value is original
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await work
+        assert restored == [True]
+        for model in providers:
+            model.client.close.assert_called_once()
+            model.async_client.close.assert_awaited_once()
+        async with llm_bundle_scope():
+            LLMBundle(db, "later", CONFIG)
+            providers[-1].client.close.assert_not_called()
+        assert len(providers) == 3
+        for model in providers:
+            model.client.close.assert_called_once()
+            model.async_client.close.assert_awaited_once()
+    finally:
+        release_close.set()
+        await asyncio.gather(work, return_exceptions=True)
+
+
 async def test_worker_model_closes_after_binding_probe_then_index_failure(db: Session, monkeypatch: pytest.MonkeyPatch, providers: list[Any]) -> None:
     from core.svr import task_executor
 

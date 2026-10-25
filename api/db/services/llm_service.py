@@ -43,6 +43,10 @@ async def llm_bundle_scope() -> AsyncIterator[None]:
     except BaseException:
         try:
             await finish_owned_work(_close_bundles(bundles))
+        except asyncio.CancelledError:
+            # Owned cleanup has drained. Preserve the exception from the body;
+            # cancellation during cleanup must not replace a business failure.
+            pass
         except Exception:
             logging.exception("Model cleanup failed while handling a task failure")
         raise
