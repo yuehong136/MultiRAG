@@ -3,6 +3,7 @@ package models
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -38,7 +39,7 @@ func nextOpenAIStreamData(scanner *bufio.Scanner, events bool) (string, bool, er
 		return "", false, err
 	}
 	if len(fields) > 0 {
-		return strings.Join(fields, "\n"), true, nil
+		return "", false, fmt.Errorf("incomplete model SSE event: %w", io.ErrUnexpectedEOF)
 	}
 	return "", false, nil
 }

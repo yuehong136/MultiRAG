@@ -29,6 +29,8 @@ type openAIChatDriver struct {
 	reasoningFallback    bool
 	rootFinishReason     bool
 	optionalDiscoveryKey bool
+	optionalAPIKey       bool
+	thinkingAlias        bool
 	parseContent         func(json.RawMessage) (string, string, error)
 	waitForStreamEOF     bool
 	inlineThink          bool
@@ -86,7 +88,7 @@ func (d *openAIChatDriver) request(method, suffix string, config *APIConfig, bod
 	if config == nil {
 		config = &APIConfig{}
 	}
-	if (config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "") && !(d.optionalDiscoveryKey && method == http.MethodGet && suffix == d.URLSuffix.Models) {
+	if (config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "") && !d.optionalAPIKey && !(d.optionalDiscoveryKey && method == http.MethodGet && suffix == d.URLSuffix.Models) {
 		return nil, fmt.Errorf("%s: API key is required", d.Name())
 	}
 	if suffix == "" {
@@ -156,6 +158,7 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 				Content          json.RawMessage `json:"content"`
 				ReasoningContent *string         `json:"reasoning_content"`
 				Reasoning        *string         `json:"reasoning"`
+				Thinking         json.RawMessage `json:"thinking"`
 			} `json:"message"`
 		} `json:"choices"`
 		Error json.RawMessage `json:"error"`
@@ -210,6 +213,13 @@ func (d *openAIChatDriver) chat(name string, messages []Message, apiConfig *APIC
 	}
 	if d.reasoningAlias && (reasoning == nil || *reasoning == "") {
 		reasoning = message.Reasoning
+	}
+	if d.thinkingAlias && (reasoning == nil || *reasoning == "") && len(message.Thinking) > 0 && string(message.Thinking) != "null" {
+		var thinking string
+		if err := json.Unmarshal(message.Thinking, &thinking); err != nil {
+			return nil, fmt.Errorf("invalid thinking content")
+		}
+		reasoning = &thinking
 	}
 	if reasoning == nil && d.splitReasoning {
 		class := ModelClassFromName(name)
@@ -387,6 +397,13 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 			choice.Delta = &openAIStreamDelta{}
 		}
 		delta := choice.Delta
+		if d.thinkingAlias && (delta.Reasoning == nil || *delta.Reasoning == "") && (delta.RouterReasoning == nil || *delta.RouterReasoning == "") && len(delta.Thinking) > 0 && string(delta.Thinking) != "null" {
+			var thinking string
+			if err := json.Unmarshal(delta.Thinking, &thinking); err != nil {
+				return fmt.Errorf("invalid thinking content")
+			}
+			delta.Reasoning = &thinking
+		}
 		if d.openRouterReasoning && delta.RouterReasoning != nil {
 			delta.Reasoning = delta.RouterReasoning
 		}
@@ -460,6 +477,7 @@ type openAIStreamDelta struct {
 	Content         json.RawMessage `json:"content"`
 	Reasoning       *string         `json:"reasoning_content"`
 	RouterReasoning *string         `json:"reasoning"`
+	Thinking        json.RawMessage `json:"thinking"`
 }
 
 func validateStrictChatFinish(reason *string) error {
