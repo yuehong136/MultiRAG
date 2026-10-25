@@ -29,6 +29,7 @@ GO_LIVE_OPT_INS = {
         "TestAfter410GoHTTPCLIAndSQL",
         "TestAfter440ProvidersHTTPCLIAndSQL",
         "TestAfter775ProvidersHTTPCLIAndSQL",
+        "TestAfterF9ProvidersHTTPCLIAndSQL",
         "TestAfterBBBProvidersHTTPCLIAndSQL",
         "TestChatSessionLiveHTTPAndSQL",
         "TestDatasetReadHTTPAndSQL",
