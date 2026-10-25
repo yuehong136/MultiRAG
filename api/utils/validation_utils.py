@@ -468,6 +468,22 @@ def normalize_table_parser_config(config: Any) -> None:
         config.update(ParserConfig.model_validate(patch).model_dump(exclude_unset=True))
 
 
+def validate_upload_parser_config(value: Any) -> dict[str, Any]:
+    """Validate document-local table overrides before any upload side effect."""
+    if not isinstance(value, dict):
+        raise ValueError("parser_config must be a JSON object")
+    allowed = {"table_column_mode", "table_column_roles"}
+    if value.keys() - allowed:
+        raise ValueError("parser_config only accepts table_column_mode and table_column_roles")
+    if "table_column_mode" in value and value["table_column_mode"] not in ("auto", "manual"):
+        raise ValueError("table_column_mode must be auto or manual")
+    if "table_column_roles" in value:
+        roles = value["table_column_roles"]
+        if not isinstance(roles, dict) or any(not isinstance(k, str) or not k.strip() or v not in ("indexing", "metadata", "both") for k, v in roles.items()):
+            raise ValueError("table_column_roles must map column names to indexing, metadata or both")
+    return dict(value)
+
+
 VALID_UPDATE_CHUNK_METHODS = {
     "naive",
     "manual",

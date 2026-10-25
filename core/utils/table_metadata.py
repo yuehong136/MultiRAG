@@ -9,11 +9,19 @@ TABLE_ROW_KEY = "__table_row_key__"
 
 
 def merge_table_parser_config_from_kb(task: dict[str, Any]) -> dict[str, Any]:
+    """Keep current dataset defaults and then apply explicit document overrides.
+
+    Uploads persist table_column_overrides so a later dataset settings change
+    cannot silently reclassify that file. Older documents without overrides
+    continue following dataset roles. The private marker is consumed here.
+    """
     config = dict(task.get("parser_config") or {})
     if task.get("parser_id", "").lower() == "table":
         for key in ("table_column_mode", "table_column_roles", "table_column_names"):
             if key in (task.get("kb_parser_config") or {}):
                 config[key] = task["kb_parser_config"][key]
+        overrides = config.pop("table_column_overrides", {})
+        config.update(overrides)
     return config
 
 

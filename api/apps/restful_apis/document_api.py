@@ -44,7 +44,7 @@ from api.utils.api_utils import (
     server_error_response,
 )
 from api.utils.document_update_contract import DocumentUpdatePatch
-from api.utils.validation_utils import DocumentIngestRequest
+from api.utils.validation_utils import DocumentIngestRequest, validate_upload_parser_config
 from common.constants import RetCode, TaskStatus
 from common.metadata_config import MetadataField
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
@@ -334,11 +334,12 @@ async def upload_documents(
     name: str | None = Form(None, description="type=web 时的文档名称"),
     url: str | None = Form(None, description="type=web 时的网页 URL"),
     parent_path: str | None = Form(None, description="父文件夹下的可选嵌套路径，使用 '/' 分隔"),
+    parser_config: str | None = Form(None, description="文档表格列角色覆盖 JSON，仅 table_column_mode/table_column_roles"),
     creation_type: str = Query("local", alias="type", description="local / web / empty"),
     return_raw_files: bool = Query(False, description="跳过文档键名映射，返回原始文档数据"),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     """统一创建数据集文档（web 会话与 API token 共用入口）。
 
     - ``type=local`` 或省略时沿用文件上传契约；
@@ -348,6 +349,7 @@ async def upload_documents(
       ``files`` 兼容既有 SDK 消费方，二者可混用、按序合并。
     - ``return_raw_files=true`` 返回原始文档字段（web/admin 消费格式）；
       默认返回映射后的键名（chunk_count/dataset_id/... + run=UNSTART）。
+    - ``parser_config`` 只接受 table_column_mode/table_column_roles，逐文档覆盖数据集默认值；非法覆盖在存储和 SQL 写入前拒绝。
     - 只负责上传和创建文档，不自动启动解析任务。
     """
     mode = creation_type.lower()
@@ -393,6 +395,11 @@ async def upload_documents(
             logger.exception("Empty document creation failed")
             return get_error_data_result(retmsg="Internal server error")
 
+    try:
+        parser_config_override = validate_upload_parser_config(json.loads(parser_config)) if parser_config is not None else None
+    except (ValueError, TypeError) as exc:
+        return get_error_data_result(retmsg=str(exc), retcode=RetCode.ARGUMENT_ERROR)
+
     file_objs = (file or []) + (files or [])
     if not file_objs:
         return get_error_data_result(retmsg="No file part!", retcode=RetCode.ARGUMENT_ERROR)
@@ -414,7 +421,7 @@ async def upload_documents(
         if not check_kb_team_permission(s, kb, tenant_id):
             return get_error_data_result(retmsg="No authorization.", retcode=RetCode.AUTHENTICATION_ERROR)
 
-        err, uploaded = FileService.upload_document(s, kb, file_contents, tenant_id, parent_path=parent_path)
+        err, uploaded = FileService.upload_document(s, kb, file_contents, tenant_id, parent_path=parent_path, parser_config_override=parser_config_override)
         if err:
             return get_error_data_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
         if not uploaded:

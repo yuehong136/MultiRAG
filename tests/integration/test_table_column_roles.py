@@ -328,3 +328,66 @@ def test_failed_first_table_metadata_save_rolls_back_seed_row(bootstrapped_engin
             db.execute(sa.delete(Task).where(Task.id == task))
             db.execute(sa.delete(Document).where(Document.id == document))
             db.execute(sa.delete(Knowledgebase).where(Knowledgebase.id == dataset))
+
+
+@pytest.mark.parametrize("extension", ["csv", "xlsx"])
+def test_upload_table_roles_survive_dataset_defaults_and_real_parse(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, extension: str) -> None:
+    from io import BytesIO
+
+    import pandas as pd
+
+    from tests.support.runtime_upload import read_object
+
+    env = parse_api
+    headers = {"Authorization": f"Bearer {env['jwt']}"}
+    base = env["base"] + "/api/v1/datasets/" + env["kb"]
+    defaults = {"table_column_mode": "manual", "table_column_roles": {"title": "metadata", "country": "indexing", "score": "indexing"}}
+    result = requests.put(base, headers=headers, json={"chunk_method": "table", "parser_config": defaults}, timeout=30)
+    assert result.status_code == 200 and result.json()["code"] == 0, result.text
+    binary = b"title,country,score\nFirst article,Brazil,0\nSecond article,Japan,2\n"
+    if extension == "xlsx":
+        buffer = BytesIO()
+        pd.DataFrame({"title": ["First article", "Second article"], "country": ["Brazil", "Japan"], "score": [0, 2]}).to_excel(buffer, index=False)
+        binary = buffer.getvalue()
+    before_objects = {obj.object_name for obj in env["storage"].list_objects(env["bucket"], recursive=True)}
+    with Session(env["engine"]) as db:
+        before_docs = list(db.scalars(sa.select(Document.id).where(Document.kb_id == env["kb"])))
+    for invalid in [{"layout_recognize": "Plain Text"}, {"table_column_mode": "unknown"}, {"table_column_roles": {"title": "invalid"}}, None]:
+        response = requests.post(base + "/documents", headers=headers, files={"file": ("rejected." + extension, binary)}, data={"parser_config": json.dumps(invalid)}, timeout=30)
+        assert response.status_code == 200 and response.json()["code"] == 101, response.text
+    assert {obj.object_name for obj in env["storage"].list_objects(env["bucket"], recursive=True)} == before_objects
+    with Session(env["engine"]) as db:
+        assert list(db.scalars(sa.select(Document.id).where(Document.kb_id == env["kb"]))) == before_docs
+    override = {"table_column_mode": "manual", "table_column_roles": {"title": "indexing", "country": "metadata", "score": "both"}}
+    response = requests.post(base + "/documents?return_raw_files=true", headers=headers, files={"file": ("roles." + extension, binary)}, data={"parser_config": json.dumps(override)}, timeout=30)
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    doc_id = response.json()["data"][0]["id"]
+    with Session(env["engine"]) as db:
+        doc = db.get(Document, doc_id)
+        assert doc.parser_config["table_column_roles"] == override["table_column_roles"]
+        assert doc.parser_config["table_column_overrides"] == override
+        assert db.get(Knowledgebase, env["kb"]).parser_config["table_column_roles"] == defaults["table_column_roles"]
+        assert read_object(env["storage"], env["bucket"], env["kb"] + "/" + doc.location) == binary
+    monkeypatch.setattr(worker, "get_model_config_by_type_and_name", lambda *a: {})
+    monkeypatch.setattr(worker, "LLMBundle", lambda *a, **kw: Encoder())
+    parsed = requests.post(base + "/documents/parse", headers=headers, json={"document_ids": [doc_id]}, timeout=30)
+    assert parsed.status_code == 200 and parsed.json()["code"] == 0, parsed.text
+    with Session(env["engine"]) as db:
+        identifier = db.scalar(sa.select(Task.id).where(Task.doc_id == doc_id, Task.progress < 1))
+        assert identifier is not None
+        task = TaskService.get_task(db, identifier)
+        assert task is not None
+        asyncio.run(worker.do_handle_task(db, task))
+    with Session(env["engine"]) as db:
+        metadata = DocMetadataService.get_document_metadata(db, doc_id)
+        assert metadata == {"country": ["Brazil", "Japan"], "score": [0, 2]}
+        assert db.get(Task, identifier).progress == 1
+        assert db.get(Knowledgebase, env["kb"]).parser_config["table_column_roles"] == defaults["table_column_roles"]
+    rows = index_snapshot(env)
+    assert len(rows) == 2
+    assert all("country" not in row["content_with_weight"] for row in rows)
+    assert all("title" not in row["chunk_data"] for row in rows)
+    env["record_path"].with_suffix(".upload-table-readback.json").write_text(json.dumps({"document": doc_id, "task": identifier, "config": override, "metadata": metadata, "rows": rows}, default=str))
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(DocumentMetadata).where(DocumentMetadata.id == doc_id))
+        db.commit()
