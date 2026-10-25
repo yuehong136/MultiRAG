@@ -435,3 +435,38 @@ func TestHostedStreamIdleDeadlines(t *testing.T) {
 		}
 	}
 }
+
+func TestAI302RejectsMalformedFramesAfterAnswer(t *testing.T) {
+	for _, test := range []struct {
+		name, frame string
+		valid       bool
+	}{
+		{"null-choice", `{"choices":[null]}`, false},
+		{"null-delta", `{"choices":[{"delta":null}]}`, false},
+		{"missing-delta", `{"choices":[{}]}`, false},
+		{"invalid-terminal", `{"choices":[{"delta":null,"finish_reason":"content_filter"}]}`, false},
+		{"valid-terminal-without-delta", `{"choices":[{"finish_reason":"stop"}]}`, true},
+		{"valid-terminal-with-null-delta", `{"choices":[{"delta":null,"finish_reason":"stop"}]}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"prefix\"}}]}\ndata: %s\ndata: [DONE]\n", test.frame)
+			}))
+			model := NewAI302Model(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
+			answer := ""
+			err := model.ChatStreamlyWithMessages("model", []Message{{Role: "user", Content: "q"}}, &APIConfig{APIKey: stringPtr("key")}, nil, func(content, reason *string) error {
+				if content != nil {
+					answer += *content
+				}
+				return nil
+			})
+			if test.valid {
+				if err != nil || answer != "prefix[DONE]" {
+					t.Fatal(answer, err)
+				}
+			} else if err == nil || answer != "prefix" {
+				t.Fatal("malformed frame after valid answer became successful completion", answer, err)
+			}
+		})
+	}
+}

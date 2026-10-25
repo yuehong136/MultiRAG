@@ -22,6 +22,7 @@ func NewAI302Model(urls map[string]string, suffix URLSuffix) *AI302Model {
 	driver := newOpenAIChatDriver(urls, suffix, "302ai", ai302ChatBody)
 	driver.accept = "application/json"
 	driver.streamIdleTimeout = 60 * time.Second
+	driver.strictStream, driver.terminalWithoutDelta = true, true
 	return &AI302Model{driver}
 }
 

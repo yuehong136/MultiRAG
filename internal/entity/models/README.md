@@ -99,7 +99,9 @@ real supplier credentials and production validation.
 
 302.AI trims model names, rerank queries, document URLs and task IDs on copies;
 blank required identities fail before HTTP. Chat methods determine `stream` even
-when the option disagrees. JSON chat/discovery and multipart ASR request JSON
+when the option disagrees. Invalid stream choices or missing deltas fail even
+after text has arrived; successful terminal frames may omit their delta.
+JSON chat/discovery and multipart ASR request JSON
 responses; sender chat requests SSE. URL parsing requires a selected model and a
 public HTTP(S) URL without userinfo or fragments; task IDs use the local bounded
 alphanumeric/hyphen/underscore grammar. File-path access stays in the service
