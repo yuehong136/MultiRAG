@@ -26,7 +26,7 @@ def _fake_conv(dialog_id: str = "dlg-1"):
         dialog_id=dialog_id,
         message=[{"role": "user", "content": "hi", "id": "m1"}],
         reference=[],
-        to_dict=lambda: {"id": "conv-1"},
+        to_dict=lambda: {"id": "conv-1", "dialog_id": dialog_id, "message": [{"role": "user", "content": "hi", "id": "m1"}], "reference": []},
     )
 
 
@@ -76,6 +76,7 @@ def chat_route_stubs(monkeypatch):
     monkeypatch.setattr(DialogService, "get_by_id", classmethod(lambda cls, s, did: dialog))
     monkeypatch.setattr(DialogService, "query", classmethod(lambda cls, s, **kw: [dialog]))
     monkeypatch.setattr(ConversationService, "update_by_id", classmethod(lambda cls, s, cid, data: updates.append(cid) or True))
+    monkeypatch.setattr(ConversationService, "save", classmethod(lambda cls, s, **data: updates.append(data["id"]) or True))
     return types.SimpleNamespace(conv=conv, dialog=dialog, updates=updates)
 
 
@@ -235,7 +236,7 @@ def test_chat_completion_openai_like_streams(client, monkeypatch, chat_route_stu
 
 
 def test_sdk_completion_request_models_expose_internet(client):
-    sdk_session = _route_module("api.apps.sdk.session")
+    sdk_session = _route_module("api.apps.restful_apis.bot")
 
     chat_request = sdk_session.ChatCompletionRequest(question="hi", internet=True)
     openai_request = sdk_session.ChatCompletionOpenAIRequest(

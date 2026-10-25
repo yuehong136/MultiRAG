@@ -46,7 +46,7 @@ from api.utils.api_utils import token_required
     ],
 )
 def test_post_argument_error_envelope(client: TestClient, monkeypatch: pytest.MonkeyPatch, payload: Any, expected: str) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock(side_effect=AssertionError("Invalid arguments reached retrieval"))
     monkeypatch.setattr(module, "_run_retrieval", run)
     client.app.dependency_overrides[token_required] = lambda: "owner"
@@ -72,7 +72,7 @@ def test_post_argument_error_envelope(client: TestClient, monkeypatch: pytest.Mo
 )
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer invalid-fixture-key"}])
 def test_get_health_check_has_no_retrieval_dependencies(client: TestClient, monkeypatch: pytest.MonkeyPatch, params: dict[str, str], headers: dict[str, str]) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     dependency = Mock(side_effect=AssertionError("Health check resolved retrieval dependencies"))
     run = AsyncMock(side_effect=AssertionError("Health check executed retrieval"))
     bundle = Mock(side_effect=AssertionError("Health check initialized model"))
@@ -95,13 +95,13 @@ def test_get_health_check_has_one_route_and_no_query_parameters(client: TestClie
     routes = [route for route in iter_route_contexts(client.app.routes) if route.path == "/api/v1/dify/retrieval" and "GET" in route.methods]
     assert len(routes) == 1
     assert routes[0].original_route.dependant.dependencies == []
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     operation = get_openapi(title="Dify", version="1", routes=module.router.routes)["paths"]["/dify/retrieval"]["get"]
     assert operation.get("parameters", []) == []
 
 
 def test_malformed_json_has_dify_envelope_without_echo(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock()
     monkeypatch.setattr(module, "_run_retrieval", run)
     response = client.post("/api/v1/dify/retrieval", content='{"secret-query":', headers={"Content-Type": "application/json"})
@@ -115,7 +115,7 @@ def test_malformed_json_has_dify_envelope_without_echo(client: TestClient, monke
 def test_post_invalid_api_key_has_dify_envelope(client: TestClient, monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]) -> None:
     from api.utils import api_utils
 
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock(side_effect=AssertionError("Unauthenticated request reached retrieval"))
     monkeypatch.setattr(module, "_run_retrieval", run)
     monkeypatch.setattr(api_utils.APIToken, "query", lambda *_args, **_kwargs: [])
@@ -125,7 +125,7 @@ def test_post_invalid_api_key_has_dify_envelope(client: TestClient, monkeypatch:
 
 
 def test_normalized_post_request_uses_strict_settings(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock(return_value=module.RetrievalResponse())
     monkeypatch.setattr(module, "_run_retrieval", run)
     client.app.dependency_overrides[token_required] = lambda: "owner"
@@ -139,7 +139,7 @@ def test_normalized_post_request_uses_strict_settings(client: TestClient, monkey
 
 
 def test_denial_precedes_metadata_model_and_index(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: SimpleNamespace(tenant_id="owner"))
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", lambda *_: False)
     metadata = Mock(side_effect=AssertionError("Denied request accessed metadata"))
@@ -164,7 +164,7 @@ def test_denial_precedes_metadata_model_and_index(client: TestClient, monkeypatc
 
 
 def test_post_lookup_failure_does_not_fall_back_to_health(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     lookup = Mock(side_effect=RuntimeError("controlled lookup failure"))
     bundle = Mock(side_effect=AssertionError("Failed lookup initialized model"))
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lookup)
@@ -179,7 +179,7 @@ def test_post_lookup_failure_does_not_fall_back_to_health(client: TestClient, mo
 
 @pytest.fixture
 def allowed_retrieval(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     kb = SimpleNamespace(id="kb", name="Knowledge", tenant_id="owner", tenant_embd_id=17, embd_id="embedding")
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: kb)
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", lambda *_: True)
@@ -255,7 +255,7 @@ def test_retrieval_failure_uses_error_envelope(client: TestClient, allowed_retri
 
 
 def test_missing_kb_precedes_access_and_all_retrieval_work(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: None)
     accessible = Mock(side_effect=AssertionError("Missing KB reached authorization"))
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", accessible)

@@ -13,13 +13,14 @@ import os
 import re
 import tempfile
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
@@ -30,7 +31,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_type_
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_chat, gen_mindmap
-from api.db.services.file_service import RuntimeUploadCleanupError
+from api.db.services.file_service import FileService, RuntimeAttachmentError, RuntimeUploadCleanupError
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -122,11 +123,60 @@ class SessionCompletionRequest(BaseModel):
     reference_metadata: ReferenceMetadata | None = None
     model_config = ConfigDict(extra="allow")
 
-    messages: list[dict[str, Any]]
+    messages: list[dict[str, Any]] | None = None
+    question: str | None = None
+    files: list[dict[str, Any]] | None = None
     chat_id: str | None = None
     session_id: str | None = None
-    stream: bool | None = True
-    internet: bool | None = None
+    conversation_id: str | None = None
+    pass_all_history_messages: StrictBool = False
+    stream: StrictBool = True
+    internet: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def validate_completion(self) -> Self:
+        if "messages" in self.model_fields_set:
+            if not self.messages:
+                raise ValueError("`messages` must be a non-empty list.")
+        elif self.question is None:
+            raise ValueError("Either `messages` or `question` is required.")
+        if self.session_id and self.conversation_id and self.session_id != self.conversation_id:
+            raise ValueError("`session_id` and `conversation_id` must identify the same session.")
+        if "pass_all_history" in (self.model_extra or {}):
+            raise ValueError("Use `pass_all_history_messages`.")
+        for message in self.messages or []:
+            if not isinstance(message.get("role"), str) or message["role"] not in {"system", "user", "assistant"} or not isinstance(message.get("content"), str):
+                raise ValueError("Every message must have a supported role and string content.")
+            if "id" in message and (not isinstance(message["id"], str) or not message["id"].strip()):
+                raise ValueError("Message IDs must be non-empty strings.")
+            _validate_completion_files(message.get("files", []))
+        if self.messages and self.messages[-1]["role"] != "user":
+            raise ValueError("The last message must be from user.")
+        _validate_completion_files(self.files if "files" in self.model_fields_set else [])
+        if self.files is not None and self.messages and "files" in self.messages[-1] and self.files != self.messages[-1]["files"]:
+            raise ValueError("Provide matching top-level and latest-message files, or only one of them.")
+        return self
+
+
+def _validate_completion_files(files: Any) -> None:
+    if not isinstance(files, list) or any(not isinstance(file, dict) or not isinstance(file.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", file["id"]) for file in files):
+        raise ValueError("`files` must be a list of uploaded file objects with valid IDs.")
+
+
+class _CompletionSession(SimpleNamespace):
+    """Request-owned history; provider failures cannot flush a partial ORM edit."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return deepcopy(vars(self))
+
+
+def _model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for message in messages:
+        if message["role"] == "system" or (message["role"] == "assistant" and not filtered):
+            continue
+        filtered.append(message)
+    return filtered
 
 
 class RelatedQuestionsRequest(BaseModel):
@@ -540,11 +590,8 @@ def _create_session_for_completion(db: Session, chat_id: str, dialog: Any, user_
         "user_id": user_id,
         "reference": [],
     }
-    ConversationService.save(db, **conv)
-    saved = ConversationService.get_by_id(db, conv["id"])
-    if not saved:
-        raise LookupError("Fail to create a session!")
-    return saved
+    # Persist only after successful generation, together with the first answer.
+    return _CompletionSession(**conv)
 
 
 @router.post("/chats", summary="Create chat")
@@ -1216,34 +1263,37 @@ async def session_completion(
     - 无 chat_id:直连 LLM 聊天(临时默认 dialog,不落库);
     - 有 chat_id 无 session_id:自动创建会话;
     - 两者齐全:在既有会话上补全;
-    - 仅有 session_id:400。
+    - 仅有 session_id:参数错误。
+    - 默认追加最新 user 消息;显式 pass_all_history_messages 使用提交的分支历史。
     """
     req = request.model_dump(exclude_unset=True)
-    raw_messages = req.pop("messages", [])
-    messages = []
-    for message in raw_messages:
-        if message.get("role") == "system":
-            continue
-        if message.get("role") == "assistant" and not messages:
-            continue
-        messages.append(message)
+    raw_messages = req.pop("messages", None)
+    question = req.pop("question", None)
+    files = req.pop("files", None)
+    if raw_messages is None:
+        raw_messages = [{"role": "user", "content": question}]
+    if files is not None:
+        raw_messages[-1]["files"] = files
+    messages = _model_messages(raw_messages)
     if not messages:
         return _error("No valid messages found!")
-    if messages[-1].get("role") != "user":
-        return _error("The last content of this conversation is not from user.")
     if not messages[-1].get("id"):
         messages[-1]["id"] = get_uuid()
-
-    message_id = messages[-1].get("id")
+    message_id = messages[-1]["id"]
     chat_id = req.pop("chat_id", "") or ""
     session_id = req.pop("session_id", "") or ""
+    session_id = session_id or req.pop("conversation_id", "") or ""
+    req.pop("conversation_id", None)
+    pass_all_history_messages = req.pop("pass_all_history_messages", False)
+    # Identity is always resolved from the request's authenticated credential.
+    req.pop("user_id", None)
     chat_model_id = req.pop("llm_id", "")
     stream_mode = req.pop("stream", True)
 
     chat_model_config = {}
     for model_config in ["temperature", "top_p", "frequency_penalty", "presence_penalty", "max_tokens"]:
         config = req.get(model_config)
-        if config:
+        if config is not None:
             chat_model_config[model_config] = config
 
     if session_id and not chat_id:
@@ -1251,6 +1301,7 @@ async def session_completion(
 
     try:
         conv = None
+        new_session = bool(chat_id and not session_id)
         if chat_id:
             if not await db.run_sync(lambda s: _owned_chat_exists(s, tenant_id, chat_id)):  # TODO(async-phase4)
                 return _error("No authorization.", RetCode.AUTHENTICATION_ERROR)
@@ -1267,12 +1318,25 @@ async def session_completion(
                 # user_id 一律取认证身份,不收 body(会话归属可被伪造)
                 conv = await db.run_sync(lambda s: _create_session_for_completion(s, chat_id, dialog, tenant_id))  # TODO(async-phase4)
                 session_id = conv.id
-            conv.message = deepcopy(raw_messages)
-            if not conv.reference:
-                conv.reference = []
-            conv.reference = [reference for reference in conv.reference if reference]
+            if session_id and not new_session:
+                conv = _CompletionSession(**deepcopy(_model_to_dict(conv)))
+            for message in raw_messages:
+                if message.get("files"):
+                    message["files"] = await FileService.resolve_runtime_uploads(tenant_id, [file["id"] for file in message["files"]])
+            if pass_all_history_messages:
+                old_answers = [message for message in _model_messages(conv.message or []) if message["role"] == "assistant"]
+                known_references = {message["id"]: reference for message, reference in zip(old_answers, conv.reference or [], strict=False) if message.get("id")}
+                conv.reference = [deepcopy(known_references.get(message.get("id"), {"chunks": [], "doc_aggs": []})) for message in messages if message["role"] == "assistant"]
+                conv.message = deepcopy(raw_messages)
+            else:
+                conv.message = deepcopy(conv.message or []) + [deepcopy(messages[-1])]
+                conv.reference = deepcopy(conv.reference or [])
+            messages = _model_messages(conv.message)
             conv.reference.append({"chunks": [], "doc_aggs": []})
         else:
+            for message in raw_messages:
+                if message.get("files"):
+                    message["files"] = await FileService.resolve_runtime_uploads(tenant_id, [file["id"] for file in message["files"]])
             dialog = await db.run_sync(lambda s: _build_default_completion_dialog(s, tenant_id, chat_model_id))  # TODO(async-phase4)
             dialog.llm_setting = chat_model_config
 
@@ -1283,6 +1347,7 @@ async def session_completion(
                 override_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, dialog.tenant_id, model_type, chat_model_id))  # TODO(async-phase4)
             except Exception:
                 return _error(f"Cannot use specified model {chat_model_id}.")
+            dialog = SimpleNamespace(**deepcopy(_model_to_dict(dialog)))
             dialog.llm_id = chat_model_id
             dialog.tenant_llm_id = override_model_config.get("id")
             dialog.llm_setting = chat_model_config
@@ -1293,13 +1358,30 @@ async def session_completion(
                 formatted["chat_id"] = chat_id
             return formatted
 
+        async def persist_answer() -> None:
+            if conv is None:
+                return
+            payload = conv.to_dict()
+            if new_session:
+                await db.run_sync(lambda s: ConversationService.save(s, **payload))  # TODO(async-phase4)
+            elif not await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, payload)):  # TODO(async-phase4)
+                raise RuntimeError("Session could not be saved.")
+
         async def stream_response() -> AsyncIterator[str]:
+            answered = False
             try:
-                async for ans in async_chat(dialog, messages, db, True, **req):
-                    yield "data:" + json.dumps({"code": 0, "message": "", "data": _format_answer(ans)}, ensure_ascii=False) + "\n\n"
-                if conv is not None:
-                    await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
+                async with aclosing(async_chat(dialog, messages, db, True, **req)) as answers:
+                    async for ans in answers:
+                        answered = answered or (isinstance(ans.get("answer"), str) and not ans.get("start_to_think") and not ans.get("end_to_think"))
+                        yield "data:" + json.dumps({"code": 0, "message": "", "data": _format_answer(ans)}, ensure_ascii=False) + "\n\n"
+                if not answered:
+                    raise RuntimeError("Chat completion returned no answer.")
+                await persist_answer()
+            except asyncio.CancelledError:
+                await db.rollback()
+                raise
             except Exception as e:
+                await db.rollback()
                 logger.exception(e)
                 yield (
                     "data:"
@@ -1325,12 +1407,21 @@ async def session_completion(
             return resp
 
         answer = None
-        async for ans in async_chat(dialog, messages, db, False, **req):
-            answer = _format_answer(ans)
-            if conv is not None:
-                await db.run_sync(lambda s: ConversationService.update_by_id(s, conv.id, conv.to_dict()))  # TODO(async-phase4)
-            break
+        async with aclosing(async_chat(dialog, messages, db, False, **req)) as answers:
+            async for ans in answers:
+                answer = _format_answer(ans)
+                break
+        if answer is None:
+            raise RuntimeError("Chat completion returned no answer.")
+        await persist_answer()
         return get_result(data=answer)
+    except RuntimeAttachmentError as e:
+        await db.rollback()
+        return _error(str(e), RetCode.ARGUMENT_ERROR)
+    except asyncio.CancelledError:
+        await db.rollback()
+        raise
     except Exception as e:
+        await db.rollback()
         logger.exception(e)
         return _error("Internal server error")

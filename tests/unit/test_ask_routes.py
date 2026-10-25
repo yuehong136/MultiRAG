@@ -117,7 +117,7 @@ def _fake_async_ask(answers):
 @pytest.fixture
 def ask_route_stubs(monkeypatch, client):
     answers = [{"answer": "你好", "reference": {}, "final": False}]
-    for mod_name in ("api.apps.sdk.session", "api.apps.restful_apis.search", "api.apps.conversation"):
+    for mod_name in ("api.apps.restful_apis.bot", "api.apps.restful_apis.search", "api.apps.conversation"):
         monkeypatch.setattr(_route_module(mod_name), "async_ask", _fake_async_ask(answers))
     kb = _fake_kb()
     monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, *args, **kwargs: True))

@@ -336,7 +336,7 @@ def test_http_variable_defaults_first_run(release_api: dict[str, Any], stream: b
 
 @pytest.mark.parametrize("release", [False, True])
 def test_sdk_session_helper_variable_defaults_preserve_draft(release_api: dict[str, Any], release: bool) -> None:
-    from api.apps.sdk.session import CreateAgentSessionRequest, create_agent_session
+    from api.apps.restful_apis.bot_api import CreateAgentSessionRequest, create_agent_session
 
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "SDK defaults", "dsl": variable_dsl("published")}, timeout=30).json()

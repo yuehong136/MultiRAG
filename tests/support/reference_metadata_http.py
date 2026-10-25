@@ -101,7 +101,7 @@ def metadata_http(runtime_upload_api: dict[str, Any], monkeypatch: pytest.Monkey
     monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
     import sys
 
-    embedded = sys.modules["api.apps.sdk.session"]
+    embedded = sys.modules["api.apps.restful_apis.bot"]
     monkeypatch.setattr(embedded, "build_named_bundle_async", bundle)
     monkeypatch.setattr(embedded, "_label_question_with_conn", lambda *a: {})
     try:

@@ -114,7 +114,7 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
 
 
 def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    from api.apps.sdk import doc as sdk
+    from api.apps.restful_apis import chunk as sdk
 
     env = search_api
     graph = AsyncMock(return_value={"doc_id": "", "content_with_weight": "unrestricted graph"})
@@ -730,7 +730,7 @@ def test_http_typed_membership_preserves_scalar_types_and_scope(search_api: dict
 
 def test_http_and_sdk_joint_search_keep_only_selected_index_bindings(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """Two owners and three datasets must never query the three cross-pairs."""
-    from api.apps.sdk import session
+    from api.apps.restful_apis import bot as session
 
     env = search_api
     monkeypatch.setattr(session, "build_named_bundle_async", dataset_search_service._bundle)

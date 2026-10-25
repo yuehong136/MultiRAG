@@ -205,3 +205,26 @@ def test_auth_and_ownership_enforced(client: Any, monkeypatch: pytest.MonkeyPatc
     assert denied.status_code == 200
     assert denied.json()["code"] == 102
     assert "don't own" in denied.json()["message"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_session_hint_is_stateless(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch, stream: bool, nested: bool) -> None:
+    from api.db.services.conversation_service import ConversationService
+
+    client, _, _, calls = openai_route
+    writes: list[str] = []
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        writes.append("conversation access")
+        raise AssertionError("OpenAI completions must not access stored sessions")
+
+    for method in ("get_by_id", "save", "update_by_id", "query"):
+        monkeypatch.setattr(ConversationService, method, forbidden)
+    body = {"model": "model", "messages": [{"role": "user", "content": "stateless"}], "stream": stream}
+    body.update({"extra_body": {"session_id": "existing-session"}} if nested else {"session_id": "existing-session"})
+    response = client.post("/api/v1/openai/dlg-1/chat/completions", json=body)
+    assert response.status_code == 200
+    assert calls and not writes
+    assert "session_id" not in calls[0]
+    assert '"session_id"' not in response.text

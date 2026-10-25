@@ -13,7 +13,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.apps.sdk.session import CreateAgentSessionRequest, create_agent_session
+from api.apps.restful_apis.bot_api import CreateAgentSessionRequest, create_agent_session
 from api.db.db_models import API4Conversation
 from core.utils.redis_conn import REDIS_CONN
 from tests.support.agent_list_operations import _ITEMS, _NODE, assert_runtime, assert_success, create, list_dsl, replica_key, run, session_state

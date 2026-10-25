@@ -58,6 +58,7 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
     import core.llm as providers
     from api.db.services import tenant_llm_service
     from common import settings
+    from core.prompts import generator
 
     env = runtime_upload_api
     owners = env["owners"]
@@ -122,6 +123,9 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
             yield db
 
     monkeypatch.setattr(tenant_llm_service, "db_connection", scratch_usage_db)
+    # Multi-turn refinement creates its own legacy bundle. Keep that real SQL
+    # resolution on this fixture's scratch database as well.
+    monkeypatch.setattr(generator, "db_connection", scratch_usage_db)
     save_record()
     with ExitStack() as cleanup:
         cleanup.callback(cleanup_rows)

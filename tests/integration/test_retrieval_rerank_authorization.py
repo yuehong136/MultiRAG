@@ -37,7 +37,8 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
     # It must also work after another test imported the cached application.
     monkeypatch.setitem(resources._state, "secret_key", "rerank-auth-contract-signer")
     from api.apps import app
-    from api.apps.sdk import doc, session
+    from api.apps.restful_apis import bot as session
+    from api.apps.restful_apis import chunk as doc
     from api.apps.services import dataset_search_service
     from api.db import db_models
 

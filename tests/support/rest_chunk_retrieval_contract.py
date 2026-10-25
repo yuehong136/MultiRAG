@@ -106,7 +106,7 @@ def rest_chunk_contract(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(module, "db_connection", scratch_db)
     monkeypatch.setattr(module, "LLMBundle", bundle)
     monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *_args, **_kwargs: {})
-    sdk = sys.modules["api.apps.sdk.doc"]
+    sdk = sys.modules["api.apps.restful_apis.chunk"]
     monkeypatch.setattr(sdk, "LLMBundle", bundle)
     monkeypatch.setattr(sdk, "get_tenant_default_model_by_type", lambda *_args, **_kwargs: {})
 

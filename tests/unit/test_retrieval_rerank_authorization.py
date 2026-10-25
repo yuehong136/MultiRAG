@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.apps.sdk import doc, session
+from api.apps.restful_apis import bot as session
+from api.apps.restful_apis import chunk as doc
 from api.db.db_models import Knowledgebase
 from api.db.joint_services import tenant_model_service as models
 from api.db.services.llm_service import LLMBundle

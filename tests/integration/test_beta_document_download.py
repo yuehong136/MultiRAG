@@ -153,7 +153,7 @@ def test_registered_routes_and_real_same_tenant_downloads(downloads: dict[str, A
 
     for path, function in [("/api/v1/documents/{document_id}", "download_doc"), ("/api/v1/datasets/{dataset_id}/documents/{document_id}", "download_document")]:
         context = next(ctx for ctx in iter_route_contexts(apps.app.routes) if ctx.path == path and "GET" in (ctx.methods or set()))
-        assert context.original_route.endpoint.__module__ == "api.apps.sdk.doc" and context.original_route.endpoint.__name__ == function
+        assert context.original_route.endpoint.__module__ == "api.apps.restful_apis.document_download" and context.original_route.endpoint.__name__ == function
     before = snapshot(env)
     for key, content in [("private", b"private"), ("team", b"team"), ("local", b"local-source"), ("shared", b"shared-source")]:
         response = download(env, key)

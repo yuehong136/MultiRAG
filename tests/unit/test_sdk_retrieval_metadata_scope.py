@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.sdk import doc as sdk
+from api.apps.restful_apis import chunk as sdk
 from api.db.db_models import Knowledgebase
 from api.utils.api_utils import token_required
 from common import settings
@@ -111,7 +111,7 @@ def test_sdk_multi_dataset_passes_ordered_tenant_name_id_bindings(sdk_retrieval:
 
 
 async def test_embedded_retrieval_pairs_loaded_rows_when_sql_order_differs(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
-    from api.apps.sdk import session
+    from api.apps.restful_apis import bot as session
 
     rows = [Knowledgebase(id=identifier, tenant_id=owner, name="name-" + identifier, tenant_embd_id=None, embd_id="embedding") for identifier, owner in (("b", "other"), ("a", "owner"))]
     monkeypatch.setattr(session.UserTenantService, "query", lambda *_a, **_k: [SimpleNamespace(tenant_id="owner"), SimpleNamespace(tenant_id="other")])
@@ -150,3 +150,12 @@ def test_sdk_membership_uses_lazy_exact_filter_and_document_intersection(sdk_ret
     assert retrieval.call_args.args[10] == ["new"]
     assert pushed.call_args.args[1:3] == (["dataset"], [{"key": "version", "op": "in", "value": [0, False]}])
     load.assert_not_called()
+
+
+def test_not_found_at_start_has_data_error(sdk_retrieval: tuple[TestClient, AsyncMock]) -> None:
+    client, retrieval = sdk_retrieval
+    retrieval.side_effect = RuntimeError("not_found: missing dataset collection")
+    response = client.post("/api/v1/retrieval", json={"dataset_ids": ["dataset"], "question": "q"})
+    assert response.status_code == 200
+    assert response.json()["code"] == 102
+    assert response.json()["message"] == "No chunk found! Check the chunk status please!"

@@ -10,7 +10,7 @@ from api.db.db_models import APIToken
 
 
 def test_unique_beta_token_precedes_document_resolution(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    module = sys.modules["api.apps.sdk.doc"]
+    module = sys.modules["api.apps.restful_apis.document_download"]
     monkeypatch.setattr(APIToken, "query", lambda *args, **kwargs: [SimpleNamespace(tenant_id="a"), SimpleNamespace(tenant_id="b")])
 
     def forbidden(*args: Any, **kwargs: Any) -> Any:

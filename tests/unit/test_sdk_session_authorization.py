@@ -29,7 +29,7 @@ from api.utils.api_utils import async_beta_token_required, beta_token_required
 def test_malformed_beta_authorization_has_no_business_side_effects(
     client: Any, monkeypatch: pytest.MonkeyPatch, authorization: str | None, method: str, path: str, body: dict[str, Any] | None
 ) -> None:
-    module = sys.modules["api.apps.sdk.session"]
+    module = sys.modules["api.apps.restful_apis.bot"]
     assert beta_token_required not in client.app.dependency_overrides
     assert async_beta_token_required not in client.app.dependency_overrides
     forbidden = Mock(side_effect=AssertionError("unauthorized request reached business IO"))

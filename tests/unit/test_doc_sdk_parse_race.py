@@ -4,8 +4,10 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
-from api.apps.sdk import doc as doc_routes
+from api.apps.restful_apis import chunk as doc_routes
+from api.apps.restful_apis import document_download as downloads
 from common.constants import RetCode, TaskStatus
 
 
@@ -34,10 +36,10 @@ class _StrictBinaryStorage:
 
 
 async def test_download_document_uses_storage_address_and_preserves_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    db = object()
+    db = Session()
     binary_content = b"\x00multi\nrag\xff\xfe"
     storage = _StrictBinaryStorage(binary_content)
-    doc = SimpleNamespace(id="doc-1", name="resume.bin")
+    doc = SimpleNamespace(id="doc-1", name="resume.bin", type="doc")
 
     monkeypatch.setattr(doc_routes.KnowledgebaseService, "query", lambda *_args, **_kwargs: [object()])
     monkeypatch.setattr(doc_routes.DocumentService, "query", lambda *_args, **_kwargs: [doc])
@@ -46,7 +48,7 @@ async def test_download_document_uses_storage_address_and_preserves_binary(monke
     monkeypatch.setattr(doc_routes.File2DocumentService, "get_by_document_id", Mock(side_effect=AssertionError("legacy file lookup should not be used")))
     monkeypatch.setattr(doc_routes.settings, "STORAGE_IMPL", storage)
 
-    response = doc_routes.download_document("kb-1", "doc-1", db=db, tenant_id="tenant-1")
+    response = downloads.download_document("kb-1", "doc-1", db=db, tenant_id="tenant-1")
 
     authorized_address.assert_called_once_with(db, "doc-1", "tenant-1")
     assert isinstance(response, StreamingResponse)
@@ -56,7 +58,7 @@ async def test_download_document_uses_storage_address_and_preserves_binary(monke
 
 
 def test_parse_documents_stops_when_atomic_running_update_loses(monkeypatch):
-    db = object()
+    db = Session()
     existing_doc = SimpleNamespace(id="doc-1", status="1", run=TaskStatus.UNSTART.value)
     docstore_delete = Mock()
     task_delete = Mock()
@@ -85,7 +87,7 @@ def test_parse_documents_stops_when_atomic_running_update_loses(monkeypatch):
 
 
 def test_parse_documents_uses_atomic_update_before_queueing(monkeypatch):
-    db = object()
+    db = Session()
     existing_doc = SimpleNamespace(id="doc-1", status="1", run=TaskStatus.UNSTART.value)
     refreshed_doc = SimpleNamespace(
         to_dict=lambda: {
