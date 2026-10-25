@@ -208,7 +208,7 @@ def snapshot(env: dict[str, Any]) -> dict[str, Any]:
     return {"sql": rows, "objects": {item.object_name: read_object(env["storage"], env["bucket"], item.object_name) for item in env["storage"].list_objects(env["bucket"], recursive=True)}}
 
 
-def call(env: dict[str, Any], method: str, suffix: str = "", *, credential: str | None = "owner", **kwargs: Any) -> requests.Response:
+def call(env: dict[str, Any], method: str, suffix: str = "", *, credential: str | None = "owner", timeout: float = 30, **kwargs: Any) -> requests.Response:
     token = env["keys"][0] if credential == "owner" else credential
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    return requests.request(method, env["base"] + "/api/v1" + suffix, headers=headers, timeout=30, **kwargs)
+    return requests.request(method, env["base"] + "/api/v1" + suffix, headers=headers, timeout=timeout, **kwargs)
