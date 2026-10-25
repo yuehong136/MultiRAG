@@ -52,7 +52,14 @@ GO_LIVE_OPT_INS = {
         "TestUserTimeHTTPCLIAndSQL",
         "TestXAIInstanceLiveHTTPAndSQL",
     },
-    "service": {"TestAfter2836ModelsHTTPCLIAndSQL", "TestAfter0fbNewModelsHTTPCLIAndSQL", "TestProviderFixesHTTPCLIAndSQL", "TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
+    "service": {
+        "TestAfter2836ModelsHTTPCLIAndSQL",
+        "TestAfter0fbNewModelsHTTPCLIAndSQL",
+        "TestProviderFixesHTTPCLIAndSQL",
+        "TestChatSessionScratchPostgres",
+        "TestHostedProviderBindingScratchPostgres",
+        "TestModelBindingScratchPostgres",
+    },
     "service/nlp": {"TestRetrievalScratchPostgresInfinity"},
     "skills": {"TestSkillsLiveServer"},
 }
