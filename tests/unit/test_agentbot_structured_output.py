@@ -33,7 +33,7 @@ def _source(client: TestClient, monkeypatch: pytest.MonkeyPatch, chunks: list[An
             state["closed"] = True
 
     client.app.dependency_overrides[async_beta_token_required] = lambda: "tenant-unit"
-    monkeypatch.setattr(sys.modules["api.apps.sdk.session"], "agent_completion", completion)
+    monkeypatch.setattr(sys.modules["api.apps.restful_apis.bot"], "agent_completion", completion)
     return state
 
 

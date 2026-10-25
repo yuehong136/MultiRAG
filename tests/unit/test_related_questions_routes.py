@@ -30,7 +30,7 @@ class _FakeBundle:
 @pytest.fixture
 def rq_stubs(monkeypatch, client):
     _FakeBundle.instances = []
-    for mod_name in ("api.apps.sdk.session", "api.apps.restful_apis.chat", "api.apps.conversation"):
+    for mod_name in ("api.apps.restful_apis.bot", "api.apps.restful_apis.chat", "api.apps.conversation"):
         mod = _route_module(mod_name)
         monkeypatch.setattr(mod, "LLMBundle", _FakeBundle)
         monkeypatch.setattr(mod, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "default-m"})

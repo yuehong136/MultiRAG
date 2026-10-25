@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.apps.sdk.dify_retrieval import RetrievalSetting
-from api.apps.sdk.doc import RetrievalTestRequest
-from api.apps.sdk.session import SearchBotRetrievalTestRequest
+from api.apps.restful_apis.bot_api import SearchBotRetrievalTestRequest
+from api.apps.restful_apis.chunk_api import RetrievalTestRequest
+from api.apps.restful_apis.dify_retrieval_api import RetrievalSetting
 from api.apps.services import dataset_api_service
 from api.db.services.knowledgebase_service import KnowledgebaseService
 

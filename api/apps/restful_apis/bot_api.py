@@ -1001,7 +1001,7 @@ async def retrieval_test_embedded(
     except EmbeddingModelMismatchError as e:
         return get_json_result(data=False, retmsg=str(e), retcode=RetCode.DATA_ERROR)
     except Exception as e:
-        if str(e).find("not_found") > 0:
+        if "not_found" in str(e):
             return get_json_result(data=False, retmsg="No chunk found! Check the chunk status please!", retcode=RetCode.DATA_ERROR)
         return server_error_response(e)
 

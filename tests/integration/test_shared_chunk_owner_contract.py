@@ -161,9 +161,9 @@ def shared_api(shared_database: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_
             calls.append({"tenant_id": tenant_id, "model_id": config["id"]})
             return Embedding()
 
-        for name in ["api.apps.restful_apis.chunk", "api.apps.sdk.dify_retrieval"]:
+        for name in ["api.apps.restful_apis.chunk", "api.apps.restful_apis.dify_retrieval"]:
             monkeypatch.setattr(sys.modules[name], "LLMBundle", bundle)
-        monkeypatch.setattr(sys.modules["api.apps.sdk.dify_retrieval"], "label_question", lambda *_: {})
+        monkeypatch.setattr(sys.modules["api.apps.restful_apis.dify_retrieval"], "label_question", lambda *_: {})
         listener = socket.socket()
         cleanup.callback(listener.close)
         listener.bind(("127.0.0.1", 0))

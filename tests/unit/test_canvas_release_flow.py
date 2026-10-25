@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from agent import canvas as agent_canvas
 from api.apps.restful_apis import agent_api as canvas_app_module
-from api.apps.sdk import session as session_module
+from api.apps.restful_apis import bot as session_module
 from api.db import CanvasCategory, TenantPermission
 from api.db.db_models import UserCanvas
 from api.db.services import canvas_service as canvas_service_module

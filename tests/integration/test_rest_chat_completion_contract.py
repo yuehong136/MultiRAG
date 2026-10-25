@@ -150,3 +150,118 @@ def test_related_questions_uses_real_beta_auth_and_controlled_model(rest_chat_co
         response = ctx.request("POST", "/searchbots/related_questions", credential=credential, json={"question": "contract"})
         assert response.status_code == 401 and len(ctx.provider["calls"]) == 1
         assert ctx.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("full", [False, True])
+def test_latest_rest_history_and_explicit_branch_are_committed(rest_chat_contract: RestChatContract, stream: bool, full: bool) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(prompt_config={"system": "Answer directly", "parameters": []})
+    first = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "question": "server question", "stream": False}).json()
+    assert first["code"] == 0, first
+    sid = first["data"]["session_id"]
+    before = ctx.read_session(sid)
+    submitted = [
+        {"role": "user", "content": "submitted branch question", "id": "branch"},
+        {"role": "assistant", "content": "submitted branch answer", "id": "branch"},
+        {"role": "user", "content": "latest question", "id": "latest"},
+    ]
+    response = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "conversation_id": sid, "messages": submitted, "stream": stream, "pass_all_history_messages": full})
+    assert response.status_code == 200
+    if stream:
+        frames = sse_frames(response)
+        assert frames[-1]["data"] is True and all(frame["code"] == 0 for frame in frames), frames
+    else:
+        assert response.json()["code"] == 0, response.text
+    captured = str(ctx.provider["calls"][-1]["history"])
+    assert ("submitted branch question" in captured) is full
+    assert ("server question" in captured) is not full
+    saved = ctx.read_session(sid)
+    assert saved is not None and before is not None
+    assert saved["message"][-2] == submitted[-1]
+    assert saved["message"][-1]["role"] == "assistant"
+    assert ("server question" in str(saved["message"])) is not full
+    assert ctx.request("GET", f"/chats/{chat['id']}/sessions/{sid}").json()["data"]["messages"] == saved["message"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_openai_session_hints_leave_existing_session_unchanged(rest_chat_contract: RestChatContract, stream: bool) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(credential="api_key", prompt_config={"system": "Answer directly", "parameters": []})
+    sid = ctx.request("POST", f"/chats/{chat['id']}/sessions", credential="api_key", json={}).json()["data"]["id"]
+    before = ctx.snapshot()
+    for nested in (False, True):
+        body: dict[str, Any] = {"model": "model", "messages": [{"role": "user", "content": "do not save"}], "stream": stream}
+        body.update({"extra_body": {"session_id": sid}} if nested else {"session_id": sid})
+        response = ctx.request("POST", f"/openai/{chat['id']}/chat/completions", credential="api_key", json=body)
+        assert response.status_code == 200 and '"session_id"' not in response.text
+        if stream:
+            frames = sse_frames(response)
+            assert frames[-1] == "[DONE]" and frames[-2]["choices"][0]["finish_reason"] == "stop", frames
+        else:
+            assert response.json()["object"] == "chat.completion", response.text
+        assert ctx.snapshot() == before
+    assert len(ctx.provider["calls"]) == 2
+
+
+def test_invalid_rest_contract_has_no_committed_or_provider_side_effects(rest_chat_contract: RestChatContract) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat()
+    sid = ctx.request("POST", f"/chats/{chat['id']}/sessions", json={}).json()["data"]["id"]
+    before = ctx.snapshot()
+    for invalid in (
+        {"pass_all_history_messages": "false"},
+        {"session_id": sid, "conversation_id": "conflicting"},
+        {"messages": [{"role": "user", "content": 1}]},
+        {"files": ["invalid"]},
+        {"files": None},
+    ):
+        response = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "session_id": sid, "question": "deny", "stream": False, **invalid})
+        assert response.status_code == 422, response.text
+        assert ctx.snapshot() == before and ctx.provider["calls"] == []
+    missing = ctx.request(
+        "POST", "/chat/completions", json={"chat_id": chat["id"], "session_id": sid, "question": "deny", "stream": False, "files": [{"id": uuid4().hex, "created_by": ctx.runtime["owners"][1]}]}
+    )
+    assert missing.status_code == 200 and missing.json()["code"] != 0, missing.text
+    assert ctx.snapshot() == before and ctx.provider["calls"] == []
+
+
+def test_actual_admin_client_appends_two_latest_messages(rest_chat_contract: RestChatContract, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    import importlib
+    from pathlib import Path
+    from urllib.parse import urlsplit
+
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(prompt_config={"system": "Answer directly", "parameters": []})
+    sid = ctx.request("POST", f"/chats/{chat['id']}/sessions", json={}).json()["data"]["id"]
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "admin/client"))
+    admin, http = importlib.import_module("multirag_client"), importlib.import_module("http_client")
+    address = urlsplit(ctx.runtime["base"])
+    transport = http.HttpClient(host=address.hostname, port=address.port)
+    # CLI web auth stores the complete Authorization header returned by login.
+    transport.login_token = f"Bearer {ctx.runtime['jwt']}"
+    client = admin.MultiRAGClient(transport, "user")
+    for question in ("CLI first", "CLI second"):
+        client.chat_on_session({"chat_name": chat["name"], "session_id": sid, "message": question})
+        assert "Controlled answer" in capsys.readouterr().out
+    saved = ctx.read_session(sid)
+    assert saved is not None
+    assert [message["content"] for message in saved["message"] if message["role"] == "user"] == ["CLI first", "CLI second"]
+
+
+def test_question_attachment_uses_uploaded_authority_and_committed_descriptor(rest_chat_contract: RestChatContract) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(prompt_config={"system": "Answer directly", "parameters": []})
+    uploaded = ctx.request("POST", "/documents/upload", files={"file": ("authority.txt", b"owned attachment content", "text/plain")}).json()
+    assert uploaded["code"] == 0, uploaded
+    descriptor = uploaded["data"]
+    forged = {**descriptor, "created_by": "foreign-user", "name": "forged.txt", "mime_type": "image/png"}
+    response = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "question": "read attached", "files": [forged], "stream": False})
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    saved = ctx.read_session(response.json()["data"]["session_id"])
+    assert saved is not None and saved["message"][-2]["files"] == [descriptor]
+    assert "owned attachment content" in ctx.provider["calls"][-1]["system"]
+    before, count = ctx.snapshot(), len(ctx.provider["calls"])
+    denied = ctx.request("POST", "/chat/completions", credential="api_key", json={"question": "read foreign", "files": [descriptor], "stream": False})
+    assert denied.status_code == 200 and denied.json()["code"] != 0, denied.text
+    assert ctx.snapshot() == before and len(ctx.provider["calls"]) == count

@@ -92,7 +92,7 @@ def mindmap_route_stubs(monkeypatch, client):
     async def _fake_gen_mindmap(db, question, kb_ids, tenant_id, search_config=None):
         return {"id": "root"}
 
-    for mod_name in ("api.apps.sdk.session", "api.apps.restful_apis.chat", "api.apps.conversation"):
+    for mod_name in ("api.apps.restful_apis.bot", "api.apps.restful_apis.chat", "api.apps.conversation"):
         monkeypatch.setattr(_route_module(mod_name), "gen_mindmap", _fake_gen_mindmap)
 
 

@@ -30,7 +30,7 @@ from api.utils.api_utils import token_required
     ],
 )
 def test_registered_download_mime(client: Any, monkeypatch: pytest.MonkeyPatch, route: str, name: str, kind: str, expected: str) -> None:
-    module = sys.modules["api.apps.sdk.doc"]
+    module = sys.modules["api.apps.restful_apis.document_download"]
     document = SimpleNamespace(name=name, type=kind, kb_id="dataset")
     monkeypatch.setattr(module.DocumentService, "query", lambda *args, **kwargs: [document])
     monkeypatch.setattr(module.KnowledgebaseService, "query", lambda *args, **kwargs: [object()])

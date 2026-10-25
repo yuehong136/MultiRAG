@@ -292,8 +292,8 @@ def test_dify_prunes_sql_document_deleted_after_native_retrieval(rest_chunk_cont
     ctx = rest_chunk_contract
     ctx.add("contract dify deletion race")
     ctx.wait_for_count(1)
-    module = sys.modules["api.apps.sdk.dify_retrieval"]
-    sdk = sys.modules["api.apps.sdk.doc"]
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
+    sdk = sys.modules["api.apps.restful_apis.chunk"]
     monkeypatch.setattr(module, "LLMBundle", sdk.LLMBundle)
     monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *_: {})
     monkeypatch.setattr(module, "label_question", lambda *_: {})

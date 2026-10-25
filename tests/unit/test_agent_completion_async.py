@@ -293,7 +293,7 @@ def agent_route_stubs(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> Te
     async def _fake_completion(db, tenant_id, agent_id, session_id=None, **kwargs):
         yield "data:" + json.dumps({"event": "message", "data": {"content": "hi"}}) + "\n\n"
 
-    for mod in ("api.apps.restful_apis.agent", "api.apps.sdk.session"):
+    for mod in ("api.apps.restful_apis.agent", "api.apps.restful_apis.bot"):
         monkeypatch.setattr(_route_module(mod), "agent_completion", _fake_completion)
 
     async def fake_prepare(db: AsyncSession, agent_id: str, caller_id: str, **kwargs: Any) -> canvas_service.PreparedAgentRun:
@@ -551,7 +551,7 @@ def test_agentbot_nonstream_rejects_incomplete_or_failed_run(agent_route_stubs: 
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(_route_module("api.apps.sdk.session"), "agent_completion", source)
+    monkeypatch.setattr(_route_module("api.apps.restful_apis.bot"), "agent_completion", source)
     response = agent_route_stubs.post("/api/v1/agentbots/agent-1/completions", json={"query": "hi", "stream": False})
     assert response.status_code == 200 and closed == [True]
     assert response.json()["code"] != 0 and response.json()["message"] and "data" not in response.json()
@@ -575,7 +575,7 @@ def test_agentbot_nonstream_aggregates_answer_and_keeps_pause(agent_route_stubs:
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(_route_module("api.apps.sdk.session"), "agent_completion", source)
+    monkeypatch.setattr(_route_module("api.apps.restful_apis.bot"), "agent_completion", source)
     response = agent_route_stubs.post("/api/v1/agentbots/agent-1/completions", json={"query": "hi", "stream": False})
     assert response.status_code == 200 and closed == [True]
     body = response.json()

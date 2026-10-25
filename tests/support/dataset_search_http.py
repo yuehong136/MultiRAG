@@ -73,7 +73,7 @@ def search_api(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPat
         return Embedding()
 
     monkeypatch.setattr(dataset_search_service, "_bundle", bundle)
-    from api.apps.sdk import doc as sdk
+    from api.apps.restful_apis import chunk as sdk
 
     monkeypatch.setattr(sdk, "LLMBundle", lambda *_: Embedding())
     monkeypatch.setattr(sdk, "get_model_config_by_type_and_name", lambda *_: {})
