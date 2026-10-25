@@ -151,7 +151,7 @@ class SearchBotRetrievalTestRequest(BaseModel):
     top_k: int = Field(default=1024, ge=1)
     cross_languages: list[str] | None = []
     search_id: str | None = ""
-    doc_ids: list[str] | None = []
+    doc_ids: list[str] | None = None
     rerank_id: str | None = None
     tenant_rerank_id: int | None = None
     keyword: bool | None = False

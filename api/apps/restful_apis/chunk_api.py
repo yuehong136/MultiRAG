@@ -853,7 +853,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
                 {"method": "manual", "manual": conditions, "logic": metadata_condition.get("logic", "and")},
                 None,
                 question,
-                base_doc_ids=doc_ids,
+                base_doc_ids=doc_ids if doc_ids else None,
                 metas_loader=load_metadata,
                 metadata_filterer=filter_metadata,
             )
