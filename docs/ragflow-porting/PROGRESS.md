@@ -3745,3 +3745,12 @@ managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 fals
 - 定向 Python 单测 721 项按首轮与受影响复跑核对全部最新结果；core 55、真实 Web 消费者 8 项通过，零 skip。Go 精确输入复用候选 race、JWT/SQL/CLI、build/vet 报告，当前三个 cmd 另行重新链接成功。静态检查、mypy、锁文件检查通过；首错和复跑保留，不称完整或远程 CI 全绿。
 - I 独立读回 5 个 scratch DB、23 个桶、43 个集合、225 个 Redis 精确键、189 个 fixture 标识和 62 个监听端口均不存在。原始 28 项 WIP 保留，本块独立暂存；七个历史 managed worktree 和借用资产保留。
 - 恢复 bundle、普通 worktree/分支清理、最终 main/消费者绑定及证据摘要见外部目录 `20261025-batch-after-775ea556/delivery-complete.json`。未 push、未部署，远程 `ci-required` 待运行；常驻 worker、真实付费供应商和生产行为未验收，不自动滚动下一批。
+
+
+## 2026-10-25：f9ce07ce 后二十项本地串行集成
+
+- 冻结范围排除 `f9ce07ce` 至 `4776bfa8`，直接后修上限 `519e7d98`；逐项处置与质量依据见 [本批记录](batch-after-f9ce07ce.md)。
+- A/B/D 已串行进入后端，G 完成 ingestion 差异评估并有依据不采用演示 worker；源码组合 `6039f98299a77be9fe06778450651acd70a2815e`。Web master 与 consumer pin 为 `8ae122d3e6180805c5bcefc4d45ae4c21e8966a7`。后续收口只改文档。
+- 840 项 Python 单测通过；临时脚本导入门禁失败修复后 39 项 harness 定向复跑通过。最终后端集成 31、真实 Web 上传联合验收 1、MCP 矩阵 22 行及 Agent 工具绑定通过。Go 模型 race 387 顶层/2,844 命名用例、真实 JWT HTTP/CLI/SQL 15 子场景、build/vet/三个 cmd 新链接及适用静态检查通过；首错和补跑保留，不称全库门禁全绿。
+- I 最终独立读回 21 个 scratch DB、235 个桶、260 个集合、39 个 Redis 精确键、14 个前缀、333 个 fixture 标识和 1,075 个监听端口不存在；私有 staging 清理，借用目标保留。原始 28 项 WIP 保留，本块独立暂存；七个历史 protected managed 树保留。
+- 最终 main SHA、输入绑定、恢复 bundle 和本批普通 worktree/分支清理见外部目录 `20261025-batch-after-f9ce07ce/delivery-complete.json`。未 push、未部署，远程 `ci-required` 待运行；未发布 Web pin 远程尚不可取。真实供应商、常驻 worker 与生产未验收，不创建自动化、不滚动下一批。
