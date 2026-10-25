@@ -56,7 +56,7 @@ func encodeProviderInstanceExtra(region, baseURL string) (string, error) {
 	return string(raw), err
 }
 func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModelInstance, factories ...models.DriverFactory) (models.ModelDriver, *models.APIConfig, error) {
-	if provider == nil {
+	if provider == nil || instance == nil {
 		return nil, nil, fmt.Errorf("provider not found")
 	}
 	if instance.Status != "active" {
@@ -73,7 +73,7 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 			baseURL = provider.URL["default"]
 		}
 	}
-	if strings.TrimSpace(baseURL) == "" {
+	if strings.TrimSpace(baseURL) == "" && !strings.EqualFold(provider.Name, "Bedrock") {
 		return nil, nil, fmt.Errorf("model base URL is missing")
 	}
 	if instance.APIKey == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") && !strings.EqualFold(provider.Name, "LM-Studio") && !strings.EqualFold(provider.Name, "LocalAI") && !strings.EqualFold(provider.Name, "Xinference") && !strings.EqualFold(provider.Name, "mineru_local") && !strings.EqualFold(provider.Name, "PaddleOCR_Local") {
@@ -83,7 +83,14 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 	if len(factories) > 0 && factories[0] != nil {
 		factory = factories[0]
 	}
-	driver, err := factory.CreateModelDriver(provider.Name, map[string]string{"default": baseURL, extra.Region: baseURL}, provider.URLSuffix)
+	// Bedrock derives native runtime/control endpoints from validated credentials
+	// when no instance override exists. Other drivers still require an endpoint.
+	urls := map[string]string{}
+	if baseURL != "" {
+		urls["default"] = baseURL
+		urls[extra.Region] = baseURL
+	}
+	driver, err := factory.CreateModelDriver(provider.Name, urls, provider.URLSuffix)
 	return driver, &models.APIConfig{APIKey: &instance.APIKey, Region: &extra.Region}, err
 }
 

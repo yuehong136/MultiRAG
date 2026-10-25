@@ -78,3 +78,10 @@ func TestMetadataDeleteCLIRequiresAcknowledgment(t *testing.T) {
 		t.Fatal("invalid selection reached HTTP")
 	}
 }
+
+func TestBedrockInstanceURLDoesNotInventAWSRegion(t *testing.T) {
+	command, err := NewParser(`CREATE PROVIDER 'Bedrock' INSTANCE 'office' KEY '{"bedrock_region":"us-east-1"}' URL 'http://127.0.0.1:12345';`).Parse(false)
+	if err != nil || command.Params["region"] != nil {
+		t.Fatal("instance name replaced credential region", command, err)
+	}
+}

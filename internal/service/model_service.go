@@ -758,7 +758,7 @@ func (m *ModelProviderService) getLegacyModelConfig(tenantID, providerName, name
 	if legacy.APIBase != nil && *legacy.APIBase != "" {
 		urls = map[string]string{"default": *legacy.APIBase}
 	}
-	if strings.TrimSpace(urls["default"]) == "" {
+	if strings.TrimSpace(urls["default"]) == "" && !strings.EqualFold(providerInfo.Name, "Bedrock") {
 		return nil, "", nil, fmt.Errorf("model base URL is missing")
 	}
 	driver, err := modelModule.NewModelFactory().CreateModelDriver(providerInfo.Name, urls, providerInfo.URLSuffix)

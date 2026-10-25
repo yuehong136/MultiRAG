@@ -358,3 +358,27 @@ apply to both CLI implementations.
 with token/chunk counts, parser configuration, pipeline/author names and timestamps.
 Run states use `UNSTART`, `RUNNING`, `CANCEL`, `DONE`, and `FAIL`. Documents without
 file links remain visible, and multiple file links do not duplicate a document.
+
+## Bedrock and FuturMix
+
+Bedrock instances may omit `URL`: runtime and control endpoints are derived from
+`bedrock_region` in the credential JSON. An explicit `REGION` overrides that value;
+`default` keeps the credential region. A URL override applies to both runtime and
+model discovery for that instance. The instance name is never used as an AWS
+region. For example:
+
+```sql
+CREATE PROVIDER 'Bedrock' INSTANCE 'office' KEY '{"auth_mode":"access_key_secret","bedrock_ak":"YOUR_ACCESS_KEY","bedrock_sk":"YOUR_SECRET_KEY","bedrock_region":"us-east-1"}';
+CHAT WITH 'anthropic.claude-3-5-sonnet-20241022-v2:0@office@Bedrock' MESSAGE 'hello';
+```
+
+The Go Bedrock driver supports text Converse and binary streaming. A single
+`MESSAGE` uses scalar text; media and repeated content parts retain structured
+payloads and require a provider that supports them. Native credentials and endpoint
+selection remain bound to each SQL instance, including the existing two-part
+legacy model reference path.
+
+FuturMix instance creation saves its configuration without an inference probe.
+`LIST MODELS FROM 'FuturMix' 'office';` reads the static catalog with normal API
+authentication. Dynamic `LIST SUPPORTED MODELS` and `CHECK INSTANCE` remain
+unsupported and do not call an undocumented endpoint or spend inference quota.

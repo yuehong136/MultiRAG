@@ -1081,7 +1081,7 @@ func (p *Parser) parseCreateProviderInstance() (*Command, error) {
 	}
 	baseURL, _ := cmd.Params["base_url"].(string)
 	region, _ := cmd.Params["region"].(string)
-	if strings.TrimSpace(baseURL) != "" && strings.TrimSpace(region) == "" {
+	if strings.TrimSpace(baseURL) != "" && strings.TrimSpace(region) == "" && !strings.EqualFold(providerName, "Bedrock") {
 		cmd.Params["region"] = instanceName
 	}
 	if p.curToken.Type == TokenEOF {

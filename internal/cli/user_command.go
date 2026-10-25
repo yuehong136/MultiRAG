@@ -1104,15 +1104,15 @@ func (c *MultiRAGClient) ListInstanceModels(cmd *Command) (ResponseIf, error) {
 	}
 
 	var endPoint string
-	endPoint = fmt.Sprintf("/providers/%s/instances/%s/models", providerName, instanceName)
+	endPoint = fmt.Sprintf("/providers/%s/instances/%s/models", url.PathEscape(providerName), url.PathEscape(instanceName))
 
-	resp, err := c.HTTPClient.Request("GET", endPoint, "web", nil, nil)
+	resp, err := c.HTTPClient.Request("GET", endPoint, "api", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instance models: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to list instance models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("list instance models", resp); err != nil {
+		return nil, err
 	}
 
 	var result CommonResponse

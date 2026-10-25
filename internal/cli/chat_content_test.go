@@ -100,3 +100,17 @@ func TestChatMediaRejectsUnsupportedOrInvalidInput(t *testing.T) {
 		t.Fatal("invalid data accepted")
 	}
 }
+
+func TestSingleMessageUsesPlainTextForTextOnlyProtocols(t *testing.T) {
+	for _, input := range []string{`CHAT WITH 'm@i@Bedrock' MESSAGE 'q';`, `CHAT 'm@i@Bedrock' 'q';`} {
+		command, err := NewParser(input).Parse(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		message, _ := command.Params["message"].(string)
+		content, err := chatContent(message, command.Params["content_inputs"])
+		if err != nil || content != "q" {
+			t.Fatal(content, err)
+		}
+	}
+}

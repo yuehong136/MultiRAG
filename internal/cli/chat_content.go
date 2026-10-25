@@ -30,6 +30,11 @@ func chatContent(message string, raw any) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid chat inputs")
 	}
+	// A single MESSAGE is ordinary text; avoid forcing text-only protocols
+	// to accept a multimodal array just because keyword syntax was used.
+	if message == "" && len(inputs) == 1 && inputs[0].Kind == "text" {
+		return inputs[0].Value, nil
+	}
 	var parts []map[string]any
 	if message != "" {
 		if text, ok := content.(string); ok {

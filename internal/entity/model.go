@@ -233,7 +233,7 @@ func NewProviderManager(dirPath string) (*ProviderManager, error) {
 		if err = json.Unmarshal(data, &provider); err != nil {
 			return nil, fmt.Errorf("error parsing JSON from file %s: %w", filePath, err)
 		}
-		if provider.URL["default"] == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") && !strings.EqualFold(provider.Name, "LM-Studio") && !strings.EqualFold(provider.Name, "LocalAI") && !strings.EqualFold(provider.Name, "Xinference") && !strings.EqualFold(provider.Name, "mineru_local") && !strings.EqualFold(provider.Name, "PaddleOCR_Local") && !strings.EqualFold(provider.Name, "GPUStack") && !strings.EqualFold(provider.Name, "Azure-OpenAI") {
+		if provider.URL["default"] == "" && !strings.EqualFold(provider.Name, "vllm") && !strings.EqualFold(provider.Name, "ollama") && !strings.EqualFold(provider.Name, "LM-Studio") && !strings.EqualFold(provider.Name, "LocalAI") && !strings.EqualFold(provider.Name, "Xinference") && !strings.EqualFold(provider.Name, "mineru_local") && !strings.EqualFold(provider.Name, "PaddleOCR_Local") && !strings.EqualFold(provider.Name, "GPUStack") && !strings.EqualFold(provider.Name, "Azure-OpenAI") && !strings.EqualFold(provider.Name, "Bedrock") {
 			return nil, fmt.Errorf("provider %s has no default URL", provider.Name)
 		}
 
