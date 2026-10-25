@@ -44,6 +44,7 @@ from api.utils.api_utils import (
     server_error_response,
 )
 from api.utils.document_update_contract import DocumentUpdatePatch
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.validation_utils import DocumentIngestRequest, validate_upload_parser_config
 from common.constants import RetCode, TaskStatus
 from common.metadata_config import MetadataField
@@ -487,11 +488,11 @@ def _metadata_document_ids(
     return list(doc_ids) if doc_ids is not None else None
 
 
-@router.get("/datasets/{dataset_id}/documents", summary="获取文档列表")
+@router.get("/datasets/{dataset_id}/documents", summary="获取文档列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_documents(
     dataset_id: str,
     page: int = Query(1, ge=1),
-    page_size: int = Query(30, ge=1, le=100),
+    page_size: int = Query(30, ge=1, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time"),
     desc: bool = Query(True),
     list_type: str | None = Query(None, alias="type", description="filter=返回过滤面板聚合统计（忽略分页与元数据参数）"),

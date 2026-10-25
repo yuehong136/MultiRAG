@@ -59,14 +59,14 @@ async def test_list_datasets_structured_paginates_until_total_and_dedupes():
     assert all(c["params"]["page_size"] == 2 for c in calls)
 
 
-async def test_list_datasets_structured_stops_after_one_page_when_total_missing():
-    pages = [FakeResponse({"code": 0, "data": [_dataset("a"), _dataset("b")]})]
+async def test_list_datasets_structured_reads_full_page_without_total():
+    pages = [FakeResponse({"code": 0, "data": [_dataset("a"), _dataset("b")]}), FakeResponse({"code": 0, "data": []})]
     connector, calls = _make_connector(pages)
 
     datasets = await connector.list_datasets_structured("key")
 
     assert [d["id"] for d in datasets] == ["a", "b"]
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 async def test_fetch_datasets_page_surfaces_backend_error_message():
@@ -91,3 +91,17 @@ async def test_resolve_retrieval_dataset_ids_raises_when_no_datasets():
 
     with pytest.raises(ToolError, match="No accessible datasets"):
         await connector._resolve_retrieval_dataset_ids("key", [])
+
+
+async def test_list_datasets_uses_actual_rest_total_datasets_field() -> None:
+    pages = [FakeResponse({"code": 0, "data": [_dataset("a"), _dataset("b")], "total_datasets": 3}), FakeResponse({"code": 0, "data": [_dataset("c")], "total_datasets": 3})]
+    connector, calls = _make_connector(pages)
+    assert [row["id"] for row in await connector.list_datasets_structured("key")] == ["a", "b", "c"]
+    assert len(calls) == 2
+
+
+async def test_list_datasets_nonprogress_does_not_return_partial_success() -> None:
+    pages = [FakeResponse({"code": 0, "data": [_dataset("a")], "total_datasets": 3}), FakeResponse({"code": 0, "data": [_dataset("a")], "total_datasets": 3})]
+    connector, _ = _make_connector(pages)
+    with pytest.raises(ToolError, match="stopped before"):
+        await connector.list_datasets_structured("key")

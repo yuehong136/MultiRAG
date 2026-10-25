@@ -38,6 +38,7 @@ from pydantic_core import PydanticCustomError
 
 from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
 from api.db import FileType
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, RestPageSize
 from common.constants import RetCode
 from common.graphrag_config import GraphRAGExecutionConfig
 from common.metadata_config import MetadataConfig, MetadataField, validate_parser_metadata
@@ -945,7 +946,7 @@ class BaseListReq(BaseModel):
     id: Annotated[str | None, Field(default=None)]
     name: Annotated[str | None, Field(default=None)]
     page: Annotated[int, Field(default=1, ge=1)]
-    page_size: Annotated[int, Field(default=30, ge=1)]
+    page_size: Annotated[RestPageSize, Field(default=30, ge=1, le=REST_API_MAX_PAGE_SIZE)]
     orderby: Annotated[Literal["create_time", "update_time"], Field(default="create_time")]
     desc: Annotated[bool, Field(default=True)]
 

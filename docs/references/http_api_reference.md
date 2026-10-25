@@ -28,6 +28,23 @@ Authorization: Bearer <your-api-key>
 - Content-Type: `application/json`
 - 请求体使用 JSON 格式
 
+### 分页
+
+REST 列表的 `page_size` 最大为 100。超限、负数、空值、非整数或重复的分页参数返回 HTTP 422，
+不会静默截断。省略参数时沿用各端点的默认值：
+
+| 端点 | 默认 `page_size` | 是否接受 `page_size=0` |
+|---|---:|---|
+| 数据集、文档、文档分块 | 30 | 否 |
+| Connector 同步日志 | 15 | 否 |
+| Memory 列表与消息 | 50 | 否 |
+| Agent、Chat、Search、MCP Server 列表；数据集摄取日志 | 0 | 是，保留原不分页语义 |
+| Agent 与 Chat 会话 | 30 | 是，沿用各自服务语义 |
+
+`POST /retrieval` 的 JSON `page_size` 默认为 30，只接受 1–100 的整数，不接受字符串或布尔值。
+分页读取完整目录时逐页请求；数据集列表在顶层 `total_datasets` 返回总数。
+MCP 数据集发现与管理 CLI 的用户数据集列表使用每页 100 条并读取全部页。
+
 ### 响应格式
 
 多数业务端点使用 JSON 信封。二进制响应和端点专用错误格式以各小节为准。常见成功响应结构：

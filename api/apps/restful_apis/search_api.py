@@ -34,6 +34,7 @@ from api.db.services.user_service import TenantService, UserTenantService
 from api.identity.principal import Principal
 from api.utils.api_utils import async_current_tenant_id, async_current_user, get_error_data_result, get_result
 from api.utils.dataset_search import validate_search_config
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
 from common.constants import RetCode, StatusEnum
 from common.misc_utils import get_uuid
@@ -219,11 +220,11 @@ async def create_search(
         return get_error_data_result(retmsg="Internal server error")
 
 
-@router.get("/searches", summary="List search apps")
+@router.get("/searches", summary="List search apps", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_searches(
     keywords: str = Query("", description="Keyword filter"),
     page: int = Query(0, description="Page number; 0 disables pagination"),
-    page_size: int = Query(0, description="Items per page; 0 disables pagination"),
+    page_size: int = Query(0, description="Items per page; 0 disables pagination", ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time", description="Sort field"),
     desc: bool = Query(True, description="Sort descending"),
     owner_ids: list[str] | None = Query(None, description="Filter active member tenant IDs; omitted selects all authorized tenants"),

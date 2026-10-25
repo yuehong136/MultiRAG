@@ -25,6 +25,7 @@ from api.apps.services import dataset_api_service, dataset_embedding_service, da
 from api.db.db_models import Knowledgebase, get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
 from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.validation_utils import CreateDatasetReq, validate_partial_parser_config
 from common.constants import RetCode
 from common.metadata_config import MetadataConfig
@@ -241,12 +242,12 @@ async def check_embedding(
         return get_error_data_result(retmsg="Embedding comparison failed.")
 
 
-@router.get("/datasets", summary="获取数据集列表")
+@router.get("/datasets", summary="获取数据集列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_datasets(
     id: str | None = Query(None, description="数据集ID过滤"),
     name: str | None = Query(None, description="数据集名称过滤"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(30, ge=1, description="每页数量"),
+    page_size: int = Query(30, description="每页数量", ge=1, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     keywords: str | None = Query(None, description="按名称模糊搜索"),
@@ -374,11 +375,11 @@ async def get_ingestion_summary(
         return get_error_data_result(retmsg="Internal server error")
 
 
-@router.get("/datasets/{dataset_id}/ingestions", summary="列出数据集摄取日志")
+@router.get("/datasets/{dataset_id}/ingestions", summary="列出数据集摄取日志", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_ingestion_logs(
     dataset_id: str,
     page: int = Query(0, ge=0, description="页码"),
-    page_size: int = Query(0, ge=0, description="每页数量"),
+    page_size: int = Query(0, description="每页数量", ge=0, le=REST_API_MAX_PAGE_SIZE),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     operation_status: list[str] | None = Query(None, description="按操作状态过滤，可重复"),

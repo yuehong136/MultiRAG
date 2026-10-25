@@ -29,6 +29,7 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
 from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
 from api.utils.image_utils import read_chunk_image, replace_chunk_image, store_chunk_image
+from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata, resolve_reference_metadata_preferences
 from common import settings
 from common.constants import LLMType, ParserType, RetCode, TaskStatus
@@ -183,12 +184,12 @@ def _embedding_model(db: Session, kb: Any) -> LLMBundle:
     return LLMBundle(db, kb.tenant_id, config)
 
 
-@router.get("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="获取文档分块列表")
+@router.get("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="获取文档分块列表", dependencies=[Depends(validate_rest_api_pagination)])
 async def list_chunks(
     dataset_id: str,
     document_id: str,
     page: int = Query(1, ge=1),
-    page_size: int = Query(30, ge=1, le=100),
+    page_size: int = Query(30, ge=1, le=REST_API_MAX_PAGE_SIZE),
     keywords: str | None = Query(None),
     id: str | None = Query(None, description="Chunk ID to retrieve a specific chunk"),
     available: bool | None = Query(None),
@@ -598,7 +599,7 @@ class RetrievalTestRequest(BaseModel):
     dataset_ids: list[str]
     document_ids: list[str] = Field(default_factory=list)
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=30, ge=1, le=100)
+    page_size: int = Field(default=30, ge=1, le=REST_API_MAX_PAGE_SIZE, strict=True)
     similarity_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
     vector_similarity_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     top_k: int = Field(default=1024, ge=1)
