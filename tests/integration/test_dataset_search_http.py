@@ -905,7 +905,7 @@ def test_collection_search_filters_readback_and_model_scope(search_api: dict[str
             assert not db.scalars(sa.select(TenantLLM.id).where(TenantLLM.id.in_(model_ids))).all()
 
 
-def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(search_api: dict[str, Any]) -> None:
+def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     env = search_api
     created = requests.post(
         env["base"] + "/api/v1/searches",
@@ -925,6 +925,26 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
     }
     assert settings.docStoreConn.insert([lexical], env["collections"]["dataset"], env["dataset"]) == []
     env["reader"].flush(env["collections"]["dataset"], timeout=60)
+    from api.db.services import dialog_service
+
+    class SearchBundle:
+        max_length = 4096
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.db = None
+
+        def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+            return np.array([0.2] * 768), len(text)
+
+        def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+            return np.array([[0.2] * 768 for _ in texts]), len(texts)
+
+        async def async_chat_streamly_delta(self, *args: Any, **kwargs: Any) -> Any:
+            yield "lexicalonly answer"
+
+    monkeypatch.setattr(dialog_service, "LLMBundle", SearchBundle)
+    monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_a, **_kw: {})
+    monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda *_a, **_kw: {})
     evidence: dict[str, Any] = {}
     try:
         for weight in [0, 1]:
@@ -949,6 +969,13 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
                 first = body["data"]["chunks"][0]["chunk_id"]
                 assert (first == lexical["id"]) is (weight == 0), body
                 evidence[f"{weight}-{len(datasets)}"] = body["data"]
+            completed = requests.post(env["base"] + "/api/v1/searches/" + identifier + "/completions", headers={"Authorization": "Bearer " + env["jwt"]}, json={"question": "lexicalonly"}, timeout=30)
+            frames = [json.loads(line[5:]) for line in completed.text.splitlines() if line.startswith("data:")]
+            assert completed.status_code == 200 and frames and all(frame["code"] == 0 for frame in frames), completed.text
+            final = next(frame["data"] for frame in frames if isinstance(frame.get("data"), dict) and frame["data"].get("final"))
+            assert final["reference"]["chunks"], final
+            assert (final["reference"]["chunks"][0]["id"] == lexical["id"]) is (weight == 0), final
+            evidence[f"{weight}-async-ask"] = final
         rejected = requests.put(
             env["base"] + "/api/v1/searches/" + identifier,
             headers={"Authorization": "Bearer " + env["jwt"]},
