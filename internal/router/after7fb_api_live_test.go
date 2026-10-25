@@ -17,8 +17,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,6 +77,36 @@ func TestAfter7fbAPIHTTPAndSQL(t *testing.T) {
 	address := os.Getenv("MULTIRAG_AFTER7FB_ADDRESS")
 	if private == "" || address == "" {
 		t.Fatal("private config and exact listener required")
+	}
+
+	parsed, err := url.Parse(dsn)
+	expectedDB := os.Getenv("MULTIRAG_AFTER7FB_DB")
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || strings.TrimPrefix(parsed.Path, "/") != expectedDB || !strings.HasPrefix(expectedDB, "multirag_after7fb_g_") {
+		t.Fatal("explicit owned scratch database required")
+	}
+	resolvedPrivate, err := filepath.EvalSymlinks(private)
+	if err != nil {
+		t.Fatal("owned private config directory required")
+	}
+	tmp := os.Getenv("TMPDIR")
+	if tmp == "" {
+		t.Fatal("registered temporary root required")
+	}
+	resolvedTMP, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatal("registered temporary root required")
+	}
+	relative, err := filepath.Rel(resolvedTMP, resolvedPrivate)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		t.Fatal("private config must be inside registered temporary root")
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host != "127.0.0.1" {
+		t.Fatal("exact loopback listener required")
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		t.Fatal("exact loopback port required")
 	}
 	if err := common.Init("error"); err != nil {
 		t.Fatal(err)
@@ -185,6 +217,12 @@ func TestAfter7fbAPIHTTPAndSQL(t *testing.T) {
 	if err = os.WriteFile("configs/private.pem", pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0600); err != nil {
 		t.Fatal(err)
 	}
+	keyInput, err := os.ReadFile("configs/private.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyHash := sha256.Sum256(keyInput)
+	fixture.Event("private-key-input-before-password-requests", map[string]any{"path": filepath.Join(private, "configs/private.pem"), "sha256": hex.EncodeToString(keyHash[:])})
 	encrypt := func(value string) string {
 		raw, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, []byte(base64.StdEncoding.EncodeToString([]byte(value))))
 		if err != nil {
@@ -312,6 +350,27 @@ func TestAfter7fbAPIHTTPAndSQL(t *testing.T) {
 			t.Fatal(rows)
 		}
 	})
+
+	for _, field := range []string{"name", "source"} {
+		for _, length := range []int{128, 129} {
+			payload := map[string]any{"name": "unicode-boundary", "source": "rest-api", "config": map[string]any{}}
+			payload[field] = strings.Repeat("连", length)
+			raw, _ := json.Marshal(payload)
+			var check func(map[string]any)
+			if length == 128 {
+				check = func(result map[string]any) {
+					id := result["data"].(map[string]any)["id"].(string)
+					var chars, bytes int
+					query := "SELECT char_length(" + field + "),octet_length(" + field + ") FROM t_ai_connectors WHERE id=$1"
+					if err := readback.QueryRow(query, id).Scan(&chars, &bytes); err != nil || chars != 128 || bytes != 384 {
+						t.Fatal(chars, bytes, err)
+					}
+				}
+			}
+			run(fmt.Sprintf("create-CJK-%s-%d", field, length), "owner", "POST", connectorPath, string(raw), length == 128, check)
+		}
+	}
+	run("create-invalid-UTF8", "owner", "POST", connectorPath, "{\"name\":\"\xff\",\"source\":\"rest-api\",\"config\":{}}", false, nil)
 	settings := "/api/v1/users/me"
 	run("partial-settings", "owner", "PATCH", settings, `{"nickname":"new"}`, true, func(_ map[string]any) {
 		var name, email string

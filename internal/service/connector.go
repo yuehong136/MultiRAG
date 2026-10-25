@@ -25,6 +25,7 @@ import (
 	"multirag/internal/engine"
 	"multirag/internal/entity"
 	"strings"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
@@ -102,7 +103,7 @@ func (s *ConnectorService) CreateConnector(ctx context.Context, userID string, r
 	if userID == "" {
 		return nil, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
 	}
-	if req == nil || strings.TrimSpace(req.Name) == "" || len(req.Name) > 128 || strings.TrimSpace(req.Source) == "" || len(req.Source) > 128 || req.Config == nil {
+	if req == nil || strings.TrimSpace(req.Name) == "" || !utf8.ValidString(req.Name) || utf8.RuneCountInString(req.Name) > 128 || strings.TrimSpace(req.Source) == "" || !utf8.ValidString(req.Source) || utf8.RuneCountInString(req.Source) > 128 || req.Config == nil {
 		return nil, common.CodeArgumentError, fmt.Errorf("name, source and config are required")
 	}
 	refresh, prune, timeout := int64(5), int64(5), int64(1740)

@@ -58,7 +58,7 @@ func TestAfter7fbStorageReadinessIsReadOnly(t *testing.T) {
 			var store Storage
 			switch kind {
 			case "s3":
-				store = &S3Storage{client: client, bucket: "owned-bucket"}
+				store = &S3Storage{client: client, config: &server.S3Config{Bucket: "owned-bucket"}}
 			case "oss":
 				store = &OSSStorage{client: client, bucket: "owned-bucket"}
 			case "minio":

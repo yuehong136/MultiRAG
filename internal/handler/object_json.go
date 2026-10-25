@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
+	"unicode/utf8"
 )
 
 // bindObjectJSON rejects unknown, duplicate, null and trailing top-level values.
@@ -14,6 +15,9 @@ import (
 func bindObjectJSON(c *gin.Context, target any) error {
 	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
 	if err != nil {
+		return fmt.Errorf("invalid payload")
+	}
+	if !utf8.Valid(raw) {
 		return fmt.Errorf("invalid payload")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))

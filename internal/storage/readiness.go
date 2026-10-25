@@ -31,11 +31,15 @@ func readinessFor(ctx context.Context, store Storage) error {
 		_, err := s.client.ListBuckets(ctx)
 		return err
 	case *S3Storage:
+		bucket := s.bucket
+		if bucket == "" && s.config != nil {
+			bucket = s.config.Bucket
+		}
 		if s.client == nil {
 			return fmt.Errorf("storage is not initialized")
 		}
-		if s.bucket != "" {
-			_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)})
+		if bucket != "" {
+			_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
 			return err
 		}
 		_, err := s.client.ListBuckets(ctx, &s3.ListBucketsInput{})
