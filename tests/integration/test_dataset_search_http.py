@@ -133,8 +133,10 @@ def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: py
         {"search_id": env["saved_search"]},
     ):
         response = request(env, "POST", "/search", json={"question": "availability", "use_kg": True, **constraint})
-        assert response.status_code == 200 and response.json()["code"] == 400, response.text
-        assert "cannot be combined" in response.json()["message"]
+        expected_code = 109 if "search_id" in constraint else 400
+        assert response.status_code == 200 and response.json()["code"] == expected_code, response.text
+        if expected_code == 400:
+            assert "cannot be combined" in response.json()["message"]
     for constraint in (
         {"document_ids": [env["doc"]]},
         {"metadata_condition": {"conditions": []}},
@@ -153,7 +155,10 @@ def test_http_kg_constraint_contract(search_api: dict[str, Any], monkeypatch: py
     sdk_models.assert_not_called()
     graph.assert_not_called()
 
-    payload = {"question": "availability", "use_kg": True, "doc_ids": [], "meta_data_filter": {}}
+    empty = request(env, "POST", "/search", json={"question": "availability", "use_kg": True, "doc_ids": []}).json()
+    assert empty["code"] == 400
+    graph.assert_not_called()
+    payload = {"question": "availability", "use_kg": True, "meta_data_filter": {}}
     unrestricted = request(env, "POST", "/search", json=payload).json()
     assert unrestricted["code"] == 0 and unrestricted["data"]["chunks"][0]["content_with_weight"] == "unrestricted graph", unrestricted
     legacy = requests.post(
@@ -958,4 +963,3 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
         with Session(env["engine"]) as db:
             db.execute(sa.delete(Search).where(Search.id == identifier))
             db.commit()
-
