@@ -3771,3 +3771,16 @@ managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 fals
 - Go 验收源码 `83e32581ad28c9cd545df0dd302fab982939544e`；CI 清单随后仅格式化，Python/静态复验源码 `50d711a5c7e13c4d9c91113d69ea601eab13118a`。当前组合 Python 定向单元 50、真实 HTTP/SQL/MinIO 合同 6 项通过；Go build/vet、三个程序重新链接、定向 race 158 个命名用例、catalog 1 项以及新旧 provider/connector 43 个实际 HTTP/JWT/SQL/CLI 子场景通过，零 skip。Web 候选 build/lint/i18n、定向组件和真实浏览器证据按原 SHA 复用，受控边界单列。
 - 保留格式与 tiktoken cache 首错；修复仅展开精确 opt-in 清单和接入既有校验资产，不放宽门禁。#5 的 32 路径版本质量核对与 #6/#11 发布草稿有据保留，不机械升级项目版本或复制上游发布宣传。不是完整 Python/core、默认 Go 全库 race、远程 CI 或生产全绿。
 - 原始 28 项 WIP 保留，本块独立暂存。两仓全部 refs bundle 独立恢复、七个本批普通 worktree/分支退役、全已登记资源缺席读回及最终 actual main/Web/pin 见外部 `20261025-batch-after-0fb85a66/delivery-complete.json`；七个历史 protected managed 树、SDK 与借用资产保留。B 首次 listener、C 首次模型下载尝试、D 首次 helper 的 PID/temp 事前登记不完整，后续重跑不能补回，严格历史预登记合同未完全满足。未 push、未部署，远程 `ci-required` 待运行，未发布 Web pin 远程暂不可取；不继续下一批、不创建或恢复自动化。
+
+<!-- BEGIN AFTER-7FB9A266 LOCAL DELIVERY -->
+
+## 2026-10-26：7fb9a266 后二十项本地串行集成
+
+- 冻结范围排除 `7fb9a266` 至 `b7d88f0b`，直接后修上限 `519e7d98`；20 项逐项处置与质量边界见 [本批记录](batch-after-7fb9a266.md)，包含有依据不移植的发布文字和已有等价行为。
+- A/B/C/D/G 与后续稳定排序补修已进入 main，验收源码组合 `70aff06ebb9980c337b1643195e480154de9935c`；实际 Web master 与 consumer pin 均为 `8d292eba72b0af4409755d504c12947ca8522951`，收口只改文档。
+- 最终 Python 四个定向 integration 文件 39 项通过、零失败/错误/跳过；排序补修另有 72 项真实 PostgreSQL 和 3 项相关单测。Go 在 `c649e764` 构建/vet/三个入口重链及 race 42 顶层、360 含子项通过；最终 3,471 个相关实际文件及 native/字典/工具链输入一致，按范围复用，不称新 Go 重跑。
+- 真实 Chrome 的两源配置/RAPTOR、混合上传/失败项重试/状态操作在 `c649e764` 上通过并有 SQL/MinIO 独立读回；修后 `70aff06e` 选择器三页 `100/100/5`、205 唯一 ID 和第 205 项选中，独立有序 SQL 精确匹配、4 外租户项排除。状态无独立截图；实际五格拼贴另有审阅记录。
+- I 全局独立读回 169 个临时库、146 个桶、227 个 Redis 队列/键、292 个集合和 1,207 个自有监听地址无残留；8 个本批普通 worktree/分支/登记已保存恢复包并退休，自有私有配置副本已删除。原 28 项 WIP 字节保留，本块独立暂存，历史 managed 树、SDK 和借用资产保留。
+- 最终 main SHA、原始退出码、各阶段源码/复用范围、独立清理和恢复包见外部 `20261025-batch-after-7fb9a266/delivery-complete.json`。历史严格预登记合同仍为 false，首错/脚本补修不倒填；未 push、未部署，远程 `ci-required` 待运行，未发布 Web pin 远程暂不可取。真实供应商/权限、Trino 实驱动、常驻 worker、Linux native 与生产行为未验收；不继续下一批、不创建或恢复自动化。
+
+<!-- END AFTER-7FB9A266 LOCAL DELIVERY -->
