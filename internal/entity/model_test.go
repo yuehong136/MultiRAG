@@ -278,3 +278,56 @@ func TestVolcEngineModelThinkingDefaults(t *testing.T) {
 		t.Fatalf("thinking: %v %v", model, err)
 	}
 }
+
+// Provider selection uses provider.Name. Hosted and local OCR identities remain
+// separate throughout catalog loading and factory construction.
+func TestProviderFixCatalogRoutingAndCapabilities(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, driver, class string }{
+		{"MinerU", "mineru", "mineru"}, {"mineru_local", "mineru_local", "local"},
+		{"PaddleOCR", "paddleocr", "paddleocr"}, {"PaddleOCR_Local", "paddleocr_local", "local"},
+	} {
+		p := manager.FindProvider(test.name)
+		if p == nil || p.ModelDriver.Name() != test.driver || p.Class != test.class {
+			t.Fatalf("%s: %#v", test.name, p)
+		}
+	}
+	gitee := manager.FindProvider("Gitee")
+	if gitee.URL["default"] != "https://api.moark.ai/v1" || gitee.URL["china"] != "https://api.moark.com/v1" || gitee.URL["deprecated"] != "https://ai.gitee.com/v1" {
+		t.Fatal("Gitee regions", gitee.URL)
+	}
+	for _, typ := range []string{"chat", "embedding", "rerank", "ocr", "doc_parse"} {
+		found := false
+		for _, model := range gitee.Models {
+			if model.ModelTypeMap[typ] {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("Gitee capability lost", typ)
+		}
+	}
+	if manager.FindProvider("LongCat").URLSuffix.Models != "openai/v1/models" {
+		t.Fatal("LongCat listing suffix")
+	}
+	xai := manager.FindProvider("xAI")
+	if xai.URLSuffix.TTS != "tts" || xai.URLSuffix.ASR != "stt" {
+		t.Fatal("xAI audio suffix")
+	}
+	voice, err := manager.GetModelByName("xAI", "eve")
+	if err != nil || !voice.ModelTypeMap["tts"] {
+		t.Fatal("xAI voice catalog", voice, err)
+	}
+	found := false
+	for _, model := range manager.FindProvider("Replicate").Models {
+		if model.ModelTypeMap["rerank"] {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Replicate rerank catalog")
+	}
+}

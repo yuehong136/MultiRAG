@@ -2,15 +2,17 @@
 // Licensed under the Apache License, Version 2.0.
 package models
 
-import "fmt"
+import "strings"
 
-// LongCatModel implements chat and sender streaming without inventing a paid
-// connectivity probe or a discovery endpoint absent from this provider batch.
+// LongCatModel implements chat, sender streaming and authenticated model discovery.
 type LongCatModel struct{ *openAIChatDriver }
 
 func NewLongCatModel(urls map[string]string, suffix URLSuffix) *LongCatModel {
+	suffix.Models = strings.Trim(strings.TrimSpace(suffix.Models), "/")
 	d := newOpenAIChatDriver(urls, suffix, "longcat", longCatChatBody)
 	d.waitForStreamEOF = true
+	d.strictDiscovery = true
+	d.httpClient.CheckRedirect = rejectModelRedirect
 	return &LongCatModel{d}
 }
 func longCatChatBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
@@ -20,12 +22,6 @@ func longCatChatBody(name string, messages []Message, config *ChatConfig, stream
 	}
 	delete(body, "stop")
 	return body, nil
-}
-func (l *LongCatModel) ListModels(api *APIConfig) ([]string, error) {
-	return nil, fmt.Errorf("longcat: model discovery is unsupported")
-}
-func (l *LongCatModel) CheckConnection(api *APIConfig) error {
-	return fmt.Errorf("longcat: connection probing is unsupported")
 }
 
 var _ ModelDriver = (*LongCatModel)(nil)

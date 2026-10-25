@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ type GiteeModel struct {
 // NewGiteeModel creates a new Gitee model instance
 func NewGiteeModel(baseURL map[string]string, urlSuffix URLSuffix) *GiteeModel {
 	return &GiteeModel{
-		BaseURL:   baseURL,
+		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,

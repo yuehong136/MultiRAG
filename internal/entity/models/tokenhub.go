@@ -1,11 +1,15 @@
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // TokenHubModel shares strict chat/discovery and indexed embedding validation.
 type TokenHubModel struct{ *openAIChatDriver }
 
 func NewTokenHubModel(urls map[string]string, suffix URLSuffix) *TokenHubModel {
+	suffix.Models = strings.Trim(strings.TrimSpace(suffix.Models), "/")
 	d := newGatewayChatDriver(urls, suffix, "tokenhub")
 	d.buildBody = tokenHubChatBody
 	d.streamIdleTimeout = 60 * time.Second

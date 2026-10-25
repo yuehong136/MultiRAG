@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ type VolcEngine struct {
 }
 
 func NewVolcEngine(baseURL map[string]string, suffix URLSuffix) *VolcEngine {
-	return &VolcEngine{DummyModel: NewDummyModel(baseURL, suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
+	return &VolcEngine{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
 }
 func (v *VolcEngine) Name() string { return "volcengine" }
 
@@ -207,45 +208,23 @@ func (v *VolcEngine) ChatStreamlyWithMessages(name string, messages []Message, a
 	return io.ErrUnexpectedEOF
 }
 func (v *VolcEngine) ListModels(config *APIConfig) ([]string, error) {
+	local, cancel := modelCallConfig(config)
+	defer cancel()
 	suffix := strings.Trim(strings.TrimSpace(v.URLSuffix.Models), "/")
-	resp, err := v.request(http.MethodGet, suffix, config, nil)
+	resp, err := v.request(http.MethodGet, suffix, local, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-		Error json.RawMessage `json:"error"`
+	// IDs remain exactly as supplied by Ark; owned_by is metadata, not part
+	// of the identity selected by a tenant model instance.
+	names, err := strictProviderModelNames(resp.Body)
+	if err == nil {
+		err = requestContext(local).Err()
 	}
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(&result); err != nil {
-		return nil, fmt.Errorf("volcengine: decode model list: %w", err)
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, fmt.Errorf("volcengine: unexpected data after model list")
-	}
-	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("volcengine: model list error")
-	}
-	if result.Data == nil {
-		return nil, fmt.Errorf("volcengine: model list data is missing")
-	}
-	names := make([]string, 0, len(result.Data))
-	seen := make(map[string]struct{}, len(result.Data))
-	for _, item := range result.Data {
-		if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.ID) != item.ID {
-			return nil, fmt.Errorf("volcengine: invalid model ID")
-		}
-		if _, duplicate := seen[item.ID]; duplicate {
-			return nil, fmt.Errorf("volcengine: duplicate model ID")
-		}
-		seen[item.ID] = struct{}{}
-		names = append(names, item.ID)
-	}
-	return names, nil
+	return names, err
 }
+
 func (v *VolcEngine) CheckConnection(config *APIConfig) error {
 	resp, err := v.request(http.MethodGet, v.URLSuffix.Files, config, nil)
 	if err != nil {

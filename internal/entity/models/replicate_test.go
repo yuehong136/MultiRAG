@@ -40,7 +40,7 @@ func TestReplicatePredictionRoutesAndPrompt(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if name != "owner/model" && body.Version != name || name == "owner/model" && body.Version != "" || body.Stream {
+				if name != "owner/model" && body.Version != version || name == "owner/model" && body.Version != "" || body.Stream {
 					t.Error("incorrect version or stream", body)
 				}
 				if body.Input["system_prompt"] != "system" || body.Input["prompt"] != "user: hello\nassistant: hi\nuser: again" || body.Input["max_new_tokens"] != float64(12) || body.Input["temperature"] != float64(0) || body.Input["stop"] != nil {

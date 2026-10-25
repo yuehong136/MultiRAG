@@ -12,6 +12,10 @@ optional media interface must both match before the service invokes a provider.
 | HunYuan | Chat, reasoning, discovery, embedding | OpenAI-compatible chat/list/embedding; required key and explicit region |
 | TokenHub | Chat, reasoning, discovery, embedding | OpenAI-compatible calls; bodyless model-list GET; explicit zero options retained |
 | PaddleOCR_Local | OCR from bytes | No required key; base64 `file`, PDF `fileType=0`, `layoutParsingResults[].markdown.text` |
+| LongCat | Chat and authenticated discovery | `openai/v1/chat/completions`, bodyless `openai/v1/models` GET; strict bounded lists |
+| xAI | Chat/discovery, ASR and binary speech | Multipart `stt`; JSON `tts` with `text`, `voice_id`, `output_format.codec`; binary sender streaming, no provider SSE assumption |
+| Replicate | Chat/embedding predictions and bge rerank | Versioned `v1/predictions` with a 64-character version; JSON pair-list string `input_list`, async polling and finite raw scores |
+| Gitee | Chat, embedding, rerank, OCR and parse | Default `api.moark.ai`, `china` uses `api.moark.com`, `deprecated` uses `ai.gitee.com`; custom instance URL takes precedence |
 | ZHIPU-AI | OCR | `layout_parsing` accepts a data URL or provider-forwarded URL and returns `md_results` |
 
 Local PaddleOCR uses its own provider identity and a tenant instance's explicit
@@ -66,3 +70,16 @@ Streaming adapters use request cancellation and idle deadlines rather than a
 total completion deadline. Tests use deterministic credentials and controlled
 STS/SigV4/eventstream endpoints. They make no real AWS or IMDS requests and do
 not establish production IAM permissions or paid-provider compatibility.
+
+Replicate rerank validates the full score count before stable score ordering and
+TopN selection. The bound consumer reconstructs original document order. Zero
+scores are valid; `top_n=0` means all documents. Prediction cancellation, failed
+or unknown terminal states, malformed output and cross-origin polling fail.
+Hosted OCR remains `MinerU` / `PaddleOCR`; local OCR and parsing remain
+`mineru_local` / `PaddleOCR_Local`. Catalog loading selects by provider name.
+
+`provider_fixes_test.go` supports `MULTIRAG_PROVIDER_TEST_JOURNAL` for append-only
+case identities, listener allocation intent, exact address and independent closed
+port readback. `TestProviderFixesHTTPCLIAndSQL` uses an explicitly owned PostgreSQL
+configuration and a freshly linked CLI; its opt-in environment is declared in the
+test. Controlled provider fixtures do not establish paid-provider compatibility.

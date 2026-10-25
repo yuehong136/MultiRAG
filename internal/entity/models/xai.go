@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 )
@@ -21,7 +22,7 @@ type XAIModel struct {
 }
 
 func NewXAIModel(baseURL map[string]string, suffix URLSuffix) *XAIModel {
-	return &XAIModel{DummyModel: NewDummyModel(baseURL, suffix), httpClient: &http.Client{}}
+	return &XAIModel{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Transport: providerModelTransport, CheckRedirect: rejectModelRedirect}}
 }
 func (x *XAIModel) Name() string { return "xai" }
 
@@ -39,6 +40,7 @@ func (x *XAIModel) request(method, suffix string, config *APIConfig, body interf
 	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
 		return nil, fmt.Errorf("xai: API key is required")
 	}
+	suffix = strings.Trim(strings.TrimSpace(suffix), "/")
 	if suffix == "" {
 		return nil, fmt.Errorf("xai: endpoint suffix is missing")
 	}
@@ -208,30 +210,13 @@ func (x *XAIModel) ListModels(config *APIConfig) ([]string, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var result struct {
-		Data *[]struct {
-			ID string `json:"id"`
-		} `json:"data"`
-		Error json.RawMessage `json:"error"`
+	names, err := strictProviderModelNames(resp.Body)
+	if err == nil {
+		err = requestContext(local).Err()
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("xai: model list error")
-	}
-	if result.Data == nil {
-		return nil, fmt.Errorf("xai: missing model list")
-	}
-	names := make([]string, 0, len(*result.Data))
-	for _, item := range *result.Data {
-		if strings.TrimSpace(item.ID) == "" {
-			return nil, fmt.Errorf("xai: invalid model ID")
-		}
-		names = append(names, item.ID)
-	}
-	return names, nil
+	return names, err
 }
+
 func (x *XAIModel) CheckConnection(config *APIConfig) error {
 	names, err := x.ListModels(config)
 	if err != nil {

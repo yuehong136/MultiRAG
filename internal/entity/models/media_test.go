@@ -24,16 +24,16 @@ func TestBuiltInMediaCapabilitiesAreExplicit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := driver.(ASRDriver); ok != (provider == "openai" || provider == "groq" || provider == "fishaudio" || provider == "cohere" || provider == "siliconflow" || provider == "togetherai" || provider == "zhipu-ai" || provider == "openrouter") {
+		if _, ok := driver.(ASRDriver); ok != (provider == "xai" || provider == "openai" || provider == "groq" || provider == "fishaudio" || provider == "cohere" || provider == "siliconflow" || provider == "togetherai" || provider == "zhipu-ai" || provider == "openrouter") {
 			t.Error("unexpected ASR capability", provider)
 		}
-		if _, ok := driver.(TTSDriver); ok != (provider == "openai" || provider == "groq" || provider == "fishaudio" || provider == "minimax" || provider == "openrouter" || provider == "stepfun" || provider == "siliconflow" || provider == "togetherai" || provider == "zhipu-ai") {
+		if _, ok := driver.(TTSDriver); ok != (provider == "xai" || provider == "openai" || provider == "groq" || provider == "fishaudio" || provider == "minimax" || provider == "openrouter" || provider == "stepfun" || provider == "siliconflow" || provider == "togetherai" || provider == "zhipu-ai") {
 			t.Error("unexpected TTS capability", provider)
 		}
 		if _, ok := driver.(ASRStreamDriver); ok != (provider == "openai") {
 			t.Error("unexpected streaming ASR capability", provider)
 		}
-		if _, ok := driver.(TTSStreamDriver); ok != (provider == "openai" || provider == "fishaudio" || provider == "minimax" || provider == "stepfun" || provider == "siliconflow" || provider == "togetherai" || provider == "zhipu-ai") {
+		if _, ok := driver.(TTSStreamDriver); ok != (provider == "xai" || provider == "openai" || provider == "fishaudio" || provider == "minimax" || provider == "stepfun" || provider == "siliconflow" || provider == "togetherai" || provider == "zhipu-ai") {
 			t.Error("unexpected streaming TTS capability", provider)
 		}
 		expectedOCR := provider == "zhipu-ai" || provider == "gitee" || provider == "baidu" || provider == "mistral" || provider == "paddleocr"

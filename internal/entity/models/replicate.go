@@ -66,7 +66,7 @@ func (r *ReplicateModel) predictionEndpoint(name string, api *APIConfig) (string
 			return "", "", fmt.Errorf("replicate: version must be a full 64-character hexadecimal ID")
 		}
 		endpoint, err := r.endpoint(r.URLSuffix.Chat, api)
-		return endpoint, name, err
+		return endpoint, version, err
 	}
 	if len(parts) != 2 || !replicateModelPart(parts[0]) || !replicateModelPart(parts[1]) {
 		return "", "", fmt.Errorf("replicate: official model must be owner/name")
@@ -194,6 +194,9 @@ func (r *ReplicateModel) prediction(endpoint, method string, api *APIConfig, bod
 	defer resp.Body.Close()
 	var result replicatePrediction
 	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
+		if ctxErr := requestContext(api).Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("replicate: invalid prediction response")
 	}
 	if err := ValidateTaskID(result.ID); err != nil {

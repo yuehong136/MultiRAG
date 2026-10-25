@@ -42,7 +42,7 @@ func TestReplicateEmbeddingPredictionContract(t *testing.T) {
 							if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 								t.Error(err)
 							}
-							if r.URL.Path != path || r.Header.Get("Prefer") != "wait=60" || body.Stream || versioned && body.Version != name || !versioned && body.Version != "" {
+							if r.URL.Path != path || r.Header.Get("Prefer") != "wait=60" || body.Stream || versioned && body.Version != strings.Repeat("a", 64) || !versioned && body.Version != "" {
 								t.Error("route/version lost", body)
 							}
 							if count == 1 {
