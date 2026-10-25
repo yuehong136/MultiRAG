@@ -963,3 +963,47 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
         with Session(env["engine"]) as db:
             db.execute(sa.delete(Search).where(Search.id == identifier))
             db.commit()
+
+
+def test_mcp_unsafe_urls_have_no_sql_object_or_probe_side_effects(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from api.db.db_models import MCPServer
+
+    env = runtime_upload_api
+    route = sys.modules["api.apps.restful_apis.mcp"]
+    probe = Mock(side_effect=AssertionError("unsafe URL reached external MCP probe"))
+    monkeypatch.setattr(route, "get_mcp_tools", probe)
+    monkeypatch.setattr(route, "MCPToolCallSession", probe)
+    identifier = uuid4().hex
+    owner = env["owners"][0]
+    with Session(env["engine"]) as db:
+        db.add(MCPServer(id=identifier, name="Owned MCP", tenant_id=owner, url="https://public.example/mcp", server_type="sse", variables={}, headers={}))
+        db.commit()
+    before_objects = {item.object_name for item in env["storage"].list_objects(env["bucket"], recursive=True)}
+    headers = {"Authorization": "Bearer " + env["jwt"]}
+    base = env["base"] + "/api/v1/mcp/servers"
+    try:
+        for url in ["http://127.0.0.1/private", "http://[::1]/private", "file:///etc/passwd"]:
+            payload = {"name": "Blocked MCP", "url": url, "server_type": "sse"}
+            for method, path, body in [("POST", base, payload), ("PUT", base + "/" + identifier, payload), ("POST", base + "/" + identifier + "/test", {"url": url, "server_type": "sse"})]:
+                result = requests.request(method, path, headers=headers, json=body, timeout=30)
+                assert result.status_code == 200 and result.json()["retcode"] == int(RetCode.DATA_ERROR), result.text
+            result = requests.post(
+                base + "/import", headers=headers, json={"mcpServers": {"Blocked MCP": {"type": "sse", "url": url}, "Invalid type": {"type": [], "url": "https://public.example"}}}, timeout=30
+            )
+            assert result.status_code == 200 and result.json()["retcode"] == 0, result.text
+            assert all(not entry["success"] for entry in result.json()["data"]["results"])
+        with Session(env["engine"]) as db:
+            stored = db.get(MCPServer, identifier)
+            assert stored.name == "Owned MCP" and stored.url == "https://public.example/mcp"
+            assert list(db.scalars(sa.select(MCPServer.id).where(MCPServer.tenant_id == owner))) == [identifier]
+        assert {item.object_name for item in env["storage"].list_objects(env["bucket"], recursive=True)} == before_objects
+        probe.assert_not_called()
+        env["record_path"].with_suffix(".mcp-denial-readback.json").write_text(
+            json.dumps({"server": identifier, "unchanged": True, "created_servers": [], "created_objects": [], "external_probe_calls": probe.call_count})
+        )
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(MCPServer).where(MCPServer.id == identifier))
+            db.commit()

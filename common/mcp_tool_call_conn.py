@@ -474,10 +474,14 @@ class MCPToolCallSession(ToolCallSession):
         try:
             async with AsyncExitStack() as stack:
                 if self._mcp_server.server_type == MCPServerType.SSE:
-                    transport = cast(Transport, sse_client(url, headers=headers))
+                    from common.safe_mcp_http import create_public_mcp_http_client
+
+                    transport = cast(Transport, sse_client(url, headers=headers, httpx_client_factory=create_public_mcp_http_client))
                     mode = "legacy"
                 elif self._mcp_server.server_type == MCPServerType.STREAMABLE_HTTP:
-                    owned_http_client = create_mcp_http_client(headers=headers)
+                    from common.safe_mcp_http import create_public_mcp_http_client
+
+                    owned_http_client = create_public_mcp_http_client(headers=headers)
                     owned_http_client.event_hooks["response"].append(self._on_http_response)
                     http_client = await stack.enter_async_context(owned_http_client)
                     transport = cast(Transport, streamable_http_client(url, http_client=http_client))

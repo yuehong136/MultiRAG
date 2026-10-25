@@ -61,12 +61,17 @@ def test_description_preserves_captions_positions_and_section_shape(parse_method
     block = image_block(vlm_description="  Visible growth from 12 to 34.  ")
     if not caption:
         block.update(image_caption=[], image_footnote=[])
-    baseline = parser._transfer_to_sections([block | {"vlm_description": ""}], parse_method)[0]
+    baseline = parser._transfer_to_sections([block | {"vlm_description": ""}], parse_method)
     actual = parser._transfer_to_sections([block], parse_method)[0]
     expected = "Figure caption\nFigure footnote\nVisible growth from 12 to 34." if caption else "Visible growth from 12 to 34."
     assert actual[0] == expected + (parser._line_tag(block) if parse_method == "paper" else "")
-    assert actual[1:] == baseline[1:]
-    assert len(actual) == len(baseline)
+    if caption:
+        assert actual[1:] == baseline[0][1:]
+        assert len(actual) == len(baseline[0])
+    else:
+        assert baseline == []  # Empty sanitized sections no longer become chunks.
+        expected_tail = ("image", parser._line_tag(block)) if parse_method in {"manual", "pipeline"} else (("image",) if parse_method == "paper" else (parser._line_tag(block),))
+        assert actual[1:] == expected_tail
 
 
 @pytest.mark.parametrize("description", [None, "", " \n "])

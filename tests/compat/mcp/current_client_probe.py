@@ -6,7 +6,9 @@ import logging
 import time
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
+from common import safe_mcp_http
 from common.constants import MCPServerType
 from common.mcp_tool_call_conn import MCPToolCallSession
 
@@ -29,6 +31,20 @@ def main() -> None:
     parser.add_argument("--scenario", choices=("echo", "fail", "timeout", "auth"), required=True)
     parser.add_argument("--auth", choices=tuple(_FIXTURE_TOKENS), default="none")
     args = parser.parse_args()
+    # The compatibility matrix owns a real loopback server. Substitute only
+    # its exact origin at the DNS-policy boundary; production clients continue
+    # rejecting private addresses, and all other origins use the real guard.
+    fixture = urlsplit(args.url)
+    if fixture.hostname == "127.0.0.1" and fixture.port is not None:
+        public_guard = safe_mcp_http.assert_url_is_safe
+
+        def owned_fixture_destination(url: str) -> tuple[str, str]:
+            destination = urlsplit(url)
+            if (destination.scheme, destination.hostname, destination.port) == (fixture.scheme, fixture.hostname, fixture.port):
+                return "127.0.0.1", "127.0.0.1"
+            return public_guard(url)
+
+        safe_mcp_http.assert_url_is_safe = owned_fixture_destination
     logging.disable(logging.CRITICAL)
 
     token = _FIXTURE_TOKENS[args.auth]

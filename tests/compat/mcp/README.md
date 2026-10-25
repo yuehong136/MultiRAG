@@ -29,3 +29,11 @@ these checks do not establish third-party MCP, signing, production credentials o
 full Agent conversation acceptance. Constructor regressions for both dictionary
 and SDK 2 metadata also run in `tests/unit/test_mcp_tool_binding.py` without
 external services.
+
+The production outbound transport permits public destinations only and pins the
+validated IP per HTTP request, including redirects and SSE endpoints. The
+compatibility probe substitutes only the exact origin of its owned loopback
+server at the DNS policy boundary. Protocol traffic still uses the real pinned
+transport; this fixture does not establish public DNS or third-party access.
+Private-destination rejection is tested separately through real authenticated
+HTTP and independent SQL/object readback in `test_dataset_search_http.py`.
