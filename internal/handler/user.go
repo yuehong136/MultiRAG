@@ -386,43 +386,27 @@ func (h *UserHandler) Info(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Param request body service.UpdateSettingsRequest true "user settings"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/user/setting [post]
+// @Router /api/v1/users/me [patch]
 func (h *UserHandler) Setting(c *gin.Context) {
-	// Extract token from request
-	token := c.GetHeader("Authorization")
-	if token == "" {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    common.CodeUnauthorized,
-			"message": "Missing Authorization header",
-			"data":    false,
-		})
-		return
-	}
-
-	// Get user by token
-	user, code, err := h.userService.GetUserByToken(token)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    code,
-			"message": err.Error(),
-			"data":    false,
-		})
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
 		return
 	}
 
 	// Parse request
 	var req service.UpdateSettingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindObjectJSON(c, &req); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeBadRequest,
-			"message": err.Error(),
+			"message": "Invalid settings payload.",
 			"data":    false,
 		})
 		return
 	}
 
 	// Update user settings
-	code, err = h.userService.UpdateUserSettings(user, &req)
+	code, err := h.userService.UpdateUserSettings(user, &req)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    code,
@@ -434,7 +418,7 @@ func (h *UserHandler) Setting(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    common.CodeSuccess,
-		"message": "settings updated successfully",
+		"message": "success",
 		"data":    true,
 	})
 }
@@ -520,7 +504,7 @@ func (h *UserHandler) GetLoginChannels(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Param request body service.SetTenantInfoRequest true "tenant info"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/user/set_tenant_info [post]
+// @Router /api/v1/users/me/models [patch]
 func (h *UserHandler) SetTenantInfo(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
@@ -529,10 +513,10 @@ func (h *UserHandler) SetTenantInfo(c *gin.Context) {
 	}
 
 	var req service.SetTenantInfoRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindObjectJSON(c, &req); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeArgumentError,
-			"message": err.Error(),
+			"message": "Invalid model settings payload.",
 			"data":    false,
 		})
 		return

@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"multirag/internal/handler"
+	"multirag/internal/service"
 )
 
 // Router router
@@ -36,6 +37,7 @@ type Router struct {
 	chatHandler          *handler.ChatHandler
 	chatSessionHandler   *handler.ChatSessionHandler
 	connectorHandler     *handler.ConnectorHandler
+	mcpHandler           *handler.MCPHandler
 	searchHandler        *handler.SearchHandler
 	fileHandler          *handler.FileHandler
 	memoryHandler        *handler.MemoryHandler
@@ -86,6 +88,9 @@ func NewRouter(
 
 // Setup setup routes
 func (r *Router) Setup(engine *gin.Engine) {
+	if r.mcpHandler == nil {
+		r.mcpHandler = handler.NewMCPHandler(service.NewMCPService())
+	}
 	// Health check
 	engine.GET("/health", r.systemHandler.Health)
 
@@ -94,6 +99,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	public := engine.Group("/api/v1")
 	{
 		public.GET("/system/ping", r.systemHandler.Ping)
+		public.GET("/system/healthz", r.systemHandler.Healthz)
 		public.GET("/system/config", r.systemHandler.GetConfig)
 		public.GET("/system/version", r.systemHandler.GetVersion)
 		public.POST("/auth/login", r.userHandler.Login)
@@ -104,6 +110,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
+		authorized.POST("/api/v1/mcp/servers", r.mcpHandler.CreateMCPServer)
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
 		authorized.GET("/api/v1/users/me", r.userHandler.Info)
 		authorized.PATCH("/api/v1/users/me", r.userHandler.Setting)
@@ -112,7 +119,11 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authorized.GET("/api/v1/tenants", r.tenantHandler.TenantList)
 		authorized.GET("/api/v1/tenant/list", r.tenantHandler.TenantList)
 		authorized.GET("/api/v1/connectors/", r.connectorHandler.ListConnectors)
+		authorized.POST("/api/v1/connectors/", r.connectorHandler.CreateConnector)
 		authorized.GET("/api/v1/connectors/:connector_id", r.connectorHandler.GetConnector)
+		authorized.GET("/api/v1/connectors/:connector_id/logs", r.connectorHandler.ListLogs)
+		authorized.DELETE("/api/v1/connectors/:connector_id", r.connectorHandler.DeleteConnector)
+		authorized.POST("/api/v1/connectors/:connector_id/rebuild", r.connectorHandler.RebuildConnector)
 		authorized.GET("/api/v1/chats/:chat_id/sessions", r.chatSessionHandler.ListChatSessions)
 		// User info endpoint
 		authorized.GET("/v1/user/info", r.userHandler.Info)

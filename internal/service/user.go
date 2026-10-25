@@ -39,6 +39,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/crypto/scrypt"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"multirag/internal/dao"
 	"multirag/internal/entity"
@@ -78,8 +80,9 @@ type EmailLoginRequest struct {
 
 // UpdateSettingsRequest update user settings request
 type UpdateSettingsRequest struct {
+	Password    *string `json:"password,omitempty"`
+	NewPassword *string `json:"new_password,omitempty"`
 	Nickname    *string `json:"nickname,omitempty"`
-	Email       *string `json:"email,omitempty" binding:"omitempty,email"`
 	Avatar      *string `json:"avatar,omitempty"`
 	Language    *string `json:"language,omitempty"`
 	ColorSchema *string `json:"color_schema,omitempty"`
@@ -768,29 +771,40 @@ func (s *UserService) GetUserProfile(user *entity.User) map[string]interface{} {
 
 // UpdateUserSettings updates user settings
 func (s *UserService) UpdateUserSettings(user *entity.User, req *UpdateSettingsRequest) (common.ErrorCode, error) {
-	// Update fields if provided
-	if req.Nickname != nil {
-		user.Nickname = *req.Nickname
-	}
-	if req.Email != nil {
-		user.Email = *req.Email
-	}
-	if req.Avatar != nil {
-		user.Avatar = req.Avatar
-	}
-	if req.Language != nil {
-		user.Language = req.Language
-	}
-	if req.ColorSchema != nil {
-		user.ColorSchema = req.ColorSchema
-	}
-	if req.Timezone != nil {
-		user.Timezone = req.Timezone
-	}
 
-	// Save updated user
-	if err := s.userDAO.Update(user); err != nil {
-		return common.CodeServerError, err
+	if user == nil || user.ID == "" || req == nil {
+		return common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	updates := map[string]interface{}{}
+	if req.NewPassword != nil && req.Password == nil {
+		return common.CodeArgumentError, fmt.Errorf("current password is required")
+	}
+	if req.Password != nil {
+		old, err := s.decryptPassword(*req.Password)
+		if err != nil || user.Password == nil || !s.VerifyPassword(*user.Password, old) {
+			return common.CodeAuthenticationError, fmt.Errorf("Password error!")
+		}
+		if req.NewPassword != nil {
+			next, err := s.decryptPassword(*req.NewPassword)
+			if err != nil || len(next) < 6 || len(next) > 72 {
+				return common.CodeArgumentError, fmt.Errorf("Invalid new password.")
+			}
+			hash, err := s.HashPassword(next)
+			if err != nil {
+				return common.CodeServerError, fmt.Errorf("Unable to update password.")
+			}
+			updates["password"] = hash
+		}
+	}
+	for key, value := range map[string]*string{"nickname": req.Nickname, "avatar": req.Avatar, "language": req.Language, "color_schema": req.ColorSchema, "timezone": req.Timezone} {
+		if value != nil {
+			updates[key] = *value
+		}
+	}
+	if len(updates) > 0 {
+		if err := dao.DB.Model(&entity.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
+			return common.CodeServerError, fmt.Errorf("Unable to update settings.")
+		}
 	}
 	return common.CodeSuccess, nil
 }
@@ -855,57 +869,70 @@ func (s *UserService) GetLoginChannels() ([]*LoginChannel, common.ErrorCode, err
 
 // SetTenantInfoRequest represents the request for setting tenant info
 type SetTenantInfoRequest struct {
-	TenantID  string `json:"tenant_id"`
-	ASRID     string `json:"asr_id"`
-	EmbdID    string `json:"embd_id"`
-	Img2TxtID string `json:"img2txt_id"`
-	LLMID     string `json:"llm_id"`
-	RerankID  string `json:"rerank_id"`
-	TTSID     string `json:"tts_id"`
+	TenantID  *string `json:"tenant_id,omitempty"`
+	ASRID     *string `json:"asr_id,omitempty"`
+	EmbdID    *string `json:"embd_id,omitempty"`
+	Img2TxtID *string `json:"img2txt_id,omitempty"`
+	LLMID     *string `json:"llm_id,omitempty"`
+	RerankID  *string `json:"rerank_id,omitempty"`
+	TTSID     *string `json:"tts_id,omitempty"`
 }
 
-// SetTenantInfo updates tenant model configuration
+// SetTenantInfo updates only the caller's managed tenant and resolves model ownership atomically.
 func (s *UserService) SetTenantInfo(userID string, req *SetTenantInfoRequest) error {
-	if req.TenantID == "" {
-		req.TenantID = userID
+	if userID == "" || req == nil {
+		return fmt.Errorf("No authorization.")
 	}
-	if req.TenantID != userID {
-		return fmt.Errorf("no authorization to update tenant models")
+	tenantID := userID
+	if req.TenantID != nil {
+		tenantID = *req.TenantID
 	}
-	tenantDAO := dao.NewTenantDAO()
-
-	_, err := tenantDAO.GetByID(req.TenantID)
-	if err != nil {
-		return fmt.Errorf("tenant not found: %w", err)
+	if tenantID != userID {
+		return fmt.Errorf("No authorization.")
 	}
-
-	updates := make(map[string]interface{})
-	if req.LLMID != "" {
-		updates["llm_id"] = req.LLMID
-	}
-	if req.EmbdID != "" {
-		updates["embd_id"] = req.EmbdID
-	}
-	if req.ASRID != "" {
-		updates["asr_id"] = req.ASRID
-	}
-	if req.Img2TxtID != "" {
-		updates["img2txt_id"] = req.Img2TxtID
-	}
-	if req.RerankID != "" {
-		updates["rerank_id"] = req.RerankID
-	}
-	if req.TTSID != "" {
-		updates["tts_id"] = req.TTSID
-	}
-
-	if len(updates) > 0 {
-		if err := tenantDAO.Update(req.TenantID, updates); err != nil {
-			return fmt.Errorf("failed to update tenant: %w", err)
+	return dao.DB.Transaction(func(tx *gorm.DB) error {
+		var tenant entity.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", tenantID).Take(&tenant).Error; err != nil {
+			return fmt.Errorf("Unable to read tenant.")
 		}
-	}
-
-	return nil
+		updates := map[string]interface{}{}
+		fields := []struct {
+			key, kind string
+			value     *string
+		}{{"llm_id", "chat", req.LLMID}, {"embd_id", "embedding", req.EmbdID}, {"asr_id", "speech2text", req.ASRID}, {"img2txt_id", "image2text", req.Img2TxtID}, {"rerank_id", "rerank", req.RerankID}, {"tts_id", "tts", req.TTSID}}
+		for _, f := range fields {
+			if f.value == nil {
+				continue
+			}
+			value := *f.value
+			if value == "" {
+				updates[f.key] = ""
+				updates["tenant_"+f.key] = nil
+				continue
+			}
+			name, factory := NewTenantLLMService().SplitModelNameAndFactory(value)
+			var rows []entity.TenantLLM
+			q := tx.Where("tenant_id = ? AND llm_name = ? AND mdl_type = ? AND status = ?", tenantID, name, f.kind, "1")
+			if factory != "" {
+				q = q.Where("llm_factory = ?", factory)
+			}
+			if err := q.Limit(2).Find(&rows).Error; err != nil {
+				return fmt.Errorf("Unable to resolve model.")
+			}
+			if len(rows) != 1 {
+				return fmt.Errorf("Model is unavailable for this tenant and capability.")
+			}
+			updates[f.key] = value
+			updates["tenant_"+f.key] = rows[0].ID
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+		if err := tx.Model(&entity.Tenant{}).Where("id = ?", tenantID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("Unable to update tenant models.")
+		}
+		return nil
+	})
 }
 
 // UserTenantService user tenant service
