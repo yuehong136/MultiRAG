@@ -24,6 +24,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.web_consumer import tsx_runner
 
 pytestmark = pytest.mark.external_consumer
 
@@ -79,7 +80,7 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
 
 def run_web(env: dict[str, Any], mode: str, **values: str) -> dict[str, Any]:
     checkout = Path(os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web"))
-    runner = checkout / "node_modules/.bin/tsx"
+    runner = tsx_runner(checkout)
     script = checkout / "scripts/verify-model-document-routes.ts"
     assert runner.exists() and script.exists(), "Production Web consumer checkout is required"
     completed = subprocess.run(

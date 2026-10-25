@@ -27,6 +27,7 @@ from sqlalchemy.pool import NullPool
 
 from scripts.acceptance.evidence import Evidence, require
 from tests.support.document_parse_retirement import parse_api as parse_api
+from tests.support.process_group import NEW_PROCESS_GROUP, stop_console_group
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
 
@@ -172,25 +173,10 @@ def finite_worker(env: dict[str, Any], evidence: Evidence) -> Callable[[], None]
     return run
 
 
-# npm starts Vite as a child, so each run owns a process group to stop: a new
-# session on POSIX (start_new_session), a console process group on Windows.
-if sys.platform == "win32":
-    _NEW_PROCESS_GROUP = subprocess.CREATE_NEW_PROCESS_GROUP
-else:
-    _NEW_PROCESS_GROUP = 0
-
-
 def _stop_process_group(child: subprocess.Popen[bytes]) -> None:
     """Stop npm and the Vite server it started, and no other process."""
     if sys.platform == "win32":
-        # Ctrl+Break reaches the group only through a console we share with it;
-        # without one (OSError) or an exit in time, taskkill /T ends the tree.
-        try:
-            os.kill(child.pid, signal.CTRL_BREAK_EVENT)
-            child.wait(timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"], capture_output=True, check=False)
-            child.wait(timeout=10)
+        stop_console_group(child)
     else:
         try:
             os.killpg(child.pid, signal.SIGTERM)
@@ -227,7 +213,7 @@ def product_web_server(api_base: str, evidence: Evidence) -> Iterator[str]:
             stdout=log,
             stderr=log,
             start_new_session=True,
-            creationflags=_NEW_PROCESS_GROUP,
+            creationflags=NEW_PROCESS_GROUP,
             env={**os.environ, "VITE_API_BASE_URL": api_base},
         )
         try:

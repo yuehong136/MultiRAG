@@ -23,6 +23,7 @@ from api.db.services.conversation_service import ConversationService
 from common.constants import RetCode
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.fixture
@@ -378,7 +379,7 @@ def test_pinned_web_remove_conversation_client(session_upload_api: dict[str, Any
     session_id = seed_session(env, [descriptor])
     script = Path(__file__).resolve().parents[1] / "support/session_upload_web_consumer.mts"
     result = subprocess.run(
-        [str(root / "node_modules/.bin/tsx"), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
+        [str(tsx_runner(root)), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
         cwd=root,
         env={**os.environ, "SESSION_CLEANUP_BASE": env["base"], "SESSION_CLEANUP_TOKEN": env["jwt"], "SESSION_CLEANUP_ID": session_id},
         capture_output=True,

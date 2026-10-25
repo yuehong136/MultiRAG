@@ -23,6 +23,7 @@ from tests.support.dataset_management_http import management_api as management_a
 from tests.support.dataset_management_http import request_api
 from tests.support.graphrag_acceptance import DocumentExtractor, Model, add_source_document, api, native_rows, observe, worker
 from tests.support.graphrag_acceptance import graphrag_api as graphrag_api
+from tests.support.smoke import smoke_command
 
 
 @pytest.mark.parametrize("endpoint", ["knowledge_graph", "graph", "index?type=graph"])
@@ -283,7 +284,7 @@ async def test_failed_phase_does_not_delete_old_reports_or_set_marker(graphrag_a
 
 
 def test_owned_listener_smoke(graphrag_api: dict[str, Any]) -> None:
-    result = subprocess.run(["make", "smoke"], env={**__import__("os").environ, "SMOKE_BASE_URL": graphrag_api["base"]}, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(smoke_command(), env={**__import__("os").environ, "SMOKE_BASE_URL": graphrag_api["base"]}, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
 
 

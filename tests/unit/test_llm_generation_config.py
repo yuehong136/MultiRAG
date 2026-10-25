@@ -21,7 +21,7 @@ def test_generation_config_defaults_are_immutable() -> None:
     paths = [root / "chat.py", root / "cv.py", *(root / "chat_model").rglob("*.py"), *(root / "cv_model").rglob("*.py")]
     violations: list[str] = []
     for path in paths:
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             positional = [*node.args.posonlyargs, *node.args.args]

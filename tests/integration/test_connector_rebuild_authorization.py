@@ -24,6 +24,7 @@ from common.data_source.rest_api_connector import RestAPIConnector
 from tests.support.connector_deleted_sync import connector_sync_api as connector_sync_api
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.web_consumer import tsx_runner
 
 pytestmark = pytest.mark.integration
 
@@ -322,7 +323,7 @@ def test_direct_rebuild_cannot_bypass_resource_authorization(connector_authoriza
 def test_real_web_rebuild_consumer_handles_denial_and_success(connector_authorization_api: dict[str, Any], tmp_path: Path) -> None:
     env = connector_authorization_api
     checkout = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web"))).resolve()
-    runner = checkout / "node_modules/.bin/tsx"
+    runner = tsx_runner(checkout)
     assert runner.is_file(), "Installed Web consumer is required"
     script = tmp_path / "connector-rebuild-consumer.mts"
     script.write_text(

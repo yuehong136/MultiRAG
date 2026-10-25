@@ -47,14 +47,21 @@ REST 各族的生产入口、已有测试和执行边界见 [REST 覆盖索引](
 
 没有 `make` 时直接运行目标里的命令，例如
 `uv run --no-sync python scripts/run_integration.py --suite infinity --workers 2 -- -q`；
-用例调用的 `make smoke` 由 [`smoke.py`](support/smoke.py) 回退为同一脚本。Compose、模板、语料和
-测试源码按 UTF-8 读取，不依赖 `PYTHONUTF8=1`。async psycopg 拒绝 Windows 默认的 Proactor 循环，
-因此进程内 scratch HTTP 服务与生产一样使用 selector 循环，同步用例驱动异步数据库时用
+用例调用的 `make smoke` 由 [`smoke_command()`](support/smoke.py) 回退为用当前解释器运行同一脚本，
+本身即不同步环境，`UV=` 等 make 变量只传给 make。Compose、模板、语料和测试源码按 UTF-8 读取，
+不依赖 `PYTHONUTF8=1`。async psycopg 拒绝 Windows 默认的 Proactor 循环，因此连接 async psycopg 的
+scratch HTTP 服务（进程内或子进程）与生产一样使用 selector 循环，同步用例驱动异步数据库时用
 [`event_loop.run()`](support/event_loop.py) 代替 `asyncio.run()`；pytest-asyncio 用例由集成 conftest 的
-`event_loop_policy` 处理。Web 消费者用例执行 npm 在同目录生成的 `node_modules/.bin/tsx.cmd`。
+`event_loop_policy` 处理。用例自建容器的端点经 `services.container_host()` 取 `127.0.0.1`。
+Web 消费者用例经 [`tsx_runner()`](support/web_consumer.py) 执行 npm 在同目录生成的
+`node_modules/.bin/tsx.cmd`。用例自启的 npm/Vite 服务在 Windows 上独占控制台进程组，由
+[`stop_console_group()`](support/process_group.py) 以 Ctrl+Break 停止，无共享控制台或 10 秒内未退出时
+`taskkill /T /F` 结束进程树；POSIX 仍对新会话 `killpg`。
 `tests/unit/test_secure_leave_e2e.py` 覆盖的部署脚本依赖 POSIX `fcntl`，在 Windows 上无法收集；
 类型检查不受影响：mypy 的目标平台在 [`pyproject.toml`](../pyproject.toml) 的 `[tool.mypy]` 中固定为
 Linux，Windows 上 `uv run --no-sync mypy` 仍检查该脚本，结果与 CI 一致。
+`tests/unit/test_integration_harness.py` 的中断恢复用例依赖 POSIX 信号与进程标识，在 Windows 上显式跳过；
+覆盖文件的权限位断言只在 POSIX 上执行。
 
 ## CI 分层与证据
 

@@ -22,6 +22,7 @@ from api.db.services.metadata_store_sql import SqlMetadataStore
 from common import settings
 from core.nlp import search
 from tests.support.dataset_management_http import management_api as management_api
+from tests.support.web_consumer import tsx_runner
 
 pytestmark = pytest.mark.external_consumer
 
@@ -32,7 +33,7 @@ def _run_web(env: dict[str, Any], mode: str = "documents") -> dict[str, Any]:
     observed = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
     assert observed == expected, "Test the accepted committed Web version"
     completed = subprocess.run(
-        [str(checkout / "node_modules/.bin/tsx"), "--tsconfig", str(checkout / "tsconfig.app.json"), str(Path("tests/support/metadata_web_consumer.mts").resolve())],
+        [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(Path("tests/support/metadata_web_consumer.mts").resolve())],
         cwd=checkout,
         env={
             **os.environ,

@@ -19,11 +19,13 @@ from tests.support.agent_update_release import message_dsl, read_state, update
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.reference_metadata_http import metadata_http as metadata_http
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.smoke import smoke_command
+from tests.support.web_consumer import tsx_runner
 
 
 def web_run(env: dict[str, Any], identifier: str, token: str, mode: str) -> dict[str, Any]:
     root = Path(os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web"))
-    runner, script = root / "node_modules/.bin/tsx", root / "scripts/verify-completion-routes.ts"
+    runner, script = tsx_runner(root), root / "scripts/verify-completion-routes.ts"
     assert runner.exists() and script.exists(), "The actual Web consumer checkout is required."
     completed = subprocess.run(
         [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
@@ -50,7 +52,7 @@ def test_actual_web_agent_plural(release_api: dict[str, Any]) -> None:
         assert conversation is not None and conversation.user_id == env["owners"][0] and conversation.dialog_id == agent_id
         assert [message["content"] for message in conversation.message if message["role"] == "user"] == ["web first", "web continued"]
     assert read_state(env, agent_id) == before
-    smoke = subprocess.run(["make", "smoke"], cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
+    smoke = subprocess.run(smoke_command(), cwd=Path(__file__).resolve().parents[2], env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
 
 

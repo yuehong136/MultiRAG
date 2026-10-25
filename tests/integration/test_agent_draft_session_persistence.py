@@ -25,6 +25,7 @@ from api.db.services.agent_execution_service import snapshot_digest
 from core.utils.redis_conn import REDIS_CONN
 from tests.support.agent_update_release import message_dsl, read_state, sse_events, update
 from tests.support.agent_update_release import release_api as release_api
+from tests.support.web_consumer import tsx_runner
 
 
 def create_draft(env: dict[str, Any]) -> str:
@@ -238,7 +239,7 @@ def test_real_web_draft_log_and_resume(release_api: dict[str, Any]) -> None:
     env = release_api
     agent_id = create_draft(env)
     root = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
-    runner = root / "node_modules/.bin/tsx"
+    runner = tsx_runner(root)
     assert runner.is_file(), "An installed, fixed Web checkout is required"
     completed = subprocess.run(
         [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(Path(__file__).resolve().parents[1] / "support/agent_draft_web_consumer.mts")],

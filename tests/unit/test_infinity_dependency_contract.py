@@ -11,9 +11,9 @@ from packaging.version import Version
 
 def test_infinity_sdk_lock_runtime_and_compose_match() -> None:
     root = Path(__file__).resolve().parents[2]
-    project = tomllib.loads((root / "pyproject.toml").read_text())
-    lock = tomllib.loads((root / "uv.lock").read_text())
-    compose = yaml.safe_load((root / "docker/docker-compose-base.yml").read_text())
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    compose = yaml.safe_load((root / "docker/docker-compose-base.yml").read_text(encoding="utf-8"))
     requirement = next(Requirement(item) for item in project["project"]["dependencies"] if Requirement(item).name == "infinity-sdk")
     locked = next(package for package in lock["package"] if package["name"] == "infinity-sdk")
     image = compose["services"]["infinity"]["image"]

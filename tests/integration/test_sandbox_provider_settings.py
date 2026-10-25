@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from agent.sandbox import client
 from api.db.db_models import SystemSettings
+from tests.support.web_consumer import tsx_runner
 
 
 def test_local_provider_uses_committed_settings_with_environment_override(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -448,7 +449,7 @@ def test_actual_web_sandbox_admin_client(sandbox_admin_runtime: tuple[Any, dict[
 
     http, headers, sessions, engine = sandbox_admin_runtime
     checkout = Path(os.environ.get("WEB_SANDBOX_CHECKOUT", "/Users/xldu/project/web"))
-    runner = checkout / "node_modules/.bin/tsx"
+    runner = tsx_runner(checkout)
     assert runner.is_file(), "The fixed Web consumer and dependencies are required."
     monkeypatch.setenv("SANDBOX_LOCAL_ENABLED", "true")
     listener = socket.socket()

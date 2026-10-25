@@ -6,6 +6,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -13,11 +14,16 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.support.process_group import NEW_PROCESS_GROUP, stop_console_group
+
 
 @pytest.fixture(scope="module")
 def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     checkout = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
     assert (checkout / "node_modules").is_dir(), "Installed Web checkout is required"
+    # A full path also finds npm's npm.cmd shim on Windows, which CreateProcess cannot by bare name.
+    npm = shutil.which("npm")
+    assert npm is not None, "npm is required to start the Web checkout"
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -41,11 +47,12 @@ def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     registration_path.write_text(json.dumps(registration))
     with log_path.open("w") as log:
         process = subprocess.Popen(
-            ["npm", "run", "dev", "--", "--config", str(config_path), "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
+            [npm, "run", "dev", "--", "--config", str(config_path), "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
             cwd=checkout,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            creationflags=NEW_PROCESS_GROUP,
         )
         try:
             registration["pid"] = process.pid
@@ -62,10 +69,13 @@ def connector_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
                 pytest.fail("Owned Web server failed to start")
             yield base
         finally:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            if sys.platform == "win32":
+                stop_console_group(process)
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             process.wait(timeout=10)
             with socket.socket() as listener:
                 assert listener.connect_ex(("127.0.0.1", port)) != 0

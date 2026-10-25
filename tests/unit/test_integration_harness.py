@@ -219,8 +219,9 @@ def test_overlay_is_registered_before_creation_and_private_on_failure(tmp_path: 
     monkeypatch.setattr(Path, "mkdir", mkdir)
     manifest: dict[str, Any] = {}
     with pytest.raises(RuntimeError, match="controlled interruption"), registered_overlay(tmp_path, manifest) as overlay:
-        assert overlay.stat().st_mode & 0o777 == 0o600
-        assert overlay.parent.stat().st_mode & 0o777 == 0o700
+        if sys.platform != "win32":  # POSIX permission bits; Windows st_mode carries only the read-only flag
+            assert overlay.stat().st_mode & 0o777 == 0o600
+            assert overlay.parent.stat().st_mode & 0o777 == 0o700
         overlay.write_text('{"password":"private-test-secret"}')
         raise RuntimeError("controlled interruption")
     journal = Path(manifest["temporary_resource_journal"])
@@ -232,8 +233,13 @@ def test_overlay_is_registered_before_creation_and_private_on_failure(tmp_path: 
     assert len(observed) == 1 and not observed[0].exists()
 
 
-@pytest.mark.parametrize("termination", [signal.SIGTERM, signal.SIGKILL])
-def test_interrupted_overlay_is_cleaned_or_exactly_recoverable(tmp_path: Path, termination: int) -> None:
+# POSIX signal semantics: Windows has neither SIGKILL nor signal.pause, delivers
+# SIGTERM as TerminateProcess (no handler runs), and a venv's python.exe launcher
+# has a different PID from the interpreter that registers the overlay.
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal delivery and process identity")
+@pytest.mark.parametrize("termination", ["SIGTERM", "SIGKILL"])
+def test_interrupted_overlay_is_cleaned_or_exactly_recoverable(tmp_path: Path, termination: str) -> None:
+    signum = signal.Signals[termination]
     source = """
 import signal, sys
 from pathlib import Path
@@ -250,10 +256,10 @@ with registered_overlay(Path(sys.argv[1]), {}) as overlay:
         record = json.loads(journal.read_text())
         assert record["pid"] == child.pid
         overlay, directory = Path(record["overlay"]), Path(record["directory"])
-        child.send_signal(termination)
+        child.send_signal(signum)
         child.communicate(timeout=10)
         record = json.loads(journal.read_text())
-        if termination == signal.SIGTERM:
+        if signum == signal.SIGTERM:
             assert child.returncode == 128 + signal.SIGTERM
             assert record["status"] == "cleaned"
             assert record["cleanup"] == {"overlay_absent": True, "directory_absent": True}
@@ -409,6 +415,16 @@ def test_scratch_loops_are_ones_async_psycopg_accepts() -> None:
 
     assert not isinstance(server_loop, proactor)
     assert not isinstance(event_loop.run(running_loop()), proactor)
+
+
+@pytest.mark.parametrize("make", ["/usr/bin/make", None])
+def test_smoke_make_variables_only_reach_make(monkeypatch: pytest.MonkeyPatch, make: str | None) -> None:
+    """Without make the target's command runs this interpreter directly, so variables have no counterpart."""
+    from tests.support import smoke
+
+    monkeypatch.setattr(smoke.shutil, "which", lambda name: make if name == "make" else None)
+    expected = ["make", "smoke", "UV=uv run --no-sync"] if make else [sys.executable, str(ROOT / "scripts" / "smoke.py")]
+    assert smoke.smoke_command("UV=uv run --no-sync") == expected
 
 
 def _pytest(tmp_path: Path, source: str, *args: str, strict: bool = False) -> subprocess.CompletedProcess[str]:

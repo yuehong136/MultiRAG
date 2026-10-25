@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Document, File, File2Document, Knowledgebase, Tenant, UserTenant
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.fixture
@@ -268,7 +269,7 @@ def test_generated_compatibility_uses_identical_owner_authorization(document_fil
 def test_actual_web_document_preview_and_download(document_files: dict[str, Any]) -> None:
     env = document_files
     checkout = Path(os.environ.get("WEB_DOCUMENT_FILE_CHECKOUT", os.environ.get("WEB_COMPLETION_CHECKOUT", "/Users/xldu/project/web")))
-    runner = checkout / "node_modules/.bin/tsx"
+    runner = tsx_runner(checkout)
     script = checkout / "scripts/verify-document-file-routes.ts"
     assert runner.is_file() and script.is_file(), "The pinned Web consumer checkout and dependencies are required"
     before = snapshot(env)
@@ -313,7 +314,7 @@ def test_actual_web_json_download_preserves_bytes(document_files: dict[str, Any]
     assert physical == payload
     before = snapshot(env)
     completed = subprocess.run(
-        [str(checkout / "node_modules/.bin/tsx"), "--tsconfig", str(checkout / "tsconfig.app.json"), str(checkout / "scripts/verify-document-file-routes.ts")],
+        [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(checkout / "scripts/verify-document-file-routes.ts")],
         cwd=checkout,
         env={
             **os.environ,

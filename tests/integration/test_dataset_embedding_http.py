@@ -22,6 +22,7 @@ from common.config_utils import CONFIGS
 from core.nlp import search
 from tests.support.dataset_management_http import management_api as management_api
 from tests.support.dataset_management_http import request_api, sql_state
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.fixture
@@ -167,9 +168,9 @@ def test_check_rejects_incompatible_invalid_empty_and_foreign_samples(embedding_
 def test_actual_web_embedding_consumer(embedding_api: dict[str, Any]) -> None:
     env = embedding_api
     checkout = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
-    assert (checkout / "node_modules/.bin/tsx").exists() and (checkout / "scripts/verify-embedding-check.ts").exists(), "Web checkout and embedding consumer are required"
+    assert tsx_runner(checkout).exists() and (checkout / "scripts/verify-embedding-check.ts").exists(), "Web checkout and embedding consumer are required"
     result = subprocess.run(
-        [str(checkout / "node_modules/.bin/tsx"), "--tsconfig", str(checkout / "tsconfig.app.json"), str(checkout / "scripts/verify-embedding-check.ts")],
+        [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(checkout / "scripts/verify-embedding-check.ts")],
         cwd=checkout,
         env={**os.environ, "EMBEDDING_BASE": env["base"], "EMBEDDING_TOKEN": env["jwt"][0], "EMBEDDING_DATASET": env["datasets"][0]},
         capture_output=True,

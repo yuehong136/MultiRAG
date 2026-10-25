@@ -13,7 +13,7 @@ from core.llm.tts import HTTPBasedTTS
 
 @pytest.mark.parametrize("module", ["cv", "embedding", "rerank", "sequence2txt", "tts"])
 def test_active_http_calls_have_explicit_bounded_timeout(module: str) -> None:
-    tree = ast.parse((Path(__file__).parents[2] / "core" / "llm" / f"{module}.py").read_text())
+    tree = ast.parse((Path(__file__).parents[2] / "core" / "llm" / f"{module}.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "requests" and node.func.attr == "post":
             timeout = next((kw.value for kw in node.keywords if kw.arg == "timeout"), None)

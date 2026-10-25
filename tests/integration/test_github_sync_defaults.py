@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -25,6 +26,7 @@ from scripts.acceptance.evidence import Evidence
 from tests.support.connector_deleted_sync import connector_sync_api as connector_sync_api
 from tests.support.github_sync_defaults import GithubTransport, github_config
 from tests.support.github_sync_defaults import github_transport as github_transport
+from tests.support.process_group import NEW_PROCESS_GROUP, stop_console_group
 from tests.support.runtime_upload import read_object
 from tests.support.runtime_upload import runtime_upload_api as runtime_upload_api
 
@@ -41,7 +43,12 @@ def github_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     with (evidence / "vite.log").open("w") as log:
         # Wait on Vite itself so npm exiting cannot race listener shutdown.
         process = subprocess.Popen(
-            ["node", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", str(port), "--strictPort"], cwd=checkout, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+            ["node", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
+            cwd=checkout,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            creationflags=NEW_PROCESS_GROUP,
         )
         try:
             deadline = time.monotonic() + 40
@@ -57,7 +64,10 @@ def github_web(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             yield base
         finally:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
+                if sys.platform == "win32":
+                    stop_console_group(process)
+                else:
+                    os.killpg(process.pid, signal.SIGTERM)
             process.wait(timeout=10)
             with socket.socket() as listener:
                 closed = listener.connect_ex(("127.0.0.1", port)) != 0

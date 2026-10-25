@@ -29,6 +29,8 @@ from api.db.joint_services import tenant_model_service as models
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources
 from tests.support.database import scratch_database
+from tests.support.event_loop import UVICORN_LOOP
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.fixture
@@ -131,7 +133,7 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
         cleanup.callback(listener.close)
         listener.bind(("127.0.0.1", 0))
         manifest["port"] = listener.getsockname()[1]
-        server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error"))
+        server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
         thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
 
         def stop() -> None:
@@ -275,7 +277,7 @@ console.log('Real Web retrieval consumer: own/shared models accepted; foreign mo
 """.replace("WEB_ROOT", str(root))
     )
     execution = subprocess.run(
-        [str(root / "node_modules/.bin/tsx"), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
+        [str(tsx_runner(root)), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
         cwd=root,
         text=True,
         capture_output=True,

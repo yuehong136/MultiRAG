@@ -1,6 +1,5 @@
 """Owned PostgreSQL rows, real save/read routes, bundles and SDK request payloads."""
 
-import asyncio
 import base64
 import json
 import os
@@ -25,6 +24,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_id, g
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources, settings
+from tests.support import event_loop
 
 pytestmark = pytest.mark.integration
 
@@ -281,7 +281,7 @@ def test_save_reload_tool_switch_and_credential_preservation(model_contract: dic
                 return await bundle.async_chat("", [{"role": "user", "content": "hello"}], {})
 
         start = len(model_contract["wire"])
-        answer = asyncio.run(run())
+        answer = event_loop.run(run())
         assert "answer" in answer and "**ERROR**" not in answer
         requests = model_contract["wire"][start:]
         assert bool(requests[0]["body"].get("tools")) is enabled
@@ -371,7 +371,7 @@ def test_ollama_vision_native_tools_keep_image_payload(model_contract: dict[str,
                 return await bundle.async_chat("", [{"role": "user", "content": "hello"}], {}, images=images)
 
         start = len(model_contract["wire"])
-        answer = asyncio.run(run())
+        answer = event_loop.run(run())
         assert "answer" in answer and "**ERROR**" not in answer
         requests = model_contract["wire"][start:]
         first = requests[0]["body"]

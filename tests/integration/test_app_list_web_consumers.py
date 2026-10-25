@@ -12,13 +12,14 @@ import sqlalchemy as sa
 
 from api.db.db_models import Dialog, Search
 from tests.support.dataset_management_http import management_api as management_api
+from tests.support.web_consumer import tsx_runner
 
 
 @pytest.mark.external_consumer
 def test_actual_web_owner_list_clients(management_api: dict[str, Any]) -> None:
     env = management_api
     root = Path(os.environ["WEB_DATASET_CHECKOUT"])
-    runner = root / "node_modules/.bin/tsx"
+    runner = tsx_runner(root)
     script = Path(__file__).resolve().parents[1] / "support/app_list_web_consumer.mts"
     assert runner.exists() and script.exists()
     ids: list[str] = []

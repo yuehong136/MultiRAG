@@ -32,6 +32,8 @@ from common.bootstrap import ensure_initialized
 from common.config_utils import CONFIGS
 from core.nlp.search import index_name_one
 from tests.support.database import scratch_database
+from tests.support.event_loop import UVICORN_LOOP
+from tests.support.web_consumer import tsx_runner
 
 
 def _save(path: Path, data: Any) -> None:
@@ -170,7 +172,7 @@ def shared_api(shared_database: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_
         port = listener.getsockname()[1]
         manifest["port"] = port
         _save(path, manifest)
-        server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error", access_log=False))
+        server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error", access_log=False, loop=UVICORN_LOOP))
         thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
 
         def stop() -> None:
@@ -337,7 +339,7 @@ def test_actual_web_member_chunk_client(shared_api: dict[str, Any]) -> None:
     chunk = response.json()["data"]["chunk"]["id"]
     # Exercise the active independent Web API module against this live listener.
     web = Path(os.environ.get("WEB_DATASET_CHECKOUT", str(Path(__file__).resolve().parents[3] / "web")))
-    assert (web / "node_modules/.bin/tsx").is_file(), "Set WEB_DATASET_CHECKOUT to the installed independent Web consumer checkout"
+    assert tsx_runner(web).is_file(), "Set WEB_DATASET_CHECKOUT to the installed independent Web consumer checkout"
     script = env["evidence"] / "web-chunks.mts"
     script.write_text(
         "import assert from 'node:assert/strict';\n"
@@ -361,7 +363,7 @@ def test_actual_web_member_chunk_client(shared_api: dict[str, Any]) -> None:
         + "console.log('actual Web member list/update/get/toggle passed');\n"
     )
     execution = subprocess.run(
-        [str(web / "node_modules/.bin/tsx"), "--tsconfig", str(web / "tsconfig.app.json"), str(script)],
+        [str(tsx_runner(web)), "--tsconfig", str(web / "tsconfig.app.json"), str(script)],
         cwd=web,
         capture_output=True,
         text=True,

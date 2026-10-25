@@ -18,7 +18,7 @@ from core.nlp import synonym
 from core.nlp.query import FulltextQueryer
 from core.utils.redis_conn import REDIS_CONN
 from memory.services.query import MsgTextQuery
-from tests.support.services import service_images
+from tests.support.services import container_host, service_images
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +43,7 @@ def isolated_redis_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
         cleanup.callback(container.stop)
         container.start()
         wrapped = container.get_wrapped_container()
-        host, port = container.get_container_host_ip(), container.get_exposed_port(6379)
+        host, port = container_host(container), container.get_exposed_port(6379)
         state.update(containerId=wrapped.id, host=host, port=port)
         manifest.write_text(json.dumps(state))
         yield f"redis://{host}:{port}/15"

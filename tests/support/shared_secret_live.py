@@ -21,10 +21,11 @@ def serve() -> None:
 
     from api import apps
     from common import resources, settings
+    from tests.support.event_loop import UVICORN_LOOP
 
     assert resources._state["doc_store"] is not None
     assert apps.manager.secret.secret_for_encode == settings.SECRET_KEY.encode()
-    uvicorn.run(apps.app, host="127.0.0.1", port=int(sys.argv[2]), lifespan="off", log_level="error", access_log=False)
+    uvicorn.run(apps.app, host="127.0.0.1", port=int(sys.argv[2]), lifespan="off", log_level="error", access_log=False, loop=UVICORN_LOOP)
 
 
 def main() -> None:
@@ -37,6 +38,7 @@ def main() -> None:
     from api.db.services.user_service import UserService
     from common.config_utils import CONFIGS
     from tests.support.database import scratch_database
+    from tests.support.smoke import smoke_command
 
     evidence = Path(sys.argv[2]).resolve()
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -117,7 +119,7 @@ def main() -> None:
         for index, base in enumerate(bases):
             smoke_env = dict(env, SMOKE_BASE_URL=base)
             with (evidence / f"smoke-{index}.log").open("wb") as log:
-                command = subprocess.run(["make", "smoke", "UV=uv run --no-sync"], cwd=root, env=smoke_env, stdout=log, stderr=subprocess.STDOUT, check=False)
+                command = subprocess.run(smoke_command("UV=uv run --no-sync"), cwd=root, env=smoke_env, stdout=log, stderr=subprocess.STDOUT, check=False)
             result[f"make_smoke_{index}_exit"] = command.returncode
             assert command.returncode == 0
             response = requests.get(base + "/api/v1/system/healthz", timeout=30)
