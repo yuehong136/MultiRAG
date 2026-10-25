@@ -11,7 +11,10 @@ import (
 	"strings"
 )
 
-type mediaHTTPOptions struct{ optionalAPIKey bool }
+type mediaHTTPOptions struct {
+	optionalAPIKey bool
+	accept         string
+}
 
 func mediaRequest(client *http.Client, base map[string]string, suffix string, api *APIConfig, contentType string, body io.Reader, model string, options ...mediaHTTPOptions) (*http.Response, error) {
 	key := ""
@@ -41,6 +44,9 @@ func mediaRequest(client *http.Client, base map[string]string, suffix string, ap
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	req.Header.Set("Content-Type", contentType)
+	if len(options) > 0 && options[0].accept != "" {
+		req.Header.Set("Accept", options[0].accept)
+	}
 	if model != "" {
 		req.Header.Set("model", model)
 	}

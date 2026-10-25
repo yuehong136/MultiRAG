@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ type ZhipuAIModel struct {
 // NewZhipuAIModel creates a new Zhipu AI model instance
 func NewZhipuAIModel(baseURL map[string]string, urlSuffix URLSuffix) *ZhipuAIModel {
 	return &ZhipuAIModel{
-		BaseURL:   baseURL,
+		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,

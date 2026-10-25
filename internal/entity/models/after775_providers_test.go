@@ -124,10 +124,10 @@ func TestAfter775Gateways(t *testing.T) {
 			if calls.Load() != before {
 				t.Fatal("invalid call reached HTTP")
 			}
-			if _, ok := d.(ASRDriver); ok {
+			if _, ok := d.(ASRDriver); ok != (provider == "Groq") {
 				t.Fatal("unexpected ASR")
 			}
-			if _, ok := d.(TTSDriver); ok {
+			if _, ok := d.(TTSDriver); ok != (provider == "Groq") {
 				t.Fatal("unexpected TTS")
 			}
 			if _, err := d.Embed(&name, []string{"a"}, api, nil); err == nil {

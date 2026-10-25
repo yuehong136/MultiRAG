@@ -45,12 +45,13 @@ func requestContext(config *APIConfig) context.Context {
 }
 
 type embeddingHTTPOptions struct {
-	optionalAPIKey bool
-	fallbackRegion bool
-	parameters     map[string]any
-	dimensionField string
-	authHeader     string
-	omitModel      bool
+	optionalAPIKey    bool
+	rejectNonzeroCode bool
+	fallbackRegion    bool
+	parameters        map[string]any
+	dimensionField    string
+	authHeader        string
+	omitModel         bool
 }
 
 // embedHTTPWithConfig carries optional dimensions and provider parameters through
@@ -140,6 +141,7 @@ func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix
 				Embedding []*float64 `json:"embedding"`
 			} `json:"data"`
 			Error json.RawMessage `json:"error"`
+			Code  json.RawMessage `json:"code"`
 		}
 		decodeErr := decodeBoundedModelJSON(resp.Body, &result)
 		resp.Body.Close()
@@ -151,6 +153,11 @@ func embedHTTPWithConfig(client *http.Client, baseURLs map[string]string, suffix
 		}
 		if len(result.Error) != 0 && string(result.Error) != "null" {
 			return nil, fmt.Errorf("embedding provider returned an error")
+		}
+		if option.rejectNonzeroCode {
+			if err := validateModelResponseCode(result.Code); err != nil {
+				return nil, err
+			}
 		}
 		size := end - start
 		if len(result.Data) != size {

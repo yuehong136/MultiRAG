@@ -1,14 +1,38 @@
 {
   "name": "Astraflow",
   "url": {
-    "default": "https://api-us-ca.umodelverse.ai/v1"
+    "default": "https://api.modelverse.cn/v1",
+    "us-ca": "https://api-us-ca.umodelverse.ai/v1"
   },
   "url_suffix": {
     "chat": "chat/completions",
-    "models": "models"
+    "models": "models",
+    "embedding": "embeddings",
+    "rerank": "rerank",
+    "tts": "audio/speech"
   },
   "class": "astraflow",
   "models": [
+    {
+      "name": "text-embedding-3-large",
+      "max_tokens": 16384,
+      "model_types": [
+        "embedding"
+      ]
+    },
+    {
+      "name": "bge-reranker-v2-m3",
+      "max_tokens": 8192,
+      "model_types": [
+        "rerank"
+      ]
+    },
+    {
+      "name": "IndexTeam/IndexTTS-2",
+      "model_types": [
+        "tts"
+      ]
+    },
     {
       "name": "claude-opus-4-7",
       "max_tokens": 200000,

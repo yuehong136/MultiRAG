@@ -47,6 +47,10 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewPPIOModel(baseURL, urlSuffix), nil
 	case "tokenpony":
 		return NewTokenPonyModel(baseURL, urlSuffix), nil
+	case "tokenhub":
+		return NewTokenHubModel(baseURL, urlSuffix), nil
+	case "hunyuan":
+		return NewHunyuanModel(baseURL, urlSuffix), nil
 	case "groq":
 		return NewGroqModel(baseURL, urlSuffix), nil
 	case "togetherai":
@@ -85,6 +89,8 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewMistralModel(baseURL, urlSuffix), nil
 	case "jina":
 		return NewJinaModel(baseURL, urlSuffix), nil
+	case "paddleocr_local":
+		return NewPaddleOCRLocalModel(baseURL, urlSuffix), nil
 	case "paddleocr":
 		return NewPaddleOCRModel(baseURL, urlSuffix), nil
 	case "cohere":
