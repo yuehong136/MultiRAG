@@ -1579,7 +1579,8 @@ POST /agents/chat/completions
   "agent_id": "agent-uuid",
   "query": "User input...",
   "inputs": {},
-  "stream": true
+  "stream": true,
+  "chat_template_kwargs": {"enable_thinking": false}
 }
 ```
 
@@ -1587,6 +1588,25 @@ POST /agents/chat/completions
 没有覆盖值，JSON 字符串、数组和其他标量在执行及数据库写入前被拒绝。Canvas 在每次运行
 重置并复制该对象，普通、结构化、流式及工具调用的每轮模型请求经 SDK `extra_body`
 传递；保留空对象、`false` 和 `0`，不修改共享模型配置或泄漏到下次运行。
+该对象的具体键由模型及其提供商决定；例如 `enable_thinking` 只对支持此参数的模型有效，
+接口透传不代表所有模型均具备相同能力。
+
+OpenAI 消息适配使用同一个路径，显式传 `openai-compatible: true`，例如：
+
+```json
+{
+  "agent_id": "agent-uuid",
+  "openai-compatible": true,
+  "messages": [{"role": "user", "content": "User input..."}],
+  "stream": false,
+  "chat_template_kwargs": {"enable_thinking": false}
+}
+```
+
+此模式返回 OpenAI `choices` 或 SSE 形状，默认 `stream: false`；普通模式默认
+`stream: true`，返回本地 Agent 事件合同。两种模式均可用 `session_id` 继续会话，
+并沿用已授权 Agent 和固定 DSL；可选 `model` 字段不替代 `agent_id` 路由。
+旧 `/agents/{agent_id}/completions` 未注册，不能作为此请求的备用路径。
 
 ## Go Provider API（并行实现）
 
