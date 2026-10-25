@@ -33,7 +33,7 @@ from core.flow.base import ProcessBase, ProcessParamBase
 from core.flow.parser.pdf_chunk_metadata import finalize_pdf_chunk
 from core.flow.tokenizer.schema import TokenizerFromUpstream
 from core.nlp import rag_tokenizer
-from core.svr.task_executor import embed_limiter
+from core.svr.task_executor_limiter import embed_limiter
 
 
 class TokenizerParam(ProcessParamBase):

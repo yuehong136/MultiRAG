@@ -17,7 +17,7 @@ import signal
 import socket
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from functools import partial
 from multiprocessing.context import TimeoutError as ProcessTimeoutError
@@ -44,7 +44,6 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID, TaskService, has_canceled
 from common import settings
-from common.asyncio_utils import LoopLocalSemaphore
 from common.config_utils import show_configs
 from common.connection_utils import timeout
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
@@ -64,6 +63,8 @@ from core.graphrag.utils import chat_limiter, get_llm_cache, get_tags_from_cache
 from core.nlp import add_positions, concat_img, rag_tokenizer, search
 from core.prompts.generator import content_tagging, gen_metadata, keyword_extraction, question_proposal, run_toc_from_text
 from core.svr import executor_metrics
+from core.svr.task_executor_limiter import chunk_limiter, embed_limiter, kg_limiter, minio_limiter, task_limiter
+from core.svr.worker_cli import parse_worker_args
 from core.utils.base64_image import image2id
 from core.utils.raptor_migration import replace_raptor_summaries, summary_rows
 from core.utils.raptor_utils import (
@@ -173,7 +174,7 @@ TASK_TYPE_TO_PIPELINE_TASK_TYPE = {
 
 UNACKED_ITERATOR = None
 
-CONSUMER_NO = "0" if len(sys.argv) < 2 else sys.argv[1]
+CONSUMER_NO = "0"
 CONSUMER_NAME = "task_executor_" + CONSUMER_NO
 BOOT_AT = datetime.now().astimezone().isoformat(timespec="milliseconds")
 PENDING_TASKS = 0
@@ -183,14 +184,6 @@ FAILED_TASKS = 0
 
 CURRENT_TASKS = {}
 
-MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
-MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "3"))
-MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))
-task_limiter = LoopLocalSemaphore(MAX_CONCURRENT_TASKS)
-chunk_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-minio_limiter = LoopLocalSemaphore(MAX_CONCURRENT_MINIO)
-kg_limiter = LoopLocalSemaphore(2)
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))
 stop_event = threading.Event()
 
@@ -2691,7 +2684,7 @@ async def insert_chunks(
     return True
 
 
-async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor, toc_future: asyncio.Future[Any] | None, result_observed: bool) -> None:
+async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor, toc_future: Awaitable[Any] | None, result_observed: bool) -> None:
     """Join owned TOC work off-loop before the task releases its session."""
     executor.shutdown(wait=False, cancel_futures=True)
 
@@ -3292,7 +3285,11 @@ async def main():
     logging.error("BUG!!! You should not reach here!!!")
 
 
-def run_task_executor() -> None:
+def run_task_executor(argv: list[str] | None = None) -> None:
+    global CONSUMER_NO, CONSUMER_NAME
+    args = parse_worker_args(argv)
+    CONSUMER_NO = args.index
+    CONSUMER_NAME = "task_executor_" + CONSUMER_NO
     faulthandler.enable()
     init_root_logger(CONSUMER_NAME)
     try:

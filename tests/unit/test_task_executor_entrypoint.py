@@ -25,7 +25,7 @@ def test_run_task_executor_logs_unhandled_exception_and_exits_nonzero(
     monkeypatch.setattr(task_executor, "init_root_logger", skip_logger_initialization)
 
     with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as exc_info:
-        task_executor.run_task_executor()
+        task_executor.run_task_executor([])
 
     assert exc_info.value.code == 1
     assert "Task executor terminated unexpectedly" in caplog.text

@@ -16,7 +16,7 @@ async def image2id(d: dict, storage_put_func: partial, objname: str, bucket: str
     import logging
     from io import BytesIO
 
-    from core.svr.task_executor import minio_limiter
+    from core.svr.task_executor_limiter import minio_limiter
 
     if "image" not in d:
         return

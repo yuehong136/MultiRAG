@@ -8,9 +8,11 @@ Task
 - Decide levels yourself to keep a coherent hierarchy. Keep peers at the same depth.
 
 Output
-- Return a valid JSON array only (no extra text).
-- Each element must be {"level": "1|2|3", "title": <original title string>}.
-- title must be the original title string.
+- Return a valid JSON array only (no extra text, no markdown code blocks).
+- Each element must be a JSON object: {"level": "1", "title": "original title"}.
+- title must be the original title string exactly.
+- Do not return arrays of arrays such as [["1", "title"]].
+- The output must be parseable by json.loads() directly.
 
 Examples
 
