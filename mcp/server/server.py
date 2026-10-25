@@ -285,8 +285,8 @@ class MultiRAGConnector:
         while True:
             logging.debug("list_datasets_structured fetching /datasets page=%s page_size=%s", page, self._DATASET_PAGE_SIZE)
             res_json = await self._fetch_datasets_page(api_key=api_key, page=page, page_size=self._DATASET_PAGE_SIZE)
-            page_datasets = res_json.get("data", [])
-            if not isinstance(page_datasets, list) or any(not isinstance(row, dict) or not row.get("id") for row in page_datasets):
+            page_datasets = res_json.get("data")
+            if not isinstance(page_datasets, list) or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in page_datasets):
                 raise ToolError("Invalid dataset list response.")
             previous = len(seen_ids)
             for d in page_datasets:
@@ -304,10 +304,11 @@ class MultiRAGConnector:
                         "embd_id": embedding_model,
                     }
                 )
-            total = res_json.get("total_datasets", res_json.get("total"))
-            if total is not None and (type(total) is not int or total < 0):
+            totals = [res_json[key] for key in ("total_datasets", "total") if key in res_json]
+            if totals and (any(type(value) is not int or value < len(seen_ids) for value in totals) or len(set(totals)) != 1):
                 raise ToolError("Invalid dataset total.")
-            if total is not None and len(seen_ids) >= total:
+            total = totals[0] if totals else None
+            if total is not None and len(seen_ids) == total:
                 break
             if total is None and len(page_datasets) < self._DATASET_PAGE_SIZE:
                 break

@@ -926,19 +926,22 @@ class MultiRAGClient:
             if response.status_code != 200 or payload.get("code", payload.get("retcode")) != 0:
                 print(f"Fail to list datasets, code: {payload.get('code', payload.get('retcode'))}, message: {payload.get('message', payload.get('retmsg'))}")
                 return
-            data = payload.get("data", [])
-            rows = data.get("kbs", []) if isinstance(data, dict) else data
-            if not isinstance(rows, list) or any(not isinstance(row, dict) or not row.get("id") for row in rows):
+            data = payload.get("data")
+            rows = data.get("kbs") if isinstance(data, dict) else data
+            if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows):
                 raise ValueError("Invalid dataset list response")
             previous = len(seen)
             for row in rows:
                 if row["id"] not in seen:
                     datasets.append(row)
                     seen.add(row["id"])
-            total = payload.get("total_datasets", payload.get("total", data.get("total") if isinstance(data, dict) else None))
-            if total is not None and (type(total) is not int or total < 0):
+            totals = [payload[key] for key in ("total_datasets", "total") if key in payload]
+            if isinstance(data, dict) and "total" in data:
+                totals.append(data["total"])
+            if totals and (any(type(value) is not int or value < len(seen) for value in totals) or len(set(totals)) != 1):
                 raise ValueError("Invalid dataset total")
-            if total is not None and len(seen) >= total:
+            total = totals[0] if totals else None
+            if total is not None and len(seen) == total:
                 break
             if total is None and len(rows) < 100:
                 break

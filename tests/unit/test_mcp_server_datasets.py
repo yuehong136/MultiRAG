@@ -105,3 +105,34 @@ async def test_list_datasets_nonprogress_does_not_return_partial_success() -> No
     connector, _ = _make_connector(pages)
     with pytest.raises(ToolError, match="stopped before"):
         await connector.list_datasets_structured("key")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "total_datasets": 0},
+        {"code": 0, "data": {}, "total_datasets": 0},
+        {"code": 0, "data": None},
+        {"code": 0, "data": [{"id": "one"}], "total_datasets": 0},
+        {"code": 0, "data": [{"id": "one"}], "total_datasets": None},
+        {"code": 0, "data": [{"id": "one"}], "total_datasets": 1, "total": 2},
+        {"code": 0, "data": [{"id": 1}], "total_datasets": 1},
+    ],
+)
+async def test_list_datasets_rejects_missing_inventory_and_inconsistent_totals(payload: dict) -> None:
+    connector, _ = _make_connector([FakeResponse(payload)])
+    with pytest.raises(ToolError):
+        await connector.list_datasets_structured("key")
+
+
+async def test_list_datasets_rejects_accumulated_inventory_larger_than_total() -> None:
+    connector, _ = _make_connector(
+        [FakeResponse({"code": 0, "data": [_dataset("one")], "total_datasets": 2}), FakeResponse({"code": 0, "data": [_dataset("two"), _dataset("three")], "total_datasets": 2})]
+    )
+    with pytest.raises(ToolError, match="Invalid dataset total"):
+        await connector.list_datasets_structured("key")
+
+
+async def test_list_datasets_accepts_explicit_empty_inventory() -> None:
+    connector, _ = _make_connector([FakeResponse({"code": 0, "data": [], "total_datasets": 0})])
+    assert await connector.list_datasets_structured("key") == []

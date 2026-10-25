@@ -43,3 +43,35 @@ def test_dataset_list_nonprogress_is_an_error(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(ValueError, match="stopped before"):
         cli.list_user_datasets({})
     assert printed == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "total_datasets": 0},
+        {"code": 0, "data": {}, "total_datasets": 0},
+        {"code": 0, "data": None},
+        {"code": 0, "data": [{"id": "one"}], "total_datasets": 0},
+        {"code": 0, "data": [{"id": "one"}], "total_datasets": None},
+        {"code": 0, "data": [{"id": "one"}], "total_datasets": 1, "total": 2},
+        {"code": 0, "data": [{"id": 1}], "total_datasets": 1},
+    ],
+)
+def test_dataset_list_rejects_missing_inventory_and_inconsistent_totals(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
+    cli, _, printed = client(monkeypatch, [payload])
+    with pytest.raises(ValueError):
+        cli.list_user_datasets({})
+    assert printed == []
+
+
+def test_dataset_list_rejects_accumulated_inventory_larger_than_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli, _, printed = client(monkeypatch, [{"code": 0, "data": [{"id": "one"}], "total_datasets": 2}, {"code": 0, "data": [{"id": "two"}, {"id": "three"}], "total_datasets": 2}])
+    with pytest.raises(ValueError, match="Invalid dataset total"):
+        cli.list_user_datasets({})
+    assert printed == []
+
+
+def test_dataset_list_accepts_explicit_empty_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli, _, printed = client(monkeypatch, [{"code": 0, "data": [], "total_datasets": 0}])
+    cli.list_user_datasets({})
+    assert printed == [[]]
