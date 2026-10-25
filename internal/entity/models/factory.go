@@ -51,6 +51,14 @@ func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string
 		return NewPPIOModel(baseURL, urlSuffix), nil
 	case "tokenpony":
 		return NewTokenPonyModel(baseURL, urlSuffix), nil
+	case "huaweicloud":
+		return NewHuaweiCloudModel(baseURL, urlSuffix), nil
+	case "modelscope":
+		return NewModelScopeModel(baseURL, urlSuffix), nil
+	case "orcarouter":
+		return NewOrcaRouterModel(baseURL, urlSuffix), nil
+	case "qiniu":
+		return NewQiniuModel(baseURL, urlSuffix), nil
 	case "tokenhub":
 		return NewTokenHubModel(baseURL, urlSuffix), nil
 	case "hunyuan":
