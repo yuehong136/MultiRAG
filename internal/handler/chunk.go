@@ -342,8 +342,8 @@ func (h *ChunkHandler) UpdateChunk(c *gin.Context) {
 // @Produce json
 // @Param request body service.RemoveChunksRequest true "remove chunks request"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/chunk/rm [post]
-func (h *ChunkHandler) Remove(c *gin.Context) {
+// @Router /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks [delete]
+func (h *ChunkHandler) RemoveChunks(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
@@ -359,7 +359,13 @@ func (h *ChunkHandler) Remove(c *gin.Context) {
 		return
 	}
 
-	if req.DocID == "" {
+	if req.DocID != "" && req.DocID != c.Param("document_id") {
+		jsonError(c, common.CodeDataError, "document identity mismatch")
+		return
+	}
+	req.DocID = c.Param("document_id")
+	req.DatasetID = c.Param("dataset_id")
+	if req.DocID == "" || req.DatasetID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "doc_id is required",

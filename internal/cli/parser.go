@@ -744,6 +744,10 @@ func (p *Parser) parseBenchmarkCommand() (*Command, error) {
 
 func (p *Parser) parseUserStatement() (*Command, error) {
 	switch p.curToken.Type {
+	case TokenDelete:
+		return p.parseDeleteCommand()
+	case TokenGet:
+		return p.parseGetCommand()
 	case TokenPing:
 		return p.parsePingServer()
 	case TokenShow:

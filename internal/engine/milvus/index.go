@@ -41,6 +41,9 @@ func (e *milvusEngine) UpdateMetadata(context.Context, string, string, map[strin
 func (e *milvusEngine) DeleteMetadata(context.Context, map[string]interface{}, string) (int64, error) {
 	return 0, fmt.Errorf("milvus metadata deletion is not implemented")
 }
+func (e *milvusEngine) DeleteMetadataKeys(context.Context, string, string, []string, string) error {
+	return fmt.Errorf("milvus metadata key deletion is not implemented")
+}
 func (e *milvusEngine) DropMetadataStore(context.Context, string) error {
 	return fmt.Errorf("milvus metadata store deletion is not implemented")
 }

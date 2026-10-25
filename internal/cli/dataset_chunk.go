@@ -36,24 +36,18 @@ func (p *Parser) parseGetCommand() (*Command, error) {
 	return cmd, nil
 }
 
-// parseChunkIdentity consumes CHUNK 'id' OF DATASET 'reference' DOCUMENT 'id'.
+// parseChunkIdentity consumes CHUNK 'id' OF DOCUMENT 'id' IN DATASET 'reference'.
 func (p *Parser) parseChunkIdentity(kind string) (*Command, error) {
 	p.nextToken()
 	cmd := NewCommand(kind)
-	for i, field := range []string{"chunk_id", "dataset_name", "doc_id"} {
+	for i, field := range []string{"chunk_id", "doc_id", "dataset_name"} {
 		value, err := p.parseQuotedString()
 		if err != nil || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("non-empty %s required", field)
 		}
 		cmd.Params[field] = value
 		p.nextToken()
-		var expected []int
-		switch i {
-		case 0:
-			expected = []int{TokenOf, TokenDataset}
-		case 1:
-			expected = []int{TokenDocument}
-		}
+		expected := [][]int{{TokenOf, TokenDocument}, {TokenIn, TokenDataset}, {}}[i]
 		for _, token := range expected {
 			if p.curToken.Type != token {
 				return nil, fmt.Errorf("unexpected chunk identity token: %s", p.curToken.Value)

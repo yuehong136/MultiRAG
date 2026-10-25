@@ -17,10 +17,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"multirag/internal/engine/types"
 	"regexp"
 	"sort"
+	"strings"
 
 	"multirag/internal/dao"
 	"multirag/internal/engine"
@@ -41,14 +45,22 @@ type DocumentService struct {
 }
 
 // NewDocumentService create document service
-func NewDocumentService() *DocumentService {
+func NewDocumentService(documentEngines ...engine.DocEngine) *DocumentService {
+	store := engine.Get()
+	if len(documentEngines) > 0 {
+		store = documentEngines[0]
+	}
 	cfg := server.GetConfig()
+	var engineType server.EngineType
+	if cfg != nil {
+		engineType = cfg.DocEngine.Type
+	}
 	return &DocumentService{
 		db:          dao.DB,
 		documentDAO: dao.NewDocumentDAO(),
 		kbDAO:       dao.NewKnowledgebaseDAO(),
-		docEngine:   engine.Get(),
-		engineType:  cfg.DocEngine.Type,
+		docEngine:   store,
+		engineType:  engineType,
 		metadataSvc: NewMetadataService(),
 	}
 }
@@ -270,27 +282,58 @@ func (s *DocumentService) GetMetadataSummary(kbID string, docIDs []string) (map[
 	return aggregateMetadata(searchResult.Chunks), nil
 }
 
-// SetDocumentMetadata sets (merges) metadata for a document in the document engine
-func (s *DocumentService) SetDocumentMetadata(docID string, meta map[string]interface{}) error {
-	// Get document to find kb_id
-	doc, err := s.documentDAO.GetByID(docID)
-	if err != nil {
-		return fmt.Errorf("document not found: %w", err)
+// metadataScope authorizes SQL identities before touching the document engine.
+func (s *DocumentService) metadataScope(ctx context.Context, docID, userID string) (*entity.Document, *entity.Knowledgebase, error) {
+	if strings.TrimSpace(docID) == "" {
+		return nil, nil, ErrInvalidChunkScope
 	}
-
-	// Get tenant ID
-	tenantID, err := s.metadataSvc.GetTenantIDByKBID(doc.KbID)
-	if err != nil {
-		return fmt.Errorf("failed to get tenant ID: %w", err)
+	var doc entity.Document
+	err := s.db.WithContext(ctx).Where("id = ? AND status = ?", docID, string(entity.StatusValid)).First(&doc).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, ErrChunkNotFound
 	}
-
-	// Update metadata using the document engine (merges with existing)
-	err = s.docEngine.UpdateMetadata(nil, docID, doc.KbID, meta, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to update metadata: %w", err)
+		return nil, nil, err
 	}
+	kb, err := s.kbDAO.GetReadableByID(ctx, doc.KbID, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, ErrDatasetAccessDenied
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.docEngine == nil || strings.TrimSpace(kb.TenantID) == "" {
+		return nil, nil, fmt.Errorf("document engine or tenant identity is missing")
+	}
+	return &doc, kb, nil
+}
 
-	return nil
+// SetDocumentMetadata merges keys after SQL authorization.
+func (s *DocumentService) SetDocumentMetadata(ctx context.Context, docID, userID string, meta map[string]interface{}) error {
+	doc, kb, err := s.metadataScope(ctx, docID, userID)
+	if err != nil {
+		return err
+	}
+	return s.docEngine.UpdateMetadata(ctx, doc.ID, kb.ID, meta, kb.TenantID)
+}
+
+// DeleteDocumentMetadata uses nil only for an omitted keys selection. An explicit
+// empty selection is rejected before SQL or storage and never deletes the row.
+func (s *DocumentService) DeleteDocumentMetadata(ctx context.Context, docID, userID string, keys []string) error {
+	if keys != nil {
+		if err := types.ValidateMetadataKeys(keys); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidChunkScope, err)
+		}
+	}
+	doc, kb, err := s.metadataScope(ctx, docID, userID)
+	if err != nil {
+		return err
+	}
+	if keys != nil {
+		return s.docEngine.DeleteMetadataKeys(ctx, doc.ID, kb.ID, keys, kb.TenantID)
+	}
+	_, err = s.docEngine.DeleteMetadata(ctx, map[string]interface{}{"id": doc.ID, "kb_id": kb.ID}, kb.TenantID)
+	return err
 }
 
 // GetDocumentMetadataByID get metadata for a specific document

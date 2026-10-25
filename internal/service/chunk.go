@@ -890,6 +890,7 @@ func (s *ChunkService) UpdateChunk(ctx context.Context, req *UpdateChunkRequest,
 
 // RemoveChunksRequest request for removing chunks
 type RemoveChunksRequest struct {
+	DatasetID string   `json:"-"`
 	DocID     string   `json:"doc_id"`
 	ChunkIDs  []string `json:"chunk_ids,omitempty"`
 	DeleteAll bool     `json:"delete_all,omitempty"`
@@ -899,7 +900,7 @@ type RemoveChunksRequest struct {
 // If ChunkIDs is empty and DeleteAll is true, removes all chunks for the document.
 // Otherwise removes only the specified chunks.
 func (s *ChunkService) RemoveChunks(ctx context.Context, req *RemoveChunksRequest, userID string) (int64, error) {
-	if req == nil || strings.TrimSpace(req.DocID) == "" {
+	if req == nil || strings.TrimSpace(req.DocID) == "" || strings.TrimSpace(req.DatasetID) == "" {
 		return 0, ErrInvalidChunkScope
 	}
 	if (len(req.ChunkIDs) > 0) == req.DeleteAll {
@@ -913,7 +914,7 @@ func (s *ChunkService) RemoveChunks(ctx context.Context, req *RemoveChunksReques
 		seen[id] = true
 	}
 	var doc entity.Document
-	err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", req.DocID, string(entity.StatusValid)).First(&doc).Error
+	err := dao.DB.WithContext(ctx).Where("id = ? AND kb_id = ? AND status = ?", req.DocID, req.DatasetID, string(entity.StatusValid)).First(&doc).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, ErrChunkNotFound
 	}

@@ -41,14 +41,18 @@ type TenantService struct {
 }
 
 // NewTenantService create tenant service
-func NewTenantService() *TenantService {
+func NewTenantService(documentEngines ...engine.DocEngine) *TenantService {
+	store := engine.Get()
+	if len(documentEngines) > 0 {
+		store = documentEngines[0]
+	}
 	return &TenantService{
 		tenantDAO:        dao.NewTenantDAO(),
 		userTenantDAO:    dao.NewUserTenantDAO(),
 		modelProviderDAO: dao.NewTenantModelProviderDAO(),
 		modelInstanceDAO: dao.NewTenantModelInstanceDAO(),
 		modelDAO:         dao.NewTenantModelDAO(),
-		docEngine:        engine.Get(),
+		docEngine:        store,
 	}
 }
 
@@ -234,10 +238,10 @@ func (s *TenantService) GetTenantList(userID string) ([]*TenantListItem, error) 
 	return result, nil
 }
 
-// CreateMetadataInDocEngine creates the document metadata table for a tenant
-func (s *TenantService) CreateMetadataInDocEngine(tenantID string) (common.ErrorCode, error) {
+// CreateMetadataStore creates the document metadata table for a tenant
+func (s *TenantService) CreateMetadataStore(ctx context.Context, tenantID string) (common.ErrorCode, error) {
 	// Call document engine to create doc meta table
-	err := s.docEngine.CreateMetadataStore(context.Background(), tenantID)
+	err := s.docEngine.CreateMetadataStore(ctx, tenantID)
 	if err != nil {
 		return common.CodeServerError, fmt.Errorf("failed to create metadata table: %w", err)
 	}
@@ -245,10 +249,10 @@ func (s *TenantService) CreateMetadataInDocEngine(tenantID string) (common.Error
 	return common.CodeSuccess, nil
 }
 
-// DeleteMetadataInDocEngine deletes the document metadata table for a tenant
-func (s *TenantService) DeleteMetadataInDocEngine(tenantID string) (common.ErrorCode, error) {
+// DeleteMetadataStore deletes the document metadata table for a tenant
+func (s *TenantService) DeleteMetadataStore(ctx context.Context, tenantID string) (common.ErrorCode, error) {
 	// Call document engine to delete doc meta table
-	err := s.docEngine.DropMetadataStore(context.Background(), tenantID)
+	err := s.docEngine.DropMetadataStore(ctx, tenantID)
 	if err != nil {
 		return common.CodeServerError, fmt.Errorf("failed to delete doc meta table: %w", err)
 	}
@@ -258,7 +262,7 @@ func (s *TenantService) DeleteMetadataInDocEngine(tenantID string) (common.Error
 
 // InsertMetadataFromFile reads a JSON file and inserts the metadata into the tenant's metadata table.
 // The file format is: {"chunks": [...]}
-func (s *TenantService) InsertMetadataFromFile(tenantID, filePath string) (interface{}, common.ErrorCode, error) {
+func (s *TenantService) InsertMetadataFromFile(ctx context.Context, tenantID, filePath string) (interface{}, common.ErrorCode, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, common.CodeDataError, fmt.Errorf("failed to read file: %w", err)
@@ -274,7 +278,25 @@ func (s *TenantService) InsertMetadataFromFile(tenantID, filePath string) (inter
 		return nil, common.CodeDataError, fmt.Errorf("no chunks found in file")
 	}
 
-	result, err := s.docEngine.InsertMetadata(context.Background(), input.Chunks, tenantID)
+	for _, row := range input.Chunks {
+		kbID, _ := row["kb_id"].(string)
+		docID, _ := row["id"].(string)
+		if strings.TrimSpace(kbID) == "" || strings.TrimSpace(docID) == "" {
+			return nil, common.CodeDataError, fmt.Errorf("metadata identities are required")
+		}
+		kb, err := dao.NewKnowledgebaseDAO().GetByIDContext(ctx, kbID)
+		if err != nil || kb.TenantID != tenantID {
+			return nil, common.CodeForbidden, fmt.Errorf("metadata dataset must belong to tenant")
+		}
+		var count int64
+		if err := dao.DB.WithContext(ctx).Model(&entity.Document{}).Where("id = ? AND kb_id = ? AND status = ?", docID, kbID, string(entity.StatusValid)).Count(&count).Error; err != nil {
+			return nil, common.CodeServerError, err
+		}
+		if count != 1 {
+			return nil, common.CodeDataError, fmt.Errorf("metadata document does not belong to dataset")
+		}
+	}
+	result, err := s.docEngine.InsertMetadata(ctx, input.Chunks, tenantID)
 	if err != nil {
 		return nil, common.CodeServerError, fmt.Errorf("failed to insert metadata: %w", err)
 	}

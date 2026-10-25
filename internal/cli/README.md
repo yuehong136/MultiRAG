@@ -44,18 +44,38 @@ Dataset references may be UUID1 IDs or exact, unambiguous names. Statements use
 a terminating semicolon; single-command mode adds one when omitted.
 
 ```sql
-GET CHUNK 'chunk-id' OF DATASET 'knowledge' DOCUMENT 'document-id';
+GET CHUNK 'chunk-id' OF DOCUMENT 'document-id' IN DATASET 'knowledge';
 LIST METADATA OF DATASET 'knowledge' 'another dataset';
-UPDATE CHUNK 'chunk-id' OF DATASET 'knowledge' DOCUMENT 'document-id' SET '{"content":"updated","available":false}';
+UPDATE CHUNK 'chunk-id' OF DOCUMENT 'document-id' IN DATASET 'knowledge' SET '{"content":"updated","available":false}';
 REMOVE TAGS 'obsolete', 'old' FROM DATASET 'knowledge';
-REMOVE CHUNKS 'chunk-one' 'chunk-two' FROM DOCUMENT 'document-id';
+REMOVE CHUNKS 'chunk-one' 'chunk-two' FROM DOCUMENT 'document-id' IN DATASET 'knowledge';
+DELETE METADATA OF DOCUMENT 'document-id' KEYS '["obsolete"]';
+CREATE CHUNK STORE FOR DATASET 'knowledge' VECTOR SIZE 384;
+DROP CHUNK STORE FOR DATASET 'knowledge';
+CREATE METADATA STORE;
+DROP METADATA STORE;
+INSERT CHUNKS FROM FILE 'chunks.json';
 ```
 
 `GET CHUNK` uses the dataset/document path and includes disabled chunks while
 retrieval retains its availability filter. Metadata requires authorization for
 every requested dataset and returns field/value/document mappings; `-o json`
 preserves this object, while table/plain output lists its values deterministically.
-Chunk IDs in `REMOVE CHUNKS` are space separated. Tag removal uses the dataset
+Chunk IDs in `REMOVE CHUNKS` are space separated. The dataset/document URL scope
+is authoritative. `DELETE METADATA` accepts distinct non-empty literal keys;
+`KEYS '[]'`, null, empty strings and duplicates are rejected. Omit `KEYS` to delete
+that document's entire metadata row. Removing its last key also removes the row;
+removing absent keys leaves it unchanged. SQL dataset access is required before
+reading or writing the document store.
+
+Store commands use `/api/v1/tenant/chunk_store` and `metadata_store`. ES chunk
+stores share a tenant index, so dropping one removes only that dataset's chunks.
+Metadata store commands address the authenticated user's own tenant. File imports
+remain local Go management operations: paths are on the server, and every imported
+dataset/document must belong to the authorized namespace. Both `index_name` and
+`table_name` identify the same server-derived base name; neither may override it.
+The old `DATASET TABLE` / `METADATA TABLE` grammar and Go management route names
+have been retired with their CLI consumers. Tag removal uses the dataset
 REST endpoint and validates the full tag list before writing. Store errors are
 returned to the caller; multiple tag removals may partly complete on a later
 storage failure, so retrying the same tags is supported.

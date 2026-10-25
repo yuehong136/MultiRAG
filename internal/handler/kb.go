@@ -389,24 +389,24 @@ func (h *KnowledgebaseHandler) GetBasicInfo(c *gin.Context) {
 	jsonResponse(c, common.CodeSuccess, map[string]interface{}{}, "success")
 }
 
-// CreateDatasetInDocEngine handles the create dataset request for a knowledge base
+// CreateChunkStore handles the create dataset request for a knowledge base
 // @Summary Create Dataset in Doc Engine
 // @Description Create the document engine table for a knowledge base
 // @Tags knowledgebase
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param request body service.CreateDatasetTableRequest true "create dataset request"
+// @Param request body service.CreateChunkStoreRequest true "create dataset request"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/kb/doc_engine_table [post]
-func (h *KnowledgebaseHandler) CreateDatasetInDocEngine(c *gin.Context) {
+// @Router /v1/tenant/chunk_store [post]
+func (h *KnowledgebaseHandler) CreateChunkStore(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
 		return
 	}
 
-	var req service.CreateDatasetTableRequest
+	var req service.CreateChunkStoreRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonError(c, common.CodeDataError, err.Error())
 		return
@@ -418,7 +418,7 @@ func (h *KnowledgebaseHandler) CreateDatasetInDocEngine(c *gin.Context) {
 		return
 	}
 
-	result, code, err := h.kbService.CreateDatasetInDocEngine(&req)
+	result, code, err := h.kbService.CreateChunkStore(c.Request.Context(), &req)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -427,29 +427,29 @@ func (h *KnowledgebaseHandler) CreateDatasetInDocEngine(c *gin.Context) {
 	jsonResponse(c, common.CodeSuccess, result, "success")
 }
 
-// DeleteDatasetInDocEngineRequest represents the request for deleting a dataset table
-type DeleteDatasetInDocEngineRequest struct {
+// DeleteChunkStoreRequest represents the request for deleting a dataset table
+type DeleteChunkStoreRequest struct {
 	KBID string `json:"kb_id" binding:"required"`
 }
 
-// DeleteDatasetInDocEngine handles the delete dataset request for a knowledge base
+// DeleteChunkStore handles the delete dataset request for a knowledge base
 // @Summary Delete Dataset in Doc Engine
 // @Description Delete the document engine table for a knowledge base
 // @Tags knowledgebase
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param request body DeleteDatasetInDocEngineRequest true "delete dataset request"
+// @Param request body DeleteChunkStoreRequest true "delete dataset request"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/kb/doc_engine_table [delete]
-func (h *KnowledgebaseHandler) DeleteDatasetInDocEngine(c *gin.Context) {
+// @Router /v1/tenant/chunk_store [delete]
+func (h *KnowledgebaseHandler) DeleteChunkStore(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
 		return
 	}
 
-	var req DeleteDatasetInDocEngineRequest
+	var req DeleteChunkStoreRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonError(c, common.CodeDataError, err.Error())
 		return
@@ -461,7 +461,7 @@ func (h *KnowledgebaseHandler) DeleteDatasetInDocEngine(c *gin.Context) {
 		return
 	}
 
-	code, err := h.kbService.DeleteDatasetInDocEngine(req.KBID)
+	code, err := h.kbService.DeleteChunkStore(c.Request.Context(), req.KBID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -470,35 +470,35 @@ func (h *KnowledgebaseHandler) DeleteDatasetInDocEngine(c *gin.Context) {
 	jsonResponse(c, common.CodeSuccess, nil, "success")
 }
 
-// InsertDatasetFromFileRequest represents the request for inserting chunks into a dataset from a file
-type InsertDatasetFromFileRequest struct {
+// InsertChunksFromFileRequest represents the request for inserting chunks into a dataset from a file
+type InsertChunksFromFileRequest struct {
 	FilePath string `json:"file_path" binding:"required"`
 }
 
-// InsertDatasetFromFile handles inserting chunks into a dataset from a JSON file
+// InsertChunksFromFile handles inserting chunks into a dataset from a JSON file
 // @Summary Insert chunks into dataset from file
 // @Description Internal: Insert into dataset table from a JSON file (table name extracted from file)
 // @Tags knowledgebase
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param request body InsertDatasetFromFileRequest true "insert dataset request"
+// @Param request body InsertChunksFromFileRequest true "insert dataset request"
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/kb/insert_from_file [post]
-func (h *KnowledgebaseHandler) InsertDatasetFromFile(c *gin.Context) {
-	_, errorCode, errorMessage := GetUser(c)
+// @Router /v1/tenant/insert_chunks_from_file [post]
+func (h *KnowledgebaseHandler) InsertChunksFromFile(c *gin.Context) {
+	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
 		return
 	}
 
-	var req InsertDatasetFromFileRequest
+	var req InsertChunksFromFileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
 
-	result, code, err := h.kbService.InsertDatasetFromFile(req.FilePath)
+	result, code, err := h.kbService.InsertChunksFromFile(c.Request.Context(), user.ID, req.FilePath)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return

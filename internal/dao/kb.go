@@ -62,6 +62,13 @@ func (dao *KnowledgebaseDAO) GetByID(id string) (*entity.Knowledgebase, error) {
 	return &kb, nil
 }
 
+// GetByIDContext preserves request cancellation for store management.
+func (dao *KnowledgebaseDAO) GetByIDContext(ctx context.Context, id string) (*entity.Knowledgebase, error) {
+	var kb entity.Knowledgebase
+	err := DB.WithContext(ctx).Where("id = ? AND status = ?", id, string(entity.StatusValid)).First(&kb).Error
+	return &kb, err
+}
+
 // GetByIDAndTenantID retrieves a knowledge base by ID and tenant ID
 func (dao *KnowledgebaseDAO) GetByIDAndTenantID(id, tenantID string) (*entity.Knowledgebase, error) {
 	var kb entity.Knowledgebase

@@ -47,7 +47,9 @@ const (
 	TokenPassword
 	TokenDataset
 	TokenDatasets
-	TokenDatasetTable
+	TokenChunkStore
+	TokenStore
+	TokenIn
 	TokenOf
 	TokenAgents
 	TokenRole

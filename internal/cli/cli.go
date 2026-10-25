@@ -1190,14 +1190,15 @@ SQL Commands (User Mode):
   USE MODEL 'provider/instance/model';                   - Set current model for chat
   CHAT 'message';                                        - Chat using current model
   CHAT 'provider/instance/model' 'message';              - Chat with specified model
-  CREATE DATASET TABLE 'name' VECTOR SIZE N;             - Create dataset table in doc engine
-  DROP DATASET TABLE 'name';                             - Drop dataset table in doc engine
-  CREATE METADATA TABLE;                                 - Create doc metadata table
-  DROP METADATA TABLE;                                   - Drop doc metadata table
-  UPDATE CHUNK 'id' OF DATASET 'name' SET '{...}';       - Update chunk fields (JSON)
+  CREATE CHUNK STORE FOR DATASET 'name' VECTOR SIZE N;             - Create dataset table in doc engine
+  DROP CHUNK STORE FOR DATASET 'name';                             - Drop dataset table in doc engine
+  CREATE METADATA STORE;                                 - Create doc metadata table
+  DROP METADATA STORE;                                   - Drop doc metadata table
+  UPDATE CHUNK 'id' OF DOCUMENT 'doc_id' IN DATASET 'name' SET '{...}';       - Update chunk fields (JSON)
   REMOVE TAGS 'tag1','tag2' FROM DATASET 'name';         - Remove tags from a dataset
-  REMOVE CHUNKS 'id1','id2' FROM DOCUMENT 'doc_id';      - Remove chunks from a document
-  REMOVE ALL CHUNKS FROM DOCUMENT 'doc_id';              - Remove all chunks of a document
+  REMOVE CHUNKS 'id1' 'id2' FROM DOCUMENT 'doc_id' IN DATASET 'name';      - Remove chunks from a document
+  REMOVE ALL CHUNKS FROM DOCUMENT 'doc_id' IN DATASET 'name';              - Remove all chunks of a document
+  DELETE METADATA OF DOCUMENT 'doc_id' KEYS '["key"]'; - Delete literal metadata keys; omit KEYS for all
   SET METADATA OF DOCUMENT 'doc_id' TO '{...}';          - Set/merge document metadata (JSON)
 
 Media Commands (User Mode):

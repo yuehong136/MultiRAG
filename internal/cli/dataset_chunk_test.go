@@ -14,12 +14,12 @@ import (
 
 func TestDatasetChunkAndMetadataSyntax(t *testing.T) {
 	for input, kind := range map[string]string{
-		"GET CHUNK 'c' OF DATASET 'a name' DOCUMENT 'd';":                     "get_chunk",
-		"LIST METADATA OF DATASET 'a name' 'b';":                              "list_metadata",
-		"REMOVE CHUNKS 'c1' 'c2' FROM DOCUMENT 'd';":                          "remove_chunks",
-		"REMOVE ALL CHUNKS FROM DOCUMENT 'd';":                                "remove_chunks",
-		"REMOVE TAGS 'one', 'two' FROM DATASET 'a';":                          "rm_tags",
-		`UPDATE CHUNK 'c' OF DATASET 'a' DOCUMENT 'd' SET '{"content":"x"}';`: "update_chunk",
+		"GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a name';":                     "get_chunk",
+		"LIST METADATA OF DATASET 'a name' 'b';":                                 "list_metadata",
+		"REMOVE CHUNKS 'c1' 'c2' FROM DOCUMENT 'd' IN DATASET 'a';":              "remove_chunks",
+		"REMOVE ALL CHUNKS FROM DOCUMENT 'd' IN DATASET 'a';":                    "remove_chunks",
+		"REMOVE TAGS 'one', 'two' FROM DATASET 'a';":                             "rm_tags",
+		`UPDATE CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a' SET '{"content":"x"}';`: "update_chunk",
 	} {
 		cmd, err := NewParser(input).Parse(false)
 		if err != nil || cmd.Type != kind {
@@ -27,21 +27,21 @@ func TestDatasetChunkAndMetadataSyntax(t *testing.T) {
 		}
 	}
 	for _, input := range []string{
-		"GET CHUNK 'c' OF DATASET 'a';", "GET CHUNK '' OF DATASET 'a' DOCUMENT 'd';",
-		"GET CHUNK 'c' OF DATASET 'a' DOCUMENT '';", "GET CHUNK 'c' OF DATASET 'a' DOCUMENT 'd'",
-		"GET CHUNK 'c' OF DATASET 'a' DOCUMENT 'd'; ignored", "LIST METADATA OF DATASET '';",
+		"GET CHUNK 'c' OF DATASET 'a';", "GET CHUNK '' OF DOCUMENT 'd' IN DATASET 'a';",
+		"GET CHUNK 'c' OF DOCUMENT '' IN DATASET 'a';", "GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a'",
+		"GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a'; ignored", "LIST METADATA OF DATASET '';",
 		"LIST METADATA OF DATASET 'a' 'a';", "LIST METADATA OF DATASET 'a', 'b';",
 		"LIST METADATA OF DATASET 'a'; ignored", "LIST METADATA OF DATASET 'a'",
-		"REMOVE CHUNKS 'c1', 'c2' FROM DOCUMENT 'd';", "REMOVE CHUNKS 'c1' 'c1' FROM DOCUMENT 'd';",
-		"REMOVE CHUNKS '' FROM DOCUMENT 'd';", "REMOVE CHUNKS 'c' FROM DOCUMENT '';",
-		"REMOVE CHUNKS 'c' FROM DOCUMENT 'd'; ignored", "REMOVE ALL CHUNKS FROM DOCUMENT 'd'; ignored",
+		"REMOVE CHUNKS 'c1', 'c2' FROM DOCUMENT 'd' IN DATASET 'a';", "REMOVE CHUNKS 'c1' 'c1' FROM DOCUMENT 'd' IN DATASET 'a';",
+		"REMOVE CHUNKS '' FROM DOCUMENT 'd' IN DATASET 'a';", "REMOVE CHUNKS 'c' FROM DOCUMENT '';",
+		"REMOVE CHUNKS 'c' FROM DOCUMENT 'd' IN DATASET 'a'; ignored", "REMOVE ALL CHUNKS FROM DOCUMENT 'd' IN DATASET 'a'; ignored",
 		`UPDATE CHUNK 'c' OF DATASET 'a' SET '{}';`, "REMOVE TAGS 't' FROM DATASET 'a'; ignored",
 	} {
 		if _, err := NewParser(input).Parse(false); err == nil {
 			t.Fatal("invalid syntax accepted", input)
 		}
 	}
-	cmd, _ := NewParser("REMOVE CHUNKS 'c1' 'c2' FROM DOCUMENT 'd';").Parse(false)
+	cmd, _ := NewParser("REMOVE CHUNKS 'c1' 'c2' FROM DOCUMENT 'd' IN DATASET 'a';").Parse(false)
 	if !reflect.DeepEqual(cmd.Params["chunk_ids"], []string{"c1", "c2"}) {
 		t.Fatal(cmd.Params)
 	}
@@ -77,7 +77,7 @@ func TestDatasetChunkAndMetadataClient(t *testing.T) {
 	port, _ := strconv.Atoi(address.Port())
 	client := NewMultiRAGClient("user")
 	client.HTTPClient.Host, client.HTTPClient.Port, client.HTTPClient.LoginToken = address.Hostname(), port, "owned"
-	for _, input := range []string{"GET CHUNK 'c?&' OF DATASET '" + a + "' DOCUMENT 'doc';", "LIST METADATA OF DATASET '" + a + "' '" + b + "';"} {
+	for _, input := range []string{"GET CHUNK 'c?&' OF DOCUMENT 'doc' IN DATASET '" + a + "';", "LIST METADATA OF DATASET '" + a + "' '" + b + "';"} {
 		cmd, err := NewParser(input).Parse(false)
 		if err != nil {
 			t.Fatal(err)
@@ -121,7 +121,7 @@ func TestDatasetMutationUsesAPITokenAndRejectsFalseSuccess(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer owned-api" {
 			t.Error("mutation lost API token")
 		}
-		if request.URL.Path != "/api/v1/chunk/rm" {
+		if request.URL.Path != "/api/v1/datasets/9e235004bd8911f19fcaacde48001122/documents/doc/chunks" {
 			t.Error("unexpected mutation route", request.URL.Path)
 		}
 		fmt.Fprint(w, response)
@@ -131,7 +131,7 @@ func TestDatasetMutationUsesAPITokenAndRejectsFalseSuccess(t *testing.T) {
 	port, _ := strconv.Atoi(address.Port())
 	client := NewMultiRAGClient("user")
 	client.HTTPClient.Host, client.HTTPClient.Port, client.HTTPClient.APIKey = address.Hostname(), port, "owned-api"
-	command, err := NewParser("REMOVE CHUNKS 'one' 'two' FROM DOCUMENT 'doc';").Parse(false)
+	command, err := NewParser("REMOVE CHUNKS 'one' 'two' FROM DOCUMENT 'doc' IN DATASET '9e235004bd8911f19fcaacde48001122';").Parse(false)
 	if err != nil {
 		t.Fatal(err)
 	}

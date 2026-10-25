@@ -189,7 +189,7 @@ func (h *TenantHandler) TenantList(c *gin.Context) {
 	})
 }
 
-// CreateMetadataInDocEngine handles the create doc meta table request
+// CreateMetadataStore handles the create doc meta table request
 // @Summary Create Doc Meta Table
 // @Description Create the document metadata table for a tenant
 // @Tags tenants
@@ -197,8 +197,8 @@ func (h *TenantHandler) TenantList(c *gin.Context) {
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/tenant/doc_engine_metadata_table [post]
-func (h *TenantHandler) CreateMetadataInDocEngine(c *gin.Context) {
+// @Router /v1/tenant/metadata_store [post]
+func (h *TenantHandler) CreateMetadataStore(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
@@ -208,7 +208,7 @@ func (h *TenantHandler) CreateMetadataInDocEngine(c *gin.Context) {
 	// Use user.ID as tenant ID (user IS the tenant in user mode)
 	tenantID := user.ID
 
-	code, err := h.tenantService.CreateMetadataInDocEngine(tenantID)
+	code, err := h.tenantService.CreateMetadataStore(c.Request.Context(), tenantID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -221,7 +221,7 @@ func (h *TenantHandler) CreateMetadataInDocEngine(c *gin.Context) {
 	})
 }
 
-// DeleteMetadataInDocEngine handles the delete doc meta table request
+// DeleteMetadataStore handles the delete doc meta table request
 // @Summary Delete Metadata In Doc Engine
 // @Description Delete the document metadata table for a tenant
 // @Tags tenants
@@ -229,8 +229,8 @@ func (h *TenantHandler) CreateMetadataInDocEngine(c *gin.Context) {
 // @Produce json
 // @Security ApiKeyAuth
 // @Success 200 {object} map[string]interface{}
-// @Router /v1/tenant/doc_engine_metadata_table [delete]
-func (h *TenantHandler) DeleteMetadataInDocEngine(c *gin.Context) {
+// @Router /v1/tenant/metadata_store [delete]
+func (h *TenantHandler) DeleteMetadataStore(c *gin.Context) {
 	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
@@ -240,7 +240,7 @@ func (h *TenantHandler) DeleteMetadataInDocEngine(c *gin.Context) {
 	// Use user.ID as tenant ID (user IS the tenant in user mode)
 	tenantID := user.ID
 
-	code, err := h.tenantService.DeleteMetadataInDocEngine(tenantID)
+	code, err := h.tenantService.DeleteMetadataStore(c.Request.Context(), tenantID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return
@@ -284,7 +284,7 @@ func (h *TenantHandler) InsertMetadataFromFile(c *gin.Context) {
 	// Use user.ID as tenant ID (user IS the tenant in user mode)
 	tenantID := user.ID
 
-	result, code, err := h.tenantService.InsertMetadataFromFile(tenantID, req.FilePath)
+	result, code, err := h.tenantService.InsertMetadataFromFile(c.Request.Context(), tenantID, req.FilePath)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return

@@ -85,6 +85,28 @@ func (e *datasetChunkEngine) DeleteChunks(ctx context.Context, condition map[str
 	return e.DocEngine.DeleteChunks(ctx, condition, base, dataset)
 }
 
+func (e *datasetChunkEngine) DeleteMetadataKeys(ctx context.Context, id, kb string, keys []string, tenant string) error {
+	e.writes.Add(1)
+	if e.fail.Load() {
+		return errors.New("controlled storage failure")
+	}
+	return e.DocEngine.DeleteMetadataKeys(ctx, id, kb, keys, tenant)
+}
+func (e *datasetChunkEngine) DeleteMetadata(ctx context.Context, condition map[string]any, tenant string) (int64, error) {
+	e.writes.Add(1)
+	if e.fail.Load() {
+		return 0, errors.New("controlled storage failure")
+	}
+	return e.DocEngine.DeleteMetadata(ctx, condition, tenant)
+}
+func (e *datasetChunkEngine) UpdateMetadata(ctx context.Context, id, kb string, fields map[string]any, tenant string) error {
+	e.writes.Add(1)
+	if e.fail.Load() {
+		return errors.New("controlled storage failure")
+	}
+	return e.DocEngine.UpdateMetadata(ctx, id, kb, fields, tenant)
+}
+
 // This opt-in binds registered routes, SQL authorization, both stores and a freshly built CLI.
 func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 	path := os.Getenv("MULTIRAG_GO_DATASET_CHUNK_CONFIG")
@@ -105,7 +127,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(cfg.Tenant, "multirag_after2836_e_") || cfg.Database.Database != cfg.Tenant || cfg.Infinity.DBName != cfg.Tenant {
+	if (!strings.HasPrefix(cfg.Tenant, "multirag_after2836_e_") && !strings.HasPrefix(cfg.Tenant, "multirag_after4776_g_")) || cfg.Database.Database != cfg.Tenant || cfg.Infinity.DBName != cfg.Tenant {
 		t.Fatal("explicit owned SQL/Infinity namespace required")
 	}
 	if cfg.HTTPPort < 1024 || cfg.HTTPPort > 65535 {
@@ -240,7 +262,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 	app := gin.New()
 	app.Use(gin.Recovery())
-	router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, datasets, nil, handler.NewKnowledgebaseHandler(service.NewKnowledgebaseService(), service.NewUserService(), nil), chunks, nil, nil, nil, nil, nil, nil, nil, nil, nil).Setup(app)
+	router.NewRouter(handler.NewAuthHandler(), nil, handler.NewTenantHandler(service.NewTenantService(counter), service.NewUserService()), handler.NewDocumentHandler(service.NewDocumentService(counter)), datasets, nil, handler.NewKnowledgebaseHandler(service.NewKnowledgebaseService(counter), service.NewUserService(), nil), chunks, nil, nil, nil, nil, nil, nil, nil, nil, nil).Setup(app)
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.HTTPPort))
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +432,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 		if binary == "" {
 			t.Fatal("freshly linked CLI binary required")
 		}
-		for _, input := range []string{"GET CHUNK 'chunk-a' OF DATASET '" + a + "' DOCUMENT 'doc-a';", "LIST METADATA OF DATASET '" + a + "' '" + cfg.DatasetIDs["b"] + "';", "REMOVE TAGS 'remove', 'remove2' FROM DATASET '" + a + "';"} {
+		for _, input := range []string{"GET CHUNK 'chunk-a' OF DOCUMENT 'doc-a' IN DATASET '" + a + "';", "LIST METADATA OF DATASET '" + a + "' '" + cfg.DatasetIDs["b"] + "';", "REMOVE TAGS 'remove', 'remove2' FROM DATASET '" + a + "';"} {
 			command := exec.CommandContext(ctx, binary, "--host", strings.TrimPrefix(httpServer.URL, "http://"), "--token", tokens["owner"], "-o", "json", input)
 			output, err := command.CombinedOutput()
 			if err != nil {
@@ -461,12 +483,12 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 		}
 		before := counter.writes.Load()
 		request(t, "POST", "/api/v1/chunk/update", "owner", fmt.Sprintf(`{"dataset_id":%q,"document_id":"doc-a","chunk_id":"chunk-other","content":"forbidden"}`, a), 404)
-		request(t, "POST", "/api/v1/chunk/rm", "member", `{"doc_id":"doc-private","delete_all":true}`, 403)
+		request(t, "DELETE", "/api/v1/datasets/"+cfg.DatasetIDs["private"]+"/documents/doc-private/chunks", "member", `{"delete_all":true}`, 403)
 		if before != counter.writes.Load() {
 			t.Fatal("invalid mutation reached store")
 		}
 		binary := os.Getenv("MULTIRAG_GO_DATASET_CHUNK_CLI")
-		for _, input := range []string{fmt.Sprintf(`UPDATE CHUNK 'chunk-a' OF DATASET '%s' DOCUMENT 'doc-a' SET '{"content":"updated a","available":false}';`, a), `REMOVE CHUNKS 'delete-one' 'delete-two' FROM DOCUMENT 'doc-a';`} {
+		for _, input := range []string{fmt.Sprintf(`UPDATE CHUNK 'chunk-a' OF DOCUMENT 'doc-a' IN DATASET '%s' SET '{"content":"updated a","available":false}';`, a), fmt.Sprintf(`REMOVE CHUNKS 'delete-one' 'delete-two' FROM DOCUMENT 'doc-a' IN DATASET '%s';`, a)} {
 			output, err := exec.CommandContext(ctx, binary, "--host", strings.TrimPrefix(httpServer.URL, "http://"), "--token", tokens["owner"], input).CombinedOutput()
 			if err != nil || strings.Contains(string(output), "ERROR") {
 				t.Fatalf("native mutation failed: %s %v %s", input, err, output)
@@ -503,4 +525,186 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 			}
 		}
 	})
+	t.Run("canonical_file_import_keeps_sql_namespace", func(t *testing.T) {
+		directory := filepath.Join(filepath.Dir(path), "imports")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		input := map[string]any{"index_name": "multirag_" + cfg.Tenant, "knowledgebase_id": a, "chunks": []map[string]any{{"id": "import-one", "doc_id": "doc-a", "kb_id": a, "content_with_weight": "import marker", "docnm_kwd": "import document", "available_int": 1, "q_2_vec": []float64{0, 1}}}}
+		target := filepath.Join(directory, "chunks-"+kind+".json")
+		write := func() {
+			t.Helper()
+			raw, _ := json.Marshal(input)
+			if err := os.WriteFile(target, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write()
+		binary := os.Getenv("MULTIRAG_GO_DATASET_CHUNK_CLI")
+		out, err := exec.CommandContext(ctx, binary, "--host", strings.TrimPrefix(httpServer.URL, "http://"), "--token", tokens["owner"], fmt.Sprintf("INSERT CHUNKS FROM FILE '%s';", target)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("file import CLI: %v %s", err, out)
+		}
+		row, err := store.GetChunk(ctx, "multirag_"+cfg.Tenant, "import-one", []string{a})
+		if err != nil || row == nil {
+			t.Fatal("file import not committed", row, err)
+		}
+		result, err := nlp.NewRetrievalService(store).Search(ctx, &nlp.RetrievalSearchRequest{TenantIDs: []string{cfg.Tenant}, KbIDs: []string{a}, Question: "", Page: 1, PageSize: 10, Filter: map[string]any{"available_int": 1}})
+		if err != nil || !reflect.DeepEqual(result.IDs, []string{"import-one"}) || result.Field["import-one"]["content_with_weight"] != "import marker" || len(result.Aggregation) != 1 || result.Aggregation[0]["key"] != "import document" {
+			t.Fatal("retrieval result helpers lost logical identity/fields/count", result, err)
+		}
+		highlighted := store.GetHighlight(result.Chunks, []string{"import"}, "content_with_weight")
+		if !strings.Contains(highlighted["import-one"], "<em>import</em>") {
+			t.Fatal("retrieval highlight missing", highlighted)
+		}
+
+		request(t, "POST", "/api/v1/tenant/insert_chunks_from_file", "outsider", fmt.Sprintf(`{"file_path":%q}`, target), 403)
+		input["index_name"] = "unowned_index_should_never_be_written"
+		write()
+		request(t, "POST", "/api/v1/tenant/insert_chunks_from_file", "owner", fmt.Sprintf(`{"file_path":%q}`, target), 102)
+		input["index_name"] = "multirag_" + cfg.Tenant
+		input["chunks"].([]map[string]any)[0]["doc_id"] = "doc-b"
+		write()
+		request(t, "POST", "/api/v1/tenant/insert_chunks_from_file", "owner", fmt.Sprintf(`{"file_path":%q}`, target), 102)
+		row, err = store.GetChunk(ctx, "multirag_"+cfg.Tenant, "import-one", []string{a})
+		if err != nil || row.(map[string]any)["doc_id"] != "doc-a" {
+			t.Fatal("invalid imports changed original row", row, err)
+		}
+		if count, err := store.DeleteChunks(ctx, map[string]any{"id": "import-one"}, "multirag_"+cfg.Tenant, a); err != nil || count != 1 {
+			t.Fatal(count, err)
+		}
+	})
+
+	t.Run("metadata_deletion_http_cli_and_independent_readback", func(t *testing.T) {
+		docsBefore := []entity.Document{}
+		if err := db.Order("id").Find(&docsBefore).Error; err != nil {
+			t.Fatal(err)
+		}
+		readMeta := func(tenant, dataset, doc string) []map[string]any {
+			t.Helper()
+			result, err := store.Search(ctx, &types.SearchRequest{IndexNames: []string{service.BuildMetadataIndexName(tenant)}, KbIDs: []string{dataset}, Filter: map[string]any{"id": doc}, Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return result.Chunks
+		}
+		rowsBefore := readMeta(cfg.Tenant, a, "doc-a")
+		for _, user := range []string{"", "outsider", "inactive"} {
+			code := 403
+			if user == "" {
+				code = 401
+			}
+			before := counter.writes.Load()
+			request(t, "POST", "/api/v1/document/delete_meta", user, `{"doc_id":"doc-a"}`, code)
+			if before != counter.writes.Load() {
+				t.Fatal("denied metadata deletion reached store")
+			}
+		}
+		before := counter.writes.Load()
+		request(t, "POST", "/api/v1/document/delete_meta", "member", `{"doc_id":"doc-private"}`, 403)
+		request(t, "POST", "/api/v1/document/delete_meta", "owner", `{"doc_id":"doc-foreign"}`, 403)
+		request(t, "POST", "/api/v1/document/set_meta", "member", `{"doc_id":"doc-private","meta":"{\"bad\":1}"}`, 403)
+		for _, body := range []string{`{"doc_id":"doc-a","keys":"[]"}`, `{"doc_id":"doc-a","keys":null}`, `{"doc_id":"doc-a","keys":""}`, `{"doc_id":"doc-a","keys":"[\"\"]"}`, `{"doc_id":"doc-a","keys":"[\"rank\",\"rank\"]"}`, `{"doc_id":"doc-a","doc_id":"doc-b"}`} {
+			request(t, "POST", "/api/v1/document/delete_meta", "owner", body, 102)
+		}
+		request(t, "DELETE", "/api/v1/datasets/"+a+"/documents/doc-b/chunks", "owner", `{"delete_all":true}`, 404)
+		if before != counter.writes.Load() || !reflect.DeepEqual(readMeta(cfg.Tenant, a, "doc-a"), rowsBefore) {
+			t.Fatal("invalid or denied request wrote metadata")
+		}
+		request(t, "POST", "/api/v1/document/set_meta", "owner", `{"doc_id":"doc-a","meta":"{\"a.b'[]\":\"literal\",\"rank\":0}"}`, 0)
+		counter.fail.Store(true)
+		request(t, "POST", "/api/v1/document/delete_meta", "owner", `{"doc_id":"doc-a","keys":"[\"rank\"]"}`, 500)
+		counter.fail.Store(false)
+		if fields, err := serviceMetadataFields(readMeta(cfg.Tenant, a, "doc-a")[0]["meta_fields"]); err != nil || fields["rank"] != float64(0) {
+			t.Fatal("failure changed metadata", fields, err)
+		}
+		binary := os.Getenv("MULTIRAG_GO_DATASET_CHUNK_CLI")
+		run := func(input string) {
+			t.Helper()
+			out, err := exec.CommandContext(ctx, binary, "--host", strings.TrimPrefix(httpServer.URL, "http://"), "--token", tokens["owner"], input).CombinedOutput()
+			if err != nil {
+				t.Fatalf("CLI %s: %v %s", input, err, out)
+			}
+			t.Logf("CLI %s: %s", strings.Fields(input)[0], out)
+		}
+		run(`DELETE METADATA OF DOCUMENT 'doc-a' KEYS '["rank"]';`)
+		request(t, "POST", "/api/v1/document/delete_meta", "owner", `{"doc_id":"doc-a","keys":"[\"a.b'[]\"]"}`, 0)
+		fields, err := serviceMetadataFields(readMeta(cfg.Tenant, a, "doc-a")[0]["meta_fields"])
+		if err != nil || fields["rank"] != nil || fields["a.b'[]"] != nil || fields["enabled"] != false || fields["kind"] != "a" {
+			t.Fatal("partial key deletion wrong", fields, err)
+		}
+		request(t, "POST", "/api/v1/document/delete_meta", "owner", `{"doc_id":"doc-a","keys":"[\"absent\"]"}`, 0)
+		request(t, "POST", "/api/v1/document/delete_meta", "owner", `{"doc_id":"doc-a","keys":"[\"enabled\",\"kind\"]"}`, 0)
+		if len(readMeta(cfg.Tenant, a, "doc-a")) != 0 {
+			t.Fatal("last-key deletion left row")
+		}
+		run(`DELETE METADATA OF DOCUMENT 'doc-b';`)
+		if len(readMeta(cfg.Tenant, cfg.DatasetIDs["b"], "doc-b")) != 0 || len(readMeta(cfg.Tenant, cfg.DatasetIDs["private"], "doc-private")) != 1 || len(readMeta(cfg.Tenant+"_f", cfg.DatasetIDs["foreign"], "doc-foreign")) != 1 {
+			t.Fatal("whole-row deletion crossed scope")
+		}
+		docsAfter := []entity.Document{}
+		if err := db.Order("id").Find(&docsAfter).Error; err != nil || !reflect.DeepEqual(docsBefore, docsAfter) {
+			t.Fatal("metadata deletion altered SQL documents", err)
+		}
+	})
+	t.Run("canonical_store_cli_and_scope", func(t *testing.T) {
+		binary := os.Getenv("MULTIRAG_GO_DATASET_CHUNK_CLI")
+		run := func(token, input string) {
+			t.Helper()
+			out, err := exec.CommandContext(ctx, binary, "--host", strings.TrimPrefix(httpServer.URL, "http://"), "--token", token, input).CombinedOutput()
+			if err != nil {
+				t.Fatalf("store CLI %s: %v %s", input, err, out)
+			}
+			t.Logf("store CLI: %s", out)
+		}
+		if kind == "elasticsearch" {
+			run(tokens["owner"], fmt.Sprintf(`CREATE CHUNK STORE FOR DATASET '%s' VECTOR SIZE 2;`, a))
+		} else {
+			out, err := exec.CommandContext(ctx, binary, "--host", strings.TrimPrefix(httpServer.URL, "http://"), "--token", tokens["owner"], fmt.Sprintf(`CREATE CHUNK STORE FOR DATASET '%s' VECTOR SIZE 2;`, a)).CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "already exists") {
+				t.Fatalf("Infinity duplicate create changed contract: %v %s", err, out)
+			}
+		}
+		request(t, "POST", "/api/v1/tenant/chunk_store", "outsider", fmt.Sprintf(`{"kb_id":%q,"vector_size":2}`, a), int(common.CodeAuthenticationError))
+		run(tokens["owner"], fmt.Sprintf(`DROP CHUNK STORE FOR DATASET '%s';`, a))
+		run(tokens["owner"], fmt.Sprintf(`CREATE CHUNK STORE FOR DATASET '%s' VECTOR SIZE 2;`, a))
+		result, err := store.Search(ctx, &types.SearchRequest{IndexNames: []string{"multirag_" + cfg.Tenant}, KbIDs: []string{cfg.DatasetIDs["b"]}, IncludeUnavailable: true, Limit: 10})
+		if err != nil || len(result.Chunks) != 1 {
+			t.Fatal("drop deleted neighbor dataset", result, err)
+		}
+		email := cfg.Tenant + "@owned.invalid"
+		access := strings.Repeat("x", 40)
+		if err := db.Create(&entity.User{ID: cfg.Tenant, Email: email, Nickname: "store-owner", AccessToken: &access, Status: &active, IsActive: true, IsAuthenticated: true}).Error; err != nil {
+			t.Fatal(err)
+		}
+		token, err := utility.SignUserJWT(email, server.GetSecretKey())
+		if err != nil {
+			t.Fatal(err)
+		}
+		run(token, `DROP METADATA STORE;`)
+		if exists, err := store.MetadataStoreExists(ctx, cfg.Tenant); err != nil || exists {
+			t.Fatal("metadata store not dropped", exists, err)
+		}
+		if exists, err := store.MetadataStoreExists(ctx, cfg.Tenant+"_f"); err != nil || !exists {
+			t.Fatal("metadata drop crossed tenant", exists, err)
+		}
+		run(token, `CREATE METADATA STORE;`)
+		if exists, err := store.MetadataStoreExists(ctx, cfg.Tenant); err != nil || !exists {
+			t.Fatal("metadata store not created", exists, err)
+		}
+	})
+
+}
+
+// serviceMetadataFields independently decodes stored JSON for acceptance assertions.
+func serviceMetadataFields(value any) (map[string]any, error) {
+	switch v := value.(type) {
+	case map[string]any:
+		return v, nil
+	case string:
+		var result map[string]any
+		err := json.Unmarshal([]byte(v), &result)
+		return result, err
+	}
+	return nil, fmt.Errorf("unexpected stored metadata %T", value)
 }

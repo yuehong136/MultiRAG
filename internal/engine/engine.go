@@ -52,6 +52,8 @@ type DocEngine interface {
 	// UpdateMetadata merges keys into the document row; new keys win.
 	UpdateMetadata(ctx context.Context, docID, datasetID string, metaFields map[string]interface{}, tenantID string) error
 	DeleteMetadata(ctx context.Context, condition map[string]interface{}, tenantID string) (int64, error)
+	// DeleteMetadataKeys removes literal keys; deleting the last key removes the row.
+	DeleteMetadataKeys(ctx context.Context, docID, datasetID string, keys []string, tenantID string) error
 	DropMetadataStore(ctx context.Context, tenantID string) error
 	MetadataStoreExists(ctx context.Context, tenantID string) (bool, error)
 

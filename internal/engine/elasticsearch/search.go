@@ -37,9 +37,10 @@ type SearchResponse struct {
 			Value int64 `json:"value"`
 		} `json:"total"`
 		Hits []struct {
-			ID     string                 `json:"_id"`
-			Score  float64                `json:"_score"`
-			Source map[string]interface{} `json:"_source"`
+			ID        string                 `json:"_id"`
+			Score     float64                `json:"_score"`
+			Highlight map[string]interface{} `json:"highlight"`
+			Source    map[string]interface{} `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
 	Aggregations map[string]interface{} `json:"aggregations"`
@@ -56,6 +57,14 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 		return nil, fmt.Errorf("index names cannot be empty")
 	}
 
+	if req.KbIDs != nil && len(req.KbIDs) == 0 {
+		return &types.SearchResult{Chunks: []map[string]interface{}{}}, nil
+	}
+	for _, index := range req.IndexNames {
+		if err := validateIndex(index); err != nil {
+			return nil, err
+		}
+	}
 	// Build pagination parameters
 	offset := req.Offset
 	limit := req.Limit
@@ -338,6 +347,9 @@ func convertESResponse(esResp *SearchResponse, vectorFieldName string) []map[str
 		}
 		chunks[i]["_score"] = hit.Score
 		chunks[i]["_id"] = hit.ID
+		if len(hit.Highlight) > 0 {
+			chunks[i]["highlight"] = hit.Highlight
+		}
 		//vectorField := hit.Source[vectorFieldName]
 		//chunks[i][vectorFieldName] = utility.Float64ToFloat32(vectorField)
 	}
@@ -409,28 +421,41 @@ func AddMust(query map[string]interface{}, clauses ...map[string]interface{}) {
 	}
 }
 
-// GetFields is not implemented for Elasticsearch
+// GetFields selects stored ES fields without mutating the result or erasing
+// indexed keyword arrays when no Infinity-style source alias is present.
 func (e *elasticsearchEngine) GetFields(chunks []map[string]interface{}, fields []string) map[string]map[string]interface{} {
-	common.Warn("GetFields not implemented for Elasticsearch")
-	return nil
-}
-
-// GetAggregation is not implemented for Elasticsearch
-func (e *elasticsearchEngine) GetAggregation(chunks []map[string]interface{}, fieldName string) []map[string]interface{} {
-	common.Warn("GetAggregation not implemented for Elasticsearch")
-	return nil
-}
-
-// GetHighlight is not implemented for Elasticsearch
-func (e *elasticsearchEngine) GetHighlight(chunks []map[string]interface{}, keywords []string, fieldName string) map[string]string {
-	common.Warn("GetHighlight not implemented for Elasticsearch")
-	return nil
-}
-
-// GetDocIDs is not implemented for Elasticsearch
-func (e *elasticsearchEngine) GetDocIDs(chunks []map[string]interface{}) []string {
-	common.Warn("GetDocIDs not implemented for Elasticsearch")
-	return nil
+	selected := map[string]bool{}
+	for _, field := range fields {
+		selected[field] = true
+	}
+	result := map[string]map[string]interface{}{}
+	for _, chunk := range chunks {
+		id := chunkID(chunk)
+		if id == "" {
+			continue
+		}
+		row := map[string]interface{}{}
+		for key, value := range chunk {
+			row[key] = value
+		}
+		for source, targets := range map[string][]string{"docnm": {"docnm_kwd", "title_tks", "title_sm_tks"}, "content": {"content_with_weight", "content_ltks", "content_sm_ltks"}, "authors": {"authors_tks", "authors_sm_tks"}} {
+			if value, ok := chunk[source]; ok {
+				for _, target := range targets {
+					if _, exists := row[target]; !exists {
+						row[target] = value
+					}
+				}
+			}
+		}
+		output := map[string]interface{}{}
+		for key, value := range row {
+			if len(fields) == 0 || selected[key] {
+				output[key] = value
+			}
+		}
+		result[id] = output
+	}
+	return result
 }
 
 // AddShould adds should clause to bool query

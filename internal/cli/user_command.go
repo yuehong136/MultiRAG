@@ -630,191 +630,90 @@ func (c *MultiRAGClient) DropToken(cmd *Command) (ResponseIf, error) {
 	return &SimpleResponse{Code: 0, Message: "Token dropped successfully"}, nil
 }
 
-// CreateDatasetInDocEngine creates a table for a dataset in doc engine
-func (c *MultiRAGClient) CreateDatasetInDocEngine(cmd *Command) (ResponseIf, error) {
+// CreateChunkStore creates a table for a dataset in doc engine
+func (c *MultiRAGClient) CreateChunkStore(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	datasetName, ok := cmd.Params["dataset_name"].(string)
-	if !ok {
-		return nil, fmt.Errorf("dataset_name not provided")
+	payload := map[string]interface{}{}
+	dataset, _ := cmd.Params["dataset_name"].(string)
+	if strings.TrimSpace(dataset) == "" {
+		return nil, fmt.Errorf("dataset required")
 	}
-
-	vectorSize, ok := cmd.Params["vector_size"].(int)
-	if !ok {
-		return nil, fmt.Errorf("vector_size not provided")
+	size, ok := cmd.Params["vector_size"].(int)
+	if !ok || size <= 0 {
+		return nil, fmt.Errorf("positive vector size required")
 	}
-
-	// Get dataset ID by name
-	datasetID, err := c.getDatasetID(datasetName)
+	payload["vector_size"] = size
+	id, err := c.documentDatasetID(dataset)
 	if err != nil {
 		return nil, err
 	}
-
-	payload := map[string]interface{}{
-		"kb_id":       datasetID,
-		"vector_size": vectorSize,
-	}
-
-	resp, err := c.HTTPClient.Request("POST", "/kb/doc_engine_table", "web", nil, payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create table: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to create table: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
-	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to create table for dataset: %s", datasetName)
-	} else {
-		result.Message = fmt.Sprintf("Failed to create table: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
-}
-
-// DropDatasetInDocEngine drops a table for a dataset in doc engine
-func (c *MultiRAGClient) DropDatasetInDocEngine(cmd *Command) (ResponseIf, error) {
-	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
-	}
-
-	datasetName, ok := cmd.Params["dataset_name"].(string)
-	if !ok {
-		return nil, fmt.Errorf("dataset_name not provided")
-	}
-
-	// Get dataset ID by name
-	datasetID, err := c.getDatasetID(datasetName)
+	payload["kb_id"] = id
+	response, err := c.HTTPClient.Request("POST", "/tenant/chunk_store", "api", nil, payload)
 	if err != nil {
 		return nil, err
 	}
-
-	payload := map[string]interface{}{
-		"kb_id": datasetID,
+	if err := checkAuthResponse("CreateChunkStore", response); err != nil {
+		return nil, err
 	}
-
-	resp, err := c.HTTPClient.Request("DELETE", "/kb/doc_engine_table", "web", nil, payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to drop dataset: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to drop dataset: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
-	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to drop table for dataset: %s", datasetName)
-	} else {
-		result.Message = fmt.Sprintf("Failed to drop table for dataset: %s: %v", datasetName, resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: "CreateChunkStore succeeded"}, nil
 }
 
-// CreateMetadataInDocEngine creates the document metadata table for the tenant
-func (c *MultiRAGClient) CreateMetadataInDocEngine(cmd *Command) (ResponseIf, error) {
+func (c *MultiRAGClient) DropChunkStore(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	resp, err := c.HTTPClient.Request("POST", "/tenant/doc_engine_metadata_table", "web", nil, nil)
+	payload := map[string]interface{}{}
+	dataset, _ := cmd.Params["dataset_name"].(string)
+	if strings.TrimSpace(dataset) == "" {
+		return nil, fmt.Errorf("dataset required")
+	}
+	id, err := c.documentDatasetID(dataset)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create metadata table: %w", err)
+		return nil, err
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to create metadata table: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
-	}
-
-	resJSON, err := resp.JSON()
+	payload["kb_id"] = id
+	response, err := c.HTTPClient.Request("DELETE", "/tenant/chunk_store", "api", nil, payload)
 	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
+		return nil, err
 	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
+	if err := checkAuthResponse("DropChunkStore", response); err != nil {
+		return nil, err
 	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = "Success to create metadata table"
-	} else {
-		result.Message = fmt.Sprintf("Failed to create metadata table: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: "DropChunkStore succeeded"}, nil
 }
 
-// DropMetadataInDocEngine drops the document metadata table for the tenant
-func (c *MultiRAGClient) DropMetadataInDocEngine(cmd *Command) (ResponseIf, error) {
+func (c *MultiRAGClient) CreateMetadataStore(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	resp, err := c.HTTPClient.Request("DELETE", "/tenant/doc_engine_metadata_table", "web", nil, nil)
+	payload := map[string]interface{}{}
+	response, err := c.HTTPClient.Request("POST", "/tenant/metadata_store", "api", nil, payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to drop metadata table: %w", err)
+		return nil, err
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to drop metadata table: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("CreateMetadataStore", response); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = "Success to drop metadata table"
-	} else {
-		result.Message = fmt.Sprintf("Failed to drop metadata table: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: "CreateMetadataStore succeeded"}, nil
 }
 
-// ==================== Model provider management ====================
+func (c *MultiRAGClient) DropMetadataStore(cmd *Command) (ResponseIf, error) {
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("USER mode required")
+	}
+	payload := map[string]interface{}{}
+	response, err := c.HTTPClient.Request("DELETE", "/tenant/metadata_store", "api", nil, payload)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAuthResponse("DropMetadataStore", response); err != nil {
+		return nil, err
+	}
+	return &SimpleResponse{Message: "DropMetadataStore succeeded"}, nil
+}
 
-// AddProvider creates a new model provider
-// ADD PROVIDER <name>
-// ADD PROVIDER <name> <api_key>
 func (c *MultiRAGClient) AddProvider(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
@@ -1494,97 +1393,47 @@ func (c *MultiRAGClient) ShowCurrentModel(cmd *Command) (ResponseIf, error) {
 
 // CEList handles the ls command - lists nodes using Context Engine
 
-// InsertDatasetFromFile inserts dataset chunks from a JSON file (user mode, internal)
-func (c *MultiRAGClient) InsertDatasetFromFile(cmd *Command) (ResponseIf, error) {
+// InsertChunksFromFile inserts dataset chunks from a JSON file (user mode, internal)
+func (c *MultiRAGClient) InsertChunksFromFile(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	filePath, ok := cmd.Params["file_path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("file_path not provided")
+	payload := map[string]interface{}{}
+	file, _ := cmd.Params["file_path"].(string)
+	if strings.TrimSpace(file) == "" {
+		return nil, fmt.Errorf("file path required")
 	}
-
-	payload := map[string]interface{}{
-		"file_path": filePath,
-	}
-
-	resp, err := c.HTTPClient.Request("POST", "/kb/insert_from_file", "web", nil, payload)
+	payload["file_path"] = file
+	response, err := c.HTTPClient.Request("POST", "/tenant/insert_chunks_from_file", "api", nil, payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert dataset from file: %w", err)
+		return nil, err
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to insert dataset from file: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("InsertChunksFromFile", response); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to insert dataset from file: %s", filePath)
-	} else {
-		result.Message = fmt.Sprintf("Failed to insert dataset from file: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: "InsertChunksFromFile succeeded"}, nil
 }
 
-// InsertMetadataFromFile inserts metadata from a JSON file (user mode, internal)
 func (c *MultiRAGClient) InsertMetadataFromFile(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	filePath, ok := cmd.Params["file_path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("file_path not provided")
+	payload := map[string]interface{}{}
+	file, _ := cmd.Params["file_path"].(string)
+	if strings.TrimSpace(file) == "" {
+		return nil, fmt.Errorf("file path required")
 	}
-
-	payload := map[string]interface{}{
-		"file_path": filePath,
-	}
-
-	resp, err := c.HTTPClient.Request("POST", "/tenant/insert_metadata_from_file", "web", nil, payload)
+	payload["file_path"] = file
+	response, err := c.HTTPClient.Request("POST", "/tenant/insert_metadata_from_file", "api", nil, payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert metadata from file: %w", err)
+		return nil, err
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to insert metadata from file: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("InsertMetadataFromFile", response); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
-	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to insert metadata from file: %s", filePath)
-	} else {
-		result.Message = fmt.Sprintf("Failed to insert metadata from file: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: "InsertMetadataFromFile succeeded"}, nil
 }
 
-// UpdateChunk updates a chunk in a dataset
 func (c *MultiRAGClient) UpdateChunk(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
@@ -1654,81 +1503,67 @@ func (c *MultiRAGClient) RmTags(cmd *Command) (ResponseIf, error) {
 // SetMeta sets (merges) metadata for a document
 func (c *MultiRAGClient) SetMeta(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	docID, ok := cmd.Params["doc_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("doc_id not provided")
+	doc, _ := cmd.Params["doc_id"].(string)
+	metaJSON, _ := cmd.Params["meta"].(string)
+	var meta map[string]interface{}
+	if strings.TrimSpace(doc) == "" || json.Unmarshal([]byte(metaJSON), &meta) != nil || meta == nil {
+		return nil, fmt.Errorf("document and metadata object are required")
 	}
-
-	metaJSON, ok := cmd.Params["meta"].(string)
-	if !ok {
-		return nil, fmt.Errorf("meta not provided")
-	}
-
-	payload := map[string]interface{}{
-		"doc_id": docID,
-		"meta":   metaJSON,
-	}
-
-	resp, err := c.HTTPClient.Request("POST", "/document/set_meta", "web", nil, payload)
+	response, err := c.HTTPClient.Request("POST", "/document/set_meta", "api", nil, map[string]interface{}{"doc_id": doc, "meta": metaJSON})
 	if err != nil {
-		return nil, fmt.Errorf("failed to set metadata: %w", err)
+		return nil, err
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to set metadata: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
+	if err := checkAuthResponse("set metadata", response); err != nil {
+		return nil, err
 	}
-
-	resJSON, err := resp.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
+	var result struct {
+		Data *bool `json:"data"`
 	}
-
-	code, ok := resJSON["code"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("invalid response format: code is not a number")
+	if err := json.Unmarshal(response.Body, &result); err != nil || result.Data == nil || !*result.Data {
+		return nil, fmt.Errorf("metadata update was not acknowledged")
 	}
-
-	var result SimpleResponse
-	result.Code = int(code)
-	if result.Code == 0 {
-		result.Message = fmt.Sprintf("Success to set metadata for document: %s", docID)
-	} else {
-		result.Message = fmt.Sprintf("Failed to set metadata: %v", resJSON)
-	}
-	result.Duration = 0
-	return &result, nil
+	return &SimpleResponse{Message: "Metadata updated for " + doc}, nil
 }
 
 // RemoveChunks removes chunks from a document
 func (c *MultiRAGClient) RemoveChunks(cmd *Command) (ResponseIf, error) {
 	if c.ServerType != "user" {
-		return nil, fmt.Errorf("this command is only allowed in USER mode")
+		return nil, fmt.Errorf("USER mode required")
 	}
-
-	docID, ok := cmd.Params["doc_id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("doc_id not provided")
+	docID, _ := cmd.Params["doc_id"].(string)
+	dataset, _ := cmd.Params["dataset_name"].(string)
+	if strings.TrimSpace(docID) == "" || strings.TrimSpace(dataset) == "" {
+		return nil, fmt.Errorf("document and dataset required")
 	}
-
-	payload := map[string]interface{}{
-		"doc_id": docID,
+	payload := map[string]interface{}{}
+	all, _ := cmd.Params["delete_all"].(bool)
+	ids, _ := cmd.Params["chunk_ids"].([]string)
+	if all == (len(ids) > 0) {
+		return nil, fmt.Errorf("provide chunk IDs or ALL")
 	}
-
-	// Check if delete_all is set
-	if deleteAll, ok := cmd.Params["delete_all"].(bool); ok && deleteAll {
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" || seen[id] {
+			return nil, fmt.Errorf("distinct non-empty chunk IDs required")
+		}
+		seen[id] = true
+	}
+	if all {
 		payload["delete_all"] = true
-	} else if chunkIDs, ok := cmd.Params["chunk_ids"].([]string); ok {
-		payload["chunk_ids"] = chunkIDs
+	} else {
+		payload["chunk_ids"] = ids
 	}
-
-	resp, err := c.HTTPClient.Request("POST", "/chunk/rm", "api", nil, payload)
+	datasetID, err := c.documentDatasetID(dataset)
 	if err != nil {
-		return nil, fmt.Errorf("failed to remove chunks: %w", err)
+		return nil, err
 	}
-
+	path := "/datasets/" + url.PathEscape(datasetID) + "/documents/" + url.PathEscape(docID) + "/chunks"
+	resp, err := c.HTTPClient.Request("DELETE", path, "api", nil, payload)
+	if err != nil {
+		return nil, err
+	}
 	if err := checkAuthResponse("remove chunks", resp); err != nil {
 		return nil, err
 	}

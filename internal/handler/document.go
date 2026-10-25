@@ -18,9 +18,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"multirag/internal/common"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -452,7 +453,7 @@ type SetMetaRequest struct {
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/document/set_meta [post]
 func (h *DocumentHandler) SetMeta(c *gin.Context) {
-	_, errorCode, errorMessage := GetUser(c)
+	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
 		return
@@ -519,10 +520,14 @@ func (h *DocumentHandler) SetMeta(c *gin.Context) {
 		}
 	}
 
-	err := h.documentService.SetDocumentMetadata(req.DocID, meta)
+	err := h.documentService.SetDocumentMetadata(c.Request.Context(), req.DocID, user.ID, meta)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "no such document") || strings.Contains(errMsg, "document not found") {
+		if errors.Is(err, service.ErrDatasetAccessDenied) {
+			jsonError(c, common.CodeForbidden, "No authorization.")
+			return
+		}
+		if errors.Is(err, service.ErrChunkNotFound) || strings.Contains(errMsg, "no such document") || strings.Contains(errMsg, "document not found") {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    1,
 				"message": errMsg,

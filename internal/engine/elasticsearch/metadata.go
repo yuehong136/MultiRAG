@@ -14,6 +14,10 @@ func (e *elasticsearchEngine) CreateMetadataStore(ctx context.Context, tenant st
 	if err != nil {
 		return err
 	}
+	exists, err := e.indexExists(ctx, index)
+	if err != nil || exists {
+		return err
+	}
 	return e.createIndex(ctx, index, "doc_meta_es_mapping.json")
 }
 func (e *elasticsearchEngine) MetadataStoreExists(ctx context.Context, tenant string) (bool, error) {

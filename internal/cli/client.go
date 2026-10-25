@@ -278,16 +278,16 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 	case "list_user_default_models":
 		return c.ListDefaultModels(cmd)
 	// Dataset, metadata commands
-	case "create_dataset_table":
-		return c.CreateDatasetInDocEngine(cmd)
-	case "drop_dataset_table":
-		return c.DropDatasetInDocEngine(cmd)
-	case "create_metadata_table":
-		return c.CreateMetadataInDocEngine(cmd)
-	case "drop_metadata_table":
-		return c.DropMetadataInDocEngine(cmd)
-	case "insert_dataset_from_file":
-		return c.InsertDatasetFromFile(cmd)
+	case "create_chunk_store":
+		return c.CreateChunkStore(cmd)
+	case "drop_chunk_store":
+		return c.DropChunkStore(cmd)
+	case "create_metadata_store":
+		return c.CreateMetadataStore(cmd)
+	case "drop_metadata_store":
+		return c.DropMetadataStore(cmd)
+	case "insert_chunks_from_file":
+		return c.InsertChunksFromFile(cmd)
 	case "insert_metadata_from_file":
 		return c.InsertMetadataFromFile(cmd)
 	case "get_chunk":
@@ -296,6 +296,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListMetadata(cmd)
 	case "update_chunk":
 		return c.UpdateChunk(cmd)
+	case "delete_meta":
+		return c.DeleteMeta(cmd)
 	case "set_meta":
 		return c.SetMeta(cmd)
 	case "rm_tags":
