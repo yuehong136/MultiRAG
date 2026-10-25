@@ -444,3 +444,41 @@ def test_document_patch_name_config_metadata_and_strict_guards(rest_documents: d
         absent = not REDIS_CONN.REDIS.exists(key)
         env["journal"].event("redis-cleanup", key=key, absent=absent)
         assert absent
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_partial_upload_committed_inventory_and_failed_only_retry(rest_documents: dict[str, Any], raw: bool) -> None:
+    env = rest_documents
+    path = f"/datasets/{env['datasets'][0]}/documents"
+    params = {"return_raw_files": str(raw).lower()}
+    response = call(env, "POST", path, params=params, files=[("file", ("valid.txt", b"confirmed upload")), ("file", ("unsupported.exe", b"unsupported"))])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == 500 and payload["message"] == "unsupported.exe: This type of file has not been supported yet!"
+    confirmed = payload["data"]["uploaded"]
+    assert len(confirmed) == 1 and confirmed[0]["name"] == "valid.txt"
+    assert confirmed[0]["dataset_id"] == env["datasets"][0] and confirmed[0]["run"] == "UNSTART"
+    rows = documents(env)
+    assert len(rows) == 1 and set(rows) == {confirmed[0]["id"]}
+    stored = next(iter(rows.values()))
+    assert read_object(env["storage"], env["bucket"], f"{stored['kb_id']}/{stored['location']}") == b"confirmed upload"
+    before = snapshot(env)
+    assert len(before["objects"]) == 1
+    retried = call(env, "POST", path, params=params, files=[("file", ("unsupported.exe", b"unsupported"))])
+    assert retried.status_code == 200 and retried.json() == {"code": 500, "message": payload["message"]}
+    assert snapshot(env) == before
+    for credential in (None, "invalid-token", env["keys"][1]):
+        denied = call(env, "POST", path, credential=credential, params=params, files=[("file", ("denied.txt", b"must not upload")), ("file", ("unsupported.exe", b"unsupported"))])
+        assert denied.status_code == (200 if credential == env["keys"][1] else 401)
+        assert denied.json().get("code", denied.json().get("retcode")) == 109
+        assert snapshot(env) == before
+    env["journal"].event(
+        "assertions",
+        partial_error_code=500,
+        confirmed_documents=1,
+        confirmed_objects=1,
+        retry_failed_only_no_duplicate=True,
+        auth_denials_no_write=True,
+        return_raw_files=raw,
+        partial_confirmation="canonical",
+    )

@@ -424,6 +424,9 @@ async def upload_documents(
 
         err, uploaded = FileService.upload_document(s, kb, file_contents, tenant_id, parent_path=parent_path, parser_config_override=parser_config_override)
         if err:
+            if uploaded:
+                confirmed = [document_api_service.map_doc_keys_with_run_status(item[0], "0") for item in uploaded]
+                return JSONResponse(content=jsonable_encoder({"code": RetCode.SERVER_ERROR, "message": "\n".join(err), "data": {"uploaded": confirmed}}))
             return get_error_data_result(retmsg="\n".join(err), retcode=RetCode.SERVER_ERROR)
         if not uploaded:
             return get_error_data_result(retmsg="There seems to be an issue with your file format. Please verify it is correct and not corrupted.", retcode=RetCode.DATA_ERROR)

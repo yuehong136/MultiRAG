@@ -315,6 +315,14 @@ SQL 失败不更新 replica，replica 失败会将同轮日志改记为失败后
 已有 session 分支在 SQL 保存成功后才交付终态/表单，每轮引用追加保存，读取兼容历史
 单包/数组/按序号的字典；chunk citation map 保留 citation_id。会话不提交草稿 replica。
 
+### 文档批量上传结果
+
+`POST /datasets/{dataset_id}/documents` 逐文件上传，不自动启动解析。
+全部成功沿用 `code=0` 和现有列表响应；部分失败保留 HTTP 200、非零 `code=500` 与错误 `message`，
+并在 `data.uploaded` 中返回已确认成功的文档。该可选清单始终使用普通映射字段
+（`id/name/dataset_id/run=UNSTART` 等），不含文件字节，也不受 `return_raw_files` 影响。
+全部失败沿用原错误信封，不包含该清单。客户端只确认清单中的文件，重试剩余失败文件，避免重复上传成功项。
+
 ### 文件关联数据集
 
 **POST** `/files/link-to-datasets?mode=replace`，body 为 `file_ids` 与 `kb_ids` 列表。
