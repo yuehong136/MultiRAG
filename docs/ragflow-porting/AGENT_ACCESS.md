@@ -27,7 +27,7 @@ normal/admin。owner 按画布真实 `user_id` 判断。版本必须属于路径
   `update_agent`、`set_session`、`input_form`、`debug`、`reset`。
 - [Canvas service](../../api/db/services/canvas_service.py)：`require_agent_access`、
   `UserCanvasService.accessible`、`prepare_agent_run`、`get_agent_dsl_with_release`。
-- [SDK session](../../api/apps/sdk/session.py)：`create_agent_session`、`begin_inputs`。
+- [SDK session](../../api/apps/restful_apis/bot_api.py)：`create_agent_session`、`begin_inputs`。
 - [HTTP 权限回归](../../tests/integration/test_agent_access_dependencies.py) 与
   [管理/运行矩阵](../../tests/integration/test_agent_permission_matrix.py)。
 

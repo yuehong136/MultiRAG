@@ -17,11 +17,21 @@
 JWT/API key 认证、聊天归属校验和请求验证。
 `message`/`messages`/`reference` 不可改，客户端不能改写会话 ID、聊天 ID 或用户归属。
 
-`POST /api/v1/chat/completions` 接收 `messages` 和 body 中的 `chat_id`/`session_id`。
+`POST /api/v1/chat/completions` 接收非空 `messages`，或仅传 `question`；最后一条消息须为 user。
+有会话时默认使用服务器历史并追加本次最后一条 user 消息；显式传布尔
+`pass_all_history_messages=true` 才使用提交的完整分支历史，并保留匹配轮次的已有引用。
+`session_id` 缺省或为空时回落 `conversation_id`；两者同时非空但不一致时拒绝请求。
+布尔、消息和附件格式在调用前校验；附件通过认证用户的上传登记恢复服务器 descriptor。
+成功生成并保存后才发送成功结束帧；失败或取消不保存半轮历史，自动会话也不提前落库。
+活动 Web `/v1/conversation/completion` 仍使用其独立完整分支历史合同。
 SDK 的 `POST /api/v1/chats/{chat_id}/completions` 仍接收 `question`，无 session 时返回
 开场白并创建会话；它不是 messages 转发入口。SDK 的 `/sessions/related_questions`
 保留 API key 和 `industry`，REST `/chat/recommendation` 使用 `search_id`。
-OpenAI 新旧补全路径继续由同一处理器提供，详见 [HTTP API](../../../docs/references/http_api_reference.md)。
+`bot_api.py` 承接 SDK/beta 会话与公开 bot 路由，`dify_retrieval_api.py` 提供 Dify 检索，
+`chunk_api.py` 承接 SDK 解析、停止和 `/retrieval`，`document_download_api.py` 保留
+SDK 二进制下载与 beta-key 资源归属校验；路径和响应合同不因代码搬迁改变。
+本地 SDK dataset/files 模块仍有调用，继续通过注册表挂载 `/api/v1`。
+OpenAI 新旧补全路径继续由同一处理器提供；请求中的 session 提示不会读取或保存会话，详见 [HTTP API](../../../docs/references/http_api_reference.md)。
 
 无活动消费者或兼容承诺的 `/api/v1/file/{get,list,create,upload,mv,rename,rm,...}`、
 chunk PUT 和 DELETE chats 的旧 `chat_id` body 不恢复；分别使用 files REST、chunk PATCH
@@ -42,6 +52,8 @@ Web 的 parser/metadata/chunk 客户端及 Agent Hub 的 MultiRAG 适配器均�
 `/v1/document/get/{doc_id}` 已退出。预览按当前可见性校验，下载继续要求数据集 owner/admin，
 授权实现见[文档读取服务](../../db/services/document_file_service.py)。
 更新、下载和预览的授权策略各自保留，不通过兼容入口绕过。
+生成附件使用 `/documents/runtime/{attachment_id}/download`，与原始文档下载保持资源分离；
+不把原始文档重定向到 Agent 生成附件命名空间。
 
 ## 数据集检索
 

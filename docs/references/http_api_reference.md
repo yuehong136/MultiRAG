@@ -599,6 +599,14 @@ POST /chat/completions
 }
 ```
 
+可传 `messages` 或 `question`；同时提供时采用 `messages`，其最后一项必须是用户消息。
+已有会话默认以服务端历史加本次最后一条用户消息生成回答，避免重复提交历史。
+需要按客户端选择的分支重放完整历史时，显式传布尔值
+`pass_all_history_messages: true`；省略或 `false` 使用服务端历史。
+`session_id` 可由 `conversation_id` 回落，两者同时提供时必须一致；
+会话仍须属于当前认证身份和指定助手，body 中的 `user_id` 不授予其他身份。
+这些参数属于统一 REST 补全；旧 `/v1/conversation/completion` 的完整历史合同独立。
+
 ### 对话补全
 
 与助手进行对话（流式或非流式）。
@@ -658,6 +666,9 @@ POST /openai/{chat_id}/chat/completions
 ```
 
 `model` 必填；传 `"model"` 使用聊天助手已配置的模型，传具体模型名（例如 `glm-4-flash@ZHIPU-AI`）时必须是当前租户可用的聊天模型。`messages` 最后一条必须为用户消息；文本数组内容支持 `type: "text"`，图片等非文本内容会返回参数错误。省略 `stream` 时新路径返回非流式响应；设为 `true` 则返回 SSE。旧路径 `/chats_openai/{chat_id}/chat/completions` 暂保留，省略 `stream` 时仍默认流式，已标记 deprecated。
+
+此 OpenAI 入口按请求中的 `messages` 生成回答，不读取或写入持久会话；
+传入 `session_id` 也不会改变该行为。需要保存历史时使用上述 REST 会话补全。
 
 可在 `extra_body` 中设置 `reference: true`、`reference_metadata: {"include": true, "fields": ["author"]}` 和 `metadata_condition`。非流式引用位于 `choices[0].message.reference`；流式引用及完整最终正文位于收尾帧的 `choices[0].delta.reference` 和 `final_content`。引用切片的 `document_metadata` 只包含请求的字段。
 
@@ -1141,6 +1152,18 @@ POST /datasets/{dataset_id}/documents?type=local|web|empty
 `local` 可使用可选表单字段 `parent_path`，并支持 `return_raw_files=true` 查询参数返回原始文档字段。
 网页 URL 会经过出网地址校验；各模式均检查数据集访问权限。失败时检查响应中的非零业务 `code`。
 
+本地上传还可传表单字段 `parser_config`，值为 JSON 对象，只接受
+`table_column_mode`（`auto` 或 `manual`）和 `table_column_roles`（非空列名到
+`indexing`、`metadata` 或 `both` 的映射）。例如：
+
+```json
+{"table_column_mode":"manual","table_column_roles":{"title":"indexing","country":"metadata","score":"both"}}
+```
+
+该配置保存在本次文档中，解析时优先于数据集的列设置，不修改数据集默认值。
+同一请求中的文件共用该覆盖；各文件列结构不同时，应逐文件提交各自配置。
+非法 JSON、null、额外字段或非法模式/角色在文档与对象写入前拒绝。
+
 **请求示例**
 
 ```bash
@@ -1319,6 +1342,20 @@ PATCH /datasets/{dataset_id}/documents/{document_id}/chunks/{chunk_id}
 ```
 
 ## 检索 API
+
+### 保存搜索配置与执行
+
+`/api/v1/searches` 保存的 `search_config.vector_similarity_weight` 是向量权重，
+关键词权重为 `1 - vector_similarity_weight`；不在 Web 与后端之间反转。
+按字段是否存在应用保存值，合法 `0` 会覆盖请求值；权重与阈值必须为有限的
+`[0,1]` 数字，布尔、字符串、null 和越界值被拒绝。
+显式权重在未指定模式时采用混合检索；未配置权重的数据集查询保留原默认模式。
+保存搜索的有效数据集范围先授权，再访问 embedding/rerank 模型。
+
+数据集搜索 `doc_ids` 省略或 null 表示授权范围内不增加文档限制，显式 `[]`
+表示没有候选文档；此空范围穿过手工、自动、半自动元数据过滤及实际检索。
+历史 SDK `/retrieval` 的 `document_ids: []` 保留其“未选择文档”约定，入口处转换，
+不会让内部的显式空范围扩展为全库。
 
 ### 检索测试
 
