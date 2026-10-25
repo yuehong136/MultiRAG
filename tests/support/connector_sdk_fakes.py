@@ -16,6 +16,7 @@ class GraphHTTP:
         self.calls: list[str] = []
         self.mode = "complete"
         self.body = b"controlled file bytes"
+        self.content_type = "application/octet-stream"
         self.after_request: Any = None
 
     def __call__(self, url: str, **kwargs: Any) -> requests.Response:
@@ -53,7 +54,7 @@ class GraphHTTP:
             raise AssertionError(f"Unexpected Graph request: {path}")
         response = requests.Response()
         response.status_code, response.url = status, url
-        response.headers["Content-Type"] = "application/json" if data is not None else "application/octet-stream"
+        response.headers["Content-Type"] = "application/json" if data is not None else self.content_type
         response._content = json.dumps(data).encode() if data is not None else self.body
         if self.after_request is not None:
             self.after_request(path)

@@ -17,6 +17,7 @@ import requests
 from office365.graph_client import GraphClient
 from office365.graph_request import GraphRequest
 from office365.runtime.client_object_collection import ClientObjectCollection
+from office365.runtime.client_result import ClientResult
 from office365.runtime.http.request_options import RequestOptions
 from office365.runtime.queries.client_query import ClientQuery
 
@@ -48,6 +49,11 @@ class _ReadOnlyGraphRequest(GraphRequest):
         return response
 
     def process_response(self, response: requests.Response, query: ClientQuery) -> None:
+        if isinstance(query.return_type, ClientResult) and urlsplit(query.url).path.endswith("/content"):
+            # A .json file is still a file. The SDK's generic OData mapper
+            # otherwise decodes JSON MIME bodies into individual field values.
+            query.return_type.set_property("__value", response.content)
+            return
         if isinstance(query.return_type, ClientObjectCollection):
             payload = response.json()
             if not isinstance(payload, dict) or not isinstance(payload.get("value"), list):

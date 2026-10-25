@@ -34,6 +34,8 @@ async def test_worker_storage_failure_and_cancellation(rest_documents: dict[str,
     http: GraphHTTP | SlackHTTP
     if source == "sharepoint":
         http = GraphHTTP()
+        if outcome == "complete":
+            http.body, http.content_type = b'{"empty":[],"count":0}', "application/json"
         # Patch only Graph HTTPS traffic; local API/storage HTTP remains real.
         original_get = sharepoint_connector.requests.get
         monkeypatch.setattr(sharepoint_connector.requests, "get", lambda url, **kwargs: http(url, **kwargs) if url.startswith("https://graph.microsoft.com/") else original_get(url, **kwargs))
@@ -131,7 +133,7 @@ async def test_worker_storage_failure_and_cancellation(rest_documents: dict[str,
         object_bodies = {row.id: read_object(env["storage"], env["bucket"], f"{kb_id}/{row.location}") for row in rows}
         assert len(list(env["storage"].list_objects(env["bucket"], recursive=True))) == len(rows)
         if success and source == "sharepoint":
-            assert set(object_bodies.values()) == {b"controlled file bytes"}
+            assert set(object_bodies.values()) == {http.body}
         if success and source == "slack":
             assert set(object_bodies.values()) == {"古い親\n\n新回复".encode(), b"standalone"}
         journal.event(

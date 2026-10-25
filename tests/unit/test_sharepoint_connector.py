@@ -148,3 +148,12 @@ def test_untrusted_nextlink_rejected_before_token_or_request(graph: tuple[Any, A
     with pytest.raises(module.ConnectorValidationError):
         connector.graph_client.pending_request().execute_request_direct(request)
     assert auth["constructed"] == 0 and http.calls == []
+
+
+@pytest.mark.parametrize("body", [b'{"empty":[],"count":0}', b""])
+def test_json_mime_download_remains_raw_bytes(graph: tuple[Any, Any, Any], body: bytes) -> None:
+    connector, http, _ = graph
+    http.body, http.content_type = body, "application/json"
+    docs = [doc for batch in connector.poll_source(0.0, 9e12) for doc in batch]
+    assert len(docs) == 3
+    assert all(doc.blob == body and doc.size_bytes == len(body) for doc in docs)
