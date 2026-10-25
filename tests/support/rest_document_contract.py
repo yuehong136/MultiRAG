@@ -73,6 +73,7 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
 
         if not all(key in resources._state for key in ("storage", "doc_store", "retriever", "kg_retriever")):
             ensure_initialized(force=True)
+        from api import apps as app_module
         from api.apps import app, manager
         from core.nlp import search
         from core.utils.redis_conn import REDIS_CONN
@@ -160,6 +161,8 @@ def rest_documents(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         monkeypatch.setitem(app.dependency_overrides, get_async_db, scratch_db)
         monkeypatch.setattr(document_api_service, "db_connection", sync_db)
         monkeypatch.setattr(db_models, "SessionLocal", lambda: Session(engine))
+        # LoginManager's legacy user loader holds its own imported factory alias.
+        monkeypatch.setattr(app_module, "SessionLocal", lambda: Session(engine))
         listener = socket.socket()
         cleanup.callback(listener.close)
         listener.bind(("127.0.0.1", port))
