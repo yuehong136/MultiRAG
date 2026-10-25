@@ -75,3 +75,12 @@ def test_dataset_list_accepts_explicit_empty_inventory(monkeypatch: pytest.Monke
     cli, _, printed = client(monkeypatch, [{"code": 0, "data": [], "total_datasets": 0}])
     cli.list_user_datasets({})
     assert printed == [[]]
+
+
+@pytest.mark.parametrize("tail", [{"code": 0, "data": []}, {"code": 0, "data": [], "total_datasets": 100}])
+def test_dataset_list_retains_first_total_across_later_pages(monkeypatch: pytest.MonkeyPatch, tail: dict[str, Any]) -> None:
+    rows = [{"id": str(index)} for index in range(100)]
+    cli, _, printed = client(monkeypatch, [{"code": 0, "data": rows, "total_datasets": 106}, tail])
+    with pytest.raises(ValueError, match=r"stopped before|changed between"):
+        cli.list_user_datasets({})
+    assert printed == []

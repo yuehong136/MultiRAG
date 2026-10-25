@@ -920,6 +920,7 @@ class MultiRAGClient:
         datasets: list[dict[str, Any]] = []
         seen: set[str] = set()
         page = 1
+        expected_total: int | None = None
         while True:
             response = self.http_client.request("GET", f"datasets?page={page}&page_size=100", use_api_base=True, auth_kind="web")
             payload = response.json()
@@ -940,7 +941,12 @@ class MultiRAGClient:
                 totals.append(data["total"])
             if totals and (any(type(value) is not int or value < len(seen) for value in totals) or len(set(totals)) != 1):
                 raise ValueError("Invalid dataset total")
-            total = totals[0] if totals else None
+            if totals:
+                declared_total = totals[0]
+                if expected_total is not None and declared_total != expected_total:
+                    raise ValueError("Dataset total changed between pages")
+                expected_total = declared_total
+            total = expected_total
             if total is not None and len(seen) == total:
                 break
             if total is None and len(rows) < 100:

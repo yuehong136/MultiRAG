@@ -136,3 +136,11 @@ async def test_list_datasets_rejects_accumulated_inventory_larger_than_total() -
 async def test_list_datasets_accepts_explicit_empty_inventory() -> None:
     connector, _ = _make_connector([FakeResponse({"code": 0, "data": [], "total_datasets": 0})])
     assert await connector.list_datasets_structured("key") == []
+
+
+@pytest.mark.parametrize("tail", [{"code": 0, "data": []}, {"code": 0, "data": [], "total_datasets": 100}])
+async def test_list_datasets_retains_first_total_across_later_pages(tail: dict) -> None:
+    rows = [_dataset(str(index)) for index in range(100)]
+    connector, _ = _make_connector([FakeResponse({"code": 0, "data": rows, "total_datasets": 106}), FakeResponse(tail)], page_size=100)
+    with pytest.raises(ToolError, match=r"stopped before|changed between"):
+        await connector.list_datasets_structured("key")

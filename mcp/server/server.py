@@ -281,6 +281,7 @@ class MultiRAGConnector:
         datasets: list[dict] = []
         seen_ids: set[str] = set()
         page = 1
+        expected_total: int | None = None
 
         while True:
             logging.debug("list_datasets_structured fetching /datasets page=%s page_size=%s", page, self._DATASET_PAGE_SIZE)
@@ -307,7 +308,12 @@ class MultiRAGConnector:
             totals = [res_json[key] for key in ("total_datasets", "total") if key in res_json]
             if totals and (any(type(value) is not int or value < len(seen_ids) for value in totals) or len(set(totals)) != 1):
                 raise ToolError("Invalid dataset total.")
-            total = totals[0] if totals else None
+            if totals:
+                declared_total = totals[0]
+                if expected_total is not None and declared_total != expected_total:
+                    raise ToolError("Dataset total changed between pages.")
+                expected_total = declared_total
+            total = expected_total
             if total is not None and len(seen_ids) == total:
                 break
             if total is None and len(page_datasets) < self._DATASET_PAGE_SIZE:
