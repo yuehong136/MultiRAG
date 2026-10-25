@@ -168,6 +168,7 @@ def test_invalid_create_and_update_have_zero_sql_effect(contracts: dict[str, Any
         {"description": "a" * 65536},
         {"embedding_model": "bad"},
         {"id": "forged"},
+        *({"ext": {field: "forged"}} for field in ("id", "tenant_id", "created_by", "status")),
     ]
     for payload in invalid:
         before = sql_state(env)

@@ -193,3 +193,6 @@ DELETE 发送取消信号、删除任务行、解绑任务 ID/完成时间，并
 `PUT /api/v1/datasets/{dataset_id}` 可以在已有分块时更新 `embedding_model`，同时更新租户模型行绑定；
 这不会重建已有向量。Web 设置页在模型变化且已有分块时先调用检查，失败保留表单并停止保存。
 调用方直接使用 PUT 时自行决定切换策略；旧 `/datasets/{id}/embedding` 执行入口仍未注册。
+
+`id`、`tenant_id`、`created_by` 和 `status` 由服务端管理，创建/更新不能通过旧 `ext`
+对象覆盖。解析器的未知扩展保留，已知字段按服务层展开 `parser_config.ext` 后的生效值校验。

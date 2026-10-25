@@ -101,6 +101,14 @@ def test_delete_rejects_duplicates_before_execution() -> None:
         DeleteDatasetRequest(ids=["a", "a"])
 
 
+@pytest.mark.parametrize("field", ["id", "tenant_id", "created_by", "status"])
+@pytest.mark.parametrize("update", [False, True])
+def test_immutable_identity_cannot_be_supplied_through_extension(field: str, update: bool) -> None:
+    payload = {"ext": {field: "forged"}, **({} if update else {"name": "dataset"})}
+    with pytest.raises(ValidationError):
+        (UpdateDatasetRequest if update else CreateDatasetRequest).model_validate(payload)
+
+
 @pytest.mark.parametrize("value", ["", " ", "missing-at", "@Builtin", "model@", " @Builtin", "model@ ", 0, []])
 @pytest.mark.parametrize("update", [False, True])
 def test_embedding_identifier_matrix(value: Any, update: bool) -> None:

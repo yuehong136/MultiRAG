@@ -36,8 +36,17 @@ logger = logging.getLogger(__name__)
 # ==================== Pydantic Models (V2 风格) ====================
 
 
+def validate_dataset_extension_identity(value: dict[str, Any]) -> dict[str, Any]:
+    if value.keys() & {"id", "tenant_id", "created_by", "status"}:
+        raise ValueError("Dataset identity and ownership fields cannot be supplied through ext")
+    return value
+
+
 class CreateDatasetRequest(CreateDatasetReq):
-    pass
+    @field_validator("ext")
+    @classmethod
+    def validate_extension_identity(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_dataset_extension_identity(value)
 
 
 class UpdateDatasetRequest(BaseModel):
@@ -77,6 +86,7 @@ class UpdateDatasetRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_parser_patch(self) -> UpdateDatasetRequest:
+        validate_dataset_extension_identity(self.ext)
         # Validate only an explicitly patched scope; retain unknown fields and
         # avoid filling parser defaults into a partial update.
         validate_partial_parser_config(self.parser_config)
