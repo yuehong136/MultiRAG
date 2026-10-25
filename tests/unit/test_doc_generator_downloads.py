@@ -18,7 +18,8 @@ def test_doc_generator_param_matches_download_contract():
     param = DocGeneratorParam()
 
     assert param.output_format == "pdf"
-    assert param.outputs == {"download": {"value": "", "type": "string"}}
+    assert set(param.outputs) == {"download", "doc_id", "filename", "mime_type", "size"}
+    assert param.outputs["size"] == {"value": 0, "type": "number"}
 
 
 def test_sanitize_filename_removes_paths_and_enforces_extension():
@@ -121,6 +122,8 @@ async def test_generator_base64_matches_file_and_message_downloads(monkeypatch: 
     assert info["filename"] == generated.name and info["mime_type"] == mime_type and info["size"] == len(raw)
     assert base64.b64decode(info["base64"], validate=True) == objects[("owner", info["doc_id"])] == raw
     assert json.loads(generator.output("download")) == info
+    for key in ("doc_id", "filename", "mime_type", "size"):
+        assert generator.output(key) == info[key]
     assert not generated.exists()
     assert info["base64"] not in caplog.text and "Private content marker" not in caplog.text
 
@@ -147,9 +150,14 @@ def test_generator_storage_failure_has_no_download_and_cleans_file(monkeypatch: 
     def fail(*args: Any) -> None:
         raise OSError("storage unavailable")
 
+    for key in ("download", "doc_id", "filename", "mime_type"):
+        generator.set_output(key, "previous run")
+    generator.set_output("size", 123)
     monkeypatch.setattr(settings, "STORAGE_IMPL", SimpleNamespace(put=fail))
     with pytest.raises(OSError, match="storage unavailable"):
         generator._invoke()
-    assert generator.output("download") == ""
+    for key in ("download", "doc_id", "filename", "mime_type"):
+        assert generator.output(key) == ""
+    assert generator.output("size") == 0
     assert "storage unavailable" in generator.output("_ERROR")
     assert not path.exists()
