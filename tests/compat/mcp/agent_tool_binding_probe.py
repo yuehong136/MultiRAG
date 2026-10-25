@@ -14,6 +14,7 @@ import logging
 import shutil
 import socket
 import threading
+from contextlib import ExitStack
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from common import resources
 from common.constants import MCPServerType
 from common.mcp_tool_call_conn import MCPToolBinding, MCPToolCallSession
 from scripts.check_mcp_compat import MODERN_SERVER, ManagedServer, _read_json
+from tests.compat.mcp.loopback_transport import fixture_destinations
 
 
 def _listening(port: int) -> bool:
@@ -46,10 +48,12 @@ async def run_probe(report_dir: Path) -> dict[str, Any]:
     result: dict[str, Any] = {"status": "RUNNING", "ownership": []}
     report_dir.mkdir(parents=True, exist_ok=True)
     baseline_threads = set(threading.enumerate())
+    fixture_stack = ExitStack()
     try:
         for key, server in managed.items():
             ready = server.start()
             assert server.process is not None
+            fixture_stack.enter_context(fixture_destinations([ready["url"]]))
             result["ownership"].append({"server_id": key, "pid": server.process.pid, "url": ready["protected_url"]})
             (report_dir / "ownership.json").write_text(json.dumps(result["ownership"], indent=2))
             servers[key] = SimpleNamespace(id=key, tenant_id="tenant-probe", url=ready["protected_url"], server_type=MCPServerType.STREAMABLE_HTTP, headers={}, variables={})
@@ -140,6 +144,7 @@ async def run_probe(report_dir: Path) -> dict[str, Any]:
     finally:
         for session in sessions:
             session.close_sync(timeout=3)
+        fixture_stack.close()
         for key, server in managed.items():
             server.stop()
             (report_dir / f"server-{key}.log").write_text("\n".join(server.output))
