@@ -120,7 +120,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "paramiko>=5.0.0,<6",
     "pdfplumber==0.10.4",
-    "pillow>=12.2.0,<13.0.0",
+    "pillow>=13.0.0,<13.1.0",
     "pluginlib>=0.10.0",
     # task_executor /metrics 端点（指标定义与启动见 core/svr/executor_metrics.py）
     "prometheus-client>=0.21.0",
