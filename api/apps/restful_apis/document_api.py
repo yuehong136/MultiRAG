@@ -503,6 +503,8 @@ async def list_documents(
     file_types: list[str] | None = Query(None, alias="types"),
     run: list[str] | None = Query(None),
     run_status: list[str] | None = Query(None),
+    run_array: list[str] | None = Query(None, alias="run[]"),
+    run_status_array: list[str] | None = Query(None, alias="run_status[]"),
     create_time_from: int = Query(0),
     create_time_to: int = Query(0),
     metadata_condition: str | None = Query(None, description="元数据复合过滤条件（JSON 对象）"),
@@ -519,7 +521,7 @@ async def list_documents(
         return get_error_data_result(retmsg=f"Invalid filter conditions: {invalid} type{'s' if len(invalid_types) > 1 else ''}")
 
     status_text_to_numeric = {status.name: status.value for status in TaskStatus}
-    raw_statuses = (run or []) + (run_status or [])
+    raw_statuses = [value.strip() for values in (run, run_status, run_array, run_status_array) for value in (values or []) if value.strip()]
     converted_statuses = [status_text_to_numeric.get(status.upper(), status) for status in raw_statuses]
     valid_statuses = set(status_text_to_numeric.values())
     invalid_statuses = {status for status in converted_statuses if status not in valid_statuses}

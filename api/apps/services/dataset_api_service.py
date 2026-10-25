@@ -141,7 +141,7 @@ def create_dataset(db: Session, tenant_id: str, req: dict) -> tuple[bool, Any]:
         return False, str(e)
 
 
-def delete_datasets(db: Session, tenant_id: str, ids: list | None = None, delete_all: bool = False) -> tuple[bool, Any]:
+def delete_datasets(db: Session, tenant_id: str, ids: list[str] | None = None, delete_all: bool = False) -> tuple[bool, Any]:
     """删除数据集。"""
     kb_id_instance_pairs = []
     if not ids:
@@ -173,7 +173,7 @@ def delete_datasets(db: Session, tenant_id: str, ids: list | None = None, delete
                 continue
         FileService.filter_delete(
             db,
-            [File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb.name],
+            [File.tenant_id == kb.tenant_id, File.source_type == FileSource.KNOWLEDGEBASE, File.type == "folder", File.name == kb.name],
         )
 
         # 承接旧 web：删除数据集对应的存储桶/目录（部分后端支持）
@@ -221,7 +221,7 @@ async def delete_datasets_async(tenant_id: str, ids: list | None = None, delete_
     return await asyncio.to_thread(_run)
 
 
-def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> tuple[bool, Any]:
+def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict[str, Any]) -> tuple[bool, Any]:
     """更新数据集。"""
     # 字段名转换
     if "embedding_model" in req:
@@ -279,17 +279,6 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
     if "name" in req and req["name"].lower() != kb.name.lower():
         if KnowledgebaseService.get_or_none(db, name=req["name"], tenant_id=tenant_id, status=StatusEnum.VALID.value):
             return False, f"Dataset name '{req['name']}' already exists"
-        # 承接旧 web：知识库改名时同步重命名 File folder
-        FileService.filter_update(
-            db,
-            [
-                File.tenant_id == kb.tenant_id,
-                File.source_type == FileSource.KNOWLEDGEBASE,
-                File.type == "folder",
-                File.name == kb.name,
-            ],
-            {"name": req["name"]},
-        )
 
     if "embd_id" in req:
         if not req["embd_id"]:
@@ -306,7 +295,20 @@ def update_dataset(db: Session, tenant_id: str, dataset_id: str, req: dict) -> t
             settings.docStoreConn.update({"kb_id": kb.id}, {PAGERANK_FLD: req["pagerank"]}, search.index_name(kb.tenant_id), kb.id)
         else:
             # Elasticsearch requires PAGERANK_FLD be non-zero!
-            settings.docStoreConn.update({"exists": PAGERANK_FLD}, {"remove": PAGERANK_FLD}, search.index_name(kb.tenant_id), kb.id)
+            settings.docStoreConn.update({"kb_id": kb.id, "exists": PAGERANK_FLD}, {"remove": PAGERANK_FLD}, search.index_name(kb.tenant_id), kb.id)
+
+    if "name" in req and req["name"].lower() != kb.name.lower():
+        # 承接旧 web：知识库改名时同步重命名 File folder
+        FileService.filter_update(
+            db,
+            [
+                File.tenant_id == kb.tenant_id,
+                File.source_type == FileSource.KNOWLEDGEBASE,
+                File.type == "folder",
+                File.name == kb.name,
+            ],
+            {"name": req["name"]},
+        )
 
     req = ensure_tenant_model_id_for_params(db, tenant_id, req)
     if not KnowledgebaseService.update_by_id(db, kb.id, req):

@@ -17,17 +17,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.apps.services import dataset_api_service, dataset_embedding_service, dataset_search_service
-from api.db.db_models import get_async_db
+from api.db.db_models import Knowledgebase, get_async_db
 from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
 from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
-from api.utils.validation_utils import CreateDatasetReq, normalize_table_parser_config, validate_dataset_raptor_scope
+from api.utils.validation_utils import CreateDatasetReq, validate_partial_parser_config
 from common.constants import RetCode
-from common.metadata_config import MetadataConfig, validate_parser_metadata
+from common.metadata_config import MetadataConfig
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -41,27 +41,57 @@ class CreateDatasetRequest(CreateDatasetReq):
 
 
 class UpdateDatasetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str | None = None
     avatar: str | None = None
     description: str | None = None
     embedding_model: str | None = None
     permission: str | None = None
     chunk_method: str | None = None
-    pagerank: int | None = None
+    pagerank: int | None = Field(default=None, ge=0, le=100)
     language: str | None = None
     connectors: list[dict] | None = None
     parser_config: dict[str, Any] | None = None
     auto_metadata_config: MetadataConfig | None = None
     # ext：承接前端塞进来的旧 web 扩展参数
-    ext: dict[str, Any] = {}
+    ext: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name", "avatar", "description", "embedding_model", "permission", "chunk_method")
+    @classmethod
+    def validate_dataset_field(cls, value: str | None, info: ValidationInfo) -> str | None:
+        field = info.field_name
+        assert field is not None
+        # These parsers are also used by the existing Web dataset editor.
+        if field == "chunk_method" and value in {"knowledge_graph", "audio"}:
+            return value
+        validated = CreateDatasetReq.model_validate({"name": "validation", field: value})
+        return getattr(validated, field)
+
+    @field_validator("pagerank")
+    @classmethod
+    def reject_null_pagerank(cls, value: int | None) -> int:
+        if value is None:
+            raise ValueError("pagerank must be an integer from 0 to 100")
+        return value
 
     @model_validator(mode="after")
-    def validate_raptor_scope(self) -> UpdateDatasetRequest:
+    def validate_parser_patch(self) -> UpdateDatasetRequest:
         # Validate only an explicitly patched scope; retain unknown fields and
         # avoid filling parser defaults into a partial update.
-        validate_dataset_raptor_scope(self.ext.get("parser_config", self.parser_config))
-        validate_parser_metadata(self.ext.get("parser_config", self.parser_config))
-        normalize_table_parser_config(self.ext.get("parser_config", self.parser_config))
+        validate_partial_parser_config(self.parser_config)
+        if "parser_config" in self.ext:
+            config = self.ext["parser_config"]
+            if config is not None and not isinstance(config, dict):
+                raise ValueError("parser_config must be a JSON object")
+            validate_partial_parser_config(config)
+        # Legacy Web extension values become effective service fields too.
+        aliases = {"embd_id": "embedding_model", "parser_id": "chunk_method"}
+        fields = {
+            aliases.get(key, key): value for key, value in self.ext.items() if aliases.get(key, key) in {"name", "avatar", "description", "embedding_model", "permission", "chunk_method", "pagerank"}
+        }
+        if fields:
+            UpdateDatasetRequest.model_validate(fields)
         return self
 
 
@@ -71,8 +101,17 @@ class CheckEmbeddingRequest(BaseModel):
 
 
 class DeleteDatasetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     ids: list[str] | None = None
     delete_all: bool = False
+
+    @field_validator("ids")
+    @classmethod
+    def reject_duplicate_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("Duplicate ids are not permitted")
+        return value
 
 
 class DeleteTagsRequest(BaseModel):
@@ -196,8 +235,8 @@ async def check_embedding(
 async def list_datasets(
     id: str | None = Query(None, description="数据集ID过滤"),
     name: str | None = Query(None, description="数据集名称过滤"),
-    page: int = Query(1, description="页码"),
-    page_size: int = Query(30, description="每页数量"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(30, ge=1, description="每页数量"),
     orderby: str = Query("create_time", description="排序字段"),
     desc: bool = Query(True, description="是否降序"),
     keywords: str | None = Query(None, description="按名称模糊搜索"),
@@ -206,7 +245,7 @@ async def list_datasets(
     include_parsing_status: bool = Query(False, description="是否包含文档解析状态计数"),
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     args = {
         "id": id,
         "name": name,
@@ -219,6 +258,8 @@ async def list_datasets(
         "owner_ids": owner_ids,
         "include_parsing_status": include_parsing_status,
     }
+    if orderby not in Knowledgebase.__table__.columns:
+        return get_error_data_result(retmsg="Invalid dataset ordering field")
     try:
         success, result = await db.run_sync(lambda s: dataset_api_service.list_datasets(s, tenant_id, args))  # TODO(async-phase4)
         if success:

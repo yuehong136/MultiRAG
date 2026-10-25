@@ -9,6 +9,21 @@
 `DELETE /datasets/{id}/graph` 和旧删除入口都会取消任务、清理图谱产物并解绑任务 ID/完成时间。
 旧入口固定全量清理并返回 `true`；正式入口接受 `wipe`/`task_id`，返回空对象。
 
+## 数据集保存与文档状态过滤
+
+数据集创建使用 `POST /datasets`，部分更新使用 `PUT /datasets/{id}`。
+创建与更新均接受 `avatar: ""` 和 `avatar: null`；非空 avatar 继续校验图片 MIME 前缀和长度。
+更新省略字段时保留现值；`embedding_model: null` 保留当前模型，`parser_config: {}` 或
+`null` 在未切换解析器时保留配置。切换解析器且未提供有效配置时使用该解析器默认值。
+parser 配置按层合并，只校验显式传入的已知字段；未知扩展字段保留，显式
+`built_in_metadata: []` 清空内置元数据选择，省略则保留。`pagerank` 只接受整数 0–100。
+非法请求体由 FastAPI 返回 HTTP 422，权限、模型不可用等业务失败返回 `code=102`；
+成功信封仍为 `code/data`，列表总数位于 `total_datasets`。名称重名时拒绝，不自动追加后缀。
+
+`GET /datasets/{id}/documents` 的 `run`、`run_status`、`run[]`、`run_status[]`
+均可重复传值并混用，支持大小写状态名和数字状态（含 `0`）；先去首尾空白并忽略空值。
+非法非空状态返回 `code=102`。普通文档列表与 `type=filter` 聚合使用相同状态条件。
+
 ## 聊天会话兼容
 
 聊天会话更新以 `PATCH /api/v1/chats/{chat_id}/sessions/{session_id}` 为正式入口。

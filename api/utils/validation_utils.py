@@ -40,7 +40,7 @@ from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
 from api.db import FileType
 from common.constants import RetCode
 from common.graphrag_config import GraphRAGExecutionConfig
-from common.metadata_config import MetadataConfig, MetadataField
+from common.metadata_config import MetadataConfig, MetadataField, validate_parser_metadata
 
 
 class DocumentIngestRequest(BaseModel):
@@ -468,6 +468,21 @@ def normalize_table_parser_config(config: Any) -> None:
         config.update(ParserConfig.model_validate(patch).model_dump(exclude_unset=True))
 
 
+def validate_partial_parser_config(config: dict[str, Any] | None) -> None:
+    """Validate known patch fields without defaulting or removing extensions."""
+    if config is None:
+        return
+    if len(json.dumps(config, ensure_ascii=False)) > 65535:
+        raise ValueError("Parser config exceeds size limit (max 65,535 characters)")
+    patch = {key: value for key, value in config.items() if key in ParserConfig.model_fields}
+    for key, model in (("raptor", RaptorConfig), ("graphrag", GraphragConfig), ("parent_child", ParentChildConfig)):
+        if isinstance(patch.get(key), dict):
+            patch[key] = {name: value for name, value in patch[key].items() if name in model.model_fields}
+    ParserConfig.model_validate(patch)
+    validate_parser_metadata(config)
+    normalize_table_parser_config(config)
+
+
 def validate_upload_parser_config(value: Any) -> dict[str, Any]:
     """Validate document-local table overrides before any upload side effect."""
     if not isinstance(value, dict):
@@ -605,7 +620,7 @@ class CreateDatasetReq(Base):
             CreateDatasetReq(avatar="data:video/mp4;base64,...")  # Unsupported MIME type
             ```
         """
-        if v is None:
+        if v is None or v == "":
             return v
 
         if "," in v:
@@ -632,7 +647,7 @@ class CreateDatasetReq(Base):
 
     @field_validator("embedding_model", mode="after")
     @classmethod
-    def validate_embedding_model(cls, v: str) -> str:
+    def validate_embedding_model(cls, v: str | None) -> str | None:
         """
         Validates embedding model identifier format compliance.
 
@@ -659,6 +674,9 @@ class CreateDatasetReq(Base):
             Invalid: "@openai" (empty model_name)
             Invalid: "text-embedding-3-large@" (empty provider)
         """
+        if v is None:
+            return None
+
         if "@" not in v:
             raise PydanticCustomError("format_invalid", "Embedding model identifier must follow <model_name>@<provider> format")
 
