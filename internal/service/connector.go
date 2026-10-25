@@ -22,21 +22,28 @@ import (
 	"fmt"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	"multirag/internal/engine"
+	"multirag/internal/entity"
+	"strings"
 
 	"gorm.io/gorm"
 )
 
 // ConnectorService connector service
 type ConnectorService struct {
-	connectorDAO  *dao.ConnectorDAO
-	userTenantDAO *dao.UserTenantDAO
+	connectorDAO *dao.ConnectorDAO
+	docEngine    engine.DocEngine
 }
 
 // NewConnectorService create connector service
-func NewConnectorService() *ConnectorService {
+func NewConnectorService(stores ...engine.DocEngine) *ConnectorService {
+	store := engine.Get()
+	if len(stores) > 0 {
+		store = stores[0]
+	}
 	return &ConnectorService{
-		connectorDAO:  dao.NewConnectorDAO(),
-		userTenantDAO: dao.NewUserTenantDAO(),
+		connectorDAO: dao.NewConnectorDAO(),
+		docEngine:    store,
 	}
 }
 
@@ -48,30 +55,14 @@ type ListConnectorsResponse struct {
 // ListConnectors list connectors for a user
 // Equivalent to Python's ConnectorService.list(current_user.id)
 func (s *ConnectorService) ListConnectors(userID string) (*ListConnectorsResponse, error) {
-	// Get tenant IDs by user ID
-	tenantIDs, err := s.userTenantDAO.GetTenantIDsByUserID(userID)
+	if userID == "" {
+		return nil, fmt.Errorf("No authorization.")
+	}
+	connectors, err := s.connectorDAO.ListAccessible(userID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Unable to list connectors.")
 	}
-
-	// For now, use the first tenant ID (primary tenant)
-	// This matches the Python implementation behavior
-	var tenantID string
-	if len(tenantIDs) > 0 {
-		tenantID = tenantIDs[0]
-	} else {
-		tenantID = userID
-	}
-
-	// Query connectors by tenant ID
-	connectors, err := s.connectorDAO.ListByTenantID(tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	return &ListConnectorsResponse{
-		Connectors: connectors,
-	}, nil
+	return &ListConnectorsResponse{Connectors: connectors}, nil
 }
 
 // GetConnector returns safe metadata under the current tenant resource access policy.
@@ -94,4 +85,42 @@ func (s *ConnectorService) GetConnector(ctx context.Context, connectorID, userID
 		detail.IndexingStart = &timestamp
 	}
 	return detail, common.CodeSuccess, nil
+}
+
+// CreateConnectorRequest uses pointers to distinguish omitted frequencies from legal zero.
+type CreateConnectorRequest struct {
+	Name        string         `json:"name"`
+	Source      string         `json:"source"`
+	Config      entity.JSONMap `json:"config"`
+	RefreshFreq *int64         `json:"refresh_freq,omitempty"`
+	PruneFreq   *int64         `json:"prune_freq,omitempty"`
+	TimeoutSecs *int64         `json:"timeout_secs,omitempty"`
+}
+
+// CreateConnector persists configuration without contacting a source or scheduling work.
+func (s *ConnectorService) CreateConnector(ctx context.Context, userID string, req *CreateConnectorRequest) (*dao.ConnectorDetail, common.ErrorCode, error) {
+	if userID == "" {
+		return nil, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	if req == nil || strings.TrimSpace(req.Name) == "" || len(req.Name) > 128 || strings.TrimSpace(req.Source) == "" || len(req.Source) > 128 || req.Config == nil {
+		return nil, common.CodeArgumentError, fmt.Errorf("name, source and config are required")
+	}
+	refresh, prune, timeout := int64(5), int64(5), int64(1740)
+	if req.RefreshFreq != nil {
+		refresh = *req.RefreshFreq
+	}
+	if req.PruneFreq != nil {
+		prune = *req.PruneFreq
+	}
+	if req.TimeoutSecs != nil {
+		timeout = *req.TimeoutSecs
+	}
+	if refresh < 0 || prune < 0 || timeout <= 0 {
+		return nil, common.CodeArgumentError, fmt.Errorf("invalid connector interval or timeout")
+	}
+	connector := &entity.Connector{ID: common.GenerateUUID(), TenantID: userID, Name: req.Name, Source: req.Source, Config: req.Config, InputType: "poll", RefreshFreq: refresh, PruneFreq: prune, TimeoutSecs: timeout, Status: "0"}
+	if err := dao.DB.WithContext(ctx).Create(connector).Error; err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to create connector.")
+	}
+	return &dao.ConnectorDetail{ID: connector.ID, TenantID: userID, Name: connector.Name, Source: connector.Source, InputType: connector.InputType, RefreshFreq: refresh, PruneFreq: prune, TimeoutSecs: timeout, Status: connector.Status}, common.CodeSuccess, nil
 }

@@ -17,12 +17,22 @@
 package service
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"multirag/internal/cache"
+	"multirag/internal/dao"
+	"multirag/internal/engine"
 	"multirag/internal/server"
+	"multirag/internal/storage"
 	"multirag/internal/utility"
+	"time"
 )
 
 // SystemService system service
-type SystemService struct{}
+type SystemService struct {
+	healthChecks map[string]func(context.Context) error
+}
 
 // NewSystemService create system service
 func NewSystemService() *SystemService {
@@ -55,4 +65,104 @@ func (s *SystemService) GetVersion() (*VersionResponse, error) {
 	return &VersionResponse{
 		Version: version,
 	}, nil
+}
+
+// HealthzMeta includes timing and sanitized dependency failures.
+type HealthzMeta struct {
+	Elapsed string `json:"elapsed"`
+	Reason  string `json:"reason,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+type HealthzResponse struct {
+	DB        string                 `json:"db"`
+	Redis     string                 `json:"redis"`
+	DocEngine string                 `json:"doc_engine"`
+	Storage   string                 `json:"storage"`
+	Status    string                 `json:"status"`
+	Meta      map[string]HealthzMeta `json:"_meta,omitempty"`
+}
+
+// Healthz reports every required dependency; /health remains a liveness endpoint.
+func (s *SystemService) Healthz(ctx context.Context) (*HealthzResponse, bool) {
+	checks := s.healthChecks
+	if checks == nil {
+		checks = map[string]func(context.Context) error{
+			"db": func(ctx context.Context) error {
+				if dao.DB == nil {
+					return errHealthUninitialized
+				}
+				db, err := dao.DB.DB()
+				if err != nil {
+					return err
+				}
+				return db.PingContext(ctx)
+			},
+			"redis": func(ctx context.Context) error {
+				if cache.Get() == nil {
+					return errHealthUninitialized
+				}
+				return cache.Get().PingContext(ctx)
+			},
+			"doc_engine": func(ctx context.Context) error { return documentEngineHealth(ctx, engine.Get()) },
+			"storage": func(ctx context.Context) error {
+				if storage.GetStorageFactory().GetStorage() == nil {
+					return errHealthUninitialized
+				}
+				return storage.Readiness(ctx)
+			},
+		}
+	}
+	states := map[string]string{}
+	meta := map[string]HealthzMeta{}
+	allOK := true
+	for _, key := range []string{"db", "redis", "doc_engine", "storage"} {
+		start := time.Now()
+		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+		check := checks[key]
+		var err error
+		if check == nil {
+			err = errHealthUninitialized
+		} else {
+			err = check(bounded)
+		}
+		if bounded.Err() != nil {
+			err = bounded.Err()
+		}
+		cancel()
+		states[key] = "ok"
+		m := HealthzMeta{Elapsed: fmt.Sprintf("%.1f", float64(time.Since(start).Microseconds())/1000)}
+		if err != nil {
+			allOK = false
+			states[key] = "nok"
+			m.Error = key + " health check failed"
+			m.Reason = "probe_failed"
+			switch {
+			case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+				m.Reason = "timeout"
+			case errors.Is(err, errHealthUnsupported):
+				m.Reason = "unsupported"
+			case errors.Is(err, errHealthUninitialized):
+				m.Reason = "uninitialized"
+			}
+		}
+		meta[key] = m
+	}
+	status := "ok"
+	if !allOK {
+		status = "nok"
+	}
+	return &HealthzResponse{DB: states["db"], Redis: states["redis"], DocEngine: states["doc_engine"], Storage: states["storage"], Status: status, Meta: meta}, allOK
+}
+
+var errHealthUnsupported = errors.New("active health probe unavailable")
+var errHealthUninitialized = errors.New("dependency not initialized")
+
+func documentEngineHealth(ctx context.Context, store engine.DocEngine) error {
+	if store == nil {
+		return errHealthUninitialized
+	}
+	if kind, ok := store.(interface{ Type() string }); ok && kind.Type() == "infinity" {
+		return errHealthUnsupported
+	}
+	return store.Ping(ctx)
 }

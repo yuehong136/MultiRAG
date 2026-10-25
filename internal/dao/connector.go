@@ -18,6 +18,7 @@ package dao
 
 import (
 	"context"
+	"gorm.io/gorm"
 	"multirag/internal/entity"
 	"time"
 )
@@ -131,4 +132,162 @@ func (dao *ConnectorDAO) GetAccessibleDetail(ctx context.Context, connectorID, u
 		return nil, err
 	}
 	return &detail, nil
+}
+
+// RebuildConnector replaces old connector documents with scheduled sync tasks.
+func (dao *ConnectorDAO) RebuildConnector(ctx context.Context, db *gorm.DB, connector *entity.Connector, kbID string, documents []*entity.Document) error {
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("connector_id = ? AND kb_id = ?", connector.ID, kbID).Delete(&entity.SyncLogs{}).Error; err != nil {
+			return err
+		}
+
+		if len(documents) > 0 {
+			docIDs := make([]string, 0, len(documents))
+			var tokenNum int64
+			var chunkNum int64
+			for _, document := range documents {
+				docIDs = append(docIDs, document.ID)
+				tokenNum += document.TokenNum
+				chunkNum += document.ChunkNum
+			}
+
+			var mappings []entity.File2Document
+			if err := tx.Where("document_id IN ?", docIDs).Find(&mappings).Error; err != nil {
+				return err
+			}
+			fileIDs := make([]string, 0, len(mappings))
+			seenFileIDs := make(map[string]struct{}, len(mappings))
+			for _, mapping := range mappings {
+				if mapping.FileID == nil || *mapping.FileID == "" {
+					continue
+				}
+				if _, ok := seenFileIDs[*mapping.FileID]; ok {
+					continue
+				}
+				seenFileIDs[*mapping.FileID] = struct{}{}
+				fileIDs = append(fileIDs, *mapping.FileID)
+			}
+
+			if err := tx.Where("doc_id IN ?", docIDs).Delete(&entity.Task{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("document_id IN ?", docIDs).Delete(&entity.File2Document{}).Error; err != nil {
+				return err
+			}
+			if len(fileIDs) > 0 {
+				if err := tx.Unscoped().
+					Where("id IN ? AND tenant_id = ? AND source_type = ? AND NOT EXISTS (SELECT 1 FROM t_ai_file2documents AS other WHERE other.file_id = t_ai_files.id)", fileIDs, connector.TenantID, string(entity.FileSourceKnowledgebase)).
+					Delete(&entity.File{}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Where("id IN ?", docIDs).Delete(&entity.Document{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&entity.Knowledgebase{}).
+				Where("id = ?", kbID).
+				Updates(map[string]interface{}{
+					"doc_num":   gorm.Expr("doc_num - ?", len(docIDs)),
+					"token_num": gorm.Expr("token_num - ?", tokenNum),
+					"chunk_num": gorm.Expr("chunk_num - ?", chunkNum),
+				}).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Model(&entity.Connector{}).
+			Where("id = ?", connector.ID).
+			Update("status", string(entity.TaskStatusSchedule)).Error; err != nil {
+			return err
+		}
+
+		if err := createRebuildSyncLog(tx, connector.ID, kbID, connectorTaskTypeSync, true); err != nil {
+			return err
+		}
+		if syncDeletedFiles, _ := connector.Config["sync_deleted_files"].(bool); syncDeletedFiles {
+			if err := createRebuildSyncLog(tx, connector.ID, kbID, connectorTaskTypePrune, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+const (
+	connectorTaskTypeSync  = "sync"
+	connectorTaskTypePrune = "prune"
+)
+
+func createRebuildSyncLog(tx *gorm.DB, connectorID, kbID, taskType string, reindex bool) error {
+	fromBeginning := "0"
+	if reindex {
+		fromBeginning = "1"
+	}
+	now := time.Now().UTC()
+	return tx.Create(&entity.SyncLogs{
+		ID:               generateUUID(),
+		ConnectorID:      connectorID,
+		KbID:             kbID,
+		TaskType:         taskType,
+		Status:           string(entity.TaskStatusSchedule),
+		FromBeginning:    &fromBeginning,
+		TimeStarted:      &now,
+		ErrorMsg:         "",
+		TotalDocsIndexed: 0,
+	}).Error
+}
+
+// ListLogsByConnectorID lists sync logs for one connector with pagination.
+func (dao *ConnectorDAO) ListLogsByConnectorID(ctx context.Context, connectorID, userID string, offset, limit int) ([]*entity.ConnectorSyncLog, int64, error) {
+	baseQuery := DB.WithContext(ctx).Model(&entity.SyncLogs{}).
+		Joins("JOIN t_ai_connectors AS connector ON t_ai_sync_logs.connector_id = connector.id").
+		Joins("JOIN t_ai_connector2kb ON t_ai_sync_logs.connector_id = t_ai_connector2kb.connector_id AND t_ai_sync_logs.kb_id = t_ai_connector2kb.kb_id").
+		Joins("JOIN t_ai_knowledgebases ON t_ai_sync_logs.kb_id = t_ai_knowledgebases.id AND t_ai_knowledgebases.tenant_id = connector.tenant_id").
+		Where("t_ai_sync_logs.connector_id = ?", connectorID).
+		Where("t_ai_knowledgebases.status = ? AND t_ai_knowledgebases.permission IN ?", "1", []string{"me", "team"}).
+		Where("connector.tenant_id = ? OR t_ai_knowledgebases.created_by = ? OR t_ai_knowledgebases.permission = ? OR EXISTS (SELECT 1 FROM t_ai_user_tenants m WHERE m.tenant_id = connector.tenant_id AND m.user_id = ? AND m.status = ? AND m.role IN ?)", userID, userID, "team", userID, "1", []string{"owner", "admin"})
+
+	var total int64
+	if err := baseQuery.Distinct("t_ai_sync_logs.id").Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	logs := make([]*entity.ConnectorSyncLog, 0)
+	err := baseQuery.
+		Select(
+			"t_ai_sync_logs.id",
+			"t_ai_sync_logs.connector_id",
+			"t_ai_sync_logs.task_type",
+			"t_ai_sync_logs.kb_id",
+			"t_ai_sync_logs.update_date",
+			"t_ai_sync_logs.update_time",
+			"t_ai_sync_logs.new_docs_indexed",
+			"t_ai_sync_logs.total_docs_indexed",
+			"t_ai_sync_logs.docs_removed_from_index",
+			"t_ai_sync_logs.error_msg",
+			"t_ai_sync_logs.error_count",
+			"t_ai_sync_logs.time_started",
+			"connector.refresh_freq AS refresh_freq",
+			"connector.prune_freq AS prune_freq",
+			"t_ai_knowledgebases.name AS kb_name",
+			"t_ai_sync_logs.status",
+		).
+		Distinct().
+		Order("t_ai_sync_logs.update_time DESC, t_ai_sync_logs.id DESC").
+		Offset(offset).
+		Limit(limit).
+		Scan(&logs).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}
+
+// ListAccessible returns owned and actively joined tenants under the detail policy.
+func (dao *ConnectorDAO) ListAccessible(userID string) ([]*ConnectorListItem, error) {
+	result := make([]*ConnectorListItem, 0)
+	membership := DB.Model(&entity.UserTenant{}).Select("1").Where("user_id = ? AND tenant_id = t_ai_connectors.tenant_id AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"})
+	err := DB.Model(&entity.Connector{}).Select("id", "name", "source", "status").Where("tenant_id = ? OR EXISTS (?)", userID, membership).Order("id").Scan(&result).Error
+	return result, err
 }

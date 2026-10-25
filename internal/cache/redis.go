@@ -994,3 +994,11 @@ func RandomSleep(minMs, maxMs int) {
 	duration := time.Duration(rand.Intn(maxMs-minMs)+minMs) * time.Millisecond
 	time.Sleep(duration)
 }
+
+// PingContext checks connectivity without allocating health keys.
+func (r *RedisClient) PingContext(ctx context.Context) error {
+	if r == nil || r.client == nil {
+		return fmt.Errorf("redis is not initialized")
+	}
+	return r.client.Ping(ctx).Err()
+}

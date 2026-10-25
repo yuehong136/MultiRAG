@@ -178,3 +178,13 @@ func (h *SystemHandler) SetLogLevel(c *gin.Context) {
 		"data":    gin.H{"level": req.Level},
 	})
 }
+
+// Healthz returns failure status whenever any required dependency fails.
+func (h *SystemHandler) Healthz(c *gin.Context) {
+	result, ok := h.systemService.Healthz(c.Request.Context())
+	status := http.StatusOK
+	if !ok {
+		status = http.StatusInternalServerError
+	}
+	c.JSON(status, result)
+}
