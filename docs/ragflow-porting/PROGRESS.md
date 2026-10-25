@@ -3736,3 +3736,12 @@ managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 fals
 - Python/Browser/工具、Infinity RAPTOR、Go provider/native/nginx 已串行合入源码组合 `e238e987ed0f2360abf4daf35c229be64f3240c4`；实际 Web master 与 consumer pin 均为 `1eae01eca90f4212dad46ee67970d93a9c616de1`。
 - 定向单元 895 项按首次通过与 setup 补跑合并核对；core 27、Infinity 47、真实 Web API 消费者 1、真实 Chromium、Go 默认 race/build/vet/三个 cmd 及适用静态检查通过。首次失败、补跑和历史专项复用均保留原始回执；不是完整 Python/远程 CI 全量通过。
 - 原始 28 项 WIP 保留，本块独立暂存。精确恢复 bundle、普通 worktree/分支和自有运行资源清理读回，以及最终 main SHA，见外部批次目录 `20261025-batch-after-440153c3/delivery-complete.json`；七个历史 managed worktree 和借用资产保留。未 push、未部署，最终远程 `ci-required` 待运行。
+
+
+## 2026-10-25：775ea556 后二十项本地串行集成
+
+- 冻结范围排除 `775ea556` 至 `f9ce07ce`，直接后修上限 `519e7d98`；二十项逐项处置和保留已有行为的理由见 [本批记录](batch-after-775ea556.md)。
+- A/B/D/E/F 已串行进入后端源码组合 `1c2aa5ea4fce3b9205b2c22ec91b534f04ed7b9e`；C 已进入 Web master，consumer pin 为 `0f4e3f69814968ae52ec10a82ee3a9d82b27cec8`。后续收口只改文档，最终 main SHA 见外部交付凭据。
+- 定向 Python 单测 721 项按首轮与受影响复跑核对全部最新结果；core 55、真实 Web 消费者 8 项通过，零 skip。Go 精确输入复用候选 race、JWT/SQL/CLI、build/vet 报告，当前三个 cmd 另行重新链接成功。静态检查、mypy、锁文件检查通过；首错和复跑保留，不称完整或远程 CI 全绿。
+- I 独立读回 5 个 scratch DB、23 个桶、43 个集合、225 个 Redis 精确键、189 个 fixture 标识和 62 个监听端口均不存在。原始 28 项 WIP 保留，本块独立暂存；七个历史 managed worktree 和借用资产保留。
+- 恢复 bundle、普通 worktree/分支清理、最终 main/消费者绑定及证据摘要见外部目录 `20261025-batch-after-775ea556/delivery-complete.json`。未 push、未部署，远程 `ci-required` 待运行；常驻 worker、真实付费供应商和生产行为未验收，不自动滚动下一批。
