@@ -133,7 +133,11 @@ jobs:
           uv run --no-sync python -m api.multirag_server > .test-results/server.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
-          uv run --no-sync python scripts/smoke.py --wait 180 | tee .test-results/smoke.json
+          if ! uv run --no-sync python scripts/smoke.py --wait 180 2>&1 | tee .test-results/smoke.json; then
+            echo "API smoke failed; last 200 server log lines:"
+            tail -n 200 .test-results/server.log
+            exit 1
+          fi
       - name: Cache fixed quality model
         if: inputs.lane == 'quality'
         uses: actions/cache@v4
