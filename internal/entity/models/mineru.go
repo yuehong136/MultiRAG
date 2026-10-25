@@ -81,6 +81,9 @@ func parseTaskRequest(client *http.Client, urls map[string]string, suffix, metho
 		return fmt.Errorf("parse request failed (HTTP %d)", resp.StatusCode)
 	}
 	if err := decodeBoundedModelJSON(resp.Body, result); err != nil {
+		if err := requestContext(api).Err(); err != nil {
+			return err
+		}
 		return fmt.Errorf("invalid parse response")
 	}
 	return requestContext(api).Err()

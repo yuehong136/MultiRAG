@@ -2,7 +2,10 @@
 // Licensed under the Apache License, Version 2.0.
 package models
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // LongCatModel implements chat, sender streaming and authenticated model discovery.
 type LongCatModel struct{ *openAIChatDriver }
@@ -11,6 +14,7 @@ func NewLongCatModel(urls map[string]string, suffix URLSuffix) *LongCatModel {
 	suffix.Models = strings.Trim(strings.TrimSpace(suffix.Models), "/")
 	d := newOpenAIChatDriver(urls, suffix, "longcat", longCatChatBody)
 	d.waitForStreamEOF = true
+	d.streamIdleTimeout = 60 * time.Second
 	d.strictDiscovery = true
 	d.httpClient.CheckRedirect = rejectModelRedirect
 	return &LongCatModel{d}

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,7 +18,7 @@ func TestAfterD7HostedChatDiscoveryAndVectors(t *testing.T) {
 	for _, provider := range []string{"302.AI", "JieKouAI"} {
 		t.Run(provider, func(t *testing.T) {
 			key, name := "controlled-key", "served-model"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer "+key {
 					t.Error("authentication lost")
 				}
@@ -132,7 +131,7 @@ func TestAfterD7HostedRejectMalformedVectorsAndDiscovery(t *testing.T) {
 			for index, response := range responses {
 				t.Run(fmt.Sprintf("%s/%s/%d", provider, kind, index), func(t *testing.T) {
 					key, name := "key", "model"
-					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+					srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 					defer srv.Close()
 					driver, _ := NewModelFactory().CreateModelDriver(provider, map[string]string{"default": srv.URL}, URLSuffix{Models: "models", Embedding: "embed", Rerank: "rerank"})
 					var err error
@@ -155,7 +154,7 @@ func TestAfterD7HostedRejectMalformedVectorsAndDiscovery(t *testing.T) {
 
 func TestAfterD7ASROCRAndParse(t *testing.T) {
 	key, asrName, ocrName, parseName := "key", "whisper-v3-turbo", "mistral-ocr-latest", "vlm"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+key {
 			t.Error("media credential lost")
 		}
@@ -220,7 +219,7 @@ func TestAfterD7ASROCRAndParse(t *testing.T) {
 func TestAfterD7CometAPISpeechBinaryAndOptions(t *testing.T) {
 	key, name := "key", "tts-1"
 	audio := []byte("RIFF-owned-wave-bytes")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -241,7 +240,7 @@ func TestAfterD7CometAPISpeechBinaryAndOptions(t *testing.T) {
 		t.Fatal("unsupported speech stream exposed")
 	}
 	var calls atomic.Int64
-	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	blocked := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer blocked.Close()
 	m = NewCometAPIModel(map[string]string{"default": blocked.URL}, URLSuffix{ASR: "asr", TTS: "tts"})
 	for _, field := range []string{"model", "input", "api_key", "authorization", "base_url", "stream"} {
@@ -259,7 +258,7 @@ func TestAfterD7CometAPISpeechBinaryAndOptions(t *testing.T) {
 
 func TestAfterD7ProviderCancellationAndMediaErrors(t *testing.T) {
 	key, name := "key", "model"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/wait" {
 			io.Copy(io.Discard, r.Body)
 			<-r.Context().Done()

@@ -6,14 +6,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 )
 
 func TestVoyageContracts(t *testing.T) {
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Header.Get("Authorization") != "Bearer fixture" {
 			t.Error("auth")
@@ -97,7 +96,7 @@ func TestVoyageContracts(t *testing.T) {
 func TestVoyageStrictResults(t *testing.T) {
 	for _, body := range []string{`{"data":[{"index":0}]}`, `{"data":[{"index":null,"relevance_score":0}]}`, `{"data":[{"index":0,"relevance_score":null}]}`, `{"data":[{"index":1,"relevance_score":0}]}`, `{"data":[{"index":0,"relevance_score":0},{"index":0,"relevance_score":1}]}`, `{"data":[]}`, `{"data":[{"index":0,"relevance_score":1e999}]}`, `{"results":[{"index":0,"relevance_score":0}]}`} {
 		t.Run(body, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
 			defer srv.Close()
 			d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Rerank: "rerank"})
 			name, key := "m", "fixture"
@@ -130,7 +129,7 @@ func TestVoyageStrictEmbeddings(t *testing.T) {
 		`{"data":[{"index":0,"embedding":[1]}],"error":"failed"}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
 			defer srv.Close()
 			d := NewVoyageModel(map[string]string{"default": srv.URL}, URLSuffix{Embedding: "embeddings"})
 			name, key := "m", "fixture"
@@ -142,7 +141,7 @@ func TestVoyageStrictEmbeddings(t *testing.T) {
 }
 func TestVoyageBatchDimensionsAndDefaultTopK(t *testing.T) {
 	embeddingCalls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		if r.URL.Path == "/embeddings" {

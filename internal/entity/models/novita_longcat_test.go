@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -42,7 +41,7 @@ func TestNewChatProviderRequestAndReasoningHTTP(t *testing.T) {
 			if provider == "Novita" {
 				response = `{"choices":[{"message":{"content":"<think>inline</think>answer","reasoning_content":"separate"}}]}`
 			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/chat" || r.Header.Get("Authorization") != "Bearer key" {
 					t.Error("URL/key")
 				}
@@ -107,7 +106,7 @@ func TestNewChatProviderStreamsHTTP(t *testing.T) {
 				{"reasoning only", frame("", "reason") + "data: [DONE]\n\n", false},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						var b map[string]any
 						if e := json.NewDecoder(r.Body).Decode(&b); e != nil {
 							t.Error(e)
@@ -156,7 +155,7 @@ func TestNewChatProviderStreamsHTTP(t *testing.T) {
 func TestNewProviderCancellationAndUnsupported(t *testing.T) {
 	for _, provider := range []string{"Novita", "LongCat", "Mistral", "Jina"} {
 		t.Run(provider, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				r.Body.Close()
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.WriteHeader(200)
@@ -226,7 +225,7 @@ func TestMistralNovitaDiscoveryHTTP(t *testing.T) {
 	for _, provider := range []string{"Mistral", "Novita"} {
 		t.Run(provider, func(t *testing.T) {
 			calls := 0
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if r.URL.Path != "/instance/models" || r.Header.Get("Authorization") != "Bearer key" {
 					t.Error("discovery URL/key")
