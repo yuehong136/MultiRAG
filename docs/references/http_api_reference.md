@@ -734,6 +734,11 @@ GET /datasets
 
 创建一个新的知识库。
 
+REST 数据集业务响应使用 `code/message/data`；认证失败仍沿用公共 `retcode/retmsg` 信封。
+`avatar` 可省略、为 `null` 或空字符串；
+非空值仍按支持的图片 MIME/base64 格式校验。`embedding_model: null` 使用租户默认模型，
+显式模型仍须通过当前租户的可用性校验。
+
 **请求**
 
 ```
@@ -790,6 +795,10 @@ POST /datasets
 ### 更新知识库
 
 更新指定知识库的基础信息、分块方法或解析配置。
+
+此处 `PUT` 保留未提供字段；`parser_config` 按已有配置递归合并，未知扩展保留。
+省略 `built_in_metadata` 保留原值，显式 `built_in_metadata: []` 清空该选择。
+空 `avatar` 可保存；非法非空 MIME、类型及越界 pagerank 在写入前拒绝，`pagerank: 0` 合法。
 
 **请求**
 
@@ -1200,6 +1209,10 @@ curl -X POST 'http://{address}/api/v1/datasets/{dataset_id}/documents?type=empty
 GET /datasets/{dataset_id}/documents
 ```
 
+状态过滤接受可重复的 `run`、`run_status`、`run[]` 和 `run_status[]`，四者合并使用。
+每项先去除两侧空白，忽略空项；状态名不区分大小写，数字状态 `0` 也有效。
+任一非法非空状态使请求失败，不会丢弃过滤条件后返回全量；`type=filter` 聚合路径使用相同规则。
+
 **响应**
 
 ```json
@@ -1542,6 +1555,13 @@ DELETE /chats
 
 ## Agent API
 
+### 保存画布标签
+
+`POST /agents`、`PUT /agents/{agent_id}` 接受最多 32 字符的 `canvas_type` 标签。
+创建时默认空字符串；更新省略或为 `null` 时保留，显式空字符串清空，GET 返回保存值。
+标签与 `canvas_category` 执行类别独立，任意业务标签不会将 Agent 改成 DataFlow；
+现有 owner 授权和草稿/发布生命周期继续适用。
+
 ### 执行 Agent
 
 执行 Agent 工作流。
@@ -1577,6 +1597,13 @@ PPIO、TokenPony、Groq 接入聊天和严格模型发现，保留实例凭据�
 取消及流终止校验。TogetherAI 接入 rerank、multipart ASR、二进制 TTS 和 base64 SSE TTS；
 Zhipu 接入 ASR 与普通/流式 TTS；OpenRouter 接入有界 JSON base64 ASR 并保留已有 TTS。
 具体能力按当前目录和驱动校验，不能由 Go 目录推断 Python 或真实供应商兼容性。
+
+FuturMix 使用静态目录与 OpenAI 聊天/SSE，不提供动态模型发现或付费连接探测。
+DeepInfra 支持原生 rerank；`top_n=0` 保留全部结果，零分合法，缺失/null/非有限分数失败。
+Bedrock 支持文本 Converse、二进制 Converse-Stream 与 SigV4 模型发现；实例未提供 URL 时
+按经过校验的 AWS region 构造端点，显式实例 URL 同时绑定推理与发现。认证字段、默认凭据链
+模式及未支持能力见 [Go 模型说明](../../internal/entity/models/README.md)。受控协议验收不代表
+生产 IAM 或真实付费供应商已验收。
 
 Go 模型目录中 `model_types` 表达能力（如 `chat`、`embedding`、`rerank`）；租户模型
 的 `model_type`、旧 `mdl_type` 和按类型筛选继续使用这些能力值。`class` 表达模型系列
@@ -1616,6 +1643,21 @@ Go 检索和 ChatSession 统一通过 `internal/entity/models` 驱动。模型�
 默认模型名称查询保持原始引用；空默认模型返回明确错误，未设置 TTS 返回空名称。
 API/CLI 允许创建名为 default 的实例；自定义模型可设置和查询为默认模型，受同一启用状态校验。
 实例改名/改凭据当前未实现，返回明确错误，不返回成功，也不自动改写历史引用。
+
+Go 存储管理使用下列已鉴权入口，数据集身份和 tenant 命名空间从 SQL 授权记录取得：
+
+| 路径 | 选择与效果 |
+|---|---|
+| `POST/DELETE /api/v1/tenant/chunk_store` | body 指定 `kb_id`；创建另传正整数 `vector_size`，沿既有 KB 管理权限创建/删除 chunk store |
+| `POST/DELETE /api/v1/tenant/metadata_store` | 只管理当前用户的 tenant metadata store |
+| `POST /api/v1/tenant/insert_chunks_from_file` | 服务端文件导入；完整核对 dataset、tenant namespace 和全部 chunk 文档身份后写入 |
+| `DELETE /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks` | body 非空 `chunk_ids` 或 `delete_all: true` 二选一，URL 身份不能被 body 替换 |
+| `POST /api/v1/document/delete_meta` | body 为 `doc_id` 和可选 `keys`；KEYS 是 JSON 数组编码的字符串，如 `"[\"author\"]"`。省略删除整条 metadata；显式空数组、null、重复或空键拒绝 |
+
+这些入口替换旧 Go 内部 table/chunk-rm 路由，CLI 使用 `CHUNK STORE`、`METADATA STORE`
+和带 `IN DATASET` 的完整文档范围，语法见 [CLI README](../../internal/cli/README.md)。
+ES 按物理 metadata ID 原子删除所选键；Infinity 使用严格解码后的 SDK 读改写，
+不声明跨客户端并发写入的原子性；通用 Milvus 写入能力仍明确不可用。
 
 Go embedding 驱动统一使用 `Embed(modelName, texts, apiConfig, embeddingConfig)`，
 绑定后的模型使用 `Embed(texts)`，返回带全局输入索引的 `[]EmbeddingData`（`index`、
@@ -2012,8 +2054,9 @@ Go Ollama driver 使用原生 `POST /api/chat` 与 `GET /api/tags`，实例 base
 和正文，并在 done=true 且有正文时发送 `[DONE]`。空列表可证明服务连通，但不代表已安装模型。
 聊天历史的多段文本和 base64 图片映射到原生 content/images；远程图片 URL、video/file、audio
 明确报不支持，不在服务端下载或静默降成文本。请求取消传至 HTTP，长流无总时长上限，普通调用
-有 120 秒请求超时。embedding 使用 OpenAI 兼容的 `/v1/embeddings`，支持可选 API key、
-维度和共享严格批次校验；Rerank 明确未实现。
+有 120 秒请求超时，流式另有闲置超时。embedding 默认使用原生 `/api/embed`，按 32 项分批，
+校验数量、维度和有限非 null 分量并保留全局输入索引；显式配置的 OpenAI 兼容 embedding
+端点继续使用共享严格校验。API key 可选；Rerank 明确未实现。
 协议参考 [Ollama chat](https://docs.ollama.com/api/chat) 与 [模型发现](https://docs.ollama.com/api/tags)。
 Moonshot 普通/流式聊天未显式配置 temperature 时使用 0.6，显式 0 保留。
 

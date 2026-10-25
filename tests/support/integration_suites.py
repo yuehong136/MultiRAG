@@ -143,6 +143,7 @@ def suite_paths(suite: str) -> list[Path]:
         return [
             INTEGRATION / name
             for name in (
+                "test_after4776_web_contracts.py",
                 "test_agent_draft_session_persistence.py",
                 "test_browser_web_consumer.py",
                 "test_app_list_web_consumers.py",
@@ -170,6 +171,9 @@ def suite_paths(suite: str) -> list[Path]:
 def required_services(paths: list[Path]) -> set[str]:
     required: set[str] = set()
     for path in paths:
+        if path.name in {"test_agent_lifecycle_source_contracts.py", "test_after4776_web_contracts.py"}:
+            required.update(("postgresql", "redis", "minio"))
+            continue
         if path.name == "test_connector_task_controls.py":
             required.add("postgresql")
             continue
