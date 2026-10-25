@@ -124,3 +124,39 @@ def test_mcp_unsafe_probe_has_no_writes_or_external_calls(client: Any, monkeypat
         assert result.json()["retcode"] == int(RetCode.DATA_ERROR)
     write.assert_not_called()
     probe.assert_not_called()
+
+
+async def test_canceled_http_request_closes_its_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(safe_mcp_http, "assert_url_is_safe", lambda _url: ("public.example", "93.184.216.34"))
+    transport = safe_mcp_http.PublicMCPTransport()
+    entered = asyncio.Event()
+
+    async def send(_request: httpx2.Request) -> httpx2.Response:
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("canceled transport resumed")
+
+    close = AsyncMock(wraps=transport._transport.aclose)
+    monkeypatch.setattr(transport._transport, "handle_async_request", send)
+    monkeypatch.setattr(transport._transport, "aclose", close)
+    async with httpx2.AsyncClient(transport=transport) as client:
+        request = asyncio.create_task(client.get("https://public.example/mcp"))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", [httpx2.ConnectError, httpx2.ReadTimeout])
+async def test_http_failure_keeps_its_typed_outcome(monkeypatch: pytest.MonkeyPatch, failure: type[httpx2.TransportError]) -> None:
+    monkeypatch.setattr(safe_mcp_http, "assert_url_is_safe", lambda _url: ("public.example", "93.184.216.34"))
+    transport = safe_mcp_http.PublicMCPTransport()
+
+    async def send(_request: httpx2.Request) -> httpx2.Response:
+        raise failure("controlled transport failure")
+
+    monkeypatch.setattr(transport._transport, "handle_async_request", send)
+    async with httpx2.AsyncClient(transport=transport) as client:
+        with pytest.raises(failure, match="controlled transport failure"):
+            await client.get("https://public.example/mcp")
