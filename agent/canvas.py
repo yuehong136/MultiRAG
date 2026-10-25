@@ -377,6 +377,7 @@ class Canvas(Graph):
                     self.globals[k] = {}
                 else:
                     self.globals[k] = None
+        self.globals["sys.chat_template_kwargs"] = None
         variable_keys = {key[4:] for key in self.globals if key.startswith("env.")} | self.variables.keys()
         for key in variable_keys:
             variable = self.variables.get(key, {})
@@ -396,6 +397,11 @@ class Canvas(Graph):
             self.globals[f"env.{key}"] = value
 
     async def run(self, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        chat_template_kwargs = kwargs.get("chat_template_kwargs")
+        if chat_template_kwargs is not None and not isinstance(chat_template_kwargs, dict):
+            raise ValueError("chat_template_kwargs must be a JSON object or null.")
+        # Request-scoped overrides must not survive a restored DSL or next turn.
+        self.globals["sys.chat_template_kwargs"] = deepcopy(chat_template_kwargs)
         self.globals["sys.date"] = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
         # Raw IDs are a per-turn reference, never authority. File consumers
         # restore server descriptors in the authenticated artifact owner's scope.

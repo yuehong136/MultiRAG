@@ -124,6 +124,17 @@ def _parse_tool_arguments(name: str, raw: str) -> dict[str, Any]:
     return arguments
 
 
+def _chat_template_request_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Encode template overrides in the OpenAI-compatible extension body."""
+    result = dict(options)
+    value = result.pop("chat_template_kwargs", None)
+    if value is not None:
+        if not isinstance(value, dict):
+            raise ValueError("chat_template_kwargs must be a JSON object or null.")
+        result["extra_body"] = {**deepcopy(result.get("extra_body") or {}), "chat_template_kwargs": deepcopy(value)}
+    return result
+
+
 class Base(ToolHistoryMixin, ABC):
     def __init__(self, key, model_name, base_url, **kwargs):
         timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
@@ -208,6 +219,7 @@ class Base(ToolHistoryMixin, ABC):
         if stop:
             request_kwargs["stop"] = stop
 
+        request_kwargs = _chat_template_request_options({**request_kwargs, "chat_template_kwargs": kwargs.get("chat_template_kwargs")})
         response = await self.async_client.chat.completions.create(**request_kwargs)
 
         async with response:
@@ -561,6 +573,7 @@ class Base(ToolHistoryMixin, ABC):
             request_kwargs=kwargs,
         )
 
+        kwargs = _chat_template_request_options(kwargs)
         response = await self.async_client.chat.completions.create(model=self.model_name, messages=history, **gen_conf, **kwargs)
 
         if not response.choices or not response.choices[0].message or not response.choices[0].message.content:
@@ -1371,7 +1384,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         reasoning_start = False
         total_tokens = 0
 
-        request_options = {key: kwargs[key] for key in ("extra_headers", "extra_query") if key in kwargs}
+        request_options = {key: kwargs[key] for key in ("extra_headers", "extra_query", "chat_template_kwargs") if key in kwargs}
         completion_args = self._construct_completion_args(history=history, stream=True, tools=False, **{**gen_conf, **request_options})
         stop = kwargs.get("stop")
         if stop:
@@ -1783,7 +1796,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
                 completion_args["extra_query"] = query
         if extra_headers:
             completion_args["extra_headers"] = extra_headers
-        return completion_args
+        return _chat_template_request_options(completion_args)
 
 
 class RAGconChat(Base):

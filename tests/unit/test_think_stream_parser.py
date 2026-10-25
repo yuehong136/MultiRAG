@@ -177,6 +177,7 @@ class _ReasoningOnlyThenVisibleChatModel:
 def _make_component(model: Any) -> tuple[LLM, dict[str, Any]]:
     component = object.__new__(LLM)
     component._id = "llm-test"
+    component._canvas = SimpleNamespace(globals={})
     component.chat_mdl = model
     component.imgs = []
     component._param = SimpleNamespace(gen_conf=lambda: {})
