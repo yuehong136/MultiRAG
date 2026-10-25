@@ -9,9 +9,16 @@ Provides functionality for evaluating RAG system performance including:
 - Evaluation execution
 - Metrics computation
 - Configuration recommendations
+
+Token usage is a cl100k_base estimate of the returned chat prompt and answer,
+not provider billing. Returned prompts may contain diagnostic text. Missing or
+empty prompts fall back to the question alone and omit system/retrieved context.
+No additional model call is made for accounting; run summaries retain their
+existing metric averages. Historic results may still have null token_usage.
 """
 
 import logging
+from contextlib import closing
 from datetime import datetime
 from timeit import default_timer as timer
 from typing import Any
@@ -24,6 +31,7 @@ from api.db.services.dialog_service import DialogService
 from common.constants import StatusEnum
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp
+from common.token_utils import encoder
 
 
 class EvaluationDatasetService(CommonService):
@@ -354,18 +362,39 @@ class EvaluationService:
 
             # 评测跑在同步线程上,直接用 dialog_service 的同步 chat
             # (async_chat 已迁 AsyncSession,不再接受本上下文的同步 Session)
-            def chat(dialog, messages, stream=True, **kwargs):
-                from api.db.services.dialog_service import chat as dialog_chat
+            from api.db.services.dialog_service import chat
 
-                return dialog_chat(dialog, messages, db, stream=stream, **kwargs)
-
-            for ans in chat(dialog, messages, stream=False):
-                if isinstance(ans, dict):
-                    answer = ans.get("answer", "")
-                    retrieved_chunks = ans.get("reference", {}).get("chunks", [])
-                    break
+            ans: dict[str, Any] = {}
+            with closing(chat(dialog, messages, db, stream=False)) as responses:
+                for response in responses:
+                    if isinstance(response, dict):
+                        ans = response
+                        answer = ans.get("answer", "") or ""
+                        retrieved_chunks = ans.get("reference", {}).get("chunks", [])
+                        break
+                else:
+                    logging.warning("Evaluation case %s produced no answer from chat; estimating empty output", case.get("id", "unknown"))
 
             execution_time = timer() - start_time
+
+            # Count the returned prompt without another model call. Chat prompts may
+            # include diagnostics; these are text estimates, never billing usage.
+            full_prompt = ans.get("prompt", "")
+            prompt_source = "chat_prompt" if full_prompt else "question_only"
+            if not full_prompt:
+                logging.debug("Evaluation case %s: question-only token estimate undercounts system and retrieved context", case.get("id", "unknown"))
+            # Treat special-token spellings as ordinary user text. Let tokenizer
+            # failures fail the case rather than silently recording a false zero.
+            prompt_tokens = len(encoder.encode(full_prompt or case.get("question", "") or "", disallowed_special=()))
+            completion_tokens = len(encoder.encode(answer, disallowed_special=()))
+            token_usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "estimated": True,
+                "tokenizer": "cl100k_base",
+                "prompt_source": prompt_source,
+            }
 
             # Compute metrics
             metrics = cls._compute_metrics(
@@ -386,7 +415,7 @@ class EvaluationService:
                 "retrieved_chunks": retrieved_chunks,
                 "metrics": metrics,
                 "execution_time": execution_time,
-                "token_usage": None,  # TODO: Track token usage
+                "token_usage": token_usage,
             }
 
             EvaluationResultService.insert(db, **result)
@@ -404,14 +433,14 @@ class EvaluationService:
         reference_answer: str | None,
         retrieved_chunks: list[dict[str, Any]],
         relevant_chunk_ids: list[str] | None,
-    ) -> dict[str, float]:
+    ) -> dict[str, float | int]:
         """
         Compute evaluation metrics for a single test case.
 
         Returns:
             Dictionary of metric names to values
         """
-        metrics = {}
+        metrics: dict[str, float | int] = {}
 
         # Retrieval metrics (if ground truth chunks provided)
         if relevant_chunk_ids:
