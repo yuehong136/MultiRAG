@@ -16,6 +16,8 @@ optional media interface must both match before the service invokes a provider.
 | OrcaRouter | Chat/discovery and binary speech | `v1` routes; explicit unsupported streaming speech and other unimplemented capabilities |
 | Qiniu | Chat/vision and discovery | Model-specific thinking parameters; embedding, rerank and media remain unavailable |
 | PaddleOCR_Local | OCR from bytes | No required key; base64 `file`, PDF `fileType=0`, `layoutParsingResults[].markdown.text` |
+| 302.AI | Chat/discovery, embedding/rerank, ASR, OCR and URL parse tasks | Trimmed input identities; method-selected chat mode; bodyless authenticated inventory; authorized audio/document bytes and strict indexed results |
+| Voyage AI | Embedding and rerank | `output_dimension`, `top_k`, strict raw indices and scores; no quota-consuming discovery probe |
 | LongCat | Chat and authenticated discovery | `openai/v1/chat/completions`, bodyless `openai/v1/models` GET; strict bounded lists |
 | xAI | Chat/discovery, ASR and binary speech | Multipart `stt`; JSON `tts` with `text`, `voice_id`, `output_format.codec`; binary sender streaming, no provider SSE assumption |
 | Replicate | Chat/embedding predictions and bge rerank | Versioned `v1/predictions` with a 64-character version; JSON pair-list string `input_list`, async polling and finite raw scores |
@@ -94,3 +96,23 @@ still required. The new adapters share strict raw chat/list/SSE validation, requ
 and idle deadlines. Huawei rerank validates all returned scores before TopN selection; the
 bound facade restores input order. Controlled HTTP/JWT/SQL/CLI evidence is distinct from
 real supplier credentials and production validation.
+
+302.AI trims model names, rerank queries, document URLs and task IDs on copies;
+blank required identities fail before HTTP. Chat methods determine `stream` even
+when the option disagrees. JSON chat/discovery and multipart ASR request JSON
+responses; sender chat requests SSE. URL parsing requires a selected model and a
+public HTTP(S) URL without userinfo or fragments; task IDs use the local bounded
+alphanumeric/hyphen/underscore grammar. File-path access stays in the service
+boundary: model adapters receive bytes. Empty vector/rerank input makes no request,
+and zero scores/options remain valid.
+
+LongCat and Voyage use process-level shared pools with request-level credentials
+and copied endpoint maps. Constructors deliberately retain those startup pools
+when `http.DefaultTransport` changes later. Standard pools are cloned without
+mutating the default; chat preserves custom RoundTripper routing, while the
+provider pool uses a standard fallback with dial/TLS/header deadlines. This avoids
+a pool per request-scoped driver. 302.AI and LongCat sender streams have a
+60-second idle deadline, reset on received bytes, rather than a total stream
+duration limit. Non-streaming requests retain the 120-second call deadline.
+Controlled tests cover custom/nil defaults and
+real loopback requests, without asserting paid supplier or production behavior.

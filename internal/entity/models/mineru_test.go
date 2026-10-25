@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,7 +15,7 @@ import (
 func TestMinerUTaskLifecycle(t *testing.T) {
 	key, name := "controlled-key", "vlm"
 	state := "pending"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+key {
 			t.Error("wrong authentication")
 		}
@@ -93,7 +92,7 @@ func TestMinerURejectsMalformedTasks(t *testing.T) {
 		{"query-invalid-artifact", `{"code":0,"data":{"task_id":"job-1","state":"done","full_zip_url":"file:///private"}}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.response) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.response) }))
 			defer srv.Close()
 			m := NewMinerUModel(map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "task"})
 			var err error
@@ -111,7 +110,7 @@ func TestMinerURejectsMalformedTasks(t *testing.T) {
 
 func TestMinerURejectsInputBeforeHTTP(t *testing.T) {
 	var calls atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer srv.Close()
 	m := NewMinerUModel(map[string]string{"default": srv.URL}, URLSuffix{DocumentParse: "task"})
 	key, name, blank := "key", "vlm", " "
@@ -144,7 +143,7 @@ func TestMinerURejectsInputBeforeHTTP(t *testing.T) {
 
 func TestMinerUCancellationAndHTTPFailure(t *testing.T) {
 	key, name := "private-key", "vlm"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/wait/job-1" {
 			<-r.Context().Done()
 			return

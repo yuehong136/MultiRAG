@@ -5,19 +5,29 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type AI302Model struct{ *openAIChatDriver }
 
 func NewAI302Model(urls map[string]string, suffix URLSuffix) *AI302Model {
-	return &AI302Model{newOpenAIChatDriver(urls, suffix, "302ai", ai302ChatBody)}
+	suffix.Chat = strings.Trim(strings.TrimSpace(suffix.Chat), "/")
+	suffix.Models = strings.Trim(strings.TrimSpace(suffix.Models), "/")
+	suffix.Embedding = strings.Trim(strings.TrimSpace(suffix.Embedding), "/")
+	suffix.Rerank = strings.Trim(strings.TrimSpace(suffix.Rerank), "/")
+	suffix.ASR = strings.Trim(strings.TrimSpace(suffix.ASR), "/")
+	suffix.OCR = strings.Trim(strings.TrimSpace(suffix.OCR), "/")
+	suffix.DocumentParse = strings.Trim(strings.TrimSpace(suffix.DocumentParse), "/")
+	suffix.Task = strings.Trim(strings.TrimSpace(suffix.Task), "/")
+	driver := newOpenAIChatDriver(urls, suffix, "302ai", ai302ChatBody)
+	driver.accept = "application/json"
+	driver.streamIdleTimeout = 60 * time.Second
+	return &AI302Model{driver}
 }
 
 func ai302ChatBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]any, error) {
-	if stream && config != nil && config.Stream != nil && !*config.Stream {
-		return nil, fmt.Errorf("302ai: stream must be true")
-	}
-	body, err := openAIChatBody(name, messages, config, stream)
+	// The selected method controls the wire mode, even with a conflicting option.
+	body, err := openAIChatBody(strings.TrimSpace(name), messages, config, stream)
 	if err != nil {
 		return nil, err
 	}
@@ -39,32 +49,41 @@ func ai302ChatBody(name string, messages []Message, config *ChatConfig, stream b
 	return body, nil
 }
 
+// Normalize copies so concurrent calls never mutate caller-owned model names.
+func ai302ModelName(name *string) *string {
+	if name == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*name)
+	return &value
+}
+
 func (a *AI302Model) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return embedHTTPWithConfig(a.httpClient, a.BaseURL, a.URLSuffix.Embedding, name, texts, api, config)
+	return embedHTTPWithConfig(a.httpClient, a.BaseURL, a.URLSuffix.Embedding, ai302ModelName(name), texts, api, config)
 }
 
 func (a *AI302Model) Rerank(name *string, query string, texts []string, api *APIConfig, config *RerankConfig) (*RerankResponse, error) {
 	if len(texts) > 0 && strings.TrimSpace(query) == "" {
 		return nil, fmt.Errorf("302ai: rerank query is required")
 	}
-	return rerankHTTP(a.httpClient, a.BaseURL, a.URLSuffix.Rerank, name, query, texts, api, config, map[string]any{"return_documents": nil})
+	return rerankHTTP(a.httpClient, a.BaseURL, a.URLSuffix.Rerank, ai302ModelName(name), strings.TrimSpace(query), texts, api, config, map[string]any{"return_documents": nil})
 }
 
 func (a *AI302Model) TranscribeAudio(name *string, audio []byte, api *APIConfig, config *ASRConfig) (*ASRResponse, error) {
-	return multipartASR(a.httpClient, a.BaseURL, a.URLSuffix.ASR, name, audio, api, config)
+	return multipartASR(a.httpClient, a.BaseURL, a.URLSuffix.ASR, ai302ModelName(name), audio, api, config, mediaHTTPOptions{accept: "application/json"})
 }
 
 // 302.AI proxies the same Mistral document OCR contract, including data URLs.
 func (a *AI302Model) OCRFile(name *string, content []byte, api *APIConfig, config *OCRConfig) (*OCRResponse, error) {
-	return (&MistralModel{a.openAIChatDriver}).OCRFile(name, content, api, config)
+	return (&MistralModel{a.openAIChatDriver}).OCRFile(ai302ModelName(name), content, api, config)
 }
 
 func (a *AI302Model) OCRURL(name *string, documentURL string, api *APIConfig, config *OCRConfig) (*OCRResponse, error) {
-	return (&MistralModel{a.openAIChatDriver}).OCRURL(name, documentURL, api, config)
+	return (&MistralModel{a.openAIChatDriver}).OCRURL(ai302ModelName(name), strings.TrimSpace(documentURL), api, config)
 }
 
 func (a *AI302Model) ParseFile(name *string, content []byte, documentURL string, api *APIConfig) (*ParseTask, error) {
-	return submitMinerUTask(a.httpClient, a.BaseURL, a.URLSuffix.DocumentParse, name, content, documentURL, api)
+	return submitMinerUTask(a.httpClient, a.BaseURL, a.URLSuffix.DocumentParse, ai302ModelName(name), content, strings.TrimSpace(documentURL), api)
 }
 
 func (a *AI302Model) ShowTask(id string, api *APIConfig) (*ParseTask, error) {
@@ -72,7 +91,7 @@ func (a *AI302Model) ShowTask(id string, api *APIConfig) (*ParseTask, error) {
 	if suffix == "" {
 		suffix = a.URLSuffix.DocumentParse
 	}
-	return readMinerUTask(a.httpClient, a.BaseURL, suffix, id, api)
+	return readMinerUTask(a.httpClient, a.BaseURL, suffix, strings.TrimSpace(id), api)
 }
 
 func (a *AI302Model) ListTasks(*APIConfig) ([]ParseTask, error) {
@@ -96,7 +115,13 @@ func listStrictHostedModels(driver *openAIChatDriver, api *APIConfig) ([]string,
 		Error json.RawMessage `json:"error"`
 		Code  json.RawMessage `json:"code"`
 	}
-	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil || result.Data == nil || len(result.Error) > 0 && string(result.Error) != "null" {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
+		if err := requestContext(local).Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("invalid hosted model inventory")
+	}
+	if result.Data == nil || len(result.Error) > 0 && string(result.Error) != "null" {
 		return nil, fmt.Errorf("invalid hosted model inventory")
 	}
 	if err := validateModelResponseCode(result.Code); err != nil {
@@ -104,7 +129,7 @@ func listStrictHostedModels(driver *openAIChatDriver, api *APIConfig) ([]string,
 	}
 	names, seen := make([]string, 0, len(*result.Data)), map[string]bool{}
 	for _, item := range *result.Data {
-		if strings.TrimSpace(item.ID) == "" || seen[item.ID] {
+		if item.ID == "" || strings.TrimSpace(item.ID) != item.ID || seen[item.ID] {
 			return nil, fmt.Errorf("invalid or duplicate hosted model ID")
 		}
 		seen[item.ID] = true

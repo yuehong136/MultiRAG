@@ -36,6 +36,7 @@ type openAIChatDriver struct {
 	inlineThink          bool
 	rejectNonzeroCode    bool
 	authHeader           string
+	accept               string
 	strictDiscovery      bool
 	strictStream         bool
 	sseEvents            bool
@@ -123,6 +124,9 @@ func (d *openAIChatDriver) request(method, suffix string, config *APIConfig, bod
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if d.accept != "" {
+		req.Header.Set("Accept", d.accept)
 	}
 	if fields, ok := body.(map[string]interface{}); ok && fields["stream"] == true {
 		req.Header.Set("Accept", "text/event-stream")
