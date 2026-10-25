@@ -17,8 +17,8 @@ values are rejected for numeric settings.
 | `resolution_timeout_seconds` / `community_timeout_seconds` | 1800 / 1800 | Per-attempt phase timeout; zero disables it |
 | `lock_acquire_timeout_seconds` | 600 | Writer acquisition budget; zero selects the bounded 600-second default |
 
-A timeout cancels and drains that attempt before another starts. Running storage
-threads settle before the lease is released; consequently a hung storage call
+A timeout cancels and drains that attempt before another starts. Running storage and synchronous embedding
+threads settle before the lease is released; consequently a hung executor call
 can exceed a phase timeout while draining. Task cancellation interrupts active
 attempts, lock waiting and retry backoff. Cancellation and lost leases cannot
 publish completion markers.

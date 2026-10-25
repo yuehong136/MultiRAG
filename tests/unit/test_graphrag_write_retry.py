@@ -1,6 +1,6 @@
 """GraphRAG retries checked, replay-safe upserts before pruning."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -41,16 +41,12 @@ async def test_set_graph_retries_transient_edge_deletes_and_batch_inserts(monkey
     store = _FlakyDocStore()
     waits: list[int] = []
 
-    async def run_in_thread(function: Callable[..., Any], *args: Any) -> Any:
-        return function(*args)
-
     async def record_sleep(delay: int) -> None:
         waits.append(delay)
 
     monkeypatch.setattr(settings, "docStoreConn", store)
     monkeypatch.setattr(graphrag_utils, "db_connection", _db_connection)
     monkeypatch.setattr(graphrag_utils.KnowledgebaseService, "get_by_id", lambda _db, _kb_id: SimpleNamespace(name="kb-name"))
-    monkeypatch.setattr(graphrag_utils, "thread_pool_exec", run_in_thread)
     monkeypatch.setattr(graphrag_utils, "clear_phase_markers", lambda *args: None)
     monkeypatch.setattr(graphrag_utils.asyncio, "sleep", record_sleep)
 
