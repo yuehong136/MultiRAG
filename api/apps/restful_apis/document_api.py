@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -152,7 +152,7 @@ class UpdateDocumentRequest(DocumentUpdatePatch):
 
 class DeleteDocumentsRequest(BaseModel):
     ids: list[str] | None = None
-    delete_all: bool = False
+    delete_all: StrictBool = False
 
 
 class UpdateMetadataConfigRequest(BaseModel):

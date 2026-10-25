@@ -78,6 +78,8 @@ Skills Space 应在自己的持久 operation 中维护授权后的资源清单�
 
 `DELETE /api/v1/datasets/{dataset_id}/documents` 保留独立合同：
 `ids` 与 `delete_all=true` 必须提供其一，非空 `ids` 与 `delete_all=true` 互斥。
+`delete_all` 只接受 JSON 布尔值；字符串 `"true"`、`"false"` 和数字 `0`、`1`
+返回 HTTP 422，在访问或删除服务执行前拒绝，避免类型强制转换触发全量删除。
 先检查 dataset 可访问性，再将整批 ID 与该 dataset 的文档集合比较；包含任一不存在、
 同 owner 的其他 dataset 或其他 owner 的文档 ID，整批 `code=102`，不进入删除链。
 此预检拒绝没有文件/对象/关联文档/索引/任务/元数据/计数的删除副作用。

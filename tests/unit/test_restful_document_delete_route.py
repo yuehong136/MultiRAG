@@ -12,6 +12,8 @@ DELETE /api/v1/datasets/{dataset_id}/documents 是 web 会话与 API token 的�
 import sys
 from types import SimpleNamespace
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.db.db_models import get_async_db, get_db
@@ -110,6 +112,16 @@ def test_delete_deduplicates_ids(client, monkeypatch):
     assert body["data"] == {"deleted": 2}
     assert sorted(delete_calls[0]["ids"]) == ["doc1", "doc2"]
     _assert_sync_facade(sessions)
+
+
+@pytest.mark.parametrize("value", ["true", "false", "1", "0", 1, 0])
+def test_delete_all_requires_json_boolean_before_service_calls(client: TestClient, monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    sessions: list[object] = []
+    calls = _stub_chain(monkeypatch, sessions)
+    response = client.request("DELETE", _PATH, json={"delete_all": value})
+    assert response.status_code == 422
+    assert [(error["loc"], error["type"]) for error in response.json()["detail"]] == [(["body", "delete_all"], "bool_type")]
+    assert calls == [] and sessions == []
 
 
 def test_delete_requires_ids_or_delete_all(client, monkeypatch):
