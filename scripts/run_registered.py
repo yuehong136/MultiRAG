@@ -54,12 +54,16 @@ def stop_group(process: subprocess.Popen[bytes]) -> bool:
 
 def remove_owned_tree(path: Path) -> None:
     """Make only owned directories removable, without following borrowed links."""
-    os.chmod(path, stat.S_IMODE(path.lstat().st_mode) | stat.S_IRWXU, follow_symlinks=False)
+    mode = path.lstat().st_mode
+    if not stat.S_ISDIR(mode):
+        raise NotADirectoryError("owned cleanup root is not a directory")
+    os.chmod(path, stat.S_IMODE(mode) | stat.S_IRWXU, follow_symlinks=False)
     for directory, children, _files in os.walk(path, followlinks=False):
         for child_name in children:
             child_path = Path(directory) / child_name
-            if not child_path.is_symlink():
-                os.chmod(child_path, stat.S_IMODE(child_path.lstat().st_mode) | stat.S_IRWXU, follow_symlinks=False)
+            mode = child_path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                os.chmod(child_path, stat.S_IMODE(mode) | stat.S_IRWXU, follow_symlinks=False)
     shutil.rmtree(path)
 
 

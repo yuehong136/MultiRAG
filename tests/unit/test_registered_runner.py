@@ -147,14 +147,31 @@ class RegisteredRunnerTest(unittest.TestCase):
         borrowed = self.root / "borrowed"
         borrowed.mkdir()
         (borrowed / "unchanged").write_text("shared")
+        (borrowed / "unchanged").chmod(0o444)
         borrowed.chmod(0o555)
         try:
-            program = f'import os,pathlib; p=pathlib.Path(os.environ["GOMODCACHE"])/"module"; p.mkdir(); (p/"file").write_text("x"); p.chmod(0o555); (p.parent/"borrowed").symlink_to({str(borrowed)!r},target_is_directory=True)'
+            program = f'import os,pathlib; p=pathlib.Path(os.environ["GOMODCACHE"])/"module"; p.mkdir(); (p/"file").write_text("x"); (p/"file").chmod(0o444); p.chmod(0o555); (p.parent/"borrowed").symlink_to({str(borrowed)!r},target_is_directory=True)'
             result = subprocess.run(self.command(program), capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(borrowed.stat().st_mode & 0o777, 0o555)
             self.assertEqual((borrowed / "unchanged").read_text(), "shared")
+            self.assertEqual((borrowed / "unchanged").stat().st_mode & 0o777, 0o444)
             self.assert_clean(self.events())
+        finally:
+            borrowed.chmod(0o700)
+
+    def test_cleanup_rejects_symlink_root_without_changing_target(self) -> None:
+        module = self.load_runner()
+        borrowed = self.root / "borrowed-root"
+        borrowed.mkdir()
+        borrowed.chmod(0o555)
+        link = self.root / "owned-root-link"
+        link.symlink_to(borrowed, target_is_directory=True)
+        try:
+            with self.assertRaises(NotADirectoryError):
+                module.remove_owned_tree(link)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(borrowed.stat().st_mode & 0o777, 0o555)
         finally:
             borrowed.chmod(0o700)
 
