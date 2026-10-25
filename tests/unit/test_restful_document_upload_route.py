@@ -7,9 +7,11 @@ POST /api/v1/datasets/{dataset_id}/documents 是 web 会话与 API token 的统�
 键名映射的纯逻辑钉板（含未知 run 值原样透出的 fallback）也收在本文件。
 """
 
+import json
 import sys
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
@@ -39,7 +41,7 @@ def _stub_happy_chain(monkeypatch, sessions, upload_calls=None):
     def _upload(cls, s, k, file_contents, user_id, parent_path=None, **kw):
         sessions.append(s)
         if upload_calls is not None:
-            upload_calls.append({"file_contents": file_contents, "user_id": user_id, "parent_path": parent_path})
+            upload_calls.append({"file_contents": file_contents, "user_id": user_id, "parent_path": parent_path, **kw})
         return [], [(dict(_RAW_DOC), b"blob")]
 
     monkeypatch.setattr(FileService, "upload_document", classmethod(_upload))
@@ -220,3 +222,34 @@ def test_process_run_mapping_keeps_unknown_run_value():
     """未知 run 值原样透出（不强制归 UNSTART），避免丢失状态信息。"""
     assert document_api_service._process_run_mapping({"run": "9"}, "9") == {"run": "9"}
     assert document_api_service._process_run_mapping({}, "3") == {"run": "DONE"}
+
+
+def test_upload_passes_document_table_override(client: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions: list[object] = []
+    calls: list[dict] = []
+    _stub_happy_chain(monkeypatch, sessions, calls)
+    config = {"table_column_mode": "manual", "table_column_roles": {"title": "indexing", "score": "metadata"}}
+    response = client.post(_PATH, files=[("file", ("a.csv", b"title,score\nOne,0\n", "text/csv"))], data={"parser_config": json.dumps(config)})
+    assert response.json()["code"] == 0
+    assert calls[0]["parser_config_override"] == config
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "{",
+        "null",
+        "[]",
+        '{"layout_recognize":"Plain Text"}',
+        '{"table_column_mode":false}',
+        '{"table_column_roles":{"x":"bad"}}',
+        '{"table_column_roles":null}',
+        '{"table_column_roles":{"":"metadata"}}',
+    ],
+)
+def test_upload_rejects_invalid_table_overrides_without_service_calls(client: object, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    calls: list[dict] = []
+    _stub_happy_chain(monkeypatch, [], calls)
+    result = client.post(_PATH, files=[("file", ("a.csv", b"x\ny\n", "text/csv"))], data={"parser_config": value})
+    assert result.json()["code"] == int(RetCode.ARGUMENT_ERROR)
+    assert calls == []

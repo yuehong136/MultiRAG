@@ -26,6 +26,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.skills.file_guard import SKILL_SOURCES
 from api.utils.file_utils import filename_type, read_potential_broken_pdf, sanitize_path, thumbnail_img
+from api.utils.validation_utils import validate_upload_parser_config
 from common import settings
 from common.constants import MAXIMUM_PAGE_NUMBER, FileSource, ParserType, TaskStatus
 from common.misc_utils import get_uuid
@@ -377,8 +378,20 @@ class FileService(CommonService):
 
     @classmethod
     def upload_document(
-        cls, db: Session, kb: Knowledgebase, file_objs: list, user_id: str, labels: list[str] | None = None, src: str = "local", parent_path: str | None = None
+        cls,
+        db: Session,
+        kb: Knowledgebase,
+        file_objs: list,
+        user_id: str,
+        labels: list[str] | None = None,
+        src: str = "local",
+        parent_path: str | None = None,
+        parser_config_override: dict[str, Any] | None = None,
     ) -> tuple[list[str], list[tuple[dict, bytes]]]:
+        overrides = validate_upload_parser_config(parser_config_override) if parser_config_override is not None else {}
+        parser_config = {**(kb.parser_config or {}), **overrides}
+        if overrides:
+            parser_config["table_column_overrides"] = dict(overrides)
         # 初始化根文件夹和知识库文件夹
         root_folder = cls.get_root_folder(db, user_id)
         pf_id = root_folder["id"]
@@ -460,7 +473,7 @@ class FileService(CommonService):
                     "kb_id": kb.id,
                     "parser_id": cls.get_parser(filetype, filename, kb.parser_id),
                     "pipeline_id": kb.pipeline_id,
-                    "parser_config": kb.parser_config,
+                    "parser_config": dict(parser_config),
                     "created_by": user_id,
                     "type": filetype,
                     "name": filename,
