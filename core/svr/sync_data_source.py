@@ -42,6 +42,8 @@ from common.data_source import (
     RestAPIConnector,
     RSSConnector,
     SeaFileConnector,
+    SharePointConnector,
+    SlackConnector,
     ZendeskConnector,
 )
 from common.data_source.bitbucket.connector import BitbucketConnector
@@ -52,7 +54,7 @@ from common.data_source.github.connector import GithubConnector
 from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
 from common.data_source.imap_connector import _as_utc, imap_scope_signature
-from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, collect_slim_document_snapshot
+from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, StaticCredentialsProvider, collect_slim_document_snapshot
 from common.data_source.models import ConnectorFailure, Document, KeyRecord, SeafileSyncScope
 from common.data_source.rdbms_connector import rdbms_scope_signature
 from common.data_source.webdav_connector import WebDAVConnector
@@ -953,18 +955,60 @@ class Jira(SyncBase):
         return [str(value).strip() for value in values if value is not None and str(value).strip()]
 
 
+def _connector_batch_size(conf: dict[str, Any]) -> int:
+    value = conf.get("sync_batch_size", conf.get("batch_size", INDEX_BATCH_SIZE))
+    if type(value) is not int or value <= 0:
+        raise ValueError("Connector batch size must be a positive integer")
+    return value
+
+
+class _SourceTaskGuard:
+    """Check cancellation/deadline between finite SDK requests and pages."""
+
+    def __init__(self, task: dict[str, Any]) -> None:
+        self.task_id = task["id"]
+        self.deadline = time.monotonic() + task["timeout_secs"]
+
+    def __call__(self) -> None:
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError("Connector task deadline exceeded")
+        with db_connection() as db:
+            SyncLogsService.raise_if_cancelled(db, self.task_id)
+
+
 class SharePoint(SyncBase):
     SOURCE_NAME: str = FileSource.SHAREPOINT
 
-    async def _generate(self, task: dict):
-        pass
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        self.connector = SharePointConnector(batch_size=_connector_batch_size(self.conf), check_active=_SourceTaskGuard(task))
+        self.connector.load_credentials(self.conf.get("credentials") or {})
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        start = 0.0 if task["reindex"] == "1" or task["poll_range_start"] is None else task["poll_range_start"].timestamp()
+        return self.connector.poll_source(start, datetime.now(UTC).timestamp())
 
 
 class Slack(SyncBase):
     SOURCE_NAME: str = FileSource.SLACK
 
-    async def _generate(self, task: dict):
-        pass
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        channels = self.conf.get("channels")
+        if isinstance(channels, str):
+            channels = [name.strip() for name in channels.split(",")]
+            if any(not name for name in channels):
+                raise ValueError("Slack channels must contain nonempty names")
+        self.connector = SlackConnector(
+            channels=channels, channel_regex_enabled=self.conf.get("channel_regex_enabled", False), batch_size=_connector_batch_size(self.conf), check_active=_SourceTaskGuard(task)
+        )
+        credentials = self.conf.get("credentials") or {}
+        self.connector.set_credentials_provider(StaticCredentialsProvider(tenant_id=task["tenant_id"], connector_name=FileSource.SLACK, credential_json=credentials))
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        if task["reindex"] == "1" or task["poll_range_start"] is None:
+            return self.connector.load_from_state()
+        return self.connector.poll_source(task["poll_range_start"].timestamp(), datetime.now(UTC).timestamp())
 
 
 class Teams(SyncBase):

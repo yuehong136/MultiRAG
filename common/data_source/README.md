@@ -268,3 +268,8 @@ JSON 对象文本或逐行 `key=value`；`request_body` 接受 JSON 对象或对
   重定向拒绝，以避免 body 泄漏。401/403 不重试；网络错误、429/5xx 最多尝试三次。
 
 本地验证使用受控 HTTP 和隔离 PostgreSQL/MinIO；不代表任意第三方 API、生产调度或真实供应商已验收。
+
+## SharePoint / Slack
+
+两类源的配置、增量边界、线程处理及权限/失败限制见
+[SharePoint 与 Slack 导入](sharepoint-slack.md)。两类源暂不开放删除同步。
