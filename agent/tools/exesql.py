@@ -138,8 +138,8 @@ class ExeSQL(ToolBase, ABC):
             db = pyodbc.connect(conn_str)
         elif self._param.db_type == "trino":
             try:
-                import trino
-                from trino.auth import BasicAuthentication
+                trino = import_module("trino")
+                BasicAuthentication = import_module("trino.auth").BasicAuthentication
             except Exception:
                 raise Exception("Missing dependency 'trino'. Please install: pip install trino")
 
@@ -262,10 +262,14 @@ class ExeSQL(ToolBase, ABC):
                     if cursor.rowcount == 0:
                         sql_res.append({"content": "No record in the database!"})
                         continue
+                    rows = cursor.fetchmany(self._param.max_records)
+                    if not rows:
+                        sql_res.append({"content": "No record in the database!"})
+                        continue
                     if self._param.db_type == "mssql":
-                        single_res = pd.DataFrame.from_records(cursor.fetchmany(self._param.max_records), columns=[desc[0] for desc in cursor.description])
+                        single_res = pd.DataFrame.from_records(rows, columns=[desc[0] for desc in cursor.description])
                     else:
-                        single_res = pd.DataFrame(list(cursor.fetchmany(self._param.max_records)))
+                        single_res = pd.DataFrame(list(rows))
                         single_res.columns = [i[0] for i in cursor.description]
 
                     for col in single_res.columns:
@@ -279,7 +283,16 @@ class ExeSQL(ToolBase, ABC):
                 except Exception as error:
                     # PostgreSQL rejects later statements until the failed transaction
                     # is rolled back. Never suppress a failed recovery/connection loss.
-                    db.rollback()
+                    if self._param.db_type == "trino":
+                        # Trino defaults to AUTOCOMMIT; rollback without an active
+                        # transaction raises. Only server query failures may continue;
+                        # transport/session failures are not statement results.
+                        if not isinstance(error, trino.exceptions.TrinoQueryError):
+                            raise
+                        if db.transaction is not None:
+                            db.rollback()
+                    else:
+                        db.rollback()
                     message = f"SQL Execution Failed: {single_sql}\n{error}"
                     sql_res.append({"content": message})
                     formalized_content.append(message)

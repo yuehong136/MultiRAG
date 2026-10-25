@@ -190,3 +190,61 @@ def test_db2_connection_and_recovery_failures_are_not_statement_results(monkeypa
         tool._invoke(sql="bad;last")
     assert tool.executed == ([] if failure == "connect" else ["bad"])
     assert state["closed"] is (failure == "rollback")
+
+
+@pytest.mark.parametrize("state", ["autocommit", "transaction", "transport", "rollback-failure"])
+def test_trino_recovery_uses_real_transaction_semantics(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
+    class QueryError(Exception):
+        pass
+
+    tool = SQLTool("trino")
+    tool._param.database = "catalog.schema"
+    connection = Connection(tool)
+    connection.transaction = object() if state in {"transaction", "rollback-failure"} else None
+    real_execute = connection.statement_cursor.execute
+
+    def execute(sql: str) -> None:
+        if sql == "bad":
+            tool.executed.append(sql)
+            if state == "transport":
+                raise ConnectionError("transport lost")
+            raise QueryError("server rejected query")
+        real_execute(sql)
+
+    def rollback() -> None:
+        if connection.transaction is None:
+            raise RuntimeError("no transaction was started")
+        if state == "rollback-failure":
+            raise ConnectionError("transaction recovery failed")
+        connection.rollbacks += 1
+        connection.transaction = None
+
+    monkeypatch.setattr(connection.statement_cursor, "execute", execute)
+    monkeypatch.setattr(connection, "rollback", rollback)
+    driver = SimpleNamespace(dbapi=SimpleNamespace(connect=lambda **kwargs: connection), exceptions=SimpleNamespace(TrinoQueryError=QueryError))
+    monkeypatch.setattr(exesql, "import_module", lambda name: driver if name == "trino" else SimpleNamespace(BasicAuthentication=object))
+    if state in {"transport", "rollback-failure"}:
+        with pytest.raises(ConnectionError):
+            tool._invoke(sql="first;bad;last")
+        assert tool.executed == ["first", "bad"]
+    else:
+        tool._invoke(sql="first;bad;last")
+        assert tool.output("json")[0] == tool.output("json")[2] == [{"value": 1}]
+        assert "server rejected query" in tool.output("json")[1]["content"]
+        assert connection.rollbacks == (1 if state == "transaction" else 0)
+    assert connection.closed and connection.statement_cursor.closed
+
+
+def test_unknown_rowcount_empty_fetch_keeps_later_statements(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = SQLTool()
+    connection = attach(monkeypatch, tool)
+    original = connection.statement_cursor.execute
+
+    def execute(sql: str) -> None:
+        original(sql)
+        connection.statement_cursor.rowcount = -1
+
+    monkeypatch.setattr(connection.statement_cursor, "execute", execute)
+    tool._invoke(sql="first;empty;last")
+    assert tool.output("json") == [[{"value": 1}], {"content": "No record in the database!"}, [{"value": 1}]]
+    assert connection.rollbacks == 0 and connection.closed
