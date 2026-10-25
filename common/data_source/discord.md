@@ -4,6 +4,15 @@ Discord 连接器保留按 `batch_size` 合并消息的行为：每份文档使�
 `DISCORD_{message_id}`，正文包含整批消息，更新时间取批内最大值。现有数据没有独立的
 成员消息身份映射；增量时间窗口、消息删除或批次大小变化都可能改变分组。
 
+## 配置连接
+
+1. 在 Discord Developer Portal 创建应用并添加 Bot；启用 **Message Content Intent**，生成并安全保存 bot token。
+2. 在 OAuth2 URL Generator 选择 `bot` scope，仅授予 **View Channels** 和 **Read Message History**，用生成的链接邀请 bot 到目标服务器。频道和线程的覆盖权限也必须允许读取。
+3. 在 MultiRAG 的设置 → 数据源中新建 Discord，填写 **Discord Bot Token**（凭据键 `discord_bot_token`）。可选 **Server IDs** 是服务器数字 ID 数组，**Channels** 是频道名称数组，并非频道 ID。留空会读取 bot 可见的全部服务器或频道，建议显式限定范围。
+4. 保存数据源，再从目标数据集的配置页面关联该数据源，按数据集配置启动同步。连接校验只检查 token 非空；同步日志中的实际读取结果才证明登录和权限有效。
+
+修改 server/channel 范围不会自动清理旧文档。不要在日志、截图或提交中暴露 bot token；轮换 token 后更新数据源凭据。未启用 Message Content Intent 或频道权限不足时，需在 Discord 修正配置后重试。
+
 ## 读取与资源释放
 
 同步 worker 在异步调用链中消费同步文档生成器。Discord 客户端运行在专用线程的事件循环中，
