@@ -44,13 +44,20 @@ def resolve_base_url() -> str:
 
 def wait_for_ping(base: str, timeout_sec: int) -> bool:
     deadline = time.monotonic() + timeout_sec
-    while time.monotonic() < deadline:
+    last_failure = "no attempt"
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            if requests.get(f"{base}/api/v1/system/ping", timeout=3).status_code == 200:
+            response = requests.get(f"{base}/api/v1/system/ping", timeout=min(3, remaining))
+            if response.status_code == 200 and "pong" in response.text.lower():
                 return True
-        except requests.RequestException:
-            pass
-        time.sleep(2)
+            last_failure = f"HTTP {response.status_code}; expected pong"
+        except requests.RequestException as exc:
+            # Do not print arbitrary response bodies or URLs containing credentials.
+            last_failure = type(exc).__name__
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(2, remaining))
+    print(f"readiness failed: /api/v1/system/ping: {last_failure}", file=sys.stderr)
     return False
 
 
@@ -59,6 +66,8 @@ def main() -> int:
     parser.add_argument("--wait", type=int, default=0, metavar="N", help="最多等待 N 秒直到服务器可达（默认不等待）")
     parser.add_argument("--strict", action="store_true", help="要求 healthz 整体 200（含 chat 等外部依赖）")
     args = parser.parse_args()
+    if args.wait < 0:
+        parser.error("--wait must be non-negative")
 
     base = resolve_base_url()
     print(f"smoke target: {base}")
