@@ -11,6 +11,10 @@ optional media interface must both match before the service invokes a provider.
 | OpenAI | ASR and speech, including streaming | Multipart ASR; JSON/text/SRT/VTT transcription; binary or `speech.audio.*` SSE speech |
 | HunYuan | Chat, reasoning, discovery, embedding | OpenAI-compatible chat/list/embedding; required key and explicit region |
 | TokenHub | Chat, reasoning, discovery, embedding | OpenAI-compatible calls; bodyless model-list GET; explicit zero options retained |
+| HuaweiCloud | Chat/vision, discovery, embedding and rerank | DeepSeek-V3 uses V1/lowercase wire ID; other models use V2 and their declared thinking shape; full indexed vectors/scores validated |
+| ModelScope | Chat and discovery | Tenant endpoint required; root or `/v1` accepted; deployment auth optional, reasoning/thinking aliases supported |
+| OrcaRouter | Chat/discovery and binary speech | `v1` routes; explicit unsupported streaming speech and other unimplemented capabilities |
+| Qiniu | Chat/vision and discovery | Model-specific thinking parameters; embedding, rerank and media remain unavailable |
 | PaddleOCR_Local | OCR from bytes | No required key; base64 `file`, PDF `fileType=0`, `layoutParsingResults[].markdown.text` |
 | LongCat | Chat and authenticated discovery | `openai/v1/chat/completions`, bodyless `openai/v1/models` GET; strict bounded lists |
 | xAI | Chat/discovery, ASR and binary speech | Multipart `stt`; JSON `tts` with `text`, `voice_id`, `output_format.codec`; binary sender streaming, no provider SSE assumption |
@@ -83,3 +87,10 @@ case identities, listener allocation intent, exact address and independent close
 port readback. `TestProviderFixesHTTPCLIAndSQL` uses an explicitly owned PostgreSQL
 configuration and a freshly linked CLI; its opt-in environment is declared in the
 test. Controlled provider fixtures do not establish paid-provider compatibility.
+
+ModelScope is admitted through catalog loading, custom-model listing and SQL instance creation.
+An empty key is permitted only by its explicit local-deployment policy; a tenant endpoint is
+still required. The new adapters share strict raw chat/list/SSE validation, request cancellation
+and idle deadlines. Huawei rerank validates all returned scores before TopN selection; the
+bound facade restores input order. Controlled HTTP/JWT/SQL/CLI evidence is distinct from
+real supplier credentials and production validation.

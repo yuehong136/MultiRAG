@@ -18,7 +18,7 @@ RUNTIME_JOBS = frozenset({"typecheck", "unit", "integration", "integration-infin
 # These tests require separate owned HTTP/SQL harnesses; ordinary skips are errors.
 GO_LIVE_OPT_INS = {
     "admin": {"TestAdminVariablesCLIHTTPAndSQL"},
-    "router": {"TestRESTAliasesHTTPAndSQL", "TestMemoryUpdateHTTPAndSQL", "TestDocumentListHTTPCLIAndSQL"},
+    "router": {"TestRESTAliasesHTTPAndSQL", "TestMemoryUpdateHTTPAndSQL", "TestDocumentListHTTPCLIAndSQL", "TestConnectorDetailHTTPJWTAndSQL"},
     "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
     "engine": {"TestSkillMilvusLiveUnpublishedFragments", "TestEngineStoresLive"},
     "handler": {
@@ -52,7 +52,7 @@ GO_LIVE_OPT_INS = {
         "TestUserTimeHTTPCLIAndSQL",
         "TestXAIInstanceLiveHTTPAndSQL",
     },
-    "service": {"TestAfter2836ModelsHTTPCLIAndSQL", "TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
+    "service": {"TestAfter2836ModelsHTTPCLIAndSQL", "TestAfter0fbNewModelsHTTPCLIAndSQL", "TestProviderFixesHTTPCLIAndSQL", "TestChatSessionScratchPostgres", "TestHostedProviderBindingScratchPostgres", "TestModelBindingScratchPostgres"},
     "service/nlp": {"TestRetrievalScratchPostgresInfinity"},
     "skills": {"TestSkillsLiveServer"},
 }

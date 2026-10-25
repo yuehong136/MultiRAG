@@ -2067,3 +2067,12 @@ Go xAI factory 使用真实 driver，实例 API key 与 base_url 独立绑定。
 未收到结束标记的 EOF、取消和 sender 错误均返回失败。模型发现使用无请求体的 `GET /models`，
 连接检查要求有效且非空的模型列表。非流式调用 120 秒超时，SSE 使用请求 context，无总超时。
 本地验证使用受控 HTTP/SSE 与独立数据库，不表示已通过真实 xAI 凭据或远程模型验收。
+
+Go 并行实现还提供已鉴权的 `GET /api/v1/connectors/{connector_id}`，只读取有权访问的
+连接器元数据，响应不含 `config` 或数据源凭据。角色、响应字段与独立 SQL 验证边界见
+[Go connector metadata](../ragflow-porting/go-connectors.md)。
+
+Go 新增 HuaweiCloud、ModelScope、OrcaRouter 和 Qiniu 的目录、factory 与实例消费链；
+现有 provider 的发现、Replicate rerank 和 xAI 音频按各自协议执行。具体能力、路径与
+明确不支持的功能统一见 [Go 模型驱动合同](../../internal/entity/models/README.md)。
+这些 Go 能力不改变 Python 生产模型目录；受控 HTTP/SQL/CLI 验收不等同真实供应商验证。

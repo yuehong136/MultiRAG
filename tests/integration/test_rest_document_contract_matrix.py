@@ -153,7 +153,8 @@ def test_auth_and_invalid_selections_preserve_sql_objects_index_queue(rest_docum
     for method, route, kwargs in cases:
         response = call(env, method, route, credential=env[credential_kind][1], **kwargs)
         assert response.status_code == (404 if route.endswith("/download") else 200)
-        assert response.json()["code"] in {102, 109}, (method, route, response.text)
+        expected_code = 109 if method == "POST" and route == path else 102
+        assert response.json()["code"] == expected_code, (method, route, response.text)
         assert snapshot(env) == before
     for action in ["parse", "stop"]:
         for payload in [{"document_ids": []}, {"document_ids": "invalid"}, "not json", {}]:
