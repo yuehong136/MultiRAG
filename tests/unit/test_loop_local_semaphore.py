@@ -2,14 +2,27 @@
 
 import asyncio
 import threading
+from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 
 from common.asyncio_utils import LoopLocalSemaphore
 from core.graphrag.utils import chat_limiter
 from core.svr import task_executor
+
+T = TypeVar("T")
+
+
+def run_in_new_loop(coroutine: Coroutine[Any, Any, T]) -> T:
+    # Agent components can patch asyncio.run to reuse the current loop.
+    # Explicit loop ownership keeps this a two-loop regression in combined runs.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coroutine)
+    finally:
+        loop.close()
 
 
 async def contend(limiter: LoopLocalSemaphore) -> asyncio.Semaphore:
@@ -29,8 +42,8 @@ async def contend(limiter: LoopLocalSemaphore) -> asyncio.Semaphore:
 
 @pytest.mark.parametrize("limiter", [chat_limiter, task_executor.task_limiter, task_executor.chunk_limiter, task_executor.embed_limiter, task_executor.minio_limiter, task_executor.kg_limiter])
 def test_module_limiters_wait_in_two_sequential_loops(limiter: LoopLocalSemaphore) -> None:
-    first = asyncio.run(contend(limiter))
-    second = asyncio.run(contend(limiter))
+    first = run_in_new_loop(contend(limiter))
+    second = run_in_new_loop(contend(limiter))
     assert first is not second
     assert len(limiter._semaphores) == 1  # old bound loop has been evicted
 
@@ -45,7 +58,7 @@ def test_concurrent_thread_loops_have_independent_capacity() -> None:
         return await contend(limiter)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(asyncio.run, run()) for _ in range(2)]
+        futures = [executor.submit(run_in_new_loop, run()) for _ in range(2)]
         natives = [future.result(timeout=10) for future in futures]
     assert natives[0] is not natives[1]
 
