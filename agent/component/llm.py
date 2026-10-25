@@ -287,7 +287,8 @@ class LLM(ComponentBase):
             sys_prompt = re.sub(rf"<{tag}>(.*?)</{tag}>", "", sys_prompt, flags=re.DOTALL | re.IGNORECASE)
         return pts, sys_prompt
 
-    async def _generate_async(self, msg: list[dict], **kwargs) -> str:
+    async def _generate_async(self, msg: list[dict[str, Any]], **kwargs: Any) -> str:
+        kwargs = {**self._get_chat_template_kwargs(), **kwargs}
         if not self.imgs:
             return await self.chat_mdl.async_chat(msg[0]["content"], msg[1:], self._param.gen_conf(), **kwargs)
         return await self.chat_mdl.async_chat(msg[0]["content"], msg[1:], self._param.gen_conf(), images=self.imgs, **kwargs)
@@ -298,6 +299,7 @@ class LLM(ComponentBase):
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         stream_kwargs = {"images": self.imgs} if self.imgs else {}
+        stream_kwargs.update(self._get_chat_template_kwargs())
         stream_kwargs.update(kwargs)
         async for value in self._reasoning_safe_stream(msg, stream_kwargs):
             yield value
@@ -374,6 +376,7 @@ class LLM(ComponentBase):
         answer = ""
 
         stream_kwargs = {"images": self.imgs} if self.imgs else {}
+        stream_kwargs.update(self._get_chat_template_kwargs())
         async for ans in self._reasoning_safe_stream(msg, stream_kwargs):
             if self.check_if_canceled("LLM streaming"):
                 return
@@ -392,7 +395,7 @@ class LLM(ComponentBase):
         self.set_output("content", answer)
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
-    async def _invoke_async(self, **kwargs):
+    async def _invoke_async(self, **kwargs: Any) -> None:
         """异步版本 - 主要实现"""
         if self.chat_mdl is None:
             raise LookupError(f"LLM model '{self._param.llm_id}' is not available. Please configure the model API key in the model management page.")
@@ -406,6 +409,7 @@ class LLM(ComponentBase):
 
         # 同步 prompt 组装：内含自开连接的模型查询与（有图片时）视觉模型构造——入线程池
         prompt, msg, _ = await asyncio.to_thread(self._prepare_prompt_variables)
+        extra_chat_kwargs = self._get_chat_template_kwargs()
         error: str = ""
         output_structure = None
         try:
@@ -424,7 +428,7 @@ class LLM(ComponentBase):
                     int(self.chat_mdl.max_length * 0.97),
                 )
                 error = ""
-                ans = await self._generate_async(msg_fit)
+                ans = await self._generate_async(msg_fit, **extra_chat_kwargs)
                 msg_fit.pop(0)
                 if ans.find("**ERROR**") >= 0:
                     logging.error(f"LLM response error: {ans}")
@@ -453,7 +457,7 @@ class LLM(ComponentBase):
 
             _, msg_fit = message_fit_in([{"role": "system", "content": prompt}, *deepcopy(msg)], int(self.chat_mdl.max_length * 0.97))
             error = ""
-            ans = await self._generate_async(msg_fit)
+            ans = await self._generate_async(msg_fit, **extra_chat_kwargs)
             msg_fit.pop(0)
             if ans.find("**ERROR**") >= 0:
                 logging.error(f"LLM response error: {ans}")
@@ -472,6 +476,14 @@ class LLM(ComponentBase):
     def _invoke(self, **kwargs):
         """同步版本 - 内部调用异步版本"""
         return asyncio.run(self._invoke_async(**kwargs))
+
+    def _get_chat_template_kwargs(self) -> dict[str, Any]:
+        value = self._canvas.globals.get("sys.chat_template_kwargs")
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("chat_template_kwargs must be a JSON object or null.")
+        return {"chat_template_kwargs": deepcopy(value)}
 
     async def add_memory(self, user: str, assist: str, func_name: str, params: dict, results: str, user_defined_prompt: dict = {}):
         summ = await tool_call_summary(self.chat_mdl, func_name, params, results, user_defined_prompt)

@@ -725,3 +725,95 @@ async def test_openai_agent_adapter_reports_errors_and_closes_source(monkeypatch
     frame = json.loads(str(answers[0])[5:]) if stream else answers[0]
     assert isinstance(frame, dict) and frame["error"]["type"] == "server_error" and frame["error"]["code"] != 0
     assert "choices" not in frame and "[DONE]" not in str(answers)
+
+
+@pytest.mark.parametrize("value", [None, {}, {"enable_thinking": False, "limit": 0}])
+async def test_completion_passes_template_object_to_canvas(completion_stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch, value: dict[str, Any] | None) -> None:
+    seen: list[Any] = []
+
+    async def run(self: _FakeCanvas, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+        seen.append(kwargs["chat_template_kwargs"])
+        yield {"event": "message", "data": {"content": "hello"}}
+        yield {"event": "message_end", "data": {}}
+
+    monkeypatch.setattr(_FakeCanvas, "run", run)
+    frames = [frame async for frame in canvas_service.completion(_RecordingAsyncSession({}), "tenant-unit", "agent-1", session_id="sess-1", chat_template_kwargs=value)]
+    assert '"event": "message_end"' in frames[-1] and seen == [value]
+
+
+@pytest.mark.parametrize("invalid", ["{}", [], False, 0])
+async def test_completion_rejects_invalid_template_before_database(monkeypatch: pytest.MonkeyPatch, invalid: Any) -> None:
+    db = _RecordingAsyncSession({})
+    with pytest.raises(ValueError, match="JSON object"):
+        [frame async for frame in canvas_service.completion(db, "tenant-unit", "agent-1", chat_template_kwargs=invalid)]
+    assert db.calls == []
+
+
+@pytest.mark.parametrize("mode", ["draft", "session", "openai"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("value", [{}, {"enable_thinking": False, "limit": 0}, None])
+def test_restful_agent_template_object_reaches_execution(agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, mode: str, stream: bool, value: dict[str, Any] | None) -> None:
+    from api.db import CanvasCategory
+    from api.db.db_models import get_async_db
+    from api.utils.api_utils import async_current_user
+
+    module = _route_module("api.apps.restful_apis.agent")
+    principal = agent_route_stubs.app.dependency_overrides[async_current_user]()
+    seen: list[Any] = []
+
+    class DebugDB(_RecordingAsyncSession):
+        async def execute(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(one_or_none=lambda: ({}, "debug", CanvasCategory.Agent, principal.id))
+
+    class DebugCanvas(_FakeCanvas):
+        async def run(self, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+            seen.append(kwargs["chat_template_kwargs"])
+            async for event in super().run(**kwargs):
+                yield event
+
+    async def source(**kwargs: Any) -> AsyncGenerator[str, None]:
+        seen.append(kwargs["chat_template_kwargs"])
+        yield 'data:{"event":"message","data":{"content":"answer"}}\n\n'
+        yield 'data:{"event":"message_end","data":{}}\n\n'
+
+    async def authorized(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(agent_canvas, "Canvas", DebugCanvas)
+    monkeypatch.setattr(module, "agent_completion", source)
+    monkeypatch.setattr(canvas_service, "completion", source)
+    monkeypatch.setattr(module, "require_canvas", authorized)
+    monkeypatch.setattr(module, "bind_canvas_task", authorized)
+    monkeypatch.setattr(module, "require_runtime_finish", lambda task_id: None)
+    monkeypatch.setattr(module, "finish_runtime", lambda task_id: "completed")
+    monkeypatch.setattr(module.CanvasReplicaService, "load_for_run", lambda **kwargs: {"dsl": {}, "title": "debug"})
+    monkeypatch.setattr(module.CanvasReplicaService, "commit_after_run", lambda **kwargs: True)
+
+    async def save_session(db: AsyncSession, conversation: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return {**conversation, "round": 0}
+
+    async def save_turn(db: AsyncSession, conversation: dict[str, Any]) -> None:
+        pass
+
+    monkeypatch.setattr(module, "save_agent_session", save_session)
+    monkeypatch.setattr(module, "save_agent_session_turn", save_turn)
+    agent_route_stubs.app.dependency_overrides[get_async_db] = lambda: DebugDB({})
+    payload: dict[str, Any] = {"agent_id": "agent-1", "query": "question", "stream": stream, "chat_template_kwargs": value}
+    if mode == "session":
+        payload["session_id"] = "sess-1"
+    elif mode == "openai":
+        payload.update({"openai-compatible": True, "model": "model", "messages": [{"role": "user", "content": "question"}]})
+    response = agent_route_stubs.post("/api/v1/agents/chat/completions", json=payload)
+    assert response.status_code == 200 and seen == [value]
+    assert "hello" in response.text if mode == "draft" else "answer" in response.text
+
+
+@pytest.mark.parametrize("invalid", ["{}", "invalid", [], False, 0])
+def test_restful_agent_rejects_template_strings_and_scalars_before_sql(client: TestClient, monkeypatch: pytest.MonkeyPatch, invalid: Any) -> None:
+    from api.db.db_models import get_async_db
+
+    db = _RecordingAsyncSession({})
+    client.app.dependency_overrides[get_async_db] = lambda: db
+    response = client.post("/api/v1/agents/chat/completions", json={"agent_id": "agent-1", "chat_template_kwargs": invalid})
+    assert response.status_code == 200 and response.json()["retcode"] != 0
+    assert "JSON object" in response.json()["retmsg"] and db.calls == []

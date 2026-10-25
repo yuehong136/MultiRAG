@@ -568,6 +568,8 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
     - 支持文件上传和多轮对话
     """
     req = dict(request_body)
+    if req.get("chat_template_kwargs") is not None and not isinstance(req["chat_template_kwargs"], dict):
+        return get_data_error_result(retmsg="chat_template_kwargs must be a JSON object or null.")
     req.pop("run_context", None)
     req.pop("prepared_run", None)
     agent_id = req.pop("agent_id", None)
@@ -820,7 +822,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         a2ui_surface_ids: set[str] = set()
         logged_content = ""
         try:
-            async with aclosing(canvas.run(query=query, files=files, inputs=inputs)) as run_events:
+            async with aclosing(canvas.run(query=query, files=files, inputs=inputs, chat_template_kwargs=req.get("chat_template_kwargs"))) as run_events:
                 async for raw in run_events:
                     ans = normalize_agent_event(raw)
                     ans["session_id"] = session_id

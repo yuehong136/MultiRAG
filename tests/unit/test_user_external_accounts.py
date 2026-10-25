@@ -21,7 +21,7 @@ def _external_user(*, email: str | None = None) -> User:
 
 
 def test_external_user_serializes_null_email_and_account_kind() -> None:
-    payload = _external_user().to_dict()
+    payload = _external_user().to_dict(for_self=True)
 
     assert payload["email"] is None
     assert payload["account_kind"] == UserAccountKind.EXTERNAL.value
@@ -75,6 +75,7 @@ def test_create_new_user_returns_only_public_projection(
 
     assert result["success"] is True
     assert result["user_info"]["id"] == "created-user"
+    assert "email" not in result["user_info"]
     assert "password" not in result["user_info"]
     assert "access_token" not in result["user_info"]
 

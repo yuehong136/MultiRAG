@@ -3,25 +3,99 @@ import base64
 import functools
 import hashlib
 import logging
+import math
 import os
 import subprocess
 import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin
+
+import httpx
+
+from common.ssrf_guard import assert_url_is_safe
+
+logger = logging.getLogger(__name__)
+_OAUTH_AVATAR_MAX_BYTES = 5 * 1024 * 1024
+_OAUTH_AVATAR_MAX_REDIRECTS = 5
+_REDIRECT_STATUS = frozenset({301, 302, 303, 307, 308})
 
 
 def get_uuid():
     return uuid.uuid1().hex
 
 
-async def download_img(url):
-    if not url:
-        return ""
-    from common.http_client import async_request
+async def download_img(url: str | None) -> str:
+    """Read a public image with per-hop DNS pinning and a bounded lifetime.
 
-    response = await async_request("GET", url)
-    return "data:" + response.headers.get("Content-Type", "image/jpg") + ";" + "base64," + base64.b64encode(response.content).decode("utf-8")
+    The transport connects to the validated IP, retaining the original Host and
+    TLS server name. No process-global DNS pin can affect a concurrent request.
+    Proxies cannot enforce that destination binding, so configured proxies fail
+    closed; ambient proxy variables are never inherited.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return ""
+    try:
+        request_timeout = float(os.environ.get("HTTP_CLIENT_TIMEOUT", "15"))
+        if not math.isfinite(request_timeout) or request_timeout <= 0:
+            raise ValueError("Invalid timeout")
+        if os.environ.get("HTTP_CLIENT_PROXY"):
+            logger.warning("download_img disabled: a proxy cannot guarantee DNS pinning")
+            return ""
+        async with asyncio.timeout(request_timeout):
+            return await _download_public_image(url.strip(), request_timeout)
+    except (ValueError, OSError, UnicodeError, httpx.HTTPError, httpx.InvalidURL, TimeoutError):
+        # URLs, redirect targets and exception text can carry OAuth credentials.
+        logger.warning("download_img rejected or failed to read a public image")
+        return ""
+
+
+async def _download_public_image(url: str, request_timeout: float) -> str:
+    for hop in range(_OAUTH_AVATAR_MAX_REDIRECTS + 1):
+        original = httpx.URL(url)
+        if original.username or original.password:
+            raise ValueError("URL credentials are not allowed")
+        # DNS resolution is blocking; include it in the total wall-clock budget.
+        hostname, pin_ip = await asyncio.to_thread(assert_url_is_safe, url)
+        headers = {"Host": original.netloc.decode("ascii")}
+        user_agent = os.environ.get("HTTP_CLIENT_USER_AGENT", "multirag-http-client")
+        if user_agent:
+            headers["User-Agent"] = user_agent
+        request = httpx.Request(
+            "GET",
+            original.copy_with(host=pin_ip),
+            headers=headers,
+            extensions={"sni_hostname": hostname, "timeout": httpx.Timeout(request_timeout).as_dict()},
+        )
+        # Direct transport avoids the client URL logger and implicit redirects,
+        # cookies, proxy discovery or connection reuse across DNS validations.
+        async with httpx.AsyncHTTPTransport(trust_env=False, retries=0) as transport:
+            response = await transport.handle_async_request(request)
+            try:
+                if response.status_code in _REDIRECT_STATUS:
+                    location = response.headers.get("location")
+                    if not location or hop == _OAUTH_AVATAR_MAX_REDIRECTS:
+                        raise ValueError("Invalid redirect")
+                    url = urljoin(url, location)
+                    continue
+                if response.status_code != 200:
+                    raise ValueError("Image response was not successful")
+                length = response.headers.get("content-length")
+                if length is not None and (int(length) < 0 or int(length) > _OAUTH_AVATAR_MAX_BYTES):
+                    raise ValueError("Image too large")
+                content_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0].strip().lower()
+                if content_type not in {"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon"}:
+                    raise ValueError("Unsupported image type")
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(body) + len(chunk) > _OAUTH_AVATAR_MAX_BYTES:
+                        raise ValueError("Image too large")
+                    body.extend(chunk)
+                return "data:" + content_type + ";base64," + base64.b64encode(body).decode("ascii")
+            finally:
+                await response.aclose()
+    return ""  # pragma: no cover - every final hop returns or raises
 
 
 def hash_str2int(line: str, mod: int = 10**8) -> int:

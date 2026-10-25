@@ -478,6 +478,9 @@ async def completion(
     query = kwargs.get("query", "") or kwargs.get("question", "") or ""
     files = kwargs.get("files", []) or []
     inputs = kwargs.get("inputs", {}) or {}
+    chat_template_kwargs = kwargs.get("chat_template_kwargs")
+    if chat_template_kwargs is not None and not isinstance(chat_template_kwargs, dict):
+        raise ValueError("chat_template_kwargs must be a JSON object or null.")
     a2ui_messages = validate_client_a2ui_messages(kwargs.get("a2ui"))
     metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
     if prepared_run is not None and prepared_run.run_context is not None:
@@ -647,6 +650,7 @@ async def completion(
         "inputs": inputs,
         "a2ui": a2ui_messages,
         "metadata": metadata,
+        "chat_template_kwargs": chat_template_kwargs,
     }
     if run_context is None or run_context.principal is None:
         run_kwargs["user_id"] = legacy_user_id
