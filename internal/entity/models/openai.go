@@ -7,7 +7,9 @@ func NewOpenAIModel(baseURL map[string]string, suffix URLSuffix) *OpenAIModel {
 	if suffix.Embedding == "" {
 		suffix.Embedding = "embeddings"
 	}
-	return &OpenAIModel{newOpenAIChatDriver(baseURL, suffix, "openai", openAIChatBody)}
+	d := newOpenAIChatDriver(baseURL, suffix, "openai", openAIChatBody)
+	d.httpClient.CheckRedirect = rejectModelRedirect
+	return &OpenAIModel{d}
 }
 
 func (o *OpenAIModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {

@@ -13,7 +13,8 @@
     "files": "files",
     "models": "models",
     "asr": "audio/transcriptions",
-    "tts": "audio/speech"
+    "tts": "audio/speech",
+    "ocr": "layout_parsing"
   },
   "class": "glm",
   "models": [
