@@ -3728,3 +3728,11 @@ worker lifespan、全量 Go endpoint parity、其他 session 写入/生成入口
 opt-in skip；不称全量门禁通过，远程 `ci-required` 待运行。自有运行资源和分支按精确账本清理；
 managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 false；历史未登记 overlay
 无法确定归属，未猜测删除。不自动开启下一批或恢复旧自动化。
+
+
+## 2026-10-25：440153c3 后二十项本地串行集成
+
+- 冻结范围排除 `440153c3` 至 `775ea556`，直接后修上限 `519e7d98`；二十项逐项结论、保留已有行为的理由及证据边界见 [本批记录](batch-after-440153c3.md)。
+- Python/Browser/工具、Infinity RAPTOR、Go provider/native/nginx 已串行合入源码组合 `e238e987ed0f2360abf4daf35c229be64f3240c4`；实际 Web master 与 consumer pin 均为 `1eae01eca90f4212dad46ee67970d93a9c616de1`。
+- 定向单元 895 项按首次通过与 setup 补跑合并核对；core 27、Infinity 47、真实 Web API 消费者 1、真实 Chromium、Go 默认 race/build/vet/三个 cmd 及适用静态检查通过。首次失败、补跑和历史专项复用均保留原始回执；不是完整 Python/远程 CI 全量通过。
+- 原始 28 项 WIP 保留，本块独立暂存。精确恢复 bundle、普通 worktree/分支和自有运行资源清理读回，以及最终 main SHA，见外部批次目录 `20261025-batch-after-440153c3/delivery-complete.json`；七个历史 managed worktree 和借用资产保留。未 push、未部署，最终远程 `ci-required` 待运行。
