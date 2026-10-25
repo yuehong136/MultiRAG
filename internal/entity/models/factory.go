@@ -33,6 +33,10 @@ func NewModelFactory() *ModelFactory {
 func (f *ModelFactory) CreateModelDriver(providerName string, baseURL map[string]string, urlSuffix URLSuffix) (ModelDriver, error) {
 	providerLower := strings.ToLower(providerName)
 	switch providerLower {
+	case "futurmix":
+		return NewFuturMixModel(baseURL, urlSuffix), nil
+	case "bedrock":
+		return NewBedrockModel(baseURL, urlSuffix), nil
 	case "avian":
 		return NewAvianModel(baseURL, urlSuffix), nil
 	case "astraflow":

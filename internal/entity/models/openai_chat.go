@@ -36,6 +36,7 @@ type openAIChatDriver struct {
 	authHeader           string
 	strictDiscovery      bool
 	strictStream         bool
+	sseEvents            bool
 	terminalWithoutDelta bool
 	azureContentFilter   bool
 	streamIdleTimeout    time.Duration
@@ -313,18 +314,18 @@ func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Mess
 		done := "[DONE]"
 		return sender(&done, nil)
 	}
-	for scanner.Scan() {
+	for {
+		data, ok, err := nextOpenAIStreamData(scanner, d.sseEvents)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			break
+		}
 		if err := requestContext(apiConfig).Err(); err != nil {
 			return err
 		}
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
-		}
+
 		if data == "[DONE]" {
 			return complete()
 		}

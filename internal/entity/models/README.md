@@ -39,3 +39,30 @@ responses, stream termination, sender failure, deadlines and concurrent instance
 region isolation. `MULTIRAG_MODEL_TEST_RESOURCES`, when set, records each new test
 listener's allocation intent, exact address and closed-port readback. These tests
 require no supplier account and do not establish real supplier compatibility.
+
+| Provider | Supported surface | Limits |
+| --- | --- | --- |
+| Ollama | Native `api/chat`, `api/tags`, batched `api/embed` | Installed-model catalog; optional key; explicitly configured OpenAI embedding endpoints remain supported |
+| FuturMix | OpenAI chat and event-framed SSE, including reasoning deltas | Static catalog; dynamic discovery, credential probes, embedding and rerank are unsupported |
+| DeepInfra | Native rerank at `v1/inference/<model>` | All raw scores must be present, finite and non-null before stable TopN selection; returned indices identify the original inputs |
+| Bedrock | Text Converse, Converse-Stream and signed foundation-model discovery | No tools, vision, reasoning history, embedding, rerank or media in this adapter |
+
+Bedrock stores credential JSON in the instance API key. `auth_mode` accepts
+`access_key_secret` (`bedrock_ak`, `bedrock_sk`, optional
+`bedrock_session_token`), `iam_role` (`aws_role_arn`, optional `aws_external_id`
+and `role_session_name`, using the AWS credential chain or an explicit source
+key pair), or `assume_role` (the default AWS credential chain, matching the
+existing Python mode name). `bedrock_region` supplies the region when the
+instance region is `default`; an explicit AWS instance region overrides it.
+The driver synthesizes regional AWS endpoints when no base URL is supplied.
+An explicit instance endpoint routes both runtime and discovery there, keeping
+custom instances isolated. Direct driver configuration may use a separate
+`control:<region>` endpoint. Both planes sign using service name `bedrock`.
+
+Bedrock streams require an assistant start, indexed text blocks and block stops,
+a successful `messageStop`, and clean stream completion. Provider exceptions,
+malformed frames, missing output and sender errors do not emit `[DONE]`.
+Streaming adapters use request cancellation and idle deadlines rather than a
+total completion deadline. Tests use deterministic credentials and controlled
+STS/SigV4/eventstream endpoints. They make no real AWS or IMDS requests and do
+not establish production IAM permissions or paid-provider compatibility.

@@ -9,7 +9,8 @@
     "balance": "payment/checklist",
     "embedding": "v1/embeddings",
     "tts": "v1/text-to-speech",
-    "asr": "v1/audio/transcriptions"
+    "asr": "v1/audio/transcriptions",
+    "rerank": "v1/inference"
   },
   "class": "deepinfra",
   "models": [
@@ -43,6 +44,12 @@
       "max_tokens": 8192,
       "model_types": [
         "asr"
+      ]
+    },
+    {
+      "name": "Qwen/Qwen3-Reranker-4B",
+      "model_types": [
+        "rerank"
       ]
     }
   ]

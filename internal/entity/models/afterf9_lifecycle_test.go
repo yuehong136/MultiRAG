@@ -184,6 +184,8 @@ func afterf9Server(t *testing.T, h http.Handler) *httptest.Server {
 		}
 		defer file.Close()
 		value["test"] = t.Name()
+		value["pid"] = os.Getpid()
+		value["process"] = os.Args[0]
 		if err := json.NewEncoder(file).Encode(value); err != nil {
 			t.Fatal(err)
 		}

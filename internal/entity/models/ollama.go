@@ -1,12 +1,14 @@
 package models
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -15,17 +17,21 @@ import (
 // OllamaModel uses the native chat protocol, including NDJSON streaming.
 type OllamaModel struct {
 	*DummyModel
-	httpClient *http.Client
+	httpClient        *http.Client
+	streamIdleTimeout time.Duration
 }
 
 func NewOllamaModel(baseURL map[string]string, suffix URLSuffix) *OllamaModel {
-	return &OllamaModel{DummyModel: NewDummyModel(baseURL, suffix), httpClient: &http.Client{}}
+	return &OllamaModel{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Transport: openAIChatTransport, CheckRedirect: rejectModelRedirect}, streamIdleTimeout: 60 * time.Second}
 }
 func (o *OllamaModel) Name() string { return "ollama" }
 
 func ollamaBody(name string, messages []Message, config *ChatConfig, stream bool) (map[string]any, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("ollama: model name is required")
+	}
+	if err := validateHostedGeneration(config); err != nil {
+		return nil, err
 	}
 	if err := ValidateMessages(messages); err != nil {
 		return nil, err
@@ -160,7 +166,7 @@ func (o *OllamaModel) ChatWithMessages(name string, api *APIConfig, messages []M
 	}
 	defer response.Body.Close()
 	var payload ollamaResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if err := decodeBoundedModelJSON(response.Body, &payload); err != nil {
 		return nil, err
 	}
 	if len(payload.Error) > 0 && string(payload.Error) != "null" {
@@ -173,6 +179,9 @@ func (o *OllamaModel) ChatWithMessages(name string, api *APIConfig, messages []M
 	if err := ValidateChatResponse(result); err != nil {
 		return nil, err
 	}
+	if err := requestContext(local).Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 func (o *OllamaModel) ChatStreamlyWithSender(name, message *string, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
@@ -181,7 +190,7 @@ func (o *OllamaModel) ChatStreamlyWithSender(name, message *string, api *APIConf
 	}
 	return o.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
 }
-func (o *OllamaModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+func (o *OllamaModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
 	if sender == nil {
 		return fmt.Errorf("ollama: sender is required")
 	}
@@ -189,19 +198,52 @@ func (o *OllamaModel) ChatStreamlyWithMessages(name string, messages []Message, 
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancelCause(requestContext(api))
+	defer cancel(nil)
+	local := APIConfig{Context: ctx}
+	if api != nil {
+		local = *api
+		local.Context = ctx
+	}
+	api = &local
+	timeout := o.streamIdleTimeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	idleErr := fmt.Errorf("ollama: stream idle timeout: %w", context.DeadlineExceeded)
+	timer := time.AfterFunc(timeout, func() { cancel(idleErr) })
+	defer func() {
+		timer.Stop()
+		if context.Cause(ctx) == idleErr {
+			streamErr = idleErr
+		}
+	}()
 	response, err := o.request(http.MethodPost, o.URLSuffix.Chat, api, body)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
-	decoder := json.NewDecoder(response.Body)
+	scanner := bufio.NewScanner(&activeModelStream{ReadCloser: response.Body, active: func() { timer.Reset(timeout) }})
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	received := false
 	for {
 		var payload ollamaResponse
-		if err := decoder.Decode(&payload); err != nil {
-			if err == io.EOF {
-				return io.ErrUnexpectedEOF
+		if !scanner.Scan() {
+			if err := requestContext(api).Err(); err != nil {
+				return err
 			}
+			if err := scanner.Err(); err != nil {
+				return err
+			}
+			return io.ErrUnexpectedEOF
+		}
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		if err := requestContext(api).Err(); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &payload); err != nil {
 			return err
 		}
 		if len(payload.Error) > 0 && string(payload.Error) != "null" {
@@ -212,8 +254,11 @@ func (o *OllamaModel) ChatStreamlyWithMessages(name string, messages []Message, 
 				return err
 			}
 		}
+		if err := requestContext(api).Err(); err != nil {
+			return err
+		}
 		if c := payload.Message.Content; c != nil && *c != "" {
-			received = true
+			received = received || strings.TrimSpace(*c) != ""
 			if err := sender(c, nil); err != nil {
 				return err
 			}
@@ -244,18 +289,23 @@ func (o *OllamaModel) ListModels(api *APIConfig) ([]string, error) {
 		} `json:"models"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if err := decodeBoundedModelJSON(response.Body, &payload); err != nil {
 		return nil, err
 	}
 	if payload.Models == nil || (len(payload.Error) > 0 && string(payload.Error) != "null") {
 		return nil, fmt.Errorf("ollama: invalid model list")
 	}
 	names := make([]string, 0, len(*payload.Models))
+	seen := map[string]bool{}
 	for _, model := range *payload.Models {
-		if model.Name == "" {
+		if strings.TrimSpace(model.Name) == "" || strings.TrimSpace(model.Name) != model.Name || seen[model.Name] {
 			return nil, fmt.Errorf("ollama: missing model name")
 		}
+		seen[model.Name] = true
 		names = append(names, model.Name)
+	}
+	if err := requestContext(local).Err(); err != nil {
+		return nil, err
 	}
 	return names, nil
 }
@@ -272,7 +322,75 @@ func modelCallConfig(api *APIConfig) (*APIConfig, context.CancelFunc) {
 	return &local, cancel
 }
 
-// Embed uses Ollama's OpenAI-compatible vectors while chat keeps the native protocol.
+// Embed uses the native batch endpoint. Explicit OpenAI-compatible endpoints
+// remain usable by existing configured instances.
 func (o *OllamaModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return embedHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
+	if strings.Trim(o.URLSuffix.Embedding, "/") != "api/embed" {
+		return embedHTTPWithConfig(o.httpClient, o.BaseURL, o.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true, fallbackRegion: true})
+	}
+	if len(texts) == 0 {
+		return []EmbeddingData{}, nil
+	}
+	if name == nil || strings.TrimSpace(*name) == "" {
+		return nil, fmt.Errorf("ollama: embedding model required")
+	}
+	dimension := 0
+	if config != nil {
+		dimension = config.Dimension
+	}
+	if dimension < 0 {
+		return nil, fmt.Errorf("embedding dimension must be non-negative")
+	}
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	result := make([]EmbeddingData, 0, len(texts))
+	for start := 0; start < len(texts); start += 32 {
+		end := min(start+32, len(texts))
+		body := map[string]any{"model": *name, "input": texts[start:end]}
+		if config != nil && config.Dimension > 0 {
+			body["dimensions"] = config.Dimension
+		}
+		resp, err := o.request(http.MethodPost, o.URLSuffix.Embedding, local, body)
+		if err != nil {
+			return nil, err
+		}
+		var raw struct {
+			Embeddings [][]*float64    `json:"embeddings"`
+			Error      json.RawMessage `json:"error"`
+		}
+		err = decodeBoundedModelJSON(resp.Body, &raw)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("ollama: invalid embedding response: %w", err)
+		}
+		if len(raw.Error) > 0 && string(raw.Error) != "null" {
+			return nil, fmt.Errorf("ollama: embedding provider error")
+		}
+		if len(raw.Embeddings) != end-start {
+			return nil, fmt.Errorf("ollama: embedding count mismatch")
+		}
+		for i, values := range raw.Embeddings {
+			if dimension == 0 {
+				dimension = len(values)
+			}
+			if len(values) != dimension || dimension == 0 {
+				return nil, fmt.Errorf("ollama: inconsistent embedding dimensions")
+			}
+			vector := make([]float64, len(values))
+			for j, value := range values {
+				if value == nil {
+					return nil, fmt.Errorf("ollama: missing embedding value")
+				}
+				vector[j] = *value
+			}
+			if err := ValidateEmbeddings([][]float64{vector}, 1); err != nil {
+				return nil, err
+			}
+			result = append(result, EmbeddingData{Index: start + i, Embedding: vector})
+		}
+	}
+	if err := requestContext(local).Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

@@ -3,7 +3,7 @@
   "url_suffix": {
     "chat": "api/chat",
     "models": "api/tags",
-    "embedding": "v1/embeddings"
+    "embedding": "api/embed"
   },
   "class": "local",
   "models": []
