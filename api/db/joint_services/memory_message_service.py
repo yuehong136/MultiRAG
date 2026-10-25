@@ -26,13 +26,14 @@ from sqlalchemy.orm import Session
 
 from api.db.db_models import Memory, Task
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, resolve_model_type
-from api.db.services.llm_service import LLMBundle
+from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from api.db.services.memory_service import MemoryService
 from api.db.services.task_service import TaskService
 from api.identity.run_context import RunContext
 from api.utils.db_utils import bulk_insert_into_db
 from api.utils.memory_utils import get_memory_type_human
 from common import settings
+from common.asyncio_utils import finish_owned_work
 from common.constants import LLMType, MemoryType
 from common.doc_store.doc_store_base import FusionExpr
 from common.misc_utils import get_uuid
@@ -187,6 +188,7 @@ async def save_extracted_to_memory_only(db: Session, memory_id: str, message_dic
     return await embed_and_save(db, memory, message_list, task_id)
 
 
+@llm_bundle_scope()
 async def extract_by_llm(
     db: Session,
     tenant_id: str,
@@ -288,6 +290,7 @@ def _embed_and_save_messages(embedding_model: LLMBundle, memory: Memory, message
     return True, "Message saved successfully."
 
 
+@llm_bundle_scope()
 async def embed_and_save(db: Session, memory: Memory, message_list: list[dict], task_id: str | None = None) -> tuple[bool, str]:
     embedding_model = _embedding_bundle_for(db, memory)
 
@@ -442,6 +445,7 @@ def judge_system_prompt_is_default(system_prompt: str, memory_type: int | list[s
     return system_prompt == PromptAssembler.assemble_system_prompt({"memory_type": memory_type_list})
 
 
+@llm_bundle_scope()
 async def queue_save_to_memory_task(
     db: AsyncSession,
     memory_ids: list[str],
@@ -512,7 +516,7 @@ async def queue_save_to_memory_task(
         embedding_model = await db.run_sync(lambda s, m=memory: _embedding_bundle_for(s, m))  # TODO(async-phase4)
         embedding_model.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
         # 非 DB 同步面（embedding HTTP + doc-store + Redis 缓存）整体在工作线程执行
-        res, msg = await asyncio.to_thread(_embed_and_save_messages, embedding_model, memory, [raw_message], _no_report)
+        res, msg = await finish_owned_work(asyncio.to_thread(_embed_and_save_messages, embedding_model, memory, [raw_message], _no_report))
         if not res:
             failed_memory.append({"memory_id": memory_id, "fail_msg": msg})
             continue

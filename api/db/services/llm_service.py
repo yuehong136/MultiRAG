@@ -4,7 +4,9 @@ import logging
 import queue
 import re
 import threading
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from functools import partial
 from typing import Any
 
@@ -13,8 +15,41 @@ from sqlalchemy.orm import Session
 from api.db.db_models import LLM
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import LLM4Tenant, TenantLLMService
+from common.asyncio_utils import finish_owned_work
 from common.constants import LLMType
 from common.token_utils import num_tokens_from_string
+
+_owned_bundles: ContextVar[list["LLMBundle"] | None] = ContextVar("owned_llm_bundles", default=None)
+
+
+async def _close_bundles(bundles: list["LLMBundle"]) -> None:
+    errors: list[Exception] = []
+    for bundle in reversed(bundles):
+        try:
+            await bundle.aclose()
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise ExceptionGroup("Failed to close task model bundles", errors)
+
+
+@asynccontextmanager
+async def llm_bundle_scope() -> AsyncIterator[None]:
+    """Own newly constructed bundles in this coroutine and its child tasks."""
+    bundles: list[LLMBundle] = []
+    token = _owned_bundles.set(bundles)
+    try:
+        yield
+    except BaseException:
+        try:
+            await finish_owned_work(_close_bundles(bundles))
+        except Exception:
+            logging.exception("Model cleanup failed while handling a task failure")
+        raise
+    else:
+        await finish_owned_work(_close_bundles(bundles))
+    finally:
+        _owned_bundles.reset(token)
 
 
 class LLMService(CommonService):
@@ -88,7 +123,10 @@ def get_init_tenant_llm(db, user_id):
 
 
 class LLMBundle(LLM4Tenant):
-    def __init__(self, db: Session | None, tenant_id: str, model_config: dict, lang: str = "Chinese", **kwargs):
+    def __init__(self, db: Session | None, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> None:
+        bundles = _owned_bundles.get()
+        if bundles is not None:
+            bundles.append(self)
         super().__init__(db, tenant_id, model_config, lang, **kwargs)
 
     def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
@@ -119,6 +157,10 @@ class LLMBundle(LLM4Tenant):
         return bool(await TenantLLMService.increase_usage_by_id_async(model_id, used_tokens))
 
     def encode(self, texts: list[str | None]) -> tuple[Any, int]:
+        with self._using_provider():
+            return self._encode(texts)
+
+    def _encode(self, texts: list[str | None]) -> tuple[Any, int]:
         if self.langfuse:
             generation = self.langfuse.start_observation(as_type="generation", trace_context=self.trace_context, name="encode", model=self.llm_name, input={"texts": texts})
 
@@ -470,6 +512,10 @@ class LLMBundle(LLM4Tenant):
         return queue
 
     async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> str:
+        with self._using_provider():
+            return await self._async_chat(system, history, gen_conf, **kwargs)
+
+    async def _async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> str:
         """异步 chat 方法"""
         if gen_conf is None:
             gen_conf = {}

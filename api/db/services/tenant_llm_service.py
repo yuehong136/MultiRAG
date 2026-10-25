@@ -1,7 +1,11 @@
 import asyncio
+import inspect
 import json
 import logging
 import os
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -16,6 +20,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
 from common import settings
+from common.asyncio_utils import finish_owned_work
 from common.constants import (
     MINERU_DEFAULT_CONFIG,
     MINERU_ENV_KEYS,
@@ -714,12 +719,82 @@ class LLM4Tenant:
         self.langfuse = None
         self.trace_context = {}
         self.verbose_tool_use = kwargs.get("verbose_tool_use")
+        self._provider_condition = threading.Condition()
+        self._provider_closed = False
 
         if db is None:
             with db_connection() as init_db:
                 self._initialize(init_db, tenant_id, model_config, lang, **kwargs)
         else:
             self._initialize(db, tenant_id, model_config, lang, **kwargs)
+
+    def _resource_condition(self) -> threading.Condition:
+        # Legacy subclasses may initialize their provider without calling super.
+        return self.__dict__.setdefault("_provider_condition", threading.Condition())
+
+    @contextmanager
+    def _using_provider(self) -> Iterator[None]:
+        condition = self._resource_condition()
+        with condition:
+            if getattr(self, "_provider_closed", False) or getattr(self, "_provider_closing", False):
+                raise RuntimeError("Model bundle is closed")
+            self._provider_calls = getattr(self, "_provider_calls", 0) + 1
+        try:
+            yield
+        finally:
+            with condition:
+                self._provider_calls -= 1
+                condition.notify_all()
+
+    def _wait_for_provider(self) -> bool:
+        condition = self._resource_condition()
+        with condition:
+            condition.wait_for(lambda: not getattr(self, "_provider_closing", False))
+            if getattr(self, "_provider_closed", False):
+                return False
+            self._provider_closing = True
+            condition.wait_for(lambda: not getattr(self, "_provider_calls", 0))
+            return True
+
+    async def aclose(self) -> None:
+        """Close this bundle's provider after outstanding synchronous encodes.
+
+        Langfuse's SDK resource manager is shared by public key and owns its
+        shutdown. A per-task bundle must not shut down another task's tracer.
+        """
+        await finish_owned_work(self._close_provider())
+
+    async def _close_provider(self) -> None:
+        if not await asyncio.to_thread(self._wait_for_provider):
+            return
+        try:
+            model = getattr(self, "mdl", None)
+            close = getattr(model, "aclose", None) or getattr(model, "close", None)
+            targets = [model] if callable(close) else [getattr(model, "client", None), getattr(model, "async_client", None)]
+            seen: set[int] = set()
+            errors: list[Exception] = []
+            for target in targets:
+                if target is None or id(target) in seen:
+                    continue
+                seen.add(id(target))
+                close = getattr(target, "aclose", None) or getattr(target, "close", None)
+                if not callable(close):
+                    continue
+                try:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    errors.append(exc)
+            self.langfuse = None
+            self.trace_context = {}
+            if errors:
+                raise ExceptionGroup("Failed to close owned model resources", errors)
+        finally:
+            with self._resource_condition():
+                self._provider_closed = True
+                self._provider_closing = False
+                self._resource_condition().notify_all()
 
     def _initialize(
         self,

@@ -92,3 +92,19 @@ def test_invalid_toc_level_has_no_index_or_type_error(level: Any) -> None:
 
 def test_toc_reordered_title_cannot_acquire_another_chunk_id() -> None:
     assert generator._normalize_toc_levels([["1", "Beta"]], [{"title": "Alpha", "chunk_id": 0}]) == []
+
+
+async def test_large_toc_prunes_numeric_deepest_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = [{"title": "Chapter Alpha", "chunk_id": i} for i in range(513)]
+
+    async def extract(info: dict[str, Any], *args: Any) -> None:
+        info["toc"] = sources
+
+    levels = [{"level": "10" if i == 512 else "2", "title": item["title"]} for i, item in enumerate(sources)]
+    monkeypatch.setattr(generator, "gen_toc_from_text", extract)
+    monkeypatch.setattr(generator, "assign_toc_levels", AsyncMock(return_value=levels))
+    monkeypatch.setattr(generator.rag_tokenizer, "tokenize", lambda text: text)
+    result = await generator.run_toc_from_text(["body"], SimpleNamespace(max_length=8192))
+    assert len(result) == 512
+    assert {row["level"] for row in result} == {"2"}
+    assert [row["chunk_id"] for row in result] == list(range(512))

@@ -40,7 +40,7 @@ from api.db.services.document_status_service import finish_status_write, insert_
 from api.db.services.document_task_service import SupersededDocumentTask, increment_task_document, put_task_image, record_task_pipeline, write_task_metadata, write_task_table_metadata
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle
+from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID, TaskService, has_canceled
 from common import settings
@@ -511,6 +511,7 @@ def _persist_task_pdf_outline(bind: Engine | Connection, task_id: str, document_
 
 
 @timeout(60 * 80, 1)
+@llm_bundle_scope()
 async def build_chunks(task: dict[str, Any], progress_callback: Callable[..., Any], db: Session) -> list[dict[str, Any]]:
     task_language = task.get("language") if task.get("language") is not None else "Chinese"
     if task["size"] > settings.DOC_MAXIMUM_SIZE:
@@ -809,11 +810,8 @@ def _owned_task_progress(task_id: str, from_page: int, to_page: int, prog: float
         set_progress(callback_db, task_id, from_page, to_page, prog=prog, msg=msg)
 
 
-def build_TOC(task, docs, progress_callback):
+def build_TOC(task: dict[str, Any], docs: list[dict[str, Any]], progress_callback: Callable[..., Any]) -> dict[str, Any] | None:
     progress_callback(msg="Start to generate table of content ...")
-    with db_connection() as db:
-        model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
-        chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
     docs = sorted(
         docs,
         key=lambda d: (
@@ -821,7 +819,15 @@ def build_TOC(task, docs, progress_callback):
             d.get("top_int", 0)[0] if isinstance(d.get("top_int", 0), list) else d.get("top_int", 0),
         ),
     )
-    toc: list[dict] = asyncio.run(run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback))
+
+    @llm_bundle_scope()
+    async def generate() -> list[dict[str, Any]]:
+        with db_connection() as db:
+            model_config = get_model_config_by_type_and_name(db, task["tenant_id"], LLMType.CHAT.value, task["llm_id"])
+            chat_mdl = LLMBundle(db, task["tenant_id"], model_config, lang=task["language"])
+        return await run_toc_from_text([d["content_with_weight"] for d in docs], chat_mdl, progress_callback)
+
+    toc = asyncio.run(generate())
     logging.info("------------ T O C -------------\n" + json.dumps(toc, ensure_ascii=False, indent="  "))
 
     def get_chunk_id(doc):
@@ -864,7 +870,8 @@ def build_TOC(task, docs, progress_callback):
     return None
 
 
-async def _get_embedding_dimension(row: dict) -> int:
+@llm_bundle_scope()
+async def _get_embedding_dimension(row: dict[str, Any]) -> int:
     """获取 embedding 模型的向量维度"""
     default_dim = 768
     if not row.get("embd_id") or not row.get("tenant_id"):
@@ -1099,7 +1106,7 @@ async def embedding(docs: list[dict[str, Any]], mdl: Any, parser_config: dict[st
     cnts = np.concatenate(cnts_batches, axis=0) if len(cnts_batches) > 1 else cnts_batches[0]
 
     filename_embd_weight = parser_config.get("filename_embd_weight", 0.1)  # due to the db support none value
-    if not filename_embd_weight:
+    if filename_embd_weight is None:
         filename_embd_weight = 0.1
     title_w = float(filename_embd_weight)
     if tts.ndim == 2 and cnts.ndim == 2 and tts.shape == cnts.shape:
@@ -1122,7 +1129,8 @@ async def embedding(docs: list[dict[str, Any]], mdl: Any, parser_config: dict[st
     return tk_count
 
 
-async def run_dataflow(db: Session, task: dict) -> Any:
+@llm_bundle_scope()
+async def run_dataflow(db: Session, task: dict[str, Any]) -> Any:
     from api.db.services.canvas_service import UserCanvasService
     from core.flow.pipeline import Pipeline
 
@@ -1829,6 +1837,7 @@ def _post_process_result(raw_output, post_process):
 
 
 @timeout(3600)
+@llm_bundle_scope()
 async def run_analyze_v2_task(
     task: dict[str, Any],
     chat_mdl: Any,
@@ -2699,6 +2708,7 @@ async def _shutdown_toc_executor(executor: concurrent.futures.ThreadPoolExecutor
 
 
 @timeout(60 * 60 * 3, 1)
+@llm_bundle_scope()
 async def do_handle_task(db: Session, task: Any) -> None:
     # 将 Row 转换为字典，确保可以修改字段
     task = task._asdict() if hasattr(task, "_asdict") else dict(task)

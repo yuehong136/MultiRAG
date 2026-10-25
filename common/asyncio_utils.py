@@ -2,8 +2,27 @@
 
 import asyncio
 import threading
+from collections.abc import Awaitable
 from types import TracebackType
+from typing import TypeVar
 from weakref import WeakKeyDictionary
+
+_T = TypeVar("_T")
+
+
+async def finish_owned_work(work: Awaitable[_T]) -> _T:
+    """Drain owned work before propagating cancellation, including repeats."""
+    task = asyncio.ensure_future(work)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
 
 
 class LoopLocalSemaphore:
