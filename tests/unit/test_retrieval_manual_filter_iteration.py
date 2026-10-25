@@ -90,7 +90,7 @@ async def test_resolver_returns_a_new_mapping_and_preserves_typed_constants(monk
     _boundaries(monkeypatch, db, canvas, tool)
     before = deepcopy(param.meta_data_filter)
 
-    async def inspect_resolver(config: dict[str, Any], metas: Any, query: str, model: Any, selected: list[str], resolver: Any, **kwargs: Any) -> list[str]:
+    async def inspect_resolver(config: dict[str, Any], metas: Any, query: str, model: Any, selected: list[str] | None, resolver: Any, **kwargs: Any) -> list[str]:
         original = config["manual"][0]
         result = resolver(original)
         assert result is not original

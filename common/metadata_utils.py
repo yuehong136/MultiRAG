@@ -238,7 +238,7 @@ async def apply_meta_data_filter(
     metadata_filterer: Callable[[list[dict[str, Any]], str], Awaitable[list[str] | None]] | None = None,
 ) -> list[str] | None:
     """
-    Intersect metadata matches with a nonempty base document selection.
+    Intersect metadata matches with an optional base document selection.
 
     meta_data_filter supports three modes:
     - auto: generate filter conditions via LLM (gen_meta_filter)
@@ -247,7 +247,7 @@ async def apply_meta_data_filter(
 
     Returns:
         Matching doc_ids, or ["-999"] when conditions yield no matches. An empty
-        base selection means unrestricted retrieval, as it does without filters.
+        base selection stays empty; only None means unrestricted retrieval.
         Explicit no-filter and manual empty conditions preserve the selection;
         auto empty conditions retain the existing fallback. Semi-auto requires
         usable selected fields and generated predicates; stale/empty selections
@@ -256,7 +256,9 @@ async def apply_meta_data_filter(
         None only for unsupported execution; [] means an authoritative no-match.
         Storage errors propagate and never trigger a successful empty fallback.
     """
-    doc_ids = list(base_doc_ids) if base_doc_ids else []
+    if base_doc_ids == []:
+        return []
+    doc_ids = list(base_doc_ids) if base_doc_ids is not None else None
 
     if not meta_data_filter:
         return doc_ids
@@ -301,7 +303,7 @@ async def apply_meta_data_filter(
         return doc_ids
 
     if not filters["conditions"]:
-        return (doc_ids or None) if method in ("auto", "semi_auto") else doc_ids
+        return doc_ids
     conditions = filters["conditions"]
     if not valid_metadata_conditions(conditions):
         return ["-999"]
@@ -314,7 +316,7 @@ async def apply_meta_data_filter(
     if doc_ids:
         matched_ids = set(matches)
         matches = list(dict.fromkeys(doc_id for doc_id in doc_ids if doc_id in matched_ids))
-    # Empty lists/None remove the document predicate in retrieval backends.
+    # Keep a no-match marker for legacy callers/backends with empty-list defaults.
     return matches or ["-999"]
 
 

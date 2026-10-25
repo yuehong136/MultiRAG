@@ -61,9 +61,9 @@ def test_missing_field_is_no_match_even_for_negative_or_empty_operators(operator
         ([{"key": "missing", "op": "is", "value": "x"}, {"key": "status", "op": "is", "value": "ready"}], "and", None, {"-999"}, None),
         ([{"key": "missing", "op": "is", "value": "x"}, {"key": "status", "op": "is", "value": "ready"}], "or", ["new", "draft"], {"new"}, {"-999"}),
         ([{"key": "version", "op": "is", "value": "v2"}], "and", None, {"new", "draft"}, None),
-        ([{"key": "version", "op": "is", "value": "v2"}], "and", [], {"new", "draft"}, None),
+        ([{"key": "version", "op": "is", "value": "v2"}], "and", [], set(), None),
         ([{"key": "version", "op": "is", "value": "absent"}], "and", None, {"-999"}, None),
-        ([{"key": "version", "op": "is", "value": "absent"}], "and", [], {"-999"}, None),
+        ([{"key": "version", "op": "is", "value": "absent"}], "and", [], set(), None),
     ],
 )
 async def test_conditions_intersect_base_in_every_mode(
@@ -75,7 +75,7 @@ async def test_conditions_intersect_base_in_every_mode(
     original = deepcopy((config, metas, base))
     assert set(await apply_meta_data_filter(config, metas, "question", base_doc_ids=base) or []) == (semi_expected if method == "semi_auto" and semi_expected is not None else expected)
     assert (config, metas, base) == original
-    if method == "manual":
+    if method == "manual" or base == []:
         generated.assert_not_called()
 
 
@@ -84,14 +84,14 @@ async def test_conditions_intersect_base_in_every_mode(
 async def test_no_filter_preserves_base(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, config: dict[str, Any] | None, base: list[str] | None) -> None:
     generated = AsyncMock()
     monkeypatch.setattr("core.prompts.generator.gen_meta_filter", generated)
-    assert await apply_meta_data_filter(config, metas, "", base_doc_ids=base) == (base or [])
+    assert await apply_meta_data_filter(config, metas, "", base_doc_ids=base) == base
     generated.assert_not_called()
 
 
 @pytest.mark.parametrize("base", [None, [], ["old", "without-metadata"]])
 async def test_auto_no_generated_conditions_preserve_fallback(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch, base: list[str] | None) -> None:
     monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": []}))
-    assert await apply_meta_data_filter({"method": "auto"}, metas, "", base_doc_ids=base) == (base or None)
+    assert await apply_meta_data_filter({"method": "auto"}, metas, "", base_doc_ids=base) == base
 
 
 async def test_semi_auto_does_not_match_unselected_keys(metas: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,3 +111,14 @@ async def test_manual_resolver_does_not_change_saved_filter(metas: dict[str, Any
 
     assert await apply_meta_data_filter(config, metas, "", base_doc_ids=["draft", "old", "new", "draft"], manual_value_resolver=resolve) == ["draft", "new"]
     assert config == original
+
+
+@pytest.mark.parametrize("method", ["manual", "auto", "semi_auto"])
+async def test_explicit_empty_base_scope_never_calls_metadata_or_model(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    from unittest.mock import AsyncMock
+
+    load = AsyncMock(side_effect=AssertionError("empty scope loaded metadata"))
+    push = AsyncMock(side_effect=AssertionError("empty scope queried metadata"))
+    assert await apply_meta_data_filter({"method": method, "manual": [{"key": "category", "op": "is", "value": "ready"}]}, base_doc_ids=[], metas_loader=load, metadata_filterer=push) == []
+    load.assert_not_called()
+    push.assert_not_called()

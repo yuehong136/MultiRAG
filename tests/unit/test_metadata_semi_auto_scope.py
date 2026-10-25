@@ -38,7 +38,7 @@ async def test_empty_or_unselected_generated_predicates_are_zero(monkeypatch: py
 @pytest.mark.parametrize("base", [None, [], ["selected"]])
 async def test_empty_inference_never_restores_base(monkeypatch: pytest.MonkeyPatch, base: list[str] | None) -> None:
     monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": []}))
-    assert await apply_meta_data_filter({"method": "semi_auto", "semi_auto": ["category"]}, {"category": {"ready": ["selected"]}}, "question", base_doc_ids=base) == ["-999"]
+    assert await apply_meta_data_filter({"method": "semi_auto", "semi_auto": ["category"]}, {"category": {"ready": ["selected"]}}, "question", base_doc_ids=base) == ([] if base == [] else ["-999"])
 
 
 @pytest.mark.parametrize(("fresh", "expected"), [({}, ["-999"]), ({"category": {}}, ["-999"]), ({"category": {"ready": ["other"]}}, ["-999"]), ({"category": {"ready": ["selected"]}}, ["selected"])])

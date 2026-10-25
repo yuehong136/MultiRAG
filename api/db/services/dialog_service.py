@@ -2177,7 +2177,7 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
     if search_config is None:
         search_config = {}
     metadata_preferences = resolve_reference_metadata_preferences(None, search_config)
-    doc_ids = search_config.get("doc_ids", [])
+    doc_ids = search_config.get("doc_ids")
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
     chat_llm_name = search_config.get("chat_id", chat_llm_name)
@@ -2421,7 +2421,7 @@ async def gen_mindmap(db: AsyncSession, question: str, kb_ids: list[str], tenant
     if search_config is None:
         search_config = {}
     meta_data_filter = search_config.get("meta_data_filter", {})
-    doc_ids = search_config.get("doc_ids", [])
+    doc_ids = search_config.get("doc_ids")
     rerank_id = search_config.get("rerank_id", "")
     rerank_mdl = None
     kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)

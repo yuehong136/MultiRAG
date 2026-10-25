@@ -69,3 +69,22 @@ def test_infinity_dense_search_receives_only_scalar_scope(with_text: bool) -> No
     result, _ = conn.search(["id"], [], {"doc_id": ["selected"], "available_int": 1}, expressions, OrderByExpr(), 0, 10, ["tenant"], ["kb"])
     assert result["id"].tolist() == ["in-scope"]
     assert builder.match_dense.call_args.args[5]["filter"] == "doc_id IN ('selected') AND available_int=1"
+
+
+async def test_empty_document_scope_never_reaches_candidate_store() -> None:
+    # No datastore or embedder is configured: either access is a regression.
+    dealer = Dealer.__new__(Dealer)
+    result = await dealer.search({"question": "query", "doc_ids": []}, ["scratch"], ["kb"], object())
+    assert result.total == 0 and result.ids == [] and result.field == {}
+
+
+@pytest.mark.parametrize("weight", [0, 0.5, 1])
+async def test_empty_document_scope_never_reaches_retrieval_or_embedding(monkeypatch: pytest.MonkeyPatch, weight: float) -> None:
+    dealer = Dealer.__new__(Dealer)
+    fetch = AsyncMock(side_effect=AssertionError("empty document scope reached storage"))
+    monkeypatch.setattr(dealer, "search", fetch)
+    ranks = await dealer.retrieval(
+        "query", "", object(), ["owner"], ["kb"], 1, 10, doc_ids=[], vector_similarity_weight=weight, search_mode={"hybrid": {"weight_dense": weight, "weight_sparse": 1 - weight}}
+    )
+    assert ranks == {"total": 0, "chunks": [], "doc_aggs": []}
+    fetch.assert_not_called()

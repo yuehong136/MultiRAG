@@ -241,6 +241,8 @@ class Dealer:
     async def search(
         self, req: dict[str, Any], idx_names: str | list[str], kb_ids: list[str], emb_mdl: Any = None, highlight: bool | list | None = False, rank_feature: dict | None = None
     ) -> SearchResult:
+        if req.get("doc_ids") == []:
+            return self.SearchResult(total=0, ids=[], query_vector=[], field={}, highlight={}, aggregation=[], keywords=[])
         if highlight is None:
             highlight = False
 
@@ -831,6 +833,11 @@ class Dealer:
             search_mode = {"dense": {}}
         _, weight_sparse, weight_dense = _mode_weights(search_mode)
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
+        # Some storage adapters omit empty predicates. Preserve the explicit
+        # empty selection before any query/embedding can broaden it.
+        if doc_ids == []:
+            ranks["doc_aggs"] = []
+            return ranks
         if not question:
             return ranks
 

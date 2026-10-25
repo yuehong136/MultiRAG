@@ -79,7 +79,7 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
             config = {"method": method, "manual": conditions, "logic": logic, "semi_auto": ["category", "version"]}
             body = request(env, "POST", "/search", json={**payload, "doc_ids": documents, "meta_data_filter": config}).json()
             assert body["code"] == 0, body
-            mode_expected = semi_expected if method == "semi_auto" and semi_expected is not None else expected
+            mode_expected = set() if documents == [] else (semi_expected if method == "semi_auto" and semi_expected is not None else expected)
             assert {row["doc_id"] for row in body["data"]["chunks"]} == mode_expected, (method, body)
             assert {row["doc_id"] for row in body["data"]["doc_aggs"]} == mode_expected, body
             assert body["data"]["total"] == len(mode_expected), body
@@ -105,7 +105,7 @@ def test_http_metadata_and_document_scope_intersect(search_api: dict[str, Any], 
     check(None, [current], "and", {env["second_doc"]})
     check([], [current], "and", {env["second_doc"]})
 
-    for documents, expected in ((None, set(both)), ([], set(both)), ([env["doc"]], {env["doc"]})):
+    for documents, expected in ((None, set(both)), ([], set()), ([env["doc"]], {env["doc"]})):
         body = request(env, "POST", "/search", json={**payload, "doc_ids": documents}).json()
         assert body["code"] == 0 and {row["doc_id"] for row in body["data"]["chunks"]} == expected, body
     raw = env["reader"].query(env["collections"]["dataset"], filter="knowledge_graph_kwd == ''", output_fields=["doc_id", "available_int"], consistency_level="Strong")
@@ -976,6 +976,16 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
             assert final["reference"]["chunks"], final
             assert (final["reference"]["chunks"][0]["id"] == lexical["id"]) is (weight == 0), final
             evidence[f"{weight}-async-ask"] = final
+        empty_selection = requests.put(
+            env["base"] + "/api/v1/searches/" + identifier, headers={"Authorization": "Bearer " + env["jwt"]}, json={"name": "Weight scratch", "search_config": {"doc_ids": []}}, timeout=30
+        )
+        assert empty_selection.json()["code"] == 0, empty_selection.text
+        completed = requests.post(env["base"] + "/api/v1/searches/" + identifier + "/completions", headers={"Authorization": "Bearer " + env["jwt"]}, json={"question": "lexicalonly"}, timeout=30)
+        frames = [json.loads(line[5:]) for line in completed.text.splitlines() if line.startswith("data:")]
+        assert completed.status_code == 200 and frames and all(frame["code"] == 0 for frame in frames), completed.text
+        final = next(frame["data"] for frame in frames if isinstance(frame.get("data"), dict) and frame["data"].get("final"))
+        assert final["reference"]["chunks"] == []
+        evidence["explicit-empty-async-ask"] = final
         rejected = requests.put(
             env["base"] + "/api/v1/searches/" + identifier,
             headers={"Authorization": "Bearer " + env["jwt"]},
@@ -1034,3 +1044,33 @@ def test_mcp_unsafe_urls_have_no_sql_object_or_probe_side_effects(runtime_upload
         with Session(env["engine"]) as db:
             db.execute(sa.delete(MCPServer).where(MCPServer.id == identifier))
             db.commit()
+
+
+def test_http_document_scope_presence_survives_all_metadata_modes(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = search_api
+    condition = {"key": "category", "op": "is", "value": "match"}
+    monkeypatch.setattr("core.prompts.generator.gen_meta_filter", AsyncMock(return_value={"conditions": [condition], "logic": "and"}))
+    evidence: dict[str, Any] = {}
+    for mode in ["dense", "sparse", "hybrid", "fusion"]:
+        for method in ["manual", "auto", "semi_auto"]:
+            for documents in [None, []]:
+                response = request(
+                    env,
+                    "POST",
+                    "/search",
+                    json={
+                        "question": "availability",
+                        "dataset_ids": [env["dataset"], env["second"]],
+                        "search_mode": {"type": mode},
+                        "similarity_threshold": 0,
+                        "doc_ids": documents,
+                        "meta_data_filter": {"method": method, "manual": [condition], "semi_auto": ["category"]},
+                    },
+                )
+                body = response.json()
+                assert response.status_code == 200 and body["code"] == 0, response.text
+                expected = {env["doc"], env["second_doc"]} if documents is None else set()
+                assert {chunk["doc_id"] for chunk in body["data"]["chunks"]} == expected, (mode, method, documents, body)
+                assert body["data"]["total"] == len(expected), body
+                evidence[f"{mode}-{method}-{documents}"] = body["data"]
+    env["record_path"].with_suffix(".empty-scope-readback.json").write_text(json.dumps(evidence))
