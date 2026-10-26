@@ -253,17 +253,8 @@ func (dao *KnowledgebaseDAO) GetDetail(kbID string) (*entity.KnowledgebaseDetail
 // Accessible checks if a knowledge base is accessible by a user
 // This matches the Python accessible method
 func (dao *KnowledgebaseDAO) Accessible(kbID, userID string) bool {
-	var count int64
-	err := DB.Table("t_ai_knowledgebases").
-		Joins("JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_knowledgebases.tenant_id").
-		Where("t_ai_knowledgebases.id = ? AND t_ai_user_tenants.user_id = ? AND t_ai_knowledgebases.status = ?",
-			kbID, userID, string(entity.StatusValid)).
-		Count(&count).Error
-
-	if err != nil {
-		return false
-	}
-	return count > 0
+	_, err := dao.GetReadableByID(context.Background(), kbID, userID)
+	return err == nil
 }
 
 // Accessible4Deletion checks if a knowledge base can be deleted by a user
@@ -430,7 +421,7 @@ func (dao *KnowledgebaseDAO) GetKBByIDAndUserID(kbID, userID string) ([]*entity.
 	var kbs []*entity.Knowledgebase
 	err := DB.Model(&entity.Knowledgebase{}).
 		Joins("JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_knowledgebases.tenant_id").
-		Where("t_ai_knowledgebases.id = ? AND t_ai_user_tenants.user_id = ?", kbID, userID).
+		Where("t_ai_user_tenants.status = ? AND t_ai_user_tenants.role IN ?", "1", []string{"owner", "admin", "normal"}).Where("t_ai_knowledgebases.status = ? AND (t_ai_knowledgebases.created_by = ? OR t_ai_knowledgebases.permission = ?)", "1", userID, "team").Where("t_ai_knowledgebases.id = ? AND t_ai_user_tenants.user_id = ?", kbID, userID).
 		Limit(1).
 		Find(&kbs).Error
 	return kbs, err
@@ -442,7 +433,7 @@ func (dao *KnowledgebaseDAO) GetKBByNameAndUserID(kbName, userID string) ([]*ent
 	var kbs []*entity.Knowledgebase
 	err := DB.Model(&entity.Knowledgebase{}).
 		Joins("JOIN t_ai_user_tenants ON t_ai_user_tenants.tenant_id = t_ai_knowledgebases.tenant_id").
-		Where("t_ai_knowledgebases.name = ? AND t_ai_user_tenants.user_id = ?", kbName, userID).
+		Where("t_ai_user_tenants.status = ? AND t_ai_user_tenants.role IN ?", "1", []string{"owner", "admin", "normal"}).Where("t_ai_knowledgebases.status = ? AND (t_ai_knowledgebases.created_by = ? OR t_ai_knowledgebases.permission = ?)", "1", userID, "team").Where("t_ai_knowledgebases.name = ? AND t_ai_user_tenants.user_id = ?", kbName, userID).
 		Limit(1).
 		Find(&kbs).Error
 	return kbs, err
@@ -548,7 +539,7 @@ func (dao *KnowledgebaseDAO) GetReadableByID(ctx context.Context, id, userID str
 	err := DB.WithContext(ctx).Model(&entity.Knowledgebase{}).
 		Where("id = ? AND status = ?", id, string(entity.StatusValid)).
 		Where("created_by = ? OR permission = ?", userID, string(entity.TenantPermissionTeam)).
-		Where("EXISTS (SELECT 1 FROM t_ai_user_tenants AS membership WHERE membership.tenant_id = t_ai_knowledgebases.tenant_id AND membership.user_id = ? AND membership.status = ?)", userID, "1").
+		Where("EXISTS (SELECT 1 FROM t_ai_user_tenants AS membership WHERE membership.tenant_id = t_ai_knowledgebases.tenant_id AND membership.user_id = ? AND membership.status = ? AND membership.role IN ('owner', 'admin', 'normal'))", userID, "1").
 		First(&kb).Error
 	return &kb, err
 }

@@ -18,7 +18,6 @@ package handler
 
 import (
 	"multirag/internal/common"
-	"multirag/internal/server"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -90,20 +89,17 @@ func (h *SystemHandler) GetConfig(c *gin.Context) {
 // @Success 200 {object} config.Config
 // @Router /v1/system/configs [get]
 func (h *SystemHandler) GetConfigs(c *gin.Context) {
-	cfg := server.GetConfig()
-	if cfg == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "Configuration not initialized",
-		})
+	_, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    cfg,
-	})
+	config, err := h.systemService.GetPublicConfigs()
+	if err != nil {
+		jsonError(c, common.CodeServerError, "Configuration unavailable.")
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, config, "success")
 }
 
 // GetVersion get MultiRAG version
@@ -134,6 +130,11 @@ func (h *SystemHandler) GetVersion(c *gin.Context) {
 
 // GetLogLevel returns the current log level
 func (h *SystemHandler) GetLogLevel(c *gin.Context) {
+	_, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
 	level := common.GetLevel()
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
@@ -144,13 +145,19 @@ func (h *SystemHandler) GetLogLevel(c *gin.Context) {
 
 // SetLogLevelRequest set log level request
 type SetLogLevelRequest struct {
-	Level string `json:"level" binding:"required"`
+	Level   string `json:"level" binding:"required"`
+	PkgName string `json:"pkg_name,omitempty"`
 }
 
 // SetLogLevel sets the log level at runtime
 func (h *SystemHandler) SetLogLevel(c *gin.Context) {
+	_, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
 	var req SetLogLevelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindObjectJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "level is required",
@@ -158,18 +165,16 @@ func (h *SystemHandler) SetLogLevel(c *gin.Context) {
 		return
 	}
 
+	if req.PkgName != "" && req.PkgName != "root" {
+		jsonError(c, common.CodeArgumentError, "Package log levels are unavailable.")
+		return
+	}
 	if err := common.SetLevel(req.Level); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
 		return
-	}
-
-	// Keep the in-memory config in sync so that `list configs` reflects the
-	// runtime change.
-	if cfg := server.GetConfig(); cfg != nil {
-		cfg.Log.Level = req.Level
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -187,4 +192,13 @@ func (h *SystemHandler) Healthz(c *gin.Context) {
 		status = http.StatusInternalServerError
 	}
 	c.JSON(status, result)
+}
+
+func (h *SystemHandler) GetStatus(c *gin.Context) {
+	_, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, h.systemService.GetStatus(c.Request.Context()), "success")
 }

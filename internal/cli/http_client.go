@@ -85,7 +85,13 @@ func (c *HTTPClient) Headers(authKind string, extra map[string]string) map[strin
 			// The Go server's ExtractAccessToken strips the "Bearer " prefix.
 			headers["Authorization"] = fmt.Sprintf("Bearer %s", c.LoginToken)
 		}
-	case "web", "admin":
+	case "web":
+		if c.LoginToken != "" {
+			headers["Authorization"] = c.LoginToken
+		} else if c.APIKey != "" {
+			headers["Authorization"] = fmt.Sprintf("Bearer %s", c.APIKey)
+		}
+	case "admin":
 		if c.LoginToken != "" {
 			headers["Authorization"] = c.LoginToken
 		}

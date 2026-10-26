@@ -567,7 +567,7 @@ type GetChatResponse struct {
 // GetChat gets chat detail by ID with permission check
 func (s *ChatService) GetChat(userID string, chatID string) (*GetChatResponse, error) {
 	// Step 1: Get user tenants (same as Python UserTenantService.query(user_id=current_user.id))
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	tenants, err := s.userTenantDAO.GetActiveByUserID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user tenants: %w", err)
 	}

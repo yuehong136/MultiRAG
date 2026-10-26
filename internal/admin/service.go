@@ -851,8 +851,8 @@ func (s *Service) ListUserAPITokens(username string) ([]map[string]interface{}, 
 	}
 
 	// 2. Get user's tenants
-	userTenants, err := s.userTenantDAO.GetByUserID(user.ID)
-	if err != nil || len(userTenants) == 0 {
+	userTenants, err := s.userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
+	if err != nil || len(userTenants) != 1 {
 		return nil, fmt.Errorf("tenant not found")
 	}
 
@@ -892,8 +892,8 @@ func (s *Service) GenerateUserAPIToken(username string) (map[string]interface{},
 	}
 
 	// 2. Get user's tenants
-	userTenants, err := s.userTenantDAO.GetByUserID(user.ID)
-	if err != nil || len(userTenants) == 0 {
+	userTenants, err := s.userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
+	if err != nil || len(userTenants) != 1 {
 		return nil, fmt.Errorf("tenant not found")
 	}
 
@@ -934,8 +934,8 @@ func (s *Service) DeleteUserAPIToken(username, key string) error {
 	}
 
 	// 2. Get user's tenants
-	userTenants, err := s.userTenantDAO.GetByUserID(user.ID)
-	if err != nil || len(userTenants) == 0 {
+	userTenants, err := s.userTenantDAO.GetByUserIDAndRole(user.ID, "owner")
+	if err != nil || len(userTenants) != 1 {
 		return fmt.Errorf("tenant not found")
 	}
 

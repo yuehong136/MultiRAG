@@ -36,11 +36,12 @@ func checkModelInstanceCredentialMigration(t *testing.T, db *gorm.DB) {
 	}
 	duplicate := *legacy
 	duplicate.ID = "credentials-duplicate"
+	duplicate.APIKey = "different-key"
 	err := db.Create(&duplicate).Error
 	var pgErr *pgconn.PgError
 	var mysqlErr *mysqlDriver.MySQLError
 	if !errors.Is(err, gorm.ErrDuplicatedKey) && !(errors.As(err, &pgErr) && pgErr.Code == "23505") && !(errors.As(err, &mysqlErr) && mysqlErr.Number == 1062) {
-		t.Fatal("expected unique violation for nonempty key", err)
+		t.Fatal("expected provider/name identity violation", err)
 	}
 	// Repeat AutoMigrate as startup does, then repeat the manual migration.
 	if err := db.AutoMigrate(model); err != nil {
@@ -49,8 +50,8 @@ func checkModelInstanceCredentialMigration(t *testing.T, db *gorm.DB) {
 	if err := migrateModelInstanceCredentials(db); err != nil {
 		t.Fatal(err)
 	}
-	if db.Migrator().HasIndex(model, "idx_tenant_model_instance_api_key") || !db.Migrator().HasIndex(model, "idx_tenant_model_instance_api_key_nonempty") {
-		t.Fatal("conditional credential index was not retained")
+	if db.Migrator().HasIndex(model, "idx_tenant_model_instance_api_key") || db.Migrator().HasIndex(model, "idx_tenant_model_instance_api_key_nonempty") || !db.Migrator().HasIndex(model, "idx_tenant_model_instance_provider_name") {
+		t.Fatal("provider/name identity index missing or global credential index survived")
 	}
 	pool, err := db.DB()
 	if err != nil {
@@ -64,5 +65,11 @@ func checkModelInstanceCredentialMigration(t *testing.T, db *gorm.DB) {
 	if err := pool.QueryRow("SELECT count(*) FROM tenant_model_instance WHERE id LIKE 'credentials-%'").Scan(&count); err != nil || count != 3 {
 		t.Fatal("unique denial wrote rows", count, err)
 	}
-	t.Log("populated old schema upgraded twice; two keyless providers coexist; nonempty duplicate SQL denial; repeat startup retained conditional uniqueness; legacy row and failure side effects independently read back")
+	shared := *legacy
+	shared.ID = "credentials-shared"
+	shared.InstanceName = "another-endpoint"
+	if err := db.Create(&shared).Error; err != nil {
+		t.Fatal("same credential at distinct endpoint identity rejected", err)
+	}
+	t.Log("old credential uniqueness migrated idempotently to provider/name identity; keyless/shared credentials preserved; duplicate identity denied; independent legacy readback unchanged")
 }

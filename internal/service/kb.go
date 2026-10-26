@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
@@ -300,32 +301,55 @@ func (s *KnowledgebaseService) UpdateKB(req *UpdateKBRequest, userID string) (ma
 }
 
 // UpdateMetadataSetting updates the metadata settings for a knowledge base
-func (s *KnowledgebaseService) UpdateMetadataSetting(req *UpdateMetadataSettingRequest) (map[string]interface{}, common.ErrorCode, error) {
-	kb, err := s.kbDAO.GetByID(req.KBID)
+func (s *KnowledgebaseService) UpdateMetadataSetting(ctx context.Context, req *UpdateMetadataSettingRequest, userID string) (map[string]interface{}, common.ErrorCode, error) {
+	if userID == "" {
+		return nil, common.CodeAuthenticationError, errors.New("No authorization.")
+	}
+	if req == nil || strings.TrimSpace(req.KBID) == "" || req.Metadata == nil {
+		return nil, common.CodeArgumentError, errors.New("kb_id and metadata are required")
+	}
+	var kb entity.Knowledgebase
+	code := common.CodeServerError
+	err := dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock membership before the dataset to serialize revocation with a write.
+		var membership entity.UserTenant
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("user_id = ? AND status = ? AND role IN ? AND tenant_id = (SELECT tenant_id FROM t_ai_knowledgebases WHERE id = ?)", userID, "1", []string{"owner", "admin", "normal"}, req.KBID).Take(&membership).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				code = common.CodeAuthenticationError
+				return errors.New("No authorization.")
+			}
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ? AND (created_by = ? OR permission = ?)", req.KBID, string(entity.StatusValid), userID, string(entity.TenantPermissionTeam)).Take(&kb).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				code = common.CodeAuthenticationError
+				return errors.New("No authorization.")
+			}
+			return err
+		}
+		config := kb.ParserConfig
+		if config == nil {
+			config = entity.JSONMap{}
+		}
+		config["metadata"] = req.Metadata
+		enabled := true
+		if req.EnableMetadata != nil {
+			enabled = *req.EnableMetadata
+		}
+		config["enable_metadata"] = enabled
+		if err := tx.Model(&kb).Update("parser_config", config).Error; err != nil {
+			return err
+		}
+		kb.ParserConfig = config
+		return nil
+	})
 	if err != nil {
-		return nil, common.CodeDataError, errors.New("database error (knowledgebase not found)")
+		if code == common.CodeAuthenticationError {
+			return nil, code, errors.New("No authorization.")
+		}
+		return nil, code, errors.New("Unable to update metadata setting.")
 	}
-
-	parserConfig := kb.ParserConfig
-	if parserConfig == nil {
-		parserConfig = make(map[string]interface{})
-	}
-
-	parserConfig["metadata"] = req.Metadata
-	enableMetadata := true
-	if req.EnableMetadata != nil {
-		enableMetadata = *req.EnableMetadata
-	}
-	parserConfig["enable_metadata"] = enableMetadata
-
-	if err := s.kbDAO.UpdateParserConfig(req.KBID, parserConfig); err != nil {
-		return nil, common.CodeServerError, fmt.Errorf("failed to update metadata setting: %w", err)
-	}
-
-	result := kb.ToMap()
-	result["parser_config"] = parserConfig
-
-	return result, common.CodeSuccess, nil
+	return kb.ToMap(), common.CodeSuccess, nil
 }
 
 // GetDetail retrieves detailed information about a knowledge base

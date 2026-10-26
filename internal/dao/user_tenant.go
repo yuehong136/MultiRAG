@@ -72,7 +72,7 @@ func (dao *UserTenantDAO) GetTenantIDsByUserID(userID string) ([]string, error) 
 	var tenantIDs []string
 	err := DB.Model(&entity.UserTenant{}).
 		Select("tenant_id").
-		Where("user_id = ? AND status = ?", userID, "1").
+		Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"}).
 		Pluck("tenant_id", &tenantIDs).Error
 	return tenantIDs, err
 }
@@ -142,4 +142,11 @@ func (dao *UserTenantDAO) GetByUserIDAll(userID string) ([]*entity.UserTenant, e
 	var relations []*entity.UserTenant
 	err := DB.Where("user_id = ?", userID).Find(&relations).Error
 	return relations, err
+}
+
+// GetActiveByUserID returns accepted resource memberships; invitations remain in GetByUserID for presentation.
+func (dao *UserTenantDAO) GetActiveByUserID(userID string) ([]*entity.UserTenant, error) {
+	rows := []*entity.UserTenant{}
+	err := DB.Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"}).Find(&rows).Error
+	return rows, err
 }

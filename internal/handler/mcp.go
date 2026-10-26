@@ -63,3 +63,18 @@ func (h *MCPHandler) CreateMCPServer(c *gin.Context) {
 		"data":    result,
 	})
 }
+
+// DeleteMCPServer deletes only an owned, unreferenced configuration.
+func (h *MCPHandler) DeleteMCPServer(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	result, code, err := h.mcpService.DeleteMCPServer(c.Request.Context(), user.ID, c.Param("mcp_id"))
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, code, result, "success")
+}

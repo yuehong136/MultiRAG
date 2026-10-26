@@ -192,7 +192,7 @@ func (s *SearchService) CreateSearch(userID string, name string, description *st
 
 func (s *SearchService) GetSearchDetail(userID string, searchID string) (*entity.Search, error) {
 	// Step 1: Get user tenants (same as Python UserTenantService.query(user_id=current_user.id))
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	tenants, err := s.userTenantDAO.GetActiveByUserID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user tenants: %w", err)
 	}

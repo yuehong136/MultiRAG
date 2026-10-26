@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"multirag/internal/cache"
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/server"
@@ -165,4 +166,13 @@ func documentEngineHealth(ctx context.Context, store engine.DocEngine) error {
 		return errHealthUnsupported
 	}
 	return store.Ping(ctx)
+}
+
+// GetPublicConfigs returns an explicit allowlist; credentials and arbitrary URLs never serialize.
+func (s *SystemService) GetPublicConfigs() (map[string]any, error) {
+	cfg := server.GetConfig()
+	if cfg == nil {
+		return nil, errors.New("configuration unavailable")
+	}
+	return map[string]any{"RegisterEnabled": cfg.RegisterEnabled, "Language": cfg.Language, "Log": map[string]any{"Level": common.GetLevel()}, "Database": map[string]any{"Driver": cfg.Database.Driver}, "DocEngine": map[string]any{"Type": cfg.DocEngine.Type}, "StorageEngine": map[string]any{"Type": cfg.StorageEngine.Type}}, nil
 }

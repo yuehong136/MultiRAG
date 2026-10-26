@@ -618,7 +618,7 @@ func (s *ChunkService) List(req *ListChunksRequest, userID string) (*ListChunksR
 
 	ctx := context.Background()
 
-	tenants, err := s.userTenantDAO.GetByUserID(userID)
+	tenants, err := s.userTenantDAO.GetActiveByUserID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user tenants: %w", err)
 	}
@@ -634,7 +634,7 @@ func (s *ChunkService) List(req *ListChunksRequest, userID string) (*ListChunksR
 	}
 
 	// Get knowledge base to find tenant
-	kb, err := s.kbDAO.GetByID(doc.KbID)
+	kb, err := s.kbDAO.GetReadableByID(ctx, doc.KbID, userID)
 	if err != nil || kb == nil {
 		return nil, fmt.Errorf("knowledge base not found")
 	}
