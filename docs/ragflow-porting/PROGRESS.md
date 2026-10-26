@@ -3784,3 +3784,18 @@ managed worktree 目录因 Codex primary 保护保留，overall cleanup 为 fals
 - 最终 main SHA、原始退出码、各阶段源码/复用范围、独立清理和恢复包见外部 `20261025-batch-after-7fb9a266/delivery-complete.json`。历史严格预登记合同仍为 false，首错/脚本补修不倒填；未 push、未部署，远程 `ci-required` 待运行，未发布 Web pin 远程暂不可取。真实供应商/权限、Trino 实驱动、常驻 worker、Linux native 与生产行为未验收；不继续下一批、不创建或恢复自动化。
 
 <!-- END AFTER-7FB9A266 LOCAL DELIVERY -->
+
+
+<!-- BEGIN AFTER-B7D88F0B LOCAL DELIVERY -->
+
+## 2026-10-27：b7d88f0b 后二十项本地串行集成
+
+- 冻结范围排除 `b7d88f0b` 至 `53bb2bd9`，直接后修上限 `519e7d98`；20 项完整处置和机制质量取舍见 [本批记录](batch-after-b7d88f0b.md)。Teams/OneDrive、模型实例/OCR/default/runtime 消费链、Go 管理/权限及已有等价 metadata/transport 均已逐项接收；拒绝 Go 非空凭据伪探测，不复制无活动消费者的模型 group 表。
+- 功能源码组合 `26977a0a5fa0da2461009d3ee5c06b0cdd0c605e`；`f1b574597966b5024e51e43070ebd869ccb4eb75` 仅修 Go 验收测试的空密码误报及与 M 非负合同冲突的旧断言。Web master 与 consumer pin 为 `c46150ec3f873e5d4ef89c5395e83c3d1624fb8f`；后续收口仅文档。
+- 当前 Python 定向单元 352、真实 PostgreSQL/MinIO/Redis/Milvus 合同 38、固定 Web 实际 domain client/full-app/JWT/独立 SQL 三阶段消费者 2 项均有独立 raw0，零 skip；65 改动 Python 文件 lint/format、纳管三文件 mypy 及 async DB 门禁通过。首轮禁用 external marker 与 Microsoft token 请求数误计均保留失败，不用于最终通过。
+- Go 当前 build/vet/三个 cmd fresh link 各自 raw0，最终相关 race/JWT/SQL/CLI 为 85 个含父子记录通过，另补严格 custom-extra race 1 项；native 135 源/24 字典/工具链实际一致。显式 custom max_tokens=0 原样 SQL 与受控 ASR 验证，缺失/null/负数/小数/bool 拒绝，不推导 chat 生成预算语义。端点选错、空密码恒真匹配及跨线旧正数断言失败均留原证据。
+- Web 旧完整 CI 1,948 项按旧执行输入保留；新输入有定向用例、build、静态检查和受控浏览器，不能合称最终 SHA 全套 CI。en/zh、light/dark 先用带文件名/路由/视口拼贴审阅；实际 domain client 验收与浏览器交互分层，不声明真实 Microsoft 权限或供应商可用性。
+- I 全局独立读回 167 个精确临时库名、80 个桶、80 个队列、160 个集合、385 个监听地址、253 个进程组和 251 个 runner 自有目录无残留；native TCP 与 Docker 同端口数据库分别核对。其后元数据命令、私有资产副本、恢复包与普通树/ref 的最后读回见外部 `20261027-batch-after-b7d88f0b/delivery-complete.json`。原 28 项 WIP 字节保留，本块独立暂存；借用服务、缓存原件、历史 managed 树和 SDK 保留。
+- 历史严格预登记仍为 false，A Ruff cache、I admin 路径假设/空 uv 环境、M pytest cache 和 W 拼贴解释器清单缺口不倒填。真实供应商/权限、常驻 worker、Linux native、生产迁移/部署及 Go 全应用 MySQL 未验；旧 whole-provider child/orphan 风险单列。未 push、未部署，远程 `ci-required` 待运行，未发布 Web pin 远程不可取；不继续下一批或创建自动化。
+
+<!-- END AFTER-B7D88F0B LOCAL DELIVERY -->
