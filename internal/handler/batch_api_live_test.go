@@ -530,7 +530,7 @@ func TestBatchGoAPI(t *testing.T) {
 		for _, syntax := range []string{"list configs;", "set log level error;"} {
 			cmd := exec.CommandContext(t.Context(), binary, "-f", filepath.Join(filepath.Dir(config), "cli.json"), "-h", parsed.Host, "-t", tokens["g-owner"], "-o", "json", syntax)
 			output, err := cmd.CombinedOutput()
-			if err != nil || bytes.Contains(output, []byte(cfg.Database.Password)) {
+			if err != nil || (cfg.Database.Password != "" && bytes.Contains(output, []byte(cfg.Database.Password))) {
 				t.Fatalf("CLI %s failed: %v %s", syntax, err, output)
 			}
 			t.Log("fresh CLI exit", cmd.ProcessState.ExitCode(), syntax)
