@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -116,7 +117,7 @@ func TestRegistrationCatalogZeroASR(t *testing.T) {
 			t.Error("invented ASR token budget")
 		}
 		switch r.FormValue("model") {
-		case "whisper-large-v3", "whisper-large-v3-turbo":
+		case "whisper-large-v3", "whisper-large-v3-turbo", "explicit-zero-asr":
 		default:
 			t.Error("wrong ASR model")
 		}
@@ -224,13 +225,52 @@ func TestRegistrationCatalogZeroASR(t *testing.T) {
 			if _, _, _, err := resolver.getModelConfig(user.ID, "", entity.ModelTypeSpeech2Text); err != nil {
 				t.Fatal("catalog re-enable failed", err)
 			}
+			if index == 0 {
+				journal.Event("reserve-explicit-zero-model", map[string]any{"tenant": user.ID, "provider": "Groq", "instance": "default-asr", "model": "explicit-zero-asr", "maxTokens": 0})
+				request := &AddCustomModelRequest{ProviderName: "Groq", InstanceName: "default-asr", ModelName: "explicit-zero-asr", ModelTypes: []string{"asr"}, MaxTokens: 0}
+				if code, err := resolver.AddCustomModel(request, user.ID); err != nil || code != 0 {
+					t.Fatal("explicit zero custom model rejected", code, err)
+				}
+				var storedExtra, storedType string
+				if err := read.QueryRow("SELECT m.extra,m.model_type FROM tenant_model m JOIN tenant_model_provider p ON p.id=m.provider_id WHERE p.tenant_id=$1 AND m.model_name=$2", user.ID, request.ModelName).Scan(&storedExtra, &storedType); err != nil {
+					t.Fatal("explicit zero independent SQL readback", err)
+				}
+				var values map[string]any
+				if err := json.Unmarshal([]byte(storedExtra), &values); err != nil || values["max_tokens"] != float64(0) || storedType != string(entity.ModelTypeSpeech2Text) {
+					t.Fatal("explicit zero or normalized capability changed", err)
+				}
+				customDriver, customName, customAPI, err := resolver.getModelConfig(user.ID, request.ModelName+"@default-asr@Groq", entity.ModelTypeSpeech2Text)
+				if err != nil || customName != request.ModelName {
+					t.Fatal("explicit zero custom resolver failed", err)
+				}
+				customASR, ok := customDriver.(models.ASRDriver)
+				if !ok {
+					t.Fatal("explicit zero custom ASR capability missing")
+				}
+				customResult, err := customASR.TranscribeAudio(&customName, audio, customAPI, nil)
+				if err != nil || customResult == nil || customResult.Text == nil || *customResult.Text != "catalog zero works" {
+					t.Fatal("explicit zero controlled ASR failed", err)
+				}
+				before := snapshot()
+				request.ModelName, request.MaxTokens = "invalid-negative-asr", -1
+				beforeCalls := calls.Load()
+				if code, err := resolver.AddCustomModel(request, user.ID); err == nil || code != common.CodeBadRequest || snapshot() != before || calls.Load() != beforeCalls {
+					t.Fatal("negative custom declaration accepted or caused effects", code, err)
+				}
+				journal.Event("explicit-zero-model-readback", map[string]any{"tenant": user.ID, "maxTokens": 0, "customSQL": true, "controlledMultipart": true, "negativeNoEffects": true})
+			}
 			journal.Event("zero-asr-contract", map[string]any{"model": name, "maxTokens": definition.MaxTokens, "defaultResolver": true, "controlledMultipart": true, "disabledProviderCalls": 0})
 		})
 	}
-	if _, err := decodeCustomModelExtra(`{"max_tokens":0,"model_types":["asr"]}`); err == nil {
-		t.Fatal("custom positive token contract weakened")
+	if extra, err := decodeCustomModelExtra(`{"max_tokens":0,"model_types":["asr"]}`); err != nil || extra.MaxTokens != 0 {
+		t.Fatal("explicit zero custom token limit rejected", err)
 	}
-	if calls.Load() != 2 {
+	for _, raw := range []string{`{}`, `{"max_tokens":null}`, `{"max_tokens":-1}`, `{"max_tokens":1.5}`, `{"max_tokens":true}`} {
+		if _, err := decodeCustomModelExtra(raw); err == nil {
+			t.Fatal("invalid custom token declaration accepted", raw)
+		}
+	}
+	if calls.Load() != 3 {
 		t.Fatal("unexpected controlled ASR call count", calls.Load())
 	}
 }
