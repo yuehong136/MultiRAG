@@ -3,7 +3,6 @@ package service
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -25,14 +24,14 @@ func TestOpenAIConfiguredInstanceHTTP(t *testing.T) {
 	for _, instance := range []string{"one", "two"} {
 		t.Run(instance, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/instance/v1/models" || r.Header.Get("Authorization") != "Bearer "+instance {
 					t.Error("instance URL or key lost")
 				}
 				fmt.Fprintf(w, `{"data":[{"id":%q}]}`, instance)
 			}))
 			defer server.Close()
-			extra, err := encodeProviderInstanceExtra("office", server.URL+"/instance/v1/")
+			extra, err := encodeProviderInstanceExtra("", server.URL+"/instance/v1/")
 			if err != nil {
 				t.Fatal(err)
 			}

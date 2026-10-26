@@ -105,8 +105,9 @@ func decodeCustomModelExtra(raw string) (*customModelExtra, error) {
 	if err := json.Unmarshal([]byte(raw), extra); err != nil {
 		return nil, fmt.Errorf("invalid custom model extra: %w", err)
 	}
-	if extra.MaxTokens <= 0 {
-		return nil, fmt.Errorf("custom model max_tokens must be positive")
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil || fields["max_tokens"] == nil || string(fields["max_tokens"]) == "null" || extra.MaxTokens < 0 {
+		return nil, fmt.Errorf("custom model max_tokens must be a nonnegative integer")
 	}
 	return extra, nil
 }
@@ -138,10 +139,34 @@ type AddCustomModelRequest struct {
 	Thinking     *bool    `json:"thinking"`
 }
 
+// UnmarshalJSON distinguishes a legal zero token limit from a missing value.
+func (r *AddCustomModelRequest) UnmarshalJSON(data []byte) error {
+	type declaration AddCustomModelRequest
+	var payload struct {
+		*declaration
+		MaxTokens *int `json:"max_tokens"`
+	}
+	payload.declaration = (*declaration)(r)
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("invalid model declaration")
+	}
+	if payload.MaxTokens == nil {
+		return fmt.Errorf("max_tokens is required")
+	}
+	r.MaxTokens = *payload.MaxTokens
+	return nil
+}
+
 func (m *ModelProviderService) AddCustomModel(request *AddCustomModelRequest, userID string) (common.ErrorCode, error) {
+	if request == nil {
+		return common.CodeBadRequest, fmt.Errorf("request is required")
+	}
+	if request.ProviderName == "" || request.ProviderName != strings.TrimSpace(request.ProviderName) || request.InstanceName == "" || request.InstanceName != strings.TrimSpace(request.InstanceName) || strings.Contains(request.InstanceName, "@") {
+		return common.CodeBadRequest, fmt.Errorf("valid provider and instance names are required")
+	}
 	types, err := normalizeCustomModelTypes(request.ModelType, request.ModelTypes)
-	if err != nil || request.MaxTokens <= 0 || strings.TrimSpace(request.ModelName) == "" || strings.Contains(request.ModelName, "@") {
-		return common.CodeBadRequest, fmt.Errorf("valid model name, type and positive max_tokens are required")
+	if err != nil || request.MaxTokens < 0 || strings.TrimSpace(request.ModelName) == "" || request.ModelName != strings.TrimSpace(request.ModelName) || strings.Contains(request.ModelName, "@") {
+		return common.CodeBadRequest, fmt.Errorf("valid model name, type and nonnegative max_tokens are required")
 	}
 	if request.Thinking != nil && !slices.Contains(types, string(entity.ModelTypeChat)) && !slices.Contains(types, string(entity.ModelTypeImage2Text)) {
 		return common.CodeBadRequest, fmt.Errorf("thinking requires chat or image2text")
