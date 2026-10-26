@@ -38,6 +38,7 @@ from .jira.connector import JiraConnector
 from .models import BasicExpertInfo, Document, ImageSection, TextSection
 from .moodle_connector import MoodleConnector
 from .notion_connector import NotionConnector
+from .onedrive_connector import OneDriveConnector
 from .rdbms_connector import RDBMSConnector
 from .rest_api_connector import RestAPIConnector
 from .rss_connector import RSSConnector
@@ -71,6 +72,7 @@ __all__ = [
     "JiraConnector",
     "MoodleConnector",
     "NotionConnector",
+    "OneDriveConnector",
     "RDBMSConnector",
     "RSSConnector",
     "RestAPIConnector",

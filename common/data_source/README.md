@@ -273,3 +273,8 @@ JSON 对象文本或逐行 `key=value`；`request_body` 接受 JSON 对象或对
 
 两类源的配置、增量边界、线程处理及权限/失败限制见
 [SharePoint 与 Slack 导入](sharepoint-slack.md)。两类源暂不开放删除同步。
+
+## Microsoft Teams / OneDrive
+
+凭据、Drive 范围、时间窗口、真实文件内容和失败边界见
+[Teams 与 OneDrive 导入](teams-onedrive.md)。两类源暂不开放删除同步。
