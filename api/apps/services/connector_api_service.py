@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from typing import Any
 
 from sqlalchemy import select, update
@@ -32,7 +34,10 @@ from api.db.db_models import Connector, SyncLogs
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
 from common.constants import ConnectorTaskType, FileSource, RetCode, TaskStatus
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
+from common.data_source.microsoft_graph import graph_batch_size
+from common.data_source.onedrive_connector import OneDriveConnector
 from common.data_source.rest_api_connector import RestAPIConnector
+from common.data_source.teams_connector import TeamsConnector
 from common.misc_utils import get_uuid
 
 # 连接器写入后回读前的等待，沿用移植前的行为（上游同样有一秒 sleep）。
@@ -195,16 +200,61 @@ def _validate_rest_settings(config: dict[str, Any]) -> None:
     connector.load_credentials(config.get("credentials") or {})
 
 
+class _ConnectorProbeGuard:
+    def __init__(self) -> None:
+        self.stopped = threading.Event()
+        self.deadline = time.monotonic() + 30.0
+
+    def __call__(self) -> None:
+        if self.stopped.is_set() or time.monotonic() >= self.deadline:
+            raise TimeoutError("Microsoft Graph connection test timed out")
+
+    def remaining_seconds(self) -> float:
+        self()
+        return max(0.001, self.deadline - time.monotonic())
+
+
 async def test_connector(db: AsyncSession, connector_id: str) -> tuple[bool, Any, RetCode | None]:
     """Probe saved config after the route's tenant guard, without any writes."""
     connector = await db.scalar(select(Connector).where(Connector.id == connector_id))
     if connector is None:
         return False, "Can't find this Connector!", RetCode.DATA_ERROR
-    if connector.source != FileSource.REST_API:
-        return False, "Connection testing is supported only for REST API connectors.", RetCode.DATA_ERROR
+    if connector.source not in {FileSource.REST_API, FileSource.TEAMS, FileSource.ONEDRIVE}:
+        return False, "Connection testing is not supported for this source.", RetCode.DATA_ERROR
     config = dict(connector.config or {})
+    if connector.source == FileSource.ONEDRIVE and config.get("drive_ids") == []:
+        return False, "OneDrive connection testing requires at least one configured drive ID.", RetCode.DATA_ERROR
     try:
-        await asyncio.to_thread(RestAPIConnector.validate_config, config, config.get("credentials") or {})
-    except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+        if connector.source == FileSource.REST_API:
+            await asyncio.to_thread(RestAPIConnector.validate_config, config, config.get("credentials") or {})
+        else:
+            source = connector.source
+            check_active = _ConnectorProbeGuard()
+
+            def probe() -> None:
+                adapter: TeamsConnector | OneDriveConnector
+                batch_size = graph_batch_size(config)
+                if source == FileSource.TEAMS:
+                    adapter = TeamsConnector(batch_size=batch_size, check_active=check_active)
+                else:
+                    adapter = OneDriveConnector(batch_size=batch_size, drive_ids=config.get("drive_ids"), folder_path=config.get("folder_path"), check_active=check_active)
+                adapter.load_credentials(config.get("credentials") or {})
+                adapter.validate_connector_settings()
+                check_active()
+
+            worker = asyncio.create_task(asyncio.to_thread(probe))
+            try:
+                await asyncio.wait_for(asyncio.shield(worker), timeout=30.0)
+            finally:
+                check_active.stopped.set()
+                # Wait for the finite transport to settle; no detached probe may
+                # keep reading credentials/network after the route completes.
+                if not worker.done():
+                    try:
+                        await worker
+                    except Exception:
+                        pass
+
+    except (ConnectorValidationError, ConnectorMissingCredentialError, TimeoutError) as exc:
         return False, str(exc), RetCode.DATA_ERROR
     return True, {"message": "Connection successful."}, None

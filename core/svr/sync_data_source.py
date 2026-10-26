@@ -38,12 +38,14 @@ from common.data_source import (
     JiraConnector,
     MoodleConnector,
     NotionConnector,
+    OneDriveConnector,
     RDBMSConnector,
     RestAPIConnector,
     RSSConnector,
     SeaFileConnector,
     SharePointConnector,
     SlackConnector,
+    TeamsConnector,
     ZendeskConnector,
 )
 from common.data_source.bitbucket.connector import BitbucketConnector
@@ -55,6 +57,7 @@ from common.data_source.gitlab_connector import GitlabConnector
 from common.data_source.gmail_connector import GmailConnector
 from common.data_source.imap_connector import _as_utc, imap_scope_signature
 from common.data_source.interfaces import CheckpointOutputWrapper, GenerateDocumentsOutput, StaticCredentialsProvider, collect_slim_document_snapshot
+from common.data_source.microsoft_graph import graph_batch_size
 from common.data_source.models import ConnectorFailure, Document, KeyRecord, SeafileSyncScope
 from common.data_source.rdbms_connector import rdbms_scope_signature
 from common.data_source.webdav_connector import WebDAVConnector
@@ -1032,8 +1035,29 @@ class Slack(SyncBase):
 class Teams(SyncBase):
     SOURCE_NAME: str = FileSource.TEAMS
 
-    async def _generate(self, task: dict):
-        pass
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        self._source_task_guard = _SourceTaskGuard(task)
+        self.connector = TeamsConnector(batch_size=graph_batch_size(self.conf), check_active=self._source_task_guard)
+        self.connector.load_credentials(self.conf.get("credentials") or {})
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        start = 0.0 if task["reindex"] == "1" or task["poll_range_start"] is None else task["poll_range_start"].timestamp()
+        return self.connector.poll_source(start, datetime.now(UTC).timestamp())
+
+
+class OneDrive(SyncBase):
+    SOURCE_NAME: str = FileSource.ONEDRIVE
+
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        self._source_task_guard = _SourceTaskGuard(task)
+        self.connector = OneDriveConnector(batch_size=graph_batch_size(self.conf), folder_path=self.conf.get("folder_path"), drive_ids=self.conf.get("drive_ids"), check_active=self._source_task_guard)
+        self.connector.load_credentials(self.conf.get("credentials") or {})
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        start = 0.0 if task["reindex"] == "1" or task["poll_range_start"] is None else task["poll_range_start"].timestamp()
+        return self.connector.poll_source(start, datetime.now(UTC).timestamp())
 
 
 class WebDAV(SyncBase):
@@ -1560,6 +1584,7 @@ func_factory = {
     FileSource.GOOGLE_DRIVE: GoogleDrive,
     FileSource.JIRA: Jira,
     FileSource.SHAREPOINT: SharePoint,
+    FileSource.ONEDRIVE: OneDrive,
     FileSource.SLACK: Slack,
     FileSource.TEAMS: Teams,
     FileSource.MOODLE: Moodle,

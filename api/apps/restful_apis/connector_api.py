@@ -210,7 +210,7 @@ async def get_connector(
         return server_error_response(e)
 
 
-@router.post("/connectors/{connector_id}/test", summary="测试已保存的 REST API 连接器")
+@router.post("/connectors/{connector_id}/test", summary="测试已保存的 REST API、Teams 或 OneDrive 连接器")
 async def test_connector(
     connector_id: str,
     db: AsyncSession = Depends(get_async_db),
