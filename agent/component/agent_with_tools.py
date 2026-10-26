@@ -88,7 +88,9 @@ class Agent(LLM, ToolBase):
         try:
             with db_connection() as db:
                 model_types = resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id)
-                model_type = "chat" if "chat" in model_types else model_types[0]
+                model_type = "chat" if "chat" in model_types else "image2text" if "image2text" in model_types else None
+                if model_type is None:
+                    raise LookupError("A chat or vision model is required")
                 model_config = get_model_config_by_type_and_name(
                     db,
                     self._canvas.get_tenant_id(),

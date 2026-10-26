@@ -10,7 +10,7 @@ import yaml
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.db_models import File, File2Document, PythonSkillCoreConfig, PythonSkillCoreSpace, TenantLLM
+from api.db.db_models import File, File2Document, PythonSkillCoreConfig, PythonSkillCoreSpace
 from api.skills.core_schemas import CoreConfigRequest, CoreCreate, CoreIndexRequest, CoreSearchRequest, CoreUpdate, field_defaults
 from api.skills.file_guard import SKILL_SOURCES
 from api.skills.package import MAX_FILE_SIZE, MAX_FILES, MAX_TOTAL_SIZE, PackageFile, normalize_path
@@ -60,20 +60,13 @@ class SkillCoreService:
     async def model_reference(self, tenant: str, reference: str, kind: str) -> str:
         if not reference:
             return ""
-        query = select(TenantLLM).where(TenantLLM.tenant_id == tenant, TenantLLM.mdl_type == kind, TenantLLM.status == "1")
-        if reference.isascii() and reference.isdecimal():
-            if not 0 < int(reference) < 2**63:
-                raise SkillError(422, "MODEL_NOT_FOUND", "Model reference is invalid")
-            query = query.where(TenantLLM.id == int(reference))
-        elif "@" in reference:
-            name, provider = reference.rsplit("@", 1)
-            query = query.where(TenantLLM.llm_name == name, TenantLLM.llm_factory == provider)
-        else:
-            raise SkillError(422, "MODEL_REFERENCE_REQUIRED", "Use an exact model ID or full model@provider reference")
-        rows = list(await self.db.scalars(query.limit(2)))
-        if len(rows) != 1:
-            raise SkillError(422, "MODEL_AMBIGUOUS" if rows else "MODEL_NOT_FOUND", "Model reference must identify one enabled tenant model")
-        return str(rows[0].id)
+        from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+
+        try:
+            config = await self.db.run_sync(lambda session: get_model_config_by_type_and_name(session, tenant, kind, reference))  # TODO(async-phase4): existing model resolver
+        except (LookupError, ValueError):
+            raise SkillError(422, "MODEL_NOT_FOUND", "Model reference must identify one enabled tenant model") from None
+        return str(config["id"])
 
     async def space_dto(self, row: PythonSkillCoreSpace) -> dict[str, Any]:
         config = await self.config_row(row.tenant_id, row.id)

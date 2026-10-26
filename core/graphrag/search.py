@@ -391,7 +391,7 @@ if __name__ == "__main__":
         llm_bdl = LLMBundle(db, args.tenant_id, chat_config)
         kb = KnowledgebaseService.get_by_id(db, kb_id)
         if kb.tenant_embd_id:
-            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id, model_type="embedding")
         else:
             embd_config = get_model_config_by_type_and_name(db, args.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
         embed_bdl = LLMBundle(db, args.tenant_id, embd_config)

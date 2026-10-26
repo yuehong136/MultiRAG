@@ -1,4 +1,4 @@
-"""HTTP contracts for the OpenAI-compatible chat route and its legacy alias."""
+"""HTTP contracts for the OpenAI-compatible chat route and retired legacy alias."""
 
 from __future__ import annotations
 
@@ -15,16 +15,15 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils.api_utils import async_token_required
 
 
-def test_routes_registered_once_and_legacy_alias_deprecated(client: Any) -> None:
+def test_routes_registered_once_and_legacy_alias_removed(client: Any) -> None:
     from fastapi.routing import iter_route_contexts
 
     routes = [ctx for ctx in iter_route_contexts(client.app.routes) if ctx.path.endswith("/chat/completions") and ("/openai/" in ctx.path or "/chats_openai/" in ctx.path)]
     assert sorted(ctx.path for ctx in routes) == [
-        "/api/v1/chats_openai/{chat_id}/chat/completions",
         "/api/v1/openai/{chat_id}/chat/completions",
     ]
     deprecated = {ctx.path: ctx.original_route.deprecated for ctx in routes}
-    assert deprecated["/api/v1/chats_openai/{chat_id}/chat/completions"] is True
+    assert "/api/v1/chats_openai/{chat_id}/chat/completions" not in client.app.openapi()["paths"]
     assert deprecated["/api/v1/openai/{chat_id}/chat/completions"] is not True
 
 
@@ -64,15 +63,27 @@ def test_new_route_defaults_to_nonstream_and_keeps_placeholder_model(openai_rout
     assert dialog.llm_id == "configured-model"
 
 
-def test_legacy_alias_still_streams_by_default(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]]) -> None:
+def test_legacy_alias_returns_404_without_model_execution(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]]) -> None:
     client, _, _, calls = openai_route
     response = client.post("/api/v1/chats_openai/dlg-1/chat/completions", json={"model": "model", "messages": [{"role": "user", "content": "hi"}]})
+    assert response.status_code == 404
+    assert calls == []
+
+
+@pytest.mark.parametrize("stream", [None, False, True])
+def test_canonical_stream_omission_and_explicit_values(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]], stream: bool | None) -> None:
+    client, _, _, calls = openai_route
+    response = client.post("/api/v1/openai/dlg-1/chat/completions", json={"model": "model", "messages": [{"role": "user", "content": "hi"}], "stream": stream})
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    frames = _frames(response.text)
-    assert frames[-1] == "[DONE]"
-    assert "".join(frame["choices"][0]["delta"].get("content", "") for frame in frames[:-1] if isinstance(frame, dict)) == "part"
-    assert calls[0]["stream"] is True
+    assert calls[0]["stream"] is (stream is True)
+    assert response.headers["content-type"].startswith("text/event-stream" if stream else "application/json")
+
+
+@pytest.mark.parametrize("stream", ["true", "false", 0, 1])
+def test_canonical_stream_rejects_coercion(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]], stream: Any) -> None:
+    client, _, _, calls = openai_route
+    assert client.post("/api/v1/openai/dlg-1/chat/completions", json={"model": "model", "messages": [{"role": "user", "content": "hi"}], "stream": stream}).status_code == 422
+    assert calls == []
 
 
 def test_specific_model_validated_and_dialog_not_mutated(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch) -> None:

@@ -20,6 +20,12 @@ from api.db.services.tenant_llm_service import TenantLangfuseService, TenantLLMS
 from core.llm.cv import Base as VisionBase
 
 
+@pytest.fixture(autouse=True)
+def unmanaged_legacy_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Probe tests isolate the legacy management boundary; SQL guards are tested separately."""
+    monkeypatch.setattr(llm_app, "require_legacy_write", lambda *_args: None)
+
+
 @pytest.mark.parametrize("is_tools", [True, False, None])
 @pytest.mark.parametrize(
     "provider_fields", [{}, {"group_id": "fixture-group", "opaque": {"retain": True}}, {"provider_order": ["first", "second"]}, {"auth_mode": "assume_role", "bedrock_region": "fixture-region"}]

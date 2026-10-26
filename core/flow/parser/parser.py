@@ -404,6 +404,12 @@ class Parser(ProcessBase):
                 parser_model_name = raw_parse_method.rsplit("@", 1)[0]
                 parse_method = "OpenDataLoader"
 
+        if isinstance(raw_parse_method, str) and raw_parse_method.isdecimal():
+            from api.db.joint_services.tenant_model_service import resolve_parser_reference
+
+            with db_connection() as db:
+                parse_method, parser_model_name = resolve_parser_reference(db, self._canvas._tenant_id, raw_parse_method)
+
         if parse_method.lower() == "deepdoc":
             pdf_parser = RAGFlowPdfParser()
             bboxes = pdf_parser.parse_into_bboxes(blob, callback=self.callback)

@@ -112,6 +112,10 @@ def init_superuser(
         logging.warning(f"Failed to clean TenantLLM records: {e}")
 
     TenantLLMService.insert_many(db, tenant_llm)
+    from api.db.model_backfill import backfill
+
+    db.flush()
+    backfill(db.connection(), user_info["id"])
     TenantService.update_by_id(db, user_info["id"], ensure_tenant_model_id_for_params(db, user_info["id"], tenant))
 
     logging.info(f"Super user initialized. email: {email},A default password has been set; changing the password after login is strongly recommended.")

@@ -331,3 +331,25 @@ func TestProviderFixCatalogRoutingAndCapabilities(t *testing.T) {
 		t.Fatal("Replicate rerank catalog")
 	}
 }
+
+func TestSiliconFlowFourProCatalogModels(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		tokens int
+		vision bool
+	}{
+		{"Pro/deepseek-ai/DeepSeek-V4-Pro", 1048576, false},
+		{"Pro/deepseek-ai/DeepSeek-V4-Flash", 1048576, false},
+		{"Pro/moonshotai/Kimi-K2.6", 262144, true},
+		{"Pro/zai-org/GLM-5.1", 204800, false},
+	} {
+		model, err := manager.GetModelByName("SiliconFlow", test.name)
+		if err != nil || model.MaxTokens != test.tokens || !model.ModelTypeMap["chat"] || model.ModelTypeMap["vision"] != test.vision {
+			t.Fatalf("model %s: %v %v", test.name, model, err)
+		}
+	}
+}

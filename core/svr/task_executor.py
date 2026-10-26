@@ -33,7 +33,7 @@ from sqlalchemy.orm.exc import NoResultFound
 
 from api.db.db_models import db_connection
 from api.db.joint_services.memory_message_service import handle_save_to_memory_task
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
+from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, rebind_model_config
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import finish_status_write, insert_source_chunks
@@ -2256,9 +2256,9 @@ async def run_analyze_v2_task(
             # 混合：先 TitleChunker，再 RAPTOR
             components_used.extend(["TitleChunker", "RAPTOR"])
             callback(prog=0.3, msg="混合处理：层次化 + RAPTOR...")
-            raptor_chat_config = get_model_config_by_type_and_name(db, chat_mdl.tenant_id, LLMType.CHAT.value, chat_mdl.llm_name)
+            raptor_chat_config = rebind_model_config(db, chat_mdl, LLMType.CHAT.value)
             raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, raptor_chat_config)
-            raptor_embd_config = get_model_config_by_type_and_name(db, embd_mdl.tenant_id, LLMType.EMBEDDING.value, embd_mdl.llm_name)
+            raptor_embd_config = rebind_model_config(db, embd_mdl, LLMType.EMBEDDING.value)
             raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, raptor_embd_config)
 
             # 先层次化
@@ -2372,9 +2372,9 @@ async def run_analyze_v2_task(
             # 使用 RAPTOR
             components_used.append("RAPTOR")
             callback(prog=0.3, msg="RAPTOR 聚类处理...")
-            raptor_chat_config = get_model_config_by_type_and_name(db, chat_mdl.tenant_id, LLMType.CHAT.value, chat_mdl.llm_name)
+            raptor_chat_config = rebind_model_config(db, chat_mdl, LLMType.CHAT.value)
             raptor_chat_mdl = LLMBundle(None, chat_mdl.tenant_id, raptor_chat_config)
-            raptor_embd_config = get_model_config_by_type_and_name(db, embd_mdl.tenant_id, LLMType.EMBEDDING.value, embd_mdl.llm_name)
+            raptor_embd_config = rebind_model_config(db, embd_mdl, LLMType.EMBEDDING.value)
             raptor_embd_mdl = LLMBundle(None, embd_mdl.tenant_id, raptor_embd_config)
 
             # ⚠️ 降级保护：chunk 太少（< 3）时，RAPTOR 无法有效聚类

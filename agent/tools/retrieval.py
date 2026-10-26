@@ -240,7 +240,7 @@ class Retrieval(ToolBase, ABC):
         embd_mdl = None
         if embd_keys:
             if kbs[0].tenant_embd_id:
-                embd_mdl = await build_bundle_by_id_async(kbs[0].tenant_id, kbs[0].tenant_embd_id)
+                embd_mdl = await build_bundle_by_id_async(kbs[0].tenant_id, kbs[0].tenant_embd_id, model_type="embedding")
             else:
                 embd_mdl = await build_named_bundle_async(kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id)
 

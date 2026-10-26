@@ -94,8 +94,9 @@ class TenantLLMService(CommonService):
     @classmethod
     def resolve_model_config(cls, db: Session, model_config: dict[str, Any]) -> dict[str, Any]:
         from api.db.services.llm_service import LLMService
+        from api.db.services.provider_model_resolution import resolve_linked_config
 
-        config = cls.decode_model_config(model_config)
+        config = cls.decode_model_config(resolve_linked_config(db, model_config))
         if "is_tools" not in config:
             model_name, factory = cls.split_model_name_and_factory(config["llm_name"])
             factory = factory or config.get("llm_factory")
@@ -134,28 +135,16 @@ class TenantLLMService(CommonService):
         model_name: str,
         model_type: str | LLMType | None = None,
     ):
-        mdlnm, fid = TenantLLMService.split_model_name_and_factory(model_name)
+        from api.db.services.provider_model_resolution import find_model_row
+
         model_type_value = model_type.value if hasattr(model_type, "value") else model_type
-
-        stmt = select(cls.model).where(cls.model.tenant_id == tenant_id, cls.model.llm_name == mdlnm)
-        if model_type_value is not None:
-            stmt = stmt.where(cls.model.mdl_type == model_type_value)
-        if fid:
-            stmt = stmt.where(cls.model.llm_factory == fid)
-
-        obj = db.execute(stmt).scalars().first()
-
-        if obj is None and fid and (suffix := cls._FACTORY_SUFFIX.get(fid)):
-            stmt = select(cls.model).where(
-                cls.model.tenant_id == tenant_id,
-                cls.model.llm_name == mdlnm + suffix,
-                cls.model.llm_factory == fid,
-            )
-            if model_type_value is not None:
-                stmt = stmt.where(cls.model.mdl_type == model_type_value)
-            obj = db.execute(stmt).scalars().first()
-
-        return obj
+        row = find_model_row(db, tenant_id, model_name, model_type_value)
+        if row is None:
+            name, factory = cls.split_model_name_and_factory(model_name)
+            suffix = cls._FACTORY_SUFFIX.get(factory or "", "")
+            if suffix and not name.endswith(suffix):
+                row = find_model_row(db, tenant_id, f"{name}{suffix}@{factory}", model_type_value)
+        return row
 
     @classmethod
     def get_my_llms(cls, db: Session, tenant_id: str) -> list[Any]:
@@ -200,6 +189,7 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def get_model_config(cls, db: Session, tenant_id: str, llm_type: str | LLMType, llm_name: str | None = None) -> dict[str, Any]:
+        llm_type = llm_type.value if isinstance(llm_type, LLMType) else llm_type
         tenant = TenantService.get_by_id(db, tenant_id)
         if not tenant:
             raise LookupError("Tenant not found")
@@ -235,13 +225,20 @@ class TenantLLMService(CommonService):
         else:
             raise LookupError(f"Model({mdlnm}@{fid}) not authorized")
 
-        return cls.resolve_model_config(db, model_config)
+        config = cls.resolve_model_config(db, model_config)
+        if "model_types" in config:
+            if llm_type not in config["model_types"]:
+                raise LookupError("Model does not support the requested capability")
+            config["mdl_type"] = llm_type
+        return config
 
     @classmethod
     def model_instance(cls, db: Session, tenant_id: str, model_config: dict[str, Any], lang: str = "Chinese", **kwargs: Any) -> Any:
         if not model_config:
             raise LookupError("Model config is required")
-        model_config = cls.decode_model_config(model_config)
+        from api.db.services.provider_model_resolution import resolve_linked_config
+
+        model_config = cls.decode_model_config(resolve_linked_config(db, model_config))
         model_config["api_key"] = model_config.get("api_key_payload", model_config["api_key"])
         model_type = model_config.get("mdl_type") or model_config.get("model_type")
         if not model_type:

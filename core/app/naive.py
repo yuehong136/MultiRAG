@@ -900,7 +900,14 @@ def chunk(
         return res
 
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        raw_layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        if isinstance(raw_layout_recognizer, str) and raw_layout_recognizer.isdecimal():
+            from api.db.joint_services.tenant_model_service import resolve_parser_reference
+
+            with db_connection() as db:
+                layout_recognizer, parser_model_name = resolve_parser_reference(db, kwargs.get("tenant_id", ""), raw_layout_recognizer)
+        else:
+            layout_recognizer, parser_model_name = normalize_layout_recognizer(raw_layout_recognizer)
         opendataloader_llm_name = kwargs.pop("opendataloader_llm_name", None)
         if layout_recognizer == "OpenDataLoader" and parser_model_name:
             opendataloader_llm_name = parser_model_name

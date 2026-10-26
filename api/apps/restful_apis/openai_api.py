@@ -9,9 +9,9 @@ import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import get_async_db
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class OpenAIChatCompletionRequest(BaseModel):
     model: str
     messages: Any
-    stream: bool | None = None
+    stream: StrictBool | None = None
     internet: bool | None = None
     extra_body: Any = None
     reference: bool | None = None
@@ -164,11 +164,9 @@ async def _stream_chat_completion_sse(
 
 
 @router.post("/openai/{chat_id}/chat/completions", summary="OpenAI-compatible chat completion")
-@router.post("/chats_openai/{chat_id}/chat/completions", deprecated=True, include_in_schema=True)
 async def openai_chat_completions(
     chat_id: str,
     request: OpenAIChatCompletionRequest,
-    http_request: Request,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_token_required),
 ) -> Any:
@@ -243,8 +241,7 @@ async def openai_chat_completions(
         return _argument_error(str(exc))
     metadata_fields = None if selected_fields is None else sorted(selected_fields)
     chat_kwargs["reference_metadata"] = {"include": include_reference_metadata, "fields": metadata_fields}
-    legacy = "/chats_openai/" in http_request.url.path
-    stream_mode = req["stream"] if req["stream"] is not None else legacy
+    stream_mode = req["stream"] is True
     if stream_mode:
         resp = StreamingResponse(
             _stream_chat_completion_sse(

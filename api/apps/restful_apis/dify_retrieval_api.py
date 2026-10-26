@@ -271,7 +271,7 @@ async def _run_retrieval(
 
         # 初始化嵌入模型
         if kb.tenant_embd_id:
-            embd_config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id)
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
         else:
             embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
         embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)

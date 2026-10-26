@@ -234,9 +234,10 @@ async def log_out(db: AsyncSession = Depends(get_async_db), user: Principal = De
             return get_data_error_result(retmsg="User not found!")
         await db.commit()
         return get_json_result(data=True)
-    except Exception as e:
+    except Exception as exc:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"An error occurred: {e!s}")
+        logging.error("Logout failed to persist invalidation: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to invalidate access token") from None
 
 
 @router.get("/auth/login/{channel}", summary="OAuth登录入口")
@@ -490,6 +491,10 @@ def user_register(db: Session, user_id: str, user: dict):
         TenantService.insert(db, **tenant)
         UserTenantService.insert(db, **usr_tenant)
         TenantLLMService.insert_many(db, tenant_llm)
+        from api.db.model_backfill import backfill
+
+        db.flush()
+        backfill(db.connection(), user_id)
         TenantService.update_by_id(db, user_id, ensure_tenant_model_id_for_params(db, user_id, tenant))
         FileService.insert(db, file)
         db.commit()

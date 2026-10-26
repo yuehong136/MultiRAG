@@ -951,13 +951,13 @@ async def retrieval_test_embedded(
             question = await cross_languages(kb.tenant_id, None, question, langs)
 
         if kb.tenant_embd_id:
-            embd_mdl = await build_bundle_by_id_async(kb.tenant_id, kb.tenant_embd_id)
+            embd_mdl = await build_bundle_by_id_async(kb.tenant_id, kb.tenant_embd_id, model_type="embedding")
         else:
             embd_mdl = await build_named_bundle_async(kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
 
         rerank_mdl = None
         if body.tenant_rerank_id is not None:
-            rerank_mdl = await build_bundle_by_id_async(tenant_id, body.tenant_rerank_id, db=db, allowed_tenant_ids=allowed_rerank_tenant_ids)
+            rerank_mdl = await build_bundle_by_id_async(tenant_id, body.tenant_rerank_id, db=db, allowed_tenant_ids=allowed_rerank_tenant_ids, model_type="rerank")
         elif rerank_id:
             rerank_mdl = await build_named_bundle_async(kb.tenant_id, LLMType.RERANK.value, rerank_id)
 

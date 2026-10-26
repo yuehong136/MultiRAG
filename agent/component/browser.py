@@ -245,9 +245,10 @@ class Browser(ComponentBase):
             # TODO(async-phase4): tenant model resolver is a legacy sync service.
             def resolve(session: Any) -> dict[str, Any]:
                 types = resolve_model_type(session, tenant, self._param.llm_id)
-                if types[0] not in {"chat", "image2text"}:
+                kind = "chat" if "chat" in types else "image2text" if "image2text" in types else None
+                if kind is None:
                     raise ValueError("Browser requires a chat or vision model")
-                return get_model_config_by_type_and_name(session, tenant, types[0], self._param.llm_id)
+                return get_model_config_by_type_and_name(session, tenant, kind, self._param.llm_id)
 
             cfg = await db.run_sync(resolve)
         model = cfg.get("llm_name") or cfg.get("model_name") or cfg.get("model")

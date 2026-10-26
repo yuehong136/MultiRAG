@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"multirag/internal/common"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"reflect"
@@ -49,7 +50,7 @@ func TestCustomModelTypesAndExtra(t *testing.T) {
 	if _, err := normalizeCustomModelType("qwen"); err == nil {
 		t.Fatal("family accepted as capability")
 	}
-	for _, raw := range []string{"{}", `{"max_tokens":0}`, `{"max_tokens":1.5}`, `{"max_tokens":1,"thinking":"false"}`, "invalid"} {
+	for _, raw := range []string{"{}", `{"max_tokens":-1}`, `{"max_tokens":null}`, `{"max_tokens":1.5}`, `{"max_tokens":1,"thinking":"false"}`, "invalid"} {
 		if _, err := decodeCustomModelExtra(raw); err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
@@ -157,5 +158,27 @@ func TestPaddleOCRLocalInstanceWithoutKey(t *testing.T) {
 	}
 	if _, _, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", Extra: raw}); err == nil {
 		t.Fatal("hosted provider without credentials accepted")
+	}
+}
+
+func TestCustomModelBoundaryBeforeDatabase(t *testing.T) {
+	service := &ModelProviderService{}
+	for _, request := range []*AddCustomModelRequest{nil, {}, {ProviderName: "OpenAI", InstanceName: "default", ModelName: "valid", ModelTypes: []string{}, MaxTokens: 0}, {ProviderName: "OpenAI", InstanceName: "default", ModelName: " valid ", ModelTypes: []string{"chat"}, MaxTokens: 0}} {
+		if code, err := service.AddCustomModel(request, "owner"); err == nil || code != common.CodeBadRequest {
+			t.Fatalf("invalid request reached database: %v %v", code, err)
+		}
+	}
+	for _, raw := range []string{`{"model_name":"valid","model_types":["ocr"]}`, `{"max_tokens":null}`, `{"max_tokens":1.1}`, `{"max_tokens":"1"}`} {
+		var request AddCustomModelRequest
+		if err := json.Unmarshal([]byte(raw), &request); err == nil {
+			t.Fatalf("accepted malformed token limit: %s", raw)
+		}
+	}
+	var request AddCustomModelRequest
+	if err := json.Unmarshal([]byte(`{"model_name":"valid","model_types":["ocr"],"max_tokens":0}`), &request); err != nil || request.MaxTokens != 0 {
+		t.Fatalf("rejected legal zero: %v", err)
+	}
+	if extra, err := decodeCustomModelExtra(`{"max_tokens":0,"model_types":["ocr"]}`); err != nil || extra.MaxTokens != 0 {
+		t.Fatalf("zero did not survive stored metadata: %v", err)
 	}
 }

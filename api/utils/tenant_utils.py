@@ -12,6 +12,7 @@ _KEY_TO_MODEL_TYPE = {
     "img2txt_id": LLMType.IMAGE2TEXT,
     "rerank_id": LLMType.RERANK,
     "tts_id": LLMType.TTS,
+    "ocr_id": LLMType.OCR,
 }
 
 
@@ -29,7 +30,7 @@ def ensure_tenant_model_id_for_params(
     *,
     strict: bool = False,
 ) -> dict:
-    for key in ["llm_id", "embd_id", "asr_id", "img2txt_id", "rerank_id", "tts_id"]:
+    for key in _KEY_TO_MODEL_TYPE:
         tenant_key = f"tenant_{key}"
         if key not in param_dict:
             continue

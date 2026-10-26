@@ -780,26 +780,14 @@ def verify_embedding_availability(db: Session, embd_id: str, tenant_id: str) -> 
         >>> verify_embedding_availability(db, "invalid_model", "tenant_123")
         (False, "Unsupported model: <invalid_model>")
     """
-    from api.db.services.llm_service import LLMService
-    from api.db.services.tenant_llm_service import TenantLLMService
+    from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
 
     try:
-        llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(embd_id)
-        in_llm_service = bool(LLMService.query(db=db, llm_name=llm_name, fid=llm_factory, model_type="embedding"))
-
-        tenant_llms = TenantLLMService.get_my_llms(db=db, tenant_id=tenant_id)
-        is_tenant_model = any(llm.llm_name == llm_name and llm.llm_factory == llm_factory and llm.mdl_type == "embedding" for llm in tenant_llms)
-
-        is_builtin_model = llm_factory == "Builtin"
-        if not (is_builtin_model or is_tenant_model or in_llm_service):
-            return False, f"Unsupported model: <{embd_id}>"
-
-        if not (is_builtin_model or is_tenant_model):
-            return False, f"Unauthorized model: <{embd_id}>"
-    except OperationalError as e:
-        logging.exception(e)
+        get_model_config_by_type_and_name(db, tenant_id, "embedding", embd_id)
+    except (LookupError, ValueError):
+        return False, "Embedding model is unavailable for this tenant"
+    except OperationalError:
         return False, "Database operation failed"
-
     return True, None
 
 

@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"multirag/internal/common"
 	"multirag/internal/service"
 	"net/http"
+	"strings"
 )
 
 func (h *ProviderHandler) AddCustomModel(c *gin.Context) {
@@ -18,12 +20,10 @@ func (h *ProviderHandler) AddCustomModel(c *gin.Context) {
 		jsonError(c, common.CodeBadRequest, "Invalid model declaration")
 		return
 	}
-	provider, instance := c.Param("provider_name"), c.Param("instance_name")
-	if (request.ProviderName != "" && request.ProviderName != provider) || (request.InstanceName != "" && request.InstanceName != instance) {
-		jsonError(c, common.CodeBadRequest, "Model declaration does not match route")
+	if err := prepareCustomModelRequest(&request, c.Param("provider_name"), c.Param("instance_name")); err != nil {
+		jsonError(c, common.CodeBadRequest, "Invalid model target or declaration")
 		return
 	}
-	request.ProviderName, request.InstanceName = provider, instance
 	code, err := h.modelProviderService.AddCustomModel(&request, user.ID)
 	if err != nil {
 		message := err.Error()
@@ -61,4 +61,18 @@ func (h *ProviderHandler) DropInstanceModels(c *gin.Context) {
 		return
 	}
 	jsonResponse(c, common.CodeSuccess, nil, "success")
+}
+
+func prepareCustomModelRequest(request *service.AddCustomModelRequest, provider, instance string) error {
+	if request == nil || provider == "" || provider != strings.TrimSpace(provider) || instance == "" || instance != strings.TrimSpace(instance) {
+		return fmt.Errorf("provider and instance are required")
+	}
+	if request.ProviderName != "" && request.ProviderName != provider || request.InstanceName != "" && request.InstanceName != instance {
+		return fmt.Errorf("model declaration does not match route")
+	}
+	if request.ModelName == "" || request.ModelName != strings.TrimSpace(request.ModelName) || request.ModelTypes != nil && len(request.ModelTypes) == 0 || request.ModelTypes == nil && request.ModelType == "" {
+		return fmt.Errorf("model name and type are required")
+	}
+	request.ProviderName, request.InstanceName = provider, instance
+	return nil
 }
