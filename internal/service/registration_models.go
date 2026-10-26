@@ -47,7 +47,7 @@ func initializeTenantModels(tx *gorm.DB, tenant *entity.Tenant, models server.De
 		for _, typ := range definition.ModelTypes {
 			supported = supported || modelTypeMatches(typ, expected)
 		}
-		if !supported || definition.MaxTokens <= 0 {
+		if !supported || definition.MaxTokens < 0 {
 			return fmt.Errorf("configured default model capability unavailable")
 		}
 		modelExtra := customModelExtra{MaxTokens: definition.MaxTokens, ModelTypes: definition.ModelTypes}
@@ -77,10 +77,16 @@ func initializeTenantModels(tx *gorm.DB, tenant *entity.Tenant, models server.De
 			return err
 		}
 
-		model := entity.TenantModel{ID: common.GenerateUUID(), ProviderID: providerID, InstanceID: instance.ID, ModelName: cfg.Name, ModelType: entry.typ, Status: "active", Extra: string(encodedModel)}
-		if err := tx.Create(&model).Error; err != nil {
-			return err
+		// A catalog declaration may legitimately omit a token limit (for example
+		// Whisper ASR). Leave it catalog-backed: an empty override is a disable marker,
+		// while customModelExtra correctly requires a positive explicit token budget.
+		if definition.MaxTokens > 0 {
+			model := entity.TenantModel{ID: common.GenerateUUID(), ProviderID: providerID, InstanceID: instance.ID, ModelName: cfg.Name, ModelType: entry.typ, Status: "active", Extra: string(encodedModel)}
+			if err := tx.Create(&model).Error; err != nil {
+				return err
+			}
 		}
+
 		*entry.target = cfg.Name + "@" + instance.InstanceName + "@" + cfg.Factory
 	}
 	return tx.Model(tenant).Select("llm_id", "embd_id", "rerank_id", "asr_id", "img2txt_id").Updates(tenant).Error
