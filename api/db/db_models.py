@@ -764,6 +764,8 @@ class Tenant(BaseModel):
     tenant_rerank_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant rerank row id")
     tts_id: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True, doc="default tts model ID")
     tenant_tts_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True, doc="default tenant tts row id")
+    ocr_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tenant_ocr_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     parser_ids: Mapped[str] = mapped_column(String(256), index=True, nullable=False, doc="document processors")
     credit: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=512)
     status: Mapped[str | None] = mapped_column(String(1), index=True, nullable=True, default="1", doc="is it validate(0: wasted，1: validate)")
@@ -784,6 +786,8 @@ class Tenant(BaseModel):
             "tenant_img2txt_id": self.tenant_img2txt_id,
             "tts_id": self.tts_id,
             "tenant_tts_id": self.tenant_tts_id,
+            "ocr_id": self.ocr_id,
+            "tenant_ocr_id": self.tenant_ocr_id,
             "parser_ids": self.parser_ids,
         }
 
@@ -2673,10 +2677,57 @@ class TenantLLM(BaseModel):
     mdl_type: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True, doc="LLM, Text Embedding, Image2Text, ASR")
     llm_name: Mapped[str | None] = mapped_column(String(128), primary_key=False, index=True, nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True, doc="API KEY")
-    api_base: Mapped[str | None] = mapped_column(String(255), index=False, nullable=True)
+    api_base: Mapped[str | None] = mapped_column(String(2048), index=False, nullable=True)
     max_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=8192)
     used_tokens: Mapped[int] = mapped_column(Integer, index=True, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(1), index=True, nullable=False, default="1", doc="is it validate(0: wasted, 1: validate)")
+
+
+class TenantModelProvider(BaseModel):
+    __tablename__ = "t_ai_tenant_model_providers"
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "provider_name", name="uq_model_provider_owner_name"),
+        sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_model_provider_status"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    provider_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(8), nullable=False, default="active", server_default="active")
+
+
+class TenantModelInstance(BaseModel):
+    __tablename__ = "t_ai_tenant_model_instances"
+    __table_args__ = (
+        sa.UniqueConstraint("provider_id", "instance_name", name="uq_model_instance_provider_name"),
+        sa.CheckConstraint("status IN ('active', 'inactive')", name="ck_model_instance_status"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(sa.ForeignKey("usr_ai.t_ai_tenant_model_providers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    instance_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="", server_default="")
+    region: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(String(8), nullable=False, default="active", server_default="active")
+
+
+class TenantModel(BaseModel):
+    """Instance metadata for an existing numeric TenantLLM identity."""
+
+    __tablename__ = "t_ai_tenant_models"
+    __table_args__ = (
+        sa.UniqueConstraint("instance_id", "model_name", name="uq_instance_model_name"),
+        {"schema": "usr_ai"},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, sa.ForeignKey("usr_ai.t_ai_tenant_llms.id", ondelete="RESTRICT"), primary_key=True, autoincrement=False)
+    instance_id: Mapped[str] = mapped_column(sa.ForeignKey("usr_ai.t_ai_tenant_model_instances.id", ondelete="RESTRICT"), nullable=False, index=True)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_types: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    is_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=sa.false())
 
 
 class TenantLangfuse(BaseModel):

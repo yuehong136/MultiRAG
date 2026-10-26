@@ -31,7 +31,7 @@ class Benchmark:
             self.similarity_threshold = self.kb.similarity_threshold
             self.vector_similarity_weight = self.kb.vector_similarity_weight
             if getattr(self.kb, "tenant_embd_id", None):
-                model_config = get_model_config_by_id(db, self.kb.tenant_embd_id)
+                model_config = get_model_config_by_id(db, self.kb.tenant_embd_id, model_type="embedding")
             else:
                 model_config = get_model_config_by_type_and_name(db, self.kb.tenant_id, LLMType.EMBEDDING.value, self.kb.embd_id)
             self.embd_mdl = LLMBundle(db, self.kb.tenant_id, model_config, lang=self.kb.language)

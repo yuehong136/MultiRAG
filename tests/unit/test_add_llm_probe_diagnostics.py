@@ -22,6 +22,13 @@ from api.apps import llm_app
 from api.apps.llm_app import AddLLMRequest, add_llm
 from api.db.services.tenant_llm_service import TenantLLMService
 
+
+@pytest.fixture(autouse=True)
+def unmanaged_legacy_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Probe tests isolate the legacy management boundary; SQL guards are tested separately."""
+    monkeypatch.setattr(llm_app, "require_legacy_write", lambda *_args: None)
+
+
 FACTORY = "OpenAI-API-Compatible"
 ZHIPU_V4 = "https://open.bigmodel.cn/api/paas/v4"
 

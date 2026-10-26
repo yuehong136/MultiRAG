@@ -34,7 +34,7 @@ from core.prompts.generator import cross_languages, keyword_extraction
 async def _bundle(db: AsyncSession, tenant_id: str, model_type: LLMType, *, model_id: int | None = None, name: str | None = None, allowed_tenant_ids: set[str] | None = None) -> LLMBundle:
     def build(s: Session) -> LLMBundle:
         if model_id:
-            config = get_model_config_by_id(s, model_id, allowed_tenant_ids=allowed_tenant_ids)
+            config = get_model_config_by_id(s, model_id, tenant_id=tenant_id if allowed_tenant_ids is None else None, allowed_tenant_ids=allowed_tenant_ids, model_type=model_type.value)
         elif name:
             config = get_model_config_by_type_and_name(s, tenant_id, model_type.value, name)
         else:

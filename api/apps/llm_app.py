@@ -19,11 +19,12 @@ from starlette.responses import StreamingResponse
 
 from api.apps import manager
 from api.db.db_models import TenantLLM, db_connection, get_async_db, get_db
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.joint_services.tenant_model_service import detached_bundle, get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.file_service import FileService, RuntimeAttachmentError
 from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.mcp_server_service import MCPServerService
+from api.db.services.provider_model_resolution import require_legacy_write
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.user_service import TenantService
 from api.utils.api_utils import Principal, async_current_user, get_allowed_llm_factories, get_data_error_result, get_json_result, server_error_response
@@ -35,6 +36,14 @@ from common.mcp_tool_call_conn import close_multiple_mcp_toolcall_sessions
 from common.misc_utils import get_uuid, thread_pool_exec
 from core.prompts.generator import kb_prompt
 from core.utils.tavily_conn import Tavily
+
+
+def _requested_model_types(db: Session, tenant_id: str, reference: str) -> list[str]:
+    """Preserve the management chat endpoints' missing-model response."""
+    try:
+        return resolve_model_type(db, tenant_id, reference)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=f"Model {reference} not found or unavailable") from error
 
 
 def _preview_stream_text(value: Any, limit: int = 120) -> str:
@@ -635,6 +644,13 @@ async def prepare_knowledge_context(db: AsyncSession, messages: list[dict], tavi
     return knowledge_context
 
 
+def _require_legacy_model_write(db: Session, tenant_id: str, factory: str) -> None:
+    try:
+        require_legacy_write(db, tenant_id, factory)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+
+
 class SetAPIKeyRequest(BaseModel):
     llm_factory: str
     api_key: str
@@ -879,8 +895,9 @@ def probe_timeout_seconds() -> int:
     return int(os.environ.get("LLM_TIMEOUT_SECONDS", 25))
 
 
-@router.post("/set_api_key", summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
+@router.post("/set_api_key", deprecated=True, summary="新增模型厂商api key", response_description="成功保存该模型服务厂商的api key")
 async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Any:
+    _require_legacy_model_write(db, user.id, request.llm_factory)
     req = request.model_dump()
     chat_passed, embd_passed, rerank_passed = False, False, False
     factory = req["llm_factory"]
@@ -1028,8 +1045,9 @@ async def set_api_key(request: SetAPIKeyRequest, db: Session = Depends(get_db), 
     return get_json_result(data=True)
 
 
-@router.post("/add_llm", summary="新增模型", response_description="成功新增该模型")
+@router.post("/add_llm", deprecated=True, summary="新增模型", response_description="成功新增该模型")
 async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Any:
+    _require_legacy_model_write(db, user.id, request.llm_factory)
     """
     # POST /add_llm
 
@@ -1420,8 +1438,9 @@ async def add_llm(request: AddLLMRequest, db: Session = Depends(get_db), user: A
     return get_json_result(data=True)
 
 
-@router.post("/delete_llm", summary="删除模型", response_description="成功删除该模型")
+@router.post("/delete_llm", deprecated=True, summary="删除模型", response_description="成功删除该模型")
 def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    _require_legacy_model_write(db, user.id, request.llm_factory)
     try:
         req = request.model_dump()
         llm = TenantLLMService.query(db, tenant_id=user.id, llm_factory=req["llm_factory"], llm_name=req["llm_name"])
@@ -1434,8 +1453,9 @@ def delete_llm(request: DeleteLLMRequest, db: Session = Depends(get_db), user=De
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/enable_llm", summary="启用/禁用模型", response_description="成功更新模型状态")
+@router.post("/enable_llm", deprecated=True, summary="启用/禁用模型", response_description="成功更新模型状态")
 def enable_llm(request: EnableLLMRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    _require_legacy_model_write(db, user.id, request.llm_factory)
     req = request.model_dump()
     TenantLLMService.filter_update(
         db,
@@ -1445,8 +1465,9 @@ def enable_llm(request: EnableLLMRequest, db: Session = Depends(get_db), user=De
     return get_json_result(data=True)
 
 
-@router.post("/delete_factory", summary="删除模型厂商", response_description="成功删除模型厂商")
+@router.post("/delete_factory", deprecated=True, summary="删除模型厂商", response_description="成功删除模型厂商")
 def delete_factory(request: DeleteFactoryRequest, db: Session = Depends(get_db), user=Depends(manager)):
+    _require_legacy_model_write(db, user.id, request.llm_factory)
     req = request.model_dump()
     TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user.id, TenantLLM.llm_factory == req["llm_factory"]])
     return get_json_result(data=True)
@@ -1464,41 +1485,40 @@ def my_llms(include_details: bool = False, db: Session = Depends(get_db), user: 
         TenantLLMService.ensure_mineru_from_env(db, user.id)
         TenantLLMService.ensure_opendataloader_from_env(db, user.id)
 
-        if include_details:
-            res = {}
-            objs = TenantLLMService.query(db, tenant_id=user.id)
-            factories = LLMFactoriesService.query(db, status=StatusEnum.VALID.value)
+        from api.db.services.provider_model_resolution import linked_model
 
-            for o in objs:
-                o_dict = o.to_dict()
-                factory_tags = None
-                for f in factories:
-                    if f.name == o_dict["llm_factory"]:
-                        factory_tags = f.tags
-                        break
-
-                if o_dict["llm_factory"] not in res:
-                    res[o_dict["llm_factory"]] = {"tags": factory_tags, "llm": []}
-
-                res[o_dict["llm_factory"]]["llm"].append(
-                    {
-                        "id": o_dict["id"],
-                        "type": o_dict["mdl_type"],
-                        "name": o_dict["llm_name"],
-                        "used_token": o_dict["used_tokens"],
-                        "api_base": o_dict["api_base"] or "",
-                        "max_tokens": o_dict["max_tokens"] or 8192,
-                        "status": o_dict["status"] or "1",
-                        "is_tools": TenantLLMService.resolve_model_config(db, o_dict)["is_tools"],
-                    }
-                )
-        else:
-            res = {}
-            for o in TenantLLMService.get_my_llms(db, user.id):
-                if o.llm_factory not in res:
-                    res[o.llm_factory] = {"tags": o.tags, "llm": []}
-                capability = TenantLLMService.resolve_model_config(db, {"llm_name": o.llm_name, "llm_factory": o.llm_factory, "api_key": getattr(o, "api_key", "")})["is_tools"]
-                res[o.llm_factory]["llm"].append({"id": o.id, "type": o.mdl_type, "name": o.llm_name, "used_token": o.used_tokens, "status": o.status, "is_tools": capability})
+        res: dict[str, Any] = {}
+        factories = {factory.name: factory.tags for factory in LLMFactoriesService.query(db, status=StatusEnum.VALID.value)}
+        for row in TenantLLMService.query(db, tenant_id=user.id):
+            link = linked_model(db, row.id, user.id)
+            group = res.setdefault(row.llm_factory, {"tags": factories.get(row.llm_factory), "llm": []})
+            raw_name, model_types, status = row.llm_name, [row.mdl_type], row.status
+            _, is_tools, _ = TenantLLMService._decode_api_key_config(row.api_key)
+            instance_name = ""
+            if link:
+                model, instance, provider = link
+                raw_name = f"{model.model_name}@{instance.instance_name}"
+                model_types = list(model.model_types)
+                instance_name = instance.instance_name
+                is_tools = model.is_tools
+                status = "1" if row.status == "1" and instance.status == provider.status == "active" else "0"
+            elif is_tools is None:
+                models = LLMService.query(db, fid=row.llm_factory, llm_name=row.llm_name)
+                is_tools = bool(models[0].is_tools) if models else False
+            item = {
+                "id": row.id,
+                "type": row.mdl_type,
+                "model_types": model_types,
+                "name": raw_name,
+                "reference": str(row.id),
+                "instance_name": instance_name,
+                "used_token": row.used_tokens,
+                "status": status,
+                "is_tools": is_tools,
+            }
+            if include_details:
+                item.update(api_base=row.api_base or "", max_tokens=row.max_tokens)
+            group["llm"].append(item)
         return get_json_result(data=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1899,23 +1919,13 @@ async def chat_service(request: LLMServiceRequest, db: AsyncSession = Depends(ge
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenants[0]["tenant_id"]))  # TODO(async-phase4)
-
-    def get_llm_type(model_name, my_llms):
-        for row in my_llms:
-            if row.llm_name == model_name:
-                return row.mdl_type
-        return None  # 如果找不到，返回 None
-
-    llm_type = get_llm_type(req["llm_name"], my_llms)
-    if llm_type:
-        logging.debug(f"The llm_type for model {req['llm_name']} is: {llm_type}")
-    else:
-        raise HTTPException(status_code=404, detail=f"Model {req['llm_name']} not found in the list.")
+    model_types = await db.run_sync(lambda session: _requested_model_types(session, tenants[0]["tenant_id"], req["llm_name"]))  # TODO(async-phase4): legacy resolver
+    llm_type = "chat" if "chat" in model_types else "image2text" if "image2text" in model_types else None
+    if llm_type is None:
+        raise HTTPException(status_code=400, detail="A chat or vision model is required")
 
     mdl_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], llm_type, req["llm_name"]))  # TODO(async-phase4)
-    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
-    chat_mdl.db = None  # facade 不得逸出 run_sync:防同步方法内 rollback 在事件循环上过期 ORM 状态
+    chat_mdl = await db.run_sync(lambda s: detached_bundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
     # 构建调用参数
     call_params = {"system": req["prompt"], "history": req["messages"], "gen_conf": req["gen_conf"]}
 
@@ -2108,23 +2118,13 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenants[0]["tenant_id"]))  # TODO(async-phase4)
-
-        def get_llm_type(model_name, my_llms):
-            for row in my_llms:
-                if row.llm_name == model_name:
-                    return row.mdl_type
-            return None
-
-        llm_type = get_llm_type(req_data["llm_name"], my_llms)
-        if llm_type:
-            logging.debug(f"The llm_type for model {req_data['llm_name']} is: {llm_type}")
-        else:
-            raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
+        model_types = await db.run_sync(lambda session: _requested_model_types(session, tenants[0]["tenant_id"], req_data["llm_name"]))  # TODO(async-phase4): legacy resolver
+        llm_type = "chat" if "chat" in model_types else "image2text" if "image2text" in model_types else None
+        if llm_type is None:
+            raise HTTPException(status_code=400, detail="A chat or vision model is required")
 
         mdl_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], llm_type, req_data["llm_name"]))  # TODO(async-phase4)
-        chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
-        chat_mdl.db = None  # facade 不得逸出 run_sync:防同步方法内 rollback 在事件循环上过期 ORM 状态
+        chat_mdl = await db.run_sync(lambda s: detached_bundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
         # 构建调用参数
         call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
 
@@ -2142,21 +2142,13 @@ async def chat_service_sse(request: LLMServiceRequest, http_request: Request, db
         if not tenants:
             raise HTTPException(status_code=404, detail="Tenant not found!")
 
-        my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenants[0]["tenant_id"]))  # TODO(async-phase4)
-
-        def get_llm_type(model_name, my_llms):
-            for row in my_llms:
-                if row.llm_name == model_name:
-                    return row.mdl_type
-            return None
-
-        llm_type = get_llm_type(req_data["llm_name"], my_llms)
-        if not llm_type:
-            raise HTTPException(status_code=404, detail=f"Model {req_data['llm_name']} not found in the list.")
+        model_types = await db.run_sync(lambda session: _requested_model_types(session, tenants[0]["tenant_id"], req_data["llm_name"]))  # TODO(async-phase4): legacy resolver
+        llm_type = "chat" if "chat" in model_types else "image2text" if "image2text" in model_types else None
+        if llm_type is None:
+            raise HTTPException(status_code=400, detail="A chat or vision model is required")
 
         mdl_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenants[0]["tenant_id"], llm_type, req_data["llm_name"]))  # TODO(async-phase4)
-        chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
-        chat_mdl.db = None  # facade 不得逸出 run_sync:防同步方法内 rollback 在事件循环上过期 ORM 状态
+        chat_mdl = await db.run_sync(lambda s: detached_bundle(s, tenants[0]["tenant_id"], mdl_config))  # TODO(async-phase4)
 
         # 构建调用参数
         call_params = {"system": req_data["prompt"], "history": req_data["messages"], "gen_conf": req_data["gen_conf"]}
@@ -2548,17 +2540,9 @@ async def recognize_intent(request: RecognizeIntentRequest, db: Session = Depend
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
 
-    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
-
-    def get_llm_type(model_name: str, rows):
-        for r in rows:
-            if r.llm_name == model_name:
-                return r.mdl_type
-        return None
-
-    llm_type = get_llm_type(req["llm_name"], my_llms)
-    if llm_type != LLMType.CHAT.value:
-        raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
+    if "chat" not in _requested_model_types(db, tenants[0]["tenant_id"], req["llm_name"]):
+        raise HTTPException(status_code=400, detail="A chat model is required")
+    llm_type = "chat"
 
     mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req["llm_name"])
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
@@ -2603,10 +2587,9 @@ async def fill_fields(req: FillFieldsRequest, db: Session = Depends(get_db), use
     tenants = TenantService.get_info_by(db, user.id)
     if not tenants:
         raise HTTPException(status_code=404, detail="Tenant not found!")
-    my_llms = TenantLLMService.get_my_llms(db, tenants[0]["tenant_id"])
-    llm_type = next((r.mdl_type for r in my_llms if r.llm_name == req.llm_name), None)
-    if llm_type != LLMType.CHAT.value:
-        raise HTTPException(status_code=400, detail="指定模型不是对话模型，或未找到")
+    if "chat" not in _requested_model_types(db, tenants[0]["tenant_id"], req.llm_name):
+        raise HTTPException(status_code=400, detail="A chat model is required")
+    llm_type = "chat"
     mdl_config = get_model_config_by_type_and_name(db, tenants[0]["tenant_id"], llm_type, req.llm_name)
     chat_mdl = LLMBundle(db, tenants[0]["tenant_id"], mdl_config)
 
@@ -2705,21 +2688,9 @@ async def enhanced_chat_service_sse(request: ChatRequest, db: AsyncSession = Dep
             logging.error(f"Failed to get tenant info: {e}")
             raise HTTPException(status_code=500, detail="Failed to get tenant information")
 
-        # 验证模型
-        try:
-            my_llms = await db.run_sync(lambda s: TenantLLMService.get_my_llms(s, tenant_id))  # TODO(async-phase4)
-        except Exception as e:
-            logging.error(f"Failed to get LLMs: {e}")
-            raise HTTPException(status_code=500, detail="Failed to get available models")
-
-        llm_type = None
-        for row in my_llms:
-            if row.llm_name == request.llm_name:
-                llm_type = row.mdl_type
-                break
-
-        if not llm_type:
-            raise HTTPException(status_code=404, detail=f"Model {request.llm_name} not found")
+        model_types = await db.run_sync(lambda session: _requested_model_types(session, tenant_id, request.llm_name))  # TODO(async-phase4): legacy resolver
+        if not {"chat", "image2text"}.intersection(model_types):
+            raise HTTPException(status_code=400, detail="A chat or vision model is required")
 
         # 准备知识上下文(DB 经 run_sync 桥接,Tavily HTTP 走线程池)
         knowledge_context = await prepare_knowledge_context(db, request.messages, request.tavily_api_key, tenant_id, request.llm_name)

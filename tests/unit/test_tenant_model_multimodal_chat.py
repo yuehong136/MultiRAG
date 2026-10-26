@@ -38,7 +38,6 @@ def test_chat_lookup_falls_back_to_image2text_model(monkeypatch) -> None:
     assert config["mdl_type"] == LLMType.IMAGE2TEXT.value
     assert calls == [
         ("vision-model", LLMType.CHAT.value),
-        ("vision-model", LLMType.CHAT.value),
         ("vision-model", LLMType.IMAGE2TEXT.value),
     ]
 
@@ -83,3 +82,18 @@ def test_image_lookup_keeps_factory_qualification(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(LookupError):
         tenant_model_service.get_model_config_by_type_and_name(db, "tenant-1", "image2text", "vision-model@VisionFactory")
     assert calls == ["vision-model@VisionFactory", "vision-model@VisionFactory"]
+
+
+@pytest.mark.parametrize("capabilities,expected", [(["embedding", "image2text"], "image2text"), (["image2text", "chat"], "chat"), (["rerank", "chat"], "chat")])
+def test_dialog_selects_chat_capability_independent_of_order(capabilities: list[str], expected: str) -> None:
+    from api.db.services.dialog_service import _chat_capability
+
+    assert _chat_capability(capabilities) == expected
+
+
+@pytest.mark.parametrize("capabilities", [[], ["ocr"], ["embedding", "rerank"]])
+def test_dialog_rejects_non_chat_capabilities(capabilities: list[str]) -> None:
+    from api.db.services.dialog_service import _chat_capability
+
+    with pytest.raises(LookupError, match="chat or vision"):
+        _chat_capability(capabilities)

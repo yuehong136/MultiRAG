@@ -892,11 +892,11 @@ def check_embedding(request: CheckEmbeddingRequest, db: Session = Depends(get_db
     if tenant_embd_id:
         from api.db.joint_services.tenant_model_service import get_model_config_by_id
 
-        embd_config = get_model_config_by_id(db, tenant_embd_id)
+        embd_config = get_model_config_by_id(db, tenant_embd_id, model_type="embedding")
     elif kb.tenant_embd_id:
         from api.db.joint_services.tenant_model_service import get_model_config_by_id
 
-        embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+        embd_config = get_model_config_by_id(db, kb.tenant_embd_id, model_type="embedding")
     else:
         embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, embd_id or kb.embd_id)
     emb_mdl = LLMBundle(db, kb.tenant_id, embd_config)

@@ -10,7 +10,8 @@ import types
 
 import pytest
 
-from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.joint_services import tenant_model_service
+from api.db.services.llm_service import LLMBundle
 from api.db.services.user_service import TenantService
 
 
@@ -18,7 +19,7 @@ def _llm_module():
     return sys.modules["api.apps.llm"]
 
 
-class _FakeBundle:
+class _FakeBundle(LLMBundle):
     instances: list["_FakeBundle"] = []
 
     def __init__(self, *args, **kwargs):
@@ -39,12 +40,18 @@ class _FakeBundle:
 
 
 @pytest.fixture
-def llm_stubs(monkeypatch):
+def llm_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeBundle.instances.clear()
     monkeypatch.setattr(TenantService, "get_info_by", classmethod(lambda cls, s, uid: [{"tenant_id": "tenant-unit"}]))
-    monkeypatch.setattr(TenantLLMService, "get_my_llms", classmethod(lambda cls, s, tid: [types.SimpleNamespace(llm_name="m1", mdl_type="chat")]))
+
+    def resolve(_db: object, _tenant: str, reference: str) -> list[str]:
+        if reference != "m1":
+            raise LookupError("Unknown fixture model")
+        return ["chat"]
+
+    monkeypatch.setattr(_llm_module(), "resolve_model_type", resolve)
     monkeypatch.setattr(_llm_module(), "get_model_config_by_type_and_name", lambda s, tid, t, n: {"llm_name": "m1", "max_tokens": 1024})
-    monkeypatch.setattr(_llm_module(), "LLMBundle", _FakeBundle)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _FakeBundle)
 
 
 def _sse_frames(text: str) -> list[dict]:

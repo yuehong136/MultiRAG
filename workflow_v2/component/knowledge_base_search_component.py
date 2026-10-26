@@ -33,7 +33,7 @@ class KnowledgeBaseSearchComponent(BaseComponent):
         assert len(embd_keys) == 1, "Knowledge bases use different embedding models."
 
         if kbs[0].tenant_embd_id:
-            embd_config = get_model_config_by_id(self.db, kbs[0].tenant_embd_id)
+            embd_config = get_model_config_by_id(self.db, kbs[0].tenant_embd_id, tenant_id=kbs[0].tenant_id, model_type="embedding")
         else:
             embd_config = get_model_config_by_type_and_name(self.db, kbs[0].tenant_id, LLMType.EMBEDDING.value, kbs[0].embd_id)
         return LLMBundle(self.db, kbs[0].tenant_id, embd_config)

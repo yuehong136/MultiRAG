@@ -554,7 +554,7 @@ async def query_vector_store(request: VectorStoreQueryRequest, db: Session = Dep
         match_exprs = []
         if request.question:
             if kb.tenant_embd_id:
-                embd_config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id)
+                embd_config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
             else:
                 embd_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
             embd_mdl = LLMBundle(db, tenant_id, embd_config)
@@ -724,7 +724,7 @@ def set(request: SetChunkRequest, db: Session = Depends(get_db), user: Any = Dep
 
         tenant_embd_id = DocumentService.get_tenant_embd_id(db, request.doc_id)
         if tenant_embd_id:
-            embd_config = get_model_config_by_id(db, tenant_embd_id, tenant_id=kb.tenant_id)
+            embd_config = get_model_config_by_id(db, tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
         else:
             embd_id = DocumentService.get_embd_id(db, request.doc_id)
             if embd_id:
@@ -1257,7 +1257,7 @@ def create(request: CreateChunkRequest, db: Session = Depends(get_db), user=Depe
 
         tenant_embd_id = DocumentService.get_tenant_embd_id(db, req["doc_id"])
         if tenant_embd_id:
-            embd_config = get_model_config_by_id(db, tenant_embd_id, tenant_id=kb.tenant_id)
+            embd_config = get_model_config_by_id(db, tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
         else:
             embd_id = DocumentService.get_embd_id(db, req["doc_id"])
             if embd_id:

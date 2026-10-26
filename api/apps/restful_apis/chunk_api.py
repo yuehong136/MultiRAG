@@ -178,7 +178,7 @@ def _index_name(kb: Any) -> list[str]:
 
 def _embedding_model(db: Session, kb: Any) -> LLMBundle:
     if kb.tenant_embd_id:
-        config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id)
+        config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
     else:
         config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
     return LLMBundle(db, kb.tenant_id, config)
@@ -803,7 +803,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     rerank_config = None
     if request.tenant_rerank_id is not None:
         try:
-            rerank_config = get_model_config_by_id(db, request.tenant_rerank_id, allowed_tenant_ids={tenant_id, *[kb.tenant_id for kb in kbs]})
+            rerank_config = get_model_config_by_id(db, request.tenant_rerank_id, allowed_tenant_ids={tenant_id, *[kb.tenant_id for kb in kbs]}, model_type="rerank")
         except LookupError:
             return get_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg="No authorization for rerank model.")
 
@@ -890,7 +890,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
             return get_error_data_result(retmsg="Dataset not found!")
 
         if kb.tenant_embd_id:
-            embd_config = get_model_config_by_id(db, kb.tenant_embd_id)
+            embd_config = get_model_config_by_id(db, kb.tenant_embd_id, model_type="embedding")
         else:
             embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
         embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)

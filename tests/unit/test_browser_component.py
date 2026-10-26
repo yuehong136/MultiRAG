@@ -215,3 +215,29 @@ async def test_resolved_debug_inputs_and_output_reset(monkeypatch: pytest.Monkey
     assert run.call_args.args[0] == "Task: debug override"
     assert prepare.call_args.kwargs["inputs"]["sys.query"] == "debug override"
     assert obj._upload_values(["{Begin:x@files}"], inputs={"Begin:x@files": [{"id": "upload"}]}) == [{"id": "upload"}]
+
+
+@pytest.mark.parametrize("capabilities,expected", [(["embedding", "chat"], "chat"), (["ocr", "image2text"], "image2text")])
+async def test_browser_selects_supported_capability_independent_of_order(monkeypatch: pytest.MonkeyPatch, capabilities: list[str], expected: str) -> None:
+    import browser_use.llm
+
+    requested: list[str] = []
+
+    async def run_sync(callback: Any) -> Any:
+        return callback(SimpleNamespace())
+
+    @asynccontextmanager
+    async def db() -> Any:
+        yield SimpleNamespace(run_sync=run_sync)
+
+    def config(_db: Any, tenant: str, kind: str, reference: str) -> dict[str, Any]:
+        requested.append(kind)
+        assert tenant == "tenant" and reference == "registered@OpenAI"
+        return {"llm_name": "raw-model", "llm_factory": "OpenAI", "api_key": "fixture", "api_base": "https://fixture.invalid/v1"}
+
+    monkeypatch.setattr(module, "async_db_connection", db)
+    monkeypatch.setattr(module, "resolve_model_type", lambda *_args: capabilities)
+    monkeypatch.setattr(module, "get_model_config_by_type_and_name", config)
+    monkeypatch.setattr(browser_use.llm, "ChatOpenAI", lambda **values: values)
+    result = await node()._build_browser_llm()
+    assert requested == [expected] and result["model"] == "raw-model"

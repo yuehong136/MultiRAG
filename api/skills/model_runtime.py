@@ -37,28 +37,49 @@ class ModelRuntime:
         from core.llm import EmbeddingModel
 
         async with async_db_connection() as db:
-            rows = (await db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == tenant_id, TenantLLM.status == "1", TenantLLM.mdl_type.in_(["embedding", "rerank"])).order_by(TenantLLM.id))).all()
-            return [
-                {
-                    "id": str(row.id),
-                    "name": row.llm_name,
-                    "provider": row.llm_factory,
-                    "type": row.mdl_type,
-                    "max_tokens": row.max_tokens,
-                    "available": row.llm_factory in (EmbeddingModel if row.mdl_type == "embedding" else STRICT_RERANK_PROVIDERS),
-                    "reason": None if row.llm_factory in (EmbeddingModel if row.mdl_type == "embedding" else STRICT_RERANK_PROVIDERS) else "MODEL_DRIVER_UNAVAILABLE",
-                }
-                for row in rows
-            ]
+            from api.db.services.model_provider_service import model_projection, models_for_owner
+
+            linked = await models_for_owner(db, tenant_id)
+            linked_ids = {row[0].id for row in linked}
+            inventory = [model_projection(*row) for row in linked]
+            legacy = (await db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == tenant_id, TenantLLM.status == "1").order_by(TenantLLM.id))).all()
+            inventory.extend(
+                {"id": row.id, "name": row.llm_name, "provider_name": row.llm_factory, "model_types": [row.mdl_type], "max_tokens": row.max_tokens, "effective_status": "active"}
+                for row in legacy
+                if row.id not in linked_ids
+            )
+            result = []
+            for item in inventory:
+                if item["effective_status"] != "active":
+                    continue
+                for kind in item["model_types"]:
+                    if kind not in {"embedding", "rerank"}:
+                        continue
+                    supported = item["provider_name"] in (EmbeddingModel if kind == "embedding" else STRICT_RERANK_PROVIDERS)
+                    result.append(
+                        {
+                            "id": str(item["id"]),
+                            "name": item["name"],
+                            "provider": item["provider_name"],
+                            "instance": item.get("instance_name", ""),
+                            "type": kind,
+                            "max_tokens": item["max_tokens"],
+                            "available": supported,
+                            "reason": None if supported else "MODEL_DRIVER_UNAVAILABLE",
+                        }
+                    )
+            return result
 
     async def resolve(self, tenant_id: str, model_id: Any, model_type: str) -> dict[str, Any]:
         if not isinstance(model_id, str) or not model_id.isascii() or not model_id.isdecimal() or not 0 < int(model_id) < 2**63:
             raise SkillSearchError("MODEL_NOT_FOUND", "An enabled model ID is required", False)
         async with async_db_connection() as db:
-            row = await db.scalar(select(TenantLLM).where(TenantLLM.id == int(model_id), TenantLLM.tenant_id == tenant_id, TenantLLM.mdl_type == model_type, TenantLLM.status == "1"))
-            if row is None:
-                raise SkillSearchError("MODEL_NOT_FOUND", "Model is unavailable for this tenant", False)
-            config = {key: getattr(row, key) for key in ("id", "llm_name", "llm_factory", "mdl_type", "api_key", "api_base", "max_tokens")}
+            from api.db.services.model_provider_service import resolve_config
+
+            try:
+                config = await resolve_config(db, tenant_id, int(model_id), model_type)
+            except LookupError:
+                raise SkillSearchError("MODEL_NOT_FOUND", "Model is unavailable for this tenant", False) from None
         from core.llm import EmbeddingModel
 
         if config["llm_factory"] not in (EmbeddingModel if model_type == "embedding" else STRICT_RERANK_PROVIDERS):

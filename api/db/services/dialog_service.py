@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.db_models import Dialog
-from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
+from api.db.joint_services.tenant_model_service import detached_bundle, get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.common_service import CommonService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file_service import FileService
@@ -99,13 +99,20 @@ def _resolve_model_config(
 ) -> dict:
     model_type_value = model_type.value if isinstance(model_type, LLMType) else model_type
     if tenant_model_id:
-        return get_model_config_by_id(db, tenant_model_id)
+        return get_model_config_by_id(db, tenant_model_id, tenant_id=tenant_id, model_type=model_type_value)
     return get_model_config_by_type_and_name(db, tenant_id, model_type_value, model_name)
+
+
+def _chat_capability(model_types: list[str]) -> str:
+    for capability in ("chat", "image2text"):
+        if capability in model_types:
+            return capability
+    raise LookupError("A chat or vision model is required")
 
 
 def _resolve_dialog_primary_model_config(db: Session, dialog: Any) -> dict:
     model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = "chat" if "chat" in model_types else model_types[0]
+    llm_type = _chat_capability(model_types)
     model_type = LLMType.IMAGE2TEXT.value if llm_type == "image2text" else LLMType.CHAT.value
     return _resolve_model_config(db, dialog.tenant_id, dialog.tenant_llm_id, model_type, dialog.llm_id)
 
@@ -420,7 +427,7 @@ class DialogService(CommonService):
 
 def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> Generator[dict[str, Any], None, None]:
     model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = "chat" if "chat" in model_types else model_types[0]
+    llm_type = _chat_capability(model_types)
     attachments = ""
     image_attachments = []
     image_files = []
@@ -469,7 +476,7 @@ def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: 
 async def async_chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 chat_solo"""
     model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = "chat" if "chat" in model_types else model_types[0]
+    llm_type = _chat_capability(model_types)
     attachments = ""
     image_attachments = []
     image_files = []
@@ -551,6 +558,15 @@ def get_models(db, dialog):
         tts_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.TTS)
         tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config)
     return kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl
+
+
+def get_detached_models(db: Session, dialog: Dialog) -> tuple[list[Any], LLMBundle | None, LLMBundle | None, LLMBundle, LLMBundle | None]:
+    """Strip each facade before returning from AsyncSession.run_sync."""
+    result = get_models(db, dialog)
+    for bundle in result[1:]:
+        if bundle is not None:
+            bundle.db = None
+    return result
 
 
 def split_file_attachments(files: list[dict] | None, raw: bool = False) -> tuple[list[str], list[str] | list[bytes]]:
@@ -719,7 +735,7 @@ def chat(
     chat_start_ts = timer()
 
     model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = "chat" if "chat" in model_types else model_types[0]
+    llm_type = _chat_capability(model_types)
     llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
@@ -1111,7 +1127,7 @@ async def async_chat(
 
     # TODO(async-phase4): Resolve through the request session without global model lookups.
     model_types = await db.run_sync(lambda s: resolve_model_type(s, dialog.tenant_id, dialog.llm_id))
-    llm_type = "chat" if "chat" in model_types else model_types[0]
+    llm_type = _chat_capability(model_types)
     # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
     llm_model_config = await db.run_sync(lambda s: _resolve_dialog_primary_model_config(s, dialog))
 
@@ -1136,13 +1152,7 @@ async def async_chat(
             trace_context = {}
 
     check_langfuse_tracer_ts = timer()
-    kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = await db.run_sync(lambda s: get_models(s, dialog))  # TODO(async-phase4)
-    # run_sync 的 facade session 不得逸出 greenlet:LLMBundle 同步方法里的
-    # _release_db_before_long_io 会 rollback,在事件循环上先把 ORM 对象整体过期
-    # 再抛 MissingGreenlet(conv/dialog 的后续属性访问全部炸)。构造完即剥离。
-    for _mdl in (embd_mdl, rerank_mdl, chat_mdl, tts_mdl):
-        if _mdl is not None:
-            _mdl.db = None
+    kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = await db.run_sync(lambda s: get_detached_models(s, dialog))  # TODO(async-phase4)
     toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
     if toolcall_session and tools:
         chat_mdl.bind_tools(toolcall_session, tools)
@@ -1304,8 +1314,7 @@ async def async_chat(
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
                 # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
-                kg_chat_mdl = await db.run_sync(lambda s: LLMBundle(s, dialog.tenant_id, get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT)))
-                kg_chat_mdl.db = None  # facade 不得逸出 run_sync(同上)
+                kg_chat_mdl = await db.run_sync(lambda s: detached_bundle(s, dialog.tenant_id, get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT)))
                 ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, kg_chat_mdl)
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
@@ -2313,16 +2322,12 @@ async def async_ask(
             kbs[0].embd_id if kbs else "",
         )
     )
-    embd_mdl = await db.run_sync(lambda s: LLMBundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
+    embd_mdl = await db.run_sync(lambda s: detached_bundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
     chat_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_llm_name))  # TODO(async-phase4)
-    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
+    chat_mdl = await db.run_sync(lambda s: detached_bundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
     if rerank_id:
         rerank_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.RERANK.value, rerank_id))  # TODO(async-phase4)
-        rerank_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, rerank_model_config))  # TODO(async-phase4)
-    # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）：构造完即剥离
-    for _mdl in (embd_mdl, chat_mdl, rerank_mdl):
-        if _mdl is not None:
-            _mdl.db = None
+        rerank_mdl = await db.run_sync(lambda s: detached_bundle(s, tenant_id, rerank_model_config))  # TODO(async-phase4)
     max_tokens = chat_mdl.max_length
     tenant_ids = [kb.tenant_id for kb in kbs]
 
@@ -2441,20 +2446,16 @@ async def gen_mindmap(db: AsyncSession, question: str, kb_ids: list[str], tenant
             kbs[0].embd_id if kbs else "",
         )
     )
-    embd_mdl = await db.run_sync(lambda s: LLMBundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
+    embd_mdl = await db.run_sync(lambda s: detached_bundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
     chat_id = search_config.get("chat_id", "")
     if chat_id:
         chat_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_id))  # TODO(async-phase4)
     else:
         chat_model_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, tenant_id, LLMType.CHAT))  # TODO(async-phase4)
-    chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
+    chat_mdl = await db.run_sync(lambda s: detached_bundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
     if rerank_id:
         rerank_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.RERANK.value, rerank_id))  # TODO(async-phase4)
-        rerank_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, rerank_model_config))  # TODO(async-phase4)
-    # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）：构造完即剥离
-    for _mdl in (embd_mdl, chat_mdl, rerank_mdl):
-        if _mdl is not None:
-            _mdl.db = None
+        rerank_mdl = await db.run_sync(lambda s: detached_bundle(s, tenant_id, rerank_model_config))  # TODO(async-phase4)
 
     if meta_data_filter:
 
