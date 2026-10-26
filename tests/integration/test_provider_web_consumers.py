@@ -256,8 +256,10 @@ def test_actual_web_microsoft_connector_contract_and_foreign_denials(
         _private_file(descriptor_path, json.dumps(descriptor), journal, owned_files)
         result = _consumer(checkout, descriptor_path, "owner", evidence, journal, script)
         _private_file(files[2], json.dumps(result), journal, owned_files)
-        assert auth["constructed"] == auth["acquired"] == 2
-        assert teams.calls and drive.calls
+        # Teams walks two pages; OneDrive checks both explicitly selected
+        # drives. Each Graph read asks MSAL's real cache API for a token.
+        assert auth == {"constructed": 2, "acquired": 4}
+        assert len(teams.calls) == len(drive.calls) == 2
         identifiers = set(result["ids"].values())
         with Session(env["engine"]) as db:
             rows = list(db.scalars(select(Connector).where(Connector.tenant_id == env["owners"][0])))
