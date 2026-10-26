@@ -9,12 +9,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"multirag/internal/common"
+	"multirag/internal/entity"
 )
 
 func TestSystemLogLevelHTTP(t *testing.T) {
 	defer common.SetLevel(common.GetLevel())
 	handler := &SystemHandler{}
 	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("user", &entity.User{ID: "owned-log-user"}) })
 	router.GET("/level", handler.GetLogLevel)
 	router.PUT("/level", handler.SetLogLevel)
 	captured := common.Logger.With()

@@ -107,6 +107,12 @@ type UserResponse struct {
 // Register user registration
 func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.ErrorCode, error) {
 	cfg := server.GetConfig()
+	if cfg == nil {
+		return nil, common.CodeServerError, fmt.Errorf("Configuration unavailable.")
+	}
+	if req == nil || strings.TrimSpace(req.Nickname) == "" {
+		return nil, common.CodeArgumentError, fmt.Errorf("nickname is required")
+	}
 	if cfg.RegisterEnabled == 0 {
 		return nil, common.CodeOperatingError, fmt.Errorf("User registration is disabled!")
 	}
@@ -116,7 +122,10 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 		return nil, common.CodeOperatingError, fmt.Errorf("Invalid email address: %s!", req.Email)
 	}
 
-	existUser, _ := s.userDAO.GetByEmail(req.Email)
+	existUser, lookupErr := s.userDAO.GetByEmail(req.Email)
+	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to check existing user.")
+	}
 	if existUser != nil {
 		return nil, common.CodeOperatingError, fmt.Errorf("Email: %s has already registered!", req.Email)
 	}
@@ -138,6 +147,11 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 	status := "1"
 	loginChannel := "password"
 	isSuperuser := false
+	language, colorSchema, timezone := "English", "Bright", "UTC+8\tAsia/Shanghai"
+	if strings.Contains(os.Getenv("LANG"), "zh_CN") {
+		language = "Chinese"
+	}
+	now := time.Now().Truncate(time.Second)
 
 	user := &entity.User{
 		ID:              userID,
@@ -149,8 +163,9 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 		IsActive:        true,
 		IsAuthenticated: true,
 		IsAnonymous:     false,
-		LoginChannel:    &loginChannel,
-		IsSuperuser:     &isSuperuser,
+		Language:        &language, ColorSchema: &colorSchema, Timezone: &timezone, LastLoginTime: &now,
+		LoginChannel: &loginChannel,
+		IsSuperuser:  &isSuperuser,
 	}
 
 	tenantName := req.Nickname + "'s Kingdom"
@@ -199,58 +214,30 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 	}
 
 	fileID := utility.GenerateToken()
+	emptyLocation := ""
 	rootFile := &entity.File{
 		ID:        fileID,
 		ParentID:  fileID,
 		TenantID:  userID,
 		CreatedBy: userID,
 		Name:      "/",
+		Location:  &emptyLocation,
 		Type:      "folder",
 		Size:      0,
 	}
 
-	tenantDAO := dao.NewTenantDAO()
-	userTenantDAO := dao.NewUserTenantDAO()
-	fileDAO := dao.NewFileDAO()
-
-	if err := s.userDAO.Create(user); err != nil {
-		return nil, common.CodeServerError, fmt.Errorf("failed to create user: %w", err)
-	}
-
-	if err := tenantDAO.Create(tenant); err != nil {
-		err := s.userDAO.DeleteByID(userID)
-		if err != nil {
-			return nil, 0, err
+	if err := dao.DB.Transaction(func(tx *gorm.DB) error {
+		for _, row := range []any{user, tenant, userTenant} {
+			if err := tx.Create(row).Error; err != nil {
+				return err
+			}
 		}
-		return nil, common.CodeServerError, fmt.Errorf("failed to create tenant: %w", err)
-	}
-
-	if err := userTenantDAO.Create(userTenant); err != nil {
-		err := s.userDAO.DeleteByID(userID)
-		if err != nil {
-			return nil, 0, err
+		if err := initializeTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
+			return err
 		}
-		err = tenantDAO.Delete(userID)
-		if err != nil {
-			return nil, 0, err
-		}
-		return nil, common.CodeServerError, fmt.Errorf("failed to create user tenant relation: %w", err)
-	}
-
-	if err := fileDAO.Create(rootFile); err != nil {
-		err := s.userDAO.DeleteByID(userID)
-		if err != nil {
-			return nil, 0, err
-		}
-		err = tenantDAO.Delete(userID)
-		if err != nil {
-			return nil, 0, err
-		}
-		err = userTenantDAO.Delete(userTenantID)
-		if err != nil {
-			return nil, 0, err
-		}
-		return nil, common.CodeServerError, fmt.Errorf("failed to create root folder: %w", err)
+		return tx.Create(rootFile).Error
+	}); err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to initialize account.")
 	}
 
 	return user, common.CodeSuccess, nil

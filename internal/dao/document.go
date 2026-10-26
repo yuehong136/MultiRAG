@@ -51,7 +51,7 @@ func (dao *DocumentDAO) Create(document *entity.Document) error {
 // GetByID get document by ID
 func (dao *DocumentDAO) GetByID(id string) (*entity.Document, error) {
 	var document entity.Document
-	err := DB.Preload("Author").First(&document, "id = ?", id).Error
+	err := DB.First(&document, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}

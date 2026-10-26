@@ -25,6 +25,8 @@ import (
 	"net/url"
 	"strings"
 
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
@@ -148,4 +150,57 @@ func mcpJSONMap(raw json.RawMessage) (entity.JSONMap, error) {
 		return nil, errors.New("MCP settings must be JSON objects.")
 	}
 	return value, nil
+}
+
+// DeleteMCPServer refuses deletion while a saved canvas or version references it.
+// MCP configuration is SQL-only; it does not own remote server data or storage objects.
+func (s *MCPService) DeleteMCPServer(ctx context.Context, tenantID, mcpID string) (bool, common.ErrorCode, error) {
+	if tenantID == "" {
+		return false, common.CodeAuthenticationError, errors.New("No authorization.")
+	}
+	if strings.TrimSpace(mcpID) == "" {
+		return false, common.CodeArgumentError, errors.New("mcp_id is required")
+	}
+	code := common.CodeServerError
+	err := dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var tenant entity.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", tenantID).Take(&tenant).Error; err != nil {
+			return err
+		}
+		var row entity.MCPServer
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", mcpID, tenantID).Take(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				code = common.CodeDataError
+			}
+			return err
+		}
+		for _, table := range []string{"t_ai_user_canvases", "t_ai_user_canvas_version"} {
+			var count int64
+			// JSONPath variables keep user input out of SQL and match exact mcp_id values.
+			err := tx.Table(table).Where("jsonb_path_exists(dsl, CAST(? AS jsonpath), jsonb_build_object('id', CAST(? AS text)))", "$.**.mcp_id ? (@ == $id)", mcpID).Count(&count).Error
+			if err != nil {
+				return err
+			}
+			if count != 0 {
+				code = common.CodeOperatingError
+				return errors.New("MCP server is referenced by a saved agent.")
+			}
+		}
+		result := tx.Where("id = ? AND tenant_id = ?", mcpID, tenantID).Delete(&entity.MCPServer{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			code = common.CodeDataError
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if code == common.CodeOperatingError {
+			return false, code, errors.New("MCP server is referenced by a saved agent.")
+		}
+		return false, code, errors.New("Unable to delete MCP server.")
+	}
+	return true, common.CodeSuccess, nil
 }

@@ -65,33 +65,32 @@ func RunMigrations(db *gorm.DB) error {
 	return nil
 }
 
-// Local instances may omit credentials. Keep the existing uniqueness contract
-// for nonempty keys while allowing separate keyless instances.
+// Credentials may be shared across tenants and endpoint instances. Identity is
+// the provider-scoped instance name; install that constraint before retiring keys.
 func migrateModelInstanceCredentials(db *gorm.DB) error {
 	model := &entity.TenantModelInstance{}
 	if !db.Migrator().HasTable(model) {
 		return nil
 	}
-	index := "idx_tenant_model_instance_api_key_nonempty"
+	var duplicateGroups int64
+	if err := db.Raw("SELECT count(*) FROM (SELECT provider_id,instance_name FROM tenant_model_instance GROUP BY provider_id,instance_name HAVING count(*) > 1) AS duplicates").Scan(&duplicateGroups).Error; err != nil {
+		return err
+	}
+	if duplicateGroups != 0 {
+		return fmt.Errorf("duplicate model instance names within provider; resolve existing identities before migration")
+	}
+	index := "idx_tenant_model_instance_provider_name"
 	if !db.Migrator().HasIndex(model, index) {
-		var statement string
-		switch db.Dialector.Name() {
-		case "postgres":
-			statement = "CREATE UNIQUE INDEX idx_tenant_model_instance_api_key_nonempty ON tenant_model_instance (api_key) WHERE api_key <> ''"
-		case "mysql":
-			statement = "CREATE UNIQUE INDEX idx_tenant_model_instance_api_key_nonempty ON tenant_model_instance ((NULLIF(api_key, '')))"
-		default:
-			return fmt.Errorf("unsupported database for model instance credentials: %s", db.Dialector.Name())
-		}
-		// Install the replacement first so a failure cannot remove protection for
-		// existing nonempty credentials.
-		if err := db.Exec(statement).Error; err != nil {
+		if err := db.Exec("CREATE UNIQUE INDEX idx_tenant_model_instance_provider_name ON tenant_model_instance (provider_id,instance_name)").Error; err != nil {
 			return err
 		}
 	}
-	legacyIndex := "idx_tenant_model_instance_api_key"
-	if db.Migrator().HasIndex(model, legacyIndex) {
-		return db.Migrator().DropIndex(model, legacyIndex)
+	for _, legacy := range []string{"idx_tenant_model_instance_api_key_nonempty", "idx_tenant_model_instance_api_key"} {
+		if db.Migrator().HasIndex(model, legacy) {
+			if err := db.Migrator().DropIndex(model, legacy); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

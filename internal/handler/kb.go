@@ -125,19 +125,19 @@ func (h *KnowledgebaseHandler) UpdateKB(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/kb/update_metadata_setting [post]
 func (h *KnowledgebaseHandler) UpdateMetadataSetting(c *gin.Context) {
-	_, errorCode, errorMessage := GetUser(c)
+	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
 		return
 	}
 
 	var req service.UpdateMetadataSettingRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindObjectJSON(c, &req); err != nil {
 		jsonError(c, common.CodeDataError, err.Error())
 		return
 	}
 
-	result, code, err := h.kbService.UpdateMetadataSetting(&req)
+	result, code, err := h.kbService.UpdateMetadataSetting(c.Request.Context(), &req, user.ID)
 	if err != nil {
 		jsonError(c, code, err.Error())
 		return

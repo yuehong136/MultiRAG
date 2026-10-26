@@ -17,6 +17,8 @@
 package dao
 
 import (
+	"context"
+	"fmt"
 	"multirag/internal/entity"
 )
 
@@ -141,4 +143,37 @@ func (dao *UserCanvasDAO) GetAllCanvasIDsByUserID(userID string) ([]string, erro
 		Where("user_id = ?", userID).
 		Pluck("id", &canvasIDs).Error
 	return canvasIDs, err
+}
+
+// ListByTenantIDs applies the selected owners to both private and team visibility.
+func (dao *UserCanvasDAO) ListByTenantIDs(ctx context.Context, ownerIDs []string, userID string, page, pageSize int, orderby string, desc bool, keywords, category string) ([]*entity.UserCanvas, int64, error) {
+	rows := []*entity.UserCanvas{}
+	if len(ownerIDs) == 0 {
+		return rows, 0, nil
+	}
+	switch orderby {
+	case "create_time", "update_time", "title", "id":
+	default:
+		return nil, 0, fmt.Errorf("invalid orderby")
+	}
+	base := DB.WithContext(ctx).Model(&entity.UserCanvas{}).Where("user_id IN ?", ownerIDs).Where("permission = ? OR user_id = ?", "team", userID).Where("canvas_category = ?", category)
+	if keywords != "" {
+		base = base.Where("LOWER(title) LIKE LOWER(?)", "%"+keywords+"%")
+	}
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	order := orderby + " ASC"
+	if desc {
+		order = orderby + " DESC"
+	}
+	query := base.Order(order).Order("id ASC")
+	if page > 0 && pageSize > 0 {
+		query = query.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }

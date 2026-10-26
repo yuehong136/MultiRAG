@@ -43,6 +43,7 @@ type Router struct {
 	memoryHandler        *handler.MemoryHandler
 	providerHandler      *handler.ProviderHandler
 	taskHandler          *handler.TaskHandler
+	agentHandler         *handler.AgentHandler
 }
 
 // NewRouter create router
@@ -91,6 +92,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 	if r.mcpHandler == nil {
 		r.mcpHandler = handler.NewMCPHandler(service.NewMCPService())
 	}
+	if r.agentHandler == nil {
+		r.agentHandler = handler.NewAgentHandler(service.NewAgentService())
+	}
 	// Health check
 	engine.GET("/health", r.systemHandler.Health)
 
@@ -111,12 +115,17 @@ func (r *Router) Setup(engine *gin.Engine) {
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
 		authorized.POST("/api/v1/mcp/servers", r.mcpHandler.CreateMCPServer)
+		authorized.DELETE("/api/v1/mcp/servers/:mcp_id", r.mcpHandler.DeleteMCPServer)
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
 		authorized.GET("/api/v1/users/me", r.userHandler.Info)
 		authorized.PATCH("/api/v1/users/me", r.userHandler.Setting)
 		authorized.GET("/api/v1/users/me/models", r.tenantHandler.TenantInfo)
 		authorized.PATCH("/api/v1/users/me/models", r.userHandler.SetTenantInfo)
 		authorized.GET("/api/v1/tenants", r.tenantHandler.TenantList)
+		authorized.PATCH("/api/v1/tenants/:tenant_id", r.tenantHandler.AcceptTenantInvite)
+		authorized.GET("/api/v1/tenants/:tenant_id/users", r.tenantHandler.ListTenantMembers)
+		authorized.POST("/api/v1/tenants/:tenant_id/users", r.tenantHandler.AddTenantMember)
+		authorized.DELETE("/api/v1/tenants/:tenant_id/users", r.tenantHandler.RemoveTenantMember)
 		authorized.GET("/api/v1/tenant/list", r.tenantHandler.TenantList)
 		authorized.GET("/api/v1/connectors/", r.connectorHandler.ListConnectors)
 		authorized.POST("/api/v1/connectors/", r.connectorHandler.CreateConnector)
@@ -231,6 +240,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 				v1.POST("/file/parse", r.providerHandler.ParseFile)
 			}
 
+			v1.GET("/agents", r.agentHandler.ListAgents)
+
 			models := v1.Group("/models")
 			{
 				models.GET("", r.tenantHandler.GetModels)
@@ -270,6 +281,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 			system := v1.Group("/system")
 			{
 				system.GET("/configs", r.systemHandler.GetConfigs)
+				system.GET("/status", r.systemHandler.GetStatus)
+				system.GET("/stats", r.systemHandler.GetStats)
 				system.GET("/tokens", r.systemHandler.ListTokens)
 				system.POST("/tokens", r.systemHandler.CreateToken)
 				system.DELETE("/tokens/:token", r.systemHandler.DeleteToken)

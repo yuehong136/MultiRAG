@@ -53,7 +53,7 @@ func NewUserHandler(userService *service.UserService) *UserHandler {
 // @Router /api/v1/users [post]
 func (h *UserHandler) Register(c *gin.Context) {
 	var req service.RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindObjectJSON(c, &req); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    common.CodeBadRequest,
 			"message": err.Error(),
