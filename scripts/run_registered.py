@@ -97,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
         command = command[1:]
     if not command:
         parser.error("command required")
+    if sys.platform == "win32":
+        # Refuse before any journal exists: the gate's guarantees rest on POSIX
+        # sessions, signal masks and exec keeping the journaled PID.
+        parser.error("POSIX only: Windows has no sessions, signal masks or PID-preserving exec")
     root = options.evidence_root.resolve(strict=True)
     run_id = uuid.uuid4().hex
     owned = root / run_id

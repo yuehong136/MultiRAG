@@ -23,7 +23,9 @@ sys.path.insert(0, str(ROOT))
 from tests.support.resource_journal import ResourceJournal
 
 
-class RegisteredRunnerTest(unittest.TestCase):
+class CaseRootTest(unittest.TestCase):
+    """A journaled private case root; holds no tests of its own."""
+
     def setUp(self) -> None:
         self.case_journal = ResourceJournal(self.id())
         self.root = Path(tempfile.gettempdir()) / ("gate-case-" + self.case_journal.run_id)
@@ -38,6 +40,29 @@ class RegisteredRunnerTest(unittest.TestCase):
         shutil.rmtree(self.root)
         self.case_journal.event("path-cleanup-readback", path=str(self.root), absent=not self.root.exists())
 
+    def load_runner(self) -> Any:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        self.addCleanup(lambda: sys.path.remove(str(ROOT / "scripts")))
+        spec = importlib.util.spec_from_file_location("registered_runner_under_test", RUNNER)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+class PlatformGateTest(CaseRootTest):
+    def test_windows_refuses_before_any_journal_or_launch(self) -> None:
+        module = self.load_runner()
+        arguments = ["--evidence-root", str(self.root), "--label", "windows", "--input", str(RUNNER), "--", sys.executable, "-c", "raise AssertionError('business executed')"]
+        with patch.object(sys, "platform", "win32"), patch.object(module.subprocess, "Popen") as launch, self.assertRaises(SystemExit) as refused:
+            module.main(arguments)
+        self.assertEqual(refused.exception.code, 2)
+        launch.assert_not_called()
+        self.assertEqual(list(self.root.iterdir()), [])
+
+
+@unittest.skipIf(sys.platform == "win32", "run_registered.py is POSIX-only and refuses to start on Windows")
+class RegisteredRunnerTest(CaseRootTest):
     def command(self, program: str) -> list[str]:
         return [sys.executable, str(RUNNER), "--evidence-root", str(self.root), "--label", self.id(), "--input", str(RUNNER), "--", sys.executable, "-c", program]
 
@@ -104,15 +129,6 @@ class RegisteredRunnerTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(marker.exists())
-
-    def load_runner(self) -> Any:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        self.addCleanup(lambda: sys.path.remove(str(ROOT / "scripts")))
-        spec = importlib.util.spec_from_file_location("registered_runner_under_test", RUNNER)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
 
     def test_cancel_between_spawn_and_assignment_keeps_pid_for_cleanup(self) -> None:
         module = self.load_runner()

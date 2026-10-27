@@ -62,6 +62,12 @@ Web 消费者用例经 [`tsx_runner()`](support/web_consumer.py) 执行 npm 在�
 Linux，Windows 上 `uv run --no-sync mypy` 仍检查该脚本，结果与 CI 一致。
 `tests/unit/test_integration_harness.py` 的中断恢复用例依赖 POSIX 信号与进程标识，在 Windows 上显式跳过；
 覆盖文件的权限位断言只在 POSIX 上执行。
+资源登记 journal（[`resource_journal.py`](../scripts/resource_journal.py)）在 Windows 上以二进制模式追加，
+写入方用 `msvcrt` 锁住远在文件末尾之后的一个字节互斥（Windows 字节锁是强制锁，不挡读取与追加）；
+没有 `O_NOFOLLOW`，打开后检查路径本身不是链接；目录无法作为描述符 fsync，依赖 NTFS 元数据日志。
+未指定 `REST_DOCUMENT_RESOURCE_DIR` 时，用例 journal 在 Windows 上写入系统临时目录，POSIX 仍为 `/tmp`。
+严格取证入口 [`run_registered.py`](../scripts/run_registered.py) 依赖 POSIX 会话、信号屏蔽和保持 PID 的
+exec，在 Windows 上登记任何内容前即拒绝；其单测与经它运行的 `test_provider_web_consumers.py` 只在 POSIX 上有效。
 
 ## CI 分层与证据
 

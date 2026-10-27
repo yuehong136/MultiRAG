@@ -52,7 +52,7 @@ def test_actual_web_chat_model_types_save_and_readback(runtime_upload_api: dict[
                 db.add(TenantLLM(tenant_id=env["owners"][0], llm_factory="Ollama", llm_name=name, mdl_type=kind, api_key="controlled-no-provider", status="1"))
             db.commit()
         completed = subprocess.run(
-            [str(checkout / "node_modules/.bin/tsx"), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],
+            [str(tsx_runner(checkout)), "--tsconfig", str(checkout / "tsconfig.app.json"), str(script)],
             cwd=checkout,
             env={**os.environ, "DOMAIN_ACCEPTANCE_BASE": env["base"], "DOMAIN_ACCEPTANCE_TOKEN": env["jwt"]},
             capture_output=True,

@@ -18,6 +18,7 @@ from tests.support.agent_update_release import message_dsl
 from tests.support.agent_update_release import release_api as release_api
 from tests.support.database import scratch_database
 from tests.support.dataset_management_http import management_api as management_api
+from tests.support.web_consumer import tsx_runner
 
 pytestmark = pytest.mark.external_consumer
 
@@ -31,7 +32,7 @@ def bootstrapped_engine(tmp_path: Path) -> Iterator[sa.Engine]:
 
 def run_web(mode: str, base: str, token: str, evidence: Path, **values: str) -> dict[str, Any]:
     root = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
-    runner = root / "node_modules/.bin/tsx"
+    runner = tsx_runner(root)
     assert runner.is_file(), "An installed fixed Web checkout is required"
     completed = subprocess.run(
         [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(Path(__file__).resolve().parents[1] / "support/after4776_web_consumer.mts")],
