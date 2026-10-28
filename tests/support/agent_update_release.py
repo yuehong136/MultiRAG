@@ -1,13 +1,18 @@
 """Agent publish/draft HTTP contracts against isolated PostgreSQL and real Redis."""
 
 import asyncio
+import errno
+import hashlib
 import json
+import os
+import secrets
 import socket
 import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +31,7 @@ from api.db.db_models import API4Conversation, APIToken, Tenant, User, UserCanva
 from common.constants import StatusEnum
 from core.utils.redis_conn import REDIS_CONN
 from tests.support.event_loop import UVICORN_LOOP
+from tests.support.resource_journal import ResourceJournal
 from tests.support.uvicorn_runtime import run_server
 
 
@@ -47,12 +53,63 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
         from api import apps
         from api.db import db_models
 
+        journal = ResourceJournal("agent-release-http")
+        evidence = Path(os.environ.get("AGENT_RELEASE_EVIDENCE", str(journal.path.parent))) / (journal.run_id + ".release.json")
+        report: dict[str, Any] = {"pid": os.getpid(), "database": bootstrapped_engine.url.database, "rows": {}, "redis_keys": [], "cleanup": {}}
+        journal.event("reserve-fixture", pid=os.getpid(), database=bootstrapped_engine.url.database, host=bootstrapped_engine.url.host, port=bootstrapped_engine.url.port, evidence=str(evidence))
+
+        def save_report() -> None:
+            evidence.write_text(json.dumps(report, indent=2))
+            evidence.chmod(0o600)
+
+        cleanup.callback(save_report)
         owners = [uuid4().hex for _ in range(3)]
         api_keys = [f"release-test-{uuid4().hex}" for _ in owners]
         sync_sessions = sessionmaker(bootstrapped_engine, expire_on_commit=False)
         task_ids: list[str] = []
         runtime_tenants: list[str | None] = []
         identifiers = list(owners)
+        registered_rows: dict[str, set[str]] = {}
+        owned_redis: set[str] = set()
+        lock = threading.RLock()
+
+        def reserve_row(table: str, values: dict[str, Any]) -> None:
+            identifier = values.get("id")
+            if not identifier:
+                return
+            with lock:
+                known = registered_rows.setdefault(table, set())
+                if str(identifier) in known:
+                    return
+                journal.event("reserve-sql-row", database=bootstrapped_engine.url.database, table=table, id=str(identifier))
+                known.add(str(identifier))
+                report["rows"][table] = sorted(known)
+                if table in {UserCanvas.__tablename__, API4Conversation.__tablename__}:
+                    identifiers.append(str(identifier))
+
+        def reserve_flush(session: Session, flush_context: Any, instances: Any) -> None:
+            bind = session.get_bind()
+            if getattr(bind, "engine", bind) not in sql_engines:
+                return
+            for row in session.new:
+                reserve_row(row.__tablename__, {"id": getattr(row, "id", None)})
+
+        def reserve_insert(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+            compiled = getattr(context, "compiled", None)
+            if compiled is None or not getattr(context, "isinsert", False):
+                return
+            table = compiled.statement.table
+            for values in context.compiled_parameters:
+                reserve_row(table.name, values)
+
+        sql_engines: list[sa.Engine] = [bootstrapped_engine]
+        sa.event.listen(Session, "before_flush", reserve_flush)
+        sa.event.listen(bootstrapped_engine, "before_cursor_execute", reserve_insert)
+        cleanup.callback(sa.event.remove, Session, "before_flush", reserve_flush)
+        cleanup.callback(sa.event.remove, bootstrapped_engine, "before_cursor_execute", reserve_insert)
+        journal.event(
+            "reserve-owner-scope", owners=owners, api_tokens=[{"tenant_id": owner, "token_sha256": hashlib.sha256(token.encode()).hexdigest()} for owner, token in zip(owners, api_keys, strict=True)]
+        )
 
         def remove_rows() -> None:
             with sync_sessions() as db:
@@ -77,15 +134,27 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                     (APIToken, APIToken.token, api_keys),
                 ]:
                     assert db.scalar(sa.select(sa.func.count()).select_from(model).where(column.in_(ids))) == 0
+            with sync_sessions() as reader:
+                remaining = {}
+                for table_name, row_ids in registered_rows.items():
+                    table = db_models.Base.metadata.tables["usr_ai." + table_name]
+                    remaining[table_name] = reader.scalar(sa.select(sa.func.count()).select_from(table).where(table.c.id.in_(sorted(row_ids))))
+                assert not any(remaining.values()), remaining
+            report["cleanup"]["sql_rows_absent"] = True
+            report["cleanup"]["remaining_rows"] = remaining
+            journal.event("sql-cleanup-readback", database=bootstrapped_engine.url.database, owned_rows_absent=True, remaining=remaining)
 
         def remove_redis() -> None:
             redis = REDIS_CONN.REDIS
             assert redis is not None
+            for key in sorted(owned_redis):
+                redis.delete(key)
+            assert not any(redis.exists(key) for key in owned_redis)
             for identifier in [*identifiers, *task_ids]:
                 keys = list(redis.scan_iter(match=f"*{identifier}*"))
-                if keys:
-                    redis.delete(*keys)
-                assert not list(redis.scan_iter(match=f"*{identifier}*"))
+                assert not keys, "Unregistered Redis resource remains in the owned scope"
+            report["cleanup"]["redis_keys_absent"] = True
+            journal.event("redis-cleanup-readback", keys=sorted(owned_redis), absent=True)
 
         cleanup.callback(remove_redis)
         cleanup.callback(remove_rows)
@@ -94,12 +163,16 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 db.add(User(id=owner, email=f"{owner}@release.example.com", nickname="Release test", password="unused", access_token="active"))
                 db.add(Tenant(id=owner, name="Release scratch", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
                 db.add(UserTenant(id=uuid4().hex, user_id=owner, tenant_id=owner, role="owner", invited_by=owner))
+                journal.event("reserve-api-token", tenant_id=owner, token_sha256=hashlib.sha256(token.encode()).hexdigest())
                 db.add(APIToken(tenant_id=owner, token=token, name="release-test"))
             db.commit()
         # Keep real JWT/API-key verification and user loading pointed at scratch.
         monkeypatch.setattr(apps, "SessionLocal", sync_sessions)
         monkeypatch.setattr(db_models, "SessionLocal", sync_sessions)
         async_engine = create_async_engine(bootstrapped_engine.url, poolclass=NullPool)
+        sql_engines.append(async_engine.sync_engine)
+        sa.event.listen(async_engine.sync_engine, "before_cursor_execute", reserve_insert)
+        cleanup.callback(sa.event.remove, async_engine.sync_engine, "before_cursor_execute", reserve_insert)
         cleanup.callback(lambda: asyncio.run(async_engine.dispose()))
         async_sessions = async_sessionmaker(async_engine, expire_on_commit=False)
 
@@ -113,17 +186,106 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
 
         monkeypatch.setitem(apps.app.dependency_overrides, get_db, scratch_db)
         monkeypatch.setitem(apps.app.dependency_overrides, get_async_db, scratch_async_db)
+        redis = REDIS_CONN.REDIS
+        assert redis is not None
+        redis_endpoint = {key: redis.connection_pool.connection_kwargs.get(key) for key in ["host", "port", "db"]}
+        original_command, original_pipeline = redis.execute_command, redis.pipeline
+
+        def reserve_command(arguments: tuple[Any, ...]) -> None:
+            if not arguments:
+                return
+            command = arguments[0].decode() if isinstance(arguments[0], bytes) else str(arguments[0])
+            command = command.upper()
+            keys = []
+            if command in {"EVAL", "EVALSHA"}:
+                keys = list(arguments[3 : 3 + int(arguments[2])])
+            elif command in {"DEL", "UNLINK"}:
+                keys = list(arguments[1:])
+            elif command in {"SET", "SETEX", "PSETEX", "SETNX", "HSET", "HMSET", "HDEL", "LPUSH", "RPUSH", "SADD", "ZADD", "INCR", "XADD", "EXPIRE", "PEXPIRE"}:
+                keys = list(arguments[1:2])
+            with lock:
+                for raw_key in keys:
+                    key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
+                    if key in owned_redis:
+                        continue
+                    assert not redis.exists(key), "Fixture refuses to overwrite a borrowed Redis key"
+                    journal.event("reserve-redis-key", key=key, endpoint=redis_endpoint, before_absent=True)
+                    owned_redis.add(key)
+                    report["redis_keys"] = sorted(owned_redis)
+
+        def execute_command(*arguments: Any, **options: Any) -> Any:
+            reserve_command(arguments)
+            return original_command(*arguments, **options)
+
+        def pipeline(*arguments: Any, **options: Any) -> Any:
+            instance = original_pipeline(*arguments, **options)
+            original_execute = instance.execute
+
+            def execute(*args: Any, **kwargs: Any) -> Any:
+                for command, _options in instance.command_stack:
+                    reserve_command(command)
+                return original_execute(*args, **kwargs)
+
+            instance.execute = execute
+            return instance
+
+        monkeypatch.setattr(redis, "execute_command", execute_command)
+        monkeypatch.setattr(redis, "pipeline", pipeline)
         original_init = Canvas.__init__
+        canvases: list[Canvas] = []
 
         def track_canvas(self: Canvas, *args: Any, **kwargs: Any) -> None:
-            original_init(self, *args, **kwargs)
-            task_ids.append(self.task_id)
+            arguments = list(args)
+            task_id = (arguments[2] if len(arguments) > 2 else kwargs.get("task_id")) or uuid4().hex
+            if len(arguments) > 2:
+                arguments[2] = task_id
+            else:
+                kwargs["task_id"] = task_id
+            journal.event("reserve-canvas-task", pid=os.getpid(), task_id=task_id)
+            task_ids.append(task_id)
             runtime_tenants.append(args[1] if len(args) > 1 else kwargs.get("tenant_id"))
+            canvases.append(self)
+            original_init(self, *arguments, **kwargs)
+
+        def close_canvas_pools() -> None:
+            for canvas in canvases:
+                pool = getattr(canvas, "_thread_pool", None)
+                if pool is not None:
+                    pool.shutdown(wait=True, cancel_futures=True)
+            report["cleanup"]["canvas_executors_closed"] = len(canvases)
 
         monkeypatch.setattr(Canvas, "__init__", track_canvas)
+        cleanup.callback(close_canvas_pools)
+        candidate_port = 20000 + secrets.randbelow(40000)
+        journal.event("reserve-listener", pid=os.getpid(), host="127.0.0.1", port=candidate_port)
         listener = socket.socket()
-        cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", 0))
+
+        def close_listener() -> None:
+            port = listener.getsockname()[1] if listener.fileno() != -1 else report.get("port")
+            listener.close()
+            if port:
+                with socket.socket() as probe:
+                    probe.settimeout(1)
+                    assert probe.connect_ex(("127.0.0.1", port)) != 0
+            report["cleanup"]["listener_absent"] = True
+            journal.event("listener-cleanup-readback", host="127.0.0.1", port=port, absent=True)
+
+        cleanup.callback(close_listener)
+        for attempt in range(32):
+            if attempt:
+                candidate_port = 20000 + secrets.randbelow(40000)
+                journal.event("reserve-listener", pid=os.getpid(), host="127.0.0.1", port=candidate_port)
+            try:
+                listener.bind(("127.0.0.1", candidate_port))
+                break
+            except OSError as error:
+                journal.event("listener-bind-failed", host="127.0.0.1", port=candidate_port, errno=error.errno)
+                if error.errno != errno.EADDRINUSE:
+                    raise
+        else:
+            raise RuntimeError("Unable to bind an owned Agent test listener")
+        report["port"] = listener.getsockname()[1]
+        journal.event("listener-bound", pid=os.getpid(), host="127.0.0.1", port=report["port"])
         base = f"http://127.0.0.1:{listener.getsockname()[1]}"
         server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
@@ -133,9 +295,13 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
             if thread.ident is not None:
                 thread.join(timeout=15)
             assert not thread.is_alive()
+            report["cleanup"]["server_thread_absent"] = True
+            journal.event("server-thread-cleanup-readback", pid=os.getpid(), thread_id=thread.ident, absent=True)
 
         cleanup.callback(stop_server)
+        journal.event("reserve-server-thread", pid=os.getpid(), listener_port=report["port"])
         thread.start()
+        journal.event("server-thread-started", pid=os.getpid(), thread_id=thread.ident)
         deadline = time.monotonic() + 30
         while not server.started and thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.05)
