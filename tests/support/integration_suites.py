@@ -31,6 +31,7 @@ DATABASE_TESTS = frozenset(
         "test_enterprise_subject_repository.py",
         "test_evaluation_token_usage.py",
         "test_exesql_recovery.py",
+        "test_file_document_attach_locks.py",
         "test_identity_channel_credentials.py",
         "test_identity_directory_events.py",
         "test_identity_onboarding.py",
