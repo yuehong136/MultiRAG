@@ -45,6 +45,15 @@ the legacy endpoint column. It keeps `TenantLLM` IDs, accounting, stored names,
 status and default references. Each legacy credential-envelope/endpoint group
 becomes a deterministic instance. Different stored credentials remain distinct.
 Backfill is idempotent and also links models created during user initialization.
+It selects unlinked legacy rows in SQL, including the tenant filter when supplied,
+rather than loading all existing model IDs. Alembic records a successful revision
+in the same transaction as its data changes; an applied revision is not replayed.
+New legacy rows use the explicit idempotent linkage path, not a global applied flag.
+Startup default repair fills only missing numeric references with nonempty stored
+aliases, including OCR, in batches of 500 tenants. It preserves existing numeric
+choices and original aliases, resolves ownership and capability, and leaves
+unresolved defaults eligible for a later run. Ambiguity aborts the tenant repair
+transaction. Other initialization stages retain their existing commit boundaries.
 Deploy through the repository's normal Alembic process before serving the new API.
 This document does not authorize a production migration.
 

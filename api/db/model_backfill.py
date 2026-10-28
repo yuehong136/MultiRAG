@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Session
 
 SCHEMA = "usr_ai"
 
@@ -20,14 +21,12 @@ def backfill(bind: Connection, tenant_id_filter: str | None = None) -> None:
     instances = sa.Table("t_ai_tenant_model_instances", metadata, autoload_with=bind)
     models = sa.Table("t_ai_tenant_models", metadata, autoload_with=bind)
     catalog = sa.Table("t_ai_llms", metadata, autoload_with=bind)
-    existing = set(bind.scalars(sa.select(models.c.id)))
     groups: dict[tuple[str, str], list[Any]] = defaultdict(list)
-    query = sa.select(legacy).order_by(legacy.c.id)
+    query = sa.select(legacy).where(~sa.exists(sa.select(models.c.id).where(models.c.id == legacy.c.id))).order_by(legacy.c.id)
     if tenant_id_filter is not None:
         query = query.where(legacy.c.tenant_id == tenant_id_filter)
     for row in bind.execute(query).mappings():
-        if row["id"] not in existing:
-            groups[(row["tenant_id"], row["llm_factory"])].append(row)
+        groups[(row["tenant_id"], row["llm_factory"])].append(row)
     for (tenant_id, factory), rows in groups.items():
         provider_id = bind.scalar(sa.select(providers.c.id).where(providers.c.tenant_id == tenant_id, providers.c.provider_name == factory))
         if provider_id is None:
@@ -66,3 +65,34 @@ def backfill(bind: Connection, tenant_id_filter: str | None = None) -> None:
                 if isinstance(envelope, dict) and isinstance(envelope.get("is_tools"), bool):
                     tools = envelope["is_tools"]
                 bind.execute(models.insert().values(id=row["id"], instance_id=instance_id, model_name=raw_name, model_types=capabilities, is_tools=tools))
+
+
+def backfill_tenant_defaults(db: Session) -> int:
+    """Fill only missing default identities in the caller's transaction.
+
+    Keep stored aliases and existing numeric choices unchanged. No completion
+    marker is used: newly imported legacy defaults must remain eligible later.
+    """
+    from api.db.db_models import Tenant
+    from api.db.model_contract import DEFAULT_MODEL_FIELDS
+    from api.db.services.provider_model_resolution import find_model_row
+
+    missing = sa.or_(*(sa.and_(getattr(Tenant, f"tenant_{field}").is_(None), getattr(Tenant, field).is_not(None), getattr(Tenant, field) != "") for field in DEFAULT_MODEL_FIELDS.values()))
+    last_id = ""
+    updated = 0
+    while True:
+        rows = list(db.scalars(sa.select(Tenant).where(missing, Tenant.id > last_id).order_by(Tenant.id).limit(500)))
+        if not rows:
+            return updated
+        for tenant in rows:
+            for capability, field in DEFAULT_MODEL_FIELDS.items():
+                target = f"tenant_{field}"
+                reference = getattr(tenant, field)
+                if getattr(tenant, target) is not None or not reference:
+                    continue
+                model = find_model_row(db, tenant.id, reference, capability)
+                if model is not None:
+                    result = db.execute(sa.update(Tenant).where(Tenant.id == tenant.id, getattr(Tenant, target).is_(None), getattr(Tenant, field) == reference).values({target: model.id}))
+                    updated += result.rowcount
+            last_id = tenant.id
+        db.flush()

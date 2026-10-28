@@ -196,22 +196,11 @@ def _batch_fill_tenant_model_id(db: Session, rows, *, model_name_attr: str, targ
             service.filter_update(db, [model_class.id.in_(ids)], {target_field: tenant_llm.id})
 
 
-def fix_empty_tenant_model_id(db: Session):
-    # tenant 表：每行有多个模型字段，无法分组，逐行处理
-    for row in TenantService.get_null_tenant_model_id_rows(db):
-        update_dict = ensure_tenant_model_id_for_params(
-            db,
-            row.id,
-            {
-                "llm_id": row.llm_id,
-                "embd_id": row.embd_id,
-                "asr_id": row.asr_id,
-                "img2txt_id": row.img2txt_id,
-                "rerank_id": row.rerank_id,
-                "tts_id": row.tts_id,
-            },
-        )
-        TenantService.update_by_id(db, row.id, update_dict)
+def fix_empty_tenant_model_id(db: Session) -> None:
+    from api.db.model_backfill import backfill_tenant_defaults
+
+    backfill_tenant_defaults(db)
+    db.commit()
 
     _batch_fill_tenant_model_id(
         db,
