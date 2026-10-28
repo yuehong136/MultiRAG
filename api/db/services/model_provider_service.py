@@ -8,7 +8,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import Dialog, Knowledgebase, Memory, Search, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion
-from api.db.model_contract import DEFAULT_MODEL_FIELDS, InstanceInput, InstancePatch, ModelRegistration
+from api.db.model_contract import DEFAULT_MODEL_FIELDS, ConnectionCandidate, InstanceInput, InstancePatch, ModelRegistration
+from api.db.provider_catalog import provider_order, provider_transport, public_factories, regional_provider
 from common import settings
 
 
@@ -16,8 +17,9 @@ class ModelConflict(ValueError):
     """A conflicting identity or reference prevents this operation."""
 
 
-def catalog(provider_name: str) -> list[ModelRegistration]:
-    factory = next((item for item in settings.FACTORY_LLM_INFOS if item["name"] == provider_name), None)
+def catalog(provider_name: str, region: str = "") -> list[ModelRegistration]:
+    target = regional_provider(provider_name, region)
+    factory = next((item for item in settings.FACTORY_LLM_INFOS if item["name"] == target), None)
     if factory is None:
         raise LookupError("Provider not found")
     result = []
@@ -26,7 +28,7 @@ def catalog(provider_name: str) -> list[ModelRegistration]:
         if "IMAGE2TEXT" in {tag.strip().upper() for tag in item.get("tags", "").split(",")} and "image2text" not in capabilities:
             capabilities.append("image2text")
         result.append(ModelRegistration(model_name=item["llm_name"], model_types=capabilities, max_tokens=item.get("max_tokens", 8192), is_tools=item.get("is_tools", False)))
-    return result
+    return sorted(result, key=lambda model: model.model_name)
 
 
 def instance_projection(instance: TenantModelInstance, provider: TenantModelProvider) -> dict[str, Any]:
@@ -37,7 +39,7 @@ def instance_projection(instance: TenantModelInstance, provider: TenantModelProv
         "instance_name": instance.instance_name,
         "has_api_key": bool(instance.api_key),
         "base_url": instance.base_url,
-        "region": instance.region,
+        "region": provider_transport(provider.provider_name, instance.api_key, instance.base_url, instance.region, stored=True)[2],
         "status": instance.status,
     }
 
@@ -84,6 +86,8 @@ async def instance_for_owner(db: AsyncSession, tenant_id: str, provider_name: st
 
 async def add_provider(db: AsyncSession, tenant_id: str, name: str) -> dict[str, Any]:
     await lock_owner(db, tenant_id)
+    if name not in {item["name"] for item in public_factories()}:
+        raise LookupError("Provider not found")
     catalog(name)
     if await db.scalar(select(TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == name)):
         raise ModelConflict("Provider already exists")
@@ -126,18 +130,63 @@ def validate_key(provider_name: str, api_key: str) -> None:
         raise ValueError("API key must not have surrounding whitespace")
 
 
-async def create_instance(db: AsyncSession, tenant_id: str, provider_name: str, request: InstanceInput) -> dict[str, Any]:
-    await lock_owner(db, tenant_id)
-    provider = await provider_for_owner(db, tenant_id, provider_name)
+def candidate_models(provider_name: str, request: ConnectionCandidate) -> list[ModelRegistration]:
+    if provider_name not in {item["name"] for item in public_factories()}:
+        raise LookupError("Provider not found")
     validate_key(provider_name, request.api_key)
-    if await db.scalar(select(TenantModelInstance.id).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == request.instance_name)):
-        raise ModelConflict("Instance already exists")
-    models = catalog(provider_name)
+    provider_transport(provider_name, request.api_key, request.base_url, request.region)
+    models = catalog(provider_name, request.region)
     if request.model_ids is not None:
         available = {model.model_name for model in models}
         if not set(request.model_ids) <= available:
             raise ValueError("Selected model is not in the provider catalog")
         models = [model for model in models if model.model_name in request.model_ids]
+    if request.custom_model is not None:
+        if any(model.model_name == request.custom_model.model_name for model in models):
+            raise ValueError("Custom model duplicates a selected catalog model")
+        models.insert(0, request.custom_model)
+    if not models:
+        raise ValueError("Select a catalog model or supply a custom model for verification")
+    return models
+
+
+async def verify_candidate(db: AsyncSession, tenant_id: str, provider_name: str, request: ConnectionCandidate) -> dict[str, Any]:
+    from api.db.services.provider_verification import verify_model
+
+    if db.new or db.dirty or db.deleted:
+        raise ValueError("Connection verification requires a clean transaction")
+    models = candidate_models(provider_name, request)
+    owner = await db.get(Tenant, tenant_id)
+    if owner is None or owner.status != "1":
+        raise LookupError("Tenant not found")
+    provider = await db.scalar(select(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == provider_name))
+    if provider is not None and provider.status != "active":
+        raise ValueError("Provider is inactive")
+    if provider is not None and isinstance(request, InstanceInput):
+        if await db.scalar(select(TenantModelInstance.id).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == request.instance_name)):
+            raise ModelConflict("Instance already exists")
+    # Read-only checks have taken no row locks. Release their transaction before
+    # external I/O; creation rechecks owner/status/uniqueness under its write lock.
+    await db.rollback()
+    key, base, _region = provider_transport(provider_name, request.api_key, request.base_url, request.region)
+    return await verify_model(provider_name, key, base, models[0])
+
+
+async def create_instance(db: AsyncSession, tenant_id: str, provider_name: str, request: InstanceInput) -> dict[str, Any]:
+    models = candidate_models(provider_name, request)
+    await verify_candidate(db, tenant_id, provider_name, request)
+    owner = await lock_owner(db, tenant_id)
+    if owner.status != "1":
+        raise LookupError("Tenant not found")
+    provider = await db.scalar(select(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == provider_name))
+    if provider is None:
+        provider = TenantModelProvider(id=uuid4().hex, tenant_id=tenant_id, provider_name=provider_name, status="active")
+        db.add(provider)
+        await db.flush()
+    if provider.status != "active":
+        raise ValueError("Provider is inactive")
+    if await db.scalar(select(TenantModelInstance.id).where(TenantModelInstance.provider_id == provider.id, TenantModelInstance.instance_name == request.instance_name)):
+        raise ModelConflict("Instance already exists")
     instance = TenantModelInstance(
         id=uuid4().hex, provider_id=provider.id, instance_name=request.instance_name, api_key=request.api_key, base_url=request.base_url, region=request.region, status="active"
     )
@@ -151,6 +200,13 @@ async def create_instance(db: AsyncSession, tenant_id: str, provider_name: str, 
 async def patch_instance(db: AsyncSession, tenant_id: str, provider_name: str, instance_name: str, request: InstancePatch) -> dict[str, Any]:
     await lock_owner(db, tenant_id)
     provider, instance = await instance_for_owner(db, tenant_id, provider_name, instance_name)
+    provider_transport(
+        provider_name,
+        request.api_key if request.api_key else instance.api_key,
+        request.base_url if request.base_url is not None else instance.base_url,
+        request.region if request.region is not None else instance.region,
+        stored=not bool(request.api_key),
+    )
     if request.clear_api_key:
         validate_key(provider_name, "")
         instance.api_key = ""
@@ -177,7 +233,8 @@ async def models_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[Tenan
         .where(TenantLLM.tenant_id == tenant_id, TenantModelProvider.tenant_id == tenant_id)
         .order_by(TenantLLM.id)
     )
-    return [tuple(row) for row in (await db.execute(query)).all()]
+    rows = [tuple(row) for row in (await db.execute(query)).all()]
+    return sorted(rows, key=lambda item: (*provider_order(item[3].provider_name), item[2].instance_name, item[1].model_name, item[0].id))
 
 
 _REFERENCE_KEYS = {

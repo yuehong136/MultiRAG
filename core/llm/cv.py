@@ -34,9 +34,15 @@ from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
+from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.tool_decorator import resolve_tool_binding
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
+
+
+def _qwen3_no_think_extra_body(model_name: str) -> dict[str, bool] | None:
+    """Disable reasoning for Qwen3.x extraction, including 3.5 and 3.6."""
+    return {"enable_thinking": False} if "qwen3." in model_name.lower() else None
 
 
 class Base(ABC):
@@ -518,10 +524,11 @@ class xAICV(GptV4):
 class QWenCV(GptV4):
     _FACTORY_NAME = "Tongyi-Qianwen"
 
-    def __init__(self, key, model_name="qwen-vl-chat-v1", lang="Chinese", base_url=None, **kwargs):
+    def __init__(self, key: str, model_name: str = "qwen-vl-chat-v1", lang: str = "Chinese", base_url: str | None = None, **kwargs: Any) -> None:
         if not base_url:
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         super().__init__(key, model_name, lang=lang, base_url=base_url, **kwargs)
+        self.extra_body = _qwen3_no_think_extra_body(self.model_name) or self.extra_body
 
     async def async_chat(
         self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any], images: Any = None, video_bytes: bytes | None = None, filename: str = "", **kwargs: Any
@@ -540,7 +547,7 @@ class QWenCV(GptV4):
 
         return await super().async_chat(system, history, gen_conf, images=images, **kwargs)
 
-    def _process_video(self, video_bytes, filename, prompt):
+    def _process_video(self, video_bytes: bytes, filename: str, prompt: str) -> tuple[str, int]:
         from dashscope import MultiModalConversation
 
         video_suffix = Path(filename).suffix or ".mp4"
@@ -565,11 +572,12 @@ class QWenCV(GptV4):
             }
         ]
 
-        def call_api():
+        def call_api() -> tuple[str, int]:
             response = MultiModalConversation.call(
                 api_key=self.api_key,
                 model=self.model_name,
                 messages=messages,
+                **(self.extra_body or {}),
             )
             if response.get("message"):
                 raise Exception(response["message"])
@@ -1394,7 +1402,8 @@ class AnthropicCV(Base):
     def describe_with_prompt(self, image, prompt=None):
         return self._describe(self.vision_llm_prompt(self.image2base64(image), prompt if prompt else vision_llm_describe_prompt()))
 
-    def _clean_conf(self, gen_conf):
+    def _clean_conf(self, gen_conf: dict[str, Any]) -> dict[str, Any]:
+        apply_claude_sampling_policy(self.model_name.lower(), gen_conf)
         gen_conf.pop("presence_penalty", None)
         gen_conf.pop("frequency_penalty", None)
         # /v1/messages 要求 max_tokens 必填，且不认 OpenAI 那套 max_token(s) 之外的别名

@@ -21,9 +21,12 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.model_backfill import backfill
+from api.db.services import provider_verification
 from common import resources, settings
 from tests.support.database import scratch_database
 from tests.support.resource_journal import ResourceJournal
+
+REAL_VERIFY_MODEL = provider_verification.verify_model
 
 pytestmark = pytest.mark.integration
 
@@ -51,6 +54,12 @@ def owned_engine(tmp_path: Path) -> Iterator[Engine]:
 
 @pytest.fixture
 def http(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, str, Engine, Any]]:
+    async def probe_boundary(_provider: str, _key: str, _base: str, declaration: Any) -> dict[str, Any]:
+        return {"verified": True, "model_name": declaration.model_name, "model_type": declaration.model_types[0]}
+
+    # Existing cases isolate SQL/lifecycle semantics. Dedicated connection cases
+    # below restore the real active adapter and use owned loopback HTTP.
+    monkeypatch.setattr(provider_verification, "verify_model", probe_boundary)
     owner = uuid4().hex
     with Session(owned_engine) as db:
         db.add(tenant(owner))
@@ -88,8 +97,14 @@ def create(client: TestClient, name: str = "first", *, models: list[str] | None 
     body = {"instance_name": name, "api_key": "fixture-shared-key", "base_url": f"https://{name}.invalid/v1", "region": ""}
     if models is not None:
         body["model_ids"] = models
+    if models == []:
+        body["custom_model"] = {"model_name": "verified-fixture-model", "model_types": ["chat"], "max_tokens": 0}
     response = client.post("/api/v1/providers/OpenAI/instances", json=body)
     assert response.status_code == 200, response.text
+    if models == []:
+        items = client.get(f"/api/v1/providers/OpenAI/instances/{name}/models").json()["data"]["items"]
+        assert len(items) == 1
+        assert client.delete(f"/api/v1/providers/OpenAI/instances/{name}/models/{items[0]['id']}").status_code == 200
     return response.json()["data"]
 
 
@@ -581,9 +596,12 @@ def test_default_ocr_and_parser_numeric_reference_preserve_model_tool_override(h
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "PaddleOCR", "llm": []}])
     assert client.put("/api/v1/providers", json={"provider_name": "PaddleOCR"}).status_code == 200
     key = json.dumps({"api_key": "fixture-ocr", "is_tools": True, "PADDLEOCR_URL": "https://ocr.invalid", "PADDLEOCR_API_TOKEN": "fixture-token"})
-    response = client.post("/api/v1/providers/PaddleOCR/instances", json={"instance_name": "local", "api_key": key, "model_ids": []})
+    response = client.post(
+        "/api/v1/providers/PaddleOCR/instances",
+        json={"instance_name": "local", "api_key": key, "model_ids": [], "custom_model": {"model_name": "ocr-model", "model_types": ["ocr"], "max_tokens": 0, "is_tools": False}},
+    )
     assert response.status_code == 200, response.text
-    model = client.post("/api/v1/providers/PaddleOCR/instances/local/models", json={"model_name": "ocr-model", "model_types": ["ocr"], "max_tokens": 0, "is_tools": False}).json()["data"]
+    model = client.get("/api/v1/providers/PaddleOCR/instances/local/models").json()["data"]["items"][0]
     assert client.patch("/api/v1/models/default", json={"model_type": "ocr", "model_id": model["id"]}).status_code == 200
     with Session(engine) as db:
         config = get_tenant_default_model_by_type(db, owner, "ocr")
@@ -684,3 +702,151 @@ def test_backfill_failure_rolls_back_provider_instance_and_model_writes(owned_en
         assert db.scalar(select(func.count()).select_from(TenantModelProvider)) == 0
         assert db.scalar(select(func.count()).select_from(TenantModelInstance)) == 0
         assert db.scalar(select(func.count()).select_from(TenantModel)) == 0
+
+
+def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_failures(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    import socket
+    import threading
+    from contextlib import ExitStack
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    client, owner, engine, _module = http
+    monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
+    journal = ResourceJournal("provider-connection-atomic-http")
+    requests_seen: list[str] = []
+    state = {"failure": False, "malformed": False}
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *args: Any) -> None:
+            return None
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests_seen.append(payload["model"])
+            if state["failure"]:
+                status, body = 401, {"error": {"message": "probe-SECRET-key", "type": "authentication_error"}}
+            elif state["malformed"]:
+                status, body = 200, {"choices": []}
+            else:
+                status, body = (
+                    200,
+                    {
+                        "id": "chatcmpl-probe",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": payload["model"],
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    },
+                )
+            encoded = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+    def counts() -> tuple[int, ...]:
+        with Session(engine) as db:
+            return tuple(db.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM))
+
+    with ExitStack() as cleanup:
+        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
+        journal.event("reserve-listener", address=list(address))
+        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        cleanup.callback(server.server_close)
+        server.server_bind()
+        server.server_activate()
+        thread = threading.Thread(target=server.serve_forever, name="owned-provider-probe")
+        thread.start()
+        cleanup.callback(thread.join, 5)
+        cleanup.callback(server.shutdown)
+        candidate = {
+            "api_key": "probe-SECRET-key",
+            "base_url": f"http://127.0.0.1:{address[1]}/v1",
+            "region": "",
+            "model_ids": [],
+            "custom_model": {"model_name": "custom-zero", "model_types": ["chat", "image2text"], "max_tokens": 0, "is_tools": False},
+        }
+        endpoint = "/api/v1/providers/OpenAI"
+        assert counts() == (0, 0, 0, 0)
+        verified = client.post(endpoint + "/connection", json=candidate)
+        assert verified.status_code == 200, verified.text
+        assert verified.json()["data"] == {"verified": True, "model_name": "custom-zero", "model_type": "chat"}
+        assert counts() == (0, 0, 0, 0)
+        state["failure"] = True
+        rejected = client.post(endpoint + "/instances", json={"instance_name": "first", **candidate})
+        assert rejected.status_code == 400 and "probe-SECRET-key" not in rejected.text
+        assert counts() == (0, 0, 0, 0)
+        state["failure"], state["malformed"] = False, True
+        assert client.post(endpoint + "/instances", json={"instance_name": "first", **candidate}).status_code == 400
+        assert counts() == (0, 0, 0, 0)
+        state["malformed"] = False
+        for name in ("first", "second"):
+            saved = client.post(endpoint + "/instances", json={"instance_name": name, **candidate})
+            assert saved.status_code == 200, saved.text
+            assert "probe-SECRET-key" not in saved.text
+        assert counts() == (1, 2, 2, 2)
+        assert requests_seen == ["custom-zero"] * 5  # Verify + two failed creates + two actual revalidations.
+        before = len(requests_seen)
+        assert client.post(endpoint + "/instances", json={"instance_name": "first", **candidate}).status_code == 409
+        assert client.post(endpoint + "/instances", json={"instance_name": "empty", **candidate, "custom_model": None}).status_code == 400
+        assert len(requests_seen) == before and counts() == (1, 2, 2, 2)
+        with Session(engine) as db:
+            rows = db.scalars(select(TenantModelInstance)).all()
+            assert all(row.api_key == "probe-SECRET-key" for row in rows)
+            assert all(row.max_tokens == 0 for row in db.scalars(select(TenantLLM)))
+            assert all(row.model_types == ["chat", "image2text"] for row in db.scalars(select(TenantModel)))
+        assert "probe-SECRET-key" not in caplog.text
+        assert client.delete(endpoint).status_code == 200
+        assert counts() == (0, 0, 0, 0)
+        journal.event("sql-independent-readback", tenant=owner, counts=list(counts()), provider_calls=len(requests_seen))
+    with socket.socket() as reader:
+        assert reader.connect_ex(address) != 0
+    assert not thread.is_alive()
+    journal.event("listener-independent-readback", address=list(address), absent=True, thread_absent=True)
+
+
+def test_region_catalog_effective_status_order_and_legacy_key_readback(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.joint_services.tenant_model_service import resolve_model_type
+
+    client, owner, engine, _module = http
+    factories = [
+        {"name": "SILICONFLOW", "rank": "950", "llm": [{"llm_name": "CN_only", "mdl_type": "embedding", "max_tokens": 0}]},
+        {"name": "siliconflow_intl", "llm": [{"llm_name": "intl_only", "mdl_type": "chat", "max_tokens": 0}]},
+        {"name": "LocalProvider", "llm": []},
+        {"name": "OpenAI", "rank": "999", "llm": [{"llm_name": "chat", "mdl_type": "chat", "max_tokens": 0}]},
+    ]
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", factories)
+    candidate = {"api_key": "shared", "region": "intl", "model_ids": ["intl_only"]}
+    for name in ("z_last", "a_first"):
+        response = client.post("/api/v1/providers/SILICONFLOW/instances", json={"instance_name": name, **candidate})
+        assert response.status_code == 200, response.text
+    assert client.post("/api/v1/providers/OpenAI/instances", json={"instance_name": "other", "api_key": "shared"}).status_code == 200
+    assert client.put("/api/v1/providers", json={"provider_name": "LocalProvider"}).status_code == 200
+    providers = client.get("/api/v1/providers").json()["data"]["items"]
+    assert [row["name"] for row in providers] == ["OpenAI", "SILICONFLOW", "LocalProvider"]
+    assert "siliconflow_intl" not in {row["name"] for row in client.get("/api/v1/providers?available=true").json()["data"]["items"]}
+    supported = client.get("/api/v1/providers/SILICONFLOW/instances/a_first/models?supported=true").json()["data"]["items"]
+    assert [row["model_name"] for row in supported] == ["intl_only"]
+    assert client.get("/api/v1/providers/SILICONFLOW/models?region=intl").json()["data"]["items"][0]["model_name"] == "intl_only"
+    items = client.get("/api/v1/models").json()["data"]["items"]
+    assert [(row["provider_name"], row["instance_name"]) for row in items] == [("OpenAI", "other"), ("SILICONFLOW", "a_first"), ("SILICONFLOW", "z_last")]
+    identifier = items[1]["id"]
+    assert client.patch("/api/v1/providers/SILICONFLOW/instances/a_first", json={"status": "inactive"}).status_code == 200
+    with Session(engine) as db:
+        assert db.get(TenantLLM, identifier).status == "1"
+        with pytest.raises(LookupError):
+            resolve_model_type(db, owner, str(identifier))
+        with pytest.raises(LookupError):
+            resolve_model_type(db, uuid4().hex, str(items[0]["id"]))
+        other = db.scalar(select(TenantModelInstance).where(TenantModelInstance.instance_name == "z_last"))
+        assert other is not None
+        other.api_key = json.dumps({"api_key": "historical-key", "source_fid": "siliconflow_intl"})
+        other.region = ""
+        db.commit()
+    with Session(engine) as db:
+        config = get_model_config_by_id(db, items[2]["id"], tenant_id=owner, model_type="chat")
+        assert config["api_key"] == "historical-key" and config["region"] == "intl" and config["api_base"] == "https://api.siliconflow.com/v1"
+    item = next(row for row in client.get("/api/v1/models").json()["data"]["items"] if row["id"] == identifier)
+    assert item["status"] == "active" and item["effective_status"] == "inactive"

@@ -41,6 +41,7 @@ from core.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, Supporte
 from core.llm.async_stream import iterate_owned_stream
 from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request_options
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
+from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.tool_decorator import resolve_tool_binding
 from core.nlp import is_chinese, is_english
 
@@ -103,9 +104,9 @@ def _apply_model_family_policies(
     *,
     backend: str,
     provider: "SupportedLiteLLMProvider | str | None" = None,
-    gen_conf: dict | None = None,
-    request_kwargs: dict | None = None,
-):
+    gen_conf: dict[str, Any] | None = None,
+    request_kwargs: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     model_name_lower = (model_name or "").lower()
     sanitized_gen_conf = deepcopy(gen_conf) if gen_conf else {}
     sanitized_kwargs = dict(request_kwargs) if request_kwargs else {}
@@ -118,6 +119,9 @@ def _apply_model_family_policies(
         return sanitized_gen_conf, sanitized_kwargs
 
     if backend == "litellm":
+        if provider in {SupportedLiteLLMProvider.Anthropic, SupportedLiteLLMProvider.Bedrock}:
+            apply_claude_sampling_policy(model_name_lower, sanitized_gen_conf, sanitized_kwargs)
+
         if provider in {SupportedLiteLLMProvider.OpenAI, SupportedLiteLLMProvider.Azure_OpenAI} and "gpt-5" in model_name_lower:
             for key in ("temperature", "top_p", "logprobs", "top_logprobs"):
                 sanitized_gen_conf.pop(key, None)
@@ -1740,6 +1744,8 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         raise AssertionError("Shouldn't be here.")
 
     def _construct_completion_args(self, history: list[dict[str, Any]], stream: bool, tools: bool, **kwargs: Any) -> dict[str, Any]:
+        if self.provider in {SupportedLiteLLMProvider.Anthropic, SupportedLiteLLMProvider.Bedrock}:
+            apply_claude_sampling_policy(self.model_name.lower(), kwargs)
         completion_args = {
             "model": self.model_name,
             "messages": history,

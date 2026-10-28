@@ -13,10 +13,10 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import TenantModelInstance, TenantModelProvider, get_async_db
-from api.db.model_contract import DefaultModelInput, InstanceInput, InstancePatch, ModelRegistration, ProviderInput, StatusPatch, parse_model_id
+from api.db.model_contract import ConnectionCandidate, DefaultModelInput, InstanceInput, InstancePatch, ModelRegistration, ProviderInput, StatusPatch, parse_model_id
+from api.db.provider_catalog import provider_order, public_factories
 from api.db.services import model_provider_service as service
 from api.utils.api_utils import Principal, async_current_user
-from common import settings
 
 
 class ModelRoute(APIRoute):
@@ -99,15 +99,19 @@ async def providers(request: Request, db: AsyncSession = Depends(get_async_db), 
     if flag(request, "available"):
         items = [
             {"name": factory["name"], "model_types": sorted({capability for model in service.catalog(factory["name"]) for capability in model.model_types}), "status": "active"}
-            for factory in settings.FACTORY_LLM_INFOS
+            for factory in public_factories()
         ]
     else:
         rows = (await db.scalars(select(TenantModelProvider).where(TenantModelProvider.tenant_id == user.id).order_by(TenantModelProvider.provider_name))).all()
-        items = [
-            {"id": row.id, "name": row.provider_name, "status": row.status, "model_types": sorted({capability for model in service.catalog(row.provider_name) for capability in model.model_types})}
-            for row in rows
-        ]
-    return page(items, request)
+        known = {factory["name"] for factory in public_factories()}
+        stored_types: dict[str, set[str]] = {}
+        for _legacy, model, _instance, provider in await service.models_for_owner(db, user.id):
+            stored_types.setdefault(provider.provider_name, set()).update(model.model_types)
+        items = []
+        for row in rows:
+            catalog_types = {capability for model in service.catalog(row.provider_name) for capability in model.model_types} if row.provider_name in known else set()
+            items.append({"id": row.id, "name": row.provider_name, "status": row.status, "model_types": sorted(catalog_types | stored_types.get(row.provider_name, set()))})
+    return page(sorted(items, key=lambda item: provider_order(item["name"])), request)
 
 
 @router.put("/providers")
@@ -123,7 +127,14 @@ async def delete_provider(provider_name: str, db: AsyncSession = Depends(get_asy
 @router.get("/providers/{provider_name}/models")
 async def catalog_models(provider_name: str, request: Request, _user: Principal = Depends(async_current_user)) -> dict[str, Any]:
     try:
-        return page([model.model_dump() for model in service.catalog(provider_name)], request)
+        if provider_name not in {factory["name"] for factory in public_factories()}:
+            raise LookupError("Provider not found")
+        regions = request.query_params.getlist("region")
+        if len(regions) > 1:
+            raise failure(422, "Duplicate region parameter")
+        return page([model.model_dump() for model in service.catalog(provider_name, regions[0] if regions else "")], request)
+    except ValueError:
+        raise failure(422, "Invalid provider region") from None
     except LookupError:
         raise failure(404, "Provider not found") from None
 
@@ -136,6 +147,16 @@ async def instances(provider_name: str, request: Request, db: AsyncSession = Dep
         raise failure(404, "Provider not found") from None
     rows = (await db.scalars(select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id).order_by(TenantModelInstance.instance_name))).all()
     return page([service.instance_projection(instance, provider) for instance in rows], request)
+
+
+@router.post("/providers/{provider_name}/connection")
+async def connection(provider_name: str, body: ConnectionCandidate, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
+    try:
+        return result(await service.verify_candidate(db, user.id, provider_name, body))
+    except LookupError:
+        raise failure(404, "Requested model resource not found") from None
+    except ValueError as error:
+        raise failure(400, str(error)) from None
 
 
 @router.post("/providers/{provider_name}/instances")
@@ -160,7 +181,7 @@ async def instance_models(provider_name: str, instance_name: str, request: Reque
     except LookupError:
         raise failure(404, "Instance not found") from None
     if flag(request, "supported"):
-        return page([model.model_dump() for model in service.catalog(provider_name)], request)
+        return page([model.model_dump() for model in service.catalog(provider_name, service.instance_projection(instance, _provider)["region"])], request)
     return page([service.model_projection(*row) for row in await service.models_for_owner(db, user.id) if row[2].id == instance.id], request)
 
 

@@ -20,19 +20,27 @@ class ProviderInput(ModelInput):
     provider_name: StrictStr = Field(min_length=1, max_length=128)
 
 
-class InstanceInput(ModelInput):
-    instance_name: StrictStr = Field(min_length=1, max_length=128)
+class ModelRegistration(ModelInput):
+    model_name: StrictStr = Field(min_length=1, max_length=128)
+    model_types: list[ModelType] = Field(min_length=1, max_length=7)
+    max_tokens: StrictInt = Field(ge=0, le=2147483647)
+    is_tools: StrictBool = False
+
+    @model_validator(mode="after")
+    def valid_model(self) -> "ModelRegistration":
+        if self.model_name != self.model_name.strip() or "@" in self.model_name:
+            raise ValueError("Invalid model name")
+        if len(self.model_types) != len(set(self.model_types)):
+            raise ValueError("Duplicate model capability")
+        return self
+
+
+class ConnectionCandidate(ModelInput):
     api_key: StrictStr = Field(repr=False)
     base_url: StrictStr = Field(default="", max_length=2048)
     region: StrictStr = Field(default="", max_length=128)
     model_ids: list[StrictStr] | None = None
-
-    @field_validator("instance_name")
-    @classmethod
-    def valid_name(cls, value: str) -> str:
-        if value != value.strip() or not value or "@" in value or "/" in value:
-            raise ValueError("Invalid instance name")
-        return value
+    custom_model: ModelRegistration | None = None
 
     @field_validator("model_ids")
     @classmethod
@@ -52,6 +60,17 @@ class InstanceInput(ModelInput):
         return value
 
 
+class InstanceInput(ConnectionCandidate):
+    instance_name: StrictStr = Field(min_length=1, max_length=128)
+
+    @field_validator("instance_name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        if value != value.strip() or not value or "@" in value or "/" in value:
+            raise ValueError("Invalid instance name")
+        return value
+
+
 class InstancePatch(ModelInput):
     api_key: StrictStr | None = Field(default=None, repr=False)
     clear_api_key: StrictBool = False
@@ -68,22 +87,7 @@ class InstancePatch(ModelInput):
         if any(getattr(self, key) is None for key in self.model_fields_set - {"clear_api_key"}):
             raise ValueError("Omit unchanged fields instead of sending null")
         if self.base_url is not None:
-            InstanceInput.valid_url(self.base_url)
-        return self
-
-
-class ModelRegistration(ModelInput):
-    model_name: StrictStr = Field(min_length=1, max_length=128)
-    model_types: list[ModelType] = Field(min_length=1, max_length=7)
-    max_tokens: StrictInt = Field(ge=0, le=2147483647)
-    is_tools: StrictBool = False
-
-    @model_validator(mode="after")
-    def valid_model(self) -> "ModelRegistration":
-        if self.model_name != self.model_name.strip() or "@" in self.model_name:
-            raise ValueError("Invalid model name")
-        if len(self.model_types) != len(set(self.model_types)):
-            raise ValueError("Duplicate model capability")
+            ConnectionCandidate.valid_url(self.base_url)
         return self
 
 

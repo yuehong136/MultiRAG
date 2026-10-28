@@ -82,7 +82,9 @@ class TenantLLMService(CommonService):
 
     @classmethod
     def decode_model_config(cls, model_config: dict[str, Any]) -> dict[str, Any]:
-        config = dict(model_config)
+        from api.db.provider_catalog import normalize_model_transport
+
+        config = normalize_model_transport(model_config)
         api_key, is_tools, payload = cls._decode_api_key_config(config.get("api_key"))
         config["api_key"] = api_key
         if payload is not None:
