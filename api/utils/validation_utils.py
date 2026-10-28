@@ -38,6 +38,7 @@ from pydantic_core import PydanticCustomError
 
 from api.constants import DATASET_NAME_LIMIT, FILE_NAME_LEN_LIMIT
 from api.db import FileType
+from api.db.model_contract import parse_model_id
 from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, RestPageSize
 from common.constants import RetCode
 from common.graphrag_config import GraphRAGExecutionConfig
@@ -672,7 +673,7 @@ class CreateDatasetReq(Base):
             v (str): Raw model identifier
 
         Returns:
-            str: Validated <model_name>@<provider> format
+            str: A numeric tenant-model identity or <model_name>@<provider>.
 
         Raises:
             PydanticCustomError: For these violations:
@@ -689,8 +690,14 @@ class CreateDatasetReq(Base):
         if v is None:
             return None
 
+        try:
+            if parse_model_id(v) is not None:
+                return v
+        except ValueError as error:
+            raise PydanticCustomError("format_invalid", "Invalid embedding model ID") from error
+
         if "@" not in v:
-            raise PydanticCustomError("format_invalid", "Embedding model identifier must follow <model_name>@<provider> format")
+            raise PydanticCustomError("format_invalid", "Embedding model identifier must be a model ID or follow <model_name>@<provider> format")
 
         components = v.split("@", 1)
         if len(components) != 2 or not all(components):
