@@ -26,6 +26,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
@@ -262,6 +263,12 @@ func TestAfter33GManagementHTTPAndSQL(t *testing.T) {
 				t.Fatal("denied request wrote SQL")
 			}
 		}
+		count := calls.Load()
+		missingKey, _ := request("GET", "/api/v1/providers/vllm/connection", "owner", fmt.Sprintf(`{"region":"default","base_url":%q}`, base))
+		if missingKey["code"] != float64(common.CodeArgumentError) || calls.Load() != count || snapshot() != before {
+			t.Fatal("missing local api_key must fail before provider I/O or SQL mutation")
+		}
+
 		p, _ := request("GET", "/api/v1/providers/OpenAI/connection", "owner", body)
 		assertCode(p, true)
 		p, _ = request("GET", "/api/v1/providers/OpenAI/connection", "owner", strings.Replace(body, "secret-key", "secret-fail", 1))

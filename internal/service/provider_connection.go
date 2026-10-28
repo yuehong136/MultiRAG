@@ -13,12 +13,15 @@ import (
 
 // CheckConnectionRequest probes submitted credentials without persisting them.
 type CheckConnectionRequest struct {
-	APIKey  string `json:"api_key"`
-	Region  string `json:"region"`
-	BaseURL string `json:"base_url"`
+	APIKey  *string `json:"api_key"`
+	Region  string  `json:"region"`
+	BaseURL string  `json:"base_url"`
 }
 
 func (m *ModelProviderService) CheckConnection(ctx context.Context, providerName, userID string, req CheckConnectionRequest) (common.ErrorCode, error) {
+	if req.APIKey == nil {
+		return common.CodeArgumentError, errors.New("api_key is required.")
+	}
 	// Resolve active ownership before making any external request.
 	var count int64
 	err := dao.DB.WithContext(ctx).Model(&entity.UserTenant{}).
@@ -49,7 +52,7 @@ func (m *ModelProviderService) CheckConnection(ctx context.Context, providerName
 	if err != nil {
 		return common.CodeArgumentError, errors.New("Invalid provider endpoint.")
 	}
-	driver, config, err := instanceModelDriver(provider, &entity.TenantModelInstance{APIKey: strings.TrimSpace(req.APIKey), Extra: extra, Status: "active"}, m.driverFactory)
+	driver, config, err := instanceModelDriver(provider, &entity.TenantModelInstance{APIKey: strings.TrimSpace(*req.APIKey), Extra: extra, Status: "active"}, m.driverFactory)
 	if err != nil {
 		return common.CodeArgumentError, errors.New("Invalid provider credentials or endpoint.")
 	}
