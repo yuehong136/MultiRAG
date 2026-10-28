@@ -197,6 +197,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			datasets := v1.Group("/datasets")
 			{
 				datasets.DELETE("/:dataset_id/documents", r.documentHandler.DeleteDocuments)
+				datasets.POST("/:dataset_id/documents/stop", r.documentHandler.StopParseDocuments)
 				datasets.GET("", r.datasetsHandler.ListDatasets)
 				datasets.GET("/:dataset_id", r.datasetsHandler.GetDataset)
 				datasets.GET("/:dataset_id/ingestions/summary", r.datasetsHandler.GetIngestionSummary)

@@ -26,12 +26,15 @@ func TestCLIAPIRouteScope(t *testing.T) {
 	if !strings.HasSuffix(routes["POST /api/v1/auth/login"], ".Login-fm") {
 		t.Fatal("REST login must retain current username/JWT policy")
 	}
+	if !strings.HasSuffix(routes["POST /api/v1/datasets/:dataset_id/documents/stop"], ".StopParseDocuments-fm") {
+		t.Fatal("document stop must use the lifecycle cancellation handler")
+	}
 	for _, key := range []string{"POST /v1/user/login", "POST /v1/user/register", "GET /v1/system/ping", "POST /api/v1/chunk/retrieval_test"} {
 		if routes[key] != "" {
 			t.Fatal("obsolete public route", key)
 		}
 	}
-	for _, entry := range [][2]string{{"GET", "/api/v1/system/configs"}, {"POST", "/api/v1/auth/logout"}, {"POST", "/api/v1/tenant/metadata_store"}, {"POST", "/api/v1/tenant/chunk_store"}, {"POST", "/api/v1/datasets/search"}, {"GET", "/api/v1/datasets/id"}, {"POST", "/api/v1/audio/transcriptions"}, {"POST", "/api/v1/audio/speech"}, {"POST", "/api/v1/file/ocr"}, {"POST", "/api/v1/document/set_meta"}} {
+	for _, entry := range [][2]string{{"GET", "/api/v1/system/configs"}, {"POST", "/api/v1/auth/logout"}, {"POST", "/api/v1/tenant/metadata_store"}, {"POST", "/api/v1/tenant/chunk_store"}, {"POST", "/api/v1/datasets/search"}, {"GET", "/api/v1/datasets/id"}, {"POST", "/api/v1/datasets/id/documents/stop"}, {"POST", "/api/v1/audio/transcriptions"}, {"POST", "/api/v1/audio/speech"}, {"POST", "/api/v1/file/ocr"}, {"POST", "/api/v1/document/set_meta"}} {
 		w := httptest.NewRecorder()
 		app.ServeHTTP(w, httptest.NewRequest(entry[0], entry[1], strings.NewReader(`{}`)))
 		if w.Code != http.StatusUnauthorized {

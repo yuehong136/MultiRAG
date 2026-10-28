@@ -168,6 +168,7 @@ func startServer(config *server.Config) {
 	memoryService := service.NewMemoryService()
 	modelProviderService := service.NewModelProviderService()
 	taskService := service.NewTaskService(dao.DB, cache.Get().GetClient())
+	documentService.SetDocumentStopService(service.NewDocumentStopService(dao.DB, cache.Get().GetClient()))
 
 	// Initialize handler layer
 	authHandler := handler.NewAuthHandler()
