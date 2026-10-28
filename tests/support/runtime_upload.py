@@ -2,8 +2,10 @@
 
 import asyncio
 import copy
+import errno
 import json
 import os
+import secrets
 import socket
 import threading
 import time
@@ -129,9 +131,29 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
         monkeypatch.setitem(app.dependency_overrides, get_async_db, scratch_db)
         listener = socket.socket()
         cleanup.callback(listener.close)
-        journal.event("reserve-listener", host="127.0.0.1", port=0, pid=os.getpid())
-        listener.bind(("127.0.0.1", 0))
-        record["port"] = listener.getsockname()[1]
+        for attempt in range(64):
+            port = 49152 + secrets.randbelow(16384)
+            journal.event("reserve-listener", host="127.0.0.1", port=port, pid=os.getpid(), attempt=attempt)
+            with socket.socket() as probe:
+                probe.settimeout(0.2)
+                probe_errno = probe.connect_ex(("127.0.0.1", port))
+            if probe_errno == 0:
+                journal.event("borrowed-listener", host="127.0.0.1", port=port, action="preserve-and-reselect")
+                continue
+            if probe_errno != errno.ECONNREFUSED:
+                journal.event("listener-probe-unavailable", host="127.0.0.1", port=port, probe_errno=probe_errno)
+                continue
+            try:
+                listener.bind(("127.0.0.1", port))
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                journal.event("borrowed-listener-bind-race", host="127.0.0.1", port=port, action="preserve-and-reselect")
+                continue
+            record["port"] = port
+            break
+        else:
+            raise RuntimeError("Could not bind a preregistered scratch HTTP endpoint")
         journal.event("listener-bound-before-listen", host="127.0.0.1", port=record["port"], pid=os.getpid())
         base = f"http://127.0.0.1:{record['port']}"
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
