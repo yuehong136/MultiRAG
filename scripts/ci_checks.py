@@ -25,6 +25,7 @@ GO_LIVE_OPT_INS = {
         "TestConnectorDetailHTTPJWTAndSQL",
         "TestAfter1eGMCPAndOAuth",
         "TestDocumentStopAfter67Live",
+        "TestAgentAfter67RouterJWTAPI",
     },
     "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
     "engine": {"TestSkillMilvusLiveUnpublishedFragments", "TestEngineStoresLive"},
