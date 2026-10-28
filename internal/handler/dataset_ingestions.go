@@ -14,6 +14,15 @@ import (
 	"time"
 )
 
+// ingestionQueryFromRaw rejects the whole query if even one pair cannot be parsed.
+func ingestionQueryFromRaw(raw string) (dao.IngestionQuery, error) {
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return dao.IngestionQuery{}, fmt.Errorf("invalid query string")
+	}
+	return ingestionQuery(values)
+}
+
 func ingestionQuery(values url.Values) (dao.IngestionQuery, error) {
 	q := dao.IngestionQuery{OrderBy: "create_time", LogType: "dataset", Desc: true}
 	for _, key := range []string{"page", "page_size", "orderby", "desc", "log_type", "keywords", "create_date_from", "create_date_to"} {
@@ -114,7 +123,7 @@ func (h *DatasetsHandler) ListIngestionLogs(c *gin.Context) {
 		jsonError(c, code, message)
 		return
 	}
-	q, err := ingestionQuery(c.Request.URL.Query())
+	q, err := ingestionQueryFromRaw(c.Request.URL.RawQuery)
 	if err != nil {
 		jsonError(c, common.CodeArgumentError, err.Error())
 		return

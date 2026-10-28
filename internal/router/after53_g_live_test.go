@@ -301,6 +301,16 @@ func TestAfter53GHTTPAndSQL(t *testing.T) {
 		}
 		return out
 	}
+	var logQueries atomic.Int64
+	observer := "after53-g-log-read"
+	if err := db.Callback().Query().Before("gorm:query").Register(observer, func(tx *gorm.DB) {
+		if tx.Statement.Table == "t_pipeline_operation_log" {
+			logQueries.Add(1)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Callback().Query().Remove(observer) })
 	before := snapshot()
 	_, out, _, _ := request("/api/v1/thumbnails?doc_ids=doc&doc_ids=empty&doc_ids=nil&doc_ids=inline&doc_ids=foreign-doc&doc_ids=doc", "member")
 	if out["code"] != float64(0) {
@@ -411,10 +421,17 @@ func TestAfter53GHTTPAndSQL(t *testing.T) {
 			t.Fatal("foreign logs leaked")
 		}
 	}
-	for _, query := range []string{"page=x", "page=1&page=2", "page_size=101", "operation_status=", "create_date_from=bad", "orderby=dsl"} {
+	if logQueries.Load() == 0 {
+		t.Fatal("log query observer did not observe successful queries")
+	}
+	for _, query := range []string{"page=x", "page=1&page=2", "page_size=101", "operation_status=", "create_date_from=bad", "orderby=dsl", "operation_status=%zz", "create_date_from=%zz", "operation_status=%zz&operation_status=0", "operation_status=0;operation_status=1", "create_date_from=2026-01-01;page=1"} {
+		queriesBefore := logQueries.Load()
 		_, out, _, _ = request(path+"?"+query, "owner")
 		if out["code"] != float64(common.CodeArgumentError) {
 			t.Fatal("malformed HTTP query accepted", query, out)
+		}
+		if logQueries.Load() != queriesBefore || snapshot() != before {
+			t.Fatal("malformed query read logs or mutated SQL", query)
 		}
 	}
 	if err := db.Exec("ALTER TABLE t_pipeline_operation_log RENAME TO owned_log_failure").Error; err != nil {
