@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"multirag/internal/server"
 )
 
 func TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle(t *testing.T) {
@@ -160,5 +162,39 @@ func TestRuntimeUploadAdapterLeavesNamespacePreservingStoresUnchanged(t *testing
 	}
 	if bucket, key := ossStore.resolveBucketAndPath("ordinary-files", "object"); bucket != "physical" || key != "prefix/object" {
 		t.Fatal("runtime adapter changed ordinary OSS resolution", bucket, key)
+	}
+}
+
+func TestRuntimeUploadAdapterS3ConfigurationSnapshotHonorsExplicitEmptyValues(t *testing.T) {
+	for _, entry := range []struct {
+		name, bucket, prefix string
+	}{
+		{"configured-bucket", "physical", ""},
+		{"configured-prefix", "physical", "prefix"},
+		{"empty-bucket", "", "prefix"},
+		{"empty-prefix", "physical", ""},
+		{"both-empty", "", ""},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			configuration := server.S3Config{Bucket: entry.bucket, PrefixPath: entry.prefix}
+			original := &S3Storage{bucket: "cached-bucket", prefixPath: "cached-prefix", config: &configuration}
+			runtime := ForRuntimeUploads(original)
+			var snapshot *S3Storage
+			if wrapped, ok := runtime.(*runtimeUploadStorage); ok {
+				snapshot = wrapped.Storage.(*S3Storage)
+			} else {
+				snapshot = runtime.(*S3Storage)
+			}
+			if snapshot == original || snapshot.config == original.config || snapshot.bucket != entry.bucket || snapshot.prefixPath != entry.prefix {
+				t.Fatal("runtime resolver did not snapshot authoritative S3 configuration")
+			}
+			configuration.Bucket, configuration.PrefixPath = "later-bucket", "later-prefix"
+			if snapshot.config.Bucket != entry.bucket || snapshot.config.PrefixPath != entry.prefix || snapshot.bucket != entry.bucket || snapshot.prefixPath != entry.prefix {
+				t.Fatal("caller configuration mutation changed the runtime snapshot")
+			}
+			if original.bucket != "cached-bucket" || original.prefixPath != "cached-prefix" || original.config != &configuration {
+				t.Fatal("runtime snapshot changed the ordinary storage instance")
+			}
+		})
 	}
 }

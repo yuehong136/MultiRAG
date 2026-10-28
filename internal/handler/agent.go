@@ -172,6 +172,12 @@ func (h *AgentHandler) UploadAgentFile(c *gin.Context) {
 		jsonError(c, code, err.Error())
 		return
 	}
+	// URL.Query silently drops malformed escapes. This endpoint accepts no
+	// query component, including an empty '?' marker, before parsing files.
+	if c.Request.URL.RawQuery != "" || c.Request.URL.ForceQuery {
+		jsonError(c, common.CodeArgumentError, "Provide multipart file fields only.")
+		return
+	}
 	err := c.Request.ParseMultipartForm(32 << 20)
 	if c.Request.MultipartForm != nil {
 		defer c.Request.MultipartForm.RemoveAll()
@@ -181,7 +187,7 @@ func (h *AgentHandler) UploadAgentFile(c *gin.Context) {
 		return
 	}
 	form := c.Request.MultipartForm
-	if len(c.Request.URL.Query()) != 0 || len(form.Value) != 0 || len(form.File) != 1 || len(form.File["file"]) == 0 {
+	if len(form.Value) != 0 || len(form.File) != 1 || len(form.File["file"]) == 0 {
 		jsonError(c, common.CodeArgumentError, "Provide multipart file fields only.")
 		return
 	}

@@ -10,9 +10,26 @@ import (
 func ForRuntimeUploads(store Storage) Storage {
 	switch concrete := store.(type) {
 	case *S3Storage:
-		if concrete != nil && concrete.bucket != "" && concrete.prefixPath == "" {
-			return &runtimeUploadStorage{Storage: store}
+		if concrete == nil {
+			return store
 		}
+		effective := concrete
+		if concrete.config != nil {
+			// NewS3Storage currently retains these values in config without
+			// populating its resolver fields. Snapshot the runtime view only;
+			// empty configured values are authoritative too. Ordinary callers
+			// retain the original instance and its existing mapping.
+			snapshot := *concrete
+			configuration := *concrete.config
+			snapshot.config = &configuration
+			snapshot.bucket = configuration.Bucket
+			snapshot.prefixPath = configuration.PrefixPath
+			effective = &snapshot
+		}
+		if effective.bucket != "" && effective.prefixPath == "" {
+			return &runtimeUploadStorage{Storage: effective}
+		}
+		return effective
 	case *OSSStorage:
 		if concrete != nil && concrete.bucket != "" {
 			return &runtimeUploadStorage{Storage: store}

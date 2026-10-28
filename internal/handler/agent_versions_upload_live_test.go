@@ -433,6 +433,15 @@ func TestAgentVersionsUploadScratchPostgres(t *testing.T) {
 	if countObjects() != baseline || snapshot() != beforeSQL {
 		t.Fatal("invalid upload mutated SQL/storage")
 	}
+	// Query parsing may discard malformed escapes; raw query presence must reject
+	// before multipart parsing or writes, including the bare query marker.
+	for _, query := range []string{"?url=%ZZ", "?url=%", "?"} {
+		body, ct = multipartBody([]string{"must not persist"})
+		check(request("POST", "/api/v1/agents/shared/upload"+query, "owner", body, ct), common.CodeArgumentError)
+		if countObjects() != baseline {
+			t.Fatal("raw query rejection wrote objects", query)
+		}
+	}
 	var fileCount int
 	if err = read.QueryRow("SELECT count(*) FROM t_ai_files").Scan(&fileCount); err != nil || fileCount != 0 {
 		t.Fatal("runtime upload entered File tree", err)
