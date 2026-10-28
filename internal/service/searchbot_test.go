@@ -159,7 +159,8 @@ func TestSearchbotNumericIdentityAndDefaults(t *testing.T) {
 	catalog := &entity.ProviderManager{Providers: []entity.Provider{{Name: "OpenAI", URL: map[string]string{"default": "https://catalog.invalid/v1"}}}}
 	s := NewSearchbotService(NewModelProviderServiceWithCatalog(catalog, factory))
 	s.loadTenant = func(context.Context, string) (*entity.Tenant, error) {
-		return &entity.Tenant{ID: "owner", TenantLLMID: &id, LLMID: "wrong@instance@OpenAI"}, nil
+		active := "1"
+		return &entity.Tenant{ID: "owner", Status: &active, TenantLLMID: &id, LLMID: "wrong@instance@OpenAI"}, nil
 	}
 	row := &entity.TenantLLM{ID: id, TenantID: "owner", Status: "1", LLMFactory: "OpenAI", LLMName: &modelName, ModelType: &kind, APIKey: &key, APIBase: &base, MaxTokens: 0}
 	s.loadLegacy = func(_ context.Context, tenant string, gotID int64) (*entity.TenantLLM, error) {
@@ -218,6 +219,23 @@ func TestSearchbotParseQuestions(t *testing.T) {
 	} {
 		if got := parseSearchbotQuestions(test.input); !reflect.DeepEqual(got, test.want) {
 			t.Errorf("parse %q = %v, want %v", test.input, got, test.want)
+		}
+	}
+}
+
+func TestSearchbotEverySelectorRequiresActiveOwner(t *testing.T) {
+	for _, selector := range []any{"42", "same-name@default@OpenAI"} {
+		for _, tenant := range []*entity.Tenant{nil, {ID: "owner"}, {ID: "foreign"}} {
+			factory := &searchbotTestFactory{driver: &searchbotTestDriver{}}
+			s := NewSearchbotService(NewModelProviderServiceWithCatalog(&entity.ProviderManager{}, factory))
+			s.loadTenant = func(context.Context, string) (*entity.Tenant, error) { return tenant, nil }
+			s.loadLegacy = func(context.Context, string, int64) (*entity.TenantLLM, error) {
+				t.Fatal("inactive owner reached legacy model query")
+				return nil, nil
+			}
+			if _, err := s.chatModel(context.Background(), "owner", selector); err == nil || factory.calls != 0 {
+				t.Fatal("inactive owner constructed a provider")
+			}
 		}
 	}
 }

@@ -112,7 +112,9 @@ func readableSearch(ctx context.Context, userID, searchID string) (*entity.Searc
 		Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"})
 	var search entity.Search
 	err := db.Where("id = ? AND status = ?", searchID, "1").
-		Where("tenant_id IN (?)", memberships).First(&search).Error
+		Where("tenant_id IN (?)", memberships).
+		Where("EXISTS (SELECT 1 FROM t_ai_users AS owner_user WHERE owner_user.id = t_ai_search.tenant_id AND owner_user.status = ?)", "1").
+		Where("EXISTS (SELECT 1 FROM t_ai_tenants AS owner_tenant WHERE owner_tenant.id = t_ai_search.tenant_id AND owner_tenant.status = ?)", "1").First(&search).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrSearchbotAccessDenied
 	}
@@ -127,7 +129,8 @@ func searchbotTenant(ctx context.Context, tenantID string) (*entity.Tenant, erro
 		return nil, errors.New("model database is unavailable")
 	}
 	var tenant entity.Tenant
-	err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", tenantID, "1").First(&tenant).Error
+	err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", tenantID, "1").
+		Where("EXISTS (SELECT 1 FROM t_ai_users AS owner_user WHERE owner_user.id = t_ai_tenants.id AND owner_user.status = ?)", "1").First(&tenant).Error
 	return &tenant, err
 }
 
@@ -152,14 +155,15 @@ func (s *SearchbotService) chatModel(ctx context.Context, tenantID string, selec
 	if err != nil {
 		return nil, err
 	}
+	// Every selector, including an explicit legacy ID, requires a live owner.
+	tenant, err := s.loadTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if tenant == nil || tenant.ID != tenantID || tenant.Status == nil || *tenant.Status != "1" {
+		return nil, errors.New("chat model owner is unavailable")
+	}
 	if reference == "" {
-		tenant, err := s.loadTenant(ctx, tenantID)
-		if err != nil {
-			return nil, err
-		}
-		if tenant == nil || tenant.ID != tenantID {
-			return nil, errors.New("default chat model is unavailable")
-		}
 		if tenant.TenantLLMID != nil {
 			reference, err = searchbotSelector(strconv.FormatInt(*tenant.TenantLLMID, 10))
 		} else {

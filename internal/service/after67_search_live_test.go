@@ -25,6 +25,7 @@ import (
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 	"multirag/internal/testsupport"
 )
 
@@ -51,7 +52,7 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 		t.Fatal("exact owned TCP database required")
 	}
 	endpoint := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.User, cfg.Password), Host: "127.0.0.1:5432", Path: cfg.Database, RawQuery: "sslmode=disable"}
-	journal.Event("reserve-schema-tables-before-SQL", map[string]any{"host": cfg.Host, "port": cfg.Port, "database": cfg.Database, "schema": "public", "tables": []string{"t_ai_search", "t_ai_user_tenants", "t_ai_tenant_llms", "t_ai_tenants", "tenant_model_provider", "tenant_model_instance", "tenant_model", "t_ai_knowledgebases"}})
+	journal.Event("reserve-schema-tables-before-SQL", map[string]any{"host": cfg.Host, "port": cfg.Port, "database": cfg.Database, "schema": "public", "tables": []string{"t_ai_search", "t_ai_user_tenants", "t_ai_tenant_llms", "t_ai_tenants", "tenant_model_provider", "tenant_model_instance", "tenant_model", "t_ai_knowledgebases", "t_ai_users"}})
 	db, err := gorm.Open(postgres.Open(endpoint.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal("scratch SQL connection failed")
@@ -69,7 +70,7 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 		t.Fatal("independent SQL connection failed")
 	}
 	t.Cleanup(func() { _ = read.Close() })
-	if err := db.AutoMigrate(&entity.Search{}, &entity.UserTenant{}, &entity.TenantLLM{}, &entity.Tenant{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}, &entity.Knowledgebase{}); err != nil {
+	if err := db.AutoMigrate(&entity.Search{}, &entity.UserTenant{}, &entity.TenantLLM{}, &entity.Tenant{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}, &entity.Knowledgebase{}, &entity.User{}); err != nil {
 		t.Fatal("scratch schema failed")
 	}
 	t.Chdir(filepath.Join("..", ".."))
@@ -106,13 +107,15 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 	}))
 	active, inactive, chat, embed, key, name, base := "1", "0", "chat", "embedding", "owned-legacy-key", "owned-chat", fixture.URL
 	owner, foreign := "s-owner", "s-foreign"
-	journal.Event("reserve-fixture-namespaces-before-INSERT", map[string]any{"tenant_ids": []string{owner, foreign}, "user_ids": []string{owner, "s-member", "s-invite", "s-unknown", "s-inactive"}, "search_ids": []string{"s-search", "s-foreign-search", "s-deleted"}, "dataset_ids": []string{"s-kb"}, "legacy_model_natural_keys": []any{[]string{owner, "OpenAI", name}, []string{foreign, "OpenAI", "foreign"}, []string{owner, "OpenAI", "disabled"}, []string{owner, "OpenAI", "embedding"}}, "modern_ids": []string{"s-provider", "s-instance", "s-model"}})
+	journal.Event("reserve-fixture-namespaces-before-INSERT", map[string]any{"tenant_ids": []string{owner, foreign}, "user_ids": []string{owner, foreign, "s-member", "s-invite", "s-unknown", "s-inactive"}, "search_ids": []string{"s-search", "s-foreign-search", "s-deleted"}, "dataset_ids": []string{"s-kb"}, "legacy_model_natural_keys": []any{[]string{owner, "OpenAI", name}, []string{foreign, "OpenAI", "foreign"}, []string{owner, "OpenAI", "disabled"}, []string{owner, "OpenAI", "embedding"}}, "modern_ids": []string{"s-provider", "s-instance", "s-model"}})
 	create := func(value any) {
 		t.Helper()
 		if err := db.Create(value).Error; err != nil {
 			t.Fatalf("fixture INSERT failed: %T", value)
 		}
 	}
+	create(&entity.User{ID: owner, Nickname: "owner", Email: "owner@s-owned.invalid", Status: &active})
+	create(&entity.User{ID: foreign, Nickname: "foreign", Email: "foreign@s-owned.invalid", Status: &active})
 	create(&entity.Tenant{ID: owner, Status: &active})
 	create(&entity.Tenant{ID: foreign, Status: &active})
 	legacy := &entity.TenantLLM{TenantID: owner, LLMFactory: "OpenAI", LLMName: &name, ModelType: &chat, APIKey: &key, APIBase: &base, Status: active}
@@ -145,11 +148,32 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 		t.Fatal("numeric identity independent readback failed")
 	}
 	journal.Event("model-ID-independent-readback", map[string]any{"tenant": owner, "model_id": storedID, "foreign_model_id": foreignID, "disabled_model_id": disabledID, "wrong_type_model_id": wrongType})
-	service := NewSearchbotService(NewModelProviderServiceWithCatalog(catalog, nil))
+	factory := &after67CountingFactory{}
+	service := NewSearchbotService(NewModelProviderServiceWithCatalog(catalog, factory))
 	for _, actor := range []string{owner, "s-member"} {
 		got, err := service.RelatedQuestions(context.Background(), actor, "question", "s-search")
 		if err != nil || !reflect.DeepEqual(got, []string{"First question", "Tenth question"}) {
 			t.Fatalf("authorized suggestions failed: %v", err)
+		}
+	}
+
+	for _, table := range []string{"t_ai_users", "t_ai_tenants"} {
+		beforeCalls, beforeFactory := calls.Load(), factory.calls.Load()
+		if err := db.Table(table).Where("id = ?", owner).Update("status", "0").Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.RelatedQuestions(context.Background(), "s-member", "q", saved.ID); !errors.Is(err, ErrSearchbotAccessDenied) {
+			t.Fatal("inactive search owner was readable")
+		}
+		if _, err := service.chatModel(context.Background(), owner, strconv.FormatInt(legacy.ID, 10)); err == nil {
+			t.Fatal("inactive owner bound explicit numeric model")
+		}
+		if calls.Load() != beforeCalls || factory.calls.Load() != beforeFactory {
+			t.Fatal("inactive owner caused provider construction or HTTP work")
+		}
+		journal.Event("inactive-owner-zero-provider-readback", map[string]any{"table": table, "owner_id": owner, "provider_constructions_delta": 0, "provider_HTTP_delta": 0})
+		if err := db.Table(table).Where("id = ?", owner).Update("status", "1").Error; err != nil {
+			t.Fatal(err)
 		}
 	}
 	before := calls.Load()
@@ -312,7 +336,7 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 		t.Fatal("zero stored setting changed")
 	}
 	// All queries above are reads; no new models/searches/memberships appear.
-	for table, want := range map[string]int{"t_ai_search": 3, "t_ai_tenant_llms": 4, "t_ai_user_tenants": 5, "t_ai_tenants": 2} {
+	for table, want := range map[string]int{"t_ai_search": 3, "t_ai_tenant_llms": 4, "t_ai_user_tenants": 5, "t_ai_tenants": 2, "t_ai_users": 2} {
 		var count int
 		if err := read.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != want {
 			t.Fatal("forbidden SQL side effect")
@@ -342,4 +366,11 @@ func (e *after67MetadataEngine) Search(ctx context.Context, req *types.SearchReq
 		return nil, errors.New("metadata escaped authorized dataset scope")
 	}
 	return &types.SearchResult{Chunks: e.chunks}, e.err
+}
+
+type after67CountingFactory struct{ calls atomic.Int64 }
+
+func (f *after67CountingFactory) CreateModelDriver(name string, urls map[string]string, suffix models.URLSuffix) (models.ModelDriver, error) {
+	f.calls.Add(1)
+	return models.NewModelFactory().CreateModelDriver(name, urls, suffix)
 }

@@ -407,6 +407,9 @@ func applyMetaDataFilter(ctx context.Context, filter, metadata map[string]interf
 				if _, exists := selectedMetadata[condition.Key]; !exists {
 					return []string{"-999"}, true
 				}
+				if operator := constraints[condition.Key]; operator != "" && common.NormalizeOperator(condition.Op) != common.NormalizeOperator(operator) {
+					return []string{"-999"}, true
+				}
 			}
 		}
 		metadata = selectedMetadata
