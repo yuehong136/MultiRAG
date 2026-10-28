@@ -25,6 +25,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
+	"multirag/internal/entity"
 )
 
 // MetadataService provides common metadata operations
@@ -100,16 +101,24 @@ func (s *MetadataService) SearchMetadata(kbID, tenantID string, docIDs []string,
 
 // SearchMetadataByKBs searches the metadata index for multiple knowledge bases
 func (s *MetadataService) SearchMetadataByKBs(kbIDs []string, size int) (*SearchMetadataResult, error) {
+	return s.SearchMetadataByKBsContext(context.Background(), kbIDs, size)
+}
+
+// SearchMetadataByKBsContext keeps both SQL and index work in the request scope.
+func (s *MetadataService) SearchMetadataByKBsContext(ctx context.Context, kbIDs []string, size int) (*SearchMetadataResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(kbIDs) == 0 {
 		return &SearchMetadataResult{Chunks: []map[string]interface{}{}}, nil
 	}
 
-	tenantID, err := s.GetTenantIDByKBIDs(kbIDs)
-	if err != nil {
-		return nil, err
+	var kb entity.Knowledgebase
+	if err := dao.DB.WithContext(ctx).Select("tenant_id").Where("id = ?", kbIDs[0]).First(&kb).Error; err != nil {
+		return nil, fmt.Errorf("knowledgebase not found: %w", err)
 	}
 
-	indexName := BuildMetadataIndexName(tenantID)
+	indexName := BuildMetadataIndexName(kb.TenantID)
 
 	searchReq := &types.SearchRequest{
 		IndexNames: []string{indexName},
@@ -118,11 +127,20 @@ func (s *MetadataService) SearchMetadataByKBs(kbIDs []string, size int) (*Search
 		Limit:      size,
 	}
 
-	searchResult, err := s.docEngine.Search(context.Background(), searchReq)
+	if s.docEngine == nil {
+		return nil, fmt.Errorf("metadata index is unavailable")
+	}
+	searchResult, err := s.docEngine.Search(ctx, searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if searchResult == nil {
+		return nil, fmt.Errorf("metadata index returned no result")
+	}
 	return &SearchMetadataResult{
 		IndexName: indexName,
 		Chunks:    searchResult.Chunks,
@@ -132,12 +150,20 @@ func (s *MetadataService) SearchMetadataByKBs(kbIDs []string, size int) (*Search
 // GetFlattedMetaByKBs returns flattened metadata in the format:
 // {field_name: {value: [doc_ids]}}
 func (s *MetadataService) GetFlattedMetaByKBs(kbIDs []string) (map[string]interface{}, error) {
+	return s.GetFlattedMetaByKBsContext(context.Background(), kbIDs)
+}
+
+// GetFlattedMetaByKBsContext supplies the directory for request-scoped filters.
+func (s *MetadataService) GetFlattedMetaByKBsContext(ctx context.Context, kbIDs []string) (map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(kbIDs) == 0 {
 		return make(map[string]interface{}), nil
 	}
 
 	// Get metadata for all docs in KBs (use large limit like Python's 10000)
-	result, err := s.SearchMetadataByKBs(kbIDs, 10000)
+	result, err := s.SearchMetadataByKBsContext(ctx, kbIDs, 10000)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +191,7 @@ func (s *MetadataService) GetFlattedMetaByKBs(kbIDs []string) (map[string]interf
 
 		// Flatten each field
 		for fieldName, fieldValue := range metaFields {
-			if fieldValue == nil {
+			if fieldName == "empty_metadata" || fieldValue == nil {
 				continue
 			}
 
@@ -179,17 +205,13 @@ func (s *MetadataService) GetFlattedMetaByKBs(kbIDs []string) (map[string]interf
 				continue
 			}
 
-			// Handle string, number (float64/int), and list of string/number
+			// Preserve JSON scalars, including false, zero and empty strings.
 			switch v := fieldValue.(type) {
 			case string:
-				// Single string value (including time strings)
-				if v != "" {
-					if _, exists := valueMap[v]; !exists {
-						valueMap[v] = []string{docID}
-					} else {
-						valueMap[v] = appendDocID(valueMap[v], docID)
-					}
-				}
+				valueMap[v] = appendDocID(valueMap[v], docID)
+			case bool:
+				text := strconv.FormatBool(v)
+				valueMap[text] = appendDocID(valueMap[text], docID)
 			case float64:
 				// Numeric value - convert to string (matching Python's str())
 				strVal := strconv.FormatFloat(v, 'f', -1, 64)
@@ -211,13 +233,10 @@ func (s *MetadataService) GetFlattedMetaByKBs(kbIDs []string) (map[string]interf
 				for _, item := range v {
 					switch itemVal := item.(type) {
 					case string:
-						if itemVal != "" {
-							if _, exists := valueMap[itemVal]; !exists {
-								valueMap[itemVal] = []string{docID}
-							} else {
-								valueMap[itemVal] = appendDocID(valueMap[itemVal], docID)
-							}
-						}
+						valueMap[itemVal] = appendDocID(valueMap[itemVal], docID)
+					case bool:
+						text := strconv.FormatBool(itemVal)
+						valueMap[text] = appendDocID(valueMap[text], docID)
 					case float64:
 						strVal := strconv.FormatFloat(itemVal, 'f', -1, 64)
 						if _, exists := valueMap[strVal]; !exists {
@@ -288,7 +307,7 @@ func ExtractMetaFields(chunk map[string]interface{}) (map[string]interface{}, er
 }
 
 // mergeFieldValues merges two field values when the same key appears multiple times
-// If both are arrays, append all elements. If one is array and other is string, append string to array.
+// Arrays are flattened and all supported JSON scalars are retained.
 // Returns []interface{} with all merged values (flattened).
 func mergeFieldValues(existing, new interface{}) []interface{} {
 	result := []interface{}{}
@@ -299,9 +318,11 @@ func mergeFieldValues(existing, new interface{}) []interface{} {
 			return
 		}
 		switch val := v.(type) {
-		case string:
-			if val != "" {
-				result = append(result, val)
+		case string, bool, float64, int:
+			result = append(result, val)
+		case []string:
+			for _, item := range val {
+				addValue(item)
 			}
 		case []interface{}:
 			for _, item := range val {

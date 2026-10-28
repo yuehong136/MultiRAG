@@ -184,73 +184,74 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	}
 
 	// Determine meta_data_filter
-	var chatID string
+	var chatID interface{}
+	chatTenantID := tenantIDs[0]
 	var chatModel *models.ChatModel
 	filter := req.Filter
 
 	if req.SearchID != nil && *req.SearchID != "" {
 		// If search_id is set, get meta_data_filter and chat_id from search_config
-		searchDetail, err := s.searchService.GetDetail(*req.SearchID)
+		searchDetail, err := readableSearch(ctx, userID, *req.SearchID)
 		if err != nil {
-			common.Warn("Failed to get search detail for search_id, proceeding without it", zap.String("searchID", *req.SearchID), zap.Error(err))
-		} else if searchConfig, ok := searchDetail["search_config"].(entity.JSONMap); ok && searchConfig != nil {
-			if searchMetaFilter, ok := searchConfig["meta_data_filter"].(map[string]interface{}); ok {
+			return nil, err
+		} else if searchConfig := searchDetail.SearchConfig; searchConfig != nil {
+			chatTenantID = searchDetail.TenantID
+			if rawFilter, exists := searchConfig["meta_data_filter"]; exists {
+				searchMetaFilter, ok := rawFilter.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("invalid saved metadata filter")
+				}
 				filter = searchMetaFilter
 			}
-			chatID, _ = searchConfig["chat_id"].(string)
+			if selector, exists := searchConfig["chat_id"]; exists && selector == nil {
+				return nil, fmt.Errorf("invalid saved search model")
+			}
+			chatID = searchConfig["chat_id"]
 		} else {
-			common.Warn("No search_config found in search detail", zap.String("searchID", *req.SearchID))
+			return nil, fmt.Errorf("invalid saved search configuration")
 		}
 	}
-
-	// If meta_data_filter method is auto/semi_auto, get chat model
-	if filter != nil {
-		method, _ := filter["method"].(string)
-		if method == "auto" || method == "semi_auto" {
-			modelProviderSvc := NewModelProviderService()
-			if chatID != "" {
-				// Use chat_id from search_config
-				chatModel, err = modelProviderSvc.GetChatModel(tenantIDs[0], chatID)
-				if err != nil {
-					common.Warn("Failed to get chat model from search_config chat_id, using tenant default", zap.String("chatID", chatID), zap.Error(err))
-				} else {
-					common.Info("Fetched chat model (from search_config) for metadata filter",
-						zap.String("chatID", chatID),
-						zap.String("tenantID", tenantIDs[0]),
-						zap.String("providerName", chatModel.ModelDriver.Name()),
-						zap.String("modelName", *chatModel.ModelName))
-				}
-			}
-			// If no chatID from search_config, or chatModel not found, use tenant default
-			if chatModel == nil {
-				chatModel, err = modelProviderSvc.GetChatModel(tenantIDs[0], "")
-				if err != nil {
-					common.Warn("Failed to get tenant default chat model for meta_data_filter", zap.Error(err))
-				} else {
-					common.Info("Fetched chat model (tenant default) for metadata filter",
-						zap.String("tenantID", tenantIDs[0]),
-						zap.String("providerName", chatModel.ModelDriver.Name()),
-						zap.String("modelName", *chatModel.ModelName))
-				}
-			}
-		}
+	if err := ValidateMetaDataFilter(filter); err != nil {
+		return nil, err
 	}
 
-	// Apply meta_data_filter to get filtered doc_ids (filter by metadata before retrieval)
-	docIDs := make([]string, len(req.DocIDs))
-	copy(docIDs, req.DocIDs)
-	if filter != nil {
-		// Get flattened metadata
-		metadataSvc := NewMetadataService()
-		flattedMeta, err := metadataSvc.GetFlattedMetaByKBs(kbIDs)
+	// Every resource selector has been authorized before honoring empty scope.
+	if req.DocIDs != nil && len(req.DocIDs) == 0 {
+		return emptyRetrievalTestResponse(), nil
+	}
+	docIDs := req.DocIDs
+	if req.DocIDs != nil {
+		docIDs = append([]string{}, req.DocIDs...)
+	}
+	method, _ := filter["method"].(string)
+	manual, _ := filter["manual"].([]interface{})
+	activeFilter := method == "auto" || method == "semi_auto" || method == "manual" && len(manual) > 0
+	if activeFilter {
+		metadataSvc := &MetadataService{kbDAO: s.kbDAO, docEngine: s.docEngine}
+		flattedMeta, err := metadataSvc.GetFlattedMetaByKBsContext(ctx, kbIDs)
 		if err != nil {
-			common.Warn("Failed to get flatted metadata", zap.Error(err))
-		} else {
-			common.Info("metadata filter conditions", zap.Any("filter", filter))
-			filteredDocIDs, _ := ApplyMetaDataFilter(ctx, filter, flattedMeta, req.Question, chatModel, req.DocIDs)
-			docIDs = filteredDocIDs
-			common.Info("ApplyMetaDataFilter result", zap.Strings("docIDs", docIDs))
+			return nil, fmt.Errorf("metadata filter data unavailable: %w", err)
 		}
+		// An invalid selected field set must not resolve or call a model.
+		if method == "semi_auto" {
+			if _, _, valid := semiAutoMetadata(filter["semi_auto"], flattedMeta); !valid {
+				return emptyRetrievalTestResponse(), nil
+			}
+		}
+		if method == "auto" || method == "semi_auto" {
+			chatModel, err = NewSearchbotService(NewModelProviderService()).chatModel(ctx, chatTenantID, chatID)
+			if err != nil {
+				return nil, fmt.Errorf("metadata filter model unavailable: %w", err)
+			}
+		}
+		filteredDocIDs, empty, err := ApplyMetaDataFilterChecked(ctx, filter, flattedMeta, req.Question, chatModel, req.DocIDs)
+		if err != nil {
+			return nil, err
+		}
+		if empty || filteredDocIDs != nil && len(filteredDocIDs) == 0 {
+			return emptyRetrievalTestResponse(), nil
+		}
+		docIDs = filteredDocIDs
 	}
 
 	// Apply cross_languages and keyword extraction with tenant default chat model
@@ -400,6 +401,11 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 		Labels:  &labels,
 		Total:   int64(len(filteredChunks)),
 	}, nil
+}
+
+func emptyRetrievalTestResponse() *RetrievalTestResponse {
+	labels := map[string]float64{}
+	return &RetrievalTestResponse{Chunks: []map[string]interface{}{}, DocAggs: []map[string]interface{}{}, Labels: &labels}
 }
 
 func retrievalModelSelector(ctx context.Context, tenantID string, modelType entity.ModelType, numericID *int64, selector string) (string, error) {
