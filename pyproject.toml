@@ -18,6 +18,7 @@ dependencies = [
     # PEP 594 从 3.13 标准库移除，audioop-lts 是其 3.13+ 回填（3.12 仍用标准库）
     "audioop-lts>=0.2.1; python_version >= '3.13'",
     "azure-identity>=1.25.3",
+    "azure-storage-blob==12.22.0",
     "azure-storage-file-datalake==12.16.0",
     "agentrun-sdk>=0.0.23,<1.0.0",
     "alibabacloud-dingtalk>=2.0.0",
