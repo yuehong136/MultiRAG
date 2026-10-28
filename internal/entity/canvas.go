@@ -56,6 +56,7 @@ func (CanvasTemplate) TableName() string {
 // UserCanvasVersion user canvas version model
 type UserCanvasVersion struct {
 	ID           string  `gorm:"column:id;primaryKey;size:32" json:"id"`
+	Release      bool    `gorm:"column:release;not null;default:false;index" json:"release"`
 	UserCanvasID string  `gorm:"column:user_canvas_id;size:255;not null;index" json:"user_canvas_id"`
 	Title        *string `gorm:"column:title;size:255" json:"title,omitempty"`
 	Description  *string `gorm:"column:description;type:text" json:"description,omitempty"`

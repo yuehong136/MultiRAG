@@ -128,3 +128,67 @@ func (h *AgentHandler) ListAgents(c *gin.Context) {
 		"message": "success",
 	})
 }
+
+// ListAgentVersions returns an array of summaries after authorizing the path agent.
+func (h *AgentHandler) ListAgentVersions(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	rows, code, err := h.agentService.ListVersions(c.Request.Context(), user.ID, c.Param("agent_id"))
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, rows, "")
+}
+
+// GetAgentVersion returns DSL only for a version belonging to the authorized agent.
+func (h *AgentHandler) GetAgentVersion(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	row, code, err := h.agentService.GetVersion(c.Request.Context(), user.ID, c.Param("agent_id"), c.Param("version_id"))
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, row, "")
+}
+
+// UploadAgentFile accepts repeated multipart file fields for authenticated callers.
+// Public beta uploads continue through the Python gateway and never gain a Go principal.
+func (h *AgentHandler) UploadAgentFile(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	// Authorize before parsing a body that may spill to temporary files.
+	if _, code, err := h.agentService.AuthorizeUpload(c.Request.Context(), user.ID, c.Param("agent_id")); err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	err := c.Request.ParseMultipartForm(32 << 20)
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	if err != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid multipart form.")
+		return
+	}
+	form := c.Request.MultipartForm
+	if len(c.Request.URL.Query()) != 0 || len(form.Value) != 0 || len(form.File) != 1 || len(form.File["file"]) == 0 {
+		jsonError(c, common.CodeArgumentError, "Provide multipart file fields only.")
+		return
+	}
+	result, code, err := h.agentService.UploadFiles(c.Request.Context(), user.ID, c.Param("agent_id"), form.File["file"])
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, result, "")
+}

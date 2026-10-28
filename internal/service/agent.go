@@ -18,10 +18,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 
+	"gorm.io/gorm"
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
@@ -150,4 +152,58 @@ func (s *AgentService) ListAgents(
 		items[i] = toAgentItem(c)
 	}
 	return &ListAgentsResponse{Canvas: items, Total: total}, common.CodeSuccess, nil
+}
+
+// requireCanvasAccess binds the path canvas to an active owner and accepted TEAM membership.
+// Loading authorization with the request context keeps cancellation and DB failures distinct.
+func (s *AgentService) requireCanvasAccess(ctx context.Context, userID, canvasID string) (*entity.UserCanvas, common.ErrorCode, error) {
+	if userID == "" {
+		return nil, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	if canvasID == "" {
+		return nil, common.CodeArgumentError, fmt.Errorf("agent_id is required")
+	}
+	canvas, err := dao.NewUserCanvasVersionDAO().AccessibleCanvas(ctx, userID, canvasID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, common.CodeOperatingError, fmt.Errorf("Agent not found or no permission.")
+	}
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to read agent access.")
+	}
+	return canvas, common.CodeSuccess, nil
+}
+
+// ListVersions returns summaries only, including the published flag used by consumers.
+func (s *AgentService) ListVersions(ctx context.Context, userID, canvasID string) ([]*dao.AgentVersionSummary, common.ErrorCode, error) {
+	if _, code, err := s.requireCanvasAccess(ctx, userID, canvasID); err != nil {
+		return nil, code, err
+	}
+	versions, err := dao.NewUserCanvasVersionDAO().ListByCanvasID(ctx, canvasID)
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to list agent versions.")
+	}
+	return versions, common.CodeSuccess, nil
+}
+
+// GetVersion scopes the SQL lookup by both version and its authorized path canvas.
+func (s *AgentService) GetVersion(ctx context.Context, userID, canvasID, versionID string) (*entity.UserCanvasVersion, common.ErrorCode, error) {
+	if versionID == "" {
+		return nil, common.CodeArgumentError, fmt.Errorf("version_id is required")
+	}
+	if _, code, err := s.requireCanvasAccess(ctx, userID, canvasID); err != nil {
+		return nil, code, err
+	}
+	version, err := dao.NewUserCanvasVersionDAO().GetByCanvasID(ctx, canvasID, versionID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, common.CodeNotFound, fmt.Errorf("Version not found.")
+	}
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to read agent version.")
+	}
+	return version, common.CodeSuccess, nil
+}
+
+// AuthorizeUpload allows handlers to reject access before parsing multipart data.
+func (s *AgentService) AuthorizeUpload(ctx context.Context, userID, canvasID string) (*entity.UserCanvas, common.ErrorCode, error) {
+	return s.requireCanvasAccess(ctx, userID, canvasID)
 }
