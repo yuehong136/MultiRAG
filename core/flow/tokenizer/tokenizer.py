@@ -24,6 +24,7 @@ from api.db.joint_services.tenant_model_service import get_model_config_by_id, g
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from common import settings
+from common.asyncio_utils import finish_owned_work
 from common.connection_utils import timeout
 from common.constants import LLMType
 from common.misc_utils import thread_pool_exec
@@ -93,7 +94,8 @@ class Tokenizer(ProcessBase):
         if not texts:
             return chunks, token_count
 
-        vts, c = embedding_model.encode([name])
+        async with embed_limiter:
+            vts, c = await finish_owned_work(thread_pool_exec(embedding_model.encode, [name]))
         token_count += c
         # Keep the existing flattened title layout and weighting behavior.
         tts = np.tile(vts[0], len(texts))

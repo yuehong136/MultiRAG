@@ -44,6 +44,7 @@ from api.db.services.llm_service import LLMBundle, llm_bundle_scope
 from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
 from api.db.services.task_service import CANVAS_DEBUG_DOC_ID, GRAPH_RAPTOR_FAKE_DOC_ID, TaskService, has_canceled
 from common import settings
+from common.asyncio_utils import finish_owned_work
 from common.config_utils import show_configs
 from common.connection_utils import timeout
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, PAGERANK_FLD, PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES, SVR_CONSUMER_GROUP_NAME, TAG_FLD, LLMType, ParserType, PipelineTaskType
@@ -870,30 +871,7 @@ def build_TOC(task: dict[str, Any], docs: list[dict[str, Any]], progress_callbac
     return None
 
 
-@llm_bundle_scope()
-async def _get_embedding_dimension(row: dict[str, Any]) -> int:
-    """获取 embedding 模型的向量维度"""
-    default_dim = 768
-    if not row.get("embd_id") or not row.get("tenant_id"):
-        return default_dim
-
-    try:
-        with db_connection() as db:
-            model_config = get_model_config_by_type_and_name(db, row["tenant_id"], LLMType.EMBEDDING.value, row["embd_id"])
-            embedding_model = LLMBundle(db, row["tenant_id"], model_config, lang=row.get("language", "en"))
-            sample_vec, _ = embedding_model.encode(["测试文本"])
-            # 注意：sample_vec 是 numpy 数组，不能直接用 if sample_vec 判断
-            if len(sample_vec) > 0:
-                dim = len(sample_vec[0])
-                logging.info(f"当前embedding模型维度: {dim}")
-                return dim
-    except Exception as e:
-        logging.warning(f"获取嵌入模型维度失败，使用默认维度 {default_dim}: {e}")
-
-    return default_dim
-
-
-async def init_kb(row, kb_name):
+async def init_kb(row: dict[str, Any], kb_name: str, vector_size: int) -> None:
     """
     初始化知识库，创建集合/索引。
 
@@ -906,7 +884,10 @@ async def init_kb(row, kb_name):
     Args:
         row: 任务数据行
         kb_name: 知识库名称
+        vector_size: 已由当前任务绑定模型成功探测的向量维度
     """
+    if type(vector_size) is not int or vector_size <= 0:
+        raise ValueError("Embedding dimension must be a positive integer")
     idxnm = search.index_name_one(row["tenant_id"], kb_name)
     kb_id = row.get("kb_id", "")
     db_type = settings.docStoreConn.db_type()
@@ -920,15 +901,12 @@ async def init_kb(row, kb_name):
         if await thread_pool_exec(settings.docStoreConn.index_exist, idxnm, kb_id):
             return
 
-    # 获取向量维度
-    vector_dim = await _get_embedding_dimension(row)
-
     # 创建集合/索引（底层已有幂等保护）
     parser_id = row.get("parser_id", None)
     if db_type == "milvus":
-        await _create_milvus_collection(idxnm, vector_dim)
+        await _create_milvus_collection(idxnm, vector_size)
     else:
-        await thread_pool_exec(settings.docStoreConn.create_idx, idxnm, kb_id, vector_dim, parser_id)
+        await thread_pool_exec(settings.docStoreConn.create_idx, idxnm, kb_id, vector_size, parser_id)
 
 
 async def _create_milvus_collection(collection_name: str, vector_dim: int):
@@ -1087,7 +1065,8 @@ async def embedding(docs: list[dict[str, Any]], mdl: Any, parser_config: dict[st
 
     tk_count = 0
     if len(tts) == len(cnts):
-        vts, c = await thread_pool_exec(mdl.encode, tts[0:1])
+        async with embed_limiter:
+            vts, c = await finish_owned_work(thread_pool_exec(mdl.encode, tts[0:1]))
         tts = np.tile(vts[0], (len(cnts), 1))
         tk_count += c
 
@@ -1406,7 +1385,9 @@ async def run_raptor_for_kb(
         all_available = bool(sources)
         for doc, inputs in sources.items():
             available = complete_target(doc)
-            if not available:
+            if available:
+                report(msg=f"[RAPTOR] doc:{doc} checkpoint: matching summaries already available; skipping generation")
+            else:
                 available = await generate(inputs, doc)
             all_available = all_available and available
         # Do not remove a dataset tree if any eligible file failed to produce a tree.
@@ -1415,7 +1396,9 @@ async def run_raptor_for_kb(
     else:
         target = GRAPH_RAPTOR_FAKE_DOC_ID
         available = complete_target(target)
-        if not available:
+        if available:
+            report(msg="[RAPTOR] dataset checkpoint: matching summaries already available; skipping generation")
+        else:
             available = await generate([item for chunks in sources.values() for item in chunks], target)
         if available:
             for doc in sources:
@@ -2829,9 +2812,8 @@ async def do_handle_task(db: Session, task: Any) -> None:
         logging.exception(error_message)
         raise
 
-    # init_kb(task, vector_size)
     kb_name = KnowledgebaseService.get_by_id(db, task_dataset_id).name
-    await init_kb(task, kb_name)
+    await init_kb(task, kb_name, vector_size)
 
     if task_type[: len("dataflow")] == "dataflow":
         await run_dataflow(db, task)
