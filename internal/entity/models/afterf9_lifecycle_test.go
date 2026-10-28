@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -166,44 +164,8 @@ func TestAfterf9MediaRejectRedirect(t *testing.T) {
 	}
 }
 
-var afterf9ResourceLock sync.Mutex
-
+// Use the current reserve-before-listen helper for every historical provider case.
 func afterf9Server(t *testing.T, h http.Handler) *httptest.Server {
 	t.Helper()
-	record := func(value map[string]any) {
-		t.Helper()
-		path := os.Getenv("MULTIRAG_MODEL_TEST_RESOURCES")
-		if path == "" {
-			return
-		}
-		afterf9ResourceLock.Lock()
-		defer afterf9ResourceLock.Unlock()
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer file.Close()
-		value["test"] = t.Name()
-		value["pid"] = os.Getpid()
-		value["process"] = os.Args[0]
-		if err := json.NewEncoder(file).Encode(value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	record(map[string]any{"action": "intent", "listen": "127.0.0.1:0"})
-	server := httptest.NewUnstartedServer(h)
-	address := server.Listener.Addr().String()
-	record(map[string]any{"action": "bound", "address": address})
-	server.Start()
-	t.Cleanup(func() {
-		server.CloseClientConnections()
-		server.Close()
-		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			t.Error("owned listener still reachable", address)
-		}
-		record(map[string]any{"action": "closed-readback", "address": address, "absent": err != nil})
-	})
-	return server
+	return providerTestServer(t, h)
 }

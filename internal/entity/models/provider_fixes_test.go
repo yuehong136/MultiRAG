@@ -57,16 +57,33 @@ func providerResourceRecord(t *testing.T, value map[string]any) {
 // proves the exact bound address no longer accepts connections.
 func providerTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	token := make([]byte, 16)
-	if _, err := rand.Read(token); err != nil {
-		t.Fatal(err)
+	var listener net.Listener
+	var run string
+	for attempt := 0; attempt < 10; attempt++ {
+		token := make([]byte, 16)
+		if _, err := rand.Read(token); err != nil {
+			t.Fatal(err)
+		}
+		run = hex.EncodeToString(token)
+		address := fmt.Sprintf("127.0.0.1:%d", 20000+(int(token[0])*256+int(token[1]))%30000)
+		providerResourceRecord(t, map[string]any{"action": "intent", "run_id": run, "kind": "http-listener", "address": address})
+		// macOS can allow this bind alongside an existing wildcard listener.
+		// Check before allocation so closing our socket cannot reveal an
+		// unrelated application and misreport it as an owned listener leak.
+		if conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond); err == nil {
+			conn.Close()
+			providerResourceRecord(t, map[string]any{"action": "occupied-borrowed", "run_id": run, "kind": "http-listener", "address": address})
+			continue
+		}
+		var err error
+		listener, err = net.Listen("tcp", address)
+		if err == nil {
+			break
+		}
+		providerResourceRecord(t, map[string]any{"action": "allocation-unavailable", "run_id": run, "kind": "http-listener", "address": address})
 	}
-	run := hex.EncodeToString(token)
-	address := fmt.Sprintf("127.0.0.1:%d", 20000+(int(token[0])*256+int(token[1]))%30000)
-	providerResourceRecord(t, map[string]any{"action": "intent", "run_id": run, "kind": "http-listener", "address": address})
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		t.Fatal(err)
+	if listener == nil {
+		t.Fatal("no unoccupied provider test address")
 	}
 	t.Cleanup(func() { listener.Close() })
 	addr := listener.Addr().String()
