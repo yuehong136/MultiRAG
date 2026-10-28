@@ -124,13 +124,14 @@ class MinioConfig(_Section):
 
 
 class S3LikeConfig(_Section):
-    """s3 / oss section（结构相同）。"""
+    """s3 / oss section；AWS_S3 使用 region_name，OSS 使用 region。"""
 
     access_key: str = ""
     secret_key: str = ""
     bucket: str = ""
     endpoint_url: str = ""
     region: str = ""
+    region_name: str = ""
     prefix_path: str = ""
     addressing_style: str = ""
     signature_version: str = ""

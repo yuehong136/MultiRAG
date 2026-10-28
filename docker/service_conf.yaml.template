@@ -64,7 +64,7 @@ opendal:
 s3:
   access_key: '${S3_ACCESS_KEY:-access_key}'
   secret_key: '${S3_SECRET_KEY:-secret_key}'
-  region: '${S3_REGION:-region}'
+  region_name: '${S3_REGION:-region}'
   endpoint_url: '${S3_ENDPOINT_URL:-endpoint_url}'
   bucket: '${S3_BUCKET:-bucket}'
   prefix_path: '${S3_PREFIX_PATH:-prefix_path}'

@@ -17,6 +17,9 @@
 
 ## 🐳 Docker Compose
 
+外部 S3 兼容对象存储（含 Tigris）的字段、桶路径和切换边界见
+[S3 兼容对象存储](../docs/s3-storage.md)。
+
 - **docker-compose.yml**  
   配置 MultiRAG 主服务，通过 `include` 引用 `docker-compose-base.yml` 获取基础设施服务。
 - **docker-compose-base.yml**  
