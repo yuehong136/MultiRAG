@@ -32,6 +32,14 @@ Microsoft connector domain clients、完整应用/JWT、隔离 SQL/对象及独�
 `test_metadata_config_contract.py` 的 consumer 用例使用同一固定 Web 的真实 schema 编辑转换与
 metadata domain client，校验数字 list、integer/time 与约束往返、非法值零 HTTP，以及
 外租户拒绝后的独立 SQL 读回。Node 通过无 IPC 的 tsx loader 运行，嵌套进程/临时缓存另行登记。
+`test_search_connector_web_consumers.py` 同样属于 `external_consumer`，需显式
+`--include-external-consumer`、固定且相关源码/config 干净的 `WEB_COMPLETION_CHECKOUT`。
+默认使用入库的 `tests/support/search_connector_web_consumer.ts` 调用实际 Web Search/Azure 客户端；
+`WEB_SEARCH_CONNECTOR_CONSUMER` 可覆盖为预先准备并记录 hash 的同合同脚本。
+Node、tsx、脚本或固定提交缺失直接失败；可用 `WEB_SEARCH_CONNECTOR_EVIDENCE` 指定自有证据目录。
+实际 Web fetch 进入本次 scratch Python 的 JWT/HTTP/SQL，逐个 mutation 在返回最终响应前通过独立连接读回提交：
+默认与数值模型选择、Azure 三模式 create/update、禁止 prune 和外租户拒绝；模型/检索边界受控。
+保存/编辑不构造 Azure SDK，不声明真实 Azure、浏览器 UI、常驻 worker 或生产行为。
 `test_infinity_raptor_extra.py` 覆盖新表与既有 chunk 表补列、`extra` 写入/更新、
 原生历史字段驱动的 RAPTOR 生成，以及替换失败后的独立读回与精确恢复。
 该用例使用受控摘要模型和真实 Infinity；不代表真实模型、SQL 任务提交或生产升级已验收。
@@ -91,6 +99,21 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 
 本批新增 Go 实际验收入口如下；它们在普通无服务 race 中仅登记为未验证的 opt-in。
 设置 `REQUIRE_SERVICES=1` 后缺失配置必须失败，不能以 skip 代替实际运行。
+
+after-67c3e73d 的 live 合同另需下列明确输入，均由当前 registered runner 和逐案资源 journal
+记录临时路径、SQL/Redis/对象身份、listener 及独立清理读回；只使用自有 loopback scratch 资源。
+
+| 测试 | 自有输入与边界 |
+|---|---|
+| `service.TestDocumentStopLive*`、`handler.TestDocumentStopHTTPRealSQLRedis`、`handler.TestDocumentGetByIDsLiveProjectionAndContext` | `MULTIRAG_AFTERFF_G_CONFIG` 中 PostgreSQL 为 TCP `127.0.0.1:5432`、`multirag_batch_g_*` 数据库、`usr_ai` schema，Redis 为 `127.0.0.1:6379` DB 1。真实行锁/事务/取消 nonce；handler 层直接 ServeHTTP 与受控 principal，不替代下一行实际注册路由鉴权。对象/索引为明确受控边界。 |
+| `router.TestDocumentStopAfter67Live` | `MULTIRAG_AFTER67_G_CONFIG` 固定同一 TCP 服务及数据库 `multirag_batch_g_after67_20261029`。实际 NewRouter/Setup、签名 JWT/API token、真实 SQL/Redis 与 TCP HTTP；不注入 principal。 |
+| `handler.TestAgentVersionsUploadScratchPostgres` | `MULTIRAG_AGENT_CASE_CONFIG` 提供 `admin_dsn`、相同 `pg_endpoint=127.0.0.1:5432` 和自有 MinIO 配置；逐次创建 `multirag_after67_a_*` scratch DB、bucket，验证 handler/SQL/真实对象 bytes、描述符和补偿。 |
+| `router.TestAgentAfter67RouterJWTAPI` | `MULTIRAG_AFTER67_A_ROUTER_CONFIG` 使用相同 admin DSN/endpoint/MinIO 形状，另需完整 40 位 `MULTIRAG_AFTER67_GO_SHA`。实际 Router.Setup 和签名 JWT/API/SQL 状态，创建 `multirag_after67_a_router_*` DB；正向角色、鉴权/业务拒绝、版本与上传及独立 SQL/MinIO 读回。透明对象 wrapper 仅登记精确 key 和注入一次已落盘故障，不替代真实对象存储。 |
+| `service.TestAfter67SearchScopeSQLHTTP` | `MULTIRAG_AFTER67_S_CONFIG` 固定 TCP `127.0.0.1:5432` 和独占 `multirag_batch_s_after67_20261029`。实际 SQL 授权/模型绑定、受控 provider HTTP；逐别禁用 owner User/Tenant 时零工厂构造、零 HTTP。metadata matcher 的受控引擎不能当作真实 native index 验收。 |
+
+这些名称在 `scripts/ci_checks.py` 显式分类；默认无配置的 skip 表示未运行。既有基线另有 14 个
+`DocumentDeleteLive` 未列入默认 skip 分类，本批未新增豁免或放宽 JSON 审计；本地定向通过不能据此
+声明默认完整 Go 或远程 ci-required 已通过。具体批次结果见 [本地交付记录](../docs/ragflow-porting/batch-after-67c3e73d.md)。
 
 | 测试 | 自有输入与边界 |
 |---|---|
