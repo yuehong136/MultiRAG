@@ -186,7 +186,7 @@ Go 模型目录支持 MinerU URL 异步解析、Replicate prediction/SSE、Xinfe
 TogetherAI 聊天与 reasoning，以及 302.AI、JieKouAI 和 CometAPI 的非流式 ASR/TTS。
 另支持 MinerU_Local 文件内容任务（provider `mineru_local`、`doc_parse`、租户自定义 URL，
 key 可选）、TogetherAI embedding、Xinference embedding/rerank、Novita rerank、
-N1N chat/embedding/rerank、GPUStack chat 和 Azure OpenAI deployment chat/embedding。
+N1N chat/embedding/rerank、GPUStack chat/embedding 和 Azure OpenAI deployment chat/embedding。
 Azure 实例 URL 包含 `/openai`，使用 `api-key` 和 `api-version=2024-10-21`；
 模型发现与连接检查查询 `/models`，返回可访问的基础/微调模型 ID。实际调用仍须另外声明
 租户的 deployment ID，不能把发现结果当成已部署实例。过滤、损坏响应及不合法流终态报错，

@@ -278,3 +278,8 @@ JSON 对象文本或逐行 `key=value`；`request_body` 接受 JSON 对象或对
 
 凭据、Drive 范围、时间窗口、真实文件内容和失败边界见
 [Teams 与 OneDrive 导入](teams-onedrive.md)。两类源暂不开放删除同步。
+
+## Microsoft Outlook
+
+显式邮箱、文件夹、时间窗口、正文与探测权限合同见 [Outlook 导入](outlook.md)。
+空邮箱数组不会扩大到整个租户；暂不开放删除同步，也不跨任务持久化 delta cursor。

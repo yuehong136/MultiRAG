@@ -120,7 +120,9 @@ ISOLATED_STORAGE_TESTS = frozenset(
 )
 # These exercise process-wide runtime seams and worker imports. Keep the full
 # application service stack and serial execution even if another group grows.
-SERIAL_STORAGE_TESTS = frozenset({"test_agent_file_authorization.py", "test_legacy_document_counters.py"})
+SERIAL_STORAGE_TESTS = frozenset(
+    {"test_agent_file_authorization.py", "test_legacy_document_counters.py", "test_outlook_api.py", "test_outlook_worker.py", "test_after53_dataset_create_web.py", "test_chunk_image_creation.py"}
+)
 PARALLEL_TESTS = (DATABASE_TESTS | ISOLATED_STORAGE_TESTS) - SERIAL_STORAGE_TESTS
 
 SUITES = ("core", "db", "system", "infinity", "consumer", "all", "eval", "eval-generation", "acceptance")
@@ -147,6 +149,7 @@ def suite_paths(suite: str) -> list[Path]:
             INTEGRATION / name
             for name in (
                 "test_after4776_web_contracts.py",
+                "test_after53_dataset_create_web.py",
                 "test_agent_draft_session_persistence.py",
                 "test_browser_web_consumer.py",
                 "test_app_list_web_consumers.py",
@@ -155,9 +158,11 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_dataset_embedding_http.py",
                 "test_connector_web_sync.py",
                 "test_connector_dashboard_consumer.py",
+                "test_chunk_image_creation.py",
                 "test_connector_rebuild_authorization.py",
                 "test_github_sync_defaults.py",
                 "test_model_document_web_consumers.py",
+                "test_outlook_api.py",
                 "test_provider_web_consumers.py",
                 "test_retrieval_rerank_authorization.py",
                 "test_document_file_http.py",
