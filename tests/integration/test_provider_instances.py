@@ -3,7 +3,7 @@
 import hashlib
 import importlib.util
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -106,6 +106,133 @@ def create(client: TestClient, name: str = "first", *, models: list[str] | None 
         assert len(items) == 1
         assert client.delete(f"/api/v1/providers/OpenAI/instances/{name}/models/{items[0]['id']}").status_code == 200
     return response.json()["data"]
+
+
+@pytest.mark.parametrize("suffix", ["", "@Builtin"])
+def test_builtin_default_is_readonly_without_selectable_placeholder(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
+    client, owner, engine, _module = http
+    name = "org/embedding"
+    monkeypatch.setenv("COMPOSE_PROFILES", "milvus,tei-cpu")
+    monkeypatch.setenv("TEI_MODEL", name)
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [*settings.FACTORY_LLM_INFOS, {"name": "Builtin", "llm": []}])
+    monkeypatch.setattr(settings, "EMBEDDING_CFG", {"api_key": "", "base_url": "http://tei.invalid", "max_tokens": 0})
+    with Session(engine) as db:
+        db.get(Tenant, owner).embd_id = name + suffix
+        db.commit()
+    response = client.get("/api/v1/models/default")
+    assert response.status_code == 200
+    embedding = next(row for row in response.json()["data"]["models"] if row["model_type"] == "embedding")
+    assert embedding == {"model_type": "embedding", "model_id": None, "reference": name + suffix, "model_provider": "Builtin", "model_instance": "default", "model_name": name}
+    assert client.get("/api/v1/models").json()["data"]["items"] == []
+    assert client.patch("/api/v1/models/default", json={"model_type": "embedding", "model_id": name}).status_code == 422
+    with Session(engine) as reader:
+        config = get_tenant_default_model_by_type(reader, owner, "embedding")
+        assert config["id"] is None and config["llm_name"] == name and config["llm_factory"] == "Builtin" and config["max_tokens"] == 0
+        assert reader.get(Tenant, owner).tenant_embd_id is None
+        assert reader.get(Tenant, owner).embd_id == name + suffix
+        assert all(reader.scalar(select(func.count()).select_from(model)) == 0 for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM))
+
+
+def test_search_stream_uses_numeric_default_and_rejects_foreign_override(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from api.db.services import dialog_service
+
+    client, owner, engine, _module = http
+    create(client)
+    default_id = client.get("/api/v1/models").json()["data"]["items"][0]["id"]
+    assert client.patch("/api/v1/models/default", json={"model_type": "chat", "model_id": default_id}).status_code == 200
+    selected = client.post("/api/v1/providers/OpenAI/instances/first/models", json={"model_name": "selected-chat", "model_types": ["chat"], "max_tokens": 0})
+    assert selected.status_code == 200
+    selected_id = selected.json()["data"]["id"]
+    foreign_owner = uuid4().hex
+    with Session(engine) as db:
+        db.add(tenant(foreign_owner))
+        db.flush()
+        foreign = TenantLLM(tenant_id=foreign_owner, llm_factory="OpenAI", llm_name="private", mdl_type="chat", api_key="foreign-key", max_tokens=0)
+        db.add(foreign)
+        db.commit()
+        foreign_id = foreign.id
+
+    from unittest.mock import AsyncMock
+
+    kb = SimpleNamespace(id="selected", name="Dataset", tenant_id="dataset-owner", parser_id="naive", tenant_embd_id=None, embd_id="embedding")
+    monkeypatch.setattr(dialog_service.KnowledgebaseService, "accessible", lambda *_a, **_k: True)
+    monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_by_ids", lambda *_: [kb])
+    monkeypatch.setattr(dialog_service.KnowledgebaseService, "ensure_same_embedding_model", lambda _: None)
+    monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_: {"mdl_type": "embedding"})
+    configurations: list[dict[str, Any]] = []
+
+    async def chunks(*_args: Any, **_kwargs: Any) -> AsyncIterator[str]:
+        yield "<think>reason</think>Visible answer"
+
+    def bundle(_db: Any, tenant_id: str, config: dict[str, Any]) -> Any:
+        if config["mdl_type"] == "embedding":
+            return object()
+        assert tenant_id == owner
+        configurations.append(config)
+        return SimpleNamespace(max_length=4096, async_chat_streamly_delta=chunks)
+
+    monkeypatch.setattr(dialog_service, "detached_bundle", bundle)
+    retrieve = AsyncMock(return_value={"chunks": [], "doc_aggs": []})
+    monkeypatch.setitem(settings.__dict__, "retriever", SimpleNamespace(retrieval=retrieve, insert_citations=lambda answer, *_a, **_k: (answer, [])))
+    monkeypatch.setattr(dialog_service, "label_question", lambda *_: {})
+    monkeypatch.setattr(dialog_service, "enrich_reference_metadata_async", AsyncMock())
+
+    async def exercise() -> None:
+        async_engine = create_async_engine(engine.url)
+        try:
+            for config, expected_id in [({}, default_id), ({"chat_id": None}, default_id), ({"chat_id": ""}, default_id), ({"chat_id": str(selected_id)}, selected_id)]:
+                async with AsyncSession(async_engine) as db:
+                    emitted = [item async for item in dialog_service.async_ask(db, "Question", ["selected"], owner, search_config={"doc_ids": [], **config})]
+                assert emitted[-1]["final"] is True and emitted[-1]["answer"].endswith("Visible answer")
+                assert configurations[-1]["id"] == expected_id and configurations[-1]["tenant_id"] == owner
+                assert retrieve.call_args.kwargs["doc_ids"] == []
+            assert configurations[-1]["max_tokens"] == 0
+            before = len(configurations), retrieve.await_count
+            async with AsyncSession(async_engine) as db:
+                with pytest.raises(LookupError):
+                    await anext(dialog_service.async_ask(db, "Question", ["selected"], owner, search_config={"chat_id": str(foreign_id)}))
+            assert (len(configurations), retrieve.await_count) == before
+        finally:
+            await async_engine.dispose()
+
+    asyncio.run(exercise())
+    from api.apps.restful_apis import search_api
+    from api.db.db_models import Search, User
+    from api.utils.api_utils import async_current_tenant_id
+
+    client.app.include_router(search_api.router, prefix="/api/v1")
+    client.app.dependency_overrides[async_current_tenant_id] = lambda: owner
+    search_id = uuid4().hex
+    saved_config = {"kb_ids": ["selected"], "doc_ids": [], "similarity_threshold": 0, "vector_similarity_weight": 0}
+    with Session(engine) as db:
+        db.add(User(id=owner, nickname="Search owner", email=f"{owner}@fixture.invalid", password="unused", status="1"))
+        db.add(Search(id=search_id, tenant_id=owner, created_by=owner, name="Saved default", search_config=saved_config, status="1"))
+        db.commit()
+    response = client.post(f"/api/v1/searches/{search_id}/completions", json={"question": "Question", "kb_ids": ["ignored"]})
+    frames = [json.loads(part[5:]) for part in response.text.split("\n\n") if part.startswith("data:")]
+    assert response.status_code == 200 and all(frame["code"] == 0 for frame in frames)
+    assert any(isinstance(frame["data"], dict) and frame["data"].get("final") for frame in frames)
+    assert configurations[-1]["id"] == default_id
+    assert retrieve.call_args.kwargs["doc_ids"] == []
+    assert retrieve.call_args.kwargs["kb_ids"] == ["selected"]
+    assert retrieve.call_args.kwargs["similarity_threshold"] == retrieve.call_args.kwargs["vector_similarity_weight"] == 0
+    before = len(configurations), retrieve.await_count
+    with Session(engine) as db:
+        db.get(Tenant, owner).tenant_llm_id = foreign_id
+        db.commit()
+    rejected = client.post(f"/api/v1/searches/{search_id}/completions", json={"question": "Question"})
+    assert any(json.loads(part[5:])["code"] == 500 for part in rejected.text.split("\n\n") if part.startswith("data:"))
+    assert (len(configurations), retrieve.await_count) == before
+    with Session(engine) as db:
+        db.get(Tenant, owner).tenant_llm_id = default_id
+        db.commit()
+    with Session(engine) as reader:
+        assert reader.get(Tenant, owner).tenant_llm_id == default_id
+        assert reader.get(TenantLLM, foreign_id).tenant_id == foreign_owner
+        assert reader.scalar(select(func.count()).select_from(TenantModel)) == 2
+        assert reader.get(Search, search_id).search_config == saved_config
 
 
 def test_instances_preserve_credentials_capabilities_defaults_and_secret_projection(http: tuple[Any, ...]) -> None:

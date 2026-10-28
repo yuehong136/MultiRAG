@@ -1,6 +1,7 @@
 """Tenant model lifecycle. Callers own the AsyncSession transaction."""
 
 import json
+import os
 from typing import Any
 from uuid import uuid4
 
@@ -377,6 +378,8 @@ async def set_default(db: AsyncSession, tenant_id: str, model_type: str, model_i
 
 
 async def defaults_for_owner(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
+    from api.db.services.tenant_llm_service import TenantLLMService
+
     owner = await db.get(Tenant, tenant_id)
     if owner is None:
         raise LookupError("Tenant not found")
@@ -386,14 +389,19 @@ async def defaults_for_owner(db: AsyncSession, tenant_id: str) -> dict[str, Any]
         identifier = getattr(owner, "tenant_" + field)
         reference = getattr(owner, field) or ""
         row = rows.get(identifier)
+        builtin_name = None
+        if row is None and identifier is None and capability == "embedding" and "tei-" in os.getenv("COMPOSE_PROFILES", ""):
+            name, provider = TenantLLMService.split_model_name_and_factory(reference)
+            if name and name == os.getenv("TEI_MODEL", "") and provider in {None, "Builtin"}:
+                builtin_name = name
         models.append(
             {
                 "model_type": capability,
                 "model_id": identifier,
                 "reference": str(identifier) if row else reference,
-                "model_provider": row[3].provider_name if row else "",
-                "model_instance": row[2].instance_name if row else "",
-                "model_name": row[1].model_name if row else reference,
+                "model_provider": row[3].provider_name if row else "Builtin" if builtin_name else "",
+                "model_instance": row[2].instance_name if row else "default" if builtin_name else "",
+                "model_name": row[1].model_name if row else builtin_name or reference,
             }
         )
     return {"models": models}

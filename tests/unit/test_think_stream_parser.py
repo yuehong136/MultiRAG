@@ -81,6 +81,24 @@ _CASES = {
         answer="",
         markers=("<think>",),
     ),
+    "close_only_at_eof": _ThinkCase(
+        chunks=("<think>reason", "</think>"),
+        reasoning="reason",
+        answer="",
+        markers=("<think>", "</think>"),
+    ),
+    "whitespace_tail_at_eof": _ThinkCase(
+        chunks=("<think>reason</think> \n",),
+        reasoning="reason",
+        answer=" \n",
+        markers=("<think>", "</think>"),
+    ),
+    "cumulative_close_with_answer": _ThinkCase(
+        chunks=("<think>reason", "<think>reason</think>Answer", "<think>reason</think>Answer tail"),
+        reasoning="reason",
+        answer="Answer tail",
+        markers=("<think>", "</think>"),
+    ),
 }
 
 
@@ -117,8 +135,9 @@ async def _collect(
     _CASES.values(),
     ids=_CASES.keys(),
 )
-async def test_shared_think_stream_parser_matches_provider_shapes(case: _ThinkCase) -> None:
-    reasoning, answer, markers = await _collect(_chunks(case.chunks))
+@pytest.mark.parametrize("min_tokens", [0, 16])
+async def test_shared_think_stream_parser_matches_provider_shapes(case: _ThinkCase, min_tokens: int) -> None:
+    reasoning, answer, markers = await _collect(_chunks(case.chunks), min_tokens=min_tokens)
 
     assert reasoning == case.reasoning
     assert answer == case.answer

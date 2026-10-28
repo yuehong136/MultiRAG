@@ -2182,6 +2182,13 @@ async def _stream_with_think_delta(
         state.pending_after_close = ""
 
 
+def _search_chat_model_reference(search_config: dict[str, Any], fallback: str | None) -> str | None:
+    reference = search_config.get("chat_id", fallback)
+    if reference is not None and not isinstance(reference, str):
+        raise ValueError("Search chat model must be a string reference")
+    return reference
+
+
 def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_name: str | None = None, search_config: dict[str, Any] | None = None) -> Generator[dict[str, Any], None, None]:
     if search_config is None:
         search_config = {}
@@ -2189,7 +2196,7 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
     doc_ids = search_config.get("doc_ids")
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
-    chat_llm_name = search_config.get("chat_id", chat_llm_name)
+    chat_llm_name = _search_chat_model_reference(search_config, chat_llm_name)
     rerank_id = search_config.get("rerank_id", "")
     meta_data_filter = search_config.get("meta_data_filter")
 
@@ -2209,7 +2216,7 @@ def ask(db: Session, question: str, kb_ids: list[str], tenant_id: str, chat_llm_
         kbs[0].embd_id if kbs else "",
     )
     embd_mdl = LLMBundle(db, embd_owner_tenant_id, embd_model_config)
-    chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name)
+    chat_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.CHAT.value, chat_llm_name) if chat_llm_name else get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT)
     chat_mdl = LLMBundle(db, tenant_id, chat_model_config)
     if rerank_id:
         rerank_model_config = get_model_config_by_type_and_name(db, tenant_id, LLMType.RERANK.value, rerank_id)
@@ -2297,7 +2304,7 @@ async def async_ask(
     doc_ids = search_config.get("doc_ids")
     rerank_mdl = None
     kb_ids = search_config.get("kb_ids", kb_ids)
-    chat_llm_name = search_config.get("chat_id", chat_llm_name)
+    chat_llm_name = _search_chat_model_reference(search_config, chat_llm_name)
     rerank_id = search_config.get("rerank_id", "")
     meta_data_filter = search_config.get("meta_data_filter")
 
@@ -2323,7 +2330,9 @@ async def async_ask(
         )
     )
     embd_mdl = await db.run_sync(lambda s: detached_bundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)
-    chat_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_llm_name))  # TODO(async-phase4)
+    chat_model_config = await db.run_sync(  # TODO(async-phase4)
+        lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_llm_name) if chat_llm_name else get_tenant_default_model_by_type(s, tenant_id, LLMType.CHAT)
+    )
     chat_mdl = await db.run_sync(lambda s: detached_bundle(s, tenant_id, chat_model_config))  # TODO(async-phase4)
     if rerank_id:
         rerank_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.RERANK.value, rerank_id))  # TODO(async-phase4)

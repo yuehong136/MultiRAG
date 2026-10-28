@@ -75,6 +75,7 @@ async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypa
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": "chat-m"})
+    monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "chat-m"})
     monkeypatch.setattr(tenant_model_service, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(dialog_service, "label_question", lambda s, q, kbs: [])
     monkeypatch.setattr(dialog_service, "chunks_format", lambda refs: refs["chunks"])

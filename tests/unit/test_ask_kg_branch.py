@@ -7,9 +7,12 @@ KG 分支按全库统一约定位置传参调用 KGSearch.retrieval
 """
 
 import types
+from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
+from api.db.joint_services import tenant_model_service
 from api.db.services import dialog_service
 from api.db.services.dialog_service import ask, async_ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -23,8 +26,8 @@ class _Sentinel(Exception):
         self.captured = captured
 
 
-class _FakeBundle:
-    def __init__(self, db, tenant_id, model_config, **kwargs):
+class _FakeBundle(dialog_service.LLMBundle):
+    def __init__(self, db: Session, tenant_id: str, model_config: dict[str, Any], **kwargs: Any) -> None:
         self.db = db
         self.max_length = 1024
 
@@ -41,11 +44,13 @@ def _fake_kb(parser_id="naive"):
 
 
 @pytest.fixture
-def ask_stubs(monkeypatch):
+def ask_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": "chat-m"})
+    monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "chat-m"})
     monkeypatch.setattr(dialog_service, "LLMBundle", _FakeBundle)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(dialog_service, "label_question", lambda s, q, kbs: [])
 
     async def _dealer_retrieval(**kwargs):
