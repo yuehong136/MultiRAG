@@ -222,3 +222,16 @@ def test_document_patch_preserves_presence_empty_config_and_pipeline_clear() -> 
     for fields in [{"chunk_method": None}, {"pipeline_id": None}, {"parser_config": None}, {"parser_id": "naive"}, {"doc_id": "doc"}, {"unknown": 1}]:
         with pytest.raises(ValidationError):
             DocumentUpdatePatch.model_validate(fields)
+
+
+@pytest.mark.parametrize("patch", [{"name": "new.pdf"}, {"name": "new.pdf", "enabled": False, "meta_fields": {"score": 0}}])
+def test_presentation_update_does_not_require_source(monkeypatch: pytest.MonkeyPatch, patch: dict[str, Any]) -> None:
+    def missing_source(*args: Any, **kwargs: Any) -> Any:
+        raise DocumentUpdateError("Document source is unavailable.", status=404)
+
+    monkeypatch.setattr(service, "_source", missing_source)
+    plan = prepare(document(), patch)
+    assert plan.values["name"] == "new.pdf" and plan.reset is False
+    for parser_patch in [{"parser_config": {}}, {"chunk_method": "naive"}, {"pipeline_id": ""}]:
+        with pytest.raises(DocumentUpdateError, match="Document source is unavailable"):
+            prepare(document(), {**patch, **parser_patch})

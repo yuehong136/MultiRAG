@@ -1629,3 +1629,169 @@ def test_source_rollback_recovery_releases_image_before_relocking_document(parse
         assert db.get(Task, task_id).chunk_ids == row["id"]
     env["parser_record"]["source_failure_retry"] = final
     save(env["parser_record_path"], env["parser_record"])
+
+
+@pytest.mark.parametrize("mixed_links", [False, True])
+def test_orphan_source_rename_updates_document_and_exact_index(parser_api: dict[str, Any], mixed_links: bool) -> None:
+    env = parser_api
+    manifest = env["parser_record"]["manifest"]
+    private_file, private_link, shared_link = uuid4().hex, uuid4().hex, uuid4().hex
+    if mixed_links:
+        manifest["files"].append(private_file)
+        manifest["links"].extend([private_link, shared_link])
+        env["register"]()
+        save(env["parser_record_path"], env["parser_record"])
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(File).where(File.id == manifest["files"][0]))
+        if mixed_links:
+            db.add(File(id=private_file, parent_id=env["ids"]["kb"], tenant_id=env["ids"]["owner"], created_by=env["ids"]["owner"], name="private.txt", location="a.txt", type="doc"))
+            db.add_all([File2Document(id=private_link, file_id=private_file, document_id=env["docs"]["a"]), File2Document(id=shared_link, file_id=manifest["files"][1], document_id=env["docs"]["a"])])
+        db.commit()
+    before = snapshot(env)
+    payload = {"name": "orphan-renamed.txt", "meta_fields": {"score": 0}}
+    result = patch(env, payload)["data"]
+    assert result["name"] == payload["name"] and result["meta_fields"] == {"score": 0}
+    after = snapshot(env)
+    with Session(env["engine"]) as db:
+        assert db.get(Document, env["docs"]["a"]).name == payload["name"]
+        assert db.get(File, manifest["files"][0]) is None
+        assert db.get(File, manifest["files"][1]).name == "b.txt"
+        if mixed_links:
+            assert db.get(File, private_file).name == payload["name"]
+    from core.nlp import rag_tokenizer
+
+    expected = copy.deepcopy(before["index"]["kb"]["rows"])
+    title = rag_tokenizer.tokenize(payload["name"])
+    for row in expected:
+        if row["doc_id"] == env["docs"]["a"]:
+            row.update(docnm_kwd=payload["name"], title_tks=title, title_sm_tks=rag_tokenizer.fine_grained_tokenize(title))
+    assert after["index"]["kb"]["rows"] == expected
+    for field in ["objects", "queue", "redis"]:
+        assert after[field] == before[field]
+    assert after["index"]["foreign"] == before["index"]["foreign"]
+    for model in [Task, File2Document, Knowledgebase]:
+        assert after["sql"][model.__tablename__] == before["sql"][model.__tablename__]
+    response = requests.get(env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents", params={"type": "filter"}, headers={"Authorization": "Bearer " + env["tokens"]["owner"]}, timeout=30)
+    assert response.status_code == 200 and response.json()["code"] == 0 and response.json()["data"]["total"] == 2
+    patch(env, {"name": "parser-rejected.txt", "parser_config": {}}, status=404)
+    assert snapshot(env) == after
+    env["parser_record"]["orphan_rename_readback"] = after
+    save(env["parser_record_path"], env["parser_record"])
+
+
+def test_orphan_source_parser_update_rejected_and_failed_rename_restored(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = parser_api
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(File).where(File.id == env["parser_record"]["manifest"]["files"][0]))
+        db.commit()
+    before = snapshot(env)
+    for parser_patch in [{"parser_config": {}}, {"chunk_method": "paper"}, {"pipeline_id": env["canvas"]}]:
+        body = patch(env, {"name": "rejected.txt", **parser_patch}, status=404)
+        assert body["code"] == "DOCUMENT_UPDATE_UNAVAILABLE"
+        assert snapshot(env) == before
+    original_insert = settings.docStoreConn.insert
+    attempted = False
+
+    def fail_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal attempted
+        if not attempted:
+            attempted = True
+            return ["Controlled orphan rename index failure"]
+        return original_insert(*args, **kwargs)
+
+    monkeypatch.setattr(settings.docStoreConn, "insert", fail_once)
+    failure = patch(env, {"name": "failed.txt", "meta_fields": {"score": 0}}, status=500)
+    assert attempted and failure["data"]["outcome"] == "unchanged"
+    assert snapshot(env) == before
+    env["parser_record"]["orphan_failed_rename_readback"] = snapshot(env)
+    save(env["parser_record_path"], env["parser_record"])
+
+
+def test_document_preview_missing_empty_and_storage_uncertainty(parser_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    env = parser_api
+    # Local preview requires a registered source folder; parser-only fixtures
+    # otherwise intentionally use a bare namespace without a folder File row.
+    env["parser_record"]["manifest"]["files"].append(env["ids"]["kb"])
+    env["register"]()
+    save(env["parser_record_path"], env["parser_record"])
+    with Session(env["engine"]) as db:
+        db.add(File(id=env["ids"]["kb"], parent_id=env["ids"]["owner"], tenant_id=env["ids"]["owner"], created_by=env["ids"]["owner"], name="Owned folder", type="folder", location=""))
+        db.execute(sa.update(Document).where(Document.id == env["docs"]["a"]).values(status="1"))
+        db.commit()
+    before = snapshot(env)
+    target = (env["ids"]["kb"], "a.txt")
+    original_reader = env["storage"].get_bytes
+    reads: list[tuple[str, str]] = []
+    value: bytes | None = None
+    failure = False
+
+    def controlled_read(namespace: str, key: str) -> bytes | None:
+        reads.append((namespace, key))
+        if (namespace, key) == target:
+            if failure:
+                raise OSError("private-storage-detail")
+            return value
+        return original_reader(namespace, key)
+
+    results = []
+    with monkeypatch.context() as boundary:
+        boundary.setattr(env["storage"], "get_bytes", controlled_read)
+        path = env["base"] + f"/api/v1/documents/{env['docs']['a']}/preview"
+        for value, failure, status in [(None, False, 404), (b"", False, 200), (None, True, 500)]:
+            response = requests.get(path, headers={"Authorization": "Bearer " + env["tokens"]["owner"]}, timeout=30)
+            assert response.status_code == status
+            assert response.headers["cache-control"] == "no-store"
+            if status == 200:
+                assert response.content == b""
+            else:
+                assert response.json() == {"code": 102 if status == 404 else 500, "message": "Document not found!" if status == 404 else "Document could not be read.", "data": None}
+            results.append({"status": response.status_code, "body": response.content})
+        for token in [None, env["tokens"]["other"]]:
+            reads.clear()
+            response = requests.get(path, headers={"Authorization": "Bearer " + token} if token else {}, timeout=30)
+            assert response.status_code == (401 if token is None else 404)
+            assert reads == []
+    assert snapshot(env) == before
+    env["parser_record"]["preview_missing_empty_uncertainty"] = results
+    save(env["parser_record_path"], env["parser_record"])
+
+
+def test_orphan_list_keeps_dataset_filters_counts_sort_and_pages(parser_api: dict[str, Any]) -> None:
+    env = parser_api
+    manifest = env["parser_record"]["manifest"]
+    link_id = uuid4().hex
+    manifest["links"].append(link_id)
+    env["register"]()
+    save(env["parser_record_path"], env["parser_record"])
+    with Session(env["engine"]) as db:
+        db.execute(sa.delete(File).where(File.id == manifest["files"][0]))
+        db.add(File2Document(id=link_id, file_id=manifest["files"][1], document_id=env["docs"]["a"]))
+        db.commit()
+    before = snapshot(env)
+    path = env["base"] + f"/api/v1/datasets/{env['ids']['kb']}/documents"
+    headers = {"Authorization": "Bearer " + env["tokens"]["owner"]}
+    observations = []
+    for descending, expected in [(False, ["a", "b"]), (True, ["b", "a"])]:
+        received = []
+        for page in [1, 2, 3]:
+            response = requests.get(path, headers=headers, params={"orderby": "name", "desc": str(descending).lower(), "page_size": 1, "page": page}, timeout=30)
+            body = response.json()
+            assert response.status_code == 200 and body["code"] == 0 and body["data"]["total"] == 2
+            assert len(body["data"]["docs"]) == (1 if page < 3 else 0)
+            received.extend(doc["id"] for doc in body["data"]["docs"])
+            observations.append({"descending": descending, "page": page, "body": body})
+        assert received == [env["docs"][key] for key in expected]
+    for params, expected in [({"keywords": "a.txt"}, ["a"]), ({"ids": env["docs"]["b"]}, ["b"]), ({"id": env["docs"]["foreign"]}, [])]:
+        response = requests.get(path, headers=headers, params=params, timeout=30)
+        body = response.json()
+        if expected:
+            assert response.status_code == 200 and body["code"] == 0 and body["data"]["total"] == 1
+            assert [doc["id"] for doc in body["data"]["docs"]] == [env["docs"][key] for key in expected]
+        else:
+            assert response.status_code == 200 and body == {"code": 102, "message": f"You don't own the document {env['docs']['foreign']}."}
+        observations.append({"params": params, "body": body})
+    foreign = requests.get(env["base"] + f"/api/v1/datasets/{env['ids']['foreign']}/documents", headers=headers, timeout=30)
+    assert foreign.status_code == 200 and foreign.json()["code"] == 102
+    assert snapshot(env) == before
+    env["parser_record"]["orphan_list_pages"] = observations
+    save(env["parser_record_path"], env["parser_record"])

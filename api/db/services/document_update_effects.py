@@ -188,7 +188,9 @@ def _other_image_references(kb: Knowledgebase, document_id: str | None, candidat
     return {row["img_id"] for row in rows}
 
 
-def prepare_update_effects(db: Session, doc: Document, kb: Knowledgebase, values: dict[str, Any], reset: bool, metadata: dict[str, Any] | None, principal_id: str) -> dict[str, Any]:
+def prepare_update_effects(
+    db: Session, doc: Document, kb: Knowledgebase, values: dict[str, Any], reset: bool, metadata: dict[str, Any] | None, principal_id: str, *, allow_missing_files: bool = False
+) -> dict[str, Any]:
     """Capture every affected byte and SQL row before the first mutation."""
     data: dict[str, Any] = {"files": [], "objects": [], "metadata": None, "index_values": {}, "change_status": "status" in values}
     if "name" in values:
@@ -196,6 +198,8 @@ def prepare_update_effects(db: Session, doc: Document, kb: Knowledgebase, values
         for identifier in sorted({link.file_id for link in links if link.file_id}):
             file = db.scalar(select(File).where(File.id == identifier).with_for_update())
             if file is None:
+                if allow_missing_files:
+                    continue
                 raise RuntimeError("Document source file is unavailable.")
             refs = list(db.scalars(select(File2Document.document_id).where(File2Document.file_id == identifier)))
             # A shared source retains its name for every other document.

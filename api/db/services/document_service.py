@@ -324,12 +324,11 @@ class DocumentService(CommonService):
             suffix = []
         fields = cls.get_cls_model_fields()
 
-        # 使用 select() 构建查询（SQLAlchemy 2.0 风格）
+        # Source File links are optional and may be shared; list each SQL
+        # Document once even while an orphan source is awaiting repair.
         base = (
             select(*fields, UserCanvas.title.label("pipeline_name"), User.nickname)
             .select_from(cls.model)
-            .join(File2Document, File2Document.document_id == cls.model.id)
-            .join(File, File.id == File2Document.file_id)
             .outerjoin(UserCanvas, cls.model.pipeline_id == UserCanvas.id)
             .outerjoin(User, cls.model.created_by == User.id)
             .where(cls.model.kb_id == kb_id)
@@ -445,41 +444,19 @@ class DocumentService(CommonService):
             filters.append(cls.model.suffix.in_(suffix))
 
         # 2) total：按文档去重计数，避免一文档多文件被重复计算
-        total_stmt = (
-            select(func.count(func.distinct(cls.model.id)))
-            .select_from(cls.model)
-            .join(File2Document, File2Document.document_id == cls.model.id)
-            .join(File, File.id == File2Document.file_id)
-            .where(*filters)
-        )
+        total_stmt = select(func.count(func.distinct(cls.model.id))).select_from(cls.model).where(*filters)
         total = db.execute(total_stmt).scalar()
 
         # 4) suffix 分布：同理对 Document.id 去重计数
-        suffix_stmt = (
-            select(cls.model.suffix, func.count(func.distinct(cls.model.id)).label("count"))
-            .select_from(cls.model)
-            .join(File2Document, File2Document.document_id == cls.model.id)
-            .join(File, File.id == File2Document.file_id)
-            .where(*filters)
-            .group_by(cls.model.suffix)
-        )
+        suffix_stmt = select(cls.model.suffix, func.count(func.distinct(cls.model.id)).label("count")).select_from(cls.model).where(*filters).group_by(cls.model.suffix)
         suffix_stats = db.execute(suffix_stmt).all()
 
         # 5) run_status 分布：同理
-        run_status_stmt = (
-            select(cls.model.run, func.count(func.distinct(cls.model.id)).label("count"))
-            .select_from(cls.model)
-            .join(File2Document, File2Document.document_id == cls.model.id)
-            .join(File, File.id == File2Document.file_id)
-            .where(*filters)
-            .group_by(cls.model.run)
-        )
+        run_status_stmt = select(cls.model.run, func.count(func.distinct(cls.model.id)).label("count")).select_from(cls.model).where(*filters).group_by(cls.model.run)
         run_status_stats = db.execute(run_status_stmt).all()
 
         # 6) metadata 分布：通过 DocMetadataService 获取
-        doc_ids_subquery = (
-            select(cls.model.id).select_from(cls.model).join(File2Document, File2Document.document_id == cls.model.id).join(File, File.id == File2Document.file_id).where(*filters).distinct()
-        )
+        doc_ids_subquery = select(cls.model.id).where(*filters)
         filtered_doc_ids = [r[0] for r in db.execute(doc_ids_subquery).all()]
         all_meta = {}
         if filtered_doc_ids:

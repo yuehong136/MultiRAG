@@ -36,9 +36,10 @@ def _authorize(db: Session, dataset_id: str, document_id: str, principal_id: str
 
 
 def _source(db: Session, doc: Document) -> tuple[str, str]:
-    file = db.scalar(select(File).join(File2Document, File2Document.file_id == File.id).where(File2Document.document_id == doc.id).order_by(File2Document.id).limit(1))
-    if file is None and db.scalar(select(File2Document.id).where(File2Document.document_id == doc.id).limit(1)) is not None:
+    missing = db.scalar(select(File2Document.id).outerjoin(File, File.id == File2Document.file_id).where(File2Document.document_id == doc.id, File.id.is_(None)).limit(1))
+    if missing is not None:
         raise DocumentUpdateError("Document source is unavailable.", status=404, code="DOCUMENT_UPDATE_UNAVAILABLE")
+    file = db.scalar(select(File).join(File2Document, File2Document.file_id == File.id).where(File2Document.document_id == doc.id).order_by(File2Document.id).limit(1))
     # Suffix/location are saved source metadata. Neither a renamed display name
     # nor the new name in this PATCH can reclassify the uploaded bytes.
     local_file = file is not None and (not file.source_type or file.source_type == FileSource.LOCAL)
@@ -77,7 +78,10 @@ def prepare_document_update(db: Session, doc: Document, kb: Knowledgebase, reque
             raise DocumentUpdateError("Document name already exists in this dataset.")
         if name != doc.name:
             values["name"] = name
-    file_type, filename = _source(db, doc)
+    # Presentation and metadata changes do not consume source bytes. An orphan
+    # optional File link must not prevent renaming the document itself.
+    source_required = bool({"chunk_method", "pipeline_id", "parser_config"} & provided.keys())
+    file_type, filename = _source(db, doc) if source_required else ("", "")
     try:
         plan = resolve_parser_mode(
             doc.parser_id, doc.pipeline_id, chunk_method=provided.get("chunk_method", UNSET), pipeline_id=provided.get("pipeline_id", UNSET), file_type=file_type, filename=filename
@@ -99,7 +103,7 @@ def prepare_document_update(db: Session, doc: Document, kb: Knowledgebase, reque
     if "enabled" in provided:
         values["status"] = str(int(provided["enabled"]))
     metadata = provided.get("meta_fields")
-    effects = prepare_update_effects(db, doc, kb, values, plan.reset_needed, metadata, principal_id) if lock else {}
+    effects = prepare_update_effects(db, doc, kb, values, plan.reset_needed, metadata, principal_id, allow_missing_files=not source_required) if lock else {}
     return DocumentMutationPlan(values, plan.reset_needed, effects)
 
 
