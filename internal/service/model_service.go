@@ -113,7 +113,20 @@ func (m *ModelProviderService) AddModelProvider(providerName, userID string) (co
 		ProviderName: providerName,
 		TenantID:     tenantID,
 	}
-	err = m.modelProviderDAO.Create(tenantModelProvider)
+	err = dao.DB.Transaction(func(tx *gorm.DB) error {
+		var tenant entity.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", tenantID, "1").Take(&tenant).Error; err != nil {
+			return err
+		}
+		var owner entity.UserTenant
+		if err := tx.Where("tenant_id = ? AND user_id = ? AND role = ? AND status = ?", tenantID, userID, "owner", "1").Take(&owner).Error; err != nil {
+			return err
+		}
+		return tx.Create(tenantModelProvider).Error
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return common.CodeNotFound, errors.New("active owned tenant unavailable")
+	}
 	if err != nil {
 		return common.CodeServerError, fmt.Errorf("fail to create model provider: %w", err)
 	}

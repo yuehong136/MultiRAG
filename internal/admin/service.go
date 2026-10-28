@@ -35,11 +35,14 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Service errors
@@ -293,7 +296,7 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 
 	// Registration and admin creation use the same current catalog and transaction.
 	if cfg != nil {
-		if err := service.InitializeTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
+		if err := service.InitializeAdminTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
 			rollbackTx()
 			return nil, fmt.Errorf("failed to initialize tenant models: %w", err)
 		}
@@ -397,31 +400,63 @@ func (s *Service) DeleteUser(username string) (*DeleteUserResult, error) {
 		return nil, fmt.Errorf("Cannot delete admin account")
 	}
 
-	// Get user-tenant relations
-	tenants, err := s.userTenantDAO.GetByUserIDAll(user.ID)
-	if err != nil {
-		common.Warn("failed to get user-tenant relations", zap.Error(err))
-	}
-
-	// Find owned tenant (role = "owner")
-	var ownedTenantID string
-	for _, t := range tenants {
-		if t.Role == "owner" {
-			ownedTenantID = t.TenantID
-			break
-		}
-	}
-
 	// Start transaction for cascade delete
 	tx := dao.DB.Begin()
 	if tx.Error != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", tx.Error)
 	}
+	defer func() { _ = tx.Rollback().Error }()
 
 	// Rollback helper function
 	rollbackTx := func() {
 		if rbErr := tx.Rollback(); rbErr.Error != nil {
 			common.Error("failed to rollback transaction", rbErr.Error)
+		}
+	}
+	// Fence deactivation/reactivation and modern provider creation with fresh
+	// ownership. Provider writers acquire Tenant before creating their rows;
+	// instance/model writers already acquire Provider/Instance respectively.
+	var lockedUser entity.User
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND email = ?", user.ID, username).Take(&lockedUser).Error; err != nil {
+		return nil, errors.New("user unavailable during deletion")
+	}
+	if lockedUser.IsActive {
+		return nil, fmt.Errorf("User '%s' is active and can't be deleted. Please deactivate the user first", username)
+	}
+	if lockedUser.IsSuperuser != nil && *lockedUser.IsSuperuser {
+		return nil, errors.New("Cannot delete admin account")
+	}
+	user = &lockedUser
+	var tenants []entity.UserTenant
+	if err := tx.Where("user_id = ?", user.ID).Find(&tenants).Error; err != nil {
+		return nil, errors.New("failed to read user tenant ownership")
+	}
+	var ownedTenantID string
+	ownedTenantIDs := []string{}
+	seenTenants := map[string]bool{}
+	for _, relation := range tenants {
+		if relation.Role != "owner" {
+			continue
+		}
+		if relation.TenantID == "" {
+			return nil, errors.New("invalid tenant ownership")
+		}
+		if ownedTenantID == "" {
+			ownedTenantID = relation.TenantID
+		}
+		if !seenTenants[relation.TenantID] {
+			ownedTenantIDs = append(ownedTenantIDs, relation.TenantID)
+			seenTenants[relation.TenantID] = true
+		}
+	}
+	sort.Strings(ownedTenantIDs)
+	if len(ownedTenantIDs) > 0 {
+		var lockedTenants []entity.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", ownedTenantIDs).Order("id").Find(&lockedTenants).Error; err != nil {
+			return nil, errors.New("failed to lock owned tenants")
+		}
+		if err := deleteOwnedTenantModelRows(tx, ownedTenantIDs); err != nil {
+			return nil, &adminModelCleanupError{cause: err}
 		}
 	}
 
@@ -558,6 +593,100 @@ func (s *Service) DeleteUser(username string) (*DeleteUserResult, error) {
 	common.Info("Delete user success with all related data", zap.String("username", username))
 
 	return result, nil
+}
+
+type adminModelCleanupError struct{ cause error }
+
+func (e *adminModelCleanupError) Error() string {
+	return "failed to delete owned tenant model configuration"
+}
+func (e *adminModelCleanupError) Unwrap() error { return e.cause }
+
+// Groups have no tenant column. Only mappings owned through the tenant's
+// providers are removed; a group shared with any surviving mapping is retained.
+func deleteOwnedTenantModelRows(tx *gorm.DB, tenantIDs []string) error {
+	if len(tenantIDs) == 0 {
+		return nil
+	}
+	var providers []entity.TenantModelProvider
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id IN ?", tenantIDs).Order("id").Find(&providers).Error; err != nil {
+		return err
+	}
+	providerIDs := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		providerIDs = append(providerIDs, provider.ID)
+	}
+	if len(providerIDs) == 0 {
+		return nil
+	}
+	var instances []entity.TenantModelInstance
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id IN ?", providerIDs).Order("id").Find(&instances).Error; err != nil {
+		return err
+	}
+	var models []entity.TenantModel
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id IN ?", providerIDs).Order("id").Find(&models).Error; err != nil {
+		return err
+	}
+	var groupIDs []string
+	if err := tx.Model(&entity.TenantModelGroupMapping{}).Where("provider_id IN ?", providerIDs).Distinct("group_id").Order("group_id").Pluck("group_id", &groupIDs).Error; err != nil {
+		return err
+	}
+	groupExists := map[string]bool{}
+	if len(groupIDs) > 0 {
+		var groups []entity.TenantModelGroup
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", groupIDs).Order("id").Find(&groups).Error; err != nil {
+			return err
+		}
+		for _, group := range groups {
+			groupExists[group.ID] = true
+		}
+	}
+	var mappings []entity.TenantModelGroupMapping
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id IN ?", providerIDs).Order("group_id,provider_id,instance_id,model_id").Find(&mappings).Error; err != nil {
+		return err
+	}
+	mappingDelete := tx.Where("provider_id IN ?", providerIDs).Delete(&entity.TenantModelGroupMapping{})
+	if mappingDelete.Error != nil {
+		return mappingDelete.Error
+	}
+	if mappingDelete.RowsAffected != int64(len(mappings)) {
+		return errors.New("owned model mapping deletion was not confirmed")
+	}
+	for _, id := range groupIDs {
+		var remaining int64
+		if err := tx.Model(&entity.TenantModelGroupMapping{}).Where("group_id = ?", id).Count(&remaining).Error; err != nil {
+			return err
+		}
+		if remaining == 0 {
+			deleted := tx.Where("id = ?", id).Delete(&entity.TenantModelGroup{})
+			if deleted.Error != nil {
+				return deleted.Error
+			}
+			if groupExists[id] && deleted.RowsAffected != 1 {
+				return errors.New("owned model group deletion was not confirmed")
+			}
+		}
+	}
+	for _, target := range []struct {
+		model any
+		count int
+	}{{&entity.TenantModel{}, len(models)}, {&entity.TenantModelInstance{}, len(instances)}} {
+		deleted := tx.Where("provider_id IN ?", providerIDs).Delete(target.model)
+		if deleted.Error != nil {
+			return deleted.Error
+		}
+		if deleted.RowsAffected != int64(target.count) {
+			return errors.New("owned model credential deletion was not confirmed")
+		}
+	}
+	deleted := tx.Where("id IN ? AND tenant_id IN ?", providerIDs, tenantIDs).Delete(&entity.TenantModelProvider{})
+	if deleted.Error != nil {
+		return deleted.Error
+	}
+	if deleted.RowsAffected != int64(len(providers)) {
+		return errors.New("owned model provider deletion was not confirmed")
+	}
+	return nil
 }
 
 // ChangePassword change user password

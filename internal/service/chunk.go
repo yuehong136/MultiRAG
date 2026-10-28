@@ -303,33 +303,11 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	labels := metadataSvc.LabelQuestion(modifiedQuestion, kbRecords)
 	common.Debug("LabelQuestion result", zap.Any("labels", labels))
 
-	// Determine embedding model
-	var embdID string
-	var tenantLLM *entity.TenantLLM
-	if kbRecords[0].TenantEmbdID != nil && *kbRecords[0].TenantEmbdID > 0 {
-		tenantLLM, embdID, err = dao.LookupTenantLLMByID(dao.NewTenantLLMDAO(), *kbRecords[0].TenantEmbdID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get embedding model by tenant_embd_id: %w", err)
-		}
-	} else if kbRecords[0].EmbdID != "" {
-		parts := strings.Split(kbRecords[0].EmbdID, "@")
-		if len(parts) == 2 && parts[1] != "" {
-			tenantLLM, embdID, err = dao.LookupTenantLLMByFactory(dao.NewTenantLLMDAO(), tenantIDs[0], parts[1], parts[0], entity.ModelTypeEmbedding)
-		} else {
-			tenantLLM, embdID, err = dao.LookupTenantLLMByName(dao.NewTenantLLMDAO(), tenantIDs[0], kbRecords[0].EmbdID, entity.ModelTypeEmbedding)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to get embedding model by embd_id: %w", err)
-		}
-	} else {
-		tenantLLM, err = dao.NewTenantLLMDAO().GetByTenantAndType(tenantIDs[0], entity.ModelTypeEmbedding)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get tenant default embedding model: %w", err)
-		}
-		if tenantLLM == nil || tenantLLM.LLMName == nil || *tenantLLM.LLMName == "" {
-			return nil, fmt.Errorf("no default embedding model found for tenant %s", tenantIDs[0])
-		}
-		embdID = fmt.Sprintf("%s@%s", *tenantLLM.LLMName, tenantLLM.LLMFactory)
+	// Canonical selectors and defaults belong to the active model resolver.
+	// Numeric legacy references still require an owned, active typed binding.
+	embdID, err := retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeEmbedding, kbRecords[0].TenantEmbdID, kbRecords[0].EmbdID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get embedding model selector: %w", err)
 	}
 
 	// Get embedding model for the tenant
@@ -351,7 +329,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid tenant_rerank_id: %w", parseErr)
 		}
-		_, rerankCompositeName, err = dao.LookupTenantLLMByID(dao.NewTenantLLMDAO(), tenantRerankIDInt)
+		rerankCompositeName, err = retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeRerank, &tenantRerankIDInt, "")
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
 		}
@@ -360,8 +338,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 			return nil, fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
 		}
 	} else if req.RerankID != nil && *req.RerankID != "" {
-		var err error
-		_, rerankCompositeName, err = dao.LookupTenantLLMByName(dao.NewTenantLLMDAO(), tenantIDs[0], *req.RerankID, entity.ModelTypeRerank)
+		rerankCompositeName, err = retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeRerank, nil, *req.RerankID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rerank model by rerank_id: %w", err)
 		}
@@ -423,6 +400,29 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 		Labels:  &labels,
 		Total:   int64(len(filteredChunks)),
 	}, nil
+}
+
+func retrievalModelSelector(ctx context.Context, tenantID string, modelType entity.ModelType, numericID *int64, selector string) (string, error) {
+	if numericID == nil && (selector == "" || strings.Contains(selector, "@")) {
+		return selector, nil
+	}
+	query := dao.DB.WithContext(ctx).Where("tenant_id = ? AND mdl_type = ? AND status = ?", tenantID, modelType, "1")
+	if numericID != nil {
+		if *numericID <= 0 {
+			return "", fmt.Errorf("model binding must be positive")
+		}
+		query = query.Where("id = ?", *numericID)
+	} else {
+		query = query.Where("llm_name = ?", selector)
+	}
+	var bindings []entity.TenantLLM
+	if err := query.Limit(2).Find(&bindings).Error; err != nil {
+		return "", err
+	}
+	if len(bindings) != 1 || bindings[0].LLMName == nil || *bindings[0].LLMName == "" || bindings[0].LLMFactory == "" {
+		return "", fmt.Errorf("active model binding unavailable")
+	}
+	return *bindings[0].LLMName + "@" + bindings[0].LLMFactory, nil
 }
 
 // Helper functions

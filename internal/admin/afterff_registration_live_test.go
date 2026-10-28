@@ -75,7 +75,18 @@ func TestAfterFFAdminRegistrationSQL(t *testing.T) {
 	successEmail, failedEmail := "gff-admin-ok-"+suffix+"@example.invalid", "gff-admin-fail-"+suffix+"@example.invalid"
 	callbackName := "afterff_admin_resources_" + suffix
 	rowIDs := map[string][]string{}
+	numericTenants := map[string]bool{}
 	if err := dao.DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "t_ai_tenant_llms" {
+			row, ok := tx.Statement.Dest.(*entity.TenantLLM)
+			if !ok || row.TenantID == "" || row.LLMName == nil {
+				tx.AddError(fmt.Errorf("numeric binding registration identity unavailable"))
+				return
+			}
+			journal.Event("reserve-numeric-model-natural-key-before-SQL", map[string]any{"table": tx.Statement.Table, "tenant_id": row.TenantID, "llm_factory": row.LLMFactory, "llm_name": *row.LLMName, "id": "database assigned"})
+			numericTenants[row.TenantID] = true
+			return
+		}
 		value := tx.Statement.ReflectValue
 		if value.Kind() == reflect.Pointer {
 			value = value.Elem()
@@ -109,6 +120,20 @@ func TestAfterFFAdminRegistrationSQL(t *testing.T) {
 	// remain in the journal and are independently confirmed absent as well.
 	t.Cleanup(func() {
 		for _, table := range []string{"tenant_model", "tenant_model_instance", "tenant_model_provider", "t_ai_tenant_llms", "t_ai_files", "t_ai_user_tenants", "t_ai_tenants", "t_ai_users"} {
+			if table == "t_ai_tenant_llms" {
+				for tenantID := range numericTenants {
+					if _, err := read.Exec("DELETE FROM t_ai_tenant_llms WHERE tenant_id=$1", tenantID); err != nil {
+						t.Error("owned numeric registration cleanup failed")
+					}
+					var remaining int
+					err := read.QueryRow("SELECT count(*) FROM t_ai_tenant_llms WHERE tenant_id=$1", tenantID).Scan(&remaining)
+					journal.Event("cleanup-numeric-registration-SQL-readback", map[string]any{"table": table, "tenant_id": tenantID, "remaining": remaining, "confirmed": err == nil && remaining == 0})
+					if err != nil || remaining != 0 {
+						t.Error("owned numeric registration rows remain")
+					}
+				}
+				continue
+			}
 			ids := rowIDs[table]
 			if len(ids) == 0 {
 				continue
@@ -229,8 +254,15 @@ func TestAfterFFAdminRegistrationSQL(t *testing.T) {
 	if err := read.QueryRow("SELECT count(*) FROM tenant_model WHERE provider_id=$1", providerID).Scan(&customCount); err != nil || customCount != 0 {
 		t.Fatal("zero-limit catalog model became a disabled or custom override")
 	}
-	if err := read.QueryRow("SELECT count(*) FROM t_ai_tenant_llms WHERE tenant_id=$1", userID).Scan(&legacyCount); err != nil || legacyCount != 0 {
-		t.Fatal("admin registration still depends on legacy model rows")
+	if err := read.QueryRow("SELECT count(*) FROM t_ai_tenant_llms WHERE tenant_id=$1", userID).Scan(&legacyCount); err != nil || legacyCount != 1 {
+		t.Fatal("admin registration numeric ASR binding missing")
+	}
+	var numericASRID, storedNumericASRID, numericMaxTokens int64
+	if err := read.QueryRow("SELECT id,max_tokens FROM t_ai_tenant_llms WHERE tenant_id=$1 AND llm_factory='Groq' AND llm_name='whisper-large-v3@default-asr' AND mdl_type='speech2text' AND status='1'", userID).Scan(&numericASRID, &numericMaxTokens); err != nil || numericASRID <= 0 || numericMaxTokens != 0 {
+		t.Fatal("numeric ASR binding lost its identity or legal zero token limit")
+	}
+	if err := read.QueryRow("SELECT tenant_asr_id FROM t_ai_tenants WHERE id=$1", userID).Scan(&storedNumericASRID); err != nil || storedNumericASRID != numericASRID {
+		t.Fatal("admin ASR numeric sidecar does not reference configured binding")
 	}
 	if err := read.QueryRow("SELECT count(*) FROM t_ai_files WHERE tenant_id=$1 AND created_by=$1 AND name='/' AND type='folder' AND id=parent_id", userID).Scan(&rootCount); err != nil || rootCount != 1 {
 		t.Fatal("admin registration root folder missing")
@@ -261,5 +293,5 @@ func TestAfterFFAdminRegistrationSQL(t *testing.T) {
 	if !foundZero || definition.MaxTokens != 0 {
 		t.Fatal("catalog-backed ASR zero limit changed")
 	}
-	journal.Event("admin-registration-contract-readback", map[string]any{"user_id": userID, "provider_id": providerID, "instance_id": instanceID, "selector": selector, "catalog_max_tokens": 0, "custom_overrides": customCount, "legacy_rows": legacyCount, "root_folders": rootCount, "owner_memberships": ownerCount, "late_failure_rolled_back": true, "provider_IO": false})
+	journal.Event("admin-registration-contract-readback", map[string]any{"user_id": userID, "provider_id": providerID, "instance_id": instanceID, "selector": selector, "catalog_max_tokens": 0, "custom_overrides": customCount, "numeric_rows": legacyCount, "numeric_asr_id": numericASRID, "numeric_max_tokens": numericMaxTokens, "root_folders": rootCount, "owner_memberships": ownerCount, "late_failure_rolled_back": true, "provider_IO": false})
 }

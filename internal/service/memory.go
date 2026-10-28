@@ -26,6 +26,9 @@ import (
 
 	"multirag/internal/dao"
 	"multirag/internal/entity"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -69,6 +72,8 @@ const (
 
 // validForgettingPolicies defines which forgetting policies are valid
 var ErrMemoryAccessDenied = errors.New("no authorization to update memory")
+
+var errMemoryModelUnavailable = errors.New("memory models must be active chat and embedding models owned by the tenant")
 
 var validForgettingPolicies = map[ForgettingPolicy]bool{
 	ForgettingPolicyFIFO: true,
@@ -293,23 +298,14 @@ type ListMemoryResponse struct {
 //   - *CreateMemoryResponse: The created memory details
 //   - error: Error if validation fails or creation fails
 func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) (*CreateMemoryResponse, error) {
-	// Ensure tenant model IDs are populated for LLM and embedding model parameters
-	// This automatically fills tenant_llm_id and tenant_embd_id based on llm_id and embd_id
-	tenantLLMService := NewTenantLLMService()
-	params := map[string]interface{}{
-		"llm_id":  req.LLMID,
-		"embd_id": req.EmbdID,
+	if req == nil {
+		return nil, errors.New("memory creation request is required")
 	}
-	params = tenantLLMService.EnsureTenantModelIDForParams(tenantID, params)
-
-	// Update request with tenant model IDs from the processed params
-	if tenantLLMID, ok := params["tenant_llm_id"].(int64); ok {
-		tenantLLMIDStr := strconv.FormatInt(tenantLLMID, 10)
-		req.TenantLLMID = &tenantLLMIDStr
+	if tenantID == "" || tenantID != strings.TrimSpace(tenantID) {
+		return nil, errMemoryModelUnavailable
 	}
-	if tenantEmbdID, ok := params["tenant_embd_id"].(int64); ok {
-		tenantEmbdIDStr := strconv.FormatInt(tenantEmbdID, 10)
-		req.TenantEmbdID = &tenantEmbdIDStr
+	if dao.DB == nil {
+		return nil, errors.New("memory model storage is unavailable")
 	}
 
 	if err := common.ValidateName(req.Name); err != nil {
@@ -363,18 +359,24 @@ func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) 
 		SystemPrompt:     &systemPrompt,
 	}
 
-	// Convert tenant model IDs from string to int64 for database
-	if req.TenantEmbdID != nil {
-		if embdID, err := strconv.ParseInt(*req.TenantEmbdID, 10, 64); err == nil {
-			memory.TenantEmbdID = &embdID
+	// Keep each binding active and owned until the memory INSERT commits. The
+	// generic selector helper uses zero for unresolved models; zero is never a
+	// usable binding for this consumer.
+	if err := dao.DB.Transaction(func(tx *gorm.DB) error {
+		llmID, err := memoryTenantModelID(tx, tenantID, req.LLMID, req.TenantLLMID, entity.ModelTypeChat)
+		if err != nil {
+			return err
 		}
-	}
-	if req.TenantLLMID != nil {
-		if llmID, err := strconv.ParseInt(*req.TenantLLMID, 10, 64); err == nil {
-			memory.TenantLLMID = &llmID
+		embdID, err := memoryTenantModelID(tx, tenantID, req.EmbdID, req.TenantEmbdID, entity.ModelTypeEmbedding)
+		if err != nil {
+			return err
 		}
-	}
-	if err := s.memoryDAO.Create(memory); err != nil {
+		memory.TenantLLMID, memory.TenantEmbdID = &llmID, &embdID
+		return tx.Create(memory).Error
+	}); err != nil {
+		if errors.Is(err, errMemoryModelUnavailable) {
+			return nil, errMemoryModelUnavailable
+		}
 		return nil, errors.New("could not create new memory")
 	}
 
@@ -384,6 +386,62 @@ func (s *MemoryService) CreateMemory(tenantID string, req *CreateMemoryRequest) 
 	}
 
 	return formatRetDataFromMemory(createdMemory), nil
+}
+
+// memoryTenantModelID resolves the legacy numeric model inventory used by
+// memories. New provider-instance selectors are not silently converted to zero.
+func memoryTenantModelID(tx *gorm.DB, tenantID, selector string, explicitID *string, modelType entity.ModelType) (int64, error) {
+	if selector == "" || selector != strings.TrimSpace(selector) || len(selector) > 128 {
+		return 0, errMemoryModelUnavailable
+	}
+	query := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("tenant_id = ? AND status = ? AND mdl_type = ? AND id > 0", tenantID, "1", string(modelType))
+	selectorID, numericSelector := int64(0), true
+	for i, character := range selector {
+		if i == 0 && (character == '+' || character == '-') {
+			continue
+		}
+		if character < '0' || character > '9' {
+			numericSelector = false
+			break
+		}
+	}
+	if numericSelector {
+		var err error
+		selectorID, err = strconv.ParseInt(selector, 10, 64)
+		if err != nil || selectorID <= 0 {
+			return 0, errMemoryModelUnavailable
+		}
+	}
+	if explicitID != nil {
+		if *explicitID == "" || *explicitID != strings.TrimSpace(*explicitID) {
+			return 0, errMemoryModelUnavailable
+		}
+		id, err := strconv.ParseInt(*explicitID, 10, 64)
+		if err != nil || id <= 0 || numericSelector && selectorID != id {
+			return 0, errMemoryModelUnavailable
+		}
+		query = query.Where("id = ?", id)
+	} else if numericSelector {
+		query = query.Where("id = ?", selectorID)
+	}
+	if !numericSelector {
+		name, factory := NewTenantLLMService().SplitModelNameAndFactory(selector)
+		if name == "" {
+			return 0, errMemoryModelUnavailable
+		}
+		query = query.Where("llm_name = ?", name)
+		if factory != "" {
+			query = query.Where("llm_factory = ?", factory)
+		}
+	}
+	var rows []entity.TenantLLM
+	if err := query.Order("id").Limit(2).Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 || rows[0].ID <= 0 || rows[0].LLMName == nil || strings.TrimSpace(*rows[0].LLMName) == "" {
+		return 0, errMemoryModelUnavailable
+	}
+	return rows[0].ID, nil
 }
 
 // UpdateMemory updates an existing memory with the provided fields
