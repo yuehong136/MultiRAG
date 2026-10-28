@@ -191,6 +191,12 @@ def required_services(paths: list[Path]) -> set[str]:
         if path.name == "test_tts_cache.py":
             required.update(("postgresql", "redis"))
             continue
+        if path.name == "test_worker_index_dimension.py":
+            required.update(("postgresql", "redis", "milvus"))
+            continue
+        if path.name == "test_completion_generation_params.py":
+            required.update(("postgresql", "redis", "minio", "milvus"))
+            continue
         if path.name == "test_retrieval_manual_filter_iteration.py":
             required.update(("postgresql", "elasticsearch"))
             continue
