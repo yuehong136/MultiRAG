@@ -550,7 +550,10 @@ def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
     db_stub = AsyncSession()
 
     async def fake_async_chat(dialog_arg, messages_arg, db_arg, stream=True, **kwargs):
-        assert dialog_arg is dialog
+        assert dialog_arg is not dialog
+        assert all(getattr(dialog_arg, key) == value for key, value in dialog.to_dict().items())
+        assert dialog_arg.llm_setting is not dialog.llm_setting
+        dialog_arg.llm_setting["max_tokens"] = 0
         assert db_arg is db_stub
         assert stream is False
         assert messages_arg == [{"role": "user", "content": "hi", "id": "msg-1"}]
@@ -583,20 +586,23 @@ def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
     assert body["data"]["chat_id"] == "chat-1"
     assert body["data"]["id"] == "msg-1"
     assert updates
+    assert dialog.llm_setting == {}
     assert updates[0]["message"][-1]["content"] == "ok"
 
 
 def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
+    monkeypatch.setattr(chat_api.UserTenantService, "get_membership", lambda *_a, **_kw: Obj(role="owner"))
     """直调式：AsyncSession 化后 db 走 run_sync facade，桩收到的是 facade 同步 session。"""
     captured = {}
     monkeypatch.setattr(
         chat_api.SearchService,
         "get_detail",
         lambda _db, search_id: {
+            "tenant_id": "tenant-1",
             "search_config": {
                 "chat_id": f"{search_id}-model",
                 "llm_setting": {"temperature": 0.4, "parameter": {"ignored": True}},
-            }
+            },
         },
     )
 

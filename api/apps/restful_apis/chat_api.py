@@ -929,30 +929,56 @@ async def recommendation(
     request: RelatedQuestionsRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_current_tenant_id),
-):
+) -> Response:
     try:
         req = request.model_dump()
         question = req.get("question")
-        if not question:
+        if not isinstance(question, str) or not question.strip():
             return _error("`question` is required.")
 
         search_id = req.get("search_id", "")
-        search_config = {}
+        if not isinstance(search_id, str) or search_id != search_id.strip():
+            return _error("`search_id` must be a search identifier.")
+        model_tenant_id = tenant_id
+        search_config: dict[str, Any] = {}
         if search_id:
-            if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
-                search_config = search_app.get("search_config", {})
+
+            def search_configuration(s: Session) -> tuple[str, dict[str, Any]]:
+                search_app = SearchService.get_detail(s, search_id)
+                owner_id = search_app.get("tenant_id") if search_app else None
+                if not isinstance(owner_id, str) or not owner_id:
+                    raise PermissionError("No authorization for the search app.")
+                membership = UserTenantService.get_membership(s, tenant_id=owner_id, user_id=tenant_id)
+                if membership is None or not UserTenantService.can_access_tenant_resources(membership.role):
+                    raise PermissionError("No authorization for the search app.")
+                config = search_app.get("search_config", {})
+                if not isinstance(config, dict):
+                    raise ValueError("Invalid search configuration.")
+                return owner_id, deepcopy(config)
+
+            model_tenant_id, search_config = await db.run_sync(search_configuration)  # TODO(async-phase4)
 
         chat_id = search_config.get("chat_id", "")
+        if isinstance(chat_id, int) and not isinstance(chat_id, bool) and chat_id > 0:
+            chat_id = str(chat_id)
+        if not isinstance(chat_id, str) or chat_id != chat_id.strip():
+            return _error("Invalid search model reference.")
+        gen_conf = deepcopy(search_config.get("llm_setting", {"temperature": 0.9}))
+        if not isinstance(gen_conf, dict):
+            return _error("Invalid search generation configuration.")
+        gen_conf.pop("parameter", None)
         if chat_id:
-            chat_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, tenant_id, LLMType.CHAT.value, chat_id))  # TODO(async-phase4)
+            chat_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, model_tenant_id, LLMType.CHAT.value, chat_id))  # TODO(async-phase4)
         else:
-            chat_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, tenant_id, LLMType.CHAT))  # TODO(async-phase4)
-        chat_mdl = await db.run_sync(lambda s: LLMBundle(s, tenant_id, chat_config))  # TODO(async-phase4)
-        chat_mdl.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
+            chat_config = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, model_tenant_id, LLMType.CHAT))  # TODO(async-phase4)
 
-        gen_conf = search_config.get("llm_setting", {"temperature": 0.9})
-        if "parameter" in gen_conf:
-            del gen_conf["parameter"]
+        def build_bundle(s: Session) -> LLMBundle:
+            bundle = LLMBundle(s, model_tenant_id, chat_config)
+            bundle.db = None  # run_sync 的 facade 不得逸出 greenlet（AGENTS.md 规约）
+            return bundle
+
+        chat_mdl = await db.run_sync(build_bundle)  # TODO(async-phase4)
+
         prompt = load_prompt("related_question")
         ans = await chat_mdl.async_chat(
             prompt,
@@ -964,8 +990,10 @@ async def recommendation(
             ],
             gen_conf,
         )
-        related_terms = [re.sub(r"^[0-9]\. ", "", item) for item in ans.split("\n") if re.match(r"^[0-9]\. ", item)]
+        related_terms = [match.group(1).strip() for item in ans.splitlines() if (match := re.match(r"^\s*\d+\.\s+(.+?)\s*$", item)) and match.group(1).strip()]
         return get_result(data=related_terms)
+    except PermissionError as error:
+        return _error(str(error), RetCode.AUTHENTICATION_ERROR)
     except Exception as e:
         logger.exception(e)
         return _error("Internal server error")
