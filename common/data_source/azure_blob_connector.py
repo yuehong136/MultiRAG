@@ -212,7 +212,6 @@ class AzureBlobConnector(LoadConnector, PollConnector, FingerprintConnector, Che
                         raise ConnectorValidationError("Azure Blob returned a repeated continuation marker")
                     seen_tokens.add(token)
                 for props in page:
-                    self.check_active()
                     name = props.name
                     if not isinstance(name, str) or not name.startswith(self.prefix):
                         raise ConnectorValidationError("Azure Blob returned an out-of-scope name")

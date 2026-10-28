@@ -310,3 +310,15 @@ def test_repeated_marker_on_empty_pages_is_not_a_complete_inventory(monkeypatch:
     with pytest.raises(ConnectorValidationError, match="inventory failed"):
         list(connector.load_from_state())
     assert len(transport.requests) == 2 and transport.closed
+
+
+def test_inventory_cancellation_queries_are_bounded_by_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = BlobSourceTransport({f"docs/{number}.txt": BlobVersion(b"text") for number in range(100)}, page_size=50)
+    connector, transport, _ = connect(monkeypatch, transport=transport)
+    guards: list[None] = []
+    # The worker guard checks persistent SQL cancellation. Inventory polling
+    # must scale with network pages rather than incur one DB round trip per key.
+    connector.check_active = lambda: guards.append(None)
+    with connector.session():
+        assert len(list(connector.list_keys())) == 100
+    assert len(guards) <= 3 and transport.closed
