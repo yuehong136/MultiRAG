@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
+from api.apps.restful_apis._generation_params import GenerationParameters, GenerationValidationRoute, merge_generation_config, pop_generation_config
 from api.apps.services.app_list_scope import resolve_list_owner_ids
 from api.db.db_models import Dialog, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
@@ -49,7 +50,7 @@ from common.misc_utils import get_uuid
 from core.prompts.generator import chunks_format
 from core.prompts.template import load_prompt
 
-router = APIRouter()
+router = APIRouter(route_class=GenerationValidationRoute)
 logger = logging.getLogger(__name__)
 
 
@@ -121,7 +122,7 @@ class MindmapRequest(BaseModel):
     search_id: str | None = ""
 
 
-class SessionCompletionRequest(BaseModel):
+class SessionCompletionRequest(GenerationParameters):
     reference_metadata: ReferenceMetadata | None = None
     model_config = ConfigDict(extra="allow")
 
@@ -1290,11 +1291,7 @@ async def session_completion(
     chat_model_id = req.pop("llm_id", "")
     stream_mode = req.pop("stream", True)
 
-    chat_model_config = {}
-    for model_config in ["temperature", "top_p", "frequency_penalty", "presence_penalty", "max_tokens"]:
-        config = req.get(model_config)
-        if config is not None:
-            chat_model_config[model_config] = config
+    chat_model_config = pop_generation_config(req)
 
     if session_id and not chat_id:
         return _error("`chat_id` is required when `session_id` is provided.")
@@ -1338,8 +1335,10 @@ async def session_completion(
                 if message.get("files"):
                     message["files"] = await FileService.resolve_runtime_uploads(tenant_id, [file["id"] for file in message["files"]])
             dialog = await db.run_sync(lambda s: _build_default_completion_dialog(s, tenant_id, chat_model_id))  # TODO(async-phase4)
-            dialog.llm_setting = chat_model_config
 
+        # Downstream generation may adjust JSON settings (for example token caps).
+        # Keep both those edits and request overrides outside the persisted ORM.
+        dialog = Dialog(**deepcopy(_model_to_dict(dialog)))
         if chat_model_id:
             try:
                 override_model_types = await db.run_sync(lambda s: resolve_model_type(s, dialog.tenant_id, chat_model_id))  # TODO(async-phase4)
@@ -1347,15 +1346,13 @@ async def session_completion(
                 override_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, dialog.tenant_id, model_type, chat_model_id))  # TODO(async-phase4)
             except Exception:
                 return _error(f"Cannot use specified model {chat_model_id}.")
-            dialog = Dialog(**deepcopy(_model_to_dict(dialog)))
             dialog.llm_id = chat_model_id
             dialog.tenant_llm_id = override_model_config.get("id")
-            dialog.llm_setting = chat_model_config
         elif not dialog.llm_id:
             default_model = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT.value))  # TODO(async-phase4)
-            dialog = Dialog(**deepcopy(_model_to_dict(dialog)))
             dialog.llm_id = f"{default_model['llm_name']}@{default_model['llm_factory']}"
             dialog.tenant_llm_id = default_model.get("id")
+        merge_generation_config(dialog, chat_model_config)
 
         def _format_answer(ans: dict[str, Any]) -> dict[str, Any]:
             formatted = structure_answer(conv, ans, message_id, session_id)

@@ -11,9 +11,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, StrictBool
+from pydantic import StrictBool
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.apps.restful_apis._generation_params import GenerationParameters, GenerationValidationRoute, extract_generation_config, merge_generation_config
 from api.db.db_models import get_async_db
 from api.db.services.dialog_service import DialogService, async_chat
 from api.db.services.doc_metadata_service import DocMetadataService
@@ -26,11 +27,11 @@ from common.metadata_utils import convert_conditions, meta_filter
 from common.token_utils import num_tokens_from_string
 from core.prompts.generator import chunks_format
 
-router = APIRouter()
+router = APIRouter(route_class=GenerationValidationRoute)
 logger = logging.getLogger(__name__)
 
 
-class OpenAIChatCompletionRequest(BaseModel):
+class OpenAIChatCompletionRequest(GenerationParameters):
     model: str
     messages: Any
     stream: StrictBool | None = None
@@ -201,7 +202,7 @@ async def openai_chat_completions(
     dia_list = await db.run_sync(lambda s: DialogService.query(s, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value))  # TODO(async-phase4)
     if not dia_list:
         return get_error_data_result(retmsg=f"You don't own the chat {chat_id}")
-    dia = dia_list[0]
+    dia = copy.deepcopy(dia_list[0])
     requested_model = req["model"]
     if requested_model == "model":
         requested_model = dia.llm_id or "model"
@@ -209,10 +210,10 @@ async def openai_chat_completions(
         tenant_llm_id = await db.run_sync(lambda s: getattr(TenantLLMService.get_api_key(s, tenant_id, requested_model, "chat"), "id", None))  # TODO(async-phase4)
         if tenant_llm_id is None:
             return _argument_error(f"`model` {requested_model} doesn't exist")
-        dia = copy.deepcopy(dia)
         dia.llm_id = requested_model
         if hasattr(dia, "tenant_llm_id"):
             dia.tenant_llm_id = tenant_llm_id
+    merge_generation_config(dia, extract_generation_config(req))
 
     doc_ids_str: str | None = None
     if metadata_condition:
