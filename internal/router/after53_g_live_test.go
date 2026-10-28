@@ -258,8 +258,7 @@ func TestAfter53GHTTPAndSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewUnstartedServer(app)
-	httpServer.Listener = listener
+	httpServer := &httptest.Server{Listener: listener, Config: &http.Server{Handler: app}}
 	httpServer.Start()
 	t.Cleanup(func() {
 		httpServer.Close()
