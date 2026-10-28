@@ -207,8 +207,8 @@ def test_actual_web_provider_instances_and_foreign_denials(
     descriptor_path = Path(os.environ.get("I_WEB_ACCEPTANCE_DESCRIPTOR_PATH", str(private / "descriptor.json")))
     files = [private / "owner.token", private / "foreign.token", private / "provider.keys.json", private / "readback.json", descriptor_path]
     keys = [
-        json.dumps({"api_key": "controlled-provider-one", "is_tools": True, "opaque": {"instance": 1}}),
-        json.dumps({"api_key": "controlled-provider-two", "is_tools": False, "opaque": {"instance": 2}}),
+        json.dumps({"api_key": "controlled-provider-one", "is_tools": True, "opaque": {"instance": 1}}, separators=(",", ":")),
+        json.dumps({"api_key": "controlled-provider-two", "is_tools": False, "opaque": {"instance": 2}}, separators=(",", ":")),
     ]
     descriptor = {
         "origin": env["base"],
