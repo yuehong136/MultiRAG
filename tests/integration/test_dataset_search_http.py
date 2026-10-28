@@ -19,6 +19,7 @@ from pymilvus import DataType
 from sqlalchemy.orm import Session
 
 from api.apps.services import dataset_search_service
+from api.apps.services.dataset_search_service import _bundle as build_search_bundle
 from api.db.db_models import APIToken, Document, DocumentMetadata, Knowledgebase, Search, TenantLLM, UserTenant
 from common import settings
 from common.constants import RetCode
@@ -1137,3 +1138,175 @@ def test_http_document_scope_presence_survives_all_metadata_modes(search_api: di
                 assert body["data"]["total"] == len(expected), body
                 evidence[f"{mode}-{method}-{documents}"] = body["data"]
     env["record_path"].with_suffix(".empty-scope-readback.json").write_text(json.dumps(evidence))
+
+
+def test_http_embedding_provider_errors_cross_real_bundle_without_writes(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real HTTP/auth/SQL/model resolution/provider HTTP; only provider output is controlled."""
+    import errno
+    import hashlib
+    import io
+    import socket
+    import threading
+    from contextlib import ExitStack
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from minio import Minio
+
+    from api.db.services.llm_service import LLMBundle
+    from common.config_utils import CONFIGS
+    from core.llm.embedding import SILICONFLOWEmbed
+    from tests.support.runtime_upload import read_object
+
+    env = search_api
+    journal = env["journal"]
+    secret = "fixture-provider-private-response"
+    provider_status = [429]
+    calls: list[dict[str, Any]] = []
+    bundles: list[LLMBundle] = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append({"path": self.path, "body": body, "status": provider_status[0]})
+            encoded = json.dumps({"error": {"message": secret, "api_key": "fixture-key"}}).encode()
+            self.send_response(provider_status[0])
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+    async def real_bundle(*args: Any, **kwargs: Any) -> LLMBundle:
+        bundle = await build_search_bundle(*args, **kwargs)
+        assert isinstance(bundle, LLMBundle) and type(bundle.mdl) is SILICONFLOWEmbed
+        bundles.append(bundle)
+        return bundle
+
+    def sql_snapshot() -> dict[str, list[Any]]:
+        with Session(env["engine"]) as db:
+            return {
+                model.__tablename__: list(db.execute(sa.select(model.__table__).order_by(model.id))) for model in (TenantLLM, Knowledgebase, Document, DocumentMetadata, Search, APIToken, UserTenant)
+            }
+
+    def index_snapshot() -> dict[str, list[dict[str, Any]]]:
+        return {
+            key: sorted(
+                env["reader"].query(collection, filter="pk != ''", output_fields=["pk", "doc_id", "available_int", "content_with_weight"], consistency_level="Strong"), key=lambda row: row["pk"]
+            )
+            for key, collection in env["collections"].items()
+        }
+
+    with ExitStack() as cleanup:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Provider, bind_and_activate=False)
+        cleanup.callback(server.server_close)
+        for attempt in range(20):
+            port = 20000 + int(uuid4().hex[:8], 16) % 30000
+            journal.event("reserve-embedding-provider-listener", host="127.0.0.1", port=port, attempt=attempt)
+            server.server_address = ("127.0.0.1", port)
+            try:
+                server.server_bind()
+                break
+            except OSError as exc:
+                if exc.errno != errno.EADDRINUSE:
+                    raise
+                journal.event("borrowed-embedding-provider-port", host="127.0.0.1", port=port)
+        else:
+            pytest.fail("No owned embedding provider listener available")
+        server.server_activate()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+
+        def close_provider() -> None:
+            if thread.is_alive():
+                server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            with socket.socket() as probe:
+                probe.settimeout(1)
+                assert probe.connect_ex(("127.0.0.1", port)) != 0
+            journal.event("embedding-provider-listener-cleanup", host="127.0.0.1", port=port, absent=True)
+
+        cleanup.callback(close_provider)
+        thread.start()
+        cfg = CONFIGS["minio"]
+        reader = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=str(cfg.get("secure", False)).lower() in {"true", "1", "yes"})
+        object_key = "embedding-error-" + uuid4().hex
+        sentinel = b"unchanged embedding error fixture"
+        journal.event("reserve-embedding-error-object", bucket=env["bucket"], key=object_key)
+
+        def remove_object() -> None:
+            reader.remove_object(env["bucket"], object_key)
+            assert object_key not in {item.object_name for item in reader.list_objects(env["bucket"], recursive=True)}
+            journal.event("embedding-error-object-cleanup", bucket=env["bucket"], key=object_key, absent=True)
+
+        cleanup.callback(remove_object)
+        reader.put_object(env["bucket"], object_key, io.BytesIO(sentinel), len(sentinel))
+        with Session(env["engine"]) as db:
+            kb = db.get(Knowledgebase, env["dataset"])
+            assert kb is not None
+            previous_model_id = kb.tenant_embd_id
+        model_name = "error-fixture-" + uuid4().hex
+        model_id: int | None = None
+        journal.event("reserve-embedding-error-model", database=env["engine"].url.database, tenant_id=env["owners"][0], model_name=model_name, dataset=env["dataset"])
+
+        def remove_model() -> None:
+            with Session(env["engine"]) as db:
+                db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["dataset"]).values(tenant_embd_id=previous_model_id))
+                db.execute(sa.delete(TenantLLM).where(TenantLLM.tenant_id == env["owners"][0], TenantLLM.llm_name == model_name))
+                db.commit()
+            with Session(env["engine"]) as db:
+                assert db.scalar(sa.select(sa.func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == env["owners"][0], TenantLLM.llm_name == model_name)) == 0
+                assert db.get(Knowledgebase, env["dataset"]).tenant_embd_id == previous_model_id
+            journal.event("embedding-error-model-cleanup", model_id=model_id, absent=True, dataset_restored=True)
+
+        cleanup.callback(remove_model)
+        with Session(env["engine"]) as db:
+            model = TenantLLM(
+                tenant_id=env["owners"][0],
+                llm_factory="SILICONFLOW",
+                llm_name=model_name,
+                mdl_type="embedding",
+                api_key="fixture-key",
+                api_base=f"http://127.0.0.1:{port}/v1/embeddings",
+                max_tokens=8192,
+                used_tokens=17,
+            )
+            db.add(model)
+            db.flush()
+            model_id = model.id
+            db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["dataset"]).values(tenant_embd_id=model_id))
+            db.commit()
+        monkeypatch.setattr(dataset_search_service, "_bundle", real_bundle)
+        before_sql = sql_snapshot()
+        before_indexes = index_snapshot()
+        before_objects = [(item.object_name, item.etag, item.size) for item in reader.list_objects(env["bucket"], recursive=True)]
+        assert read_object(reader, env["bucket"], object_key) == sentinel
+        for status, http_status in ((429, 503), (401, 502)):
+            provider_status[0] = status
+            for collection in (False, True):
+                prior_calls = len(calls)
+                response = request(env, "POST", "/search", collection=collection, json={"question": "availability", "dataset_ids": [env["dataset"]], "search_mode": {"type": "dense"}})
+                assert response.status_code == http_status, response.text
+                assert response.json() == {"code": RetCode.EXCEPTION_ERROR, "message": f"Embedding provider request failed (HTTP {status})", "data": {"retryable": status == 429}}
+                assert secret not in response.text and "fixture-key" not in response.text
+                assert len(calls) == prior_calls + 1
+                assert calls[-1] == {"path": "/v1/embeddings", "body": {"model": model_name, "input": "availability", "encoding_format": "float"}, "status": status}
+                assert len(bundles) == len(calls) and bundles[-1].model_config["id"] == model_id
+                assert sql_snapshot() == before_sql
+                assert index_snapshot() == before_indexes
+                assert [(item.object_name, item.etag, item.size) for item in reader.list_objects(env["bucket"], recursive=True)] == before_objects
+                assert read_object(reader, env["bucket"], object_key) == sentinel
+                journal.event(
+                    "embedding-error-route-readback",
+                    collection_route=collection,
+                    provider_status=status,
+                    http_status=http_status,
+                    model_id=model_id,
+                    provider_calls=len(calls),
+                    sql_unchanged=True,
+                    indexes_unchanged=True,
+                    objects_unchanged=True,
+                    object_sha256=hashlib.sha256(sentinel).hexdigest(),
+                )
