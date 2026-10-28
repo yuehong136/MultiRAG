@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import errno
 import json
 import os
 import socket
@@ -131,13 +132,30 @@ def management_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
                 yield db
 
         monkeypatch.setitem(app.dependency_overrides, get_async_db, scratch_db)
-        # Pick an exact candidate without allocating a socket, then durably
-        # reserve before bind. A collision fails and cleanup still runs.
-        port = 20000 + int(uuid4().hex[:8], 16) % 40000
-        journal.event("reserve-listener", host="127.0.0.1", port=port, pid=os.getpid())
         listener = socket.socket()
         cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", port))
+        for attempt in range(64):
+            port = 20000 + int(uuid4().hex[:8], 16) % 40000
+            journal.event("reserve-listener", host="127.0.0.1", port=port, pid=os.getpid(), attempt=attempt)
+            with socket.socket() as probe:
+                probe.settimeout(0.2)
+                probe_errno = probe.connect_ex(("127.0.0.1", port))
+            if probe_errno == 0:
+                journal.event("borrowed-listener", host="127.0.0.1", port=port, action="preserve-and-reselect")
+                continue
+            if probe_errno != errno.ECONNREFUSED:
+                journal.event("listener-probe-unavailable", host="127.0.0.1", port=port, probe_errno=probe_errno)
+                continue
+            try:
+                listener.bind(("127.0.0.1", port))
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                journal.event("borrowed-listener-bind-race", host="127.0.0.1", port=port, action="preserve-and-reselect")
+                continue
+            break
+        else:
+            raise RuntimeError("Could not bind a preregistered dataset HTTP endpoint")
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
         env = {
