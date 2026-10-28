@@ -215,6 +215,13 @@ async def test_azure_failure_recovery_prune_and_http_edit_boundaries(azure_sync_
     env["state"]["fail_get"] = None
     recovered = await _run(env)
     assert {key: row["content_hash"] for key, row in recovered.items()} != baseline
+    before_objects = {row["location"]: read_object(env["storage"], env["bucket"], f"{env['kb']}/{row['location']}") for row in recovered.values()}
+    env["state"]["objects"]["docs/../outside/secret.txt"] = BlobVersion(b"forbidden")
+    refused = await _run(env, success=False)
+    assert {key: row["content_hash"] for key, row in refused.items()} == {key: row["content_hash"] for key, row in recovered.items()}
+    assert {row["location"]: read_object(env["storage"], env["bucket"], f"{env['kb']}/{row['location']}") for row in refused.values()} == before_objects
+    assert all("restype" in urlsplit(item.url).query for item in env["state"]["transports"][-1].requests)
+    del env["state"]["objects"]["docs/../outside/secret.txt"]
     count = len(env["state"]["transports"])
     assert set(await _run(env, success=False, prune=True)) == set(initial)
     assert len(env["state"]["transports"]) == count

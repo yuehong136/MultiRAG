@@ -215,6 +215,11 @@ class AzureBlobConnector(LoadConnector, PollConnector, FingerprintConnector, Che
                     name = props.name
                     if not isinstance(name, str) or not name.startswith(self.prefix):
                         raise ConnectorValidationError("Azure Blob returned an out-of-scope name")
+                    # Azure's SDK preserves slashes in blob URLs, while its
+                    # HTTP transport normalizes dot segments. Refuse names
+                    # that could address another container or storage prefix.
+                    if any(part in {".", ".."} for part in name.split("/")):
+                        raise ConnectorValidationError("Azure Blob returned an unsafe path segment")
                     if not self._supported(name):
                         continue
                     _version(props)

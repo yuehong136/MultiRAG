@@ -322,3 +322,13 @@ def test_inventory_cancellation_queries_are_bounded_by_pages(monkeypatch: pytest
     with connector.session():
         assert len(list(connector.list_keys())) == 100
     assert len(guards) <= 3 and transport.closed
+
+
+@pytest.mark.parametrize("name", ["../outside/secret.txt", "docs/../../outside/secret.txt", "./docs/a.txt", "docs/./a.txt"])
+def test_dot_segments_cannot_escape_container_or_local_storage_prefix(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    transport = BlobSourceTransport({name: BlobVersion(b"forbidden")})
+    connector, transport, _ = connect(monkeypatch, configuration(prefix=""), transport)
+    with pytest.raises(ConnectorValidationError, match="inventory failed"):
+        list(connector.load_from_state())
+    assert transport.closed
+    assert all(parse_qs(urlsplit(request.url).query).get("comp") == ["list"] for request in transport.requests)

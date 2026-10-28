@@ -37,6 +37,7 @@
 保留大小写和前导斜线；`reports` 也会匹配 `reports-old`，选择虚拟目录应填 `reports/`。
 文件扩展名复用本地文本、文档和可选图片过滤，并支持 `.doc`、`.xls`、`.ppt`、`.htm`。
 超过现有 Blob 尺寸限制的对象不下载正文。
+含独立 `.` 或 `..` 路径段的 Blob 名称会使本轮失败，避免 HTTP URL 规范化改变容器或存储前缀。
 
 连接端点仅接受 Azure 公有云、中国云和美国政府云的标准 Blob HTTPS 主机。
 `container_url` 必须是无 query 的完整容器 URL，SAS 另填在 `sas_token`；不接受
