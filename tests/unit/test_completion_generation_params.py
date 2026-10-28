@@ -13,7 +13,9 @@ from tests.unit.test_rest_chat_history import history_route as history_route
 
 
 @pytest.fixture(params=["rest", "openai"])
-def completion_route(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def completion_route(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, client: Any) -> dict[str, Any]:
+    # Declare the shared client before dynamic fixtures so override snapshots
+    # cannot erase its session baseline after the first parametrized case.
     protocol = request.param
     calls: list[dict[str, Any]] = []
     saved = {"temperature": 0.7, "top_p": 0.3, "max_tokens": 64, "custom": {"keep": [1]}}
