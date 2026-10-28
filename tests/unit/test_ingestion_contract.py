@@ -46,3 +46,11 @@ async def test_ingestion_rejects_unknown_kind_after_permission_check(async_db: A
     access.return_value = True
     result: tuple[bool, Any] = await dataset_api_service.list_ingestion_logs(async_db, "user", "kb", log_type="other")
     assert result == (False, 'Invalid "log_type", expected "dataset" or "file"')
+
+
+async def test_ingestion_detail_denial_never_queries_log(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(KnowledgebaseService, "accessible_async", AsyncMock(return_value=False))
+    execute = AsyncMock(side_effect=AssertionError("denied request queried logs"))
+    monkeypatch.setattr(async_db, "execute", execute)
+    assert await dataset_api_service.get_ingestion_log(async_db, "foreign", "kb", "log") == (False, "No authorization.")
+    execute.assert_not_called()

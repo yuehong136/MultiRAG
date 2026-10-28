@@ -855,7 +855,9 @@ async def get_ingestion_log(db: AsyncSession, tenant_id: str, dataset_id: str, l
         return False, "No authorization."
 
     model = PipelineOperationLogService.model
-    stmt = select(*PipelineOperationLogService.get_dataset_logs_fields()).where(model.id == log_id, model.kb_id == dataset_id)
+    # Reuse the existing file-log projection, not an unrestricted ORM dump.
+    # Executed pipeline DSL is persisted through Graph.__str__ redaction.
+    stmt = select(*PipelineOperationLogService.get_file_logs_fields()).where(model.id == log_id, model.kb_id == dataset_id)
     log = (await db.execute(stmt)).mappings().first()
     if not log:
         return False, "Log not found"

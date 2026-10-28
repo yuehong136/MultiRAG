@@ -300,3 +300,30 @@ def test_legacy_dataset_document_routes_share_private_visibility(management_api:
         db.execute(sa.update(UserTenant).where(UserTenant.id == peer_membership).values(role="normal", status="1"))
         db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == dataset).values(permission="team"))
     check_routes(1, True)
+
+
+def test_ingestion_detail_full_projection_and_denial(management_api: dict[str, Any]) -> None:
+    import sqlalchemy as sa
+
+    from api.db.services.pipeline_operation_log_service import PipelineOperationLogService
+
+    env = management_api
+    dsl = {"components": {}, "path": [], "variables": {"secret": "[REDACTED]"}}
+    with env["engine"].begin() as db:
+        db.execute(sa.update(PipelineOperationLog).where(PipelineOperationLog.id == env["logs"][3]).values(pipeline_id="owned-pipeline", pipeline_title="Pipeline", dsl=dsl))
+    before = sql_state(env)
+    path = f"/datasets/{env['datasets'][0]}/ingestions/{env['logs'][3]}"
+    expected_fields = {field.key for field in PipelineOperationLogService.get_file_logs_fields()}
+    for credential in (env["jwt"][0], env["keys"][0]):
+        response = request_api(env, "GET", path, credential=credential)
+        assert response.status_code == 200 and response.json()["code"] == 0
+        row = response.json()["data"]
+        assert set(row) == expected_fields
+        assert row["dsl"] == dsl and row["document_id"] == env["documents"][0]
+        assert row["pipeline_id"] == "owned-pipeline" and row["pipeline_title"] == "Pipeline"
+        assert row["parser_id"] == "naive" and row["source_from"] == "local"
+        assert sql_state(env) == before
+    for denied_path, credential in [(path, env["jwt"][1]), (path, env["keys"][1]), (f"/datasets/{env['datasets'][1]}/ingestions/{env['logs'][3]}", env["jwt"][0])]:
+        response = request_api(env, "GET", denied_path, credential=credential)
+        assert response.json()["code"] != 0 and "data" not in response.json()
+        assert sql_state(env) == before
