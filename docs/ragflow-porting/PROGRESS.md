@@ -3863,3 +3863,11 @@ Infinity 就绪握手改在进程内执行（冷导入 8–17 秒，超过 5 秒
 - 原 28 WIP 保留；运行资源与 ordinary 树/ref/admin 按确切身份清理，恢复包、最终 Git/pin、原始 exit/JUnit/输入 hash 及最后元数据收尾统一见外部 `20261028-batch-after-53bb2bd9/delivery-complete.json`。历史 strict=false 及首错/取消不倒填，真实厂商/微软租户、生产/部署与远程 `ci-required` 未验。仅本地提交，不 push，不开后批或自动化。
 
 <!-- END AFTER-53BB2BD9 LOCAL DELIVERY -->
+
+
+## 2026-10-28 · 33ef724b 之后二十项本地交付
+
+- 冻结排除 `33ef724b` 至 `ff597144`，直接后修上限 `519e7d98`，未 fetch；全 20 项、96 条逐项路径的处置与质量比较见 [本批记录](batch-after-33ef724b.md)。数值模型迁移、provider 必验/地域/目录与 Web 原子创建、Go 超时/管理 API/CLI、Markdown 标题合并已串行接收；有据等价项保留本地更强机制。
+- 可执行组合 `761af5a2`；测试夹具最小补修 `dd447b5e` 不改生产行为。Web master/pin 为 `98712181c9c7bf8ccf39c955d8bbab467fd77946`，保留 `123f4a14` 和派发基线 `6abc8e26` 的选择器/库存状态与多能力筛选。
+- Python 定向单测 220+23 通过，lint/format/type/import/async 全 exit 0；SQL/HTTP 首轮 29 通过、Web JSON 空白夹具一项失败，保留原失败并最小复跑该用例通过。Go 全内部包 build/vet、三个入口实际 native 链接、模型包 race 462 顶层（3583 含子项事件）、CLI 8 项和管理 SQL/HTTP/新 CLI 10 事件通过，无 skip；Web build/受影响测试/明暗浏览器与真实 Python HTTP/SQL 消费者分层留证。
+- 原 28 项后端 WIP 保留，本块独立暂存；候选恢复包实际 verify/隔离恢复，精确 tree/ref/admin 与自有测试资源/缓存清理和最终主干 SHA 见外部 `20261028-batch-after-33ef724b/delivery-complete.json`。未 push、未部署，远程 `ci-required` 待运行；未验证真实付费厂商、生产、常驻 worker 或干净重装。不自动继续下一批。
