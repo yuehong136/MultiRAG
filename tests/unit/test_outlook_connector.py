@@ -226,3 +226,13 @@ def test_deletion_snapshot_is_unavailable(graph: tuple[OutlookConnector, Outlook
     with pytest.raises(ConnectorValidationError, match="not supported"):
         list(graph[0].retrieve_all_slim_docs_perm_sync())
     assert not graph[1].calls
+
+
+def test_finished_checkpoint_requires_every_mailbox(graph: tuple[OutlookConnector, OutlookHTTP, dict[str, Any]]) -> None:
+    adapter, http, auth = graph
+    checkpoint = adapter.build_dummy_checkpoint()
+    checkpoint.has_more = False
+    checkpoint.delta_links = {"A": adapter._delta_url("A") + "?token=saved"}
+    with pytest.raises(ConnectorValidationError, match="Incomplete"):
+        adapter.validate_checkpoint_json(checkpoint.model_dump_json())
+    assert not http.calls and auth["constructed"] == 0

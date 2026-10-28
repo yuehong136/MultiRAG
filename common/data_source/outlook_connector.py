@@ -90,6 +90,8 @@ class OutlookConnector(CheckpointedConnectorWithPermSync, SlimConnectorWithPermS
     def _validate_checkpoint(self, checkpoint: OutlookCheckpoint) -> None:
         if checkpoint.scope != self.scope or set(checkpoint.delta_links) - set(self.user_ids):
             raise ConnectorValidationError("Outlook checkpoint scope mismatch")
+        if not checkpoint.has_more and set(checkpoint.delta_links) != set(self.user_ids):
+            raise ConnectorValidationError("Incomplete Outlook finished checkpoint")
         for user_id, link in checkpoint.delta_links.items():
             self._check_link(user_id, link)
 

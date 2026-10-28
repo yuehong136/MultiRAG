@@ -50,7 +50,7 @@ class OutlookHTTP:
         else:
             raise AssertionError(path)
         status = 200
-        if self.mode in {"permission", "unauthorized", "not-found", "server-error", "throttled"} or (self.mode == "later-page" and page):
+        if self.mode in {"permission", "unauthorized", "not-found", "server-error", "throttled"} or (self.mode == "later-page" and page) or "/users/forbidden/" in path:
             status = {"unauthorized": 401, "not-found": 404, "server-error": 503, "throttled": 429}.get(self.mode, 403)
             payload = {"error": {"message": "controlled-secret-must-not-leak"}}
         elif self.mode == "empty":
