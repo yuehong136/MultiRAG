@@ -189,7 +189,7 @@ def required_services(paths: list[Path]) -> set[str]:
         if path.name == "test_connector_task_controls.py":
             required.add("postgresql")
             continue
-        if path.name == "test_tts_cache.py":
+        if path.name in {"test_tts_cache.py", "test_customer_service_template.py"}:
             required.update(("postgresql", "redis"))
             continue
         if path.name == "test_worker_index_dimension.py":
