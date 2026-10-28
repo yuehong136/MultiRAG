@@ -266,6 +266,14 @@ def _add_chunk(user_id: str, dataset_id: str, document_id: str, request: AddChun
         req = request.model_dump()
         if is_content_empty(req["content"]):
             return get_error_data_result(retmsg="`content` is required")
+        image_binary = None
+        if "image_base64" in request.model_fields_set:
+            try:
+                if not req["image_base64"]:
+                    raise ValueError("Empty supplied image")
+                image_binary = _raster(base64.b64decode(req["image_base64"], validate=True)).data
+            except ValueError:
+                return get_error_data_result(retmsg="`image_base64` must be pure Base64 of a valid raster image")
         chunk_id = xxhash.xxh64((req["content"] + document_id).encode()).hexdigest()
         from core.nlp import rag_tokenizer
 
@@ -302,16 +310,46 @@ def _add_chunk(user_id: str, dataset_id: str, document_id: str, request: AddChun
             return get_error_data_result(retmsg="You don't own the dataset or document.")
         kb, doc = context
         index_name = _index_name(kb)
-        # Bind the insertion helper to this transaction: its internal Session
-        # must not open a second connection waiting on our document lock.
-        insert_source_chunks(db.connection(), [chunk], index_name, dataset_id)
-        if req["image_base64"]:
-            store_chunk_image(dataset_id, chunk_id, base64.b64decode(req["image_base64"]))
+        with image_write_locks(db.get_bind(), [(dataset_id, chunk_id)] if image_binary is not None else []):
+            if image_binary is not None:
+                try:
+                    previous_image = read_chunk_image(dataset_id, chunk_id)
+                except Exception:
+                    return _chunk_image_creation_failure(dataset_id, chunk_id, stage="image_read", index="not_attempted", image="not_attempted")
+                try:
+                    store_chunk_image(dataset_id, chunk_id, image_binary, verify=True)
+                except Exception:
+                    image_state = "unknown"
+                    try:
+                        observed = read_chunk_image(dataset_id, chunk_id)
+                        image_state = "unchanged" if observed == previous_image else "changed"
+                    except Exception:
+                        pass  # An unavailable read cannot establish rollback.
+                    return _chunk_image_creation_failure(dataset_id, chunk_id, stage="image_write", index="not_attempted", image=image_state)
+            # Bind the helper to this document transaction, including same-ID retries.
+            try:
+                insert_source_chunks(db.connection(), [chunk], index_name, dataset_id)
+            except Exception:
+                if image_binary is None:
+                    raise
+                return _chunk_image_creation_failure(dataset_id, chunk_id, stage="index_write", index="unknown", image="acknowledged")
         # Use the producer's logical source accounting (excluding parents),
         # so a retry repairs a previous native success followed by SQL failure.
         reconcile_task_chunk_count(db, document_id, dataset_id, index_name[0])
         DocumentService.increment_chunk_num(db, document_id, dataset_id, token_count, 0, 0)
         return get_result(data={"chunk": _chunk_payload(chunk_id, chunk)})
+
+
+def _chunk_image_creation_failure(dataset_id: str, chunk_id: str, *, stage: str, index: str, image: str) -> JSONResponse:
+    """Preserve recovery observations after a non-atomic append/create attempt."""
+    outcome = "unchanged" if index == "not_attempted" and image in {"not_attempted", "unchanged"} else "unknown" if image == "unknown" or index == "unknown" else "partial"
+    return JSONResponse(
+        content={
+            "code": int(RetCode.EXCEPTION_ERROR),
+            "message": "图片或切片索引写入未确认；请刷新切片和图片核对后再决定是否重试，不要盲目重发 append；需重发图片时使用 PATCH replace。",
+            "data": {"outcome": outcome, "stage": stage, "index": index, "image": image, "image_id": f"{dataset_id}-{chunk_id}", "retry_safe": False},
+        }
+    )
 
 
 @router.post("/datasets/{dataset_id}/documents/{document_id}/chunks", summary="添加文档分块")

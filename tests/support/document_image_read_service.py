@@ -32,6 +32,7 @@ from common.config_utils import CONFIGS
 from core.nlp.search import index_name_one
 from core.utils.encrypted_storage import EncryptedStorageWrapper
 from core.utils.redis_conn import REDIS_CONN
+from tests.support.resource_journal import ResourceJournal
 
 
 def _principal(user_id: str, source: AuthenticationSource = AuthenticationSource.WEB_SESSION) -> Principal:
@@ -73,6 +74,7 @@ def _raw_object(client: Minio, bucket: str, key: str) -> bytes:
 @pytest.fixture
 def image_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
     with ExitStack() as cleanup:
+        journal = ResourceJournal("document_image_resources")
         ensure_initialized()
         ids = {name: uuid4().hex for name in ["owner", "other", "normal", "admin", "invite", "inactive", "outsider", "kb", "sibling", "foreign", "inactivekb"]}
         names = {name: f"image_read_{uuid4().hex}" for name in ["kb", "sibling", "foreign", "inactivekb"]}
@@ -92,6 +94,16 @@ def image_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPa
             "pid": None,
             "cleanup": False,
         }
+        journal.event(
+            "reserve-image-resources",
+            database=bootstrapped_engine.url.database,
+            ids=ids,
+            collections=collections,
+            bucket=bucket,
+            queue=queue,
+            manifest=str(manifest_path),
+            borrowed="configured PG/MinIO/Milvus/Redis; preserve services",
+        )
         manifest_path.write_text(json.dumps(manifest))
         cfg = CONFIGS["minio"]
         client = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=str(cfg.get("secure", False)).lower() in {"true", "1", "yes"})
@@ -109,6 +121,7 @@ def image_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPa
         assert not client.bucket_exists(bucket) and not REDIS_CONN.REDIS.exists(queue)
         assert all(not store.has_collection(collection) for collection in collections.values())
         env = {
+            "journal": journal,
             "engine": bootstrapped_engine,
             "ids": ids,
             "names": names,
@@ -168,23 +181,45 @@ def image_resources(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPa
         def record_cleanup() -> None:
             manifest["cleanup"] = all(manifest.get(key) for key in ["bucket_absent", "collections_absent", "queue_absent"]) and not any(manifest.get("remaining", {"unknown": 1}).values())
             manifest_path.write_text(json.dumps(manifest, indent=2))
+            journal.event("image-resources-cleanup", **manifest)
 
         cleanup.callback(record_cleanup)
         cleanup.callback(remove_rows)
         cleanup.callback(remove_bucket)
         cleanup.callback(remove_queue)
         cleanup.callback(remove_collections)
+        original_put = storage.put
+
+        def tracked_put(namespace: str, key: str, data: bytes, *args: Any, **kwargs: Any) -> Any:
+            physical = adapter._resolve_bucket_and_path(namespace, key)[1]
+            journal.event("reserve-object-write", bucket=bucket, namespace=namespace, key=key, physical=physical)
+            return original_put(namespace, key, data, *args, **kwargs)
+
+        monkeypatch.setattr(storage, "put", tracked_put)
+        memberships = {role: uuid4().hex for role in ["owner", "other", "normal", "admin", "invite", "inactive"]}
+        journal.event(
+            "reserve-sql-rows",
+            users={role: ids[role] for role in ["owner", "other", "normal", "admin", "invite", "inactive", "outsider"]},
+            tenants=[ids["owner"], ids["other"]],
+            knowledgebases={name: ids[name] for name in names},
+            memberships=memberships,
+        )
         client.make_bucket(bucket)
         with Session(bootstrapped_engine) as db:
             for role in ["owner", "other", "normal", "admin", "invite", "inactive", "outsider"]:
                 db.add(User(id=ids[role], email=f"{ids[role]}@image.test", nickname=role, password="unused", access_token="active"))
             for role in ["owner", "other"]:
                 db.add(Tenant(id=ids[role], name="Image read scratch", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
-                db.add(UserTenant(id=uuid4().hex, user_id=ids[role], tenant_id=ids[role], role="owner", invited_by=ids[role]))
+                db.add(UserTenant(id=memberships[role], user_id=ids[role], tenant_id=ids[role], role="owner", invited_by=ids[role]))
             for role in ["normal", "admin", "invite", "inactive"]:
                 db.add(
                     UserTenant(
-                        id=uuid4().hex, user_id=ids[role], tenant_id=ids["owner"], role="normal" if role == "inactive" else role, status="0" if role == "inactive" else "1", invited_by=ids["owner"]
+                        id=memberships[role],
+                        user_id=ids[role],
+                        tenant_id=ids["owner"],
+                        role="normal" if role == "inactive" else role,
+                        status="0" if role == "inactive" else "1",
+                        invited_by=ids["owner"],
                     )
                 )
             for kb in names:

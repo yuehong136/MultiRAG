@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import secrets
 import socket
 import tempfile
 import threading
@@ -64,6 +65,7 @@ def image_http_api(image_resources: dict[str, Any], monkeypatch: pytest.MonkeyPa
 
         def register() -> None:
             with manifest_lock:
+                env["journal"].event("reserve-http-resources", **env["manifest"])
                 _save(env["manifest_path"], env["manifest"])
 
         original_put = env["storage"].put
@@ -89,6 +91,7 @@ def image_http_api(image_resources: dict[str, Any], monkeypatch: pytest.MonkeyPa
         personal_users = [ids[role] for role in ["normal", "admin", "invite", "inactive", "outsider", "disabled"]]
         personal_memberships = {user_id: uuid4().hex for user_id in personal_users}
         env["manifest"].update(personal_tenant_ids=personal_users, personal_membership_ids=list(personal_memberships.values()))
+        env["manifest"]["sql_ids"]["disabled_user"] = ids["disabled"]
         register()
 
         def remove_rows() -> None:
@@ -127,7 +130,16 @@ def image_http_api(image_resources: dict[str, Any], monkeypatch: pytest.MonkeyPa
         monkeypatch.setattr(db_models, "SessionLocal", sync_sessions)
         listener = socket.socket()
         cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", 0))
+        for _attempt in range(32):
+            candidate_port = 20000 + secrets.randbelow(40000)
+            env["journal"].event("reserve-listener", host="127.0.0.1", port=candidate_port, pid=os.getpid(), kind="in-process uvicorn")
+            try:
+                listener.bind(("127.0.0.1", candidate_port))
+                break
+            except OSError:
+                env["journal"].event("listener-bind-unavailable", host="127.0.0.1", port=candidate_port)
+        else:
+            raise RuntimeError("No registered listener port was available")
         port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(apps.app, lifespan="off", log_level="error", access_log=False, loop=UVICORN_LOOP))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
@@ -143,6 +155,7 @@ def image_http_api(image_resources: dict[str, Any], monkeypatch: pytest.MonkeyPa
             assert not thread.is_alive()
             with socket.socket() as probe:
                 assert probe.connect_ex(("127.0.0.1", port)) != 0
+            env["journal"].event("listener-absent", host="127.0.0.1", port=port, thread_alive=thread.is_alive())
             env["manifest"].update(listener_closed=True)
             register()
 
