@@ -18,6 +18,7 @@ package router
 
 import (
 	"github.com/gin-gonic/gin"
+	"strings"
 
 	"multirag/internal/handler"
 	"multirag/internal/service"
@@ -89,6 +90,14 @@ func NewRouter(
 
 // Setup setup routes
 func (r *Router) Setup(engine *gin.Engine) {
+	// Mark even authentication denials before the protected middleware runs.
+	engine.Use(func(c *gin.Context) {
+		if c.Request.URL.Path == "/api/v1/thumbnails" || strings.HasPrefix(c.Request.URL.Path, "/api/v1/documents/images/") {
+			c.Header("Cache-Control", "no-store")
+			c.Header("X-Content-Type-Options", "nosniff")
+		}
+		c.Next()
+	})
 	if r.mcpHandler == nil {
 		r.mcpHandler = handler.NewMCPHandler(service.NewMCPService())
 	}
@@ -176,11 +185,17 @@ func (r *Router) Setup(engine *gin.Engine) {
 				documents.DELETE("/:id", r.documentHandler.DeleteDocument)
 			}
 
+			v1.GET("/thumbnails", r.documentHandler.GetThumbnails)
+			v1.GET("/documents/images/*image_id", r.documentHandler.GetDocumentImage)
+
 			// RESTful dataset routes
 			datasets := v1.Group("/datasets")
 			{
 				datasets.GET("", r.datasetsHandler.ListDatasets)
 				datasets.GET("/:dataset_id", r.datasetsHandler.GetDataset)
+				datasets.GET("/:dataset_id/ingestions/summary", r.datasetsHandler.GetIngestionSummary)
+				datasets.GET("/:dataset_id/ingestions", r.datasetsHandler.ListIngestionLogs)
+				datasets.GET("/:dataset_id/ingestions/:log_id", r.datasetsHandler.GetIngestionLog)
 				datasets.GET("/:dataset_id/graph", r.datasetsHandler.GetKnowledgeGraph)
 				datasets.DELETE("/:dataset_id/graph", r.datasetsHandler.DeleteKnowledgeGraph)
 				datasets.POST("", r.datasetsHandler.CreateDataset)

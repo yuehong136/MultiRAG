@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"fmt"
 	"multirag/internal/entity"
 )
 
@@ -86,4 +87,23 @@ func (dao *API4ConversationDAO) DeleteByDialogIDs(dialogIDs []string) (int64, er
 	}
 	result := DB.Unscoped().Where("dialog_id IN ?", dialogIDs).Delete(&entity.API4Conversation{})
 	return result.RowsAffected, result.Error
+}
+
+// BackfillBeta performs a compare-and-set and returns the persisted concurrent winner.
+func (dao *APITokenDAO) BackfillBeta(tenantID, token, candidate string) (string, error) {
+	if candidate == "" {
+		return "", fmt.Errorf("empty beta candidate")
+	}
+	result := DB.Model(&entity.APIToken{}).Where("tenant_id = ? AND token = ? AND (beta IS NULL OR beta = '')", tenantID, token).Update("beta", candidate)
+	if result.Error != nil {
+		return "", result.Error
+	}
+	var stored entity.APIToken
+	if err := DB.Where("tenant_id = ? AND token = ?", tenantID, token).First(&stored).Error; err != nil {
+		return "", err
+	}
+	if stored.Beta == nil || *stored.Beta == "" {
+		return "", fmt.Errorf("beta readback is empty")
+	}
+	return *stored.Beta, nil
 }

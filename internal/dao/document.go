@@ -163,3 +163,45 @@ func (dao *DocumentDAO) SumSizeByDatasetID(ctx context.Context, datasetID string
 		Scan(&total).Error
 	return total, err
 }
+
+// GetParsingStatusByKBID aggregates document parsing status counts for a
+// dataset, mirroring DocumentService.get_parsing_status_by_kb_ids in Python.
+func (dao *DocumentDAO) GetParsingStatusByKBID(ctx context.Context, kbID string) (map[string]int64, error) {
+	result := map[string]int64{
+		"unstart_count": 0,
+		"running_count": 0,
+		"cancel_count":  0,
+		"done_count":    0,
+		"fail_count":    0,
+	}
+
+	var rows []struct {
+		Run *string `gorm:"column:run"`
+		Cnt int64   `gorm:"column:cnt"`
+	}
+	err := DB.WithContext(ctx).Model(&entity.Document{}).
+		Select("run, COUNT(id) as cnt").
+		Where("kb_id = ?", kbID).
+		Group("run").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	statusFieldMap := map[string]string{
+		string(entity.TaskStatusUnstart): "unstart_count",
+		string(entity.TaskStatusRunning): "running_count",
+		string(entity.TaskStatusCancel):  "cancel_count",
+		string(entity.TaskStatusDone):    "done_count",
+		string(entity.TaskStatusFail):    "fail_count",
+	}
+	for _, row := range rows {
+		if row.Run == nil {
+			continue
+		}
+		if field, ok := statusFieldMap[*row.Run]; ok {
+			result[field] = row.Cnt
+		}
+	}
+	return result, nil
+}

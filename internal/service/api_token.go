@@ -43,6 +43,13 @@ func (s *SystemService) ListAPITokens(tenantID string) ([]*TokenResponse, error)
 
 	responses := make([]*TokenResponse, len(tokens))
 	for i, token := range tokens {
+		if token.Beta == nil || *token.Beta == "" {
+			beta, err := apiTokenDAO.BackfillBeta(tenantID, token.Token, utility.GenerateBetaAPIToken(utility.GenerateAPIToken()))
+			if err != nil {
+				return nil, err
+			}
+			token.Beta = &beta
+		}
 		responses[i] = &TokenResponse{
 			TenantID:   token.TenantID,
 			Token:      token.Token,
@@ -70,7 +77,7 @@ func (s *SystemService) CreateAPIToken(tenantID string, req *CreateAPITokenReque
 	// token: "multirag-" + secrets.token_urlsafe(32)
 	apiToken := utility.GenerateAPIToken()
 	// beta: generate_confirmation_token().replace("multirag-", "")[:32]
-	betaAPIKey := utility.GenerateBetaAPIToken(apiToken)
+	betaAPIKey := utility.GenerateBetaAPIToken(utility.GenerateAPIToken())
 
 	apiTokenData := &entity.APIToken{
 		TenantID: tenantID,

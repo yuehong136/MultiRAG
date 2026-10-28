@@ -547,3 +547,47 @@ func (h *DocumentHandler) SetMeta(c *gin.Context) {
 		"data":    true,
 	})
 }
+
+// GetThumbnails reads only thumbnails belonging to readable datasets.
+func (h *DocumentHandler) GetThumbnails(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	data, err := h.documentService.GetThumbnails(c.Request.Context(), user.ID, c.QueryArray("doc_ids"))
+	if err != nil {
+		code := common.CodeServerError
+		if errors.Is(err, service.ErrInvalidImage) {
+			code = common.CodeArgumentError
+		}
+		jsonError(c, code, "Thumbnails could not be read.")
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, data, "success")
+}
+
+// GetDocumentImage serves registered raster bytes after active membership authorization.
+func (h *DocumentHandler) GetDocumentImage(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	data, mime, err := h.documentService.GetDocumentImage(c.Request.Context(), user.ID, strings.TrimPrefix(c.Param("image_id"), "/"))
+	if err != nil {
+		code := common.CodeServerError
+		if errors.Is(err, service.ErrImageUnavailable) {
+			code = common.CodeDataError
+		}
+		if errors.Is(err, service.ErrInvalidImage) {
+			code = common.CodeArgumentError
+		}
+		jsonError(c, code, "Image could not be read.")
+		return
+	}
+	c.Data(http.StatusOK, mime, data)
+}
