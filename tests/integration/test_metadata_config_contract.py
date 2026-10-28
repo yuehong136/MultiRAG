@@ -1,6 +1,7 @@
 """Metadata configuration through real HTTP and independent SQL readback."""
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +18,99 @@ from tests.support.dataset_management_http import metadata_path, request_api, sq
 
 FIELDS = [{"key": "score", "type": "number", "enum": ["1.5", "2"], "future": {"keep": True}}, {"key": "tags", "type": "list", "enum": ["A", "B"]}]
 BUILTIN = [{"key": "source", "type": "string", "enum": ["Paper"]}]
+
+
+@pytest.mark.external_consumer
+def test_accepted_web_schema_editor_roundtrip_and_denials(management_api: dict[str, Any], tmp_path: Path) -> None:
+    """Actual Web conversions/client, real HTTP/auth and independent SQL readback."""
+    import hashlib
+    import json
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    from tests.support.resource_journal import ResourceJournal
+
+    env = management_api
+    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
+    project = Path(__file__).resolve().parents[2]
+    pin = json.loads((project / ".github/consumer-web.json").read_text())["ref"]
+    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip() == pin
+    assert not subprocess.check_output(["git", "status", "--porcelain", "--", "src", "scripts", "package.json", "package-lock.json", "tsconfig.app.json"], cwd=checkout, text=True).strip()
+    journal = ResourceJournal("after1e-metadata-web")
+    evidence = Path(os.environ["MULTIRAG_AFTER1E_WEB_EVIDENCE"]) / journal.run_id
+    private = tmp_path / "metadata-web-private"
+    journal.event("reserve-web-directories", evidence=str(evidence), private=str(private))
+    evidence.mkdir(parents=True, mode=0o700)
+    private.mkdir(mode=0o700)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["scores"],
+        "properties": {
+            "count": {"type": "integer", "minimum": 0, "maximum": 10, "enum": [0, 2]},
+            "scores": {"type": "array", "minItems": 1, "items": {"type": "number", "minimum": 0, "enum": [0, 1.5]}},
+            "timestamp": {"type": "time", "description": "When", "enum": ["2026-10-28"]},
+        },
+    }
+    journal.event("reserve-metadata-seed", database=env["engine"].url.database, dataset=env["datasets"][0])
+    with env["engine"].begin() as db:
+        db.execute(sa.update(Knowledgebase).where(Knowledgebase.id == env["datasets"][0]).values(parser_config={"metadata": schema}))
+    before = sql_state(env)
+    paths = [private / "owner.token", private / "foreign.token", private / "descriptor.json"]
+    descriptor = {"checkout": str(checkout), "origin": env["base"], "dataset": env["datasets"][0], "ownerTokenFile": str(paths[0]), "foreignTokenFile": str(paths[1]), "schema": schema}
+    contents = [env["keys"][0], env["keys"][1], json.dumps(descriptor)]
+    owned: list[Path] = []
+    try:
+        for path, content in zip(paths, contents, strict=True):
+            journal.event("reserve-private-web-file", path=str(path), sha256=hashlib.sha256(content.encode()).hexdigest())
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            owned.append(path)
+            with os.fdopen(fd, "w") as file:
+                file.write(content)
+        script = project / "tests/support/after1e_metadata_web_consumer.mts"
+        node = shutil.which("node")
+        assert node is not None
+        runner = project / "scripts/run_registered.py"
+        for phase in ("owner", "foreign"):
+            command = [sys.executable, str(runner), "--evidence-root", str(evidence), "--label", "metadata-web-" + phase]
+            inputs = [script, *paths, project / ".github/consumer-web.json", Path(__file__), Path(node)]
+            inputs.extend(path for path in (checkout / "src").rglob("*") if path.is_file() and path.suffix in {".ts", ".tsx", ".json"})
+            inputs.extend(checkout / name for name in ("package.json", "package-lock.json", "tsconfig.app.json"))
+            for path in inputs:
+                command.extend(("--input", str(path)))
+            command.extend(("--borrowed", str(checkout / "node_modules"), "--", node, "--import", "tsx", str(script)))
+            journal.event("reserve-web-command", phase=phase, command=command, checkout_sha=pin)
+            result = subprocess.run(
+                command,
+                cwd=checkout,
+                env={**os.environ, "I_METADATA_WEB_DESCRIPTOR": str(paths[2]), "I_METADATA_WEB_PHASE": phase, "TSX_TSCONFIG_PATH": str(checkout / "tsconfig.app.json"), "TSX_DISABLE_CACHE": "1"},
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            receipt = json.loads(result.stdout.strip().splitlines()[-1])
+            assert receipt["raw_exit"] == 0 and receipt["exit_code"] == 0
+            response = json.loads(Path(receipt["journal"]).with_suffix(".output").read_text().strip().splitlines()[-1])
+            assert response["phase"] == phase and response["status"] == "passed"
+            after = sql_state(env)
+            if phase == "owner":
+                expected = deepcopy(before)
+                row = expected[Knowledgebase.__tablename__][env["datasets"][0]]
+                actual = after[Knowledgebase.__tablename__][env["datasets"][0]]
+                row.update(parser_config={"metadata": response["metadata"]}, update_time=actual["update_time"], update_date=actual["update_date"])
+                assert after == expected
+                before = after
+            else:
+                assert after == before
+            journal.event("metadata-web-independent-readback", phase=phase, checkout_sha=pin, receipt=receipt, sql_scope_unchanged=True)
+    finally:
+        for path in owned:
+            path.unlink()
+        private.rmdir()
+        journal.event("metadata-web-private-cleanup", files_absent=all(not path.exists() for path in owned), directory_absent=not private.exists())
 
 
 @pytest.mark.parametrize("kind", ["jwt", "keys"])

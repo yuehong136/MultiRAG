@@ -29,6 +29,9 @@
 Microsoft connector domain clients、完整应用/JWT、隔离 SQL/对象及独立读回。
 直接运行必须显式加 `--include-external-consumer`；缺 Node/tsx/固定脚本不能跳过。
 三个阶段的嵌套 canonical runner 原始退出码分别保留；供应商 Graph 受控，不等同浏览器或真实租户。
+`test_metadata_config_contract.py` 的 consumer 用例使用同一固定 Web 的真实 schema 编辑转换与
+metadata domain client，校验数字 list、integer/time 与约束往返、非法值零 HTTP，以及
+外租户拒绝后的独立 SQL 读回。Node 通过无 IPC 的 tsx loader 运行，嵌套进程/临时缓存另行登记。
 `test_infinity_raptor_extra.py` 覆盖新表与既有 chunk 表补列、`extra` 写入/更新、
 原生历史字段驱动的 RAPTOR 生成，以及替换失败后的独立读回与精确恢复。
 该用例使用受控摘要模型和真实 Infinity；不代表真实模型、SQL 任务提交或生产升级已验收。
@@ -92,6 +95,7 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 | 测试 | 自有输入与边界 |
 |---|---|
 | `handler.TestBatchGoAPI`、`service.TestRegistrationCatalogZeroASR` | 私有 `MULTIRAG_BATCH_G_CONFIG` 仅指向 loopback scratch PostgreSQL `multirag_batch_g_*`；前者需当前源码 CLI `MULTIRAG_BATCH_G_CLI` 与预登记 `MULTIRAG_GO_OPT_IN_RESOURCES` 的 journal/listener 映射，后者需精确 `MULTIRAG_BATCH_G_ZERO_ADDR`。建库和 Go 必须使用同一 TCP 端点，不能假设 Docker exec 与同端口宿主数据库相同。实际 JWT/SQL/CLI、注册与受控模型 HTTP，原始失败和独立清理读回保留；不声明真实供应商或 MySQL 全应用启动。 |
+| `router.TestAfter1eGMCPAndOAuth` | `MULTIRAG_AFTER1E_G_DSN` 指向 loopback `multirag_after1e_g_*` scratch PostgreSQL，`MULTIRAG_AFTER1E_G_REDIS` 为预登记的独立空 Redis DB 连接 JSON，`REQUIRE_SERVICES=1` 缺环境直接失败。真实 JWT、SQL、Redis、注册 HTTP 与受控 TLS provider 验证 MCP owner/分页/脱敏及 OAuth 原子 state/PKCE/OIDC；独立读回账号、tenant、token 不变。OAuth 始终返回身份绑定未启用，不代表账号登录或真实供应商验收。 |
 | `router.TestConnectorDetailHTTPJWTAndSQL` | `MULTIRAG_CONNECTOR_DETAIL_DSN` 仅指向 loopback scratch DB `multirag_after0fb_g_connector_*`，另需预登记的 `MULTIRAG_CONNECTOR_DETAIL_ADDRESS`、`MULTIRAG_CONNECTOR_DETAIL_REPORT_DIR` 与认证配置 `MULTIRAG_CONNECTOR_DETAIL_CONFIG`。实际注册路由/JWT/SQL 检查安全详情 DTO、成员角色、拒绝响应一致及零写入/数据源外连；每个子场景保留独立 journal。 |
 | `service.TestAfter0fbNewModelsHTTPCLIAndSQL` | 私有 `MULTIRAG_AFTER0FB_B_CONFIG`、当前源码新构建的 `MULTIRAG_AFTER0FB_B_CLI` 和预登记 `MULTIRAG_AFTER0FB_B_RESOURCES`。HuaweiCloud/ModelScope/OrcaRouter/Qiniu 的实际 factory、SQL 实例、HTTP/CLI 消费者；供应商 HTTP 受控，无真实供应商验收声明。 |
 | `service.TestProviderFixesHTTPCLIAndSQL` | `MULTIRAG_AFTER0FB_D_CONFIG` 仅指向 loopback scratch DB `multirag_after0fb_d_*`，配合同源码 `MULTIRAG_AFTER0FB_D_CLI`、逐案 `MULTIRAG_AFTER0FB_D_RUN` 与不可覆盖的 `MULTIRAG_PROVIDER_TEST_JOURNAL`。实际 SQL/HTTP/CLI 检查现有供应商发现、rerank、音频和 hosted/local OCR/解析，拒绝请求零外连/SQL 变化；供应商端点受控。 |
