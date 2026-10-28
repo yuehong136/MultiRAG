@@ -1297,6 +1297,52 @@ func (c *MultiRAGClient) ChatToModel(cmd *Command) (ResponseIf, error) {
 	return &result, nil
 }
 
+// CheckProviderWithKey checks credentials without saving a provider instance.
+func (c *MultiRAGClient) CheckProviderWithKey(cmd *Command) (ResponseIf, error) {
+	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
+		return nil, fmt.Errorf("API token not set. Please login first")
+	}
+	if c.ServerType != "user" {
+		return nil, fmt.Errorf("this command is only allowed in USER mode")
+	}
+	providerName, ok := cmd.Params["provider_name"].(string)
+	if !ok || strings.TrimSpace(providerName) == "" {
+		return nil, fmt.Errorf("provider name not provided")
+	}
+	payload := make(map[string]interface{})
+	for _, field := range []string{"api_key", "region", "base_url"} {
+		value, present := cmd.Params[field]
+		if !present && field != "api_key" {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s must be a string", field)
+		}
+		payload[field] = text
+	}
+	path := fmt.Sprintf("/providers/%s/connection", url.PathEscape(providerName))
+	resp, err := c.HTTPClient.RequestBounded(http.MethodGet, path, "api", nil, payload, 64*1024)
+	if err != nil {
+		// Transport errors may contain a URL, proxy credentials or response text.
+		return nil, fmt.Errorf("failed to check provider connection")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to check provider connection: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Code *int `json:"code"`
+	}
+	if err := json.Unmarshal(resp.Body, &result); err != nil || result.Code == nil {
+		return nil, fmt.Errorf("check provider connection failed: invalid response")
+	}
+	if *result.Code != 0 {
+		return nil, fmt.Errorf("check provider connection failed: code %d", *result.Code)
+	}
+	// Never print a remote message/data value that might echo credentials.
+	return &SimpleResponse{Code: 0, Message: "success"}, nil
+}
+
 func (c *MultiRAGClient) CheckProviderConnection(cmd *Command) (ResponseIf, error) {
 	if c.HTTPClient.APIKey == "" && c.HTTPClient.LoginToken == "" {
 		return nil, fmt.Errorf("API token not set. Please login first")

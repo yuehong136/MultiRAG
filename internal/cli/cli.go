@@ -500,10 +500,7 @@ func (c *CLI) Run() error {
 
 	// Save history on exit
 	defer func() {
-		if f, err := os.Create(histFile); err == nil {
-			c.line.WriteHistory(f)
-			f.Close()
-		}
+		c.saveHistory(histFile)
 		c.line.Close()
 	}()
 
@@ -524,10 +521,7 @@ func (c *CLI) Run() error {
 			continue
 		}
 
-		// Add to history (skip meta commands)
-		if !strings.HasPrefix(input, "\\") {
-			c.line.AppendHistory(input)
-		}
+		c.appendHistory(input)
 
 		if err := c.execute(input); err != nil {
 			fmt.Printf("Error: %v\n", err)
@@ -537,7 +531,44 @@ func (c *CLI) Run() error {
 	return nil
 }
 
-func (c *CLI) execute(input string) error {
+// credentialInput also recognizes incomplete CHECK PROVIDER commands, before
+// parsing can report an error containing a credential token.
+func credentialInput(input string) bool {
+	if strings.ContainsRune(input, 0) {
+		return true
+	}
+	lexer := NewLexer(input)
+	previous := TokenEOF
+	for token := lexer.NextToken(); token.Type != TokenEOF; token = lexer.NextToken() {
+		if token.Type == TokenKey || previous == TokenCheck && token.Type == TokenProvider {
+			return true
+		}
+		previous = token.Type
+	}
+	return false
+}
+
+func (c *CLI) appendHistory(input string) {
+	if !strings.HasPrefix(input, "\\") && !credentialInput(input) {
+		c.line.AppendHistory(input)
+	}
+}
+
+func (c *CLI) saveHistory(path string) {
+	if f, err := os.Create(path); err == nil {
+		c.line.WriteHistory(f)
+		f.Close()
+	}
+}
+
+func (c *CLI) execute(input string) (executeErr error) {
+	if credentialInput(input) {
+		defer func() {
+			if executeErr != nil {
+				executeErr = fmt.Errorf("credential command failed; check syntax, authentication and provider configuration")
+			}
+		}()
+	}
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil

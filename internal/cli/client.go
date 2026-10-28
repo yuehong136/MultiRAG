@@ -237,6 +237,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ShowInstanceBalance(cmd)
 	case "check_provider_connection":
 		return c.CheckProviderConnection(cmd)
+	case "check_provider_with_key":
+		return c.CheckProviderWithKey(cmd)
 	case "alter_provider_instance":
 		return c.AlterProviderInstance(cmd)
 	case "drop_instance_model":

@@ -1499,6 +1499,9 @@ func (p *Parser) parseUseCommand() (*Command, error) {
 
 func (p *Parser) parseCheckCommand() (*Command, error) {
 	p.nextToken() // consume CHECK
+	if p.curToken.Type == TokenProvider {
+		return p.parseCheckProviderWithKey()
+	}
 	if p.curToken.Type != TokenInstance {
 		return nil, fmt.Errorf("expected INSTANCE after CHECK")
 	}
@@ -1524,6 +1527,57 @@ func (p *Parser) parseCheckCommand() (*Command, error) {
 	cmd := NewCommand("check_provider_connection")
 	cmd.Params["provider_name"] = providerName
 	cmd.Params["instance_name"] = instanceName
+	return cmd, nil
+}
+
+// parseCheckProviderWithKey parses a credential probe without creating an instance.
+func (p *Parser) parseCheckProviderWithKey() (*Command, error) {
+	if strings.ContainsRune(p.lexer.input, 0) {
+		return nil, fmt.Errorf("invalid provider check input")
+	}
+	p.nextToken() // consume PROVIDER
+	cmd := NewCommand("check_provider_with_key")
+	for _, field := range []struct {
+		name string
+		next int
+	}{
+		{"provider_name", TokenRegion},
+		{"region", TokenKey},
+		{"api_key", TokenURL},
+	} {
+		if p.curToken.Type != TokenQuotedString {
+			return nil, fmt.Errorf("expected quoted %s", field.name)
+		}
+		cmd.Params[field.name] = p.curToken.Value
+		p.nextToken()
+		if field.name == "api_key" {
+			break
+		}
+		if p.curToken.Type != field.next {
+			return nil, fmt.Errorf("expected REGION then KEY after provider name")
+		}
+		p.nextToken()
+	}
+	if p.curToken.Type == TokenURL {
+		p.nextToken()
+		if p.curToken.Type != TokenQuotedString {
+			return nil, fmt.Errorf("expected quoted base URL")
+		}
+		cmd.Params["base_url"] = p.curToken.Value
+		p.nextToken()
+	}
+	// Check the current token explicitly: expectSemicolon also accepts a peek
+	// semicolon, which would otherwise swallow an unexpected credential token.
+	if p.curToken.Type != TokenSemicolon {
+		return nil, fmt.Errorf("expected semicolon after provider check")
+	}
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenEOF {
+		return nil, fmt.Errorf("unexpected trailing provider check option")
+	}
 	return cmd, nil
 }
 
