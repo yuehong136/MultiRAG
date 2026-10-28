@@ -28,9 +28,11 @@ func chatModelClass(name string, config *ChatConfig) string {
 }
 
 func normalizeChatConfig(config *ChatConfig) *ChatConfig {
-	if config == nil {
-		config = &ChatConfig{}
+	local := ChatConfig{}
+	if config != nil {
+		local = *config
 	}
+	config = &local
 	if config.Effort == nil {
 		defaultEffort := "default"
 		config.Effort = &defaultEffort

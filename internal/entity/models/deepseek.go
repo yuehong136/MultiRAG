@@ -1,11 +1,10 @@
 package models
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
+	"maps"
 	"net/http"
 	"strings"
 )
@@ -19,7 +18,7 @@ type DeepSeekModel struct {
 
 func NewDeepSeekModel(baseURL map[string]string, urlSuffix URLSuffix) *DeepSeekModel {
 	return &DeepSeekModel{
-		BaseURL:    baseURL,
+		BaseURL:    maps.Clone(baseURL),
 		URLSuffix:  urlSuffix,
 		httpClient: &http.Client{Transport: openAIChatTransport},
 	}
@@ -44,17 +43,19 @@ func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig,
 	if err := ValidateMessages(messages); err != nil {
 		return nil, err
 	}
-	if apiConfig == nil || apiConfig.APIKey == nil {
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("API key is nil")
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
 
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
+	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if err != nil {
+		return nil, err
 	}
-
-	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Chat)
+	if m.URLSuffix.Chat == "" {
+		return nil, fmt.Errorf("chat endpoint is missing")
+	}
+	url := joinModelURL(baseURL, m.URLSuffix.Chat)
 
 	// Build request body
 	reqBody := map[string]interface{}{
@@ -132,7 +133,7 @@ func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig,
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -140,59 +141,21 @@ func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig,
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
-
-	// Parse response
-	var result map[string]interface{}
-	if err = json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	response, err := decodeLegacyChatResponse(resp.Body)
+	if ctxErr := requestContext(apiConfig).Err(); ctxErr != nil {
+		return nil, ctxErr
 	}
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
+	if err != nil {
+		return nil, err
 	}
-
-	firstChoice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid choice format")
+	if response.ReasoningContent != nil {
+		reason := strings.TrimPrefix(*response.ReasoningContent, "\n")
+		response.ReasoningContent = &reason
 	}
-
-	messageMap, ok := firstChoice["message"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid message format")
-	}
-
-	content, ok := messageMap["content"].(string)
-	if !ok || content == "" {
-		return nil, fmt.Errorf("invalid content format")
-	}
-
-	var reasonContent string
-	if value, present := messageMap["reasoning_content"]; present && value != nil {
-		reasonContent, ok = value.(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid reasoning content format")
-		}
-		// if first char of reasonContent is \n remove the '\n'
-		if reasonContent != "" && reasonContent[0] == '\n' {
-			reasonContent = reasonContent[1:]
-		}
-	}
-
-	chatResponse := &ChatResponse{
-		Answer:           &content,
-		ReasoningContent: &reasonContent,
-	}
-
-	return chatResponse, nil
+	return response, nil
 }
 
 func (m *DeepSeekModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
@@ -212,19 +175,24 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
-	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
+	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return fmt.Errorf("message or API key is nil")
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return fmt.Errorf("model is required")
 	}
 	if err := ValidateMessages(messages); err != nil {
 		return err
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
+	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
+	if err != nil {
+		return err
 	}
-
-	url := fmt.Sprintf("%s/chat/completions", m.BaseURL[region])
+	if m.URLSuffix.Chat == "" {
+		return fmt.Errorf("chat endpoint is missing")
+	}
+	url := joinModelURL(baseURL, m.URLSuffix.Chat)
 
 	// Build request body with streaming enabled
 	reqBody := map[string]interface{}{
@@ -306,7 +274,7 @@ func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Me
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -318,95 +286,7 @@ func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Me
 		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
-	// SSE parsing: read line by line
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	completed, receivedAnswer := false, false
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// SSE data line starts with "data:"
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		// Extract JSON after "data:"
-		data := strings.TrimSpace(line[5:])
-
-		// [DONE] marks the end of stream
-		if data == "[DONE]" {
-			if err := requestContext(apiConfig).Err(); err != nil {
-				return err
-			}
-			completed = true
-			break
-		}
-
-		// Parse the JSON event
-		var event map[string]interface{}
-		if err = json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("invalid stream event: %w", err)
-		}
-
-		if event["error"] != nil {
-			return fmt.Errorf("provider stream error")
-		}
-		choices, ok := event["choices"].([]interface{})
-		if !ok || len(choices) == 0 {
-			continue
-		}
-
-		firstChoice, ok := choices[0].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		delta, ok := firstChoice["delta"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		content, ok := delta["content"].(string)
-		if ok && content != "" {
-			receivedAnswer = true
-			if err := sender(&content, nil); err != nil {
-				return err
-			}
-		}
-
-		reasoningContent, ok := delta["reasoning_content"].(string)
-		if ok && reasoningContent != "" {
-			if err := sender(nil, &reasoningContent); err != nil {
-				return err
-			}
-		}
-
-		finishReason, ok := firstChoice["finish_reason"].(string)
-		if ok && finishReason != "" {
-			completed = true
-			break
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if err := requestContext(apiConfig).Err(); err != nil {
-		return err
-	}
-	if !completed {
-		return fmt.Errorf("stream ended before completion")
-	}
-	if !receivedAnswer {
-		return fmt.Errorf("stream returned no text answer")
-	}
-	// Send [DONE] marker for OpenAI compatibility
-	endOfStream := "[DONE]"
-	if err = sender(&endOfStream, nil); err != nil {
-		return err
-	}
-
-	return scanner.Err()
+	return readLegacyChatStream(resp.Body, apiConfig, false, sender)
 }
 
 func (m *DeepSeekModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
@@ -420,7 +300,7 @@ func (m *DeepSeekModel) Embed(modelName *string, texts []string, apiConfig *APIC
 func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	apiConfig, cancelCall := modelCallConfig(apiConfig)
 	defer cancelCall()
-	if apiConfig == nil || apiConfig.APIKey == nil {
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("API key is nil")
 	}
 	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
@@ -432,7 +312,7 @@ func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create model list request: %w", err)
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -443,19 +323,14 @@ func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		return nil, fmt.Errorf("list DeepSeek models: status %d", resp.StatusCode)
 	}
 
-	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	names, err := strictProviderModelNames(resp.Body)
+	if ctxErr := requestContext(apiConfig).Err(); ctxErr != nil {
+		return nil, ctxErr
 	}
-	if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode DeepSeek model list: %w", err)
+	if err != nil {
+		return nil, err
 	}
-	models := make([]string, 0, len(payload.Data))
-	for _, model := range payload.Data {
-		models = append(models, model.ID)
-	}
-	return models, nil
+	return names, requestContext(apiConfig).Err()
 }
 
 type deepSeekBalanceResponse struct {

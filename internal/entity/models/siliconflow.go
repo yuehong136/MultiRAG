@@ -17,7 +17,6 @@
 package models
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -71,7 +70,7 @@ func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConf
 	if err := ValidateMessages(messages); err != nil {
 		return nil, err
 	}
-	if apiConfig == nil || apiConfig.APIKey == nil {
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("API key is nil")
 	}
 	chatModelConfig = normalizeChatConfig(chatModelConfig)
@@ -137,7 +136,7 @@ func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConf
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -145,60 +144,25 @@ func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConf
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
-
-	// Parse response
-	var result map[string]interface{}
-	if err = json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	response, err := decodeLegacyChatResponse(resp.Body)
+	if ctxErr := requestContext(apiConfig).Err(); ctxErr != nil {
+		return nil, ctxErr
 	}
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
+	if err != nil {
+		return nil, err
 	}
-
-	firstChoice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid choice format")
+	thinking, answer := GetThinkingAndAnswer(&modelClass, response.Answer)
+	if response.ReasoningContent != nil && *response.ReasoningContent != "" {
+		reason := strings.TrimPrefix(*response.ReasoningContent, "\n")
+		thinking, answer = &reason, response.Answer
 	}
-
-	messageMap, ok := firstChoice["message"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid message format")
+	if answer == nil || strings.TrimSpace(*answer) == "" {
+		return nil, fmt.Errorf("model chat response has no text answer")
 	}
-
-	content, ok := messageMap["content"].(string)
-	if !ok || content == "" {
-		return nil, fmt.Errorf("invalid content format")
-	}
-
-	thinking, answer := GetThinkingAndAnswer(&modelClass, &content)
-	if value, present := messageMap["reasoning_content"]; present && value != nil {
-		reason, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid reasoning content")
-		}
-		if reason != "" {
-			reason = strings.TrimPrefix(reason, "\n")
-			thinking = &reason
-			answer = &content
-		}
-	}
-
-	chatResponse := &ChatResponse{
-		Answer:           answer,
-		ReasoningContent: thinking,
-	}
-
-	return chatResponse, nil
+	return &ChatResponse{Answer: answer, ReasoningContent: thinking}, nil
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
@@ -221,8 +185,11 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
 	apiConfig, cancelCall := modelStreamConfig(apiConfig)
 	defer cancelCall()
-	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
+	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return fmt.Errorf("message or API key is nil")
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return fmt.Errorf("model is required")
 	}
 	if err := ValidateMessages(messages); err != nil {
 		return err
@@ -288,7 +255,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -300,93 +267,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
-	// SSE parsing: read line by line
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	completed, receivedAnswer := false, false
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// SSE data line starts with "data:"
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		// Extract JSON after "data:"
-		data := strings.TrimSpace(line[5:])
-
-		// [DONE] marks the end of stream
-		if data == "[DONE]" {
-			if err := requestContext(apiConfig).Err(); err != nil {
-				return err
-			}
-			completed = true
-			break
-		}
-
-		// Parse the JSON event
-		var event map[string]interface{}
-		if err = json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("invalid stream event: %w", err)
-		}
-
-		if event["error"] != nil {
-			return fmt.Errorf("provider stream error")
-		}
-		choices, ok := event["choices"].([]interface{})
-		if !ok || len(choices) == 0 {
-			continue
-		}
-
-		firstChoice, ok := choices[0].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		delta, ok := firstChoice["delta"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		content, ok := delta["content"].(string)
-		if ok && content != "" {
-			receivedAnswer = true
-			if err := sender(&content, nil); err != nil {
-				return err
-			}
-		}
-
-		if reasoning, ok := delta["reasoning_content"].(string); ok && reasoning != "" {
-			if err := sender(nil, &reasoning); err != nil {
-				return err
-			}
-		}
-		finishReason, ok := firstChoice["finish_reason"].(string)
-		if ok && finishReason != "" {
-			completed = true
-			break
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if err := requestContext(apiConfig).Err(); err != nil {
-		return err
-	}
-	if !completed {
-		return fmt.Errorf("stream ended before completion")
-	}
-	if !receivedAnswer {
-		return fmt.Errorf("stream returned no text answer")
-	}
-	// Send [DONE] marker for OpenAI compatibility
-	endOfStream := "[DONE]"
-	if err = sender(&endOfStream, nil); err != nil {
-		return err
-	}
-
-	return scanner.Err()
+	return readLegacyChatStream(resp.Body, apiConfig, false, sender)
 }
 
 // Embed returns indexed embeddings for a list of texts
@@ -423,7 +304,7 @@ func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

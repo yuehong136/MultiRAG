@@ -17,12 +17,12 @@
 package models
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +38,7 @@ type AliyunModel struct {
 // NewAliyunModel creates a DashScope driver for the configured regions.
 func NewAliyunModel(baseURL map[string]string, urlSuffix URLSuffix) *AliyunModel {
 	return &AliyunModel{
-		BaseURL:   baseURL,
+		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
@@ -53,7 +53,7 @@ func NewAliyunModel(baseURL map[string]string, urlSuffix URLSuffix) *AliyunModel
 func (m *AliyunModel) Name() string { return "aliyun" }
 
 func (m *AliyunModel) endpoint(config *APIConfig, suffix string) (string, string, error) {
-	if config == nil || config.APIKey == nil || *config.APIKey == "" {
+	if config == nil || config.APIKey == nil || strings.TrimSpace(*config.APIKey) == "" {
 		return "", "", errors.New("aliyun: API key is required")
 	}
 	region := "default"
@@ -67,7 +67,7 @@ func (m *AliyunModel) endpoint(config *APIConfig, suffix string) (string, string
 	if suffix == "" {
 		return "", "", errors.New("aliyun: endpoint suffix is missing")
 	}
-	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(suffix, "/"), *config.APIKey, nil
+	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(suffix, "/"), strings.TrimSpace(*config.APIKey), nil
 }
 
 func aliyunChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
@@ -136,8 +136,7 @@ func (m *AliyunModel) request(method, suffix string, config *APIConfig, body int
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("aliyun: API request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		return nil, fmt.Errorf("aliyun: API request failed with status %d", resp.StatusCode)
 	}
 	return resp, nil
 }
@@ -164,22 +163,18 @@ func (m *AliyunModel) chat(modelName string, messages []Message, apiConfig *APIC
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var result aliyunChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("aliyun: decode chat response: %w", err)
+	response, err := decodeLegacyChatResponse(resp.Body)
+	if ctxErr := requestContext(apiConfig).Err(); ctxErr != nil {
+		return nil, ctxErr
 	}
-	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("aliyun: chat error: %s", result.Error)
+	if err != nil {
+		return nil, err
 	}
-	if len(result.Choices) == 0 || result.Choices[0].Message.Content == nil {
-		return nil, errors.New("aliyun: chat response has no answer")
+	if response.ReasoningContent != nil {
+		trimmed := strings.TrimLeft(*response.ReasoningContent, "\n")
+		response.ReasoningContent = &trimmed
 	}
-	reasoning := result.Choices[0].Message.ReasoningContent
-	if reasoning != nil {
-		trimmed := strings.TrimLeft(*reasoning, "\n")
-		reasoning = &trimmed
-	}
-	return &ChatResponse{Answer: result.Choices[0].Message.Content, ReasoningContent: reasoning}, nil
+	return response, nil
 }
 
 // Chat sends a user message and returns the complete answer.
@@ -229,63 +224,7 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 		return err
 	}
 	defer resp.Body.Close()
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	receivedAnswer := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			if err := requestContext(apiConfig).Err(); err != nil {
-				return err
-			}
-			if !receivedAnswer {
-				return errors.New("aliyun: stream returned no text answer")
-			}
-			done := "[DONE]"
-			return sender(&done, nil)
-		}
-		if data == "" {
-			continue
-		}
-		var event struct {
-			Choices []struct {
-				Delta struct {
-					Content          *string `json:"content"`
-					ReasoningContent *string `json:"reasoning_content"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Error json.RawMessage `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return fmt.Errorf("aliyun: decode stream event: %w", err)
-		}
-		if len(event.Error) != 0 && string(event.Error) != "null" {
-			return fmt.Errorf("aliyun: stream error: %s", event.Error)
-		}
-		if len(event.Choices) == 0 {
-			continue
-		}
-		delta := event.Choices[0].Delta
-		if delta.Content != nil && *delta.Content != "" {
-			receivedAnswer = true
-			if err := sender(delta.Content, nil); err != nil {
-				return err
-			}
-		}
-		if delta.ReasoningContent != nil && *delta.ReasoningContent != "" {
-			if err := sender(nil, delta.ReasoningContent); err != nil {
-				return err
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("aliyun: read stream: %w", err)
-	}
-	return io.ErrUnexpectedEOF
+	return readLegacyChatStream(resp.Body, apiConfig, true, sender)
 }
 
 func (m *AliyunModel) Embed(modelName *string, texts []string, apiConfig *APIConfig, embeddingConfig *EmbeddingConfig) ([]EmbeddingData, error) {
@@ -312,11 +251,11 @@ func (m *AliyunModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		} `json:"output"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("aliyun: decode model list: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
-		return nil, fmt.Errorf("aliyun: model list error: %s", result.Error)
+		return nil, errors.New("aliyun: model list error")
 	}
 	names := make([]string, 0, len(result.Data)+len(result.Output.Models))
 	for _, item := range result.Data {
