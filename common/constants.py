@@ -68,6 +68,7 @@ class ParserType(StrEnum):
 
 
 class FileSource(StrEnum):
+    AZURE_BLOB = "azure_blob"
     LOCAL = ""
     KNOWLEDGEBASE = "knowledgebase"
     REST_API = "rest_api"

@@ -24,6 +24,7 @@ SOFTWARE.
 
 from .airtable_connector import AirtableConnector
 from .asana_connector import AsanaConnector
+from .azure_blob_connector import AzureBlobConnector
 from .blob_connector import BlobStorageConnector
 from .config import BlobType, DocumentSource
 from .confluence_connector import ConfluenceConnector
@@ -53,6 +54,7 @@ from .zendesk_connector import ZendeskConnector
 __all__ = [
     "AirtableConnector",
     "AsanaConnector",
+    "AzureBlobConnector",
     "BasicExpertInfo",
     "BlobStorageConnector",
     "BlobType",

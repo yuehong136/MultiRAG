@@ -33,6 +33,7 @@ from api.db import InputType
 from api.db.db_models import Connector, SyncLogs
 from api.db.services.connector_service import Connector2KbService, ConnectorService, SyncLogsService
 from common.constants import ConnectorTaskType, FileSource, RetCode, TaskStatus
+from common.data_source.azure_blob_connector import AzureBlobConnector
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
 from common.data_source.microsoft_graph import graph_batch_size
 from common.data_source.onedrive_connector import OneDriveConnector
@@ -91,6 +92,11 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
     config = dict(req.get("config") or {})
     if state_key := _WORKER_STATE_FIELDS.get(req["source"]):
         config.pop(state_key, None)
+    if req["source"] == FileSource.AZURE_BLOB:
+        try:
+            AzureBlobConnector.build_connector(config)
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
     if req["source"] == FileSource.REST_API:
         try:
             _validate_rest_settings(config)
@@ -127,6 +133,11 @@ def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tup
         return False, "Can't find this Connector!", RetCode.DATA_ERROR
 
     changes = {field: req[field] for field in _UPDATABLE_FIELDS if field in req}
+    if "config" in changes and connector.source == FileSource.AZURE_BLOB:
+        try:
+            AzureBlobConnector.build_connector(changes["config"])
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
     if "config" in changes and (state_key := _WORKER_STATE_FIELDS.get(connector.source)):
         connector = db.scalar(select(Connector).where(Connector.id == connector_id).with_for_update().execution_options(populate_existing=True))
         if connector is None:

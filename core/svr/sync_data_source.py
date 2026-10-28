@@ -29,6 +29,7 @@ from common.constants import ConnectorTaskType, FileSource
 from common.data_source import (
     AirtableConnector,
     AsanaConnector,
+    AzureBlobConnector,
     BlobStorageConnector,
     DingTalkAITableConnector,
     DiscordConnector,
@@ -317,6 +318,55 @@ class _BlobLikeBase(SyncBase):
 class S3(_BlobLikeBase):
     SOURCE_NAME: str = FileSource.S3
     DEFAULT_BUCKET_TYPE: str = "s3"
+
+
+class AzureBlob(_BlobLikeBase):
+    SOURCE_NAME: str = FileSource.AZURE_BLOB
+
+    async def _run_sync_task_logic(self, task: dict[str, Any]) -> datetime:
+        stopped = threading.Event()
+
+        def check_active() -> None:
+            if stopped.is_set():
+                raise SyncTaskCancelled("Azure Blob synchronization stopped")
+            with db_connection() as db:
+                SyncLogsService.raise_if_cancelled(db, task["id"])
+
+        self._azure_check_active = check_active
+
+        def run() -> datetime:
+            try:
+                # The synchronous SDK and the legacy sync/SQL pipeline stay on
+                # one worker thread. Every DB context creates its own session.
+                with asyncio.Runner() as runner:
+                    return runner.run(super(AzureBlob, self)._run_sync_task_logic(task))
+            finally:
+                if hasattr(self, "connector"):
+                    self.connector.close()
+
+        worker = asyncio.create_task(asyncio.to_thread(run))
+        try:
+            return await asyncio.shield(worker)
+        finally:
+            # Cancellation cannot interrupt synchronous SDK IO. Signal checks
+            # before/after finite requests, then drain before closing the root.
+            if not worker.done():
+                stopped.set()
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        self.connector = AzureBlobConnector.build_connector(self.conf, check_active=self._azure_check_active)
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        records = list(self.connector.list_keys())
+        return self._fingerprint_filtered_generator(task, records)
 
 
 class R2(_BlobLikeBase):
@@ -1586,6 +1636,7 @@ class PostgreSQL(_RDBMSBase):
 
 
 func_factory = {
+    FileSource.AZURE_BLOB: AzureBlob,
     FileSource.REST_API: REST_API,
     FileSource.RSS: RSS,
     FileSource.S3: S3,
