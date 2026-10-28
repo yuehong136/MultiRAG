@@ -99,7 +99,8 @@ class BlobSourceTransport(HttpTransport):
             return self._error(request, 403, "AuthorizationPermissionMismatch")
         names = self.list_names if self.list_names is not None else [name for name in self.objects if name.startswith(prefix)]
         selected = names[offset : offset + self.page_size]
-        root = ElementTree.Element("EnumerationResults", ServiceEndpoint="https://ownedaccount.blob.core.windows.net/", ContainerName="container")
+        target = urlsplit(request.url)
+        root = ElementTree.Element("EnumerationResults", ServiceEndpoint=f"{target.scheme}://{target.netloc}/", ContainerName=unquote(target.path).strip("/"))
         ElementTree.SubElement(root, "Prefix").text = prefix
         ElementTree.SubElement(root, "Marker").text = query.get("marker", [""])[0]
         ElementTree.SubElement(root, "MaxResults").text = str(self.page_size)
@@ -135,7 +136,7 @@ class BlobSourceTransport(HttpTransport):
             assert request.method == "GET" and query.get("comp") == ["list"]
             return self._listing(request, query)
         assert request.method == "GET"
-        key = unquote(target.path).removeprefix("/container/")
+        key = unquote(target.path).split("/", 2)[2]
         if self.fail_get == key:
             return self._error(request, 403, "AuthorizationPermissionMismatch")
         if self.race_key == key:

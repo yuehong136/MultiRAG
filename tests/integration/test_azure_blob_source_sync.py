@@ -232,9 +232,15 @@ async def test_azure_failure_recovery_prune_and_http_edit_boundaries(azure_sync_
     assert invalid["retcode"] != 0
     with env["engine"].connect() as reader:
         assert reader.scalar(sa.select(Connector.config).where(Connector.id == env["connector"])) == env["config"]
-    edited = {**env["config"], "prefix": "docs/sub/", "allow_images": True}
+    edited = {**env["config"], "credentials": {**env["config"]["credentials"], "container_name": "other-container"}, "prefix": "docs/sub/", "allow_images": True}
     response = requests.patch(url, headers=env["headers"], json={"config": edited}, timeout=15).json()
     assert response["retcode"] == 0 and response["data"]["config"] == edited
     with env["engine"].connect() as reader:
         assert reader.scalar(sa.select(Connector.config).where(Connector.id == env["connector"])) == edited
     assert len(env["state"]["transports"]) == count, "save/edit must issue zero Azure requests"
+    env["config"] = edited
+    env["state"]["objects"]["docs/sub/a.txt"] = BlobVersion(b"from-other-container")
+    rescoped = await _run(env)
+    replacement = next(row for row in rescoped.values() if row["name"] == "docs/sub/a.txt")
+    assert read_object(env["storage"], env["bucket"], f"{env['kb']}/{replacement['location']}") == b"from-other-container"
+    assert sum("restype" not in urlsplit(item.url).query for item in env["state"]["transports"][-1].requests) == 1

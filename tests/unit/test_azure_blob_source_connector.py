@@ -174,7 +174,7 @@ def test_complete_paged_inventory_is_metadata_only_and_fetch_is_conditioned(monk
         assert document.id == "docs/a.txt" and document.source == "azure_blob"
         assert document.doc_updated_at == datetime(2026, 1, 1, tzinfo=UTC)
         assert document.metadata == {"container": "container", "prefix": "docs/", "etag": '"version-one"'}
-        assert document.fingerprint == records[0].fingerprint == xxhash.xxh128(b"version-one").hexdigest()
+        assert document.fingerprint == records[0].fingerprint == xxhash.xxh128(b"https://ownedaccount.blob.core.windows.net\0container\0version-one").hexdigest()
         assert transport.requests[-1].headers["If-Match"] == '"version-one"'
     assert transport.closed and transport.close_count == 1
 
@@ -332,3 +332,16 @@ def test_dot_segments_cannot_escape_container_or_local_storage_prefix(monkeypatc
         list(connector.load_from_state())
     assert transport.closed
     assert all(parse_qs(urlsplit(request.url).query).get("comp") == ["list"] for request in transport.requests)
+
+
+@pytest.mark.parametrize("field,value", [("container_name", "other-container"), ("account_name", "otheraccount")])
+def test_same_etag_in_another_source_scope_requires_refetch(monkeypatch: pytest.MonkeyPatch, field: str, value: str) -> None:
+    connector, transport, _ = connect(monkeypatch)
+    with connector.session():
+        original = next(connector.list_keys()).fingerprint
+    config = configuration()
+    config["credentials"][field] = value
+    replacement, _, _ = connect(monkeypatch, config, transport)
+    with replacement.session():
+        other = next(replacement.list_keys()).fingerprint
+    assert original != other, "ETags are resource-scoped: editing account/container must invalidate the old source version"

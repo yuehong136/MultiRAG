@@ -197,6 +197,15 @@ class AzureBlobConnector(LoadConnector, PollConnector, FingerprintConnector, Che
         extension = get_file_ext(name)
         return not name.endswith("/") and (is_accepted_file_ext(extension, types) or extension in {".doc", ".xls", ".ppt", ".htm"})
 
+    def _fingerprint(self, etag: str) -> str:
+        if self._connection_args is None:
+            raise ConnectorMissingCredentialError("Azure Blob")
+        account_url, container, _ = self._connection_args
+        # An ETag is a version of one resource, not a globally unique token.
+        # Editing the source account/container must invalidate prior versions.
+        version = "\0".join((account_url, container, etag.strip().strip('"')))
+        return xxhash.xxh128(version.encode()).hexdigest()
+
     def list_keys(self) -> Iterator[KeyRecord]:
         inventory: dict[str, Any] = {}
         try:
@@ -231,7 +240,7 @@ class AzureBlobConnector(LoadConnector, PollConnector, FingerprintConnector, Che
             raise ConnectorValidationError("Azure Blob inventory failed; retry the complete synchronization") from None
         self._listing = inventory
         for name, props in inventory.items():
-            yield KeyRecord(key=name, fingerprint=xxhash.xxh128(props.etag.strip().strip('"').encode()).hexdigest())
+            yield KeyRecord(key=name, fingerprint=self._fingerprint(props.etag))
 
     def get_value(self, key: str) -> Document | None:
         self.check_active()
@@ -264,7 +273,7 @@ class AzureBlobConnector(LoadConnector, PollConnector, FingerprintConnector, Che
             blob=data,
             doc_updated_at=modified,
             size_bytes=len(data),
-            fingerprint=xxhash.xxh128(etag.strip().strip('"').encode()).hexdigest(),
+            fingerprint=self._fingerprint(etag),
             metadata={"container": client.container_name, "prefix": self.prefix, "etag": etag},
         )
 
