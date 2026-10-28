@@ -30,6 +30,7 @@ func TestCLIAPIRouteScope(t *testing.T) {
 		t.Fatal("document stop must use the lifecycle cancellation handler")
 	}
 	for route, method := range map[string]string{
+		"POST /api/v1/searchbots/related_questions":         "(*SearchbotHandler).Handle-fm",
 		"GET /api/v1/agents/:agent_id/versions":             ".ListAgentVersions-fm",
 		"GET /api/v1/agents/:agent_id/versions/:version_id": ".GetAgentVersion-fm",
 		"POST /api/v1/agents/:agent_id/upload":              ".UploadAgentFile-fm",
@@ -38,7 +39,7 @@ func TestCLIAPIRouteScope(t *testing.T) {
 			t.Fatalf("agent route %s must bind %s", route, method)
 		}
 	}
-	for _, entry := range [][2]string{{"GET", "/api/v1/agents/id/versions"}, {"GET", "/api/v1/agents/id/versions/version"}, {"POST", "/api/v1/agents/id/upload"}} {
+	for _, entry := range [][2]string{{"GET", "/api/v1/agents/id/versions"}, {"GET", "/api/v1/agents/id/versions/version"}, {"POST", "/api/v1/agents/id/upload"}, {"POST", "/api/v1/searchbots/related_questions"}} {
 		w := httptest.NewRecorder()
 		app.ServeHTTP(w, httptest.NewRequest(entry[0], entry[1], strings.NewReader(`{}`)))
 		if w.Code != http.StatusUnauthorized {

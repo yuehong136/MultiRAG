@@ -187,9 +187,11 @@ func startServer(config *server.Config) {
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	providerHandler := handler.NewProviderHandler(userService, modelProviderService)
 	taskHandler := handler.NewTaskHandler(taskService)
+	searchbotHandler := handler.NewSearchbotHandler(service.NewSearchbotService(modelProviderService))
 
 	// Initialize router
 	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
+	r.SetSearchbotHandler(searchbotHandler)
 
 	// Create Gin engine
 	ginEngine := gin.New()

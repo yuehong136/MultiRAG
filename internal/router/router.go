@@ -44,6 +44,7 @@ type Router struct {
 	providerHandler      *handler.ProviderHandler
 	taskHandler          *handler.TaskHandler
 	agentHandler         *handler.AgentHandler
+	searchbotHandler     *handler.SearchbotHandler
 }
 
 // NewRouter create router
@@ -85,6 +86,11 @@ func NewRouter(
 	}
 }
 
+// SetSearchbotHandler binds the model service shared by the server's handlers.
+func (r *Router) SetSearchbotHandler(searchbotHandler *handler.SearchbotHandler) {
+	r.searchbotHandler = searchbotHandler
+}
+
 // Setup setup routes
 func (r *Router) Setup(engine *gin.Engine) {
 	// Mark even authentication denials before the protected middleware runs.
@@ -100,6 +106,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 	}
 	if r.agentHandler == nil {
 		r.agentHandler = handler.NewAgentHandler(service.NewAgentService())
+	}
+	if r.searchbotHandler == nil {
+		r.searchbotHandler = handler.NewSearchbotHandler(service.NewSearchbotService(service.NewModelProviderService()))
 	}
 	// Health check
 	engine.GET("/health", r.systemHandler.Health)
@@ -269,6 +278,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
 			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
 			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
+			v1.POST("/searchbots/related_questions", r.searchbotHandler.Handle)
 
 			models := v1.Group("/models")
 			{
