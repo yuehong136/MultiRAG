@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -255,3 +256,153 @@ def test_text_arrays_reject_malformed_and_unsupported_parts_before_lookup(openai
     response = client.post("/api/v1/openai/dlg-1/chat/completions", json={"model": "model", "messages": [{"role": "user", "content": content}]})
     assert response.status_code == 200 and response.json()["code"] != 0
     assert calls == []
+
+
+@pytest.fixture
+def openai_http_url(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]], request: pytest.FixtureRequest) -> Iterator[str]:
+    """Exercise the registered route through a reserved, real TCP listener."""
+    import secrets
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from tests.support.resource_journal import ResourceJournal
+    from tests.support.uvicorn_runtime import run_server
+
+    client, _, _, _ = openai_route
+    journal = ResourceJournal(request.node.nodeid)
+    thread_name = f"openai-sdk-{journal.run_id}"
+    for _attempt in range(32):
+        port = 20000 + secrets.randbelow(40000)
+        journal.event("reserve-listener-thread", host="127.0.0.1", port=port, thread=thread_name)
+        listener = socket.socket()
+        try:
+            listener.bind(("127.0.0.1", port))
+            break
+        except OSError:
+            listener.close()
+            journal.event("listener-unavailable", port=port)
+    else:
+        raise RuntimeError("No registered OpenAI test listener available")
+    server = uvicorn.Server(uvicorn.Config(client.app, lifespan="off", log_level="error", access_log=False, loop="asyncio"))
+    thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, name=thread_name, daemon=True)
+    try:
+        thread.start()
+        deadline = time.monotonic() + 15
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started
+        yield f"http://127.0.0.1:{port}/api/v1/openai/dlg-1"
+    finally:
+        server.should_exit = True
+        if thread.ident is not None:
+            thread.join(timeout=15)
+        listener.close()
+        assert not thread.is_alive()
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0
+        journal.event("listener-absent", host="127.0.0.1", port=port, thread_alive=False)
+
+
+@pytest.mark.parametrize("shape", ["incremental", "cumulative", "final-only"])
+@pytest.mark.parametrize("reference", [False, True])
+def test_sdk_stream_preserves_single_answer_and_terminal_contract(
+    openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]],
+    openai_http_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    reference: bool,
+) -> None:
+    import httpx
+    from openai import OpenAI
+
+    from api.db.services.dialog_service import _stream_with_think_delta
+
+    _, route, _, _ = openai_route
+    answer = "你好 🌍"
+    decorated = answer + " ##0$$"
+    model_chunks = ("<thi", "nk>推理</thi", "nk>你好", " 🌍") if shape == "incremental" else ("<thi", "<think>推理</think>你", "<think>推理</think>你好 🌍")
+
+    async def chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        async def chunks() -> AsyncIterator[str]:
+            for chunk in model_chunks:
+                yield chunk
+
+        if shape != "final-only":
+            async for kind, value, state in _stream_with_think_delta(chunks(), min_tokens=0):
+                if kind == "marker":
+                    yield {"start_to_think" if state.in_think else "end_to_think": True}
+                else:
+                    yield {"answer": value}
+        yield {
+            "final": True,
+            "answer": decorated if reference and shape != "final-only" else answer,
+            "reference": {"chunks": [{"doc_id": "doc", "similarity": float("nan"), "vector_similarity": float("inf"), "term_similarity": 0.25}]},
+        }
+
+    monkeypatch.setattr(route, "async_chat", chat)
+    messages: Any = [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": "there"}]}]
+    with OpenAI(base_url=openai_http_url, api_key="controlled") as sdk:
+        with sdk.chat.completions.create(model="model", messages=messages, stream=True, extra_body={"reference": reference}) as stream:
+            events = list(stream)
+    assert "".join(event.choices[0].delta.content or "" for event in events) == answer
+    assert "".join(getattr(event.choices[0].delta, "reasoning_content", "") or "" for event in events) == ("" if shape == "final-only" else "推理")
+    assert [event.choices[0].finish_reason for event in events if event.choices[0].finish_reason] == ["stop"]
+    final = events[-1]
+    assert final.model == "configured-model"
+    if reference:
+        assert final.choices[0].delta.final_content == (answer if shape == "final-only" else decorated)
+        assert final.choices[0].delta.reference[0]["similarity"] is None
+        assert final.choices[0].delta.reference[0]["vector_similarity"] is None
+        assert final.choices[0].delta.reference[0]["term_similarity"] == 0.25
+    else:
+        assert final.choices[0].delta.model_dump(exclude_unset=True) == {}
+    raw = httpx.post(openai_http_url + "/chat/completions", json={"model": "model", "messages": messages, "stream": True, "reference": reference})
+    assert raw.status_code == 200
+    assert raw.text.count("data:[DONE]\n\n") == 1
+
+    def reject_constant(value: str) -> Any:
+        raise AssertionError(f"Non-standard JSON constant: {value}")
+
+    frames = [json.loads(line[5:], parse_constant=reject_constant) for line in raw.text.splitlines() if line.startswith("data:") and line != "data:[DONE]"]
+    assert sum(frame["choices"][0]["finish_reason"] == "stop" for frame in frames) == 1
+    tokens = sum(route.num_tokens_from_string(frame["choices"][0]["delta"].get(field, "")) for frame in frames for field in ("content", "reasoning_content"))
+    prompt_tokens = route.num_tokens_from_string("hi\nthere")
+    assert frames[-1]["usage"] == {"prompt_tokens": prompt_tokens, "completion_tokens": tokens, "total_tokens": prompt_tokens + tokens}
+    assert final.usage.model_dump(exclude_unset=True) == frames[-1]["usage"]
+    assert all(frame["usage"] is None for frame in frames[:-1])
+
+
+@pytest.mark.parametrize("failure", ["before-content", "after-content", "empty"])
+def test_sdk_stream_errors_never_emit_success(
+    openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]],
+    openai_http_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    import httpx
+    from openai import APIError, OpenAI
+
+    _, route, _, _ = openai_route
+
+    async def chat(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        if failure == "empty":
+            return
+        if failure == "after-content":
+            yield {"answer": "partial"}
+        raise RuntimeError("private-provider-diagnostic")
+
+    monkeypatch.setattr(route, "async_chat", chat)
+    messages: Any = [{"role": "user", "content": "hi"}]
+    with OpenAI(base_url=openai_http_url, api_key="controlled") as sdk:
+        with sdk.chat.completions.create(model="model", messages=messages, stream=True) as stream:
+            with pytest.raises(APIError, match="Chat completion failed"):
+                list(stream)
+    raw = httpx.post(openai_http_url + "/chat/completions", json={"model": "model", "messages": messages, "stream": True})
+    assert "private-provider-diagnostic" not in raw.text
+    frames = _frames(raw.text)
+    assert frames.count("[DONE]") == 1
+    assert frames[-2] == {"error": {"message": "Chat completion failed.", "type": "server_error"}}
+    assert all(frame.get("choices", [{}])[0].get("finish_reason") is None for frame in frames[:-1])
