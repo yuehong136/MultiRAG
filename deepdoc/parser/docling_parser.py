@@ -171,9 +171,16 @@ class DoclingParser(RAGFlowPdfParser):
             poss.append(([int(p) - 1 for p in pn.split("-")], left, right, top, bottom))
         return poss
 
-    def crop(self, text: str, ZM: int = 1, need_position: bool = False):
+    def crop(self, text: str, ZM: int = 1, need_position: bool = False) -> Image.Image | tuple[Image.Image | None, list[tuple[int, int, int, int, int]] | None] | None:
         imgs = []
         poss = self.extract_positions(text)
+        if not poss:
+            return (None, None) if need_position else None
+
+        # Remote text conversion does not render pages; invalid page tags must
+        # not turn usable text into a failed document conversion.
+        page_count = len(self.page_images)
+        poss = [pos for pos in poss if pos[0] and all(0 <= pn < page_count for pn in pos[0])]
         if not poss:
             return (None, None) if need_position else None
 
@@ -348,6 +355,31 @@ class DoclingParser(RAGFlowPdfParser):
             return docs
         return []
 
+    @staticmethod
+    def _extract_remote_chunk_texts(payload: Any) -> list[str]:
+        """Accept usable native chunks from the response, regardless of request flags."""
+        if isinstance(payload, list):
+            containers = [payload]
+        elif isinstance(payload, dict):
+            containers = [payload[key] for key in ("results", "chunks") if isinstance(payload.get(key), list)]
+        else:
+            return []
+
+        for chunks in containers:
+            texts = []
+            for chunk in chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                text = chunk.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    nested = chunk.get("chunk")
+                    text = nested.get("text") if isinstance(nested, dict) else None
+                if isinstance(text, str) and text.strip():
+                    texts.append(text)
+            if texts:
+                return texts
+        return []
+
     def _parse_pdf_remote(
         self,
         filepath: str | PathLike[str],
@@ -358,7 +390,7 @@ class DoclingParser(RAGFlowPdfParser):
         docling_server_url: str | None = None,
         request_timeout: int | None = None,
     ) -> tuple[list[tuple[str, ...]], list[Any]]:
-        """Parse a PDF through Docling, preferring server-side chunking."""
+        """Request chunking first, then parse the actual native or standard response."""
 
         server_url = self._effective_server_url(docling_server_url)
         if not server_url:
@@ -440,7 +472,8 @@ class DoclingParser(RAGFlowPdfParser):
 
         errors: list[str] = []
         response_json: Any = None
-        is_chunked_response = False
+        response_received = False
+        chunk_texts: list[str] = []
         for endpoint, payload, chunked in (
             ("/v1/convert/source", v1_payload_chunked, True),
             ("/v1alpha/convert/source", v1alpha_payload_chunked, True),
@@ -455,9 +488,12 @@ class DoclingParser(RAGFlowPdfParser):
                 )
                 if resp.status_code < 300:
                     response_json = resp.json()
-                    is_chunked_response = chunked
-                    if chunked:
+                    response_received = True
+                    chunk_texts = self._extract_remote_chunk_texts(response_json)
+                    if chunk_texts:
                         self.logger.info(f"[Docling] Successfully used native chunking on: {endpoint}")
+                    elif chunked:
+                        self.logger.warning(f"[Docling] No usable native chunks on {endpoint}; trying standard response parsing.")
                     else:
                         self.logger.info(f"[Docling] Chunking unavailable, fell back to standard: {endpoint}")
                     break
@@ -469,22 +505,15 @@ class DoclingParser(RAGFlowPdfParser):
                 self.logger.error(f"[Docling] Request error on {endpoint}: {exc}")
                 errors.append(f"{endpoint}: {exc}")
 
-        if response_json is None:
+        if not response_received:
             raise RuntimeError("[Docling] remote convert failed: " + " | ".join(errors))
 
         sections: list[tuple[str, ...]] = []
         tables: list[Any] = []
 
-        if is_chunked_response:
-            chunks = response_json if isinstance(response_json, list) else response_json.get("results", [])
-            for chunk_data in chunks:
-                if not isinstance(chunk_data, dict):
-                    continue
-                chunk_text = chunk_data.get("text", "")
-                if not chunk_text and isinstance(chunk_data.get("chunk"), dict):
-                    chunk_text = chunk_data["chunk"].get("text", "")
-                if isinstance(chunk_text, str) and chunk_text.strip():
-                    sections.extend(self._sections_from_remote_text(chunk_text, parse_method=parse_method))
+        if chunk_texts:
+            for chunk_text in chunk_texts:
+                sections.extend(self._sections_from_remote_text(chunk_text, parse_method=parse_method))
 
             if callback:
                 callback(0.95, f"[Docling] Native chunks received: {len(sections)}")
@@ -497,16 +526,17 @@ class DoclingParser(RAGFlowPdfParser):
         for doc in docs:
             md = doc.get("md_content")
             txt = doc.get("text_content")
+            json_content = doc.get("json_content")
+            md_fallback = json_content.get("md_content") if isinstance(json_content, dict) else None
             if isinstance(md, str) and md.strip():
                 sections.extend(self._sections_from_remote_text(md, parse_method=parse_method))
             elif isinstance(txt, str) and txt.strip():
                 sections.extend(self._sections_from_remote_text(txt, parse_method=parse_method))
+            elif isinstance(md_fallback, str) and md_fallback.strip():
+                sections.extend(self._sections_from_remote_text(md_fallback, parse_method=parse_method))
 
-            json_content = doc.get("json_content")
-            if isinstance(json_content, dict):
-                md_fallback = json_content.get("md_content")
-                if isinstance(md_fallback, str) and md_fallback.strip() and not sections:
-                    sections.extend(self._sections_from_remote_text(md_fallback, parse_method=parse_method))
+        if not sections:
+            raise RuntimeError("[Docling] remote response does not contain usable text or Markdown.")
 
         if callback:
             callback(0.95, f"[Docling] Remote sections: {len(sections)}")
