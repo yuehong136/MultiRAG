@@ -118,7 +118,9 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
         for module in (doc, session, dataset_search_service):
             monkeypatch.setattr(module, "cross_languages", translation)
             monkeypatch.setattr(module, "apply_meta_data_filter", metadata)
-        monkeypatch.setattr(doc, "queue_tasks", schedule)
+        from api.db.services import task_service
+
+        monkeypatch.setattr(task_service, "queue_tasks", schedule)
         # Request-time SQL mutation monitoring, independent of provider spies.
         writes: list[str] = []
 
@@ -293,3 +295,210 @@ console.log('Real Web retrieval consumer: own/shared models accepted; foreign mo
     )
     (env["evidence"] / "web-consumer.log").write_text(execution.stdout + execution.stderr)
     assert execution.returncode == 0, execution.stdout + execution.stderr
+
+
+def test_mixed_retrieval_auth_sql_and_retired_operations(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Real token/user/membership SQL; controlled provider IO; independent readback."""
+    from datetime import timedelta
+
+    from fastapi.testclient import TestClient
+
+    from api.apps import app, manager
+    from api.apps.restful_apis import chunk as route
+    from api.db.services import task_service
+    from tests.support.resource_journal import ResourceJournal
+
+    engine = bootstrapped_engine
+    journal = ResourceJournal("mixed-retrieval-auth")
+    roles = ["owner", "foreign", "inactive", "tenant_disabled", "missing_member", "member_disabled", "invited"]
+    ids = {role: uuid4().hex for role in roles}
+    tokens = {role: "auth-" + uuid4().hex for role in roles}
+    duplicate, beta = "duplicate-" + uuid4().hex, "beta-" + uuid4().hex
+    datasets = {role: uuid4().hex for role in ["owner", "foreign", "inactive"]}
+    memberships = {role: uuid4().hex for role in roles if role != "missing_member"}
+    emails = {role: ids[role] + "@mixed-auth.test" for role in roles}
+    jwt = manager.create_access_token(data={"sub": emails["owner"]})
+    inactive_jwt = manager.create_access_token(data={"sub": emails["inactive"]})
+    expired = manager.create_access_token(data={"sub": emails["owner"]}, expires=timedelta(seconds=-1))
+    invalid_jwt = "invalid.jwt.signature"
+    evidence = Path(os.environ.get("F_AUTH_EVIDENCE", str(tmp_path))) / "mixed-auth.json"
+    journal.event("reserve-sql-rows", database=engine.url.database, users=ids, memberships=memberships, datasets=datasets, api_token_tenants=list(ids.values()), evidence=str(evidence))
+    report: dict[str, Any] = {"database": engine.url.database, "checks": [], "cleanup": False}
+
+    def save() -> None:
+        evidence.write_text(json.dumps(report, indent=2))
+        evidence.chmod(0o600)
+
+    def readback() -> str:
+        with Session(engine) as db:
+            rows = {
+                model.__tablename__: [dict(row) for row in db.execute(sa.select(model.__table__).order_by(*model.__table__.primary_key.columns)).mappings()]
+                for model in [User, Tenant, UserTenant, APIToken, Knowledgebase, Document, Task]
+            }
+        return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
+
+    writes: list[str] = []
+
+    def capture_write(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        if statement.lstrip().split()[0].upper() in {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE"}:
+            writes.append(statement.lstrip().split()[0].upper())
+
+    def request_db() -> Iterator[Session]:
+        with Session(engine) as db:
+            yield db
+
+    fetch = AsyncMock(return_value={"total": 0, "chunks": [], "doc_aggs": []})
+    provider = Mock(return_value=SimpleNamespace())
+    storage, queue = Mock(), Mock()
+    monkeypatch.setitem(app.dependency_overrides, get_db, request_db)
+    monkeypatch.setitem(resources._state, "retriever", SimpleNamespace(retrieval=fetch, retrieval_by_children=lambda chunks, *_: chunks))
+    monkeypatch.setitem(resources._state, "storage", storage)
+    monkeypatch.setattr(task_service, "queue_tasks", queue)
+    monkeypatch.setattr(route, "LLMBundle", provider)
+    monkeypatch.setattr(route, "get_model_config_by_type_and_name", lambda *_a, **_k: {})
+    monkeypatch.setattr(route, "label_question", lambda *_a: {})
+    client: TestClient | None = None
+    try:
+        with Session(engine) as db:
+            for role, identifier in ids.items():
+                db.add(User(id=identifier, email=emails[role], nickname="Mixed auth", password="unused", access_token="active", is_active=role != "inactive"))
+                db.add(Tenant(id=identifier, name="Mixed auth", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive", status="0" if role == "tenant_disabled" else "1"))
+                if role in memberships:
+                    db.add(
+                        UserTenant(
+                            id=memberships[role],
+                            user_id=identifier,
+                            tenant_id=identifier,
+                            role="invite" if role == "invited" else "owner",
+                            invited_by=identifier,
+                            status="0" if role == "member_disabled" else "1",
+                        )
+                    )
+                db.add(APIToken(tenant_id=identifier, token=tokens[role], beta=beta if role == "owner" else None, name="mixed-auth"))
+            for role, identifier in datasets.items():
+                db.add(
+                    Knowledgebase(
+                        id=identifier,
+                        tenant_id=ids["owner"] if role == "inactive" else ids[role],
+                        created_by=ids["owner"] if role == "inactive" else ids[role],
+                        name="Mixed auth " + role,
+                        permission="me",
+                        embd_id="embedding",
+                        parser_config={},
+                        status="0" if role == "inactive" else "1",
+                    )
+                )
+            for owner, value in [(ids["owner"], duplicate), (ids["foreign"], duplicate), (ids["owner"], invalid_jwt), (ids["owner"], expired), (ids["owner"], inactive_jwt)]:
+                db.add(APIToken(tenant_id=owner, token=value, name="mixed-auth"))
+            db.commit()
+        before = readback()
+        sa.event.listen(engine, "before_cursor_execute", capture_write)
+        client = TestClient(app)
+        denied: list[tuple[str, str | None]] = [
+            ("missing", None),
+            ("invalid", "Bearer unknown"),
+            ("wrong-scheme", "Basic " + tokens["owner"]),
+            ("extra-part", "Bearer " + tokens["owner"] + " extra"),
+            ("duplicate", "Bearer " + duplicate),
+            ("beta", "Bearer " + beta),
+            ("invalid-jwt-no-fallback", "Bearer " + invalid_jwt),
+            ("expired-jwt-no-fallback", "Bearer " + expired),
+            ("inactive-jwt-no-fallback", "Bearer " + inactive_jwt),
+            *[(role, "Bearer " + tokens[role]) for role in roles if role not in {"owner", "foreign"}],
+        ]
+        for label, authorization in denied:
+            response = client.post("/api/v1/retrieval", json={"question": "q", "dataset_ids": [datasets["owner"]]}, headers={} if authorization is None else {"Authorization": authorization})
+            assert response.status_code == 401 and response.json()["code"] == 401, (label, response.text)
+            assert readback() == before and not writes
+            provider.assert_not_called()
+            fetch.assert_not_called()
+            assert not storage.mock_calls
+            queue.assert_not_called()
+            report["checks"].append({"case": label, "status": response.status_code, "code": response.json()["code"], "sql_unchanged": True, "provider_calls": 0})
+        response = client.post(
+            "/api/v1/retrieval", json={"question": "q", "dataset_ids": [datasets["owner"]]}, headers=[("Authorization", "Bearer " + tokens["owner"]), ("Authorization", "Bearer " + tokens["foreign"])]
+        )
+        assert response.status_code == 401 and response.json()["code"] == 401
+        assert readback() == before and not writes
+        provider.assert_not_called()
+        fetch.assert_not_called()
+        report["checks"].append({"case": "duplicate-header", "status": 401, "code": 401, "sql_unchanged": True})
+        response = client.post("/api/v1/retrieval", json={"question": "q", "dataset_ids": [datasets["foreign"]]}, headers={"Authorization": "Bearer " + tokens["owner"]})
+        assert response.status_code == 200 and response.json()["code"] == 102
+        provider.assert_not_called()
+        fetch.assert_not_called()
+        report["checks"].append({"case": "foreign-dataset", "status": 200, "code": 102, "sql_unchanged": readback() == before})
+        response = client.post("/api/v1/retrieval", json={"question": "q", "dataset_ids": [datasets["inactive"]]}, headers={"Authorization": "Bearer " + tokens["owner"]})
+        assert response.status_code == 200 and response.json()["code"] == 102
+        provider.assert_not_called()
+        fetch.assert_not_called()
+        report["checks"].append({"case": "inactive-dataset", "status": 200, "code": 102, "sql_unchanged": readback() == before})
+        for label, credential in [("API", tokens["owner"]), ("JWT", jwt)]:
+            response = client.post("/api/v1/retrieval", json={"question": "q", "dataset_ids": [datasets["owner"]]}, headers={"Authorization": "Bearer " + credential})
+            assert response.status_code == 200 and response.json()["code"] == 0, response.text
+            assert fetch.call_args.kwargs["kb_ids"] == [datasets["owner"]]
+            report["checks"].append({"case": label, "status": 200, "code": 0, "controlled_retrieval": True})
+        # Run the active MCP consumer through its real payload and HTTP adapter.
+        # Dataset inventory/metadata are controlled ancillary boundaries here.
+        import importlib.util
+
+        import anyio
+        import httpx
+
+        spec = importlib.util.spec_from_file_location("multirag_f12_mcp", Path(__file__).resolve().parents[2] / "mcp/server/server.py")
+        assert spec is not None and spec.loader is not None
+        mcp_server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mcp_server)
+
+        async def mcp_retrieval() -> dict[str, Any]:
+            connector = mcp_server.MultiRAGConnector("http://testserver")
+            connector._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
+            monkeypatch.setattr(connector, "list_datasets_structured", AsyncMock(return_value=[{"id": datasets["owner"], "name": "Mixed auth owner", "embedding_model": "embedding"}]))
+            monkeypatch.setattr(connector, "_get_document_metadata_cache", AsyncMock(return_value=({}, {})))
+            try:
+                return await connector.retrieval(tokens["owner"], [datasets["owner"]], question="MCP witness")
+            finally:
+                await connector.close()
+
+        result = anyio.run(mcp_retrieval)
+        assert result["chunks"] == [] and result["pagination"]["total_chunks"] == 0
+        assert fetch.call_args.args[0] == "MCP witness" and fetch.call_args.kwargs["kb_ids"] == [datasets["owner"]]
+        report["checks"].append({"case": "actual-MCP-consumer", "controlled_dataset_metadata": True, "real_HTTP_and_auth": True})
+        for method in ["POST", "DELETE"]:
+            response = client.request(method, "/api/v1/datasets/unused/chunks", json={"document_ids": ["unused"]})
+            assert response.status_code == 404
+        response = client.request("DELETE", "/api/v1/agents/unused/sessions", json={"ids": ["unused"]})
+        assert response.status_code == 405
+        assert not writes and readback() == before
+        report.update(request_sql_unchanged=True, request_writes=writes, controlled_provider_calls=provider.call_count, controlled_retrieval_calls=fetch.call_count)
+    finally:
+        if client is not None:
+            client.close()
+        if sa.event.contains(engine, "before_cursor_execute", capture_write):
+            sa.event.remove(engine, "before_cursor_execute", capture_write)
+        with Session(engine) as db:
+            for model, condition in [
+                (APIToken, APIToken.tenant_id.in_(list(ids.values()))),
+                (Knowledgebase, Knowledgebase.id.in_(list(datasets.values()))),
+                (UserTenant, UserTenant.id.in_(list(memberships.values()))),
+                (Tenant, Tenant.id.in_(list(ids.values()))),
+                (User, User.id.in_(list(ids.values()))),
+            ]:
+                db.execute(sa.delete(model).where(condition))
+            db.commit()
+        with Session(engine) as db:
+            remaining = {
+                model.__tablename__: db.scalar(sa.select(sa.func.count()).select_from(model).where(condition))
+                for model, condition in [
+                    (APIToken, APIToken.tenant_id.in_(list(ids.values()))),
+                    (Knowledgebase, Knowledgebase.id.in_(list(datasets.values()))),
+                    (UserTenant, UserTenant.id.in_(list(memberships.values()))),
+                    (Tenant, Tenant.id.in_(list(ids.values()))),
+                    (User, User.id.in_(list(ids.values()))),
+                ]
+            }
+            assert not any(remaining.values()), remaining
+        report["cleanup_remaining"] = remaining
+        journal.event("sql-cleanup-readback", database=engine.url.database, owned_rows_absent=True)
+        report["cleanup"] = True
+        save()

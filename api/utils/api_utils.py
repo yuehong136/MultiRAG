@@ -295,6 +295,12 @@ def token_required(request: Request, db: Session = Depends(get_db)):
     return objs[0].tenant_id
 
 
+def _request_authorization(request: Request) -> str:
+    """Multiple Authorization fields cannot select one credential implicitly."""
+    values = request.headers.getlist("Authorization")
+    return values[0] if len(values) == 1 else ""
+
+
 def _beta_token_tenant(db: Session, authorization: str) -> str:
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
@@ -310,7 +316,7 @@ def _beta_token_tenant(db: Session, authorization: str) -> str:
 
 def beta_token_required(request: Request, db: Session = Depends(get_db)) -> str:
     """Validate one Bearer beta token bound to an active tenant."""
-    return _beta_token_tenant(db, request.headers.get("Authorization", ""))
+    return _beta_token_tenant(db, _request_authorization(request))
 
 
 def current_tenant_id(request: Request, db: Session = Depends(get_db)) -> str:
@@ -400,7 +406,7 @@ async def async_token_required(request: Request, db: AsyncSession = Depends(get_
 
 async def async_beta_token_required(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
     """Async equivalent of beta_token_required, sharing the same auth policy."""
-    return await db.run_sync(lambda s: _beta_token_tenant(s, request.headers.get("Authorization", "")))  # TODO(async-phase4)
+    return await db.run_sync(lambda s: _beta_token_tenant(s, _request_authorization(request)))  # TODO(async-phase4)
 
 
 async def async_current_tenant_id(request: Request, db: AsyncSession = Depends(get_async_db)) -> str:
@@ -439,56 +445,57 @@ async def async_current_tenant_id(request: Request, db: AsyncSession = Depends(g
     return tenant_id
 
 
-async def async_current_user(request: Request, db: AsyncSession = Depends(get_async_db)) -> Principal:
-    """``Depends(manager)`` 的 AsyncSession 版:返回不可变 Principal。
-
-    对齐 _TokenFallbackLoginManager 的双认语义:web JWT 优先,仅在预期 JWT 解码
-    失败时把 Authorization 值当 SDK API token 反查 owner 用户;用户与 Token 查询全部走
-    注入的 AsyncSession(run_sync),不再自开 SessionLocal。
-    """
-    from api.apps import load_user, manager  # 延迟导入避免循环依赖
+def _principal_for_token(db: Session, token: str) -> Principal:
+    """Resolve JWT or one API token without changing trust after valid JWT denial."""
+    from api.apps import load_user, manager
     from api.db.services.user_service import UserService
 
-    token = await manager._get_token(request)
     try:
         payload = manager._get_payload(token)
     except HTTPException as exc:
         if exc is not manager.not_authenticated_exception:
             raise
         if os.environ.get("DISABLE_SDK") or token.count(".") == 2:
-            # A JWT that failed validation must never acquire API-key identity.
             raise
-        # Only a credential that failed JWT parsing may enter the SDK-token
-        # fallback.  A valid JWT whose user/membership is disabled must remain
-        # rejected rather than being reinterpreted under a second trust model.
-        authorization = request.headers.get("Authorization")
-        if authorization:
-            parts = authorization.split()
-            token = parts[1] if len(parts) >= 2 else parts[0]
-
-            def _by_api_token(s: Session) -> Principal | None:
-                objs = APITokenService.query(s, token=token)
-                if len(objs) != 1:
-                    return None
-                users = UserService.query(s, id=objs[0].tenant_id)
-                if len(users) != 1:
-                    return None
-                return principal_from_legacy_owner_context(s, users[0], AuthenticationSource.SDK_API_TOKEN)
-
-            principal = await db.run_sync(_by_api_token)  # TODO(async-phase4)
-            if principal is not None:
-                return principal
-        raise
-
+        tokens = APITokenService.query(db, token=token)
+        if len(tokens) != 1:
+            raise
+        users = UserService.query(db, id=tokens[0].tenant_id)
+        if len(users) != 1:
+            raise
+        principal = principal_from_legacy_owner_context(db, users[0], AuthenticationSource.SDK_API_TOKEN)
+        if principal is None:
+            raise
+        return principal
     email = payload.get("sub") if isinstance(payload, dict) else None
     principal = None
     if type(email) is str and 0 < len(email.strip()) <= 255 and len(email) <= 255:
-        principal = await db.run_sync(
-            lambda s: principal_from_legacy_owner_context(s, load_user(email, s), AuthenticationSource.WEB_SESSION)  # type: ignore[operator]  # TODO(async-phase4)；fastapi-login user_loader 标注 artifact，运行时为同步函数
-        )
+        principal = principal_from_legacy_owner_context(db, load_user(email, db), AuthenticationSource.WEB_SESSION)  # type: ignore[operator]
     if principal is None:
         raise manager.not_authenticated_exception
     return principal
+
+
+def _bearer_token(request: Request) -> str:
+    from api.apps import manager
+
+    parts = _request_authorization(request).split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise manager.not_authenticated_exception
+    return parts[1]
+
+
+def current_user(request: Request, db: Session = Depends(get_db)) -> Principal:
+    """Strict JWT/API identity for legacy handlers sharing the same sync session."""
+    return _principal_for_token(db, _bearer_token(request))
+
+
+async def async_current_user(request: Request, db: AsyncSession = Depends(get_async_db)) -> Principal:
+    """Project the same strict JWT/API identity through the request AsyncSession."""
+    from api.apps import manager
+
+    token = _bearer_token(request) if request.headers.get("Authorization") is not None else await manager._get_token(request)
+    return await db.run_sync(lambda session: _principal_for_token(session, token))  # TODO(async-phase4): request-owned authentication SQL only.
 
 
 # def token_required(func):

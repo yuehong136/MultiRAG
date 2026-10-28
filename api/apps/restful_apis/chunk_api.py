@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
-import logging
 import re
 from typing import Annotated, Any, Literal
 
@@ -15,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Document, Task, db_connection, get_async_db, get_db
+from api.db.db_models import Document, db_connection, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_image_lock import image_reference_key, image_write_locks
@@ -23,16 +22,14 @@ from api.db.services.document_image_service import _raster
 from api.db.services.document_service import DocumentService
 from api.db.services.document_status_service import insert_source_chunks
 from api.db.services.document_task_service import reconcile_task_chunk_count
-from api.db.services.file2document_service import File2DocumentService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.db.services.task_service import TaskService, cancel_all_task_of, queue_tasks
-from api.utils.api_utils import async_current_tenant_id, check_duplicate_ids, construct_json_result, get_error_data_result, get_result, server_error_response, token_required
+from api.utils.api_utils import Principal, async_current_tenant_id, check_duplicate_ids, current_user, get_error_data_result, get_result, server_error_response
 from api.utils.image_utils import read_chunk_image, replace_chunk_image, store_chunk_image
 from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.reference_metadata import ReferenceMetadata, enrich_reference_metadata, resolve_reference_metadata_preferences
 from common import settings
-from common.constants import LLMType, ParserType, RetCode, TaskStatus
+from common.constants import LLMType, ParserType, RetCode
 from common.metadata_utils import apply_meta_data_filter, convert_conditions
 from common.string_utils import is_content_empty, remove_redundant_spaces
 from common.tag_feature_utils import validate_tag_features
@@ -171,7 +168,6 @@ def _write_context(db: Session, user_id: str, dataset_id: str, document_id: str,
 
 
 def _index_name(kb: Any) -> list[str]:
-    from core.nlp import search
 
     return search.index_name(kb.tenant_id, [kb.name])
 
@@ -199,7 +195,6 @@ async def list_chunks(
     context = await db.run_sync(lambda session: _read_context(session, user_id, dataset_id, document_id))  # TODO(async-phase4)
     if context is None:
         return get_error_data_result(retmsg=f"You don't own the dataset or document {dataset_id}/{document_id}.")
-    from core.nlp import search
 
     kb, doc = context
     index_name = search.index_name(str(kb["tenant_id"]), [str(kb["name"])])
@@ -247,7 +242,6 @@ async def get_chunk(
     context = await db.run_sync(lambda session: _read_context(session, user_id, dataset_id, document_id))  # TODO(async-phase4)
     if context is None:
         return get_error_data_result(retmsg=f"You don't own the dataset or document {dataset_id}/{document_id}.")
-    from core.nlp import search
 
     kb, _ = context
     index_name = search.index_name(str(kb["tenant_id"]), [str(kb["name"])])
@@ -623,14 +617,6 @@ class FusionSearchMode(BaseModel):
 SearchModeType = Annotated[SparseSearchMode | DenseSearchMode | HybridSearchMode | FusionSearchMode, Discriminator("type")]
 
 
-class ParseDocumentRequest(BaseModel):
-    document_ids: list[str]
-
-
-class StopParsingRequest(BaseModel):
-    document_ids: list[str]
-
-
 class RetrievalTestRequest(BaseModel):
     reference_metadata: ReferenceMetadata | None = None
     question: str
@@ -660,142 +646,8 @@ class RetrievalTestRequest(BaseModel):
         return {mode_type: mode_data}
 
 
-@router.post("/datasets/{dataset_id}/chunks", summary="解析文档")
-def parse_documents(dataset_id: str, request: ParseDocumentRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
-    """
-    解析数据集中的文档为chunks
-
-    Args:
-        dataset_id: 数据集ID
-        request: 解析请求参数
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        解析任务结果
-    """
-    req = request.model_dump()
-
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-        return get_error_data_result(retmsg="You don't own the dataset.")
-
-    document_ids = req["document_ids"]
-    if not document_ids:
-        return get_error_data_result(retmsg="document_ids is required")
-
-    # 检查重复ID
-    unique_doc_ids, duplicate_messages = check_duplicate_ids(document_ids, "document")
-
-    try:
-        docs = []
-        for doc_id in unique_doc_ids:
-            doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
-            if not doc:
-                return get_error_data_result(retmsg=f"Document {doc_id} not found")
-            docs.append(doc[0])
-
-        # 队列解析任务
-        for doc in docs:
-            if doc.status == "0":  # 未启用的文档不解析
-                continue
-            info = {
-                "progress": 0,
-                "progress_msg": "",
-                "run": TaskStatus.RUNNING.value,
-                "chunk_num": 0,
-                "token_num": 0,
-            }
-            if not DocumentService.filter_update(
-                db,
-                [
-                    Document.id == doc.id,
-                    (Document.run.is_(None) | (Document.run != TaskStatus.RUNNING.value)),
-                ],
-                info,
-            ):
-                return get_error_data_result(retmsg="Can't parse document that is currently being processed")
-
-            settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
-            TaskService.filter_delete(db, [Task.doc_id == doc.id])
-            doc = DocumentService.get_by_id(db, doc.id)
-            doc_dict = doc.to_dict()
-            doc_dict["tenant_id"] = tenant_id
-            bucket, name = File2DocumentService.get_storage_address(db, doc_id=doc_dict["id"])
-            queue_tasks(db, doc_dict, bucket, name, 0)
-
-        message = "Documents queued for parsing"
-        if duplicate_messages:
-            message += f" (with {len(duplicate_messages)} duplicate IDs ignored)"
-
-        return get_result(retmsg=message)
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to queue parsing: {e!s}")
-
-
-DOC_STOP_PARSING_INVALID_STATE_MESSAGE = "Can't stop parsing document that has not started or already completed"
-DOC_STOP_PARSING_INVALID_STATE_ERROR_CODE = "DOC_STOP_PARSING_INVALID_STATE"
-
-
-@router.delete("/datasets/{dataset_id}/chunks", summary="停止解析")
-def stop_parsing_documents(dataset_id: str, request: StopParsingRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
-    """
-    停止解析数据集中的文档
-
-    Args:
-        dataset_id: 数据集ID
-        request: 停止解析请求参数
-        db: 数据库会话
-        tenant_id: 租户ID
-
-    Returns:
-        停止解析结果
-    """
-    req = request.model_dump()
-
-    if not KnowledgebaseService.query(db, id=dataset_id, tenant_id=tenant_id):
-        return get_error_data_result(retmsg="You don't own the dataset.")
-
-    document_ids = req["document_ids"]
-    if not document_ids:
-        return get_error_data_result(retmsg="document_ids is required")
-
-    # 检查重复ID
-    unique_doc_ids, duplicate_messages = check_duplicate_ids(document_ids, "document")
-
-    try:
-        success_count = 0
-        for doc_id in unique_doc_ids:
-            doc = DocumentService.query(db, kb_id=dataset_id, id=doc_id)
-            if not doc:
-                continue
-            if doc[0].run != TaskStatus.RUNNING.value:
-                return construct_json_result(
-                    code=RetCode.DATA_ERROR,
-                    message=DOC_STOP_PARSING_INVALID_STATE_MESSAGE,
-                    data={"error_code": DOC_STOP_PARSING_INVALID_STATE_ERROR_CODE},
-                )
-            # Send cancellation signal via Redis to stop background task
-            cancel_all_task_of(doc_id)
-            # 更新文档状态为取消
-            DocumentService.update_by_id(db, doc_id, {"run": TaskStatus.CANCEL.value, "progress": 0, "progress_msg": "Cancelled by user"})
-
-            # 删除相关任务
-            TaskService.filter_delete(db, [Task.doc_id == doc_id])
-            success_count += 1
-
-        message = f"Parsing stopped for {success_count} documents"
-        if duplicate_messages:
-            message += f" (with {len(duplicate_messages)} duplicate IDs ignored)"
-
-        return get_result(retmsg=message)
-    except Exception as e:
-        logging.exception(e)
-        return get_error_data_result(retmsg=f"Failed to stop parsing: {e!s}")
-
-
 @router.post("/retrieval", summary="检索测试")
-async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)) -> JSONResponse:
+async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(get_db), user: Principal = Depends(current_user)) -> JSONResponse:
     """
     测试检索功能
 
@@ -807,6 +659,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
     Returns:
         检索结果
     """
+    tenant_id = user.platform_user_id
     req = request.model_dump()
 
     # 验证必填参数
@@ -819,7 +672,7 @@ async def retrieval_test(request: RetrievalTestRequest, db: Session = Depends(ge
 
     # 验证数据集权限
     for kb_id in kb_ids:
-        if not KnowledgebaseService.query(db, id=kb_id, tenant_id=tenant_id):
+        if not KnowledgebaseService.query(db, id=kb_id, tenant_id=tenant_id, status="1"):
             return get_error_data_result(retmsg=f"You don't own the dataset {kb_id}.")
 
     # 获取所有知识库

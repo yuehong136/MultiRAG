@@ -336,9 +336,7 @@ def test_http_variable_defaults_first_run(release_api: dict[str, Any], stream: b
 
 
 @pytest.mark.parametrize("release", [False, True])
-def test_sdk_session_helper_variable_defaults_preserve_draft(release_api: dict[str, Any], release: bool) -> None:
-    from api.apps.restful_apis.bot_api import CreateAgentSessionRequest, create_agent_session
-
+def test_http_session_variable_defaults_preserve_draft(release_api: dict[str, Any], release: bool) -> None:
     env = release_api
     created = env["client"].post(f"{env['base']}/api/v1/agents", json={"title": "SDK defaults", "dsl": variable_dsl("published")}, timeout=30).json()
     assert created["retcode"] == 0
@@ -348,13 +346,10 @@ def test_sdk_session_helper_variable_defaults_preserve_draft(release_api: dict[s
     before = read_state(env, agent_id)
     replica_key = f"canvas:replica:{agent_id}:{env['owners'][0]}:{env['owners'][0]}"
     replica_before = REDIS_CONN.get(replica_key)
-    # This legacy helper is not registered as an HTTP route. Exercise its real
-    # Canvas and transaction against scratch, without inventing an SDK URL.
-    with Session(env["engine"]) as db:
-        response = create_agent_session(agent_id, CreateAgentSessionRequest(release=release), db=db, tenant_id=env["owners"][0])
-        result = json.loads(response.body)
-        assert result["code"] == 0, result
-        session_id = result["data"]["id"]
+    response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": release}, timeout=30)
+    result = response.json()
+    assert response.status_code == 200 and result["retcode"] == 0, response.text
+    session_id = result["data"]["id"]
     with Session(env["engine"]) as db:
         session = db.get(API4Conversation, session_id)
         assert session is not None

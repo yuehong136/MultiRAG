@@ -10,6 +10,7 @@ import types
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.joint_services import tenant_model_service
 from api.db.services import dialog_service
 from api.db.services.dialog_service import gen_mindmap
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -20,7 +21,7 @@ def _route_module(name: str):
     return sys.modules[name]
 
 
-class _FakeBundle:
+class _FakeBundle(dialog_service.LLMBundle):
     instances: list["_FakeBundle"] = []
 
     def __init__(self, db, tenant_id, model_config, **kwargs):
@@ -61,7 +62,7 @@ def mindmap_service_stubs(monkeypatch):
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": name})
     monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "chat-m"})
-    monkeypatch.setattr(dialog_service, "LLMBundle", _FakeBundle)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(dialog_service, "label_question", lambda s, q, kbs: [])
     monkeypatch.setattr(dialog_service, "MindMapExtractor", _FakeMindMapExtractor)
     monkeypatch.setattr(settings, "retriever", types.SimpleNamespace(retrieval=_fake_retrieval))
@@ -94,6 +95,7 @@ def mindmap_route_stubs(monkeypatch, client):
 
     for mod_name in ("api.apps.restful_apis.bot", "api.apps.restful_apis.chat", "api.apps.conversation"):
         monkeypatch.setattr(_route_module(mod_name), "gen_mindmap", _fake_gen_mindmap)
+    monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda cls, s, kb_id, user_id: True))
 
 
 @pytest.fixture

@@ -1,16 +1,20 @@
 import json
+import sys
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from agent import canvas as agent_canvas
 from api.apps.restful_apis import agent_api as canvas_app_module
-from api.apps.restful_apis import bot as session_module
 from api.db import CanvasCategory, TenantPermission
 from api.db.db_models import UserCanvas
 from api.db.services import canvas_service as canvas_service_module
 from api.db.services.api_service import API4ConversationService
+from api.identity.principal import Principal
 
 
 def test_get_agent_dsl_with_release_prefers_latest_published_version(monkeypatch) -> None:
@@ -90,71 +94,49 @@ def test_agent_session_date_filter_normalization_covers_full_end_day() -> None:
     assert API4ConversationService._normalize_query_date("2026-04-23", is_end=True).strftime("%Y-%m-%d %H:%M:%S") == "2026-04-23 23:59:59"
 
 
-def test_create_agent_session_uses_release_dsl(monkeypatch) -> None:
-    fake_db = Session()
-    captured: dict[str, object] = {}
-    fake_canvas = SimpleNamespace(id="agent-1", dsl={"draft": True})
+def test_create_agent_session_uses_release_dsl(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = sys.modules["api.apps.restful_apis.agent"]
+    captured: dict[str, Any] = {}
+    run_context = object()
 
-    monkeypatch.setattr(
-        session_module.UserCanvasService,
-        "query",
-        lambda db, **kwargs: [object()],
-    )
+    async def prepare(db: AsyncSession, agent_id: str, caller_id: str, *, release_mode: bool, principal: Principal) -> SimpleNamespace:
+        captured["release_mode"] = release_mode
+        return SimpleNamespace(dsl=json.dumps({"published": True}), runtime_tenant_id=caller_id, run_context=run_context, version_title="published")
 
-    def fake_get_agent_dsl_with_release(db, agent_id, release_mode=False, tenant_id=None):
-        captured["helper_args"] = {
-            "db": db,
-            "agent_id": agent_id,
-            "release_mode": release_mode,
-            "tenant_id": tenant_id,
-        }
-        return fake_canvas, json.dumps({"published": True}, ensure_ascii=False)
-
-    monkeypatch.setattr(
-        session_module.UserCanvasService,
-        "get_agent_dsl_with_release",
-        fake_get_agent_dsl_with_release,
-    )
+    async def save(db: AsyncSession, conversation: dict[str, Any], *, context: object, snapshot: dict[str, Any]) -> dict[str, Any]:
+        captured["context"] = context
+        captured["saved_conv"] = conversation
+        assert snapshot == {"normalized": True}
+        return conversation
 
     class FakeCanvas:
-        def __init__(self, dsl, tenant_id, task_id=None, canvas_id=None):
-            captured["canvas_init"] = {
-                "dsl": dsl,
-                "tenant_id": tenant_id,
-                "task_id": task_id,
-                "canvas_id": canvas_id,
-            }
+        def __init__(self, dsl: str, tenant_id: str, canvas_id: str | None = None, run_context: object | None = None) -> None:
+            captured["canvas_init"] = {"dsl": dsl, "tenant_id": tenant_id, "canvas_id": canvas_id, "run_context": run_context}
+            self.globals: dict[str, Any] = {}
 
-        def reset(self):
+        def reset(self) -> None:
             captured["reset_called"] = True
 
-        def get_prologue(self):
+        def get_prologue(self) -> str:
             return "published-prologue"
 
-        def __str__(self):
-            return json.dumps({"normalized": True}, ensure_ascii=False)
+        def __str__(self) -> str:
+            return json.dumps({"normalized": True})
 
+    monkeypatch.setattr(module, "prepare_agent_run", prepare)
+    monkeypatch.setattr(module, "save_agent_session", save)
     monkeypatch.setattr(agent_canvas, "Canvas", FakeCanvas)
-    monkeypatch.setattr(
-        session_module.API4ConversationService,
-        "save",
-        lambda db, **kwargs: captured.setdefault("saved_conv", kwargs),
-    )
-
-    response = session_module.create_agent_session(
-        "agent-1",
-        session_module.CreateAgentSessionRequest(user_id="user-1", release=True),
-        db=fake_db,
-        tenant_id="tenant-1",
-    )
-    payload = json.loads(response.body)
-
-    assert captured["helper_args"]["release_mode"] is True
-    assert captured["canvas_init"]["dsl"] == json.dumps({"published": True}, ensure_ascii=False)
-    assert captured["canvas_init"]["task_id"] is None
+    response = client.post("/api/v1/agents/agent-1/sessions", json={"release": True, "user_id": "user-1"})
+    payload = response.json()
+    assert response.status_code == 200 and payload["retcode"] == 0, response.text
+    assert captured["release_mode"] is True
+    assert captured["canvas_init"]["dsl"] == json.dumps({"published": True})
+    assert captured["canvas_init"]["run_context"] is run_context
     assert captured["saved_conv"]["message"] == [{"role": "assistant", "content": "published-prologue"}]
+    assert captured["saved_conv"]["user_id"] == "user-unit"
+    assert captured["saved_conv"]["exp_user_id"] == "user-1"
+    assert captured["context"] is run_context
     assert payload["data"]["agent_id"] == "agent-1"
-    fake_db.close()
 
 
 def test_canvas_get_returns_linked_datasets_for_dataflow(monkeypatch) -> None:

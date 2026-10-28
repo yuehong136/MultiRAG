@@ -3,7 +3,6 @@
 The shared fixture supplies scratch auth/SQL, owned Redis cleanup and a real
 listener. No component, model/provider, business response or storage is faked."""
 
-import json
 import os
 import subprocess
 from copy import deepcopy
@@ -13,7 +12,6 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.apps.restful_apis.bot_api import CreateAgentSessionRequest, create_agent_session
 from api.db.db_models import API4Conversation
 from core.utils.redis_conn import REDIS_CONN
 from tests.support.agent_list_operations import _ITEMS, _NODE, assert_runtime, assert_success, create, list_dsl, replica_key, run, session_state
@@ -177,7 +175,7 @@ def test_openai_real_list_execution_and_errors(release_api: dict[str, Any], stre
     assert read_state(env, agent_id) == before and REDIS_CONN.get(replica_key(env, agent_id)) == replica
 
 
-def test_version_error_is_before_stream_and_sdk_helper_keeps_legacy(release_api: dict[str, Any]) -> None:
+def test_version_error_is_before_stream_and_http_session_keeps_legacy(release_api: dict[str, Any]) -> None:
     env = release_api
     invalid = create(env, list_dsl({"operations_version": 3, "operations": "head", "n": 2}))
     update(env, invalid, {"release": True})
@@ -193,11 +191,10 @@ def test_version_error_is_before_stream_and_sdk_helper_keeps_legacy(release_api:
     update(env, agent_id, {"release": True})
     before = read_state(env, agent_id)
     replica = REDIS_CONN.get(replica_key(env, agent_id))
-    with Session(env["engine"]) as db:
-        response = create_agent_session(agent_id, CreateAgentSessionRequest(release=True), db, env["owners"][0])
-        body = json.loads(response.body)
-        assert body["code"] == 0
-        session_id = body["data"]["id"]
+    response = env["client"].post(f"{env['base']}/api/v1/agents/{agent_id}/sessions", json={"release": True}, timeout=30)
+    body = response.json()
+    assert response.status_code == 200 and body["retcode"] == 0, response.text
+    session_id = body["data"]["id"]
     state = session_state(env, agent_id, session_id)
     assert state["dsl"]["components"][_NODE]["obj"]["params"]["operations_version"] == 1
     response = run(env, agent_id, stream=False, session_id=session_id)

@@ -14,11 +14,11 @@ from api.apps.restful_apis import chunk as doc
 from api.db.db_models import Knowledgebase
 from api.db.joint_services import tenant_model_service as models
 from api.db.services.llm_service import LLMBundle
-from api.utils.api_utils import token_required
+from api.utils.api_utils import current_user
 
 
 def test_sdk_denies_foreign_model_before_metadata_and_any_bundle(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[token_required] = lambda: "owner"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(platform_user_id="owner")
     kb = Knowledgebase(id="kb", tenant_id="owner", name="kb", embd_id="embedding")
     monkeypatch.setattr(doc.KnowledgebaseService, "query", lambda *_a, **_kw: [kb])
     monkeypatch.setattr(doc.KnowledgebaseService, "get_by_ids", lambda *_: [kb])
@@ -45,8 +45,7 @@ def test_sdk_denies_foreign_model_before_metadata_and_any_bundle(client: TestCli
 
 async def test_embedded_denies_foreign_model_before_saved_search_metadata(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     kb = Knowledgebase(id="kb", tenant_id="shared-owner", name="kb", embd_id="embedding")
-    monkeypatch.setattr(session.UserTenantService, "query", lambda *_a, **_kw: [SimpleNamespace(tenant_id="shared-owner")])
-    monkeypatch.setattr(session.KnowledgebaseService, "query", lambda *_a, **_kw: [kb])
+    monkeypatch.setattr(session.KnowledgebaseService, "accessible", lambda *_a, **_kw: True)
     monkeypatch.setattr(session.KnowledgebaseService, "get_by_ids", lambda *_: [kb])
     monkeypatch.setattr(async_db, "scalar", AsyncMock(return_value=None))
     saved, bundle, translation = Mock(), AsyncMock(), AsyncMock()
@@ -77,9 +76,9 @@ async def test_scoped_bundle_uses_request_session_and_model_owner(async_db: Asyn
             self.model_config = model_config
 
     monkeypatch.setattr(models, "LLMBundle", Bundle)
-    bundle = await models.build_bundle_by_id_async("shared-owner", 42, db=async_db, allowed_tenant_ids={"user", "shared-owner"})
+    bundle = await models.build_bundle_by_id_async("shared-owner", 42, db=async_db, allowed_tenant_ids={"user", "shared-owner"}, model_type="rerank")
     assert bundle.db is None and bundle.tenant_id == "user"
-    assert lookup.call_args.kwargs == {"allowed_tenant_ids": {"user", "shared-owner"}}
+    assert lookup.call_args.kwargs == {"allowed_tenant_ids": {"user", "shared-owner"}, "model_type": "rerank"}
 
 
 def test_empty_scope_rejects_before_query_or_credentials(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:

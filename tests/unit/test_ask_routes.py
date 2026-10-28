@@ -15,6 +15,7 @@ import types
 
 import pytest
 
+from api.db.joint_services import tenant_model_service
 from api.db.services import dialog_service
 from api.db.services.dialog_service import async_ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -34,7 +35,7 @@ def _sse_frames(text: str):
     return frames
 
 
-class _FakeBundle:
+class _FakeBundle(dialog_service.LLMBundle):
     instances: list["_FakeBundle"] = []
 
     def __init__(self, db, tenant_id, model_config, **kwargs):
@@ -73,7 +74,7 @@ async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypa
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": "chat-m"})
-    monkeypatch.setattr(dialog_service, "LLMBundle", _FakeBundle)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(dialog_service, "label_question", lambda s, q, kbs: [])
     monkeypatch.setattr(dialog_service, "chunks_format", lambda refs: refs["chunks"])
 

@@ -35,7 +35,6 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import EmbeddingModelMismatchError, KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
-from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import UserTenantService
 from api.utils.agent_completion import AgentCompletionAccumulator, normalize_agent_event, parse_agent_completion_chunk
 from api.utils.agent_streaming import AgentStreamingResponse
@@ -43,7 +42,6 @@ from api.utils.api_utils import (
     async_beta_token_required,
     async_token_required,
     beta_token_required,
-    check_duplicate_ids,
     get_data_openai,
     get_error_data_result,
     get_json_result,
@@ -56,7 +54,7 @@ from api.utils.web_utils import CONTENT_TYPE_MAP, apply_safe_file_response_heade
 from common import settings
 from common.constants import LLMType, RetCode, StatusEnum
 from common.metadata_utils import apply_meta_data_filter, convert_conditions, meta_filter
-from common.misc_utils import get_uuid, thread_pool_exec
+from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string
 from core.app.tag import label_question
 from core.prompts.generator import cross_languages, keyword_extraction
@@ -72,9 +70,22 @@ def _label_question_with_conn(question: str, kbs: list) -> Any:
         return label_question(s, question, kbs)
 
 
-class DeleteSessionsRequest(BaseModel):
-    ids: list[str] | None = None
-    delete_all: bool = False
+def _shared_search_detail(db: Session, search_id: str, tenant_id: str) -> dict[str, Any]:
+    """Resolve a shared search only through a live, permitted membership."""
+    detail = SearchService.get_detail(db, search_id)
+    if not detail:
+        raise PermissionError("No authorization for the search app.")
+    membership = UserTenantService.get_membership(db, tenant_id=detail["tenant_id"], user_id=tenant_id)
+    if membership is None or not UserTenantService.can_access_tenant_resources(membership.role):
+        raise PermissionError("No authorization for the search app.")
+    return detail
+
+
+async def _accessible_shared_kbs(db: AsyncSession, kb_ids: Any, tenant_id: str) -> bool:
+    """Check the complete selection before any shared provider or index work."""
+    if not isinstance(kb_ids, list) or not kb_ids or any(not isinstance(kb_id, str) or not kb_id for kb_id in kb_ids):
+        return False
+    return await db.run_sync(lambda s: all(KnowledgebaseService.accessible(s, kb_id, tenant_id) for kb_id in kb_ids))  # TODO(async-phase4)
 
 
 class ChatCompletionRequest(BaseModel):
@@ -189,53 +200,6 @@ def build_sse_error_payload(error: Exception) -> str:
         )
         + "\n\n"
     )
-
-
-class CreateAgentSessionRequest(BaseModel):
-    user_id: str | None = None
-    release: bool = False
-
-
-def create_agent_session(agent_id: str, request_body: CreateAgentSessionRequest | None = None, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)) -> JSONResponse:
-    user_id = (request_body.user_id if request_body and request_body.user_id else None) or tenant_id
-    release_mode = request_body.release if request_body else False
-
-    if not UserCanvasService.query(db, user_id=tenant_id, id=agent_id):
-        return get_error_data_result(retmsg="You cannot access the agent.")
-
-    try:
-        cvs, dsl = UserCanvasService.get_agent_dsl_with_release(
-            db,
-            agent_id,
-            release_mode=release_mode,
-            tenant_id=tenant_id,
-        )
-    except LookupError:
-        return get_error_data_result(retmsg="Agent not found.")
-    except PermissionError as e:
-        return get_error_data_result(retmsg=str(e))
-
-    session_id = get_uuid()
-    from agent.canvas import Canvas
-
-    canvas = Canvas(dsl, tenant_id, canvas_id=cvs.id)
-    canvas.reset()
-
-    session_dsl = json.loads(str(canvas))
-    # 记录建会话时 canvas 的版本标题（按 release_mode 取已发布/最新版本）
-    version_title = UserCanvasVersionService.get_latest_version_title(db, cvs.id, release_mode=release_mode)
-    conv = {
-        "id": session_id,
-        "dialog_id": cvs.id,
-        "user_id": user_id,
-        "message": [{"role": "assistant", "content": canvas.get_prologue()}],
-        "source": "agent",
-        "dsl": session_dsl,
-        "version_title": version_title,
-    }
-    API4ConversationService.save(db, **conv)
-    conv["agent_id"] = conv.pop("dialog_id")
-    return get_result(data=conv)
 
 
 @router.post("/chats/{chat_id}/completions", summary="聊天补全")
@@ -492,52 +456,6 @@ def list_agent_sessions(
     return get_result(data=convs)
 
 
-@router.delete("/agents/{agent_id}/sessions", summary="批量删除代理会话")
-def delete_agent_sessions(agent_id: str, request: DeleteSessionsRequest, db: Session = Depends(get_db), tenant_id: str = Depends(token_required)):
-    errors = []
-    success_count = 0
-    req = request.model_dump()
-    cvs = UserCanvasService.query(db, user_id=tenant_id, id=agent_id)
-    if not cvs:
-        return get_error_data_result(retmsg=f"You don't own the agent {agent_id}")
-
-    ids = req.get("ids")
-    if not ids:
-        if req.get("delete_all") is True:
-            ids = [conv.id for conv in API4ConversationService.query(db, dialog_id=agent_id)]
-            if not ids:
-                return get_result()
-        else:
-            return get_result()
-
-    conv_list = ids
-
-    unique_conv_ids, duplicate_messages = check_duplicate_ids(conv_list, "session")
-    conv_list = unique_conv_ids
-
-    for session_id in conv_list:
-        conv = API4ConversationService.query(db, id=session_id, dialog_id=agent_id)
-        if not conv:
-            errors.append(f"The agent doesn't own the session {session_id}")
-            continue
-        API4ConversationService.delete_by_id(db, session_id)
-        success_count += 1
-
-    if errors:
-        if success_count > 0:
-            return get_result(data={"success_count": success_count, "errors": errors}, retmsg=f"Partially deleted {success_count} sessions with {len(errors)} errors")
-        else:
-            return get_error_data_result(retmsg="; ".join(errors))
-
-    if duplicate_messages:
-        if success_count > 0:
-            return get_result(retmsg=f"Partially deleted {success_count} sessions with {len(duplicate_messages)} errors", data={"success_count": success_count, "errors": duplicate_messages})
-        else:
-            return get_error_data_result(retmsg=";".join(duplicate_messages))
-
-    return get_result()
-
-
 @router.post("/sessions/ask", summary="询问知识库")
 async def ask_about(request: AskRequest, db: AsyncSession = Depends(get_async_db), tenant_id: str = Depends(async_token_required)):
     req = request.model_dump()
@@ -768,7 +686,7 @@ def agentbot_persondata_list(
     agent_id: str,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(beta_token_required),
-):
+) -> JSONResponse:
     """
     公开 (share/widget beta-token) 入口，按 agent_id (即 datav workflow_id) 读取
     inputPlugin persondataList。与登录态 `/v1/datav/persondataList/{id}` 同源数据，
@@ -777,6 +695,8 @@ def agentbot_persondata_list(
     cvs = UserCanvasService.get_by_id(db, agent_id)
     if not cvs:
         return get_error_data_result(retmsg=f"Can't find agent by ID: {agent_id}")
+    if cvs.user_id != tenant_id:
+        return get_error_data_result(retmsg="You cannot access the agent.")
 
     try:
         from api.apps.datav_app import fetch_persondata_list
@@ -825,17 +745,22 @@ async def ask_about_embedded(
     body: SearchBotAskRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_beta_token_required),
-):
+) -> Response:
     req = body.model_dump()
     uid = tenant_id
 
     search_id = req.get("search_id", "")
     search_config = {}
     if search_id:
-        if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
-            search_config = search_app.get("search_config", {})
+        try:
+            search_app = await db.run_sync(lambda s: _shared_search_detail(s, search_id, tenant_id))  # TODO(async-phase4)
+        except PermissionError as error:
+            return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
+        search_config = search_app.get("search_config") or {}
+    if not await _accessible_shared_kbs(db, search_config.get("kb_ids", req["kb_ids"]), tenant_id):
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg="No authorization for the selected dataset.")
 
-    async def stream():
+    async def stream() -> AsyncGenerator[str, None]:
         nonlocal req, uid, db
         try:
             include, fields = resolve_reference_metadata_preferences(req, search_config)
@@ -882,27 +807,13 @@ async def retrieval_test_embedded(
     search_config = {}
 
     try:
-
-        def _authorized_tenants(s: Session) -> list[str] | None:
-            owned: list[str] = []
-            tenants = UserTenantService.query(s, user_id=tenant_id)
-            for kb_id in kb_ids:
-                for tenant in tenants:
-                    if KnowledgebaseService.query(s, tenant_id=tenant.tenant_id, id=kb_id):
-                        owned.append(tenant.tenant_id)
-                        break
-                else:
-                    return None
-            return owned
-
-        owned_tenants = await db.run_sync(_authorized_tenants)  # TODO(async-phase4)
-        if owned_tenants is None:
+        if not await _accessible_shared_kbs(db, kb_ids, tenant_id):
             return get_json_result(data=False, retmsg="Only owner of dataset authorized for this operation.", retcode=RetCode.OPERATING_ERROR)
-        tenant_ids = owned_tenants
 
         kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
         if {kb.id for kb in kbs} != set(kb_ids):
             return get_error_data_result(retmsg="Knowledgebase not found!")
+        tenant_ids = [dataset.tenant_id for dataset in kbs]
         KnowledgebaseService.ensure_same_embedding_model(kbs)
         kb = kbs[0]
         allowed_rerank_tenant_ids = {tenant_id, *[dataset.tenant_id for dataset in kbs]}
@@ -912,12 +823,7 @@ async def retrieval_test_embedded(
                 return get_json_result(data=False, retmsg="No authorization for rerank model.", retcode=RetCode.AUTHENTICATION_ERROR)
 
         if req.get("search_id", ""):
-            detail = await db.run_sync(lambda s: SearchService.get_detail(s, req["search_id"]))  # TODO(async-phase4)
-            if not detail:
-                return get_error_data_result(retmsg="Search app not found!")
-            membership = await db.run_sync(lambda s: UserTenantService.get_membership(s, tenant_id=detail["tenant_id"], user_id=tenant_id))  # TODO(async-phase4)
-            if membership is None or not UserTenantService.can_access_tenant_resources(membership.role):
-                return get_error_data_result(retmsg="No authorization.")
+            detail = await db.run_sync(lambda s: _shared_search_detail(s, req["search_id"], tenant_id))  # TODO(async-phase4)
             search_config = detail.get("search_config") or {}
             meta_data_filter = search_config.get("meta_data_filter", {})
             if meta_data_filter:
@@ -1000,6 +906,8 @@ async def retrieval_test_embedded(
         return get_json_result(data=ranks)
     except EmbeddingModelMismatchError as e:
         return get_json_result(data=False, retmsg=str(e), retcode=RetCode.DATA_ERROR)
+    except PermissionError as error:
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
     except Exception as e:
         if "not_found" in str(e):
             return get_json_result(data=False, retmsg="No chunk found! Check the chunk status please!", retcode=RetCode.DATA_ERROR)
@@ -1011,14 +919,17 @@ async def related_questions_embedded(
     body: SearchBotRelatedQuestionsRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_beta_token_required),
-):
+) -> JSONResponse:
     req = body.model_dump()
 
     search_id = req.get("search_id", "")
     search_config = {}
     if search_id:
-        if search_app := await db.run_sync(lambda s: SearchService.get_detail(s, search_id)):  # TODO(async-phase4)
-            search_config = search_app.get("search_config", {})
+        try:
+            search_app = await db.run_sync(lambda s: _shared_search_detail(s, search_id, tenant_id))  # TODO(async-phase4)
+        except PermissionError as error:
+            return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
+        search_config = search_app.get("search_config") or {}
 
     question = req["question"]
 
@@ -1053,19 +964,11 @@ def detail_share_embedded(
     search_id: str = Query(...),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(beta_token_required),
-):
+) -> JSONResponse:
     try:
-        tenants = UserTenantService.query(db, user_id=tenant_id)
-        for tenant in tenants:
-            if SearchService.query(db, tenant_id=tenant.tenant_id, id=search_id):
-                break
-        else:
-            return get_json_result(data=False, retmsg="Has no permission for this operation.", retcode=RetCode.OPERATING_ERROR)
-
-        search = SearchService.get_detail(db, search_id)
-        if not search:
-            return get_error_data_result(retmsg="Can't find this Search App!")
-        return get_json_result(data=search)
+        return get_json_result(data=_shared_search_detail(db, search_id, tenant_id))
+    except PermissionError as error:
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
     except Exception as e:
         return server_error_response(e)
 
@@ -1075,11 +978,16 @@ async def mindmap(
     body: SearchBotMindmapRequest,
     db: AsyncSession = Depends(get_async_db),
     tenant_id: str = Depends(async_beta_token_required),
-):
+) -> JSONResponse:
     req = body.model_dump()
 
     search_id = req.get("search_id", "")
-    search_app = await db.run_sync(lambda s: SearchService.get_detail(s, search_id)) if search_id else {}  # TODO(async-phase4)
+    try:
+        search_app = await db.run_sync(lambda s: _shared_search_detail(s, search_id, tenant_id)) if search_id else {}  # TODO(async-phase4)
+    except PermissionError as error:
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
+    if not await _accessible_shared_kbs(db, req["kb_ids"], tenant_id):
+        return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg="No authorization for the selected dataset.")
 
     mind_map = await gen_mindmap(db, req["question"], req["kb_ids"], tenant_id, search_app.get("search_config", {}))
     if "error" in mind_map:

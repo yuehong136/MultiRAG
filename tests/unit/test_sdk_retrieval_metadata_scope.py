@@ -10,13 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.apps.restful_apis import chunk as sdk
 from api.db.db_models import Knowledgebase
-from api.utils.api_utils import token_required
+from api.utils.api_utils import current_user
 from common import settings
 
 
 @pytest.fixture
 def sdk_retrieval(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, AsyncMock]:
-    client.app.dependency_overrides[token_required] = lambda: "owner"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(platform_user_id="owner")
     kb = Knowledgebase(id="dataset", tenant_id="owner", name="dataset", tenant_embd_id=None, embd_id="embedding")
     monkeypatch.setattr(sdk.KnowledgebaseService, "query", lambda *_a, **_k: [kb])
     monkeypatch.setattr(sdk.KnowledgebaseService, "get_by_ids", lambda *_: [kb])
@@ -114,8 +114,7 @@ async def test_embedded_retrieval_pairs_loaded_rows_when_sql_order_differs(async
     from api.apps.restful_apis import bot as session
 
     rows = [Knowledgebase(id=identifier, tenant_id=owner, name="name-" + identifier, tenant_embd_id=None, embd_id="embedding") for identifier, owner in (("b", "other"), ("a", "owner"))]
-    monkeypatch.setattr(session.UserTenantService, "query", lambda *_a, **_k: [SimpleNamespace(tenant_id="owner"), SimpleNamespace(tenant_id="other")])
-    monkeypatch.setattr(session.KnowledgebaseService, "query", lambda *_a, **kwargs: [row for row in rows if row.id == kwargs["id"] and row.tenant_id == kwargs["tenant_id"]])
+    monkeypatch.setattr(session.KnowledgebaseService, "accessible", lambda *_a, **_kw: True)
     monkeypatch.setattr(session.KnowledgebaseService, "get_by_ids", lambda *_: rows)
     monkeypatch.setattr(session, "build_named_bundle_async", AsyncMock(return_value=object()))
     monkeypatch.setattr(session, "_label_question_with_conn", lambda *_: {})

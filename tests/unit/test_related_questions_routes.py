@@ -5,10 +5,12 @@ LLMBundle 打桩带 instances 追踪，AsyncSession 化后断言 facade 剥离�
 """
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from api.db.services.search_service import SearchService
+from api.db.services.user_service import UserTenantService
 
 
 def _route_module(name: str):
@@ -35,7 +37,8 @@ def rq_stubs(monkeypatch, client):
         monkeypatch.setattr(mod, "LLMBundle", _FakeBundle)
         monkeypatch.setattr(mod, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "default-m"})
         monkeypatch.setattr(mod, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": name})
-    monkeypatch.setattr(SearchService, "get_detail", classmethod(lambda cls, s, sid: {"search_config": {}}))
+    monkeypatch.setattr(SearchService, "get_detail", classmethod(lambda cls, s, sid: {"tenant_id": "tenant-unit", "search_config": {}}))
+    monkeypatch.setattr(UserTenantService, "get_membership", classmethod(lambda cls, s, **kwargs: SimpleNamespace(role="owner")))
     return _FakeBundle
 
 
