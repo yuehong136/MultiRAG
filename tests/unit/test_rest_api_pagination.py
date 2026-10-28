@@ -84,6 +84,9 @@ def test_invalid_query_stops_before_handler(client: TestClient, monkeypatch: pyt
     for value in invalid:
         response = client.get("/api/v1" + path, params={"page_size": value})
         assert response.status_code == 422, (path, value, response.text)
+    for value in ["-1", "1.0", "1.5", "nan", "inf", "true", "false", "null", "", " 1", "+1"]:
+        response = client.get("/api/v1" + path, params={"page": value})
+        assert response.status_code == 422, (path, value, response.text)
     for params in [[("page_size", "1"), ("page_size", "100")], [("page_size", "100"), ("page_size", "100")], [("page", "1"), ("page", "2")]]:
         response = client.get("/api/v1" + path, params=params)
         assert response.status_code == 422, (path, params, response.text)

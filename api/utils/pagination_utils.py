@@ -28,6 +28,8 @@ def validate_rest_api_pagination(request: Request) -> None:
         values = request.query_params.getlist(name)
         if len(values) > 1:
             raise RequestValidationError([{"type": "value_error", "loc": ("query", name), "msg": f"{name} must be supplied only once", "input": values}])
+        if name == "page" and values and not re.fullmatch(r"[0-9]+", values[0]):
+            raise RequestValidationError([{"type": "value_error", "loc": ("query", name), "msg": "page must be a non-negative integer", "input": values[0]}])
         if name == "page_size" and values:
             try:
                 validate_rest_api_page_size(values[0])

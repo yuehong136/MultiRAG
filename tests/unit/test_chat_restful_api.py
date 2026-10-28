@@ -661,3 +661,21 @@ def test_legacy_conversation_app_remains_deprecated_for_compatibility():
     source = _LEGACY_CONVERSATION_APP_PATH.read_text(encoding="utf-8")
     assert "/v1/conversation/*" in source
     assert "deprecated=True" in source
+
+
+@pytest.mark.parametrize("page", ["-1", "1.5", "1.0", "NaN", "inf", "true", ""])
+def test_session_invalid_page_rejects_before_database(client: Any, monkeypatch: pytest.MonkeyPatch, page: str) -> None:
+    import sys
+
+    route = sys.modules["api.apps.restful_apis.chat"]
+    calls: list[str] = []
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        calls.append("database")
+        raise AssertionError("invalid page must not reach ownership or session query")
+
+    monkeypatch.setattr(route, "_owned_chat_exists", forbidden)
+    monkeypatch.setattr(route.ConversationService, "get_list", forbidden)
+    response = client.get("/api/v1/chats/chat-1/sessions", params={"page": page})
+    assert response.status_code == 422
+    assert calls == []
