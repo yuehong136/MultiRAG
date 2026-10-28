@@ -123,6 +123,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
+		authorized.GET("/api/v1/mcp/servers", r.mcpHandler.ListMCPServers)
 		authorized.POST("/api/v1/mcp/servers", r.mcpHandler.CreateMCPServer)
 		authorized.DELETE("/api/v1/mcp/servers/:mcp_id", r.mcpHandler.DeleteMCPServer)
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)

@@ -22,8 +22,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -203,4 +205,70 @@ func (s *MCPService) DeleteMCPServer(ctx context.Context, tenantID, mcpID string
 		return false, code, errors.New("Unable to delete MCP server.")
 	}
 	return true, common.CodeSuccess, nil
+}
+
+// MCPServerListItem exposes display data, never saved credentials.
+type MCPServerListItem struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	ServerType  string         `json:"server_type"`
+	URL         string         `json:"url"`
+	Description *string        `json:"description"`
+	Variables   entity.JSONMap `json:"variables"`
+	CreateDate  *time.Time     `json:"create_date"`
+	UpdateDate  *time.Time     `json:"update_date"`
+}
+
+type ListMCPServersResponse struct {
+	MCPServers []MCPServerListItem `json:"mcp_servers"`
+	Total      int64               `json:"total"`
+}
+
+// ListMCPServers is a management operation guarded by active tenant ownership.
+func (s *MCPService) ListMCPServers(ctx context.Context, userID, tenantID string, opts dao.MCPListQuery) (*ListMCPServersResponse, common.ErrorCode, error) {
+	if opts.Page < 0 || opts.PageSize < 0 || opts.PageSize > 100 || (opts.PageSize > 0 && opts.Page > math.MaxInt/opts.PageSize) {
+		return nil, common.CodeArgumentError, errors.New("Invalid MCP pagination.")
+	}
+	if _, err := dao.MCPServerOrderColumn(opts.OrderBy); err != nil {
+		return nil, common.CodeArgumentError, err
+	}
+	result := &ListMCPServersResponse{MCPServers: []MCPServerListItem{}}
+	err := dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := verifyTenantOwner(tx, userID, tenantID); err != nil {
+			return err
+		}
+		var activeTenant int64
+		if err := tx.Model(&entity.Tenant{}).Where("id = ? AND status = ?", tenantID, "1").Count(&activeTenant).Error; err != nil {
+			return err
+		}
+		if activeTenant != 1 {
+			return errTenantMemberDenied
+		}
+		rows, total, err := s.mcpServerDAO.ListMCPServers(ctx, tx, tenantID, opts)
+		if err != nil {
+			return err
+		}
+		result.Total = total
+		for _, row := range rows {
+			variables := entity.JSONMap{}
+			if tools, ok := row.Variables["tools"]; ok {
+				variables["tools"] = tools
+			}
+			// Connection URL query parameters may contain tokens.
+			endpoint, err := url.Parse(row.URL)
+			if err != nil {
+				return errors.New("Invalid saved MCP endpoint.")
+			}
+			endpoint.User, endpoint.RawQuery, endpoint.Fragment = nil, "", ""
+			result.MCPServers = append(result.MCPServers, MCPServerListItem{ID: row.ID, Name: row.Name, ServerType: row.ServerType, URL: endpoint.String(), Description: row.Description, Variables: variables, CreateDate: row.CreateDate, UpdateDate: row.UpdateDate})
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errTenantMemberDenied) {
+			return nil, common.CodeAuthenticationError, errTenantMemberDenied
+		}
+		return nil, common.CodeServerError, errors.New("Unable to list MCP servers.")
+	}
+	return result, common.CodeSuccess, nil
 }

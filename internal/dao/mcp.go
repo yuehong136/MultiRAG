@@ -22,6 +22,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"multirag/internal/entity"
+	"strings"
 )
 
 type MCPServerDAO struct{}
@@ -47,4 +48,53 @@ func (dao *MCPServerDAO) CreateMCPServer(ctx context.Context, server *entity.MCP
 		}
 		return nil
 	})
+}
+
+// MCPListQuery keeps an absent ID filter (nil) distinct from an empty one.
+type MCPListQuery struct {
+	IDs            []string
+	Keywords       string
+	Page, PageSize int
+	OrderBy        string
+	Desc           bool
+}
+
+// MCPServerOrderColumn maps public names to a closed SQL column allowlist.
+func MCPServerOrderColumn(field string) (string, error) {
+	switch field {
+	case "id", "name", "server_type", "url", "create_time", "update_time", "create_date", "update_date":
+		return field, nil
+	default:
+		return "", errors.New("Invalid MCP ordering field.")
+	}
+}
+
+// ListMCPServers applies pagination in SQL and never selects connection headers.
+func (dao *MCPServerDAO) ListMCPServers(ctx context.Context, tx *gorm.DB, tenantID string, opts MCPListQuery) ([]entity.MCPServer, int64, error) {
+	rows := []entity.MCPServer{}
+	column, err := MCPServerOrderColumn(opts.OrderBy)
+	if err != nil {
+		return nil, 0, err
+	}
+	query := tx.WithContext(ctx).Model(&entity.MCPServer{}).Where("tenant_id = ?", tenantID)
+	if opts.IDs != nil {
+		query = query.Where("id IN ?", opts.IDs)
+	}
+	if opts.Keywords != "" {
+		literal := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(strings.ToLower(opts.Keywords))
+		query = query.Where("LOWER(name) LIKE ?", "%"+literal+"%")
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	query = query.Select("id", "name", "server_type", "url", "description", "variables", "create_date", "update_date").Order(clause.OrderByColumn{Column: clause.Column{Name: column}, Desc: opts.Desc})
+	if column != "id" {
+		query = query.Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}, Desc: opts.Desc})
+	}
+	if opts.Page > 0 && opts.PageSize > 0 {
+		query = query.Offset((opts.Page - 1) * opts.PageSize).Limit(opts.PageSize)
+	}
+	err = query.Find(&rows).Error
+	return rows, total, err
 }
