@@ -26,6 +26,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -65,6 +66,12 @@ func (g *GoogleModel) client(ctx context.Context, config *APIConfig) (*genai.Cli
 	}
 	if baseURL == "" {
 		return nil, errors.New("Google base URL is not configured")
+	}
+	// A selected custom endpoint must fail closed rather than let the SDK
+	// reinterpret malformed URLs or attach credentials to an unintended target.
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
+		return nil, errors.New("Google base URL must be an HTTP(S) endpoint without credentials, query or fragment")
 	}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: strings.TrimSpace(*config.APIKey), Backend: genai.BackendGeminiAPI,

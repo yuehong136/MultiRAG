@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,7 +13,7 @@ import (
 
 func TestGoogleDiscoveryChecksKeysWithoutHTTP(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{"models":[]}`) }))
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{"models":[]}`) }))
 	defer server.Close()
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	for _, api := range []*APIConfig{nil, {}, {APIKey: stringPtr("")}, {APIKey: stringPtr(" \t\n ")}} {
@@ -37,7 +36,7 @@ func TestGoogleDiscoveryChecksKeysWithoutHTTP(t *testing.T) {
 
 func TestGoogleConnectionPropagatesLaterPageFailure(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Header.Get("x-goog-api-key") != "fixture-key" {
 			t.Error("list authentication lost")
@@ -60,7 +59,7 @@ func TestGoogleConnectionPropagatesLaterPageFailure(t *testing.T) {
 func TestGoogleDiscoveryCancellationReachesLaterPage(t *testing.T) {
 	started, cancelled := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.URL.Query().Get("pageToken") == "" {
 			fmt.Fprint(w, `{"models":[{"name":"first"}],"nextPageToken":"second"}`)
@@ -110,7 +109,7 @@ func TestGoogleDiscoveryCancellationReachesLaterPage(t *testing.T) {
 
 func TestGoogleConstructorOwnsURLMap(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{"models":[]}`) }))
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{"models":[]}`) }))
 	defer server.Close()
 	urls := map[string]string{"default": server.URL}
 	driver := NewGoogleModel(urls, URLSuffix{})
@@ -128,7 +127,7 @@ func TestGoogleDiscoveryRejectsMalformedResponses(t *testing.T) {
 		`{"error":{"code":403,"message":"fixture-key private error"}}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 			names, err := driver.ListModels(&APIConfig{APIKey: stringPtr("fixture-key")})
@@ -143,7 +142,7 @@ func TestGoogleDiscoveryRejectsMalformedResponses(t *testing.T) {
 }
 
 func TestGoogleDiscoveryAcceptsExplicitEmptyInventory(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"models":[]}`) }))
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"models":[]}`) }))
 	defer server.Close()
 	driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 	api := &APIConfig{APIKey: stringPtr("fixture-key")}

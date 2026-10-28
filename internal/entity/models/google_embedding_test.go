@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -20,7 +19,7 @@ func TestGoogleEmbeddingSDKBatchAndTaskConfig(t *testing.T) {
 		t.Run(fmt.Sprintf("%+v", config), func(t *testing.T) {
 			var calls atomic.Int32
 			texts := []string{"first", "中文", "  keep spacing  "}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				if r.Method != http.MethodPost || r.URL.Path != "/proxy/v1beta/models/text-embedding-004:batchEmbedContents" || r.Header.Get("x-goog-api-key") != "fixture-key" {
 					t.Error("embedding endpoint, method or authentication lost")
@@ -94,7 +93,7 @@ func TestGoogleEmbeddingRejectsMalformedSDKResponses(t *testing.T) {
 		`{"embeddings":[{"values":[1,2]},{"values":[3,4]}]} {}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 			vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("text-embedding-004"), []string{"a", "b"}, &APIConfig{APIKey: stringPtr("fixture-key")}, nil))
@@ -105,7 +104,7 @@ func TestGoogleEmbeddingRejectsMalformedSDKResponses(t *testing.T) {
 	}
 	for _, dimension := range []int{1, 3} {
 		t.Run(fmt.Sprint(dimension), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"embeddings":[{"values":[1,2]}]}`) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"embeddings":[{"values":[1,2]}]}`) }))
 			defer server.Close()
 			driver := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 			if vectors, err := embeddingVectorsForTest(driver.Embed(stringPtr("text-embedding-004"), []string{"a"}, &APIConfig{APIKey: stringPtr("fixture-key")}, &EmbeddingConfig{Dimension: dimension})); err == nil || vectors != nil {
@@ -117,7 +116,7 @@ func TestGoogleEmbeddingRejectsMalformedSDKResponses(t *testing.T) {
 
 func TestGoogleEmbeddingPreflightAndCancellation(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		fmt.Fprint(w, `{"embeddings":[{"values":[1]}]}`)
 	}))
@@ -159,7 +158,7 @@ func TestGoogleEmbeddingPreflightAndCancellation(t *testing.T) {
 
 func TestGoogleEmbeddingErrorAndInFlightCancellation(t *testing.T) {
 	t.Run("provider error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(w, `{"error":{"code":403,"message":"fixture-key internal detail"}}`)
 		}))
@@ -173,7 +172,7 @@ func TestGoogleEmbeddingErrorAndInFlightCancellation(t *testing.T) {
 	for _, deadline := range []bool{false, true} {
 		t.Run(fmt.Sprint("deadline=", deadline), func(t *testing.T) {
 			started, cancelled := make(chan struct{}), make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// Drain the SDK payload before waiting so cancellation closes the request.
 				var body any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

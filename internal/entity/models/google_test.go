@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -22,7 +21,7 @@ func googleTestConfig() (*string, *string, *APIConfig) {
 func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
 	for _, thinking := range []bool{true, false} {
 		t.Run(fmt.Sprint(thinking), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "POST" || r.URL.Path != "/v1beta/models/gemini-2.5-flash:generateContent" {
 					t.Errorf("unexpected SDK endpoint %s %s", r.Method, r.URL.Path)
 				}
@@ -75,7 +74,7 @@ func TestGoogleChatSDKRequestAndThoughtSeparation(t *testing.T) {
 func TestGoogleEmptyChatResponses(t *testing.T) {
 	for _, response := range []string{`{}`, `{"candidates":[]}`, `{"candidates":[{}]}`, `{"candidates":[{"content":{}}]}`, `{"candidates":[{"content":{"parts":[]}}]}`} {
 		t.Run(response, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 			defer server.Close()
 			g := NewGoogleModel(map[string]string{"default": server.URL}, URLSuffix{})
 			name, message, api := googleTestConfig()
@@ -87,7 +86,7 @@ func TestGoogleEmptyChatResponses(t *testing.T) {
 }
 
 func TestGoogleStreamingEmptyChunksOrderAndCallbackFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1beta/models/gemini-2.5-flash:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
 			t.Error("wrong SDK stream path")
 		}
@@ -127,7 +126,7 @@ func TestGoogleStreamingEmptyChunksOrderAndCallbackFailure(t *testing.T) {
 
 func TestGoogleModelPaginationAndConnection(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.URL.Path != "/v1beta/models" {
 			t.Errorf("list path %s", r.URL.Path)
@@ -159,7 +158,7 @@ func TestGoogleModelPaginationAndConnection(t *testing.T) {
 func TestGooglePageErrorsAndEmptyListing(t *testing.T) {
 	for _, mode := range []string{"error", "empty", "cycle"} {
 		t.Run(mode, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if mode == "empty" {
 					fmt.Fprint(w, `{"models":[]}`)
 					return
@@ -191,7 +190,7 @@ func TestGooglePageErrorsAndEmptyListing(t *testing.T) {
 func TestGoogleErrorsAreSafeAndCancellationReachesTransport(t *testing.T) {
 	started := make(chan struct{}, 1)
 	cancelled := make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "stream") {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(200)
@@ -267,7 +266,7 @@ func TestGoogleValidationAndUnsupportedCapabilities(t *testing.T) {
 }
 
 func TestGoogleChatWithMessagesPreservesRolesAndSystemInstruction(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Contents          []struct{ Role string }
 			SystemInstruction struct{ Parts []struct{ Text string } }
@@ -292,7 +291,7 @@ func TestGoogleChatWithMessagesPreservesRolesAndSystemInstruction(t *testing.T) 
 func TestGoogleBaseURLRegionAndFallback(t *testing.T) {
 	for _, region := range []string{"regional", "", "missing"} {
 		t.Run(region, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"models":[]}`) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"models":[]}`) }))
 			defer server.Close()
 			urls := map[string]string{"default": server.URL}
 			if region == "regional" {
@@ -314,7 +313,7 @@ func TestGoogleBaseURLRegionAndFallback(t *testing.T) {
 }
 
 func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1beta/models/gemini-test:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
 			t.Errorf("history stream URL %s", r.URL)
 		}
@@ -360,7 +359,7 @@ func TestGoogleHistorySenderPreservesRolesAndContext(t *testing.T) {
 
 func TestGoogleMultimodalStreamAndTruncation(t *testing.T) {
 	for _, complete := range []bool{false, true} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Error(err)
