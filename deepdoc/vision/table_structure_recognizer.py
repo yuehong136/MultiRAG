@@ -17,6 +17,7 @@ import logging
 import os
 import re
 from collections import Counter
+from typing import Any
 
 import numpy as np
 from huggingface_hub import snapshot_download
@@ -111,8 +112,13 @@ class TableStructureRecognizer(Recognizer):
         return res
 
     @staticmethod
-    def is_caption(bx):
-        patt = [r"[图表]+[ 0-9:：]{2,}"]
+    def is_caption(bx: dict[str, Any]) -> bool:
+        patt = [
+            r"[图表]+[ 0-9:：]{2,}",
+            r"(?i)Fig\.?\s*\d+\b",
+            r"(?i)Figure\s+\d+\b",
+            r"(?i)Table\s+\d+\b",
+        ]
         if any(re.match(p, bx["text"].strip()) for p in patt) or bx.get("layout_type", "").find("caption") >= 0:
             return True
         return False
