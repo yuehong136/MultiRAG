@@ -245,6 +245,9 @@ test = []
 # 工具链防漂：本地与 CI 必须同一 minor 的 uv（锁文件由 0.12.x 产出；
 # 升级 uv 时本地、CI 四处 pin、重锁三者同一提交完成）
 required-version = ">=0.12,<0.13"
+# Crawl4AI's fork installs the same litellm namespace as our direct dependency.
+# Keep one owner of those modules so install order cannot change the runtime.
+exclude-dependencies = ["unclecode-litellm"]
 override-dependencies = [
     # moodlepy 0.24.1（最新版、上游停更）pin attrs/cattrs <23.0，与现代栈硬冲突，
     # override 是唯一出路；日落点 = 弃用或内联 moodlepy 连接器

@@ -11,6 +11,7 @@ resolution-markers = [
 ]
 
 [manifest]
+excludes = ["unclecode-litellm"]
 constraints = [
     { name = "datasets", specifier = ">=5.0.1,<6.0.0" },
     { name = "fastmcp-slim", specifier = "==4.0.0b3" },
@@ -1679,7 +1680,6 @@ dependencies = [
     { name = "rich" },
     { name = "shapely" },
     { name = "snowballstemmer" },
-    { name = "unclecode-litellm" },
     { name = "xxhash" },
 ]
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ca/95/a307119201f09a5136be1e394282ee4d4d6e3816cbc3c73f370aaa4b5e56/crawl4ai-0.9.1.tar.gz", hash = "sha256:d04251f13ba180107324bb7bbe12029a63d95cc50248f05085743739f38404fc" }
@@ -11575,29 +11575,6 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/6b/5a/92ce0b3ea5481915f55da994c2c2c5f7a3c09949afde196ee89f8ab961aa/uncalled_for-0.4.0.tar.gz", hash = "sha256:335b95bd2422332ec210d518f314a16e4c640921c39fc8bf2ad095bd3538f4af" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/a2/40/97cec87c077eb3291fc7905e6633e08b7ca593c57d30238444bcb6bb3d53/uncalled_for-0.4.0-py3-none-any.whl", hash = "sha256:16c4bb3337532e4bd5569adc192285976f3ad5305402256d34c67a12b5c968bd" },
-]
-
-[[package]]
-name = "unclecode-litellm"
-version = "1.81.13"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "click" },
-    { name = "fastuuid" },
-    { name = "httpx" },
-    { name = "importlib-metadata" },
-    { name = "jinja2" },
-    { name = "jsonschema" },
-    { name = "openai" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "tiktoken" },
-    { name = "tokenizers" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ce/c4/93ed52c49c2347184f908c692ebb7c1f06303805910774c3282ac68033db/unclecode_litellm-1.81.13.tar.gz", hash = "sha256:db70e34e3e859c0a07f02cb02eaa644f8fa4b4ecc5e2f3be9a58bd7d1c3feedc" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/43/85/7b1e0bc5827bcb23dc572b17c447fb5825340f36a9e4405d4b777b862e0c/unclecode_litellm-1.81.13-py3-none-any.whl", hash = "sha256:5e1fbedbed92333b48e7371e0bacf86d1288020451bf34351703c3b159591399" },
 ]
 
 [[package]]

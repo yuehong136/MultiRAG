@@ -17,7 +17,7 @@ import asyncio
 from abc import ABC
 from typing import Any
 
-from crawl4ai import AsyncWebCrawler
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 
 from agent.tools.base import ToolBase, ToolParamBase
 
@@ -62,8 +62,9 @@ class Crawler(ToolBase, ABC):
             return
 
         proxy = self._param.proxy if self._param.proxy else None
-        async with AsyncWebCrawler(verbose=True, proxy=proxy) as crawler:
-            result = await crawler.arun(url=url, bypass_cache=True)
+        browser_config = BrowserConfig(verbose=True, proxy=proxy)
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url=url, config=CrawlerRunConfig(cache_mode=CacheMode.BYPASS))
 
             if self.check_if_canceled("Crawler async operation"):
                 return
