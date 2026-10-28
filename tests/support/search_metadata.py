@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,7 @@ from opensearchpy import OpenSearch
 
 from core.utils.es_conn import ESConnection
 from core.utils.opensearch_conn import OSConnection
+from tests.support.resource_journal import ResourceJournal
 
 
 @pytest.fixture(params=["elasticsearch", "opensearch"])
@@ -24,7 +26,11 @@ def search_store(request: pytest.FixtureRequest, record_property: Any) -> Iterat
     es = backend == "elasticsearch"
     url = os.environ.get("METADATA_TEST_ES_URL" if es else "METADATA_TEST_OS_URL")
     assert url, "Prepare isolated ES/OS services before collection"
+    parsed = urlsplit(url)
+    endpoint = urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], "", "", ""))
     indexes: list[str] = []
+    journal = ResourceJournal(request.node.nodeid)
+    journal.event("borrowed-search-service", backend=backend, endpoint=endpoint)
     manifest_path = os.environ.get("ES_OS_RESOURCE_MANIFEST")
 
     def record() -> None:
@@ -50,6 +56,7 @@ def search_store(request: pytest.FixtureRequest, record_property: Any) -> Iterat
 
         def register_index(name: str) -> str:
             assert not reader.indices.exists(index=name)
+            journal.event("reserve-index", backend=backend, endpoint=endpoint, index=name)
             indexes.append(name)
             record()
             return name
@@ -65,6 +72,7 @@ def search_store(request: pytest.FixtureRequest, record_property: Any) -> Iterat
                 if reader.indices.exists(index=index):
                     reader.indices.delete(index=index)
                 assert not reader.indices.exists(index=index)
+                journal.event("index-readback", backend=backend, endpoint=endpoint, index=index, absent=True)
             record_property("removed_owned_indexes", indexes)
             indexes.clear()
             record()

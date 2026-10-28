@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import numpy as np
@@ -21,8 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from api.db.db_models import Document, Knowledgebase
+from api.db.db_models import Dialog, Document, Knowledgebase, UserTenant
+from api.db.joint_services import tenant_model_service
 from api.db.services import dialog_service
+from api.db.services.llm_service import LLMBundle
 from common import settings
 from common.doc_store.doc_store_base import MatchDenseExpr, OrderByExpr
 from core.nlp import search
@@ -30,6 +33,7 @@ from core.nlp.search import Dealer
 from core.utils.es_conn import ESConnection
 from core.utils.opensearch_conn import OSConnection
 from tests.support.database import scratch_database
+from tests.support.resource_journal import ResourceJournal
 
 
 @pytest.fixture(params=["elasticsearch", "opensearch"])
@@ -37,8 +41,12 @@ def scored_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
     backend = request.param
     url = os.environ.get("METADATA_TEST_ES_URL" if backend == "elasticsearch" else "METADATA_TEST_OS_URL")
     assert url, "Prepare an owned ES/OS listener before collection"
+    parsed = urlsplit(url)
+    endpoint = urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], "", "", ""))
     evidence = Path(os.environ.get("SCORING_EVIDENCE", str(tmp_path)))
     evidence.mkdir(parents=True, exist_ok=True)
+    journal = ResourceJournal(request.node.nodeid)
+    journal.event("borrowed-search-service", backend=backend, endpoint=endpoint)
     with scratch_database(evidence) as engine, ExitStack() as cleanup:
         owner, kb = uuid4().hex, uuid4().hex
         name = "scoring_" + uuid4().hex
@@ -77,13 +85,17 @@ def scored_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
             if reader.indices.exists(index=index_name):
                 reader.indices.delete(index=index_name)
             assert not reader.indices.exists(index=index_name)
+            journal.event("index-readback", backend=backend, endpoint=endpoint, index=index_name, absent=True)
             manifest["cleaned"] = True
             manifest_file.write_text(json.dumps(manifest, indent=2))
 
         cleanup.callback(remove)
+        assert not reader.indices.exists(index=index_name)
+        journal.event("reserve-index", backend=backend, endpoint=endpoint, index=index_name)
         client.indices.create(index=index_name, body=body, master_timeout="60s")
         rows = {}
         with Session(engine) as db:
+            db.add(UserTenant(id=uuid4().hex, user_id=owner, tenant_id=owner, role="owner", invited_by=owner, status="1"))
             db.add(Knowledgebase(id=kb, tenant_id=owner, created_by=owner, name=name, parser_config={}, parser_id="naive", embd_id="controlled"))
             for key, identifier in ids.items():
                 db.add(Document(id=identifier, kb_id=kb, name=key, created_by=owner, parser_id="naive", parser_config={}, type="txt", location="", auth=""))
@@ -149,7 +161,7 @@ class _Embedding:
         return np.array([[1.0] + [0.0] * 511 for _ in texts]), len(texts)
 
 
-class _CitationModel(_Embedding):
+class _CitationModel(_Embedding, LLMBundle):
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         self.db = None
         self.max_length = 8192
@@ -246,6 +258,7 @@ async def test_actual_chat_and_ask_finalize_citations_from_real_storage(scored_s
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_: {"llm_name": "controlled"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda *_: {"llm_name": "controlled"})
     monkeypatch.setattr(dialog_service, "LLMBundle", _CitationModel)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _CitationModel)
     monkeypatch.setattr(dialog_service.TenantLangfuseService, "filter_by_tenant", lambda *_a, **_k: None)
     monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_field_map", lambda *_: {})
     monkeypatch.setattr(dialog_service, "label_question", lambda *_: {})
@@ -256,7 +269,7 @@ async def test_actual_chat_and_ask_finalize_citations_from_real_storage(scored_s
     monkeypatch.setattr(dialog_service, "get_models", get_models)
     hydrated = AsyncMock(wraps=dealer.fetch_chunk_vectors)
     monkeypatch.setattr(dealer, "fetch_chunk_vectors", hydrated)
-    dialog = SimpleNamespace(
+    dialog = Dialog(
         tenant_id=env["owner"],
         kb_ids=[env["kb"]],
         llm_id="controlled",
@@ -265,6 +278,7 @@ async def test_actual_chat_and_ask_finalize_citations_from_real_storage(scored_s
         llm_setting={},
         meta_data_filter=None,
         top_n=3,
+        top_k=1024,
         similarity_threshold=0.05,
         vector_similarity_weight=0.3,
         search_mode=None,
