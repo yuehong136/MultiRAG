@@ -592,6 +592,7 @@ def test_session_completion_non_stream_reads_ids_from_body(monkeypatch):
 
 def test_related_questions_uses_search_chat_config(monkeypatch, async_db):
     monkeypatch.setattr(chat_api.UserTenantService, "get_membership", lambda *_a, **_kw: Obj(role="owner"))
+    monkeypatch.setattr(chat_api.TenantService, "get_or_none", lambda *_a, **_kw: Obj(id="tenant-1", status="1"))
     """直调式：AsyncSession 化后 db 走 run_sync facade，桩收到的是 facade 同步 session。"""
     captured = {}
     monkeypatch.setattr(

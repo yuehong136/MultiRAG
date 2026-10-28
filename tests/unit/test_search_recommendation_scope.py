@@ -12,8 +12,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.fixture
-def recommendation_module(client: TestClient) -> ModuleType:
-    return sys.modules["api.apps.restful_apis.chat"]
+def recommendation_module(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    module = sys.modules["api.apps.restful_apis.chat"]
+    monkeypatch.setattr(module.TenantService, "get_or_none", lambda *_a, **kw: SimpleNamespace(id=kw["id"], status="1"))
+    return module
+
+
+@pytest.mark.parametrize("tenant_status", [None, "0"])
+def test_missing_or_inactive_search_tenant_never_resolves_or_calls_model(client: TestClient, recommendation_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tenant_status: str | None) -> None:
+    module = recommendation_module
+    monkeypatch.setattr(module.SearchService, "get_detail", lambda *_: {"tenant_id": "team", "search_config": {"chat_id": "29"}})
+    tenant = None if tenant_status is None else SimpleNamespace(id="team", status=tenant_status)
+
+    def active_tenant(_db: Any, **filters: Any) -> Any:
+        assert filters == {"id": "team", "status": "1"}
+        return tenant if tenant is not None and tenant.status == filters["status"] else None
+
+    tenant_lookup = Mock(side_effect=active_tenant)
+    monkeypatch.setattr(module.TenantService, "get_or_none", tenant_lookup)
+    forbidden = Mock(side_effect=AssertionError("Inactive search tenant reached membership or model work"))
+    monkeypatch.setattr(module.UserTenantService, "get_membership", forbidden)
+    for name in ["get_model_config_by_type_and_name", "get_tenant_default_model_by_type", "LLMBundle", "load_prompt"]:
+        monkeypatch.setattr(module, name, forbidden)
+
+    response = client.post("/api/v1/chat/recommendation", json={"question": "question", "search_id": "saved"})
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 109
+    assert response.json()["message"] == "No authorization for the search app."
+    tenant_lookup.assert_called_once()
+    forbidden.assert_not_called()
 
 
 @pytest.mark.parametrize("detail", [{}, {"tenant_id": "foreign", "search_config": {"chat_id": "secret"}}, {"tenant_id": "tenant-unit", "search_config": {}}])

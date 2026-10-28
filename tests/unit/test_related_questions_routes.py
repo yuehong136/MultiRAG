@@ -38,6 +38,8 @@ def rq_stubs(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> type[_FakeB
         monkeypatch.setattr(mod, "LLMBundle", _FakeBundle)
         monkeypatch.setattr(mod, "get_tenant_default_model_by_type", lambda s, tid, t: {"llm_name": "default-m"})
         monkeypatch.setattr(mod, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": name})
+        if mod_name == "api.apps.restful_apis.chat":
+            monkeypatch.setattr(mod.TenantService, "get_or_none", lambda *_a, **_kw: SimpleNamespace(id="tenant-unit", status="1"))
     monkeypatch.setattr(SearchService, "get_detail", classmethod(lambda cls, s, sid: {"tenant_id": "tenant-unit", "search_config": {}}))
     monkeypatch.setattr(UserTenantService, "get_membership", classmethod(lambda cls, s, **kwargs: SimpleNamespace(role="owner")))
     return _FakeBundle

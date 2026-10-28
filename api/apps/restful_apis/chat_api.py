@@ -948,6 +948,8 @@ async def recommendation(
                 owner_id = search_app.get("tenant_id") if search_app else None
                 if not isinstance(owner_id, str) or not owner_id:
                     raise PermissionError("No authorization for the search app.")
+                if TenantService.get_or_none(s, id=owner_id, status=StatusEnum.VALID.value) is None:
+                    raise PermissionError("No authorization for the search app.")
                 membership = UserTenantService.get_membership(s, tenant_id=owner_id, user_id=tenant_id)
                 if membership is None or not UserTenantService.can_access_tenant_resources(membership.role):
                     raise PermissionError("No authorization for the search app.")
