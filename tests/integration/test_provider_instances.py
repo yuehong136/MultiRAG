@@ -648,3 +648,39 @@ def test_async_construction_detaches_before_callback_returns(http: tuple[Any, ..
             await async_engine.dispose()
 
     asyncio.run(check())
+
+
+def test_backfill_parameter_binding_quotes_injection_and_idempotency(owned_engine: Engine) -> None:
+    owner = "tenant-'quoted"
+    factory = "provider'); DROP TABLE usr_ai.t_ai_tenant_models; --"
+    credential = "private-'credential"
+    with Session(owned_engine) as db:
+        db.add(tenant(owner))
+        db.add(TenantLLM(tenant_id=owner, llm_factory=factory, llm_name="model-'quoted", mdl_type="chat", api_key=credential, api_base="https://fixture.invalid/'path", max_tokens=0))
+        db.commit()
+    with owned_engine.begin() as connection:
+        backfill(connection, owner)
+        backfill(connection, owner)
+    with Session(owned_engine) as db:
+        assert db.scalar(select(func.count()).select_from(TenantModel)) == 1
+        provider = db.scalars(select(TenantModelProvider)).one()
+        assert provider.tenant_id == owner and provider.provider_name == factory
+        instance = db.scalars(select(TenantModelInstance)).one()
+        assert instance.api_key == credential and instance.base_url == "https://fixture.invalid/'path"
+        assert db.scalars(select(TenantModel)).one().model_name == "model-'quoted"
+
+
+def test_backfill_failure_rolls_back_provider_instance_and_model_writes(owned_engine: Engine) -> None:
+    owner = uuid4().hex
+    with Session(owned_engine) as db:
+        db.add(tenant(owner))
+        db.add(TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="invalid-capability", mdl_type="invalid", api_key="private-fixture"))
+        db.commit()
+    with pytest.raises(RuntimeError, match="explicit repair"), owned_engine.begin() as connection:
+        backfill(connection, owner)
+    # A new session observes the failed transaction independently.
+    with Session(owned_engine) as db:
+        assert db.scalar(select(func.count()).select_from(TenantLLM)) == 1
+        assert db.scalar(select(func.count()).select_from(TenantModelProvider)) == 0
+        assert db.scalar(select(func.count()).select_from(TenantModelInstance)) == 0
+        assert db.scalar(select(func.count()).select_from(TenantModel)) == 0
