@@ -96,8 +96,9 @@ A 的真实构造配置和 query 边界、S 的活动 owner/tenant 与 operator 
 历史登记不能由最终清理倒补合规：D/F/C/S 有事前登记命令失败后创建 tree 的窗口；F 首轮 observer
 输入变更及 Redis set 遗留、G 接受窗口前提前清 candidate、C 未预登记 tokenizer cache 创建均有记录。
 C 旧 cache 的原下载/生成路径未被观测，不能声明其历史零下载。原文件归档后精确移除；I 后续 runtime
-资产在导入前按登记复制。manifest 审计保留 12 个旧版缺失原始快照（D 4、A 2、F 1、S 4、W 1），
-不凭当前 JSON 重建旧字节。见 [manifest 审计][manifest-audit]。
+资产在导入前按登记复制。初次 manifest 审计缺失 12 个旧版原始快照（D 4、A 2、F 1、S 4、W 1）；
+收尾扩展审计覆盖 343 个 journal、57 个资源输入版本，其中 32 个匹配当前字节、4 个有原始快照、
+21 个缺少对应旧版原始 JSON，unstable read 为 0。不凭当前 JSON 重建旧字节，见 [manifest 审计][manifest-audit]。
 因此 `strictProtocolPassed=false`，`historicalRegistrationConformance=false`；实际行为通过、当前 absence 与历史协议合规分别报告。
 
 ## 恢复、清理与原 WIP
