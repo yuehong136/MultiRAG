@@ -216,7 +216,7 @@ def test_actual_web_search_defaults_and_azure_static_crud(
 
     env, journal = rest_documents, rest_documents["journal"]
     checkout, web_sha = _pinned_checkout()
-    script = Path(os.environ["WEB_SEARCH_CONNECTOR_CONSUMER"])
+    script = Path(os.environ.get("WEB_SEARCH_CONNECTOR_CONSUMER", str(Path(__file__).parents[1] / "support/search_connector_web_consumer.ts")))
     private = tmp_path / "search-azure-private"
     evidence_parent = Path(os.environ.get("WEB_SEARCH_CONNECTOR_EVIDENCE", str(journal.path.parent)))
     assert evidence_parent.is_dir(), "The registered consumer evidence parent must exist"
