@@ -100,11 +100,12 @@ def test_omitted_configuration_starts_fresh_across_instances(method: str, monkey
 @pytest.mark.parametrize("backend", ["base", "litellm"])
 @pytest.mark.parametrize("method", ["async_chat", "async_chat_streamly", "async_chat_with_tools", "async_chat_streamly_with_tools"])
 async def test_async_calls_keep_shared_nested_configuration(backend: str, method: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _config()
+    config = {**_config(), "model_type": "chat", "llm_id": "internal-model-id"}
     before = deepcopy(config)
     seen: list[dict[str, Any]] = []
 
     async def complete(**options: Any) -> Any:
+        assert "model_type" not in options and "llm_id" not in options
         _mutate_sdk_options(options, seen)
         await asyncio.sleep(0)
         return _Stream() if options.get("stream") else _response()

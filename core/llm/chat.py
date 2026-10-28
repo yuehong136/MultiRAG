@@ -70,6 +70,34 @@ LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小�
 LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its limitation on context length."
 
 
+# Only completion options may leave the assistant configuration boundary.
+ALLOWED_GEN_CONF_KEYS = frozenset(
+    {
+        "temperature",
+        "max_completion_tokens",
+        "top_p",
+        "stream",
+        "stream_options",
+        "stop",
+        "n",
+        "presence_penalty",
+        "frequency_penalty",
+        "functions",
+        "function_call",
+        "logit_bias",
+        "user",
+        "response_format",
+        "seed",
+        "tools",
+        "tool_choice",
+        "logprobs",
+        "top_logprobs",
+        "extra_headers",
+    }
+)
+LITELLM_ALLOWED_GEN_CONF_KEYS = ALLOWED_GEN_CONF_KEYS | frozenset({"thinking", "reasoning_effort", "extra_body", "extra_query"})
+
+
 def _apply_model_family_policies(
     model_name: str,
     *,
@@ -175,7 +203,7 @@ class Base(ToolHistoryMixin, ABC):
 
         return LLMErrorCode.ERROR_GENERIC
 
-    def _clean_conf(self, gen_conf):
+    def _clean_conf(self, gen_conf: dict[str, Any]) -> dict[str, Any]:
         gen_conf, _ = _apply_model_family_policies(
             self.model_name,
             backend="base",
@@ -185,30 +213,7 @@ class Base(ToolHistoryMixin, ABC):
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
 
-        allowed_conf = {
-            "temperature",
-            "max_completion_tokens",
-            "top_p",
-            "stream",
-            "stream_options",
-            "stop",
-            "n",
-            "presence_penalty",
-            "frequency_penalty",
-            "functions",
-            "function_call",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "logprobs",
-            "top_logprobs",
-            "extra_headers",
-        }
-
-        gen_conf = {k: v for k, v in gen_conf.items() if k in allowed_conf}
+        gen_conf = {k: v for k, v in gen_conf.items() if k in ALLOWED_GEN_CONF_KEYS}
         return gen_conf
 
     async def _async_chat_streamly(self, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> AsyncIterator[tuple[str, int]]:
@@ -1343,7 +1348,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
 
         return LLMErrorCode.ERROR_GENERIC
 
-    def _clean_conf(self, gen_conf):
+    def _clean_conf(self, gen_conf: dict[str, Any]) -> dict[str, Any]:
         gen_conf, _ = _apply_model_family_policies(
             self.model_name,
             backend="litellm",
@@ -1352,7 +1357,7 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         )
 
         gen_conf.pop("max_tokens", None)
-        return gen_conf
+        return {key: value for key, value in gen_conf.items() if key in LITELLM_ALLOWED_GEN_CONF_KEYS}
 
     def _need_reasoning_content_back(self) -> bool:
         return self.provider == SupportedLiteLLMProvider.DeepSeek
