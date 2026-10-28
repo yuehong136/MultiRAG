@@ -36,6 +36,7 @@ from common.constants import ConnectorTaskType, FileSource, RetCode, TaskStatus
 from common.data_source.exceptions import ConnectorMissingCredentialError, ConnectorValidationError
 from common.data_source.microsoft_graph import graph_batch_size
 from common.data_source.onedrive_connector import OneDriveConnector
+from common.data_source.outlook_connector import OutlookConnector
 from common.data_source.rest_api_connector import RestAPIConnector
 from common.data_source.teams_connector import TeamsConnector
 from common.misc_utils import get_uuid
@@ -95,6 +96,11 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
             _validate_rest_settings(config)
         except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
             return False, str(exc), RetCode.DATA_ERROR
+    if req["source"] == FileSource.OUTLOOK:
+        try:
+            _validate_outlook_settings(config)
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
     connector_id = get_uuid()
     ConnectorService.insert(
         db,
@@ -133,6 +139,11 @@ def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tup
     if "config" in changes and connector.source == FileSource.REST_API:
         try:
             _validate_rest_settings(changes["config"])
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
+    if "config" in changes and connector.source == FileSource.OUTLOOK:
+        try:
+            _validate_outlook_settings(changes["config"])
         except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
             return False, str(exc), RetCode.DATA_ERROR
     if changes:
@@ -200,6 +211,13 @@ def _validate_rest_settings(config: dict[str, Any]) -> None:
     connector.load_credentials(config.get("credentials") or {})
 
 
+def _validate_outlook_settings(config: dict[str, Any]) -> None:
+    if config.get("sync_deleted_files", False) is not False:
+        raise ConnectorValidationError("Outlook deletion synchronization is not supported")
+    adapter = OutlookConnector(batch_size=graph_batch_size(config), folder=config.get("folder", "inbox"), user_ids=config.get("user_ids"))
+    adapter.load_credentials(config.get("credentials"))
+
+
 class _ConnectorProbeGuard:
     def __init__(self) -> None:
         self.stopped = threading.Event()
@@ -219,11 +237,13 @@ async def test_connector(db: AsyncSession, connector_id: str) -> tuple[bool, Any
     connector = await db.scalar(select(Connector).where(Connector.id == connector_id))
     if connector is None:
         return False, "Can't find this Connector!", RetCode.DATA_ERROR
-    if connector.source not in {FileSource.REST_API, FileSource.TEAMS, FileSource.ONEDRIVE}:
+    if connector.source not in {FileSource.REST_API, FileSource.TEAMS, FileSource.ONEDRIVE, FileSource.OUTLOOK}:
         return False, "Connection testing is not supported for this source.", RetCode.DATA_ERROR
     config = dict(connector.config or {})
     if connector.source == FileSource.ONEDRIVE and config.get("drive_ids") == []:
         return False, "OneDrive connection testing requires at least one configured drive ID.", RetCode.DATA_ERROR
+    if connector.source == FileSource.OUTLOOK and config.get("user_ids") == []:
+        return False, "Outlook connection testing requires at least one configured mailbox ID.", RetCode.DATA_ERROR
     try:
         if connector.source == FileSource.REST_API:
             await asyncio.to_thread(RestAPIConnector.validate_config, config, config.get("credentials") or {})
@@ -232,10 +252,13 @@ async def test_connector(db: AsyncSession, connector_id: str) -> tuple[bool, Any
             check_active = _ConnectorProbeGuard()
 
             def probe() -> None:
-                adapter: TeamsConnector | OneDriveConnector
+                adapter: TeamsConnector | OneDriveConnector | OutlookConnector
                 batch_size = graph_batch_size(config)
                 if source == FileSource.TEAMS:
                     adapter = TeamsConnector(batch_size=batch_size, check_active=check_active)
+                elif source == FileSource.OUTLOOK:
+                    _validate_outlook_settings(config)
+                    adapter = OutlookConnector(batch_size=batch_size, user_ids=config.get("user_ids"), folder=config.get("folder", "inbox"), check_active=check_active)
                 else:
                     adapter = OneDriveConnector(batch_size=batch_size, drive_ids=config.get("drive_ids"), folder_path=config.get("folder_path"), check_active=check_active)
                 adapter.load_credentials(config.get("credentials") or {})

@@ -39,6 +39,7 @@ from common.data_source import (
     MoodleConnector,
     NotionConnector,
     OneDriveConnector,
+    OutlookConnector,
     RDBMSConnector,
     RestAPIConnector,
     RSSConnector,
@@ -1060,6 +1061,20 @@ class OneDrive(SyncBase):
         return self.connector.poll_source(start, datetime.now(UTC).timestamp())
 
 
+class Outlook(SyncBase):
+    SOURCE_NAME: str = FileSource.OUTLOOK
+
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        self._source_task_guard = _SourceTaskGuard(task)
+        self.connector = OutlookConnector(batch_size=graph_batch_size(self.conf), folder=self.conf.get("folder", "inbox"), user_ids=self.conf.get("user_ids"), check_active=self._source_task_guard)
+        self.connector.load_credentials(self.conf.get("credentials"))
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        start = 0.0 if task["reindex"] == "1" or task["poll_range_start"] is None else task["poll_range_start"].timestamp()
+        return self.connector.poll_source(start, datetime.now(UTC).timestamp())
+
+
 class WebDAV(SyncBase):
     SOURCE_NAME: str = FileSource.WEBDAV
 
@@ -1585,6 +1600,7 @@ func_factory = {
     FileSource.JIRA: Jira,
     FileSource.SHAREPOINT: SharePoint,
     FileSource.ONEDRIVE: OneDrive,
+    FileSource.OUTLOOK: Outlook,
     FileSource.SLACK: Slack,
     FileSource.TEAMS: Teams,
     FileSource.MOODLE: Moodle,

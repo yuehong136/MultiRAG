@@ -101,6 +101,7 @@ class FileSource(StrEnum):
     POSTGRESQL = "postgresql"
     DINGTALK_AI_TABLE = "dingtalk_ai_table"
     ONEDRIVE = "onedrive"
+    OUTLOOK = "outlook"
 
 
 class MCPServerType(StrEnum):
