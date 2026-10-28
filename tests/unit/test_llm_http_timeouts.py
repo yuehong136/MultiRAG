@@ -7,6 +7,7 @@ import httpx
 import pytest
 import requests
 
+from common.exceptions import ModelException
 from core.llm import CvModel, EmbeddingModel, Seq2txtModel, TTSModel
 from core.llm.tts import HTTPBasedTTS
 
@@ -32,8 +33,9 @@ def test_embedding_timeout_reaches_transport(monkeypatch: pytest.MonkeyPatch, fa
     monkeypatch.setattr(requests, "post", post)
     model_name = "jina-embeddings-v3" if factory == "Jina" else "model"
     model = EmbeddingModel[factory]("x", model_name, base_url="http://provider.invalid")
-    with pytest.raises(requests.Timeout, match="controlled timeout"):
+    with pytest.raises(ModelException) as caught:
         model.encode_queries("document") if query else model.encode(["document"])
+    assert caught.value.retryable and caught.value.status_code is None
     assert calls and all(call["timeout"] == 30 for call in calls)
 
 

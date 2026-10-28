@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from abc import ABC
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,14 +30,75 @@ import numpy as np
 import requests
 from huggingface_hub import snapshot_download
 from ollama import Client
-from openai import OpenAI
+from openai import APIConnectionError, OpenAI
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from api.utils.file_utils import get_home_cache_dir
 from common import settings
+from common.exceptions import ModelException
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version
+
+
+def _model_request(call: Callable[..., Any], **kwargs: Any) -> Any:
+    """Classify SDK/HTTP transport errors without exposing provider diagnostics."""
+    try:
+        return call(**kwargs)
+    except ModelException:
+        raise
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
+            status = None
+        retryable = status in {408, 429} or (status is not None and status >= 500)
+        if status is None:
+            retryable = isinstance(exc, (requests.Timeout, requests.ConnectionError, APIConnectionError, TimeoutError, ConnectionError))
+        suffix = f" (HTTP {status})" if status is not None else ""
+        raise ModelException(f"Embedding provider request failed{suffix}", status_code=status, retryable=retryable) from None
+
+
+def _raise_model_exception_if_failed(response: requests.Response) -> None:
+    status = response.status_code
+    if not isinstance(status, int) or isinstance(status, bool) or not 200 <= status < 300:
+        valid_status = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None
+        retryable = valid_status in {408, 429} or (valid_status is not None and valid_status >= 500)
+        suffix = f" (HTTP {valid_status})" if valid_status is not None else ""
+        raise ModelException(f"Embedding provider request failed{suffix}", status_code=valid_status, retryable=retryable)
+
+
+def _post_embedding(url: str, **kwargs: Any) -> requests.Response:
+    response = _model_request(requests.post, url=url, timeout=30, **kwargs)
+    try:
+        _raise_model_exception_if_failed(response)
+    except ModelException:
+        response.close()
+        raise
+    return response
+
+
+def _ordered_embedding_entries(entries: Any, count: int) -> list[Any]:
+    if not isinstance(entries, list) or len(entries) != count:
+        raise ModelException("Invalid embedding provider response: count mismatch")
+    ordered: list[Any] = [None] * count
+    for entry in entries:
+        index = entry.get("index") if isinstance(entry, Mapping) else getattr(entry, "index", None)
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < count or ordered[index] is not None:
+            raise ModelException("Invalid embedding provider response: invalid or duplicate index")
+        ordered[index] = entry
+    return ordered
+
+
+def _validated_embedding_vectors(vectors: Any, count: int) -> np.ndarray:
+    try:
+        array = np.asarray(vectors)
+        if count == 0 and array.size == 0:
+            return array
+        if array.ndim != 2 or array.shape[0] != count or not array.shape[1] or array.dtype.kind not in "fiu" or not np.isfinite(array).all():
+            raise ValueError
+        return array
+    except (ValueError, TypeError, OverflowError):
+        raise ModelException("Invalid embedding provider response: malformed vectors") from None
 
 
 class Base(ABC):
@@ -162,29 +223,27 @@ class OpenAIEmbed(Base):
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
 
-    def encode(self, texts: list):
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
         # OpenAI requires batch size <=16
         batch_size = 16
         texts = [truncate(t, 8191) for t in texts]
         ress = []
         total_tokens = 0
         for i in range(0, len(texts), batch_size):
-            res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
+            res = _model_request(self.client.embeddings.create, input=texts[i : i + batch_size], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
             try:
-                ress.extend([d.embedding for d in res.data])
+                ress.extend([d.embedding for d in _ordered_embedding_entries(res.data, len(texts[i : i + batch_size]))])
                 total_tokens += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, res)
-                raise Exception(f"Error: {res}")
-        return np.array(ress), total_tokens
+            except Exception:
+                raise ModelException("Invalid embedding provider response") from None
+        return _validated_embedding_vectors(ress, len(texts)), total_tokens
 
-    def encode_queries(self, text):
-        res = self.client.embeddings.create(input=[truncate(text, 8191)], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        res = _model_request(self.client.embeddings.create, input=[truncate(text, 8191)], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
         try:
-            return np.array(res.data[0].embedding), total_token_count_from_response(res)
-        except Exception as _e:
-            log_exception(_e, res)
-            raise Exception(f"Error: {res}")
+            return _validated_embedding_vectors([_ordered_embedding_entries(res.data, 1)[0].embedding], 1)[0], total_token_count_from_response(res)
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
 
 
 class LocalAIEmbed(Base):
@@ -304,7 +363,13 @@ class QWenEmbed(Base):
         for attempt in range(retries + 1):
             # The pinned SDK consumes base_address per request, without changing
             # dashscope.base_http_api_url for other tenants or default-endpoint users.
-            response = dashscope.TextEmbedding.call(model=self.model_name, input=texts, api_key=self.key, text_type=text_type, base_address=self._dashscope_http_api_url)
+            try:
+                response = _model_request(dashscope.TextEmbedding.call, model=self.model_name, input=texts, api_key=self.key, text_type=text_type, base_address=self._dashscope_http_api_url)
+            except ModelException as exc:
+                if exc.retryable and attempt < retries:
+                    time.sleep(10)
+                    continue
+                raise
             if not isinstance(response, Mapping):
                 raise ValueError("Invalid Tongyi-Qianwen embedding response")
             status = response.get("status_code")
@@ -316,8 +381,8 @@ class QWenEmbed(Base):
                 time.sleep(10)
                 continue
             # Provider messages can echo credentials or input; keep errors bounded.
-            raise RuntimeError(f"Tongyi-Qianwen embedding request failed (HTTP {status})")
-        raise RuntimeError("Tongyi-Qianwen embedding retry limit exceeded")
+            raise ModelException(f"Tongyi-Qianwen embedding request failed (HTTP {status})", status_code=status, retryable=status in {408, 429} or 500 <= status < 600)
+        raise ModelException("Tongyi-Qianwen embedding retry limit exceeded", retryable=True)
 
     @staticmethod
     def _parse_embeddings(response: Mapping[str, Any], expected_count: int) -> tuple[np.ndarray, int]:
@@ -571,27 +636,26 @@ class JinaMultiVecEmbed(Base):
                 data["task"] = task
                 data["truncate"] = True
 
-            response = requests.post(self.base_url, headers=self.headers, json=data, timeout=30)
+            response = _post_embedding(self.base_url, headers=self.headers, json=data)
             try:
                 res = response.json()
-                for d in res["data"]:
+                for d in _ordered_embedding_entries(res["data"], len(data["input"])):
                     if data.get("return_multivector", False):  # v4
-                        token_embs = np.asarray(d["embeddings"], dtype=np.float32)
+                        token_embs = _validated_embedding_vectors(d["embeddings"], len(d["embeddings"])).astype(np.float32)
                         chunk_emb = token_embs.mean(axis=0)
 
                     else:
                         # v2/v3
-                        chunk_emb = np.asarray(d["embedding"], dtype=np.float32)
+                        chunk_emb = _validated_embedding_vectors([d["embedding"]], 1)[0].astype(np.float32)
 
                     ress.append(chunk_emb)
 
                 token_count += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, response)
-                raise Exception(f"Error: {response}")
-        return np.array(ress), token_count
+            except Exception:
+                raise ModelException("Invalid embedding provider response") from None
+        return _validated_embedding_vectors(ress, len(texts)), token_count
 
-    def encode_queries(self, text):
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
         embds, cnt = self.encode([text], task="retrieval.query")
         return np.array(embds[0]), cnt
 
@@ -837,7 +901,7 @@ class NvidiaEmbed(Base):
         if model_name == "snowflake/arctic-embed-l":
             self.base_url = "https://ai.api.nvidia.com/v1/retrieval/snowflake/arctic-embed-l/embeddings"
 
-    def encode(self, texts: list) -> tuple[np.ndarray, int]:
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
         batch_size = 16
         ress = []
         token_count = 0
@@ -849,17 +913,16 @@ class NvidiaEmbed(Base):
                 "encoding_format": "float",
                 "truncate": "END",
             }
-            response = requests.post(self.base_url, headers=self.headers, json=payload, timeout=30)
+            response = _post_embedding(self.base_url, headers=self.headers, json=payload)
             try:
                 res = response.json()
-                ress.extend([d["embedding"] for d in res["data"]])
+                ress.extend([d["embedding"] for d in _ordered_embedding_entries(res["data"], len(payload["input"]))])
                 token_count += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, response)
-                raise Exception(f"Error: {response}")
-        return np.array(ress), token_count
+            except Exception:
+                raise ModelException("Invalid embedding provider response") from None
+        return _validated_embedding_vectors(ress, len(texts)), token_count
 
-    def encode_queries(self, text):
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
         embds, cnt = self.encode([text])
         return np.array(embds[0]), cnt
 
@@ -969,7 +1032,7 @@ class SILICONFLOWEmbed(Base):
         self.base_url = base_url
         self.model_name = model_name
 
-    def encode(self, texts: list) -> tuple[np.ndarray, int]:
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
         batch_size = 16
         ress = []
         token_count = 0
@@ -986,16 +1049,15 @@ class SILICONFLOWEmbed(Base):
                 "input": texts_batch,
                 "encoding_format": "float",
             }
-            response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=30)
+            response = _post_embedding(self.base_url, json=payload, headers=self.headers)
             try:
                 res = response.json()
-                ress.extend([d["embedding"] for d in res["data"]])
+                ress.extend([d["embedding"] for d in _ordered_embedding_entries(res["data"], len(payload["input"]))])
                 token_count += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, response)
-                raise Exception(f"Error: {response}")
+            except Exception:
+                raise ModelException("Invalid embedding provider response") from None
 
-        return np.array(ress), token_count
+        return _validated_embedding_vectors(ress, len(texts)), token_count
 
     def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
         payload = {
@@ -1003,13 +1065,12 @@ class SILICONFLOWEmbed(Base):
             "input": text,
             "encoding_format": "float",
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=30)
+        response = _post_embedding(self.base_url, json=payload, headers=self.headers)
         try:
             res = response.json()
-            return np.array(res["data"][0]["embedding"]), total_token_count_from_response(res)
-        except Exception as _e:
-            log_exception(_e, response)
-            raise Exception(f"Error: {response}")
+            return _validated_embedding_vectors([_ordered_embedding_entries(res["data"], 1)[0]["embedding"]], 1)[0], total_token_count_from_response(res)
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
 
 
 class ReplicateEmbed(Base):
@@ -1077,21 +1138,22 @@ class HuggingFaceEmbed(Base):
         self.model_name = model_name.split("___")[0]
         self.base_url = base_url or "http://127.0.0.1:8080"
 
-    def encode(self, texts: list) -> tuple[np.ndarray, int]:
-        response = requests.post(f"{self.base_url}/embed", json={"inputs": texts}, headers={"Content-Type": "application/json"}, timeout=30)
-        if response.status_code == 200:
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        if not texts:
+            return np.array([]), 0
+        response = _post_embedding(f"{self.base_url}/embed", json={"inputs": texts}, headers={"Content-Type": "application/json"})
+        try:
             embeddings = response.json()
-        else:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
-        return np.array(embeddings), sum([num_tokens_from_string(text) for text in texts])
+            return _validated_embedding_vectors(embeddings, len(texts)), sum(num_tokens_from_string(text) for text in texts)
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
 
     def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
-        response = requests.post(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"}, timeout=30)
-        if response.status_code == 200:
-            embedding = response.json()[0]
-            return np.array(embedding), num_tokens_from_string(text)
-        else:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
+        response = _post_embedding(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"})
+        try:
+            return _validated_embedding_vectors(response.json(), 1)[0], num_tokens_from_string(text)
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
 
 
 # class VolcEngineEmbed(OpenAIEmbed):
@@ -1452,14 +1514,14 @@ class PerplexityEmbed(Base):
         }
 
     @staticmethod
-    def _decode_base64_int8(b64_str):
-        raw = base64.b64decode(b64_str)
+    def _decode_base64_int8(b64_str: str) -> np.ndarray:
+        raw = base64.b64decode(b64_str, validate=True)
         return np.frombuffer(raw, dtype=np.int8).astype(np.float32)
 
     def _is_contextualized(self):
         return "context" in self.model_name
 
-    def encode(self, texts: list) -> tuple[np.ndarray, int]:
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
         batch_size = 512
         ress = []
         token_count = 0
@@ -1473,16 +1535,15 @@ class PerplexityEmbed(Base):
                     "input": [[chunk] for chunk in batch],
                     "encoding_format": "base64_int8",
                 }
-                response = requests.post(url, headers=self.headers, json=payload, timeout=30)
+                response = _post_embedding(url, headers=self.headers, json=payload)
                 try:
                     res = response.json()
-                    for doc in res["data"]:
-                        for chunk_emb in doc["data"]:
+                    for doc in _ordered_embedding_entries(res["data"], len(batch)):
+                        for chunk_emb in _ordered_embedding_entries(doc["data"], 1):
                             ress.append(self._decode_base64_int8(chunk_emb["embedding"]))
                     token_count += res.get("usage", {}).get("total_tokens", 0)
-                except Exception as _e:
-                    log_exception(_e, response)
-                    raise Exception(f"Error: {response.text}")
+                except Exception:
+                    raise ModelException("Invalid embedding provider response") from None
         else:
             url = f"{self.base_url}/v1/embeddings"
             for i in range(0, len(texts), batch_size):
@@ -1492,18 +1553,17 @@ class PerplexityEmbed(Base):
                     "input": batch,
                     "encoding_format": "base64_int8",
                 }
-                response = requests.post(url, headers=self.headers, json=payload, timeout=30)
+                response = _post_embedding(url, headers=self.headers, json=payload)
                 try:
                     res = response.json()
-                    for d in res["data"]:
+                    for d in _ordered_embedding_entries(res["data"], len(batch)):
                         ress.append(self._decode_base64_int8(d["embedding"]))
                     token_count += res.get("usage", {}).get("total_tokens", 0)
-                except Exception as _e:
-                    log_exception(_e, response)
-                    raise Exception(f"Error: {response.text}")
+                except Exception:
+                    raise ModelException("Invalid embedding provider response") from None
 
-        return np.array(ress), token_count
+        return _validated_embedding_vectors(ress, len(texts)), token_count
 
-    def encode_queries(self, text):
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
         embds, cnt = self.encode([text])
         return np.array(embds[0]), cnt

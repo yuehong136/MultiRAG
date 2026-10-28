@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.db.services.tenant_llm_service import TenantLLMService
 from common.constants import LLMType
+from common.exceptions import ModelException
 from common.token_utils import num_tokens_from_string
 from core.llm import EmbeddingModel, embedding
 
@@ -171,7 +172,7 @@ def test_failures_are_explicit_bounded_and_do_not_log_response_secrets(
     monkeypatch.setattr("time.sleep", waits.append)
     replies.extend([(status, {"code": "ProviderFailure", "message": f"response-secret {FAKE_KEY}"})] * attempts)
     model = make_model(db, f"{INTL}/api/v1")
-    with pytest.raises(RuntimeError, match=f"HTTP {status}") as error:
+    with pytest.raises(ModelException, match=f"HTTP {status}") as error:
         model.encode_queries("4") if query else model.encode(["4"])
     assert len(calls) == attempts
     assert waits == [10] * (attempts - 1)
@@ -295,7 +296,7 @@ def test_transport_exception_leaves_other_instance_and_sdk_default_usable(db: Se
         return original_send(session, request, **kwargs)
 
     monkeypatch.setattr(requests.Session, "send", send)
-    with pytest.raises(requests.ConnectionError, match="controlled transport failure"):
+    with pytest.raises(ModelException, match="Embedding provider request failed"):
         make_model(db, INTL).encode_queries("0")
     vector, tokens = make_model(db, None).encode_queries("2")
     np.testing.assert_array_equal(vector, [2.0, 0.0])

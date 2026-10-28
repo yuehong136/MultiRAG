@@ -22,6 +22,7 @@ from api.identity.principal import AuthenticationSource, Principal
 from common import settings
 from common.connection_utils import timeout
 from common.constants import RetCode, StatusEnum
+from common.exceptions import ModelException
 from common.graphrag_config import GraphRAGExecutionConfig
 from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_toolcall_sessions
 from common.misc_utils import thread_pool_exec
@@ -150,7 +151,16 @@ def get_data_error_result(retcode=RetCode.DATA_ERROR, retmsg="Sorry! Data missin
     return JSONResponse(content=jsonable_encoder(response))
 
 
-def server_error_response(e):
+def model_error_response(error: ModelException, *, rest_api: bool = False) -> JSONResponse:
+    return JSONResponse(
+        status_code=503 if error.retryable else 502,
+        content={"code" if rest_api else "retcode": RetCode.EXCEPTION_ERROR, "message" if rest_api else "retmsg": str(error), "data": {"retryable": error.retryable}},
+    )
+
+
+def server_error_response(e: Exception) -> JSONResponse:
+    if isinstance(e, ModelException):
+        return model_error_response(e)
     logging.error("Unhandled exception during request", exc_info=(type(e), e, e.__traceback__))
     try:
         msg = repr(e).lower()

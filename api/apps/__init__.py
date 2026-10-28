@@ -23,6 +23,7 @@ from api.db.services import UserService
 from api.utils.api_utils import BusinessError, SDKAuthError
 from common import settings
 from common.constants import RetCode
+from common.exceptions import ModelException
 from common.log_ctx import bind_log_context
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format
@@ -525,6 +526,13 @@ async def business_error_handler(request: Request, exc: BusinessError):
 
 
 # 定义FastAPI应用的自定义异常处理器
+@app.exception_handler(ModelException)
+def model_exception_handler(request: Request, exc: ModelException) -> JSONResponse:
+    from api.utils.api_utils import model_error_response
+
+    return model_error_response(exc)
+
+
 @app.exception_handler(Exception)
 def custom_exception_handler(request: Request, exc: Exception):
     return JSONResponse(

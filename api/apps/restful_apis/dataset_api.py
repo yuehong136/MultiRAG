@@ -23,11 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.apps.services import dataset_api_service, dataset_embedding_service, dataset_search_service
 from api.db.db_models import Knowledgebase, get_async_db
-from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result
+from api.utils.api_utils import async_current_tenant_id, get_error_data_result, get_result, model_error_response
 from api.utils.dataset_search import SearchDatasetRequest, SearchDatasetsRequest
 from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.validation_utils import CreateDatasetReq, validate_partial_parser_config
 from common.constants import RetCode
+from common.exceptions import ModelException
 from common.metadata_config import MetadataConfig
 
 router = APIRouter()
@@ -558,6 +559,8 @@ async def search_datasets(
     try:
         success, result, code = await dataset_search_service.search_datasets(db, tenant_id, request)
         return get_result(data=result) if success else get_error_data_result(retcode=code, retmsg=result)
+    except ModelException as exc:
+        return model_error_response(exc, rest_api=True)
     except Exception as exc:
         logger.exception(exc)
         message = "No chunk found! Check the chunk status please!" if "not_found" in str(exc) else "Internal server error"
@@ -574,6 +577,8 @@ async def search_dataset(
     try:
         success, result, code = await dataset_search_service.search_dataset(db, tenant_id, dataset_id, request)
         return get_result(data=result) if success else get_error_data_result(retcode=code, retmsg=result)
+    except ModelException as exc:
+        return model_error_response(exc, rest_api=True)
     except Exception as exc:
         logger.exception(exc)
         message = "No chunk found! Check the chunk status please!" if "not_found" in str(exc) else "Internal server error"
