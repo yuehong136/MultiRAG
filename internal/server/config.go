@@ -94,8 +94,17 @@ type ModelConfig struct {
 
 // OAuthConfig OAuth configuration for a channel
 type OAuthConfig struct {
-	DisplayName string `mapstructure:"display_name"`
-	Icon        string `mapstructure:"icon"`
+	Type             string `mapstructure:"type"`
+	ClientID         string `mapstructure:"client_id"`
+	ClientSecret     string `mapstructure:"client_secret"`
+	AuthorizationURL string `mapstructure:"authorization_url"`
+	TokenURL         string `mapstructure:"token_url"`
+	UserinfoURL      string `mapstructure:"userinfo_url"`
+	RedirectURI      string `mapstructure:"redirect_uri"`
+	Scope            string `mapstructure:"scope"`
+	Issuer           string `mapstructure:"issuer"`
+	DisplayName      string `mapstructure:"display_name"`
+	Icon             string `mapstructure:"icon"`
 }
 
 // ServerConfig server configuration

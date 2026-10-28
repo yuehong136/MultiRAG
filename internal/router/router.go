@@ -118,6 +118,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 		public.POST("/auth/login", r.userHandler.Login)
 		public.POST("/users", r.userHandler.Register)
 		public.GET("/auth/login/channels", r.userHandler.GetLoginChannels)
+		public.GET("/auth/login/:channel", r.userHandler.OAuthLogin)
+		public.GET("/auth/oauth/:channel/callback", r.userHandler.OAuthCallback)
 	}
 	// Protected routes
 	authorized := engine.Group("")
