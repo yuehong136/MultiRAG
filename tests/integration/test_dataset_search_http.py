@@ -487,7 +487,7 @@ def test_http_rerank_threshold_survives_document_and_metadata_scope(search_api: 
 
 def test_http_search_reports_only_computed_score_components(search_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """Real Milvus scores: computed components (including 0.0) are kept, the rest are null."""
-    from api.apps.sdk import doc as sdk
+    from api.apps.restful_apis import chunk as sdk
 
     env = search_api
     query_vector = [1.0] + [0.0] * 767
