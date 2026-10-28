@@ -29,6 +29,22 @@ func TestCLIAPIRouteScope(t *testing.T) {
 	if !strings.HasSuffix(routes["POST /api/v1/datasets/:dataset_id/documents/stop"], ".StopParseDocuments-fm") {
 		t.Fatal("document stop must use the lifecycle cancellation handler")
 	}
+	for route, method := range map[string]string{
+		"GET /api/v1/agents/:agent_id/versions":             ".ListAgentVersions-fm",
+		"GET /api/v1/agents/:agent_id/versions/:version_id": ".GetAgentVersion-fm",
+		"POST /api/v1/agents/:agent_id/upload":              ".UploadAgentFile-fm",
+	} {
+		if !strings.HasSuffix(routes[route], method) {
+			t.Fatalf("agent route %s must bind %s", route, method)
+		}
+	}
+	for _, entry := range [][2]string{{"GET", "/api/v1/agents/id/versions"}, {"GET", "/api/v1/agents/id/versions/version"}, {"POST", "/api/v1/agents/id/upload"}} {
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, httptest.NewRequest(entry[0], entry[1], strings.NewReader(`{}`)))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s status %d", entry[0], entry[1], w.Code)
+		}
+	}
 	for _, key := range []string{"POST /v1/user/login", "POST /v1/user/register", "GET /v1/system/ping", "POST /api/v1/chunk/retrieval_test"} {
 		if routes[key] != "" {
 			t.Fatal("obsolete public route", key)

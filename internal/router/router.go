@@ -266,6 +266,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 			}
 
 			v1.GET("/agents", r.agentHandler.ListAgents)
+			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
+			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
+			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
 
 			models := v1.Group("/models")
 			{
