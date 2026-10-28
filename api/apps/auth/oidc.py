@@ -14,15 +14,28 @@
 #  limitations under the License.
 #
 
+from typing import Any
+
 import jwt
 
 from common.http_client import sync_request
 
 from .oauth import OAuthClient, UserInfo
 
+_ALLOWED_OIDC_SIGNING_ALGS = frozenset({"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "EdDSA"})
+
+
+def _resolve_id_token_signing_algs(metadata: dict[str, Any]) -> list[str]:
+    """Pin asymmetric verification policy from discovery, never the token header."""
+    advertised = metadata.get("id_token_signing_alg_values_supported")
+    if not isinstance(advertised, (list, tuple)):
+        return ["RS256"]
+    safe = [algorithm for algorithm in advertised if isinstance(algorithm, str) and algorithm in _ALLOWED_OIDC_SIGNING_ALGS]
+    return list(dict.fromkeys(safe)) or ["RS256"]
+
 
 class OIDCClient(OAuthClient):
-    def __init__(self, config):
+    def __init__(self, config: dict[str, Any]) -> None:
         """
         Initialize the OIDCClient with the provider's configuration.
         Use `issuer` as the single source of truth for configuration discovery.
@@ -45,31 +58,26 @@ class OIDCClient(OAuthClient):
         super().__init__(config)
         self.issuer = config["issuer"]
         self.jwks_uri = config["jwks_uri"]
+        self.id_token_signing_algs = _resolve_id_token_signing_algs(oidc_metadata)
 
     @staticmethod
-    def _load_oidc_metadata(issuer):
+    def _load_oidc_metadata(issuer: str) -> dict[str, Any]:
         """
         Load OIDC metadata from `/.well-known/openid-configuration`.
         """
         try:
-            metadata_url = f"{issuer}/.well-known/openid-configuration"
+            metadata_url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
             response = sync_request("GET", metadata_url, timeout=7)
             response.raise_for_status()
             return response.json()
         except Exception as e:
             raise ValueError(f"Failed to fetch OIDC metadata: {e}")
 
-    def parse_id_token(self, id_token):
+    def parse_id_token(self, id_token: str) -> dict[str, Any]:
         """
         Parse and validate OIDC ID Token (JWT format) with signature verification.
         """
         try:
-            # Decode JWT header without verifying signature
-            headers = jwt.get_unverified_header(id_token)
-
-            # OIDC usually uses `RS256` for signing
-            alg = headers.get("alg", "RS256")
-
             # Use PyJWT's PyJWKClient to fetch JWKS and find signing key
             jwks_cli = jwt.PyJWKClient(self.jwks_uri)
             signing_key = jwks_cli.get_signing_key_from_jwt(id_token).key
@@ -78,7 +86,7 @@ class OIDCClient(OAuthClient):
             decoded_token = jwt.decode(
                 id_token,
                 key=signing_key,
-                algorithms=[alg],
+                algorithms=list(self.id_token_signing_algs),
                 audience=str(self.client_id),
                 issuer=self.issuer,
             )
