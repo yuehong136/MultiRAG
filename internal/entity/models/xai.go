@@ -118,6 +118,8 @@ func (x *XAIModel) ChatStreamlyWithSender(name, message *string, apiConfig *APIC
 }
 
 func (x *XAIModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -143,6 +145,9 @@ func (x *XAIModel) ChatStreamlyWithMessages(name string, messages []Message, api
 			continue
 		}
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("xai: stream returned no text answer")
 			}

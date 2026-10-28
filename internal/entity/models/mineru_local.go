@@ -131,7 +131,7 @@ func (m *MinerULocalModel) ParseFile(name *string, content []byte, documentURL s
 	if err := w.Close(); err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	var response mineruLocalResponse
 	if _, err := m.request(http.MethodPost, m.URLSuffix.DocumentParse, local, &body, w.FormDataContentType(), &response); err != nil {

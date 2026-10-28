@@ -114,6 +114,8 @@ func (c *CoHereModel) ChatStreamlyWithSender(name, message *string, api *APIConf
 }
 
 func (c *CoHereModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	api, cancelCall := modelStreamConfig(api)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("cohere: stream sender is required")
 	}

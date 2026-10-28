@@ -22,7 +22,7 @@ type PaddleOCRModel struct {
 }
 
 func NewPaddleOCRModel(base map[string]string, suffix URLSuffix) *PaddleOCRModel {
-	return &PaddleOCRModel{DummyModel: NewDummyModel(base, suffix), httpClient: &http.Client{Timeout: 120 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}, pollInterval: time.Second}
+	return &PaddleOCRModel{DummyModel: NewDummyModel(base, suffix), httpClient: &http.Client{Transport: openAIChatTransport}, pollInterval: time.Second}
 }
 func (p *PaddleOCRModel) Name() string { return "paddleocr" }
 
@@ -155,7 +155,7 @@ func (p *PaddleOCRModel) ocr(name *string, content []byte, fileURL string, api *
 	if err := ocrInputBody(name, content, fileURL); err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	endpoint, resolved, err := p.jobConfig(*name, local)
 	if err != nil {

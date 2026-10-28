@@ -191,6 +191,8 @@ func (o *OllamaModel) ChatStreamlyWithSender(name, message *string, api *APIConf
 	return o.ChatStreamlyWithMessages(*name, []Message{{Role: "user", Content: *message}}, api, config, sender)
 }
 func (o *OllamaModel) ChatStreamlyWithMessages(name string, messages []Message, api *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
+	api, cancelCall := modelStreamConfig(api)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("ollama: sender is required")
 	}
@@ -310,17 +312,6 @@ func (o *OllamaModel) ListModels(api *APIConfig) ([]string, error) {
 	return names, nil
 }
 func (o *OllamaModel) CheckConnection(api *APIConfig) error { _, err := o.ListModels(api); return err }
-
-// modelCallConfig bounds non-streaming calls without imposing a total SSE timeout.
-func modelCallConfig(api *APIConfig) (*APIConfig, context.CancelFunc) {
-	local := APIConfig{}
-	if api != nil {
-		local = *api
-	}
-	ctx, cancel := context.WithTimeout(requestContext(api), 120*time.Second)
-	local.Context = ctx
-	return &local, cancel
-}
 
 // Embed uses the native batch endpoint. Explicit OpenAI-compatible endpoints
 // remain usable by existing configured instances.

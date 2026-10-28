@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // MinimaxModel implements Minimax text chat and reasoning streams with request cancellation.
@@ -22,7 +21,7 @@ func NewMinimaxModel(baseURL map[string]string, urlSuffix URLSuffix) *MinimaxMod
 	return &MinimaxModel{
 		BaseURL:    baseURL,
 		URLSuffix:  urlSuffix,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		httpClient: &http.Client{Transport: openAIChatTransport},
 	}
 }
 
@@ -119,6 +118,8 @@ func (m *MinimaxModel) requestChat(body map[string]interface{}, config *APIConfi
 }
 
 func (m *MinimaxModel) chat(modelName string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	body, err := minimaxChatBody(modelName, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -161,6 +162,8 @@ func (m *MinimaxModel) ChatStreamlyWithSender(modelName, message *string, apiCon
 }
 
 func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -186,6 +189,9 @@ func (m *MinimaxModel) ChatStreamlyWithMessages(modelName string, messages []Mes
 			continue
 		}
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("minimax: stream returned no text answer")
 			}
@@ -250,6 +256,8 @@ func (m *MinimaxModel) Embed(modelName *string, texts []string, apiConfig *APICo
 }
 
 func (m *MinimaxModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("minimax: API key is required")
 	}

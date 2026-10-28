@@ -41,7 +41,6 @@ func NewZhipuAIModel(baseURL map[string]string, urlSuffix URLSuffix) *ZhipuAIMod
 		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
@@ -82,6 +81,13 @@ func (z *ZhipuAIModel) Chat(modelName, message *string, apiConfig *APIConfig, co
 }
 
 func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf map[string]interface{}) (<-chan string, error) {
+	api, cancel := modelStreamConfig(nil)
+	transferred := false
+	defer func() {
+		if !transferred {
+			cancel()
+		}
+	}()
 	baseURL, err := z.resolveBaseURL(nil)
 	if err != nil {
 		return nil, err
@@ -116,7 +122,7 @@ func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(api), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -130,15 +136,16 @@ func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Create channel for streaming
 	resultChan := make(chan string)
 
+	transferred = true
 	go func() {
+		defer cancel()
 		defer close(resultChan)
 		defer resp.Body.Close()
 
@@ -183,7 +190,11 @@ func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf 
 
 			content, ok := delta["content"].(string)
 			if ok && content != "" {
-				resultChan <- content
+				select {
+				case resultChan <- content:
+				case <-requestContext(api).Done():
+					return
+				}
 			}
 
 			finishReason, ok := firstChoice["finish_reason"].(string)
@@ -198,6 +209,8 @@ func (z *ZhipuAIModel) ChatStreamly(modelName, apiKey, message *string, genConf 
 
 // ChatStreamlyWithChannel sends a message and streams response to channel (better performance)
 func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *string, genConf map[string]interface{}, resultChan chan<- string) error {
+	api, cancel := modelStreamConfig(nil)
+	defer cancel()
 	baseURL, err := z.resolveBaseURL(nil)
 	if err != nil {
 		return err
@@ -232,7 +245,7 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(api), "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -247,8 +260,7 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// SSE parsing: read line by line
@@ -292,7 +304,11 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 
 		content, ok := delta["content"].(string)
 		if ok && content != "" {
-			resultChan <- content
+			select {
+			case resultChan <- content:
+			case <-requestContext(api).Done():
+				return requestContext(api).Err()
+			}
 		}
 
 		finishReason, ok := firstChoice["finish_reason"].(string)
@@ -301,14 +317,24 @@ func (z *ZhipuAIModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 		}
 	}
 
-	// Send [DONE] marker for OpenAI compatibility
-	resultChan <- "[DONE]"
-
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if err := requestContext(api).Err(); err != nil {
+		return err
+	}
+	select {
+	case resultChan <- "[DONE]":
+		return nil
+	case <-requestContext(api).Done():
+		return requestContext(api).Err()
+	}
 }
 
 // ChatWithMessages sends multiple messages with roles and returns response
 func (z *ZhipuAIModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, config *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	body, err := z.historyBody(modelName, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -389,6 +415,8 @@ func (z *ZhipuAIModel) ChatStreamlyWithSender(modelName, message *string, apiCon
 }
 
 func (z *ZhipuAIModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("zhipu-ai: sender is required")
 	}
@@ -414,6 +442,9 @@ func (z *ZhipuAIModel) ChatStreamlyWithMessages(name string, messages []Message,
 			continue
 		}
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("zhipu-ai: no text answer")
 			}

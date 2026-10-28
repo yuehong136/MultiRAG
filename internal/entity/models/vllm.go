@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // VLLMModel implements standard OpenAI-compatible vLLM chat and discovery.
@@ -22,7 +21,7 @@ type VLLMModel struct {
 }
 
 func NewVLLMModel(baseURL map[string]string, suffix URLSuffix) *VLLMModel {
-	return &VLLMModel{DummyModel: NewDummyModel(baseURL, suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
+	return &VLLMModel{DummyModel: NewDummyModel(baseURL, suffix), httpClient: &http.Client{Transport: openAIChatTransport}}
 }
 func (v *VLLMModel) Name() string { return "vllm" }
 
@@ -83,6 +82,8 @@ func (v *VLLMModel) request(method, suffix string, config *APIConfig, body inter
 }
 
 func (v *VLLMModel) chat(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	body, err := vllmBody(name, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -117,6 +118,8 @@ func (v *VLLMModel) ChatStreamlyWithSender(name, message *string, apiConfig *API
 }
 
 func (v *VLLMModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -142,6 +145,9 @@ func (v *VLLMModel) ChatStreamlyWithMessages(name string, messages []Message, ap
 			continue
 		}
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("vllm: stream returned no text answer")
 			}
@@ -184,6 +190,8 @@ func (v *VLLMModel) ChatStreamlyWithMessages(name string, messages []Message, ap
 	return io.ErrUnexpectedEOF
 }
 func (v *VLLMModel) ListModels(config *APIConfig) ([]string, error) {
+	config, cancel := modelCallConfig(config)
+	defer cancel()
 	resp, err := v.request(http.MethodGet, v.URLSuffix.Models, config, nil)
 	if err != nil {
 		return nil, err

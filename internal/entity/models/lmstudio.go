@@ -141,6 +141,8 @@ func (l *LMStudioModel) ChatStreamlyWithSender(name, message *string, apiConfig 
 }
 
 func (l *LMStudioModel) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -169,6 +171,9 @@ func (l *LMStudioModel) ChatStreamlyWithMessages(name string, messages []Message
 			continue
 		}
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("lmstudio: stream returned no text answer")
 			}

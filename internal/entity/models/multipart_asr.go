@@ -79,7 +79,7 @@ func multipartASRForm(client *http.Client, base map[string]string, suffix string
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaRequest(client, base, suffix, local, writer.FormDataContentType(), &body, "", options...)
 	if err != nil {

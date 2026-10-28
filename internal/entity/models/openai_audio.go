@@ -132,7 +132,7 @@ func decodeAudioTranscription(resp *http.Response, format string, api *APIConfig
 }
 
 func (o *OpenAIModel) TranscribeAudio(name *string, audio []byte, api *APIConfig, config *ASRConfig) (*ASRResponse, error) {
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, format, err := openAIASRRequest(o.httpClient, o.BaseURL, o.URLSuffix.ASR, name, audio, local, config, false)
 	if err != nil {
@@ -146,7 +146,7 @@ func (o *OpenAIModel) TranscribeAudioWithSender(name *string, audio []byte, api 
 	if send == nil {
 		return fmt.Errorf("ASR sender required")
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, format, err := openAIASRRequest(o.httpClient, o.BaseURL, o.URLSuffix.ASR, name, audio, local, config, true)
 	if err != nil {
@@ -260,7 +260,7 @@ func (o *OpenAIModel) AudioSpeech(name *string, text string, api *APIConfig, con
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(o.httpClient, o.BaseURL, o.URLSuffix.TTS, local, body, "")
 	if err != nil {
@@ -284,7 +284,7 @@ func (o *OpenAIModel) AudioSpeechWithSender(name *string, text string, api *APIC
 	if err != nil {
 		return err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	accept := ""
 	if mode == "sse" {

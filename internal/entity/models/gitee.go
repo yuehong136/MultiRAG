@@ -41,7 +41,6 @@ func NewGiteeModel(baseURL map[string]string, urlSuffix URLSuffix) *GiteeModel {
 		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
@@ -64,6 +63,8 @@ func (m *GiteeModel) Chat(modelName, message *string, apiConfig *APIConfig, chat
 	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
 }
 func (m *GiteeModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	if strings.TrimSpace(modelName) == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -148,7 +149,7 @@ func (m *GiteeModel) ChatWithMessages(modelName string, apiConfig *APIConfig, me
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Parse response
@@ -216,6 +217,8 @@ func (m *GiteeModel) ChatStreamlyWithSender(modelName, message *string, apiConfi
 	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
 }
 func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
 	}
@@ -290,8 +293,7 @@ func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Messa
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	reserveText := ""
@@ -315,6 +317,9 @@ func (m *GiteeModel) ChatStreamlyWithMessages(modelName string, messages []Messa
 
 		// [DONE] marks the end of stream
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			completed = true
 			break
 		}
@@ -419,6 +424,8 @@ func (m *GiteeModel) Embed(modelName *string, texts []string, apiConfig *APIConf
 }
 
 func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	var region = "default"
 	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
@@ -434,7 +441,7 @@ func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("GET", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -454,7 +461,7 @@ func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Parse response
@@ -476,6 +483,8 @@ func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 }
 
 func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	var region = "default"
 	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
@@ -491,7 +500,7 @@ func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, erro
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("GET", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -511,7 +520,7 @@ func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, erro
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Parse response
@@ -531,6 +540,8 @@ func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, erro
 }
 
 func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	var region = "default"
 	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
 		region = *apiConfig.Region
@@ -546,7 +557,7 @@ func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("GET", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -560,13 +571,13 @@ func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	return nil

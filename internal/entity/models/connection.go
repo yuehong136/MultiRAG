@@ -2,11 +2,8 @@ package models
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 )
-
-const connectionErrorBodyLimit = 64 * 1024
 
 func checkBearerEndpointConnection(
 	client *http.Client,
@@ -15,6 +12,8 @@ func checkBearerEndpointConnection(
 	apiConfig *APIConfig,
 	providerName string,
 ) error {
+	apiConfig, cancel := modelCallConfig(apiConfig)
+	defer cancel()
 	if apiConfig == nil || apiConfig.APIKey == nil || *apiConfig.APIKey == "" {
 		return fmt.Errorf("API key is required for %s", providerName)
 	}
@@ -25,7 +24,7 @@ func checkBearerEndpointConnection(
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, suffix), http.NoBody)
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), http.MethodGet, joinModelURL(baseURL, suffix), http.NoBody)
 	if err != nil {
 		return fmt.Errorf("create %s connection request: %w", providerName, err)
 	}
@@ -39,9 +38,5 @@ func checkBearerEndpointConnection(
 	if resp.StatusCode == http.StatusOK {
 		return nil
 	}
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, connectionErrorBodyLimit))
-	if readErr != nil {
-		return fmt.Errorf("check %s connection: status %d; read response: %w", providerName, resp.StatusCode, readErr)
-	}
-	return fmt.Errorf("check %s connection: status %d: %s", providerName, resp.StatusCode, string(body))
+	return fmt.Errorf("check %s connection: status %d", providerName, resp.StatusCode)
 }

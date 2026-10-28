@@ -7,7 +7,7 @@ import (
 
 // TranscribeAudio sends authorized bytes with the xAI multipart STT protocol.
 func (x *XAIModel) TranscribeAudio(name *string, audio []byte, api *APIConfig, config *ASRConfig) (*ASRResponse, error) {
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, format, err := openAIASRRequest(x.httpClient, x.BaseURL, x.URLSuffix.ASR, name, audio, local, config, false)
 	if err != nil {
@@ -43,7 +43,7 @@ func (x *XAIModel) AudioSpeech(name *string, text string, api *APIConfig, config
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(x.httpClient, x.BaseURL, x.URLSuffix.TTS, local, body, "")
 	if err != nil {
@@ -70,7 +70,7 @@ func (x *XAIModel) AudioSpeechWithSender(name *string, text string, api *APIConf
 	if err != nil {
 		return err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(x.httpClient, x.BaseURL, x.URLSuffix.TTS, local, body, "")
 	if err != nil {

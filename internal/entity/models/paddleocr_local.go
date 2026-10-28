@@ -30,7 +30,7 @@ func (p *PaddleOCRLocalModel) OCRFile(name *string, content []byte, api *APIConf
 	if bytes.HasPrefix(content, []byte("%PDF")) {
 		typ = 0
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(p.httpClient, p.BaseURL, p.URLSuffix.OCR, local, map[string]any{"file": base64.StdEncoding.EncodeToString(content), "fileType": typ}, "", mediaHTTPOptions{optionalAPIKey: true})
 	if err != nil {

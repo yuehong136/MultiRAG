@@ -99,7 +99,7 @@ func submitMinerUTask(client *http.Client, urls map[string]string, suffix string
 	if len(content) != 0 {
 		return nil, fmt.Errorf("parse API requires a public document URL; direct file upload is unsupported")
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	var response mineruTaskSubmitResponse
 	body := map[string]any{"url": documentURL, "model_version": *name}

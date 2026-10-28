@@ -19,7 +19,7 @@ func (o *OpenRouterModel) AudioSpeech(name *string, text string, api *APIConfig,
 	if config != nil && config.Voice != "" {
 		body["voice"] = config.Voice
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(o.httpClient, o.BaseURL, o.URLSuffix.TTS, local, body, "")
 	if err != nil {
@@ -83,7 +83,7 @@ func (o *OpenRouterModel) TranscribeAudio(name *string, audio []byte, api *APICo
 	}
 	body["model"] = *name
 	body["input_audio"] = map[string]any{"data": base64.StdEncoding.EncodeToString(audio), "format": format}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(o.httpClient, o.BaseURL, o.URLSuffix.ASR, local, body, "")
 	if err != nil {

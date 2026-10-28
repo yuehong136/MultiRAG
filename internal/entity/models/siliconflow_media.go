@@ -34,7 +34,7 @@ func (s *SiliconFlowModel) AudioSpeech(name *string, text string, api *APIConfig
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(s.httpClient, s.BaseURL, s.URLSuffix.TTS, local, body, "")
 	if err != nil {
@@ -59,7 +59,7 @@ func (s *SiliconFlowModel) AudioSpeechWithSender(name *string, text string, api 
 	if err != nil {
 		return err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(s.httpClient, s.BaseURL, s.URLSuffix.TTS, local, body, "")
 	if err != nil {

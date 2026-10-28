@@ -43,7 +43,7 @@ func TestMinimaxCheckConnectionSurfacesProviderError(t *testing.T) {
 	model := NewMinimaxModel(map[string]string{"default": server.URL}, URLSuffix{Files: "files"})
 	apiKey := "bad"
 	err := model.CheckConnection(&APIConfig{APIKey: &apiKey})
-	if err == nil || !strings.Contains(err.Error(), "invalid key") {
+	if err == nil || !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "invalid key") {
 		t.Fatalf("CheckConnection() error = %v", err)
 	}
 }

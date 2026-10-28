@@ -13,7 +13,6 @@ import (
 	"maps"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // VolcEngine implements Ark chat, discovery and text input to multimodal embedding.
@@ -23,7 +22,7 @@ type VolcEngine struct {
 }
 
 func NewVolcEngine(baseURL map[string]string, suffix URLSuffix) *VolcEngine {
-	return &VolcEngine{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Timeout: 120 * time.Second}}
+	return &VolcEngine{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Transport: openAIChatTransport}}
 }
 func (v *VolcEngine) Name() string { return "volcengine" }
 
@@ -107,6 +106,8 @@ func (v *VolcEngine) request(method, suffix string, config *APIConfig, body inte
 }
 
 func (v *VolcEngine) chat(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	body, err := volcEngineBody(name, messages, config, false)
 	if err != nil {
 		return nil, err
@@ -141,6 +142,8 @@ func (v *VolcEngine) ChatStreamlyWithSender(name, message *string, apiConfig *AP
 }
 
 func (v *VolcEngine) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -166,6 +169,9 @@ func (v *VolcEngine) ChatStreamlyWithMessages(name string, messages []Message, a
 			continue
 		}
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return fmt.Errorf("volcengine: stream returned no text answer")
 			}

@@ -336,11 +336,12 @@ func TestLMStudioPerCallTimeouts(t *testing.T) {
 	driver.httpClient.Transport = lmStudioTransportFunc(func(r *http.Request) (*http.Response, error) {
 		contexts = append(contexts, r.Context())
 		deadline, exists := r.Context().Deadline()
-		if exists == stream {
-			t.Error("stream has a total timeout or normal call is unbounded")
+		want := nonStreamCallTimeout
+		if stream {
+			want = streamCallTimeout
 		}
-		if exists && (time.Until(deadline) > 120*time.Second || time.Until(deadline) < 119*time.Second) {
-			t.Error("unexpected non-stream timeout")
+		if !exists || time.Until(deadline) > want || time.Until(deadline) < want-time.Second {
+			t.Errorf("operation deadline = %v, want %v", time.Until(deadline), want)
 		}
 		body := `{"choices":[{"message":{"content":"answer"}}]}`
 		if r.Method == "GET" {

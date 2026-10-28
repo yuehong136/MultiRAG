@@ -61,7 +61,7 @@ func (d *DeepInfraModel) AudioSpeech(name *string, text string, api *APIConfig, 
 	if d.URLSuffix.TTS == "" {
 		return nil, fmt.Errorf("deepinfra: speech endpoint is missing")
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(d.httpClient, d.BaseURL, strings.TrimRight(d.URLSuffix.TTS, "/")+"/"+voice, local, body, "")
 	if err != nil {
@@ -89,7 +89,7 @@ func (d *DeepInfraModel) AudioSpeechWithSender(name *string, text string, api *A
 	if d.URLSuffix.TTS == "" {
 		return fmt.Errorf("deepinfra: speech endpoint is missing")
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(d.httpClient, d.BaseURL, strings.TrimRight(d.URLSuffix.TTS, "/")+"/"+voice+"/stream", local, body, "")
 	if err != nil {

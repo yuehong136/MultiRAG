@@ -22,7 +22,7 @@ func (c *CometAPIModel) AudioSpeech(name *string, text string, api *APIConfig, c
 			return nil, fmt.Errorf("cometapi: voice must be a nonempty string")
 		}
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(c.httpClient, c.BaseURL, c.URLSuffix.TTS, local, body, "")
 	if err != nil {

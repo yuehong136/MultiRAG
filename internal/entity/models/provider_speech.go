@@ -22,7 +22,7 @@ func openAIBinarySpeech(client *http.Client, urls map[string]string, suffix stri
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(client, urls, suffix, local, body, "")
 	if err != nil {

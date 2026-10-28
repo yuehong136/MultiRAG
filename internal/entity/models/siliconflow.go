@@ -41,7 +41,6 @@ func NewSiliconFlowModel(baseURL map[string]string, urlSuffix URLSuffix) *Silico
 		BaseURL:   maps.Clone(baseURL),
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
@@ -64,6 +63,8 @@ func (m *SiliconFlowModel) Chat(modelName, message *string, apiConfig *APIConfig
 	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
 }
 func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	if strings.TrimSpace(modelName) == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -150,7 +151,7 @@ func (m *SiliconFlowModel) ChatWithMessages(modelName string, apiConfig *APIConf
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Parse response
@@ -218,6 +219,8 @@ func (m *SiliconFlowModel) ChatStreamlyWithSender(modelName, message *string, ap
 	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
 }
 func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
 	}
@@ -294,8 +297,7 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// SSE parsing: read line by line
@@ -315,6 +317,9 @@ func (m *SiliconFlowModel) ChatStreamlyWithMessages(modelName string, messages [
 
 		// [DONE] marks the end of stream
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			completed = true
 			break
 		}
@@ -390,6 +395,8 @@ func (m *SiliconFlowModel) Embed(modelName *string, texts []string, apiConfig *A
 }
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("siliconflow: model discovery API key is required")
 	}
@@ -410,7 +417,7 @@ func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("GET", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -430,7 +437,7 @@ func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Parse response

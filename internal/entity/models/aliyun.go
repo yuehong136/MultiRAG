@@ -41,7 +41,6 @@ func NewAliyunModel(baseURL map[string]string, urlSuffix URLSuffix) *AliyunModel
 		BaseURL:   baseURL,
 		URLSuffix: urlSuffix,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
@@ -154,6 +153,8 @@ type aliyunChatResponse struct {
 }
 
 func (m *AliyunModel) chat(modelName string, messages []Message, apiConfig *APIConfig, chatConfig *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	body, err := aliyunChatBody(modelName, messages, chatConfig, false)
 	if err != nil {
 		return nil, err
@@ -211,6 +212,8 @@ func (m *AliyunModel) ChatStreamlyWithSender(modelName, message *string, apiConf
 }
 
 func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatConfig *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}
@@ -236,6 +239,9 @@ func (m *AliyunModel) ChatStreamlyWithMessages(modelName string, messages []Mess
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			if !receivedAnswer {
 				return errors.New("aliyun: stream returned no text answer")
 			}
@@ -288,6 +294,8 @@ func (m *AliyunModel) Embed(modelName *string, texts []string, apiConfig *APICon
 
 // ListModels checks the configured endpoint and returns model names.
 func (m *AliyunModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	resp, err := m.request(http.MethodGet, m.URLSuffix.Models, apiConfig, nil)
 	if err != nil {
 		return nil, err

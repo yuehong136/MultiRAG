@@ -252,6 +252,8 @@ func (d *openAIChatDriver) ChatStreamlyWithSender(name, message *string, apiConf
 }
 
 func (d *openAIChatDriver) ChatStreamlyWithMessages(name string, messages []Message, apiConfig *APIConfig, config *ChatConfig, sender func(*string, *string) error) (streamErr error) {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}

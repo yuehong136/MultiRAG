@@ -28,7 +28,7 @@ func (f *FishAudioModel) AudioSpeech(name *string, text string, api *APIConfig, 
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(f.driver.httpClient, f.BaseURL, f.URLSuffix.TTS, local, body, *name)
 	if err != nil {
@@ -55,7 +55,7 @@ func (f *FishAudioModel) AudioSpeechWithSender(name *string, text string, api *A
 	if f.URLSuffix.TTS == "" {
 		return fmt.Errorf("fishaudio: speech endpoint is missing")
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(f.driver.httpClient, f.BaseURL, strings.TrimRight(f.URLSuffix.TTS, "/")+"/stream/with-timestamp", local, body, *name)
 	if err != nil {
@@ -169,7 +169,7 @@ func (f *FishAudioModel) TranscribeAudio(name *string, audio []byte, api *APICon
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaRequest(f.driver.httpClient, f.BaseURL, f.URLSuffix.ASR, local, writer.FormDataContentType(), &body, *name)
 	if err != nil {

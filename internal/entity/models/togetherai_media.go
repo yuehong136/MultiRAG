@@ -28,7 +28,7 @@ func (t *TogetherAIModel) AudioSpeechWithSender(name *string, text string, api *
 	if err != nil {
 		return err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(t.httpClient, t.BaseURL, t.URLSuffix.TTS, local, body, "")
 	if err != nil {

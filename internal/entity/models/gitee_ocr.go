@@ -29,7 +29,7 @@ func (g *GiteeModel) ocrInput(name *string, content []byte, imageURL string, api
 	if g.URLSuffix.OCR == "" {
 		return nil, fmt.Errorf("gitee OCR endpoint is missing")
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	base, err := resolveModelBaseURL(g.BaseURL, local.Region)
 	if err != nil {

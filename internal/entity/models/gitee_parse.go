@@ -62,7 +62,7 @@ func (g *GiteeModel) ParseFile(name *string, content []byte, documentURL string,
 	if err := ValidateParseInput(content, documentURL); err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -93,7 +93,7 @@ func (g *GiteeModel) ParseFile(name *string, content []byte, documentURL string,
 		return nil, err
 	}
 	if task.Status == "success" {
-		return g.ShowTask(task.TaskID, local)
+		return g.showTask(task.TaskID, local)
 	}
 	if err := ValidateParseTask(&task, true); err != nil {
 		return nil, err
@@ -127,14 +127,18 @@ func (g *GiteeModel) ListTasks(api *APIConfig) ([]ParseTask, error) {
 }
 
 func (g *GiteeModel) ShowTask(id string, api *APIConfig) (*ParseTask, error) {
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	return g.showTask(id, local)
+}
+
+func (g *GiteeModel) showTask(id string, local *APIConfig) (*ParseTask, error) {
 	if err := ValidateTaskID(id); err != nil {
 		return nil, err
 	}
 	if g.URLSuffix.Task == "" {
 		return nil, fmt.Errorf("missing task endpoint")
 	}
-	local, cancel := modelCallConfig(api)
-	defer cancel()
 	var status struct {
 		TaskID string `json:"task_id"`
 		Status string `json:"status"`

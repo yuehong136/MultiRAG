@@ -32,7 +32,7 @@ func (s *StepFunModel) AudioSpeech(name *string, text string, api *APIConfig, co
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(s.httpClient, s.BaseURL, s.URLSuffix.TTS, local, body, "")
 	if err != nil {
@@ -57,7 +57,7 @@ func (s *StepFunModel) AudioSpeechWithSender(name *string, text string, api *API
 	if err != nil {
 		return err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(s.httpClient, s.BaseURL, s.URLSuffix.TTS, local, body, "")
 	if err != nil {

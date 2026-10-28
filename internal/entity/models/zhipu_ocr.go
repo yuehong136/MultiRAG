@@ -25,7 +25,7 @@ func (z *ZhipuAIModel) ocr(name *string, content []byte, fileURL string, api *AP
 		}
 		fileURL = "data:" + typ + ";base64," + base64.StdEncoding.EncodeToString(content)
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	client := *z.httpClient
 	client.CheckRedirect = rejectModelRedirect

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // DeepSeekModel implements provider model discovery for DeepSeek.
@@ -22,7 +21,7 @@ func NewDeepSeekModel(baseURL map[string]string, urlSuffix URLSuffix) *DeepSeekM
 	return &DeepSeekModel{
 		BaseURL:    baseURL,
 		URLSuffix:  urlSuffix,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		httpClient: &http.Client{Transport: openAIChatTransport},
 	}
 }
 
@@ -37,6 +36,8 @@ func (m *DeepSeekModel) Chat(modelName, message *string, apiConfig *APIConfig, c
 	return m.ChatWithMessages(*modelName, apiConfig, []Message{{Role: "user", Content: *message}}, chatModelConfig)
 }
 func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig, messages []Message, chatModelConfig *ChatConfig) (*ChatResponse, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	if strings.TrimSpace(modelName) == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -145,7 +146,7 @@ func (m *DeepSeekModel) ChatWithMessages(modelName string, apiConfig *APIConfig,
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// Parse response
@@ -209,6 +210,8 @@ func (m *DeepSeekModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 	return m.ChatStreamlyWithMessages(*modelName, []Message{{Role: "user", Content: *message}}, apiConfig, chatModelConfig, sender)
 }
 func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, chatModelConfig *ChatConfig, sender func(*string, *string) error) error {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil || apiConfig == nil || apiConfig.APIKey == nil {
 		return fmt.Errorf("message or API key is nil")
 	}
@@ -312,8 +315,7 @@ func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Me
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
 	}
 
 	// SSE parsing: read line by line
@@ -333,6 +335,9 @@ func (m *DeepSeekModel) ChatStreamlyWithMessages(modelName string, messages []Me
 
 		// [DONE] marks the end of stream
 		if data == "[DONE]" {
+			if err := requestContext(apiConfig).Err(); err != nil {
+				return err
+			}
 			completed = true
 			break
 		}
@@ -413,6 +418,8 @@ func (m *DeepSeekModel) Embed(modelName *string, texts []string, apiConfig *APIC
 }
 
 func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	if apiConfig == nil || apiConfig.APIKey == nil {
 		return nil, fmt.Errorf("API key is nil")
 	}
@@ -421,7 +428,7 @@ func (m *DeepSeekModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Models), nil)
+	req, err := http.NewRequestWithContext(requestContext(apiConfig), http.MethodGet, joinModelURL(baseURL, m.URLSuffix.Models), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create model list request: %w", err)
 	}
@@ -465,6 +472,8 @@ type deepSeekBalanceResponse struct {
 // Balance preserves each currency and account availability. The first pair also
 // supplies the common balance/currency fields consumed by the provider CLI.
 func (m *DeepSeekModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
+	apiConfig, cancelCall := modelCallConfig(apiConfig)
+	defer cancelCall()
 	var result deepSeekBalanceResponse
 	if err := decodeBalanceHTTP(m.httpClient, m.BaseURL, m.URLSuffix.Balance, apiConfig, &result); err != nil {
 		return nil, fmt.Errorf("deepseek: %w", err)

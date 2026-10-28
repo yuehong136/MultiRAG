@@ -70,7 +70,7 @@ func (b *BaiduModel) ocr(name *string, content []byte, fileURL string, api *APIC
 			typ = 0
 		}
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(b.httpClient, b.BaseURL, b.URLSuffix.OCR, local, map[string]any{"model": *name, "file": input, "fileType": typ}, "")
 	if err != nil {
@@ -118,7 +118,7 @@ func (m *MistralModel) ocr(name *string, content []byte, fileURL string, api *AP
 	if fileURL == "" {
 		fileURL = "data:" + http.DetectContentType(content) + ";base64," + base64.StdEncoding.EncodeToString(content)
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(m.httpClient, m.BaseURL, m.URLSuffix.OCR, local, map[string]any{"model": *name, "document": map[string]string{"type": "document_url", "document_url": fileURL}}, "")
 	if err != nil {

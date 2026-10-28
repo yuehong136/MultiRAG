@@ -31,7 +31,7 @@ func groqChatBody(name string, messages []Message, config *ChatConfig, stream bo
 }
 
 func (g *GroqModel) TranscribeAudio(name *string, audio []byte, api *APIConfig, config *ASRConfig) (*ASRResponse, error) {
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, format, err := openAIASRRequest(g.httpClient, g.BaseURL, g.URLSuffix.ASR, name, audio, local, config, false)
 	if err != nil {
@@ -50,7 +50,7 @@ func (g *GroqModel) AudioSpeech(name *string, text string, api *APIConfig, confi
 	if err := requireSpeechVoice(body); err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(g.httpClient, g.BaseURL, g.URLSuffix.TTS, local, body, "")
 	if err != nil {

@@ -97,7 +97,7 @@ func (m *MinimaxModel) AudioSpeech(name *string, text string, api *APIConfig, co
 	if err != nil {
 		return nil, err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(m.httpClient, m.BaseURL, m.URLSuffix.TTS, local, body, "")
 	if err != nil {
@@ -136,7 +136,7 @@ func (m *MinimaxModel) AudioSpeechWithSender(name *string, text string, api *API
 	if err != nil {
 		return err
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelStreamConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(m.httpClient, m.BaseURL, m.URLSuffix.TTS, local, body, "")
 	if err != nil {

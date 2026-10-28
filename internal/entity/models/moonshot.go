@@ -171,6 +171,8 @@ func (m *MoonshotModel) ChatStreamlyWithSender(modelName, message *string, apiCo
 }
 
 func (m *MoonshotModel) ChatStreamlyWithMessages(modelName string, messages []Message, apiConfig *APIConfig, modelConfig *ChatConfig, sender func(*string, *string) error) (streamErr error) {
+	apiConfig, cancelCall := modelStreamConfig(apiConfig)
+	defer cancelCall()
 	if sender == nil {
 		return fmt.Errorf("stream sender is required")
 	}

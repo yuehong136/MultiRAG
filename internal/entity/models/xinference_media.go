@@ -22,7 +22,7 @@ func (x *XinferenceModel) AudioSpeech(name *string, text string, api *APIConfig,
 			return nil, fmt.Errorf("xinference: voice must be a string")
 		}
 	}
-	local, cancel := modelCallConfig(api)
+	local, cancel := modelLongOpConfig(api)
 	defer cancel()
 	resp, err := mediaJSONRequest(x.httpClient, x.BaseURL, x.URLSuffix.TTS, local, body, "", mediaHTTPOptions{optionalAPIKey: true})
 	if err != nil {
