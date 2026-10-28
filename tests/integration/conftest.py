@@ -22,6 +22,7 @@ from tests.support.database import _alembic_config as _alembic_config
 from tests.support.database import _pg_role_can_create_db as _pg_role_can_create_db
 from tests.support.database import _pg_url as _pg_url
 from tests.support.integration_suites import required_services
+from tests.support.resource_journal import ResourceJournal
 
 
 def _docker_usable() -> bool:
@@ -115,6 +116,8 @@ def pg_scratch_engine(postgres_service: None) -> Iterator[sa.Engine]:
     admin_url = _pg_url(CONFIGS["postgresql"]["dbname"])
     if _pg_role_can_create_db(admin_url):
         scratch_name = f"multirag_test_{uuid.uuid4().hex[:12]}"
+        journal = ResourceJournal("pg_scratch_engine")
+        journal.event("reserve-database", database=scratch_name, host=admin_url.host, port=admin_url.port, role=admin_url.username, borrowed_database=admin_url.database)
         with ExitStack() as resources:
             admin_engine = sa.create_engine(admin_url, isolation_level="AUTOCOMMIT")
             resources.callback(admin_engine.dispose)
@@ -122,10 +125,17 @@ def pg_scratch_engine(postgres_service: None) -> Iterator[sa.Engine]:
             def drop_scratch() -> None:
                 with admin_engine.connect() as conn:
                     conn.execute(sa.text(f'DROP DATABASE IF EXISTS "{scratch_name}" WITH (FORCE)'))
+                with admin_engine.connect() as reader:
+                    absent = reader.scalar(sa.text("SELECT count(*) FROM pg_database WHERE datname=:name"), {"name": scratch_name}) == 0
+                journal.event("database-cleanup-readback", database=scratch_name, absent=absent)
+                assert absent, "Owned scratch database remains after cleanup"
 
             resources.callback(drop_scratch)
             with admin_engine.connect() as conn:
+                identity = conn.execute(sa.text("SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()")).one()
+                journal.event("database-endpoint", database=scratch_name, admin_database=identity[0], role=identity[1], address=identity[2], port=identity[3])
                 conn.execute(sa.text(f'CREATE DATABASE "{scratch_name}"'))
+            journal.event("database-created", database=scratch_name)
             engine = sa.create_engine(_pg_url(scratch_name))
             resources.callback(engine.dispose)
             with engine.begin() as conn:
