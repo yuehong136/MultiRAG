@@ -396,7 +396,7 @@ async def retrieval(
 
 
 @router.get(
-    "/dify/retrieval",
+    "/dify/retrieval/health",
     summary="Dify 连通性检查",
 )
 async def retrieval_health_check() -> JSONResponse:

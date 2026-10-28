@@ -33,7 +33,7 @@ def test_api_named_checkout_keeps_canonical_module_name(tmp_path: Path, monkeypa
         ("POST", "/api/v1/chats/{chat_id}/completions", "bot"),
         ("POST", "/api/v1/searchbots/retrieval_test", "bot"),
         ("POST", "/api/v1/dify/retrieval", "dify_retrieval"),
-        ("GET", "/api/v1/dify/retrieval", "dify_retrieval"),
+        ("GET", "/api/v1/dify/retrieval/health", "dify_retrieval"),
         ("POST", "/api/v1/retrieval", "chunk"),
         ("POST", "/api/v1/datasets/{dataset_id}/chunks", "chunk"),
         ("DELETE", "/api/v1/datasets/{dataset_id}/chunks", "chunk"),

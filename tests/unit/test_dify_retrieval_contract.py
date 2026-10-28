@@ -80,7 +80,7 @@ def test_get_health_check_has_no_retrieval_dependencies(client: TestClient, monk
     monkeypatch.setattr(module, "LLMBundle", bundle)
     client.app.dependency_overrides[get_db] = dependency
     client.app.dependency_overrides[token_required] = dependency
-    response = client.get("/api/v1/dify/retrieval", params=params, headers=headers)
+    response = client.get("/api/v1/dify/retrieval/health", params=params, headers=headers)
     assert response.status_code == 200, response.text
     assert response.json() == {"retcode": 0, "retmsg": "success", "data": True}
     dependency.assert_not_called()
@@ -92,11 +92,11 @@ def test_get_health_check_has_one_route_and_no_query_parameters(client: TestClie
     from fastapi.openapi.utils import get_openapi
     from fastapi.routing import iter_route_contexts
 
-    routes = [route for route in iter_route_contexts(client.app.routes) if route.path == "/api/v1/dify/retrieval" and "GET" in route.methods]
+    routes = [route for route in iter_route_contexts(client.app.routes) if route.path == "/api/v1/dify/retrieval/health" and "GET" in route.methods]
     assert len(routes) == 1
     assert routes[0].original_route.dependant.dependencies == []
     module = sys.modules["api.apps.restful_apis.dify_retrieval"]
-    operation = get_openapi(title="Dify", version="1", routes=module.router.routes)["paths"]["/dify/retrieval"]["get"]
+    operation = get_openapi(title="Dify", version="1", routes=module.router.routes)["paths"]["/dify/retrieval/health"]["get"]
     assert operation.get("parameters", []) == []
 
 
@@ -263,3 +263,10 @@ def test_missing_kb_precedes_access_and_all_retrieval_work(client: TestClient, m
     response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "missing", "query": "text"})
     assert response.status_code == 404 and response.json()["error_code"] == 404
     accessible.assert_not_called()
+
+
+def test_old_get_is_method_not_allowed_and_post_is_registered(client: TestClient) -> None:
+    assert client.get("/api/v1/dify/retrieval").status_code == 405
+    schema = client.app.openapi()["paths"]
+    assert "get" not in schema["/api/v1/dify/retrieval"]
+    assert "post" in schema["/api/v1/dify/retrieval"]
