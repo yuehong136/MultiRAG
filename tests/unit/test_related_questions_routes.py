@@ -8,6 +8,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import UserTenantService
@@ -30,7 +31,7 @@ class _FakeBundle:
 
 
 @pytest.fixture
-def rq_stubs(monkeypatch, client):
+def rq_stubs(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> type[_FakeBundle]:
     _FakeBundle.instances = []
     for mod_name in ("api.apps.restful_apis.bot", "api.apps.restful_apis.chat", "api.apps.conversation"):
         mod = _route_module(mod_name)

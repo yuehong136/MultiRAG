@@ -8,6 +8,7 @@ import sys
 import types
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.joint_services import tenant_model_service
@@ -50,7 +51,7 @@ def _fake_kb():
 
 
 @pytest.fixture
-def mindmap_service_stubs(monkeypatch):
+def mindmap_service_stubs(monkeypatch: pytest.MonkeyPatch) -> type[_FakeBundle]:
     _FakeBundle.instances = []
     kb = _fake_kb()
 
@@ -89,7 +90,7 @@ async def test_gen_mindmap_without_kb_returns_error(async_db, monkeypatch):
 
 
 @pytest.fixture
-def mindmap_route_stubs(monkeypatch, client):
+def mindmap_route_stubs(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
     async def _fake_gen_mindmap(db, question, kb_ids, tenant_id, search_config=None):
         return {"id": "root"}
 

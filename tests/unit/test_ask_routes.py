@@ -14,6 +14,7 @@ import threading
 import types
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.joint_services import tenant_model_service
 from api.db.services import dialog_service
@@ -64,7 +65,7 @@ def _fake_kb():
 
 
 @pytest.mark.parametrize("weight", [0, 0.4, 1])
-async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypatch, async_db, weight: float) -> None:
+async def test_async_ask_strips_bundles_and_finalizes_citation_off_loop(monkeypatch: pytest.MonkeyPatch, async_db: AsyncSession, weight: float) -> None:
     _FakeBundle.instances = []
     kb = _fake_kb()
     captured = {}
