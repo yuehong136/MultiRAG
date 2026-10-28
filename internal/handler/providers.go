@@ -390,6 +390,26 @@ func (h *ProviderHandler) ShowInstanceBalance(c *gin.Context) {
 	})
 }
 
+// CheckConnection validates submitted credentials without creating an instance.
+func (h *ProviderHandler) CheckConnection(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	var req service.CheckConnectionRequest
+	if err := bindObjectJSON(c, &req); err != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid provider check payload.")
+		return
+	}
+	code, err := h.modelProviderService.CheckConnection(c.Request.Context(), c.Param("provider_name"), user.ID, req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, nil, "success")
+}
+
 func (h *ProviderHandler) CheckProviderConnection(c *gin.Context) {
 	providerName := c.Param("provider_name")
 	if providerName == "" {

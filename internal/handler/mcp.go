@@ -191,3 +191,23 @@ func (h *MCPHandler) ListMCPServers(c *gin.Context) {
 	}
 	jsonResponse(c, common.CodeSuccess, result, "success")
 }
+
+// UpdateMCPServer changes explicit settings and returns a credential-free view.
+func (h *MCPHandler) UpdateMCPServer(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	var req service.UpdateMCPServerRequest
+	if bindObjectJSONNullable(c, &req, map[string]bool{"description": true}) != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid MCP payload.")
+		return
+	}
+	result, code, err := h.mcpService.UpdateMCPServer(c.Request.Context(), user.ID, c.Param("mcp_id"), req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, code, result, "success")
+}

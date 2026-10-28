@@ -13,6 +13,11 @@ import (
 // bindObjectJSON rejects unknown, duplicate, null and trailing top-level values.
 // Validation errors intentionally never contain request values or credentials.
 func bindObjectJSON(c *gin.Context, target any) error {
+	return bindObjectJSONNullable(c, target, nil)
+}
+
+// bindObjectJSONNullable permits null only for explicitly nullable fields.
+func bindObjectJSONNullable(c *gin.Context, target any, nullable map[string]bool) error {
 	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("invalid payload")
@@ -37,7 +42,7 @@ func bindObjectJSON(c *gin.Context, target any) error {
 		}
 		seen[key] = true
 		var value json.RawMessage
-		if err = dec.Decode(&value); err != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if err = dec.Decode(&value); err != nil || (bytes.Equal(bytes.TrimSpace(value), []byte("null")) && !nullable[key]) {
 			return fmt.Errorf("invalid field")
 		}
 	}

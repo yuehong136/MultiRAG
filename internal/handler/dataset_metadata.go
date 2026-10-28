@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"multirag/internal/common"
+	"multirag/internal/service"
 )
 
 func (h *DatasetsHandler) ListMetadataFlattened(c *gin.Context) {
@@ -92,4 +93,36 @@ func (h *DatasetsHandler) RemoveTags(c *gin.Context) {
 	}
 
 	jsonResponse(c, common.CodeSuccess, true, "success")
+}
+
+func (h *DatasetsHandler) GetMetadataConfig(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	result, code, err := h.datasetsService.GetMetadataConfig(c.Request.Context(), c.Param("dataset_id"), user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, code, result, "success")
+}
+func (h *DatasetsHandler) UpdateMetadataConfig(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	var req service.MetadataConfigRequest
+	if bindObjectJSON(c, &req) != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid metadata configuration.")
+		return
+	}
+	result, code, err := h.datasetsService.UpdateMetadataConfig(c.Request.Context(), c.Param("dataset_id"), user.ID, req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, code, result, "success")
 }

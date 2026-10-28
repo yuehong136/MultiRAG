@@ -37,8 +37,13 @@ func NewModelProviderService() *ModelProviderService {
 // NewModelProviderServiceWithFactory uses the same SQL binding policy with a driver factory.
 // A nil factory selects the built-in drivers.
 func NewModelProviderServiceWithFactory(factory modelModule.DriverFactory) *ModelProviderService {
+	return NewModelProviderServiceWithCatalog(dao.GetModelProviderManager(), factory)
+}
+
+// NewModelProviderServiceWithCatalog binds a catalog and request-local driver factory.
+func NewModelProviderServiceWithCatalog(catalog *entity.ProviderManager, factory modelModule.DriverFactory) *ModelProviderService {
 	return &ModelProviderService{
-		providerManager:      dao.GetModelProviderManager(),
+		providerManager:      catalog,
 		driverFactory:        factory,
 		modelProviderDAO:     dao.NewTenantModelProviderDAO(),
 		modelInstanceDAO:     dao.NewTenantModelInstanceDAO(),

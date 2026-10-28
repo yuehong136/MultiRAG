@@ -242,3 +242,22 @@ func (h *ConnectorHandler) RebuildConnector(c *gin.Context) {
 		"message": "success",
 	})
 }
+
+func (h *ConnectorHandler) UpdateConnector(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	var req service.UpdateConnectorRequest
+	if bindObjectJSON(c, &req) != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid connector payload.")
+		return
+	}
+	result, code, err := h.connectorService.UpdateConnector(c.Request.Context(), c.Param("connector_id"), user.ID, req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, code, result, "success")
+}
