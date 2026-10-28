@@ -8,6 +8,9 @@
 | RAGFlow 上游 | MultiRAG 落点 | 规则 |
 |---|---|---|
 | `api/settings.py`、`rag/settings.py` | `common/app_config.py` + `common/resources.py` | 新配置进入类型化 `AppConfig`；状态资源由 `resources` 懒加载 |
+| S3 兼容存储配置与部署说明 | `common/app_config.py`、`docker/service_conf.yaml.template`、`core/utils/s3_conn.py` | AWS_S3 使用 `region_name`；Docker 保留 `S3_REGION` 环境名，OSS 保留独立 `region`。额外键保留但只向 SDK 传已支持字段；桶路径与迁移边界见 [S3 存储](../s3-storage.md)。 |
+| Chat completion 模型选择与数值输出 | `api/apps/restful_apis/{chat_api,openai_api}.py`、`api/utils/chat_json.py` | 保存模型优先，空值才取租户数值 ID 默认；请求级配置用 transient Dialog，不写回保存对象。仅响应边界将非有限数值转 null、NumPy 实数转 JSON 标量，保留持久化与 provider 严格校验。 |
+| Go MCP 列表与 OAuth 协议 | `internal/{handler,service,dao}/mcp.go`、`internal/utility/oauth/` | MCP 列表要求有效 owner，SQL 稳定分页与显式空过滤；不选择 headers/variables，不回传未受信 tools。OAuth 只验证 state/PKCE/签名身份，始终要求持久 provider-subject 绑定，不启用账号登录；见 [Go OAuth 边界](../../internal/utility/oauth/README.md)。 |
 | 消费者的 `settings.X` | `common/settings.py` | 上游同步文件继续照抄访问面，由永久 facade 翻译；不要逐文件改成 DI |
 | Quart/Flask handler | FastAPI router + Pydantic + dependency | 新 service async-first；同一请求不混用同步/异步 session |
 | Agent/Search completion 与 backward compatibility | `api/apps/restful_apis/{agent_api,search_api}.py` | canonical 路由为 `/agents/chat/completions`、`/searches/{id}/completions`；Web 与原生演示客户端迁移完成后退出 singular/旧 Agent 路径，不转调带 Depends 的 handler；runtime 副本按 canvas/tenant/runtime_user 隔离。见 [迁移验收](../ragflow-porting/agent-runtime-alignment.md) |

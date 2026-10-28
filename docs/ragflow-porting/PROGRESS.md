@@ -3,6 +3,13 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2026-10-28 · after-1e80419c-20 本地验收索引
+
+连续 20 项、61 个上游路径的处置、实现质量比较、实际主干接受映射及受影响消费者，见
+[1e80419c 后二十项交付](batch-after-1e80419c.md)。本批定向 Python、HTTP/SQL/存储、
+固定 Web 与 Go 分层验收按该索引封存；首错、登记边界和外部 Web 漂移保留。
+未 push、未部署；远程 ci-required 待运行。
+
 ## 2026-10-24 · after-d7fb4bdb-20 定向验收索引
 
 连续 20 项的本地实现、等价/不适用结论、接受映射、真实消费者、保留失败与恢复清理，见
