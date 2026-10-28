@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Document, DocumentMetadata, File, File2Document, Knowledgebase, PipelineOperationLog, SourceRecoveryRecord, Task, UserCanvas, UserTenant
 from api.db.services import document_ingest_service as service
 from api.db.services import document_status_service as status_service
+from api.db.services.document_image_lock import task_image_reservation_key
 from api.db.services.document_ingest_recovery import recovery_key
 from api.db.services.document_service import DocumentService
 from api.db.services.document_source_recovery import SourceRecovery, source_recovery_key
@@ -65,6 +66,7 @@ def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> It
         "extra_dataset": env["other_kb"],
         "collections": [env["collection"], env["other_collection"]],
         "redis_keys": [env["queue"], *(recovery_key(env[key]) for key in ["a", "b", "c", "foreign"])],
+        "task_image_keys": [],
         "objects": [],
         "http_port": env["record"]["port"],
     }
@@ -121,7 +123,10 @@ def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> It
                 manifest = env["ingest_manifest"]
                 if row.id not in manifest["task_ids"]:
                     manifest["task_ids"].append(row.id)
-                    manifest["redis_keys"].append(row.id + "-cancel")
+                    keys = [row.id + "-cancel", task_image_reservation_key(row.id)]
+                    env["journal"].event("reserve-ingest-task-resources", task_id=row.id, redis_keys=keys)
+                    manifest["redis_keys"].append(keys[0])
+                    manifest["task_image_keys"].append(keys[1])
                     evidence(env, "manifest", manifest)
 
     sa.event.listen(Session, "before_flush", record_tasks)
@@ -155,6 +160,8 @@ def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> It
         manifest["task_ids"] = list(dict.fromkeys([*manifest["task_ids"], *task_ids]))
         keys = [*manifest["redis_keys"], *(f"{identifier}-cancel" for identifier in manifest["task_ids"])]
         keys = list(dict.fromkeys(key for key in keys if key != env["queue"]))
+        image_keys = list(dict.fromkeys([*manifest["task_image_keys"], *(task_image_reservation_key(identifier) for identifier in manifest["task_ids"])]))
+        manifest["task_image_keys"] = image_keys
         manifest["redis_keys"] = list(dict.fromkeys([*manifest["redis_keys"], *keys]))
         evidence(env, "manifest", manifest)
         evidence(env, "final", snapshot(env))
@@ -167,7 +174,7 @@ def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> It
                 dump = REDIS_CONN.REDIS.dump(key)
                 source_states[key] = {"value": raw, "dump_hex": dump.hex() if dump is not None else None, "pttl": REDIS_CONN.REDIS.pttl(key), "absent": raw is None}
         evidence(env, "source-recovery-cleanup-before", {"rows": source_rows, "redis_states": source_states})
-        REDIS_CONN.REDIS.delete(*keys) if keys else None
+        REDIS_CONN.REDIS.delete(*keys, *image_keys) if keys or image_keys else None
         settings.docStoreConn.delete_idx(env["other_collection"], env["other_kb"])
         with Session(env["engine"]) as db:
             for model, condition in [
@@ -185,7 +192,8 @@ def ingest_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> It
                 db.execute(sa.delete(model).where(condition))
             db.commit()
         assert not settings.docStoreConn.has_collection(env["other_collection"])
-        assert not any(REDIS_CONN.REDIS.exists(key) for key in keys)
+        assert not any(REDIS_CONN.REDIS.exists(key) for key in [*keys, *image_keys])
+        env["journal"].event("ingest-image-reservation-cleanup-readback", keys=image_keys, absent=True)
         with env["engine"].connect() as db:
             assert db.scalar(sa.select(sa.func.count()).select_from(SourceRecoveryRecord).where(SourceRecoveryRecord.document_id.in_(manifest["document_ids"]))) == 0
             assert db.scalar(sa.select(sa.func.count()).select_from(UserCanvas).where(UserCanvas.id == env["canvas"])) == 0
