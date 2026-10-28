@@ -24,7 +24,9 @@ from sqlalchemy.pool import NullPool
 
 from api.db.db_models import APIToken, Document, Knowledgebase, PipelineOperationLog, Tenant, User, UserTenant, get_async_db
 from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID
+from tests.support.database import scratch_database
 from tests.support.event_loop import UVICORN_LOOP
+from tests.support.resource_journal import ResourceJournal
 from tests.support.uvicorn_runtime import run_server
 
 FIELDS = [{"key": "author", "description": "Author", "enum": ["Alice"], "restrictDefinedValues": True}]
@@ -42,44 +44,53 @@ def sql_state(env: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 @pytest.fixture
-def management_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
+def management_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
     with ExitStack() as cleanup:
+        journal = ResourceJournal("dataset-management-http")
+        evidence = Path(os.environ.get("MULTIRAG_D780_EVIDENCE_DIR", str(tmp_path)))
+        journal.event("reserve-evidence", path=str(evidence))
+        bootstrapped_engine = cleanup.enter_context(scratch_database(evidence))
         from api.apps import app, manager
 
         users = [uuid4().hex for _ in range(3)]
         datasets, documents, logs = ([uuid4().hex for _ in range(count)] for count in [3, 3, 5])
         token_names = ["d780-" + uuid4().hex[:15] for _ in users]
         tokens = ["d780-key-" + uuid4().hex for _ in users]
-        record = {"database": bootstrapped_engine.url.database, "users": users, "datasets": datasets, "documents": documents, "logs": logs, "token_names": token_names}
+        memberships = [uuid4().hex for _ in range(4)]
+        record = {"memberships": memberships, "database": bootstrapped_engine.url.database, "users": users, "datasets": datasets, "documents": documents, "logs": logs, "token_names": token_names}
         evidence = Path(os.environ.get("MULTIRAG_D780_EVIDENCE_DIR", str(tmp_path)))
         evidence.mkdir(parents=True, exist_ok=True)
         record_path = evidence / (users[0] + ".json")
+        journal.event("reserve-sql", **record, borrowed="owned scratch database")
         record_path.write_text(json.dumps(record))
+        reader = sa.create_engine(bootstrapped_engine.url, poolclass=NullPool)
+        cleanup.callback(reader.dispose)
 
         def remove_rows() -> None:
             with bootstrapped_engine.begin() as db:
-                scopes = [(PipelineOperationLog, logs), (Document, documents), (Knowledgebase, datasets), (UserTenant, users), (APIToken, token_names), (Tenant, users), (User, users)]
+                scopes = [(PipelineOperationLog, logs), (Document, documents), (Knowledgebase, datasets), (UserTenant, memberships), (APIToken, token_names), (Tenant, users), (User, users)]
                 for model, ids in scopes:
-                    column = model.user_id if model is UserTenant else model.name if model is APIToken else model.id
+                    column = model.name if model is APIToken else model.id
                     db.execute(sa.delete(model).where(column.in_(ids)))
             # Independent readback after the deletion transaction committed.
-            with bootstrapped_engine.connect() as db:
+            with reader.connect() as db:
                 remaining = {}
                 for model, ids in scopes:
-                    column = model.user_id if model is UserTenant else model.name if model is APIToken else model.id
+                    column = model.name if model is APIToken else model.id
                     remaining[model.__tablename__] = db.scalar(sa.select(sa.func.count()).select_from(model).where(column.in_(ids)))
                 assert not any(remaining.values()), remaining
+            journal.event("sql-cleanup-readback", remaining=remaining)
             record["remaining"] = remaining
             record_path.write_text(json.dumps(record))
 
         cleanup.callback(remove_rows)
         with Session(bootstrapped_engine) as db:
-            for user, name, token in zip(users, token_names, tokens, strict=True):
+            for user, name, token, membership in zip(users, token_names, tokens, memberships[:3], strict=True):
                 db.add(User(id=user, email=f"{user}@d780.test", nickname="HTTP scratch", password="unused", access_token="active"))
                 db.add(Tenant(id=user, name="HTTP scratch", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
-                db.add(UserTenant(id=uuid4().hex, tenant_id=user, user_id=user, role="owner", invited_by=user))
+                db.add(UserTenant(id=membership, tenant_id=user, user_id=user, role="owner", invited_by=user))
                 db.add(APIToken(tenant_id=user, token=token, name=name))
-            db.add(UserTenant(id=uuid4().hex, tenant_id=users[0], user_id=users[2], role="admin", invited_by=users[0]))
+            db.add(UserTenant(id=memberships[3], tenant_id=users[0], user_id=users[2], role="admin", invited_by=users[0]))
             for i, (dataset, doc) in enumerate(zip(datasets, documents, strict=True)):
                 owner = users[0] if i < 2 else users[1]
                 db.add(Knowledgebase(id=dataset, tenant_id=owner, created_by=owner, name="Metadata scratch", embd_id="scratch", parser_id="naive", parser_config=copy.deepcopy(PARSER)))
@@ -120,10 +131,13 @@ def management_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPat
                 yield db
 
         monkeypatch.setitem(app.dependency_overrides, get_async_db, scratch_db)
+        # Pick an exact candidate without allocating a socket, then durably
+        # reserve before bind. A collision fails and cleanup still runs.
+        port = 20000 + int(uuid4().hex[:8], 16) % 40000
+        journal.event("reserve-listener", host="127.0.0.1", port=port, pid=os.getpid())
         listener = socket.socket()
         cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+        listener.bind(("127.0.0.1", port))
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
         env = {
@@ -148,6 +162,7 @@ def management_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPat
             assert not thread.is_alive()
             with socket.socket() as client:
                 assert client.connect_ex(("127.0.0.1", port)) != 0
+            journal.event("listener-cleanup-readback", host="127.0.0.1", port=port, closed=True)
             record["listener_closed"] = True
             record_path.write_text(json.dumps(record))
 
