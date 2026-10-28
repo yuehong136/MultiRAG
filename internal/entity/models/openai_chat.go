@@ -559,13 +559,13 @@ func rejectModelRedirect(*http.Request, []*http.Request) error { return http.Err
 
 // These capabilities are deliberately unavailable in this driver batch.
 func (d *openAIChatDriver) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return nil, fmt.Errorf("openai-compatible: embedding is not implemented")
+	return nil, fmt.Errorf("%w: %s embedding", ErrUnsupportedCapability, d.provider)
 }
 func (d *openAIChatDriver) Rerank(name *string, query string, texts []string, api *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {
-	return nil, fmt.Errorf("openai-compatible: rerank is not implemented")
+	return nil, fmt.Errorf("%w: %s rerank", ErrUnsupportedCapability, d.provider)
 }
 func (d *openAIChatDriver) Balance(api *APIConfig) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("openai-compatible: balance is not implemented")
+	return nil, fmt.Errorf("%w: %s balance", ErrUnsupportedCapability, d.provider)
 }
 func (d *openAIChatDriver) CheckConnection(api *APIConfig) error {
 	_, err := d.ListModels(api)

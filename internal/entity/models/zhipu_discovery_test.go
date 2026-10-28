@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,7 +12,7 @@ import (
 func TestZhipuDiscovery(t *testing.T) {
 	for _, key := range []string{"", "fixture"} {
 		t.Run(key, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v4/models" || r.Method != "GET" {
 					t.Errorf("request %s %s", r.Method, r.URL.Path)
 				}
@@ -29,7 +28,7 @@ func TestZhipuDiscovery(t *testing.T) {
 			defer server.Close()
 			driver := NewZhipuAIModel(map[string]string{"default": server.URL + "/v4/"}, URLSuffix{Models: "models"})
 			got, err := driver.ListModels(&APIConfig{APIKey: &key})
-			if err != nil || !reflect.DeepEqual(got, []string{"glm", "embedding@zhipu"}) {
+			if err != nil || !reflect.DeepEqual(got, []string{"glm", "embedding"}) {
 				t.Fatalf("%v %v", got, err)
 			}
 			region := "unknown"
@@ -43,9 +42,9 @@ func TestZhipuDiscovery(t *testing.T) {
 			}
 		})
 	}
-	for _, body := range []string{`{}`, `{"data":null}`, `{"data":[{}]}`, `{"data":[],"error":{"message":"failed"}}`, `{"data":[]} {}`} {
+	for _, body := range []string{`{}`, `{"data":null}`, `{"data":[{}]}`, `{"data":[{"id":" x"}]}`, `{"data":[{"id":"x"},{"id":"x"}]}`, `{"data":[],"error":{"message":"failed"}}`, `{"data":[]} {}`} {
 		t.Run(body, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
 			defer srv.Close()
 			d := NewZhipuAIModel(map[string]string{"default": srv.URL}, URLSuffix{Models: "models"})
 			if _, err := d.ListModels(nil); err == nil {
@@ -56,7 +55,7 @@ func TestZhipuDiscovery(t *testing.T) {
 }
 
 func TestProviderDiscoveryRejectsHTTPErrorAndOversizedJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte("private provider error"))
 	}))

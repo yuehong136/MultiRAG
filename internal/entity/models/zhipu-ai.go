@@ -379,7 +379,7 @@ func (z *ZhipuAIModel) historyBody(name string, messages []Message, config *Chat
 }
 
 func (z *ZhipuAIModel) historyRequest(apiConfig *APIConfig, body map[string]interface{}) (*http.Response, error) {
-	if apiConfig == nil || apiConfig.APIKey == nil || *apiConfig.APIKey == "" {
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("zhipu-ai: API key is required")
 	}
 	baseURL, err := z.resolveBaseURL(apiConfig.Region)
@@ -395,7 +395,7 @@ func (z *ZhipuAIModel) historyRequest(apiConfig *APIConfig, body map[string]inte
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+*apiConfig.APIKey)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 	resp, err := z.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -502,7 +502,7 @@ func (z *ZhipuAIModel) Embed(modelName *string, texts []string, apiConfig *APICo
 }
 
 func (z *ZhipuAIModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	return listProviderModels(z.httpClient, z.BaseURL, z.URLSuffix.Models, apiConfig, true)
+	return listProviderModels(z.httpClient, z.BaseURL, z.URLSuffix.Models, apiConfig, false)
 }
 
 func (z *ZhipuAIModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {

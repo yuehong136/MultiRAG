@@ -118,3 +118,12 @@ a pool per request-scoped driver. 302.AI and LongCat sender streams have a
 duration limit. Non-streaming requests retain the 120-second call deadline.
 Controlled tests cover custom/nil defaults and
 real loopback requests, without asserting paid supplier or production behavior.
+
+Gitee model discovery is public: a bodyless GET sends no account key and returns
+raw provider IDs. Balance queries use the isolated instance endpoint and bearer
+key; missing or malformed amounts, provider errors, oversized or trailing JSON
+fail without returning a partial balance. Zero and negative balances remain valid.
+Zhipu discovery likewise returns raw IDs so they can be declared through the model
+API. Shared unsupported embedding, rerank and balance methods return
+`ErrUnsupportedCapability` with the provider and operation; optional media/parser
+interfaces continue to describe actual implemented capabilities.

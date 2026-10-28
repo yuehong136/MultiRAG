@@ -50,10 +50,12 @@ func listProviderModels(client *http.Client, urls map[string]string, suffix stri
 		return nil, fmt.Errorf("model discovery returned an error or missing data")
 	}
 	names := make([]string, 0, len(*result.Data))
+	seen := make(map[string]bool, len(*result.Data))
 	for _, item := range *result.Data {
-		if strings.TrimSpace(item.ID) == "" {
-			return nil, fmt.Errorf("model discovery returned an empty ID")
+		if item.ID == "" || strings.TrimSpace(item.ID) != item.ID || seen[item.ID] {
+			return nil, fmt.Errorf("model discovery returned an invalid or duplicate ID")
 		}
+		seen[item.ID] = true
 		name := item.ID
 		if owner && item.OwnedBy != "" {
 			name += "@" + item.OwnedBy

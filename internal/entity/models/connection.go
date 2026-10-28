@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 func checkBearerEndpointConnection(
@@ -14,7 +15,7 @@ func checkBearerEndpointConnection(
 ) error {
 	apiConfig, cancel := modelCallConfig(apiConfig)
 	defer cancel()
-	if apiConfig == nil || apiConfig.APIKey == nil || *apiConfig.APIKey == "" {
+	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return fmt.Errorf("API key is required for %s", providerName)
 	}
 	if suffix == "" {
@@ -28,7 +29,7 @@ func checkBearerEndpointConnection(
 	if err != nil {
 		return fmt.Errorf("create %s connection request: %w", providerName, err)
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
 
 	resp, err := client.Do(req)
 	if err != nil {

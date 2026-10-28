@@ -423,120 +423,85 @@ func (m *GiteeModel) Embed(modelName *string, texts []string, apiConfig *APIConf
 	return embedHTTPWithConfig(m.httpClient, m.BaseURL, m.URLSuffix.Embedding, modelName, texts, apiConfig, embeddingConfig, embeddingHTTPOptions{fallbackRegion: true})
 }
 
-func (m *GiteeModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	apiConfig, cancelCall := modelCallConfig(apiConfig)
-	defer cancelCall()
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
+// getMetadata keeps public discovery separate from authenticated account queries.
+// Instance endpoint maps are already isolated by the service boundary.
+func (m *GiteeModel) getMetadata(suffix, action string, api *APIConfig, authenticated bool) (*http.Response, error) {
+	if authenticated && (api.APIKey == nil || strings.TrimSpace(*api.APIKey) == "") {
+		return nil, fmt.Errorf("gitee: %s API key is required", action)
 	}
-
-	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Models)
-
-	// Build request body
-	reqBody := map[string]interface{}{}
-
-	jsonData, err := json.Marshal(reqBody)
+	if strings.Trim(suffix, "/ ") == "" {
+		return nil, fmt.Errorf("gitee: %s endpoint is missing", action)
+	}
+	base, err := resolveModelBaseURL(m.BaseURL, api.Region)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("gitee: %s region endpoint is missing", action)
 	}
-
-	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(requestContext(api), http.MethodGet, joinModelURL(base, suffix), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("gitee: invalid %s endpoint", action)
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
-
-	resp, err := m.httpClient.Do(req)
+	req.Header.Set("Accept", "application/json")
+	if authenticated {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
+	}
+	client := *m.httpClient
+	client.CheckRedirect = rejectModelRedirect
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
-	}
-
-	// Parse response
-	var modelList providerModelList
-	if err = json.Unmarshal(body, &modelList); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	var models []string
-	for _, model := range modelList.Models {
-		modelName := model.ID
-		if model.OwnedBy != "" {
-			modelName = model.ID + "@" + model.OwnedBy
+		if err := requestContext(api).Err(); err != nil {
+			return nil, err
 		}
-		models = append(models, modelName)
+		return nil, fmt.Errorf("gitee: %s request failed", action)
 	}
-
-	return models, nil
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("gitee: %s request failed (HTTP %d)", action, resp.StatusCode)
+	}
+	return resp, nil
 }
 
-func (m *GiteeModel) Balance(apiConfig *APIConfig) (map[string]interface{}, error) {
-	apiConfig, cancelCall := modelCallConfig(apiConfig)
-	defer cancelCall()
-	var region = "default"
-	if apiConfig != nil && apiConfig.Region != nil && *apiConfig.Region != "" {
-		region = *apiConfig.Region
-	}
-
-	url := fmt.Sprintf("%s/%s", m.BaseURL[region], m.URLSuffix.Balance)
-
-	// Build request body
-	reqBody := map[string]interface{}{}
-
-	jsonData, err := json.Marshal(reqBody)
+func (m *GiteeModel) ListModels(api *APIConfig) ([]string, error) {
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	resp, err := m.getMetadata(m.URLSuffix.Models, "discovery", local, false)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *apiConfig.APIKey))
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	names, err := strictProviderModelNames(resp.Body)
+	if ctxErr := requestContext(local).Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("gitee: invalid discovery response")
 	}
+	return names, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
+func (m *GiteeModel) Balance(api *APIConfig) (map[string]interface{}, error) {
+	local, cancel := modelCallConfig(api)
+	defer cancel()
+	resp, err := m.getMetadata(m.URLSuffix.Balance, "balance", local, true)
+	if err != nil {
+		return nil, err
 	}
-
-	// Parse response
-	var result map[string]interface{}
-	if err = json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	defer resp.Body.Close()
+	var payload struct {
+		Balance *float64        `json:"balance"`
+		Error   json.RawMessage `json:"error"`
+		Code    json.RawMessage `json:"code"`
 	}
-
-	balance := result["balance"].(float64)
-
-	var response = map[string]interface{}{
-		"balance":  balance,
-		"currency": "CNY",
+	err = decodeBoundedModelJSON(resp.Body, &payload)
+	if ctxErr := requestContext(local).Err(); ctxErr != nil {
+		return nil, ctxErr
 	}
-
-	return response, nil
+	if err != nil || payload.Balance == nil || len(payload.Error) > 0 && string(payload.Error) != "null" {
+		return nil, fmt.Errorf("gitee: invalid balance response")
+	}
+	if err := validateModelResponseCode(payload.Code); err != nil {
+		return nil, fmt.Errorf("gitee: balance provider error")
+	}
+	return map[string]interface{}{"balance": *payload.Balance, "currency": "CNY"}, nil
 }
 
 func (m *GiteeModel) CheckConnection(apiConfig *APIConfig) error {
