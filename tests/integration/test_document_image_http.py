@@ -243,3 +243,99 @@ def test_authenticated_image_http_full_storage_no_writes(image_http_api: dict[st
     smoke = subprocess.run(smoke_command(), env={**os.environ, "SMOKE_BASE_URL": env["base"]}, capture_output=True, text=True, timeout=60)
     path.with_suffix(".smoke.log").write_text(smoke.stdout + smoke.stderr + f"\nexit={smoke.returncode}\n")
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
+
+
+def test_file_download_strict_reads_and_zero_bytes(image_http_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real file route, SQL provenance, native objects and independent readback."""
+    from sqlalchemy.orm import Session
+
+    from api.db.db_models import File, File2Document
+    from common.constants import FileSource
+    from tests.support.document_image_read_service import _snapshot
+
+    env, ids = image_http_api, image_http_api["ids"]
+    _setup(env)
+    kinds = ["zero", "fallback", "fallbackzero", "missing", "denied"]
+    files = {kind: uuid4().hex for kind in kinds}
+    docs = {kind: uuid4().hex for kind in kinds}
+    links = {kind: uuid4().hex for kind in kinds}
+    root = env["manifest"]["file_ids"][0]
+    env["manifest"]["file_ids"].extend(files.values())
+    env["manifest"]["documents"].update({"file-download-" + key: value for key, value in docs.items()})
+    env["manifest"]["file_download_links"] = links
+    env["register"]()
+    with Session(env["engine"]) as db:
+        for kind in kinds:
+            owner = ids["other"] if kind == "denied" else ids["owner"]
+            db.add(File(id=files[kind], parent_id=root, tenant_id=owner, created_by=owner, name=kind + ".txt", type="doc", location=kind, source_type=FileSource.KNOWLEDGEBASE))
+            db.add(Document(id=docs[kind], kb_id=ids["foreign"] if kind == "denied" else ids["kb"], created_by=owner, name=kind + ".txt", type="doc", parser_id="naive", location="download-" + kind))
+            db.add(File2Document(id=links[kind], file_id=files[kind], document_id=docs[kind]))
+        db.commit()
+    for namespace, key, data in [(root, "zero", b""), (ids["kb"], "download-fallback", b"fallback"), (ids["kb"], "download-fallbackzero", b"")]:
+        env["storage"].put(namespace, key, data)
+    before = _snapshot(env)
+    evidence: dict[str, Any] = {"before": before, "calls": [], "reads": [], "writes": []}
+    path = env["evidence"] / f"{ids['kb']}.file-download.json"
+    _save(path, evidence)
+    original = env["storage"].get_bytes
+
+    def read(namespace: str, key: str) -> bytes | None:
+        evidence["reads"].append([namespace, key])
+        return original(namespace, key)
+
+    def forbid(*args: Any, **kwargs: Any) -> Any:
+        evidence["writes"].append("forbidden storage or queue operation")
+        raise AssertionError("download reached a forbidden operation")
+
+    def sql_guard(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        if statement.lstrip().split()[0].upper() in {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"}:
+            evidence["writes"].append(statement)
+            raise AssertionError("download attempted SQL mutation")
+
+    def download(kind: str, role: str | None = "owner") -> requests.Response:
+        headers = {"Authorization": "Bearer " + env["tokens"][role]} if role else {}
+        response = requests.get(env["base"] + "/api/v1/files/" + files[kind], headers=headers, timeout=30)
+        evidence["calls"].append({"kind": kind, "role": role, "status": response.status_code, "body": response.content, "headers": dict(response.headers)})
+        _save(path, evidence)
+        return response
+
+    with monkeypatch.context() as guard:
+        guard.setattr(env["storage"], "get_bytes", read)
+        for target, name in [(env["storage"], "get"), (env["storage"], "put"), (env["storage"], "rm"), (REDIS_CONN, "queue_product")]:
+            guard.setattr(target, name, forbid)
+        for engine in [env["engine"], env["async_engine"].sync_engine]:
+            sa.event.listen(engine, "before_cursor_execute", sql_guard)
+        try:
+            # The image fixture registers its malformed JWT as a valid API key.
+            # Ordinary files deliberately accept API keys, so use an unknown key.
+            for role in [None, "unknown"]:
+                response = download("zero", role)
+                assert response.status_code == 401 and response.json()["retcode"] == 109
+            for kind, role in [("zero", "other"), ("denied", "owner")]:
+                response = download(kind, role)
+                assert response.status_code == 200 and response.json()["code"] == 102
+            assert evidence["reads"] == []
+            for kind, data, reads in [("zero", b"", 1), ("fallback", b"fallback", 2), ("fallbackzero", b"", 2)]:
+                evidence["reads"].clear()
+                response = download(kind)
+                assert response.status_code == 200 and response.content == data
+                assert "attachment" in response.headers["content-disposition"] and len(evidence["reads"]) == reads
+            evidence["reads"].clear()
+            response = download("missing")
+            assert response.status_code == 404 and response.json() == {"code": 102, "message": "File not found in storage", "data": None}
+            assert len(evidence["reads"]) == 2
+
+            def unavailable(*args: Any, **kwargs: Any) -> Any:
+                raise OSError("private transport detail")
+
+            with monkeypatch.context() as fault:
+                fault.setattr(env["adapter"].conn, "get_object", unavailable)
+                response = download("zero")
+                assert response.status_code == 503 and response.json() == {"code": 500, "message": "File could not be read", "data": None}
+        finally:
+            for engine in [env["engine"], env["async_engine"].sync_engine]:
+                sa.event.remove(engine, "before_cursor_execute", sql_guard)
+    evidence["after"] = _snapshot(env)
+    evidence["unchanged"] = before == evidence["after"]
+    _save(path, evidence)
+    assert evidence["unchanged"] and evidence["writes"] == []

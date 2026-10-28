@@ -204,9 +204,11 @@ class _FakeStorage:
         self.blobs = blobs
         self.calls: list[dict] = []
 
-    def get(self, bucket, name):
+    def get_bytes(self, bucket, name):
         self.calls.append({"bucket": bucket, "name": name, "off_loop": threading.current_thread() is not threading.main_thread()})
         return self.blobs.get((bucket, name))
+
+    get = get_bytes
 
 
 def test_file_download_streams_blob_off_loop(client, monkeypatch):
@@ -244,6 +246,48 @@ def test_file_download_falls_back_to_document_address(client, monkeypatch):
     assert resp.content == b"fallback"
     assert [(c["bucket"], c["name"]) for c in storage.calls] == [("pf-1", "gone.txt"), ("kb-bucket", "doc-loc")]
     _assert_sync_facade(records)
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_file_download_zero_bytes_are_valid(client: Any, monkeypatch: pytest.MonkeyPatch, fallback: bool) -> None:
+    monkeypatch.setattr(file_api_service, "get_file_content", lambda *args: (True, SimpleNamespace(parent_id="pf-1", location="empty", name="empty.txt", type="doc")))
+    addresses: list[str] = []
+    monkeypatch.setattr(File2DocumentService, "get_storage_address", classmethod(lambda cls, s, file_id: addresses.append(file_id) or ("kb", "empty-fallback")))
+    storage = _FakeStorage({("kb", "empty-fallback") if fallback else ("pf-1", "empty"): b""})
+    client.app.dependency_overrides[deps.get_storage] = lambda: storage
+    response = client.get("/api/v1/files/f-1")
+    assert response.status_code == 200 and response.content == b""
+    assert response.headers["content-disposition"] == "attachment; filename=empty.txt"
+    assert len(storage.calls) == (2 if fallback else 1)
+    assert addresses == (["f-1"] if fallback else [])
+
+
+@pytest.mark.parametrize("mode", ["missing", "transport", "invalid", "legacy", "fallback-transport"])
+def test_file_download_missing_and_uncertain_reads(client: Any, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    monkeypatch.setattr(file_api_service, "get_file_content", lambda *args: (True, SimpleNamespace(parent_id="pf-1", location="gone", name="gone.txt", type="doc")))
+    addresses: list[str] = []
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(File2DocumentService, "get_storage_address", classmethod(lambda cls, s, file_id: addresses.append(file_id) or ("kb", "gone")))
+
+    def read(bucket: str, key: str) -> Any:
+        calls.append((bucket, key))
+        if mode == "transport" or (mode == "fallback-transport" and bucket == "kb"):
+            raise OSError("private storage details")
+        return "not bytes" if mode == "invalid" else None
+
+    def forbidden(*args: Any) -> Any:
+        pytest.fail("download reached legacy storage or wrote storage")
+
+    storage = SimpleNamespace(get=forbidden, put=forbidden, rm=forbidden)
+    if mode != "legacy":
+        storage.get_bytes = read
+    client.app.dependency_overrides[deps.get_storage] = lambda: storage
+    response = client.get("/api/v1/files/f-1")
+    assert response.status_code == (404 if mode == "missing" else 503)
+    assert response.json()["code"] != 0 and response.json()["data"] is None
+    assert "private" not in response.text and "content-disposition" not in response.headers
+    assert addresses == (["f-1"] if mode in {"missing", "fallback-transport"} else [])
+    assert len(calls) == (0 if mode == "legacy" else 2 if mode in {"missing", "fallback-transport"} else 1)
 
 
 def test_file_download_denied(client, monkeypatch):

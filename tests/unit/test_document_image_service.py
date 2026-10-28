@@ -57,8 +57,9 @@ def test_invalid_image_id(value: str) -> None:
         service._split_image_id(value)
 
 
-def test_first_hyphen_preserves_key() -> None:
-    assert service._split_image_id("kb-page-crop-name.png") == ("kb", "page-crop-name.png")
+@pytest.mark.parametrize("key", ["page-crop-name.png", "page-", "-"])
+def test_first_hyphen_preserves_key(key: str) -> None:
+    assert service._split_image_id(f"kb-{key}") == ("kb", key)
 
 
 @pytest.mark.parametrize("ids", [[], [""], [" "], ["doc"] * 101])

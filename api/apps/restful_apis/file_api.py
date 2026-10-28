@@ -311,13 +311,21 @@ async def download(
         if meta is None:
             return get_error_data_result(retmsg=err)
 
-        # 存储读取是同步 IO：to_thread 外移避免阻塞事件循环
-        blob = await asyncio.to_thread(storage.get, meta["parent_id"], meta["location"])
-        if not blob:
-            b, n = await db.run_sync(lambda s: File2DocumentService.get_storage_address(s, file_id=file_id))  # TODO(async-phase4)
-            blob = await asyncio.to_thread(storage.get, b, n)
-        if not blob:
-            return get_error_data_result(retmsg="File not found in storage")
+        # Only a strict read can distinguish absent content from backend failure.
+        try:
+            read = getattr(storage, "get_bytes", None)
+            if not callable(read):
+                raise TypeError("Storage does not support strict object reads")
+            blob = await asyncio.to_thread(read, meta["parent_id"], meta["location"])
+            if blob is None:
+                b, n = await db.run_sync(lambda s: File2DocumentService.get_storage_address(s, file_id=file_id))  # TODO(async-phase4)
+                blob = await asyncio.to_thread(read, b, n)
+            if blob is not None and not isinstance(blob, bytes):
+                raise TypeError("Invalid file bytes")
+        except Exception:
+            return JSONResponse(status_code=503, content={"code": RetCode.SERVER_ERROR, "message": "File could not be read", "data": None})
+        if blob is None:
+            return JSONResponse(status_code=404, content={"code": RetCode.DATA_ERROR, "message": "File not found in storage", "data": None})
 
         ext = re.search(r"\.([^.]+)$", meta["name"].lower())
         ext = ext.group(1) if ext else None

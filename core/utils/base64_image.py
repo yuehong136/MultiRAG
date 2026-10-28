@@ -1,7 +1,6 @@
 import base64
 import logging
 from collections.abc import Callable
-from functools import partial
 from io import BytesIO
 from typing import Any
 
@@ -76,13 +75,21 @@ async def image2id(d: dict[str, Any], storage_put_func: Callable[..., Any], objn
     del d["image"]
 
 
-def id2image(image_id: str | None, storage_get_func: partial):
+def parse_storage_composite_id(composite_id: str) -> tuple[str, str] | None:
+    """Split image2id's bucket-key ID, preserving the opaque object key."""
+    bucket, separator, key = composite_id.partition("-")
+    if not separator or not bucket or not key:
+        return None
+    return bucket, key
+
+
+def id2image(image_id: str | None, storage_get_func: Callable[..., bytes | None]) -> Image.Image | None:
     if not image_id:
-        return
-    arr = image_id.split("-")
-    if len(arr) != 2:
-        return
-    bkt, nm = image_id.split("-")
+        return None
+    parsed = parse_storage_composite_id(image_id)
+    if parsed is None:
+        return None
+    bkt, nm = parsed
     try:
         blob = storage_get_func(bucket=bkt, filename=nm)
         if not blob:
