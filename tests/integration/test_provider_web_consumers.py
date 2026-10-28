@@ -5,11 +5,16 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
@@ -121,7 +126,73 @@ def _pinned_checkout() -> tuple[Path, str]:
     return checkout, web_sha
 
 
-def test_actual_web_provider_instances_and_foreign_denials(rest_documents: dict[str, Any], tmp_path: Path, record_property: Callable[[str, object], None]) -> None:
+@pytest.fixture
+def provider_probe_http() -> Iterator[tuple[list[str], list[dict[str, str]]]]:
+    """Use the active OpenAI-compatible adapter against owned real HTTP."""
+    journal = ResourceJournal("web-provider-probe-http")
+    calls: list[dict[str, str]] = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            model = payload["model"]
+            calls.append({"path": self.path, "model": model})
+            assert self.path.endswith("/chat/completions")
+            body = json.dumps(
+                {
+                    "id": "fixture",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    with ExitStack() as cleanup:
+        for _attempt in range(32):
+            port = 30000 + int(uuid4().hex[:4], 16) % 20000
+            address = ("127.0.0.1", port)
+            journal.event("reserve-listener", address=list(address))
+            server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+            cleanup.callback(server.server_close)
+            try:
+                server.server_bind()
+                break
+            except OSError:
+                server.server_close()
+        else:
+            raise RuntimeError("No owned provider listener available")
+        server.server_activate()
+        thread = threading.Thread(target=server.serve_forever, name="web-provider-probe")
+        journal.event("reserve-thread", name=thread.name, listener=list(address))
+
+        def stop() -> None:
+            if thread.ident is not None:
+                server.shutdown()
+                thread.join(timeout=5)
+            server.server_close()
+            with socket.socket() as probe:
+                absent = probe.connect_ex(address) != 0
+            journal.event("provider-cleanup-readback", address=list(address), listener_absent=absent, thread_absent=not thread.is_alive(), calls=calls)
+            assert absent and not thread.is_alive()
+
+        cleanup.callback(stop)
+        thread.start()
+        yield [f"http://127.0.0.1:{port}/{lane}/v1" for lane in ("first", "second")], calls
+
+
+def test_actual_web_provider_instances_and_foreign_denials(
+    rest_documents: dict[str, Any], provider_probe_http: tuple[list[str], list[dict[str, str]]], tmp_path: Path, record_property: Callable[[str, object], None]
+) -> None:
     from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
     from api.db.joint_services.tenant_model_service import get_model_config_by_id
 
@@ -144,6 +215,7 @@ def test_actual_web_provider_instances_and_foreign_denials(rest_documents: dict[
         "ownerTokenFile": str(files[0]),
         "foreignTokenFile": str(files[1]),
         "providerKeyFile": str(files[2]),
+        "providerBaseURLs": provider_probe_http[0],
         "owners": {"ownerId": env["owners"][0], "foreignId": env["owners"][1]},
         "providerName": "OpenAI-API-Compatible",
         "instanceNames": ["web-first-" + journal.run_id[:12], "web-second-" + journal.run_id[:12]],
@@ -167,6 +239,10 @@ def test_actual_web_provider_instances_and_foreign_denials(rest_documents: dict[
         _private_file(files[2], json.dumps(keys), journal, owned_files)
         _private_file(descriptor_path, json.dumps(descriptor), journal, owned_files)
         result = _consumer(checkout, descriptor_path, "owner", evidence, journal)
+        assert len(provider_probe_http[1]) == 4
+        assert {call["path"] for call in provider_probe_http[1]} == {"/first/v1/chat/completions", "/second/v1/chat/completions"}
+        assert {call["model"] for call in provider_probe_http[1]} == {descriptor["modelName"]}
+        journal.event("actual-web-create-provider-probes", calls=provider_probe_http[1], verify_and_create_each_revalidated=True)
         _private_file(files[3], json.dumps(result), journal, owned_files)
         identifier = result["modelIds"]["surviving"]
         deleted_id = result["modelIds"]["deleted"]

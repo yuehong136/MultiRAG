@@ -261,13 +261,59 @@ jobs:
           for command in multirag_cli server_main admin_server; do
             go build -o ".test-results/go/bin/$command" "./cmd/$command.go"
           done
+      - name: Prepare owned management regression database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+          PG_PORT: ${{ job.services.postgres.ports[5432] }}
+          PGHOST: 127.0.0.1
+          PGPORT: ${{ job.services.postgres.ports[5432] }}
+          PGUSER: ci_go
+          PGPASSWORD: '123456'
+          PGDATABASE: postgres
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('.test-results/go/after33-database.json').write_text(json.dumps({
+              'database': 'multirag_after33_g_ci', 'host': '127.0.0.1',
+              'port': int(os.environ['PG_PORT']), 'container': os.environ['PG_CONTAINER'],
+              'status': 'registered-before-create', 'borrowed_service': True,
+          }, indent=2))
+          PY
+          psql -v ON_ERROR_STOP=1 -c 'CREATE DATABASE multirag_after33_g_ci'
       - name: Go race regression (live opt-ins remain explicit)
         env:
           MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_go_models_a_skills_ci?sslmode=disable
+          MULTIRAG_AFTER33_G_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_after33_g_ci?sslmode=disable
+          MULTIRAG_AFTER33_CLI: ${{ github.workspace }}/.test-results/go/bin/multirag_cli
         run: |
           set -euo pipefail
           go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
           python3 scripts/ci_checks.py go-audit --reports .test-results/go
+      - name: Drop owned management regression database
+        if: always()
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: ${{ job.services.postgres.ports[5432] }}
+          PGUSER: ci_go
+          PGPASSWORD: '123456'
+          PGDATABASE: postgres
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS multirag_after33_g_ci WITH (FORCE)'
+          remaining=$(psql -At \
+            -c "SELECT count(*) FROM pg_database WHERE datname = 'multirag_after33_g_ci'")
+          test "$remaining" = 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('.test-results/go/after33-database.json')
+          record = json.loads(path.read_text()) if path.exists() else {'database': 'multirag_after33_g_ci'}
+          record.update(status='cleaned', independent_database_absent=True)
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(record, indent=2))
+          PY
       - name: MinIO diagnostics and cleanup
         if: always()
         run: |

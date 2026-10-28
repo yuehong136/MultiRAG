@@ -37,6 +37,20 @@ go build -o multirag_cli ./cmd/multirag_cli.go
 Connection flags: `-h host[:port]`, `-u/--user`, `-p/--password`, `-t/--token`,
 `-f/--config <multirag.yml>`, `-o/--output table|plain|json`, `--admin`.
 
+### Provider credential checks
+
+User mode can check a provider without saving an instance:
+
+```sql
+CHECK PROVIDER 'vllm' REGION 'default' KEY '' URL 'http://localhost:8000/v1';
+```
+
+Region, key and optional base URL reach the Go provider connection endpoint.
+Unknown regions fail. Credential commands are omitted from REPL history, and
+single-command failures return a nonzero exit without displaying provider bodies
+or credentials. A terminating semicolon is required by the parser; single-command
+mode follows its existing automatic semicolon behavior.
+
 ### Dataset chunks and metadata
 
 User-mode chunk reads and updates require the dataset and document identity.
