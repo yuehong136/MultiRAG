@@ -182,3 +182,17 @@ func TestCustomModelBoundaryBeforeDatabase(t *testing.T) {
 		t.Fatalf("zero did not survive stored metadata: %v", err)
 	}
 }
+
+func TestCustomModelRejectsNullAndDuplicateInventories(t *testing.T) {
+	for _, raw := range []string{
+		`{"model_name":"x","model_type":"chat","model_types":null,"max_tokens":0}`,
+		`{"model_name":"x","model_type":"chat","model_type":"embedding","max_tokens":0}`,
+		`{"model_name":null,"model_type":"chat","max_tokens":0}`,
+		`{"model_name":"x","model_types":["chat"],"max_tokens":0,"max_tokens":1}`,
+	} {
+		var request AddCustomModelRequest
+		if json.Unmarshal([]byte(raw), &request) == nil {
+			t.Fatal("accepted ambiguous declaration", raw)
+		}
+	}
+}

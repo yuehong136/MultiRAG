@@ -16,7 +16,10 @@
 
 package cli
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // ResponseIf is the unified result of a command execution. Command functions
 // return a ResponseIf and the central loop calls PrintOut to render it, instead
@@ -65,11 +68,29 @@ func (r *CommonDataResponse) SetOutputFormat(format OutputFormat) { r.outputForm
 
 func (r *CommonDataResponse) PrintOut() {
 	if r.Code == 0 {
-		PrintTableSimpleByFormat([]map[string]interface{}{r.Data}, r.outputFormat)
+		if r.outputFormat == OutputFormatJSON {
+			PrintTableSimpleByFormat([]map[string]interface{}{r.Data}, r.outputFormat)
+			return
+		}
+		PrintTableSimpleByFormat(objectFieldRows(r.Data), r.outputFormat)
 	} else {
 		fmt.Println("ERROR")
 		fmt.Printf("%d, %s\n", r.Code, r.Message)
 	}
+}
+
+// objectFieldRows keeps SHOW output compact and ordered without changing JSON.
+func objectFieldRows(data map[string]interface{}) []map[string]interface{} {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	rows := make([]map[string]interface{}, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, map[string]interface{}{"field": key, "value": data[key]})
+	}
+	return rows
 }
 
 // SimpleResponse carries no payload (e.g. DROP / GRANT / ALTER).

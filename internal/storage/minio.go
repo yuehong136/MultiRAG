@@ -198,9 +198,16 @@ func (m *MinioStorage) Get(bucket, fnm string, tenantID ...string) ([]byte, erro
 
 // Remove removes an object from MinIO
 func (m *MinioStorage) Remove(bucket, fnm string, tenantID ...string) error {
+	return m.RemoveContext(context.Background(), bucket, fnm, tenantID...)
+}
+
+// RemoveContext propagates cancellation through the object deletion.
+func (m *MinioStorage) RemoveContext(ctx context.Context, bucket, fnm string, tenantID ...string) error {
 	bucket, fnm = m.resolveBucketAndPath(bucket, fnm)
 
-	ctx := context.Background()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if err := m.client.RemoveObject(ctx, bucket, fnm, minio.RemoveObjectOptions{}); err != nil {
 		common.Warn("Failed to remove object", zap.String("bucket", bucket), zap.String("key", fnm), zap.Error(err))

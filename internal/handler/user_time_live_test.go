@@ -118,7 +118,7 @@ func TestUserTimeHTTPCLIAndSQL(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 	app := gin.New()
 	app.Use(gin.Recovery())
-	routes := router.NewRouter(handler.NewAuthHandler(), userHandler, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	routes := router.NewRouter(handler.NewAuthHandler(), userHandler, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	routes.Setup(app)
 	api := httptest.NewServer(app)
 	t.Cleanup(func() { api.Close(); t.Log("owned-http-resource-closed", api.URL) })

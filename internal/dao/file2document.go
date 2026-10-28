@@ -17,6 +17,9 @@
 package dao
 
 import (
+	"fmt"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"multirag/internal/entity"
 )
 
@@ -69,4 +72,26 @@ func (dao *File2DocumentDAO) GetByFileID(fileID string) ([]*entity.File2Document
 // DeleteByFileID deletes file2document mappings by file ID
 func (dao *File2DocumentDAO) DeleteByFileID(fileID string) error {
 	return DB.Unscoped().Where("file_id = ?", fileID).Delete(&entity.File2Document{}).Error
+}
+
+// CreateInTransaction shares the document/dataset/file lock protocol with deletion.
+// The caller owns tx and commits the link while both parent rows remain locked.
+func (dao *File2DocumentDAO) CreateInTransaction(tx *gorm.DB, mapping *entity.File2Document) error {
+	if tx == nil || mapping == nil || mapping.ID == "" || mapping.FileID == nil || *mapping.FileID == "" || mapping.DocumentID == nil || *mapping.DocumentID == "" {
+		return fmt.Errorf("complete file/document mapping required")
+	}
+	var document entity.Document
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", *mapping.DocumentID).Take(&document).Error; err != nil {
+		return err
+	}
+	// KB counters and deletion take the dataset lock before shared File rows.
+	var dataset entity.Knowledgebase
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", document.KbID).Take(&dataset).Error; err != nil {
+		return err
+	}
+	var file entity.File
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", *mapping.FileID).Take(&file).Error; err != nil {
+		return err
+	}
+	return tx.Create(mapping).Error
 }

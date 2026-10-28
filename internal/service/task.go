@@ -124,8 +124,27 @@ func (s *TaskService) Cancel(ctx context.Context, taskID, userID string) error {
 	flagWritten := false
 	previousBinding := ""
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Document workers and deletion lock Document -> Task. Read the target
+		// without a lock first, then lock the document before the task row.
+		var snapshot entity.Task
+		peekErr := tx.Where("id = ?", taskID).Take(&snapshot).Error
+		if peekErr != nil && !errors.Is(peekErr, gorm.ErrRecordNotFound) {
+			return peekErr
+		}
+		if peekErr == nil && snapshot.DocID != "dataflow_x" && snapshot.DocID != "graph_raptor_x" {
+			var lockedDoc entity.Document
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ?", snapshot.DocID, "1").Take(&lockedDoc).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrTaskForbidden
+				}
+				return err
+			}
+		}
 		var task entity.Task
 		taskErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", taskID).Take(&task).Error
+		if taskErr == nil && peekErr == nil && task.DocID != snapshot.DocID {
+			return ErrTaskForbidden
+		}
 		hasTask := taskErr == nil
 		if taskErr != nil && !errors.Is(taskErr, gorm.ErrRecordNotFound) {
 			return taskErr

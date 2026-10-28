@@ -34,7 +34,6 @@ type Router struct {
 	systemHandler        *handler.SystemHandler
 	knowledgebaseHandler *handler.KnowledgebaseHandler
 	chunkHandler         *handler.ChunkHandler
-	llmHandler           *handler.LLMHandler
 	chatHandler          *handler.ChatHandler
 	chatSessionHandler   *handler.ChatSessionHandler
 	connectorHandler     *handler.ConnectorHandler
@@ -57,7 +56,6 @@ func NewRouter(
 	systemHandler *handler.SystemHandler,
 	knowledgebaseHandler *handler.KnowledgebaseHandler,
 	chunkHandler *handler.ChunkHandler,
-	llmHandler *handler.LLMHandler,
 	chatHandler *handler.ChatHandler,
 	chatSessionHandler *handler.ChatSessionHandler,
 	connectorHandler *handler.ConnectorHandler,
@@ -76,7 +74,6 @@ func NewRouter(
 		systemHandler:        systemHandler,
 		knowledgebaseHandler: knowledgebaseHandler,
 		chunkHandler:         chunkHandler,
-		llmHandler:           llmHandler,
 		chatHandler:          chatHandler,
 		chatSessionHandler:   chatSessionHandler,
 		connectorHandler:     connectorHandler,
@@ -120,6 +117,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 		public.GET("/auth/login/channels", r.userHandler.GetLoginChannels)
 		public.GET("/auth/login/:channel", r.userHandler.OAuthLogin)
 		public.GET("/auth/oauth/:channel/callback", r.userHandler.OAuthCallback)
+		public.GET("/connectors/google-drive/oauth/web/callback", r.connectorHandler.GoogleDriveWebOAuthCallback)
+		public.GET("/connectors/gmail/oauth/web/callback", r.connectorHandler.GmailWebOAuthCallback)
 	}
 	// Protected routes
 	authorized := engine.Group("")
@@ -140,6 +139,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authorized.POST("/api/v1/tenants/:tenant_id/users", r.tenantHandler.AddTenantMember)
 		authorized.DELETE("/api/v1/tenants/:tenant_id/users", r.tenantHandler.RemoveTenantMember)
 		authorized.GET("/api/v1/tenant/list", r.tenantHandler.TenantList)
+		authorized.POST("/api/v1/connectors/google/oauth/web/start", r.connectorHandler.StartGoogleWebOAuth)
+		authorized.POST("/api/v1/connectors/google/oauth/web/result", r.connectorHandler.PollGoogleWebOAuthResult)
 		authorized.GET("/api/v1/connectors/", r.connectorHandler.ListConnectors)
 		authorized.POST("/api/v1/connectors/", r.connectorHandler.CreateConnector)
 		authorized.PATCH("/api/v1/connectors/:connector_id", r.connectorHandler.UpdateConnector)
@@ -187,7 +188,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 				documents.GET("", r.documentHandler.ListDocuments)
 				documents.GET("/:id", r.documentHandler.GetDocumentByID)
 				documents.PUT("/:id", r.documentHandler.UpdateDocument)
-				documents.DELETE("/:id", r.documentHandler.DeleteDocument)
 			}
 
 			v1.GET("/thumbnails", r.documentHandler.GetThumbnails)
@@ -196,6 +196,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			// RESTful dataset routes
 			datasets := v1.Group("/datasets")
 			{
+				datasets.DELETE("/:dataset_id/documents", r.documentHandler.DeleteDocuments)
 				datasets.GET("", r.datasetsHandler.ListDatasets)
 				datasets.GET("/:dataset_id", r.datasetsHandler.GetDataset)
 				datasets.GET("/:dataset_id/ingestions/summary", r.datasetsHandler.GetIngestionSummary)
@@ -368,15 +369,6 @@ func (r *Router) Setup(engine *gin.Engine) {
 			chunk.POST("/list", r.chunkHandler.List)
 			authorized.POST("/api/v1/chunk/update", r.chunkHandler.UpdateChunk) // Internal API only for GO
 			authorized.DELETE("/api/v1/datasets/:dataset_id/documents/:document_id/chunks", r.chunkHandler.RemoveChunks)
-		}
-
-		// LLM routes
-		llm := authorized.Group("/v1/llm")
-		{
-			llm.GET("/my_llms", r.llmHandler.GetMyLLMs)
-			llm.GET("/factories", r.llmHandler.Factories)
-			llm.GET("/list", r.llmHandler.ListApp)
-			llm.POST("/set_api_key", r.llmHandler.SetAPIKey)
 		}
 
 		// Chat routes

@@ -374,12 +374,13 @@ func (h *ProviderHandler) ShowInstanceBalance(c *gin.Context) {
 
 	userID := c.GetString("user_id")
 
-	balance, errorCode, err := h.modelProviderService.ShowInstanceBalance(providerName, instanceName, userID)
+	balance, errorCode, err := h.modelProviderService.ShowInstanceBalance(c.Request.Context(), providerName, instanceName, userID)
 	if err != nil || errorCode != common.CodeSuccess {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    errorCode,
-			"message": err.Error(),
-		})
+		message := "Unable to read provider balance"
+		if err != nil && errorCode != common.CodeServerError {
+			message = err.Error()
+		}
+		c.JSON(http.StatusOK, gin.H{"code": errorCode, "message": message})
 		return
 	}
 

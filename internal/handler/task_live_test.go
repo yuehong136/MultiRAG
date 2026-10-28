@@ -101,7 +101,7 @@ func TestTaskLiveServer(t *testing.T) {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	taskHandler := handler.NewTaskHandler(service.NewTaskService(db, r))
-	appRouter := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, taskHandler)
+	appRouter := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, taskHandler)
 	appRouter.Setup(engine)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

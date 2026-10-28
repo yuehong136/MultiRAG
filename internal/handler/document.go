@@ -162,42 +162,6 @@ func (h *DocumentHandler) UpdateDocument(c *gin.Context) {
 	})
 }
 
-// DeleteDocument delete document
-// @Summary Delete Document
-// @Description Delete specified document
-// @Tags documents
-// @Accept json
-// @Produce json
-// @Param id path int true "document ID"
-// @Success 200 {object} map[string]interface{}
-// @Router /api/v1/documents/{id} [delete]
-func (h *DocumentHandler) DeleteDocument(c *gin.Context) {
-	_, errorCode, errorMessage := GetUser(c)
-	if errorCode != common.CodeSuccess {
-		jsonError(c, errorCode, errorMessage)
-		return
-	}
-
-	id := c.Param("id")
-	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid document id",
-		})
-		return
-	}
-
-	if err := h.documentService.DeleteDocument(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "deleted successfully",
-	})
-}
-
 // ListDocuments document list
 // @Summary Document List
 // @Description Get paginated document list

@@ -11,9 +11,9 @@ import (
 	"strings"
 )
 
-// initializeTenantModels uses only the configured defaults and their own credentials.
+// InitializeTenantModels uses only the configured defaults and their own credentials.
 // All rows and default references participate in the registration transaction.
-func initializeTenantModels(tx *gorm.DB, tenant *entity.Tenant, models server.DefaultModelsConfig) error {
+func InitializeTenantModels(tx *gorm.DB, tenant *entity.Tenant, models server.DefaultModelsConfig) error {
 	providers := map[string]string{}
 	entries := []struct {
 		typ    string

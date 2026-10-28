@@ -26,16 +26,19 @@ import (
 	"sort"
 	"strings"
 
+	"multirag/internal/cache"
 	"multirag/internal/dao"
 	"multirag/internal/engine"
 	"multirag/internal/entity"
 	"multirag/internal/server"
+	"multirag/internal/storage"
 
 	"gorm.io/gorm"
 )
 
 // DocumentService document service
 type DocumentService struct {
+	deletion    *DocumentDeleteService
 	db          *gorm.DB
 	documentDAO *dao.DocumentDAO
 	kbDAO       *dao.KnowledgebaseDAO
@@ -168,9 +171,21 @@ func (s *DocumentService) UpdateDocument(id string, req *UpdateDocumentRequest) 
 	return s.documentDAO.Update(document)
 }
 
-// DeleteDocument delete document
-func (s *DocumentService) DeleteDocument(id string) error {
-	return s.documentDAO.Delete(id)
+// SetDocumentDeleteService supplies explicit lifecycle dependencies before serving.
+func (s *DocumentService) SetDocumentDeleteService(deletion *DocumentDeleteService) {
+	s.deletion = deletion
+}
+
+func (s *DocumentService) DeleteDocuments(ctx context.Context, datasetID, userID string, ids []string, deleteAll bool) (int, error) {
+	if s.deletion != nil {
+		return s.deletion.DeleteDocuments(ctx, datasetID, userID, ids, deleteAll)
+	}
+	client := cache.Get()
+	if client == nil {
+		return 0, ErrDocumentDeleteRetryable
+	}
+	deletion := NewDocumentDeleteService(s.db, client.GetClient(), s.docEngine, storage.GetStorageFactory().GetStorage(), s.engineType)
+	return deletion.DeleteDocuments(ctx, datasetID, userID, ids, deleteAll)
 }
 
 // ListDocuments list documents

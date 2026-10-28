@@ -43,6 +43,7 @@ func (p *Parser) parseAddModel() (*Command, error) {
 	cmd.Params["model_name"], cmd.Params["provider_name"], cmd.Params["instance_name"] = name, provider, instance
 	var types []string
 	tokens := 0
+	tokenLimitSet := false
 	thinking := false
 	for p.curToken.Type != TokenSemicolon && p.curToken.Type != TokenEOF {
 		selected := ""
@@ -64,15 +65,16 @@ func (p *Parser) parseAddModel() (*Command, error) {
 		case TokenDocParse:
 			selected = "doc_parse"
 		case TokenTokens:
-			if tokens != 0 {
+			if tokenLimitSet {
 				return nil, fmt.Errorf("duplicate token limit")
 			}
 			p.nextToken()
 			value, err := p.parseNumber()
-			if err != nil || value <= 0 {
-				return nil, fmt.Errorf("positive integer token limit required")
+			if err != nil || value < 0 {
+				return nil, fmt.Errorf("nonnegative integer token limit required")
 			}
 			tokens = value
+			tokenLimitSet = true
 		case TokenThink:
 			if thinking {
 				return nil, fmt.Errorf("duplicate THINK")
@@ -89,7 +91,7 @@ func (p *Parser) parseAddModel() (*Command, error) {
 		}
 		p.nextToken()
 	}
-	if len(types) == 0 || tokens == 0 {
+	if len(types) == 0 || !tokenLimitSet {
 		return nil, fmt.Errorf("model type and token limit required")
 	}
 	if thinking && !slices.Contains(types, "chat") && !slices.Contains(types, "image2text") {

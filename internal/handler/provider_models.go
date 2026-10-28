@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"multirag/internal/common"
@@ -15,16 +16,48 @@ func (h *ProviderHandler) AddCustomModel(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": code, "message": message})
 		return
 	}
-	var request service.AddCustomModelRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
+	fields, err := objectRequest(c)
+	if err != nil {
 		jsonError(c, common.CodeBadRequest, "Invalid model declaration")
 		return
 	}
-	if err := prepareCustomModelRequest(&request, c.Param("provider_name"), c.Param("instance_name")); err != nil {
-		jsonError(c, common.CodeBadRequest, "Invalid model target or declaration")
-		return
+	var requests []service.AddCustomModelRequest
+	if batch, ok := fields["models"]; ok {
+		for _, key := range []string{"model_name", "model_type", "model_types", "max_tokens", "thinking"} {
+			if _, mixed := fields[key]; mixed {
+				jsonError(c, common.CodeBadRequest, "Mixed model declaration shapes")
+				return
+			}
+		}
+		if err := json.Unmarshal(batch, &requests); err != nil || len(requests) == 0 || len(requests) > 100 {
+			jsonError(c, common.CodeBadRequest, "Expected 1 to 100 model declarations")
+			return
+		}
+		for _, field := range []struct{ key, route string }{{"provider_name", c.Param("provider_name")}, {"instance_name", c.Param("instance_name")}} {
+			if raw, ok := fields[field.key]; ok {
+				var value string
+				if json.Unmarshal(raw, &value) != nil || value != field.route {
+					jsonError(c, common.CodeBadRequest, "Invalid model target")
+					return
+				}
+			}
+		}
+	} else {
+		raw, _ := json.Marshal(fields)
+		var request service.AddCustomModelRequest
+		if err := json.Unmarshal(raw, &request); err != nil {
+			jsonError(c, common.CodeBadRequest, "Invalid model declaration")
+			return
+		}
+		requests = []service.AddCustomModelRequest{request}
 	}
-	code, err := h.modelProviderService.AddCustomModel(&request, user.ID)
+	for i := range requests {
+		if err := prepareCustomModelRequest(&requests[i], c.Param("provider_name"), c.Param("instance_name")); err != nil {
+			jsonError(c, common.CodeBadRequest, "Invalid model target or declaration")
+			return
+		}
+	}
+	code, err = h.modelProviderService.AddModels(c.Request.Context(), c.Param("provider_name"), c.Param("instance_name"), requests, user.ID)
 	if err != nil {
 		message := err.Error()
 		if code == common.CodeServerError {

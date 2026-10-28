@@ -78,12 +78,6 @@ func main() {
 		common.Fatal("Server port is not configured. Please specify via --port flag or config file.")
 	}
 
-	// Load model providers configuration
-	if err := server.LoadModelProviders(""); err != nil {
-		common.Fatal("Failed to load model providers", zap.Error(err))
-	}
-	common.Info("Model providers loaded", zap.Int("count", len(server.GetModelProviders())))
-
 	// Update the shared level without replacing captured loggers
 	if config.Log.Level != "" && config.Log.Level != "info" {
 		if err := common.Init(config.Log.Level); err != nil {
@@ -104,13 +98,6 @@ func main() {
 	// Initialize database
 	if err := dao.InitDB(); err != nil {
 		common.Fatal("Failed to initialize database", zap.Error(err))
-	}
-
-	// Initialize LLM factory data models from configuration file
-	if err := dao.InitLLMFactory(); err != nil {
-		common.Error("Failed to initialize LLM factory", err)
-	} else {
-		common.Info("LLM factory initialized successfully")
 	}
 
 	// Initialize doc engine
@@ -171,7 +158,6 @@ func startServer(config *server.Config) {
 	datasetsService := service.NewDatasetsService()
 	kbService := service.NewKnowledgebaseService()
 	chunkService := service.NewChunkService()
-	llmService := service.NewLLMService()
 	tenantService := service.NewTenantService()
 	chatService := service.NewChatService()
 	chatSessionService := service.NewChatSessionService()
@@ -192,7 +178,6 @@ func startServer(config *server.Config) {
 	systemHandler := handler.NewSystemHandler(systemService)
 	kbHandler := handler.NewKnowledgebaseHandler(kbService, userService, documentService)
 	chunkHandler := handler.NewChunkHandler(chunkService, userService)
-	llmHandler := handler.NewLLMHandler(llmService, userService)
 	chatHandler := handler.NewChatHandler(chatService, userService)
 	chatSessionHandler := handler.NewChatSessionHandler(chatSessionService, userService)
 	connectorHandler := handler.NewConnectorHandler(connectorService, userService)
@@ -203,7 +188,7 @@ func startServer(config *server.Config) {
 	taskHandler := handler.NewTaskHandler(taskService)
 
 	// Initialize router
-	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, llmHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
+	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
 
 	// Create Gin engine
 	ginEngine := gin.New()

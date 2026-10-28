@@ -203,7 +203,7 @@ func TestDatasetGraphHTTPAndSQL(t *testing.T) {
 	app.Use(gin.Recovery())
 	counter := &countingGraphEngine{DocEngine: store}
 	datasets := handler.NewDatasetsHandler(service.NewDatasetsService(), counter)
-	appRouter := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, datasets, nil, handler.NewKnowledgebaseHandler(service.NewKnowledgebaseService(), service.NewUserService(), nil), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	appRouter := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, datasets, nil, handler.NewKnowledgebaseHandler(service.NewKnowledgebaseService(), service.NewUserService(), nil), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	appRouter.Setup(app)
 	httpServer := httptest.NewServer(app)
 	defer httpServer.Close()

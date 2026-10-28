@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,6 +148,17 @@ func (r *AddCustomModelRequest) UnmarshalJSON(data []byte) error {
 		MaxTokens *int `json:"max_tokens"`
 	}
 	payload.declaration = (*declaration)(r)
+	// The wire declaration must not reinterpret explicit null inventories or
+	// duplicate fields as an omitted capability list.
+	fields, err := strictJSONObject(data)
+	if err != nil {
+		return fmt.Errorf("invalid model declaration")
+	}
+	for _, key := range []string{"model_name", "model_type", "model_types", "provider_name", "instance_name"} {
+		if raw, exists := fields[key]; exists && strings.TrimSpace(string(raw)) == "null" {
+			return fmt.Errorf("invalid model declaration")
+		}
+	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return fmt.Errorf("invalid model declaration")
 	}
@@ -157,74 +169,86 @@ func (r *AddCustomModelRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AddCustomModel remains the single-declaration entry used by the CLI consumer.
 func (m *ModelProviderService) AddCustomModel(request *AddCustomModelRequest, userID string) (common.ErrorCode, error) {
 	if request == nil {
 		return common.CodeBadRequest, fmt.Errorf("request is required")
 	}
-	if request.ProviderName == "" || request.ProviderName != strings.TrimSpace(request.ProviderName) || request.InstanceName == "" || request.InstanceName != strings.TrimSpace(request.InstanceName) || strings.Contains(request.InstanceName, "@") {
-		return common.CodeBadRequest, fmt.Errorf("valid provider and instance names are required")
+	return m.AddModels(context.Background(), request.ProviderName, request.InstanceName, []AddCustomModelRequest{*request}, userID)
+}
+
+// AddModels declares the complete batch atomically under the owned instance lock.
+func (m *ModelProviderService) AddModels(ctx context.Context, providerName, instanceName string, requests []AddCustomModelRequest, userID string) (common.ErrorCode, error) {
+	if providerName == "" || providerName != strings.TrimSpace(providerName) || instanceName == "" || instanceName != strings.TrimSpace(instanceName) || strings.Contains(instanceName, "@") || len(requests) == 0 || len(requests) > 100 {
+		return common.CodeBadRequest, fmt.Errorf("valid provider, instance and 1 to 100 models are required")
 	}
-	types, err := normalizeCustomModelTypes(request.ModelType, request.ModelTypes)
-	if err != nil || request.MaxTokens < 0 || strings.TrimSpace(request.ModelName) == "" || request.ModelName != strings.TrimSpace(request.ModelName) || strings.Contains(request.ModelName, "@") {
-		return common.CodeBadRequest, fmt.Errorf("valid model name, type and nonnegative max_tokens are required")
+	modelsToCreate := make([]entity.TenantModel, 0, len(requests))
+	seen := make(map[string]bool, len(requests))
+	for _, request := range requests {
+		if request.ProviderName != "" && request.ProviderName != providerName || request.InstanceName != "" && request.InstanceName != instanceName {
+			return common.CodeBadRequest, fmt.Errorf("model declaration does not match route")
+		}
+		types, err := normalizeCustomModelTypes(request.ModelType, request.ModelTypes)
+		if err != nil || request.MaxTokens < 0 || strings.TrimSpace(request.ModelName) == "" || request.ModelName != strings.TrimSpace(request.ModelName) || strings.Contains(request.ModelName, "@") || seen[request.ModelName] {
+			return common.CodeBadRequest, fmt.Errorf("valid unique model names, types and nonnegative max_tokens are required")
+		}
+		if request.Thinking != nil && !slices.Contains(types, string(entity.ModelTypeChat)) && !slices.Contains(types, string(entity.ModelTypeImage2Text)) {
+			return common.CodeBadRequest, fmt.Errorf("thinking requires chat or image2text")
+		}
+		seen[request.ModelName] = true
+		extra, err := json.Marshal(customModelExtra{MaxTokens: request.MaxTokens, Thinking: request.Thinking, ModelTypes: types})
+		if err != nil {
+			return common.CodeServerError, err
+		}
+		id, err := generateUUID1Hex()
+		if err != nil {
+			return common.CodeServerError, err
+		}
+		modelsToCreate = append(modelsToCreate, entity.TenantModel{ID: id, ModelName: request.ModelName, ModelType: types[0], Status: "active", Extra: string(extra)})
 	}
-	if request.Thinking != nil && !slices.Contains(types, string(entity.ModelTypeChat)) && !slices.Contains(types, string(entity.ModelTypeImage2Text)) {
-		return common.CodeBadRequest, fmt.Errorf("thinking requires chat or image2text")
-	}
-	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
-	if err != nil {
-		return common.CodeServerError, err
-	}
-	if len(tenants) == 0 {
-		return common.CodeNotFound, fmt.Errorf("user has no tenants")
-	}
-	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenants[0].TenantID, request.ProviderName)
-	if err != nil {
-		return common.CodeNotFound, err
-	}
-	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, request.InstanceName)
-	if err != nil {
-		return common.CodeNotFound, err
-	}
-	if instance.Status != "active" {
-		return common.CodeDataError, errModelInstanceDisabled
-	}
-	if m.providerManager.FindProvider(request.ProviderName) == nil {
-		return common.CodeNotFound, fmt.Errorf("provider not found")
-	}
-	if _, err := m.providerManager.GetModelByName(request.ProviderName, request.ModelName); err == nil {
-		return common.CodeConflict, fmt.Errorf("model already exists in provider catalog")
-	}
-	id, err := generateUUID1Hex()
-	if err != nil {
-		return common.CodeServerError, err
-	}
-	extra, err := json.Marshal(customModelExtra{MaxTokens: request.MaxTokens, Thinking: request.Thinking, ModelTypes: types})
-	if err != nil {
-		return common.CodeServerError, err
-	}
-	model := &entity.TenantModel{ID: id, ModelName: request.ModelName, ProviderID: provider.ID, InstanceID: instance.ID, ModelType: types[0], Status: "active", Extra: string(extra)}
-	err = dao.DB.Transaction(func(tx *gorm.DB) error {
-		// Serialize declarations for this owned instance without changing the schema.
-		var locked entity.TenantModelInstance
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND provider_id = ?", instance.ID, provider.ID).First(&locked).Error; err != nil {
+	err := dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var owner entity.UserTenant
+		if err := tx.Where("user_id = ? AND role = ? AND status = ?", userID, "owner", "1").First(&owner).Error; err != nil {
 			return err
 		}
-		if locked.Status != "active" {
+		var provider entity.TenantModelProvider
+		if err := tx.Where("tenant_id = ? AND provider_name = ?", owner.TenantID, providerName).First(&provider).Error; err != nil {
+			return err
+		}
+		var instance entity.TenantModelInstance
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("provider_id = ? AND instance_name = ?", provider.ID, instanceName).First(&instance).Error; err != nil {
+			return err
+		}
+		if instance.Status != "active" {
 			return errModelInstanceDisabled
 		}
-		var existing entity.TenantModel
-		err := tx.Where("provider_id = ? AND instance_id = ? AND model_name = ?", provider.ID, instance.ID, request.ModelName).First(&existing).Error
-		if err == nil {
-			return errCustomModelExists
+		if m.providerManager.FindProvider(providerName) == nil {
+			return gorm.ErrRecordNotFound
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+		for i := range modelsToCreate {
+			model := &modelsToCreate[i]
+			if _, err := m.providerManager.GetModelByName(providerName, model.ModelName); err == nil {
+				return errCustomModelExists
+			}
+			var count int64
+			if err := tx.Model(&entity.TenantModel{}).Where("provider_id = ? AND instance_id = ? AND model_name = ?", provider.ID, instance.ID, model.ModelName).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return errCustomModelExists
+			}
+			model.ProviderID, model.InstanceID = provider.ID, instance.ID
 		}
-		return tx.Create(model).Error
+		return tx.Create(&modelsToCreate).Error
 	})
 	if errors.Is(err, errCustomModelExists) {
 		return common.CodeConflict, err
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return common.CodeNotFound, fmt.Errorf("provider instance not found")
+	}
+	if errors.Is(err, errModelInstanceDisabled) {
+		return common.CodeDataError, err
 	}
 	if err != nil {
 		return common.CodeServerError, err

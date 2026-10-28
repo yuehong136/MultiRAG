@@ -268,7 +268,7 @@ func TestMediaHTTPCLIAndSQL(t *testing.T) {
 	serve := func(name string, svc *service.ModelProviderService) *httptest.Server {
 		app := gin.New()
 		app.Use(gin.Recovery())
-		r := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, svc), nil)
+		r := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, svc), nil)
 		r.Setup(app)
 		api := newOwnedOptInHTTPServer(t, name, app)
 		t.Log("owned-http-resource", api.URL)

@@ -30,6 +30,7 @@ import (
 	"multirag/internal/engine/elasticsearch"
 	"multirag/internal/entity"
 	"multirag/internal/server"
+	"multirag/internal/service"
 	"multirag/internal/utility"
 	"net/http"
 	"os"
@@ -66,7 +67,6 @@ type Service struct {
 	chatSessionDAO    *dao.ChatSessionDAO
 	apiTokenDAO       *dao.APITokenDAO
 	api4ConvDAO       *dao.API4ConversationDAO
-	llmDAO            *dao.LLMDAO
 }
 
 // NewService create admin service
@@ -88,7 +88,6 @@ func NewService() *Service {
 		chatSessionDAO:    dao.NewChatSessionDAO(),
 		apiTokenDAO:       dao.NewAPITokenDAO(),
 		api4ConvDAO:       dao.NewAPI4ConversationDAO(),
-		llmDAO:            dao.NewLLMDAO(),
 	}
 }
 
@@ -292,15 +291,11 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 		return nil, fmt.Errorf("failed to create user-tenant relation: %w", err)
 	}
 
-	// 4. Create tenant LLM configurations
-	tenantLLMs, err := s.getInitTenantLLM(userID)
-	if err != nil {
-		common.Warn("failed to get init tenant LLM configs", zap.Error(err))
-		// Continue without LLM configs - not a critical error
-	} else if len(tenantLLMs) > 0 {
-		if err := tx.Create(&tenantLLMs).Error; err != nil {
-			common.Warn("failed to create tenant LLM configs", zap.Error(err))
-			// Continue without LLM configs - not a critical error
+	// Registration and admin creation use the same current catalog and transaction.
+	if cfg != nil {
+		if err := service.InitializeTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
+			rollbackTx()
+			return nil, fmt.Errorf("failed to initialize tenant models: %w", err)
 		}
 	}
 
@@ -339,131 +334,6 @@ func (s *Service) CreateUser(username, password, role string) (map[string]interf
 	}, nil
 }
 
-// getInitTenantLLM gets initial tenant LLM configurations
-// This matches Python's get_init_tenant_llm function
-func (s *Service) getInitTenantLLM(userID string) ([]*entity.TenantLLM, error) {
-	cfg := server.GetConfig()
-	if cfg == nil {
-		return nil, fmt.Errorf("config not initialized")
-	}
-
-	var tenantLLMs []*entity.TenantLLM
-
-	// Get model configs from configuration
-	modelConfigs := []server.ModelConfig{
-		cfg.UserDefaultLLM.DefaultModels.ChatModel,
-		cfg.UserDefaultLLM.DefaultModels.EmbeddingModel,
-		cfg.UserDefaultLLM.DefaultModels.RerankModel,
-		cfg.UserDefaultLLM.DefaultModels.ASRModel,
-		cfg.UserDefaultLLM.DefaultModels.Image2TextModel,
-	}
-
-	// Track seen factories to avoid duplicates
-	seenFactories := make(map[string]bool)
-	var uniqueFactories []server.ModelConfig
-
-	for _, mc := range modelConfigs {
-		if mc.Factory == "" {
-			continue
-		}
-		if !seenFactories[mc.Factory] {
-			seenFactories[mc.Factory] = true
-			uniqueFactories = append(uniqueFactories, mc)
-		}
-	}
-
-	// Get LLMs for each unique factory
-	for _, factoryConfig := range uniqueFactories {
-		llms, err := s.llmDAO.GetByFactory(factoryConfig.Factory)
-		if err != nil {
-			common.Warn("failed to get LLMs for factory", zap.String("factory", factoryConfig.Factory), zap.Error(err))
-			continue
-		}
-
-		for _, llm := range llms {
-			// Determine API key and base URL based on model type
-			var apiKey, apiBase string
-			switch llm.ModelType {
-			case string(entity.ModelTypeChat):
-				apiKey = factoryConfig.APIKey
-				apiBase = factoryConfig.BaseURL
-			case string(entity.ModelTypeEmbedding):
-				apiKey = cfg.UserDefaultLLM.DefaultModels.EmbeddingModel.APIKey
-				apiBase = cfg.UserDefaultLLM.DefaultModels.EmbeddingModel.BaseURL
-				if apiKey == "" {
-					apiKey = factoryConfig.APIKey
-				}
-				if apiBase == "" {
-					apiBase = factoryConfig.BaseURL
-				}
-			case string(entity.ModelTypeRerank):
-				apiKey = cfg.UserDefaultLLM.DefaultModels.RerankModel.APIKey
-				apiBase = cfg.UserDefaultLLM.DefaultModels.RerankModel.BaseURL
-				if apiKey == "" {
-					apiKey = factoryConfig.APIKey
-				}
-				if apiBase == "" {
-					apiBase = factoryConfig.BaseURL
-				}
-			case string(entity.ModelTypeSpeech2Text):
-				apiKey = cfg.UserDefaultLLM.DefaultModels.ASRModel.APIKey
-				apiBase = cfg.UserDefaultLLM.DefaultModels.ASRModel.BaseURL
-				if apiKey == "" {
-					apiKey = factoryConfig.APIKey
-				}
-				if apiBase == "" {
-					apiBase = factoryConfig.BaseURL
-				}
-			case string(entity.ModelTypeImage2Text):
-				apiKey = cfg.UserDefaultLLM.DefaultModels.Image2TextModel.APIKey
-				apiBase = cfg.UserDefaultLLM.DefaultModels.Image2TextModel.BaseURL
-				if apiKey == "" {
-					apiKey = factoryConfig.APIKey
-				}
-				if apiBase == "" {
-					apiBase = factoryConfig.BaseURL
-				}
-			default:
-				apiKey = factoryConfig.APIKey
-				apiBase = factoryConfig.BaseURL
-			}
-
-			maxTokens := int64(8192)
-			if llm.MaxTokens > 0 {
-				maxTokens = llm.MaxTokens
-			}
-
-			llmName := llm.LLMName
-			modelType := llm.ModelType
-			tenantLLM := &entity.TenantLLM{
-				TenantID:   userID,
-				LLMFactory: factoryConfig.Factory,
-				LLMName:    &llmName,
-				ModelType:  &modelType,
-				APIKey:     &apiKey,
-				APIBase:    &apiBase,
-				MaxTokens:  maxTokens,
-				Status:     "1",
-			}
-			tenantLLMs = append(tenantLLMs, tenantLLM)
-		}
-	}
-
-	// Remove duplicates based on (tenant_id, llm_factory, llm_name)
-	seen := make(map[string]bool)
-	var uniqueLLMs []*entity.TenantLLM
-	for _, tllm := range tenantLLMs {
-		key := fmt.Sprintf("%s|%s|%s", tllm.TenantID, tllm.LLMFactory, *tllm.LLMName)
-		if !seen[key] {
-			seen[key] = true
-			uniqueLLMs = append(uniqueLLMs, tllm)
-		}
-	}
-
-	return uniqueLLMs, nil
-}
-
-// GetUserDetails get user details
 func (s *Service) GetUserDetails(username string) (map[string]interface{}, error) {
 	// Query user by email/username
 	var user entity.User

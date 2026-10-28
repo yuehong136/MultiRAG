@@ -232,7 +232,7 @@ func (s *UserService) Register(req *RegisterRequest) (*entity.User, common.Error
 				return err
 			}
 		}
-		if err := initializeTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
+		if err := InitializeTenantModels(tx, tenant, cfg.UserDefaultLLM.DefaultModels); err != nil {
 			return err
 		}
 		return tx.Create(rootFile).Error

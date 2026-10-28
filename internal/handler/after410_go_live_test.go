@@ -480,7 +480,7 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 	app := gin.New()
 	app.Use(gin.Recovery())
-	routes := router.NewRouter(handler.NewAuthHandler(), nil, nil, handler.NewDocumentHandler(service.NewDocumentService()), handler.NewDatasetsHandler(service.NewDatasetsService()), handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, service.NewModelProviderService()), nil)
+	routes := router.NewRouter(handler.NewAuthHandler(), nil, nil, handler.NewDocumentHandler(service.NewDocumentService()), handler.NewDatasetsHandler(service.NewDatasetsService()), handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, service.NewModelProviderService()), nil)
 	routes.Setup(app)
 	api := httptest.NewServer(app)
 	defer api.Close()
@@ -789,7 +789,7 @@ func TestAfter410GoHTTPCLIAndSQL(t *testing.T) {
 		server.GetConfig().DocEngine.Type = server.EngineInfinity
 		configuredApp := gin.New()
 		configuredApp.Use(gin.Recovery())
-		configuredRoutes := router.NewRouter(handler.NewAuthHandler(), nil, nil, handler.NewDocumentHandler(service.NewDocumentService()), handler.NewDatasetsHandler(service.NewDatasetsService()), handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, service.NewModelProviderService()), nil)
+		configuredRoutes := router.NewRouter(handler.NewAuthHandler(), nil, nil, handler.NewDocumentHandler(service.NewDocumentService()), handler.NewDatasetsHandler(service.NewDatasetsService()), handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, service.NewModelProviderService()), nil)
 		configuredRoutes.Setup(configuredApp)
 		configuredAPI := httptest.NewServer(configuredApp)
 		defer configuredAPI.Close()

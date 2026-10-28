@@ -220,9 +220,16 @@ func (o *OSSStorage) Get(bucket, fnm string, tenantID ...string) ([]byte, error)
 
 // Remove removes an object from OSS
 func (o *OSSStorage) Remove(bucket, fnm string, tenantID ...string) error {
+	return o.RemoveContext(context.Background(), bucket, fnm, tenantID...)
+}
+
+// RemoveContext propagates cancellation through the object deletion.
+func (o *OSSStorage) RemoveContext(ctx context.Context, bucket, fnm string, tenantID ...string) error {
 	bucket, fnm = o.resolveBucketAndPath(bucket, fnm)
 
-	ctx := context.Background()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	_, err := o.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),

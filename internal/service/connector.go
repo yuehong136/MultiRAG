@@ -32,6 +32,7 @@ import (
 
 // ConnectorService connector service
 type ConnectorService struct {
+	oauth        *ConnectorOAuthService
 	connectorDAO *dao.ConnectorDAO
 	docEngine    engine.DocEngine
 }

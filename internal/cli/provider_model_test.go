@@ -19,7 +19,7 @@ func TestProviderInstanceGrammar(t *testing.T) {
 		}
 	}
 	cmd, err := NewParser(`CREATE PROVIDER 'vllm' INSTANCE 'local' KEY 'key' URL 'http://localhost:8000/v1';`).Parse(false)
-	if err != nil || cmd.Params["region"] != "local" {
+	if err != nil || cmd.Params["region"] != nil {
 		t.Fatalf("%v %v", cmd, err)
 	}
 	for _, input := range []string{`CREATE PROVIDER 'vllm' INSTANCE 'local' KEY 'key' URL 'x' URL 'y';`, `CREATE PROVIDER 'vllm' INSTANCE 'local' KEY 'key' REGION 'x' trailing;`} {
@@ -30,7 +30,7 @@ func TestProviderInstanceGrammar(t *testing.T) {
 }
 func TestProviderInstanceEmptyURLAndRegion(t *testing.T) {
 	cmd, err := NewParser(`CREATE PROVIDER 'vllm' INSTANCE 'local' KEY 'key' URL 'http://localhost:8000/v1' REGION '';`).Parse(false)
-	if err != nil || cmd.Params["region"] != "local" {
+	if err != nil || cmd.Params["region"] != "" {
 		t.Fatalf("empty region %v %v", cmd, err)
 	}
 	cmd, err = NewParser(`CREATE PROVIDER 'vllm' INSTANCE 'local' KEY 'key' URL '';`).Parse(false)
@@ -50,7 +50,7 @@ func TestCustomModelGrammarAndCapabilities(t *testing.T) {
 			t.Fatalf("%s: %v %v", option, cmd, err)
 		}
 	}
-	for _, option := range []string{"tokens 1 chat chat", "tokens 1 embedding think", "tokens 1 tokens 2 chat", "chat", "tokens 0 chat", "tokens 1.5 chat", "tokens 1 chat garbage", "tokens 1 chat think think"} {
+	for _, option := range []string{"tokens 1 chat chat", "tokens 1 embedding think", "tokens 1 tokens 2 chat", "chat", "tokens -1 chat", "tokens 0 tokens 1 chat", "tokens 1.5 chat", "tokens 1 chat garbage", "tokens 1 chat think think"} {
 		if _, err := NewParser(`ADD MODEL 'm' TO PROVIDER 'vllm' INSTANCE 'i' WITH ` + option + `;`).Parse(false); err == nil {
 			t.Fatalf("accepted %s", option)
 		}

@@ -115,7 +115,7 @@ func TestAfter775ProvidersHTTPCLIAndSQL(t *testing.T) {
 	app := gin.New()
 	app.Use(gin.Recovery())
 	svc := service.NewModelProviderService()
-	routes := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, svc), nil)
+	routes := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, handler.NewSystemHandler(service.NewSystemService()), nil, nil, nil, nil, nil, nil, nil, nil, handler.NewProviderHandler(nil, svc), nil)
 	routes.Setup(app)
 	api := after775Server(t, "application", app)
 

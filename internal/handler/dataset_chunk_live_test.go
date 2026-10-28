@@ -262,7 +262,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 	app := gin.New()
 	app.Use(gin.Recovery())
-	router.NewRouter(handler.NewAuthHandler(), nil, handler.NewTenantHandler(service.NewTenantService(counter), service.NewUserService()), handler.NewDocumentHandler(service.NewDocumentService(counter)), datasets, nil, handler.NewKnowledgebaseHandler(service.NewKnowledgebaseService(counter), service.NewUserService(), nil), chunks, nil, nil, nil, nil, nil, nil, nil, nil, nil).Setup(app)
+	router.NewRouter(handler.NewAuthHandler(), nil, handler.NewTenantHandler(service.NewTenantService(counter), service.NewUserService()), handler.NewDocumentHandler(service.NewDocumentService(counter)), datasets, nil, handler.NewKnowledgebaseHandler(service.NewKnowledgebaseService(counter), service.NewUserService(), nil), chunks, nil, nil, nil, nil, nil, nil, nil, nil).Setup(app)
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.HTTPPort))
 	if err != nil {
 		t.Fatal(err)

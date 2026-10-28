@@ -228,9 +228,16 @@ func (s *S3Storage) Get(bucket, fnm string, tenantID ...string) ([]byte, error) 
 
 // Remove removes an object from S3
 func (s *S3Storage) Remove(bucket, fnm string, tenantID ...string) error {
+	return s.RemoveContext(context.Background(), bucket, fnm, tenantID...)
+}
+
+// RemoveContext propagates cancellation through the object deletion.
+func (s *S3Storage) RemoveContext(ctx context.Context, bucket, fnm string, tenantID ...string) error {
 	bucket, fnm = s.resolveBucketAndPath(bucket, fnm)
 
-	ctx := context.Background()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),

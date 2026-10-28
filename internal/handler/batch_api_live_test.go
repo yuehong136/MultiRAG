@@ -156,7 +156,7 @@ func TestBatchGoAPI(t *testing.T) {
 	cs := service.NewConnectorService()
 	readEngine := &batchGReadEngine{}
 	chunkService := service.NewChunkService(readEngine)
-	routes := router.NewRouter(handler.NewAuthHandler(), handler.NewUserHandler(us), handler.NewTenantHandler(ts, us), nil, nil, handler.NewSystemHandler(service.NewSystemService()), handler.NewKnowledgebaseHandler(ks, us, nil), handler.NewChunkHandler(chunkService, us), nil, handler.NewChatHandler(service.NewChatService(), us), nil, handler.NewConnectorHandler(cs, us), handler.NewSearchHandler(service.NewSearchService(), us), nil, nil, nil, nil)
+	routes := router.NewRouter(handler.NewAuthHandler(), handler.NewUserHandler(us), handler.NewTenantHandler(ts, us), nil, nil, handler.NewSystemHandler(service.NewSystemService()), handler.NewKnowledgebaseHandler(ks, us, nil), handler.NewChunkHandler(chunkService, us), handler.NewChatHandler(service.NewChatService(), us), nil, handler.NewConnectorHandler(cs, us), handler.NewSearchHandler(service.NewSearchService(), us), nil, nil, nil, nil)
 	routes.Setup(app)
 	api := newOwnedOptInHTTPServer(t, "batch-api", app)
 	client := &http.Client{Timeout: 20 * time.Second}

@@ -35,8 +35,8 @@ func (c *MultiRAGClient) AddCustomModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("model capabilities required")
 	}
 	tokens, ok := cmd.Params["max_tokens"].(int)
-	if !ok || tokens <= 0 {
-		return nil, fmt.Errorf("positive max_tokens required")
+	if !ok || tokens < 0 {
+		return nil, fmt.Errorf("nonnegative max_tokens required")
 	}
 	payload["max_tokens"] = tokens
 	if value, ok := cmd.Params["support_think"].(bool); ok {

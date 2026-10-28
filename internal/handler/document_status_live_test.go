@@ -113,7 +113,7 @@ func TestDocumentStatusLiveServer(t *testing.T) {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	documentHandler := handler.NewDocumentHandler(service.NewDocumentStatusService(db, store, cfg.EngineType))
-	appRouter := router.NewRouter(handler.NewAuthHandler(), nil, nil, documentHandler, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	appRouter := router.NewRouter(handler.NewAuthHandler(), nil, nil, documentHandler, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	appRouter.Setup(engine)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

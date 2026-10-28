@@ -17,6 +17,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -340,7 +341,10 @@ func (m *ModelProviderService) ShowProviderInstance(providerName, instanceName, 
 	return result, common.CodeSuccess, nil
 }
 
-func (m *ModelProviderService) ShowInstanceBalance(providerName, instanceName, userID string) (map[string]interface{}, common.ErrorCode, error) {
+func (m *ModelProviderService) ShowInstanceBalance(ctx context.Context, providerName, instanceName, userID string) (map[string]interface{}, common.ErrorCode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, common.CodeServerError, err
+	}
 
 	// Get tenant ID from user
 	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
@@ -370,10 +374,11 @@ func (m *ModelProviderService) ShowInstanceBalance(providerName, instanceName, u
 		return nil, common.CodeServerError, fmt.Errorf("provider %s not found", providerName)
 	}
 
-	driver, apiConfig, err := instanceModelDriver(providerInfo, instance)
+	driver, apiConfig, err := instanceModelDriver(providerInfo, instance, m.driverFactory)
 	if err != nil {
 		return nil, common.CodeDataError, err
 	}
+	apiConfig.Context = ctx
 	result, err := driver.Balance(apiConfig)
 	if err != nil {
 		return nil, common.CodeServerError, err

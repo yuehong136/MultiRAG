@@ -17,6 +17,8 @@
 package dao
 
 import (
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"strings"
 
 	"github.com/google/uuid"
@@ -442,50 +444,39 @@ func (dao *FileDAO) newAFileFromDataset(tenantID, name, parentID string) (*entit
 // file2document mapping. It is a no-op when the document is already mapped.
 // Mirrors Python FileService.add_file_from_kb.
 func (dao *FileDAO) addFileFromKB(doc *entity.Document, datasetFolderID, tenantID string) error {
-	var f2dCount int64
-	if err := DB.Model(&entity.File2Document{}).
-		Where("document_id = ?", doc.ID).
-		Count(&f2dCount).Error; err != nil {
-		return err
+	if doc == nil || doc.ID == "" {
+		return gorm.ErrRecordNotFound
 	}
-	if f2dCount > 0 {
-		return nil
-	}
-
-	docName := ""
-	if doc.Name != nil {
-		docName = *doc.Name
-	}
-	docLocation := ""
-	if doc.Location != nil {
-		docLocation = *doc.Location
-	}
-
-	fileID := generateUUID()
-	file := &entity.File{
-		ID:         fileID,
-		ParentID:   datasetFolderID,
-		TenantID:   tenantID,
-		CreatedBy:  tenantID,
-		Name:       docName,
-		Type:       doc.Type,
-		Size:       doc.Size,
-		Location:   &docLocation,
-		SourceType: "knowledgebase",
-	}
-	if err := DB.Create(file).Error; err != nil {
-		return err
-	}
-
-	docID := doc.ID
-	f2d := &entity.File2Document{
-		ID:         generateUUID(),
-		FileID:     &fileID,
-		DocumentID: &docID,
-	}
-	if err := DB.Create(f2d).Error; err != nil {
-		return err
-	}
-
-	return nil
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// Re-read after waiting: a deletion may have retired the snapshot document.
+		var current entity.Document
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND kb_id = ?", doc.ID, doc.KbID).Take(&current).Error; err != nil {
+			return err
+		}
+		var dataset entity.Knowledgebase
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", current.KbID, tenantID).Take(&dataset).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&entity.File2Document{}).Where("document_id = ?", current.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
+		name, location := "", ""
+		if current.Name != nil {
+			name = *current.Name
+		}
+		if current.Location != nil {
+			location = *current.Location
+		}
+		fileID := generateUUID()
+		file := &entity.File{ID: fileID, ParentID: datasetFolderID, TenantID: tenantID, CreatedBy: tenantID, Name: name, Type: current.Type, Size: current.Size, Location: &location, SourceType: "knowledgebase"}
+		if err := tx.Create(file).Error; err != nil {
+			return err
+		}
+		docID := current.ID
+		return NewFile2DocumentDAO().CreateInTransaction(tx, &entity.File2Document{ID: generateUUID(), FileID: &fileID, DocumentID: &docID})
+	})
 }
