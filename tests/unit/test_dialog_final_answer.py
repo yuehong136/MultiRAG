@@ -11,9 +11,13 @@ final 事件是同一模式，共用该契约。
 
 import types
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
+from api.db.joint_services import tenant_model_service
 from api.db.services import dialog_service
 from api.db.services.dialog_service import _extract_visible_answer, async_ask
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -22,25 +26,25 @@ from common import settings
 _DECORATED = "Answer about pandas ##0$$ and more detail."
 
 
-class _FakeBundle:
-    def __init__(self, db, tenant_id, model_config, **kwargs):
+class _FakeBundle(dialog_service.LLMBundle):
+    def __init__(self, db: Session, tenant_id: str, model_config: dict[str, Any], **kwargs: Any) -> None:
         self.db = db
         self.max_length = 1024
 
-    async def async_chat_streamly_delta(self, system, history, gen_conf):
+    async def async_chat_streamly_delta(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> AsyncIterator[str]:
         # 累积式流：后一 chunk 是前一 chunk 的前缀扩展
         yield "Answer about pandas"
         yield "Answer about pandas and more detail."
 
 
 @pytest.fixture
-def final_answer_stubs(monkeypatch):
+def final_answer_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": "chat-m"})
-    monkeypatch.setattr(dialog_service, "LLMBundle", _FakeBundle)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(dialog_service, "label_question", lambda s, q, kbs: [])
     monkeypatch.setattr(dialog_service, "kb_prompt", lambda kbinfos, max_tokens: [])
 
@@ -64,15 +68,15 @@ async def test_async_ask_final_event_carries_decorated_answer(async_db, final_an
     assert all(not event.get("final") for event in events[:-1])
 
 
-async def test_async_ask_final_event_normalizes_think_tags(async_db, final_answer_stubs, monkeypatch):
+async def test_async_ask_final_event_normalizes_think_tags(async_db: AsyncSession, final_answer_stubs: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """模型重复吐 think 标签时，final 事件只留规范的一对。"""
 
     class _RepeatedThinkBundle(_FakeBundle):
-        async def async_chat_streamly_delta(self, system, history, gen_conf):
+        async def async_chat_streamly_delta(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> AsyncIterator[str]:
             yield "<think>step one</think>"
             yield "<think>step one</think><think>step two</think>visible answer"
 
-    monkeypatch.setattr(dialog_service, "LLMBundle", _RepeatedThinkBundle)
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", _RepeatedThinkBundle)
     monkeypatch.setattr(settings.retriever, "insert_citations", lambda answer, *args, **kwargs: (answer, set()))
 
     events = [event async for event in async_ask(async_db, "q", [], "t1")]
