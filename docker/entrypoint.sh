@@ -221,9 +221,12 @@ ensure_docling() {
 }
 
 ensure_db_init() {
-  echo "[entrypoint] 初始化数据库表..."
-  "${PY}" -c "from api.db.db_models import init_database_tables as init_web_db; init_web_db()"
-  echo "[entrypoint] 数据库表初始化完成"
+  echo "[entrypoint] 引导数据库 schema..."
+  if ! "${PY}" -c "from api.db.schema_bootstrap import bootstrap_database_schema; bootstrap_database_schema()"; then
+    echo "[entrypoint] 数据库引导失败，停止启动服务" >&2
+    return 1
+  fi
+  echo "[entrypoint] 数据库引导完成"
 }
 
 _term() {
@@ -364,7 +367,9 @@ fi
 
 ensure_docling
 
-ensure_db_init
+if ! ensure_db_init; then
+  exit 1
+fi
 
 # 启动 Nginx（优先启动，作为统一入口）
 if [[ "${ENABLE_WEBSERVER}" -eq 1 ]]; then

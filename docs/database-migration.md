@@ -33,8 +33,8 @@
 [PostgreSQL 初始化 SQL](../docker/postgres/init.sql) 创建 schema 并授权给 `usr_ai` 角色，
 由 Compose 的 PostgreSQL 服务挂载到初始化目录。已有数据目录、外置数据库或不同角色
 不能仅靠再次启动容器获得该初始化，需核对真实 schema 和权限。
-schema 缺失或连接检查失败时，建表函数可能返回错误字符串；不能只根据进程退出码
-或“初始化完成”日志判断建表成功。
+schema 缺失或连接检查失败时，建表函数抛错并阻断启动；仍需同时读回真实 schema、
+迁移版本和业务记录，不能仅以“初始化完成”日志判定数据迁移完整。
 
 [API 进程入口](../api/multirag_server.py) 在开始 serving 前调用 schema 引导，再调用
 `init_web_data()`；后者刷新模型厂商和模型目录，并包含历史名称、模型引用等修复。
@@ -44,9 +44,10 @@ schema 缺失或连接检查失败时，建表函数可能返回错误字符串�
 直接使用其他 ASGI 启动方式时，应检查是否经过上述进程入口，不能假定导入 `app`
 就完成了同样的迁移。
 
-容器还有一层行为：[entrypoint](../docker/entrypoint.sh) 在拉起服务前无条件调用
-`init_database_tables()`，API 进程随后才运行上述完整引导。因此容器入口存在先尝试
-model-first 建表的步骤，不能将其顺序概括为“所有存量环境都先迁移”。
+容器的 [entrypoint](../docker/entrypoint.sh) 在拉起任何服务前调用相同的
+`bootstrap_database_schema()`：存量环境先迁移，再补建缺表；全新环境先建表再 stamp。
+引导失败时显式退出，即使默认宽容 shell 模式也不会启动 admin、同步服务、worker 或 API。
+API 进程随后仍执行幂等引导，并初始化默认数据。
 `--disable-server` 不跳过这一步；当前没有专门的跳过数据库初始化/升级参数。
 `SKIP_CONFIG_GENERATE` 只控制配置生成，`MULTIRAG_RENDER_CONFIG_ONLY` 只生成配置后退出，
 均不能用作正常运行服务时的迁移开关。

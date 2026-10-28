@@ -28,6 +28,7 @@ from tests.support.database import scratch_database
 
 _USER_ACCOUNT_REVISION = "7c8d9e0f1a2b"
 _PRE_USER_ACCOUNT_REVISION = "e4f6a8b0c2d4"
+_PRE_PROVIDER_REVISION = "a7c9e1f3b5d7"
 _NON_SECRET_PLACEHOLDER = "x"
 
 
@@ -40,41 +41,28 @@ def bootstrapped_engine(postgres_service: None, tmp_path_factory: pytest.TempPat
 
 @pytest.fixture
 def stored_schema_bootstrap_engine(
-    pg_scratch_engine: sa.Engine,
+    postgres_service: None,
     alembic_cfg: Config,
-):
-    """An isolated stored database at the revision used before identity work."""
+    tmp_path: Path,
+) -> Iterator[sa.Engine]:
+    """Reconstruct old identity parents while retaining current model tables.
 
-    database_name = f"multirag_bootstrap_{uuid.uuid4().hex[:12]}"
-    admin_engine = sa.create_engine(
-        pg_scratch_engine.url,
-        isolation_level="AUTOCOMMIT",
-    )
-    stored_engine = sa.create_engine(
-        pg_scratch_engine.url.set(database=database_name),
-    )
-    try:
-        with admin_engine.connect() as connection:
-            connection.execute(sa.text(f'CREATE DATABASE "{database_name}"'))
+    Provider downgrade deliberately requires a reviewed export. This empty
+    fixture retains those unrelated tables and reconstructs only reversible
+    parent revisions, as if a model-first attempt had already added them.
+    """
+
+    with scratch_database(tmp_path) as stored_engine:
         with stored_engine.begin() as connection:
-            connection.execute(sa.text("CREATE SCHEMA usr_ai"))
-            Base.metadata.create_all(connection)
             cfg = Config(alembic_cfg.config_file_name)
             cfg.set_main_option(
                 "script_location",
                 alembic_cfg.get_main_option("script_location"),
             )
             cfg.attributes["connection"] = connection
-            command.stamp(cfg, "head")
+            command.stamp(cfg, _PRE_PROVIDER_REVISION)
             command.downgrade(cfg, _PRE_USER_ACCOUNT_REVISION)
         yield stored_engine
-    finally:
-        stored_engine.dispose()
-        with admin_engine.connect() as connection:
-            connection.execute(
-                sa.text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'),
-            )
-        admin_engine.dispose()
 
 
 def test_migration_chain_is_linear_and_loadable(alembic_cfg):

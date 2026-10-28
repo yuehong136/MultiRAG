@@ -4363,7 +4363,7 @@ def models_in_fk_creation_order() -> list[type[BaseModel]]:
     return sorted(models, key=lambda model: creation_order.get(getattr(model, "__table__", None), len(creation_order)))
 
 
-def init_database_tables():
+def init_database_tables() -> str:
     # 需要检查的 schema 名称
     schema_name = "usr_ai"
 
@@ -4378,13 +4378,13 @@ def init_database_tables():
         if not schema_exists:
             error_msg = f"Schema {schema_name} does not exist. Please ensure the schema is created before proceeding."
             logging.error(error_msg)
-            return error_msg
+            raise RuntimeError(error_msg)
         else:
             logging.info(f"Schema {schema_name} already exists. Continuing with table creation...")
 
     except OperationalError as e:
         logging.exception(f"OperationalError while checking schema existence: {e}")
-        return f"OperationalError: {e!s}"
+        raise RuntimeError("Failed to inspect database schema") from e
 
     # 获取现有表列表
     inspector = sa_inspect(engine)
