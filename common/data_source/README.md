@@ -1,5 +1,20 @@
 # 数据连接器
 
+## 添加 RSS 订阅
+
+在 Web 的数据源管理中选择 RSS，填写名称和完整的 RSS/Atom feed URL，再将数据源
+关联到目标知识库。URL 应指向 XML feed，而不是网站首页；可从网站的 RSS 图标或
+页面源码中 `application/rss+xml` / `application/atom+xml` 的链接获取。
+
+连接器配置使用 `feed_url` 和 `batch_size`，后者默认 2，控制每批产出的文档数，
+不是每轮最多同步的文章总数。正文优先读取条目的 content，再回退 summary/description，
+清除 HTML 标签后作为文本导入；不会根据文章链接抓取完整网页。
+
+保存并关联知识库后启动同步；`refresh_freq` 以分钟配置增量轮询频率，状态和失败原因
+可在数据源同步日志查看。默认保留历史条目。只有明确需要镜像当前 feed 成员时才开启
+`config.sync_deleted_files` 并设置正数 `prune_freq`；有限 feed 的滚出不代表原文章已删除，
+具体身份、完整性与失败语义见下方的 RSS 清单合同。
+
 ## S3 系列增量
 
 S3、R2、Google Cloud Storage、OCI 和 S3-compatible Blob 同步先完整列出配置前缀内
