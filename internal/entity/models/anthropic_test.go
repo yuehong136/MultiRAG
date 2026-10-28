@@ -28,7 +28,7 @@ func TestAnthropicNativeMessagesHTTP(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if body["model"] != "claude-sonnet-4-5-20250929" || body["max_tokens"] != float64(2048) || body["system"] != "rules\n\nmore\nrules" || body["temperature"] != 0.2 || body["top_p"] != 0.8 || !reflect.DeepEqual(body["stop_sequences"], []any{"END"}) {
+				if body["model"] != "claude-sonnet-4-5-20250929" || body["max_tokens"] != float64(2048) || body["system"] != "rules\n\nmore\nrules" || body["temperature"] != 0.2 || body["top_p"] != nil || !reflect.DeepEqual(body["stop_sequences"], []any{"END"}) {
 					t.Error("native config", body)
 				}
 				messages, _ := body["messages"].([]any)

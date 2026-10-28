@@ -100,6 +100,7 @@ func (a *AnthropicModel) ChatWithMessages(name string, api *APIConfig, messages 
 			body["stop_sequences"] = *config.Stop
 		}
 	}
+	applyClaudeSamplingPolicy(name, body)
 	local, cancel := modelCallConfig(api)
 	defer cancel()
 	resp, err := a.request(http.MethodPost, a.URLSuffix.Chat, local, body)

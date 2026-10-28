@@ -285,6 +285,7 @@ func bedrockChatBody(name string, messages []Message, config *ChatConfig) (map[s
 		if config.Stop != nil {
 			inf["stopSequences"] = *config.Stop
 		}
+		applyClaudeSamplingPolicy(name, inf)
 		if len(inf) > 0 {
 			body["inferenceConfig"] = inf
 		}
