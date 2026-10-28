@@ -309,3 +309,67 @@ def test_historical_siliconflow_tools_do_not_override_linked_metadata(explicit: 
     result = normalize_model_transport(config)
     assert result["is_tools"] is (True if explicit is None else explicit)
     assert result["api_key"] == "key" and result["region"] == "intl"
+
+
+@pytest.mark.parametrize("body_fails", [False, True])
+async def test_probe_self_cancelled_close_drains_all_clients_and_preserves_business_error(monkeypatch: pytest.MonkeyPatch, body_fails: bool) -> None:
+    import core.llm
+
+    seen: list[str] = []
+
+    class FirstClient:
+        async def aclose(self) -> None:
+            seen.append("first")
+            raise asyncio.CancelledError
+
+    class SecondClient:
+        async def aclose(self) -> None:
+            seen.append("second")
+
+    class Adapter:
+        def __init__(self, **kwargs: Any) -> None:
+            self.client = FirstClient()
+            self.async_client = SecondClient()
+
+        async def async_chat(self, *args: Any) -> tuple[str, int]:
+            return ("**ERROR** private" if body_fails else "OK"), 0
+
+    monkeypatch.setattr(core.llm, "ChatModel", {"fixture": Adapter})
+    with pytest.raises(ValueError if body_fails else asyncio.CancelledError):
+        await provider_verification.verify_model("fixture", "", "", ModelRegistration(model_name="test", model_types=["chat"], max_tokens=0))
+    assert seen == ["first", "second"]
+
+
+async def test_probe_external_cleanup_cancellation_drains_owned_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    import core.llm
+
+    started, release = asyncio.Event(), asyncio.Event()
+    seen: list[str] = []
+
+    class FirstClient:
+        async def aclose(self) -> None:
+            started.set()
+            await release.wait()
+            seen.append("first")
+
+    class SecondClient:
+        async def aclose(self) -> None:
+            seen.append("second")
+
+    class Adapter:
+        def __init__(self, **kwargs: Any) -> None:
+            self.client, self.async_client = FirstClient(), SecondClient()
+
+        async def async_chat(self, *args: Any) -> tuple[str, int]:
+            return "OK", 0
+
+    monkeypatch.setattr(core.llm, "ChatModel", {"fixture": Adapter})
+    task = asyncio.create_task(provider_verification.verify_model("fixture", "", "", ModelRegistration(model_name="test", model_types=["chat"], max_tokens=0)))
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert seen == ["first", "second"]

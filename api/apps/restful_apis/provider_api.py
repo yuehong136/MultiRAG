@@ -104,9 +104,7 @@ async def providers(request: Request, db: AsyncSession = Depends(get_async_db), 
     else:
         rows = (await db.scalars(select(TenantModelProvider).where(TenantModelProvider.tenant_id == user.id).order_by(TenantModelProvider.provider_name))).all()
         known = {factory["name"] for factory in public_factories()}
-        stored_types: dict[str, set[str]] = {}
-        for _legacy, model, _instance, provider in await service.models_for_owner(db, user.id):
-            stored_types.setdefault(provider.provider_name, set()).update(model.model_types)
+        stored_types = await service.provider_capabilities_for_owner(db, user.id)
         items = []
         for row in rows:
             catalog_types = {capability for model in service.catalog(row.provider_name) for capability in model.model_types} if row.provider_name in known else set()

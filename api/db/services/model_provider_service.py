@@ -224,6 +224,22 @@ async def patch_instance(db: AsyncSession, tenant_id: str, provider_name: str, i
     return instance_projection(instance, provider)
 
 
+async def provider_capabilities_for_owner(db: AsyncSession, tenant_id: str) -> dict[str, set[str]]:
+    """Read inventory capability metadata without loading instance credentials."""
+    query = (
+        select(TenantModelProvider.provider_name, TenantModel.model_types)
+        .select_from(TenantModel)
+        .join(TenantModelInstance, TenantModel.instance_id == TenantModelInstance.id)
+        .join(TenantModelProvider, TenantModelInstance.provider_id == TenantModelProvider.id)
+        .join(TenantLLM, TenantModel.id == TenantLLM.id)
+        .where(TenantLLM.tenant_id == tenant_id, TenantModelProvider.tenant_id == tenant_id)
+    )
+    capabilities: dict[str, set[str]] = {}
+    for name, model_types in (await db.execute(query)).all():
+        capabilities.setdefault(name, set()).update(model_types)
+    return capabilities
+
+
 async def models_for_owner(db: AsyncSession, tenant_id: str) -> list[tuple[TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider]]:
     query = (
         select(TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider)

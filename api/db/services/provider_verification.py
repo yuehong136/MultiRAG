@@ -40,6 +40,7 @@ async def _close(model: Any) -> None:
     targets.extend(getattr(model, "page_images", []))
     seen: set[int] = set()
     errors: list[Exception] = []
+    cancelled = False
     for target in targets:
         if target is None or id(target) in seen:
             continue
@@ -53,8 +54,12 @@ async def _close(model: Any) -> None:
                     result = await _blocking(close)
                     if inspect.isawaitable(result):
                         await result
+            except asyncio.CancelledError:
+                cancelled = True
             except Exception as error:
                 errors.append(error)
+    if cancelled:
+        raise asyncio.CancelledError
     if errors:
         raise ExceptionGroup("Failed to close probe resources", errors)
 
@@ -220,7 +225,8 @@ async def verify_model(provider: str, key: str, base_url: str, declaration: Mode
             try:
                 await finish_owned_work(_close(model))
             except asyncio.CancelledError:
-                raise
+                if not body_failed:
+                    raise
             except Exception:
                 # Cleanup failure must not turn a failed probe into a success.
                 if not body_failed:

@@ -850,3 +850,53 @@ def test_region_catalog_effective_status_order_and_legacy_key_readback(http: tup
         assert config["api_key"] == "historical-key" and config["region"] == "intl" and config["api_base"] == "https://api.siliconflow.com/v1"
     item = next(row for row in client.get("/api/v1/models").json()["data"]["items"] if row["id"] == identifier)
     assert item["status"] == "active" and item["effective_status"] == "inactive"
+
+
+def test_provider_inventory_projects_owned_capabilities_without_credentials(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, owner, engine, module = http
+    create(client)
+    registered = client.post("/api/v1/providers/OpenAI/instances/first/models", json={"model_name": "custom-ocr", "model_types": ["ocr"], "max_tokens": 0})
+    assert registered.status_code == 200
+    assert client.patch("/api/v1/providers/OpenAI/instances/first", json={"status": "inactive"}).status_code == 200
+    foreign = uuid4().hex
+    with Session(engine) as db:
+        db.add(tenant(foreign))
+        provider = TenantModelProvider(id=uuid4().hex, tenant_id=foreign, provider_name="OpenAI", status="active")
+        db.add(provider)
+        db.flush()
+        instance = TenantModelInstance(id=uuid4().hex, provider_id=provider.id, instance_name="foreign", api_key="private-foreign-key", base_url="", region="", status="active")
+        db.add(instance)
+        row = TenantLLM(tenant_id=foreign, llm_factory="OpenAI", llm_name="foreign-only", mdl_type="rerank", api_key="private-foreign-key", max_tokens=0, status="1")
+        db.add(row)
+        db.flush()
+        db.add(TenantModel(id=row.id, instance_id=instance.id, model_name="foreign-only", model_types=["rerank"], is_tools=False))
+        db.commit()
+    # A provider can disappear from the static catalog while its registered
+    # tenant inventory remains visible, including disabled custom capabilities.
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [])
+    statements: list[str] = []
+
+    async def projected(db: AsyncSession, tenant_id: str) -> dict[str, set[str]]:
+        def capture(_conn: Any, _cursor: Any, statement: str, _params: Any, _context: Any, _many: bool) -> None:
+            statements.append(statement)
+
+        connection = await db.connection()
+        event.listen(connection.sync_connection, "before_cursor_execute", capture)
+        try:
+            return await original(db, tenant_id)
+        finally:
+            event.remove(connection.sync_connection, "before_cursor_execute", capture)
+
+    original = module.service.provider_capabilities_for_owner
+    monkeypatch.setattr(module.service, "provider_capabilities_for_owner", projected)
+    result = client.get("/api/v1/providers")
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["items"][0]["model_types"] == ["chat", "image2text", "ocr"]
+    assert len(statements) == 1
+    projection = statements[0].split("FROM", 1)[0].lower()
+    assert "provider_name" in projection and "model_types" in projection
+    assert "api_key" not in projection and "base_url" not in projection
+    with Session(engine) as db:
+        assert db.scalar(select(TenantModelInstance).where(TenantModelInstance.instance_name == "first")).status == "inactive"
+        assert db.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id != owner)) == 1
+        assert db.scalar(select(TenantLLM).where(TenantLLM.tenant_id == foreign)).api_key == "private-foreign-key"
