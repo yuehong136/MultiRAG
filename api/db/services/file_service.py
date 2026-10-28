@@ -351,22 +351,9 @@ class FileService(CommonService):
         return size
 
     @classmethod
-    def add_file_from_kb(cls, db: Session, doc: dict, kb_folder_id: str, tenant_id: str):
-        if File2DocumentService.get_by_document_id(db, doc["id"]):
-            return
-        file_data = {
-            "id": get_uuid(),
-            "parent_id": kb_folder_id,
-            "tenant_id": tenant_id,
-            "created_by": tenant_id,
-            "name": doc["name"],
-            "type": doc["type"],
-            "size": doc["size"],
-            "location": doc["location"],
-            "source_type": FileSource.KNOWLEDGEBASE,
-        }
-        file = cls.save(db, **file_data)
-        File2DocumentService.save(db, **{"id": get_uuid(), "file_id": file.id, "document_id": doc["id"]})
+    def add_file_from_kb(cls, db: Session, doc: dict[str, Any], kb_folder_id: str, tenant_id: str, *, actor_id: str | None = None) -> None:
+        # The omitted actor is reserved for existing owner maintenance calls.
+        File2DocumentService.create_file_for_document(db, doc["id"], kb_folder_id, actor_id=tenant_id if actor_id is None else actor_id)
 
     @classmethod
     def move_file(cls, db: Session, file_ids: list[str], folder_id: str):
@@ -487,7 +474,7 @@ class FileService(CommonService):
                 }
                 DocumentService.insert(db, doc)
 
-                cls.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+                cls.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id, actor_id=user_id)
                 files_info.append((doc, file_blob))  # 返回文档信息和二进制数据
             except Exception as e:
                 err.append(f"{filename}: {e!s}")

@@ -374,7 +374,7 @@ async def upload_documents(
             DocumentService.insert(db, doc)
 
             # 在知识库文件夹中添加文件记录
-            FileService.add_file_from_kb(db, doc, kb_folder["id"], dataset.tenant_id)
+            FileService.add_file_from_kb(db, doc, kb_folder["id"], dataset.tenant_id, actor_id=user.id)
             uploaded_docs_json.append(doc)
         except Exception as e:
             # 记录处理过程中出现的错误

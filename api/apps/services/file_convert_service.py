@@ -1,15 +1,12 @@
 import logging
-from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
 from api.db.db_models import db_connection
-from api.db.services import duplicate_name
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
-from api.db.services.knowledgebase_service import KnowledgebaseService
 from common.misc_utils import get_uuid
 
 
@@ -20,6 +17,7 @@ def convert_files(db: Session, file_ids: list[str], kb_ids: list[str], user_id: 
         file = FileService.get_by_id(db, file_id)
         if not file:
             raise LookupError("File not found during conversion.")
+        expected_file = file.to_dict()
         existing_kb_ids: set[str] = set()
         informs = File2DocumentService.get_by_file_id(db, file_id)
         for inform in informs:
@@ -37,40 +35,16 @@ def convert_files(db: Session, file_ids: list[str], kb_ids: list[str], user_id: 
                     raise RuntimeError("Document removal failed during conversion.")
                 File2DocumentService.delete_by_document_id(db, doc_id)
 
-        def existing_name(**filters: Any) -> Any:
-            return DocumentService.query(db, **filters)
-
         for kb_id in targets:
             if kb_id in existing_kb_ids:
                 continue
-            kb = KnowledgebaseService.get_by_id(db, kb_id)
-            if not kb:
-                raise LookupError("Dataset not found during conversion.")
-            filename = duplicate_name(existing_name, name=file.name, kb_id=kb_id)
-
-            doc = DocumentService.insert(
+            File2DocumentService.create_document_for_file(
                 db,
-                {
-                    "id": get_uuid(),
-                    "kb_id": kb.id,
-                    "parser_id": FileService.get_parser(file.type, filename, kb.parser_id),
-                    "pipeline_id": kb.pipeline_id,
-                    "parser_config": kb.parser_config,
-                    "created_by": user_id,
-                    "type": file.type,
-                    "name": filename,
-                    "suffix": Path(filename).suffix.lstrip("."),
-                    "location": file.location,
-                    "size": file.size,
-                },
-            )
-            File2DocumentService.insert(
-                db,
-                {
-                    "id": get_uuid(),
-                    "file_id": file_id,
-                    "document_id": doc.id,
-                },
+                file_id,
+                kb_id,
+                actor_id=user_id,
+                expected_file=expected_file,
+                document_id=get_uuid(),
             )
 
 

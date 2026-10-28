@@ -572,6 +572,11 @@ class FileAdmin(ModelView, model=File):
 class File2DocumentAdmin(ModelView, model=File2Document):
     """文件文档关联"""
 
+    # Mapping writes must pass the actor-scoped attachment/deletion services.
+    can_create = False
+    can_edit = False
+    can_delete = False
+
     name = "文件文档"
     name_plural = "文件文档关联"
     icon = "fa-solid fa-link"

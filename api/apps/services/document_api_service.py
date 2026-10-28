@@ -229,7 +229,7 @@ def create_empty_document(db: Session, dataset_id: str, tenant_id: str, name: st
         "size": 0,
     }
     DocumentService.insert(db, doc)
-    FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+    FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id, actor_id=tenant_id)
     persisted = DocumentService.get_by_id(db, doc["id"])
     if persisted is None:
         raise RuntimeError("Created document could not be read back.")

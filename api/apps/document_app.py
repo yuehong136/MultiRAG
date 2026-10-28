@@ -724,7 +724,7 @@ def web_crawl(request_body: WebCrawlRequest, db: Session = Depends(get_db), user
         if re.search(r"\.(eml)$", filename):
             doc["parser_id"] = ParserType.EMAIL.value
         DocumentService.insert(db, doc)
-        FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id)
+        FileService.add_file_from_kb(db, doc, kb_folder["id"], kb.tenant_id, actor_id=user.id)
     except Exception as e:
         return construct_error_response(e)
     return construct_json_result(data=doc)

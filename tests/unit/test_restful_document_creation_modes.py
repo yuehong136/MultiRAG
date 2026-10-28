@@ -2,8 +2,10 @@
 
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
 from api.apps.services import document_api_service
 from api.db import FileType
@@ -79,7 +81,7 @@ def test_creation_routes_keep_legacy_paths_deprecated(client):
     assert paths["/v1/document/create"]["post"]["deprecated"] is True
 
 
-def test_empty_mode_creates_virtual_document_and_file_link(db, monkeypatch):
+def test_empty_mode_creates_virtual_document_and_file_link(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     kb = Knowledgebase(id="kb1", tenant_id="owner", name="dataset", parser_id="naive", pipeline_id="pipe1", parser_config={"chunk_token_num": 128})
     seen = {}
     monkeypatch.setattr(KnowledgebaseService, "get_by_id", classmethod(lambda cls, s, dataset_id: kb))
@@ -88,7 +90,11 @@ def test_empty_mode_creates_virtual_document_and_file_link(db, monkeypatch):
     monkeypatch.setattr(FileService, "get_kb_folder", classmethod(lambda cls, s, tenant_id: {"id": "root"}))
     monkeypatch.setattr(FileService, "new_a_file_from_kb", classmethod(lambda cls, s, tenant_id, name, parent_id: {"id": "folder"}))
     monkeypatch.setattr(DocumentService, "insert", classmethod(lambda cls, s, doc: seen.update(doc=doc.copy())))
-    monkeypatch.setattr(FileService, "add_file_from_kb", classmethod(lambda cls, s, doc, folder_id, tenant_id: seen.update(link=(doc.copy(), folder_id, tenant_id))))
+
+    def capture_link(cls: Any, session: Session, doc: dict[str, Any], folder_id: str, tenant_id: str, *, actor_id: str) -> None:
+        seen.update(link=(doc.copy(), folder_id, tenant_id, actor_id))
+
+    monkeypatch.setattr(FileService, "add_file_from_kb", classmethod(capture_link))
     monkeypatch.setattr(DocumentService, "get_by_id", classmethod(lambda cls, s, doc_id: SimpleNamespace(id=doc_id)))
     monkeypatch.setattr(document_api_service, "map_doc_keys", lambda s, doc: {"id": doc.id})
 
@@ -98,7 +104,7 @@ def test_empty_mode_creates_virtual_document_and_file_link(db, monkeypatch):
     assert seen["doc"]["type"] == FileType.VIRTUAL
     assert seen["doc"]["pipeline_id"] == "pipe1"
     assert seen["doc"]["created_by"] == "member"
-    assert seen["link"] == (seen["doc"], "folder", "owner")
+    assert seen["link"] == (seen["doc"], "folder", "owner", "member")
 
 
 def test_web_mode_checks_access_before_crawl_and_reuses_upload_chain(db, monkeypatch):
