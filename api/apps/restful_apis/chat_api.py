@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import iterate_in_threadpool
 
 from api.apps.services.app_list_scope import resolve_list_owner_ids
-from api.db.db_models import get_async_db
+from api.db.db_models import Dialog, get_async_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.chunk_feedback_service import ChunkFeedbackService
 from api.db.services.conversation_service import ConversationService, structure_answer
@@ -39,6 +39,7 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService, UserTenantService
 from api.identity.principal import Principal
 from api.utils.api_utils import async_current_tenant_id, async_current_user, check_duplicate_ids, get_error_data_result, get_result
+from api.utils.chat_json import sanitize_chat_json
 from api.utils.dataset_search import normalize_search_mode, search_mode_response
 from api.utils.pagination_utils import REST_API_MAX_PAGE_SIZE, validate_rest_api_pagination
 from api.utils.reference_metadata import ReferenceMetadata, resolve_reference_metadata_preferences
@@ -550,7 +551,7 @@ def _owned_chat_exists(db: Session, tenant_id: str, chat_id: str) -> bool:
     return bool(DialogService.query(db, tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value))
 
 
-def _build_default_completion_dialog(db: Session, tenant_id: str, llm_id: str) -> SimpleNamespace:
+def _build_default_completion_dialog(db: Session, tenant_id: str, llm_id: str) -> Dialog:
     """直连聊天(无 chat_id)用的临时 dialog。
 
     未显式传 llm_id 时回退租户默认 chat 模型:我方模型解析链拒绝空名,
@@ -558,12 +559,10 @@ def _build_default_completion_dialog(db: Session, tenant_id: str, llm_id: str) -
     """
     tenant_llm_id = None
     if not llm_id:
-        tenant = TenantService.get_by_id(db, tenant_id)
-        if not tenant:
-            raise LookupError("Tenant not found!")
-        llm_id = tenant.llm_id
-        tenant_llm_id = tenant.tenant_llm_id
-    return SimpleNamespace(
+        default_model = get_tenant_default_model_by_type(db, tenant_id, LLMType.CHAT.value)
+        llm_id = f"{default_model['llm_name']}@{default_model['llm_factory']}"
+        tenant_llm_id = default_model.get("id")
+    return Dialog(
         tenant_id=tenant_id,
         llm_id=llm_id,
         tenant_llm_id=tenant_llm_id,
@@ -1348,10 +1347,15 @@ async def session_completion(
                 override_model_config = await db.run_sync(lambda s: get_model_config_by_type_and_name(s, dialog.tenant_id, model_type, chat_model_id))  # TODO(async-phase4)
             except Exception:
                 return _error(f"Cannot use specified model {chat_model_id}.")
-            dialog = SimpleNamespace(**deepcopy(_model_to_dict(dialog)))
+            dialog = Dialog(**deepcopy(_model_to_dict(dialog)))
             dialog.llm_id = chat_model_id
             dialog.tenant_llm_id = override_model_config.get("id")
             dialog.llm_setting = chat_model_config
+        elif not dialog.llm_id:
+            default_model = await db.run_sync(lambda s: get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT.value))  # TODO(async-phase4)
+            dialog = Dialog(**deepcopy(_model_to_dict(dialog)))
+            dialog.llm_id = f"{default_model['llm_name']}@{default_model['llm_factory']}"
+            dialog.tenant_llm_id = default_model.get("id")
 
         def _format_answer(ans: dict[str, Any]) -> dict[str, Any]:
             formatted = structure_answer(conv, ans, message_id, session_id)
@@ -1374,7 +1378,7 @@ async def session_completion(
                 async with aclosing(async_chat(dialog, messages, db, True, **req)) as answers:
                     async for ans in answers:
                         answered = answered or (isinstance(ans.get("answer"), str) and not ans.get("start_to_think") and not ans.get("end_to_think"))
-                        yield "data:" + json.dumps({"code": 0, "message": "", "data": _format_answer(ans)}, ensure_ascii=False) + "\n\n"
+                        yield "data:" + json.dumps(sanitize_chat_json({"code": 0, "message": "", "data": _format_answer(ans)}), ensure_ascii=False, allow_nan=False) + "\n\n"
                 if not answered:
                     raise RuntimeError("Chat completion returned no answer.")
                 await persist_answer()
@@ -1414,8 +1418,9 @@ async def session_completion(
                 break
         if answer is None:
             raise RuntimeError("Chat completion returned no answer.")
+        response = get_result(data=sanitize_chat_json(answer))
         await persist_answer()
-        return get_result(data=answer)
+        return response
     except RuntimeAttachmentError as e:
         await db.rollback()
         return _error(str(e), RetCode.ARGUMENT_ERROR)

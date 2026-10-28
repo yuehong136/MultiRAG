@@ -19,6 +19,7 @@ from api.db.services.dialog_service import DialogService, async_chat
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.utils.api_utils import async_token_required, get_error_data_result
+from api.utils.chat_json import sanitize_chat_json
 from api.utils.reference_metadata import enrich_reference_metadata_async, resolve_reference_metadata_preferences
 from common.constants import RetCode, StatusEnum
 from common.metadata_utils import convert_conditions, meta_filter
@@ -99,7 +100,7 @@ def _chunk(completion_id: str, model: str, created: int, delta: dict[str, Any], 
 
 
 def _sse(payload: dict[str, Any] | str) -> str:
-    return f"data:{json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else payload}\n\n"
+    return f"data:{json.dumps(sanitize_chat_json(payload), ensure_ascii=False, allow_nan=False) if isinstance(payload, dict) else payload}\n\n"
 
 
 async def _stream_chat_completion_sse(
@@ -277,7 +278,7 @@ async def openai_chat_completions(
     completion_tokens = num_tokens_from_string(content)
     message: dict[str, Any] = {"role": "assistant", "content": content}
     if need_reference:
-        message["reference"] = reference
+        message["reference"] = sanitize_chat_json(reference)
     return {
         "id": completion_id,
         "object": "chat.completion",

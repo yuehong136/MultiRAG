@@ -265,3 +265,179 @@ def test_question_attachment_uses_uploaded_authority_and_committed_descriptor(re
     denied = ctx.request("POST", "/chat/completions", credential="api_key", json={"question": "read foreign", "files": [descriptor], "stream": False})
     assert denied.status_code == 200 and denied.json()["code"] != 0, denied.text
     assert ctx.snapshot() == before and len(ctx.provider["calls"]) == count
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_saved_empty_and_explicit_model_resolution_without_config_mutation(rest_chat_contract: RestChatContract, monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    import core.llm as providers
+    from api.db.db_models import LLM, Dialog, Tenant, TenantLLM
+
+    ctx = rest_chat_contract
+    selected: list[str] = []
+
+    class SelectedChat:
+        def __init__(self, key: str, model: str, **kwargs: Any) -> None:
+            assert key == "controlled"
+            selected.append(model)
+
+        async def async_chat(self, *args: Any, **kwargs: Any) -> tuple[str, int]:
+            return "selected", 0
+
+        async def async_chat_streamly(self, *args: Any, **kwargs: Any) -> Any:
+            yield "selected"
+            yield 0
+
+    monkeypatch.setitem(providers.ChatModel, ctx.factory, SelectedChat)
+    # The shared fixture already owns all rows for this exact factory/tenant.
+    ctx.runtime["journal"].event("reserve-chat-models", factory=ctx.factory, owner=ctx.runtime["owners"][0], names=["saved", "override"])
+    with Session(ctx.runtime["engine"]) as db:
+        ids = {}
+        for model in ("saved", "override"):
+            db.add(LLM(fid=ctx.factory, llm_name=model, mdl_type="chat", tags="CHAT", max_tokens=8192, is_tools=False))
+            row = TenantLLM(tenant_id=ctx.runtime["owners"][0], llm_factory=ctx.factory, llm_name=model, mdl_type="chat", api_key="controlled", api_base="", max_tokens=8192)
+            db.add(row)
+            db.flush()
+            ids[model] = row.id
+        default = db.scalar(sa.select(TenantLLM).where(TenantLLM.tenant_id == ctx.runtime["owners"][0], TenantLLM.llm_factory == ctx.factory, TenantLLM.llm_name == "chat"))
+        assert default is not None
+        tenant = db.get(Tenant, ctx.runtime["owners"][0])
+        assert tenant is not None
+        tenant.tenant_llm_id = default.id
+        db.commit()
+    chat = ctx.create_chat(llm_id=f"saved@{ctx.factory}", prompt_config={"system": "Answer directly", "parameters": [], "refine_multiturn": False})
+    saved = ctx.read_chat(chat["id"])
+    assert saved["tenant_llm_id"] == ids["saved"]
+    # Numeric tenant defaults are authoritative even when the old name is stale.
+    ctx.runtime["journal"].event("reserve-tenant-default-update", owner=ctx.runtime["owners"][0], fields=["llm_id"])
+    with Session(ctx.runtime["engine"]) as db:
+        db.execute(sa.update(Tenant).where(Tenant.id == ctx.runtime["owners"][0]).values(llm_id="stale-default"))
+        db.commit()
+    for override, expected in ((None, "saved"), (f"override@{ctx.factory}", "override")):
+        body: dict[str, Any] = {"chat_id": chat["id"], "question": "select", "stream": stream}
+        if override:
+            body["llm_id"] = override
+        response = ctx.request("POST", "/chat/completions", json=body)
+        if stream:
+            assert sse_frames(response)[-1]["data"] is True, response.text
+        else:
+            assert response.json()["code"] == 0, response.text
+        assert selected[-1] == expected
+        assert ctx.read_chat(chat["id"]) == saved
+    before = ctx.snapshot()
+    calls = len(selected)
+    denied = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "question": "deny", "llm_id": f"unknown@{ctx.factory}", "stream": stream})
+    assert denied.json()["code"] != 0 and len(selected) == calls
+    assert ctx.snapshot() == before
+    ctx.runtime["journal"].event("reserve-chat-update", chat_id=chat["id"], fields=["llm_id", "tenant_llm_id"])
+    with Session(ctx.runtime["engine"]) as db:
+        db.execute(sa.update(Dialog).where(Dialog.id == chat["id"]).values(llm_id="", tenant_llm_id=None))
+        db.commit()
+    empty = ctx.read_chat(chat["id"])
+    response = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "question": "default", "stream": stream})
+    if stream:
+        assert sse_frames(response)[-1]["data"] is True, response.text
+    else:
+        assert response.json()["code"] == 0, response.text
+    assert selected[-1] == "chat" and ctx.read_chat(chat["id"]) == empty
+    before = ctx.snapshot()
+    response = ctx.request("POST", "/chat/completions", json={"question": "numeric default direct", "stream": stream})
+    if stream:
+        assert sse_frames(response)[-1]["data"] is True, response.text
+    else:
+        assert response.json()["code"] == 0, response.text
+    assert selected[-1] == "chat" and ctx.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_actual_openai_sdk_text_parts_rejections_and_sql_readback(rest_chat_contract: RestChatContract, stream: bool) -> None:
+    from openai import OpenAI
+
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(credential="api_key", prompt_config={"system": "Answer directly", "parameters": []})
+    before = ctx.snapshot()
+    with OpenAI(api_key=ctx.runtime["api_key"], base_url=f"{ctx.runtime['base']}/api/v1/openai/{chat['id']}", max_retries=0) as sdk:
+        result = sdk.chat.completions.create(model="model", messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}, {"type": "text", "text": "World"}]}], stream=stream)
+        if stream:
+            chunks = list(result)
+            assert chunks[-1].choices[0].finish_reason == "stop"
+            assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Controlled answer"
+        else:
+            assert result.choices[0].message.content == "Controlled answer"
+    assert ctx.provider["calls"][-1]["history"][-1]["content"] == "Hello\nWorld"
+    assert ctx.snapshot() == before
+    count = len(ctx.provider["calls"])
+    for bad in (None, 0, {}, [None], [{"type": "text", "text": 0}], [{"type": "text", "text": "keep"}, {"type": "image_url", "image_url": {"url": "http://example.invalid/image.png"}}]):
+        response = ctx.request("POST", f"/openai/{chat['id']}/chat/completions", credential="api_key", json={"model": "model", "messages": [{"role": "user", "content": bad}], "stream": stream})
+        assert response.json()["code"] != 0 and len(ctx.provider["calls"]) == count
+        assert ctx.snapshot() == before
+    ctx.provider["failure"] = True
+    response = ctx.request(
+        "POST",
+        f"/openai/{chat['id']}/chat/completions",
+        credential="api_key",
+        json={"model": "model", "messages": [{"role": "user", "content": [{"type": "text", "text": "failure"}]}], "stream": stream},
+    )
+    if stream:
+        frames = sse_frames(response)
+        assert frames[-1] == "[DONE]" and "error" in frames[-2]
+        assert not any(isinstance(frame, dict) and frame.get("choices", [{}])[0].get("finish_reason") == "stop" for frame in frames[:-1])
+    else:
+        assert response.json()["code"] != 0
+    assert ctx.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("protocol", ["rest", "openai"])
+def test_chat_numeric_wire_boundary_and_independent_sql_readback(rest_chat_contract: RestChatContract, monkeypatch: pytest.MonkeyPatch, stream: bool, protocol: str) -> None:
+    import sys
+
+    import numpy as np
+
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(credential="api_key", prompt_config={"system": "Answer directly", "parameters": []})
+    before = ctx.snapshot()
+    route = sys.modules[f"api.apps.restful_apis.{'chat' if protocol == 'rest' else 'openai'}"]
+    source = {
+        "answer": "numeric answer",
+        "reference": {
+            "chunks": [
+                {
+                    "chunk_id": "c",
+                    "document_id": "doc",
+                    "similarity": np.float32("nan"),
+                    "vector_similarity": float("-inf"),
+                    "term_similarity": np.float16(0),
+                    "positions": [[np.int64(0), np.int64(2)]],
+                }
+            ]
+        },
+        "final": True,
+    }
+
+    async def controlled_chat(*args: Any, **kwargs: Any) -> Any:
+        yield source
+
+    def reject_constant(value: str) -> Any:
+        raise AssertionError(f"Invalid JSON numeric token {value}")
+
+    # This case controls the orchestration output, not a real retrieval engine.
+    # Authentication, dialog lookup, HTTP serialization and SQL readback are real.
+    monkeypatch.setattr(route, "async_chat", controlled_chat)
+    path = "/chat/completions" if protocol == "rest" else f"/openai/{chat['id']}/chat/completions"
+    response = ctx.request("POST", path, credential="api_key", json={"model": "model", "messages": [{"role": "user", "content": "numeric"}], "reference": True, "stream": stream})
+    assert response.status_code == 200
+    if stream:
+        frames = [json.loads(line[5:], parse_constant=reject_constant) if line[5:] != "[DONE]" else "[DONE]" for line in response.text.splitlines() if line.startswith("data:")]
+        if protocol == "rest":
+            assert frames[-1]["data"] is True
+            references = frames[-2]["data"]["reference"]["chunks"]
+        else:
+            assert frames[-1] == "[DONE]" and frames[-2]["choices"][0]["finish_reason"] == "stop"
+            references = frames[-2]["choices"][0]["delta"]["reference"]
+    else:
+        body = json.loads(response.text, parse_constant=reject_constant)
+        references = body["data"]["reference"]["chunks"] if protocol == "rest" else body["choices"][0]["message"]["reference"]
+    assert references[0]["similarity"] is None and references[0]["vector_similarity"] is None
+    assert references[0]["term_similarity"] == 0 and references[0]["positions"] == [[0, 2]]
+    assert np.isnan(source["reference"]["chunks"][0]["similarity"])
+    assert ctx.snapshot() == before

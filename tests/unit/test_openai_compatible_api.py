@@ -239,3 +239,19 @@ def test_session_hint_is_stateless(openai_route: tuple[Any, Any, SimpleNamespace
     assert calls and not writes
     assert "session_id" not in calls[0]
     assert '"session_id"' not in response.text
+
+
+@pytest.mark.parametrize(
+    "content",
+    [None, 42, {}, [None], [{"type": "text"}], [{"type": "text", "text": None}], [{"type": "text", "text": 0}], [{"type": "text", "text": "keep"}, {"type": "image_url", "image_url": {"url": "x"}}]],
+)
+def test_text_arrays_reject_malformed_and_unsupported_parts_before_lookup(openai_route: tuple[Any, Any, SimpleNamespace, list[dict[str, Any]]], monkeypatch: pytest.MonkeyPatch, content: Any) -> None:
+    client, route, _, calls = openai_route
+
+    def unexpected_lookup(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("Invalid input reached SQL lookup")
+
+    monkeypatch.setattr(route.DialogService, "query", unexpected_lookup)
+    response = client.post("/api/v1/openai/dlg-1/chat/completions", json={"model": "model", "messages": [{"role": "user", "content": content}]})
+    assert response.status_code == 200 and response.json()["code"] != 0
+    assert calls == []
