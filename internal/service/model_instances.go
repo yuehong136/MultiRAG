@@ -70,9 +70,6 @@ func instanceModelDriver(provider *entity.Provider, instance *entity.TenantModel
 	baseURL := extra.BaseURL
 	if baseURL == "" {
 		baseURL = provider.URL[extra.Region]
-		if baseURL == "" {
-			baseURL = provider.URL["default"]
-		}
 	}
 	if strings.TrimSpace(baseURL) == "" && !strings.EqualFold(provider.Name, "Bedrock") {
 		return nil, nil, fmt.Errorf("model base URL is missing")
