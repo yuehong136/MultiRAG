@@ -60,6 +60,12 @@ from deepdoc.parser.pdf_parser import PlainParser, VisionParser
 from deepdoc.parser.tcadp_parser import TCADPParser
 
 
+def _is_short_header(text: str, max_tokens: int = 50) -> bool:
+    """Recognize short ATX headings without treating body text as a heading."""
+    heading = text.strip()
+    return bool(heading) and all(re.fullmatch(r"#{1,6}[ \t]+[^\r\n]+", line) for line in heading.splitlines()) and num_tokens_from_string(heading) < max_tokens
+
+
 def _normalize_section_text_for_rtl_presentation_forms(sections):
     if not sections:
         return sections
@@ -1105,7 +1111,9 @@ def chunk(
             sec_tokens = num_tokens_from_string(text)
             sec_image = section_images[idx] if section_images and idx < len(section_images) else None
 
-            if current_text and current_tokens + sec_tokens > chunk_limit:
+            # Keep short headings with the next section. Once body
+            # text is present, normal limits apply again, even for a long section.
+            if current_text and current_tokens + sec_tokens > chunk_limit and not _is_short_header(current_text):
                 merged_chunks.append(current_text)
                 merged_images.append(current_image)
                 overlap_part = ""
