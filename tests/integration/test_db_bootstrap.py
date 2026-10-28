@@ -29,6 +29,7 @@ from tests.support.database import scratch_database
 _USER_ACCOUNT_REVISION = "7c8d9e0f1a2b"
 _PRE_USER_ACCOUNT_REVISION = "e4f6a8b0c2d4"
 _PRE_PROVIDER_REVISION = "a7c9e1f3b5d7"
+_PROVIDER_REVISION = "b8d0f2a4c6e8"
 _NON_SECRET_PLACEHOLDER = "x"
 
 
@@ -515,6 +516,12 @@ def test_user_migration_refuses_downgrade_that_would_destroy_external_identity(
                 is_anonymous=False,
             )
         )
+        # Target this identity revision's data-loss guard while retaining
+        # unrelated newer tables, whose downgrade has a separate export guard.
+        connection.execute(
+            sa.text("UPDATE usr_ai.alembic_version SET version_num = :revision"),
+            {"revision": _USER_ACCOUNT_REVISION},
+        )
         cfg.attributes["connection"] = connection
 
         with pytest.raises(RuntimeError, match=message):
@@ -526,6 +533,31 @@ def test_user_migration_refuses_downgrade_that_would_destroy_external_identity(
     finally:
         transaction.rollback()
         connection.close()
+
+
+def test_provider_revision_refuses_destructive_downgrade(
+    bootstrapped_engine: sa.Engine,
+    alembic_cfg: Config,
+) -> None:
+    """Historical fixture targeting must not weaken provider export protection."""
+
+    cfg = Config(alembic_cfg.config_file_name)
+    cfg.set_main_option("script_location", alembic_cfg.get_main_option("script_location"))
+    with bootstrapped_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                sa.text("UPDATE usr_ai.alembic_version SET version_num = :revision"),
+                {"revision": _PROVIDER_REVISION},
+            )
+            cfg.attributes["connection"] = connection
+            with pytest.raises(RuntimeError, match="reviewed data export"):
+                command.downgrade(cfg, _PRE_PROVIDER_REVISION)
+
+            assert connection.execute(sa.text("SELECT version_num FROM usr_ai.alembic_version")).scalar_one() == _PROVIDER_REVISION
+            assert all(sa.inspect(connection).has_table(name, schema="usr_ai") for name in ("t_ai_tenant_model_providers", "t_ai_tenant_model_instances", "t_ai_tenant_models"))
+        finally:
+            transaction.rollback()
 
 
 def test_sync_cursor_columns_are_native_timestamptz(bootstrapped_engine):
