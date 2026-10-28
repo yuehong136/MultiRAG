@@ -167,6 +167,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_model_document_web_consumers.py",
                 "test_outlook_api.py",
                 "test_provider_web_consumers.py",
+                "test_search_connector_web_consumers.py",
                 "test_retrieval_rerank_authorization.py",
                 "test_document_file_http.py",
                 "test_session_upload_cleanup.py",
