@@ -14,6 +14,7 @@ DATABASE_TESTS = frozenset(
     {
         "test_agent_retrieval_top_k.py",
         "test_async_engine.py",
+        "test_beta_share_scope.py",
         "test_channel_candidate_gc.py",
         "test_channel_control_persistence.py",
         "test_channel_history_manager.py",
