@@ -39,6 +39,7 @@ import (
 // DocumentService document service
 type DocumentService struct {
 	deletion    *DocumentDeleteService
+	stopping    *DocumentStopService
 	db          *gorm.DB
 	documentDAO *dao.DocumentDAO
 	kbDAO       *dao.KnowledgebaseDAO
