@@ -88,7 +88,7 @@ func (dao *MCPServerDAO) ListMCPServers(ctx context.Context, tx *gorm.DB, tenant
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	query = query.Select("id", "name", "server_type", "url", "description", "variables", "create_date", "update_date").Order(clause.OrderByColumn{Column: clause.Column{Name: column}, Desc: opts.Desc})
+	query = query.Select("id", "name", "server_type", "url", "description", "create_date", "update_date").Order(clause.OrderByColumn{Column: clause.Column{Name: column}, Desc: opts.Desc})
 	if column != "id" {
 		query = query.Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}, Desc: opts.Desc})
 	}

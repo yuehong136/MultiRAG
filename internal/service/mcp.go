@@ -250,10 +250,9 @@ func (s *MCPService) ListMCPServers(ctx context.Context, userID, tenantID string
 		}
 		result.Total = total
 		for _, row := range rows {
-			variables := entity.JSONMap{}
-			if tools, ok := row.Variables["tools"]; ok {
-				variables["tools"] = tools
-			}
+			// Go management currently creates only empty tool metadata. Arbitrary
+			// saved tools may embed credentials and are not a trusted display DTO.
+			variables := entity.JSONMap{"tools": map[string]any{}}
 			// Connection URL query parameters may contain tokens.
 			endpoint, err := url.Parse(row.URL)
 			if err != nil {

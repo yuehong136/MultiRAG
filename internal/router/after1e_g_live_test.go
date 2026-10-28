@@ -125,7 +125,7 @@ func TestAfter1eGMCPAndOAuth(t *testing.T) {
 		if id == "d" {
 			name = "Other"
 		}
-		if err := db.Create(&entity.MCPServer{ID: id, TenantID: tenant, Name: name, ServerType: "sse", URL: "https://example.invalid/mcp?token=secret-query", Headers: entity.JSONMap{"Authorization": "secret-header"}, Variables: entity.JSONMap{"authorization_token": "secret-variable", "nested": map[string]any{"password": "secret-nested"}, "tools": map[string]any{}}, BaseModel: entity.BaseModel{CreateTime: &stamp, CreateDate: &date}}).Error; err != nil {
+		if err := db.Create(&entity.MCPServer{ID: id, TenantID: tenant, Name: name, ServerType: "sse", URL: "https://example.invalid/mcp?token=secret-query", Headers: entity.JSONMap{"Authorization": "secret-header"}, Variables: entity.JSONMap{"authorization_token": "secret-variable", "nested": map[string]any{"password": "secret-nested"}, "tools": map[string]any{"display": map[string]any{"description": "cached metadata", "secret": "secret-tool", "headers": map[string]any{"Authorization": "secret-tool-header"}, "config": map[string]any{"api_key": "secret-tool-nested"}}}}, BaseModel: entity.BaseModel{CreateTime: &stamp, CreateDate: &date}}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -218,6 +218,21 @@ func TestAfter1eGMCPAndOAuth(t *testing.T) {
 	if payload["code"] != float64(0) || payload["data"].(map[string]any)["total"] != float64(4) {
 		t.Fatal("unfiltered list", payload)
 	}
+	for _, item := range payload["data"].(map[string]any)["mcp_servers"].([]any) {
+		variables := item.(map[string]any)["variables"].(map[string]any)
+		tools, ok := variables["tools"].(map[string]any)
+		if !ok || len(variables) != 1 || len(tools) != 0 {
+			t.Fatal("list must expose only empty tools")
+		}
+	}
+	var toolSecret, toolHeader, toolNested string
+	if err := reader.QueryRow(`SELECT variables->'tools'->'display'->>'secret',variables->'tools'->'display'->'headers'->>'Authorization',variables->'tools'->'display'->'config'->>'api_key' FROM public.t_ai_mcp_server WHERE id='a'`).Scan(&toolSecret, &toolHeader, &toolNested); err != nil {
+		t.Fatal(err)
+	}
+	if toolSecret != "secret-tool" || toolHeader != "secret-tool-header" || toolNested != "secret-tool-nested" {
+		t.Fatal("list changed persisted tool credentials")
+	}
+	j.Event("mcp-tool-secret-independent-readback", map[string]any{"responseEmptyTools": true, "sqlToolSecretHeaderAndNestedConfigUnchanged": true})
 	payload = list("?mcp_ids=[]", "owner")
 	data := payload["data"].(map[string]any)
 	if data["total"] != float64(0) || len(data["mcp_servers"].([]any)) != 0 {
