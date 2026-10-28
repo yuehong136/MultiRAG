@@ -1,7 +1,9 @@
 """Registered REST management routes with authenticated SQL roundtrips."""
 
 import json
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from typing import Any
 from uuid import uuid4
 
@@ -9,11 +11,12 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from api.db.db_models import Conversation, Dialog, UserTenant
+from api.db.db_models import Conversation, Dialog, File, UserTenant
 from common.constants import RetCode
 from tests.support.rest_chat_contract import RestChatContract
 from tests.support.rest_chat_contract import rest_chat_contract as rest_chat_contract
 from tests.support.rest_chat_contract import runtime_upload_api as runtime_upload_api
+from tests.support.runtime_upload import read_object
 
 
 @pytest.mark.parametrize("credential", ["jwt", "api_key"])
@@ -209,3 +212,196 @@ def test_unauthenticated_management_has_no_effect(rest_chat_contract: RestChatCo
     for method, path, body in (("POST", "/chats", {"name": "denied"}), ("GET", "/chats", None), ("PATCH", f"/chats/{chat['id']}", {"name": "denied"}), ("DELETE", "/chats", {"delete_all": True})):
         assert ctx.request(method, path, credential=None, json=body).status_code == 401
     assert ctx.snapshot() == before
+
+
+@pytest.mark.parametrize("credential", ["jwt", "api_key"])
+def test_session_concurrent_crud_and_hundred_delete(rest_chat_contract: RestChatContract, credential: str) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat(credential=credential)
+    path = f"/chats/{chat['id']}/sessions"
+
+    def create(index: int) -> dict[str, Any]:
+        response = ctx.request("POST", path, credential=credential, json={"name": f"session-{index:03d}"})
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        return response.json()["data"]
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        sessions = list(pool.map(create, range(20)))
+    ids = [item["id"] for item in sessions]
+    assert len(set(ids)) == 20
+    assert all(ctx.read_session(identifier)["dialog_id"] == chat["id"] for identifier in ids)
+
+    def update(identifier: str) -> None:
+        name = f"updated-{identifier}"
+        for _ in range(2):
+            response = ctx.request("PATCH", f"{path}/{identifier}", credential=credential, json={"name": name})
+            assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        assert ctx.read_session(identifier)["name"] == name
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(update, ids))
+
+    def read(_: int) -> set[str]:
+        response = ctx.request("GET", path, credential=credential, params={"page_size": 100})
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        return {item["id"] for item in response.json()["data"]}
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        assert all(actual == set(ids) for actual in pool.map(read, range(10)))
+
+    def delete(identifier: str) -> None:
+        response = ctx.request("DELETE", path, credential=credential, json={"ids": [identifier]})
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        assert response.json()["data"] is True
+        assert ctx.read_session(identifier) is None
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(delete, ids))
+        bulk = list(pool.map(create, range(100)))
+    bulk_ids = [item["id"] for item in bulk]
+    assert len(set(bulk_ids)) == 100
+    assert all(ctx.read_session(identifier) is not None for identifier in bulk_ids)
+    response = ctx.request("DELETE", path, credential=credential, json={"ids": bulk_ids})
+    assert response.status_code == 200 and response.json()["code"] == 0, response.text
+    assert response.json()["data"] is True
+    assert all(ctx.read_session(identifier) is None for identifier in bulk_ids)
+    assert read(0) == set()
+
+
+def test_session_filters_stable_pages_and_strict_query(rest_chat_contract: RestChatContract) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat()
+    path = f"/chats/{chat['id']}/sessions"
+    sessions = []
+    for name in ["same"] * 5 + ["other", "final"]:
+        response = ctx.request("POST", path, json={"name": name})
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        sessions.append(response.json()["data"])
+    # Force tied sort values; stable paging must still include each ID once.
+    ids = [item["id"] for item in sessions]
+    ctx.runtime["journal"].event("reserve-session-sort-fixture", ids=ids, table="conversation")
+    with Session(ctx.runtime["engine"]) as db:
+        db.execute(sa.update(Conversation).where(Conversation.id.in_(ids)).values(create_time=1234567890000))
+        db.commit()
+    before = ctx.snapshot()
+    for descending in (False, True):
+        expected = sorted(ids, reverse=descending)
+        actual = []
+        for page in range(1, 6):
+            response = ctx.request("GET", path, params={"page": page, "page_size": 2, "orderby": "create_time", "desc": descending})
+            assert response.status_code == 200 and response.json()["code"] == 0, response.text
+            actual.extend(item["id"] for item in response.json()["data"])
+        assert actual == expected
+    for params, expected in (
+        ({"name": "same"}, ids[:5]),
+        ({"id": ids[0]}, ids[:1]),
+        ({"id": ids[0], "name": "other"}, []),
+        ({"id": "missing"}, []),
+        ({"user_id": ctx.runtime["owners"][1]}, []),
+        ({"page": 0, "page_size": 0}, ids),
+    ):
+        response = ctx.request("GET", path, params=params)
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        assert {item["id"] for item in response.json()["data"]} == set(expected)
+    invalid = [
+        {"page": "-1"},
+        {"page": "1.5"},
+        {"page": "1.0"},
+        {"page": "NaN"},
+        {"page_size": "-1"},
+        {"page_size": "101"},
+        {"page_size": "1.0"},
+        {"desc": "unknown"},
+        [("page", "1"), ("page", "2")],
+        [("page_size", "1"), ("page_size", "2")],
+    ]
+    for params in invalid:
+        response = ctx.request("GET", path, params=params)
+        assert response.status_code == 422, (params, response.text)
+        assert ctx.snapshot() == before
+    for order in ("name", "update_time"):
+        response = ctx.request("GET", path, params={"orderby": order, "desc": False})
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        values = response.json()["data"]
+        assert [(item[order], item["id"]) for item in values] == sorted((item[order], item["id"]) for item in values)
+    assert ctx.snapshot() == before
+
+
+def test_session_auth_validation_and_deleted_chat_preserve_sql(rest_chat_contract: RestChatContract) -> None:
+    ctx = rest_chat_contract
+    chat = ctx.create_chat()
+    path = f"/chats/{chat['id']}/sessions"
+    created = ctx.request("POST", path, json={"name": "kept"}).json()
+    assert created["code"] == 0
+    identifier = created["data"]["id"]
+    before = ctx.snapshot()
+    for credential in (None, "invalid_token"):
+        ctx.runtime["invalid_token"] = "invalid-token"
+        for method, target, body in (("POST", path, {}), ("GET", path, None), ("PATCH", f"{path}/{identifier}", {"name": "denied"}), ("DELETE", path, {"ids": [identifier]})):
+            response = ctx.request(method, target, credential=credential, json=body)
+            assert response.status_code == 401, response.text
+            assert ctx.snapshot() == before
+    for name in ("", " ", 1):
+        for method, target in (("POST", path), ("PATCH", f"{path}/{identifier}")):
+            response = ctx.request(method, target, json={"name": name})
+            if isinstance(name, str):
+                assert response.status_code == 200 and response.json()["code"] == RetCode.DATA_ERROR, response.text
+            else:
+                assert response.status_code == 422, response.text
+            assert ctx.snapshot() == before
+    assert ctx.request("DELETE", "/chats", json={"ids": [chat["id"]]}).json()["code"] == 0
+    before = ctx.snapshot()
+    for method, target, body in (("POST", path, {}), ("GET", path, None), ("PATCH", f"{path}/{identifier}", {"name": "denied"}), ("DELETE", path, {"delete_all": True})):
+        response = ctx.request(method, target, json=body)
+        assert response.status_code == 200 and response.json()["code"] == RetCode.AUTHENTICATION_ERROR, response.text
+        assert ctx.snapshot() == before
+
+
+@pytest.mark.parametrize("credential", ["jwt", "api_key"])
+def test_file_upload_persists_sql_and_object_bytes(runtime_upload_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, credential: str) -> None:
+    import requests
+
+    from api.apps.services import file_api_service
+
+    env = runtime_upload_api
+    owner = env["owners"][credential == "api_key"]
+    folder, file_id = uuid4().hex, uuid4().hex
+    name, blob = "uploaded.txt", b"uploaded bytes \xe4\xb8\xad\xe6\x96\x87"
+    env["journal"].event("reserve-file-upload", database=env["engine"].url.database, owner=owner, folder=folder, file_id=file_id, bucket=env["bucket"], object_key=f"{folder}/{name}")
+
+    @contextmanager
+    def scratch_db() -> Iterator[Session]:
+        with Session(env["engine"]) as db:
+            yield db
+
+    monkeypatch.setattr(file_api_service, "db_connection", scratch_db)
+    monkeypatch.setattr(file_api_service, "get_uuid", lambda: file_id)
+    try:
+        with Session(env["engine"]) as db:
+            db.add(File(id=folder, parent_id=folder, tenant_id=owner, created_by=owner, name="upload-folder", type="folder", location="", size=0))
+            db.commit()
+        response = requests.post(
+            f"{env['base']}/api/v1/files", headers={"Authorization": f"Bearer {env[credential]}"}, data={"parent_id": folder}, files={"file": (name, blob, "text/plain")}, timeout=30
+        )
+        assert response.status_code == 200 and response.json()["code"] == 0, response.text
+        data = response.json()["data"]
+        assert len(data) == 1 and data[0]["id"] == file_id
+        with Session(env["engine"]) as db:
+            row = db.get(File, file_id)
+            assert row is not None
+            assert (row.name, row.parent_id, row.tenant_id, row.created_by, row.size, row.location) == (name, folder, owner, owner, len(blob), name)
+        bucket, key = env["storage_adapter"]._resolve_bucket_and_path(folder, name)
+        assert bucket == env["bucket"]
+        assert read_object(env["storage"], bucket, key) == blob
+        listing = requests.get(f"{env['base']}/api/v1/files", headers={"Authorization": f"Bearer {env[credential]}"}, params={"parent_id": folder}, timeout=30)
+        assert listing.status_code == 200 and listing.json()["code"] == 0, listing.text
+        assert [item["id"] for item in listing.json()["data"]["files"]] == [file_id]
+        env["journal"].event("upload-readback", file_id=file_id, sql_committed=True, bytes_equal=True, listed=True)
+    finally:
+        with Session(env["engine"]) as db:
+            db.execute(sa.delete(File).where(File.id.in_([file_id, folder])))
+            db.commit()
+        with env["engine"].connect() as connection:
+            remaining = connection.scalar(sa.select(sa.func.count()).select_from(File).where(File.id.in_([file_id, folder])))
+        env["journal"].event("upload-sql-cleanup-readback", ids=[file_id, folder], remaining=remaining)
+        assert remaining == 0

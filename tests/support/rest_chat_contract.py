@@ -25,6 +25,8 @@ class RestChatContract:
     provider: dict[str, Any]
 
     def request(self, method: str, path: str, *, credential: str | None = "jwt", **kwargs: Any) -> requests.Response:
+        if method in {"POST", "PATCH", "PUT", "DELETE"}:
+            self.runtime["journal"].event("reserve-chat-request", method=method, path=path, owners=self.runtime["owners"], tables=["dialog", "conversation"])
         headers = {"Authorization": f"Bearer {self.runtime[credential]}"} if credential else {}
         return requests.request(method, f"{self.runtime['base']}/api/v1{path}", headers=headers, timeout=30, **kwargs)
 
@@ -66,6 +68,7 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
     datasets = {key: uuid4().hex for key in ("parsed", "unparsed", "foreign")}
     state: dict[str, Any] = {"calls": [], "answer": "Controlled answer", "failure": False}
     record = env["record"]["rest_chat"] = {"factory": factory, "datasets": datasets, "owners": owners}
+    env["journal"].event("reserve-chat-scope", owners=owners, factory=factory, datasets=datasets, tables=["dialog", "conversation", "knowledgebase", "tenant_llm", "llm"])
 
     def save_record() -> None:
         env["record_path"].write_text(json.dumps(env["record"]))
@@ -94,6 +97,7 @@ def rest_chat_contract(runtime_upload_api: dict[str, Any], monkeypatch: pytest.M
                 )
             }
         record["remaining"] = remaining
+        env["journal"].event("chat-cleanup-readback", remaining=remaining)
         save_record()
         assert not any(remaining.values()), remaining
 

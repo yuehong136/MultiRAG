@@ -25,6 +25,7 @@ from api.db.db_models import APIToken, Tenant, User, UserTenant, get_async_db
 from common import resources, settings
 from common.config_utils import CONFIGS
 from tests.support.event_loop import UVICORN_LOOP
+from tests.support.resource_journal import ResourceJournal
 from tests.support.uvicorn_runtime import run_server
 
 
@@ -40,12 +41,24 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
     from api.apps import app, manager
 
     owner_ids = [uuid4().hex, uuid4().hex]
+    membership_ids = [uuid4().hex, uuid4().hex]
     api_key = f"upload-test-{uuid4().hex}"
     bucket = f"upload-test-{uuid4().hex}"
     record: dict[str, Any] = {"database": bootstrapped_engine.url.database, "owners": owner_ids, "api_token_owner": owner_ids[1], "api_token_name": "upload-test", "bucket": bucket}
     evidence = Path(os.environ.get("MULTIRAG_343BDA_EVIDENCE_DIR", str(tmp_path)))
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
     record_path = evidence / (owner_ids[0] + ".json")
+    journal = ResourceJournal("runtime-upload-api")
+    journal.event(
+        "reserve-runtime",
+        database=record["database"],
+        owners=owner_ids,
+        memberships=membership_ids,
+        api_token_owner=owner_ids[1],
+        api_token_name="upload-test",
+        bucket=bucket,
+        record_path=str(record_path),
+    )
 
     def save_record() -> None:
         record_path.write_text(json.dumps(record))
@@ -64,6 +77,7 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
                 for model, column in [(APIToken, APIToken.tenant_id), (UserTenant, UserTenant.user_id), (Tenant, Tenant.id), (User, User.id)]
             }
         record["base_remaining"] = remaining
+        journal.event("sql-cleanup-readback", remaining=remaining)
         assert not any(remaining.values()), remaining
 
     save_record()
@@ -71,10 +85,10 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
         cleanup.callback(save_record)
         cleanup.callback(remove_rows)
         with Session(bootstrapped_engine) as db:
-            for user_id in owner_ids:
+            for user_id, membership_id in zip(owner_ids, membership_ids, strict=True):
                 db.add(User(id=user_id, email=f"{user_id}@upload.test", nickname="Upload test", password="unused", access_token="active"))
                 db.add(Tenant(id=user_id, name="Upload scratch", llm_id="", embd_id="", asr_id="", img2txt_id="", parser_ids="naive"))
-                db.add(UserTenant(id=uuid4().hex, user_id=user_id, tenant_id=user_id, role="owner", invited_by=user_id))
+                db.add(UserTenant(id=membership_id, user_id=user_id, tenant_id=user_id, role="owner", invited_by=user_id))
             db.add(APIToken(tenant_id=owner_ids[1], token=api_key, name="upload-test"))
             db.commit()
 
@@ -91,6 +105,7 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
                 storage_client.remove_bucket(bucket)
             assert not storage_client.bucket_exists(bucket)
             record["bucket_removed"] = True
+            journal.event("object-cleanup-readback", bucket=bucket, absent=True)
 
         # Register first: an acknowledged server-side create followed by a
         # transport error must still clean the uniquely owned bucket.
@@ -114,8 +129,10 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
         monkeypatch.setitem(app.dependency_overrides, get_async_db, scratch_db)
         listener = socket.socket()
         cleanup.callback(listener.close)
+        journal.event("reserve-listener", host="127.0.0.1", port=0, pid=os.getpid())
         listener.bind(("127.0.0.1", 0))
         record["port"] = listener.getsockname()[1]
+        journal.event("listener-bound-before-listen", host="127.0.0.1", port=record["port"], pid=os.getpid())
         base = f"http://127.0.0.1:{record['port']}"
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
         thread = threading.Thread(target=run_server, args=(server,), kwargs={"sockets": [listener]}, daemon=True)
@@ -129,6 +146,7 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
             with socket.socket() as client:
                 assert client.connect_ex(("127.0.0.1", record["port"])) != 0
             record["listener_closed"] = True
+            journal.event("listener-cleanup-readback", host="127.0.0.1", port=record["port"], thread_stopped=True, connection_refused=True)
 
         cleanup.callback(stop_server)
         save_record()
@@ -148,6 +166,7 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
             "storage_adapter": storage,
             "record": record,
             "record_path": record_path,
+            "journal": journal,
         }
 
 

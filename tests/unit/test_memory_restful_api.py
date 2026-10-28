@@ -11,7 +11,10 @@ add_message 已于 11.11 转换（tests 见 test_memory_add_message_route.py）�
 
 import sys
 import threading
+from typing import Any
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.apps.services import memory_api_service
@@ -266,3 +269,32 @@ def test_memory_routes_have_pure_async_dependency_tree(client, route_dependency_
         assert get_db not in calls, f"{method} {path} 依赖树含同步 get_db"
         assert api_apps.manager not in calls, f"{method} {path} 依赖树含同步 manager"
         assert async_current_user in calls, f"{method} {path} 缺异步鉴权依赖"
+
+
+@pytest.mark.parametrize("path", ["/api/v1/messages", "/api/v1/messages/search?query=q"])
+def test_missing_memory_query_id_rejects_before_service(client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    calls: list[str] = []
+
+    async def forbidden(*args: Any, **kwargs: Any) -> None:
+        calls.append("service")
+        raise AssertionError("missing memory ID must not reach service")
+
+    monkeypatch.setattr(memory_api_service, "get_messages_async", forbidden)
+    monkeypatch.setattr(memory_api_service, "search_message_async", forbidden)
+    response = client.get(path)
+    assert response.status_code == 422
+    assert any(error["loc"] == ["query", "memory_id"] for error in response.json()["detail"])
+    assert calls == []
+
+
+@pytest.mark.parametrize("ids", [[""], ["  "], [","], []])
+def test_empty_memory_filter_never_broadens_to_all(db: Session, monkeypatch: pytest.MonkeyPatch, ids: list[str]) -> None:
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("empty filter must not read SQL, embed, or query message storage")
+
+    monkeypatch.setattr(memory_api_service.MemoryService, "accessible_tenant_ids", forbidden)
+    monkeypatch.setattr(memory_api_service.MemoryService, "get_by_ids", forbidden)
+    monkeypatch.setattr(memory_api_service, "query_message", forbidden)
+    monkeypatch.setattr(memory_api_service.MessageService, "get_recent_messages", forbidden)
+    assert memory_api_service.get_messages(db, ids, user_id="user-unit") == []
+    assert memory_api_service.search_message(db, {"memory_id": ids}, {"query": "q"}, user_id="user-unit") == []
