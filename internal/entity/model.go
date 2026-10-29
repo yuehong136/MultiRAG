@@ -17,6 +17,7 @@
 package entity
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"multirag/internal/entity/models"
@@ -162,12 +163,35 @@ type ModelThinking struct {
 // Model represents a single LLM model
 type Model struct {
 	Name         string         `json:"name"`
+	Alias        []string       `json:"alias,omitempty"`
 	MaxTokens    int            `json:"max_tokens"`
 	ModelTypes   []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
 	Features     Features       `json:"features"`
 	Thinking     *ModelThinking `json:"thinking,omitempty"`
 	Class        *string        `json:"class,omitempty"` // Model family, such as gpt or qwen3.
 	ModelTypeMap map[string]bool
+}
+
+// UnmarshalJSON validates suffix keys locally while preserving provider extensions.
+func (p *Provider) UnmarshalJSON(data []byte) error {
+	type plain Provider
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, ok := fields["url_suffix"]; ok {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&decoded.URLSuffix); err != nil {
+			return fmt.Errorf("url_suffix: %w", err)
+		}
+	}
+	*p = Provider(decoded)
+	return nil
 }
 
 // Provider represents an LLM provider
@@ -184,7 +208,9 @@ type Provider struct {
 
 // ProviderManager manages provider and model operations
 type ProviderManager struct {
-	Providers []Provider `json:"model_providers"`
+	Providers  []Provider `json:"model_providers"`
+	allModels  []*Model
+	modelIndex map[string]*Model
 }
 
 // ModelResponse represents the standard response structure
@@ -642,4 +668,48 @@ func containsModelType(types []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// LoadAllModels atomically loads an explicitly selected global catalog.
+// Provider-only fixtures do not depend on a process working directory.
+func (pm *ProviderManager) LoadAllModels(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var catalog []*Model
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		return fmt.Errorf("model catalog: %w", err)
+	}
+	index := make(map[string]*Model)
+	for _, model := range catalog {
+		if model == nil || strings.TrimSpace(model.Name) == "" || strings.TrimSpace(model.Name) != model.Name {
+			return fmt.Errorf("invalid catalog model name")
+		}
+		for _, name := range append([]string{model.Name}, model.Alias...) {
+			if name == "" || strings.TrimSpace(name) != name {
+				return fmt.Errorf("invalid catalog alias")
+			}
+			if _, exists := index[name]; exists {
+				return fmt.Errorf("duplicate catalog name or alias %q", name)
+			}
+			index[name] = model
+		}
+	}
+	pm.allModels, pm.modelIndex = catalog, index
+	return nil
+}
+
+func (pm *ProviderManager) ListAllModels() []*Model {
+	result := make([]*Model, len(pm.allModels))
+	copy(result, pm.allModels)
+	return result
+}
+
+func (pm *ProviderManager) GetModelByNameOrAlias(name string) (*Model, error) {
+	model, ok := pm.modelIndex[name]
+	if !ok {
+		return nil, fmt.Errorf("model %q not found", name)
+	}
+	return model, nil
 }
