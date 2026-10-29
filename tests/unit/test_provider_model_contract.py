@@ -41,3 +41,15 @@ def test_numeric_and_legacy_references() -> None:
     assert parse_model_id("12") == 12
     assert parse_model_id("org/model@instance@provider") is None
     assert InstancePatch(api_key="").api_key == ""
+
+
+def test_remote_model_batch_keeps_explicit_selection_and_rejects_ambiguity() -> None:
+    models = [{"model_name": name, "model_types": ["chat", "image2text"], "max_tokens": 0} for name in ("first", "second")]
+    candidate = InstanceInput(instance_name="local", api_key="", model_ids=[], custom_models=models)
+    assert candidate.model_ids == [] and [item.model_name for item in candidate.custom_models] == ["first", "second"]
+    with pytest.raises(ValidationError):
+        InstanceInput(instance_name="local", api_key="", model_ids=[], custom_models=[models[0], models[0]])
+    with pytest.raises(ValidationError):
+        InstanceInput(instance_name="local", api_key="", model_ids=[], custom_model=models[0], custom_models=[models[1]])
+    with pytest.raises(ValidationError):
+        InstanceInput(instance_name="local", api_key="", model_ids=[], custom_models=[{**models[0], "model_name": str(index)} for index in range(101)])

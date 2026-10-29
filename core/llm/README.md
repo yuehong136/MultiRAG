@@ -102,3 +102,27 @@ Canvas 和 dialog 的 TTS 入口清理文本后共用 Redis 音频缓存。键�
 Redis 失败按原路径合成，损坏缓存、空音频、非法音频块及中途失败不会写缓存。
 独立 `/chat/audio/speech` 路由仍直接执行其语音合同。真实 Redis 与 SQL 计量读回见
 `tests/integration/test_tts_cache.py`；受控供应商结果不代表真实模型音质或供应商可用性。
+
+## 模型发现
+
+`POST /api/v1/providers/{provider_name}/models/discovery` 接受 body 中的
+`api_key`、`base_url`、`region`，query 只接受 `page` / `page_size`。
+响应使用现有分页信封，返回模型名称、能力、上下文、工具/思考 features、展示名与
+static/remote 来源。结果是候选，没有已注册模型的 numeric ID 或启用状态；响应不缓存。
+
+Ollama 使用 `/api/tags` 和 `/api/show`，最多发现 100 个模型，最多并发 4 个请求，
+单响应最多 1 MiB、请求超时 10 秒、整体超时 30 秒。凭据仅发送至 literal loopback IP；
+远程地址可无凭据发现。禁止用户信息、query、重定向和环境代理携带凭据。
+任何远程失败、坏响应或超出限制都明确失败，不以空列表或旧静态目录掩盖。
+
+Fish Audio 固定官方 HTTPS origin，以 `self=true` 读取当前 workspace 自有声音并完成
+最多 100 项的分页；稳定 `_id` 用于调用，title 只用于展示。原始 token 和明确的结构化
+token 字段均可用；已配置的声音引用与所选 ID 冲突时拒绝。其他 origin 不接收 Fish 凭据。
+MinerU 的生产协议为 `/file_parse`，发现接口只提供 OCR 声明候选，后续仍验证真实 PDF 解析。
+未实现的 VolcEngine metadata driver 不注册；普通静态目录仍可用。
+
+选择多个远程模型时，使用 `ConnectionCandidate.custom_models`（最多 100 项），
+将 `model_ids: []` 明确设置为空静态选择。展示元数据不作为注册字段提交。
+保留现有单项 `custom_model` 合同，两个自定义选择字段不能同时使用。
+connection 对代表模型只读验证，instances 创建时服务端重新验证并在一个事务内保存
+实例及全部模型。验证或任一模型持久化失败时整笔回滚，成功读回后才获得 numeric ID。

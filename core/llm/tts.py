@@ -140,15 +140,28 @@ class HTTPBasedTTS(Base):
 class FishAudioTTS(Base):
     _FACTORY_NAME = "Fish Audio"
 
-    def __init__(self, key, model_name, base_url="https://api.fish.audio/v1/tts"):
+    def __init__(self, key: str, model_name: str, base_url: str = "https://api.fish.audio/v1/tts") -> None:
+        from core.llm.model_meta import fish_access_token
+
         if not base_url:
             base_url = "https://api.fish.audio/v1/tts"
-        key = json.loads(key)
+        token = fish_access_token(key)
+        try:
+            payload = json.loads(key)
+        except ValueError:
+            payload = {}
+        configured_reference = payload.get("fish_audio_refid") if isinstance(payload, dict) else None
+        if configured_reference is not None and (not isinstance(configured_reference, str) or configured_reference != configured_reference.strip()):
+            raise ValueError("Invalid Fish Audio reference ID")
+        configured_reference = configured_reference or None
+        selected_reference = model_name if re.fullmatch(r"(?:[0-9a-fA-F]{24}|[0-9a-fA-F]{32})", model_name) else None
+        if selected_reference and configured_reference and selected_reference != configured_reference:
+            raise ValueError("Selected Fish Audio model conflicts with configured reference ID")
         self.headers = {
-            "api-key": key.get("fish_audio_ak"),
+            "api-key": token,
             "content-type": "application/msgpack",
         }
-        self.ref_id = key.get("fish_audio_refid")
+        self.ref_id = selected_reference or configured_reference
         self.base_url = base_url
 
     def tts(self, text: str) -> Iterator[bytes | int]:

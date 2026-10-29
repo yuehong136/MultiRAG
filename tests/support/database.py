@@ -67,8 +67,17 @@ def scratch_database(evidence: Path) -> Iterator[sa.Engine]:
         path.write_text(json.dumps(manifest, indent=2))
         path.chmod(0o600)
 
-    journal.event("reserve-database", database=name, manifest=str(path), borrowed="configured PostgreSQL service; never delete service")
     admin_url = _pg_url(CONFIGS["postgresql"]["dbname"])
+    journal.event(
+        "reserve-database",
+        database=name,
+        manifest=str(path),
+        host=admin_url.host,
+        port=admin_url.port,
+        role=admin_url.username,
+        borrowed_database=admin_url.database,
+        borrowed="configured PostgreSQL service; never delete service",
+    )
     assert _pg_role_can_create_db(admin_url), "HTTP verification requires isolated scratch database creation"
     with ExitStack() as cleanup:
         cleanup.callback(save)
@@ -78,17 +87,26 @@ def scratch_database(evidence: Path) -> Iterator[sa.Engine]:
         def drop() -> None:
             with admin.connect() as connection:
                 connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            with admin.connect() as connection:
                 assert connection.scalar(sa.text("SELECT count(*) FROM pg_database WHERE datname=:name"), {"name": name}) == 0
+                identity = connection.execute(sa.text("SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()")).one()
+                journal.event("database-cleanup-readback", database=name, absent=True, admin_database=identity[0], role=identity[1], address=identity[2], port=identity[3])
             manifest["absent"] = True
 
         cleanup.callback(drop)
         save()
         with admin.connect() as connection:
+            identity = connection.execute(sa.text("SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()")).one()
+            journal.event("database-endpoint", database=name, admin_database=identity[0], role=identity[1], address=identity[2], port=identity[3])
             connection.execute(sa.text(f'CREATE DATABASE "{name}"'))
         manifest["created"] = True
         save()
         engine = sa.create_engine(_pg_url(name))
         cleanup.callback(engine.dispose)
+        with engine.connect() as reader:
+            identity = reader.execute(sa.text("SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()")).one()
+            assert identity[0] == name
+            journal.event("database-created-readback", database=identity[0], role=identity[1], address=identity[2], port=identity[3])
         with engine.begin() as connection:
             connection.execute(sa.text("CREATE SCHEMA usr_ai"))
         Base.metadata.create_all(engine)

@@ -9,7 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import Dialog, Knowledgebase, Memory, Search, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, UserCanvas, UserCanvasVersion
-from api.db.model_contract import DEFAULT_MODEL_FIELDS, ConnectionCandidate, InstanceInput, InstancePatch, ModelRegistration
+from api.db.model_contract import DEFAULT_MODEL_FIELDS, ConnectionCandidate, DiscoveredModel, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration
 from api.db.provider_catalog import provider_order, provider_transport, public_factories, regional_provider
 from common import settings
 
@@ -18,18 +18,84 @@ class ModelConflict(ValueError):
     """A conflicting identity or reference prevents this operation."""
 
 
-def catalog(provider_name: str, region: str = "") -> list[ModelRegistration]:
+def catalog_entries(provider_name: str, region: str = "") -> list[tuple[ModelRegistration, dict[str, Any]]]:
     target = regional_provider(provider_name, region)
     factory = next((item for item in settings.FACTORY_LLM_INFOS if item["name"] == target), None)
     if factory is None:
         raise LookupError("Provider not found")
     result = []
     for item in factory.get("llm", []):
-        capabilities = [item.get("mdl_type", item.get("model_type"))]
+        raw_types = item.get("mdl_type", item.get("model_type"))
+        capabilities = list(raw_types) if isinstance(raw_types, list) else [raw_types]
         if "IMAGE2TEXT" in {tag.strip().upper() for tag in item.get("tags", "").split(",")} and "image2text" not in capabilities:
             capabilities.append("image2text")
-        result.append(ModelRegistration(model_name=item["llm_name"], model_types=capabilities, max_tokens=item.get("max_tokens", 8192), is_tools=item.get("is_tools", False)))
-    return sorted(result, key=lambda model: model.model_name)
+        features = item.get("features")
+        if features is not None and (not isinstance(features, list) or any(value not in {"is_tools", "thinking"} for value in features)):
+            raise ValueError("Invalid provider catalog features")
+        is_tools = "is_tools" in features if features is not None else item.get("is_tools", False)
+        result.append((ModelRegistration(model_name=item["llm_name"], model_types=capabilities, max_tokens=item.get("max_tokens", 8192), is_tools=is_tools), item))
+    return result
+
+
+def catalog(provider_name: str, region: str = "") -> list[ModelRegistration]:
+    merged: dict[str, ModelRegistration] = {}
+    for model, _raw in catalog_entries(provider_name, region):
+        previous = merged.get(model.model_name)
+        if previous is not None:
+            model.model_types = list(dict.fromkeys(previous.model_types + model.model_types))
+            model.is_tools = previous.is_tools or model.is_tools
+            model.max_tokens = max(previous.max_tokens, model.max_tokens)
+        merged[model.model_name] = model
+    return sorted(merged.values(), key=lambda model: model.model_name)
+
+
+async def discover_models(provider_name: str, request: DiscoveryInput) -> list[DiscoveredModel]:
+    """Discover declarations only; no SQL, registration, inference or credential cache."""
+    if provider_name not in {item["name"] for item in public_factories()}:
+        raise LookupError("Provider not found")
+    target = regional_provider(provider_name, request.region)
+    factory = next(item for item in settings.FACTORY_LLM_INFOS if item["name"] == target)
+    merged: dict[str, DiscoveredModel] = {}
+    for declaration, raw in catalog_entries(provider_name, request.region):
+        features = raw.get("features")
+        if features is None:
+            features = (["is_tools"] if declaration.is_tools else []) + (["thinking"] if raw.get("thinking") is True else [])
+        if not isinstance(features, list) or any(value not in {"is_tools", "thinking"} for value in features):
+            raise ValueError("Invalid provider catalog features")
+        features = list(dict.fromkeys(features))
+        # Explicit feature declarations are authoritative for display and selection.
+        item = DiscoveredModel(**{**declaration.model_dump(), "is_tools": "is_tools" in features}, features=features, display_name=declaration.model_name, source="static")
+        previous = merged.get(item.model_name)
+        if previous is not None:
+            item.model_types = list(dict.fromkeys(previous.model_types + item.model_types))
+            item.features = list(dict.fromkeys(previous.features + item.features))
+            item.is_tools = "is_tools" in item.features
+            item.max_tokens = max(previous.max_tokens, item.max_tokens)
+        merged[item.model_name] = item
+    if provider_name == "MinerU" and not merged:
+        # MinerU's active adapter uses /file_parse, not an OpenAI model inventory.
+        merged["MinerU"] = DiscoveredModel(model_name="MinerU", model_types=["ocr"], max_tokens=0, features=[], display_name="MinerU", source="static")
+    from core.llm import ModelMeta
+
+    adapter = ModelMeta.get(provider_name)
+    if adapter is not None:
+        base = request.base_url or factory.get("url", "")
+        remote = await adapter(request.api_key, base).get_model_list()
+        for metadata in remote:
+            item = DiscoveredModel(
+                model_name=metadata.name,
+                model_types=metadata.model_types,
+                max_tokens=metadata.max_tokens,
+                is_tools="is_tools" in metadata.features,
+                features=metadata.features,
+                display_name=metadata.display_name or metadata.name,
+                source="remote",
+            )
+            # Current remote capabilities replace stale static declarations as one unit.
+            merged[item.model_name] = item
+    elif not merged:
+        raise ValueError("Model discovery is unavailable for this provider")
+    return sorted(merged.values(), key=lambda item: item.model_name)
 
 
 def instance_projection(instance: TenantModelInstance, provider: TenantModelProvider) -> dict[str, Any]:
@@ -142,10 +208,12 @@ def candidate_models(provider_name: str, request: ConnectionCandidate) -> list[M
         if not set(request.model_ids) <= available:
             raise ValueError("Selected model is not in the provider catalog")
         models = [model for model in models if model.model_name in request.model_ids]
-    if request.custom_model is not None:
-        if any(model.model_name == request.custom_model.model_name for model in models):
+    custom = [request.custom_model] if request.custom_model is not None else request.custom_models
+    if custom:
+        selected = {model.model_name for model in models}
+        if any(model.model_name in selected for model in custom):
             raise ValueError("Custom model duplicates a selected catalog model")
-        models.insert(0, request.custom_model)
+        models = [*custom, *models]
     if not models:
         raise ValueError("Select a catalog model or supply a custom model for verification")
     return models

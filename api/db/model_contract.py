@@ -35,12 +35,34 @@ class ModelRegistration(ModelInput):
         return self
 
 
+class DiscoveryInput(ModelInput):
+    api_key: StrictStr = Field(default="", repr=False, max_length=16384)
+    base_url: StrictStr = Field(default="", max_length=2048)
+    region: StrictStr = Field(default="", max_length=128)
+
+
+class DiscoveredModel(ModelRegistration):
+    features: list[Literal["is_tools", "thinking"]] = Field(default_factory=list)
+    display_name: StrictStr
+    source: Literal["static", "remote"]
+
+
 class ConnectionCandidate(ModelInput):
     api_key: StrictStr = Field(repr=False)
     base_url: StrictStr = Field(default="", max_length=2048)
     region: StrictStr = Field(default="", max_length=128)
     model_ids: list[StrictStr] | None = None
     custom_model: ModelRegistration | None = None
+    custom_models: list[ModelRegistration] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def valid_custom_models(self) -> "ConnectionCandidate":
+        if self.custom_model is not None and self.custom_models:
+            raise ValueError("Use one custom model selection field")
+        names = [model.model_name for model in self.custom_models]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate custom model identity")
+        return self
 
     @field_validator("model_ids")
     @classmethod

@@ -4,7 +4,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import TenantModelInstance, TenantModelProvider, get_async_db
-from api.db.model_contract import ConnectionCandidate, DefaultModelInput, InstanceInput, InstancePatch, ModelRegistration, ProviderInput, StatusPatch, parse_model_id
+from api.db.model_contract import ConnectionCandidate, DefaultModelInput, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration, ProviderInput, StatusPatch, parse_model_id
 from api.db.provider_catalog import provider_order, public_factories
 from api.db.services import model_provider_service as service
 from api.utils.api_utils import Principal, async_current_user
@@ -25,17 +25,21 @@ class ModelRoute(APIRoute):
 
         async def safe_handler(request: Request) -> Any:
             try:
-                return await handler(request)
+                response = await handler(request)
             except RequestValidationError as error:
                 # FastAPI's default errors include the rejected input, which can
                 # contain an entire provider credential envelope.
-                return JSONResponse(
+                response = JSONResponse(
                     status_code=422, content={"code": 422, "message": "Invalid model request", "data": {"errors": [{"loc": list(item["loc"]), "type": item["type"]} for item in error.errors()]}}
                 )
             except HTTPException as error:
                 if isinstance(error.detail, dict) and "code" in error.detail:
-                    return JSONResponse(status_code=error.status_code, content=error.detail)
-                raise
+                    response = JSONResponse(status_code=error.status_code, content=error.detail)
+                else:
+                    raise
+            if request.url.path.endswith("/models/discovery"):
+                response.headers["Cache-Control"] = "no-store"
+            return response
 
         return safe_handler
 
@@ -145,6 +149,25 @@ async def instances(provider_name: str, request: Request, db: AsyncSession = Dep
         raise failure(404, "Provider not found") from None
     rows = (await db.scalars(select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id).order_by(TenantModelInstance.instance_name))).all()
     return page([service.instance_projection(instance, provider) for instance in rows], request)
+
+
+@router.post("/providers/{provider_name}/models/discovery")
+async def discover_models(provider_name: str, body: DiscoveryInput, request: Request, response: Response, _user: Principal = Depends(async_current_user)) -> dict[str, Any]:
+    from core.llm.model_meta import DiscoveryError
+
+    response.headers["Cache-Control"] = "no-store"
+    # Validate pagination before any remote call. Credentials belong only in the body.
+    if set(request.query_params) - {"page", "page_size"}:
+        raise failure(422, "Unexpected discovery query parameter")
+    page([], request)
+    try:
+        return page([model.model_dump() for model in await service.discover_models(provider_name, body)], request)
+    except LookupError:
+        raise failure(404, "Provider not found") from None
+    except DiscoveryError as error:
+        raise failure(502, str(error)) from None
+    except ValueError:
+        raise failure(400, "Invalid or unavailable provider model discovery") from None
 
 
 @router.post("/providers/{provider_name}/connection")

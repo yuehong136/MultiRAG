@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from api.db.model_backfill import backfill
+from api.db.model_contract import ConnectionCandidate, ModelRegistration
 from api.db.services import provider_verification
 from common import resources, settings
 from tests.support.provider_instances import REAL_VERIFY_MODEL, tenant
@@ -27,6 +28,169 @@ from tests.support.provider_instances import owned_engine as owned_engine
 from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
+
+
+def _exercise_discovery(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, web_checkout: Path | None = None) -> None:
+    """A discovered declaration is not an ID until verified atomic SQL creation."""
+    import hashlib
+    import socket
+    import threading
+    from contextlib import ExitStack
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from api.db.services import model_provider_service
+    from tests.support.provider_instances import REAL_VERIFY_MODEL
+
+    client, owner, engine, _module = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "Ollama", "llm": []}, {"name": "MinerU", "llm": []}])
+    journal = ResourceJournal("discovery-real-http-atomic-sql")
+
+    async def owned_probe(provider: str, key: str, base: str, declaration: ModelRegistration) -> dict[str, Any]:
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        assert GLOBAL_LOGGING_WORKER._worker_task is None
+        journal.event("reserve-sdk-logging-worker", model=declaration.model_name, purpose="owned isolated provider probe")
+        try:
+            return await REAL_VERIFY_MODEL(provider, key, base, declaration)
+        finally:
+            await GLOBAL_LOGGING_WORKER.stop()
+            await GLOBAL_LOGGING_WORKER.clear_queue()
+            assert GLOBAL_LOGGING_WORKER._worker_task is None and not GLOBAL_LOGGING_WORKER._running_tasks
+            journal.event("sdk-logging-worker-cleanup", stopped=True, drained=True)
+
+    monkeypatch.setattr(provider_verification, "verify_model", owned_probe)
+    state = {"bad_show": False, "bad_chat": False}
+    seen: list[tuple[str, str]] = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            return
+
+        def reply(self, value: dict[str, Any]) -> None:
+            content = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def do_GET(self) -> None:
+            assert self.path == "/api/tags"
+            seen.append((self.path, self.headers.get("Authorization", "")))
+            self.reply({"models": [{"name": "first"}, {"name": "second"}]})
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append((self.path, self.headers.get("Authorization", "")))
+            if self.path == "/api/show":
+                self.reply(
+                    {"model_info": {"fixture.context_length": 0}, "details": {"family": "fixture"}, "capabilities": None if state["bad_show"] else ["completion", "vision", "tools", "thinking"]}
+                )
+            else:
+                assert self.path == "/api/chat" and payload["model"] == "first"
+                self.reply({"model": "first", "message": {"role": "assistant", "content": "" if state["bad_chat"] else "OK"}, "done": True, "prompt_eval_count": 0, "eval_count": 0})
+
+    def counts() -> list[int]:
+        with Session(engine) as reader:
+            return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
+
+    with ExitStack() as cleanup:
+        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
+        journal.event("reserve-listener", address=list(address), input_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        cleanup.callback(server.server_close)
+        server.server_bind()
+        server.server_activate()
+        thread = threading.Thread(target=server.serve_forever, name="discovery-provider-fixture")
+        thread.start()
+
+        def stop_listener() -> None:
+            server.shutdown()
+            thread.join(5)
+            server.server_close()
+            assert not thread.is_alive()
+            with socket.socket() as reader_socket:
+                assert reader_socket.connect_ex(address) != 0
+            journal.event("listener-independent-readback", address=list(address), absent=True, thread_absent=True)
+
+        cleanup.callback(stop_listener)
+        body = {"api_key": "fixture-discovery-key", "base_url": f"http://127.0.0.1:{address[1]}", "region": ""}
+        from api.utils.api_utils import async_current_user
+
+        authenticated = client.app.dependency_overrides.pop(async_current_user)
+        try:
+            denied = client.post("/api/v1/providers/Ollama/models/discovery", json=body, headers={"Authorization": "Bearer invalid-fixture-token"})
+            assert denied.status_code == 401 and not seen
+        finally:
+            client.app.dependency_overrides[async_current_user] = authenticated
+        response = client.post("/api/v1/providers/Ollama/models/discovery?page_size=1", json=body)
+        assert response.status_code == 200, response.text
+        assert response.headers["Cache-Control"] == "no-store"
+        data = response.json()["data"]
+        assert data["total"] == 2 and len(data["items"]) == 1
+        item = data["items"][0]
+        assert "id" not in item and "status" not in item
+        assert item["max_tokens"] == 0 and item["model_types"] == ["chat", "image2text"] and item["features"] == ["is_tools", "thinking"]
+        items = client.post("/api/v1/providers/Ollama/models/discovery", json=body).json()["data"]["items"]
+        candidate = {**body, "model_ids": [], "custom_models": [{key: item[key] for key in ("model_name", "model_types", "max_tokens", "is_tools")} for item in items]}
+        assert counts() == [0, 0, 0, 0]
+        verified = client.post("/api/v1/providers/Ollama/connection", json=candidate)
+        assert verified.status_code == 200 and verified.json()["data"]["verified"] is True, verified.text
+        assert counts() == [0, 0, 0, 0]
+        state["bad_show"] = True
+        failed = client.post("/api/v1/providers/Ollama/models/discovery", json=body)
+        assert failed.status_code == 502 and "fixture-discovery-key" not in failed.text
+        state["bad_show"] = False
+        assert client.post("/api/v1/providers/Ollama/models/discovery?api_key=forbidden", json=body).status_code == 422
+        state["bad_chat"] = True
+        assert client.post("/api/v1/providers/Ollama/instances", json={**candidate, "instance_name": "failed"}).status_code == 400
+        assert counts() == [0, 0, 0, 0]
+        state["bad_chat"] = False
+        original = model_provider_service.add_model
+
+        async def fail_second(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            if args[4].model_name == "second":
+                raise ValueError("Controlled second model failure")
+            return await original(*args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(model_provider_service, "add_model", fail_second)
+            assert client.post("/api/v1/providers/Ollama/instances", json={**candidate, "instance_name": "rolled-back"}).status_code == 400
+        assert counts() == [0, 0, 0, 0]
+        created = client.post("/api/v1/providers/Ollama/instances", json={**candidate, "instance_name": "selected"})
+        assert created.status_code == 200, created.text
+        rows = client.get("/api/v1/models").json()["data"]["items"]
+        assert len(rows) == 2 and all(type(row["id"]) is int and row["id"] > 0 and row["max_tokens"] == 0 for row in rows)
+        with Session(engine) as reader:
+            assert reader.scalars(select(TenantModel.model_types).order_by(TenantModel.model_name)).all() == [["chat", "image2text"], ["chat", "image2text"]]
+        assert counts() == [1, 1, 2, 2]
+        before = len(seen)
+        placeholder = client.post("/api/v1/providers/MinerU/models/discovery", json={}).json()["data"]["items"]
+        assert placeholder[0]["model_types"] == ["ocr"] and placeholder[0]["max_tokens"] == 0 and "id" not in placeholder[0]
+        selected_placeholder = {key: placeholder[0][key] for key in ("model_name", "model_types", "max_tokens", "is_tools")}
+        assert model_provider_service.candidate_models("MinerU", ConnectionCandidate(api_key="", model_ids=[], custom_models=[selected_placeholder]))[0].model_name == "MinerU"
+        assert len(seen) == before
+        assert client.delete("/api/v1/providers/Ollama").status_code == 200
+        assert counts() == [0, 0, 0, 0]
+        if web_checkout is not None:
+            from tests.support.model_discovery_web import run_web_discovery
+
+            run_web_discovery(client, owner, engine, body["base_url"], journal, web_checkout, tmp_path)
+        assert seen and all(header == "Bearer fixture-discovery-key" for _path, header in seen)
+        journal.event("sql-independent-readback", tenant=owner, counts=counts(), failures_zero_writes=True, numeric_model_ids=[row["id"] for row in rows])
+
+
+def test_discovery_http_candidates_verify_and_create_atomically(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _exercise_discovery(http, monkeypatch, tmp_path)
+
+
+@pytest.mark.external_consumer
+def test_discovery_pinned_web_consumer_and_independent_sql(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import os
+
+    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
+    assert (checkout / "scripts/verify-provider-discovery-routes.ts").is_file()
+    _exercise_discovery(http, monkeypatch, tmp_path, checkout)
 
 
 def create(client: TestClient, name: str = "first", *, models: list[str] | None = None) -> dict[str, Any]:

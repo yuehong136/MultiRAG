@@ -137,6 +137,7 @@ _REGISTRY_MODULES = {
     "Seq2txtModel": "sequence2txt",
     "TTSModel": "tts",
     "OcrModel": "ocr_model",
+    "ModelMeta": "model_meta",
 }
 _REGISTRY_LOCKS = {name: RLock() for name in _REGISTRY_MODULES}
 
@@ -187,6 +188,7 @@ __all__ = [
     "ChatModel",
     "CvModel",
     "EmbeddingModel",
+    "ModelMeta",
     "OcrModel",
     "RerankModel",
     "Seq2txtModel",
