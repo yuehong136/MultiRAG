@@ -125,3 +125,41 @@ func communityContent(reports []KGCommunityReport, budget int) string {
 	}
 	return result.String()
 }
+
+// Indexed relations are undirected canonical pairs. Preserve the low-level
+// directed path primitive, then combine reverse contributions at this boundary.
+func canonicalEdge(edge Edge) Edge {
+	if edge.From > edge.To {
+		return Edge{edge.To, edge.From}
+	}
+	return edge
+}
+
+func canonicalPaths(paths map[Edge]EdgeScore) map[Edge]EdgeScore {
+	edges := make([]Edge, 0, len(paths))
+	for edge := range paths {
+		edges = append(edges, edge)
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].From != edges[j].From {
+			return edges[i].From < edges[j].From
+		}
+		return edges[i].To < edges[j].To
+	})
+	result := make(map[Edge]EdgeScore, len(paths))
+	for _, edge := range edges {
+		value := paths[edge]
+		canonical := canonicalEdge(edge)
+		prior, exists := result[canonical]
+		if !exists {
+			result[canonical] = value
+			continue
+		}
+		if sum := prior.Sim + value.Sim; finiteKGScore(sum) {
+			prior.Sim = sum
+		}
+		prior.PageRank = max(prior.PageRank, value.PageRank)
+		result[canonical] = prior
+	}
+	return result
+}

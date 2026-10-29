@@ -160,13 +160,13 @@ func (p *Pipeline) Retrieval(ctx context.Context, userID string, kbIDs []string,
 			continue
 		}
 		row.Sim, row.PageRank = row.Similarity, float64(row.Weight)
-		edge := Edge{row.From, row.To}
+		edge := canonicalEdge(Edge{row.From, row.To})
 		if old := relations[edge]; old == nil || row.Sim*row.PageRank > old.Sim*old.PageRank {
 			copy := row
 			relations[edge] = &copy
 		}
 	}
-	paths := AnalyzeNHopPaths(entities)
+	paths := canonicalPaths(AnalyzeNHopPaths(entities))
 	entities = DoubleHitBoost(entities, typeHits)
 	relations = FuseRelationScores(relations, typeHits, paths)
 	rankedEntities := SortAndTrimEntities(entities, cfg.entityTopN)

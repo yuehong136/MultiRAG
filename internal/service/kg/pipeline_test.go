@@ -197,3 +197,19 @@ func TestNeighborsRejectMismatchedAndNonfinitePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestPipelineCanonicalPathsFuseReverseRelations(t *testing.T) {
+	directed := map[Edge]EdgeScore{{"A", "B"}: {Sim: .4, PageRank: 3}, {"B", "A"}: {Sim: .2, PageRank: 7}}
+	paths := canonicalPaths(directed)
+	if len(paths) != 1 || math.Abs(paths[Edge{"A", "B"}].Sim-.6) > 1e-12 || paths[Edge{"A", "B"}].PageRank != 7 {
+		t.Fatal(paths)
+	}
+	relation := map[Edge]*KGRelation{{"A", "B"}: {Sim: .5, PageRank: 3, Description: "canonical text relation"}}
+	fused := FuseRelationScores(relation, nil, paths)
+	if len(fused) != 1 || math.Abs(fused[Edge{"A", "B"}].Sim-.8) > 1e-12 {
+		t.Fatal("reverse paths did not merge into canonical text relation", fused)
+	}
+	if len(directed) != 2 || relation[Edge{"A", "B"}].Sim != .5 {
+		t.Fatal("input was mutated")
+	}
+}
