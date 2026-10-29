@@ -26,9 +26,10 @@ from sqlalchemy.pool import NullPool
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from api.db.db_models import Connector, Connector2Kb, Document, File, Knowledgebase, Search, SyncLogs, Task, Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, get_async_db
-from tests.integration.test_provider_web_consumers import _pinned_checkout, _private_file
 from tests.support.resource_journal import ResourceJournal
 from tests.support.rest_document_contract import rest_documents as rest_documents
+from tests.support.web_consumer import pinned_web_checkout as _pinned_checkout
+from tests.support.web_consumer import private_consumer_file as _private_file
 
 pytestmark = pytest.mark.external_consumer
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +54,7 @@ def _run_consumer(checkout: Path, script: Path, descriptor: Path, evidence: Path
         runner,
         runner.with_name("resource_journal.py"),
         Path(__file__),
-        ROOT / "tests/integration/test_provider_web_consumers.py",
+        ROOT / "tests/support/web_consumer.py",
         script,
         descriptor,
         Path(node),

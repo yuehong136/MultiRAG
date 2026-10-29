@@ -23,27 +23,11 @@ from sqlalchemy.orm import Session
 from tests.support.resource_journal import ResourceJournal
 from tests.support.rest_document_contract import rest_documents as rest_documents
 from tests.support.rest_document_contract import snapshot
+from tests.support.web_consumer import pinned_web_checkout as _pinned_checkout
+from tests.support.web_consumer import private_consumer_file as _private_file
 
 pytestmark = pytest.mark.external_consumer
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _private_file(path: Path, value: str, journal: ResourceJournal, owned: list[Path]) -> None:
-    journal.event("reserve-private-consumer-file", path=str(path), content_sha256=hashlib.sha256(value.encode()).hexdigest())
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    owned.append(path)
-    try:
-        with os.fdopen(descriptor, "w", closefd=False) as stream:
-            stream.write(value)
-            stream.flush()
-            os.fsync(stream.fileno())
-    finally:
-        os.close(descriptor)
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
 
 
 def _consumer(checkout: Path, descriptor: Path, phase: str, evidence: Path, journal: ResourceJournal, script_name: str = "verify-provider-instance-routes.ts") -> dict[str, Any]:
@@ -52,7 +36,7 @@ def _consumer(checkout: Path, descriptor: Path, phase: str, evidence: Path, jour
     assert node is not None, "The pinned Web consumer requires Node.js"
     script = checkout / "scripts" / script_name
     assert script.is_file(), "The pinned Web provider-instance consumer is required"
-    inputs = [runner, runner.with_name("resource_journal.py"), Path(__file__), descriptor, script, Path(node), ROOT / ".github/consumer-web.json"]
+    inputs = [runner, runner.with_name("resource_journal.py"), Path(__file__), ROOT / "tests/support/web_consumer.py", descriptor, script, Path(node), ROOT / ".github/consumer-web.json"]
     configuration = json.loads(descriptor.read_text())
     inputs.extend(Path(configuration[key]) for key in ("ownerTokenFile", "foreignTokenFile", "providerKeyFile", "readbackFile") if key in configuration and Path(configuration[key]).is_file())
     inputs.extend(path for path in (checkout / "src").rglob("*") if path.is_file() and path.suffix in {".ts", ".tsx", ".json"})
@@ -110,20 +94,6 @@ def _consumer(checkout: Path, descriptor: Path, phase: str, evidence: Path, jour
     assert result["mode"] == phase and result["status"] == "passed", result
     journal.event("consumer-result", phase=phase, receipt=receipt, result=result)
     return result
-
-
-def _pinned_checkout() -> tuple[Path, str]:
-    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
-    web_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
-    pin = json.loads((ROOT / ".github/consumer-web.json").read_text())["ref"]
-    assert web_sha == pin, "Actual Web checkout must equal the consumer pin"
-    consumer_status = subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=all", "--", "src", "scripts", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "tsconfig.json", "tsconfig.app.json"],
-        cwd=checkout,
-        text=True,
-    )
-    assert not consumer_status, "Pinned Web consumer source/configuration must be clean: " + consumer_status
-    return checkout, web_sha
 
 
 @pytest.fixture
