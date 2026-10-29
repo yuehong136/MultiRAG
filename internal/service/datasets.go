@@ -703,6 +703,9 @@ func (s *DatasetsService) verifyEmbeddingAvailability(embdID string, tenantID st
 	}
 
 	if provider == "Builtin" {
+		if _, err := NewModelProviderService().GetEmbeddingModel(tenantID, embdID); err != nil {
+			return false, fmt.Sprintf("Unauthorized model: <%s>", embdID)
+		}
 		return true, ""
 	}
 

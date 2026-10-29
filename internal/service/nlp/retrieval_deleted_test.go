@@ -236,8 +236,14 @@ func TestRetrievalByChildrenCannotReintroduceForeignOrDeletedParent(t *testing.T
 			parent := retrievalChunk("parent", tc.docID, tc.kbID)
 			parent["content_with_weight"] = "parent text"
 			e := &retrievalParentEngine{parent: parent}
-			got := RetrievalByChildren([]map[string]interface{}{child}, []string{"tenant"}, e, context.Background())
-			if len(got) != 1 || !reflect.DeepEqual(e.scopes, [][]string{{"kb"}}) {
+			got, err := RetrievalByChildrenChecked(context.Background(), []map[string]interface{}{child}, []string{"tenant"}, e)
+			if tc.name != "same-document" {
+				if err == nil || got != nil {
+					t.Fatalf("invalid parent scope accepted: %v %v", got, err)
+				}
+				return
+			}
+			if err != nil || len(got) != 1 || !reflect.DeepEqual(e.scopes, [][]string{{"kb"}}) {
 				t.Fatalf("scope/count lost: %v %v", got, e.scopes)
 			}
 			if tc.name == "same-document" {
@@ -253,8 +259,8 @@ func TestRetrievalByChildrenCannotReintroduceForeignOrDeletedParent(t *testing.T
 	first, second := retrievalChunk("a", "live", "kb"), retrievalChunk("b", "other-doc", "kb")
 	first["mom_id"], second["mom_id"] = "same-parent", "same-parent"
 	e := &retrievalParentEngine{parent: retrievalChunk("same-parent", "live", "kb")}
-	got := RetrievalByChildren([]map[string]interface{}{first, second}, []string{"tenant"}, e, context.Background())
-	if len(got) != 2 || len(e.scopes) != 2 {
-		t.Fatalf("document groups merged: %v", got)
+	got, err := RetrievalByChildrenChecked(context.Background(), []map[string]interface{}{first, second}, []string{"tenant"}, e)
+	if err == nil || got != nil || len(e.scopes) != 2 {
+		t.Fatalf("document groups merged: %v %v", got, err)
 	}
 }

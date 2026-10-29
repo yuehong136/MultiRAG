@@ -314,7 +314,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 			if row, err := store.GetChunk(ctx, base, "visibility-parent", []string{a}); err != nil || row != nil {
 				t.Fatal("ordinary GetChunk exposed disabled parent", row, err)
 			}
-			if got := nlp.RetrievalByChildren([]map[string]any{child}, []string{cfg.Tenant}, store, ctx); len(got) != 0 {
+			if got, err := nlp.RetrievalByChildrenChecked(ctx, []map[string]any{child}, []string{cfg.Tenant}, store); err != nil || len(got) != 0 {
 				t.Fatal("disabled ES parent entered retrieval", got)
 			}
 			data := request(t, "GET", "/api/v1/datasets/"+a+"/documents/doc-a/chunks/visibility-parent", "owner", "", 0)["data"].(map[string]any)
@@ -324,7 +324,7 @@ func TestDatasetChunkMetadataCLIAndStores(t *testing.T) {
 			if err := store.UpdateChunks(ctx, map[string]any{"id": "visibility-parent"}, map[string]any{"available_int": 1}, base, a); err != nil {
 				t.Fatal(err)
 			}
-			if got := nlp.RetrievalByChildren([]map[string]any{child}, []string{cfg.Tenant}, store, ctx); len(got) != 1 || got[0]["content_with_weight"] != "parent marker" {
+			if got, err := nlp.RetrievalByChildrenChecked(ctx, []map[string]any{child}, []string{cfg.Tenant}, store); err != nil || len(got) != 1 || got[0]["content_with_weight"] != "parent marker" {
 				t.Fatal("enabled parent no longer expands", got)
 			}
 		})

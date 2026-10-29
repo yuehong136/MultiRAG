@@ -130,6 +130,9 @@ func CrossLanguages(ctx context.Context, chatModel *modelModule.ChatModel, query
 	}
 
 	response := *responsePtr.Answer
+	if strings.Contains(response, "**ERROR**") {
+		return "", fmt.Errorf("model response contains an error marker")
+	}
 
 	// Clean up response - remove think tags and trim
 	response = strings.TrimSpace(response)
@@ -137,7 +140,7 @@ func CrossLanguages(ctx context.Context, chatModel *modelModule.ChatModel, query
 	response = strings.TrimSpace(response)
 
 	if strings.Contains(response, "**ERROR**") {
-		return query, nil
+		return "", fmt.Errorf("error in cross-language response")
 	}
 
 	// Parse response

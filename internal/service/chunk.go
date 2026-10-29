@@ -18,13 +18,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"multirag/internal/server"
-	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -34,6 +34,7 @@ import (
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
 
+	"multirag/internal/service/kg"
 	"multirag/internal/service/nlp"
 	"multirag/internal/tokenizer"
 	"multirag/internal/utility"
@@ -82,11 +83,17 @@ type RetrievalTestRequest struct {
 	CrossLanguages         []string               `json:"cross_languages,omitempty"`
 	SearchID               *string                `json:"search_id,omitempty"`
 	Filter                 map[string]interface{} `json:"meta_data_filter,omitempty"`
-	TenantRerankID         *string                `json:"tenant_rerank_id,omitempty"`
+	TenantRerankID         *int64                 `json:"tenant_rerank_id,omitempty"`
 	RerankID               *string                `json:"rerank_id,omitempty"`
 	Keyword                *bool                  `json:"keyword,omitempty"`
 	SimilarityThreshold    *float64               `json:"similarity_threshold,omitempty"`
 	VectorSimilarityWeight *float64               `json:"vector_similarity_weight,omitempty"`
+	Highlight              *bool                  `json:"highlight,omitempty"`
+	// These fields are sent by the shared Web client to the richer Python
+	// backend. Keep their established acceptance without claiming Go execution.
+	SearchMode        json.RawMessage `json:"search_mode,omitempty"`
+	ReferenceMetadata json.RawMessage `json:"reference_metadata,omitempty"`
+	MetadataCondition json.RawMessage `json:"metadata_condition,omitempty"`
 }
 
 // RetrievalTestResponse retrieval test response
@@ -111,12 +118,17 @@ type RetrievalTestResponse struct {
 //     - Performs hybrid search (text + vector) with rank features
 //     - Reranks results
 //     - Builds doc_aggs by aggregating chunks per document
-//  7. knowledge graph retrieval (not implemented)
+//  7. scoped knowledge graph retrieval
 //  8. Apply retrieval by children to group child chunks under parent chunks
 func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequest, userID string) (*RetrievalTestResponse, error) {
-	if req == nil {
-		return nil, fmt.Errorf("retrieval request is required")
+	if err := validateRetrievalRequest(req); err != nil {
+		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	localRequest := *req
+	req = &localRequest
 	common.Info("RetrievalTest started", zap.String("userID", userID), zap.Any("kbID", req.DatasetIDs), zap.String("question", req.Question))
 
 	common.Debug(fmt.Sprintf("RetrievalTest request:\n"+
@@ -169,18 +181,11 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 			}
 			return nil, fmt.Errorf("read dataset failed: %w", err)
 		}
+		if _, err := searchbotTenant(ctx, kb.TenantID); err != nil {
+			return nil, ErrDatasetAccessDenied
+		}
 		tenantIDs = append(tenantIDs, kb.TenantID)
 		kbRecords = append(kbRecords, kb)
-	}
-
-	// Check if all kbs have the same embedding model
-	if len(kbRecords) > 1 {
-		firstEmbdID := kbRecords[0].EmbdID
-		for i := 1; i < len(kbRecords); i++ {
-			if kbRecords[i].EmbdID != firstEmbdID {
-				return nil, fmt.Errorf("cannot retrieve across datasets with different embedding models")
-			}
-		}
 	}
 
 	// Determine meta_data_filter
@@ -190,29 +195,93 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	filter := req.Filter
 
 	if req.SearchID != nil && *req.SearchID != "" {
-		// If search_id is set, get meta_data_filter and chat_id from search_config
-		searchDetail, err := readableSearch(ctx, userID, *req.SearchID)
+		searchDetail, searchConfig, err := readableRetrievalConfig(ctx, userID, *req.SearchID)
 		if err != nil {
 			return nil, err
-		} else if searchConfig := searchDetail.SearchConfig; searchConfig != nil {
-			chatTenantID = searchDetail.TenantID
-			if rawFilter, exists := searchConfig["meta_data_filter"]; exists {
-				searchMetaFilter, ok := rawFilter.(map[string]interface{})
-				if !ok {
-					return nil, fmt.Errorf("invalid saved metadata filter")
-				}
-				filter = searchMetaFilter
-			}
-			if selector, exists := searchConfig["chat_id"]; exists && selector == nil {
-				return nil, fmt.Errorf("invalid saved search model")
-			}
-			chatID = searchConfig["chat_id"]
+		}
+		req, err = savedRetrievalRequest(req, searchConfig)
+		if err != nil {
+			return nil, err
+		}
+		filter = req.Filter
+		chatTenantID = searchDetail.TenantID
+		if selector, exists := searchConfig["chat_id"]; exists && selector == nil {
+			return nil, fmt.Errorf("%w: invalid saved search model", ErrRetrievalArgument)
+		}
+		chatID = searchConfig["chat_id"]
+	}
+	if req.UseKG != nil && *req.UseKG && (req.DocIDs != nil || len(filter) > 0 || req.SearchID != nil && *req.SearchID != "") {
+		return nil, fmt.Errorf("%w: knowledge graph enhancement cannot be combined with document filters, metadata filters, or a saved search", ErrRetrievalArgument)
+	}
+	var rerankCompositeName string
+	var rerankModel *models.RerankModel
+	if req.TenantRerankID != nil || req.RerankID != nil && *req.RerankID != "" {
+		selector := ""
+		if req.RerankID != nil {
+			selector = *req.RerankID
+		}
+		rerankCompositeName, err = retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeRerank, req.TenantRerankID, selector)
+		if err != nil {
+			return nil, fmt.Errorf("selected rerank model unavailable: %w", err)
+		}
+		provider := NewModelProviderService()
+		if req.TenantRerankID != nil {
+			rerankModel, err = provider.GetRerankModelByIDWithContext(ctx, tenantIDs[0], *req.TenantRerankID)
 		} else {
-			return nil, fmt.Errorf("invalid saved search configuration")
+			rerankModel, err = provider.GetRerankModelWithContext(ctx, tenantIDs[0], rerankCompositeName)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("selected rerank model unavailable: %w", err)
 		}
 	}
+	if chatID != nil {
+		chatModel, err = NewSearchbotService(NewModelProviderService()).chatModel(ctx, chatTenantID, chatID)
+		if err != nil {
+			return nil, fmt.Errorf("selected search model unavailable: %w", err)
+		}
+	}
+
 	if err := ValidateMetaDataFilter(filter); err != nil {
 		return nil, err
+	}
+
+	// Resolve every selected embedding binding before using one query vector.
+	modelProvider := NewModelProviderService()
+	var embdID string
+	var identity EmbeddingModelIdentity
+	for i, kb := range kbRecords {
+		selector, err := retrievalModelSelector(ctx, kb.TenantID, entity.ModelTypeEmbedding, kb.TenantEmbdID, kb.EmbdID)
+		if err != nil {
+			return nil, fmt.Errorf("embedding selector unavailable: %w", err)
+		}
+		var resolved EmbeddingModelIdentity
+		if kb.TenantEmbdID != nil {
+			resolved, err = modelProvider.ResolvedEmbeddingIdentityByID(ctx, kb.TenantID, *kb.TenantEmbdID)
+		} else {
+			resolved, err = modelProvider.ResolvedEmbeddingIdentity(ctx, kb.TenantID, selector)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("embedding binding unavailable: %w", err)
+		}
+		if i == 0 {
+			embdID, identity = selector, resolved
+		} else if resolved != identity {
+			return nil, fmt.Errorf("cannot retrieve across datasets with different embedding models")
+		}
+	}
+
+	graphChats := make(map[string]*models.ChatModel)
+	if req.UseKG != nil && *req.UseKG {
+		for _, kb := range kbRecords {
+			if _, found := graphChats[kb.TenantID]; found {
+				continue
+			}
+			bound, err := modelProvider.GetChatModelWithContext(ctx, kb.TenantID, "")
+			if err != nil {
+				return nil, fmt.Errorf("knowledge graph model unavailable: %w", err)
+			}
+			graphChats[kb.TenantID] = bound
+		}
 	}
 
 	// Every resource selector has been authorized before honoring empty scope.
@@ -260,9 +329,9 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	// Get chat model for cross_languages and keyword_extraction
 	if len(req.CrossLanguages) > 0 || (req.Keyword != nil && *req.Keyword) {
 		modelProviderSvc := NewModelProviderService()
-		chatModel, err = modelProviderSvc.GetChatModel(tenantIDs[0], "")
+		chatModel, err = modelProviderSvc.GetChatModelWithContext(ctx, tenantIDs[0], "")
 		if err != nil {
-			common.Warn("Failed to get default chat model for LLM transformations", zap.Error(err))
+			return nil, fmt.Errorf("default chat model unavailable: %w", err)
 		} else {
 			common.Info("Fetched chat model (tenant default) for cross_languages/keyword_extraction",
 				zap.String("tenantID", tenantIDs[0]),
@@ -275,7 +344,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	if chatModel != nil && len(req.CrossLanguages) > 0 {
 		translated, err := CrossLanguages(ctx, chatModel, req.Question, req.CrossLanguages)
 		if err != nil {
-			common.Warn("Failed to translate question", zap.Error(err))
+			return nil, err
 		} else {
 			modifiedQuestion = translated
 		}
@@ -285,7 +354,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	if chatModel != nil && req.Keyword != nil && *req.Keyword {
 		extractedKeywords, err := KeywordExtraction(ctx, chatModel, modifiedQuestion, 3)
 		if err != nil {
-			common.Warn("Failed to extract keywords from question", zap.Error(err))
+			return nil, err
 		} else if extractedKeywords != "" {
 			modifiedQuestion = modifiedQuestion + " " + extractedKeywords
 		}
@@ -300,20 +369,20 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	}
 
 	// Get tag-based rank features via LabelQuestion
-	metadataSvc := NewMetadataService()
-	labels := metadataSvc.LabelQuestion(modifiedQuestion, kbRecords)
+	metadataSvc := &MetadataService{kbDAO: s.kbDAO, docEngine: s.docEngine}
+	labels, err := metadataSvc.LabelQuestionContext(ctx, userID, modifiedQuestion, kbRecords)
+	if err != nil {
+		return nil, err
+	}
 	common.Debug("LabelQuestion result", zap.Any("labels", labels))
 
-	// Canonical selectors and defaults belong to the active model resolver.
-	// Numeric legacy references still require an owned, active typed binding.
-	embdID, err := retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeEmbedding, kbRecords[0].TenantEmbdID, kbRecords[0].EmbdID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get embedding model selector: %w", err)
-	}
-
 	// Get embedding model for the tenant
-	modelProvider := NewModelProviderService()
-	embeddingModel, err := modelProvider.GetEmbeddingModel(tenantIDs[0], embdID)
+	var embeddingModel *models.EmbeddingModel
+	if kbRecords[0].TenantEmbdID != nil {
+		embeddingModel, err = modelProvider.GetEmbeddingModelByIDWithContext(ctx, tenantIDs[0], *kbRecords[0].TenantEmbdID)
+	} else {
+		embeddingModel, err = modelProvider.GetEmbeddingModelWithContext(ctx, tenantIDs[0], embdID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get embedding model: %w", err)
 	}
@@ -321,33 +390,6 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	common.Info("Fetched embedding model for retrieval",
 		zap.String("tenantID", tenantIDs[0]),
 		zap.String("embdID", embdID))
-
-	// Get rerank model if RerankID is specified
-	var rerankModel *models.RerankModel
-	var rerankCompositeName string
-	if req.TenantRerankID != nil && *req.TenantRerankID != "" {
-		tenantRerankIDInt, parseErr := strconv.ParseInt(*req.TenantRerankID, 10, 64)
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid tenant_rerank_id: %w", parseErr)
-		}
-		rerankCompositeName, err = retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeRerank, &tenantRerankIDInt, "")
-		if err != nil {
-			return nil, fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
-		}
-		rerankModel, err = modelProvider.GetRerankModel(tenantIDs[0], rerankCompositeName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get rerank model by tenant_rerank_id: %w", err)
-		}
-	} else if req.RerankID != nil && *req.RerankID != "" {
-		rerankCompositeName, err = retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeRerank, nil, *req.RerankID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get rerank model by rerank_id: %w", err)
-		}
-		rerankModel, err = modelProvider.GetRerankModel(tenantIDs[0], rerankCompositeName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get rerank model by rerank_id: %w", err)
-		}
-	}
 
 	if rerankModel != nil {
 		rerankModel.APIConfig.Context = ctx
@@ -369,6 +411,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 		RerankModel:            rerankModel,
 		RankFeature:            &labels,
 		EmbeddingModel:         embeddingModel,
+		Highlight:              req.Highlight,
 	}
 
 	// Call RetrievalService to perform retrieval
@@ -379,14 +422,30 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 
 	filteredChunks := retrievalResult.Chunks
 
-	// Handle knowledge graph retrieval
-	// TODO: KG retrieval requires GraphRAG infrastructure which is not yet implemented in Go
+	// Graph rows are trusted KB aggregates produced by a separate scoped
+	// pipeline. They do not claim document identity or measured similarity.
+	var graphChunks []map[string]interface{}
 	if req.UseKG != nil && *req.UseKG {
-		common.Warn("use_kg is not yet implemented in Go - skipping KG retrieval")
+		pipeline := kg.NewPipeline(s.docEngine)
+		for _, kb := range kbRecords {
+			graphChat := graphChats[kb.TenantID]
+			graph, err := pipeline.Retrieval(ctx, userID, []string{kb.ID}, modifiedQuestion, graphChat, embeddingModel)
+			if err != nil {
+				return nil, fmt.Errorf("knowledge graph retrieval failed: %w", err)
+			}
+			if graph != nil && graph.Content != "" {
+				graphChunks = append(graphChunks, map[string]interface{}{"chunk_id": "knowledge_graph_" + kb.ID, "kb_id": kb.ID, "doc_id": "", "content_with_weight": graph.Content, "content_ltks": "", "knowledge_graph": true, "similarity": 1.0, "vector_similarity": nil, "term_similarity": nil})
+			}
+		}
 	}
 
 	// Apply retrieval_by_children - aggregate child chunks into parent chunks
-	filteredChunks = nlp.RetrievalByChildren(filteredChunks, tenantIDs, s.docEngine, ctx)
+	filteredChunks, err = nlp.RetrievalByChildrenChecked(ctx, filteredChunks, tenantIDs, s.docEngine)
+	if err != nil {
+		return nil, err
+	}
+
+	filteredChunks = append(graphChunks, filteredChunks...)
 
 	// Remove vector field from each chunk
 	for i := range filteredChunks {
@@ -399,7 +458,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 		Chunks:  filteredChunks,
 		DocAggs: retrievalResult.DocAggs,
 		Labels:  &labels,
-		Total:   int64(len(filteredChunks)),
+		Total:   retrievalResult.Total,
 	}, nil
 }
 
@@ -412,7 +471,7 @@ func retrievalModelSelector(ctx context.Context, tenantID string, modelType enti
 	if numericID == nil && (selector == "" || strings.Contains(selector, "@")) {
 		return selector, nil
 	}
-	query := dao.DB.WithContext(ctx).Where("tenant_id = ? AND mdl_type = ? AND status = ?", tenantID, modelType, "1")
+	query := dao.DB.WithContext(ctx).Where("tenant_id = ? AND status = ?", tenantID, "1")
 	if numericID != nil {
 		if *numericID <= 0 {
 			return "", fmt.Errorf("model binding must be positive")
@@ -422,9 +481,16 @@ func retrievalModelSelector(ctx context.Context, tenantID string, modelType enti
 		query = query.Where("llm_name = ?", selector)
 	}
 	var bindings []entity.TenantLLM
-	if err := query.Limit(2).Find(&bindings).Error; err != nil {
+	if err := query.Find(&bindings).Error; err != nil {
 		return "", err
 	}
+	typed := make([]entity.TenantLLM, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding.ModelType != nil && modelTypeMatches(*binding.ModelType, modelType) {
+			typed = append(typed, binding)
+		}
+	}
+	bindings = typed
 	if len(bindings) != 1 || bindings[0].LLMName == nil || *bindings[0].LLMName == "" || bindings[0].LLMFactory == "" {
 		return "", fmt.Errorf("active model binding unavailable")
 	}

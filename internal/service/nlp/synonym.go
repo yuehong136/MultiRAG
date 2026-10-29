@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -170,9 +171,9 @@ func (s *Synonym) Lookup(tk string, topN int) []string {
 
 	if res, ok := s.dictionary[key]; ok {
 		if len(res) > topN {
-			return res[:topN]
+			return append([]string(nil), res[:topN]...)
 		}
-		return res
+		return append([]string(nil), res...)
 	}
 
 	// 2) If not found and tk is purely alphabetical, fallback to WordNet
@@ -198,6 +199,7 @@ func (s *Synonym) Lookup(tk string, topN int) []string {
 			}
 		}
 
+		sort.Strings(wnRes)
 		if len(wnRes) > topN {
 			return wnRes[:topN]
 		}

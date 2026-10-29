@@ -251,12 +251,19 @@ func (s *ChatSessionService) prepareCompletion(ctx context.Context, conversation
 	}
 	if llmID != "" {
 		dialog.LLMID = llmID
+		dialog.TenantLLMID = nil
 	}
 	return session, dialog, s.initializeReference(session), nil
 }
 
 func (s *ChatSessionService) completionModel(ctx context.Context, dialog *entity.Chat) (*models.ChatModel, error) {
-	model, err := s.modelProviderService.GetChatModel(dialog.TenantID, dialog.LLMID)
+	var model *models.ChatModel
+	var err error
+	if dialog.TenantLLMID != nil {
+		model, err = s.modelProviderService.GetChatModelByIDWithContext(ctx, dialog.TenantID, *dialog.TenantLLMID)
+	} else {
+		model, err = s.modelProviderService.GetChatModelWithContext(ctx, dialog.TenantID, dialog.LLMID)
+	}
 	if err != nil {
 		return nil, err
 	}

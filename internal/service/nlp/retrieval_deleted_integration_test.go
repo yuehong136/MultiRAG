@@ -183,14 +183,9 @@ func TestRetrievalScratchPostgresInfinity(t *testing.T) {
 	}
 	// Follow the actual ChunkService consumer's parent-expansion step against
 	// the residual index row, whose SQL document was physically deleted above.
-	expanded := RetrievalByChildren(retrieved.Chunks, search.TenantIDs, index, context.Background())
-	if len(expanded) != 3 {
-		t.Fatalf("parent expansion lost verified children: %v", expanded)
-	}
-	for _, chunk := range expanded {
-		if chunkScalar(chunk["doc_id"]) == "gone" || strings.Contains(fmt.Sprint(chunk["content_with_weight"]), "gone") {
-			t.Fatal("consumer parent expansion reintroduced deleted text")
-		}
+	expanded, err := RetrievalByChildrenChecked(context.Background(), retrieved.Chunks, search.TenantIDs, index)
+	if err == nil || expanded != nil {
+		t.Fatalf("parent expansion accepted mismatched deleted document scope: %v %v", expanded, err)
 	}
 	// Keep index unchanged, delete source SQL row and soft-delete the dataset.
 	if _, err := pool.Exec(`DELETE FROM t_ai_documents WHERE id='live'`); err != nil {

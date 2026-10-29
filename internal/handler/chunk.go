@@ -52,7 +52,7 @@ func (h *ChunkHandler) SearchDatasets(c *gin.Context) {
 
 	// Bind JSON request
 	var req service.RetrievalTestRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindObjectJSONNullable(c, &req, map[string]bool{"doc_ids": true, "cross_languages": true, "search_id": true, "meta_data_filter": true, "tenant_rerank_id": true, "rerank_id": true, "search_mode": true, "reference_metadata": true, "metadata_condition": true}); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
@@ -97,9 +97,17 @@ func (h *ChunkHandler) SearchDatasets(c *gin.Context) {
 		})
 		return
 	}
+	if err := service.ValidateDatasetSearchRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": err.Error()})
+		return
+	}
 	// Call service with user ID for permission checks
 	resp, err := h.chunkService.RetrievalTest(c.Request.Context(), &req, user.ID)
-	if errors.Is(err, service.ErrDatasetAccessDenied) {
+	if errors.Is(err, service.ErrRetrievalArgument) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "message": err.Error()})
+		return
+	}
+	if errors.Is(err, service.ErrDatasetAccessDenied) || errors.Is(err, service.ErrSearchbotAccessDenied) {
 		jsonError(c, common.CodeForbidden, err.Error())
 		return
 	}

@@ -342,8 +342,8 @@ func (d *TermWeightDealer) Weights(tks []string, preprocess bool) []TermWeight {
 		}
 		if s == 0 && len([]rune(t)) >= 4 {
 			// Try fine-grained tokenization
-			fgTokens, _ := tokenizer.Tokenize(t)
-			tokens := strings.Fields(fgTokens)
+			fgTokens, _ := tokenizer.FineGrainedTokenize(t)
+			tokens := multiRuneTokens(fgTokens)
 
 			var validTokens []float64
 			if len(tokens) > 1 {
@@ -380,8 +380,8 @@ func (d *TermWeightDealer) Weights(tks []string, preprocess bool) []TermWeight {
 			return 300
 		}
 		if len([]rune(t)) >= 4 {
-			fgTokens, _ := tokenizer.Tokenize(t)
-			tokens := strings.Fields(fgTokens)
+			fgTokens, _ := tokenizer.FineGrainedTokenize(t)
+			tokens := multiRuneTokens(fgTokens)
 
 			var validTokens []float64
 			if len(tokens) > 1 {
@@ -492,4 +492,14 @@ func (d *TermWeightDealer) GetNE() map[string]string {
 // GetDF returns the document frequency dictionary
 func (d *TermWeightDealer) GetDF() map[string]int {
 	return d.df
+}
+
+func multiRuneTokens(text string) []string {
+	var tokens []string
+	for _, token := range strings.Fields(text) {
+		if len([]rune(token)) > 1 {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
 }

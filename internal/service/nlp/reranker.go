@@ -15,7 +15,9 @@
 package nlp
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -53,6 +55,7 @@ type SearchResult struct {
 //   - tsim: token similarity scores
 //   - vsim: vector similarity scores
 func Rerank(
+	ctx context.Context,
 	rerankModel *models.RerankModel,
 	chunks []map[string]interface{},
 	total int,
@@ -64,10 +67,16 @@ func Rerank(
 	cfield string,
 	qb *QueryBuilder,
 	rankFeature map[string]float64,
-) (sim []float64, tsim []float64, vsim []float64) {
+) (sim []float64, tsim []float64, vsim []float64, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := validateRerankWeights(tkWeight, vtWeight); err != nil {
+		return nil, nil, nil, err
+	}
 	// If reranker model is provided and there are results, use model reranking
 	if rerankModel != nil && total > 0 {
-		return RerankByModel(rerankModel, chunks, query, tkWeight, vtWeight, cfield, qb, rankFeature)
+		return RerankByModel(ctx, rerankModel, chunks, query, tkWeight, vtWeight, cfield, qb, rankFeature)
 	}
 
 	// Otherwise, use fallback logic based on engine type
@@ -75,18 +84,20 @@ func Rerank(
 		// For Infinity: scores are already normalized before fusion
 		// Just extract the scores from results
 		if chunks == nil || total == 0 || len(chunks) == 0 {
-			return []float64{}, []float64{}, []float64{}
+			return []float64{}, []float64{}, []float64{}, nil
 		}
 
 		return RerankInfinityFallback(chunks)
 	}
 
 	// For Elasticsearch: need to perform reranking and apply rank features
-	return RerankStandard(chunks, keywords, questionVector, query, tkWeight, vtWeight, cfield, qb, rankFeature)
+	sim, tsim, vsim = RerankStandard(chunks, keywords, questionVector, query, tkWeight, vtWeight, cfield, qb, rankFeature)
+	return sim, tsim, vsim, validateRerankScores(sim)
 }
 
 // RerankByModel performs reranking using a reranker model
 func RerankByModel(
+	ctx context.Context,
 	rerankModel *models.RerankModel,
 	chunks []map[string]interface{},
 	query string,
@@ -94,9 +105,15 @@ func RerankByModel(
 	cfield string,
 	qb *QueryBuilder,
 	rankFeature map[string]float64,
-) (sim []float64, tsim []float64, vsim []float64) {
+) (sim []float64, tsim []float64, vsim []float64, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := validateRerankWeights(tkWeight, vtWeight); err != nil {
+		return nil, nil, nil, err
+	}
 	if chunks == nil || len(chunks) == 0 {
-		return []float64{}, []float64{}, []float64{}
+		return []float64{}, []float64{}, []float64{}, nil
 	}
 
 	chunkCount := len(chunks)
@@ -118,16 +135,21 @@ func RerankByModel(
 		contentLtks := extractContentTokens(chunk, cfield)
 		titleTks := extractTitleTokens(chunk)
 		importantKwd := extractImportantKeywords(chunk)
+		questionTks := extractQuestionTokens(chunk)
 
-		// Combine tokens without repetition (simpler version for model reranking)
+		// Preserve indexed token boundaries and question terms for lexical scoring.
 		tks := make([]string, 0, len(contentLtks)+len(titleTks)+len(importantKwd))
 		tks = append(tks, contentLtks...)
 		tks = append(tks, titleTks...)
 		tks = append(tks, importantKwd...)
+		tks = append(tks, questionTks...)
 		insTw = append(insTw, tks)
 
 		// Build document text for model reranking
-		docText := RemoveRedundantSpaces(strings.Join(tks, " "))
+		docText, ok := chunk["content_with_weight"].(string)
+		if !ok || docText == "" {
+			docText = RemoveRedundantSpaces(strings.Join(contentLtks, " "))
+		}
 		docs = append(docs, docText)
 	}
 
@@ -135,18 +157,22 @@ func RerankByModel(
 	tsim = TokenSimilarity(keywords, insTw, qb)
 
 	// Get similarity scores from reranker model
+	if rerankModel == nil || rerankModel.ModelDriver == nil {
+		return nil, nil, nil, fmt.Errorf("rerank model is required")
+	}
 	modelSim, err := rerankModel.Rerank(query, docs)
 	if err != nil {
-		common.Error("RerankByModel: rerankModel.Rerank failed; falling back to token-only similarity", err)
-		// If model fails, fall back to token similarity only
-		modelSim = make([]float64, len(tsim))
+		return nil, nil, nil, fmt.Errorf("rerank model: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
 	}
 	if len(modelSim) != chunkCount {
-		common.Warn("reranker returned mismatched score length; padding/truncating",
-			zap.Int("got", len(modelSim)), zap.Int("want", chunkCount))
-		fixed := make([]float64, chunkCount)
-		copy(fixed, modelSim)
-		modelSim = fixed
+		return nil, nil, nil, fmt.Errorf("reranker returned %d scores for %d candidates", len(modelSim), chunkCount)
+	}
+	modelSim, err = NormalizeRerankScores(modelSim)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	// Combine token similarity with model similarity
 	// Model similarity is treated as vector similarity component
@@ -160,7 +186,64 @@ func RerankByModel(
 	sim = applyRankFeatureScores(chunks, sim, rankFeature)
 
 	common.Info("RerankByModel completed")
-	return sim, tsim, modelSim
+	return sim, tsim, modelSim, validateRerankScores(sim)
+}
+
+// NormalizeRerankScores keeps calibrated scores unchanged and maps unbounded
+// provider logits to the blend's [0, 1] scale. It validates before mutating.
+func NormalizeRerankScores(scores []float64) ([]float64, error) {
+	if err := validateRerankScores(scores); err != nil {
+		return nil, err
+	}
+	if len(scores) == 0 {
+		return scores, nil
+	}
+	low, high := scores[0], scores[0]
+	for _, score := range scores[1:] {
+		low = math.Min(low, score)
+		high = math.Max(high, score)
+	}
+	if low >= 0 && high <= 1 {
+		return scores, nil
+	}
+	span := high - low
+	if span < 1e-3 {
+		for i, score := range scores {
+			scores[i] = math.Max(0, math.Min(1, score))
+		}
+		return scores, nil
+	}
+	if math.IsInf(span, 0) {
+		// Opposite finite extremes can overflow high-low. Scale first.
+		scale := math.Max(math.Abs(low), math.Abs(high))
+		low, high = low/scale, high/scale
+		for i, score := range scores {
+			scores[i] = (score/scale - low) / (high - low)
+		}
+	} else {
+		for i, score := range scores {
+			scores[i] = (score - low) / span
+		}
+	}
+	return scores, nil
+}
+
+func validateRerankScores(scores []float64) error {
+	for _, score := range scores {
+		if math.IsNaN(score) || math.IsInf(score, 0) {
+			return fmt.Errorf("rerank scores must be finite")
+		}
+	}
+	return nil
+}
+
+func validateRerankWeights(token, vector float64) error {
+	for _, weight := range []float64{token, vector} {
+		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 || weight > 1 {
+			return fmt.Errorf("rerank weights must be finite and between 0 and 1")
+		}
+	}
+	return nil
 }
 
 // RerankStandard performs standard reranking without a reranker model
@@ -241,9 +324,8 @@ func RerankStandard(
 
 // RerankInfinityFallback is used as a fallback when no reranker model is provided for Infinity engine.
 // Infinity can return scores in various field names (SCORE, score, SIMILARITY, etc.),
-// so we check multiple possible field names. If no score is found, we default to 1.0
-// to ensure the chunk passes through any similarity threshold filters.
-func RerankInfinityFallback(chunks []map[string]interface{}) (sim []float64, tsim []float64, vsim []float64) {
+// so we check the supported field names and reject missing or invalid scores.
+func RerankInfinityFallback(chunks []map[string]interface{}) (sim []float64, tsim []float64, vsim []float64, err error) {
 	common.Info("RerankInfinityFallback started", zap.Int("chunkCount", len(chunks)))
 
 	sim = make([]float64, len(chunks))
@@ -251,18 +333,22 @@ func RerankInfinityFallback(chunks []map[string]interface{}) (sim []float64, tsi
 		scoreFound := false
 		scoreFields := []string{"SCORE", "score", "SIMILARITY", "similarity", "_score", "score()", "similarity()"}
 		for _, field := range scoreFields {
-			if score, ok := chunk[field].(float64); ok {
+			if value, exists := chunk[field]; exists {
+				score, ok := toFloat64(value)
+				if !ok || math.IsNaN(score) || math.IsInf(score, 0) {
+					return nil, nil, nil, fmt.Errorf("Infinity returned invalid fused score for candidate %d", i)
+				}
 				sim[i] = score
 				scoreFound = true
 				break
 			}
 		}
 		if !scoreFound {
-			sim[i] = 1.0
+			return nil, nil, nil, fmt.Errorf("Infinity returned no fused score for candidate %d", i)
 		}
 	}
 	common.Info("RerankInfinityFallback completed")
-	return sim, sim, sim
+	return sim, sim, sim, nil
 }
 
 // HybridSimilarity calculates hybrid similarity between query and documents
@@ -350,16 +436,16 @@ func tokenDictSimilarity(qtwt, dtwt map[string]float64) float64 {
 
 	// s = sum of query weights for matching tokens
 	s := 1e-9
-	for t, qw := range qtwt {
+	for _, t := range sortedScoreKeys(qtwt) {
 		if _, ok := dtwt[t]; ok {
-			s += qw
+			s += qtwt[t]
 		}
 	}
 
 	// q = sum of all query weights (L1 normalization)
 	q := 1e-9
-	for _, qw := range qtwt {
-		q += qw
+	for _, t := range sortedScoreKeys(qtwt) {
+		q += qtwt[t]
 	}
 
 	return s / q
@@ -372,7 +458,7 @@ func ArgsortDescending(values []float64) []int {
 		indices[i] = i
 	}
 
-	sort.Slice(indices, func(i, j int) bool {
+	sort.SliceStable(indices, func(i, j int) bool {
 		return values[indices[i]] > values[indices[j]]
 	})
 
@@ -414,19 +500,7 @@ func extractContentTokens(fields map[string]interface{}, cfield string) []string
 		return []string{}
 	}
 
-	// Remove redundant spaces first to handle irregular spacing in Chinese text
-	v = RemoveRedundantSpaces(v)
-
-	// Now split by whitespace to get individual tokens
-	seen := make(map[string]bool)
-	var result []string
-	for _, t := range strings.Fields(v) {
-		if !seen[t] {
-			seen[t] = true
-			result = append(result, t)
-		}
-	}
-	return result
+	return strings.Fields(v)
 }
 
 // extractTitleTokens extracts title tokens from chunk fields
@@ -435,8 +509,6 @@ func extractTitleTokens(fields map[string]interface{}) []string {
 	if !ok {
 		return []string{}
 	}
-	// Remove redundant spaces first
-	v = RemoveRedundantSpaces(v)
 	var result []string
 	for _, t := range strings.Fields(v) {
 		if t != "" {
@@ -553,12 +625,18 @@ func applyRankFeatureScores(chunks []map[string]interface{}, sim []float64, rank
 
 	// Compute query denominator: sqrt(sum of squares of query rank feature weights, excluding pagerank)
 	qDenor := 0.0
-	for t, s := range rankFeature {
+	for _, t := range sortedScoreKeys(rankFeature) {
 		if t != common.PAGERANK_FLD {
-			qDenor += s * s
+			qDenor += rankFeature[t] * rankFeature[t]
 		}
 	}
 	qDenor = math.Sqrt(qDenor)
+	if qDenor == 0 {
+		for i := range sim {
+			sim[i] += pageranks[i]
+		}
+		return sim
+	}
 
 	// Compute tag score for each chunk
 	tagScores := make([]float64, len(chunks))
@@ -572,7 +650,8 @@ func applyRankFeatureScores(chunks []map[string]interface{}, sim []float64, rank
 		// Parse tag_feas JSON string: {"tag1": 0.5, "tag2": 0.3}
 		nor, denor := 0.0, 0.0
 		tagFeaMap := parseTagFeasRerank(tagFeaStr)
-		for t, sc := range tagFeaMap {
+		for _, t := range sortedScoreKeys(tagFeaMap) {
+			sc := tagFeaMap[t]
 			if weight, exists := rankFeature[t]; exists {
 				nor += weight * sc
 			}
@@ -630,4 +709,14 @@ func parseTagFeasRerank(tagFeasStr string) map[string]float64 {
 		}
 	}
 	return result
+}
+
+// sortedScoreKeys makes score reductions deterministic across map iterations.
+func sortedScoreKeys(values map[string]float64) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

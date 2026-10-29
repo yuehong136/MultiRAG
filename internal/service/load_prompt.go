@@ -32,7 +32,7 @@ var (
 )
 
 // thinkBlockRE is used to strip think blocks from LLM responses
-var thinkBlockRE = regexp.MustCompile(`<think>[\s\S]*?`)
+var thinkBlockRE = regexp.MustCompile(`^[\s\S]*</think>`)
 
 func init() {
 	// Strategy 1: Check working directory first (most reliable during development/tests)
