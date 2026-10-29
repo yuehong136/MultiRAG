@@ -3890,3 +3890,15 @@ Infinity 就绪握手改在进程内执行（冷导入 8–17 秒，超过 5 秒
 - 可执行组合 `761af5a2`；测试夹具最小补修 `dd447b5e` 不改生产行为。Web master/pin 为 `98712181c9c7bf8ccf39c955d8bbab467fd77946`，保留 `123f4a14` 和派发基线 `6abc8e26` 的选择器/库存状态与多能力筛选。
 - Python 定向单测 220+23 通过，lint/format/type/import/async 全 exit 0；SQL/HTTP 首轮 29 通过、Web JSON 空白夹具一项失败，保留原失败并最小复跑该用例通过。Go 全内部包 build/vet、三个入口实际 native 链接、模型包 race 462 顶层（3583 含子项事件）、CLI 8 项和管理 SQL/HTTP/新 CLI 10 事件通过，无 skip；Web build/受影响测试/明暗浏览器与真实 Python HTTP/SQL 消费者分层留证。
 - 原 28 项后端 WIP 保留，本块独立暂存；候选恢复包实际 verify/隔离恢复，精确 tree/ref/admin 与自有测试资源/缓存清理和最终主干 SHA 见外部 `20261028-batch-after-33ef724b/delivery-complete.json`。未 push、未部署，远程 `ci-required` 待运行；未验证真实付费厂商、生产、常驻 worker 或干净重装。不自动继续下一批。
+
+
+<!-- BEGIN AFTER-AAB01AF6 LOCAL DELIVERY -->
+
+## 2026-10-29 · aab01af6 后二十项本地交付
+
+- 冻结排除 `aab01af6` 至 `5e0a7ce4`，后修上限 `519e7d98`，未 fetch；20 项、154 路径的实现/保留与质量比较见 [本批记录](batch-after-aab01af6.md)，#11 保留单一编号覆盖 70 条足迹。
+- 可执行组合 `c5585e678271f1a01cbaa8812dc2c812edad05b7`；Web master/pin `5afb4fbc5787158dfed9785d437c568a145c3b20`。Go KG/Dify、精确模型绑定、metadata/tag/文档权限、重排/页宽/native、CLI 与 Python discovery/重排及 Web 生命周期均已按活动消费者接通；生产 Python 不切换到 Go。
+- I 组合 557 Python 单测、47 harness、最终固定 Web 2 个实际 HTTP/SQL/Milvus 消费者；Go 全内部 build/vet、3 个 fresh native 链接及 race 188 顶层/923 含子项均通过。native 14 项 sanitizer 与当前 tokenizer 3 项 race 另证。原 Search harness 基线失败在本批共享消费者链中修根因并复验，原失败/各次偏差和最小复跑仍保留，不以历史通过数冒称全套。
+- 原 28 WIP 与并发外部变动保留，本块单独暂存；当前 refs/pin、154 处置指针、bundle 实际隔离恢复及精确自有资源清理见外部 `20261029-batch-after-aab01af6/delivery-complete.json`。未 push/部署，远程 `ci-required`、真实付费厂商/生产/常驻 worker/全后端全套未运行；不自动下一批。
+
+<!-- END AFTER-AAB01AF6 LOCAL DELIVERY -->
