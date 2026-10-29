@@ -35,7 +35,7 @@ func documentFileError(c *gin.Context, err error) {
 	}
 	c.JSON(status, gin.H{"code": code, "message": message, "data": nil})
 }
-func sendDocumentFile(c *gin.Context, file *service.DocumentFile, download bool) {
+func sendDocumentFile(c *gin.Context, file *service.DocumentFile, download, artifact bool) {
 	if file == nil {
 		documentFileError(c, service.ErrDocumentFileStorage)
 		return
@@ -56,7 +56,11 @@ func sendDocumentFile(c *gin.Context, file *service.DocumentFile, download bool)
 		}
 		return r
 	}, file.FileName)
-	c.Header("Content-Disposition", disposition+"; filename="+strconv.Quote(fallback)+"; filename*=UTF-8''"+encoded)
+	header := disposition + "; filename*=UTF-8''" + encoded
+	if artifact {
+		header = disposition + "; filename=" + strconv.Quote(fallback) + "; filename*=UTF-8''" + encoded
+	}
+	c.Header("Content-Disposition", header)
 	c.Data(http.StatusOK, file.ContentType, file.Data)
 }
 func (h *DocumentHandler) binaryReader() documentFileReader {
@@ -79,7 +83,7 @@ func (h *DocumentHandler) readDocumentFile(c *gin.Context, download bool) {
 		documentFileError(c, err)
 		return
 	}
-	sendDocumentFile(c, file, download)
+	sendDocumentFile(c, file, download, false)
 }
 
 // DownloadDocument requires DatasetDocumentAuthMiddleware's API-token tenant.
@@ -95,7 +99,7 @@ func (h *DocumentHandler) DownloadDocument(c *gin.Context) {
 		documentFileError(c, err)
 		return
 	}
-	sendDocumentFile(c, file, true)
+	sendDocumentFile(c, file, true, false)
 }
 func (h *DocumentHandler) GetDocumentArtifact(c *gin.Context) {
 	documentFileHeaders(c)
@@ -119,5 +123,5 @@ func (h *DocumentHandler) GetDocumentArtifact(c *gin.Context) {
 		documentFileError(c, err)
 		return
 	}
-	sendDocumentFile(c, file, false)
+	sendDocumentFile(c, file, false, true)
 }

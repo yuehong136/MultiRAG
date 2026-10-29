@@ -156,17 +156,12 @@ func TestDocumentFilesSafeDisposition(t *testing.T) {
 		f := &fakeDocumentFileReader{file: &service.DocumentFile{Data: []byte("data"), FileName: tc.name, ContentType: tc.mime}}
 		response := documentFilesGET(documentFilesRouter(f, &entity.User{ID: "member"}, ""), "/documents/doc/preview")
 		value := response.Header().Get("Content-Disposition")
-		if response.Code != http.StatusOK || !strings.Contains(value, "filename*=UTF-8''") || strings.ContainsAny(value, "\r\n") || response.Header().Get("X-Evil") != "" {
+		if response.Code != http.StatusOK || !strings.Contains(value, "filename*=UTF-8''") || strings.ContainsAny(value, "\r\n\"") || response.Header().Get("X-Evil") != "" {
 			t.Fatalf("unsafe header: %v", response.Header())
 		}
 		disposition, params, err := mime.ParseMediaType(value)
 		if err != nil || params["filename"] != tc.name {
 			t.Fatalf("original filename was not preserved: header=%s parsed=%v err=%v", value, params, err)
-		}
-		_, fallback, found := strings.Cut(value, `; filename="`)
-		fallback, _, closed := strings.Cut(fallback, `"`)
-		if !found || !closed || fallback == "" || strings.ContainsAny(fallback, "\\/\r\n") || strings.ContainsFunc(fallback, func(r rune) bool { return r < 32 || r >= 127 }) {
-			t.Fatalf("unsafe or missing quoted ASCII filename: %s", value)
 		}
 		wantDisposition := "inline"
 		if tc.attachment {
