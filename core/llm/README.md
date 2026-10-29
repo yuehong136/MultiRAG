@@ -5,6 +5,39 @@
 [`chat_model/base.py`](./chat_model/base.py) 与 `chat_model/models/` 仍提供同步入口。
 排查模型行为时先确认实际注册和调用方，不只按模型文件名定位。
 
+## OpenAI 内置目录
+
+2026-10-29 按 [OpenAI 模型目录](https://developers.openai.com/api/docs/models)和
+[退役公告](https://developers.openai.com/api/docs/deprecations)核对。
+Python 使用 `configs/llm_factories.json`，并行 Go 实现使用
+`configs/models/openai.json`；两份声明的模型名、能力与上下文保持一致，沿用各自 JSON schema。
+RAGFlow Go 的参照入口是 `conf/models/openai.json`，不是 Python 总目录；供应商声明仍需与官方接口核对。
+
+内置聊天目录保留 GPT-6 / 6.1、GPT-5.6、5.5、5.4 / mini 和 5.2。
+不再为新实例列出 GPT-3.5、GPT-4 系列、旧 o 系列、已弃用的 GPT-5 / 5.1 / 5.4-nano
+以及 ChatGPT 专用别名。`gpt-5.2-pro` 只支持 Responses，当前 Chat Completions 适配器不列出它。
+这只调整内置候选，不删除租户已保存的模型，也不更换其默认模型。
+
+[`gpt-6.1-sol`](https://developers.openai.com/api/docs/models/gpt-6.1-sol)、
+GPT-6.1 Terra 与 GPT-6 Astra 的工具调用需要 Responses；GPT-6 Sol / Luna 的
+Chat Completions 工具调用要求 `reasoning_effort=none`。当前目录的 `is_tools` 无法表达
+这些条件，因此 GPT-6 系列仅声明聊天/图像能力，暂不声明工具能力。
+聊天请求过滤 GPT-6 不支持的采样参数，保持调用方配置不变；接口限制见
+[官方兼容说明](https://developers.openai.com/api/docs/guides/latest-model#update-api-and-model-parameters)。
+Go 的 GPT-5 / GPT-6 请求同样省略采样参数，输出上限使用 `max_completion_tokens`，
+显式推理强度通过 `reasoning_effort` 传递；其他模型仍使用原请求字段。
+
+嵌入保留 text-embedding-3-small / large 与兼容用 ada-002，不自动迁移已建向量。
+文件转写增加 [`gpt-transcribe`](https://developers.openai.com/api/docs/models/gpt-transcribe)。
+whisper-1（2027-02-26 停用）与 tts-1（2027-01-06 停用）暂保留现有接口兼容；
+Realtime 替代品不冒充 `/audio/speech` 模型。音频模型没有可核实的文本上下文时使用 `max_tokens=0`，
+不把文件字节上限当成 token 数。
+
+仅输入凭据时，连接验证使用厂商的 `default_probe_model`，OpenAI 为 `gpt-6-luna`；
+显式选择或自定义模型时验证所选模型，不按名称排序覆盖选择。探测仍验证一个代表模型，
+不代表账号可访问全部内置候选；保存实例时重新验证。失败只返回固定分类和上游 HTTP 状态，
+不回显异常正文、凭据、URL 或供应商响应载荷。
+
 ## 工具调用后的历史
 
 两种入口共用 [`ToolHistoryMixin`](./chat_model/tool_history.py)。同一轮的所有工具调用

@@ -14,6 +14,15 @@ from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMSer
 from common import settings
 from common.app_config import get_factory_llm_infos
 
+CHAT_MODELS = {
+    "gpt-6.1-sol": (1050000, False),
+    "gpt-6-luna": (1050000, False),
+    "gpt-5.6-sol": (1050000, True),
+    "gpt-5.5": (1050000, True),
+    "gpt-5.4": (1050000, True),
+    "gpt-5.4-mini": (400000, True),
+}
+
 
 @pytest.fixture
 def openai_catalog(monkeypatch: pytest.MonkeyPatch, db: Session) -> list[LLM]:
@@ -35,11 +44,12 @@ def openai_catalog(monkeypatch: pytest.MonkeyPatch, db: Session) -> list[LLM]:
     monkeypatch.setattr(init_data.DocumentService, "get_all_kb_doc_count", lambda *args: {})
     monkeypatch.setattr(init_data.KnowledgebaseService, "get_all_ids", lambda *args: [])
     init_data.init_llm_factory(db)
-    for name in ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"):
+    for name, (context, tools) in CHAT_MODELS.items():
         matches = [row for row in rows if row.llm_name == name]
         assert len(matches) == 1
         row = matches[0]
-        assert (row.fid, row.mdl_type, row.max_tokens, row.tags, row.is_tools) == ("OpenAI", "chat", 400000, "LLM,CHAT,400k,IMAGE2TEXT", True)
+        assert (row.fid, row.mdl_type, row.max_tokens, row.is_tools) == ("OpenAI", "chat", context, tools)
+        assert "IMAGE2TEXT" in row.tags
     monkeypatch.setattr(LLMService, "get_all", lambda session: rows)
     monkeypatch.setattr(TenantLLMService, "ensure_mineru_from_env", lambda *args: None)
     monkeypatch.setattr(TenantLLMService, "ensure_opendataloader_from_env", lambda *args: None)
@@ -70,11 +80,11 @@ def test_default_openai_catalog_reaches_registered_list(monkeypatch: pytest.Monk
     data = body["data"]
     if mdl_type != "embedding":
         models = {row["llm_name"]: row for row in data["OpenAI"]}
-        for name in ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"):
+        for name, (context, tools) in CHAT_MODELS.items():
             assert models[name]["available"] is True
             assert models[name]["id"] in {row.id for row in tenants if row.llm_name == name}
-            assert models[name]["max_tokens"] == 400000
-            assert models[name]["is_tools"] is True
+            assert models[name]["max_tokens"] == context
+            assert models[name]["is_tools"] is tools
         assert data["Custom"][0]["llm_name"] == "tenant-only"
     if mdl_type == "chat":
         assert "Builtin" not in data

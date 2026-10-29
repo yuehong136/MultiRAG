@@ -225,6 +225,16 @@ async def verify_candidate(db: AsyncSession, tenant_id: str, provider_name: str,
     if db.new or db.dirty or db.deleted:
         raise ValueError("Connection verification requires a clean transaction")
     models = candidate_models(provider_name, request)
+    probe = models[0]
+    if request.model_ids is None and request.custom_model is None and not request.custom_models:
+        target = regional_provider(provider_name, request.region)
+        factory = next(item for item in settings.FACTORY_LLM_INFOS if item["name"] == target)
+        preferred = factory.get("default_probe_model")
+        if preferred is not None:
+            selected = next((model for model in models if model.model_name == preferred), None)
+            if selected is None:
+                raise ValueError("Default verification model is not in the provider catalog")
+            probe = selected
     owner = await db.get(Tenant, tenant_id)
     if owner is None or owner.status != "1":
         raise LookupError("Tenant not found")
@@ -238,7 +248,7 @@ async def verify_candidate(db: AsyncSession, tenant_id: str, provider_name: str,
     # external I/O; creation rechecks owner/status/uniqueness under its write lock.
     await db.rollback()
     key, base, _region = provider_transport(provider_name, request.api_key, request.base_url, request.region)
-    return await verify_model(provider_name, key, base, models[0])
+    return await verify_model(provider_name, key, base, probe)
 
 
 async def create_instance(db: AsyncSession, tenant_id: str, provider_name: str, request: InstanceInput) -> dict[str, Any]:

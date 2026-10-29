@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import inspect
 import io
+import logging
 import math
 import os
 import sys
@@ -18,6 +19,38 @@ from api.db.model_contract import ModelRegistration
 from common.asyncio_utils import finish_owned_work
 
 _REGISTRIES = {"chat": "ChatModel", "embedding": "EmbeddingModel", "rerank": "RerankModel", "image2text": "CvModel", "tts": "TTSModel", "ocr": "OcrModel", "speech2text": "Seq2txtModel"}
+
+
+def _failure_message(error: BaseException) -> str:
+    """Classify SDK failures without echoing exception text, URLs or payloads."""
+    import httpx
+    import openai
+
+    prefix = "Provider connection verification failed"
+    if isinstance(error, (TimeoutError, httpx.TimeoutException, openai.APITimeoutError)):
+        return "Provider connection verification timed out"
+    if isinstance(error, (httpx.NetworkError, openai.APIConnectionError)):
+        return f"{prefix}: could not connect to the provider"
+    status: int | None = None
+    code: Any = None
+    if isinstance(error, openai.APIStatusError):
+        status, code = error.status_code, error.code
+    elif isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+    if status == 429 and isinstance(code, str) and code in {"insufficient_quota", "billing_hard_limit_reached", "billing_not_active"}:
+        return f"{prefix}: provider quota or billing limit reached (upstream HTTP 429)"
+    reasons = {
+        400: "provider rejected the model or request parameters",
+        401: "provider rejected the API key",
+        403: "provider denied access; check project permissions and region",
+        404: "selected model or provider endpoint is unavailable",
+        422: "provider rejected the request parameters",
+        429: "provider rate limit reached",
+    }
+    if type(status) is int and 100 <= status <= 599:
+        reason = reasons.get(status, "provider service error" if status >= 500 else "provider rejected the request")
+        return f"{prefix}: {reason} (upstream HTTP {status})"
+    return prefix
 
 
 async def _blocking(call: Callable[[], Any]) -> Any:
@@ -116,6 +149,7 @@ async def verify_model(provider: str, key: str, base_url: str, declaration: Mode
     if capability not in _REGISTRIES:
         raise ValueError("Connection verification is unavailable for this model capability")
     model: Any = None
+    failure_message: str | None = None
     try:
         seconds = float(os.environ.get("LLM_PROBE_TIMEOUT_SECONDS", "25"))
         if not math.isfinite(seconds) or not 0 < seconds <= 120:
@@ -133,10 +167,14 @@ async def verify_model(provider: str, key: str, base_url: str, declaration: Mode
                 options = {name: value for name, value in options.items() if name in signature.parameters}
             await _blocking(lambda: cls.__init__(model, **options))
 
-            async def safe_async_failure(_error: BaseException, _attempt: int) -> str:
+            async def safe_async_failure(error: BaseException, _attempt: int) -> str:
+                nonlocal failure_message
+                failure_message = _failure_message(error)
                 return "**ERROR** Provider connection failed"
 
-            def safe_failure(_error: BaseException, _attempt: int) -> str:
+            def safe_failure(error: BaseException, _attempt: int) -> str:
+                nonlocal failure_message
+                failure_message = _failure_message(error)
                 return "**ERROR** Provider connection failed"
 
             # Adapters normally log diagnostic exception bodies. Probe failures
@@ -211,14 +249,18 @@ async def verify_model(provider: str, key: str, base_url: str, declaration: Mode
 
                 valid = await _blocking(synthesize)
             if not valid:
+                failure_message = failure_message or "Provider connection verification failed: empty or invalid model response"
                 raise ValueError("Invalid provider response")
         return {"verified": True, "model_name": declaration.model_name, "model_type": capability}
     except TimeoutError:
+        logging.warning("Provider connection verification timed out")
         raise ValueError("Provider connection verification timed out") from None
-    except Exception:
+    except Exception as error:
         # Constructor, transport and provider diagnostics may all contain keys,
         # request URLs and payloads. Do not echo them or persist usage.
-        raise ValueError("Provider connection verification failed") from None
+        message = failure_message or _failure_message(error)
+        logging.warning("%s", message)
+        raise ValueError(message) from None
     finally:
         body_failed = sys.exc_info()[0] is not None
         if model is not None:

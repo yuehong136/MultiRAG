@@ -82,6 +82,17 @@ func openAIChatBody(name string, messages []Message, config *ChatConfig, stream 
 	}
 	delete(body, "enable_thinking")
 	delete(body, "do_sample")
+	if strings.HasPrefix(name, "gpt-5") || strings.HasPrefix(name, "gpt-6") {
+		delete(body, "temperature")
+		delete(body, "top_p")
+		if config != nil && config.MaxTokens != nil {
+			delete(body, "max_tokens")
+			body["max_completion_tokens"] = *config.MaxTokens
+		}
+		if config != nil && config.Effort != nil {
+			body["reasoning_effort"] = *config.Effort
+		}
+	}
 	return body, nil
 }
 

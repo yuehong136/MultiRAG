@@ -17,6 +17,48 @@ import (
 
 func TestOpenAIChatHTTP(t *testing.T) { testHostedChatHTTP(t, "OpenAI", nil) }
 
+func TestOpenAIReasoningModelsHTTP(t *testing.T) {
+	for _, name := range []string{"gpt-5.5", "gpt-6.1-sol", "gpt-6-luna"} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if r.URL.Path != "/v1/chat/completions" || body["model"] != name || body["max_completion_tokens"] != float64(32) || body["reasoning_effort"] != "low" {
+					t.Error("model or reasoning parameters lost", body)
+				}
+				for _, field := range []string{"temperature", "top_p", "max_tokens"} {
+					if _, ok := body[field]; ok {
+						t.Errorf("unsupported parameter sent: %s", field)
+					}
+				}
+				if body["stream"] == true {
+					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n")
+				} else {
+					fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+				}
+			}))
+			defer server.Close()
+			driver := NewOpenAIModel(map[string]string{"default": server.URL + "/v1"}, URLSuffix{Chat: "chat/completions"})
+			key, effort, limit, temperature := "fixture", "low", 32, 0.3
+			config := &ChatConfig{MaxTokens: &limit, Temperature: &temperature, TopP: &temperature, Effort: &effort}
+			history := []Message{{Role: "user", Content: "Reply OK"}}
+			response, err := driver.ChatWithMessages(name, &APIConfig{APIKey: &key}, history, config)
+			if err != nil || response == nil || response.Answer == nil || *response.Answer != "OK" {
+				t.Fatal(response, err)
+			}
+			if err := driver.ChatStreamlyWithMessages(name, history, &APIConfig{APIKey: &key}, config, func(content, reasoning *string) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if *config.MaxTokens != 32 || *config.Temperature != 0.3 || *config.TopP != 0.3 {
+				t.Fatal("caller configuration changed")
+			}
+		})
+	}
+}
+
 // Also exercises factory construction against independent URLs and credentials.
 func testHostedChatHTTP(t *testing.T, provider string, extra func(*testing.T, map[string]any)) {
 	t.Helper()

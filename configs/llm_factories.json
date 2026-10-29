@@ -3,22 +3,78 @@
         {
             "name": "OpenAI",
             "logo": "",
-            "tags": "LLM,TEXT EMBEDDING,TTS,TEXT RE-RANK,SPEECH2TEXT,MODERATION",
+            "tags": "LLM,TEXT EMBEDDING,TTS,SPEECH2TEXT",
             "status": "1",
             "url": "https://api.openai.com/v1",
             "rank": "999",
             "llm": [
                 {
+                    "llm_name": "gpt-6.1-sol",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "gpt-6.1-terra",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "gpt-6-astra",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "gpt-6-sol",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "gpt-6-luna",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "gpt-5.6-sol",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "gpt-5.6-terra",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
+                    "llm_name": "gpt-5.6-luna",
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
+                    "mdl_type": "chat",
+                    "is_tools": true
+                },
+                {
                     "llm_name": "gpt-5.5",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
                     "mdl_type": "chat",
                     "is_tools": true
                 },
                 {
                     "llm_name": "gpt-5.4",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
+                    "tags": "LLM,CHAT,1.05M,IMAGE2TEXT",
+                    "max_tokens": 1050000,
                     "mdl_type": "chat",
                     "is_tools": true
                 },
@@ -30,151 +86,11 @@
                     "is_tools": true
                 },
                 {
-                    "llm_name": "gpt-5.4-nano",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5.2-pro",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
                     "llm_name": "gpt-5.2",
                     "tags": "LLM,CHAT,400k,IMAGE2TEXT",
                     "max_tokens": 400000,
                     "mdl_type": "chat",
                     "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5.1",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5.1-chat-latest",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5-mini",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5-nano",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-5-chat-latest",
-                    "tags": "LLM,CHAT,400k,IMAGE2TEXT",
-                    "max_tokens": 400000,
-                    "mdl_type": "chat",
-                    "is_tools": false
-                },
-                {
-                    "llm_name": "gpt-4.1",
-                    "tags": "LLM,CHAT,1M,IMAGE2TEXT",
-                    "max_tokens": 1047576,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-4.1-mini",
-                    "tags": "LLM,CHAT,1M,IMAGE2TEXT",
-                    "max_tokens": 1047576,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-4.1-nano",
-                    "tags": "LLM,CHAT,1M,IMAGE2TEXT",
-                    "max_tokens": 1047576,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-4.5-preview",
-                    "tags": "LLM,CHAT,128K",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "o3",
-                    "tags": "LLM,CHAT,200K,IMAGE2TEXT",
-                    "max_tokens": 200000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "o4-mini",
-                    "tags": "LLM,CHAT,200K,IMAGE2TEXT",
-                    "max_tokens": 200000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "o4-mini-high",
-                    "tags": "LLM,CHAT,200K,IMAGE2TEXT",
-                    "max_tokens": 200000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-4o-mini",
-                    "tags": "LLM,CHAT,128K,IMAGE2TEXT",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-4o",
-                    "tags": "LLM,CHAT,128K,IMAGE2TEXT",
-                    "max_tokens": 128000,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-3.5-turbo",
-                    "tags": "LLM,CHAT,4K",
-                    "max_tokens": 4096,
-                    "mdl_type": "chat",
-                    "is_tools": false
-                },
-                {
-                    "llm_name": "gpt-3.5-turbo-16k-0613",
-                    "tags": "LLM,CHAT,16k",
-                    "max_tokens": 16385,
-                    "mdl_type": "chat",
-                    "is_tools": false
-                },
-                {
-                    "llm_name": "text-embedding-ada-002",
-                    "tags": "TEXT EMBEDDING,8K",
-                    "max_tokens": 8191,
-                    "mdl_type": "embedding",
-                    "is_tools": false
                 },
                 {
                     "llm_name": "text-embedding-3-small",
@@ -191,41 +107,35 @@
                     "is_tools": false
                 },
                 {
-                    "llm_name": "whisper-1",
+                    "llm_name": "text-embedding-ada-002",
+                    "tags": "TEXT EMBEDDING,8K",
+                    "max_tokens": 8191,
+                    "mdl_type": "embedding",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "gpt-transcribe",
                     "tags": "SPEECH2TEXT",
-                    "max_tokens": 26214400,
+                    "max_tokens": 0,
                     "mdl_type": "speech2text",
                     "is_tools": false
                 },
                 {
-                    "llm_name": "gpt-4",
-                    "tags": "LLM,CHAT,8K",
-                    "max_tokens": 8191,
-                    "mdl_type": "chat",
-                    "is_tools": false
-                },
-                {
-                    "llm_name": "gpt-4-turbo",
-                    "tags": "LLM,CHAT,8K",
-                    "max_tokens": 8191,
-                    "mdl_type": "chat",
-                    "is_tools": true
-                },
-                {
-                    "llm_name": "gpt-4-32k",
-                    "tags": "LLM,CHAT,32K",
-                    "max_tokens": 32768,
-                    "mdl_type": "chat",
+                    "llm_name": "whisper-1",
+                    "tags": "SPEECH2TEXT",
+                    "max_tokens": 0,
+                    "mdl_type": "speech2text",
                     "is_tools": false
                 },
                 {
                     "llm_name": "tts-1",
                     "tags": "TTS",
-                    "max_tokens": 2048,
+                    "max_tokens": 0,
                     "mdl_type": "tts",
                     "is_tools": false
                 }
-            ]
+            ],
+            "default_probe_model": "gpt-6-luna"
         },
         {
             "name": "xAI",

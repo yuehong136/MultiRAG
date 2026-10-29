@@ -123,7 +123,7 @@ def _apply_model_family_policies(
         if provider in {SupportedLiteLLMProvider.Anthropic, SupportedLiteLLMProvider.Bedrock}:
             apply_claude_sampling_policy(model_name_lower, sanitized_gen_conf, sanitized_kwargs)
 
-        if provider in {SupportedLiteLLMProvider.OpenAI, SupportedLiteLLMProvider.Azure_OpenAI} and "gpt-5" in model_name_lower:
+        if provider in {SupportedLiteLLMProvider.OpenAI, SupportedLiteLLMProvider.Azure_OpenAI} and any(family in model_name_lower for family in ("gpt-5", "gpt-6")):
             for key in ("temperature", "top_p", "logprobs", "top_logprobs"):
                 sanitized_gen_conf.pop(key, None)
                 sanitized_kwargs.pop(key, None)
