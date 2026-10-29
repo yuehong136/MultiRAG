@@ -21,31 +21,35 @@ import (
 )
 
 type difyTestDependencies struct {
-	calls      []string
-	kb         *entity.Knowledgebase
-	readError  error
-	existsErr  error
-	metaError  error
-	embedError error
-	chatError  error
-	childError error
-	docError   error
-	graphError error
-	enrichErr  error
-	searchErr  error
-	labelErr   error
-	labelNil   bool
-	metadata   common.MetaData
-	chunks     []map[string]interface{}
-	documents  []*entity.Document
-	graph      *kg.Result
-	request    *nlp.RetrievalRequest
-	childrenFn DifyChildrenRetriever
-	metaFn     func(context.Context)
+	calls       []string
+	kb          *entity.Knowledgebase
+	readError   error
+	existsErr   error
+	metaError   error
+	embedError  error
+	chatError   error
+	childError  error
+	docError    error
+	graphError  error
+	enrichErr   error
+	searchErr   error
+	labelErr    error
+	labelNil    bool
+	metadata    common.MetaData
+	chunks      []map[string]interface{}
+	documents   []*entity.Document
+	graph       *kg.Result
+	request     *nlp.RetrievalRequest
+	childrenFn  DifyChildrenRetriever
+	metaFn      func(context.Context)
+	authorizeFn func(context.Context)
 }
 
-func (d *difyTestDependencies) GetReadableByID(_ context.Context, id, user string) (*entity.Knowledgebase, error) {
+func (d *difyTestDependencies) GetReadableByID(ctx context.Context, id, user string) (*entity.Knowledgebase, error) {
 	d.calls = append(d.calls, "authorize:"+id+":"+user)
+	if d.authorizeFn != nil {
+		d.authorizeFn(ctx)
+	}
 	return d.kb, d.readError
 }
 func (d *difyTestDependencies) GetByIDContext(context.Context, string) (*entity.Knowledgebase, error) {
@@ -205,19 +209,91 @@ func TestDifyTypedMetadataAndTrustedGraphIdentity(t *testing.T) {
 }
 
 func TestDifyEmptyMetadataPredicatesDoNotSelectEmptyDocuments(t *testing.T) {
-	for _, metadata := range []string{"", `,"metadata_condition":{}`, `,"metadata_condition":{"conditions":[]}`, `,"metadata_condition":null`} {
-		t.Run(metadata, func(t *testing.T) {
-			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
-			response := callDify(router, `{"knowledge_id":"kb","query":"question"`+metadata+`}`)
-			if response.Code != 200 || d.request == nil || d.request.DocIDs != nil || *d.request.Top != 1024 || *d.request.SimilarityThreshold != 0 {
-				t.Fatal(response.Code, response.Body.String(), d.request)
-			}
-			for _, call := range d.calls {
-				if call == "filter" {
-					t.Fatal("inactive predicates loaded filtering metadata")
+	for _, metadata := range []string{"", `,"metadata_condition":{}`, `,"metadata_condition":null`} {
+		for _, useKG := range []string{"false", "true"} {
+			t.Run(metadata+"/kg="+useKG, func(t *testing.T) {
+				d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
+				response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":`+useKG+metadata+`}`)
+				if response.Code != 200 || d.request == nil || d.request.DocIDs != nil || *d.request.Top != 1024 || *d.request.SimilarityThreshold != 0 {
+					t.Fatal(response.Code, response.Body.String(), d.request)
 				}
+				for _, call := range d.calls {
+					if call == "filter" {
+						t.Fatal("inactive predicates loaded filtering metadata")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestDifyExplicitEmptyMetadataStopsAfterAuthorization(t *testing.T) {
+	for _, useKG := range []string{"false", "true"} {
+		t.Run(useKG, func(t *testing.T) {
+			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
+			response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":`+useKG+`,"metadata_condition":{"conditions":[]}}`)
+			if response.Code != http.StatusOK || response.Body.String() != `{"records":[]}` || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
+				t.Fatal(response.Code, response.Body.String(), d.calls)
 			}
 		})
+	}
+}
+
+func TestDifyExplicitEmptyMetadataKeepsAuthorizationChecks(t *testing.T) {
+	const body = `{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[]}}`
+	t.Run("missing identity", func(t *testing.T) {
+		d, router := newDifyTestHandler(t, nil)
+		response := callDify(router, body)
+		if response.Code != http.StatusForbidden || len(d.calls) != 0 {
+			t.Fatal(response.Code, response.Body.String(), d.calls)
+		}
+	})
+	t.Run("denied dataset", func(t *testing.T) {
+		d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
+		d.readError = gorm.ErrRecordNotFound
+		response := callDify(router, body)
+		if response.Code != http.StatusForbidden || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user", "exists"}) {
+			t.Fatal(response.Code, response.Body.String(), d.calls)
+		}
+	})
+	t.Run("original token tenant", func(t *testing.T) {
+		d := &difyTestDependencies{kb: &entity.Knowledgebase{ID: "kb", TenantID: "foreign-owner"}}
+		h := NewDifyRetrievalHandler(DifyRetrievalDependencies{Datasets: d, Metadata: d})
+		router := gin.New()
+		router.POST("/api/v1/dify/retrieval", func(c *gin.Context) {
+			c.Set("user", &entity.User{ID: "user"})
+			c.Set(difyTokenTenantContext, "original-token-tenant")
+			h.Retrieval(c)
+		})
+		response := callDify(router, body)
+		if response.Code != http.StatusForbidden || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
+			t.Fatal(response.Code, response.Body.String(), d.calls)
+		}
+	})
+}
+
+func TestDifyNullMetadataConditionsRejectBeforeIO(t *testing.T) {
+	for _, useKG := range []string{"false", "true"} {
+		t.Run(useKG, func(t *testing.T) {
+			d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
+			response := callDify(router, `{"knowledge_id":"kb","query":"question","use_kg":`+useKG+`,"metadata_condition":{"conditions":null}}`)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"error_code":101`) || len(d.calls) != 0 {
+				t.Fatal(response.Code, response.Body.String(), d.calls)
+			}
+		})
+	}
+}
+
+func TestDifyExplicitEmptyMetadataCancellation(t *testing.T) {
+	d, router := newDifyTestHandler(t, &entity.User{ID: "user"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.authorizeFn = func(context.Context) { cancel() }
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/dify/retrieval", strings.NewReader(`{"knowledge_id":"kb","query":"question","use_kg":true,"metadata_condition":{"conditions":[]}}`)).WithContext(ctx)
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || !reflect.DeepEqual(d.calls, []string{"authorize:kb:user"}) {
+		t.Fatal(response.Code, response.Body.String(), d.calls)
 	}
 }
 

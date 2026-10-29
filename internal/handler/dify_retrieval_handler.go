@@ -111,9 +111,11 @@ func (m *difyMetadataCondition) filter() (*common.MetaFilterInput, error) {
 	if !common.ValidMetaConditions(conditions, logic) {
 		return nil, fmt.Errorf("invalid metadata condition")
 	}
-	if len(conditions) == 0 {
+	if m.Conditions == nil {
 		return nil, nil
 	}
+	// An explicitly empty array is a zero selection. Keep its marker distinct
+	// from omitted conditions so the handler can stop after authorization.
 	return &common.MetaFilterInput{Logic: logic, Conditions: conditions}, nil
 }
 
@@ -245,6 +247,14 @@ func (h *DifyRetrievalHandler) Retrieval(c *gin.Context) {
 	}
 	if tokenTenant, exists := c.Get(difyTokenTenantContext); exists && tokenTenant != kb.TenantID {
 		difyError(c, http.StatusForbidden, common.CodeAuthenticationError, "No authorization for this knowledge base.")
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		difyError(c, http.StatusInternalServerError, common.CodeServerError, "retrieval cancelled")
+		return
+	}
+	if filter != nil && len(filter.Conditions) == 0 {
+		c.JSON(http.StatusOK, gin.H{"records": []difyRecord{}})
 		return
 	}
 	var docIDs []string
