@@ -43,6 +43,7 @@ class BlobType(str, Enum):
 class DocumentSource(str, Enum):
     """Document sources"""
 
+    SALESFORCE = "salesforce"
     AZURE_BLOB = "azure_blob"
 
     REST_API = "rest_api"

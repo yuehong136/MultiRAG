@@ -44,6 +44,7 @@ from common.data_source import (
     RDBMSConnector,
     RestAPIConnector,
     RSSConnector,
+    SalesforceConnector,
     SeaFileConnector,
     SharePointConnector,
     SlackConnector,
@@ -367,6 +368,51 @@ class AzureBlob(_BlobLikeBase):
         await self._initialize_connector(task)
         records = list(self.connector.list_keys())
         return self._fingerprint_filtered_generator(task, records)
+
+
+class Salesforce(SyncBase):
+    SOURCE_NAME: str = FileSource.SALESFORCE
+
+    async def _run_sync_task_logic(self, task: dict[str, Any]) -> datetime:
+        stopped = threading.Event()
+        guard = _SourceTaskGuard(task)
+
+        def check_active() -> None:
+            if stopped.is_set():
+                raise SyncTaskCancelled("Salesforce synchronization stopped")
+            guard()
+
+        self._source_task_guard = check_active
+
+        def run() -> datetime:
+            try:
+                with asyncio.Runner() as runner:
+                    return runner.run(super(Salesforce, self)._run_sync_task_logic(task))
+            finally:
+                if hasattr(self, "connector"):
+                    self.connector.close()
+
+        worker = asyncio.create_task(asyncio.to_thread(run))
+        try:
+            return await asyncio.shield(worker)
+        finally:
+            if not worker.done():
+                stopped.set()
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+
+    async def _initialize_connector(self, task: dict[str, Any]) -> None:
+        self.connector = SalesforceConnector.build_connector(self.conf, check_active=self._source_task_guard)
+
+    async def _generate(self, task: dict[str, Any]) -> GenerateDocumentsOutput:
+        await self._initialize_connector(task)
+        start = 0.0 if task["reindex"] == "1" or task["poll_range_start"] is None else task["poll_range_start"].timestamp()
+        return self.connector.poll_source(start, datetime.now(UTC).timestamp())
 
 
 class R2(_BlobLikeBase):
@@ -1636,6 +1682,7 @@ class PostgreSQL(_RDBMSBase):
 
 
 func_factory = {
+    FileSource.SALESFORCE: Salesforce,
     FileSource.AZURE_BLOB: AzureBlob,
     FileSource.REST_API: REST_API,
     FileSource.RSS: RSS,

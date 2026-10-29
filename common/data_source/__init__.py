@@ -44,6 +44,7 @@ from .outlook_connector import OutlookConnector
 from .rdbms_connector import RDBMSConnector
 from .rest_api_connector import RestAPIConnector
 from .rss_connector import RSSConnector
+from .salesforce_connector import SalesforceConnector
 from .seafile_connector import SeaFileConnector
 from .sharepoint_connector import SharePointConnector
 from .slack_connector import SlackConnector
@@ -80,6 +81,7 @@ __all__ = [
     "RDBMSConnector",
     "RSSConnector",
     "RestAPIConnector",
+    "SalesforceConnector",
     "SeaFileConnector",
     "SharePointConnector",
     "SlackConnector",

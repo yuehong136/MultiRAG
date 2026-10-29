@@ -39,6 +39,7 @@ from common.data_source.microsoft_graph import graph_batch_size
 from common.data_source.onedrive_connector import OneDriveConnector
 from common.data_source.outlook_connector import OutlookConnector
 from common.data_source.rest_api_connector import RestAPIConnector
+from common.data_source.salesforce_connector import SalesforceConnector
 from common.data_source.teams_connector import TeamsConnector
 from common.misc_utils import get_uuid
 
@@ -97,6 +98,11 @@ def create_connector(db: Session, req: dict[str, Any], tenant_id: str) -> tuple[
             AzureBlobConnector.build_connector(config)
         except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
             return False, str(exc), RetCode.DATA_ERROR
+    if req["source"] == FileSource.SALESFORCE:
+        try:
+            SalesforceConnector.build_connector(config)
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
     if req["source"] == FileSource.REST_API:
         try:
             _validate_rest_settings(config)
@@ -136,6 +142,11 @@ def update_connector(db: Session, connector_id: str, req: dict[str, Any]) -> tup
     if "config" in changes and connector.source == FileSource.AZURE_BLOB:
         try:
             AzureBlobConnector.build_connector(changes["config"])
+        except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
+            return False, str(exc), RetCode.DATA_ERROR
+    if "config" in changes and connector.source == FileSource.SALESFORCE:
+        try:
+            SalesforceConnector.build_connector(changes["config"])
         except (ConnectorValidationError, ConnectorMissingCredentialError) as exc:
             return False, str(exc), RetCode.DATA_ERROR
     if "config" in changes and (state_key := _WORKER_STATE_FIELDS.get(connector.source)):
