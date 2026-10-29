@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -34,7 +33,7 @@ func TestBoundChatPreservesModelClass(t *testing.T) {
 
 func TestModelClassFromNamespacedName(t *testing.T) {
 	for name, want := range map[string]string{
-		"Qwen/Qwen3-8B": "qwen3", "qwen/qwen3.5-4b": "qwen3.5",
+		"Qwen/Qwen3-8B": "qwen3", "qwen/qwen3.5-4b": "qwen3",
 		"org/GLM-4.7": "glm", "vendor/plain": "plain", "plain": "plain",
 	} {
 		if got := ModelClassFromName(name); got != want {
@@ -56,7 +55,7 @@ func TestChatConsumersUseModelClass(t *testing.T) {
 			{name: "configured async suffix", model: "alias", class: "glm", async: "async/chat", path: "/async/chat"},
 		} {
 			t.Run(provider+"/"+test.name, func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != http.MethodPost || r.URL.Path != test.path || r.Header.Get("Authorization") != "Bearer fixture-key" {
 						t.Errorf("request = %s %s, wrong endpoint or credential", r.Method, r.URL.Path)
 					}

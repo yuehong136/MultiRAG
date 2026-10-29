@@ -11,18 +11,30 @@ type providerModelList struct {
 	Models []providerModel `json:"data"`
 }
 
+// NormalizeModelFamily normalizes model classes and names for shared response parsing.
+func NormalizeModelFamily(modelClass *string) string {
+	if modelClass == nil {
+		return ""
+	}
+	family := strings.ToLower(strings.TrimSpace(*modelClass))
+	if separator := strings.LastIndex(family, "/"); separator >= 0 {
+		family = family[separator+1:]
+	}
+	if family == "qwen3" || strings.HasPrefix(family, "qwen3-") || strings.HasPrefix(family, "qwen3.") {
+		return "qwen3"
+	}
+	family, _, _ = strings.Cut(family, "-")
+	return family
+}
+
 // ModelClassFromName derives a lowercase family from the model ID, excluding its namespace.
 func ModelClassFromName(name string) string {
-	if separator := strings.LastIndex(name, "/"); separator >= 0 {
-		name = name[separator+1:]
-	}
-	modelClass, _, _ := strings.Cut(name, "-")
-	return strings.ToLower(modelClass)
+	return NormalizeModelFamily(&name)
 }
 
 func chatModelClass(name string, config *ChatConfig) string {
-	if config.ModelClass != nil && *config.ModelClass != "" {
-		return strings.ToLower(*config.ModelClass)
+	if config != nil && config.ModelClass != nil && strings.TrimSpace(*config.ModelClass) != "" {
+		return NormalizeModelFamily(config.ModelClass)
 	}
 	return ModelClassFromName(name)
 }
@@ -49,13 +61,16 @@ func GetThinkingAndAnswer(modelClass *string, content *string) (*string, *string
 	if modelClass == nil || content == nil {
 		return nil, content
 	}
-	if *modelClass == "qwen3" {
+	if NormalizeModelFamily(modelClass) == "qwen3" {
 		return extractThinkContent(content)
 	}
 	return nil, content
 }
 
 func extractThinkContent(content *string) (*string, *string) {
+	if content == nil {
+		return nil, nil
+	}
 	startTag := "<think>"
 	endTag := "</think>"
 	startIndex := strings.Index(*content, startTag)

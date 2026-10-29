@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-// These are the 22 chat providers in the 28-path scanner patch. Paddle's
-// download uses JSONL, and the other five paths only consolidate test helpers.
+// The original 22-provider scanner matrix also covers JieKouAI, whose shared
+// reader keeps the same large-frame, terminal, and cancellation boundaries.
 func after53StreamProviders() []string {
-	return []string{"302.AI", "Aliyun", "Baichuan", "Baidu", "Cohere", "DeepInfra", "DeepSeek", "Gitee", "HuggingFace", "LM-Studio", "Minimax", "Moonshot", "NVIDIA", "Ollama", "OpenRouter", "OrcaRouter", "SiliconFlow", "TokenHub", "vllm", "VolcEngine", "XunFei", "ZHIPU-AI"}
+	return []string{"302.AI", "Aliyun", "Baichuan", "Baidu", "Cohere", "DeepInfra", "DeepSeek", "Gitee", "HuggingFace", "JieKouAI", "LM-Studio", "Minimax", "Moonshot", "NVIDIA", "Ollama", "OpenRouter", "OrcaRouter", "SiliconFlow", "TokenHub", "vllm", "VolcEngine", "XunFei", "ZHIPU-AI"}
 }
 
 func after53Wire(provider, content, reasoning string, terminal bool) string {
