@@ -1162,46 +1162,51 @@ class Parser(ProcessBase):
 
         self.set_output("text", "\n".join([section for section in sections if section]))
 
-    def _image(self, name, blob, **kwargs):
+    def _image(self, name: str, blob: bytes, **kwargs: Any) -> None:
         from deepdoc.vision import OCR
 
         self.callback(random.randint(1, 5) / 100.0, "Start to work on an image.")
         conf = self._param.setups["image"]
-        self.set_output("output_format", conf["output_format"])
+        self.set_output("output_format", "json")
 
-        img = Image.open(io.BytesIO(blob)).convert("RGB")
+        with io.BytesIO(blob) as source_bytes, Image.open(source_bytes) as source:
+            img = source.convert("RGB")
 
-        if conf["parse_method"] == "ocr":
-            # use ocr, recognize chars only
-            ocr = OCR()
-            bxs = ocr(np.array(img))  # return boxes and recognize result
-            txt = "\n".join([t[0] for _, t in bxs if t[0]])
-        else:
-            lang = conf["lang"]
-            # use VLM to describe the picture
-            with db_connection() as db:
-                cv_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT.value, conf["parse_method"])
-                cv_model = LLMBundle(db, self._canvas.get_tenant_id(), cv_config, lang=lang)
-            img_binary = io.BytesIO()
-            img.save(img_binary, format="JPEG")
-            img_binary.seek(0)
-
-            system_prompt = conf.get("system_prompt")
-            if system_prompt:
-                txt = cv_model.describe_with_prompt(img_binary.read(), system_prompt)
+        try:
+            if conf["parse_method"] == "ocr":
+                # use ocr, recognize chars only
+                ocr = OCR()
+                bxs = ocr(np.array(img))  # return boxes and recognize result
+                txt = "\n".join([t[0] for _, t in bxs if t[0]])
             else:
-                txt = cv_model.describe(img_binary.read())
+                lang = conf["lang"]
+                # use VLM to describe the picture
+                with db_connection() as db:
+                    cv_config = get_model_config_by_type_and_name(db, self._canvas.get_tenant_id(), LLMType.IMAGE2TEXT.value, conf["parse_method"])
+                    cv_model = LLMBundle(db, self._canvas.get_tenant_id(), cv_config, lang=lang)
+                with io.BytesIO() as img_binary:
+                    img.save(img_binary, format="JPEG")
+                    img_binary.seek(0)
+                    system_prompt = conf.get("system_prompt")
+                    if system_prompt:
+                        txt = cv_model.describe_with_prompt(img_binary.read(), system_prompt)
+                    else:
+                        txt = cv_model.describe(img_binary.read())
 
-        self.set_output(
-            "json",
-            [
-                {
-                    "text": txt,
-                    "image": img,
-                    "doc_type_kwd": "image",
-                }
-            ],
-        )
+            self.set_output(
+                "json",
+                [
+                    {
+                        "text": txt,
+                        "image": img,
+                        "doc_type_kwd": "image",
+                    }
+                ],
+            )
+
+        except BaseException:
+            img.close()
+            raise
 
     def _audio(self, name, blob, **kwargs):
         import os

@@ -65,8 +65,11 @@ def _normalize_bool_string(value: Any) -> Any:
     return value
 
 
-def _normalize_image_config(config: dict | None) -> dict:
+def _normalize_image_config(config: dict[str, Any] | None) -> dict[str, Any]:
     normalized = dict(config or {})
+    # Raw images always produce structured image chunks, including through the
+    # direct-file facade. Do not advertise a text field that is never emitted.
+    normalized["output_format"] = "json"
     parse_method = str(normalized.get("parse_method") or "ocr")
     lowered = parse_method.lower()
 
