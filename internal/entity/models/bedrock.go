@@ -52,7 +52,10 @@ func parseBedrockKey(api *APIConfig) (*bedrockKey, string, error) {
 		return nil, "", fmt.Errorf("bedrock: API key JSON is required")
 	}
 	var key bedrockKey
-	if err := json.Unmarshal([]byte(*api.APIKey), &key); err != nil {
+	if len(*api.APIKey) > 65536 {
+		return nil, "", fmt.Errorf("bedrock: credential JSON exceeds limit")
+	}
+	if err := decodeBedrockJSON(strings.NewReader(*api.APIKey), &key); err != nil {
 		return nil, "", fmt.Errorf("bedrock: invalid credential JSON schema")
 	}
 	switch key.AuthMode {
@@ -197,11 +200,15 @@ func (b *BedrockModel) request(api *APIConfig, name, operation string, body any,
 	if err != nil {
 		return nil, err
 	}
+	return b.signedRequest(requestContext(api), endpoint, raw, creds, region, stream, control)
+}
+
+func (b *BedrockModel) signedRequest(ctx context.Context, endpoint string, raw []byte, creds aws.Credentials, region string, stream, control bool) (*http.Response, error) {
 	method := http.MethodPost
 	if control {
 		method = http.MethodGet
 	}
-	req, err := http.NewRequestWithContext(requestContext(api), method, endpoint, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +219,7 @@ func (b *BedrockModel) request(api *APIConfig, name, operation string, body any,
 	}
 	req.Header.Set("Accept", accept)
 	hash := sha256.Sum256(raw)
-	if err := v4.NewSigner().SignHTTP(requestContext(api), creds, req, hex.EncodeToString(hash[:]), "bedrock", region, time.Now().UTC()); err != nil {
+	if err := v4.NewSigner().SignHTTP(ctx, creds, req, hex.EncodeToString(hash[:]), "bedrock", region, time.Now().UTC()); err != nil {
 		return nil, fmt.Errorf("bedrock: sign request: %w", err)
 	}
 	resp, err := b.httpClient.Do(req)
@@ -389,8 +396,5 @@ func (b *BedrockModel) ListModels(api *APIConfig) ([]string, error) {
 	return names, nil
 }
 func (b *BedrockModel) CheckConnection(api *APIConfig) error { _, err := b.ListModels(api); return err }
-func (b *BedrockModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return nil, fmt.Errorf("bedrock: embedding is unsupported")
-}
 
 var _ ModelDriver = (*BedrockModel)(nil)
