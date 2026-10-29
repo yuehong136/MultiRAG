@@ -367,7 +367,15 @@ def relation_chunk_id(kb_id: str, source: str, target: str) -> str:
     return chunk_id({"content_with_weight": json.dumps(["relation", *get_from_to(source, target)]), "kb_id": kb_id})
 
 
-async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: dict[str, Any], chunks: list[dict[str, Any]], nhop_neighbors: list[dict[str, Any]] | None = None) -> None:
+async def graph_node_to_chunk(
+    kb_id: str,
+    embd_mdl: Any,
+    ent_name: str,
+    meta: dict[str, Any],
+    chunks: list[dict[str, Any]],
+    nhop_neighbors: list[dict[str, Any]] | None = None,
+    existing_vectors: dict[str, list[float]] | None = None,
+) -> None:
     global chat_limiter
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     rank = float(meta.get("pagerank", 0) or 0)
@@ -390,6 +398,10 @@ async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: di
         "available_int": 0,
     }
     chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
+    if existing_vectors:
+        chunk.update(existing_vectors)
+        chunks.append(chunk)
+        return
     ebd = get_embed_cache(embd_mdl.llm_name, ent_name)
     if ebd is None:
         async with chat_limiter:
@@ -514,6 +526,24 @@ async def get_graph(tenant_id: str, kb_id: str, exclude_rebuild: str | list[str]
     return graph
 
 
+def _stored_entity_vectors(row: dict[str, Any] | None, kb_id: str, entity: str) -> dict[str, list[float]]:
+    """Reuse only vectors read from this canonical entity's checked snapshot."""
+    if row is None:
+        return {}
+    if row.get("kb_id") != kb_id or row.get("entity_kwd") != entity or row.get("pk") != entity_chunk_id(kb_id, entity):
+        raise ValueError("Persisted entity vector scope mismatch")
+    vectors: dict[str, list[float]] = {}
+    for name, value in row.items():
+        field = re.fullmatch(r"q_(\d+)_vec", name)
+        if field is None or value is None:
+            continue
+        vector = np.asarray(value)
+        if vector.ndim != 1 or not vector.size or vector.size != int(field[1]) or vector.dtype.kind not in "fiu" or not np.isfinite(vector).all():
+            raise ValueError("Persisted entity vector must be finite and match its dimension")
+        vectors[name] = vector.astype(float).tolist()
+    return vectors
+
+
 async def set_graph(tenant_id: str, kb_id: str, embd_mdl: Any, graph: nx.Graph, change: GraphChange, callback: Callable[..., Any] | None) -> None:
     global chat_limiter
     start = asyncio.get_running_loop().time()
@@ -559,14 +589,21 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl: Any, graph: nx.Graph, 
             }
         )
 
-    node_neighbors = {node: n_neighbor(graph, node) for node in sorted(change.added_updated_nodes)}
+    # Merge/resolution recomputes PageRank globally. Graph mutations also alter
+    # old nodes' N-hop paths, so refresh every surviving entity's derived data.
+    # An empty change remains a checkpoint-only operation.
+    graph_changed = bool(change.added_updated_nodes or change.removed_nodes or change.added_updated_edges or change.removed_edges)
+    nodes_to_refresh = set(graph.nodes) if graph_changed else set()
+    node_neighbors = {node: n_neighbor(graph, node) for node in sorted(nodes_to_refresh)}
+    previous_entities = {row["pk"]: row for row in previous if row["knowledge_graph_kwd"] == "entity"}
+    node_vectors = {node: _stored_entity_vectors(previous_entities.get(entity_chunk_id(kb_id, node)), kb_id, node) for node in nodes_to_refresh - change.added_updated_nodes}
     tasks = []
-    for ii, (node, nhop_neighbors) in enumerate(node_neighbors.items()):
-        node_attrs = graph.nodes[node]
-        tasks.append(asyncio.create_task(graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks, nhop_neighbors)))
-        if ii % 100 == 9 and callback:
-            callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
     try:
+        for ii, (node, nhop_neighbors) in enumerate(node_neighbors.items()):
+            node_attrs = graph.nodes[node]
+            tasks.append(asyncio.create_task(graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks, nhop_neighbors, node_vectors.get(node))))
+            if ii % 100 == 9 and callback:
+                callback(msg=f"Get embedding of nodes: {ii}/{len(nodes_to_refresh)}")
         await asyncio.gather(*tasks, return_exceptions=False)
     except BaseException as e:
         logging.error(f"Error in get_embedding_of_nodes: {e}")
@@ -576,14 +613,14 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl: Any, graph: nx.Graph, 
         raise
 
     tasks = []
-    for ii, (from_node, to_node) in enumerate(change.added_updated_edges):
-        edge_attrs = graph.get_edge_data(from_node, to_node)
-        if not edge_attrs:
-            continue
-        tasks.append(asyncio.create_task(graph_edge_to_chunk(kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)))
-        if ii % 100 == 9 and callback:
-            callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
     try:
+        for ii, (from_node, to_node) in enumerate(change.added_updated_edges):
+            edge_attrs = graph.get_edge_data(from_node, to_node)
+            if not edge_attrs:
+                continue
+            tasks.append(asyncio.create_task(graph_edge_to_chunk(kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)))
+            if ii % 100 == 9 and callback:
+                callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
         await asyncio.gather(*tasks, return_exceptions=False)
     except BaseException as e:
         logging.error(f"Error in get_embedding_of_edges: {e}")

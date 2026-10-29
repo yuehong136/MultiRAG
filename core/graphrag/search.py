@@ -31,7 +31,7 @@ from common.misc_utils import get_uuid, thread_pool_exec
 from common.token_utils import num_tokens_from_string
 from core.graphrag.llm_protocol import GraphRAGCompletionLLM, unwrap_graphrag_chat_response
 from core.graphrag.query_analyze_prompt import PROMPTS
-from core.graphrag.utils import get_entity_type2samples, get_llm_cache, get_relation, set_llm_cache
+from core.graphrag.utils import get_entity_type2samples, get_from_to, get_llm_cache, get_relation, set_llm_cache
 from core.nlp.search import Dealer, index_name
 
 
@@ -240,7 +240,7 @@ class KGSearch(Dealer):
                 path = nbr["path"]
                 wts = nbr["weights"]
                 for i in range(len(path) - 1):
-                    f, t = path[i], path[i + 1]
+                    f, t = get_from_to(path[i], path[i + 1])
                     if (f, t) in nhop_pathes:
                         nhop_pathes[(f, t)]["sim"] += ent["sim"] / (2 + i)
                     else:
@@ -259,7 +259,7 @@ class KGSearch(Dealer):
             ents_from_query[ent]["sim"] *= 2
 
         for f, t in rels_from_txt.keys():
-            pair = tuple(sorted([f, t]))
+            pair = get_from_to(f, t)
             s = 0
             if pair in nhop_pathes:
                 s += nhop_pathes[pair]["sim"]

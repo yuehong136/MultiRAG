@@ -152,3 +152,104 @@ async def test_keyword_projection_includes_nhop_and_legacy_empty_is_safe(monkeyp
     result = await retriever.get_relevant_ents_by_keywords(["A"], {}, ["index"], ["kb"], None)
     assert "n_hop_with_weight" in store.search.call_args.args[0]
     assert result["A"]["n_hop_ents"] == []
+
+
+@pytest.fixture
+def producer_store(monkeypatch: pytest.MonkeyPatch) -> Store:
+    store = Store()
+    monkeypatch.setattr(settings, "docStoreConn", store)
+    monkeypatch.setattr(utils, "db_connection", _db)
+    monkeypatch.setattr(utils.KnowledgebaseService, "get_by_id", lambda *_: SimpleNamespace(name="scratch"))
+    monkeypatch.setattr(utils, "clear_phase_markers", lambda *_: None)
+    return store
+
+
+async def test_incremental_merge_refreshes_old_entity_rank_paths_without_reembedding(producer_store: Store, embedding_boundary: SimpleNamespace) -> None:
+    from core.graphrag.general import index
+
+    graph = _graph()
+    first = graph.subgraph(["A", "B"]).copy()
+    initial = await index.merge_subgraph("tenant", "kb", "document", first, embedding_boundary, lambda **_: None)
+    old_row = deepcopy(producer_store.rows[utils.entity_chunk_id("kb", "A")])
+    embedding_boundary.encode.reset_mock()
+    second = graph.subgraph(["B", "C"]).copy()
+    second.graph["source_id"] = ["second-document"]
+    for node in second.nodes:
+        second.nodes[node]["source_id"] = ["second-document"]
+    for source, target in second.edges:
+        second.edges[source, target]["source_id"] = ["second-document"]
+    merged = await index.merge_subgraph("tenant", "kb", "second-document", second, embedding_boundary, lambda **_: None)
+    actual = producer_store.query("scratch", expr='kb_id == "kb" && pk in ' + json.dumps([utils.entity_chunk_id("kb", "A")]))[0]
+    assert initial.nodes["A"]["pagerank"] == old_row["rank_flt"]
+    assert actual["rank_flt"] == merged.nodes["A"]["pagerank"] != old_row["rank_flt"]
+    assert json.loads(actual["n_hop_with_weight"]) == [{"path": ["A", "B", "C"], "weights": [3.0, 7.0]}]
+    assert actual["q_2_vec"] == old_row["q_2_vec"]
+    assert actual["source_id"] == ["document"] and actual["available_int"] == 0
+    encoded = [call.args[0][0] for call in embedding_boundary.encode.call_args_list]
+    assert "A" not in encoded and sorted(encoded) == ["B", "B->C: B knows C", "C"]
+
+
+@pytest.mark.parametrize("vector", [[float("nan"), 1], [1], [[1, 2]], [True, False]])
+async def test_invalid_stored_old_vector_rejects_refresh_before_any_io(producer_store: Store, embedding_boundary: SimpleNamespace, vector: Any) -> None:
+    graph = _graph()
+    first = graph.subgraph(["A", "B"]).copy()
+    await utils.set_graph("tenant", "kb", embedding_boundary, first, utils.GraphChange(added_updated_nodes=set(first.nodes), added_updated_edges=set(first.edges)), None)
+    producer_store.rows[utils.entity_chunk_id("kb", "A")]["q_2_vec"] = vector
+    before = deepcopy(producer_store.rows)
+    producer_store.events.clear()
+    embedding_boundary.encode.reset_mock()
+    with pytest.raises(ValueError, match="Persisted entity vector must be finite"):
+        await utils.set_graph("tenant", "kb", embedding_boundary, graph, utils.GraphChange(added_updated_nodes={"B", "C"}, added_updated_edges={("B", "C")}), None)
+    assert producer_store.rows == before and producer_store.events == []
+    embedding_boundary.encode.assert_not_called()
+
+
+@pytest.mark.parametrize("field, value", [("kb_id", "other-kb"), ("entity_kwd", "other-entity"), ("pk", "other-id")])
+def test_stored_vector_identity_is_exact(field: str, value: str) -> None:
+    row = {"pk": utils.entity_chunk_id("kb", "A"), "entity_kwd": "A", "kb_id": "kb", "q_2_vec": [0.25, 0.75], field: value}
+    with pytest.raises(ValueError, match="scope mismatch"):
+        utils._stored_entity_vectors(row, "kb", "A")
+
+
+async def test_reverse_producer_path_fuses_into_canonical_text_relation_once(monkeypatch: pytest.MonkeyPatch, embedding_boundary: SimpleNamespace) -> None:
+    store = Mock(spec=DocStoreConnection, db_type=Mock(return_value="milvus"), get_fields=lambda result, _: result)
+    retriever = search.KGSearch(store)
+    graph = _graph()
+    rows: list[dict[str, Any]] = []
+    await utils.graph_edge_to_chunk("kb", embedding_boundary, "C", "B", graph.edges["C", "B"], rows)
+    text_relations = retriever._relation_info_from_({"relation": {**rows[0], "_score": 2.0}})
+    entities = {"C": {"sim": 1.0, "pagerank": 1.0, "description": '{"description":"C"}', "n_hop_ents": utils.n_neighbor(graph, "C")}}
+    monkeypatch.setattr(search, "db_connection", _db)
+    monkeypatch.setattr(utils.KnowledgebaseService, "get_by_ids", lambda *_args, **_kwargs: [SimpleNamespace(name="scratch")])
+    monkeypatch.setattr(retriever, "query_rewrite", AsyncMock(return_value=([], ["C"])))
+    monkeypatch.setattr(retriever, "get_relevant_ents_by_keywords", AsyncMock(return_value=entities))
+    monkeypatch.setattr(retriever, "get_relevant_ents_by_types", lambda *_: {})
+    monkeypatch.setattr(retriever, "get_relevant_relations_by_txt", AsyncMock(return_value=text_relations))
+    fallback = AsyncMock(return_value={"description": "other relation"})
+    monkeypatch.setattr(search, "get_relation", fallback)
+    monkeypatch.setattr(retriever, "_community_retrieval_", lambda *_: "")
+    result = await retriever.retrieval("question", "tenant", ["kb"], None, None)
+    content = result["content_with_weight"]
+    assert content.count("B,C,") == 1 and "B,C,21.00,B knows C" in content and "C,B," not in content
+    fallback.assert_awaited_once_with("tenant", ["kb"], "A", "B")
+
+
+@pytest.mark.parametrize("phase", ["nodes", "edges"])
+async def test_progress_cancellation_drains_all_spawned_tasks_before_checkpoint(producer_store: Store, embedding_boundary: SimpleNamespace, phase: str) -> None:
+    from common.exceptions import TaskCanceledException
+
+    graph = nx.path_graph([f"node-{i:02d}" for i in range(12)])
+    graph.graph["source_id"] = ["doc"]
+    for node in graph.nodes:
+        graph.nodes[node].update(entity_type="person", description=node, source_id=["doc"], pagerank=0.1)
+    for source, target in graph.edges:
+        graph.edges[source, target].update(description="edge", weight=1, keywords=["edge"], source_id=["doc"])
+
+    def progress(*, msg: str) -> None:
+        if msg.startswith(f"Get embedding of {phase}:"):
+            raise TaskCanceledException("task cancelled by progress callback")
+
+    with pytest.raises(TaskCanceledException):
+        await utils.set_graph("tenant", "kb", embedding_boundary, graph, utils.GraphChange(added_updated_nodes=set(graph.nodes), added_updated_edges=set(graph.edges)), progress)
+    assert producer_store.rows == {} and producer_store.events == []
+    assert not any(not task.done() and task is not asyncio.current_task() for task in asyncio.all_tasks())
