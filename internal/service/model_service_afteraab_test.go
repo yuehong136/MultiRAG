@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -88,6 +89,29 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 	stopped := make(chan struct{}, 1)
 	server := afteraabModelBindingServer(t, journal, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		if r.Method != http.MethodPost {
+			t.Error("embedding HTTP method changed")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path == "/legacy/embeddings" {
+			if r.Header.Get("Authorization") != "Bearer private-numeric-legacy-key" || r.Header.Get("api-key") != "" {
+				t.Error("numeric binding selected modern credentials")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			var body struct {
+				Model string   `json:"model"`
+				Input []string `json:"input"`
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != modernName || !reflect.DeepEqual(body.Input, []string{"owned input"}) {
+				t.Error("numeric binding changed model or inputs")
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			fmt.Fprint(w, `{"data":[{"index":0,"embedding":[0,1]}]}`)
+			return
+		}
 		if r.URL.Path != "/embed" || r.Header.Get("Authorization") != "" || r.Header.Get("api-key") != "" {
 			t.Error("Builtin endpoint or credential isolation failed")
 			w.WriteHeader(http.StatusBadRequest)
@@ -117,7 +141,7 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 	active, inactive, embedding, chat := "1", "0", "embedding", "chat"
 	builtinComposite := builtinName + "@Builtin"
 	modernComposite := modernName + "@default@" + providerName
-	journal.Event("reserve-fixtures-before-INSERT", map[string]any{"tenant_ids": []string{owner, other}, "legacy_bindings": []any{[]string{owner, "Builtin", builtinName}, []string{other, "Builtin", builtinName}, []string{owner, legacyProviderName, "legacy-embedding"}, []string{other, legacyProviderName, "legacy-embedding"}}, "provider_ids": []string{"m-provider-owner", "m-provider-other"}, "instance_ids": []string{"m-instance-owner", "m-instance-other"}, "model_ids": []string{"m-model-owner", "m-model-other", "m-model-other-name", "m-model-foreign-instance"}, "TEI_endpoint": server.URL, "TEI_model": builtinName, "TEI_profile": "tei-cpu", "inputs": []string{"owned input"}})
+	journal.Event("reserve-fixtures-before-INSERT", map[string]any{"tenant_ids": []string{owner, other}, "legacy_bindings": []any{[]string{owner, "Builtin", builtinName}, []string{other, "Builtin", builtinName}, []string{owner, legacyProviderName, "legacy-embedding"}, []string{other, legacyProviderName, "legacy-embedding"}, []string{owner, providerName, modernName}}, "provider_ids": []string{"m-provider-owner", "m-provider-other"}, "instance_ids": []string{"m-instance-owner", "m-instance-other"}, "model_ids": []string{"m-model-owner", "m-model-other", "m-model-other-name", "m-model-foreign-instance"}, "TEI_endpoint": server.URL, "TEI_model": builtinName, "TEI_profile": "tei-cpu", "inputs": []string{"owned input"}})
 	create := func(value any) {
 		t.Helper()
 		if err := db.Create(value).Error; err != nil {
@@ -133,6 +157,9 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 		key := "private-legacy-" + tenant
 		create(&entity.TenantLLM{TenantID: tenant, LLMFactory: legacyProviderName, LLMName: afteraabModelString("legacy-embedding"), ModelType: &embedding, APIKey: &key, APIBase: &server.URL, Status: active})
 	}
+	numericBase, numericKey := server.URL+"/legacy", "private-numeric-legacy-key"
+	numericBinding := &entity.TenantLLM{TenantID: owner, LLMFactory: providerName, LLMName: afteraabModelString(modernName), ModelType: &embedding, APIKey: &numericKey, APIBase: &numericBase, Status: active}
+	create(numericBinding)
 	for _, item := range []struct{ tenant, suffix string }{{owner, "owner"}, {other, "other"}} {
 		providerID, instanceID := "m-provider-"+item.suffix, "m-instance-"+item.suffix
 		create(&entity.TenantModelProvider{ID: providerID, TenantID: item.tenant, ProviderName: providerName})
@@ -242,6 +269,98 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 			t.Fatal("owned M fixture mutation failed", column)
 		}
 	}
+	// The same provider/name also exists in the modern tables. Numeric IDs
+	// remain direct legacy identities; converting to a name would select the
+	// modern endpoint and credentials and silently change the embedding space.
+	var numericReadback int
+	if err := read.QueryRow("SELECT count(*) FROM t_ai_tenant_llms WHERE id=$1 AND tenant_id=$2 AND llm_factory=$3 AND llm_name=$4 AND api_base=$5 AND mdl_type=$6 AND status=$7", numericBinding.ID, owner, providerName, modernName, numericBase, embedding, active).Scan(&numericReadback); err != nil || numericReadback != 1 {
+		t.Fatal("numeric collision fixture independent SQL readback failed")
+	}
+	numericBound, err := service.GetEmbeddingModelByIDWithContext(t.Context(), owner, numericBinding.ID)
+	if err != nil || numericBound.APIConfig.Context != t.Context() || numericBound.APIConfig.APIKey == nil || *numericBound.APIConfig.APIKey != numericKey {
+		t.Fatal("numeric model binding did not preserve identity/context")
+	}
+	numericIdentity, err := service.ResolvedEmbeddingIdentityByID(t.Context(), owner, numericBinding.ID)
+	if err != nil || numericIdentity.Model != modernName || numericIdentity.Endpoint != numericBase || numericIdentity.Region != "default" {
+		t.Fatal("numeric model identity resolved through modern name")
+	}
+	modernIdentity, err := service.ResolvedEmbeddingIdentity(t.Context(), owner, modernComposite)
+	if err != nil || modernIdentity.Endpoint != server.URL || modernIdentity == numericIdentity || *modernBound.APIConfig.APIKey == numericKey {
+		t.Fatal("modern composite and numeric legacy identity collided")
+	}
+	data, err := numericBound.Embed([]string{"owned input"})
+	if err != nil || len(data) != 1 || data[0].Index != 0 || !reflect.DeepEqual(data[0].Embedding, []float64{0, 1}) {
+		t.Fatal("numeric bound embedding did not reach legacy HTTP endpoint")
+	}
+	journal.Event("numeric-collision-independent-binding-readback", map[string]any{"tenant": owner, "numeric_binding_id": numericBinding.ID, "model": numericIdentity.Model, "numeric_endpoint": numericIdentity.Endpoint, "modern_endpoint": modernIdentity.Endpoint, "credentials_distinct": true})
+	// A numeric tenant default takes precedence over a valid textual Builtin
+	// default, preserving the same exact legacy row and embedding space.
+	update(&entity.Tenant{}, owner, "tenant_embd_id", numericBinding.ID)
+	numericDefault, err := service.GetEmbeddingModelWithContext(t.Context(), owner, "")
+	if err != nil || numericDefault.APIConfig.Context != t.Context() || numericDefault.APIConfig.APIKey == nil || *numericDefault.APIConfig.APIKey != numericKey {
+		t.Fatal("numeric tenant default fell back to textual model")
+	}
+	defaultIdentity, err := service.ResolvedEmbeddingIdentity(t.Context(), owner, "")
+	if err != nil || defaultIdentity != numericIdentity {
+		t.Fatal("numeric tenant default identity changed embedding space")
+	}
+	defaultData, err := numericDefault.Embed([]string{"owned input"})
+	if err != nil || len(defaultData) != 1 || !reflect.DeepEqual(defaultData[0].Embedding, []float64{0, 1}) {
+		t.Fatal("numeric tenant default did not reach exact legacy HTTP binding")
+	}
+	update(&entity.Tenant{}, owner, "tenant_embd_id", nil)
+	update(&entity.Tenant{}, other, "tenant_embd_id", numericBinding.ID)
+	deny("foreign numeric default cannot textual fallback", bind(other, ""))
+	update(&entity.Tenant{}, other, "tenant_embd_id", nil)
+	journal.Event("numeric-default-precedence-readback", map[string]any{"tenant": owner, "numeric_binding_id": numericBinding.ID, "textual_default": builtinComposite, "selected_endpoint": defaultIdentity.Endpoint, "foreign_default_denied": true})
+	numericDeny := func(tenant string, id int64) func() error {
+		return func() error { _, err := service.GetEmbeddingModelByIDWithContext(t.Context(), tenant, id); return err }
+	}
+	for _, id := range []int64{0, -1, 999999} {
+		deny(fmt.Sprintf("invalid numeric ID %d", id), numericDeny(owner, id))
+	}
+	deny("numeric wrong tenant cannot modern fallback", numericDeny(other, numericBinding.ID))
+	update(&entity.TenantLLM{}, numericBinding.ID, "status", inactive)
+	deny("numeric disabled cannot modern fallback", numericDeny(owner, numericBinding.ID))
+	deny("disabled numeric identity", func() error {
+		identity, err := service.ResolvedEmbeddingIdentityByID(t.Context(), owner, numericBinding.ID)
+		if identity != (EmbeddingModelIdentity{}) {
+			return nil
+		}
+		return err
+	})
+	update(&entity.TenantLLM{}, numericBinding.ID, "status", active)
+	update(&entity.TenantLLM{}, numericBinding.ID, "mdl_type", chat)
+	deny("numeric wrong capability cannot modern fallback", numericDeny(owner, numericBinding.ID))
+	update(&entity.TenantLLM{}, numericBinding.ID, "mdl_type", embedding)
+	deny("numeric embedding cannot bind chat", func() error {
+		_, err := service.GetChatModelByIDWithContext(t.Context(), owner, numericBinding.ID)
+		return err
+	})
+	deny("numeric embedding cannot bind rerank", func() error {
+		_, err := service.GetRerankModelByIDWithContext(t.Context(), owner, numericBinding.ID)
+		return err
+	})
+	numericCtx, numericCancel := context.WithCancel(t.Context())
+	numericCancelable, err := service.GetEmbeddingModelByIDWithContext(numericCtx, owner, numericBinding.ID)
+	if err != nil || numericCancelable.APIConfig.Context != numericCtx {
+		t.Fatal("numeric bound model lost request context")
+	}
+	numericCancel()
+	deny("numeric bound context canceled before HTTP", func() error {
+		_, err := numericCancelable.Embed([]string{"owned input"})
+		if !errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	})
+	deny("numeric canceled before SQL", func() error {
+		_, err := service.GetEmbeddingModelByIDWithContext(numericCtx, owner, numericBinding.ID)
+		if !errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	})
 	deny("missing tenant", bind(missing, builtinComposite))
 	deny("wrong Builtin instance", bind(owner, builtinName+"@foreign@Builtin"))
 	deny("wrong configured model", bind(owner, "other-model@Builtin"))
@@ -249,13 +368,31 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 		_, err := service.GetRerankModelWithContext(t.Context(), owner, builtinComposite)
 		return err
 	})
+	// An ordinary modern default must bind while active, then become
+	// unavailable through the historical non-context API when inactive.
+	update(&entity.Tenant{}, owner, "embd_id", modernComposite)
+	if bound, err := service.GetEmbeddingModel(owner, ""); err != nil || bound.APIConfig.APIKey == nil || *bound.APIConfig.APIKey != "private-key-owner" {
+		t.Fatal("active ordinary model default did not bind")
+	}
 	update(&entity.Tenant{}, owner, "status", inactive)
+	for _, plain := range []struct {
+		name string
+		call func() error
+	}{
+		{"embedding", func() error { _, err := service.GetEmbeddingModel(owner, ""); return err }},
+		{"rerank", func() error { _, err := service.GetRerankModel(owner, ""); return err }},
+		{"chat", func() error { _, err := service.GetChatModel(owner, ""); return err }},
+	} {
+		deny("inactive tenant plain default "+plain.name, plain.call)
+	}
 	deny("inactive Builtin tenant", bind(owner, builtinComposite))
 	deny("inactive modern tenant", func() error {
 		_, err := service.ResolvedEmbeddingIdentity(t.Context(), owner, modernComposite)
 		return err
 	})
+	deny("inactive numeric tenant", numericDeny(owner, numericBinding.ID))
 	update(&entity.Tenant{}, owner, "status", active)
+	update(&entity.Tenant{}, owner, "embd_id", builtinComposite)
 	update(&entity.TenantLLM{}, builtin.ID, "status", inactive)
 	deny("disabled Builtin binding", bind(owner, builtinComposite))
 	update(&entity.TenantLLM{}, builtin.ID, "status", active)
@@ -378,11 +515,46 @@ func TestAfteraabModelBindingsSQLHTTP(t *testing.T) {
 		t.Fatal("read-only identity resolution contacted provider")
 	}
 	journal.Event("identity-zero-HTTP-readback", map[string]any{"HTTP_delta": 0, "same_space_across_tenants": true, "different_model_endpoint_region_rejected": true})
+	var legacyBindingID int64
+	if err := read.QueryRow("SELECT id FROM t_ai_tenant_llms WHERE tenant_id=$1 AND llm_factory=$2 AND llm_name=$3", owner, legacyProviderName, "legacy-embedding").Scan(&legacyBindingID); err != nil {
+		t.Fatal("legacy binding independent ID readback failed")
+	}
+	for _, unsafeEndpoint := range []string{
+		strings.Replace(server.URL, "http://", "http://private-user:unsafe-url-secret@", 1),
+		server.URL + "?key=unsafe-url-secret", server.URL + "#unsafe-url-secret",
+	} {
+		update(&entity.TenantLLM{}, legacyBindingID, "api_base", unsafeEndpoint)
+		update(&entity.TenantLLM{}, numericBinding.ID, "api_base", unsafeEndpoint)
+		deny("unsafe legacy URL identity rejected privately", func() error {
+			identity, err := service.ResolvedEmbeddingIdentity(t.Context(), owner, legacyName)
+			if identity != (EmbeddingModelIdentity{}) || err != nil && strings.Contains(err.Error(), "unsafe-url-secret") {
+				return nil
+			}
+			return err
+		})
+		deny("unsafe numeric URL identity rejected privately", func() error {
+			identity, err := service.ResolvedEmbeddingIdentityByID(t.Context(), owner, numericBinding.ID)
+			if identity != (EmbeddingModelIdentity{}) || err != nil && strings.Contains(err.Error(), "unsafe-url-secret") {
+				return nil
+			}
+			return err
+		})
+		deny("unsafe numeric URL cannot bind privately", func() error {
+			_, err := service.GetEmbeddingModelByIDWithContext(t.Context(), owner, numericBinding.ID)
+			if err != nil && strings.Contains(err.Error(), "unsafe-url-secret") {
+				return nil
+			}
+			return err
+		})
+	}
+	update(&entity.TenantLLM{}, legacyBindingID, "api_base", server.URL)
+	update(&entity.TenantLLM{}, numericBinding.ID, "api_base", numericBase)
 	journal.Event("reserve-closed-own-pool-failure-case", map[string]any{"database": cfg.Database, "independent_read_pool_retained": true})
 	if err := pool.Close(); err != nil {
 		t.Fatal("owned SQL pool close failed")
 	}
 	deny("SQL failure cannot fallback Builtin", bind(owner, builtinComposite))
+	deny("SQL failure cannot fallback numeric", numericDeny(owner, numericBinding.ID))
 	deny("SQL failure cannot fallback identity", func() error {
 		_, err := service.ResolvedEmbeddingIdentity(t.Context(), owner, modernComposite)
 		return err

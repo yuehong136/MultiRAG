@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"multirag/internal/common"
@@ -729,8 +730,11 @@ func (m *ModelProviderService) getModelConfigWithIdentity(ctx context.Context, t
 	if compositeName == "" {
 		var err error
 		var tenant entity.Tenant
-		err = dao.DB.WithContext(ctx).Where("id = ?", tenantID).First(&tenant).Error
+		err = dao.DB.WithContext(ctx).Where("id = ? AND status = ?", tenantID, "1").First(&tenant).Error
 		if err == nil {
+			if id := tenantDefaultBindingID(&tenant, modelType); id != nil {
+				return m.getModelConfigByID(ctx, tenantID, *id, modelType, identity)
+			}
 			compositeName, err = tenantDefaultModelName(&tenant, modelType)
 		}
 		if err != nil {
@@ -806,7 +810,10 @@ func (m *ModelProviderService) getModelConfigWithIdentity(ctx context.Context, t
 		if endpoint == "" {
 			endpoint = providerInfo.URL[extra.Region]
 		}
-		*identity = EmbeddingModelIdentity{Provider: strings.ToLower(providerInfo.Name), Model: name, Endpoint: strings.TrimRight(endpoint, "/"), Region: extra.Region}
+		*identity, err = resolvedEmbeddingIdentity(driver, providerInfo.Name, name, endpoint, extra.Region, config)
+		if err != nil {
+			return nil, "", nil, err
+		}
 	}
 	if config != nil {
 		config.Context = ctx
@@ -823,7 +830,13 @@ func (m *ModelProviderService) getLegacyModelConfigWithContext(ctx context.Conte
 	if err != nil {
 		return nil, "", nil, err
 	}
-	if legacy.Status == "0" {
+	return m.bindLegacyModelConfig(ctx, name, modelType, providerInfo, &legacy, identities...)
+}
+
+// A numeric TenantLLM selector binds this exact row; it must never be re-resolved
+// through a modern same-name provider instance.
+func (m *ModelProviderService) bindLegacyModelConfig(ctx context.Context, name string, modelType entity.ModelType, providerInfo *entity.Provider, legacy *entity.TenantLLM, identities ...*EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	if legacy.Status != "1" {
 		return nil, "", nil, errModelDisabled
 	}
 	if legacy.ModelType == nil || strings.TrimSpace(*legacy.ModelType) == "" {
@@ -848,14 +861,21 @@ func (m *ModelProviderService) getLegacyModelConfigWithContext(ctx context.Conte
 	}
 	urls := providerInfo.URL
 	if legacy.APIBase != nil && *legacy.APIBase != "" {
-		urls = map[string]string{"default": *legacy.APIBase}
+		extra, err := decodeProviderInstanceExtra(`{"region":"default","base_url":` + strconv.Quote(*legacy.APIBase) + `}`)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		urls = map[string]string{"default": extra.BaseURL}
 	}
 	if strings.TrimSpace(urls["default"]) == "" && !strings.EqualFold(providerInfo.Name, "Bedrock") {
 		return nil, "", nil, fmt.Errorf("model base URL is missing")
 	}
 	driver, err := modelModule.NewModelFactory().CreateModelDriver(providerInfo.Name, urls, providerInfo.URLSuffix)
 	if err == nil && len(identities) > 0 && identities[0] != nil {
-		*identities[0] = EmbeddingModelIdentity{Provider: strings.ToLower(providerInfo.Name), Model: name, Endpoint: strings.TrimRight(urls["default"], "/"), Region: "default"}
+		*identities[0], err = resolvedEmbeddingIdentity(driver, providerInfo.Name, name, urls["default"], "default", &modelModule.APIConfig{Context: ctx, APIKey: legacy.APIKey})
+		if err != nil {
+			return nil, "", nil, err
+		}
 	}
 	return driver, name, &modelModule.APIConfig{Context: ctx, APIKey: legacy.APIKey}, err
 }
@@ -929,4 +949,113 @@ func requireActiveModelTenant(ctx context.Context, tenantID string) error {
 	}
 	var tenant entity.Tenant
 	return dao.DB.WithContext(ctx).Select("id").Where("id = ? AND status = ?", tenantID, "1").First(&tenant).Error
+}
+
+func resolvedEmbeddingIdentity(driver modelModule.ModelDriver, provider, name, endpoint, region string, config *modelModule.APIConfig) (EmbeddingModelIdentity, error) {
+	if resolver, ok := driver.(interface {
+		ResolveEmbeddingEndpoint(string, *modelModule.APIConfig) (string, string, error)
+	}); ok {
+		var err error
+		endpoint, region, err = resolver.ResolveEmbeddingEndpoint(name, config)
+		if err != nil {
+			return EmbeddingModelIdentity{}, err
+		}
+	}
+	extra, err := decodeProviderInstanceExtra(`{"region":"default","base_url":` + strconv.Quote(endpoint) + `}`)
+	if err != nil {
+		return EmbeddingModelIdentity{}, err
+	}
+	if extra.BaseURL == "" {
+		return EmbeddingModelIdentity{}, fmt.Errorf("embedding identity endpoint is unavailable")
+	}
+	return EmbeddingModelIdentity{Provider: strings.ToLower(provider), Model: name, Endpoint: strings.TrimRight(extra.BaseURL, "/"), Region: region}, nil
+}
+
+func (m *ModelProviderService) getModelConfigByID(ctx context.Context, tenantID string, id int64, modelType entity.ModelType, identity *EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	if err := requireActiveModelTenant(ctx, tenantID); err != nil {
+		return nil, "", nil, err
+	}
+	if id <= 0 {
+		return nil, "", nil, fmt.Errorf("model binding must be positive")
+	}
+	var binding entity.TenantLLM
+	if err := dao.DB.WithContext(ctx).Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, "1").First(&binding).Error; err != nil {
+		return nil, "", nil, err
+	}
+	if binding.LLMName == nil || strings.TrimSpace(*binding.LLMName) == "" || binding.ModelType == nil || !modelTypeMatches(*binding.ModelType, modelType) {
+		return nil, "", nil, fmt.Errorf("active typed model binding unavailable")
+	}
+	name := *binding.LLMName
+	if strings.EqualFold(binding.LLMFactory, "Builtin") {
+		return m.getBuiltinModelConfig(ctx, tenantID, name, "default", modelType, identity)
+	}
+	if m.providerManager == nil {
+		return nil, "", nil, fmt.Errorf("model providers are not initialized")
+	}
+	provider := m.providerManager.FindProvider(binding.LLMFactory)
+	if provider == nil && strings.EqualFold(binding.LLMFactory, "GiteeAI") {
+		provider = m.providerManager.FindProvider("Gitee")
+	}
+	if provider == nil && strings.EqualFold(binding.LLMFactory, "OpenAI-API-Compatible") {
+		provider = &entity.Provider{Name: binding.LLMFactory, URL: map[string]string{}, URLSuffix: modelModule.URLSuffix{Embedding: "embeddings"}}
+	}
+	if provider == nil {
+		return nil, "", nil, fmt.Errorf("model provider unavailable")
+	}
+	return m.bindLegacyModelConfig(ctx, name, modelType, provider, &binding, identity)
+}
+
+func (m *ModelProviderService) GetEmbeddingModelByIDWithContext(ctx context.Context, tenantID string, id int64) (*modelModule.EmbeddingModel, error) {
+	driver, name, config, err := m.getModelConfigByID(ctx, tenantID, id, entity.ModelTypeEmbedding, nil)
+	if err != nil {
+		return nil, err
+	}
+	return modelModule.NewEmbeddingModel(driver, &name, config), nil
+}
+func (m *ModelProviderService) GetRerankModelByIDWithContext(ctx context.Context, tenantID string, id int64) (*modelModule.RerankModel, error) {
+	driver, name, config, err := m.getModelConfigByID(ctx, tenantID, id, entity.ModelTypeRerank, nil)
+	if err != nil {
+		return nil, err
+	}
+	return modelModule.NewRerankModel(driver, &name, config), nil
+}
+func (m *ModelProviderService) GetChatModelByIDWithContext(ctx context.Context, tenantID string, id int64) (*modelModule.ChatModel, error) {
+	driver, name, config, err := m.getModelConfigByID(ctx, tenantID, id, entity.ModelTypeChat, nil)
+	if err != nil {
+		return nil, err
+	}
+	result := modelModule.NewChatModel(driver, &name, config)
+	if m.providerManager != nil {
+		var binding entity.TenantLLM
+		if err := dao.DB.WithContext(ctx).Select("llm_factory").Where("id = ? AND tenant_id = ?", id, tenantID).First(&binding).Error; err != nil {
+			return nil, err
+		}
+		if definition, err := m.providerManager.GetModelByName(binding.LLMFactory, name); err == nil {
+			applyModelChatDefaults(definition, &result.ModelConfig)
+		}
+	}
+	return result, nil
+}
+func (m *ModelProviderService) ResolvedEmbeddingIdentityByID(ctx context.Context, tenantID string, id int64) (EmbeddingModelIdentity, error) {
+	var identity EmbeddingModelIdentity
+	_, _, _, err := m.getModelConfigByID(ctx, tenantID, id, entity.ModelTypeEmbedding, &identity)
+	return identity, err
+}
+
+func tenantDefaultBindingID(tenant *entity.Tenant, modelType entity.ModelType) *int64 {
+	switch modelType {
+	case entity.ModelTypeChat:
+		return tenant.TenantLLMID
+	case entity.ModelTypeEmbedding:
+		return tenant.TenantEmbdID
+	case entity.ModelTypeRerank:
+		return tenant.TenantRerankID
+	case entity.ModelTypeSpeech2Text:
+		return tenant.TenantASRID
+	case entity.ModelTypeImage2Text:
+		return tenant.TenantImg2TxtID
+	case entity.ModelTypeTTS:
+		return tenant.TenantTTSID
+	}
+	return nil
 }
