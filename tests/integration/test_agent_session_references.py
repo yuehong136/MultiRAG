@@ -189,6 +189,53 @@ def assert_read_only(before: dict[str, Any], after: dict[str, Any]) -> None:
         assert current["pttl"] == prior["pttl"] if prior["pttl"] < 0 else 0 < current["pttl"] <= prior["pttl"]
 
 
+def test_legacy_chunk_ids_survive_authenticated_history_reads(history_api: dict[str, Any]) -> None:
+    env, owner = history_api, history_api["ids"]["owner"]
+    canvas_id = uuid4().hex
+    values: list[Any] = [None, "legacy-chunk", False, 0, 9007199254740993, 1.5, "", "  ", []]
+    expected = ["legacy-chunk", 0, 9007199254740993]
+    sessions = {shape: uuid4().hex for shape in ["list", "keyed"]}
+    with Session(env["engine"]) as db:
+        db.add(UserCanvas(id=canvas_id, user_id=owner, title="Legacy chunk history", dsl=message_dsl("unused")))
+        db.commit()
+        for shape, session_id in sessions.items():
+            API4ConversationService.save(
+                db,
+                id=session_id,
+                dialog_id=canvas_id,
+                user_id=owner,
+                source="agent",
+                name=shape,
+                message=[{"role": "user", "prompt": "private prompt"}, {"role": "assistant", "content": "Saved citations"}],
+                reference=[{"chunks": values if shape == "list" else {str(i): value for i, value in enumerate(values)}}],
+            )
+
+    before = history_snapshot(env)
+    record: dict[str, Any] = {"sessions": sessions, "calls": [], "before": before}
+    for credential in ["owner", "owner_api"]:
+        headers = {"Authorization": "Bearer " + env["tokens"][credential]}
+        route = f"{env['base']}/api/v1/agents/{canvas_id}/sessions"
+        listing = requests.get(route, params={"dsl": "false"}, headers=headers, timeout=30)
+        assert listing.status_code == 200 and listing.json()["retcode"] == 0, listing.text
+        assert listing.json()["data"]["total"] == 2
+        listed = {session["id"]: session for session in listing.json()["data"]["sessions"]}
+        for shape, session_id in sessions.items():
+            response = requests.get(route + "/" + session_id, headers=headers, timeout=30)
+            assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
+            payload = response.json()["data"]
+            actual = payload["messages"][1]["reference"]
+            assert [chunk["id"] for chunk in actual] == expected
+            assert [chunk["content"] for chunk in actual] == [str(value) for value in expected]
+            assert all(chunk["document_id"] is None and chunk["dataset_id"] is None and chunk["image_id"] is None for chunk in actual)
+            assert [chunk["citation_id"] for chunk in actual] == ["1", "3", "4"]
+            assert all("prompt" not in message for message in payload["messages"])
+            assert listed[session_id]["messages"] == payload["messages"] and "dsl" not in listed[session_id]
+            record["calls"].append({"principal": credential, "shape": shape, "status": response.status_code, "body": response.json()})
+    record["after"] = history_snapshot(env)
+    assert_read_only(before, record["after"])
+    _save(env["evidence"] / f"{env['ids']['kb']}.legacy-chunks.json", record)
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_saved_history_types_and_authenticated_images_are_read_only(history_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     env, ids = history_api, history_api["ids"]

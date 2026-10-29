@@ -189,6 +189,26 @@ def _normalize_agent_reference_entry(reference: Any) -> dict[str, Any]:
     return {"chunks": chunks if isinstance(chunks, (dict, list)) else [], "doc_aggs": doc_aggs if isinstance(doc_aggs, list) else []}
 
 
+def _normalize_agent_reference_chunk(chunk: Any) -> dict[str, Any] | None:
+    if not isinstance(chunk, dict):
+        # Stored legacy references may contain opaque chunk IDs instead of
+        # metadata. Keep those IDs, including numeric zero, without treating
+        # null, booleans or arbitrary JSON containers as citations.
+        if not ((isinstance(chunk, str) and chunk.strip()) or type(chunk) is int):
+            return None
+        return {"id": chunk, "content": str(chunk), "document_id": None, "document_name": None, "dataset_id": None, "image_id": None, "positions": None}
+    return {
+        "id": chunk.get("chunk_id", chunk.get("id")),
+        "content": chunk.get("content_with_weight", chunk.get("content")),
+        "document_id": chunk.get("doc_id", chunk.get("document_id")),
+        "document_name": chunk.get("docnm_kwd", chunk.get("document_name")),
+        "dataset_id": chunk.get("kb_id", chunk.get("dataset_id")),
+        "image_id": chunk.get("image_id", chunk.get("img_id")),
+        "positions": chunk.get("positions", chunk.get("position_int")),
+        **{key: chunk[key] for key in ("doc_type", "doc_type_kwd") if key in chunk},
+    }
+
+
 def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(conversation)
     normalized["messages"] = normalized.pop("message", normalized.get("messages", [])) or []
@@ -208,22 +228,17 @@ def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
         chunks = reference.get("chunks", [])
         items = chunks.items() if isinstance(chunks, dict) else enumerate(chunks) if isinstance(chunks, list) else []
         normalized_references = []
+        source_ids = []
         for citation_id, chunk in items:
-            if not isinstance(chunk, dict):
+            item = _normalize_agent_reference_chunk(chunk)
+            if item is None:
                 continue
-            item = {
-                "id": chunk.get("chunk_id", chunk.get("id")),
-                "content": chunk.get("content_with_weight", chunk.get("content")),
-                "document_id": chunk.get("doc_id", chunk.get("document_id")),
-                "document_name": chunk.get("docnm_kwd", chunk.get("document_name")),
-                "dataset_id": chunk.get("kb_id", chunk.get("dataset_id")),
-                "image_id": chunk.get("image_id", chunk.get("img_id")),
-                "positions": chunk.get("positions", chunk.get("position_int")),
-                **{key: chunk[key] for key in ("doc_type", "doc_type_kwd") if key in chunk},
-            }
-            if isinstance(chunks, dict):
-                item["citation_id"] = str(citation_id)
+            source_ids.append(str(citation_id))
             normalized_references.append(item)
+        # Filtering malformed list entries must not rebind later [ID:n] markers.
+        if isinstance(chunks, dict) or any(source_id != str(index) for index, source_id in enumerate(source_ids)):
+            for item, source_id in zip(normalized_references, source_ids, strict=True):
+                item["citation_id"] = source_id
         message["reference"] = normalized_references
     return normalized
 

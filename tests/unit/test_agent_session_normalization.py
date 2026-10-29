@@ -25,7 +25,7 @@ def test_history_retains_only_actual_source_type(field: str, value: Any) -> None
     conversation = {
         "dialog_id": "agent",
         "message": [{"role": "assistant", "content": "prologue"}, {"role": "user", "content": "query", "prompt": "secret"}, {"role": "assistant", "content": "answer", "prompt": "secret"}],
-        "reference": [{"chunks": [None, chunk, "not a chunk"]}],
+        "reference": [{"chunks": [None, chunk, []]}],
     }
     result = _normalize_agent_session(deepcopy(conversation))
     assert result["agent_id"] == "agent" and "dialog_id" not in result and "reference" not in result
@@ -40,6 +40,7 @@ def test_history_retains_only_actual_source_type(field: str, value: Any) -> None
             "dataset_id": "dataset",
             "image_id": "dataset-same-image.png",
             "positions": [[1, 2, 3, 4, 5]],
+            "citation_id": "1",
             field: value,
         }
     ]
@@ -78,3 +79,42 @@ def test_runtime_history_normalizes_legacy_and_empty_references_without_mutation
         assert result["messages"][1]["reference"][0]["id"] == "legacy"
     else:
         assert result["messages"][1].get("reference", []) == []
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+def test_legacy_chunk_ids_survive_history_without_inventing_document_access(keyed: bool) -> None:
+    values: list[Any] = ["legacy-chunk", 0, 9007199254740993, None, False, 1.5, "", "  ", [], ["garbage"]]
+    chunks = {str(index + 10): value for index, value in enumerate(values)} if keyed else values
+    conversation = {"message": [{"role": "user", "prompt": "private"}, {"role": "assistant"}], "reference": [{"chunks": chunks}]}
+    original = deepcopy(conversation)
+    result = _normalize_agent_session(conversation)
+    assert conversation == original
+    actual = result["messages"][1]["reference"]
+    assert actual == [
+        {
+            "id": value,
+            "content": str(value),
+            "document_id": None,
+            "document_name": None,
+            "dataset_id": None,
+            "image_id": None,
+            "positions": None,
+            **({"citation_id": str(index + 10)} if keyed else {}),
+        }
+        for index, value in enumerate(values[:3])
+    ]
+    assert "prompt" not in result["messages"][0]
+
+
+def test_chunk_mapping_preserves_explicit_zero_empty_and_null_values() -> None:
+    chunk = {"chunk_id": 0, "id": "fallback", "content_with_weight": "", "content": "fallback", "doc_id": None, "document_id": "fallback", "positions": [], "position_int": [[1]], "doc_type": ""}
+    result = _normalize_agent_session({"message": [{"role": "user"}, {"role": "assistant"}], "reference": [{"chunks": {"0": chunk}}]})
+    actual = result["messages"][1]["reference"][0]
+    assert actual["id"] == 0 and actual["content"] == "" and actual["document_id"] is None and actual["positions"] == []
+    assert actual["citation_id"] == "0" and actual["doc_type"] == ""
+
+
+def test_filtered_history_chunks_keep_original_citation_numbers() -> None:
+    result = _normalize_agent_session({"message": [{"role": "user"}, {"role": "assistant", "content": "[ID:1] [ID:3]"}], "reference": [{"chunks": [None, "legacy", False, 0]}]})
+    actual = result["messages"][1]["reference"]
+    assert [(chunk["citation_id"], chunk["id"]) for chunk in actual] == [("1", "legacy"), ("3", 0)]
