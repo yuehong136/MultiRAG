@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,17 +19,19 @@ import (
 func (e *elasticsearchEngine) searchPage(ctx context.Context, indices []string, body map[string]interface{}, exactNumbers bool) (*SearchResponse, error) {
 	path := "/_search?allow_partial_search_results=false"
 	if len(indices) > 0 {
-		path = "/" + strings.Join(indices, ",") + path
+		path = "/" + escapedIndices(indices) + path
 	}
 	var result SearchResponse
 	if err := e.searchJSON(ctx, http.MethodPost, path, body, &result, exactNumbers); err != nil {
-		return nil, err
+		// A decoded PIT identity remains a resource even if the rest of the
+		// response is malformed. The walker must release that newest identity.
+		return &result, err
 	}
 	if result.Hits == nil || result.Hits.Total == nil || result.Hits.Total.Value < 0 || result.Hits.Hits == nil {
-		return nil, fmt.Errorf("Elasticsearch omitted required search hits or total")
+		return &result, fmt.Errorf("Elasticsearch omitted required search hits or total")
 	}
 	if result.TimedOut || result.Shards.Failed != 0 || (result.Hits.Total.Relation != "" && result.Hits.Total.Relation != "eq") {
-		return nil, fmt.Errorf("Elasticsearch returned an incomplete search")
+		return &result, fmt.Errorf("Elasticsearch returned an incomplete search")
 	}
 	return &result, nil
 }
@@ -77,7 +80,7 @@ func (e *elasticsearchEngine) walkPIT(ctx context.Context, indices []string, bod
 	var opened struct {
 		ID string `json:"id"`
 	}
-	err = e.searchJSON(ctx, http.MethodPost, "/"+strings.Join(indices, ",")+"/_pit?keep_alive=1m&allow_partial_search_results=false", nil, &opened, false)
+	err = e.searchJSON(ctx, http.MethodPost, "/"+escapedIndices(indices)+"/_pit?keep_alive=1m&allow_partial_search_results=false", nil, &opened, false)
 	if strings.TrimSpace(opened.ID) == "" {
 		if err != nil {
 			return err
@@ -138,11 +141,11 @@ func (e *elasticsearchEngine) walkPIT(ctx context.Context, indices []string, bod
 		}
 		query["pit"] = map[string]interface{}{"id": pitID, "keep_alive": "1m"}
 		page, pageErr := e.searchPage(ctx, nil, query, exactNumbers)
+		if page != nil && page.PITID != "" {
+			pitID = page.PITID
+		}
 		if pageErr != nil {
 			return pageErr
-		}
-		if page.PITID != "" {
-			pitID = page.PITID
 		}
 		done, visitErr := visit(page)
 		if visitErr != nil {
@@ -243,4 +246,14 @@ func (e *elasticsearchEngine) ScanMetadata(ctx context.Context, req *types.Searc
 		}
 		return seen == total, nil
 	})
+}
+
+// Preserve literal index bytes when building transport paths. In particular,
+// an index containing "%2A" must not become a wildcard after URL decoding.
+func escapedIndices(indices []string) string {
+	escaped := make([]string, len(indices))
+	for i, index := range indices {
+		escaped[i] = url.PathEscape(index)
+	}
+	return strings.Join(escaped, ",")
 }

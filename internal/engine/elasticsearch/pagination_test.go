@@ -144,7 +144,7 @@ func TestMetadataScannerExactCompleteSnapshotAndCallbackFailureRelease(t *testin
 }
 
 func TestPITCancellationAndPartialFailuresReleaseCursor(t *testing.T) {
-	for _, mode := range []string{"cancel", "partial", "timeout", "missing-cursor", "repeated-cursor", "close-failed", "open-malformed"} {
+	for _, mode := range []string{"cancel", "partial", "timeout", "missing-cursor", "repeated-cursor", "close-failed", "open-malformed", "page-malformed", "page-missing-hits", "partial-close-failed"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -159,8 +159,21 @@ func TestPITCancellationAndPartialFailuresReleaseCursor(t *testing.T) {
 					return
 				}
 				if r.Method == http.MethodDelete {
+					var body struct {
+						ID string `json:"id"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					expected := "pit"
+					if mode == "partial" || mode == "timeout" || mode == "page-malformed" || mode == "page-missing-hits" || mode == "partial-close-failed" {
+						expected = "rotated-pit"
+					}
+					if body.ID != expected {
+						t.Errorf("released PIT %q, want latest %q", body.ID, expected)
+					}
 					closed.Store(true)
-					if mode == "close-failed" {
+					if mode == "close-failed" || mode == "partial-close-failed" {
 						w.WriteHeader(500)
 					} else {
 						fmt.Fprint(w, `{"succeeded":true}`)
@@ -168,10 +181,14 @@ func TestPITCancellationAndPartialFailuresReleaseCursor(t *testing.T) {
 					return
 				}
 				switch mode {
-				case "partial":
-					fmt.Fprint(w, `{"_shards":{"failed":1},"hits":{"total":{"value":1},"hits":[]}}`)
+				case "partial", "partial-close-failed":
+					fmt.Fprint(w, `{"pit_id":"rotated-pit","_shards":{"failed":1},"hits":{"total":{"value":1},"hits":[]}}`)
 				case "timeout":
-					fmt.Fprint(w, `{"timed_out":true,"hits":{"total":{"value":1},"hits":[]}}`)
+					fmt.Fprint(w, `{"pit_id":"rotated-pit","timed_out":true,"hits":{"total":{"value":1},"hits":[]}}`)
+				case "page-malformed":
+					fmt.Fprint(w, `{"pit_id":"rotated-pit","hits":{"total":{"value":1},"hits":[]}} trailing`)
+				case "page-missing-hits":
+					fmt.Fprint(w, `{"pit_id":"rotated-pit","hits":{}}`)
 				case "missing-cursor":
 					fmt.Fprint(w, `{"hits":{"total":{"value":2},"hits":[{"_source":{"id":"a","kb_id":"owned"}}]}}`)
 				case "repeated-cursor":
@@ -193,10 +210,13 @@ func TestPITCancellationAndPartialFailuresReleaseCursor(t *testing.T) {
 			if err == nil || !closed.Load() {
 				t.Fatal("failure lost or cursor survived", err, closed.Load())
 			}
+			if mode == "partial-close-failed" && (!strings.Contains(err.Error(), "incomplete search") || !strings.Contains(err.Error(), "HTTP 500")) {
+				t.Fatal("business failure or cleanup failure was lost", err)
+			}
 			if mode == "cancel" && !errors.Is(err, context.Canceled) {
 				t.Fatal("cancellation identity lost", err)
 			}
-			journal.Event("pit-cleanup-readback", map[string]interface{}{"deleteObserved": closed.Load(), "acknowledged": mode != "close-failed"})
+			journal.Event("pit-cleanup-readback", map[string]interface{}{"deleteObserved": closed.Load(), "acknowledged": mode != "close-failed" && mode != "partial-close-failed"})
 		})
 	}
 }
@@ -296,4 +316,44 @@ func TestMetadataScannerCrossesResultWindowOnOneSnapshot(t *testing.T) {
 		t.Fatal("truncated snapshot or PIT survived", count, searches.Load(), active.Load(), err)
 	}
 	journal.Event("pit-cleanup-readback", map[string]interface{}{"absent": !active.Load(), "observedRows": count})
+}
+
+func TestSearchAndMetadataPITKeepLiteralIndexEscapes(t *testing.T) {
+	var shallow, opened, closed bool
+	engine, journal := registeredKGEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete:
+			closed = true
+			fmt.Fprint(w, `{"succeeded":true}`)
+		case strings.HasSuffix(r.URL.Path, "/_pit"):
+			opened = true
+			if r.URL.EscapedPath() != "/multirag_doc_meta_owner%252A/_pit" {
+				t.Error("literal metadata index became wildcard", r.URL.EscapedPath())
+			}
+			fmt.Fprint(w, `{"id":"literal-index-pit"}`)
+		default:
+			if r.URL.Path != "/_search" {
+				shallow = true
+				if r.URL.EscapedPath() != "/multirag_owner%252A/_search" {
+					t.Error("literal index became wildcard", r.URL.EscapedPath())
+				}
+			}
+			fmt.Fprint(w, `{"hits":{"total":{"value":0},"hits":[]}}`)
+		}
+	})
+	request := &types.SearchRequest{IndexNames: []string{"multirag_owner%2A"}, KbIDs: []string{"owned"}}
+	recordKGSearchInput(t, journal, request)
+	if _, err := engine.Search(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	request.IndexNames = []string{"multirag_doc_meta_owner%2A"}
+	recordKGSearchInput(t, journal, request)
+	journal.Event("reserve-pit", map[string]interface{}{"identity": "literal-index-pit", "scope": "owned"})
+	if err := engine.ScanMetadata(t.Context(), request, func(rows []map[string]interface{}) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !shallow || !opened || !closed {
+		t.Fatal("missing scoped boundary or cleanup", shallow, opened, closed)
+	}
+	journal.Event("pit-cleanup-readback", map[string]interface{}{"closed": closed})
 }
