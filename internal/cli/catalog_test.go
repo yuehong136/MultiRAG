@@ -34,8 +34,10 @@ func TestCatalogParserAndTransport(t *testing.T) {
 			t.Error("catalog needs bodyless GET")
 		}
 		switch r.URL.Path {
-		case "/api/v1/all-models", "/api/v1/admin/all-models":
+		case "/api/v1/all-models", "/api/v1/admin/all-models", "/api/v1/providers/provider/models", "/api/v1/admin/providers/provider/models":
 			fmt.Fprint(w, `{"code":0,"data":[{"name":"static","max_tokens":0}],"total":1}`)
+		case "/api/v1/providers/provider/models/legacy", "/api/v1/admin/providers/provider/models/legacy":
+			fmt.Fprint(w, `{"code":0,"data":{"name":"legacy"}}`)
 		case "/api/v1/all-models/detail", "/api/v1/admin/all-models/detail":
 			if r.URL.Query().Get("model_name") != "组织/a+b?" {
 				t.Error("corrupted name")
@@ -56,7 +58,7 @@ func TestCatalogParserAndTransport(t *testing.T) {
 		client.HTTPClient.Host = u.Hostname()
 		client.HTTPClient.Port = port
 		client.HTTPClient.LoginToken = "fixture"
-		for _, syntax := range []string{`LIST MODELS;`, `SHOW MODEL '组织/a+b?';`} {
+		for _, syntax := range []string{`LIST MODELS;`, `SHOW MODEL '组织/a+b?';`, `LIST MODELS FROM 'provider';`, `SHOW MODEL 'legacy' FROM 'provider';`} {
 			cmd, err := NewParser(syntax).Parse(mode == "admin")
 			if err != nil {
 				t.Fatal(err)
