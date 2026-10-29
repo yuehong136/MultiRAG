@@ -17,18 +17,13 @@
 package elasticsearch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/elastic/go-elasticsearch/v8/esapi"
-	"go.uber.org/zap"
 
 	"multirag/internal/common"
 	"multirag/internal/engine/types"
@@ -36,18 +31,30 @@ import (
 
 // SearchResponse Elasticsearch search response
 type SearchResponse struct {
-	Hits struct {
-		Total struct {
-			Value int64 `json:"value"`
-		} `json:"total"`
-		Hits []struct {
-			ID        string                 `json:"_id"`
-			Score     float64                `json:"_score"`
-			Highlight map[string]interface{} `json:"highlight"`
-			Source    map[string]interface{} `json:"_source"`
-		} `json:"hits"`
-	} `json:"hits"`
+	TimedOut bool   `json:"timed_out"`
+	PITID    string `json:"pit_id"`
+	Shards   struct {
+		Failed int `json:"failed"`
+	} `json:"_shards"`
+	Hits *searchHits `json:"hits"`
+
 	Aggregations map[string]interface{} `json:"aggregations"`
+}
+
+type searchTotal struct {
+	Value    int64  `json:"value"`
+	Relation string `json:"relation"`
+}
+type searchHit struct {
+	ID        string                 `json:"_id"`
+	Sort      []json.RawMessage      `json:"sort"`
+	Score     float64                `json:"_score"`
+	Highlight map[string]interface{} `json:"highlight"`
+	Source    map[string]interface{} `json:"_source"`
+}
+type searchHits struct {
+	Total *searchTotal `json:"total"`
+	Hits  []searchHit  `json:"hits"`
 }
 
 // Search executes search with unified types.SearchRequest
@@ -57,6 +64,9 @@ func (e *elasticsearchEngine) Search(ctx context.Context, req *types.SearchReque
 
 // searchUnified handles the unified types.SearchRequest
 func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if req == nil || len(req.IndexNames) == 0 {
 		return nil, fmt.Errorf("index names cannot be empty")
 	}
@@ -69,6 +79,10 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 			return nil, err
 		}
 	}
+	explicitVisibility, err := req.ExplicitVisibility()
+	if err != nil {
+		return nil, err
+	}
 	// Build pagination parameters
 	offset := req.Offset
 	limit := req.Limit
@@ -79,7 +93,7 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 	// Build filter clauses (default: available=1, meaning available_int >= 1)
 	// Reference: rag/utils/es_conn.py L60-L78
 	filterClauses := buildFilterClauses(req.KbIDs, 1)
-	if _, explicit := req.Filter["available_int"]; explicit || req.IncludeUnavailable {
+	if explicitVisibility {
 		filterClauses = nil
 		if len(req.KbIDs) > 0 {
 			filterClauses = append(filterClauses, map[string]interface{}{"terms": map[string]interface{}{"kb_id": req.KbIDs}})
@@ -245,60 +259,32 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 	queryBody["size"] = limit
 	queryBody["from"] = offset
 
-	// Serialize query
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(queryBody); err != nil {
-		return nil, fmt.Errorf("error encoding query: %w", err)
-	}
-
-	// Log search details
-	common.Debug("Elasticsearch searching indices", zap.Strings("indices", req.IndexNames))
-	common.Debug("Elasticsearch DSL", zap.Any("dsl", queryBody))
-
-	// Build search request
-	reqES := esapi.SearchRequest{
-		Index: req.IndexNames,
-		Body:  &buf,
-	}
-
-	// Execute search
-	res, err := reqES.Do(ctx, e.client)
-	if err != nil {
-		return nil, fmt.Errorf("search failed: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		bodyBytes, err := io.ReadAll(res.Body)
-		if err != nil {
-			common.Error("Elasticsearch failed to read error response body", err)
-		} else {
-			common.Warn("Elasticsearch error response", zap.String("body", string(bodyBytes)))
-		}
-		return nil, fmt.Errorf("Elasticsearch returned error: %s", res.Status())
-	}
-
-	// Parse response
-	var esResp SearchResponse
-	decoder := json.NewDecoder(res.Body)
-	metadataOnly := len(req.IndexNames) > 0
+	queryBody["track_total_hits"] = true
+	metadataOnly := true
 	for _, index := range req.IndexNames {
 		if !strings.HasPrefix(index, "multirag_doc_meta_") {
 			metadataOnly = false
 			break
 		}
 	}
-	if metadataOnly {
-		// Metadata values may contain integers beyond float64 precision.
-		// Chunk consumers retain their existing numeric representation.
-		decoder.UseNumber()
+	var esResp *SearchResponse
+	if offset < 0 {
+		return nil, fmt.Errorf("search offset cannot be negative")
 	}
-	if err := decoder.Decode(&esResp); err != nil {
-		return nil, fmt.Errorf("error parsing response: %w", err)
+	if offset > 10000-limit {
+		if hasVectorMatch {
+			return nil, fmt.Errorf("dense search exceeds the Elasticsearch result window")
+		}
+		esResp, err = e.searchDeep(ctx, req.IndexNames, queryBody, offset, limit, metadataOnly)
+	} else {
+		esResp, err = e.searchPage(ctx, req.IndexNames, queryBody, metadataOnly)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// Convert to unified response
-	chunks := convertESResponse(&esResp, vectorFieldName)
+	chunks := convertESResponse(esResp, vectorFieldName)
 	return &types.SearchResult{
 		Chunks: chunks,
 		Total:  esResp.Hits.Total.Value,
@@ -313,24 +299,12 @@ func calculatePagination(page, size, topK int) (int, int) {
 	if size <= 0 {
 		size = 30
 	}
-	if topK <= 0 {
-		topK = 1024
-	}
-
-	RERANK_LIMIT := max(30, (64/size)*size)
-	if RERANK_LIMIT < size {
-		RERANK_LIMIT = size
-	}
-	if RERANK_LIMIT > topK {
-		RERANK_LIMIT = topK
-	}
-
-	offset := (page - 1) * RERANK_LIMIT
+	window := types.RerankWindow(size, topK)
+	offset := ((page - 1) * size / window) * window
 	if offset < 0 {
 		offset = 0
 	}
-
-	return offset, RERANK_LIMIT
+	return offset, window
 }
 
 // buildFilterClauses builds ES filter clauses from kb_ids, doc_ids and available_int
@@ -486,7 +460,7 @@ func esSortFields(orderBy *types.OrderByExpr) ([]map[string]interface{}, error) 
 
 // convertESResponse converts ES SearchResponse to unified chunks format
 func convertESResponse(esResp *SearchResponse, vectorFieldName string) []map[string]interface{} {
-	if esResp == nil || esResp.Hits.Hits == nil {
+	if esResp == nil || esResp.Hits == nil || esResp.Hits.Hits == nil {
 		return []map[string]interface{}{}
 	}
 

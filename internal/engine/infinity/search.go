@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"multirag/internal/common"
 	"multirag/internal/engine/types"
@@ -44,6 +45,13 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 	}
 	if req == nil {
 		return nil, fmt.Errorf("search request is required")
+	}
+	explicitVisibility, err := req.ExplicitVisibility()
+	if err != nil {
+		return nil, err
+	}
+	if req.KbIDs != nil && len(req.KbIDs) == 0 {
+		return &types.SearchResult{Chunks: []map[string]interface{}{}}, nil
 	}
 	common.Info("Search in Infinity started", zap.Any("indexNames", req.IndexNames))
 	if common.IsDebugEnabled() {
@@ -137,10 +145,6 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 	if _, err := infinityDenseThreshold(matchDense); err != nil {
 		return nil, err
 	}
-	db, err := e.client.conn.GetDatabase(e.client.dbName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database: %w", err)
-	}
 
 	if hasTextMatch || hasVectorMatch {
 		if hasTextMatch {
@@ -173,10 +177,8 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		}
 		filterParts = append(filterParts, clause)
 	}
-	if !isMetadataTable && (hasTextMatch || hasVectorMatch) {
-		if _, exists := req.Filter["available_int"]; !exists {
-			filterParts = append(filterParts, "available_int=1")
-		}
+	if !isMetadataTable && !explicitVisibility {
+		filterParts = append(filterParts, "available_int=1")
 	}
 	if len(req.Filter) > 0 {
 		clause, err := strictFilterFromCondition(req.Filter, nil)
@@ -186,6 +188,14 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		filterParts = append(filterParts, clause)
 	}
 	filterStr := strings.Join(filterParts, " AND ")
+
+	if e.client == nil || e.client.conn == nil {
+		return nil, fmt.Errorf("Infinity client not initialized")
+	}
+	db, err := e.client.conn.GetDatabase(e.client.dbName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database: %w", err)
+	}
 
 	orderBy := req.OrderBy
 	var rankFeature map[string]float64
@@ -197,6 +207,9 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 	totalHits := int64(0)
 
 	for _, indexName := range req.IndexNames {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var tableNames []string
 		if strings.HasPrefix(indexName, "multirag_doc_meta_") {
 			tableNames = []string{indexName}
@@ -234,6 +247,9 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		}
 
 		for _, tableName := range tableNames {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			tbl, err := db.GetTable(tableName)
 			if err != nil {
 				if isMissingTable(err) {
@@ -404,6 +420,9 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 				return nil, fmt.Errorf("search table %s: %w", tableName, err)
 			}
 
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if isMetadataTable {
 				df.ColumnData["meta_fields"], err = decodeMetadataColumn(df.ColumnData["meta_fields"], len(df.ColumnData["id"]))
 				if err != nil {
@@ -424,15 +443,9 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 			// Apply field name mapping and row_id handling
 			GetFields(chunks, nil)
 
-			// Parse total_hits_count from ExtraInfo
-			var tableTotal int64
-			if df.ExtraInfo != "" {
-				var extraResult map[string]interface{}
-				if err := json.Unmarshal([]byte(df.ExtraInfo), &extraResult); err == nil {
-					if count, ok := extraResult["total_hits_count"].(float64); ok {
-						tableTotal = int64(count)
-					}
-				}
+			tableTotal, err := infinitySearchTotal(df.ExtraInfo, len(chunks))
+			if err != nil {
+				return nil, err
 			}
 
 			searchResult := &types.SearchResult{
@@ -780,7 +793,7 @@ func sortByScore(chunks []map[string]interface{}, limit int) []map[string]interf
 	}
 
 	// Sort by _score descending
-	sort.Slice(chunks, func(i, j int) bool {
+	sort.SliceStable(chunks, func(i, j int) bool {
 		scoreI := getChunkScore(chunks[i])
 		scoreJ := getChunkScore(chunks[j])
 		return scoreI > scoreJ
@@ -1034,4 +1047,28 @@ func (e *infinityEngine) GetHighlight(chunks []map[string]interface{}, keywords 
 	}
 
 	return result
+}
+
+// infinitySearchTotal rejects a missing or rounded total instead of manufacturing
+// an empty result after a successful SDK call.
+func infinitySearchTotal(extra string, returned int) (int64, error) {
+	decoder := json.NewDecoder(strings.NewReader(extra))
+	decoder.UseNumber()
+	var value struct {
+		Total *json.Number `json:"total_hits_count"`
+	}
+	if err := decoder.Decode(&value); err != nil {
+		return 0, fmt.Errorf("invalid Infinity total: %w", err)
+	}
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		return 0, fmt.Errorf("invalid trailing Infinity total")
+	}
+	if value.Total == nil {
+		return 0, fmt.Errorf("Infinity omitted total_hits_count")
+	}
+	total, err := value.Total.Int64()
+	if err != nil || total < int64(returned) || total < 0 {
+		return 0, fmt.Errorf("invalid Infinity total_hits_count")
+	}
+	return total, nil
 }
