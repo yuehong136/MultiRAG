@@ -232,7 +232,7 @@ def _normalize_agent_session(conversation: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/agents/templates", summary="获取Canvas模板列表", response_description="成功获取模板列表")
-def templates(db: Session = Depends(get_db), user=Depends(manager)):
+def templates(db: Session = Depends(get_db), user: User = Depends(manager)) -> JSONResponse:
     """
     获取所有Agent类型的Canvas模板
 
@@ -256,7 +256,7 @@ def templates(db: Session = Depends(get_db), user=Depends(manager)):
     - 快速复制常用配置
     - 学习Canvas的DSL结构
     """
-    templates_list = CanvasTemplateService.get_all(db)
+    templates_list = CanvasTemplateService.list_templates(db)
     return get_json_result(data=[c.to_dict() for c in templates_list])
 
 

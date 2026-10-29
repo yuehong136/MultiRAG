@@ -22,7 +22,7 @@ from sqlalchemy.sql import desc as sa_desc
 
 from agent.a2ui import validate_client_a2ui_messages
 from api.db import CanvasCategory, TenantPermission, UserTenantRole
-from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTemplate, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant
+from api.db.db_models import AgentExecutionOrigin, API4Conversation, CanvasTemplate, Tenant, User, UserCanvas, UserCanvasVersion, UserTenant, normalize_update_data
 from api.db.services.agent_execution_service import execution_context, principal_for_resource_tenant, restore_execution_snapshot, save_agent_session, snapshot_digest
 from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
@@ -44,6 +44,12 @@ class CanvasTemplateService(CommonService):
 
     def __init__(self):
         super().__init__(CanvasTemplate)
+
+    @classmethod
+    def list_templates(cls, db: Session) -> list[CanvasTemplate]:
+        """Keep multilingual data intact and order equal timestamps consistently."""
+        statement = select(cls.model).order_by(cls.model.create_time.desc(), cls.model.id.asc())
+        return list(db.scalars(statement).all())
 
 
 class DataFlowTemplateService(CommonService):
@@ -301,7 +307,8 @@ class UserCanvasService(CommonService):
     @classmethod
     async def update_tags(cls, db: AsyncSession, canvas_id: str, user_id: str, tags: str | list[str]) -> bool:
         """Authorize in the write itself; readers cannot mutate team Agents."""
-        updated_id = await db.scalar(update(cls.model).where(cls.model.id == canvas_id, cls.model.user_id == user_id).values(tags=cls.normalize_tags(tags)).returning(cls.model.id))
+        values = normalize_update_data(cls.model, {"tags": cls.normalize_tags(tags)})
+        updated_id = await db.scalar(update(cls.model).where(cls.model.id == canvas_id, cls.model.user_id == user_id).values(values).returning(cls.model.id))
         if updated_id is None:
             return False
         await db.commit()
