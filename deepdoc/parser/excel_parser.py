@@ -221,14 +221,16 @@ class RAGFlowExcelParser:
             return []
         return list(ws.iter_rows(min_row=1, max_row=actual_rows))
 
-    def html(self, fnm, chunk_rows=256):
+    def html(self, fnm: str | bytes, chunk_rows: int = 256) -> list[str]:
         from html import escape
 
+        if chunk_rows <= 0:
+            raise ValueError("chunk_rows must be positive")
         file_like_object = BytesIO(fnm) if not isinstance(fnm, str) else fnm
         wb = RAGFlowExcelParser._load_excel_to_workbook(file_like_object)
         tb_chunks = []
 
-        def _fmt(v):
+        def _fmt(v: object) -> str:
             if v is None:
                 return ""
             return str(v).strip()
@@ -241,6 +243,10 @@ class RAGFlowExcelParser:
                 logging.warning(f"Skip sheet '{sheetname}' due to rows access error: {e}")
                 continue
 
+            # Excel dimensions include styled and whitespace-only trailing rows.
+            # Preserve interior blank rows but do not turn tail formatting into data.
+            while rows and all(cell.value is None or not str(cell.value).strip() for cell in rows[-1]):
+                rows.pop()
             if not rows:
                 continue
 
@@ -249,7 +255,7 @@ class RAGFlowExcelParser:
                 tb_rows_0 += f"<th>{escape(_fmt(t.value))}</th>"
             tb_rows_0 += "</tr>"
 
-            for chunk_i in range((len(rows) - 1) // chunk_rows + 1):
+            for chunk_i in range((len(rows) - 1 + chunk_rows - 1) // chunk_rows):
                 tb = ""
                 tb += f"<table><caption>{sheetname}</caption>"
                 tb += tb_rows_0
