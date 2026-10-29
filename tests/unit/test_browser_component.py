@@ -273,7 +273,19 @@ async def test_browser_run_log_preserves_resolved_value_types(monkeypatch: pytes
     assert json.loads(json.dumps(log_inputs, ensure_ascii=False)) == {"sys.query": value}
 
 
-async def test_browser_llm_uses_schema_in_prompt_with_real_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("endpoints", "expected_base_url"),
+    [
+        ({}, "https://api.deepseek.com/v1"),
+        ({"api_base": "https://api-base.invalid/v1"}, "https://api-base.invalid/v1"),
+        ({"base_url": "https://base-url.invalid/v1"}, "https://base-url.invalid/v1"),
+        ({"api_base": "https://api-base.invalid/v1", "base_url": "https://base-url.invalid/v1"}, "https://api-base.invalid/v1"),
+        ({"api_base": "", "base_url": "https://base-url.invalid/v1"}, "https://base-url.invalid/v1"),
+        ({"api_base": None, "base_url": None}, "https://api.deepseek.com/v1"),
+    ],
+    ids=["factory-default", "api-base", "base-url", "api-base-priority", "empty-api-base", "null-endpoints"],
+)
+async def test_browser_llm_uses_schema_in_prompt_with_real_sdk(monkeypatch: pytest.MonkeyPatch, endpoints: dict[str, str | None], expected_base_url: str) -> None:
     from browser_use.llm import ChatOpenAI
 
     async def run_sync(callback: Any) -> Any:
@@ -288,14 +300,14 @@ async def test_browser_llm_uses_schema_in_prompt_with_real_sdk(monkeypatch: pyte
     monkeypatch.setattr(
         module,
         "get_model_config_by_type_and_name",
-        lambda *_args: {"llm_name": "deepseek-reasoner", "llm_factory": "DeepSeek", "api_key": "controlled-sdk-fixture", "api_base": "https://fixture.invalid/v1"},
+        lambda *_args: {"llm_name": "deepseek-reasoner", "llm_factory": "DeepSeek", "api_key": "controlled-sdk-fixture", **endpoints},
     )
 
     llm = await node()._build_browser_llm()
 
     assert isinstance(llm, ChatOpenAI)
     assert llm.model == "deepseek-reasoner"
-    assert llm.base_url == "https://fixture.invalid/v1"
+    assert llm.base_url == expected_base_url
     assert llm.add_schema_to_system_prompt is True
     assert llm.dont_force_structured_output is True
     assert llm.temperature == 0 and llm.max_retries == 0
