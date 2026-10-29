@@ -15,6 +15,14 @@ Instance listings return `has_api_key`, never the credential. An omitted or blan
 PATCH credential retains it; `clear_api_key: true` explicitly clears it only for
 providers that allow keyless configuration. An empty region is valid.
 
+Tongyi-Qianwen accepts `cn`, `intl`, or an empty/default region. Empty/default
+selects China. Provider listings publish official regional endpoints in the
+optional `url` map. A nonempty `base_url` takes precedence; unknown regions fail
+before provider I/O. Native DashScope embedding, rerank, speech and video calls
+use request-local endpoints and credentials. Official compatible endpoints map
+to the corresponding native `/api/v1` host; custom native endpoints must end in
+`/api/v1`. A failed request never retries in another region.
+
 A model has an integer ID, raw provider model name, explicit capability list,
 nonnegative token limit and per-model tool capability. Model references exposed
 to selectors are decimal strings of that ID. Callers resolving a model with
@@ -28,8 +36,13 @@ The PATCH body is `{ "model_type": "chat", "model_id": 123 }`; a null ID clears
 only that capability. OCR is included. Lists return `items`, `total`, `page` and
 `page_size`; pages start at one and page size is limited to 100. Query keys cannot
 be duplicated, and boolean query values are exactly `true` or `false`.
-An explicit empty `model_ids` list creates an instance without catalog models.
-Omitting it selects that provider's catalog. Model route IDs require canonical
+An explicit empty `model_ids` list excludes catalog models. Supply at least one
+custom model in that case; an entirely empty selection is rejected. Omitting
+`model_ids` selects that provider's catalog. Distinct custom and discovered
+models can share the same typed candidate, verification and atomic creation.
+Verification itself writes no registrations; creation verifies again before its
+transactional write. MinerU verification performs a real generated-PDF parse,
+with the probe timeout forwarded to its HTTP request. Model route IDs require canonical
 positive decimal integers; malformed, overflowing and noncanonical forms fail.
 
 Deletion checks persisted defaults and model-reference fields in datasets,
@@ -42,8 +55,12 @@ deleted. A conflict leaves the whole request unchanged.
 
 Alembic revision `b8d0f2a4c6e8` adds three tables and OCR default fields and widens
 the legacy endpoint column. It keeps `TenantLLM` IDs, accounting, stored names,
-status and default references. Each legacy credential-envelope/endpoint group
-becomes a deterministic instance. Different stored credentials remain distinct.
+status and default references. Each legacy credential/endpoint group becomes a deterministic instance.
+Only a boolean model-level `is_tools` wrapper is excluded from credential
+identity. Different endpoints and other credential options remain distinct,
+and each model retains its own tools flag and numeric ID. New imports can reuse
+an equivalent unchanged instance; existing registrations and edited instances
+are never rebound or merged.
 Backfill is idempotent and also links models created during user initialization.
 It selects unlinked legacy rows in SQL, including the tenant filter when supplied,
 rather than loading all existing model IDs. Alembic records a successful revision

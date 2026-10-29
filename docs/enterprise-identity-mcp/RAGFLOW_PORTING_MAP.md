@@ -32,7 +32,7 @@
 | Salesforce CRM 数据源 | `common/data_source/{config,salesforce_connector}.py`、`core/svr/sync_data_source.py`；独立 Web datasource 表单 | 静态 CRUD、factory 与 worker 共用严格配置；省略/null 默认对象，显式 []/空串保持零请求。固定 canonical HTTPS origin，拒绝 redirect/跨源凭据；完整分页计数、精确窗口筛选和失败 checkpoint 保留，取消排空传输。受控 HTTP/SQL/存储与真实 Web 消费分层验收，不宣称真实供应商或删除同步支持。 |
 | `rag/` | `core/` | 只做语义移植，不按目录名机械复制 |
 | 模块级 asyncio semaphore | `common/asyncio_utils.py:LoopLocalSemaphore` | 每个事件 loop 使用原生 semaphore；锁保护映射，清理已关闭 loop，保留真实等待与取消语义，不跨 loop 复用 asyncio 原语。 |
-| GraphRAG 执行重试和超时 | `common/graphrag_config.py`、`core/graphrag/general/index.py`、`persistence.py` | API 与任务重放共用严格数值合同；writer lease 覆盖全部尝试，取消和同步 I/O 排空后才重试或释放。按已持久化 checkpoint 恢复，不引入缺少图/模型/prompt 修订的子阶段缓存。默认与零值语义见 [执行说明](../../core/graphrag/README.md)。 |
+| GraphRAG 执行重试、超时与子阶段恢复 | `common/graphrag_config.py`、`core/graphrag/{checkpoints,phase_markers,persistence}.py`、`general/index.py` | writer lease 覆盖全部尝试；成功子步骤按 tenant/dataset、图、frontier、模型、配置和 prompt 修订保存。Redis 执行时校验 writer token，整阶段 checked publication 后才清理和发布完成标记；取消排空，缓存故障不变成阶段成功。见 [执行说明](../../core/graphrag/README.md)。 |
 | 评测 token 用量 | `api/db/services/evaluation_service.py` + `EvaluationResult.token_usage` | 保留同步 Session 事务；使用 cl100k_base 估算，结果携带 estimated/tokenizer/prompt_source，不冒充真实供应商计费。未启用已退役评测 HTTP 路由。 |
 | Agent chat_template_kwargs | `agent/canvas.py`、`agent/component/llm.py`、`core/llm/chat.py` | 对象或 null，逐次运行及每轮调用复制，经 SDK extra_body 传递；工具调用和 fallback 同样消费，保留既有授权、暂停与工具结果合同。 |
 | 用户响应投影 | `User.to_dict`、`restful_apis/user_api.py` | 通用白名单省略邮箱与凭据；登录、个人资料和自身注册响应显式使用 for_self，保留外部账号的 nullable email；密码重置仅返回布尔结果。 |
@@ -123,6 +123,9 @@
 | Go 托管与自部署模型适配 | `configs/models/`、`internal/entity/models/{huaweicloud,modelscope,orcarouter,qiniu,replicate_rerank,xai_audio}.go` 与现有模型 service/factory | 新目录贯通实际实例与调用方；ModelScope 可无 key 但须租户 URL，Huawei 保留模型专用路径。Replicate 使用真实预测/轮询，xAI 使用原生音频协议；受控验证和未支持能力见 [驱动合同](../../internal/entity/models/README.md)。 |
 | Go ingestion 执行与任务控制边界 | Python `core/svr/task_executor.py`、`document_ingest_service.py`；Go `internal/service/task.go`、`internal/admin/service.go` | Python 执行实际分块、向量与索引写入；Go 保留 SQL 任务视图和已授权取消请求，不引入模拟完成的 worker、独立 ingestion schema 或无执行器的提交成功入口。 |
 | Go thumbnails 与 ingestion 读取 | `internal/service/{document_images,dataset_ingestions}.go`、对应 handler/DAO；Python ingestion 详情复用现有 file-log 字段投影 | 图片先验证 dataset/document/chunk 归属再取存储并解码五类 raster；日志分文件与数据集、严格筛选与详情归属，DSL 沿用已脱敏写入。两条 Go 读取链不引入 ingestion 执行器。 |
+| Go 实例模型库存元数据 | `internal/entity/model.go`、`internal/service/model_service.go`、`internal/handler/providers.go` | 保留严格 driver name discovery，在注入 catalog 的 service 中补充可选元数据；唯一响应使用 name，省略未知值，保留显式零值/false/空数组与原始 ID。见 [驱动合同](../../internal/entity/models/README.md)。 |
+| Go CLI 多服务器与配置 | `cmd/multirag_cli.go`、`internal/cli/{server_registry,server_parser}.go`、`internal/admin/router.go` | API/admin 使用独立客户端和单一 common dispatcher，私有配置原子保存，admin logout 使用 POST；不迁移生产 Python 入口。见 [CLI 合同](../../internal/cli/README.md)。 |
+
 
 ## 2. EIM-U14 Interaction 所有权
 
