@@ -78,9 +78,12 @@ func (e *elasticsearchEngine) searchJSON(ctx context.Context, method, path strin
 // when cancellation or the visitor aborts the traversal.
 func (e *elasticsearchEngine) walkPIT(ctx context.Context, indices []string, body map[string]interface{}, exactNumbers bool, visit func(*SearchResponse) (bool, error)) (err error) {
 	var opened struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Shards struct {
+			Failed int `json:"failed"`
+		} `json:"_shards"`
 	}
-	err = e.searchJSON(ctx, http.MethodPost, "/"+escapedIndices(indices)+"/_pit?keep_alive=1m&allow_partial_search_results=false", nil, &opened, false)
+	err = e.searchJSON(ctx, http.MethodPost, "/"+escapedIndices(indices)+"/_pit?keep_alive=1m", nil, &opened, false)
 	if strings.TrimSpace(opened.ID) == "" {
 		if err != nil {
 			return err
@@ -102,6 +105,9 @@ func (e *elasticsearchEngine) walkPIT(ctx context.Context, indices []string, bod
 	}()
 	if err != nil {
 		return err
+	}
+	if opened.Shards.Failed != 0 {
+		return fmt.Errorf("Elasticsearch opened an incomplete PIT")
 	}
 	query := make(map[string]interface{}, len(body)+2)
 	for key, value := range body {

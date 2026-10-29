@@ -357,3 +357,31 @@ func TestSearchAndMetadataPITKeepLiteralIndexEscapes(t *testing.T) {
 	}
 	journal.Event("pit-cleanup-readback", map[string]interface{}{"closed": closed})
 }
+
+func TestPITOpenRejectsFailedShardsAndClosesIdentity(t *testing.T) {
+	var searches, closed atomic.Int64
+	engine, journal := registeredKGEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/_pit") && r.Method == http.MethodPost {
+			if r.URL.Query().Get("allow_partial_search_results") != "" {
+				t.Error("ES8.11 PIT-open does not support allow_partial_search_results")
+			}
+			fmt.Fprint(w, `{"id":"partial-open-pit","_shards":{"failed":1}}`)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			closed.Add(1)
+			fmt.Fprint(w, `{"succeeded":true}`)
+			return
+		}
+		searches.Add(1)
+		fmt.Fprint(w, `{"hits":{"total":{"value":0},"hits":[]}}`)
+	})
+	request := &types.SearchRequest{IndexNames: []string{"multirag_doc_meta_owner"}, KbIDs: []string{"owned"}}
+	recordKGSearchInput(t, journal, request)
+	journal.Event("reserve-pit", map[string]interface{}{"identity": "partial-open-pit", "scope": "owned"})
+	err := engine.ScanMetadata(t.Context(), request, func([]map[string]interface{}) error { t.Error("partial PIT returned successful metadata"); return nil })
+	if err == nil || !strings.Contains(err.Error(), "incomplete PIT") || searches.Load() != 0 || closed.Load() != 1 {
+		t.Fatal(err, searches.Load(), closed.Load())
+	}
+	journal.Event("pit-cleanup-readback", map[string]interface{}{"closed": closed.Load() == 1})
+}
