@@ -16,6 +16,7 @@ import (
 
 	"multirag/internal/entity/models"
 	"multirag/internal/testsupport"
+	"multirag/tests/support"
 )
 
 // Observe the request-scoped binding while delegating to the real HTTP driver.
@@ -49,7 +50,7 @@ func kgRecordEmbeddingInput(t *testing.T, journal *testsupport.CaseJournal, endp
 func TestKGEmbeddingRealOpenAIHTTPBinding(t *testing.T) {
 	journal := testsupport.NewCase(t)
 	var calls atomic.Int64
-	fixture := testsupport.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/embeddings" || r.Header.Get("Authorization") != "Bearer owned-kg-fixture-key" {
 			t.Error("embedding request route or fixture credential changed")
@@ -100,7 +101,7 @@ func TestKGEmbeddingInFlightCancellationDrainsHTTP(t *testing.T) {
 	journal := testsupport.NewCase(t)
 	entered, handlerDone, callDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var requests atomic.Int64
-	fixture := testsupport.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		defer close(handlerDone)
 		if _, err := io.Copy(io.Discard, r.Body); err != nil {

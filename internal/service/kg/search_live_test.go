@@ -90,12 +90,12 @@ func TestKGLiveSQLAndES(t *testing.T) {
 		}
 		ES server.ElasticsearchConfig
 	}
-	if json.Unmarshal(raw, &cfg) != nil || cfg.Tenant != "after98_k_20261029" || cfg.Database.Host != "127.0.0.1" || cfg.Database.Port != 5432 || cfg.Database.Name != "multirag_after98_k_20261029" || cfg.ES.Hosts != "http://127.0.0.1:1200" {
+	if json.Unmarshal(raw, &cfg) != nil || cfg.Tenant != "afteraab_k_20261029" || cfg.Database.Host != "127.0.0.1" || cfg.Database.Port != 5432 || cfg.Database.Name != "multirag_afteraab_k_20261029" || cfg.ES.Hosts != "http://127.0.0.1:1200" {
 		t.Fatal("exact owned KG SQL/ES endpoints required")
 	}
 	index := "multirag_" + cfg.Tenant
 	endpoint := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.Database.User, cfg.Database.Password), Host: "127.0.0.1:5432", Path: cfg.Database.Name, RawQuery: "sslmode=disable&connect_timeout=5"}
-	journal.Event("reserve-KG-live-schema-before-SQL", map[string]any{"host": cfg.Database.Host, "port": cfg.Database.Port, "database": cfg.Database.Name, "schema": "public", "tables": []string{"t_ai_knowledgebases", "t_ai_user_tenants"}, "database_drop_owner": "K parent"})
+	journal.Event("reserve-KG-live-schema-before-SQL", map[string]any{"host": cfg.Database.Host, "port": cfg.Database.Port, "database": cfg.Database.Name, "schema": "public", "tables": []string{"t_ai_knowledgebases", "t_ai_user_tenants", "t_ai_tenants"}, "database_drop_owner": "K parent"})
 	db, err := gorm.Open(postgres.Open(endpoint.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal("KG scratch SQL connection failed")
@@ -117,7 +117,7 @@ func TestKGLiveSQLAndES(t *testing.T) {
 	if err := read.QueryRow("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").Scan(&existingTables); err != nil || existingTables != 0 {
 		t.Fatal("KG scratch database must initially have no public tables")
 	}
-	if err := db.AutoMigrate(&entity.Knowledgebase{}, &entity.UserTenant{}); err != nil {
+	if err := db.AutoMigrate(&entity.Knowledgebase{}, &entity.UserTenant{}, &entity.Tenant{}); err != nil {
 		t.Fatal("KG scratch schema migration failed")
 	}
 	previousDB := dao.DB
@@ -132,6 +132,9 @@ func TestKGLiveSQLAndES(t *testing.T) {
 		if err := db.Create(value).Error; err != nil {
 			t.Fatalf("KG fixture INSERT failed: %T", value)
 		}
+	}
+	for _, id := range []string{cfg.Tenant, "kg-live-foreign-tenant"} {
+		create(&entity.Tenant{ID: id, Status: &active})
 	}
 	for _, row := range []struct{ user, tenant, role, status string }{{owner, cfg.Tenant, "owner", active}, {member, cfg.Tenant, "normal", active}, {invite, cfg.Tenant, "invite", active}, {inactive, cfg.Tenant, "normal", disabled}, {foreign, "kg-live-foreign-tenant", "owner", active}} {
 		status := row.status

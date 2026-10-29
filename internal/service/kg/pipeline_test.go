@@ -15,7 +15,7 @@ import (
 	"multirag/internal/engine"
 	"multirag/internal/engine/types"
 	"multirag/internal/entity/models"
-	"multirag/internal/testsupport"
+	"multirag/tests/support"
 )
 
 type pipelineStore struct {
@@ -173,7 +173,7 @@ func TestPipelineFailureCancelsAndDrainsEveryBranch(t *testing.T) {
 }
 
 func TestPipelineRewriteUsesRealBoundOpenAIHTTP(t *testing.T) {
-	fixture := testsupport.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.URL.Path != "/v1/chat/completions" {
 			t.Error(r.Method, r.URL.Path)
 		}
