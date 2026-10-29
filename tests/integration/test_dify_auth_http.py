@@ -1,6 +1,7 @@
 """Dify HTTP identity and metadata contracts with real, owned SQL rows."""
 
 import hashlib
+import json
 import sys
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -42,6 +43,9 @@ def dify_http(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> I
             for tenant, token in [(owner, tokens["duplicate"]), (outsider, tokens["duplicate"]), (owner, tokens["primary"]), (owner, tokens["invalid_jwt"])]
         ],
         beta_sha256=hashlib.sha256(tokens["beta"].encode()).hexdigest(),
+        input_sha256=hashlib.sha256(
+            json.dumps({"kbs": kbs, "docs": docs, "membership": membership, "owner": owner, "member": member, "metadata": {author: {"author": author} for author in docs}}, sort_keys=True).encode()
+        ).hexdigest(),
     )
     try:
         with Session(env["engine"]) as db:
@@ -78,7 +82,7 @@ def dify_http(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> I
         monkeypatch.setattr(module, "get_model_config_by_type_and_name", model)
         monkeypatch.setattr(module, "LLMBundle", bundle)
         monkeypatch.setattr(module, "label_question", Mock(return_value={}))
-        yield {**env, "kbs": kbs, "docs": docs, "tokens": tokens, "metadata": metadata, "model": model, "bundle": bundle, "retriever": retriever}
+        yield {**env, "kbs": kbs, "docs": docs, "tokens": tokens, "metadata": metadata, "model": model, "bundle": bundle, "retriever": retriever, "dify_journal": journal}
     finally:
         with Session(env["engine"]) as db:
             for model_type, predicate in [
@@ -105,10 +109,18 @@ def dify_http(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> I
         journal.event("dify-sql-cleanup-readback", owned_rows_absent=True, remaining=remaining)
 
 
-def post_retrieval(env: dict[str, Any], credential: str, *, permission: str = "team", author: str | None = None, use_kg: bool = False) -> Any:
+def post_retrieval(env: dict[str, Any], credential: str, *, permission: str = "team", author: str | None = None, use_kg: bool = False, metadata_condition: dict[str, Any] | None = None) -> Any:
     payload: dict[str, Any] = {"knowledge_id": env["kbs"][permission], "query": "controlled question", "use_kg": use_kg}
     if author is not None:
         payload["metadata_condition"] = {"logic": "and", "conditions": [{"name": "author", "comparison_operator": "is", "value": author}]}
+    if metadata_condition is not None:
+        payload["metadata_condition"] = metadata_condition
+    env["dify_journal"].event(
+        "reserve-dify-http-request",
+        endpoint=env["base"] + "/api/v1/dify/retrieval",
+        input_sha256=hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest(),
+        credential_sha256=hashlib.sha256(credential.encode()).hexdigest(),
+    )
     return env["client"].post(env["base"] + "/api/v1/dify/retrieval", headers={"Authorization": f"Bearer {credential}"}, json=payload, timeout=30)
 
 
@@ -191,6 +203,25 @@ def test_real_metadata_empty_match_does_not_broaden(dify_http: dict[str, Any], m
     module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     monkeypatch.setattr(module.settings, "kg_retriever", kg)
     response = post_retrieval(dify_http, dify_http["keys"][0], author="Nobody", use_kg=use_kg)
+    assert response.status_code == 200 and response.json() == {"records": []}, response.text
+    kg.retrieval.assert_not_called()
+    dify_http["model"].assert_not_called()
+    dify_http["bundle"].assert_not_called()
+    dify_http["retriever"].retrieval.assert_not_called()
+    dify_http["retriever"].retrieval_by_children.assert_not_called()
+
+
+@pytest.mark.parametrize(("condition", "restricted"), [({}, False), ({"logic": "and", "conditions": []}, True), ({"logic": "or", "conditions": []}, True)])
+def test_real_empty_metadata_condition_preserves_scope(dify_http: dict[str, Any], monkeypatch: pytest.MonkeyPatch, condition: dict[str, Any], restricted: bool) -> None:
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
+    kg = SimpleNamespace(retrieval=AsyncMock(side_effect=AssertionError("Empty conditions reached KG")))
+    monkeypatch.setattr(module.settings, "kg_retriever", kg)
+    response = post_retrieval(dify_http, dify_http["keys"][0], metadata_condition=condition, use_kg=restricted)
+    if not restricted:
+        assert response.status_code == 200 and len(response.json()["records"]) == 2, response.text
+        assert dify_http["retriever"].retrieval.call_args.kwargs["doc_ids"] is None
+        kg.retrieval.assert_not_called()
+        return
     assert response.status_code == 200 and response.json() == {"records": []}, response.text
     kg.retrieval.assert_not_called()
     dify_http["model"].assert_not_called()

@@ -1006,9 +1006,15 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
         async def async_chat_streamly_delta(self, *args: Any, **kwargs: Any) -> Any:
             yield "lexicalonly answer"
 
+    from api.db.joint_services import tenant_model_service
+
     monkeypatch.setattr(dialog_service, "LLMBundle", SearchBundle)
+    # async_ask builds through the real detached_bundle helper, whose
+    # constructor is resolved from tenant_model_service at call time.
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", SearchBundle)
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda *_a, **_kw: {})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda *_a, **_kw: {})
+    monkeypatch.setattr(dialog_service, "get_tenant_default_model_by_type", lambda *_a, **_kw: {})
     evidence: dict[str, Any] = {}
     try:
         for weight in [0, 1]:

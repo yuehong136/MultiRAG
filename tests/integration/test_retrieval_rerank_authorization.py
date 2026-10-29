@@ -1,9 +1,11 @@
 """Real SQL/auth/registered HTTP routes, with controlled provider and ranking IO."""
 
 import asyncio
+import errno
 import hashlib
 import json
 import os
+import secrets
 import socket
 import subprocess
 import threading
@@ -30,7 +32,16 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources
 from tests.support.database import scratch_database
 from tests.support.event_loop import UVICORN_LOOP
+from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import tsx_runner
+
+
+def input_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def record_http_input(journal: ResourceJournal, method: str, url: str, body: Any, headers: Any) -> None:
+    journal.event("reserve-http-input", method=method.upper(), url=url, input_sha256=input_hash({"method": method.upper(), "url": url, "json": body, "headers": headers}))
 
 
 @pytest.fixture
@@ -46,11 +57,16 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
 
     evidence = Path(os.environ.get("RERANK_AUTH_EVIDENCE", str(tmp_path)))
     with scratch_database(evidence) as engine, ExitStack() as cleanup:
+        journal = ResourceJournal("rerank-auth-http")
         owners = {key: uuid4().hex for key in ("caller", "shared", "foreign")}
         ids = {key: uuid4().hex for key in ("own", "shared", "foreign", "incompatible")}
+        membership_ids = {key: uuid4().hex for key in (*owners, "shared_member")}
         token, beta = uuid4().hex, uuid4().hex
         manifest: dict[str, Any] = {
             "database": engine.url.database,
+            "database_host": engine.url.host,
+            "database_port": engine.url.port,
+            "database_role": engine.url.username,
             "pid": os.getpid(),
             "dataset_ids": ids,
             "owner_ids": owners,
@@ -61,19 +77,41 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
             "port": None,
         }
         manifest_path = evidence / f"{engine.url.database}.http.json"
+        sql_inputs = {
+            "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "owners": owners,
+            "datasets": ids,
+            "memberships": membership_ids,
+            "model_candidates": [{"tenant_id": owner, "factory": "OpenAI", "model_name": kind, "model_type": kind} for owner in owners.values() for kind in ("embedding", "rerank")],
+            "api_token": {"tenant_id": owners["caller"], "token_sha256": hashlib.sha256(token.encode()).hexdigest(), "beta_sha256": hashlib.sha256(beta.encode()).hexdigest()},
+        }
+        journal.event(
+            "reserve-rerank-auth-sql",
+            database=engine.url.database,
+            host=engine.url.host,
+            port=engine.url.port,
+            role=engine.url.username,
+            resources=sql_inputs,
+            input_sha256=input_hash(sql_inputs),
+            evidence=str(manifest_path),
+        )
+        with engine.connect() as reader:
+            identity = reader.execute(sa.text("SELECT current_database(), current_user, inet_server_addr()::text, inet_server_port()")).one()
+        journal.event("sql-database-endpoint", database=identity[0], role=identity[1], address=identity[2], port=identity[3])
 
         def save() -> None:
             manifest_path.write_text(json.dumps(manifest, indent=2))
+            manifest_path.chmod(0o600)
 
         cleanup.callback(save)
         save()
         with Session(engine) as db:
-            for owner in owners.values():
+            for key, owner in owners.items():
                 db.add(User(id=owner, email=f"{owner}@rerank.test", nickname="Rerank auth", password="unused", access_token="active"))
                 db.add(Tenant(id=owner, name="Rerank auth", llm_id="", embd_id="embedding", asr_id="", img2txt_id="", parser_ids="naive"))
-                db.add(UserTenant(id=uuid4().hex, user_id=owner, tenant_id=owner, role="owner", invited_by=owner))
+                db.add(UserTenant(id=membership_ids[key], user_id=owner, tenant_id=owner, role="owner", invited_by=owner))
                 db.add(TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="embedding", mdl_type="embedding", api_key="controlled-provider-key"))
-            db.add(UserTenant(id=uuid4().hex, user_id=owners["caller"], tenant_id=owners["shared"], role="normal", invited_by=owners["shared"]))
+            db.add(UserTenant(id=membership_ids["shared_member"], user_id=owners["caller"], tenant_id=owners["shared"], role="normal", invited_by=owners["shared"]))
             for name, identifier in ids.items():
                 owner = owners[{"own": "caller", "incompatible": "shared"}.get(name, name)]
                 db.add(Knowledgebase(id=identifier, tenant_id=owner, created_by=owner, name=name, permission="team", embd_id="other" if name == "incompatible" else "embedding", parser_config={}))
@@ -83,6 +121,10 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
             db.commit()
             model_ids = {key: row.id for key, row in registrations.items()}
         manifest["model_ids"] = model_ids
+        with Session(engine) as reader:
+            stored_models = dict(reader.execute(sa.select(TenantLLM.tenant_id, TenantLLM.id).where(TenantLLM.tenant_id.in_(list(owners.values())), TenantLLM.mdl_type == "rerank")).all())
+        assert model_ids == {key: stored_models[owner] for key, owner in owners.items()}
+        journal.event("sql-model-identities-readback", database=engine.url.database, model_ids=model_ids)
         save()
 
         async_engine = create_async_engine(engine.url, poolclass=NullPool)
@@ -131,26 +173,48 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
 
         for target in (engine, async_engine.sync_engine):
             sa.event.listen(target, "before_cursor_execute", capture_write)
-        listener = socket.socket()
+        listener: socket.socket | None = None
+        for _ in range(32):
+            address = ("127.0.0.1", 20000 + secrets.randbelow(40000))
+            journal.event("reserve-listener-before-bind", host=address[0], port=address[1])
+            candidate = socket.socket()
+            try:
+                candidate.bind(address)
+            except OSError as error:
+                candidate.close()
+                journal.event("listener-bind-failed", host=address[0], port=address[1], errno=error.errno, socket_closed=candidate.fileno() == -1)
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                continue
+            listener = candidate
+            break
+        assert listener is not None, "Could not reserve rerank authorization listener"
         cleanup.callback(listener.close)
-        listener.bind(("127.0.0.1", 0))
         manifest["port"] = listener.getsockname()[1]
+        journal.event("listener-bound", host="127.0.0.1", port=manifest["port"])
         server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error", loop=UVICORN_LOOP))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, name="rerank-auth-http", daemon=True)
 
         def stop() -> None:
             server.should_exit = True
             if thread.ident is not None:
                 thread.join(timeout=15)
             listener.close()
+            thread_absent = not thread.is_alive()
+            journal.event("server-thread-cleanup-readback", thread_id=thread.ident, absent=thread_absent)
             assert not thread.is_alive()
             with socket.socket() as client:
+                client.settimeout(1)
+                listener_absent = client.connect_ex(("127.0.0.1", manifest["port"])) != 0
+                journal.event("listener-cleanup-readback", host="127.0.0.1", port=manifest["port"], absent=listener_absent)
                 assert client.connect_ex(("127.0.0.1", manifest["port"])) != 0
             manifest["listener_closed"] = True
 
         cleanup.callback(stop)
         save()
+        journal.event("reserve-server-thread-before-start", name=thread.name, pid=os.getpid(), host="127.0.0.1", port=manifest["port"])
         thread.start()
+        journal.event("server-thread-started", thread_id=thread.ident)
         deadline = time.monotonic() + 30
         while not server.started and thread.is_alive() and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -171,6 +235,7 @@ def rerank_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, postgres_service
             "schedule": schedule,
             "writes": writes,
             "evidence": evidence,
+            "journal": journal,
         }
         manifest["writes"] = writes
         assert not writes
@@ -190,7 +255,11 @@ def post(env: dict[str, Any], route: str, datasets: list[str], model_id: int, *,
     else:
         path = {"sdk": "/retrieval", "collection": "/datasets/search", "single": f"/datasets/{datasets[0]}/search"}[route]
         body["dataset_ids"] = datasets
-    response = requests.post(env["base"] + "/api/v1" + path, headers={"Authorization": "Bearer " + token} if authenticated else {}, json={**body, **(extras or {})}, timeout=30)
+    url = env["base"] + "/api/v1" + path
+    headers = {"Authorization": "Bearer " + token} if authenticated else {}
+    payload = {**body, **(extras or {})}
+    record_http_input(env["journal"], "POST", url, payload, headers)
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
     assert response.status_code == (200 if authenticated else 401), response.text
     return response
 
@@ -262,8 +331,7 @@ def test_real_web_retrieval_consumer_observes_authorization(rerank_api: dict[str
     env = rerank_api
     root = Path(os.environ["WEB_DATASET_CHECKOUT"])
     script = env["evidence"] / "web-rerank-consumer.mts"
-    script.write_text(
-        """import assert from 'node:assert/strict';
+    script_source = """import assert from 'node:assert/strict';
 import {apiClient, APIError} from 'WEB_ROOT/src/api/client.ts';
 import {knowledgeRestConfig} from 'WEB_ROOT/src/api/knowledge-config.ts';
 import {knowledgeRetrievalAPI} from 'WEB_ROOT/src/api/knowledge-retrieval.ts';
@@ -277,9 +345,27 @@ for (const id of JSON.parse(process.env.RERANK_ALLOWED!)) {
 await assert.rejects(knowledgeRetrievalAPI.test({...args,tenant_rerank_id:Number(process.env.RERANK_FOREIGN)}),APIError);
 console.log('Real Web retrieval consumer: own/shared models accepted; foreign model rejected');
 """.replace("WEB_ROOT", str(root))
-    )
+    script_sha256 = hashlib.sha256(script_source.encode()).hexdigest()
+    env["journal"].event("reserve-web-consumer-script", path=str(script), input_sha256=script_sha256)
+    script.write_text(script_source)
+    consumer_files = [
+        root / name
+        for name in ("src/api/client.ts", "src/api/knowledge-config.ts", "src/api/knowledge-retrieval.ts", "tsconfig.app.json", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock")
+    ]
+    runner = tsx_runner(root)
+    consumer_inputs = {
+        "base": env["base"],
+        "dataset": env["ids"]["shared"],
+        "allowed_models": [env["model_ids"]["caller"], env["model_ids"]["shared"]],
+        "foreign_model": env["model_ids"]["foreign"],
+        "token_sha256": hashlib.sha256(env["token"].encode()).hexdigest(),
+        "script_sha256": script_sha256,
+        "input_files": {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in [runner, *consumer_files] if path.is_file()},
+    }
+    command = [str(runner), "--tsconfig", str(root / "tsconfig.app.json"), str(script)]
+    env["journal"].event("reserve-web-consumer-before-subprocess", command=command, cwd=str(root), inputs=consumer_inputs, input_sha256=input_hash(consumer_inputs))
     execution = subprocess.run(
-        [str(tsx_runner(root)), "--tsconfig", str(root / "tsconfig.app.json"), str(script)],
+        command,
         cwd=root,
         text=True,
         capture_output=True,
@@ -293,6 +379,7 @@ console.log('Real Web retrieval consumer: own/shared models accepted; foreign mo
             "RERANK_FOREIGN": str(env["model_ids"]["foreign"]),
         },
     )
+    env["journal"].event("web-consumer-exit", raw_exit=execution.returncode)
     (env["evidence"] / "web-consumer.log").write_text(execution.stdout + execution.stderr)
     assert execution.returncode == 0, execution.stdout + execution.stderr
 
@@ -306,7 +393,6 @@ def test_mixed_retrieval_auth_sql_and_retired_operations(bootstrapped_engine: sa
     from api.apps import app, manager
     from api.apps.restful_apis import chunk as route
     from api.db.services import task_service
-    from tests.support.resource_journal import ResourceJournal
 
     engine = bootstrapped_engine
     journal = ResourceJournal("mixed-retrieval-auth")
@@ -322,7 +408,28 @@ def test_mixed_retrieval_auth_sql_and_retired_operations(bootstrapped_engine: sa
     expired = manager.create_access_token(data={"sub": emails["owner"]}, expires=timedelta(seconds=-1))
     invalid_jwt = "invalid.jwt.signature"
     evidence = Path(os.environ.get("F_AUTH_EVIDENCE", str(tmp_path))) / "mixed-auth.json"
-    journal.event("reserve-sql-rows", database=engine.url.database, users=ids, memberships=memberships, datasets=datasets, api_token_tenants=list(ids.values()), evidence=str(evidence))
+    sql_inputs = {
+        "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "users": ids,
+        "memberships": memberships,
+        "datasets": datasets,
+        "api_tokens": [{"tenant_id": ids[role], "token_sha256": hashlib.sha256(value.encode()).hexdigest()} for role, value in tokens.items()],
+        "extra_token_sha256": [hashlib.sha256(value.encode()).hexdigest() for value in (duplicate, beta, invalid_jwt, expired, inactive_jwt)],
+    }
+    journal.event(
+        "reserve-sql-rows",
+        database=engine.url.database,
+        host=engine.url.host,
+        port=engine.url.port,
+        role=engine.url.username,
+        users=ids,
+        memberships=memberships,
+        datasets=datasets,
+        api_token_tenants=list(ids.values()),
+        evidence=str(evidence),
+        resources=sql_inputs,
+        input_sha256=input_hash(sql_inputs),
+    )
     report: dict[str, Any] = {"database": engine.url.database, "checks": [], "cleanup": False}
 
     def save() -> None:
@@ -394,6 +501,13 @@ def test_mixed_retrieval_auth_sql_and_retired_operations(bootstrapped_engine: sa
         before = readback()
         sa.event.listen(engine, "before_cursor_execute", capture_write)
         client = TestClient(app)
+        original_request = client.request
+
+        def recorded_request(method: str, url: str, **kwargs: Any) -> Any:
+            record_http_input(journal, method, str(url), kwargs.get("json"), kwargs.get("headers"))
+            return original_request(method, url, **kwargs)
+
+        monkeypatch.setattr(client, "request", recorded_request)
         denied: list[tuple[str, str | None]] = [
             ("missing", None),
             ("invalid", "Bearer unknown"),
@@ -451,8 +565,11 @@ def test_mixed_retrieval_auth_sql_and_retired_operations(bootstrapped_engine: sa
         spec.loader.exec_module(mcp_server)
 
         async def mcp_retrieval() -> dict[str, Any]:
+            async def record_mcp_request(request: httpx.Request) -> None:
+                record_http_input(journal, request.method, str(request.url), json.loads(request.content) if request.content else None, dict(request.headers))
+
             connector = mcp_server.MultiRAGConnector("http://testserver")
-            connector._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app))
+            connector._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), event_hooks={"request": [record_mcp_request]})
             monkeypatch.setattr(connector, "list_datasets_structured", AsyncMock(return_value=[{"id": datasets["owner"], "name": "Mixed auth owner", "embedding_model": "embedding"}]))
             monkeypatch.setattr(connector, "_get_document_metadata_cache", AsyncMock(return_value=({}, {})))
             try:

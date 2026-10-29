@@ -299,13 +299,22 @@ def test_old_get_is_method_not_allowed_and_post_is_registered(client: TestClient
     assert "post" in schema["/api/v1/dify/retrieval"]
 
 
-@pytest.mark.parametrize("condition", [{}, {"logic": "and", "conditions": []}, {"logic": "or", "conditions": []}])
-def test_inactive_metadata_condition_keeps_unrestricted_chunk_scope(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace, condition: dict[str, Any]) -> None:
+@pytest.mark.parametrize("condition", [{"logic": "and", "conditions": []}, {"logic": "or", "conditions": []}])
+def test_explicit_empty_metadata_condition_never_broadens_scope(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace, condition: dict[str, Any]) -> None:
     ctx = allowed_retrieval
-    filter_matches = Mock(side_effect=AssertionError("Inactive metadata condition must not select documents"))
-    monkeypatch.setattr(ctx.module, "meta_filter", filter_matches)
-    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "metadata_condition": condition})
+    model = Mock(side_effect=AssertionError("Explicit empty metadata condition reached model"))
+    monkeypatch.setattr(ctx.module, "LLMBundle", model)
+    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "metadata_condition": condition, "use_kg": True})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"records": []}
+    model.assert_not_called()
+    ctx.retriever.retrieval.assert_not_called()
+    ctx.retriever.retrieval_by_children.assert_not_called()
+    ctx.kg.retrieval.assert_not_called()
+
+
+def test_empty_metadata_object_preserves_omitted_filter_contract(client: TestClient, allowed_retrieval: SimpleNamespace) -> None:
+    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "metadata_condition": {}})
     assert response.status_code == 200, response.text
     assert [record["content"] for record in response.json()["records"]] == ["text"]
-    assert ctx.retriever.retrieval.call_args.kwargs["doc_ids"] is None
-    filter_matches.assert_not_called()
+    assert allowed_retrieval.retriever.retrieval.call_args.kwargs["doc_ids"] is None

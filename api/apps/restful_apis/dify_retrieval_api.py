@@ -277,7 +277,7 @@ async def _run_retrieval(
         # Resolve an active filter before any model, chunk or graph work.
         # An empty match set is final; a sentinel ID can still trigger KG IO.
         filters = convert_conditions(metadata_condition)
-        if filters:
+        if metadata_condition:
             doc_ids = meta_filter(metas, filters, (metadata_condition or {}).get("logic", "and"))
             if not doc_ids:
                 return RetrievalResponse()
