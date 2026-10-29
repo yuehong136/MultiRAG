@@ -12,6 +12,9 @@ EVALS = ROOT / "tests" / "evals"
 ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
+        "test_after5e_agent_history_web.py",
+        "test_after5e_mssql_web.py",
+        "test_after5e_provider_discovery_web.py",
         "test_agent_retrieval_top_k.py",
         "test_agent_tags_atomic.py",
         "test_async_engine.py",
@@ -48,6 +51,7 @@ DATABASE_TESTS = frozenset(
         "test_llm_tool_capability.py",
         "test_model_config_resolution.py",
         "test_provider_instances.py",
+        "test_rdbms_state_sql.py",
         "test_model_default_backfill.py",
         "test_pdf_page_task_defaults.py",
         "test_principal_auth.py",
@@ -56,6 +60,7 @@ DATABASE_TESTS = frozenset(
         "test_sandbox_provider_settings.py",
         "test_sync_log_checkpoint.py",
         "test_task_log_limits.py",
+        "test_table_auto_metadata_sql.py",
         "test_volc_provider_credentials.py",
     }
 )
@@ -117,6 +122,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_skill_assets.py",
         "test_skill_http.py",
         "test_skill_search_store.py",
+        "test_sdk_cli_session_inventory.py",
         "test_task_cancellation.py",
         "test_task_cancellation_terminal.py",
         "test_task_metadata_generation.py",
@@ -154,6 +160,10 @@ def suite_paths(suite: str) -> list[Path]:
         return [
             INTEGRATION / name
             for name in (
+                "test_after5e_provider_discovery_web.py",
+                "test_after5e_agent_history_web.py",
+                "test_after5e_mssql_web.py",
+                "test_sdk_cli_session_inventory.py",
                 "test_after4776_web_contracts.py",
                 "test_after53_dataset_create_web.py",
                 "test_agent_draft_session_persistence.py",

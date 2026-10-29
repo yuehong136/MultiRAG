@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 import uvicorn
@@ -32,6 +32,12 @@ from tests.support.uvicorn_runtime import run_server
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class ExpectedDiscoveryModel(TypedDict):
+    model_types: list[str]
+    max_tokens: int
+    is_tools: bool
+
+
 def _private_file(path: Path, value: str, journal: ResourceJournal) -> None:
     journal.event("reserve-private-consumer-file", path=str(path), content_sha256=hashlib.sha256(value.encode()).hexdigest())
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -39,6 +45,11 @@ def _private_file(path: Path, value: str, journal: ResourceJournal) -> None:
         output.write(value)
         output.flush()
         os.fsync(output.fileno())
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _consumer(checkout: Path, descriptor: Path, phase: str, evidence: Path, journal: ResourceJournal) -> dict[str, Any]:
@@ -108,9 +119,27 @@ def _consumer(checkout: Path, descriptor: Path, phase: str, evidence: Path, jour
     return result
 
 
-def run_web_discovery(client: TestClient, owner: str, engine: Engine, base_url: str, journal: ResourceJournal, checkout: Path, tmp_path: Path) -> None:
+def run_web_discovery(
+    client: TestClient,
+    owner: str,
+    engine: Engine,
+    base_url: str,
+    journal: ResourceJournal,
+    checkout: Path,
+    tmp_path: Path,
+    *,
+    provider_name: str = "Ollama",
+    api_key: str = "fixture-discovery-key",
+    expected_models: dict[str, ExpectedDiscoveryModel] | None = None,
+    expected_page_lengths: tuple[int, ...] = (),
+    controlled_transport: bool = False,
+    invalid_base_url: str = "https://arbitrary.invalid",
+) -> None:
     from api.apps import manager
 
+    if expected_models is None:
+        expected_models = {name: {"model_types": ["chat", "image2text"], "max_tokens": 0, "is_tools": True} for name in ("first", "second")}
+    assert expected_models, "A Web discovery case must declare its selected models"
     private = tmp_path / "discovery-web-private"
     evidence = journal.path.parent / (journal.run_id + "-web-consumer")
     files = [private / name for name in ("owner.token", "provider.key", "descriptor.json", "readback.json")]
@@ -174,17 +203,22 @@ def run_web_discovery(client: TestClient, owner: str, engine: Engine, base_url: 
             "origin": origin,
             "ownerTokenFile": str(files[0]),
             "providerKeyFile": str(files[1]),
-            "providerName": "Ollama",
+            "providerName": provider_name,
             "discovery": {"base_url": base_url, "region": ""},
             "instanceName": "web-discovery-" + journal.run_id[:12],
             "readbackFile": str(files[3]),
             "scratchDatabase": engine.url.database,
             "ownerId": owner,
-            "invalidBaseURL": "https://arbitrary.invalid",
+            "invalidBaseURL": invalid_base_url,
         }
-        journal.event("reserve-web-model-resources", database=engine.url.database, owner=owner, provider="Ollama", instance=descriptor["instanceName"], models=["first", "second"])
+        if expected_page_lengths:
+            descriptor.update(expectedInventoryTotal=sum(expected_page_lengths), expectedPageLengths=list(expected_page_lengths))
+        if controlled_transport:
+            assert provider_name == "OpenRouter" and base_url == "https://openrouter.ai/api/v1"
+            descriptor["controlledTransport"] = True
+        journal.event("reserve-web-model-resources", database=engine.url.database, owner=owner, provider=provider_name, instance=descriptor["instanceName"], models=list(expected_models))
         _private_file(files[0], token, journal)
-        _private_file(files[1], "fixture-discovery-key", journal)
+        _private_file(files[1], api_key, journal)
         _private_file(files[2], json.dumps(descriptor), journal)
         journal.event("reserve-consumer-readback", path=str(files[3]))
         result = _consumer(checkout, files[2], "owner", evidence, journal)
@@ -193,21 +227,22 @@ def run_web_discovery(client: TestClient, owner: str, engine: Engine, base_url: 
         assert identifiers == result["modelIds"] and identifiers and all(type(value) is int and value > 0 for value in identifiers)
         with Session(engine) as reader:
             provider = reader.scalars(select(TenantModelProvider).where(TenantModelProvider.tenant_id == owner)).one()
-            assert provider.provider_name == "Ollama"
+            assert provider.provider_name == provider_name
             instance = reader.scalars(select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id)).one()
-            assert instance.instance_name == descriptor["instanceName"] and instance.base_url == base_url and instance.api_key == "fixture-discovery-key" and instance.status == "active"
+            assert instance.instance_name == descriptor["instanceName"] and instance.base_url == base_url and instance.api_key == api_key and instance.status == "active"
             models = reader.scalars(select(TenantModel).where(TenantModel.instance_id == instance.id)).all()
             assert {model.id for model in models} == set(identifiers)
-            assert {model.model_name for model in models} == ({"first", "second"} if len(identifiers) == 2 else {"first"})
+            assert {model.model_name for model in models} == set(expected_models)
             for model in models:
+                expected = expected_models[model.model_name]
                 row = reader.get(TenantLLM, model.id)
-                assert row is not None and row.tenant_id == owner and row.max_tokens == 0 and row.status == "1"
-                assert model.model_types == ["chat", "image2text"] and model.is_tools is True
-        journal.event("web-model-independent-readback", database=engine.url.database, owner=owner, numeric_model_ids=identifiers, multi_capability=True, max_tokens=0)
+                assert row is not None and row.tenant_id == owner and row.max_tokens == expected["max_tokens"] and row.status == "1"
+                assert model.model_types == expected["model_types"] and model.is_tools is expected["is_tools"]
+        journal.event("web-model-independent-readback", database=engine.url.database, owner=owner, numeric_model_ids=identifiers, expected_models=expected_models)
         _consumer(checkout, files[2], "cleanup", evidence, journal)
         with Session(engine) as reader:
             retained_provider = reader.get(TenantModelProvider, provider.id)
-            assert retained_provider is not None and retained_provider.tenant_id == owner and retained_provider.provider_name == "Ollama"
+            assert retained_provider is not None and retained_provider.tenant_id == owner and retained_provider.provider_name == provider_name
             assert reader.scalar(select(func.count()).select_from(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id)) == 0
             assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
             assert all(reader.get(TenantModel, value) is None for value in identifiers)
