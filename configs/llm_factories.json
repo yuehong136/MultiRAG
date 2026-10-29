@@ -3523,7 +3523,50 @@
             "logo": "",
             "tags": "LLM,TTS",
             "status": "1",
-            "llm": []
+            "llm": [
+                {
+                    "llm_name": "Spark-Max",
+                    "tags": "LLM,CHAT",
+                    "max_tokens": 8192,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "Spark-Max-32K",
+                    "tags": "LLM,CHAT",
+                    "max_tokens": 32768,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "Spark-Lite",
+                    "tags": "LLM,CHAT",
+                    "max_tokens": 8192,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "Spark-Pro",
+                    "tags": "LLM,CHAT",
+                    "max_tokens": 8192,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "Spark-Pro-128K",
+                    "tags": "LLM,CHAT",
+                    "max_tokens": 131072,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                },
+                {
+                    "llm_name": "Spark-4.0-Ultra",
+                    "tags": "LLM,CHAT",
+                    "max_tokens": 131072,
+                    "mdl_type": "chat",
+                    "is_tools": false
+                }
+            ]
         },
         {
             "name": "BaiduYiyan",
