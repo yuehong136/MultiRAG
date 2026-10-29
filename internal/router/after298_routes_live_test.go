@@ -169,6 +169,9 @@ func TestAfter298RoutesHTTPAndSQL(t *testing.T) {
 			must(&entity.APIToken{TenantID: id, Token: "api-" + id})
 		}
 	}
+	if err = db.Model(&entity.User{}).Where("id = ?", "owner").Update("is_superuser", nil).Error; err != nil {
+		t.Fatal("nil superuser fixture")
+	}
 	must(&entity.Tenant{ID: "owner", Status: &active})
 	must(&entity.UserTenant{ID: "membership", UserID: "owner", TenantID: "owner", Role: "owner", Status: &active})
 	must(&entity.Knowledgebase{ID: "dataset", TenantID: "owner", CreatedBy: "owner", Name: "dataset", Permission: "me", Status: &active})
@@ -274,16 +277,17 @@ func TestAfter298RoutesHTTPAndSQL(t *testing.T) {
 	for _, c := range []struct {
 		path, auth string
 		status     int
+		code       common.ErrorCode
 	}{
-		{"/api/v1/datasets/dataset/metadata/summary", "Bearer " + tokens["foreign"], 403},
-		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=deleted", "Bearer " + tokens["owner"], 404},
-		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=missing", "Bearer " + tokens["owner"], 404},
-		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=document,,missing", "Bearer " + tokens["owner"], 400},
-		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=document&doc_ids=document", "Bearer " + tokens["owner"], 400},
+		{"/api/v1/datasets/dataset/metadata/summary", "Bearer " + tokens["foreign"], 403, common.CodeForbidden},
+		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=deleted", "Bearer " + tokens["owner"], 404, common.CodeDataError},
+		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=missing", "Bearer " + tokens["owner"], 404, common.CodeDataError},
+		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=document,,missing", "Bearer " + tokens["owner"], 200, common.CodeArgumentError},
+		{"/api/v1/datasets/dataset/metadata/summary?doc_ids=document&doc_ids=document", "Bearer " + tokens["owner"], 200, common.CodeArgumentError},
 	} {
 		calls := index.calls.Load()
 		status, body, _ := request(userHTTP.URL, "GET", c.path, c.auth)
-		if status != c.status || body["code"] == float64(0) || index.calls.Load() != calls {
+		if status != c.status || body["code"] != float64(c.code) || index.calls.Load() != calls {
 			t.Fatal("scope denial", c.path, status, body)
 		}
 	}
@@ -326,6 +330,10 @@ func TestAfter298RoutesHTTPAndSQL(t *testing.T) {
 	var stored string
 	if err = reader.QueryRow(`SELECT access_token FROM "` + schema + `".t_ai_users WHERE id='administrator'`).Scan(&stored); err != nil || !strings.HasPrefix(stored, "INVALID_") {
 		t.Fatal("logout SQL readback")
+	}
+	status, _, _ = request(adminHTTP.URL, "POST", "/api/v1/admin/logout", tokens["administrator"])
+	if status != 401 {
+		t.Fatal("invalidated admin JWT remains accepted")
 	}
 	j.Event("after298-acceptance", map[string]any{"actualRouters": true, "JWTAndAPIKey": true, "scopedSQLReadOnly": true, "controlledIndexCalls": index.calls.Load(), "adminPOSTLogout": true, "logoutFailureRetainsSession": true})
 }
