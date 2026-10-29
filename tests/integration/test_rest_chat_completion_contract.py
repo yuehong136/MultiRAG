@@ -1,10 +1,12 @@
 """Real completion routes, controlled LLMs, and independently committed history."""
 
 import json
+from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
 import pytest
+import requests
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,59 @@ from common.token_utils import num_tokens_from_string
 from tests.support.rest_chat_contract import RestChatContract, sse_frames
 from tests.support.rest_chat_contract import rest_chat_contract as rest_chat_contract
 from tests.support.rest_chat_contract import runtime_upload_api as runtime_upload_api
+
+
+@pytest.mark.parametrize("audio_output", [None, "configured", "none"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_legacy_text_only_completion_preserves_saved_tts_and_history(rest_chat_contract: RestChatContract, monkeypatch: pytest.MonkeyPatch, audio_output: str | None, stream: bool) -> None:
+    import core.llm as providers
+
+    ctx = rest_chat_contract
+    synthesis: list[str] = []
+
+    class ControlledTTS:
+        def __init__(self, key: str, model: str, **kwargs: Any) -> None:
+            assert key == "controlled" and model == "tts"
+
+        def tts(self, text: str) -> Iterator[bytes]:
+            synthesis.append(text)
+            # A text-only request must not wait for or be failed by this provider.
+            if audio_output == "none":
+                raise RuntimeError("TTS must not run for a text-only request")
+            yield b"controlled-audio"
+
+    monkeypatch.setitem(providers.TTSModel, ctx.factory, ControlledTTS)
+    prompt_config = {"tts": True, "system": "Answer directly", "parameters": []}
+    chat = ctx.create_chat(prompt_config=prompt_config)
+    sid = ctx.request("POST", f"/chats/{chat['id']}/sessions", json={}).json()["data"]["id"]
+    before = ctx.read_chat(chat["id"])
+    body: dict[str, Any] = {"conversation_id": sid, "messages": [{"role": "user", "content": "Question"}], "stream": stream, "stream_output": "delta"}
+    if audio_output is not None:
+        body["audio_output"] = audio_output
+    response = requests.post(f"{ctx.runtime['base']}/v1/conversation/completion", headers={"Authorization": f"Bearer {ctx.runtime['jwt']}"}, json=body, timeout=30)
+    assert response.status_code == 200, response.text
+    if stream:
+        frames = sse_frames(response)
+        assert frames[-1]["data"] is True
+        assert all(frame["retcode"] == 0 for frame in frames), frames
+        answers = [frame["data"] for frame in frames if isinstance(frame.get("data"), dict)]
+    else:
+        result = response.json()
+        assert result["retcode"] == 0, result
+        answers = [result["data"]]
+    assert answers[-1]["answer"] == "Controlled answer"
+    if audio_output == "none":
+        assert synthesis == []
+        assert all(answer.get("audio_binary") is None for answer in answers)
+    else:
+        assert synthesis == ["Controlled answer"]
+        assert any(answer.get("audio_binary") == b"controlled-audio".hex() for answer in answers)
+    # Independent sessions read back actual commits, including the original
+    # application JSON; an in-memory identity-map assertion is insufficient.
+    assert ctx.read_chat(chat["id"]) == before
+    history = ctx.read_session(sid)
+    assert history is not None
+    assert history["message"][-1]["content"] == "Controlled answer"
 
 
 @pytest.mark.parametrize("credential", ["jwt", "api_key"])

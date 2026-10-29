@@ -8,9 +8,15 @@ service 层 monkeypatch 真实类,async_chat 打桩为假异步生成器。
 import json
 import sys
 import types
+from collections.abc import AsyncIterator
+from copy import deepcopy
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.db_models import Conversation, Dialog
 from api.db.services.conversation_service import ConversationService
 from api.db.services.dialog_service import DialogService
 
@@ -106,6 +112,84 @@ def test_conversation_completion_rejects_missing_conversation_id(client):
     resp = client.post("/v1/conversation/completion", json={"conversation_id": "", "messages": []})
     assert resp.status_code == 200
     assert resp.json()["retcode"] != 0
+
+
+@pytest.mark.parametrize("audio_output", [None, "configured", "none"])
+@pytest.mark.parametrize("mode", ["delta", "full", "json"])
+@pytest.mark.parametrize("tts_enabled", [True, False])
+def test_conversation_audio_preference_is_request_local(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    audio_output: str | None,
+    mode: str,
+    tts_enabled: bool,
+) -> None:
+    conversation_app = _route_module("api.apps.conversation")
+    dialog = Dialog(
+        id="dlg-1",
+        tenant_id="tenant-unit",
+        llm_id="fake-llm",
+        kb_ids=["kb-1"],
+        llm_setting={"temperature": 0.5},
+        prompt_config={"tts": tts_enabled, "parameters": [{"key": "knowledge", "optional": True}]},
+    )
+    saved_config = deepcopy(dialog.prompt_config)
+    conv = Conversation(id="conv-1", dialog_id=dialog.id, message=[], reference=[])
+    persisted: list[dict[str, Any]] = []
+    monkeypatch.setattr(ConversationService, "get_by_id", classmethod(lambda cls, db, cid: conv))
+    monkeypatch.setattr(ConversationService, "update_by_id", classmethod(lambda cls, db, cid, data: persisted.append(deepcopy(data)) or True))
+    monkeypatch.setattr(DialogService, "get_by_id", classmethod(lambda cls, db, did: dialog))
+    synthesized: list[str] = []
+
+    async def generate(request_dialog: Dialog, messages: list[dict[str, Any]], db: AsyncSession, stream: bool = True, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        assert "audio_output" not in kwargs
+        assert request_dialog.kb_ids == ["kb-1"]
+        audio = None
+        if request_dialog.prompt_config["tts"]:
+            synthesized.append("answer")
+            audio = "synthetic-audio"
+        if audio_output == "none":
+            assert request_dialog is not dialog
+            # Upstream may normalize nested JSON while generating. It must not
+            # dirty the saved application or another request's configuration.
+            request_dialog.prompt_config["parameters"][0]["optional"] = False
+            request_dialog.llm_setting["temperature"] = 0.9
+        yield {"answer": "answer [ID:0]", "reference": {"chunks": []}, "audio_binary": audio, "final": True}
+
+    monkeypatch.setattr(conversation_app, "async_chat", generate)
+    body: dict[str, Any] = {
+        "conversation_id": "conv-1",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": mode != "json",
+        "stream_output": "full" if mode == "full" else "delta",
+    }
+    if audio_output is not None:
+        body["audio_output"] = audio_output
+    response = client.post("/v1/conversation/completion", json=body)
+    assert response.status_code == 200
+    if mode == "json":
+        result = response.json()
+    else:
+        frames = _sse_frames(response.text)
+        assert frames[-1]["data"] is True
+        result = frames[0]
+    assert result["retcode"] == 0, result
+    assert result["data"]["answer"] == "answer [ID:0]"
+    assert synthesized == (["answer"] if tts_enabled and audio_output != "none" else [])
+    assert result["data"]["audio_binary"] == ("synthetic-audio" if synthesized else None)
+    assert dialog.prompt_config == saved_config
+    assert dialog.llm_setting == {"temperature": 0.5}
+    assert len(persisted) == 1
+    assert persisted[0]["id"] == "conv-1"
+    assert persisted[0]["message"][-1]["content"] == "answer [ID:0]"
+
+
+def test_conversation_audio_preference_rejects_unknown_mode(client: TestClient) -> None:
+    response = client.post(
+        "/v1/conversation/completion",
+        json={"conversation_id": "conv-1", "messages": [{"role": "user", "content": "hi"}], "audio_output": "typo"},
+    )
+    assert response.status_code == 422
 
 
 def test_session_completion_streams(client, monkeypatch, chat_route_stubs):

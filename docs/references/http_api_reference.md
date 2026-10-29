@@ -632,6 +632,12 @@ POST /chat/completions
 会话仍须属于当前认证身份和指定助手，body 中的 `user_id` 不授予其他身份。
 这些参数属于统一 REST 补全；旧 `/v1/conversation/completion` 的完整历史合同独立。
 
+旧应用补全入口 `/v1/conversation/completion` 另支持
+`audio_output: "configured" | "none"`，省略时为 `"configured"`，保持应用原有
+TTS 行为。`"none"` 只在本次请求的配置副本中关闭逐段语音合成，不修改应用配置，
+不影响引用、会话保存或独立 `/v1/conversation/tts` 朗读入口。
+当前 Web 的应用对话与预览显式使用 `"none"`，避免文字流等待语音合成。
+
 ### 对话补全
 
 与助手进行对话（流式或非流式）。

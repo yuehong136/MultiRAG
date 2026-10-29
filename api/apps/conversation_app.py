@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from api.apps import manager
 from api.apps.restful_apis.chat_api import apply_feedback_to_session_payload
 from api.db import UserTenantRole
-from api.db.db_models import APIToken, get_async_db, get_db
+from api.db.db_models import APIToken, Dialog, get_async_db, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, resolve_model_type
 from api.db.services.conversation_service import ConversationService, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
@@ -134,6 +134,9 @@ class CompletionRequest(BaseModel):
     # frontend fully migrates to delta streaming.
     stream_output: Literal["delta", "full"] | None = "full"
     """流式输出格式：delta 为增量，full 为兼容旧前端的累计全文。"""
+
+    audio_output: Literal["configured", "none"] = "configured"
+    """configured 沿用应用 TTS 配置；none 仅返回文字，不执行逐段语音合成。"""
 
     reasoning: bool | None = None
     """是否启用推理模式。"""
@@ -481,6 +484,7 @@ async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_
     # TODO(multirag): Transitional compatibility switch for legacy cumulative
     # SSE consumers. Remove after the application frontend no longer sends it.
     stream_output = req.pop("stream_output", "delta")
+    audio_output = req.pop("audio_output")
     msg = []
     for m in req["messages"]:
         if m["role"] == "system":
@@ -521,6 +525,11 @@ async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_
         dia = await db.run_sync(lambda s: DialogService.get_by_id(s, conv.dialog_id))  # TODO(async-phase4)
         if not dia:
             return get_data_error_result(retmsg="Dialog not found!")
+        if audio_output == "none":
+            # MultiRAG consumer adaptation: keep upstream generation unchanged and
+            # never persist this request's text-only preference on the application.
+            dia = Dialog(**deepcopy(dia.to_dict()))
+            dia.prompt_config = {**(dia.prompt_config or {}), "tts": False}
         del req["conversation_id"]
         del req["messages"]
 
