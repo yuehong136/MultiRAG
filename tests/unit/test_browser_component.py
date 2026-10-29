@@ -1,6 +1,7 @@
 """Browser contracts without a browser, network, or database service."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -241,3 +242,60 @@ async def test_browser_selects_supported_capability_independent_of_order(monkeyp
     monkeypatch.setattr(browser_use.llm, "ChatOpenAI", lambda **values: values)
     result = await node()._build_browser_llm()
     assert requested == [expected] and result["model"] == "raw-model"
+
+
+@pytest.mark.parametrize("value", [None, 0, False, "你好，世界", {"键": [0, False, None]}])
+@pytest.mark.parametrize("override", [False, True], ids=["resolved", "debug-override"])
+async def test_browser_run_log_preserves_resolved_value_types(monkeypatch: pytest.MonkeyPatch, value: Any, override: bool) -> None:
+    from agent.canvas import Canvas
+
+    obj = node()
+    obj._param.persist_session = False
+    obj._param.prompts = "Task: {sys.query}"
+    obj._canvas.get_variable_value = lambda _reference: "stored" if override else value
+    run = AsyncMock(return_value=SimpleNamespace(final_result=lambda: "reply", is_successful=lambda: True))
+    monkeypatch.setattr(obj, "_prepare_upload_files", AsyncMock(return_value=[]))
+    monkeypatch.setattr(obj, "_run_browser_use_async", run)
+    monkeypatch.setattr(obj, "_save_downloads", AsyncMock(return_value=[]))
+
+    result = await obj.invoke_async(**({"sys.query": value} if override else {}))
+
+    assert result["content"] == "reply" and "_ERROR" not in result
+    assert obj.get_input_value("sys.query") == value
+    assert type(obj.get_input_value("sys.query")) is type(value)
+    expected_prompt = "Task: " + (str(value) if value is not None else "")
+    assert obj.get_input_value("prompts") == expected_prompt
+    assert run.call_args.args[0] == expected_prompt
+    # node_finished serializes these values after the public invoke wrapper.
+    canvas = object.__new__(Canvas)
+    canvas._sensitive_values = []
+    log_inputs = canvas.redact_sensitive_data(obj.get_input_values())
+    assert json.loads(json.dumps(log_inputs, ensure_ascii=False)) == {"sys.query": value}
+
+
+async def test_browser_llm_uses_schema_in_prompt_with_real_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    from browser_use.llm import ChatOpenAI
+
+    async def run_sync(callback: Any) -> Any:
+        return callback(SimpleNamespace())
+
+    @asynccontextmanager
+    async def db() -> Any:
+        yield SimpleNamespace(run_sync=run_sync)
+
+    monkeypatch.setattr(module, "async_db_connection", db)
+    monkeypatch.setattr(module, "resolve_model_type", lambda *_args: ["chat"])
+    monkeypatch.setattr(
+        module,
+        "get_model_config_by_type_and_name",
+        lambda *_args: {"llm_name": "deepseek-reasoner", "llm_factory": "DeepSeek", "api_key": "controlled-sdk-fixture", "api_base": "https://fixture.invalid/v1"},
+    )
+
+    llm = await node()._build_browser_llm()
+
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model == "deepseek-reasoner"
+    assert llm.base_url == "https://fixture.invalid/v1"
+    assert llm.add_schema_to_system_prompt is True
+    assert llm.dont_force_structured_output is True
+    assert llm.temperature == 0 and llm.max_retries == 0

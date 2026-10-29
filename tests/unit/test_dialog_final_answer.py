@@ -131,3 +131,39 @@ async def test_think_stream_keeps_short_answer_after_closing_marker() -> None:
 )
 def test_extract_visible_answer(text, expected):
     assert _extract_visible_answer(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("chunks", "reasoning", "answer"),
+    [
+        (("<think>We</think>", " need</think>", " to answer</think>", "你好", "。"), "We need to answer", "你好。"),
+        (("<think>内部推理", "继续", "</think>\n\nVisible answer", " tail"), "内部推理继续", "\n\nVisible answer tail"),
+    ],
+    ids=["deepseek-repeated-close", "minimax-close-with-answer"],
+)
+async def test_async_ask_separates_reasoning_and_visible_answer(
+    async_db: AsyncSession,
+    final_answer_stubs: None,
+    monkeypatch: pytest.MonkeyPatch,
+    chunks: tuple[str, ...],
+    reasoning: str,
+    answer: str,
+) -> None:
+    class ProviderBundle(_FakeBundle):
+        async def async_chat_streamly_delta(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> AsyncIterator[str]:
+            for chunk in chunks:
+                yield chunk
+
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", ProviderBundle)
+    monkeypatch.setattr(settings.retriever, "insert_citations", lambda text, *args, **kwargs: (text, set()))
+
+    events = [event async for event in async_ask(async_db, "q", [], "t1")]
+
+    assert [event for event in events if event.get("final")] == [events[-1]]
+    assert events[-1]["answer"] == f"<think>{reasoning}</think>{answer}"
+    assert sum(bool(event.get("start_to_think")) for event in events) == 1
+    assert sum(bool(event.get("end_to_think")) for event in events) == 1
+    end_index = next(index for index, event in enumerate(events) if event.get("end_to_think"))
+    assert "".join(event["answer"] for event in events[:end_index]) == reasoning
+    assert "".join(event["answer"] for event in events[end_index:-1]) == answer
+    assert all(event["reference"] == {} and event["final"] is False for event in events[:-1])
