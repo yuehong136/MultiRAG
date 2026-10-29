@@ -17,46 +17,73 @@ CORE_SHARDS = 4
 RUNTIME_JOBS = frozenset({"typecheck", "unit", "integration", "integration-infinity", "consumer", "go", "smoke"})
 # These tests require separate owned HTTP/SQL harnesses; ordinary skips are errors.
 GO_LIVE_OPT_INS = {
-    "admin": {"TestAdminVariablesCLIHTTPAndSQL"},
-    "router": {
-        "TestRESTAliasesHTTPAndSQL",
-        "TestMemoryUpdateHTTPAndSQL",
-        "TestDocumentListHTTPCLIAndSQL",
-        "TestConnectorDetailHTTPJWTAndSQL",
-        "TestAfter1eGMCPAndOAuth",
-        "TestDocumentStopAfter67Live",
-        "TestAgentAfter67RouterJWTAPI",
+    "admin": {
+        "TestAdminVariablesCLIHTTPAndSQL",
+        "TestAfterFFAdminDeleteUserFencesLateProviderSQL",
+        "TestAfterFFAdminDeleteUserModelFailureRollsBackSQL",
+        "TestAfterFFAdminDeleteUserModernCredentialsSQL",
+        "TestAfterFFAdminNumericModelConsumersSQL",
+        "TestAfterFFAdminRegistrationSQL",
     },
-    "dao": {"TestBaseModelTimeScratchPostgres", "TestTenantModelExtraScratchPostgres"},
-    "engine": {"TestSkillMilvusLiveUnpublishedFragments", "TestEngineStoresLive"},
+    "router": {
+        "TestAfter1eGMCPAndOAuth",
+        "TestAfter53GHTTPAndSQL",
+        "TestAfter7fbAPIHTTPAndSQL",
+        "TestAfter98RouterContractsJWTAPIAndSQL",
+        "TestAfterFFDocumentsJWTHTTPAndSQL",
+        "TestAfterFFModelsHTTPAndSQL",
+        "TestAgentAfter67RouterJWTAPI",
+        "TestConnectorDetailHTTPJWTAndSQL",
+        "TestDocumentListHTTPCLIAndSQL",
+        "TestDocumentStopAfter67Live",
+        "TestMemoryUpdateHTTPAndSQL",
+        "TestRESTAliasesHTTPAndSQL",
+    },
+    "dao": {
+        "TestBaseModelTimeScratchPostgres",
+        "TestBatchGMySQLCredentials",
+        "TestTenantModelExtraScratchPostgres",
+    },
+    "engine": {
+        "TestEngineStoresLive",
+        "TestSkillMilvusLiveUnpublishedFragments",
+    },
     "handler": {
-        "TestAgentVersionsUploadScratchPostgres",
-        "TestDocumentStopHTTPRealSQLRedis",
-        "TestDocumentGetByIDsLiveProjectionAndContext",
-        "TestDatasetChunkMetadataCLIAndStores",
-        "TestAfterD7ProvidersHTTPCLIAndSQL",
-        "TestDatasetGraphHTTPAndSQL",
-        "TestAfter9dProvidersHTTPCLIAndSQL",
         "TestAfter410GoHTTPCLIAndSQL",
         "TestAfter440ProvidersHTTPCLIAndSQL",
-        "TestAfter775ProvidersHTTPCLIAndSQL",
-        "TestAfterF9ProvidersHTTPCLIAndSQL",
         "TestAfter4776ProvidersHTTPCLIAndSQL",
+        "TestAfter5ESearchbotRouterSQLAndElasticsearch",
+        "TestAfter775ProvidersHTTPCLIAndSQL",
+        "TestAfter9dProvidersHTTPCLIAndSQL",
+        "TestAfterAABSearchRouterSQLAndElasticsearch",
+        "TestAfterAabDocumentFilesHTTPAndWeb",
         "TestAfterBBBProvidersHTTPCLIAndSQL",
+        "TestAfterD7ProvidersHTTPCLIAndSQL",
+        "TestAfterF9ProvidersHTTPCLIAndSQL",
+        "TestAgentCatalogTagsScratchPostgres",
+        "TestAgentSessionsScratchPostgres",
+        "TestAgentVersionsUploadScratchPostgres",
+        "TestBatchGoAPI",
         "TestChatSessionLiveHTTPAndSQL",
+        "TestDatasetChunkMetadataCLIAndStores",
+        "TestDatasetGraphHTTPAndSQL",
         "TestDatasetReadHTTPAndSQL",
         "TestDatasetTimeHTTPAndSQL",
+        "TestDifyCredentialSQLAndScope",
+        "TestDocumentGetByIDsLiveProjectionAndContext",
         "TestDocumentStatusLiveServer",
-        "TestHybridAuthLiveServer",
-        "TestHostedProviderRoutesScratchPostgres",
-        "TestOllamaInstanceLiveHTTPAndSQL",
-        "TestProviderInstancesLiveHTTPAndSQL",
-        "TestGoogleProviderLiveHTTPAndSQL",
+        "TestDocumentStopHTTPRealSQLRedis",
         "TestGoogleEmbeddingLiveHTTPAndSQL",
+        "TestGoogleProviderLiveHTTPAndSQL",
+        "TestHostedProviderRoutesScratchPostgres",
+        "TestHybridAuthLiveServer",
+        "TestMCPManagementHTTPAndSQL",
         "TestMediaHTTPCLIAndSQL",
         "TestModelClassProviderLiveHTTPAndSQL",
         "TestModelInferenceLiveHTTPAndSQL",
         "TestNVIDIASiliconFlowEmbeddingLiveCLIHTTPAndSQL",
+        "TestOllamaInstanceLiveHTTPAndSQL",
+        "TestProviderInstancesLiveHTTPAndSQL",
         "TestSkillCoreLiveServer",
         "TestSpeechProvidersHTTPCLIAndSQL",
         "TestTaskLiveServer",
@@ -64,30 +91,73 @@ GO_LIVE_OPT_INS = {
         "TestXAIInstanceLiveHTTPAndSQL",
     },
     "service": {
+        "TestAfter0fbNewModelsHTTPCLIAndSQL",
+        "TestAfter2836ModelsHTTPCLIAndSQL",
         "TestAfter67SearchScopeSQLHTTP",
+        "TestAfter98MetadataSQLAndElasticsearch",
+        "TestAfterFFMemoryModelBindingsSQL",
+        "TestAfteraabModelBindingsSQLHTTP",
+        "TestBatchGMySQLStats",
+        "TestChatSessionScratchPostgres",
+        "TestConnectorOAuthLiveSQLRedisAndTLS",
+        "TestDAfter53GPUStackHTTPAndSQL",
+        "TestDocumentDeleteLiveAllSelectionReadsEveryPage",
+        "TestDocumentDeleteLiveAttachWaitsForFileRetirement",
+        "TestDocumentDeleteLiveCanceledHTTPDrainsNativeBeforeUnlock",
+        "TestDocumentDeleteLiveCancellationFailureCompensatesOwnNonce",
+        "TestDocumentDeleteLiveEarlierAttachProtectsFileAndSource",
+        "TestDocumentDeleteLiveFinalSQLFailureRollsBackAllCounters",
+        "TestDocumentDeleteLiveGraphLostAckInvalidatesBeforeRetry",
+        "TestDocumentDeleteLiveMinioStorage",
+        "TestDocumentDeleteLiveMissingFileAndRecoveryMirrorsBlockBeforeCancel",
+        "TestDocumentDeleteLivePendingSQLRecoveryBlocksAndReadyRetires",
+        "TestDocumentDeleteLivePreservesSharedFileImageAndPendingWriter",
+        "TestDocumentDeleteLiveRejectsBeforeCancellation",
+        "TestDocumentDeleteLiveSharedGraphAndZeroCounterRows",
+        "TestDocumentDeleteLiveUnknownObjectAndIndexFailuresRemainRetryable",
+        "TestDocumentFilesMinioRedis",
+        "TestDocumentFilesResourceAckLoss",
+        "TestDocumentFilesSQLAuthorizationAndBindings",
+        "TestDocumentMetadataScopeIndexResults",
+        "TestDocumentMetadataScopeSQL",
         "TestDocumentStopLiveAtomicDeduplicatedBatch",
-        "TestDocumentStopLiveRejectsEntireBatchBeforeEffects",
-        "TestDocumentStopLiveSQLFailureCompensatesOnlyOwnNonce",
-        "TestDocumentStopLiveTerminalDocumentsRejectWithoutEffects",
         "TestDocumentStopLiveCanceledBeforeStorage",
-        "TestDocumentStopLiveLocksDocumentBeforeTask",
-        "TestDocumentStopLiveRuntimeOwnerMismatchHasNoEffects",
-        "TestDocumentStopLiveUnfinishedTasksCancelRegardlessOfRun",
-        "TestDocumentStopLiveMixedTerminalBatchRejectsBeforeCancellation",
+        "TestDocumentStopLiveCommitAckLossPreservesCancellationFences",
         "TestDocumentStopLiveDisabledActiveDocumentRemainsCancelable",
         "TestDocumentStopLiveFinishedRuntimeRejectsActiveSQLBatch",
-        "TestDocumentStopLiveCommitAckLossPreservesCancellationFences",
+        "TestDocumentStopLiveLocksDocumentBeforeTask",
         "TestDocumentStopLiveMembershipRevocationSerializesBeforeEffects",
-        "TestAfter2836ModelsHTTPCLIAndSQL",
-        "TestAfter0fbNewModelsHTTPCLIAndSQL",
-        "TestProviderFixesHTTPCLIAndSQL",
-        "TestChatSessionScratchPostgres",
+        "TestDocumentStopLiveMixedTerminalBatchRejectsBeforeCancellation",
+        "TestDocumentStopLiveRejectsEntireBatchBeforeEffects",
+        "TestDocumentStopLiveRuntimeOwnerMismatchHasNoEffects",
+        "TestDocumentStopLiveSQLFailureCompensatesOnlyOwnNonce",
+        "TestDocumentStopLiveTerminalDocumentsRejectWithoutEffects",
+        "TestDocumentStopLiveUnfinishedTasksCancelRegardlessOfRun",
         "TestHostedProviderBindingScratchPostgres",
+        "TestMCPDiscoverySQL",
         "TestModelBindingScratchPostgres",
+        "TestProviderBatchCLIHTTPAndSQL",
+        "TestProviderFixesHTTPCLIAndSQL",
+        "TestRegistrationCatalogZeroASR",
     },
-    "service/nlp": {"TestRetrievalScratchPostgresInfinity"},
-    "skills": {"TestSkillsLiveServer"},
+    "service/nlp": {
+        "TestRetrievalScratchPostgresInfinity",
+    },
+    "skills": {
+        "TestSkillsLiveServer",
+    },
+    "service/kg": {
+        "TestKGLiveSQLAndES",
+    },
 }
+
+GO_REQUIRED_TESTS = frozenset(
+    {
+        "multirag/internal/skills::TestLegacyEmbeddingScratchPostgres",
+        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL",
+        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL/built_CLI_consumer",
+    }
+)
 
 
 def requires_runtime(paths: list[str]) -> bool:
@@ -163,17 +233,20 @@ def required_gate(needs: dict[str, Any]) -> None:
             raise ValueError(f"Required job {name}: {job['result']} (expected {wanted})")
 
 
-def audit_go(path: Path) -> dict[str, Any]:
+def audit_go(path: Path, *, require_ci_tests: bool = False) -> dict[str, Any]:
     allowed = {f"multirag/internal/{package}::{test}" for package, tests in GO_LIVE_OPT_INS.items() for test in tests}
     started: Counter[str] = Counter()
     finished: Counter[str] = Counter()
     counts: Counter[str] = Counter()
     opt_ins: list[str] = []
+    passed: set[str] = set()
     for line in path.read_text().splitlines():
         event = json.loads(line)
         action, package, test = event["Action"], event.get("Package", ""), event.get("Test")
         if action in {"fail", "build-fail"}:
             raise ValueError(f"Failed Go event: {package}::{test}")
+        if action == "pass" and test:
+            passed.add(f"{package}::{test}")
         if action == "start":
             started[package] += 1
         if action in {"pass", "skip"}:
@@ -182,11 +255,13 @@ def audit_go(path: Path) -> dict[str, Any]:
                 finished[package] += 1
             elif action == "skip":
                 identity = f"{package}::{test}"
-                if identity not in allowed:
+                if identity in GO_REQUIRED_TESTS or identity not in allowed:
                     raise ValueError(f"Unexpected Go skip: {identity}")
                 opt_ins.append(identity)
     if not started or started != finished or not counts["pass_test"]:
         raise ValueError("Empty or incomplete Go evidence")
+    if require_ci_tests and not GO_REQUIRED_TESTS <= passed:
+        raise ValueError(f"Missing required Go tests: {sorted(GO_REQUIRED_TESTS - passed)}")
     return {"counts": dict(counts), "unverified_live_opt_ins": opt_ins}
 
 
@@ -212,7 +287,7 @@ def main() -> int:
     elif args.command == "audit":
         audit_core(args.reports, os.environ["GITHUB_SHA"])
     elif args.command == "go-audit":
-        summary = audit_go(args.reports / "tests.jsonl")
+        summary = audit_go(args.reports / "tests.jsonl", require_ci_tests=True)
         (args.reports / "summary.json").write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary, indent=2))
     else:

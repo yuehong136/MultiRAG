@@ -242,8 +242,10 @@ services:
       - oceanbase
     image: oceanbase/oceanbase-ce:4.4.1.0-100000032025101610
     container_name: multirag-oceanbase
+    entrypoint: ["bash", "/root/boot/multirag-oceanbase-entrypoint.sh"]
     volumes:
       - ob_data:/root/ob
+      - ./oceanbase-entrypoint.sh:/root/boot/multirag-oceanbase-entrypoint.sh:ro
       - ./oceanbase/conf:/root/.obd/cluster
       - ./oceanbase/init.d:/root/boot/init.d
     ports:
@@ -253,8 +255,12 @@ services:
       - MODE=normal
       - OB_SERVER_IP=127.0.0.1
     mem_limit: ${MEM_LIMIT:-8073741824}
+    ulimits:
+      nofile:
+        soft: 655350
+        hard: 655350
     healthcheck:
-      test: ["CMD-SHELL", "obclient -h127.0.0.1 -P2881 -uroot@${OB_TENANT_NAME:-multirag} -p${OB_TENANT_PASSWORD:-dxl_multi_rag} -e \"CREATE DATABASE IF NOT EXISTS ${OCEANBASE_DOC_DBNAME:-multirag_doc};\""]
+      test: ["CMD", "bash", "/root/boot/multirag-oceanbase-entrypoint.sh", "--healthcheck"]
       interval: 10s
       retries: 30
       start_period: 30s

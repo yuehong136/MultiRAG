@@ -18,6 +18,9 @@ package admin
 
 import (
 	"github.com/gin-gonic/gin"
+
+	"multirag/internal/handler"
+	"multirag/internal/service"
 )
 
 // Router admin router
@@ -128,6 +131,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 			// Log level
 			protected.GET("/log_level", r.handler.GetLogLevel)
 			protected.PUT("/log_level", r.handler.SetLogLevel)
+
+			modelHandler := handler.NewModelHandler(service.NewModelProviderService())
+			protected.GET("/all-models", modelHandler.ListAllModels)
+			protected.GET("/all-models/detail", modelHandler.ShowModel)
 
 			// provider pool route group
 			provider := protected.Group("/providers")

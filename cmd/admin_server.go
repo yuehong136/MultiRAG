@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -66,6 +67,10 @@ func main() {
 		common.Error("Failed to initialize database", err)
 		common.Sync()
 		os.Exit(1)
+	}
+
+	if err := dao.GetModelProviderManager().LoadAllModels(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "all_models.json")); err != nil {
+		common.Fatal("Failed to load global model catalog", zap.Error(err))
 	}
 
 	// Initialize doc engine

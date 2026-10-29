@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -99,6 +100,10 @@ func main() {
 	// Initialize database
 	if err := dao.InitDB(); err != nil {
 		common.Fatal("Failed to initialize database", zap.Error(err))
+	}
+
+	if err := dao.GetModelProviderManager().LoadAllModels(filepath.Join(utility.GetProjectBaseDirectory(), "configs", "all_models.json")); err != nil {
+		common.Fatal("Failed to load global model catalog", zap.Error(err))
 	}
 
 	// Initialize doc engine
@@ -203,6 +208,7 @@ func startServer(config *server.Config) {
 	// Initialize router
 	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
 	r.SetSearchbotHandler(searchbotHandler)
+	r.SetModelHandler(handler.NewModelHandler(modelProviderService))
 	r.SetPluginHandler(pluginHandler)
 	r.SetDifyRetrievalHandler(difyHandler)
 

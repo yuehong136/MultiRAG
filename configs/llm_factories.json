@@ -769,6 +769,7 @@
         {
             "name": "VolcEngine",
             "logo": "",
+            "url": "https://ark.cn-beijing.volces.com/api/v3",
             "tags": "LLM, TEXT EMBEDDING, IMAGE2TEXT",
             "status": "1",
             "llm": []

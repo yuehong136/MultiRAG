@@ -41,6 +41,7 @@ type Router struct {
 	searchHandler        *handler.SearchHandler
 	fileHandler          *handler.FileHandler
 	memoryHandler        *handler.MemoryHandler
+	modelHandler         *handler.ModelHandler
 	providerHandler      *handler.ProviderHandler
 	taskHandler          *handler.TaskHandler
 	agentHandler         *handler.AgentHandler
@@ -86,6 +87,11 @@ func NewRouter(
 		providerHandler:      providerHandler,
 		taskHandler:          taskHandler,
 	}
+}
+
+// SetModelHandler binds the shared static model catalog service.
+func (r *Router) SetModelHandler(modelHandler *handler.ModelHandler) {
+	r.modelHandler = modelHandler
 }
 
 // SetSearchbotHandler binds the model service shared by the server's handlers.
@@ -324,6 +330,11 @@ func (r *Router) Setup(engine *gin.Engine) {
 			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
 			v1.POST("/searchbots/related_questions", r.searchbotHandler.Handle)
 			v1.POST("/searchbots/retrieval_test", r.searchbotHandler.RetrievalTest)
+
+			if r.modelHandler != nil {
+				v1.GET("/all-models", r.modelHandler.ListAllModels)
+				v1.GET("/all-models/detail", r.modelHandler.ShowModel)
+			}
 
 			models := v1.Group("/models")
 			{

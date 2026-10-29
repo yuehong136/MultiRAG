@@ -227,3 +227,35 @@ def test_allowed_opt_ins_do_not_hide_failed_or_unfinished_packages(tmp_path: Pat
     path.write_text("\n".join(map(json.dumps, events)))
     with pytest.raises(ValueError, match=r"Failed Go event|Empty or incomplete Go evidence"):
         audit_go(path)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "multirag/internal/skills::TestLegacyEmbeddingScratchPostgres",
+        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL",
+        "multirag/internal/router::TestAfter33GManagementHTTPAndSQL/built_CLI_consumer",
+    ],
+)
+def test_ci_go_requires_service_tests(tmp_path: Path, identity: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.ci_checks import GO_LIVE_OPT_INS, GO_REQUIRED_TESTS
+
+    path = tmp_path / "go.jsonl"
+    events = []
+    for required in sorted(GO_REQUIRED_TESTS):
+        package, test = required.split("::")
+        events.extend([{"Action": "start", "Package": package}, {"Action": "pass", "Package": package, "Test": test}, {"Action": "pass", "Package": package}])
+    path.write_text("\n".join(map(json.dumps, events)))
+    audit_go(path, require_ci_tests=True)
+    package, test = identity.split("::")
+    omitted = [e for e in events if not (e.get("Test") == test and e["Package"] == package)]
+    path.write_text("\n".join(map(json.dumps, omitted)))
+    with pytest.raises(ValueError, match="Missing required"):
+        audit_go(path, require_ci_tests=True)
+    monkeypatch.setitem(GO_LIVE_OPT_INS, package.removeprefix("multirag/internal/"), {test})
+    for event in events:
+        if event.get("Test") == test:
+            event["Action"] = "skip"
+    path.write_text("\n".join(map(json.dumps, events)))
+    with pytest.raises(ValueError, match="Unexpected Go skip"):
+        audit_go(path, require_ci_tests=True)
