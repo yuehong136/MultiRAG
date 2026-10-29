@@ -201,7 +201,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 			t.Fatalf("model metadata %v", row)
 		}
 		names, err := svc.ListSupportedModels("vllm", instance, "owner")
-		if err != nil || len(names) != 1 || names[0] != "Qwen/custom" {
+		if err != nil || len(names) != 1 || names[0].Name != "Qwen/custom" {
 			t.Fatalf("discovery %v %v", names, err)
 		}
 		if _, err := svc.CheckProviderConnection("vllm", instance, "owner"); err != nil {

@@ -526,14 +526,10 @@ func (h *ProviderHandler) ListInstanceModels(c *gin.Context) {
 		return
 	}
 	if strings.EqualFold(c.Query("supported"), "true") {
-		modelNames, err := h.modelProviderService.ListSupportedModels(providerName, instanceName, c.GetString("user_id"))
+		models, err := h.modelProviderService.ListSupportedModelsWithContext(c.Request.Context(), providerName, instanceName, c.GetString("user_id"))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"code": common.CodeServerError, "message": "Provider model listing failed"})
 			return
-		}
-		models := make([]map[string]string, 0, len(modelNames))
-		for _, modelName := range modelNames {
-			models = append(models, map[string]string{"model_name": modelName})
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": models})
 		return

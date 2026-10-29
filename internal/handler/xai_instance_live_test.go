@@ -78,7 +78,7 @@ func TestXAIInstanceLiveHTTPAndSQL(t *testing.T) {
 		if code, err := svc.AddCustomModel(&service.AddCustomModelRequest{ProviderName: "xAI", InstanceName: instance, ModelName: "grok-test", ModelType: "chat", MaxTokens: 2048}, "xai-owner"); err != nil || code != common.CodeSuccess {
 			t.Fatal(err)
 		}
-		if names, err := svc.ListSupportedModels("xAI", instance, "xai-owner"); err != nil || !reflect.DeepEqual(names, []string{"grok-test"}) {
+		if names, err := svc.ListSupportedModels("xAI", instance, "xai-owner"); err != nil || (len(names) != 1 || names[0].Name != "grok-test") {
 			t.Fatal(names, err)
 		}
 		if _, err := svc.CheckProviderConnection("xAI", instance, "xai-owner"); err != nil {

@@ -184,32 +184,55 @@ func (m *ModelProviderService) DeleteModelProvider(providerName, userID string) 
 	return common.CodeSuccess, nil
 }
 
-func (m *ModelProviderService) ListSupportedModels(providerName, instanceName, userID string) ([]string, error) {
-	tenants, err := m.userTenantDAO.GetByUserIDAndRole(userID, "owner")
-	if err != nil {
+// ListSupportedModels is the non-HTTP entry point used by local consumers.
+func (m *ModelProviderService) ListSupportedModels(providerName, instanceName, userID string) ([]entity.SupportedModel, error) {
+	return m.ListSupportedModelsWithContext(context.Background(), providerName, instanceName, userID)
+}
+
+// ListSupportedModelsWithContext keeps SQL ownership checks and remote discovery
+// in the request's cancellation scope. No inventory result is persisted.
+func (m *ModelProviderService) ListSupportedModelsWithContext(ctx context.Context, providerName, instanceName, userID string) ([]entity.SupportedModel, error) {
+	if ctx == nil {
+		return nil, errors.New("request context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m.providerManager == nil {
+		return nil, errors.New("model provider catalog is unavailable")
+	}
+	var tenants []*entity.UserTenant
+	if err := dao.DB.WithContext(ctx).Where("user_id = ? AND role = ? AND status = ?", userID, "owner", "1").Find(&tenants).Error; err != nil {
 		return nil, errors.New("fail to get tenant")
 	}
 	if len(tenants) == 0 {
 		return nil, errors.New("user has no tenants")
 	}
-
-	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenants[0].TenantID, providerName)
-	if err != nil {
+	var provider entity.TenantModelProvider
+	if err := dao.DB.WithContext(ctx).Where("tenant_id = ? AND provider_name = ?", tenants[0].TenantID, providerName).First(&provider).Error; err != nil {
 		return nil, err
 	}
-	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, instanceName)
-	if err != nil {
+	var instance entity.TenantModelInstance
+	if err := dao.DB.WithContext(ctx).Where("provider_id = ? AND instance_name = ?", provider.ID, instanceName).First(&instance).Error; err != nil {
 		return nil, err
 	}
-	providerInfo := dao.GetModelProviderManager().FindProvider(providerName)
+	providerInfo := m.providerManager.FindProvider(providerName)
 	if providerInfo == nil {
 		return nil, fmt.Errorf("provider %s not found", providerName)
 	}
-	driver, apiConfig, err := instanceModelDriver(providerInfo, instance)
+	driver, apiConfig, err := instanceModelDriver(providerInfo, &instance, m.driverFactory)
 	if err != nil {
 		return nil, err
 	}
-	return driver.ListModels(apiConfig)
+	apiConfig.Context = ctx
+	names, err := driver.ListModels(apiConfig)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.providerManager.DescribeSupportedModels(providerName, names), nil
 }
 
 func (m *ModelProviderService) CreateProviderInstance(providerName, instanceName, apiKey, userID, region string, baseURLs ...string) (common.ErrorCode, error) {

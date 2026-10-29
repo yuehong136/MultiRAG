@@ -74,7 +74,7 @@ func TestOllamaInstanceLiveHTTPAndSQL(t *testing.T) {
 		if code, err := svc.AddCustomModel(&service.AddCustomModelRequest{ProviderName: "ollama", InstanceName: instance, ModelName: "qwen3", ModelType: "chat", MaxTokens: 2048}, "ollama-owner"); err != nil || code != common.CodeSuccess {
 			t.Fatal(err)
 		}
-		if names, err := svc.ListSupportedModels("ollama", instance, "ollama-owner"); err != nil || !reflect.DeepEqual(names, []string{"qwen3"}) {
+		if names, err := svc.ListSupportedModels("ollama", instance, "ollama-owner"); err != nil || (len(names) != 1 || names[0].Name != "qwen3") {
 			t.Fatal(names, err)
 		}
 		if _, err := svc.CheckProviderConnection("ollama", instance, "ollama-owner"); err != nil {

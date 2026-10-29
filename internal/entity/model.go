@@ -164,14 +164,76 @@ type ModelThinking struct {
 
 // Model represents a single LLM model
 type Model struct {
-	Name         string         `json:"name"`
-	Alias        []string       `json:"alias,omitempty"`
-	MaxTokens    int            `json:"max_tokens"`
-	ModelTypes   []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
-	Features     Features       `json:"features"`
-	Thinking     *ModelThinking `json:"thinking,omitempty"`
-	Class        *string        `json:"class,omitempty"` // Model family, such as gpt or qwen3.
-	ModelTypeMap map[string]bool
+	Name              string   `json:"name"`
+	Alias             []string `json:"alias,omitempty"`
+	MaxTokens         int      `json:"max_tokens"`
+	Dimension         *int     `json:"dimension,omitempty"`
+	maxTokensDeclared bool
+	ModelTypes        []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
+	Features          Features       `json:"features"`
+	Thinking          *ModelThinking `json:"thinking,omitempty"`
+	Class             *string        `json:"class,omitempty"` // Model family, such as gpt or qwen3.
+	ModelTypeMap      map[string]bool
+}
+
+// UnmarshalJSON preserves an explicit zero token limit without changing the
+// integer contract used by inference and registration callers.
+func (m *Model) UnmarshalJSON(data []byte) error {
+	type plain Model
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields struct {
+		MaxTokens *int `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	decoded.maxTokensDeclared = fields.MaxTokens != nil
+	*m = Model(decoded)
+	return nil
+}
+
+// SupportedModel describes a discovered remote ID. Unknown metadata is omitted;
+// pointers preserve declared zero values, false thinking defaults and empty types.
+type SupportedModel struct {
+	Name       string         `json:"name"`
+	MaxTokens  *int           `json:"max_tokens,omitempty"`
+	Dimension  *int           `json:"dimension,omitempty"`
+	ModelTypes *[]string      `json:"model_types,omitempty"`
+	Thinking   *ModelThinking `json:"thinking,omitempty"`
+}
+
+// DescribeSupportedModels enriches inventory without changing its IDs, order or
+// cardinality. It reads this injected catalog and never calls a provider or writes.
+func (pm *ProviderManager) DescribeSupportedModels(providerName string, names []string) []SupportedModel {
+	result := make([]SupportedModel, 0, len(names))
+	for _, name := range names {
+		row := SupportedModel{Name: name}
+		model, err := pm.GetModelByNameOrAlias(name)
+		if err != nil {
+			// Provider-specific declarations are useful when the shared catalog has
+			// no matching name. Unknown aliases never fall back to another model.
+			model, _ = pm.GetModelByName(providerName, name)
+			if model != nil {
+				model = cloneCatalogModel(model)
+			}
+		}
+		if model != nil {
+			if model.maxTokensDeclared || model.MaxTokens != 0 {
+				value := model.MaxTokens
+				row.MaxTokens = &value
+			}
+			row.Dimension = model.Dimension
+			if model.ModelTypes != nil {
+				row.ModelTypes = &model.ModelTypes
+			}
+			row.Thinking = model.Thinking
+		}
+		result = append(result, row)
+	}
+	return result
 }
 
 // UnmarshalJSON validates suffix keys locally while preserving provider extensions.
@@ -723,6 +785,10 @@ func (pm *ProviderManager) GetModelByNameOrAlias(name string) (*Model, error) {
 // cloneCatalogModel prevents consumers from changing catalog identity or metadata.
 func cloneCatalogModel(model *Model) *Model {
 	clone := *model
+	if model.Dimension != nil {
+		v := *model.Dimension
+		clone.Dimension = &v
+	}
 	clone.Alias = slices.Clone(model.Alias)
 	clone.ModelTypes = slices.Clone(model.ModelTypes)
 	clone.ModelTypeMap = maps.Clone(model.ModelTypeMap)
