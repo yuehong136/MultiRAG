@@ -13,7 +13,7 @@ def _object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def decode_volc_key(key: str | dict[str, Any], model_name: str, *, use_endpoint: bool = True) -> tuple[str, str, dict[str, Any]]:
+def decode_volc_credentials(key: str | dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Accept a raw Ark key or an object envelope, without echoing secrets."""
     payload: Any = key
     if isinstance(key, str):
@@ -39,6 +39,13 @@ def decode_volc_key(key: str | dict[str, Any], model_name: str, *, use_endpoint:
             endpoints.append(value)
     if len(set(endpoints)) > 1:
         raise ValueError("Conflicting VolcEngine endpoint fields")
+    return api_key, dict(payload)
+
+
+def decode_volc_key(key: str | dict[str, Any], model_name: str, *, use_endpoint: bool = True) -> tuple[str, str, dict[str, Any]]:
+    """Resolve an explicit runtime model independently of the API credential."""
+    api_key, payload = decode_volc_credentials(key)
+    endpoints = [payload[field] for field in ("ep_id", "endpoint_id") if field in payload]
     selected = endpoints[0] if endpoints and use_endpoint else model_name
     if not isinstance(selected, str) or not selected or selected != selected.strip() or any(ord(char) < 32 for char in selected):
         raise ValueError("VolcEngine requires an explicit model name or endpoint")

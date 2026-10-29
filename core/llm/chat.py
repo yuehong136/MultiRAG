@@ -42,6 +42,7 @@ from core.llm.async_stream import iterate_owned_stream
 from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request_options
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.llm.model_policies import apply_claude_sampling_policy
+from core.llm.openrouter_auth import decode_openrouter_key
 from core.llm.tool_decorator import resolve_tool_binding
 from core.llm.volc_auth import decode_volc_key
 from core.nlp import is_chinese, is_english
@@ -1314,8 +1315,9 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
 
         # Factory specific fields
         if self.provider == SupportedLiteLLMProvider.OpenRouter:
-            self.api_key = json.loads(key).get("api_key", "")
-            self.provider_order = json.loads(key).get("provider_order", "")
+            credential = decode_openrouter_key(key)
+            self.api_key = credential["api_key"]
+            self.provider_order = credential["provider_order"]
         elif self.provider == SupportedLiteLLMProvider.Azure_OpenAI:
             self.api_key = json.loads(key).get("api_key", "")
             self.api_version = json.loads(key).get("api_version", "2024-02-01")

@@ -46,6 +46,10 @@ async def test_raw_and_known_credentials_construct_actual_runtime_adapters(crede
         " key",
         "key\n",
         "{}",
+        "null",
+        "true",
+        "42",
+        "NaN",
         "[]",
         '"key"',
         '{"api_key":',
@@ -60,3 +64,31 @@ async def test_raw_and_known_credentials_construct_actual_runtime_adapters(crede
 def test_invalid_credentials_are_rejected_without_echo(credential: str) -> None:
     with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
         provider_transport("OpenRouter", credential, "", "")
+
+
+@pytest.mark.parametrize("capability", ["chat", "image2text"])
+@pytest.mark.parametrize("key", ["controlled-key", '{"api_key":"controlled-key","provider_order":["first"],"is_tools":false}'])
+async def test_direct_registry_raw_and_envelope(key: str, capability: str) -> None:
+    from core.llm import ChatModel, CvModel
+
+    registry = ChatModel if capability == "chat" else CvModel
+    model = registry["OpenRouter"](key, "fixture", provider="OpenRouter")
+    try:
+        assert (model.api_key if capability == "chat" else model.client.api_key) == "controlled-key"
+    finally:
+        await _close(model)
+
+
+@pytest.mark.parametrize("key", ['{"api_key":"one","api_key":"two"}', '{"api_key":"one","provider_order":false}'])
+async def test_duplicate_and_invalid_fields_fail_in_every_boundary(key: str) -> None:
+    from core.llm import ChatModel, CvModel
+    from core.llm.model_meta import access_token
+
+    for construct in [
+        lambda: provider_transport("OpenRouter", key, "", ""),
+        lambda: ChatModel["OpenRouter"](key, "fixture", provider="OpenRouter"),
+        lambda: CvModel["OpenRouter"](key, "fixture"),
+        lambda: access_token(key, openrouter=True),
+    ]:
+        with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
+            construct()

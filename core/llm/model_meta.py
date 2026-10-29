@@ -13,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from common.asyncio_utils import finish_owned_work
+from core.llm.openrouter_auth import decode_openrouter_key
+from core.llm.volc_auth import decode_volc_credentials
 
 MAX_MODELS = 100
 # Complete /models inventories are independent of API page and create sizes.
@@ -95,6 +97,8 @@ def identifier(value: Any) -> str:
 
 def access_token(key: str, *, openrouter: bool = False) -> str:
     """Resolve the known connection envelope before constructing a Bearer header."""
+    if openrouter:
+        return decode_openrouter_key(key)["api_key"] if key else ""
     if key.startswith(("{", "[", '"')):
         try:
             payload = json.loads(key)
@@ -438,5 +442,59 @@ class FishAudio(Base):
                     if not items or len(result) > total:
                         raise DiscoveryError("Inconsistent Fish Audio inventory pagination")
                 raise DiscoveryError("Fish Audio inventory exceeds its page limit")
+        except TimeoutError:
+            raise DiscoveryError("Model discovery timed out") from None
+
+
+class VolcEngine(Base):
+    _FACTORY_NAME = "VolcEngine"
+
+    def _metadata(self, model: dict[str, Any]) -> ModelMetadata | None:
+        name = identifier(model.get("id"))
+        status = model.get("status", "")
+        if not isinstance(status, str):
+            raise DiscoveryError("Invalid VolcEngine model status")
+        if status == "Shutdown":
+            return None
+        domain = model.get("domain", "")
+        tasks = _string_list(model.get("task_type", []))
+        modalities = model.get("modalities", {})
+        features, limits = model.get("features", {}), model.get("token_limits", {})
+        if not isinstance(domain, str) or any(not isinstance(value, dict) for value in (modalities, features, limits)):
+            raise DiscoveryError("Invalid VolcEngine model metadata")
+        inputs = _string_list(modalities.get("input_modalities", []))
+        outputs = _string_list(modalities.get("output_modalities", []))
+        # Expose only capabilities implemented by the Python runtime registry.
+        if domain == "Embedding" or set(tasks) & {"TextEmbedding", "ImageEmbedding"}:
+            types = ["embedding"]
+        else:
+            types = (["chat"] if "text" in outputs else []) + (["embedding"] if "embeddings" in outputs else [])
+            if "image" in inputs and "text" in outputs:
+                types.append("image2text")
+        tools = features.get("tools", {})
+        if not isinstance(tools, dict) or type(tools.get("function_calling", False)) is not bool:
+            raise DiscoveryError("Invalid VolcEngine tools metadata")
+        reasoning = limits.get("max_reasoning_token_length", 0)
+        if type(reasoning) is not int:
+            raise DiscoveryError("Invalid VolcEngine reasoning token limit")
+        context_length(reasoning)
+        context = context_length(limits.get("max_input_token_length"))
+        flags = (["is_tools"] if tools.get("function_calling", False) else []) + (["thinking"] if reasoning > 0 else [])
+        return ModelMetadata(name, types, context, flags, name) if types else None
+
+    async def get_model_list(self) -> list[ModelMetadata]:
+        base = endpoint(self.base_url or "https://ark.cn-beijing.volces.com/api/v3")
+        parsed = urlsplit(base)
+        if parsed.scheme != "https" or parsed.hostname != "ark.cn-beijing.volces.com" or parsed.port not in {None, 443} or parsed.path not in {"", "/api/v3"}:
+            raise ValueError("VolcEngine discovery requires its official HTTPS origin")
+        token, payload = decode_volc_credentials(self.api_key)
+        if set(payload) - {"ark_api_key", "ep_id", "endpoint_id", "dimensions", "encoding_format", "is_tools"}:
+            raise ValueError("Invalid VolcEngine credential fields")
+        if any(not 33 <= ord(char) <= 126 for char in token):
+            raise ValueError("Invalid VolcEngine API key")
+        try:
+            async with asyncio.timeout(DISCOVERY_SECONDS), self._session() as client:
+                raw = await self._request(client, "GET", "https://ark.cn-beijing.volces.com/api/v3/models", headers={"Authorization": "Bearer " + token})
+                return [metadata for model in inventory(raw, limit=MAX_INVENTORY_MODELS) if (metadata := self._metadata(model)) is not None]
         except TimeoutError:
             raise DiscoveryError("Model discovery timed out") from None

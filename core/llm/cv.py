@@ -35,6 +35,7 @@ from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.llm.model_policies import apply_claude_sampling_policy
+from core.llm.openrouter_auth import decode_openrouter_key
 from core.llm.tool_decorator import resolve_tool_binding
 from core.llm.volc_auth import decode_volc_key
 from core.nlp import is_english
@@ -830,20 +831,21 @@ class SILICONFLOWCV(GptV4):
 class OpenRouterCV(GptV4):
     _FACTORY_NAME = "OpenRouter"
 
-    def __init__(self, key, model_name, lang="Chinese", base_url="https://openrouter.ai/api/v1", **kwargs):
+    def __init__(self, key: str, model_name: str, lang: str = "Chinese", base_url: str = "https://openrouter.ai/api/v1", **kwargs: Any) -> None:
         if not base_url:
             base_url = "https://openrouter.ai/api/v1"
-        api_key = json.loads(key).get("api_key", "")
+        credential = decode_openrouter_key(key)
+        api_key = credential["api_key"]
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.async_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
         self.lang = lang
         Base.__init__(self, **kwargs)
-        provider_order = json.loads(key).get("provider_order", "")
+        provider_order = credential["provider_order"]
         self.extra_body = {}
         if provider_order:
 
-            def _to_order_list(x):
+            def _to_order_list(x: str | list[str]) -> list[str]:
                 if x is None:
                     return []
                 if isinstance(x, str):

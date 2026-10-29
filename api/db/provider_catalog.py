@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from common import settings
+from core.llm.openrouter_auth import decode_openrouter_key
 
 
 def public_factories() -> list[dict[str, Any]]:
@@ -32,28 +33,7 @@ def regional_provider(provider: str, region: str) -> str:
 
 def _openrouter_transport_key(key: str) -> str:
     """Use one known envelope for the chat and vision runtime adapters."""
-    if not isinstance(key, str):
-        raise ValueError("Invalid OpenRouter credential")
-    payload: dict[str, Any] = {"api_key": key, "provider_order": ""}
-    if key.startswith(("{", "[", '"')):
-        try:
-            parsed = json.loads(key)
-        except ValueError:
-            raise ValueError("Invalid OpenRouter credential") from None
-        if not isinstance(parsed, dict) or "api_key" not in parsed or set(parsed) - {"api_key", "provider_order", "is_tools"}:
-            raise ValueError("Invalid OpenRouter credential")
-        payload.update(parsed)
-    token = payload.get("api_key")
-    order = payload["provider_order"]
-    if (
-        not isinstance(token, str)
-        or not token
-        or any(not 33 <= ord(char) <= 126 for char in token)
-        or (not isinstance(order, str) and (not isinstance(order, list) or any(not isinstance(item, str) for item in order)))
-        or ("is_tools" in payload and type(payload["is_tools"]) is not bool)
-    ):
-        raise ValueError("Invalid OpenRouter credential")
-    return json.dumps(payload, ensure_ascii=False)
+    return json.dumps(decode_openrouter_key(key), ensure_ascii=False)
 
 
 def provider_transport(provider: str, key: str, base_url: str, region: str, *, stored: bool = False) -> tuple[str, str, str]:
