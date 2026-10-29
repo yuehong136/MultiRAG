@@ -8,9 +8,11 @@ Reference:
 import asyncio
 import json
 import logging
+import math
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +22,7 @@ import pandas as pd
 from api.db.services.task_service import has_canceled
 from common.exceptions import TaskCanceledException
 from common.token_utils import num_tokens_from_string
+from core.graphrag.checkpoints import community_checkpoint_key
 from core.graphrag.general import leiden
 from core.graphrag.general.community_report_prompt import COMMUNITY_REPORT_PROMPT
 from core.graphrag.general.extractor import Extractor
@@ -47,14 +50,19 @@ class CommunityReportsExtractor(Extractor):
         self,
         llm_invoker: GraphRAGCompletionLLM,
         max_report_length: int | None = None,
-    ):
-        super().__init__(llm_invoker)
+        *,
+        use_llm_cache: bool = True,
+    ) -> None:
+        super().__init__(llm_invoker, use_llm_cache=use_llm_cache)
         """Init method definition."""
         self._llm = llm_invoker
         self._extraction_prompt = COMMUNITY_REPORT_PROMPT
         self._max_report_length = max_report_length or 1500
 
-    async def __call__(self, graph: nx.Graph, callback: Callable | None = None, task_id: str = "") -> CommunityReportsResult:
+    async def __call__(
+        self, graph: nx.Graph, callback: Callable | None = None, task_id: str = "", *, checkpoints: dict[str, Any] | None = None, save_checkpoint: Callable[[str, Any], Awaitable[None]] | None = None
+    ) -> CommunityReportsResult:
+        checkpoints = checkpoints or {}
         enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
         for node_degree in graph.degree:
             graph.nodes[str(node_degree[0])]["rank"] = int(node_degree[1])
@@ -65,7 +73,7 @@ class CommunityReportsExtractor(Extractor):
         res_dict = []
         over, token_count = 0, 0
 
-        async def extract_community_report(community: tuple[str, dict[str, Any]]) -> None:
+        async def extract_community_report(level: str, community: tuple[str, dict[str, Any]]) -> None:
             nonlocal res_str, res_dict, over, token_count
             if task_id:
                 if has_canceled(task_id):
@@ -77,59 +85,58 @@ class CommunityReportsExtractor(Extractor):
             ents = cm["nodes"]
             if len(ents) < 2:
                 return
-            ent_list = [{"entity": ent, "description": graph.nodes[ent]["description"]} for ent in ents]
-            ent_df = pd.DataFrame(ent_list)
+            checkpoint_key = community_checkpoint_key(level, str(cm_id), list(ents))
+            response = deepcopy(checkpoints.get(checkpoint_key))
+            try:
+                self._validate_report(response)
+            except ValueError:
+                response = None
+            if response is None:
+                ent_list = [{"entity": ent, "description": graph.nodes[ent]["description"]} for ent in ents]
+                ent_df = pd.DataFrame(ent_list)
 
-            rela_list = []
-            k = 0
-            for i in range(0, len(ents)):
-                if k >= 10000:
-                    break
-                for j in range(i + 1, len(ents)):
+                rela_list = []
+                k = 0
+                for i in range(0, len(ents)):
                     if k >= 10000:
                         break
-                    edge = graph.get_edge_data(ents[i], ents[j])
-                    if edge is None:
-                        continue
-                    rela_list.append({"source": ents[i], "target": ents[j], "description": edge["description"]})
-                    k += 1
-            rela_df = pd.DataFrame(rela_list)
+                    for j in range(i + 1, len(ents)):
+                        if k >= 10000:
+                            break
+                        edge = graph.get_edge_data(ents[i], ents[j])
+                        if edge is None:
+                            continue
+                        rela_list.append({"source": ents[i], "target": ents[j], "description": edge["description"]})
+                        k += 1
+                rela_df = pd.DataFrame(rela_list)
 
-            prompt_variables = {"entity_df": ent_df.to_csv(index_label="id"), "relation_df": rela_df.to_csv(index_label="id")}
-            text = perform_variable_replacements(self._extraction_prompt, variables=prompt_variables)
-            async with chat_limiter:
-                try:
+                prompt_variables = {"entity_df": ent_df.to_csv(index_label="id"), "relation_df": rela_df.to_csv(index_label="id")}
+                text = perform_variable_replacements(self._extraction_prompt, variables=prompt_variables)
+                async with chat_limiter:
                     try:
-                        timeout = 180 if enable_timeout_assertion else 1000000000
-                        response = await asyncio.wait_for(self._async_chat(text, [{"role": "user", "content": "Output:"}], {}, task_id), timeout=timeout)
-                    except TimeoutError:
-                        logging.warning("extract_community_report._async_chat timeout")
+                        try:
+                            timeout = 180 if enable_timeout_assertion else 1000000000
+                            response = await asyncio.wait_for(self._async_chat(text, [{"role": "user", "content": "Output:"}], {}, task_id), timeout=timeout)
+                        except TimeoutError:
+                            logging.warning("extract_community_report._async_chat timeout")
+                            raise
+                    except Exception as e:
+                        logging.error(f"extract_community_report._async_chat failed: {e}")
                         raise
-                except Exception as e:
-                    logging.error(f"extract_community_report._async_chat failed: {e}")
-                    raise
-            token_count += num_tokens_from_string(text + response)
-            response = re.sub(r"^[^\{]*", "", response)
-            response = re.sub(r"[^\}]*$", "", response)
-            response = re.sub(r"\{\{", "{", response)
-            response = re.sub(r"\}\}", "}", response)
-            logging.debug(response)
-            try:
-                response = json.loads(response)
-            except json.JSONDecodeError as e:
-                logging.error(f"Failed to parse JSON response: {e}")
-                raise ValueError("Invalid community report JSON") from e
-            if not dict_has_keys_with_types(
-                response,
-                [
-                    ("title", str),
-                    ("summary", str),
-                    ("findings", list),
-                    ("rating", float),
-                    ("rating_explanation", str),
-                ],
-            ):
-                raise ValueError("Invalid community report structure")
+                token_count += num_tokens_from_string(text + response)
+                response = re.sub(r"^[^\{]*", "", response)
+                response = re.sub(r"[^\}]*$", "", response)
+                response = re.sub(r"\{\{", "{", response)
+                response = re.sub(r"\}\}", "}", response)
+                logging.debug(response)
+                try:
+                    response = json.loads(response)
+                except json.JSONDecodeError as e:
+                    logging.error(f"Failed to parse JSON response: {e}")
+                    raise ValueError("Invalid community report JSON") from e
+                self._validate_report(response)
+                if save_checkpoint:
+                    await save_checkpoint(checkpoint_key, response)
             response["weight"] = weight
             response["entities"] = ents
             add_community_info2graph(graph, ents, response["title"])
@@ -147,7 +154,7 @@ class CommunityReportsExtractor(Extractor):
                 if task_id and has_canceled(task_id):
                     logging.info(f"Task {task_id} cancelled before community processing.")
                     raise TaskCanceledException(f"Task {task_id} was cancelled")
-                tasks.append(asyncio.create_task(extract_community_report(community)))
+                tasks.append(asyncio.create_task(extract_community_report(str(level), community)))
         try:
             await asyncio.gather(*tasks, return_exceptions=False)
         except BaseException as e:
@@ -163,6 +170,19 @@ class CommunityReportsExtractor(Extractor):
             structured_output=res_dict,
             output=res_str,
         )
+
+    @staticmethod
+    def _validate_report(response: Any) -> None:
+        if (
+            not isinstance(response, dict)
+            or not dict_has_keys_with_types(
+                response,
+                [("title", str), ("summary", str), ("findings", list), ("rating", float), ("rating_explanation", str)],
+            )
+            or not math.isfinite(response["rating"])
+            or not all(isinstance(finding, dict) and isinstance(finding.get("summary"), str) and isinstance(finding.get("explanation"), str) for finding in response["findings"])
+        ):
+            raise ValueError("Invalid community report structure")
 
     def _get_text_output(self, parsed_output: dict) -> str:
         title = parsed_output.get("title", "Report")

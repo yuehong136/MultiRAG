@@ -2,6 +2,7 @@
 
 import logging
 
+from core.graphrag.persistence import GraphRAGLease
 from core.utils.redis_conn import REDIS_CONN
 
 PHASE_RESOLUTION = "resolution_done"
@@ -26,10 +27,32 @@ def has_phase_marker(kb_id: str, phase: str, revision: str) -> bool:
         return False
 
 
-def set_phase_marker(kb_id: str, phase: str, revision: str, ttl: int = 604800) -> bool:
+def set_phase_marker(kb_id: str, phase: str, revision: str, ttl: int = 604800, *, lease: GraphRAGLease | None = None, task_id: str = "") -> bool:
     if not kb_id or not revision or phase not in ALL_PHASES:
         return False
     try:
+        if lease is not None:
+            return bool(
+                REDIS_CONN.REDIS.eval(
+                    """
+                if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+                if ARGV[4] ~= '' then
+                    local cancelled = redis.call('GET', KEYS[3])
+                    if cancelled and cancelled ~= '' then return 0 end
+                end
+                redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+                return 1
+                """,
+                    3,
+                    lease.key,
+                    phase_key(kb_id, phase),
+                    f"{task_id}-cancel" if task_id else "",
+                    lease.lock.local.token,
+                    revision,
+                    ttl,
+                    task_id,
+                )
+            )
         return bool(REDIS_CONN.set(phase_key(kb_id, phase), revision, ttl))
     except Exception:
         logging.exception("GraphRAG marker write failed for %s/%s", kb_id, phase)

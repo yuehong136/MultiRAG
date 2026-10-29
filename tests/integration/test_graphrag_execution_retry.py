@@ -75,18 +75,26 @@ async def test_exhausted_community_storage_failure_leaves_phase_retryable(graphr
 
     monkeypatch.setattr(settings.docStoreConn, "insert", fail_report)
     task = api(env, "POST")["data"]["task_id"]
+    initial_model = Model()
     with pytest.raises(RuntimeError, match="controlled native"):
-        await worker(env, task, Model())
+        await worker(env, task, initial_model)
     failed = observe(env, "community storage retry exhausted")
     assert failed["markers"][PHASE_RESOLUTION] and not failed["markers"][PHASE_COMMUNITY]
     assert not failed["writer_active"] and not any(row.get("knowledge_graph_kwd") == "community_report" for row in failed["rows"])
     assert next(row for row in failed["task_rows"] if row["id"] == task)["progress"] == -1
+    cache_keys = [key for key in env["checkpoint_keys"] if key.startswith("graphrag:checkpoint:")]
+    assert any(env["redis"].exists(key) for key in cache_keys)
+    assert initial_model.community == 1
     monkeypatch.setattr(settings.docStoreConn, "insert", original)
     model = Model()
     await worker(env, api(env, "POST")["data"]["task_id"], model)
     recovered = observe(env, "community storage recovered with checked graph resume")
     assert all(recovered["markers"].values()) and not recovered["writer_active"]
-    assert model.resolution == 0 and model.community == 1 and DocumentExtractor.calls == [env["documents"][0]]
+    # The model report succeeded before storage failed. A new queued task must
+    # publish that durable result without a second paid generation.
+    assert model.resolution == model.community == 0 and DocumentExtractor.calls == [env["documents"][0]]
+    assert not any(env["redis"].exists(key) for key in cache_keys)
+    env["journal"].event("storage-recovery-calls-readback", failed_run_community_calls=initial_model.community, recovered_run_community_calls=model.community, checkpoint_keys_absent=True)
 
 
 async def test_phase_timeout_drains_real_write_then_reuses_checkpoint(graphrag_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:

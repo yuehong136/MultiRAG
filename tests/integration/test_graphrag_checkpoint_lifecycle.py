@@ -153,10 +153,34 @@ async def test_nullable_native_graph_rows_resume_and_prune_by_kind(graphrag_api:
     assert sum(row["knowledge_graph_kwd"] == "relation" for row in final) == 1
     retained_ids = {utils.entity_chunk_id(kb, name) for name in names[1:]} | {utils.relation_chunk_id(kb, names[1], names[2])}
     retained_ids.update(row["pk"] for row in before if row["knowledge_graph_kwd"] is None)
-    assert all(next(row for row in final if row["pk"] == pk) == expected[pk] for pk in retained_ids)
+    # Empty-change resume preserved every row above. A node deletion refreshes
+    # all surviving entities' indexed metadata/paths (85688b42), while reusing
+    # their exact vectors and provenance. Source and relation rows stay intact.
+    unchanged_ids = {pk for pk in retained_ids if expected[pk]["knowledge_graph_kwd"] != "entity"}
+    assert all(next(row for row in final if row["pk"] == pk) == expected[pk] for pk in unchanged_ids)
+    for name in names[1:]:
+        pk = utils.entity_chunk_id(kb, name)
+        actual = next(row for row in final if row["pk"] == pk)
+        original = expected[pk]
+        for field in ["pk", "kb_id", "source_id", "vector", "q_2_vec"]:
+            assert actual[field] == original[field], field
+        assert actual["entity_kwd"] == name and actual["entity_type_kwd"] == "person"
+        assert json.loads(actual["content_with_weight"]) == graph.nodes[name]
+        assert actual["content_with_weight"] != original["content_with_weight"]
+        assert actual["rank_flt"] == 0.0
+        neighbor = names[2] if name == names[1] else names[1]
+        assert json.loads(actual["n_hop_with_weight"]) == [{"path": [name, neighbor], "weights": [1.0]}]
+        assert actual["name_kwd"] is None and actual["from_entity_kwd"] is None and actual["to_entity_kwd"] is None
     persisted = await utils.get_graph(env["tenant"], kb)
     assert persisted is not None and set(persisted.nodes) == set(names[1:]) and persisted.number_of_edges() == 1
-    env["record"]["nullable_kind_dispatch"] = {"before_count": 8, "after_resume_count": 8, "after_resolution_count": 6, "source_and_retained_identity_rows_unchanged": True}
+    env["record"]["nullable_kind_dispatch"] = {
+        "before_count": 8,
+        "after_resume_count": 8,
+        "after_resolution_count": 6,
+        "source_and_relation_rows_unchanged": True,
+        "survivor_vectors_and_provenance_preserved": True,
+        "survivor_metadata_and_paths_refreshed": True,
+    }
     env["record"]["nullable_native_snapshots"] = {"before": before, "after_resume": after, "after_resolution": final}
 
 
@@ -247,7 +271,7 @@ async def test_failed_phase_does_not_delete_old_reports_or_set_marker(graphrag_a
     persisted = await utils.get_graph(env["tenant"], env["kb"])
     from core.graphrag.phase_markers import set_phase_marker
 
-    set_phase_marker(env["kb"], PHASE_RESOLUTION, index.phase_revision(persisted, env["parser_config"]))
+    set_phase_marker(env["kb"], PHASE_RESOLUTION, index.phase_revision(persisted, env["parser_config"], model, nodes=set(persisted.nodes())))
     task = api(env, "POST")["data"]["task_id"]
     if failure == "query":
         original = store.graph_rows
@@ -383,3 +407,209 @@ async def test_writer_lease_renews_and_rejects_competing_owner(graphrag_api: dic
         env["redis"].delete(writer_key(env["tenant"], env["kb"]))
         with pytest.raises(RuntimeError, match="lease was lost"):
             lease.check()
+
+
+@pytest.mark.parametrize("change", ["none", "graph", "config", "model"])
+@pytest.mark.parametrize("stage", ["resolution", "community"])
+async def test_durable_substage_resume_counts_real_model_calls_and_cleans_after_publication(graphrag_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stage: str, change: str) -> None:
+    from core.graphrag.checkpoints import StageCheckpoints
+    from core.graphrag.general import community_reports_extractor
+    from tests.support.graphrag_acceptance import Embedding
+
+    env = graphrag_api
+    doc = env["documents"][0]
+    graph = nx.Graph()
+    graph.graph["source_id"] = [doc]
+    for name, entity_type in [("ALPHA", "person"), ("ALPHAS", "person"), ("BETA", "organization"), ("BETAS", "organization")]:
+        graph.add_node(name, entity_type=entity_type, description=name, source_id=[doc])
+    graph.add_edge("ALPHA", "ALPHAS", description="first relation", weight=1, keywords=["related"], source_id=[doc])
+    graph.add_edge("BETA", "BETAS", description="second relation", weight=1, keywords=["related"], source_id=[doc])
+    await utils.set_graph(env["tenant"], env["kb"], Embedding(), graph, utils.GraphChange(), None)
+    if stage == "community":
+        monkeypatch.setattr(community_reports_extractor.leiden, "run", lambda *args: {"0": {"a": {"nodes": ["ALPHA", "ALPHAS"], "weight": 1}, "b": {"nodes": ["BETA", "BETAS"], "weight": 1}}})
+    saved = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    original_save = StageCheckpoints._save
+    caches: set[StageCheckpoints] = set()
+
+    def save(cache: StageCheckpoints, key: str, payload: Any, lease: Any = None) -> None:
+        original_save(cache, key, payload, lease)
+        caches.add(cache)
+        loop.call_soon_threadsafe(saved.set)
+
+    monkeypatch.setattr(StageCheckpoints, "_save", save)
+
+    class PartialModel:
+        llm_name = "durable-substage-controlled-model"
+        max_length = 8192
+        model_config = {"id": 1, "api_base": "http://controlled.invalid", "max_tokens": 8192}
+        failed = True
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> str:
+            self.calls.append(system)
+            if "BETA" in system:
+                await asyncio.wait_for(saved.wait(), timeout=10)
+                if self.failed:
+                    raise TimeoutError("injected after first durable LLM result")
+            if stage == "resolution":
+                return "<|>1<|>&&No&&"
+            title = "BETA report" if "BETA" in system else "ALPHA report"
+            return json.dumps({"title": title, "summary": "summary", "findings": [{"summary": "finding", "explanation": "evidence"}], "rating": 1.0, "rating_explanation": "reason"})
+
+    model = PartialModel()
+    config = {"graphrag": {"retry_attempts": 1, "retry_backoff_seconds": 0}}
+    row = {"id": "", "tenant_id": env["tenant"], "kb_id": env["kb"]}
+
+    async def run() -> None:
+        await index.run_graphrag_for_kb(row, [doc], "English", config, model, Embedding(), lambda **kwargs: None, with_resolution=stage == "resolution", with_community=stage == "community")
+
+    before = native_rows(env)
+    with pytest.raises(TimeoutError, match="injected after first durable"):
+        await run()
+    assert len(model.calls) == 2 and len(caches) == 1
+    cache = next(iter(caches))
+    keys = env["redis"].smembers(cache.index_key)
+    assert len(keys) == 1
+    data_key = cache.data_key(next(iter(keys)).decode())
+    payload = json.loads(env["redis"].get(data_key))["payload"]
+    assert payload == [] if stage == "resolution" else payload["title"] == "ALPHA report"
+    assert 0 < env["redis"].ttl(data_key) <= 604800 and 0 < env["redis"].ttl(cache.index_key) <= 604800
+    assert native_rows(env) == before
+    phase = PHASE_RESOLUTION if stage == "resolution" else PHASE_COMMUNITY
+    assert env["redis"].get(phase_key(env["kb"], phase)) is None
+    model.failed = False
+    if change == "graph":
+        changed_graph = await utils.get_graph(env["tenant"], env["kb"])
+        changed_graph.nodes["ALPHA"]["description"] = "changed description"
+        await utils.set_graph(env["tenant"], env["kb"], Embedding(), changed_graph, utils.GraphChange(), None)
+    elif change == "config":
+        config["graphrag"]["batch_chunk_token_size"] = 1000
+    elif change == "model":
+        model.model_config = {**model.model_config, "id": 2}
+    await run()
+    assert len(model.calls) == (3 if change == "none" else 4)
+    if change == "none":
+        assert not env["redis"].exists(cache.index_key) and not env["redis"].exists(data_key)
+    else:
+        # The old input's successful work is never replayed into new inputs;
+        # superseded scopes retain their bounded TTL for exact-input resumes.
+        assert env["redis"].exists(cache.index_key) and env["redis"].exists(data_key)
+        assert len(caches) == 2
+        new_cache = next(value for value in caches if value != cache)
+        assert not env["redis"].exists(new_cache.index_key)
+    assert env["redis"].get(phase_key(env["kb"], phase)) is not None
+    rows = native_rows(env)
+    if stage == "community":
+        reports = [row for row in rows if row.get("knowledge_graph_kwd") == "community_report"]
+        assert {row["docnm_kwd"] for row in reports} == {"ALPHA report", "BETA report"}
+    else:
+        persisted = [row for row in rows if row.get("knowledge_graph_kwd") == "graph"]
+        assert len(persisted) == 1 and len(json.loads(persisted[0]["content_with_weight"])["nodes"]) == 4
+    env["journal"].event("substage-resume-readback", stage=stage, change=change, real_model_calls=len(model.calls), cached_substeps=1, completed_scope_absent=True, graph_rows=len(rows))
+
+
+@pytest.mark.parametrize("operation", ["save", "cleanup", "marker"])
+async def test_lost_writer_is_fenced_at_redis_execution(graphrag_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
+    from core.graphrag.checkpoints import StageCheckpoints, fingerprint
+    from core.graphrag.persistence import GraphRAGLease, current_writer
+    from core.graphrag.phase_markers import set_phase_marker
+    from core.utils.redis_conn import REDIS_CONN
+
+    env = graphrag_api
+    cache = StageCheckpoints(env["tenant"], env["kb"], "resolution", fingerprint("fenced-test"))
+    key, new_key = fingerprint("batch"), fingerprint("new-batch")
+    async with GraphRAGLease(env["tenant"], env["kb"]) as lease:
+        token = current_writer.set(lease)
+        try:
+            await cache.save(key, [])
+            original_eval = REDIS_CONN.REDIS.eval
+            replaced = False
+
+            def replace_owner(script: str, numkeys: int, *args: Any) -> Any:
+                nonlocal replaced
+                if not replaced:
+                    replaced = True
+                    env["redis"].set(lease.key, "replacement-owner", ex=60)
+                    # A replacement writer can publish before the stalled old
+                    # writer's command reaches Redis. Its cache must survive.
+                    cache._save(new_key, [["new", "result"]])
+                return original_eval(script, numkeys, *args)
+
+            monkeypatch.setattr(REDIS_CONN.REDIS, "eval", replace_owner)
+            if operation == "marker":
+                assert not set_phase_marker(env["kb"], PHASE_RESOLUTION, "done", lease=lease)
+            else:
+                with pytest.raises(RuntimeError, match="lease was lost"):
+                    if operation == "save":
+                        await cache.save(key, [["old", "overwrite"]])
+                    else:
+                        await cache.cleanup(page_size=1)
+            assert json.loads(env["redis"].get(cache.data_key(key)))["payload"] == []
+            assert env["redis"].get(cache.data_key(new_key)) is not None
+            assert env["redis"].exists(cache.index_key)
+            assert env["redis"].get(phase_key(env["kb"], PHASE_RESOLUTION)) is None
+            env["journal"].event("fence-readback", operation=operation, replacement_cache_preserved=True, marker_absent=True)
+        finally:
+            current_writer.reset(token)
+
+
+async def test_redis_checkpoint_pages_expiry_corruption_and_index_failure(graphrag_api: dict[str, Any]) -> None:
+    from redis.exceptions import ResponseError
+
+    from core.graphrag.checkpoints import StageCheckpoints, fingerprint
+    from core.graphrag.persistence import GraphRAGLease, current_writer
+
+    env = graphrag_api
+    cache = StageCheckpoints(env["tenant"], env["kb"], "community", fingerprint("pages"))
+    keys = [fingerprint(i) for i in range(6)]
+    async with GraphRAGLease(env["tenant"], env["kb"]) as lease:
+        token = current_writer.set(lease)
+        try:
+            for key in keys:
+                await cache.save(key, {"title": key})
+            assert len(await cache.load(page_size=1)) == 6
+            env["redis"].set(cache.data_key(keys[0]), "invalid-json", ex=60)
+            env["redis"].pexpire(cache.data_key(keys[1]), 1)
+            swapped = json.loads(env["redis"].get(cache.data_key(keys[2])))
+            env["redis"].set(cache.data_key(keys[3]), json.dumps(swapped), ex=60)
+            await asyncio.sleep(0.02)
+            assert set(await cache.load(page_size=1)) == {keys[2], keys[4], keys[5]}
+            assert await StageCheckpoints("foreign", env["kb"], "community", cache.revision).load() == {}
+            assert await StageCheckpoints(env["tenant"], "foreign", "community", cache.revision).load() == {}
+            await cache.cleanup(page_size=1)
+            assert not env["redis"].exists(cache.index_key)
+            assert not any(env["redis"].exists(cache.data_key(key)) for key in keys)
+            # An invalid index cannot partially publish a new data record.
+            env["redis"].set(cache.index_key, "wrong-type", ex=60)
+            with pytest.raises(ResponseError, match="Invalid GraphRAG checkpoint index"):
+                await cache.save(keys[0], {})
+            assert env["redis"].get(cache.data_key(keys[0])) is None
+            env["journal"].event("checkpoint-pages-readback", valid=3, expired=1, corrupt=1, swapped=1, failed_publication_no_data=True)
+        finally:
+            current_writer.reset(token)
+
+
+async def test_cancellation_is_fenced_at_completion_marker_execution(graphrag_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.graphrag.persistence import GraphRAGLease
+    from core.graphrag.phase_markers import set_phase_marker
+    from core.utils.redis_conn import REDIS_CONN
+
+    env = graphrag_api
+    task = "marker-cancel-" + uuid4().hex
+    key = task + "-cancel"
+    env["journal"].event("reserve-marker-cancellation", key=key)
+    env["checkpoint_keys"].add(key)
+    async with GraphRAGLease(env["tenant"], env["kb"]) as lease:
+        original_eval = REDIS_CONN.REDIS.eval
+
+        def cancel_before_exec(script: str, numkeys: int, *args: Any) -> Any:
+            env["redis"].set(key, "1", ex=60)
+            return original_eval(script, numkeys, *args)
+
+        monkeypatch.setattr(REDIS_CONN.REDIS, "eval", cancel_before_exec)
+        assert not set_phase_marker(env["kb"], PHASE_RESOLUTION, "done", lease=lease, task_id=task)
+        assert env["redis"].get(phase_key(env["kb"], PHASE_RESOLUTION)) is None
+        env["journal"].event("cancel-marker-readback", marker_absent=True)

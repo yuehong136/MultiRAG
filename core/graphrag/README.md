@@ -27,12 +27,35 @@ Build retries reload checked document subgraphs. Merge retries inspect the
 persisted graph and settle publication/cleanup without merging a document twice.
 Resolution and community attempts receive independent deep copies, preventing a
 failed attempt from contaminating the next. Phase markers are hints tied to the
-successfully persisted graph/config revision; a failed phase remains retryable.
-Subgraph and full-phase recovery are supported; successful individual LLM calls
-inside an unfinished phase are not durable substage checkpoints. Existing model
-cache behavior remains in place. NER consumes original string chunks without
-LLM batching. Extraction errors propagate rather than publishing a partial
-successful document graph.
+successfully persisted graph/config/model revision; a failed phase remains retryable.
+
+Entity-resolution batches and individual community reports now keep validated
+successful results in Redis for seven days. A paged index and per-entry expiry
+bound their lifetime. Scope includes tenant/dataset, the input graph, GraphRAG
+configuration, prompts, model/provider instance and effective transport options;
+usage counters and audit dates do not change that identity. Resolution completion
+markers also bind the candidate frontier, so completing one requested document
+subset does not mark another subset resolved. Resolution derives
+its candidate frontier from requested documents' persisted node provenance, so
+an incremental merge followed by a new task can replay the same batches.
+
+A complete batch of explicit `No` answers is a valid cached empty selection;
+incomplete or malformed answers fail. Replay validates pairs against the current
+candidate batch. Community membership/weight and rendered text come from the
+current graph and validated report, with copies protecting cached objects.
+Envelopes bind both scope and entry key, preventing foreign or swapped entries
+from being replayed. Missing, expired or corrupt entries are recomputed; Redis
+read/write failures propagate rather than pretending the cache is empty.
+
+Durable stages bypass the generic unvalidated response cache. Other extraction
+keeps its existing model cache behavior. Substeps survive stage/model/store
+failures and are removed only after checked stage publication. Redis writes,
+paged cleanup and completion markers check the writer token atomically; markers
+also atomically reject task cancellation. A stalled old writer cannot remove a
+replacement writer's results or mark it done.
+Superseded input scopes expire by TTL. NER consumes original string chunks
+without LLM batching. Extraction errors propagate rather than publishing a
+partial successful document graph.
 
 Controlled integration tests use real scratch SQL, Redis and Milvus, replace
 only model/fault boundaries, and independently read storage and cleanup state:

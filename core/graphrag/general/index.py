@@ -18,7 +18,6 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from hashlib import sha256
 from typing import Any
 
 import networkx as nx
@@ -29,7 +28,10 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.task_service import has_canceled
 from common.exceptions import TaskCanceledException
 from common.graphrag_config import GraphRAGExecutionConfig
+from core.graphrag.checkpoints import COMMUNITY_CHECKPOINT, RESOLUTION_CHECKPOINT, StageCheckpoints, stage_revision
 from core.graphrag.entity_resolution import EntityResolution
+from core.graphrag.entity_resolution_prompt import ENTITY_RESOLUTION_PROMPT
+from core.graphrag.general.community_report_prompt import COMMUNITY_REPORT_PROMPT
 from core.graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.general.graph_extractor import GraphExtractor as GeneralKGExt
@@ -140,9 +142,16 @@ async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str) -> n
     return graph
 
 
-def phase_revision(graph: nx.Graph, config: dict[str, Any]) -> str:
-    material = {"graph": nx.node_link_data(graph, edges="edges"), "config": config.get("graphrag", {})}
-    return sha256(json.dumps(material, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+def phase_revision(graph: nx.Graph, config: dict[str, Any], model: Any = None, *, nodes: set[str] | None = None) -> str:
+    material = {"graphrag": config.get("graphrag", {}), "prompts": [ENTITY_RESOLUTION_PROMPT, COMMUNITY_REPORT_PROMPT]}
+    if nodes is not None:
+        material["nodes"] = sorted(nodes)
+    return stage_revision(graph, material, model)
+
+
+def _candidate_nodes(graph: nx.Graph, document_ids: list[str]) -> set[str]:
+    requested = set(document_ids)
+    return {node for node, data in graph.nodes(data=True) if requested.intersection(data.get("source_id", []))} or set(graph.nodes())
 
 
 def _select_extractor(config: dict[str, Any]) -> type[Extractor]:
@@ -380,28 +389,40 @@ async def _run_graphrag_for_kb(
             raise RuntimeError("No persisted graph found for resolution/community resume")
         return {"ok_docs": ok_docs, "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": asyncio.get_running_loop().time() - start}
 
-    subgraph_nodes = {node for graph in subgraphs.values() for node in graph.nodes()} or set(final_graph.nodes())
-    revision = phase_revision(final_graph, kb_parser_config)
-    if with_resolution and not has_phase_marker(kb_id, PHASE_RESOLUTION, revision):
+    # Derive the candidate frontier from persisted provenance, so a new task
+    # that skips already-merged documents resumes the same successful batches.
+    subgraph_nodes = _candidate_nodes(final_graph, doc_ids)
+    revision = phase_revision(final_graph, kb_parser_config, chat_model)
+    resolution_revision = phase_revision(final_graph, kb_parser_config, chat_model, nodes=subgraph_nodes)
+    if with_resolution and not has_phase_marker(kb_id, PHASE_RESOLUTION, resolution_revision):
+        resolution_cache = StageCheckpoints(
+            tenant_id, str(kb_id), RESOLUTION_CHECKPOINT, stage_revision(final_graph, {"revision": revision, "nodes": sorted(subgraph_nodes), "language": language}, chat_model)
+        )
 
         async def resolution_attempt() -> nx.Graph:
             candidate = deepcopy(final_graph)
-            await resolve_entities(candidate, subgraph_nodes, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+            await resolve_entities(candidate, subgraph_nodes, tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"], checkpoint=resolution_cache)
             return candidate
 
         final_graph = await retry("entity resolution", resolution_attempt, config.resolution_retry_attempts, config.resolution_timeout_seconds)
-        revision = phase_revision(final_graph, kb_parser_config)
+        revision = phase_revision(final_graph, kb_parser_config, chat_model)
         if has_canceled(row["id"]):
             raise TaskCanceledException(f"Task {row['id']} was cancelled")
         lease = current_writer.get()
         if lease is None:
             raise RuntimeError("GraphRAG phase completion requires a writer lease")
         lease.check()
-        set_phase_marker(kb_id, PHASE_RESOLUTION, revision)
+        await resolution_cache.cleanup()
+        _has_cancel_and_exit(row["id"], "Cancelled before resolution completion.", callback)
+        resolution_revision = phase_revision(final_graph, kb_parser_config, chat_model, nodes=_candidate_nodes(final_graph, doc_ids))
+        if not set_phase_marker(kb_id, PHASE_RESOLUTION, resolution_revision, lease=lease, task_id=row["id"]):
+            _has_cancel_and_exit(row["id"], "Cancelled during resolution completion.", callback)
+            raise RuntimeError("GraphRAG resolution marker publication failed")
     if with_community and not has_phase_marker(kb_id, PHASE_COMMUNITY, revision):
+        community_cache = StageCheckpoints(tenant_id, str(kb_id), COMMUNITY_CHECKPOINT, stage_revision(final_graph, {"revision": revision, "language": language}, chat_model))
 
         async def community_attempt() -> None:
-            await extract_community(deepcopy(final_graph), tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"])
+            await extract_community(deepcopy(final_graph), tenant_id, kb_id, None, chat_model, embedding_model, callback, task_id=row["id"], checkpoint=community_cache)
 
         await retry("community extraction", community_attempt, config.community_retry_attempts, config.community_timeout_seconds)
         if has_canceled(row["id"]):
@@ -410,7 +431,11 @@ async def _run_graphrag_for_kb(
         if lease is None:
             raise RuntimeError("GraphRAG phase completion requires a writer lease")
         lease.check()
-        set_phase_marker(kb_id, PHASE_COMMUNITY, revision)
+        await community_cache.cleanup()
+        _has_cancel_and_exit(row["id"], "Cancelled before community completion.", callback)
+        if not set_phase_marker(kb_id, PHASE_COMMUNITY, revision, lease=lease, task_id=row["id"]):
+            _has_cancel_and_exit(row["id"], "Cancelled during community completion.", callback)
+            raise RuntimeError("GraphRAG community marker publication failed")
 
     now = asyncio.get_running_loop().time()
     callback(msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks}")
@@ -548,6 +573,8 @@ async def resolve_entities(
     embed_bdl: Any,
     callback: Callable[..., Any],
     task_id: str = "",
+    *,
+    checkpoint: StageCheckpoints | None = None,
 ) -> None:
     # Check if task has been canceled before resolution
     if task_id and has_canceled(task_id):
@@ -555,10 +582,9 @@ async def resolve_entities(
         raise TaskCanceledException(f"Task {task_id} was cancelled")
 
     start = asyncio.get_running_loop().time()
-    er = EntityResolution(
-        llm_bdl,
-    )
-    reso = await er(graph, subgraph_nodes, callback=callback, task_id=task_id)
+    cached = await checkpoint.load() if checkpoint else None
+    er = EntityResolution(llm_bdl, use_llm_cache=checkpoint is None)
+    reso = await er(graph, subgraph_nodes, callback=callback, task_id=task_id, checkpoints=cached, save_checkpoint=checkpoint.save if checkpoint else None)
     graph = reso.graph
     change = reso.change
     callback(msg=f"Graph resolution removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges.")
@@ -582,16 +608,17 @@ async def extract_community(
     embed_bdl: Any,
     callback: Callable[..., Any],
     task_id: str = "",
+    *,
+    checkpoint: StageCheckpoints | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled before community extraction.")
         raise TaskCanceledException(f"Task {task_id} was cancelled")
 
     start = asyncio.get_running_loop().time()
-    ext = CommunityReportsExtractor(
-        llm_bdl,
-    )
-    cr = await ext(graph, callback=callback, task_id=task_id)
+    cached = await checkpoint.load() if checkpoint else None
+    ext = CommunityReportsExtractor(llm_bdl, use_llm_cache=checkpoint is None)
+    cr = await ext(graph, callback=callback, task_id=task_id, checkpoints=cached, save_checkpoint=checkpoint.save if checkpoint else None)
 
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled during community extraction.")

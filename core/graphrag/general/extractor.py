@@ -57,7 +57,10 @@ class Extractor:
         llm_invoker: GraphRAGCompletionLLM,
         language: str | None = "English",
         entity_types: list[str] | None = None,
-    ):
+        *,
+        use_llm_cache: bool = True,
+    ) -> None:
+        self._use_llm_cache = use_llm_cache
         self._llm = llm_invoker
         self._language = language
         self._entity_types = entity_types or DEFAULT_ENTITY_TYPES
@@ -66,10 +69,13 @@ class Extractor:
     def _is_truncated_cache(response):
         return len((response or "").strip()) <= 1
 
-    async def _async_chat(self, system, history, gen_conf={}, task_id=""):
+    async def _async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any] = {}, task_id: str = "") -> str:
+        # Durable stages cache only validated substep results. A raw response
+        # cached before parsing could permanently replay truncated/invalid output.
+        use_cache = getattr(self, "_use_llm_cache", True)
         hist = deepcopy(history)
         conf = deepcopy(gen_conf)
-        response = await thread_pool_exec(get_llm_cache, self._llm.llm_name, system, hist, conf)
+        response = await thread_pool_exec(get_llm_cache, self._llm.llm_name, system, hist, conf) if use_cache else None
         if self._is_truncated_cache(response):
             response = ""
         if response:
@@ -90,7 +96,7 @@ class Extractor:
                 response = re.sub(r"^.*</think>", "", response, flags=re.DOTALL)
                 if response.find("**ERROR**") >= 0:
                     raise Exception(response)
-                if not self._is_truncated_cache(response):
+                if use_cache and not self._is_truncated_cache(response):
                     await thread_pool_exec(set_llm_cache, self._llm.llm_name, system, response, history, gen_conf)
                 break
             except TaskCanceledException:

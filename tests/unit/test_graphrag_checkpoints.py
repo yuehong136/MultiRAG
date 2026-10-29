@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from common import settings
-from core.graphrag import persistence, phase_markers, utils
+from core.graphrag import checkpoints, persistence, phase_markers, utils
 from core.graphrag.entity_resolution import EntityResolution
 from core.graphrag.general import index
 from core.graphrag.general.extractor import Extractor
@@ -37,12 +37,15 @@ def fake_db() -> Iterator[object]:
 
 @pytest.fixture
 def checkpoint_env(monkeypatch: pytest.MonkeyPatch) -> Store:
+    monkeypatch.setattr(checkpoints.StageCheckpoints, "load", AsyncMock(return_value={}))
+    monkeypatch.setattr(checkpoints.StageCheckpoints, "cleanup", AsyncMock())
     store = Store()
     monkeypatch.setattr(settings, "docStoreConn", store)
     for module in [utils, index]:
         monkeypatch.setattr(module, "db_connection", fake_db)
         monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *args: SimpleNamespace(name="scratch"))
     monkeypatch.setattr(index, "GraphRAGLease", lambda *args, **kwargs: Lease())
+    monkeypatch.setattr(index, "set_phase_marker", lambda kb, phase, revision, **kwargs: phase_markers.set_phase_marker(kb, phase, revision))
     monkeypatch.setattr(index, "has_canceled", lambda *args: False)
     monkeypatch.setattr(persistence, "has_canceled", lambda *args: False)
     monkeypatch.setattr(index, "load_graph_source_chunks", lambda *args: ["source"])
@@ -177,7 +180,7 @@ async def test_community_ids_are_stable_and_query_or_prune_failure_propagates(ch
         async def __call__(self, *args: Any, **kwargs: Any) -> Any:
             return report
 
-    monkeypatch.setattr(index, "CommunityReportsExtractor", lambda *args: Reports())
+    monkeypatch.setattr(index, "CommunityReportsExtractor", lambda *args, **kwargs: Reports())
 
     async def run() -> None:
         await index.extract_community(graph(), "tenant", "kb", None, extractor, None, lambda **kwargs: None)
@@ -369,3 +372,43 @@ async def test_build_retry_reuses_checkpoint_after_postwrite_error(checkpoint_en
         with_community=False,
     )
     assert result["ok_docs"] == ["doc"] and calls == 1
+
+
+async def test_incremental_merge_restart_preserves_candidate_frontier_and_scope(checkpoint_env: Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    await seed(checkpoint_env)
+    added = nx.relabel_nodes(graph("new-doc"), {"A": "C", "B": "D"})
+    monkeypatch.setattr(index, "generate_subgraph", AsyncMock(return_value=added))
+    attempts: list[tuple[set[str], str]] = []
+
+    async def resolve(value: nx.Graph, nodes: set[str], *args: Any, **kwargs: Any) -> None:
+        attempts.append((nodes, kwargs["checkpoint"].index_key))
+        if len(attempts) == 1:
+            raise TimeoutError("failed after merge")
+
+    monkeypatch.setattr(index, "resolve_entities", resolve)
+    model = SimpleNamespace(llm_name="model", model_config={"id": 1})
+    embedding = SimpleNamespace(llm_name="scratch", encode=lambda texts: (np.ones((len(texts), 2)), 0))
+
+    async def run() -> None:
+        await index.run_graphrag_for_kb(
+            {"tenant_id": "tenant", "kb_id": "kb", "id": "task"}, ["new-doc"], "English", {"graphrag": {"retry_attempts": 1}}, model, embedding, lambda **kwargs: None, with_community=False
+        )
+
+    with pytest.raises(TimeoutError):
+        await run()
+    await run()
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    assert attempts[0][0] == {"C", "D"}
+
+
+async def test_resolution_completion_for_one_frontier_does_not_skip_another(checkpoint_env: Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    combined = nx.compose(graph("doc"), nx.relabel_nodes(graph("other-doc"), {"A": "C", "B": "D"}))
+    combined.graph["source_id"] = ["doc", "other-doc"]
+    await utils.set_graph("tenant", "kb", None, combined, utils.GraphChange(), None)
+    resolve = AsyncMock()
+    monkeypatch.setattr(index, "resolve_entities", resolve)
+    for doc in ["doc", "other-doc"]:
+        await index.run_graphrag_for_kb({"tenant_id": "tenant", "kb_id": "kb", "id": "task"}, [doc], "English", {}, None, None, lambda **kwargs: None, with_community=False)
+    assert resolve.await_count == 2
+    assert resolve.call_args_list[0].args[1] == {"A", "B"}
+    assert resolve.call_args_list[1].args[1] == {"C", "D"}

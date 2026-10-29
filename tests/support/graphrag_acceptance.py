@@ -22,12 +22,14 @@ from api.db.services import document_service
 from common import settings
 from common.config_utils import CONFIGS
 from core.graphrag import utils
+from core.graphrag.checkpoints import StageCheckpoints
 from core.graphrag.general import extractor, index
 from core.graphrag.persistence import control_key, writer_key
 from core.graphrag.phase_markers import ALL_PHASES, phase_key
 from core.nlp import search
 from tests.support.dataset_management_http import PARSER, request_api
 from tests.support.dataset_management_http import management_api as management_api
+from tests.support.resource_journal import ResourceJournal
 
 
 class Embedding:
@@ -53,6 +55,7 @@ class DocumentExtractor(extractor.Extractor):
 @pytest.fixture
 def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
     env = dict(management_api)
+    journal = ResourceJournal("graphrag-acceptance")
     name = "graphrag_acceptance_" + uuid4().hex
     kb, tenant = env["datasets"][0], env["users"][0]
     collection = search.index_name_one(tenant, name)
@@ -69,6 +72,28 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     directory = Path(os.environ.get("MULTIRAG_GRAPHRAG_EVIDENCE_DIR", str(tmp_path)))
     directory.mkdir(parents=True, exist_ok=True)
     record_path = directory / f"{kb}.json"
+    redis_keys = {queue, writer_key(tenant, kb), control_key(kb), *[phase_key(kb, phase) for phase in ALL_PHASES]}
+    journal.event(
+        "reserve-graph-resources",
+        collection=collection,
+        tenant=tenant,
+        kb=kb,
+        queue=queue,
+        redis_keys=sorted(redis_keys),
+        files=files,
+        links=links,
+        database=env["engine"].url.database,
+        evidence=str(record_path),
+    )
+    original_save = StageCheckpoints._save
+
+    def registered_save(cache: StageCheckpoints, key: str, payload: Any, lease: Any = None) -> None:
+        keys = [cache.index_key, cache.data_key(key)]
+        journal.event("reserve-redis-checkpoint", keys=keys, tenant=cache.tenant_id, kb=cache.kb_id)
+        redis_keys.update(keys)
+        original_save(cache, key, payload, lease)
+
+    monkeypatch.setattr(StageCheckpoints, "_save", registered_save)
     record: dict[str, Any] = {"database": env["engine"].url.database, "collection": collection, "kb": kb, "tenant": tenant, "queue": queue, "tasks": tasks, "observations": []}
     env.update(
         kb=kb,
@@ -83,6 +108,8 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
         queue=queue,
         record=record,
         graph_record_path=record_path,
+        journal=journal,
+        checkpoint_keys=redis_keys,
     )
 
     @contextmanager
@@ -92,6 +119,7 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 
     def new_task_id() -> str:
         identifier = uuid4().hex
+        journal.event("reserve-graph-task", task=identifier, cancel_key=identifier + "-cancel", database=env["engine"].url.database)
         tasks.append(identifier)
         return identifier
 
@@ -115,6 +143,7 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
             db.execute(sa.delete(File2Document).where(File2Document.id.in_(links)))
             db.execute(sa.delete(File).where(File.id.in_(files)))
         keys = [queue, writer_key(tenant, kb), control_key(kb), *[phase_key(kb, phase) for phase in ALL_PHASES], *[task + "-cancel" for task in tasks]]
+        keys = sorted(set(keys) | redis_keys)
         redis_reader.delete(*keys)
         if reader.has_collection(collection):
             reader.drop_collection(collection)
@@ -122,6 +151,7 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
         with env["engine"].connect() as db:
             assert db.scalar(sa.select(sa.func.count()).select_from(Task).where(Task.id.in_(tasks))) == 0
         record["cleanup"] = {"collection_absent": True, "redis_keys_absent": True, "tasks_absent": True}
+        journal.event("graph-cleanup-readback", collection=collection, redis_keys=keys, **record["cleanup"])
 
     with ExitStack() as owned:
         owned.callback(reader.close)
@@ -136,6 +166,7 @@ def graphrag_api(management_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
             db.execute(sa.insert(File).values(id=file_id, parent_id=tenant, tenant_id=tenant, created_by=tenant, name="source.txt", type="txt"))
             db.execute(sa.insert(File2Document).values(id=link_id, file_id=file_id, document_id=env["documents"][0]))
         rows = [{"id": uuid4().hex, "kb_id": kb, "doc_id": env["documents"][0], "content_with_weight": "GraphRAG source", "available_int": 1, "q_2_vec": [0.25, 0.75]}]
+        journal.event("reserve-graph-source-chunks", collection=collection, identifiers=[row["id"] for row in rows])
         assert settings.docStoreConn.insert(rows, collection, kb) == []
         yield env
 
@@ -234,6 +265,8 @@ async def worker(env: dict[str, Any], task_id: str, model: Model, docs: list[str
 def add_source_document(env: dict[str, Any], content: str = "New graph source") -> str:
     """Register source provenance/counters and persist actual source rows in owned resources."""
     doc_id, file_id, link_id = uuid4().hex, uuid4().hex, uuid4().hex
+    source_id = uuid4().hex
+    env["journal"].event("reserve-source-document", database=env["engine"].url.database, doc_id=doc_id, file_id=file_id, link_id=link_id, collection=env["collection"], source_chunk=source_id)
     env["documents"].append(doc_id)
     env["files"].append(file_id)
     env["links"].append(link_id)
@@ -245,7 +278,7 @@ def add_source_document(env: dict[str, Any], content: str = "New graph source") 
         db.commit()
     assert (
         settings.docStoreConn.insert(
-            [{"id": uuid4().hex, "kb_id": env["kb"], "doc_id": doc_id, "content_with_weight": content, "available_int": 1, "q_2_vec": [0.25, 0.75]}], env["collection"], env["kb"]
+            [{"id": source_id, "kb_id": env["kb"], "doc_id": doc_id, "content_with_weight": content, "available_int": 1, "q_2_vec": [0.25, 0.75]}], env["collection"], env["kb"]
         )
         == []
     )

@@ -18,7 +18,7 @@ import itertools
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +27,7 @@ import networkx as nx
 
 from api.db.services.task_service import has_canceled
 from common.exceptions import TaskCanceledException
+from core.graphrag.checkpoints import resolution_checkpoint_key
 from core.graphrag.entity_resolution_prompt import ENTITY_RESOLUTION_PROMPT
 from core.graphrag.general.extractor import Extractor
 from core.graphrag.llm_protocol import GraphRAGCompletionLLM
@@ -58,8 +59,10 @@ class EntityResolution(Extractor):
     def __init__(
         self,
         llm_invoker: GraphRAGCompletionLLM,
-    ):
-        super().__init__(llm_invoker)
+        *,
+        use_llm_cache: bool = True,
+    ) -> None:
+        super().__init__(llm_invoker, use_llm_cache=use_llm_cache)
         """Init method definition."""
         self._llm = llm_invoker
         self._resolution_prompt = ENTITY_RESOLUTION_PROMPT
@@ -68,7 +71,17 @@ class EntityResolution(Extractor):
         self._resolution_result_delimiter_key = "resolution_result_delimiter"
         self._input_text_key = "input_text"
 
-    async def __call__(self, graph: nx.Graph, subgraph_nodes: set[str], prompt_variables: dict[str, Any] | None = None, callback: Callable | None = None, task_id: str = "") -> EntityResolutionResult:
+    async def __call__(
+        self,
+        graph: nx.Graph,
+        subgraph_nodes: set[str],
+        prompt_variables: dict[str, Any] | None = None,
+        callback: Callable | None = None,
+        task_id: str = "",
+        *,
+        checkpoints: dict[str, Any] | None = None,
+        save_checkpoint: Callable[[str, Any], Awaitable[None]] | None = None,
+    ) -> EntityResolutionResult:
         """Call method definition."""
         if prompt_variables is None:
             prompt_variables = {}
@@ -95,6 +108,7 @@ class EntityResolution(Extractor):
         callback(msg=f"Identified {num_candidates} candidate pairs")
         remain_candidates_to_resolve = num_candidates
 
+        checkpoints = checkpoints or {}
         resolution_result: set[tuple[str, str]] = set()
         resolution_result_lock = asyncio.Lock()
         resolution_batch_size = 100
@@ -105,11 +119,24 @@ class EntityResolution(Extractor):
             nonlocal remain_candidates_to_resolve, callback
             async with semaphore:
                 try:
+                    if task_id and has_canceled(task_id):
+                        raise TaskCanceledException(f"Task {task_id} was cancelled")
+                    key = resolution_checkpoint_key(*candidate_batch)
+                    cached = checkpoints.get(key)
+                    candidates = set(candidate_batch[1])
+                    if isinstance(cached, list) and all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(node, str) for node in pair) and tuple(pair) in candidates for pair in cached):
+                        async with result_lock:
+                            result_set.update(tuple(pair) for pair in cached)
+                        remain_candidates_to_resolve -= len(candidate_batch[1])
+                        callback(msg=f"Replayed {len(candidate_batch[1])} resolved pairs, {remain_candidates_to_resolve} remain.")
+                        return
                     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
                     timeout_sec = 280 if enable_timeout_assertion else 1_000_000_000
 
                     try:
-                        await asyncio.wait_for(self._resolve_candidate(candidate_batch, result_set, result_lock, task_id), timeout=timeout_sec)
+                        selected = await asyncio.wait_for(self._resolve_candidate(candidate_batch, result_set, result_lock, task_id), timeout=timeout_sec)
+                        if save_checkpoint:
+                            await save_checkpoint(key, [list(pair) for pair in selected])
                         remain_candidates_to_resolve -= len(candidate_batch[1])
                         callback(msg=f"Resolved {len(candidate_batch[1])} pairs, {remain_candidates_to_resolve} remain.")
 
@@ -179,7 +206,7 @@ class EntityResolution(Extractor):
 
     async def _resolve_candidate(
         self, candidate_resolution_i: tuple[str, list[tuple[str, str]]], resolution_result: set[tuple[str, str]], resolution_result_lock: asyncio.Lock, task_id: str = ""
-    ) -> None:
+    ) -> list[tuple[str, str]]:
         if task_id:
             if has_canceled(task_id):
                 logging.info(f"Task {task_id} cancelled during entity resolution candidate processing.")
@@ -219,29 +246,27 @@ class EntityResolution(Extractor):
             self.prompt_variables.get(self._entity_index_delimiter_key, DEFAULT_ENTITY_INDEX_DELIMITER),
             self.prompt_variables.get(self._resolution_result_delimiter_key, DEFAULT_RESOLUTION_RESULT_DELIMITER),
         )
+        selected = [candidate_resolution_i[1][result_i[0] - 1] for result_i in result]
         async with resolution_result_lock:
-            for result_i in result:
-                resolution_result.add(candidate_resolution_i[1][result_i[0] - 1])
+            resolution_result.update(selected)
+        return selected
 
-    def _process_results(self, records_length: int, results: str, record_delimiter: str, entity_index_delimiter: str, resolution_result_delimiter: str) -> list:
-        ans_list = []
-        records = [r.strip() for r in results.split(record_delimiter)]
-        for record in records:
-            pattern_int = rf"{re.escape(entity_index_delimiter)}(\d+){re.escape(entity_index_delimiter)}"
-            match_int = re.search(pattern_int, record)
-            res_int = int(str(match_int.group(1) if match_int else "0"))
-            if res_int > records_length:
+    def _process_results(self, records_length: int, results: str, record_delimiter: str, entity_index_delimiter: str, resolution_result_delimiter: str) -> list[tuple[int, str]]:
+        answers: dict[int, str] = {}
+        for record in results.split(record_delimiter):
+            indices = re.findall(rf"{re.escape(entity_index_delimiter)}(\d+){re.escape(entity_index_delimiter)}", record)
+            choices = re.findall(rf"{re.escape(resolution_result_delimiter)}([a-zA-Z]+){re.escape(resolution_result_delimiter)}", record)
+            if not indices and not choices:
                 continue
-
-            pattern_bool = f"{re.escape(resolution_result_delimiter)}([a-zA-Z]+){re.escape(resolution_result_delimiter)}"
-            match_bool = re.search(pattern_bool, record)
-            res_bool = str(match_bool.group(1) if match_bool else "")
-
-            if res_int and res_bool:
-                if res_bool.lower() == "yes":
-                    ans_list.append((res_int, "yes"))
-
-        return ans_list
+            if len(indices) != 1 or len(choices) != 1:
+                raise ValueError("Invalid entity resolution response")
+            index, answer = int(indices[0]), choices[0].lower()
+            if not 1 <= index <= records_length or index in answers or answer not in {"yes", "no"}:
+                raise ValueError("Invalid entity resolution response")
+            answers[index] = answer
+        if set(answers) != set(range(1, records_length + 1)):
+            raise ValueError("Incomplete entity resolution response")
+        return [(index, answer) for index, answer in answers.items() if answer == "yes"]
 
     def _has_digit_in_2gram_diff(self, a, b):
         def to_2gram_set(s):
