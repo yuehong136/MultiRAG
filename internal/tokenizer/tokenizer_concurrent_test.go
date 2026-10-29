@@ -370,7 +370,15 @@ func TestTermFreqAndTagConcurrent(t *testing.T) {
 	}
 	defer Close()
 
-	terms := []string{"hello", "world", "中文", "test", "natural"}
+	// These entries are present in the tokenizer's resource dictionary. Checking
+	// the loaded tags catches native POS-table regressions across analyzer copies.
+	terms := []struct {
+		text string
+		tag  string
+	}{
+		{text: "北京", tag: "ns"},
+		{text: "测试", tag: "n"},
+	}
 	var wg sync.WaitGroup
 	numGoroutines := 10
 
@@ -383,12 +391,12 @@ func TestTermFreqAndTagConcurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
 				term := terms[(id+j)%len(terms)]
-				freq := GetTermFreq(term)
-				tag := GetTermTag(term)
-				// We don't validate the results as terms may or may not exist in dictionary
-				// Just ensuring no panics or errors
-				_ = freq
-				_ = tag
+				if freq := GetTermFreq(term.text); freq <= 0 {
+					t.Errorf("term %q has invalid frequency %d", term.text, freq)
+				}
+				if tag := GetTermTag(term.text); tag != term.tag {
+					t.Errorf("term %q has POS %q, want %q", term.text, tag, term.tag)
+				}
 			}
 		}(i)
 	}

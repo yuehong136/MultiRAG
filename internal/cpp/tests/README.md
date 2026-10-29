@@ -1,6 +1,7 @@
-# OpenCC input regression tests
+# Native input regression tests
 
-Run against the real vendored C sources, without the C++ tokenizer or Go runtime:
+Run against the real vendored OpenCC C sources and C++ POS table, without the full
+tokenizer or Go runtime:
 
 ```sh
 cmake -S internal/cpp/tests -B /absolute/owned/opencc-tests -DENABLE_SANITIZERS=ON
@@ -13,6 +14,11 @@ tests cover long UTF-8 entries, multiple values, value-array terminators, trunca
 line draining, malformed UTF-8 cleanup, missing files, config paths, and concurrent
 reads of independent valid dictionaries/configs. They do not establish thread
 safety for shared dictionary handles or the library's global error state.
+
+The POS-table test checks lookup after loading, dictionary order, duplicate tags,
+CRLF handling, empty or missing input, and index bounds. It runs the production
+`POSTable` implementation directly, so an uninitialized readable size cannot hide
+behind a successful load result.
 
 The dictionary/config buffers hold 4096/8192 bytes respectively. A full buffer
 without a newline is treated as truncated, including an exactly full last chunk at

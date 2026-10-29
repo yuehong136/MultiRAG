@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(opencc_input_tests C)
+project(opencc_input_tests C CXX)
 
 enable_testing()
 find_package(Threads REQUIRED)
@@ -21,3 +21,12 @@ foreach(case IN ITEMS long_utf8 no_final_newline dictionary_boundary truncated_t
         config_home_path parallel_dictionary parallel_config string_copy)
     add_test(NAME opencc_${case} COMMAND opencc_input_test ${case} ${CMAKE_CURRENT_BINARY_DIR})
 endforeach()
+
+add_executable(pos_table_test pos_table_test.cpp ../darts_trie.cpp)
+target_compile_features(pos_table_test PRIVATE cxx_std_20)
+target_compile_options(pos_table_test PRIVATE -Wall -Wextra)
+if(ENABLE_SANITIZERS)
+    target_compile_options(pos_table_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    target_link_options(pos_table_test PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME pos_table_load COMMAND pos_table_test ${CMAKE_CURRENT_BINARY_DIR})
