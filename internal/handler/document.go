@@ -33,6 +33,7 @@ import (
 // DocumentHandler document handler
 type DocumentHandler struct {
 	documentService *service.DocumentService
+	fileService     documentFileReader
 }
 
 // NewDocumentHandler create document handler
