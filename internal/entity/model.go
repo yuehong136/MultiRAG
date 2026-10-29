@@ -181,12 +181,14 @@ func (p *Provider) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
-	var fields map[string]json.RawMessage
+	var fields struct {
+		URLSuffix json.RawMessage `json:"url_suffix"`
+	}
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	if raw, ok := fields["url_suffix"]; ok {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
+	if len(fields.URLSuffix) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(fields.URLSuffix))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&decoded.URLSuffix); err != nil {
 			return fmt.Errorf("url_suffix: %w", err)

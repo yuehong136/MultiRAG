@@ -106,3 +106,13 @@ func TestAfter7ddCatalogReturnsIndependentMetadata(t *testing.T) {
 		t.Fatalf("catalog mutated: %#v", actual)
 	}
 }
+
+func TestAfter7ddStrictSuffixCaseAliases(t *testing.T) {
+	for _, key := range []string{"url_suffix", "URL_SUFFIX", "Url_Suffix"} {
+		var provider Provider
+		err := json.Unmarshal([]byte(`{"name":"DeepSeek","`+key+`":{"embeddings":"typo"}}`), &provider)
+		if err == nil {
+			t.Fatalf("case alias %s bypassed strict suffix validation", key)
+		}
+	}
+}
