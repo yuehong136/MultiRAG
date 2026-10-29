@@ -1196,6 +1196,7 @@ def test_backfill_tools_wrappers_mixed_imports_preserve_ids_and_defaults(owned_e
 @pytest.mark.parametrize("case", ["cn", "intl", "explicit", "mineru", "mixed"])
 def test_after298_fixed_web_regions_and_ocr(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str) -> None:
     """Real Web API client → JWT → Python → controlled HTTP → independent SQL."""
+    import errno
     import io
     import os
     import socket
@@ -1315,11 +1316,20 @@ def test_after298_fixed_web_regions_and_ocr(http: tuple[Any, ...], monkeypatch: 
                 )
 
     with ExitStack() as cleanup:
-        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
-        journal.event("reserve-listener", address=list(address))
-        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
-        cleanup.callback(server.server_close)
-        server.server_bind()
+        for attempt in range(32):
+            address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
+            journal.event("reserve-listener", address=list(address), attempt=attempt + 1)
+            server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+            cleanup.callback(server.server_close)
+            try:
+                server.server_bind()
+            except OSError as error:
+                server.server_close()
+                journal.event("listener-bind-failed", address=list(address), attempt=attempt + 1, errno=error.errno, socket_closed=server.socket.fileno() == -1)
+                if error.errno != errno.EADDRINUSE or attempt == 31:
+                    raise
+            else:
+                break
         server.server_activate()
         thread = threading.Thread(target=server.serve_forever, name="after298-provider-" + case)
         journal.event("reserve-thread", name=thread.name, listener=list(address))
