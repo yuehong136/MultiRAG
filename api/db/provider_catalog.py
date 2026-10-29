@@ -13,7 +13,7 @@ def public_factories() -> list[dict[str, Any]]:
 
 
 def provider_order(name: str) -> tuple[int, str]:
-    factory = next((item for item in settings.FACTORY_LLM_INFOS if item["name"] == name), {})
+    factory: dict[str, Any] = next((item for item in settings.FACTORY_LLM_INFOS if item["name"] == name), {})
     rank = factory.get("rank", 500)
     try:
         rank = int(rank) if type(rank) in {str, int} else 500
