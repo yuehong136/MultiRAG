@@ -108,13 +108,14 @@ func (h *ChunkHandler) SearchDatasets(c *gin.Context) {
 		return
 	}
 	if errors.Is(err, service.ErrDatasetAccessDenied) || errors.Is(err, service.ErrSearchbotAccessDenied) {
-		jsonError(c, common.CodeForbidden, err.Error())
+		jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
 		return
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
-			"message": err.Error(),
+			"data":    nil,
+			"message": "Retrieval failed",
 		})
 		return
 	}

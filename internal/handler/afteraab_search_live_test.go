@@ -62,7 +62,21 @@ func (e *afterAABSearchEngine) ScanMetadata(ctx context.Context, request *types.
 // This opt-in test traverses the production Router, auth, SQL selectors, dataset
 // orchestration, NLP and the actual ES adapter. Only model HTTP is controlled.
 func TestAfterAABSearchRouterSQLAndElasticsearch(t *testing.T) {
-	path := os.Getenv("MULTIRAG_AFTERAAB_G_CONFIG")
+	runSearchRouterSQLAndElasticsearch(t, false)
+}
+
+// The new endpoint runs the same real auth/SQL/ES/model regression through its
+// kb_id adapter, including saved settings, empty scope and cancellation.
+func TestAfter5ESearchbotRouterSQLAndElasticsearch(t *testing.T) {
+	runSearchRouterSQLAndElasticsearch(t, true)
+}
+
+func runSearchRouterSQLAndElasticsearch(t *testing.T, searchbot bool) {
+	configEnv, database := "MULTIRAG_AFTERAAB_G_CONFIG", "multirag_afteraab_g_20261029"
+	if searchbot {
+		configEnv, database = "MULTIRAG_AFTER5E_G_CONFIG", "multirag_after5e_g_20261029"
+	}
+	path := os.Getenv(configEnv)
 	if path == "" {
 		if os.Getenv("REQUIRE_SERVICES") == "1" {
 			t.Fatal("owned afteraab G SQL/ES configuration required")
@@ -77,7 +91,7 @@ func TestAfterAABSearchRouterSQLAndElasticsearch(t *testing.T) {
 		Elasticsearch                  server.ElasticsearchConfig
 	}
 	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &cfg) != nil || cfg.Host != "127.0.0.1" || cfg.Port != 5432 || cfg.Database != "multirag_afteraab_g_20261029" || cfg.Elasticsearch.Hosts != "http://localhost:1200" {
+	if err != nil || json.Unmarshal(raw, &cfg) != nil || cfg.Host != "127.0.0.1" || cfg.Port != 5432 || cfg.Database != database || cfg.Elasticsearch.Hosts != "http://localhost:1200" {
 		t.Fatal("exact pre-registered TCP SQL and borrowed ES endpoints required")
 	}
 	redact := func(message string) string {
@@ -158,6 +172,9 @@ func TestAfterAABSearchRouterSQLAndElasticsearch(t *testing.T) {
 	t.Cleanup(func() { _ = read.Close() })
 	owner, foreign, actor := "afteraab_g_20261029", "afteraab_g_foreign_20261029", "afteraab-g-reader"
 	kb, forbiddenKB := "0000000000001000800000000000aa01", "0000000000001000800000000000aa02"
+	if searchbot {
+		owner, foreign, actor = "after5e_g_20261029", "after5e_g_foreign_20261029", "after5e-g-reader"
+	}
 	index, metadataIndex := "multirag_"+owner, service.BuildMetadataIndexName(owner)
 	searchID, documentID := "afteraab-g-saved", "afteraab-g-document"
 	active, inactive, embeddingType, rerankType, chatType := "1", "0", "embedding", "rerank", "chat"
@@ -412,6 +429,69 @@ func TestAfterAABSearchRouterSQLAndElasticsearch(t *testing.T) {
 	}
 	journal.Event("ES-chunk-count-independent-readback", map[string]interface{}{"index": index, "count": counted.Count})
 	counter := &afterAABSearchEngine{DocEngine: store}
+	if searchbot {
+		vectorService := service.NewChunkService(counter)
+		selected := &service.ChunkVectorRequest{DatasetID: kb, DocumentIDs: []string{documentID}, ChunkIDs: []string{"afteraab-g-chunk-000", "afteraab-g-chunk-069", "afteraab-g-missing"}, Dimension: 2}
+		before := counter.searches.Load()
+		hydrated, err := vectorService.FetchChunkVectors(ctx, selected, actor)
+		if err != nil || counter.searches.Load() != before+1 || len(hydrated.Vectors) != 3 || !reflect.DeepEqual(hydrated.Vectors["afteraab-g-chunk-000"], []float64{1, 0}) || !reflect.DeepEqual(hydrated.Vectors["afteraab-g-chunk-069"], []float64{1, 0}) || len(hydrated.Fallback) != 1 || hydrated.Fallback["afteraab-g-missing"] != service.ChunkVectorMissing {
+			t.Fatal("actual SQL/ES citation hydration failed", hydrated, err)
+		}
+		// Read the same vector independently of the Go engine and helper.
+		storedChunkID := fmt.Sprintf("%x", sha256.Sum256([]byte(kb+"\x00afteraab-g-chunk-000")))
+		response := es(ctx, http.MethodGet, "/"+index+"/_doc/"+storedChunkID)
+		var source struct {
+			Source struct {
+				Vector []float64 `json:"q_2_vec"`
+				KBID   string    `json:"kb_id"`
+				DocID  string    `json:"doc_id"`
+			} `json:"_source"`
+		}
+		decodeErr := json.NewDecoder(response.Body).Decode(&source)
+		response.Body.Close()
+		if decodeErr != nil || response.StatusCode != 200 || !reflect.DeepEqual(source.Source.Vector, hydrated.Vectors["afteraab-g-chunk-000"]) || source.Source.KBID != kb || source.Source.DocID != documentID {
+			t.Fatal("independent citation source/vector readback failed")
+		}
+		before = counter.searches.Load()
+		for _, unauthorized := range []*service.ChunkVectorRequest{
+			{DatasetID: forbiddenKB, DocumentIDs: []string{documentID}, ChunkIDs: selected.ChunkIDs, Dimension: 2, AllowTransportFallback: true},
+			{DatasetID: kb, DocumentIDs: []string{"after5e-g-foreign-document"}, ChunkIDs: selected.ChunkIDs, Dimension: 2, AllowTransportFallback: true},
+		} {
+			if got, err := vectorService.FetchChunkVectors(ctx, unauthorized, actor); err == nil || got != nil {
+				t.Fatal("unauthorized citation selection became fallback", got, err)
+			}
+		}
+		canceled, stop := context.WithCancel(ctx)
+		stop()
+		if got, err := vectorService.FetchChunkVectors(canceled, selected, actor); !errors.Is(err, context.Canceled) || got != nil || counter.searches.Load() != before {
+			t.Fatal("citation denied/cancelled preflight performed engine IO", got, err)
+		}
+		// Mutate only the registered fixture row to prove real SQL document
+		// binding and active status are checked independently of ES content.
+		journal.Event("reserve-owned-citation-document-state-checks", map[string]interface{}{"document_id": documentID, "dataset_id": kb, "temporary_foreign_dataset": forbiddenKB, "temporary_status": inactive})
+		for _, mutation := range []map[string]interface{}{{"kb_id": forbiddenKB}, {"status": inactive}} {
+			if err := dao.DB.WithContext(ctx).Model(&entity.Document{}).Where("id = ?", documentID).Updates(mutation).Error; err != nil {
+				t.Fatal("update owned citation fixture", err)
+			}
+			var actualKB, actualStatus string
+			if err := read.QueryRowContext(ctx, "SELECT kb_id,status FROM t_ai_documents WHERE id=$1", documentID).Scan(&actualKB, &actualStatus); err != nil {
+				t.Fatal("independent document state readback", err)
+			}
+			if mutation["kb_id"] != nil && actualKB != forbiddenKB || mutation["status"] != nil && actualStatus != inactive {
+				t.Fatal("owned citation state was not committed")
+			}
+			if got, err := vectorService.FetchChunkVectors(ctx, selected, actor); err == nil || got != nil || counter.searches.Load() != before {
+				t.Fatal("foreign/inactive SQL document reached citation engine", got, err)
+			}
+			if err := dao.DB.WithContext(ctx).Model(&entity.Document{}).Where("id = ?", documentID).Updates(map[string]interface{}{"kb_id": kb, "status": active}).Error; err != nil {
+				t.Fatal("restore owned citation fixture", err)
+			}
+			if err := read.QueryRowContext(ctx, "SELECT kb_id,status FROM t_ai_documents WHERE id=$1", documentID).Scan(&actualKB, &actualStatus); err != nil || actualKB != kb || actualStatus != active {
+				t.Fatal("independent citation fixture restoration failed", err)
+			}
+		}
+		journal.Event("citation-vectors-SQL-ES-independent-readback", map[string]interface{}{"dataset_id": kb, "document_id": documentID, "index": index, "hydrated_ids": selected.ChunkIDs[:2], "fallback_ids": []string{"afteraab-g-missing"}, "fallback_reason": "missing_chunk", "actual_vector": source.Source.Vector, "one_projected_search": true, "denied_or_cancelled_engine_delta": 0, "full_Go_ask_connected": false})
+	}
 	users := service.NewUserService()
 	chunks := handler.NewChunkHandler(service.NewChunkService(counter), users)
 	gin.SetMode(gin.ReleaseMode)
@@ -420,7 +500,11 @@ func TestAfterAABSearchRouterSQLAndElasticsearch(t *testing.T) {
 	priorAdmin := local.GetAdminStatus()
 	local.SetAdminStatus(0, "owned afteraab search acceptance")
 	t.Cleanup(func() { local.SetAdminStatus(priorAdmin.Status, priorAdmin.Reason) })
-	router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, handler.NewDatasetsHandler(service.NewDatasetsService(), counter), nil, nil, chunks, nil, nil, nil, nil, nil, nil, nil, nil).Setup(app)
+	routes := router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, handler.NewDatasetsHandler(service.NewDatasetsService(), counter), nil, nil, chunks, nil, nil, nil, nil, nil, nil, nil, nil)
+	if searchbot {
+		routes.SetSearchbotHandler(handler.NewSearchbotHandler(service.NewSearchbotService(service.NewModelProviderService()), service.NewChunkService(counter)))
+	}
+	routes.Setup(app)
 	api := support.RegisteredHTTPServer(t, app)
 	token, err := utility.SignUserJWT(actor+"@owned.invalid", server.GetSecretKey())
 	if err != nil {
@@ -432,11 +516,23 @@ func TestAfterAABSearchRouterSQLAndElasticsearch(t *testing.T) {
 		Message string                        `json:"message"`
 	}
 	call := func(callctx context.Context, body map[string]interface{}) (int, envelope, error) {
+		endpoint := "/api/v1/datasets/search"
+		if searchbot {
+			endpoint = "/api/v1/searchbots/retrieval_test"
+			mapped := make(map[string]interface{}, len(body))
+			for key, value := range body {
+				if key != "dataset_ids" {
+					mapped[key] = value
+				}
+			}
+			mapped["kb_id"] = body["dataset_ids"]
+			body = mapped
+		}
 		data, err := json.Marshal(body)
 		if err != nil {
 			return 0, envelope{}, err
 		}
-		request, err := http.NewRequestWithContext(callctx, http.MethodPost, api.URL+"/api/v1/datasets/search", strings.NewReader(string(data)))
+		request, err := http.NewRequestWithContext(callctx, http.MethodPost, api.URL+endpoint, strings.NewReader(string(data)))
 		if err != nil {
 			return 0, envelope{}, err
 		}
