@@ -267,6 +267,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				datasets.GET("/:dataset_id/documents", r.documentHandler.ListDatasetDocuments)
 				datasets.GET("/:dataset_id/documents/:document_id/chunks/:chunk_id", r.chunkHandler.Get)
 				datasets.GET("/metadata/flattened", r.datasetsHandler.ListMetadataFlattened)
+				datasets.GET("/:dataset_id/metadata/summary", r.documentHandler.MetadataSummaryByDataset)
 				datasets.DELETE("/:dataset_id/tags", r.datasetsHandler.RemoveTags)
 			}
 
@@ -320,6 +321,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			}
 
 			v1.GET("/agents", r.agentHandler.ListAgents)
+			v1.GET("/agents/prompts", r.agentHandler.GetPrompts)
 			v1.GET("/agents/templates", r.agentHandler.ListTemplates)
 			v1.PUT("/agents/:agent_id/tags", r.agentHandler.UpdateAgentTags)
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)

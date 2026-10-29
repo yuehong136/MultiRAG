@@ -35,6 +35,8 @@ func TestCLIAPIRouteScope(t *testing.T) {
 		"GET /api/v1/agents/:agent_id/versions/:version_id": ".GetAgentVersion-fm",
 		"POST /api/v1/agents/:agent_id/upload":              ".UploadAgentFile-fm",
 		"GET /api/v1/agents/templates":                      ".ListTemplates-fm",
+		"GET /api/v1/agents/prompts":                        ".GetPrompts-fm",
+		"GET /api/v1/datasets/:dataset_id/metadata/summary": ".MetadataSummaryByDataset-fm",
 		"PUT /api/v1/agents/:agent_id/tags":                 ".UpdateAgentTags-fm",
 		"POST /api/v1/mcp/servers/import":                   ".ImportMCPServers-fm",
 		"POST /api/v1/mcp/servers/:mcp_id/test":             ".TestMCPServer-fm",

@@ -60,7 +60,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 		protected.Use(r.handler.AuthMiddleware())
 		{
 			// Logout requires the auth middleware to populate the user context.
-			protected.GET("/logout", r.handler.Logout)
+			protected.POST("/logout", r.handler.Logout)
 			// Auth
 			protected.GET("/auth", r.handler.AuthCheck)
 
