@@ -188,7 +188,7 @@ func startServer(config *server.Config) {
 	memoryHandler := handler.NewMemoryHandler(memoryService)
 	providerHandler := handler.NewProviderHandler(userService, modelProviderService)
 	taskHandler := handler.NewTaskHandler(taskService)
-	searchbotHandler := handler.NewSearchbotHandler(service.NewSearchbotService(modelProviderService))
+	searchbotHandler := handler.NewSearchbotHandler(service.NewSearchbotService(modelProviderService), chunkService)
 	pluginHandler := handler.NewPluginHandler(service.NewPluginService())
 	store := engine.Get()
 	difyHandler := handler.NewDifyRetrievalHandler(handler.DifyRetrievalDependencies{

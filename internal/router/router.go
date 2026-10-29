@@ -131,7 +131,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 		r.agentHandler = handler.NewAgentHandler(service.NewAgentService())
 	}
 	if r.searchbotHandler == nil {
-		r.searchbotHandler = handler.NewSearchbotHandler(service.NewSearchbotService(service.NewModelProviderService()))
+		r.searchbotHandler = handler.NewSearchbotHandler(service.NewSearchbotService(service.NewModelProviderService()), service.NewChunkService())
 	}
 	if r.pluginHandler == nil {
 		r.pluginHandler = handler.NewPluginHandler(service.NewPluginService())
@@ -318,8 +318,12 @@ func (r *Router) Setup(engine *gin.Engine) {
 			v1.PUT("/agents/:agent_id/tags", r.agentHandler.UpdateAgentTags)
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
 			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
+			v1.GET("/agents/:agent_id/sessions", r.agentHandler.ListAgentSessions)
+			v1.GET("/agents/:agent_id/sessions/:session_id", r.agentHandler.GetAgentSession)
+			v1.DELETE("/agents/:agent_id/sessions/:session_id", r.agentHandler.DeleteAgentSessionItem)
 			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
 			v1.POST("/searchbots/related_questions", r.searchbotHandler.Handle)
+			v1.POST("/searchbots/retrieval_test", r.searchbotHandler.RetrievalTest)
 
 			models := v1.Group("/models")
 			{
