@@ -206,11 +206,20 @@ def run_web_discovery(client: TestClient, owner: str, engine: Engine, base_url: 
         journal.event("web-model-independent-readback", database=engine.url.database, owner=owner, numeric_model_ids=identifiers, multi_capability=True, max_tokens=0)
         _consumer(checkout, files[2], "cleanup", evidence, journal)
         with Session(engine) as reader:
-            assert reader.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == owner)) == 0
+            retained_provider = reader.get(TenantModelProvider, provider.id)
+            assert retained_provider is not None and retained_provider.tenant_id == owner and retained_provider.provider_name == "Ollama"
+            assert reader.scalar(select(func.count()).select_from(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id)) == 0
             assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
             assert all(reader.get(TenantModel, value) is None for value in identifiers)
             assert reader.get(TenantModelInstance, instance.id) is None
-        journal.event("web-cleanup-independent-readback", database=engine.url.database, provider_instance_models_absent=True, numeric_model_ids=identifiers)
+        journal.event(
+            "web-cleanup-independent-readback",
+            database=engine.url.database,
+            provider_retained=provider.id,
+            owned_instance_models_absent=True,
+            numeric_model_ids=identifiers,
+            final_provider_cleanup_owner="registered scratch_database DROP + independent readback",
+        )
     except BaseException:
         # The outer fixture owns the exact scratch database and always drops it.
         # A failed consumer has no trustworthy receipt for deleting API resources.
