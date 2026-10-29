@@ -332,7 +332,7 @@ class OpenRouter(OpenAIAPICompatible):
         inputs, outputs = _string_list(architecture.get("input_modalities")), _string_list(architecture.get("output_modalities"))
         parameters = _string_list(model.get("supported_parameters", []))
         # The active OpenRouter registry supports chat and vision only.
-        types = (["chat"] + (["image2text"] if "image" in inputs else [])) if "text" in outputs else []
+        types = [capability for modality, capability in (("text", "chat"), ("image", "image2text")) if modality in inputs and "text" in outputs]
         features = (["is_tools"] if "tools" in parameters else []) + (["thinking"] if {"reasoning", "include_reasoning"} & set(parameters) else [])
         context = context_length(top.get("max_completion_tokens"), model.get("context_length"), top.get("context_length"))
         return ModelMetadata(name, types, context, features, name) if types else None

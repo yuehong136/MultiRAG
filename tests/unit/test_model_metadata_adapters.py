@@ -119,6 +119,15 @@ async def test_openrouter_official_path_features_zero_and_supported_modalities(m
     assert result[0].features == ["is_tools", "thinking"] and all(client.is_closed for client in clients)
 
 
+@pytest.mark.parametrize("inputs,expected", [(["audio"], []), (["image"], ["image2text"]), ([], []), (["text"], ["chat"]), (["text", "image"], ["chat", "image2text"])])
+async def test_openrouter_text_output_requires_corresponding_supported_inputs(monkeypatch: pytest.MonkeyPatch, inputs: list[str], expected: list[str]) -> None:
+    model = router_model(architecture={"input_modalities": inputs, "output_modalities": ["text"]})
+    clients = transport(monkeypatch, lambda _request: httpx.Response(200, json={"data": [model]}))
+    result = await OpenRouter("").get_model_list()
+    assert [item.model_types for item in result] == ([expected] if expected else [])
+    assert all(client.is_closed for client in clients)
+
+
 @pytest.mark.parametrize("base", ["http://openrouter.ai", "https://openrouter.ai.evil.invalid", "https://openrouter.ai:444", "https://openrouter.ai/other"])
 async def test_openrouter_rejects_other_origins_before_credentials(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
     clients = transport(monkeypatch, lambda _request: pytest.fail("must not send credentials"))
