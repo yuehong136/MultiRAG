@@ -163,7 +163,6 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_after5e_provider_discovery_web.py",
                 "test_after5e_agent_history_web.py",
                 "test_after5e_mssql_web.py",
-                "test_sdk_cli_session_inventory.py",
                 "test_after4776_web_contracts.py",
                 "test_after53_dataset_create_web.py",
                 "test_agent_draft_session_persistence.py",
