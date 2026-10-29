@@ -817,3 +817,64 @@ def test_restful_agent_rejects_template_strings_and_scalars_before_sql(client: T
     response = client.post("/api/v1/agents/chat/completions", json={"agent_id": "agent-1", "chat_template_kwargs": invalid})
     assert response.status_code == 200 and response.json()["retcode"] != 0
     assert "JSON object" in response.json()["retmsg"] and db.calls == []
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, "question"),
+        ({"name": None}, "question"),
+        ({"name": ""}, "question"),
+        ({"name": "Explicit name"}, "Explicit name"),
+        ({"query": "问" * 260}, "问" * 250),
+        ({"query": "", "question": "Fallback question"}, "Fallback question"),
+        ({"query": None, "question": None}, ""),
+    ],
+)
+def test_draft_session_name_uses_first_query(agent_route_stubs: TestClient, monkeypatch: pytest.MonkeyPatch, fields: dict[str, Any], expected: str) -> None:
+    from api.db import CanvasCategory
+    from api.db.db_models import get_async_db
+    from api.utils.api_utils import async_current_user
+
+    module = _route_module("api.apps.restful_apis.agent")
+    principal = agent_route_stubs.app.dependency_overrides[async_current_user]()
+    saved: list[dict[str, Any]] = []
+
+    class DebugDB(_RecordingAsyncSession):
+        async def execute(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(one_or_none=lambda: ({}, "debug", CanvasCategory.Agent, principal.id))
+
+    async def authorized(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def save_session(db: AsyncSession, conversation: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["context"].tenant_id == principal.id
+        saved.append(dict(conversation))
+        return {**conversation, "round": 0}
+
+    monkeypatch.setattr(agent_canvas, "Canvas", _FakeCanvas)
+    monkeypatch.setattr(module, "require_canvas", authorized)
+    monkeypatch.setattr(module, "bind_canvas_task", authorized)
+    monkeypatch.setattr(module, "require_runtime_finish", lambda task_id: None)
+    monkeypatch.setattr(module, "finish_runtime", lambda task_id: "completed")
+    monkeypatch.setattr(module.CanvasReplicaService, "load_for_run", lambda **kwargs: {"dsl": {}, "title": "debug"})
+    monkeypatch.setattr(module.CanvasReplicaService, "commit_after_run", lambda **kwargs: True)
+    monkeypatch.setattr(module, "save_agent_session", save_session)
+    monkeypatch.setattr(module, "save_agent_session_turn", authorized)
+    db = DebugDB({})
+    agent_route_stubs.app.dependency_overrides[get_async_db] = lambda: db
+    response = agent_route_stubs.post("/api/v1/agents/chat/completions", json={"agent_id": "agent-1", "query": "question", **fields})
+    assert response.status_code == 200 and "hello" in response.text
+    assert len(saved) == 1 and saved[0]["name"] == expected
+    assert saved[0]["user_id"] == principal.id and "rollback" in db.calls
+
+
+@pytest.mark.parametrize("fields", [{"name": 12}, {"name": []}, {"query": ["text"]}, {"query": {"text": "bad"}}, {"query": []}, {"query": False}, {"query": 0}, {"question": {}}])
+def test_draft_session_name_rejects_invalid_fields_before_sql(client: TestClient, fields: dict[str, Any]) -> None:
+    from api.db.db_models import get_async_db
+
+    db = _RecordingAsyncSession({})
+    client.app.dependency_overrides[get_async_db] = lambda: db
+    response = client.post("/api/v1/agents/chat/completions", json={"agent_id": "agent-1", **fields})
+    assert response.status_code == 200 and response.json()["retcode"] != 0
+    assert "must be strings" in response.json()["retmsg"] and db.calls == []

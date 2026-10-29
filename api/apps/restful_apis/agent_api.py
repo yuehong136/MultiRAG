@@ -656,7 +656,9 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
         return await exp_agent_completion(agent_id, req, db, user)
 
     req["id"] = agent_id
-    query = req.get("query", "") or req.get("question", "")
+    if any(req.get(field) is not None and not isinstance(req[field], str) for field in ("query", "question", "name")):
+        return get_data_error_result(retmsg="query, question and name must be strings or null.")
+    query = req.get("query") or req.get("question") or ""
     files = req.get("files", [])
     inputs = req.get("inputs", {})
     tenant_id = str(user.id)
@@ -816,7 +818,7 @@ async def run(request_body: dict[str, Any], db: AsyncSession = Depends(get_async
                 "dialog_id": agent_id,
                 "user_id": user.id,
                 "exp_user_id": user_id,
-                "name": req.get("name", ""),
+                "name": req.get("name") or query[:250],
                 "message": [{"role": "user", "content": query, "id": canvas.task_id, "files": files, "created_at": time.time()}],
                 "reference": [],
                 "source": "agent",
