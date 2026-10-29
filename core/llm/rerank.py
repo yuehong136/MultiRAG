@@ -95,7 +95,22 @@ class Base(ABC):
         pass
 
     def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        raise NotImplementedError("Please implement encode method!")
+        """Return one finite score per input on the hybrid blend's [0, 1] scale.
+
+        Normalize once after the provider assembles every batch. Calibrated
+        scores retain their absolute values and similarity-threshold semantics.
+        Provider failures and cancellation propagate to the caller.
+        """
+        if not query or not texts:
+            return np.zeros(len(texts), dtype=float), 0
+        rank, token_count = self._compute_rank(query, texts)
+        rank = np.asarray(rank, dtype=float)
+        if rank.ndim != 1 or rank.shape[0] != len(texts):
+            raise ValueError("Rerank response must contain one score per input in a one-dimensional array")
+        return self._normalize_rank(rank), token_count
+
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
+        raise NotImplementedError("Please implement _compute_rank method!")
 
     @staticmethod
     def _normalize_rank(rank: np.ndarray) -> np.ndarray:
@@ -111,9 +126,15 @@ class Base(ABC):
         # Keep calibrated scores (including a lone score and legal zero) intact.
         if 0 <= min_rank <= max_rank <= 1:
             return rank
-        if np.isclose(min_rank, max_rank, atol=1e-3):
+        span = max_rank - min_rank
+        if span < 1e-3:
             return np.clip(rank, 0, 1)
-        return (rank - min_rank) / (max_rank - min_rank)
+        if not np.isfinite(span):
+            # Finite opposite-sign extremes can overflow during subtraction.
+            scale = max(abs(min_rank), abs(max_rank))
+            scaled = rank / scale
+            return (scaled - min_rank / scale) / (max_rank / scale - min_rank / scale)
+        return (rank - min_rank) / span
 
 
 class DefaultRerank(Base):
@@ -200,9 +221,7 @@ class DefaultRerank(Base):
             scores = [scores]
         return scores
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         pairs = [(query, truncate(t, 2048)) for t in texts]
         token_count = 0
         for _, t in pairs:
@@ -220,9 +239,7 @@ class JinaRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         texts = [truncate(t, 8196) for t in texts]
         data = {"model": self.model_name, "query": query, "documents": texts, "top_n": len(texts)}
         res = _post_json(self.base_url, headers=self.headers, json=data)
@@ -250,9 +267,7 @@ class YoudaoRerank(DefaultRerank):
         self._dynamic_batch_size = 8
         self._min_batch_size = 1
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         pairs = [(query, truncate(t, self._model.max_length)) for t in texts]
         token_count = 0
         for _, t in pairs:
@@ -273,9 +288,7 @@ class XInferenceRerank(Base):
         if key and key != "x":
             self.headers["Authorization"] = f"Bearer {key}"
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         pairs = [(query, truncate(t, 4096)) for t in texts]
         token_count = 0
         for _, t in pairs:
@@ -294,9 +307,7 @@ class LocalAIRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         # noway to config Ragflow , use fix setting
         texts = [truncate(t, 500) for t in texts]
         data = {
@@ -310,8 +321,6 @@ class LocalAIRerank(Base):
             token_count += num_tokens_from_string(t)
         res = _post_json(self.base_url, headers=self.headers, json=data)
         rank = _rank_from_results(_field(res, "results"), len(texts), "relevance_score")
-
-        rank = Base._normalize_rank(rank)
 
         return rank, token_count
 
@@ -340,9 +349,7 @@ class NvidiaRerank(Base):
             "Authorization": f"Bearer {key}",
         }
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         token_count = num_tokens_from_string(query) + sum([num_tokens_from_string(t) for t in texts])
         data = {
             "model": self.model_name,
@@ -362,7 +369,7 @@ class LmStudioRerank(Base):
     def __init__(self, key, model_name, base_url, **kwargs):
         pass
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         raise NotImplementedError("The LmStudioRerank has not been implemented")
 
 
@@ -374,9 +381,7 @@ class OpenAI_APIRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name.split("___")[0]
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         # noway to config MultiRAG , use fix setting
         texts = [truncate(t, 500) for t in texts]
         data = {
@@ -390,8 +395,6 @@ class OpenAI_APIRerank(Base):
             token_count += num_tokens_from_string(t)
         res = _post_json(self.base_url, headers=self.headers, json=data)
         rank = _rank_from_results(_field(res, "results"), len(texts), "relevance_score")
-
-        rank = Base._normalize_rank(rank)
 
         return rank, token_count
 
@@ -420,9 +423,7 @@ class CoHereRerank(Base):
         self.client = Client(**client_kwargs)
         self.model_name = model_name.split("___")[0]
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         token_count = num_tokens_from_string(query) + sum([num_tokens_from_string(t) for t in texts])
         res = self.client.rerank(
             model=self.model_name,
@@ -441,7 +442,7 @@ class TogetherAIRerank(Base):
     def __init__(self, key, model_name, base_url, **kwargs):
         pass
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         raise NotImplementedError("The api has not been implemented")
 
 
@@ -461,9 +462,7 @@ class SILICONFLOWRerank(Base):
             "authorization": f"Bearer {key}",
         }
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         payload = {
             "model": self.model_name,
             "query": query,
@@ -490,9 +489,7 @@ class VoyageRerank(Base):
         self.client = voyageai.Client(api_key=key, timeout=30.0)
         self.model_name = model_name
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         res = self.client.rerank(query=query, documents=texts, model=self.model_name, top_k=len(texts))
         rank = _rank_from_results(res.results, len(texts))
         return rank, res.total_tokens
@@ -508,9 +505,7 @@ class QWenRerank(Base):
         self.model_name = dashscope.TextReRank.Models.gte_rerank if model_name is None else model_name
         self.request_timeout = 30.0
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         from http import HTTPStatus
 
         import dashscope
@@ -547,9 +542,7 @@ class HuggingfaceRerank(Base):
         self.model_name = model_name.split("___")[0]
         self.base_url = base_url
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
@@ -571,9 +564,7 @@ class GPUStackRerank(Base):
             "authorization": f"Bearer {key}",
         }
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         payload = {
             "model": self.model_name,
             "query": query,
@@ -613,9 +604,7 @@ class Ai302Rerank(JinaRerank):
     def __init__(self, key: str, model_name: str, base_url: str | None = "https://api.302.ai/v1/rerank") -> None:
         super().__init__(key, model_name, base_url or "https://api.302.ai/v1/rerank")
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         texts = [truncate(t, 500) for t in texts]
         data = {"model": self.model_name, "query": query, "documents": texts, "top_n": len(texts)}
         response = _post_json(self.base_url, headers=self.headers, json=data)
@@ -651,9 +640,7 @@ class RAGconRerank(Base):
         self.headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         self.model_name = model_name
 
-    def similarity(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
-        if not query or not texts:
-            return np.zeros(len(texts), dtype=float), 0
+    def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
         # noway to config Ragflow , use fix setting
         texts = [truncate(t, 500) for t in texts]
         data = {
@@ -667,7 +654,5 @@ class RAGconRerank(Base):
             token_count += num_tokens_from_string(t)
         res = _post_json(append_path_segment(self._base_url, "rerank"), headers=self.headers, json=data)
         rank = _rank_from_results(_field(res, "results"), len(texts), "relevance_score")
-
-        rank = Base._normalize_rank(rank)
 
         return rank, token_count

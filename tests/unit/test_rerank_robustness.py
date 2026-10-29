@@ -1,4 +1,7 @@
+import hashlib
 import json
+import secrets
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -12,6 +15,7 @@ import requests
 
 from core.llm import RerankModel
 from core.llm.rerank import Base
+from tests.support.resource_journal import ResourceJournal
 
 HTTP_FACTORIES = ["Jina", "Xinference", "LocalAI", "NVIDIA", "OpenAI-API-Compatible", "SILICONFLOW", "HuggingFace", "GPUStack", "302.AI", "RAGcon", "NovitaAI", "GiteeAI", "Jiekou.AI", "FuturMix"]
 
@@ -232,13 +236,30 @@ def test_registered_rerank_real_http_batches_errors_and_timeout(monkeypatch: pyt
         def log_message(self, *args: Any) -> None:
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    journal = ResourceJournal("registered-rerank-controlled-http")
+    journal.event("reserve-provider-input", input_sha256=hashlib.sha256(json.dumps({"query": "query", "texts": [str(i) for i in range(17)]}).encode()).hexdigest())
+    server: ThreadingHTTPServer | None = None
+    for _ in range(20):
+        address = ("127.0.0.1", 20000 + secrets.randbelow(40000))
+        journal.event("reserve-listener-before-bind", address=list(address))
+        candidate = ThreadingHTTPServer(address, Handler, bind_and_activate=False)
+        try:
+            candidate.server_bind()
+            candidate.server_activate()
+        except OSError as error:
+            candidate.server_close()
+            journal.event("listener-unavailable", address=list(address), errno=error.errno)
+            continue
+        server = candidate
+        break
+    assert server is not None, "Could not reserve controlled provider listener"
+    worker = threading.Thread(target=server.serve_forever, name="registered-rerank-http")
+    journal.event("reserve-server-thread-before-start", name=worker.name, address=list(address))
     worker.start()
     url = f"http://127.0.0.1:{server.server_port}"
     try:
         scores, _ = model_for("HuggingFace", url + "/gateway/rerank?tenant=a").similarity("query", [str(i) for i in range(17)])
-        np.testing.assert_array_equal(scores, np.arange(17))
+        np.testing.assert_array_equal(scores, np.arange(17) / 16)
         assert requests_seen == ["/gateway/rerank?tenant=a"] * 3
         with pytest.raises(requests.HTTPError, match="503"):
             model_for("Jina", url + "/unavailable").similarity("query", ["doc"])
@@ -257,4 +278,8 @@ def test_registered_rerank_real_http_batches_errors_and_timeout(monkeypatch: pyt
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
+        with socket.socket() as reader:
+            listener_absent = reader.connect_ex(address) != 0
+        journal.event("listener-independent-readback", address=list(address), absent=listener_absent, thread_absent=not worker.is_alive())
+        assert listener_absent and not worker.is_alive()
     assert not worker.is_alive()

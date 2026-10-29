@@ -359,9 +359,10 @@ async def cross_languages(tenant_id: str, llm_id: str | None, query: str, langua
     rendered_user_prompt = PROMPT_JINJA_ENV.from_string(CROSS_LANGUAGES_USER_PROMPT_TEMPLATE).render(query=query, languages=languages)
 
     ans = await chat_mdl.async_chat(rendered_sys_prompt, [{"role": "user", "content": rendered_user_prompt}], {"temperature": 0.2})
-    ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
     if ans.find("**ERROR**") >= 0:
+        logging.info("Cross-language query generation failed; retaining the original query")
         return query
+    ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
     return "\n".join([a for a in re.sub(r"(^Output:|\n+)", "", ans, flags=re.DOTALL).split("===") if a.strip()])
 
 

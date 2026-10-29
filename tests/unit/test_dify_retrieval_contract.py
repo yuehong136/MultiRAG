@@ -245,14 +245,31 @@ def test_missing_sql_documents_are_filtered_without_losing_kg(client: TestClient
     assert ctx.documents.call_count == 1 and ctx.documents.call_args.args[1] == ["doc", "gone"]
 
 
-def test_metadata_zero_matches_stays_restricted(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace) -> None:
+@pytest.mark.parametrize("use_kg", [False, True])
+def test_metadata_zero_matches_stays_restricted(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace, use_kg: bool) -> None:
     ctx = allowed_retrieval
     monkeypatch.setattr(ctx.module, "meta_filter", lambda *_: [])
+    model = Mock(side_effect=AssertionError("Empty metadata reached model lookup"))
+    bundle = Mock(side_effect=AssertionError("Empty metadata initialized model"))
+    labels = Mock(side_effect=AssertionError("Empty metadata reached label model"))
+    monkeypatch.setattr(ctx.module, "get_model_config_by_id", model)
+    monkeypatch.setattr(ctx.module, "get_tenant_default_model_by_type", model)
+    monkeypatch.setattr(ctx.module, "LLMBundle", bundle)
+    monkeypatch.setattr(ctx.module, "label_question", labels)
     response = client.post(
-        "/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "metadata_condition": {"conditions": [{"name": "author", "comparison_operator": "is", "value": "nobody"}]}}
+        "/api/v1/dify/retrieval",
+        json={"knowledge_id": "kb", "query": "text", "use_kg": use_kg, "metadata_condition": {"conditions": [{"name": "author", "comparison_operator": "is", "value": "nobody"}]}},
     )
     assert response.status_code == 200, response.text
-    assert ctx.retriever.retrieval.call_args.kwargs["doc_ids"] == ["-999"]
+    assert response.json() == {"records": []}
+    model.assert_not_called()
+    bundle.assert_not_called()
+    labels.assert_not_called()
+    ctx.retriever.retrieval.assert_not_called()
+    ctx.retriever.retrieval_by_children.assert_not_called()
+    ctx.kg.retrieval.assert_not_called()
+    ctx.documents.assert_not_called()
+    ctx.metadata.assert_not_called()
 
 
 @pytest.mark.parametrize("message,status", [("chunk_not_found_error", 404), ("controlled retrieval failure", 500)])
@@ -280,3 +297,15 @@ def test_old_get_is_method_not_allowed_and_post_is_registered(client: TestClient
     schema = client.app.openapi()["paths"]
     assert "get" not in schema["/api/v1/dify/retrieval"]
     assert "post" in schema["/api/v1/dify/retrieval"]
+
+
+@pytest.mark.parametrize("condition", [{}, {"logic": "and", "conditions": []}, {"logic": "or", "conditions": []}])
+def test_inactive_metadata_condition_keeps_unrestricted_chunk_scope(client: TestClient, monkeypatch: pytest.MonkeyPatch, allowed_retrieval: SimpleNamespace, condition: dict[str, Any]) -> None:
+    ctx = allowed_retrieval
+    filter_matches = Mock(side_effect=AssertionError("Inactive metadata condition must not select documents"))
+    monkeypatch.setattr(ctx.module, "meta_filter", filter_matches)
+    response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text", "metadata_condition": condition})
+    assert response.status_code == 200, response.text
+    assert [record["content"] for record in response.json()["records"]] == ["text"]
+    assert ctx.retriever.retrieval.call_args.kwargs["doc_ids"] is None
+    filter_matches.assert_not_called()

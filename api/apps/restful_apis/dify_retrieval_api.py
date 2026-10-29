@@ -274,24 +274,20 @@ async def _run_retrieval(
 
         metas = DocMetadataService.get_flatted_meta_by_kbs(db, [kb_id])
 
+        # Resolve an active filter before any model, chunk or graph work.
+        # An empty match set is final; a sentinel ID can still trigger KG IO.
+        filters = convert_conditions(metadata_condition)
+        if filters:
+            doc_ids = meta_filter(metas, filters, (metadata_condition or {}).get("logic", "and"))
+            if not doc_ids:
+                return RetrievalResponse()
+
         # 初始化嵌入模型
         if kb.tenant_embd_id:
             embd_config = get_model_config_by_id(db, kb.tenant_embd_id, tenant_id=kb.tenant_id, model_type="embedding")
         else:
             embd_config = get_model_config_by_type_and_name(db, kb.tenant_id, LLMType.EMBEDDING.value, kb.embd_id)
         embd_mdl = LLMBundle(db, kb.tenant_id, embd_config)
-
-        # 处理元数据过滤
-        if metadata_condition:
-            filtered_ids = meta_filter(
-                metas,
-                convert_conditions(metadata_condition),
-                metadata_condition.get("logic", "and"),
-            )
-            doc_ids.extend(filtered_ids)
-            # 如果有过滤条件但没有匹配结果，使用占位符避免返回所有文档
-            if not doc_ids:
-                doc_ids = ["-999"]
 
         # 执行检索
         ranks = await settings.retriever.retrieval(

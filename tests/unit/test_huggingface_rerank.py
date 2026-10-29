@@ -35,6 +35,6 @@ def test_registered_huggingface_url_and_batch_alignment(monkeypatch: pytest.Monk
     scores, tokens = provider.similarity("query", texts)
     assert [endpoint for endpoint, _ in calls] == [expected] * 3
     assert [len(kwargs["json"]["texts"]) for _, kwargs in calls] == [8, 8, 1]
-    np.testing.assert_array_equal(scores, np.arange(17))
+    np.testing.assert_array_equal(scores, np.arange(17) / 16)
     assert tokens > 0
     assert texts == [str(i) for i in range(17)]

@@ -5,6 +5,15 @@
 会静默丢结果、返回短页。
 """
 
+import math
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import numpy as np
+import pytest
+
+from core.llm.rerank import Base
 from core.nlp.search import Dealer
 
 
@@ -51,3 +60,34 @@ def test_cross_block_pagination_no_gaps_no_short_pages():
         assert len(page_items) == page_size
         seen.extend(page_items)
     assert seen == list(range(total))
+
+
+@pytest.mark.parametrize(("page_size", "top", "total"), [(10, 1024, 250), (30, 55, 250), (7, 30, 83), (1, 0, 35)])
+async def test_actual_retrieval_walks_every_page_once(monkeypatch: pytest.MonkeyPatch, page_size: int, top: int, total: int) -> None:
+    dealer = Dealer.__new__(Dealer)
+    dealer.qryr = SimpleNamespace(question=lambda _: (None, ["query"]), token_similarity=lambda _query, documents: np.zeros(len(documents)))
+    cap = min(total, top) if top > 0 else total
+    requests: list[dict[str, Any]] = []
+
+    async def search(request: dict[str, Any], *_args: Any, **_kwargs: Any) -> Dealer.SearchResult:
+        requests.append(request)
+        start = (request["page"] - 1) * request["size"]
+        ids = [str(i) for i in range(start, min(start + request["size"], cap))]
+        fields = {identifier: {"content_ltks": "document", "content_with_weight": "document", "doc_id": "doc", "kb_id": "kb"} for identifier in ids}
+        return Dealer.SearchResult(total=len(ids), ids=ids, query_vector=[1.0], field=fields, highlight={}, aggregation=[], keywords=[])
+
+    class Reranker(Base):
+        def _compute_rank(self, query: str, texts: list[str]) -> tuple[np.ndarray, int]:
+            return np.full(len(texts), 0.9), 0
+
+    monkeypatch.setattr(dealer, "search", search)
+    monkeypatch.setattr(dealer, "_prune_deleted_chunks", AsyncMock(side_effect=lambda results, _: results))
+    surfaced: list[str] = []
+    for page in range(1, math.ceil(cap / page_size) + 1):
+        result = await dealer.retrieval("query", None, object(), "tenant", ["knowledge"], page, page_size, top=top, rerank_mdl=Reranker(None, None), aggs=False)
+        expected_size = min(page_size, cap - (page - 1) * page_size)
+        assert len(result["chunks"]) == expected_size
+        surfaced.extend(chunk["chunk_id"] for chunk in result["chunks"])
+    assert surfaced == [str(i) for i in range(cap)]
+    window = Dealer._rerank_window(page_size, top)
+    assert all(request["size"] == window for request in requests)

@@ -105,8 +105,8 @@ def dify_http(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> I
         journal.event("dify-sql-cleanup-readback", owned_rows_absent=True, remaining=remaining)
 
 
-def post_retrieval(env: dict[str, Any], credential: str, *, permission: str = "team", author: str | None = None) -> Any:
-    payload: dict[str, Any] = {"knowledge_id": env["kbs"][permission], "query": "controlled question"}
+def post_retrieval(env: dict[str, Any], credential: str, *, permission: str = "team", author: str | None = None, use_kg: bool = False) -> Any:
+    payload: dict[str, Any] = {"knowledge_id": env["kbs"][permission], "query": "controlled question", "use_kg": use_kg}
     if author is not None:
         payload["metadata_condition"] = {"logic": "and", "conditions": [{"name": "author", "comparison_operator": "is", "value": author}]}
     return env["client"].post(env["base"] + "/api/v1/dify/retrieval", headers={"Authorization": f"Bearer {credential}"}, json=payload, timeout=30)
@@ -185,7 +185,15 @@ def test_disable_sdk_preserves_real_jwt_identity(dify_http: dict[str, Any], monk
     assert allowed.status_code == 200 and len(allowed.json()["records"]) == 2, allowed.text
 
 
-def test_real_metadata_empty_match_does_not_broaden(dify_http: dict[str, Any]) -> None:
-    response = post_retrieval(dify_http, dify_http["keys"][0], author="Nobody")
+@pytest.mark.parametrize("use_kg", [False, True])
+def test_real_metadata_empty_match_does_not_broaden(dify_http: dict[str, Any], monkeypatch: pytest.MonkeyPatch, use_kg: bool) -> None:
+    kg = SimpleNamespace(retrieval=AsyncMock(side_effect=AssertionError("Empty metadata reached KG")))
+    module = sys.modules["api.apps.restful_apis.dify_retrieval"]
+    monkeypatch.setattr(module.settings, "kg_retriever", kg)
+    response = post_retrieval(dify_http, dify_http["keys"][0], author="Nobody", use_kg=use_kg)
     assert response.status_code == 200 and response.json() == {"records": []}, response.text
-    assert dify_http["retriever"].retrieval.call_args.kwargs["doc_ids"] == ["-999"]
+    kg.retrieval.assert_not_called()
+    dify_http["model"].assert_not_called()
+    dify_http["bundle"].assert_not_called()
+    dify_http["retriever"].retrieval.assert_not_called()
+    dify_http["retriever"].retrieval_by_children.assert_not_called()
