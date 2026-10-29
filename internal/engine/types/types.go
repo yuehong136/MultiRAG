@@ -18,6 +18,8 @@ package types
 
 // SearchRequest unified search request for all engines
 type SearchRequest struct {
+	// Kind is a trusted internal capability, never decoded from client JSON.
+	Kind SearchKind `json:"-"`
 	// Search target
 	IndexNames []string // For ES: index names; For Infinity: treated as table name prefixes
 	KbIDs      []string // Knowledge base IDs filter

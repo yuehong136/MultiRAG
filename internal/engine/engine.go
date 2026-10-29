@@ -82,3 +82,9 @@ func Type(docEngine DocEngine) EngineType {
 	// or rely on configuration to know the type
 	return EngineType("unknown")
 }
+
+// MetadataScanner optionally streams a complete, scoped metadata snapshot.
+// Implementations must close cursors on visitor errors and cancellation.
+type MetadataScanner interface {
+	ScanMetadata(ctx context.Context, req *types.SearchRequest, visit func([]map[string]interface{}) error) error
+}
