@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,9 +36,9 @@ func TestHeartbeatResponseValidationAndRetry(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
+			var calls atomic.Int64
 			fixture := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
+				calls.Add(1)
 				if r.Method != "POST" || r.URL.Path != "/api/v1/admin/reports" {
 					t.Error("heartbeat request contract changed")
 				}
@@ -67,8 +68,8 @@ func TestHeartbeatResponseValidationAndRetry(t *testing.T) {
 			if tc.valid {
 				want = 1
 			}
-			if calls != want {
-				t.Fatalf("retry/throttle requests=%d want=%d", calls, want)
+			if got := calls.Load(); got != int64(want) {
+				t.Fatalf("retry/throttle requests=%d want=%d", got, want)
 			}
 		})
 	}
@@ -82,9 +83,9 @@ func TestHeartbeatNilSenderFailsWithoutPanic(t *testing.T) {
 }
 
 func TestHeartbeatTransportFailureRetries(t *testing.T) {
-	calls := 0
+	var calls atomic.Int64
 	fixture := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		calls.Add(1)
 		connection, _, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			t.Error(err)
@@ -102,7 +103,7 @@ func TestHeartbeatTransportFailureRetries(t *testing.T) {
 			t.Fatal("transport error reported success")
 		}
 	}
-	if calls != 2 {
-		t.Fatalf("transport failure prevented retry: %d", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("transport failure prevented retry: %d", got)
 	}
 }
