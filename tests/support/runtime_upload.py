@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import errno
+import hashlib
 import json
 import os
 import secrets
@@ -51,9 +52,24 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
     record_path = evidence / (owner_ids[0] + ".json")
     journal = ResourceJournal("runtime-upload-api")
+    sql_url = bootstrapped_engine.url
+    object_config = CONFIGS["minio"]
+    object_endpoint = {"host": object_config["host"], "secure": str(object_config.get("secure", False)).lower() in {"true", "1", "yes"}}
+    seed = {
+        "owners": owner_ids,
+        "memberships": membership_ids,
+        "api_token_owner": owner_ids[1],
+        "api_token_name": "upload-test",
+        "api_token_sha256": hashlib.sha256(api_key.encode()).hexdigest(),
+        "bucket": bucket,
+    }
     journal.event(
         "reserve-runtime",
         database=record["database"],
+        database_endpoint={"host": sql_url.host, "port": sql_url.port, "role": sql_url.username},
+        object_endpoint=object_endpoint,
+        fixture_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        seed_sha256=hashlib.sha256(json.dumps(seed, sort_keys=True).encode()).hexdigest(),
         owners=owner_ids,
         memberships=membership_ids,
         api_token_owner=owner_ids[1],
@@ -94,7 +110,7 @@ def runtime_upload_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.Monke
             db.add(APIToken(tenant_id=owner_ids[1], token=api_key, name="upload-test"))
             db.commit()
 
-        cfg = CONFIGS["minio"]
+        cfg = object_config
         storage_client = Minio(cfg["host"], access_key=cfg["user"], secret_key=cfg["password"], secure=str(cfg.get("secure", False)).lower() in {"true", "1", "yes"})
 
         def remove_bucket() -> None:
