@@ -1301,6 +1301,10 @@ class LiteLLMBase(ToolHistoryMixin, ABC):
         self.model_name = f"{self.prefix}{model_name}"
         self.api_key = key
         self.base_url = (base_url or FACTORY_DEFAULT_BASE_URL.get(self.provider, "")).rstrip("/")
+        if self.provider == SupportedLiteLLMProvider.Tongyi_Qianwen and not self.base_url.endswith("/api/v1"):
+            # Compatible DashScope endpoints use the OpenAI wire protocol.
+            self.prefix = "openai/"
+            self.model_name = f"{self.prefix}{model_name}"
         if self.provider == SupportedLiteLLMProvider.Anthropic:
             # Anthropic 是原生 /v1/messages 协议，LiteLLM 会自己补这一段。用户沿 OpenAI
             # 习惯多填的 /v1 必须先摘掉，否则拼成 .../v1/v1/messages 而 404。

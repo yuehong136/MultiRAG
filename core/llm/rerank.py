@@ -33,6 +33,7 @@ from common import settings
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
+from core.llm.dashscope_transport import native_http_api_url
 
 
 def _valid_url(url: str | None, *, allow_bare_host: bool = False) -> str:
@@ -502,6 +503,7 @@ class QWenRerank(Base):
         import dashscope
 
         self.api_key = key
+        self._dashscope_http_api_url = native_http_api_url(base_url)
         self.model_name = dashscope.TextReRank.Models.gte_rerank if model_name is None else model_name
         self.request_timeout = 30.0
 
@@ -512,9 +514,20 @@ class QWenRerank(Base):
 
         # qwen3-rerank does not support return_documents parameter
         if self.model_name.startswith("qwen3-rerank"):
-            resp = dashscope.TextReRank.call(api_key=self.api_key, model=self.model_name, query=query, documents=texts, top_n=len(texts), request_timeout=self.request_timeout)
+            resp = dashscope.TextReRank.call(
+                api_key=self.api_key, model=self.model_name, query=query, documents=texts, top_n=len(texts), request_timeout=self.request_timeout, base_address=self._dashscope_http_api_url
+            )
         else:
-            resp = dashscope.TextReRank.call(api_key=self.api_key, model=self.model_name, query=query, documents=texts, top_n=len(texts), return_documents=False, request_timeout=self.request_timeout)
+            resp = dashscope.TextReRank.call(
+                api_key=self.api_key,
+                model=self.model_name,
+                query=query,
+                documents=texts,
+                top_n=len(texts),
+                return_documents=False,
+                request_timeout=self.request_timeout,
+                base_address=self._dashscope_http_api_url,
+            )
 
         if resp.status_code == HTTPStatus.OK:
             rank = _rank_from_results(_field(_field(resp, "output"), "results"), len(texts))

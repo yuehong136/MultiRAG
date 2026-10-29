@@ -23,7 +23,6 @@ import time
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit, urlunsplit
 
 import dashscope
 import numpy as np
@@ -39,6 +38,7 @@ from common.exceptions import ModelException
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version
+from core.llm.dashscope_transport import native_http_api_url
 from core.llm.volc_auth import decode_volc_key
 
 
@@ -321,44 +321,13 @@ class BaiChuanEmbed(OpenAIEmbed):
         super().__init__(key, model_name, base_url)
 
 
-def _dashscope_native_http_api_url(base_url: str | None) -> str | None:
-    """Map known compatible roots; explicit custom endpoints must use the native API."""
-    normalized = (base_url or "").strip().rstrip("/")
-    if not normalized:
-        return None
-    error = "Tongyi-Qianwen base_url must be a native /api/v1 URL or a supported DashScope root"
-    try:
-        parsed = urlsplit(normalized)
-        # Accessing port also rejects malformed or out-of-range ports.
-        _ = parsed.port
-    except ValueError:
-        raise ValueError(error) from None
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-        or any(c.isspace() for c in normalized)
-    ):
-        # Never include the configured URL: userinfo and queries may contain credentials.
-        raise ValueError(error)
-    path = parsed.path.rstrip("/")
-    if path.endswith("/api/v1"):
-        return urlunsplit(parsed._replace(path=path))
-    if parsed.hostname in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"} and path in {"", "/compatible-mode/v1"}:
-        return urlunsplit(parsed._replace(path="/api/v1"))
-    raise ValueError(error)
-
-
 class QWenEmbed(Base):
     _FACTORY_NAME = "Tongyi-Qianwen"
 
     def __init__(self, key: str, model_name: str = "text-embedding-v4", base_url: str | None = None, **kwargs: Any) -> None:
         self.key = key
         self.model_name = model_name
-        self._dashscope_http_api_url = _dashscope_native_http_api_url(base_url)
+        self._dashscope_http_api_url = native_http_api_url(base_url)
 
     def _request_embeddings(self, texts: str | list[str], text_type: Literal["document", "query"], retries: int = 0) -> Mapping[str, Any]:
         for attempt in range(retries + 1):

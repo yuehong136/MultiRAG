@@ -16,6 +16,7 @@
 import html
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -139,6 +140,7 @@ class MinerUParseOptions:
     parse_method: str = "raw"
     formula_enable: bool = True
     table_enable: bool = True
+    request_timeout: float = 1800.0
 
 
 class MinerUParser(RAGFlowPdfParser):
@@ -300,7 +302,7 @@ class MinerUParser(RAGFlowPdfParser):
                     files=files,
                     data=data,
                     headers=headers,
-                    timeout=1800,
+                    timeout=options.request_timeout,
                     stream=True,
                 ) as response:
                     response.raise_for_status()
@@ -717,6 +719,9 @@ class MinerUParser(RAGFlowPdfParser):
     ) -> tuple[list[tuple[str, str] | tuple[str, str, str]], list[Any]]:
         import shutil
 
+        request_timeout = float(kwargs.get("request_timeout", 1800))
+        if not math.isfinite(request_timeout) or request_timeout <= 0:
+            raise ValueError("MinerU request timeout must be positive and finite")
         self.outlines = extract_pdf_outlines(binary if binary is not None else filepath)
         temp_pdf = None
         created_tmp_dir = False
@@ -775,6 +780,7 @@ class MinerUParser(RAGFlowPdfParser):
                 parse_method=parse_method,
                 formula_enable=enable_formula,
                 table_enable=enable_table,
+                request_timeout=request_timeout,
             )
             final_out_dir = self._run_mineru(pdf, out_dir, options, callback=callback)
             outputs = self._read_output(final_out_dir, pdf.stem, method=mineru_method_raw_str, backend=backend)

@@ -921,25 +921,30 @@ def test_backfill_failure_rolls_back_provider_instance_and_model_writes(owned_en
     owner = uuid4().hex
     with Session(owned_engine) as db:
         db.add(tenant(owner))
+        db.add(TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="valid-first", mdl_type="chat", api_key="private-fixture"))
         db.add(TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="invalid-capability", mdl_type="invalid", api_key="private-fixture"))
         db.commit()
     with pytest.raises(RuntimeError, match="explicit repair"), owned_engine.begin() as connection:
         backfill(connection, owner)
     # A new session observes the failed transaction independently.
     with Session(owned_engine) as db:
-        assert db.scalar(select(func.count()).select_from(TenantLLM)) == 1
+        assert db.scalar(select(func.count()).select_from(TenantLLM)) == 2
         assert db.scalar(select(func.count()).select_from(TenantModelProvider)) == 0
         assert db.scalar(select(func.count()).select_from(TenantModelInstance)) == 0
         assert db.scalar(select(func.count()).select_from(TenantModel)) == 0
 
 
-def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_failures(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize("provider_name,base_path", [("OpenAI", "/v1"), ("BaiduYiyan", "/v2"), ("Tongyi-Qianwen", "/compatible-mode/v1"), ("VLLM", "/mount"), ("VLLM", "/mount/v1/")])
+def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_failures(
+    http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, provider_name: str, base_path: str
+) -> None:
     import socket
     import threading
     from contextlib import ExitStack
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     client, owner, engine, _module = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": provider_name, "llm": []}])
     monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
     journal = ResourceJournal("provider-connection-atomic-http")
     requests_seen: list[str] = []
@@ -950,6 +955,8 @@ def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_f
             return None
 
         def do_POST(self) -> None:
+            assert self.path == (base_path.rstrip("/") + ("/v1" if provider_name == "VLLM" and not base_path.rstrip("/").endswith("/v1") else "") + "/chat/completions")
+            assert self.headers["Authorization"] == "Bearer probe-SECRET-key"
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests_seen.append(payload["model"])
             if state["failure"]:
@@ -992,12 +999,12 @@ def test_provider_connection_and_atomic_create_use_real_adapter_and_zero_write_f
         cleanup.callback(server.shutdown)
         candidate = {
             "api_key": "probe-SECRET-key",
-            "base_url": f"http://127.0.0.1:{address[1]}/v1",
+            "base_url": f"http://127.0.0.1:{address[1]}{base_path}",
             "region": "",
             "model_ids": [],
             "custom_model": {"model_name": "custom-zero", "model_types": ["chat", "image2text"], "max_tokens": 0, "is_tools": False},
         }
-        endpoint = "/api/v1/providers/OpenAI"
+        endpoint = f"/api/v1/providers/{provider_name}"
         assert counts() == (0, 0, 0, 0)
         verified = client.post(endpoint + "/connection", json=candidate)
         assert verified.status_code == 200, verified.text
@@ -1129,3 +1136,271 @@ def test_provider_inventory_projects_owned_capabilities_without_credentials(http
         assert db.scalar(select(TenantModelInstance).where(TenantModelInstance.instance_name == "first")).status == "inactive"
         assert db.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id != owner)) == 1
         assert db.scalar(select(TenantLLM).where(TenantLLM.tenant_id == foreign)).api_key == "private-foreign-key"
+
+
+def test_backfill_tools_wrappers_mixed_imports_preserve_ids_and_defaults(owned_engine: Engine) -> None:
+    """Dedup new credentials without moving any already linked model."""
+    from api.db.model_backfill import backfill_tenant_defaults
+
+    owner, other = uuid4().hex, uuid4().hex
+    with Session(owned_engine) as db:
+        db.add_all([tenant(owner), tenant(other)])
+        first = TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="original", mdl_type="chat", api_key='{"api_key":"fixture","is_tools":true}', api_base="https://one.invalid/v1", max_tokens=0)
+        db.add(first)
+        db.commit()
+        original_id = first.id
+    with owned_engine.begin() as connection:
+        backfill(connection)
+    with Session(owned_engine) as db:
+        original_instance = db.get(TenantModel, original_id).instance_id
+        db.get(Tenant, owner).tenant_llm_id = original_id
+        inputs = [
+            (owner, "OpenAI", "raw", "fixture", "https://one.invalid/v1"),
+            (owner, "OpenAI", "false", '{"is_tools":false,"api_key":"fixture"}', "https://one.invalid/v1"),
+            (owner, "OpenAI", "base", "fixture", "https://two.invalid/v1"),
+            (other, "OpenAI", "tenant", "fixture", "https://one.invalid/v1"),
+            (owner, "OpenRouter", "factory", "fixture", "https://one.invalid/v1"),
+            (owner, "OpenAI", "order-a", '{"api_key":"fixture","provider_order":["A"],"is_tools":true}', "https://one.invalid/v1"),
+            (owner, "OpenAI", "order-a-false", '{"provider_order":["A"],"is_tools":false,"api_key":"fixture"}', "https://one.invalid/v1"),
+            (owner, "OpenAI", "order-b", '{"api_key":"fixture","provider_order":["B"]}', "https://one.invalid/v1"),
+            (owner, "OpenAI", "region", '{"api_key":"fixture","region":"intl"}', "https://one.invalid/v1"),
+            (owner, "OpenAI", "auth", '{"api_key":"fixture","auth_mode":"role"}', "https://one.invalid/v1"),
+        ]
+        for tenant_id, factory, name, key, base in inputs:
+            db.add(TenantLLM(tenant_id=tenant_id, llm_factory=factory, llm_name=name, mdl_type="chat", api_key=key, api_base=base, max_tokens=0))
+        db.commit()
+        before = [(row.id, row.tenant_id, row.llm_name, row.api_key, row.api_base) for row in db.scalars(select(TenantLLM).order_by(TenantLLM.id))]
+    with owned_engine.begin() as connection:
+        backfill(connection)
+        backfill(connection)
+    with Session(owned_engine) as reader:
+        assert [(row.id, row.tenant_id, row.llm_name, row.api_key, row.api_base) for row in reader.scalars(select(TenantLLM).order_by(TenantLLM.id))] == before
+        models = {row.model_name: row for row in reader.scalars(select(TenantModel))}
+        assert len(models) == 11 and {row.id for row in models.values()} == {row[0] for row in before}
+        assert {models[name].instance_id for name in ("original", "raw", "false")} == {original_instance}
+        assert models["original"].is_tools is True and models["false"].is_tools is False
+        assert get_model_config_by_id(reader, models["false"].id, tenant_id=owner, model_type="chat")["is_tools"] is False
+        assert models["order-a"].instance_id == models["order-a-false"].instance_id
+        assert models["order-a"].is_tools is True and models["order-a-false"].is_tools is False
+        assert len({models[name].instance_id for name in ("original", "base", "tenant", "factory", "order-a", "order-b", "region", "auth")}) == 8
+        assert reader.get(Tenant, owner).tenant_llm_id == original_id
+        assert reader.get(TenantModelInstance, original_instance).api_key == '{"api_key":"fixture","is_tools":true}'
+        assert backfill_tenant_defaults(reader) == 0
+        reader.commit()
+    with Session(owned_engine) as reader:
+        assert reader.get(Tenant, owner).tenant_llm_id == original_id
+        assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 8
+
+
+@pytest.mark.external_consumer
+@pytest.mark.parametrize("case", ["cn", "intl", "explicit", "mineru", "mixed"])
+def test_after298_fixed_web_regions_and_ocr(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str) -> None:
+    """Real Web API client → JWT → Python → controlled HTTP → independent SQL."""
+    import io
+    import os
+    import socket
+    import tempfile
+    import threading
+    import zipfile
+    from contextlib import ExitStack
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    import httpx
+
+    from tests.support.model_discovery_web import run_web_discovery
+
+    client, owner, engine, _module = http
+    checkout = Path(os.environ["WEB_COMPLETION_CHECKOUT"])
+    provider_name = "MinerU" if case == "mineru" else "Tongyi-Qianwen"
+    monkeypatch.setattr(
+        settings, "FACTORY_LLM_INFOS", [{"name": provider_name, "llm": [] if case == "mineru" else [{"llm_name": "controlled-qwen", "mdl_type": "chat", "max_tokens": 0, "is_tools": False}]}]
+    )
+    journal = ResourceJournal("after298-web-" + case)
+    calls: list[dict[str, Any]] = []
+
+    from api.db.services import model_provider_service
+
+    original_verify_candidate = model_provider_service.verify_candidate
+
+    def snapshot_counts() -> list[int]:
+        with Session(engine) as reader:
+            return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
+
+    async def measured_verify(db: AsyncSession, tenant_id: str, provider: str, request: ConnectionCandidate) -> dict[str, Any]:
+        before = snapshot_counts()
+        try:
+            return await original_verify_candidate(db, tenant_id, provider, request)
+        finally:
+            after = snapshot_counts()
+            assert before == after
+            journal.event("verify-independent-sql-readback", before=before, after=after, unchanged=True)
+
+    monkeypatch.setattr(model_provider_service, "verify_candidate", measured_verify)
+
+    async def owned_probe(provider: str, key: str, base: str, model: ModelRegistration) -> dict[str, Any]:
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        journal.event("reserve-sdk-logging-worker", model=model.model_name)
+        try:
+            return await REAL_VERIFY_MODEL(provider, key, base, model)
+        finally:
+            await GLOBAL_LOGGING_WORKER.stop()
+            await GLOBAL_LOGGING_WORKER.clear_queue()
+            assert GLOBAL_LOGGING_WORKER._worker_task is None and not GLOBAL_LOGGING_WORKER._running_tasks
+            journal.event("sdk-logging-worker-cleanup", stopped=True, drained=True)
+
+    monkeypatch.setattr(provider_verification, "verify_model", owned_probe)
+    original_mkdtemp = tempfile.mkdtemp
+
+    def reserve_parser_temp(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        # Name is fixed before mkdir, rather than recording a random path later.
+        path = Path(dir or tempfile.gettempdir()) / ((prefix or "tmp") + uuid4().hex + (suffix or ""))
+        journal.event("reserve-parser-directory", path=str(path))
+        path.mkdir(mode=0o700)
+        return str(path)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", reserve_parser_temp)
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            return
+
+        def reply(self, status: int, content: bytes, mime: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def do_HEAD(self) -> None:
+            assert self.path == "/openapi.json"
+            calls.append({"path": self.path, "method": "HEAD"})
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self) -> None:
+            assert self.path == "/openapi.json"
+            calls.append({"path": self.path})
+            self.reply(200, b"{}", "application/json")
+
+        def do_POST(self) -> None:
+            payload = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.path == "/file_parse":
+                assert b"%PDF" in payload and b"connection.pdf" in payload
+                calls.append({"path": self.path, "pdf": True})
+                data = io.BytesIO()
+                with zipfile.ZipFile(data, "w") as archive:
+                    archive.writestr("connection/connection_content_list.json", json.dumps([{"type": "text", "text": "Connection test", "page_idx": 0, "bbox": [0, 0, 100, 40]}]))
+                self.reply(200, data.getvalue(), "application/zip")
+                return
+            body = json.loads(payload)
+            assert self.path.endswith("/chat/completions") and self.headers["Authorization"] == "Bearer fixture-after298"
+            calls.append({"path": self.path, "model": body["model"]})
+            if body["model"] == "controlled-fail":
+                self.reply(401, b'{"error":{"message":"controlled rejection","type":"authentication_error"}}', "application/json")
+            else:
+                self.reply(
+                    200,
+                    json.dumps(
+                        {
+                            "id": "controlled",
+                            "object": "chat.completion",
+                            "created": 1,
+                            "model": body["model"],
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                            "usage": {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0},
+                        }
+                    ).encode(),
+                    "application/json",
+                )
+
+    with ExitStack() as cleanup:
+        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
+        journal.event("reserve-listener", address=list(address))
+        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        cleanup.callback(server.server_close)
+        server.server_bind()
+        server.server_activate()
+        thread = threading.Thread(target=server.serve_forever, name="after298-provider-" + case)
+        journal.event("reserve-thread", name=thread.name, listener=list(address))
+        thread.start()
+
+        def stop() -> None:
+            server.shutdown()
+            thread.join(5)
+            server.server_close()
+            with socket.socket() as reader:
+                absent = reader.connect_ex(address) != 0
+            assert absent and not thread.is_alive()
+            journal.event("provider-listener-readback", absent=True, thread_absent=True, calls=calls)
+
+        cleanup.callback(stop)
+        origin = f"http://{address[0]}:{address[1]}"
+        original_send = httpx.AsyncClient.send
+
+        async def redirect(client: httpx.AsyncClient, request: httpx.Request, *args: Any, **kwargs: Any) -> httpx.Response:
+            if request.url.host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}:
+                expected_host = "dashscope-intl.aliyuncs.com" if case in {"intl", "mixed"} else "dashscope.aliyuncs.com"
+                assert request.url.host == expected_host
+                journal.event("controlled-official-request", host=request.url.host, path=request.url.path)
+                request.url = request.url.copy_with(scheme="http", host=address[0], port=address[1])
+            return await original_send(client, request, *args, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", redirect)
+        key = json.dumps({"api_key": {"mineru_apiserver": origin, "mineru_delete_output": 1}}) if case == "mineru" else "fixture-after298"
+        base = origin + "/custom/v1" if case == "explicit" else ""
+        region = "intl" if case in {"intl", "explicit", "mixed"} else "cn" if case == "cn" else ""
+        expected = {"MinerU" if case == "mineru" else "controlled-qwen": {"model_types": ["ocr" if case == "mineru" else "chat"], "max_tokens": 0, "is_tools": False}}
+        if case == "mixed":
+            expected["manual-qwen"] = {"model_types": ["chat"], "max_tokens": 0, "is_tools": False}
+        run_web_discovery(
+            client,
+            owner,
+            engine,
+            base,
+            journal,
+            checkout,
+            tmp_path,
+            provider_name=provider_name,
+            api_key=key,
+            expected_models=expected,
+            invalid_base_url="",
+            region=region,
+            descriptor_extra={"after298Case": case, "rejectedModelName": "controlled-fail"},
+        )
+        assert calls
+        if case == "mineru":
+            assert sum(call["path"] == "/file_parse" for call in calls) >= 2
+        else:
+            assert sum(call.get("model") == "controlled-qwen" for call in calls) >= 2
+        monkeypatch.setattr(tempfile, "mkdtemp", original_mkdtemp)
+
+
+def test_backfill_new_import_does_not_rebind_edited_instance(owned_engine: Engine) -> None:
+    owner = uuid4().hex
+    with Session(owned_engine) as db:
+        db.add(tenant(owner))
+        first = TenantLLM(tenant_id=owner, llm_factory="Tongyi-Qianwen", llm_name="first", mdl_type="chat", api_key="fixture", api_base="", max_tokens=0)
+        db.add(first)
+        db.commit()
+        first_id = first.id
+    with owned_engine.begin() as connection:
+        backfill(connection)
+    with Session(owned_engine) as db:
+        original_instance = db.get(TenantModel, first_id).instance_id
+        db.get(TenantModelInstance, original_instance).region = "intl"
+        second = TenantLLM(tenant_id=owner, llm_factory="Tongyi-Qianwen", llm_name="second", mdl_type="chat", api_key='{"api_key":"fixture","is_tools":false}', api_base="", max_tokens=0)
+        db.add(second)
+        db.commit()
+        second_id = second.id
+    with owned_engine.begin() as connection:
+        backfill(connection)
+        backfill(connection)
+    with Session(owned_engine) as reader:
+        assert reader.get(TenantModel, first_id).instance_id == original_instance
+        assert reader.get(TenantModelInstance, original_instance).region == "intl"
+        new_instance = reader.get(TenantModelInstance, reader.get(TenantModel, second_id).instance_id)
+        assert new_instance.id != original_instance and new_instance.region == ""
+        assert get_model_config_by_id(reader, first_id, tenant_id=owner, model_type="chat")["api_base"] == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        assert get_model_config_by_id(reader, second_id, tenant_id=owner, model_type="chat")["api_base"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 2

@@ -40,6 +40,7 @@ from pydantic import BaseModel, conint
 
 from common.http_client import sync_request
 from common.token_utils import num_tokens_from_string
+from core.llm.dashscope_transport import native_websocket_api_url
 
 
 class ServeReferenceAudio(BaseModel):
@@ -193,13 +194,12 @@ class FishAudioTTS(Base):
 class QwenTTS(Base):
     _FACTORY_NAME = "Tongyi-Qianwen"
 
-    def __init__(self, key, model_name, base_url=""):
-        import dashscope
-
+    def __init__(self, key: str, model_name: str, base_url: str = "") -> None:
         self.model_name = model_name
-        dashscope.api_key = key
+        self.api_key = key
+        self._dashscope_websocket_api_url = native_websocket_api_url(base_url)
 
-    def tts(self, text):
+    def tts(self, text: str) -> Iterator[bytes | int]:
         from collections import deque
 
         from dashscope.api_entities.dashscope_response import SpeechSynthesisResponse
@@ -238,7 +238,7 @@ class QwenTTS(Base):
 
         text = self.normalize_text(text)
         callback = Callback()
-        SpeechSynthesizer.call(model=self.model_name, text=text, callback=callback, format="mp3")
+        SpeechSynthesizer.call(model=self.model_name, api_key=self.api_key, base_address=self._dashscope_websocket_api_url, text=text, callback=callback, format="mp3")
         try:
             yield from callback._run()
             yield num_tokens_from_string(text)

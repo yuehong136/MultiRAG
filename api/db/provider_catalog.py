@@ -7,6 +7,13 @@ from urllib.parse import urlsplit
 from common import settings
 from core.llm.openrouter_auth import decode_openrouter_key
 
+TONGYI_URLS = {"cn": "https://dashscope.aliyuncs.com/compatible-mode/v1", "intl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"}
+
+
+def provider_urls(name: str) -> dict[str, str]:
+    """Publish official regional endpoints without changing stored custom URLs."""
+    return dict(TONGYI_URLS) if name == "Tongyi-Qianwen" else {}
+
 
 def public_factories() -> list[dict[str, Any]]:
     # This name supplies regional metadata; it has no independently registered driver.
@@ -24,6 +31,8 @@ def provider_order(name: str) -> tuple[int, str]:
 
 
 def regional_provider(provider: str, region: str) -> str:
+    if provider == "Tongyi-Qianwen" and region not in {"", "default", "cn", "intl"}:
+        raise ValueError("Unsupported Tongyi-Qianwen region")
     if provider != "SILICONFLOW":
         return provider
     if region not in {"", "default", "cn", "intl"}:
@@ -37,6 +46,9 @@ def _openrouter_transport_key(key: str) -> str:
 
 
 def provider_transport(provider: str, key: str, base_url: str, region: str, *, stored: bool = False) -> tuple[str, str, str]:
+    if provider == "Tongyi-Qianwen":
+        regional_provider(provider, region)
+        return key, base_url or TONGYI_URLS["intl" if region == "intl" else "cn"], region
     if provider == "OpenRouter":
         return _openrouter_transport_key(key), base_url, region
     if provider != "SILICONFLOW":
@@ -64,6 +76,9 @@ def provider_transport(provider: str, key: str, base_url: str, region: str, *, s
 
 def normalize_model_transport(config: dict[str, Any]) -> dict[str, Any]:
     config = dict(config)
+    if config.get("llm_factory") == "Tongyi-Qianwen":
+        key, base, region = provider_transport("Tongyi-Qianwen", config.get("api_key") or "", config.get("api_base") or "", config.get("region") or "", stored=True)
+        config.update(api_key=key, api_base=base, region=region)
     if config.get("llm_factory") == "OpenRouter":
         config["api_key"] = _openrouter_transport_key(config.get("api_key", ""))
     if config.get("llm_factory") == "SILICONFLOW":

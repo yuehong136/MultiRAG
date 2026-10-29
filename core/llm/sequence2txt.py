@@ -26,6 +26,7 @@ from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 
 from common.token_utils import num_tokens_from_string
+from core.llm.dashscope_transport import native_http_api_url
 
 
 class Base(ABC):
@@ -78,13 +79,12 @@ class StepFunSeq2txt(GPTSeq2txt):
 class QWenSeq2txt(Base):
     _FACTORY_NAME = "Tongyi-Qianwen"
 
-    def __init__(self, key, model_name="qwen3-asr-flash", **kwargs):
-        import dashscope
-
-        dashscope.api_key = key
+    def __init__(self, key: str, model_name: str = "qwen3-asr-flash", **kwargs: Any) -> None:
+        self.api_key = key
+        self._dashscope_http_api_url = native_http_api_url(kwargs.get("base_url"))
         self.model_name = model_name
 
-    def transcription(self, audio_path):
+    def transcription(self, audio_path: str) -> tuple[str, int]:
         import dashscope
 
         if audio_path.startswith("http"):
@@ -94,7 +94,9 @@ class QWenSeq2txt(Base):
 
         messages = [{"role": "system", "content": [{"text": ""}]}, {"role": "user", "content": [{"audio": audio_input}]}]
 
-        resp = dashscope.MultiModalConversation.call(model=self.model_name, messages=messages, result_format="message", asr_options={"enable_lid": True, "enable_itn": False})
+        resp = dashscope.MultiModalConversation.call(
+            model=self.model_name, api_key=self.api_key, base_address=self._dashscope_http_api_url, messages=messages, result_format="message", asr_options={"enable_lid": True, "enable_itn": False}
+        )
 
         try:
             text = resp["output"]["choices"][0]["message"].content[0]["text"]
@@ -102,7 +104,7 @@ class QWenSeq2txt(Base):
             text = "**ERROR**: " + str(e)
         return text, num_tokens_from_string(text)
 
-    def stream_transcription(self, audio_path):
+    def stream_transcription(self, audio_path: str) -> Any:
         import dashscope
 
         if audio_path.startswith("http"):
@@ -112,7 +114,15 @@ class QWenSeq2txt(Base):
 
         messages = [{"role": "system", "content": [{"text": ""}]}, {"role": "user", "content": [{"audio": audio_input}]}]
 
-        stream = dashscope.MultiModalConversation.call(model=self.model_name, messages=messages, result_format="message", stream=True, asr_options={"enable_lid": True, "enable_itn": False})
+        stream = dashscope.MultiModalConversation.call(
+            model=self.model_name,
+            api_key=self.api_key,
+            base_address=self._dashscope_http_api_url,
+            messages=messages,
+            result_format="message",
+            stream=True,
+            asr_options={"enable_lid": True, "enable_itn": False},
+        )
 
         full = ""
         for chunk in stream:

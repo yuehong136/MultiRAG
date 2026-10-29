@@ -45,7 +45,7 @@ def test_registered_qwen_rerank_sdk_contract(
     provider = RerankModel["Tongyi-Qianwen"]
     assert provider is QWenRerank
     assert provider.__module__ == "core.llm.rerank"
-    model = provider("unit-test-key", model_name, base_url="https://unused.invalid", extra="compatible")
+    model = provider("unit-test-key", model_name, base_url="https://custom.invalid/api/v1", extra="compatible")
     texts = ["first", "zero score", "third"]
     scores, tokens = model.similarity("query", texts)
 
@@ -57,6 +57,7 @@ def test_registered_qwen_rerank_sdk_contract(
     assert call["top_n"] == len(texts)
     assert call["task"] == "text-rerank"
     assert call["request_timeout"] == 30.0
+    assert call["base_address"] == "https://custom.invalid/api/v1"
     assert "base_url" not in call
     assert "extra" not in call
     if return_documents is None:
@@ -72,7 +73,7 @@ def test_registered_qwen_rerank_sdk_contract(
 def test_qwen_rerank_constructor_keeps_default_and_positional_base_url() -> None:
     provider = RerankModel["Tongyi-Qianwen"]
     assert provider("unit-test-key").model_name == "gte-rerank"
-    model = provider("unit-test-key", "qwen3-rerank", "https://unused.invalid")
+    model = provider("unit-test-key", "qwen3-rerank", "https://custom.invalid/api/v1")
     assert model.model_name == "qwen3-rerank"
 
 

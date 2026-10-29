@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.db_models import TenantModelInstance, TenantModelProvider, get_async_db
 from api.db.model_contract import ConnectionCandidate, DefaultModelInput, DiscoveryInput, InstanceInput, InstancePatch, ModelRegistration, ProviderInput, StatusPatch, parse_model_id
-from api.db.provider_catalog import provider_order, public_factories
+from api.db.provider_catalog import provider_order, provider_urls, public_factories
 from api.db.services import model_provider_service as service
 from api.utils.api_utils import Principal, async_current_user
 
@@ -102,7 +102,12 @@ async def write(db: AsyncSession, operation: Callable[[], Awaitable[Any]]) -> di
 async def providers(request: Request, db: AsyncSession = Depends(get_async_db), user: Principal = Depends(async_current_user)) -> dict[str, Any]:
     if flag(request, "available"):
         items = [
-            {"name": factory["name"], "model_types": sorted({capability for model in service.catalog(factory["name"]) for capability in model.model_types}), "status": "active"}
+            {
+                "name": factory["name"],
+                "model_types": sorted({capability for model in service.catalog(factory["name"]) for capability in model.model_types}),
+                "status": "active",
+                **({"url": provider_urls(factory["name"])} if provider_urls(factory["name"]) else {}),
+            }
             for factory in public_factories()
         ]
     else:
@@ -112,7 +117,15 @@ async def providers(request: Request, db: AsyncSession = Depends(get_async_db), 
         items = []
         for row in rows:
             catalog_types = {capability for model in service.catalog(row.provider_name) for capability in model.model_types} if row.provider_name in known else set()
-            items.append({"id": row.id, "name": row.provider_name, "status": row.status, "model_types": sorted(catalog_types | stored_types.get(row.provider_name, set()))})
+            items.append(
+                {
+                    "id": row.id,
+                    "name": row.provider_name,
+                    "status": row.status,
+                    "model_types": sorted(catalog_types | stored_types.get(row.provider_name, set())),
+                    **({"url": provider_urls(row.provider_name)} if provider_urls(row.provider_name) else {}),
+                }
+            )
     return page(sorted(items, key=lambda item: provider_order(item["name"])), request)
 
 

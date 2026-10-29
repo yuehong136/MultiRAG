@@ -134,6 +134,8 @@ def run_web_discovery(
     expected_page_lengths: tuple[int, ...] = (),
     controlled_transport: bool = False,
     invalid_base_url: str = "https://arbitrary.invalid",
+    region: str = "",
+    descriptor_extra: dict[str, Any] | None = None,
 ) -> None:
     from api.apps import manager
 
@@ -204,13 +206,15 @@ def run_web_discovery(
             "ownerTokenFile": str(files[0]),
             "providerKeyFile": str(files[1]),
             "providerName": provider_name,
-            "discovery": {"base_url": base_url, "region": ""},
+            "discovery": {"base_url": base_url, "region": region},
             "instanceName": "web-discovery-" + journal.run_id[:12],
             "readbackFile": str(files[3]),
             "scratchDatabase": engine.url.database,
             "ownerId": owner,
             "invalidBaseURL": invalid_base_url,
         }
+        if descriptor_extra:
+            descriptor.update(descriptor_extra)
         if expected_page_lengths:
             descriptor.update(expectedInventoryTotal=sum(expected_page_lengths), expectedPageLengths=list(expected_page_lengths))
         if controlled_transport:
@@ -229,7 +233,7 @@ def run_web_discovery(
             provider = reader.scalars(select(TenantModelProvider).where(TenantModelProvider.tenant_id == owner)).one()
             assert provider.provider_name == provider_name
             instance = reader.scalars(select(TenantModelInstance).where(TenantModelInstance.provider_id == provider.id)).one()
-            assert instance.instance_name == descriptor["instanceName"] and instance.base_url == base_url and instance.api_key == api_key and instance.status == "active"
+            assert instance.instance_name == descriptor["instanceName"] and instance.base_url == base_url and instance.api_key == api_key and instance.status == "active" and instance.region == region
             models = reader.scalars(select(TenantModel).where(TenantModel.instance_id == instance.id)).all()
             assert {model.id for model in models} == set(identifiers)
             assert {model.model_name for model in models} == set(expected_models)

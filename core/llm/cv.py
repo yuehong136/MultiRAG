@@ -34,6 +34,7 @@ from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
+from core.llm.dashscope_transport import native_http_api_url
 from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.openrouter_auth import decode_openrouter_key
 from core.llm.tool_decorator import resolve_tool_binding
@@ -579,6 +580,7 @@ class QWenCV(GptV4):
                 api_key=self.api_key,
                 model=self.model_name,
                 messages=messages,
+                base_address=native_http_api_url(str(self.client.base_url)),
                 **(self.extra_body or {}),
             )
             if response.get("message"):
@@ -587,16 +589,7 @@ class QWenCV(GptV4):
             return summary, num_tokens_from_string(summary)
 
         try:
-            try:
-                return call_api()
-            except Exception as e1:
-                import dashscope
-
-                dashscope.base_http_api_url = "https://dashscope-intl.aliyuncs.com/api/v1"
-                try:
-                    return call_api()
-                except Exception as e2:
-                    raise RuntimeError(f"Both default and intl endpoint failed.\nFirst error: {e1}\nSecond error: {e2}")
+            return call_api()
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 try:

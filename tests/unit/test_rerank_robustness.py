@@ -135,10 +135,10 @@ def test_jina_subclass_endpoints_are_honored(factory: str, expected: str) -> Non
 def test_qwen_error_without_text_and_partial_success_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dashscope.TextReRank, "call", lambda **kwargs: dashscope.api_entities.dashscope_response.ReRankResponse(status_code=400, code="InvalidParameter", message="bad request"))
     with pytest.raises(ValueError, match="400 - bad request"):
-        model_for("Tongyi-Qianwen").similarity("query", ["doc"])
+        model_for("Tongyi-Qianwen", "https://fixture.invalid/api/v1").similarity("query", ["doc"])
     monkeypatch.setattr(dashscope.TextReRank, "call", lambda **kwargs: SimpleNamespace(status_code=200, output=SimpleNamespace(results=[SimpleNamespace(index=0, relevance_score=0)])))
     with pytest.raises(ValueError, match="one result per input"):
-        model_for("Tongyi-Qianwen").similarity("query", ["doc", "missing"])
+        model_for("Tongyi-Qianwen", "https://fixture.invalid/api/v1").similarity("query", ["doc", "missing"])
 
 
 @pytest.mark.parametrize(("factory", "module"), [("Cohere", "cohere"), ("Voyage AI", "voyageai")])

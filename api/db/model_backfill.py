@@ -13,6 +13,22 @@ from sqlalchemy.orm import Session
 SCHEMA = "usr_ai"
 
 
+def credential_identity(key: str) -> str:
+    """Remove only model-level tools encoding, retaining all credential semantics."""
+    try:
+        payload = json.loads(key)
+    except (ValueError, TypeError):
+        return key
+    if not isinstance(payload, dict):
+        return key
+    if "is_tools" in payload and type(payload["is_tools"]) is not bool:
+        return key
+    payload.pop("is_tools", None)
+    if set(payload) == {"api_key"} and isinstance(payload["api_key"], str):
+        return payload["api_key"]
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
 def backfill(bind: Connection, tenant_id_filter: str | None = None) -> None:
     """Idempotently link old rows, retaining distinct credential/base pairs."""
     metadata = sa.MetaData(schema=SCHEMA)
@@ -34,12 +50,27 @@ def backfill(bind: Connection, tenant_id_filter: str | None = None) -> None:
             bind.execute(providers.insert().values(id=provider_id, tenant_id=tenant_id, provider_name=factory, status="active"))
         credential_groups: dict[tuple[str, str], list[Any]] = defaultdict(list)
         for row in rows:
-            credential_groups[(row["api_key"] or "", row["api_base"] or "")].append(row)
-        for (key, base_url), credential_rows in credential_groups.items():
-            fingerprint = hashlib.sha256(json.dumps([key, base_url], ensure_ascii=False).encode()).hexdigest()
+            credential_groups[(credential_identity(row["api_key"] or ""), row["api_base"] or "")].append(row)
+        # New imports can share an existing instance. Never relink migrated models
+        # or merge existing instances, which may already carry active references.
+        existing: dict[tuple[str, str], Any] = {}
+        existing_ids: set[str] = set()
+        for stored_instance in bind.execute(sa.select(instances).where(instances.c.provider_id == provider_id).order_by(instances.c.id)).mappings():
+            existing_ids.add(stored_instance["id"])
+            if not stored_instance["region"]:
+                existing.setdefault((credential_identity(stored_instance["api_key"] or ""), stored_instance["base_url"] or ""), stored_instance)
+        for (identity, base_url), credential_rows in credential_groups.items():
+            key = credential_rows[0]["api_key"] or ""
+            fingerprint = hashlib.sha256(json.dumps([identity, base_url], ensure_ascii=False).encode()).hexdigest()
             instance_id = uuid5(NAMESPACE_URL, f"multirag:instance:{provider_id}:{fingerprint}").hex
-            instance = bind.execute(sa.select(instances).where(instances.c.id == instance_id)).mappings().first()
+            instance = existing.get((identity, base_url))
+            if instance is not None:
+                instance_id = instance["id"]
             if instance is None:
+                if instance_id in existing_ids:
+                    # A previously migrated instance can have been edited since.
+                    # Preserve its identity and create one for this new import.
+                    instance_id = uuid5(NAMESPACE_URL, f"multirag:instance:{provider_id}:{fingerprint}:legacy:{credential_rows[0]['id']}").hex
                 instance_name = "default" if len(credential_groups) == 1 else f"legacy-{credential_rows[0]['id']}"
                 collision = bind.scalar(sa.select(instances.c.id).where(instances.c.provider_id == provider_id, instances.c.instance_name == instance_name))
                 if collision:
@@ -59,7 +90,7 @@ def backfill(bind: Connection, tenant_id_filter: str | None = None) -> None:
                     capabilities.append("image2text")
                 tools = bool(item["is_tools"]) if item else False
                 try:
-                    envelope = json.loads(key)
+                    envelope = json.loads(row["api_key"] or "")
                 except (ValueError, TypeError):
                     envelope = None
                 if isinstance(envelope, dict) and isinstance(envelope.get("is_tools"), bool):
