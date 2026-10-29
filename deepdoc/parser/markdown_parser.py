@@ -179,9 +179,76 @@ class MarkdownElementExtractor:
         toks = sorted(set(toks), key=lambda x: -len(x))
         return "|".join(re.escape(t) for t in toks if t)
 
+    def _table_cells(self, line: str) -> list[str]:
+        stripped = line.strip()
+        if "|" not in stripped:
+            return []
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        return [cell.strip() for cell in stripped.split("|")]
+
+    def _is_table_row(self, line: str) -> bool:
+        cells = self._table_cells(line)
+        return len(cells) >= 2
+
+    def _is_table_separator_row(self, line: str) -> bool:
+        cells = self._table_cells(line)
+        return len(cells) >= 2 and all(re.fullmatch(r":?-+:?", cell.replace(" ", "")) for cell in cells)
+
+    def _markdown_table_ranges(self, text: str) -> list[tuple[int, int]]:
+        lines = text.split("\n")
+        offsets = []
+        offset = 0
+        for line in lines:
+            offsets.append(offset)
+            offset += len(line) + 1
+
+        ranges = []
+        i = 0
+        while i < len(lines) - 1:
+            if not self._is_table_row(lines[i]) or not self._is_table_separator_row(lines[i + 1]):
+                i += 1
+                continue
+            end_line = i + 1
+            # Empty cells are legal body rows and must not end protection.
+            while end_line + 1 < len(lines) and self._is_table_row(lines[end_line + 1]):
+                end_line += 1
+            ranges.append((offsets[i], offsets[end_line] + len(lines[end_line])))
+            i = end_line + 1
+        return ranges
+
+    def _html_table_ranges(self, text: str) -> list[tuple[int, int]]:
+        pattern = re.compile(
+            r"<html\b[^>]*>\s*<body\b[^>]*>\s*<table\b[^>]*>.*?</table>\s*</body>\s*</html>"
+            r"|<body\b[^>]*>\s*<table\b[^>]*>.*?</table>\s*</body>"
+            r"|<table\b[^>]*>.*?</table>",
+            re.DOTALL | re.IGNORECASE,
+        )
+        return [(match.start(), match.end()) for match in pattern.finditer(text)]
+
+    def _protected_ranges(self, text: str) -> list[tuple[int, int]]:
+        fences = _fenced_code_ranges(text)
+        ranges = list(fences)
+        last_end = 0
+        # Table examples in code must not match table markup outside the fence.
+        for start, end in [*fences, (len(text), len(text))]:
+            unfenced = text[last_end:start]
+            ranges.extend((last_end + left, last_end + right) for left, right in self._markdown_table_ranges(unfenced) + self._html_table_ranges(unfenced))
+            last_end = end
+
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(ranges):
+            if not merged or start > merged[-1][1]:
+                merged.append((start, end))
+            else:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        return merged
+
     def _extract_delimited_elements(self, text: str, delimiters: str, include_meta: bool) -> list[str] | list[dict[str, Any]]:
         sections = []
-        ranges = _fenced_code_ranges(text)
+        ranges = self._protected_ranges(text)
         protected_idx = 0
         last_end = 0
 
