@@ -45,6 +45,8 @@ type Router struct {
 	taskHandler          *handler.TaskHandler
 	agentHandler         *handler.AgentHandler
 	searchbotHandler     *handler.SearchbotHandler
+	pluginHandler        *handler.PluginHandler
+	difyRetrievalHandler *handler.DifyRetrievalHandler
 }
 
 // NewRouter create router
@@ -91,11 +93,32 @@ func (r *Router) SetSearchbotHandler(searchbotHandler *handler.SearchbotHandler)
 	r.searchbotHandler = searchbotHandler
 }
 
+// SetPluginHandler binds the server's tool inventory service.
+func (r *Router) SetPluginHandler(pluginHandler *handler.PluginHandler) {
+	r.pluginHandler = pluginHandler
+}
+
+// SetDifyRetrievalHandler binds the shared model, storage and graph pipeline.
+func (r *Router) SetDifyRetrievalHandler(difyHandler *handler.DifyRetrievalHandler) {
+	r.difyRetrievalHandler = difyHandler
+}
+
+func documentBinaryPath(path string) bool {
+	if path == "/api/v1/thumbnails" || strings.HasPrefix(path, "/api/v1/documents/images/") || strings.HasPrefix(path, "/api/v1/documents/artifact/") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/documents/") && (strings.HasSuffix(path, "/preview") || strings.HasSuffix(path, "/download")) {
+		return true
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "datasets" && parts[4] == "documents"
+}
+
 // Setup setup routes
 func (r *Router) Setup(engine *gin.Engine) {
 	// Mark even authentication denials before the protected middleware runs.
 	engine.Use(func(c *gin.Context) {
-		if c.Request.URL.Path == "/api/v1/thumbnails" || strings.HasPrefix(c.Request.URL.Path, "/api/v1/documents/images/") {
+		if documentBinaryPath(c.Request.URL.Path) {
 			c.Header("Cache-Control", "no-store")
 			c.Header("X-Content-Type-Options", "nosniff")
 		}
@@ -110,10 +133,22 @@ func (r *Router) Setup(engine *gin.Engine) {
 	if r.searchbotHandler == nil {
 		r.searchbotHandler = handler.NewSearchbotHandler(service.NewSearchbotService(service.NewModelProviderService()))
 	}
+	if r.pluginHandler == nil {
+		r.pluginHandler = handler.NewPluginHandler(service.NewPluginService())
+	}
+	if r.difyRetrievalHandler == nil {
+		r.difyRetrievalHandler = handler.NewDifyRetrievalHandler(handler.DifyRetrievalDependencies{})
+	}
 	// Health check
 	engine.GET("/health", r.systemHandler.Health)
 
 	engine.POST("/api/v1/datasets/:dataset_id/documents/batch-update-status", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.BatchUpdateStatus)
+	engine.GET("/api/v1/documents/:id/preview", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.GetDocumentPreview)
+	engine.GET("/api/v1/documents/:id/download", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.DownloadDocumentFile)
+	engine.GET("/api/v1/documents/artifact/:filename", r.authHandler.DocumentStatusAuthMiddleware(), r.documentHandler.GetDocumentArtifact)
+	engine.GET("/api/v1/datasets/:dataset_id/documents/:document_id", r.authHandler.DatasetDocumentAuthMiddleware(), r.documentHandler.DownloadDocument)
+	engine.POST("/api/v1/dify/retrieval", r.authHandler.DifyAuthMiddleware(), r.difyRetrievalHandler.Retrieval)
+	engine.GET("/api/v1/dify/retrieval/health", r.difyRetrievalHandler.HealthCheck)
 
 	public := engine.Group("/api/v1")
 	{
@@ -133,6 +168,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	authorized := engine.Group("")
 	authorized.Use(r.authHandler.AuthMiddleware())
 	{
+		authorized.GET("/api/v1/plugin/tools", r.pluginHandler.ListLLMTools)
 		authorized.GET("/api/v1/mcp/servers", r.mcpHandler.ListMCPServers)
 		authorized.POST("/api/v1/mcp/servers", r.mcpHandler.CreateMCPServer)
 		authorized.POST("/api/v1/mcp/servers/import", r.mcpHandler.ImportMCPServers)

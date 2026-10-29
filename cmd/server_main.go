@@ -27,6 +27,7 @@ import (
 	"multirag/internal/handler"
 	"multirag/internal/router"
 	"multirag/internal/service"
+	"multirag/internal/service/kg"
 	"multirag/internal/service/nlp"
 	"multirag/internal/tokenizer"
 )
@@ -188,10 +189,22 @@ func startServer(config *server.Config) {
 	providerHandler := handler.NewProviderHandler(userService, modelProviderService)
 	taskHandler := handler.NewTaskHandler(taskService)
 	searchbotHandler := handler.NewSearchbotHandler(service.NewSearchbotService(modelProviderService))
+	pluginHandler := handler.NewPluginHandler(service.NewPluginService())
+	store := engine.Get()
+	difyHandler := handler.NewDifyRetrievalHandler(handler.DifyRetrievalDependencies{
+		Datasets: dao.NewKnowledgebaseDAO(), Models: service.NewDifyModelBindings(modelProviderService),
+		Metadata: service.NewMetadataService(), Retrieval: nlp.NewRetrievalService(store), Documents: dao.NewDocumentDAO(),
+		Children: func(ctx context.Context, chunks []map[string]interface{}, owner string) ([]map[string]interface{}, error) {
+			return nlp.RetrievalByChildrenChecked(ctx, chunks, []string{owner}, store)
+		},
+		KG: kg.NewPipeline(store),
+	})
 
 	// Initialize router
 	r := router.NewRouter(authHandler, userHandler, tenantHandler, documentHandler, datasetsHandler, systemHandler, kbHandler, chunkHandler, chatHandler, chatSessionHandler, connectorHandler, searchHandler, fileHandler, memoryHandler, providerHandler, taskHandler)
 	r.SetSearchbotHandler(searchbotHandler)
+	r.SetPluginHandler(pluginHandler)
+	r.SetDifyRetrievalHandler(difyHandler)
 
 	// Create Gin engine
 	ginEngine := gin.New()

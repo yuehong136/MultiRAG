@@ -349,7 +349,7 @@ func (h *KnowledgebaseHandler) GetMeta(c *gin.Context) {
 		}
 	}
 
-	meta, err := h.documentService.GetMetadataByKBs(kbIDs)
+	meta, err := h.documentService.GetMetadataByKBs(c.Request.Context(), user.ID, kbIDs)
 	if err != nil {
 		jsonError(c, common.CodeExceptionError, err.Error())
 		return
