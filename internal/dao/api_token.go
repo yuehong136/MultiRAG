@@ -17,6 +17,8 @@
 package dao
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"multirag/internal/entity"
 )
@@ -106,4 +108,27 @@ func (dao *APITokenDAO) BackfillBeta(tenantID, token, candidate string) (string,
 		return "", fmt.Errorf("beta readback is empty")
 	}
 	return *stored.Beta, nil
+}
+
+// AgentSession keeps immutable DSL JSON numeric identifiers lossless on read.
+// It shadows the legacy JSONMap scanner only for the agent session endpoints.
+type AgentSession struct {
+	entity.API4Conversation
+	DSL json.RawMessage `gorm:"column:dsl" json:"dsl,omitempty"`
+}
+
+func (d *API4ConversationDAO) GetBySessionID(ctx context.Context, sessionID, agentID string) (*AgentSession, error) {
+	var row AgentSession
+	err := DB.WithContext(ctx).Model(&entity.API4Conversation{}).
+		Where("id = ? AND dialog_id = ? AND source = ?", sessionID, agentID, "agent").First(&row).Error
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// DeleteBySessionIDAndAgentID cannot delete another agent's or ordinary chat session.
+func (d *API4ConversationDAO) DeleteBySessionIDAndAgentID(ctx context.Context, sessionID, agentID string) (int64, error) {
+	result := DB.WithContext(ctx).Where("id = ? AND dialog_id = ? AND source = ?", sessionID, agentID, "agent").Delete(&entity.API4Conversation{})
+	return result.RowsAffected, result.Error
 }

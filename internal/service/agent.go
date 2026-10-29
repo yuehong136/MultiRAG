@@ -17,12 +17,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/text/cases"
@@ -287,4 +291,312 @@ func (s *AgentService) GetVersion(ctx context.Context, userID, canvasID, version
 // AuthorizeUpload allows handlers to reject access before parsing multipart data.
 func (s *AgentService) AuthorizeUpload(ctx context.Context, userID, canvasID string) (*entity.UserCanvas, common.ErrorCode, error) {
 	return s.requireCanvasAccess(ctx, userID, canvasID)
+}
+
+// ListAgentSessionsRequest carries filters separately from the authenticated actor.
+type ListAgentSessionsRequest struct {
+	SessionID, UserID, Keywords, FromDate, ToDate, OrderBy, ExpUserID string
+	Page, PageSize                                                    int
+	Desc, IncludeDSL                                                  bool
+}
+
+type ListAgentSessionsResponse struct {
+	Sessions []map[string]any `json:"sessions"`
+	Total    int64            `json:"total"`
+}
+
+func parseAgentSessionDate(value string, isEnd bool) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var parsed time.Time
+	var err error
+	switch {
+	case len(value) == 10:
+		parsed, err = time.ParseInLocation("2006-01-02", value, time.Local)
+		if err == nil && isEnd {
+			parsed = parsed.AddDate(0, 0, 1).Add(-time.Nanosecond)
+		}
+	case strings.Contains(value, "T"):
+		parsed, err = time.Parse(time.RFC3339Nano, value)
+	default:
+		parsed, err = time.ParseInLocation("2006-01-02 15:04:05", value, time.Local)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invalid session date")
+	}
+	// Python query dates use naive local wall times; pgx needs local components
+	// when binding a timestamp-without-time-zone column.
+	parsed = parsed.Local()
+	return &parsed, nil
+}
+
+func decodeAgentSessionJSON(raw json.RawMessage) (any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// firstAgentChunkValue respects field presence, including explicit null, 0 and empty text.
+func firstAgentChunkValue(chunk map[string]any, primary, fallback string) any {
+	if value, ok := chunk[primary]; ok {
+		return value
+	}
+	return chunk[fallback]
+}
+
+func normalizeAgentReferenceChunk(raw any) map[string]any {
+	chunk, ok := raw.(map[string]any)
+	if !ok {
+		var content string
+		switch value := raw.(type) {
+		case string:
+			if strings.TrimSpace(value) == "" {
+				return nil
+			}
+			content = value
+		case json.Number:
+			// Legacy chunk IDs are strings or integers; floats and booleans are not IDs.
+			integer := strings.TrimPrefix(value.String(), "-")
+			if integer == "" || strings.IndexFunc(integer, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+				return nil
+			}
+			content = value.String()
+		default:
+			return nil
+		}
+		chunk = map[string]any{"id": raw, "content": content}
+	}
+	result := map[string]any{
+		"id":            firstAgentChunkValue(chunk, "chunk_id", "id"),
+		"content":       firstAgentChunkValue(chunk, "content_with_weight", "content"),
+		"document_id":   firstAgentChunkValue(chunk, "doc_id", "document_id"),
+		"document_name": firstAgentChunkValue(chunk, "docnm_kwd", "document_name"),
+		"dataset_id":    firstAgentChunkValue(chunk, "kb_id", "dataset_id"),
+		"image_id":      firstAgentChunkValue(chunk, "image_id", "img_id"),
+		"positions":     firstAgentChunkValue(chunk, "positions", "position_int"),
+	}
+	for _, key := range []string{"doc_type", "doc_type_kwd"} {
+		if value, ok := chunk[key]; ok {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func normalizeAgentReferenceChunks(raw any) []map[string]any {
+	result := []map[string]any{}
+	switch chunks := raw.(type) {
+	case []any:
+		indices := []int{}
+		shifted := false
+		for index, raw := range chunks {
+			if chunk := normalizeAgentReferenceChunk(raw); chunk != nil {
+				shifted = shifted || index != len(result)
+				indices = append(indices, index)
+				result = append(result, chunk)
+			}
+		}
+		// Filtering malformed chunks must not renumber stored [ID:n] citations.
+		// Keep contiguous legacy output unchanged; sparse lists carry every source index.
+		if shifted {
+			for index, chunk := range result {
+				chunk["citation_id"] = strconv.Itoa(indices[index])
+			}
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(chunks))
+		for key := range chunks {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if chunk := normalizeAgentReferenceChunk(chunks[key]); chunk != nil {
+				chunk["citation_id"] = key
+				result = append(result, chunk)
+			}
+		}
+	}
+	return result
+}
+
+func agentSessionReferences(raw any) ([]any, error) {
+	switch refs := raw.(type) {
+	case []any:
+		return refs, nil
+	case map[string]any:
+		if _, ok := refs["chunks"]; ok {
+			return []any{refs}, nil
+		}
+		keys := make([]string, 0, len(refs))
+		positions := map[string]int{}
+		for key := range refs {
+			position, err := strconv.Atoi(key)
+			if err != nil {
+				return nil, fmt.Errorf("invalid session references")
+			}
+			positions[key] = position
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if positions[keys[i]] != positions[keys[j]] {
+				return positions[keys[i]] < positions[keys[j]]
+			}
+			return keys[i] < keys[j]
+		})
+		values := make([]any, 0, len(keys))
+		for _, key := range keys {
+			values = append(values, refs[key])
+		}
+		return values, nil
+	}
+	return nil, nil
+}
+
+func normalizeAgentSession(session *dao.AgentSession, includeDSL bool) (map[string]any, error) {
+	raw, err := json.Marshal(session)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := decodeAgentSessionJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	result := decoded.(map[string]any)
+	rawMessages := result["message"]
+	messages := []map[string]any{}
+	if rawMessages != nil {
+		list, ok := rawMessages.([]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid session messages")
+		}
+		for _, value := range list {
+			message, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("invalid session message")
+			}
+			delete(message, "prompt")
+			messages = append(messages, message)
+		}
+	}
+	references := result["reference"]
+	refs, err := agentSessionReferences(references)
+	if err != nil {
+		return nil, err
+	}
+	referenceIndex := 0
+	for i, message := range messages {
+		if i == 0 || message["role"] == "user" {
+			continue
+		}
+		if referenceIndex >= len(refs) {
+			break
+		}
+		ref, _ := refs[referenceIndex].(map[string]any)
+		referenceIndex++
+		chunks, ok := ref["chunks"]
+		if !ok {
+			chunks = ref["reference"]
+		}
+		message["reference"] = normalizeAgentReferenceChunks(chunks)
+	}
+	result["messages"] = messages
+	result["agent_id"] = session.DialogID
+	delete(result, "message")
+	delete(result, "reference")
+	delete(result, "dialog_id")
+	if !includeDSL {
+		delete(result, "dsl")
+	}
+	return result, nil
+}
+
+func (s *AgentService) ListAgentSessions(ctx context.Context, actorID, agentID string, req ListAgentSessionsRequest) (*ListAgentSessionsResponse, common.ErrorCode, error) {
+	if err := dao.ValidateAgentSessionPagination(req.Page, req.PageSize); err != nil {
+		return nil, common.CodeArgumentError, err
+	}
+	if !dao.ValidAgentSessionOrderBy(req.OrderBy) {
+		return nil, common.CodeArgumentError, fmt.Errorf("invalid orderby")
+	}
+	from, err := parseAgentSessionDate(req.FromDate, false)
+	if err != nil {
+		return nil, common.CodeArgumentError, err
+	}
+	to, err := parseAgentSessionDate(req.ToDate, true)
+	if err != nil {
+		return nil, common.CodeArgumentError, err
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return nil, common.CodeArgumentError, fmt.Errorf("invalid date range")
+	}
+	if _, code, err := s.requireCanvasAccess(ctx, actorID, agentID); err != nil {
+		return nil, code, err
+	}
+	sessionDAO := dao.NewChatSessionDAO()
+	if req.ExpUserID != "" {
+		rows, err := sessionDAO.ListAgentSessionNames(ctx, agentID, req.ExpUserID)
+		if err != nil {
+			return nil, common.CodeServerError, fmt.Errorf("Unable to list agent sessions.")
+		}
+		items := make([]map[string]any, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, map[string]any{"id": row.ID, "name": row.Name})
+		}
+		return &ListAgentSessionsResponse{Sessions: items, Total: int64(len(items))}, common.CodeSuccess, nil
+	}
+	total, rows, err := sessionDAO.ListAgentSessions(ctx, dao.ListAgentSessionsParams{AgentID: agentID, Page: req.Page, PageSize: req.PageSize, OrderBy: req.OrderBy, Desc: req.Desc, SessionID: req.SessionID, UserID: req.UserID, Keywords: req.Keywords, IncludeDSL: req.IncludeDSL, FromDate: from, ToDate: to})
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to list agent sessions.")
+	}
+	items := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		item, err := normalizeAgentSession(row, req.IncludeDSL)
+		if err != nil {
+			return nil, common.CodeServerError, fmt.Errorf("Unable to read agent session.")
+		}
+		items = append(items, item)
+	}
+	return &ListAgentSessionsResponse{Sessions: items, Total: total}, common.CodeSuccess, nil
+}
+
+func (s *AgentService) GetAgentSession(ctx context.Context, actorID, agentID, sessionID string) (map[string]any, common.ErrorCode, error) {
+	if sessionID == "" {
+		return nil, common.CodeArgumentError, fmt.Errorf("session_id is required")
+	}
+	if _, code, err := s.requireCanvasAccess(ctx, actorID, agentID); err != nil {
+		return nil, code, err
+	}
+	row, err := dao.NewAPI4ConversationDAO().GetBySessionID(ctx, sessionID, agentID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, common.CodeNotFound, fmt.Errorf("Agent session not found.")
+	}
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to read agent session.")
+	}
+	result, err := normalizeAgentSession(row, true)
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to read agent session.")
+	}
+	return result, common.CodeSuccess, nil
+}
+
+func (s *AgentService) DeleteAgentSessionItem(ctx context.Context, actorID, agentID, sessionID string) (bool, common.ErrorCode, error) {
+	if sessionID == "" {
+		return false, common.CodeArgumentError, fmt.Errorf("session_id is required")
+	}
+	if _, code, err := s.requireCanvasAccess(ctx, actorID, agentID); err != nil {
+		return false, code, err
+	}
+	rows, err := dao.NewAPI4ConversationDAO().DeleteBySessionIDAndAgentID(ctx, sessionID, agentID)
+	if err != nil {
+		return false, common.CodeServerError, fmt.Errorf("Unable to delete agent session.")
+	}
+	return rows > 0, common.CodeSuccess, nil
 }

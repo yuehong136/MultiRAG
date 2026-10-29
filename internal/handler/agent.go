@@ -18,7 +18,9 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -252,4 +254,96 @@ func (h *AgentHandler) UploadAgentFile(c *gin.Context) {
 		return
 	}
 	jsonResponse(c, common.CodeSuccess, result, "")
+}
+
+// parseAgentSessionQuery rejects malformed escapes and repeated controls before DB access.
+func parseAgentSessionQuery(raw string) (service.ListAgentSessionsRequest, error) {
+	req := service.ListAgentSessionsRequest{Page: 1, PageSize: 30, OrderBy: "update_time", Desc: true, IncludeDSL: true}
+	query, err := url.ParseQuery(raw)
+	if err != nil {
+		return req, fmt.Errorf("invalid query parameter")
+	}
+	for _, key := range []string{"id", "user_id", "page", "page_size", "keywords", "from_date", "to_date", "orderby", "exp_user_id", "desc", "dsl"} {
+		if values, ok := query[key]; ok && (len(values) != 1 || ((key == "page" || key == "page_size" || key == "orderby" || key == "desc" || key == "dsl" || key == "from_date" || key == "to_date") && strings.TrimSpace(values[0]) == "")) {
+			return req, fmt.Errorf("invalid query parameter")
+		}
+	}
+	req.SessionID = query.Get("id")
+	req.UserID = query.Get("user_id")
+	req.Keywords = query.Get("keywords")
+	req.FromDate = query.Get("from_date")
+	req.ToDate = query.Get("to_date")
+	req.ExpUserID = query.Get("exp_user_id")
+	for key, dest := range map[string]*int{"page": &req.Page, "page_size": &req.PageSize} {
+		if values, ok := query[key]; ok {
+			value, e := strconv.Atoi(values[0])
+			if e != nil {
+				return req, fmt.Errorf("invalid pagination")
+			}
+			*dest = value
+		}
+	}
+	if value, ok := query["orderby"]; ok {
+		req.OrderBy = value[0]
+	}
+	for key, dest := range map[string]*bool{"desc": &req.Desc, "dsl": &req.IncludeDSL} {
+		if values, ok := query[key]; ok {
+			switch values[0] {
+			case "true", "True":
+				*dest = true
+			case "false", "False":
+				*dest = false
+			default:
+				return req, fmt.Errorf("invalid %s", key)
+			}
+		}
+	}
+	return req, nil
+}
+
+func (h *AgentHandler) ListAgentSessions(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	req, err := parseAgentSessionQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		jsonError(c, common.CodeArgumentError, err.Error())
+		return
+	}
+	result, code, err := h.agentService.ListAgentSessions(c.Request.Context(), user.ID, c.Param("agent_id"), req)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}
+
+func (h *AgentHandler) GetAgentSession(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	result, code, err := h.agentService.GetAgentSession(c.Request.Context(), user.ID, c.Param("agent_id"), c.Param("session_id"))
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, result, "success")
+}
+
+func (h *AgentHandler) DeleteAgentSessionItem(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonResponse(c, code, false, message)
+		return
+	}
+	deleted, code, err := h.agentService.DeleteAgentSessionItem(c.Request.Context(), user.ID, c.Param("agent_id"), c.Param("session_id"))
+	if err != nil {
+		jsonResponse(c, code, false, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, deleted, "success")
 }

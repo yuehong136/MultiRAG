@@ -17,6 +17,12 @@
 package dao
 
 import (
+	"context"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
 	"multirag/internal/entity"
 )
 
@@ -91,4 +97,95 @@ func (dao *ChatSessionDAO) DeleteByDialogIDs(dialogIDs []string) (int64, error) 
 	}
 	result := DB.Unscoped().Where("dialog_id IN ?", dialogIDs).Delete(&entity.ChatSession{})
 	return result.RowsAffected, result.Error
+}
+
+type ListAgentSessionsParams struct {
+	AgentID                                string
+	Page, PageSize                         int
+	OrderBy                                string
+	Desc                                   bool
+	SessionID, UserID, Keywords, ExpUserID string
+	IncludeDSL                             bool
+	FromDate, ToDate                       *time.Time
+}
+
+// ValidateAgentSessionPagination keeps all arithmetic within a native int.
+func ValidateAgentSessionPagination(page, size int) error {
+	if page < 1 || size < 0 || size > 1000 || (size > 0 && page > math.MaxInt/size) {
+		return fmt.Errorf("invalid pagination")
+	}
+	return nil
+}
+
+func ValidAgentSessionOrderBy(value string) bool {
+	switch value {
+	case "id", "name", "create_time", "create_date", "update_time", "update_date", "tokens", "duration", "round", "thumb_up":
+		return true
+	}
+	return false
+}
+
+type AgentSessionName struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+}
+
+func (d *ChatSessionDAO) ListAgentSessionNames(ctx context.Context, agentID, expUserID string) ([]AgentSessionName, error) {
+	rows := []AgentSessionName{}
+	err := DB.WithContext(ctx).Model(&entity.API4Conversation{}).Select("id", "name").
+		Where("dialog_id = ? AND source = ? AND exp_user_id = ?", agentID, "agent", expUserID).
+		Order("create_date DESC").Order("id DESC").Find(&rows).Error
+	return rows, err
+}
+
+func (d *ChatSessionDAO) ListAgentSessions(ctx context.Context, params ListAgentSessionsParams) (int64, []*AgentSession, error) {
+	if err := ValidateAgentSessionPagination(params.Page, params.PageSize); err != nil {
+		return 0, nil, err
+	}
+	if !ValidAgentSessionOrderBy(params.OrderBy) {
+		return 0, nil, fmt.Errorf("invalid orderby")
+	}
+	query := DB.WithContext(ctx).Model(&entity.API4Conversation{}).Where("dialog_id = ? AND source = ?", params.AgentID, "agent")
+	if params.SessionID != "" {
+		query = query.Where("id = ?", params.SessionID)
+	}
+	if params.UserID != "" {
+		query = query.Where("user_id = ?", params.UserID)
+	}
+	if params.Keywords != "" {
+		query = query.Where("LOWER(CAST(message AS TEXT)) LIKE ?", "%"+strings.ToLower(params.Keywords)+"%")
+	}
+	dateColumn := "create_date"
+	if strings.HasPrefix(params.OrderBy, "update_") {
+		dateColumn = "update_date"
+	}
+	if params.FromDate != nil {
+		query = query.Where(dateColumn+" >= ?", *params.FromDate)
+	}
+	if params.ToDate != nil {
+		query = query.Where(dateColumn+" <= ?", *params.ToDate)
+	}
+	if params.ExpUserID != "" {
+		query = query.Where("exp_user_id = ?", params.ExpUserID)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return 0, nil, err
+	}
+	if !params.IncludeDSL {
+		query = query.Omit("dsl")
+	}
+	direction := " ASC"
+	if params.Desc {
+		direction = " DESC"
+	}
+	query = query.Order(params.OrderBy + direction)
+	if params.OrderBy != "id" {
+		query = query.Order("id" + direction)
+	}
+	// page_size=0 is the production consumer's explicit empty page, never unbounded.
+	query = query.Offset((params.Page - 1) * params.PageSize).Limit(params.PageSize)
+	rows := []*AgentSession{}
+	err := query.Find(&rows).Error
+	return total, rows, err
 }
