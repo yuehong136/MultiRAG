@@ -57,7 +57,7 @@ class Switch(ComponentBase, ABC):
     component_name = "Switch"
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 3)))
-    def _invoke(self, **kwargs):
+    def _invoke(self, **kwargs: Any) -> None:
         if self.check_if_canceled("Switch processing"):
             return
 
@@ -83,7 +83,7 @@ class Switch(ComponentBase, ABC):
                     self.set_output("_next", cond["to"])
                     return
 
-            if all(res):
+            if res and all(res):
                 self.set_output("next", [self._canvas.get_component_name(cpn_id) for cpn_id in cond["to"]])
                 self.set_output("_next", cond["to"])
                 return

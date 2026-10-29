@@ -21,7 +21,7 @@ async def resolve_list_owner_ids(db: AsyncSession, actor_id: str, requested: lis
         )
     )
     authorized = set((await db.scalars(stmt)).all())
-    owners = set(requested) if requested else authorized
+    owners = set(requested) if requested is not None else authorized
     if not owners.issubset(authorized):
         raise PermissionError("Only authorized owner_ids can be queried.")
     return sorted(owners)
