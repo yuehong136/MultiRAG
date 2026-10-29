@@ -1870,16 +1870,30 @@ class MultiRAGClient:
         print(f"Chat '{chat_name}' not found")
         return None
 
-    def _list_chat_sessions(self, dialog_id: str) -> list | None:
-        response = self.http_client.request("GET", f"chats/{dialog_id}/sessions", use_api_base=True, auth_kind="web")
-        res_json = response.json()
-        code = res_json.get("code", res_json.get("retcode", -1))
-        if response.status_code == 200 and code == 0:
-            return res_json.get("data", [])
-        else:
-            msg = res_json.get("message", res_json.get("retmsg", ""))
-            print(f"Fail to list chat sessions: {msg}")
-            return None
+    def _list_chat_sessions(self, dialog_id: str) -> list[dict[str, Any]] | None:
+        sessions: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        page = 1
+        while True:
+            try:
+                response = self.http_client.request("GET", f"chats/{dialog_id}/sessions", params={"page": page, "page_size": 100, "orderby": "id", "desc": False}, use_api_base=True, auth_kind="web")
+                result = response.json()
+                if response.status_code != 200 or not isinstance(result, dict) or type(result.get("code")) is not int or result["code"] != 0:
+                    raise ValueError("Session list was not acknowledged.")
+                rows = result.get("data")
+                if not isinstance(rows, list) or len(rows) > 100:
+                    raise ValueError("Session list shape is unavailable.")
+                for row in rows:
+                    if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] or row["id"] in seen:
+                        raise ValueError("Session list contains invalid or duplicate IDs.")
+                    seen.add(row["id"])
+                sessions.extend(rows)
+                if len(rows) < 100:
+                    return sessions
+                page += 1
+            except Exception:
+                print("Fail to list chat sessions: response could not be confirmed")
+                return None
 
     def _list_chats(self) -> list | None:
         response = self.http_client.request("GET", "chats", use_api_base=True, auth_kind="web")
@@ -1940,15 +1954,18 @@ class MultiRAGClient:
             docs = self._list_documents(dataset_name, dataset_id, document_ids)
             if docs is None:
                 return False
-            if {doc["id"] for doc in docs} != required or any(doc.get("run") not in {"UNSTART", "RUNNING", "CANCEL", "DONE", "FAIL", "SCHEDULE"} for doc in docs):
+            if {doc["id"] for doc in docs} != required or any(not isinstance(doc.get("run"), str) or doc["run"] not in {"UNSTART", "RUNNING", "CANCEL", "DONE", "FAIL", "SCHEDULE"} for doc in docs):
                 print(f"Parsing status is unavailable for submitted documents in {dataset_name}")
                 return False
             all_done = all(doc["run"] == "DONE" for doc in docs)
             if all_done:
                 return True
+            status_counts = ", ".join(f"{status}={sum(doc['run'] == status for doc in docs)}" for status in sorted({doc["run"] for doc in docs}))
             if any(doc["run"] in {"CANCEL", "FAIL"} for doc in docs):
+                print(f"Parsing stopped for dataset {dataset_name}: {status_counts}")
                 return False
             if time.monotonic() - start > 60:
+                print(f"Parsing timed out after 60s for dataset {dataset_name}: {status_counts}")
                 return False
             time.sleep(0.5)
 
