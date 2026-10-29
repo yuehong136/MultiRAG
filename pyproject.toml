@@ -136,6 +136,7 @@ dependencies = [
     "pycryptodomex==3.20.0",
     # <3：生产主向量库客户端不敞口大版本；敞口时解析器曾在部分分支静默换 3.0.0
     "pymilvus>=2.5.11,<3.0.0",
+    "pymssql>=2.3,<3.0.0",
     "pyobvector==0.2.22",
     "pyodbc>=5.2.0,<6.0.0",
     "pypandoc>=1.16",
