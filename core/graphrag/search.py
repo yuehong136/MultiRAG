@@ -116,7 +116,7 @@ class KGSearch(Dealer):
                 continue
             n_hop_ents = []
             try:
-                n_hop_ents = json.loads(ent.get("n_hop_with_weight", "[]"))
+                n_hop_ents = json.loads(ent.get("n_hop_with_weight") or "[]")
             except Exception:
                 logging.warning("Invalid n_hop_with_weight: %s", ent.get("n_hop_with_weight"))
             res[entity_kwd] = {"sim": get_float(ent.get("_score", 0)), "pagerank": get_float(ent.get("rank_flt", 0)), "n_hop_ents": n_hop_ents, "description": ent.get("content_with_weight", "{}")}
@@ -150,7 +150,7 @@ class KGSearch(Dealer):
         matchDense = await self.get_vector(", ".join(keywords), emb_mdl, 1024, sim_thr)
         milvus_res = await thread_pool_exec(
             self.dataStore.search,
-            ["content_with_weight", "entity_kwd", "rank_flt"],
+            ["content_with_weight", "entity_kwd", "rank_flt", "n_hop_with_weight"],
             [],
             filters,
             [matchDense],
@@ -245,7 +245,7 @@ class KGSearch(Dealer):
                         nhop_pathes[(f, t)]["sim"] += ent["sim"] / (2 + i)
                     else:
                         nhop_pathes[(f, t)]["sim"] = ent["sim"] / (2 + i)
-                    nhop_pathes[(f, t)]["pagerank"] = wts[i]
+                    nhop_pathes[(f, t)]["pagerank"] = max(nhop_pathes[(f, t)].get("pagerank", wts[i]), wts[i])
 
         logging.info(f"Retrieved entities: {list(ents_from_query.keys())}")
         logging.info(f"Retrieved relations: {list(rels_from_txt.keys())}")

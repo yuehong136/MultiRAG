@@ -11,12 +11,14 @@ import dataclasses
 import html
 import json
 import logging
+import math
 import os
 import re
 import time
 from collections import defaultdict
 from collections.abc import Callable
 from hashlib import md5
+from itertools import pairwise
 from typing import Any
 
 import networkx as nx
@@ -365,9 +367,13 @@ def relation_chunk_id(kb_id: str, source: str, target: str) -> str:
     return chunk_id({"content_with_weight": json.dumps(["relation", *get_from_to(source, target)]), "kb_id": kb_id})
 
 
-async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: dict[str, Any], chunks: list[dict[str, Any]]) -> None:
+async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: dict[str, Any], chunks: list[dict[str, Any]], nhop_neighbors: list[dict[str, Any]] | None = None) -> None:
     global chat_limiter
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
+    rank = float(meta.get("pagerank", 0) or 0)
+    if not math.isfinite(rank):
+        raise ValueError("Entity pagerank must be finite")
+    nhop_json = json.dumps(nhop_neighbors or [], ensure_ascii=False, allow_nan=False)
     chunk = {
         "id": entity_chunk_id(kb_id, ent_name),
         "important_kwd": [ent_name],
@@ -378,6 +384,8 @@ async def graph_node_to_chunk(kb_id: str, embd_mdl: Any, ent_name: str, meta: di
         "content_with_weight": json.dumps(meta, ensure_ascii=False),
         "content_ltks": rag_tokenizer.tokenize(meta["description"]),
         "source_id": meta["source_id"],
+        "rank_flt": rank,
+        "n_hop_with_weight": nhop_json,
         "kb_id": kb_id,
         "available_int": 0,
     }
@@ -551,10 +559,11 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl: Any, graph: nx.Graph, 
             }
         )
 
+    node_neighbors = {node: n_neighbor(graph, node) for node in sorted(change.added_updated_nodes)}
     tasks = []
-    for ii, node in enumerate(change.added_updated_nodes):
+    for ii, (node, nhop_neighbors) in enumerate(node_neighbors.items()):
         node_attrs = graph.nodes[node]
-        tasks.append(asyncio.create_task(graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks)))
+        tasks.append(asyncio.create_task(graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks, nhop_neighbors)))
         if ii % 100 == 9 and callback:
             callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
     try:
@@ -676,6 +685,29 @@ def merge_tuples(list1, list2):
             if not already_match_flag:
                 result.append(tup)
     return result
+
+
+def n_neighbor(graph: nx.Graph, node: str, n_hop: int = 2) -> list[dict[str, Any]]:
+    """Build deterministic paths with one finite weight for each traversed edge.
+
+    A terminal path may contain fewer than ``n_hop`` edges. Existing merge
+    rules prevent immediate edge reversal and stop paths after a cycle.
+    """
+    if n_hop <= 0:
+        return []
+    paths = sorted(graph.edges(node))
+    for _ in range(1, n_hop):
+        paths = [merged for path in paths for merged in merge_tuples([path], sorted(graph.edges(path[-1])))]
+    neighbors: list[dict[str, Any]] = []
+    for path in sorted(paths):
+        weights = []
+        for source, target in pairwise(path):
+            weight = float(graph.edges[source, target].get("weight", 0) or 0)
+            if not math.isfinite(weight):
+                raise ValueError("N-hop edge weight must be finite")
+            weights.append(weight)
+        neighbors.append({"path": path, "weights": weights})
+    return neighbors
 
 
 async def get_entity_type2samples(idxnms, kb_ids: list):
