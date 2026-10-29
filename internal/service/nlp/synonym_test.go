@@ -194,25 +194,29 @@ func TestSynonymLookup(t *testing.T) {
 
 // TestSynonymLookupFromWordNet tests WordNet fallback
 func TestSynonymLookupFromWordNet(t *testing.T) {
-	// Create synonym with empty dictionary to force WordNet fallback
-	s := NewSynonym(nil, "", "")
-	s.dictionary = make(map[string][]string) // Clear dictionary
+	// An empty custom dictionary forces the same WordNet fallback used by
+	// query expansion. A missing dictionary must fail this test, not pass empty.
+	s := NewSynonym(nil, t.TempDir(), testSynonymWordNetDir)
+	if s.wordNet == nil {
+		t.Fatal("WordNet fixture was not loaded")
+	}
+	t.Cleanup(s.wordNet.Close)
 
-	t.Run("pure alphabetical token", func(t *testing.T) {
-		// Since WordNet is a placeholder, it should return empty
-		result := s.Lookup("test", 8)
-		// WordNet placeholder returns empty, so we expect empty result
-		if len(result) != 0 {
-			t.Logf("WordNet returned: %v (placeholder implementation)", result)
+	// WordNet 3.0's noun and verb senses of dog include these canonical
+	// lemmas; the query itself is excluded and results are sorted/deduplicated.
+	want := []string{"andiron", "cad", "chase", "frank", "frump", "pawl"}
+	for _, limit := range []int{0, 2, 8} {
+		expected := want
+		if limit == 2 {
+			expected = want[:2]
 		}
-	})
-
-	t.Run("non-alphabetical token", func(t *testing.T) {
-		result := s.Lookup("test123", 8)
-		if len(result) != 0 {
-			t.Errorf("Expected empty result for non-alphabetical token, got %v", result)
+		if got := s.Lookup("dog", limit); !reflect.DeepEqual(got, expected) {
+			t.Fatalf("WordNet lookup limit %d: got %v, want %v", limit, got, expected)
 		}
-	})
+	}
+	if got := s.Lookup("dog123", 8); len(got) != 0 {
+		t.Fatalf("non-alphabetical query reached WordNet: %v", got)
+	}
 }
 
 // TestSynonymLoad tests loading from Redis
