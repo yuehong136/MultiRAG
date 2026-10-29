@@ -20,9 +20,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"multirag/internal/entity/models"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -702,7 +704,9 @@ func (pm *ProviderManager) LoadAllModels(path string) error {
 
 func (pm *ProviderManager) ListAllModels() []*Model {
 	result := make([]*Model, len(pm.allModels))
-	copy(result, pm.allModels)
+	for i, model := range pm.allModels {
+		result[i] = cloneCatalogModel(model)
+	}
 	return result
 }
 
@@ -711,5 +715,45 @@ func (pm *ProviderManager) GetModelByNameOrAlias(name string) (*Model, error) {
 	if !ok {
 		return nil, fmt.Errorf("model %q not found", name)
 	}
-	return model, nil
+	return cloneCatalogModel(model), nil
+}
+
+// cloneCatalogModel prevents consumers from changing catalog identity or metadata.
+func cloneCatalogModel(model *Model) *Model {
+	clone := *model
+	clone.Alias = slices.Clone(model.Alias)
+	clone.ModelTypes = slices.Clone(model.ModelTypes)
+	clone.ModelTypeMap = maps.Clone(model.ModelTypeMap)
+	if model.Thinking != nil {
+		v := *model.Thinking
+		clone.Thinking = &v
+	}
+	if model.Class != nil {
+		v := *model.Class
+		clone.Class = &v
+	}
+	if model.Features.Multimodal != nil {
+		v := *model.Features.Multimodal
+		v.InputModalities = slices.Clone(v.InputModalities)
+		v.OutputModalities = slices.Clone(v.OutputModalities)
+		clone.Features.Multimodal = &v
+	}
+	if model.Features.Reasoning != nil {
+		v := *model.Features.Reasoning
+		if v.Simple != nil {
+			p := *v.Simple
+			v.Simple = &p
+		}
+		if v.Budget != nil {
+			p := *v.Budget
+			v.Budget = &p
+		}
+		if v.Effort != nil {
+			p := *v.Effort
+			p.Options = slices.Clone(p.Options)
+			v.Effort = &p
+		}
+		clone.Features.Reasoning = &v
+	}
+	return &clone
 }
