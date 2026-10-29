@@ -183,13 +183,35 @@ func TestAliyunListModelsUsesConfiguredEndpoint(t *testing.T) {
 }
 
 func TestAliyunListModelsRejectsBusinessError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"error":{"message":"bad key"}}`)
-	}))
-	defer server.Close()
-	model := aliyunTestModel(server.URL)
-	key := "test-key"
-	if err := model.CheckConnection(&APIConfig{APIKey: &key}); err == nil || !strings.Contains(err.Error(), "bad key") {
-		t.Fatalf("CheckConnection() error = %v", err)
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"business error", http.StatusOK, `{"error":{"message":"bad key: test-secret-key"}}`, "aliyun: model list error"},
+		{"partial inventory with error", http.StatusOK, `{"data":[{"id":"must-not-escape"}],"error":{"message":"bad key: test-secret-key"}}`, "aliyun: model list error"},
+		{"HTTP error", http.StatusUnauthorized, `{"error":{"message":"bad key: test-secret-key"}}`, "aliyun: API request failed with status 401"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer test-secret-key" || r.ContentLength > 0 {
+					t.Error("invalid model inventory request")
+				}
+				w.WriteHeader(test.status)
+				fmt.Fprint(w, test.body)
+			}))
+			model := aliyunTestModel(server.URL)
+			key := "test-secret-key"
+			config := &APIConfig{APIKey: &key}
+			// Inventory failures must not publish partial models or echo a
+			// supplier response that can contain credentials.
+			if listed, err := model.ListModels(config); listed != nil || err == nil || err.Error() != test.want {
+				t.Fatalf("ListModels() = %#v, %v", listed, err)
+			}
+			if err := model.CheckConnection(config); err == nil || err.Error() != test.want {
+				t.Fatalf("CheckConnection() error = %v", err)
+			}
+		})
 	}
 }

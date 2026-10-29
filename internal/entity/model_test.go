@@ -230,6 +230,10 @@ func TestModelLevelThinkingAndGoogleFactory(t *testing.T) {
 		{"Google", "gemini-2.5-flash", true}, {"DeepSeek", "deepseek-v4-pro", true},
 		{"Moonshot", "kimi-k2.5", true}, {"ZHIPU-AI", "glm-5-turbo", true},
 		{"ZHIPU-AI", "glm-4.7-flashx", true}, {"MiniMax", "minimax-m2.7", true},
+		{"SiliconFlow", "Pro/deepseek-ai/DeepSeek-V4-Pro", true},
+		{"SiliconFlow", "Pro/deepseek-ai/DeepSeek-V4-Flash", true},
+		{"SiliconFlow", "Pro/moonshotai/Kimi-K2.6", true},
+		{"SiliconFlow", "Pro/zai-org/GLM-5.1", true},
 	} {
 		model, err := manager.GetModelByName(test.provider, test.model)
 		if err != nil || model.Thinking == nil || !model.Thinking.DefaultValue || model.Thinking.ClearThinking != test.clear {
@@ -244,8 +248,19 @@ func TestModelLevelThinkingAndGoogleFactory(t *testing.T) {
 		t.Fatal("target removed model still advertised")
 	}
 	for _, provider := range []string{"Gitee", "SiliconFlow"} {
-		for _, model := range manager.FindProvider(provider).Models {
-			if model.Thinking != nil {
+		catalog := manager.FindProvider(provider)
+		if catalog == nil {
+			t.Fatalf("%s catalog missing", provider)
+		}
+		if catalog.Features.Thinking != nil || catalog.Features.ClearThinking != nil {
+			t.Fatalf("stale provider thinking defaults remain on %s", provider)
+		}
+		for _, model := range catalog.Models {
+			explicitThinking := provider == "SiliconFlow" && slices.Contains([]string{
+				"Pro/deepseek-ai/DeepSeek-V4-Pro", "Pro/deepseek-ai/DeepSeek-V4-Flash",
+				"Pro/moonshotai/Kimi-K2.6", "Pro/zai-org/GLM-5.1",
+			}, model.Name)
+			if !explicitThinking && model.Thinking != nil {
 				t.Fatalf("stale provider thinking applied to %s/%s", provider, model.Name)
 			}
 		}

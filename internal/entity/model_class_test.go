@@ -44,7 +44,7 @@ func TestConfiguredModelClassesKeepCapabilities(t *testing.T) {
 		{"Google", "gemini-2.5-flash", "gemini"},
 		{"MiniMax", "minimax-m2.7", "minimax"},
 		{"Moonshot", "kimi-k2.6", "kimi"},
-		{"OpenAI", "gpt-5.2-pro", "gpt"},
+		{"OpenAI", "gpt-5.4-mini", "gpt"},
 		{"SiliconFlow", "qwen/qwen3-8b", "qwen3"},
 		{"VolcEngine", "doubao-seed-2-0-pro-260215", "volcengine"},
 		{"xAI", "grok-4", "grok"},
