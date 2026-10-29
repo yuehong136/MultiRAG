@@ -18,6 +18,7 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -344,23 +345,15 @@ func (p *Parser) parseVariableValue() (string, error) {
 	if p.curToken.Type == TokenIllegal && (p.curToken.Value == "-" || p.curToken.Value == "+") {
 		sign = p.curToken.Value
 		p.nextToken()
-		if p.curToken.Type != TokenNumber {
+		if p.curToken.Type != TokenNumber && p.curToken.Type != TokenFloat {
 			return "", fmt.Errorf("expected numeric variable value")
 		}
 	}
 	switch p.curToken.Type {
 	case TokenIdentifier, TokenQuotedString:
 		return p.curToken.Value, nil
-	case TokenNumber:
+	case TokenNumber, TokenFloat:
 		value := sign + p.curToken.Value
-		if p.peekToken.Type == TokenIllegal && p.peekToken.Value == "." {
-			p.nextToken()
-			p.nextToken()
-			if p.curToken.Type != TokenNumber {
-				return "", fmt.Errorf("expected decimal variable value")
-			}
-			value += "." + p.curToken.Value
-		}
 		return value, nil
 	default:
 		return "", fmt.Errorf("expected variable value, got %s", p.curToken.Value)
@@ -372,6 +365,17 @@ func (p *Parser) parseNumber() (int, error) {
 		return 0, fmt.Errorf("expected number, got %s", p.curToken.Value)
 	}
 	return strconv.Atoi(p.curToken.Value)
+}
+
+func (p *Parser) parseFloat() (float64, error) {
+	if p.curToken.Type != TokenNumber && p.curToken.Type != TokenFloat {
+		return 0, fmt.Errorf("expected number, got %s", p.curToken.Value)
+	}
+	value, err := strconv.ParseFloat(p.curToken.Value, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("finite number required")
+	}
+	return value, nil
 }
 
 func (p *Parser) parseIdentifierList() ([]string, error) {

@@ -201,6 +201,9 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListUserDatasets(cmd)
 	case "search_on_datasets":
 		return c.SearchOnDatasets(cmd)
+	case "search_help":
+		printSearchHelp()
+		return nil, nil
 	case "create_token":
 		return c.CreateToken(cmd)
 	case "list_tokens":
@@ -294,8 +297,8 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.InsertMetadataFromFile(cmd)
 	case "get_chunk":
 		return c.GetChunk(cmd)
-	case "list_metadata":
-		return c.ListMetadata(cmd)
+	case "get_metadata":
+		return c.GetMetadata(cmd)
 	case "update_chunk":
 		return c.UpdateChunk(cmd)
 	case "delete_meta":

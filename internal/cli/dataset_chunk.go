@@ -23,6 +23,9 @@ func (p *Parser) finishDatasetCommand() error {
 
 func (p *Parser) parseGetCommand() (*Command, error) {
 	p.nextToken()
+	if p.curToken.Type == TokenMetadata {
+		return p.parseGetMetadata()
+	}
 	if p.curToken.Type != TokenChunk {
 		return nil, fmt.Errorf("expected CHUNK after GET")
 	}
@@ -58,7 +61,7 @@ func (p *Parser) parseChunkIdentity(kind string) (*Command, error) {
 	return cmd, nil
 }
 
-func (p *Parser) parseListMetadata() (*Command, error) {
+func (p *Parser) parseGetMetadata() (*Command, error) {
 	p.nextToken()
 	for _, token := range []int{TokenOf, TokenDataset} {
 		if p.curToken.Type != token {
@@ -83,7 +86,7 @@ func (p *Parser) parseListMetadata() (*Command, error) {
 	if err := p.finishDatasetCommand(); err != nil {
 		return nil, err
 	}
-	cmd := NewCommand("list_metadata")
+	cmd := NewCommand("get_metadata")
 	cmd.Params["dataset_names"] = names
 	return cmd, nil
 }
@@ -120,7 +123,7 @@ func (c *MultiRAGClient) GetChunk(cmd *Command) (ResponseIf, error) {
 	return &CommonDataResponse{Data: data, Duration: time.Since(started).Seconds()}, nil
 }
 
-func (c *MultiRAGClient) ListMetadata(cmd *Command) (ResponseIf, error) {
+func (c *MultiRAGClient) GetMetadata(cmd *Command) (ResponseIf, error) {
 	started := time.Now()
 	if c.ServerType != "user" {
 		return nil, fmt.Errorf("USER mode required")
@@ -150,7 +153,7 @@ func (c *MultiRAGClient) ListMetadata(cmd *Command) (ResponseIf, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := decodeDatasetObject("list metadata", response)
+	data, err := decodeDatasetObject("get metadata", response)
 	if err != nil {
 		return nil, err
 	}

@@ -171,10 +171,13 @@ const (
 	TokenIdentifier
 	TokenQuotedString
 	TokenNumber
+	TokenFloat
 
 	// Special
 	TokenSemicolon
 	TokenComma
+	TokenLBracket
+	TokenRBracket
 	TokenEOF
 	TokenIllegal
 )

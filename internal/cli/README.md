@@ -59,7 +59,7 @@ a terminating semicolon; single-command mode adds one when omitted.
 
 ```sql
 GET CHUNK 'chunk-id' OF DOCUMENT 'document-id' IN DATASET 'knowledge';
-LIST METADATA OF DATASET 'knowledge' 'another dataset';
+GET METADATA OF DATASET 'knowledge' 'another dataset';
 UPDATE CHUNK 'chunk-id' OF DOCUMENT 'document-id' IN DATASET 'knowledge' SET '{"content":"updated","available":false}';
 REMOVE TAGS 'obsolete', 'old' FROM DATASET 'knowledge';
 REMOVE CHUNKS 'chunk-one' 'chunk-two' FROM DOCUMENT 'document-id' IN DATASET 'knowledge';
@@ -290,6 +290,40 @@ including zero for missing IDs. Task logs and chunk contents are not included.
 SQL dataset search (`SEARCH 'question' ON DATASETS 'name1,name2';`) and its sequential/concurrent
 benchmark modes call `POST /api/v1/datasets/search` with `dataset_ids` and Bearer
 authentication. Dataset names resolve through `GET /api/v1/datasets` first.
+Multiple names may be quoted separately (`'name1' 'name2'`) or supplied in one
+comma-separated quoted string. A semicolon terminates the statement.
+
+```sql
+SEARCH 'question' ON DATASETS 'knowledge' WITH page 1 page_size 20 top_k 0 similarity_threshold 0.0 vector_similarity_weight 0.3 keyword false doc_ids [] cross_languages [];
+SEARCH 'question' ON DATASETS 'knowledge' WITH tenant_rerank_id 42;
+```
+
+`WITH` options are space-separated. `page` and `page_size` are positive;
+`top_k` is nonnegative (`0` means no limit). Similarity threshold and vector
+weight accept finite numbers in `[0,1]`. `keyword` and `use_kg` accept booleans.
+`doc_ids` and `cross_languages` accept bracketed quoted string lists, preserving
+an explicit empty list. `doc_ids []` asks for an empty document scope; omission
+leaves document selection to the server. `tenant_rerank_id` is a positive numeric
+model ID; `rerank_id` is a model selector, and the two cannot be combined.
+`meta_data_filter` takes a quoted JSON object; `search_id` selects saved configuration.
+Unsupported server combinations fail explicitly. Invalid, duplicate or unknown
+options fail before dataset lookup. All benchmark modes use the same payload.
+
+Custom models can be added or removed in one atomic request:
+
+```sql
+ADD MODEL 'chat-model embed-model' TO PROVIDER 'vllm' INSTANCE 'local' WITH CHAT VISION THINK TOKENS 0, EMBEDDING;
+REMOVE MODEL 'chat-model embed-model' FROM PROVIDER 'vllm' INSTANCE 'local';
+EMBED TEXT 'hello' WITH 'embed-model@local@vllm';
+EMBED TEXT 'hello' WITH 'embed-model@local@vllm' DIMENSION 0;
+```
+
+Each whitespace-separated model name has one comma-separated option group.
+`TOKENS` is optional and defaults to explicit `0`; repeated options and duplicate
+names are rejected. Single-model syntax follows the same batch path. `DROP MODEL`
+also deletes a batch. Model or instance identifiers used by other commands retain
+their existing numeric and composite selector contracts. Embedding `DIMENSION`
+may be omitted; explicit `0` is sent to request the provider default dimension.
 
 ## Media commands
 

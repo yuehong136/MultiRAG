@@ -2,8 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"multirag/tests/support"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -18,7 +18,7 @@ func TestDropInstanceModelGrammarAndMode(t *testing.T) {
 		`DROP MODEL 'org/model' FROM 'vllm' 'local'`,
 	} {
 		cmd, err := NewParser(input).Parse(false)
-		if err != nil || cmd.Type != "drop_instance_model" || cmd.Params["model_name"] != "org/model" || cmd.Params["instance_name"] != "local" {
+		if err != nil || cmd.Type != "drop_instance_model" || !reflect.DeepEqual(cmd.Params["model_names"], []string{"org/model"}) || cmd.Params["instance_name"] != "local" {
 			t.Fatalf("%v %v", cmd, err)
 		}
 		if _, err := NewParser(input).Parse(true); err == nil {
@@ -34,7 +34,7 @@ func TestDropInstanceModelGrammarAndMode(t *testing.T) {
 		t.Fatal("dead admin command still parses")
 	}
 	cmd, err := NewParser(`ADD MODEL 'm' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 1024 VISION CHAT EMBEDDING THINK;`).Parse(false)
-	if err != nil || !reflect.DeepEqual(cmd.Params["model_types"], []string{"image2text", "chat", "embedding"}) || cmd.Params["model_type"] != "image2text" {
+	if err != nil || !reflect.DeepEqual(cmd.Params["models"].([]customModelDeclaration)[0].Types, []string{"image2text", "chat", "embedding"}) {
 		t.Fatalf("%v %v", cmd, err)
 	}
 }
@@ -50,7 +50,7 @@ func TestDropInstanceModelClientErrorsAndEscaping(t *testing.T) {
 		{200, `{}`, false}, {200, `null`, false}, {200, `secret-response`, false}, {500, `secret-response`, false},
 	} {
 		t.Run(test.body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "DELETE" || r.URL.EscapedPath() != "/api/v1/providers/p%3F%23/instances/local%20name/models" {
 					t.Errorf("%s %s", r.Method, r.URL.EscapedPath())
 				}
@@ -73,7 +73,7 @@ func TestDropInstanceModelClientErrorsAndEscaping(t *testing.T) {
 			cmd := NewCommand("drop_instance_model")
 			cmd.Params["provider_name"] = "p?#"
 			cmd.Params["instance_name"] = "local name"
-			cmd.Params["model_name"] = "org/model"
+			cmd.Params["model_names"] = []string{"org/model"}
 			_, err := client.ExecuteUserCommand(cmd)
 			if (err == nil) != test.success || (err != nil && strings.Contains(err.Error(), "secret-response")) {
 				t.Fatal(err)

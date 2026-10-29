@@ -18,7 +18,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 )
@@ -75,18 +74,11 @@ func (c *MultiRAGClient) runBenchmarkSingle(concurrency, iterations int, nestedC
 
 	// Search benchmarks always retain the real response, including one iteration.
 	if commandType == "search_on_datasets" {
-		datasets, _ := nestedCmd.Params["datasets"].(string)
-		datasetNames := strings.Split(datasets, ",")
-		datasetIDs := make([]string, 0, len(datasetNames))
-		for _, name := range datasetNames {
-			name = strings.TrimSpace(name)
-			id, err := c.getDatasetID(name)
-			if err != nil {
-				return err
-			}
-			datasetIDs = append(datasetIDs, id)
+		payload, err := c.searchPayload(nestedCmd)
+		if err != nil {
+			return err
 		}
-		nestedCmd.Params["dataset_ids"] = datasetIDs
+		nestedCmd.Params["search_payload"] = payload
 		responseList = c.executeBenchmarkSilent(nestedCmd, iterations)
 		supportsNative = true
 	}
@@ -166,18 +158,11 @@ func (c *MultiRAGClient) runBenchmarkConcurrent(concurrency, iterations int, nes
 
 	// For search_on_datasets, convert dataset names to IDs first
 	if nestedCmd.Type == "search_on_datasets" {
-		datasets, _ := nestedCmd.Params["datasets"].(string)
-		datasetNames := strings.Split(datasets, ",")
-		datasetIDs := make([]string, 0, len(datasetNames))
-		for _, name := range datasetNames {
-			name = strings.TrimSpace(name)
-			id, err := c.getDatasetID(name)
-			if err != nil {
-				return err
-			}
-			datasetIDs = append(datasetIDs, id)
+		payload, err := c.searchPayload(nestedCmd)
+		if err != nil {
+			return err
 		}
-		nestedCmd.Params["dataset_ids"] = datasetIDs
+		nestedCmd.Params["search_payload"] = payload
 	}
 
 	startTime := time.Now()
@@ -252,13 +237,10 @@ func (c *MultiRAGClient) executeBenchmarkSilent(cmd *Command, iterations int) []
 			userName, _ := cmd.Params["user_name"].(string)
 			resp, err = c.HTTPClient.Request("GET", fmt.Sprintf("/admin/users/%s/datasets", userName), "admin", nil, nil)
 		case "search_on_datasets":
-			question, _ := cmd.Params["question"].(string)
-			datasetIDs, _ := cmd.Params["dataset_ids"].([]string)
-			payload := map[string]interface{}{
-				"dataset_ids":              datasetIDs,
-				"question":                 question,
-				"similarity_threshold":     0.2,
-				"vector_similarity_weight": 0.3,
+			payload, ok := cmd.Params["search_payload"].(map[string]interface{})
+			if !ok {
+				resp = &Response{StatusCode: 0}
+				break
 			}
 			resp, err = c.HTTPClient.Request("POST", "/datasets/search", "api", nil, payload)
 		default:

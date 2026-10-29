@@ -88,6 +88,12 @@ func (l *Lexer) NextToken() Token {
 	case ',':
 		tok = newToken(TokenComma, l.ch)
 		l.readChar()
+	case '[':
+		tok = newToken(TokenLBracket, l.ch)
+		l.readChar()
+	case ']':
+		tok = newToken(TokenRBracket, l.ch)
+		l.readChar()
 	case '\'':
 		tok.Type = TokenQuotedString
 		tok.Value = l.readQuotedString('\'')
@@ -108,6 +114,9 @@ func (l *Lexer) NextToken() Token {
 		} else if isDigit(l.ch) {
 			tok.Type = TokenNumber
 			tok.Value = l.readNumber()
+			if strings.Contains(tok.Value, ".") {
+				tok.Type = TokenFloat
+			}
 			return tok
 		} else {
 			tok = newToken(TokenIllegal, l.ch)
@@ -143,6 +152,12 @@ func (l *Lexer) readNumber() string {
 	start := l.pos
 	for isDigit(l.ch) {
 		l.readChar()
+	}
+	if l.ch == '.' && isDigit(l.peekChar()) {
+		l.readChar()
+		for isDigit(l.ch) {
+			l.readChar()
+		}
 	}
 	return l.input[start:l.pos]
 }

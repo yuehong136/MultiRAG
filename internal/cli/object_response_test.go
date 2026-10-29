@@ -21,7 +21,7 @@ func TestObjectFieldRowsStableAndLossless(t *testing.T) {
 
 func TestCustomModelZeroTokenLimit(t *testing.T) {
 	cmd, err := NewParser(`ADD MODEL 'zero' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 0 CHAT;`).Parse(false)
-	if err != nil || cmd.Params["max_tokens"] != 0 {
+	if err != nil || cmd.Params["models"].([]customModelDeclaration)[0].MaxTokens != 0 {
 		t.Fatalf("zero token limit: %v %v", cmd, err)
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"multirag/tests/support"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"strconv"
@@ -18,7 +18,7 @@ func TestDatasetSearchRESTContract(t *testing.T) {
 	for _, mode := range []string{"normal", "native", "concurrent"} {
 		t.Run(mode, func(t *testing.T) {
 			var searches atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer owned-session" {
 					t.Error("missing Bearer session")
 				}
@@ -100,7 +100,7 @@ func TestDatasetSearchRESTContract(t *testing.T) {
 func TestDatasetSearchRejectsBusinessFailure(t *testing.T) {
 	for _, body := range []string{`{"code":403,"message":"denied"}`, `{}`, `{"code":"0"}`, `not json`} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v1/datasets" {
 					fmt.Fprint(w, `{"code":0,"data":[{"id":"a-id","name":"a"}]}`)
 					return
@@ -139,7 +139,7 @@ func TestDatasetSearchSingleIterationBenchmark(t *testing.T) {
 		{`{"code":403,"message":"denied"}`, "COMMAND_COUNT: 1, SUCCESS: 0, FAILURE: 1"},
 	} {
 		t.Run(test.want, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v1/datasets" {
 					fmt.Fprint(w, `{"code":0,"data":[{"id":"a-id","name":"a"}]}`)
 					return

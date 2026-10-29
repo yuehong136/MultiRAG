@@ -1041,7 +1041,20 @@ Output defaults to JSON. Use \format plain or \format table to change it.
 Examples:
   search -d datasets/kb1 -q "neural networks"
   search -q "data mining"
-  search -q "RAG" -k 20 -t 0.5`)
+  search -q "RAG" -k 20 -t 0.5
+
+SQL dataset search (semicolon required):
+  SEARCH 'query' ON DATASETS 'kb1' 'kb2' WITH top_k 0 similarity_threshold 0.0;
+  A single comma-separated quoted name list ('kb1,kb2') is also accepted.
+  WITH options are space-separated:
+    page <int>=1, page_size <int>=1, top_k <int>=0 (0 means no limit)
+    similarity_threshold <number>, vector_similarity_weight <number> (0..1)
+    keyword true|false, use_kg true|false
+    doc_ids ['id', ...], cross_languages ['Chinese', ...] (empty [] preserved)
+    tenant_rerank_id <positive integer>, rerank_id 'model selector' (choose one)
+    meta_data_filter '{...}', search_id 'saved search ID'
+  DOC_IDS [] returns no chunks. Omit DOC_IDS to leave the document scope unrestricted.
+  Saved-search and knowledge-graph combinations follow the server contract.`)
 }
 
 // printListHelp prints help for the ls command.
@@ -1219,6 +1232,11 @@ SQL Commands (User Mode):
   ENABLE MODEL 'model' FROM 'provider' 'instance';       - Enable a model on an instance
   DISABLE MODEL 'model' FROM 'provider' 'instance';      - Disable a model on an instance
   USE MODEL 'provider/instance/model';                   - Set current model for chat
+  ADD MODEL 'm1 m2' TO PROVIDER 'p' INSTANCE 'i' WITH CHAT TOKENS 0, EMBEDDING;
+  REMOVE MODEL 'm1 m2' FROM PROVIDER 'p' INSTANCE 'i';    - Atomic batch deletion (DROP also accepted)
+  EMBED TEXT 'text' WITH 'model@instance@provider' [DIMENSION N];
+  SEARCH 'query' ON DATASETS 'name' [WITH option value ...];
+  GET METADATA OF DATASET 'name' 'another name';
   CHAT 'message';                                        - Chat using current model
   CHAT 'provider/instance/model' 'message';              - Chat with specified model
   CREATE CHUNK STORE FOR DATASET 'name' VECTOR SIZE N;             - Create dataset table in doc engine

@@ -427,39 +427,15 @@ func (c *MultiRAGClient) SearchOnDatasets(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("this command is only allowed in USER mode")
 	}
 
-	question, ok := cmd.Params["question"].(string)
-	if !ok {
-		return nil, fmt.Errorf("question not provided")
-	}
-
-	datasets, ok := cmd.Params["datasets"].(string)
-	if !ok {
-		return nil, fmt.Errorf("datasets not provided")
-	}
-
-	// Parse dataset names (comma-separated) and convert to IDs
-	datasetNames := strings.Split(datasets, ",")
-	datasetIDs := make([]string, 0, len(datasetNames))
-	for _, name := range datasetNames {
-		name = strings.TrimSpace(name)
-		id, err := c.getDatasetID(name)
-		if err != nil {
-			return nil, err
-		}
-		datasetIDs = append(datasetIDs, id)
+	payload, err := c.searchPayload(cmd)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check for benchmark iterations
 	iterations := 1
 	if val, ok := cmd.Params["iterations"].(int); ok && val > 1 {
 		iterations = val
-	}
-
-	payload := map[string]interface{}{
-		"dataset_ids":              datasetIDs,
-		"question":                 question,
-		"similarity_threshold":     0.2,
-		"vector_similarity_weight": 0.3,
 	}
 
 	if iterations > 1 {

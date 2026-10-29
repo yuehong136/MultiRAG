@@ -59,21 +59,27 @@ func (p *Parser) parseInferenceCommand(rerank bool) (*Command, error) {
 		option = TokenTop
 		field = "top_n"
 	}
-	if p.curToken.Type != option {
+	if rerank && p.curToken.Type != option {
 		return nil, fmt.Errorf("expected DIMENSION or TOP")
 	}
-	p.nextToken()
-	number, err := p.parseNumber()
-	if err != nil || number < 0 {
-		return nil, fmt.Errorf("expected non-negative integer")
+	if p.curToken.Type == option {
+		p.nextToken()
+		number, err := p.parseNumber()
+		if err != nil || number < 0 {
+			return nil, fmt.Errorf("expected non-negative integer")
+		}
+		cmd.Params[field] = number
+		p.nextToken()
 	}
-	cmd.Params[field] = number
-	p.nextToken()
 	if p.curToken.Type != TokenSemicolon {
 		return nil, fmt.Errorf("expected semicolon")
 	}
 	if err := p.expectSemicolon(); err != nil {
 		return nil, err
+	}
+	p.nextToken()
+	if p.curToken.Type != TokenEOF {
+		return nil, fmt.Errorf("unexpected trailing inference input")
 	}
 	return cmd, nil
 }

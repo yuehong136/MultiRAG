@@ -43,11 +43,14 @@ func (c *MultiRAGClient) ModelInference(cmd *Command, rerank bool) (ResponseIf, 
 		return nil, fmt.Errorf("%s required", field)
 	}
 	payload[field] = values
-	number, ok := cmd.Params[option].(int)
-	if !ok || number < 0 {
+	rawNumber, present := cmd.Params[option]
+	number, ok := rawNumber.(int)
+	if (present && (!ok || number < 0)) || (rerank && !present) {
 		return nil, fmt.Errorf("non-negative %s required", option)
 	}
-	payload[option] = number
+	if present {
+		payload[option] = number
+	}
 	resp, err := c.HTTPClient.Request("POST", path, "api", nil, payload)
 	if err != nil {
 		return nil, err

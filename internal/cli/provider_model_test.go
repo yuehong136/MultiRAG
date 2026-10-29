@@ -2,8 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"multirag/tests/support"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -46,11 +46,11 @@ func TestLegacyProviderInstanceWithoutSemicolon(t *testing.T) {
 func TestCustomModelGrammarAndCapabilities(t *testing.T) {
 	for option, typ := range map[string]string{"chat think": "chat", "vision think": "image2text", "asr": "speech2text", "ocr": "ocr", "embedding": "embedding", "rerank": "rerank", "tts": "tts"} {
 		cmd, err := NewParser(`ADD MODEL 'Qwen/Qwen2-0.5B' TO PROVIDER 'vllm' INSTANCE 'local' WITH TOKENS 131072 ` + option + `;`).Parse(false)
-		if err != nil || cmd.Type != "add_custom_model" || cmd.Params["model_type"] != typ || cmd.Params["max_tokens"] != 131072 {
+		if err != nil || cmd.Type != "add_custom_model" || cmd.Params["models"].([]customModelDeclaration)[0].Types[0] != typ || cmd.Params["models"].([]customModelDeclaration)[0].MaxTokens != 131072 {
 			t.Fatalf("%s: %v %v", option, cmd, err)
 		}
 	}
-	for _, option := range []string{"tokens 1 chat chat", "tokens 1 embedding think", "tokens 1 tokens 2 chat", "chat", "tokens -1 chat", "tokens 0 tokens 1 chat", "tokens 1.5 chat", "tokens 1 chat garbage", "tokens 1 chat think think"} {
+	for _, option := range []string{"tokens 1 chat chat", "tokens 1 embedding think", "tokens 1 tokens 2 chat", "tokens -1 chat", "tokens 0 tokens 1 chat", "tokens 1.5 chat", "tokens 1 chat garbage", "tokens 1 chat think think"} {
 		if _, err := NewParser(`ADD MODEL 'm' TO PROVIDER 'vllm' INSTANCE 'i' WITH ` + option + `;`).Parse(false); err == nil {
 			t.Fatalf("accepted %s", option)
 		}
@@ -58,7 +58,7 @@ func TestCustomModelGrammarAndCapabilities(t *testing.T) {
 }
 func TestCustomModelClientPayloadAndBusinessError(t *testing.T) {
 	fail := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.URL.Path != "/api/v1/providers/vllm/instances/local/models" {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
@@ -66,7 +66,12 @@ func TestCustomModelClientPayloadAndBusinessError(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Error(err)
 		}
-		if payload["max_tokens"] != float64(1024) || payload["thinking"] != true || payload["model_name"] != "Qwen/test" || payload["model_type"] != "chat" || !reflect.DeepEqual(payload["model_types"], []interface{}{"chat", "image2text"}) {
+		models, ok := payload["models"].([]interface{})
+		if !ok || len(models) != 1 {
+			t.Fatalf("invalid batch: %v", payload)
+		}
+		model := models[0].(map[string]interface{})
+		if model["max_tokens"] != float64(1024) || model["thinking"] != true || model["model_name"] != "Qwen/test" || !reflect.DeepEqual(model["model_types"], []interface{}{"chat", "image2text"}) {
 			t.Errorf("%v", payload)
 		}
 		if fail {

@@ -3,8 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"multirag/tests/support"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -15,7 +15,7 @@ import (
 func TestDatasetChunkAndMetadataSyntax(t *testing.T) {
 	for input, kind := range map[string]string{
 		"GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a name';":                     "get_chunk",
-		"LIST METADATA OF DATASET 'a name' 'b';":                                 "list_metadata",
+		"GET METADATA OF DATASET 'a name' 'b';":                                  "get_metadata",
 		"REMOVE CHUNKS 'c1' 'c2' FROM DOCUMENT 'd' IN DATASET 'a';":              "remove_chunks",
 		"REMOVE ALL CHUNKS FROM DOCUMENT 'd' IN DATASET 'a';":                    "remove_chunks",
 		"REMOVE TAGS 'one', 'two' FROM DATASET 'a';":                             "rm_tags",
@@ -29,9 +29,9 @@ func TestDatasetChunkAndMetadataSyntax(t *testing.T) {
 	for _, input := range []string{
 		"GET CHUNK 'c' OF DATASET 'a';", "GET CHUNK '' OF DOCUMENT 'd' IN DATASET 'a';",
 		"GET CHUNK 'c' OF DOCUMENT '' IN DATASET 'a';", "GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a'",
-		"GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a'; ignored", "LIST METADATA OF DATASET '';",
-		"LIST METADATA OF DATASET 'a' 'a';", "LIST METADATA OF DATASET 'a', 'b';",
-		"LIST METADATA OF DATASET 'a'; ignored", "LIST METADATA OF DATASET 'a'",
+		"GET CHUNK 'c' OF DOCUMENT 'd' IN DATASET 'a'; ignored", "GET METADATA OF DATASET '';",
+		"GET METADATA OF DATASET 'a' 'a';", "GET METADATA OF DATASET 'a', 'b';",
+		"GET METADATA OF DATASET 'a'; ignored", "GET METADATA OF DATASET 'a'",
 		"REMOVE CHUNKS 'c1', 'c2' FROM DOCUMENT 'd' IN DATASET 'a';", "REMOVE CHUNKS 'c1' 'c1' FROM DOCUMENT 'd' IN DATASET 'a';",
 		"REMOVE CHUNKS '' FROM DOCUMENT 'd' IN DATASET 'a';", "REMOVE CHUNKS 'c' FROM DOCUMENT '';",
 		"REMOVE CHUNKS 'c' FROM DOCUMENT 'd' IN DATASET 'a'; ignored", "REMOVE ALL CHUNKS FROM DOCUMENT 'd' IN DATASET 'a'; ignored",
@@ -51,7 +51,7 @@ func TestDatasetChunkAndMetadataClient(t *testing.T) {
 	const a = "9e235004bd8911f19fcaacde48001122"
 	const b = "9e235005bd8911f19fcaacde48001122"
 	paths := []string{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.Method+" "+r.URL.Path)
 		if r.Header.Get("Authorization") != "Bearer owned" {
 			t.Error("missing session")
@@ -77,7 +77,7 @@ func TestDatasetChunkAndMetadataClient(t *testing.T) {
 	port, _ := strconv.Atoi(address.Port())
 	client := NewMultiRAGClient("user")
 	client.HTTPClient.Host, client.HTTPClient.Port, client.HTTPClient.LoginToken = address.Hostname(), port, "owned"
-	for _, input := range []string{"GET CHUNK 'c?&' OF DOCUMENT 'doc' IN DATASET '" + a + "';", "LIST METADATA OF DATASET '" + a + "' '" + b + "';"} {
+	for _, input := range []string{"GET CHUNK 'c?&' OF DOCUMENT 'doc' IN DATASET '" + a + "';", "GET METADATA OF DATASET '" + a + "' '" + b + "';"} {
 		cmd, err := NewParser(input).Parse(false)
 		if err != nil {
 			t.Fatal(err)
@@ -117,7 +117,7 @@ func TestDatasetObjectsRejectMalformedEnvelopes(t *testing.T) {
 
 func TestDatasetMutationUsesAPITokenAndRejectsFalseSuccess(t *testing.T) {
 	response := `{"code":0,"data":2}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	srv := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer owned-api" {
 			t.Error("mutation lost API token")
 		}

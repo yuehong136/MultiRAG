@@ -6,8 +6,8 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"multirag/tests/support"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,7 +18,7 @@ import (
 
 func skillTestClient(t *testing.T, handler http.HandlerFunc) *HTTPClient {
 	t.Helper()
-	server := httptest.NewServer(handler)
+	server := support.RegisteredHTTPServer(t, handler)
 	t.Cleanup(server.Close)
 	parsed, _ := url.Parse(server.URL)
 	client := NewHTTPClient()

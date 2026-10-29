@@ -16,32 +16,40 @@ func (c *MultiRAGClient) AddCustomModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("please login first")
 	}
 	payload := make(map[string]interface{})
-	for _, field := range []string{"provider_name", "instance_name", "model_name"} {
+	for _, field := range []string{"provider_name", "instance_name"} {
 		value, ok := cmd.Params[field].(string)
-		if !ok || value == "" {
+		if !ok || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("%s is required", field)
 		}
 		payload[field] = value
 	}
-	if types, ok := cmd.Params["model_types"].([]string); ok {
-		if len(types) == 0 {
-			return nil, fmt.Errorf("model_types must not be empty")
+	models, ok := cmd.Params["models"].([]customModelDeclaration)
+	if !ok || len(models) == 0 || len(models) > 100 {
+		return nil, fmt.Errorf("between 1 and 100 models required")
+	}
+	seen := make(map[string]bool, len(models))
+	for _, model := range models {
+		if strings.TrimSpace(model.Name) == "" || seen[model.Name] || model.MaxTokens < 0 || len(model.Types) == 0 {
+			return nil, fmt.Errorf("invalid or duplicate model declaration")
 		}
-		payload["model_types"] = types
-		payload["model_type"] = types[0]
-	} else if typ, ok := cmd.Params["model_type"].(string); ok && typ != "" {
-		payload["model_type"] = typ
-	} else {
-		return nil, fmt.Errorf("model capabilities required")
+		seen[model.Name] = true
+		capabilities := make(map[string]bool, len(model.Types))
+		for _, capability := range model.Types {
+			switch capability {
+			case "chat", "image2text", "embedding", "rerank", "speech2text", "tts", "ocr", "doc_parse":
+			default:
+				return nil, fmt.Errorf("unsupported model capability")
+			}
+			if capabilities[capability] {
+				return nil, fmt.Errorf("duplicate model capability")
+			}
+			capabilities[capability] = true
+		}
+		if model.Thinking != nil && *model.Thinking && !capabilities["chat"] && !capabilities["image2text"] {
+			return nil, fmt.Errorf("THINK requires chat or vision")
+		}
 	}
-	tokens, ok := cmd.Params["max_tokens"].(int)
-	if !ok || tokens < 0 {
-		return nil, fmt.Errorf("nonnegative max_tokens required")
-	}
-	payload["max_tokens"] = tokens
-	if value, ok := cmd.Params["support_think"].(bool); ok {
-		payload["thinking"] = value
-	}
+	payload["models"] = models
 	path := fmt.Sprintf("/providers/%s/instances/%s/models", url.PathEscape(payload["provider_name"].(string)), url.PathEscape(payload["instance_name"].(string)))
 	resp, err := c.HTTPClient.Request("POST", path, "api", nil, payload)
 	if err != nil {
@@ -58,15 +66,26 @@ func (c *MultiRAGClient) DropInstanceModel(cmd *Command) (ResponseIf, error) {
 		return nil, fmt.Errorf("please login first")
 	}
 	values := make(map[string]string)
-	for _, field := range []string{"provider_name", "instance_name", "model_name"} {
+	for _, field := range []string{"provider_name", "instance_name"} {
 		value, ok := cmd.Params[field].(string)
 		if !ok || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("%s is required", field)
 		}
 		values[field] = value
 	}
+	names, ok := cmd.Params["model_names"].([]string)
+	if !ok || len(names) == 0 || len(names) > 100 {
+		return nil, fmt.Errorf("between 1 and 100 models required")
+	}
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" || seen[name] {
+			return nil, fmt.Errorf("invalid or duplicate model name")
+		}
+		seen[name] = true
+	}
 	path := fmt.Sprintf("/providers/%s/instances/%s/models", url.PathEscape(values["provider_name"]), url.PathEscape(values["instance_name"]))
-	resp, err := c.HTTPClient.Request("DELETE", path, "api", nil, map[string]interface{}{"models": []string{values["model_name"]}})
+	resp, err := c.HTTPClient.Request("DELETE", path, "api", nil, map[string]interface{}{"models": names})
 	if err != nil {
 		return nil, err
 	}

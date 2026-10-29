@@ -110,8 +110,6 @@ func (p *Parser) parseListCommand() (*Command, error) {
 		return NewCommand("list_user_chats"), nil
 	case TokenDocuments:
 		return p.parseListDatasetDocuments()
-	case TokenMetadata:
-		return p.parseListMetadata()
 	case TokenFiles:
 		return p.parseListFiles()
 	case TokenQuotedString:
@@ -835,39 +833,6 @@ func (p *Parser) parseImportCommand() (*Command, error) {
 	cmd := NewCommand("import_docs_into_dataset")
 	cmd.Params["document_paths"] = documentPaths
 	cmd.Params["dataset_name"] = datasetName
-
-	p.nextToken()
-	if err := p.expectSemicolon(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-func (p *Parser) parseSearchCommand() (*Command, error) {
-	p.nextToken() // consume SEARCH
-	question, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	p.nextToken()
-	if p.curToken.Type != TokenOn {
-		return nil, fmt.Errorf("expected ON")
-	}
-	p.nextToken()
-	if p.curToken.Type != TokenDatasets {
-		return nil, fmt.Errorf("expected DATASETS")
-	}
-	p.nextToken()
-
-	datasets, err := p.parseQuotedString()
-	if err != nil {
-		return nil, err
-	}
-
-	cmd := NewCommand("search_on_datasets")
-	cmd.Params["question"] = question
-	cmd.Params["datasets"] = datasets
 
 	p.nextToken()
 	if err := p.expectSemicolon(); err != nil {
@@ -1607,6 +1572,8 @@ func (p *Parser) parseRemoveCommand() (*Command, error) {
 	p.nextToken() // consume REMOVE
 
 	switch p.curToken.Type {
+	case TokenModel:
+		return p.parseDropInstanceModel()
 	case TokenTag:
 		return p.parseRemoveTags()
 	case TokenChunks, TokenAll:

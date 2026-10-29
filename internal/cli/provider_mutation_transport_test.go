@@ -2,9 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"multirag/tests/support"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -20,7 +20,7 @@ func TestProviderMutationsAuthenticateAndReturnNilOnFailure(t *testing.T) {
 				success    bool
 			}{{"success", `{"code":0,"message":"ok"}`, 200, true}, {"missing-code", `{"message":"missing"}`, 200, false}, {"business-error", `{"code":403,"message":"denied"}`, 200, false}, {"http-error", `{"code":0}`, 502, false}} {
 				t.Run(fmt.Sprintf("%s/%d/%s", credential, i, reply.name), func(t *testing.T) {
-					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					srv := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if r.Header.Get("Authorization") != "Bearer owned-token" {
 							t.Error("CLI credential omitted", r.Header.Get("Authorization"))
 						}
@@ -60,7 +60,7 @@ func TestProviderMutationsAuthenticateAndReturnNilOnFailure(t *testing.T) {
 
 func TestProviderMutationsRejectMissingCredentialsBeforeHTTP(t *testing.T) {
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(500) }))
+	srv := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(500) }))
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	host, port, _ := net.SplitHostPort(u.Host)
