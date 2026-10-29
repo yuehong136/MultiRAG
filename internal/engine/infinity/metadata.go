@@ -17,10 +17,12 @@
 package infinity
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,11 +299,15 @@ func decodeMetadataFields(value interface{}) (map[string]interface{}, error) {
 			fields[k] = x
 		}
 	case string:
-		if err := json.Unmarshal([]byte(v), &fields); err != nil {
+		var err error
+		fields, err = decodeMetadataJSON([]byte(v))
+		if err != nil {
 			return nil, fmt.Errorf("invalid stored metadata JSON: %w", err)
 		}
 	case []byte:
-		if err := json.Unmarshal(v, &fields); err != nil {
+		var err error
+		fields, err = decodeMetadataJSON(v)
+		if err != nil {
 			return nil, fmt.Errorf("invalid stored metadata JSON: %w", err)
 		}
 	default:
@@ -312,6 +318,19 @@ func decodeMetadataFields(value interface{}) (map[string]interface{}, error) {
 	}
 	if _, err := json.Marshal(fields); err != nil {
 		return nil, err
+	}
+	return fields, nil
+}
+
+func decodeMetadataJSON(raw []byte) (map[string]interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var fields map[string]interface{}
+	if err := decoder.Decode(&fields); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("metadata JSON contains trailing data")
 	}
 	return fields, nil
 }

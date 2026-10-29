@@ -2,6 +2,7 @@ package infinity
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	sdk "github.com/infiniflow/infinity-go-sdk"
 	"math"
 	"reflect"
@@ -25,12 +26,12 @@ func TestStrictStoreFiltersDoNotDropScope(t *testing.T) {
 	}
 }
 func TestMetadataRejectsMalformedObjects(t *testing.T) {
-	for _, raw := range []interface{}{`null`, `[]`, `{"broken"`, 4} {
+	for _, raw := range []interface{}{`null`, `[]`, `{"broken"`, `{} {}`, `{} trailing`, 4} {
 		if _, err := decodeMetadataFields(raw); err == nil {
 			t.Fatal(raw)
 		}
 	}
-	if got, err := decodeMetadataFields(`{"zero":0,"keep":false}`); err != nil || got["zero"] != float64(0) || got["keep"] != false {
+	if got, err := decodeMetadataFields(`{"zero":0,"keep":false}`); err != nil || got["zero"] != json.Number("0") || got["keep"] != false {
 		t.Fatal(got, err)
 	}
 }
@@ -56,12 +57,28 @@ func TestSDKFilterLiteralAndMetadataFrames(t *testing.T) {
 		frames = append(frames, raw...)
 	}
 	rows, err := decodeMetadataColumn([]interface{}{frames}, 2)
-	if err != nil || !reflect.DeepEqual(rows, []interface{}{map[string]interface{}{"first": float64(1)}, map[string]interface{}{"second": float64(0)}}) {
+	if err != nil || !reflect.DeepEqual(rows, []interface{}{map[string]interface{}{"first": json.Number("1")}, map[string]interface{}{"second": json.Number("0")}}) {
 		t.Fatal(rows, err)
 	}
 	for _, raw := range [][]byte{frames[:len(frames)-1], {1, 0}, binary.LittleEndian.AppendUint32(nil, 100)} {
 		if _, err := decodeMetadataColumn([]interface{}{raw}, 2); err == nil {
 			t.Fatal("invalid frames accepted")
 		}
+	}
+}
+
+func TestKGMetadataDecoderKeepsExactIntegers(t *testing.T) {
+	for _, raw := range []any{`{"large":9007199254740993,"zero":0}`, []byte(`{"large":9007199254740993,"zero":0}`)} {
+		got, err := decodeMetadataFields(raw)
+		if err != nil || got["large"] != json.Number("9007199254740993") || got["zero"] != json.Number("0") {
+			t.Fatal(got, err)
+		}
+	}
+	raw := []byte(`{"large":9007199254740993}`)
+	packed := binary.LittleEndian.AppendUint32(nil, uint32(len(raw)))
+	packed = append(packed, raw...)
+	rows, err := decodeMetadataColumn([]any{packed}, 1)
+	if err != nil || len(rows) != 1 || rows[0].(map[string]any)["large"] != json.Number("9007199254740993") {
+		t.Fatal(rows, err)
 	}
 }

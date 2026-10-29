@@ -22,6 +22,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"go.uber.org/zap"
@@ -94,9 +98,12 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 
 	// Determine search type from MatchExprs
 	var matchText string
+	var matchFields []string
 	var matchDense interface{}
 	var textWeight float64 = 1.0
+	var vectorWeight float64 = 1.0
 	var hasVectorMatch bool
+	var fusion *types.FusionExpr
 
 	for _, expr := range req.MatchExprs {
 		if expr == nil {
@@ -106,24 +113,56 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 		case string:
 			matchText = e
 		case *types.MatchTextExpr:
+			if e == nil {
+				continue
+			}
 			matchText = e.MatchingText
+			matchFields = e.Fields
 		case *types.MatchDenseExpr:
+			if e == nil {
+				continue
+			}
 			hasVectorMatch = true
 			matchDense = e
 			textWeight = 0.3 // default, should be passed via SimilarityThreshold
+		case *types.FusionExpr:
+			if e != nil {
+				if fusion != nil {
+					return nil, fmt.Errorf("multiple fusion expressions are unsupported")
+				}
+				fusion = e
+			}
 		}
+	}
+	if fusion != nil {
+		if !hasVectorMatch || matchText == "" {
+			return nil, fmt.Errorf("weighted fusion requires text and dense expressions")
+		}
+		var err error
+		textWeight, vectorWeight, err = esFusionWeights(fusion)
+		if err != nil {
+			return nil, err
+		}
+	}
+	rankFeatures, err := esRankFeatures(req.RankFeature)
+	if err != nil {
+		return nil, err
+	}
+	orders, err := esSortFields(req.OrderBy)
+	if err != nil {
+		return nil, err
 	}
 
 	var vectorFieldName string
 	if !hasVectorMatch {
 		// Keyword-only search
-		queryBody["query"] = buildESKeywordQuery(matchText, filterClauses, 1.0)
+		queryBody["query"] = buildESKeywordQuery(matchText, filterClauses, 1.0, matchFields)
 	} else {
 		// Hybrid search: keyword + vector
 		// Calculate text weight (use SimilarityThreshold as text weight if provided)
 
 		// Build boolean query for text match and filters
-		boolQuery := buildESKeywordQuery(matchText, filterClauses, 1.0)
+		boolQuery := buildESKeywordQuery(matchText, filterClauses, 1.0, matchFields)
 		// Add boost to the bool query (as in Python code)
 		if boolMap, ok := boolQuery["bool"].(map[string]interface{}); ok {
 			boolMap["boost"] = textWeight
@@ -150,6 +189,20 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 				"filter":         boolQuery,
 				"similarity":     0.0,
 			}
+			if value, present := md.ExtraOptions["similarity"]; present {
+				similarity, ok := value.(float64)
+				if !ok || math.IsNaN(similarity) || math.IsInf(similarity, 0) {
+					return nil, fmt.Errorf("dense similarity must be a finite number")
+				}
+				knnQuery["similarity"] = similarity
+			}
+			if fusion != nil {
+				// Explicit fusion follows the Python scalar-only kNN filter:
+				// vectors may match without satisfying the lexical branch.
+				// Keep the legacy lexical prefilter for callers without FusionExpr.
+				knnQuery["filter"] = map[string]interface{}{"bool": map[string]interface{}{"filter": filterClauses}}
+				knnQuery["boost"] = vectorWeight
+			}
 
 			queryBody["knn"] = knnQuery
 			queryBody["query"] = boolQuery
@@ -172,6 +225,16 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 			}
 			queryBody["_source"] = sourceFields
 		}
+	}
+	if len(rankFeatures) > 0 {
+		if query, ok := queryBody["query"].(map[string]interface{}); ok {
+			if boolQuery, ok := query["bool"].(map[string]interface{}); ok {
+				boolQuery["should"] = rankFeatures
+			}
+		}
+	}
+	if len(orders) > 0 {
+		queryBody["sort"] = orders
 	}
 
 	if len(req.SelectFields) > 0 {
@@ -217,7 +280,20 @@ func (e *elasticsearchEngine) searchUnified(ctx context.Context, req *types.Sear
 
 	// Parse response
 	var esResp SearchResponse
-	if err := json.NewDecoder(res.Body).Decode(&esResp); err != nil {
+	decoder := json.NewDecoder(res.Body)
+	metadataOnly := len(req.IndexNames) > 0
+	for _, index := range req.IndexNames {
+		if !strings.HasPrefix(index, "multirag_doc_meta_") {
+			metadataOnly = false
+			break
+		}
+	}
+	if metadataOnly {
+		// Metadata values may contain integers beyond float64 precision.
+		// Chunk consumers retain their existing numeric representation.
+		decoder.UseNumber()
+	}
+	if err := decoder.Decode(&esResp); err != nil {
 		return nil, fmt.Errorf("error parsing response: %w", err)
 	}
 
@@ -304,16 +380,20 @@ func buildFilterClauses(kbIDs []string, available int) []map[string]interface{} 
 // buildESKeywordQuery builds keyword-only search query for ES
 // Uses query_string if matchText is in query_string format, otherwise uses multi_match
 // boost is applied to the text match clause (query_string or multi_match)
-func buildESKeywordQuery(matchText string, filterClauses []map[string]interface{}, boost float64) map[string]interface{} {
+func buildESKeywordQuery(matchText string, filterClauses []map[string]interface{}, boost float64, selectedFields ...[]string) map[string]interface{} {
 	if matchText == "" {
 		return map[string]interface{}{"bool": map[string]interface{}{"filter": filterClauses}}
 	}
 	var mustClause map[string]interface{}
 
+	fields := []string{"title_tks^10", "title_sm_tks^5", "important_kwd^30", "important_tks^20", "question_tks^20", "content_ltks^2", "content_sm_ltks"}
+	if len(selectedFields) > 0 && len(selectedFields[0]) > 0 {
+		fields = append([]string(nil), selectedFields[0]...)
+	}
 	// Use query_string for complex queries
 	queryString := map[string]interface{}{
 		"query":                matchText,
-		"fields":               []string{"title_tks^10", "title_sm_tks^5", "important_kwd^30", "important_tks^20", "question_tks^20", "content_ltks^2", "content_sm_ltks"},
+		"fields":               fields,
 		"type":                 "best_fields",
 		"minimum_should_match": "30%",
 		"boost":                boost,
@@ -328,6 +408,80 @@ func buildESKeywordQuery(matchText string, filterClauses []map[string]interface{
 			"filter": filterClauses,
 		},
 	}
+}
+
+// esFusionWeights uses the text,dense order of the public fusion contract,
+// independent of the order of those expressions in MatchExprs.
+func esFusionWeights(fusion *types.FusionExpr) (float64, float64, error) {
+	if fusion.Method != "weighted_sum" {
+		return 0, 0, fmt.Errorf("unsupported Elasticsearch fusion method %q", fusion.Method)
+	}
+	value, ok := fusion.FusionParams["weights"].(string)
+	parts := strings.Split(value, ",")
+	if !ok || len(parts) != 2 {
+		return 0, 0, fmt.Errorf("fusion weights must contain text and dense weights")
+	}
+	weights := [2]float64{}
+	for i, part := range parts {
+		weight, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil || math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+			return 0, 0, fmt.Errorf("fusion weights must be finite and non-negative")
+		}
+		weights[i] = weight
+	}
+	if weights[0] == 0 && weights[1] == 0 {
+		return 0, 0, fmt.Errorf("fusion weights cannot both be zero")
+	}
+	return weights[0], weights[1], nil
+}
+
+func esRankFeatures(features map[string]float64) ([]map[string]interface{}, error) {
+	keys := make([]string, 0, len(features))
+	for key := range features {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	clauses := make([]map[string]interface{}, 0, len(keys))
+	for _, key := range keys {
+		boost := features[key]
+		if strings.TrimSpace(key) == "" || math.IsNaN(boost) || math.IsInf(boost, 0) || boost < 0 {
+			return nil, fmt.Errorf("rank features require non-empty names and finite non-negative boosts")
+		}
+		field := key
+		if field != common.PAGERANK_FLD {
+			field = common.TAG_FLD + "." + key
+		}
+		clauses = append(clauses, map[string]interface{}{"rank_feature": map[string]interface{}{"field": field, "linear": map[string]interface{}{}, "boost": boost}})
+	}
+	return clauses, nil
+}
+
+func esSortFields(orderBy *types.OrderByExpr) ([]map[string]interface{}, error) {
+	if orderBy == nil {
+		return nil, nil
+	}
+	orders := make([]map[string]interface{}, 0, len(orderBy.Fields))
+	for _, field := range orderBy.Fields {
+		if !types.ValidFieldName(field.Field) || (field.Type != types.SortAsc && field.Type != types.SortDesc) {
+			return nil, fmt.Errorf("invalid Elasticsearch sort field or direction")
+		}
+		// The stored logical id is a text field, matching Python's exclusion.
+		if field.Field == "id" {
+			continue
+		}
+		direction := "asc"
+		if field.Type == types.SortDesc {
+			direction = "desc"
+		}
+		info := map[string]interface{}{"order": direction, "unmapped_type": "keyword"}
+		if field.Field == "page_num_int" || field.Field == "top_int" {
+			info["unmapped_type"], info["mode"], info["numeric_type"] = "float", "avg", "double"
+		} else if strings.HasSuffix(field.Field, "_int") || strings.HasSuffix(field.Field, "_flt") {
+			info["unmapped_type"] = "float"
+		}
+		orders = append(orders, map[string]interface{}{field.Field: info})
+	}
+	return orders, nil
 }
 
 // convertESResponse converts ES SearchResponse to unified chunks format
