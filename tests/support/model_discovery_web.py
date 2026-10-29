@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import httpx
 import uvicorn
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, event, func, select
@@ -213,12 +212,9 @@ def run_web_discovery(client: TestClient, owner: str, engine: Engine, base_url: 
             assert reader.get(TenantModelInstance, instance.id) is None
         journal.event("web-cleanup-independent-readback", database=engine.url.database, provider_instance_models_absent=True, numeric_model_ids=identifiers)
     except BaseException:
-        if origin and server is not None and server.started:
-            try:
-                response = httpx.delete(origin + "/api/v1/providers/Ollama", headers={"Authorization": "Bearer " + token}, timeout=10)
-                journal.event("web-failure-fallback-cleanup", status=response.status_code, provider="Ollama", owner=owner)
-            except Exception as error:
-                journal.event("web-failure-fallback-cleanup-failed", error_type=type(error).__name__)
+        # The outer fixture owns the exact scratch database and always drops it.
+        # A failed consumer has no trustworthy receipt for deleting API resources.
+        journal.event("web-failure-cleanup-deferred", database=engine.url.database, cleanup_owner="registered scratch_database fixture")
         raise
     finally:
         if server is not None:
