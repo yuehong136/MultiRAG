@@ -54,6 +54,18 @@ _CASES = {
         answer="答案在这里",
         markers=("<think>", "</think>"),
     ),
+    "repeated_close_with_answer": _ThinkCase(
+        chunks=("<think>r</think>", "</think>V"),
+        reasoning="r",
+        answer="V",
+        markers=("<think>", "</think>"),
+    ),
+    "repeated_close_preserves_answer_whitespace": _ThinkCase(
+        chunks=("<think>r</think> ", "</think>V"),
+        reasoning="r",
+        answer=" V",
+        markers=("<think>", "</think>"),
+    ),
     "answer_before_and_after_reasoning": _ThinkCase(
         chunks=("前言", " ", "<think>内部推理</think>", "最终回答", "。"),
         reasoning="内部推理",

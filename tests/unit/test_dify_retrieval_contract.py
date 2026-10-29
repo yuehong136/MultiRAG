@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.db.db_models import get_db
-from api.utils.api_utils import token_required
+from api.utils.api_utils import current_user
 
 
 @pytest.mark.parametrize(
@@ -49,7 +49,7 @@ def test_post_argument_error_envelope(client: TestClient, monkeypatch: pytest.Mo
     module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock(side_effect=AssertionError("Invalid arguments reached retrieval"))
     monkeypatch.setattr(module, "_run_retrieval", run)
-    client.app.dependency_overrides[token_required] = lambda: "owner"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(tenant_id="owner")
     response = client.post("/api/v1/dify/retrieval", json=payload)
     assert response.status_code == 400, response.text
     assert response.json()["error_code"] == 101
@@ -79,7 +79,7 @@ def test_get_health_check_has_no_retrieval_dependencies(client: TestClient, monk
     monkeypatch.setattr(module, "_run_retrieval", run)
     monkeypatch.setattr(module, "LLMBundle", bundle)
     client.app.dependency_overrides[get_db] = dependency
-    client.app.dependency_overrides[token_required] = dependency
+    client.app.dependency_overrides[current_user] = dependency
     response = client.get("/api/v1/dify/retrieval/health", params=params, headers=headers)
     assert response.status_code == 200, response.text
     assert response.json() == {"retcode": 0, "retmsg": "success", "data": True}
@@ -111,14 +111,24 @@ def test_malformed_json_has_dify_envelope_without_echo(client: TestClient, monke
     run.assert_not_called()
 
 
-@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer"}, {"Authorization": "Bearer invalid-fixture-key"}])
-def test_post_invalid_api_key_has_dify_envelope(client: TestClient, monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": "Bearer"},
+        {"Authorization": "Bearer invalid-fixture-key"},
+        {"Authorization": "Basic invalid-fixture-key"},
+        {"Authorization": "Bearer invalid-fixture-key extra"},
+        [("Authorization", "Bearer first"), ("Authorization", "Bearer second")],
+    ],
+)
+def test_post_invalid_api_key_has_dify_envelope(client: TestClient, monkeypatch: pytest.MonkeyPatch, headers: Any) -> None:
     from api.utils import api_utils
 
     module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock(side_effect=AssertionError("Unauthenticated request reached retrieval"))
     monkeypatch.setattr(module, "_run_retrieval", run)
-    monkeypatch.setattr(api_utils.APIToken, "query", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(api_utils.APITokenService, "query", lambda *_args, **_kwargs: [])
     response = client.post("/api/v1/dify/retrieval", headers=headers, json={"knowledge_id": "kb", "query": "text"})
     assert response.status_code == 403 and response.json()["error_code"] == 403
     run.assert_not_called()
@@ -128,7 +138,7 @@ def test_normalized_post_request_uses_strict_settings(client: TestClient, monkey
     module = sys.modules["api.apps.restful_apis.dify_retrieval"]
     run = AsyncMock(return_value=module.RetrievalResponse())
     monkeypatch.setattr(module, "_run_retrieval", run)
-    client.app.dependency_overrides[token_required] = lambda: "owner"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(tenant_id="owner")
     settings = {"top_k": "12", "score_threshold": "0.66"}
     data = {"knowledge_id": "kb", "query": "text", "use_kg": "true"}
     response = client.post("/api/v1/dify/retrieval", json={**data, "retrieval_setting": settings})
@@ -150,7 +160,7 @@ def test_denial_precedes_metadata_model_and_index(client: TestClient, monkeypatc
     monkeypatch.setattr(module, "LLMBundle", bundle)
     monkeypatch.setattr(module.settings, "retriever", retriever)
     monkeypatch.setattr(module.settings, "kg_retriever", kg_retriever)
-    client.app.dependency_overrides[token_required] = lambda: "attacker"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(tenant_id="attacker")
     with caplog.at_level(logging.WARNING):
         response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "SECRET_REQUEST_CONTENT", "use_kg": True})
     assert response.status_code == 403 and response.json()["error_code"] == 109
@@ -169,7 +179,7 @@ def test_post_lookup_failure_does_not_fall_back_to_health(client: TestClient, mo
     bundle = Mock(side_effect=AssertionError("Failed lookup initialized model"))
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lookup)
     monkeypatch.setattr(module, "LLMBundle", bundle)
-    client.app.dependency_overrides[token_required] = lambda: "owner"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(tenant_id="owner")
     response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "kb", "query": "text"})
     assert response.status_code == 500 and response.json()["error_code"] == 500
     assert response.json()["error_msg"] == "controlled lookup failure"
@@ -197,7 +207,7 @@ def allowed_retrieval(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Si
     kg = SimpleNamespace(retrieval=AsyncMock(return_value={"doc_id": "", "content_with_weight": "Graph aggregate", "similarity": 1.0, "docnm_kwd": "Related content in Knowledge Graph"}))
     monkeypatch.setattr(module.settings, "retriever", retriever)
     monkeypatch.setattr(module.settings, "kg_retriever", kg)
-    client.app.dependency_overrides[token_required] = lambda: "member"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(tenant_id="member")
     return SimpleNamespace(module=module, chunks=chunks, retriever=retriever, kg=kg, documents=documents, metadata=metadata)
 
 
@@ -259,7 +269,7 @@ def test_missing_kb_precedes_access_and_all_retrieval_work(client: TestClient, m
     monkeypatch.setattr(module.KnowledgebaseService, "get_by_id", lambda *_: None)
     accessible = Mock(side_effect=AssertionError("Missing KB reached authorization"))
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", accessible)
-    client.app.dependency_overrides[token_required] = lambda: "owner"
+    client.app.dependency_overrides[current_user] = lambda: SimpleNamespace(tenant_id="owner")
     response = client.post("/api/v1/dify/retrieval", json={"knowledge_id": "missing", "query": "text"})
     assert response.status_code == 404 and response.json()["error_code"] == 404
     accessible.assert_not_called()

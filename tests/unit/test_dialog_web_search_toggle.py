@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 import core.advanced_rag.tree_structured_query_decomposition_retrieval as deep_research_module
+from api.db.db_models import Dialog
 from api.db.services import dialog_service
 from api.db.services.llm_service import LLMBundle
 
@@ -61,7 +62,7 @@ class _PipelineBundle(LLMBundle):
 
 @dataclass
 class _PipelineProbe:
-    dialog: SimpleNamespace
+    dialog: Dialog
     messages: list[dict[str, str]]
     tavily_calls: list[tuple[str, str]]
 
@@ -152,7 +153,7 @@ def dialog_pipeline_stubs(monkeypatch: pytest.MonkeyPatch) -> _PipelineProbe:
     monkeypatch.setattr(dialog_service, "kb_prompt", fake_kb_prompt)
     monkeypatch.setattr(dialog_service, "Tavily", TavilySpy)
 
-    dialog = SimpleNamespace(
+    dialog = Dialog(
         kb_ids=["kb-1"],
         llm_id="chat-model",
         tenant_id="tenant-unit",

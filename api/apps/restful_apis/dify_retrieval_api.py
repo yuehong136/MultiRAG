@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal, Self
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -21,7 +21,8 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
-from api.utils.api_utils import SDKAuthError, build_error_result, get_json_result, token_required
+from api.identity.principal import Principal
+from api.utils.api_utils import build_error_result, current_user, get_json_result
 from common import settings
 from common.constants import LLMType, RetCode
 from common.metadata_utils import convert_conditions, meta_filter
@@ -29,7 +30,7 @@ from core.app.tag import label_question
 
 
 class DifyRetrievalRoute(APIRoute):
-    """Keep Dify's error envelope for FastAPI validation and API-key failures."""
+    """Keep Dify's error envelope for validation and identity failures."""
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
@@ -47,7 +48,11 @@ class DifyRetrievalRoute(APIRoute):
                     details = "; ".join(".".join(str(part) for part in item["loc"]) + ": " + item["msg"] for item in errors)
                     message = "invalid or malformed arguments: " + details
                 return JSONResponse(status_code=400, content={"error_code": int(RetCode.ARGUMENT_ERROR), "error_msg": message})
-            except SDKAuthError:
+            except HTTPException as error:
+                from api.apps import manager
+
+                if error is not manager.not_authenticated_exception:
+                    raise
                 return build_error_result(retcode=RetCode.FORBIDDEN, error_msg="API-KEY is invalid or missing!")
 
         return handle
@@ -373,7 +378,7 @@ async def _run_retrieval(
     responses={
         200: {"description": "检索成功"},
         400: {"description": "Dify error_code=101: required arguments are missing / invalid or malformed arguments"},
-        403: {"description": "API key or dataset access denied"},
+        403: {"description": "Credentials or dataset access denied"},
         404: {"description": "知识库或文档块未找到"},
         500: {"description": "服务器内部错误"},
     },
@@ -381,7 +386,7 @@ async def _run_retrieval(
 async def retrieval(
     request_data: RetrievalRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(token_required),
+    principal: Principal = Depends(current_user),
 ) -> RetrievalResponse | Response:
     """
     Dify 兼容的检索接口
@@ -392,7 +397,7 @@ async def retrieval(
     - hybrid: 混合检索（加权融合）
     - fusion: 融合检索（RRF 排序）
     """
-    return await _run_retrieval(request_data, db, tenant_id)
+    return await _run_retrieval(request_data, db, principal.tenant_id)
 
 
 @router.get(

@@ -2110,9 +2110,11 @@ def _parse_think_chunk(
                 yield ("text", output)
         after_visible = _remove_think_markers(after)
         if after_visible.strip():
+            state.close_pending = False
             state.in_think = False
             yield ("marker", "</think>")
-            pending = after_visible
+            pending = state.pending_after_close + after_visible
+            state.pending_after_close = ""
             continue
 
         state.close_pending = True
