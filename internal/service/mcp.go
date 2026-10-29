@@ -32,6 +32,7 @@ import (
 	"multirag/internal/common"
 	"multirag/internal/dao"
 	"multirag/internal/entity"
+	"multirag/internal/utility"
 )
 
 const (
@@ -42,13 +43,15 @@ const (
 
 // MCPService handles MCP server operations.
 type MCPService struct {
-	mcpServerDAO *dao.MCPServerDAO
+	mcpServerDAO  *dao.MCPServerDAO
+	fetchMCPTools func(context.Context, utility.FetchOptions) ([]utility.Tool, error)
 }
 
 // NewMCPService creates an MCP service.
 func NewMCPService() *MCPService {
 	return &MCPService{
-		mcpServerDAO: dao.NewMCPServerDAO(),
+		mcpServerDAO:  dao.NewMCPServerDAO(),
+		fetchMCPTools: utility.FetchTools,
 	}
 }
 
