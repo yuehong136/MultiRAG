@@ -28,6 +28,7 @@ GO_LIVE_OPT_INS = {
     "router": {
         "TestAfter1eGMCPAndOAuth",
         "TestAfter53GHTTPAndSQL",
+        "TestCatalogActualAuthHTTPAndSQL",
         "TestAfter7fbAPIHTTPAndSQL",
         "TestAfter98RouterContractsJWTAPIAndSQL",
         "TestAfterFFDocumentsJWTHTTPAndSQL",
@@ -94,6 +95,7 @@ GO_LIVE_OPT_INS = {
         "TestAfter0fbNewModelsHTTPCLIAndSQL",
         "TestAfter2836ModelsHTTPCLIAndSQL",
         "TestAfter67SearchScopeSQLHTTP",
+        "TestAfter7ddXiaomiServiceMedia",
         "TestAfter98MetadataSQLAndElasticsearch",
         "TestAfterFFMemoryModelBindingsSQL",
         "TestAfteraabModelBindingsSQLHTTP",
