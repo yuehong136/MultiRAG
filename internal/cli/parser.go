@@ -504,8 +504,14 @@ func (p *Parser) parseListModelsOfProvider() (*Command, error) {
 	}
 
 	p.nextToken()
+	if p.curToken.Type == TokenSemicolon {
+		if p.peekToken.Type != TokenEOF {
+			return nil, fmt.Errorf("unexpected token after semicolon")
+		}
+		return NewCommand("list_all_models"), nil
+	}
 	if p.curToken.Type != TokenFrom {
-		return nil, fmt.Errorf("expected FROM")
+		return nil, fmt.Errorf("expected FROM or semicolon")
 	}
 	p.nextToken()
 
@@ -581,8 +587,15 @@ func (p *Parser) parseShowModel() (*Command, error) {
 
 	p.nextToken() // consume model_name
 
+	if p.curToken.Type == TokenSemicolon {
+		if p.peekToken.Type != TokenEOF {
+			return nil, fmt.Errorf("unexpected token after semicolon")
+		}
+		cmd.Type = "show_catalog_model"
+		return cmd, nil
+	}
 	if p.curToken.Type != TokenFrom {
-		return nil, fmt.Errorf("expected FROM")
+		return nil, fmt.Errorf("expected FROM or semicolon")
 	}
 	p.nextToken() // consume FROM
 	providerName, err := p.parseQuotedString()

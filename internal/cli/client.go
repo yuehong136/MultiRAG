@@ -161,6 +161,10 @@ func (c *MultiRAGClient) ExecuteAdminCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListAvailableProviders(cmd)
 	case "show_provider":
 		return c.ShowProvider(cmd)
+	case "list_all_models":
+		return c.ListAllModels(cmd)
+	case "show_catalog_model":
+		return c.ShowCatalogModel(cmd)
 	case "list_provider_models":
 		return c.ListModels(cmd)
 	case "list_supported_models":
@@ -214,6 +218,10 @@ func (c *MultiRAGClient) ExecuteUserCommand(cmd *Command) (ResponseIf, error) {
 		return c.ListAvailableProviders(cmd)
 	case "show_provider":
 		return c.ShowProvider(cmd)
+	case "list_all_models":
+		return c.ListAllModels(cmd)
+	case "show_catalog_model":
+		return c.ShowCatalogModel(cmd)
 	case "list_provider_models":
 		return c.ListModels(cmd)
 	case "list_supported_models":

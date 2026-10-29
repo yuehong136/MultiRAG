@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -1058,4 +1059,43 @@ func tenantDefaultBindingID(tenant *entity.Tenant, modelType entity.ModelType) *
 		return tenant.TenantTTSID
 	}
 	return nil
+}
+
+// ListAllModels returns static metadata and its total, without consulting tenant state.
+// Pages are zero based; size zero requests the complete catalog.
+func (m *ModelProviderService) ListAllModels(page, size int) ([]*entity.Model, int, error) {
+	if page < 0 || size < 0 || (size == 0 && page != 0) || (size > 0 && page > math.MaxInt/size) {
+		return nil, 0, fmt.Errorf("invalid catalog pagination")
+	}
+	if m.providerManager == nil {
+		return nil, 0, fmt.Errorf("model catalog unavailable")
+	}
+	all := m.providerManager.ListAllModels()
+	total := len(all)
+	if size == 0 {
+		if all == nil {
+			all = []*entity.Model{}
+		}
+		return all, total, nil
+	}
+	// Check before multiplication so arbitrarily large pages cannot wrap.
+	if total == 0 || page > (total-1)/size {
+		return []*entity.Model{}, total, nil
+	}
+	start := page * size
+	end := total
+	if size < total-start {
+		end = start + size
+	}
+	return all[start:end], total, nil
+}
+
+func (m *ModelProviderService) ShowModel(name string) (*entity.Model, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("model name required")
+	}
+	if m.providerManager == nil {
+		return nil, fmt.Errorf("model catalog unavailable")
+	}
+	return m.providerManager.GetModelByNameOrAlias(name)
 }

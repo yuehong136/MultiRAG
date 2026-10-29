@@ -430,3 +430,21 @@ FuturMix instance creation saves its configuration without an inference probe.
 `LIST MODELS FROM 'FuturMix' 'office';` reads the static catalog with normal API
 authentication. Dynamic `LIST SUPPORTED MODELS` and `CHECK INSTANCE` remain
 unsupported and do not call an undocumented endpoint or spend inference quota.
+
+### Static model metadata
+
+`LIST MODELS;` lists the global static catalog; `SHOW MODEL 'baai/bge-m3';`
+looks up a canonical name or alias. These commands work in user and admin modes
+and use their corresponding authenticated endpoints. The catalog describes
+capabilities; entries do not identify configured tenant instances or authorize
+inference. `LIST MODELS FROM 'provider';`, the instance form, and
+`LIST SUPPORTED MODELS FROM 'provider' 'instance';` keep their provider scopes.
+The usual `-o json` and `\format json` output settings apply.
+
+HTTP consumers use `GET /api/v1/all-models` with optional zero-based `page` and
+`page_size` query parameters (size zero means all and requires page zero).
+Responses contain `data` and `total`; the last page is clamped and a page past
+the end returns an empty array. Negative, overflowing, repeated, empty or malformed
+parameters fail explicitly. Detail uses `/api/v1/all-models/detail?model_name=...`;
+URL-encode names, including aliases containing slashes. Admin consumers use the
+same paths beneath `/api/v1/admin`. No GET request body is required.

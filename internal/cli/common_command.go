@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -432,4 +433,55 @@ func (c *MultiRAGClient) ListDefaultModels(cmd *Command) (ResponseIf, error) {
 	}
 	result.Duration = 0
 	return &result, nil
+}
+
+// ListAllModels reads static metadata, independent of tenant instances.
+func (c *MultiRAGClient) ListAllModels(cmd *Command) (ResponseIf, error) {
+	body, err := c.catalogRequest("/all-models")
+	if err != nil {
+		return nil, err
+	}
+	var result CommonResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("invalid catalog response: %w", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("catalog request failed (code %d)", result.Code)
+	}
+	return &result, nil
+}
+
+func (c *MultiRAGClient) ShowCatalogModel(cmd *Command) (ResponseIf, error) {
+	name, ok := cmd.Params["model_name"].(string)
+	if !ok || strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("model_name required")
+	}
+	body, err := c.catalogRequest("/all-models/detail?" + url.Values{"model_name": {name}}.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var result CommonDataResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("invalid catalog response: %w", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("catalog request failed (code %d)", result.Code)
+	}
+	return &result, nil
+}
+
+func (c *MultiRAGClient) catalogRequest(endpoint string) ([]byte, error) {
+	auth := "web"
+	if c.ServerType == "admin" {
+		endpoint = "/admin" + endpoint
+		auth = "admin"
+	}
+	response, err := c.HTTPClient.Request("GET", endpoint, auth, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("catalog request failed: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("catalog request failed: HTTP %d", response.StatusCode)
+	}
+	return response.Body, nil
 }
