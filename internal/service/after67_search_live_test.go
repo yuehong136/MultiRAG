@@ -365,7 +365,7 @@ func (e *after67MetadataEngine) Search(ctx context.Context, req *types.SearchReq
 	if len(req.IndexNames) != 1 || req.IndexNames[0] != "multirag_doc_meta_s-owner" || !reflect.DeepEqual(req.KbIDs, []string{"s-kb"}) {
 		return nil, errors.New("metadata escaped authorized dataset scope")
 	}
-	return &types.SearchResult{Chunks: e.chunks}, e.err
+	return &types.SearchResult{Chunks: e.chunks, Total: int64(len(e.chunks))}, e.err
 }
 
 type after67CountingFactory struct{ calls atomic.Int64 }

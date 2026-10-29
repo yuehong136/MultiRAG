@@ -540,6 +540,7 @@ func (dao *KnowledgebaseDAO) GetReadableByID(ctx context.Context, id, userID str
 		Where("id = ? AND status = ?", id, string(entity.StatusValid)).
 		Where("created_by = ? OR permission = ?", userID, string(entity.TenantPermissionTeam)).
 		Where("EXISTS (SELECT 1 FROM t_ai_user_tenants AS membership WHERE membership.tenant_id = t_ai_knowledgebases.tenant_id AND membership.user_id = ? AND membership.status = ? AND membership.role IN ('owner', 'admin', 'normal'))", userID, "1").
+		Where("EXISTS (SELECT 1 FROM t_ai_tenants AS owner_tenant WHERE owner_tenant.id = t_ai_knowledgebases.tenant_id AND owner_tenant.status = ?)", "1").
 		First(&kb).Error
 	return &kb, err
 }

@@ -133,31 +133,112 @@ func (s *MetadataService) SearchMetadataByKBsContext(ctx context.Context, kbIDs 
 			return nil, err
 		}
 		index := BuildMetadataIndexName(tenant)
-		found, err := s.docEngine.Search(ctx, &types.SearchRequest{
-			IndexNames: []string{index}, KbIDs: groups[tenant], Limit: size,
-			SelectFields: []string{"id", "kb_id", "meta_fields"}, IncludeUnavailable: true,
-		})
+		rows, err := s.searchMetadataDirectory(ctx, tenant, groups[tenant], size)
 		if err != nil {
-			return nil, fmt.Errorf("metadata search failed: %w", err)
+			return nil, err
 		}
-		if found == nil {
-			return nil, fmt.Errorf("metadata index returned no result")
-		}
-		if found.Total > int64(len(found.Chunks)) {
-			return nil, fmt.Errorf("metadata directory search returned an incomplete selection")
-		}
-		for _, row := range found.Chunks {
-			kb, ok := row["kb_id"].(string)
-			if !ok || !seen[kb] || tenants[kb] != tenant {
-				return nil, fmt.Errorf("metadata directory dataset scope mismatch")
-			}
-		}
-		result.Chunks = append(result.Chunks, found.Chunks...)
+		result.Chunks = append(result.Chunks, rows...)
 		if len(ordered) == 1 {
 			result.IndexName = index
 		}
 	}
 	return result, ctx.Err()
+}
+
+// searchMetadataDirectory reads a complete, stable tenant selection. The size
+// controls batch memory and never limits the directory used by metadata filters.
+func (s *MetadataService) searchMetadataDirectory(ctx context.Context, tenant string, kbIDs []string, size int) ([]map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if tenant == "" || len(kbIDs) == 0 || size <= 0 || s.docEngine == nil {
+		return nil, fmt.Errorf("metadata directory scope, engine and positive batch size are required")
+	}
+	allowedKBs := make(map[string]bool, len(kbIDs))
+	for _, id := range kbIDs {
+		if id == "" {
+			return nil, fmt.Errorf("metadata directory dataset scope is required")
+		}
+		allowedKBs[id] = true
+	}
+	batchSize := min(size, 1000)
+	rows := []map[string]interface{}{}
+	seen := make(map[string]bool)
+	appendRows := func(batch []map[string]interface{}) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(batch) > batchSize {
+			return fmt.Errorf("metadata directory returned an overfull page")
+		}
+		for _, row := range batch {
+			kb, kbOK := row["kb_id"].(string)
+			id, idOK := row["id"].(string)
+			if !kbOK || !allowedKBs[kb] || !idOK || id == "" {
+				return fmt.Errorf("metadata directory dataset or document scope mismatch")
+			}
+			identity := kb + "\x00" + id
+			if seen[identity] {
+				return fmt.Errorf("metadata directory returned a duplicate document")
+			}
+			seen[identity] = true
+			rows = append(rows, row)
+		}
+		return nil
+	}
+	request := &types.SearchRequest{
+		IndexNames: []string{BuildMetadataIndexName(tenant)}, KbIDs: append([]string(nil), kbIDs...),
+		Limit: batchSize, SelectFields: []string{"id", "kb_id", "meta_fields"}, IncludeUnavailable: true,
+		OrderBy: new(types.OrderByExpr).Asc("kb_id").Asc("id"),
+	}
+	// ES can hold a point-in-time snapshot across its result-window boundary;
+	// adapters without that capability still paginate with exact total checks.
+	if scanner, ok := s.docEngine.(engine.MetadataScanner); ok {
+		if err := scanner.ScanMetadata(ctx, request, appendRows); err != nil {
+			return nil, fmt.Errorf("metadata snapshot scan failed: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return rows, nil
+	}
+	expectedTotal := int64(-1)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		request.Offset = len(rows)
+		found, err := s.docEngine.Search(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("metadata search failed: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if found == nil {
+			return nil, fmt.Errorf("metadata index returned no result")
+		}
+		if found.Total < 0 {
+			return nil, fmt.Errorf("metadata directory returned invalid pagination")
+		}
+		if expectedTotal < 0 {
+			expectedTotal = found.Total
+		} else if found.Total != expectedTotal {
+			return nil, fmt.Errorf("metadata directory changed during pagination")
+		}
+		if int64(len(rows))+int64(len(found.Chunks)) > expectedTotal {
+			return nil, fmt.Errorf("metadata directory returned more rows than its total")
+		}
+		if err := appendRows(found.Chunks); err != nil {
+			return nil, err
+		}
+		if int64(len(rows)) == expectedTotal {
+			return rows, nil
+		}
+		if len(found.Chunks) == 0 {
+			return nil, fmt.Errorf("metadata directory pagination made no progress")
+		}
+	}
 }
 
 // GetFlattedMetaByKBs returns flattened metadata in the format:
@@ -175,15 +256,18 @@ func (s *MetadataService) GetFlattedMetaByKBsContext(ctx context.Context, kbIDs 
 		return make(common.MetaData), nil
 	}
 
-	// Get metadata for all docs in KBs (use large limit like Python's 10000)
+	// Read every metadata row; the batch size is not a result cap.
 	result, err := s.SearchMetadataByKBsContext(ctx, kbIDs, 10000)
 	if err != nil {
 		return nil, err
 	}
 
-	flattedMeta := make(common.MetaData)
+	return flattenMetadataRows(result.Chunks)
+}
 
-	for _, chunk := range result.Chunks {
+func flattenMetadataRows(rows []map[string]interface{}) (common.MetaData, error) {
+	flattedMeta := make(common.MetaData)
+	for _, chunk := range rows {
 		// Extract doc_id from chunk
 		docID := ""
 		if id, ok := chunk["id"].(string); ok {
@@ -193,12 +277,16 @@ func (s *MetadataService) GetFlattedMetaByKBsContext(ctx context.Context, kbIDs 
 		}
 
 		if docID == "" {
-			continue
+			return nil, fmt.Errorf("metadata directory document id is required")
 		}
 
-		// Extract metadata fields
+		// Corrupt metadata cannot become an incomplete directory that broadens
+		// a negative/manual predicate or changes a model-generated filter.
 		metaFields, err := ExtractMetaFields(chunk)
-		if err != nil || len(metaFields) == 0 {
+		if err != nil {
+			return nil, fmt.Errorf("metadata directory contains invalid fields: %w", err)
+		}
+		if len(metaFields) == 0 {
 			continue
 		}
 
@@ -290,42 +378,7 @@ func ExtractDocumentID(chunk map[string]interface{}) (string, bool) {
 
 // ExtractMetaFields extracts meta_fields from a chunk, handling different types
 func ExtractMetaFields(chunk map[string]interface{}) (map[string]interface{}, error) {
-	metaFieldsVal := chunk["meta_fields"]
-	if metaFieldsVal == nil {
-		return make(map[string]interface{}), nil
-	}
-
-	var metaFields map[string]interface{}
-	switch v := metaFieldsVal.(type) {
-	case map[string]interface{}:
-		metaFields = v
-	case string:
-		if err := decodeMetadataObject([]byte(v), &metaFields); err != nil {
-			return make(map[string]interface{}), nil
-		}
-	case []byte:
-		allResults := ParseAllLengthPrefixedJSON(v)
-		if len(allResults) > 0 {
-			// Merge all JSON objects - when same key appears with different values, collect all
-			metaFields = make(map[string]interface{})
-			for _, result := range allResults {
-				for k, val := range result {
-					if existing, exists := metaFields[k]; exists {
-						// Key already exists - merge values
-						metaFields[k] = mergeFieldValues(existing, val)
-					} else {
-						metaFields[k] = val
-					}
-				}
-			}
-		} else if err := decodeMetadataObject(v, &metaFields); err != nil {
-			return make(map[string]interface{}), nil
-		}
-	default:
-		return make(map[string]interface{}), nil
-	}
-
-	return metaFields, nil
+	return decodeDocumentMetadata(chunk["meta_fields"])
 }
 
 // mergeFieldValues merges two field values when the same key appears multiple times

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,6 +93,7 @@ func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaDa
 		for value := range values {
 			keys = append(keys, value)
 		}
+		sort.Strings(keys)
 		metaDataStructure[key] = keys
 	}
 
@@ -155,7 +157,9 @@ func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaDa
 		return nil, fmt.Errorf("generated metadata filter logic must be a string")
 	}
 	var result MetaFilterResult
-	if err := json.Unmarshal([]byte(responseStr), &result); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(responseStr))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil {
 		return nil, fmt.Errorf("parse generated metadata filter: %w", err)
 	}
 	parsed := make([]common.MetaCondition, 0, len(result.Conditions))
