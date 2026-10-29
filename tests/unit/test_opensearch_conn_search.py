@@ -220,3 +220,16 @@ async def test_dealer_modes_reach_real_adapter(mode: dict[str, Any], text_weight
     assert body["from"] == 4 and body["size"] == 2
     if dense_weight is None:
         dealer.get_vector.assert_not_awaited()
+
+
+def test_insert_keeps_source_identity_and_caller_nested_input() -> None:
+    conn = _connection()
+    documents = [{"id": "meta", "kb_id": "kb", "meta_fields": {"score": 0, "active": False, "tags": ["a"]}}]
+    before = deepcopy(documents)
+    conn.os.bulk.return_value = {"errors": False}
+    assert conn.insert(documents, "scratch-meta", "kb") == []
+    body = conn.os.bulk.call_args.kwargs["body"]
+    assert body[0] == {"index": {"_index": "scratch-meta", "_id": "meta"}}
+    assert body[1] == before[0] and body[1]["id"] == "meta"
+    body[1]["meta_fields"]["tags"].append("changed")
+    assert documents == before
