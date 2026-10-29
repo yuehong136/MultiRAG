@@ -195,6 +195,44 @@ docker compose logs -f multirag-channel-supervisor   # 应出现 worker_started 
 | `--profile cpu --profile milvus --profile tei-cpu` | 上述 + tei-cpu (8个) |
 | `--profile cpu --profile elasticsearch` | postgres, redis, minio, multirag-cpu, es01 (5个) |
 
+### OceanBase 启动与宿主机前提
+
+`oceanbase` profile 保留固定的 CE 4.4.1 镜像、`ob_data` named volume 和端口映射。
+入口 `oceanbase-entrypoint.sh` 先启动镜像自带 sshd/start.sh，再等待 sys 就绪，确保 tenant
+与文档数据库存在。`OB_TENANT_NAME` 默认 `multirag`，`OCEANBASE_DOC_DBNAME` 默认
+`multirag_doc`；两者只接受以字母开头、最多 64 位的字母/数字/下划线名称，不允许系统库名。
+`OB_SYS_PASSWORD`、`OB_TENANT_PASSWORD` 未设置时使用 `OCEANBASE_PASSWORD`
+（再回退到 `.env` 的开发默认值）；显式空值保留为空，生产应自行配置凭据。
+
+已有 tenant 接受配置密码时不会改密码；只有能够使用空密码登录时才设置配置密码。
+不存在的 tenant 由 obd 创建。已有非空密码与配置不符时，启动失败并明确拒绝重置；
+应核对持久配置及凭据，不要删除 volume 来绕过。数据库使用 `CREATE DATABASE IF NOT EXISTS`，
+重启可重复执行。SQL/客户端原始输出不写启动日志，错误日志只报告失败阶段。
+客户端密码通过环境传递；obd 创建 tenant 的接口要求密码参数，容器进程列表访问须受限。
+密码可包含引号与反斜线，但不接受换行符。
+
+`OB_WAIT_ATTEMPTS` 默认 120（每次失败等待 1 秒），`OB_COMMAND_TIMEOUT` 默认 30 秒，
+`OB_STOP_TIMEOUT` 默认 10 秒，均接受 1–9999 的整数。每个客户端/obd 命令也有超时，
+所以启动总时长还包括各次命令耗时。reconcile 失败会使容器非零退出；TERM/INT 会转发给
+启动子进程并有界回收。只有 tenant 与数据库独立查询成功后才写入临时 readiness 标记；
+`bash /root/boot/multirag-oceanbase-entrypoint.sh --healthcheck` 检查标记及数据库查询，
+不会创建库或改密码。退出时标记移除，重启时也会先清除旧标记。
+
+Linux Docker Engine 应允许容器 `nofile` soft/hard 达到 **655350**（Compose 明确设置）。
+部署前可只读核对 `docker info`、Docker daemon/systemd 的 `LimitNOFILE` 与容器内
+`ulimit -Sn` / `ulimit -Hn`；宿主进程的 `ulimit` 并不能单独证明容器生效值。
+若宿主发行版通过 PAM 管理登录会话限制，管理员可按发行版规范在
+`/etc/security/limits.d/` 配置 nofile；Debian/Ubuntu 的 `common-session*` 与 RHEL 系列
+的 PAM 路径不同。只有使用 PAM 的会话才会应用 `pam_limits.so`，它不替代 systemd 的
+服务限制。变更后重新建立相应会话或按维护计划重启服务，再核对有效限制；
+不要盲目追加 PAM 配置或为此重启共享服务。core dump 的启用及大小由运维策略决定，
+本 profile 不强制启用无限 core。
+
+macOS/Windows Docker Desktop 的容器运行在 Linux VM 中，主机的 PAM/limits 文件
+不控制 VM；应检查 Desktop VM 资源和实际容器限制。此脚本不修改宿主机 PAM、sysctl
+或 limits。受控客户端测试仅证明协调与失败语义，真实 OceanBase 启动、存储恢复和
+目标平台资源限制仍需在该平台验收。
+
 ## 📦 独立镜像部署
 
 `docker-compose-standalone.yml` 用于服务器上只保留 MultiRAG 镜像、一份配置文件和
