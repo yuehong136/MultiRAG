@@ -403,6 +403,18 @@ def test_modelmeta_registry_loads_only_metadata_module_and_surfaces_failure(monk
 
     monkeypatch.setattr(llm.importlib, "import_module", load)
     registry = llm.__getattr__("ModelMeta")
-    assert registry == {"Ollama": Ollama, "Fish Audio": FishAudio}
+    assert registry == {
+        name: getattr(model_meta, adapter)
+        for name, adapter in {
+            "Ollama": "Ollama",
+            "Fish Audio": "FishAudio",
+            "OpenRouter": "OpenRouter",
+            "OpenAI-API-Compatible": "OpenAIAPICompatible",
+            "VLLM": "VLLM",
+            "LM-Studio": "LMStudio",
+            "Xinference": "Xinference",
+            "LocalAI": "LocalAI",
+        }.items()
+    }
     assert llm.ModelMeta is registry
     assert imported == ["core.llm.model_meta", "core.llm.model_meta"]

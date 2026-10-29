@@ -32,9 +32,9 @@ def test_provider_metadata_does_not_import_model_families() -> None:
             pass
         else:
             raise AssertionError('unknown registry must raise')
-        print(json.dumps({'familiesLoaded': [], 'publicRegistries': len(llm.__all__)}))
+        print(json.dumps({'familiesLoaded': [], 'publicRegistries': sorted(llm.__all__)}))
     """)
-    assert observed == {"familiesLoaded": [], "publicRegistries": 7}
+    assert observed == {"familiesLoaded": [], "publicRegistries": ["ChatModel", "CvModel", "EmbeddingModel", "ModelMeta", "OcrModel", "RerankModel", "Seq2txtModel", "TTSModel"]}
 
 
 def test_first_factory_initialization_is_atomic_and_failed_import_can_retry() -> None:

@@ -15,6 +15,8 @@ import httpx
 from common.asyncio_utils import finish_owned_work
 
 MAX_MODELS = 100
+# Complete /models inventories are independent of API page and create sizes.
+MAX_INVENTORY_MODELS = 2000
 MAX_BODY_BYTES = 1024 * 1024
 CONCURRENCY = 4
 DISCOVERY_SECONDS = 30
@@ -91,6 +93,72 @@ def identifier(value: Any) -> str:
     return value
 
 
+def access_token(key: str, *, openrouter: bool = False) -> str:
+    """Resolve the known connection envelope before constructing a Bearer header."""
+    if key.startswith(("{", "[", '"')):
+        try:
+            payload = json.loads(key)
+        except ValueError:
+            raise ValueError("Invalid discovery credential") from None
+        allowed = {"api_key", "is_tools"} | ({"provider_order"} if openrouter else set())
+        if not isinstance(payload, dict) or set(payload) - allowed or "api_key" not in payload:
+            raise ValueError("Invalid discovery credential")
+        if "is_tools" in payload and type(payload["is_tools"]) is not bool:
+            raise ValueError("Invalid discovery credential")
+        order = payload.get("provider_order", "")
+        if not isinstance(order, str) and (not isinstance(order, list) or any(not isinstance(item, str) for item in order)):
+            raise ValueError("Invalid discovery credential")
+        key = payload["api_key"]
+    if not isinstance(key, str) or any(not 33 <= ord(char) <= 126 for char in key):
+        raise ValueError("Invalid discovery credential")
+    return key
+
+
+def authorization(key: str, base: str, *, openrouter: bool = False, loopback_only: bool = False) -> dict[str, str]:
+    token = access_token(key, openrouter=openrouter)
+    if token:
+        parsed = urlsplit(base)
+        try:
+            loopback = ipaddress.ip_address(parsed.hostname or "").is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback and (loopback_only or parsed.scheme != "https"):
+            raise ValueError("Authenticated discovery requires HTTPS or a literal loopback origin")
+    return {"Authorization": "Bearer " + token} if token else {}
+
+
+def context_length(*values: Any) -> int:
+    for value in values:
+        if value is None:
+            continue
+        if type(value) is not int or not 0 <= value <= 2147483647:
+            raise DiscoveryError("Invalid model context length")
+        return value
+    return 8192
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise DiscoveryError("Invalid model modalities or parameters")
+    return value
+
+
+def inventory(raw: dict[str, Any], key: str = "data", *, limit: int = MAX_MODELS) -> list[dict[str, Any]]:
+    models = raw.get(key)
+    if not isinstance(models, list) or len(models) > limit or any(not isinstance(item, dict) for item in models):
+        raise DiscoveryError("Invalid or excessive model inventory")
+    # These protocols return a complete inventory, never silently accept a page.
+    if raw.get("has_more", False) is not False or raw.get("next") or raw.get("next_page"):
+        raise DiscoveryError("Incomplete model inventory")
+    total = raw.get("total", len(models))
+    if type(total) is not int or total != len(models):
+        raise DiscoveryError("Inconsistent model inventory total")
+    names = [identifier(item.get("id" if key == "data" else "name")) for item in models]
+    if len(names) != len(set(names)):
+        raise DiscoveryError("Duplicate model identity in remote inventory")
+    return models
+
+
 class Base(ABC):
     def __init__(self, api_key: str, base_url: str = "") -> None:
         self.api_key = api_key
@@ -137,16 +205,7 @@ class Ollama(Base):
 
     async def get_model_list(self) -> list[ModelMetadata]:
         base = endpoint(self.base_url)
-        if self.api_key:
-            try:
-                loopback = ipaddress.ip_address(urlsplit(base).hostname or "").is_loopback
-            except ValueError:
-                loopback = False
-            if not loopback:
-                raise ValueError("Authenticated Ollama discovery requires a literal loopback origin")
-            if self.api_key != self.api_key.strip() or any(ord(char) < 32 for char in self.api_key):
-                raise ValueError("Invalid Ollama credential")
-        headers = {"Authorization": "Bearer " + self.api_key} if self.api_key else {}
+        headers = authorization(self.api_key, base, loopback_only=True)
         try:
             async with asyncio.timeout(DISCOVERY_SECONDS), self._session() as client:
                 tags = await self._request(client, "GET", base + "/api/tags", headers=headers)
@@ -177,6 +236,157 @@ class Ollama(Base):
                     return ModelMetadata(name, model_types, context, features, name)
 
                 tasks = [asyncio.create_task(detail(name)) for name in names]
+                try:
+                    return await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await finish_owned_work(asyncio.gather(*tasks, return_exceptions=True))
+        except TimeoutError:
+            raise DiscoveryError("Model discovery timed out") from None
+
+
+class OpenAIAPICompatible(Base):
+    _FACTORY_NAME = "OpenAI-API-Compatible"
+    _SUPPORTED = {"chat", "image2text", "embedding", "rerank"}
+
+    @staticmethod
+    def _infer_model_types(name: str) -> list[str]:
+        name = name.lower()
+        for hints, capability in (
+            (("rerank",), "rerank"),
+            (("embed", "bge"), "embedding"),
+            (("asr", "stt", "transcrib", "whisper"), "speech2text"),
+            (("tts", "text-to-speech"), "tts"),
+        ):
+            if any(hint in name for hint in hints):
+                return [capability]
+        vision = ("vl", "vision", "llava", "minicpm-v", "gpt-4o", "glm-4v", "qvq", "pixtral")
+        return ["chat", "image2text"] if any(hint in name for hint in vision) else ["chat"]
+
+    def _metadata(self, model: dict[str, Any]) -> ModelMetadata | None:
+        name = identifier(model.get("id"))
+        types = [value for value in self._infer_model_types(name) if value in self._SUPPORTED]
+        context = context_length(*(model.get(key) for key in ("max_tokens", "max_completion_tokens", "context_length", "max_model_len")))
+        return ModelMetadata(name, types, context, [], name) if types else None
+
+    async def get_model_list(self) -> list[ModelMetadata]:
+        base = endpoint(self.base_url)
+        headers = authorization(self.api_key, base)
+        try:
+            async with asyncio.timeout(DISCOVERY_SECONDS), self._session() as client:
+                raw = await self._request(client, "GET", base + "/v1/models", headers=headers)
+                return [metadata for model in inventory(raw, limit=MAX_INVENTORY_MODELS) if (metadata := self._metadata(model)) is not None]
+        except TimeoutError:
+            raise DiscoveryError("Model discovery timed out") from None
+
+
+class VLLM(OpenAIAPICompatible):
+    _FACTORY_NAME = "VLLM"
+
+
+class LMStudio(OpenAIAPICompatible):
+    _FACTORY_NAME = "LM-Studio"
+    # The registered rerank class is an unimplemented placeholder.
+    _SUPPORTED = {"chat", "image2text", "embedding"}
+
+
+class Xinference(OpenAIAPICompatible):
+    _FACTORY_NAME = "Xinference"
+
+    def _metadata(self, model: dict[str, Any]) -> ModelMetadata | None:
+        name = identifier(model.get("id"))
+        kind = model.get("model_type", "LLM")
+        if not isinstance(kind, str):
+            raise DiscoveryError("Invalid Xinference model type")
+        # Xinference image models generate images; vision belongs to LLM abilities.
+        if kind not in {"LLM", "chat", "embedding", "rerank", "audio"}:
+            return None
+        abilities = model.get("model_ability")
+        if abilities is not None and (not isinstance(abilities, list) or any(not isinstance(value, str) for value in abilities)):
+            raise DiscoveryError("Invalid Xinference model abilities")
+        types = {"embedding": ["embedding"], "rerank": ["rerank"]}.get(kind, [])
+        if kind in {"LLM", "chat"}:
+            types = ["chat"] if abilities is None or "chat" in abilities else []
+            if abilities is not None and "vision" in abilities:
+                types.append("image2text")
+        if kind == "audio":
+            types = [capability for ability, capability in (("text2audio", "tts"), ("audio2text", "speech2text")) if ability in (abilities or [])]
+        if not types:
+            return None
+        abilities = abilities or []
+        features = [feature for value, feature in (("tools", "is_tools"), ("reasoning", "thinking")) if value in abilities]
+        context = context_length(model.get("context_length"), model.get("max_tokens"))
+        return ModelMetadata(name, types, context, features, name) if types else None
+
+
+class OpenRouter(OpenAIAPICompatible):
+    _FACTORY_NAME = "OpenRouter"
+
+    def _metadata(self, model: dict[str, Any]) -> ModelMetadata | None:
+        name = identifier(model.get("id"))
+        architecture, top = model.get("architecture"), model.get("top_provider", {})
+        if not isinstance(architecture, dict) or not isinstance(top, dict):
+            raise DiscoveryError("Invalid OpenRouter model metadata")
+        inputs, outputs = _string_list(architecture.get("input_modalities")), _string_list(architecture.get("output_modalities"))
+        parameters = _string_list(model.get("supported_parameters", []))
+        # The active OpenRouter registry supports chat and vision only.
+        types = (["chat"] + (["image2text"] if "image" in inputs else [])) if "text" in outputs else []
+        features = (["is_tools"] if "tools" in parameters else []) + (["thinking"] if {"reasoning", "include_reasoning"} & set(parameters) else [])
+        context = context_length(top.get("max_completion_tokens"), model.get("context_length"), top.get("context_length"))
+        return ModelMetadata(name, types, context, features, name) if types else None
+
+    async def get_model_list(self) -> list[ModelMetadata]:
+        base = endpoint(self.base_url or "https://openrouter.ai/api/v1")
+        parsed = urlsplit(base)
+        if parsed.scheme != "https" or parsed.hostname != "openrouter.ai" or parsed.port not in {None, 443} or parsed.path not in {"", "/api"}:
+            raise ValueError("OpenRouter discovery requires its official HTTPS origin")
+        headers = authorization(self.api_key, base, openrouter=True)
+        try:
+            async with asyncio.timeout(DISCOVERY_SECONDS), self._session() as client:
+                raw = await self._request(client, "GET", "https://openrouter.ai/api/v1/models", headers=headers, params={"output_modalities": "all"})
+                return [metadata for model in inventory(raw, limit=MAX_INVENTORY_MODELS) if (metadata := self._metadata(model)) is not None]
+        except TimeoutError:
+            raise DiscoveryError("Model discovery timed out") from None
+
+
+class LocalAI(Ollama):
+    _FACTORY_NAME = "LocalAI"
+
+    async def get_model_list(self) -> list[ModelMetadata]:
+        base = endpoint(self.base_url)
+        headers = authorization(self.api_key, base)
+        try:
+            async with asyncio.timeout(DISCOVERY_SECONDS), self._session() as client:
+                tags = inventory(await self._request(client, "GET", base + "/api/tags", headers=headers), "models")
+                callable_models = inventory(await self._request(client, "GET", base + "/v1/models", headers=headers))
+                callable_names = {model["id"] for model in callable_models}
+                names: list[tuple[str, str]] = []
+                for model in tags:
+                    tagged = model["name"]
+                    name = tagged if tagged in callable_names else tagged.removesuffix(":latest")
+                    if name not in callable_names:
+                        raise DiscoveryError("LocalAI tag has no callable model identity")
+                    names.append((tagged, name))
+                if len({name for _, name in names}) != len(names) or {name for _, name in names} != callable_names:
+                    raise DiscoveryError("Ambiguous or incomplete LocalAI inventory")
+                semaphore = asyncio.Semaphore(CONCURRENCY)
+
+                async def detail(tagged: str, name: str) -> ModelMetadata:
+                    async with semaphore:
+                        raw = await self._request(client, "POST", base + "/api/show", headers=headers, json={"model": tagged})
+                    capabilities, info = raw.get("capabilities"), raw.get("model_info")
+                    if not isinstance(capabilities, list) or any(not isinstance(value, str) for value in capabilities) or not isinstance(info, dict):
+                        raise DiscoveryError("Invalid LocalAI model metadata")
+                    types = {"completion": "chat", "vision": "image2text", "embedding": "embedding", "rerank": "rerank"}
+                    model_types = list(dict.fromkeys(types[value] for value in capabilities if value in types))
+                    if not model_types:
+                        raise DiscoveryError("Unsupported LocalAI model capabilities")
+                    features = [feature for value, feature in (("tools", "is_tools"), ("thinking", "thinking")) if value in capabilities]
+                    return ModelMetadata(name, model_types, context_length(info.get("general.context_length")), features, name)
+
+                tasks = [asyncio.create_task(detail(tagged, name)) for tagged, name in names]
                 try:
                     return await asyncio.gather(*tasks)
                 finally:
