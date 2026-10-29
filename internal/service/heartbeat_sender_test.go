@@ -28,6 +28,10 @@ func TestHeartbeatResponseValidationAndRetry(t *testing.T) {
 		{"malformed", 500, `broken`, false}, {"wrong-code", 500, `{"code":401}`, false},
 		{"wrong-status", 503, `{"code":320}`, false}, {"false-success", 200, `{"code":401}`, false},
 		{"empty-success", 200, `{}`, false},
+		{"trailing-json", 200, `{"code":320}{"code":401}`, false},
+		{"trailing-garbage", 200, `{"code":320}oops`, false},
+		{"oversize", 200, strings.Repeat(" ", maxHeartbeatResponseBytes+1) + `{"code":320}`, false},
+		{"valid-whitespace", 200, " \n" + `{"code":320}` + "\t", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

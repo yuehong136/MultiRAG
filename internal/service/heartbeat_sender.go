@@ -19,6 +19,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"multirag/internal/common"
 	"multirag/internal/server"
 	"multirag/internal/utility"
@@ -27,6 +28,8 @@ import (
 
 	"go.uber.org/zap"
 )
+
+const maxHeartbeatResponseBytes = 64 << 10
 
 // HeartbeatSender is responsible for sending heartbeat reports to the admin server
 type HeartbeatSender struct {
@@ -139,7 +142,14 @@ func (h *HeartbeatSender) SendHeartbeat() error {
 	var responseBody struct {
 		Code *int `json:"code"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHeartbeatResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("unreadable heartbeat response (status %d)", resp.StatusCode)
+	}
+	if len(body) > maxHeartbeatResponseBytes {
+		return fmt.Errorf("heartbeat response exceeds size limit (status %d)", resp.StatusCode)
+	}
+	if err := json.Unmarshal(body, &responseBody); err != nil {
 		return fmt.Errorf("invalid heartbeat response (status %d)", resp.StatusCode)
 	}
 	if responseBody.Code == nil {
