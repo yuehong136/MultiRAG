@@ -76,7 +76,7 @@ func renderMetaFilterTemplate(currentDate, metadataKeys, question, constraints s
 }
 
 // GenMetaFilter generates filter conditions using LLM based on metadata and question.
-func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaData map[string]interface{}, question string, constraints map[string]string) (*MetaFilterResult, error) {
+func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaData common.MetaData, question string, constraints map[string]string) (*MetaFilterResult, error) {
 	if chatModel == nil {
 		return nil, fmt.Errorf("chat model is nil")
 	}
@@ -88,13 +88,11 @@ func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaDa
 	// Build metadata structure for prompt
 	metaDataStructure := make(map[string][]string)
 	for key, values := range metaData {
-		if valueMap, ok := values.(map[string]interface{}); ok {
-			keys := make([]string, 0, len(valueMap))
-			for k := range valueMap {
-				keys = append(keys, k)
-			}
-			metaDataStructure[key] = keys
+		keys := make([]string, 0, len(values))
+		for value := range values {
+			keys = append(keys, value)
 		}
+		metaDataStructure[key] = keys
 	}
 
 	metaDataJSON, _ := json.Marshal(metaDataStructure)
@@ -173,47 +171,17 @@ func GenMetaFilter(ctx context.Context, chatModel *modelModule.ChatModel, metaDa
 	return &result, nil
 }
 
-// ApplyMetaFilter adapts the existing flattened directory and delegates the
+// ApplyMetaFilter accepts the typed flattened directory and delegates the
 // entire expression to the common matcher, including boolean merging.
-func ApplyMetaFilter(metaData map[string]interface{}, filters []MetaFilterCondition, logic string) []string {
+func ApplyMetaFilter(metaData common.MetaData, filters []MetaFilterCondition, logic string) []string {
 	conditions := make([]common.MetaCondition, 0, len(filters))
 	for _, filter := range filters {
 		conditions = append(conditions, common.MetaCondition{Key: filter.Key, Operator: common.NormalizeOperator(filter.Op), Value: filter.Value})
 	}
-	return common.MetaFilter(metadataDirectory(metaData), &common.MetaFilterInput{Conditions: conditions, Logic: logic})
+	return common.MetaFilter(metaData, &common.MetaFilterInput{Conditions: conditions, Logic: logic})
 }
 
-func metadataDirectory(metadata map[string]interface{}) common.MetaData {
-	result := make(common.MetaData, len(metadata))
-	for key, rawValues := range metadata {
-		values := make(common.MetaValueDocs)
-		switch raw := rawValues.(type) {
-		case common.MetaValueDocs:
-			result[key] = raw
-			continue
-		case map[string][]string:
-			result[key] = common.MetaValueDocs(raw)
-			continue
-		case map[string]interface{}:
-			for value, rawDocuments := range raw {
-				switch documents := rawDocuments.(type) {
-				case []string:
-					values[value] = documents
-				case []interface{}:
-					for _, document := range documents {
-						if documentID, ok := document.(string); ok {
-							values[value] = append(values[value], documentID)
-						}
-					}
-				}
-			}
-		}
-		result[key] = values
-	}
-	return result
-}
-
-type metaFilterGenerator func(map[string]interface{}, string, map[string]string) (*MetaFilterResult, error)
+type metaFilterGenerator func(common.MetaData, string, map[string]string) (*MetaFilterResult, error)
 
 // ValidateMetaDataFilter rejects malformed predicates before model or metadata
 // access. Semi-auto field existence is checked against the loaded directory.
@@ -297,7 +265,7 @@ func ValidateMetaDataFilter(filter map[string]interface{}) error {
 func ApplyMetaDataFilter(
 	ctx context.Context,
 	metaDataFilter map[string]interface{},
-	metaData map[string]interface{},
+	metaData common.MetaData,
 	question string,
 	chatModel *modelModule.ChatModel,
 	baseDocIDs []string,
@@ -315,7 +283,7 @@ func ApplyMetaDataFilter(
 func ApplyMetaDataFilterChecked(
 	ctx context.Context,
 	metaDataFilter map[string]interface{},
-	metaData map[string]interface{},
+	metaData common.MetaData,
 	question string,
 	chatModel *modelModule.ChatModel,
 	baseDocIDs []string,
@@ -325,7 +293,7 @@ func ApplyMetaDataFilterChecked(
 		return nil, false, err
 	}
 	var generationError error
-	generate := func(metadata map[string]interface{}, question string, constraints map[string]string) (*MetaFilterResult, error) {
+	generate := func(metadata common.MetaData, question string, constraints map[string]string) (*MetaFilterResult, error) {
 		result, err := GenMetaFilter(ctx, chatModel, metadata, question, constraints)
 		generationError = err
 		return result, err
@@ -340,7 +308,7 @@ func ApplyMetaDataFilterChecked(
 	return ids, empty, nil
 }
 
-func applyMetaDataFilter(ctx context.Context, filter, metadata map[string]interface{}, question string, base []string, resolvers []ManualValueResolver, generate metaFilterGenerator) ([]string, bool) {
+func applyMetaDataFilter(ctx context.Context, filter map[string]interface{}, metadata common.MetaData, question string, base []string, resolvers []ManualValueResolver, generate metaFilterGenerator) ([]string, bool) {
 	if base != nil && len(base) == 0 {
 		return []string{}, true
 	}
@@ -463,12 +431,18 @@ func cloneDocumentIDs(documents []string) []string {
 func cloneMetadataValue(value interface{}) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:
+		if typed == nil {
+			return map[string]interface{}(nil)
+		}
 		copy := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
 			copy[key] = cloneMetadataValue(item)
 		}
 		return copy
 	case []interface{}:
+		if typed == nil {
+			return []interface{}(nil)
+		}
 		copy := make([]interface{}, len(typed))
 		for index, item := range typed {
 			copy[index] = cloneMetadataValue(item)
@@ -476,19 +450,28 @@ func cloneMetadataValue(value interface{}) interface{} {
 		return copy
 	case []string:
 		return cloneDocumentIDs(typed)
+	case []byte:
+		if typed == nil {
+			return []byte(nil)
+		}
+		return append([]byte{}, typed...)
+	case []float64:
+		if typed == nil {
+			return []float64(nil)
+		}
+		return append([]float64{}, typed...)
 	default:
 		return value
 	}
 }
 
-func semiAutoMetadata(selection interface{}, metadata map[string]interface{}) (map[string]interface{}, map[string]string, bool) {
+func semiAutoMetadata(selection interface{}, metadata common.MetaData) (common.MetaData, map[string]string, bool) {
 	items, ok := selection.([]interface{})
 	if !ok || len(items) == 0 {
 		return nil, nil, false
 	}
-	selected := make(map[string]interface{}, len(items))
+	selected := make(common.MetaData, len(items))
 	constraints := make(map[string]string)
-	directory := metadataDirectory(metadata)
 	for _, item := range items {
 		key, ok := item.(string)
 		if condition, isCondition := item.(map[string]interface{}); isCondition {
@@ -510,7 +493,7 @@ func semiAutoMetadata(selection interface{}, metadata map[string]interface{}) (m
 			return nil, nil, false
 		}
 		populated := false
-		for _, documents := range directory[key] {
+		for _, documents := range metadata[key] {
 			populated = populated || len(documents) > 0
 		}
 		if !populated {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -24,7 +25,7 @@ func TestDocumentMetadataStrictDecoding(t *testing.T) {
 	}
 	valid := append(prefix(`{"tag":["a"],"score":0}`), prefix(`{"tag":["b"],"score":1}`)...)
 	result, err := decodeDocumentMetadata(valid)
-	if err != nil || !reflect.DeepEqual(result["tag"], []any{"a", "b"}) || !reflect.DeepEqual(result["score"], []any{float64(0), float64(1)}) {
+	if err != nil || !reflect.DeepEqual(result["tag"], []any{"a", "b"}) || !reflect.DeepEqual(result["score"], []any{json.Number("0"), json.Number("1")}) {
 		t.Fatal("length-prefixed merge/zero contract lost", result, err)
 	}
 	for _, suffix := range [][]byte{{1}, prefix(`{bad}`), prefix(`[]`)} {

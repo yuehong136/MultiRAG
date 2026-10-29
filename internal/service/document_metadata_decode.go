@@ -5,15 +5,28 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 )
 
-// decodeDocumentMetadata is strict at the new document-list boundary. Older
-// consumers retain their own ExtractMetaFields compatibility behavior.
+// decodeMetadataObject preserves exact JSON numbers and rejects trailing data.
+func decodeMetadataObject(raw []byte, object *map[string]interface{}) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(object); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		return fmt.Errorf("document metadata has trailing data")
+	}
+	return nil
+}
+
+// decodeDocumentMetadata is strict at document-list and reference boundaries.
 func decodeDocumentMetadata(value any) (map[string]any, error) {
 	empty := func() map[string]any { return map[string]any{} }
 	decode := func(raw []byte) (map[string]any, error) {
 		var object map[string]any
-		if err := json.Unmarshal(raw, &object); err != nil {
+		if err := decodeMetadataObject(raw, &object); err != nil {
 			return nil, fmt.Errorf("invalid document metadata JSON object")
 		}
 		if object == nil {

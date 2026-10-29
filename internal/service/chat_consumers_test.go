@@ -9,7 +9,6 @@ import (
 	"multirag/internal/entity"
 	"multirag/internal/entity/models"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -32,7 +31,7 @@ func TestChatConsumersUseBoundInstanceAndContext(t *testing.T) {
 	}
 	answer := "keywords"
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.URL.Path != "/instance/chat/completions" || r.Header.Get("Authorization") != "Bearer local-key" {
 			t.Error("binding lost")
@@ -50,7 +49,6 @@ func TestChatConsumersUseBoundInstanceAndContext(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": answer}}}})
 	}))
-	defer server.Close()
 	name, key, temp := "custom", "local-key", 0.25
 	model := models.NewChatModel(models.NewVLLMModel(map[string]string{"default": server.URL + "/instance"}, models.URLSuffix{Chat: "chat/completions"}), &name, &models.APIConfig{APIKey: &key})
 	model.ModelConfig.Temperature = &temp
@@ -62,7 +60,7 @@ func TestChatConsumersUseBoundInstanceAndContext(t *testing.T) {
 		t.Fatal(got, err)
 	}
 	answer = `{"conditions":[],"logic":"and"}`
-	if got, err := GenMetaFilter(context.Background(), model, map[string]any{"author": map[string]any{"person": []string{"doc"}}}, "question", nil); err != nil || got.Logic != "and" {
+	if got, err := GenMetaFilter(context.Background(), model, common.MetaData{"author": {"person": {"doc"}}}, "question", nil); err != nil || got.Logic != "and" {
 		t.Fatal(got, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

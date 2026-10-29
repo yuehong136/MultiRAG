@@ -295,7 +295,7 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 	metadataStore.cancel = nil
 	journal.Event("retrieval-empty-filter-independent-readback", map[string]any{"explicit_empty_metadata_calls": 0, "invalid_predicate_metadata_calls": 0, "foreign_search_model_calls": 0, "unknown_selected_key_model_calls": 0, "failed_metadata_fallback": false, "no_match_retrieval": false})
 
-	metadataStore.chunks = []map[string]any{{"id": "zero-doc", "meta_fields": map[string]any{"boolean": false, "number": float64(0), "empty": "", "labels": []any{false, ""}, "empty_metadata": true}}}
+	metadataStore.chunks = []map[string]any{{"id": "zero-doc", "kb_id": "s-kb", "meta_fields": map[string]any{"boolean": false, "number": float64(0), "empty": "", "labels": []any{false, ""}, "empty_metadata": true}}}
 	directory, err := (&MetadataService{kbDAO: dao.NewKnowledgebaseDAO(), docEngine: metadataStore}).GetFlattedMetaByKBsContext(context.Background(), []string{"s-kb"})
 	if err != nil || directory["empty_metadata"] != nil {
 		t.Fatal("metadata flattening exposed a control field")
@@ -315,7 +315,7 @@ func TestAfter67SearchScopeSQLHTTP(t *testing.T) {
 		packed = append(packed, prefix...)
 		packed = append(packed, raw...)
 	}
-	metadataStore.chunks = []map[string]any{{"id": "packed-doc", "meta_fields": packed}}
+	metadataStore.chunks = []map[string]any{{"id": "packed-doc", "kb_id": "s-kb", "meta_fields": packed}}
 	directory, err = (&MetadataService{kbDAO: dao.NewKnowledgebaseDAO(), docEngine: metadataStore}).GetFlattedMetaByKBsContext(context.Background(), []string{"s-kb"})
 	if err != nil {
 		t.Fatal(err)

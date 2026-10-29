@@ -109,18 +109,24 @@ func flattenedMetadataValues(raw any) ([]string, error) {
 	items, ok := raw.([]any)
 	if !ok {
 		items = []any{raw}
+		if list, ok := raw.([]string); ok {
+			items = make([]any, len(list))
+			for index, item := range list {
+				items[index] = item
+			}
+		}
 	}
 	values := []string{}
 	for _, value := range items {
-		switch value.(type) {
-		case nil:
+		if value == nil {
 			continue
-		case string, float64, int, bool:
-			if label := fmt.Sprint(value); label != "" {
-				values = append(values, label)
-			}
-		default:
+		}
+		label, valid := metadataValueText(value)
+		if !valid {
 			return nil, fmt.Errorf("metadata values must be scalar or scalar arrays")
+		}
+		if label != "" {
+			values = append(values, label)
 		}
 	}
 	return values, nil
