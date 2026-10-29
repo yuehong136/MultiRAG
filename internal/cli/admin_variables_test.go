@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -38,7 +37,7 @@ func TestAdminVariablesQueryAndAcknowledgement(t *testing.T) {
 		wantError bool
 	}{{`{"code":0,"data":[]}`, false}, {`{"retcode":0,"data":[]}`, false}, {`{}`, true}, {`{"code":false,"data":[]}`, true}, {`{"code":0,"retcode":1,"data":[]}`, true}, {`{"code":0,"data":null}`, true}, {`{"code":400,"message":"denied"}`, true}} {
 		t.Run(tc.body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "GET" || r.URL.Path != "/api/v1/admin/variables" || r.URL.Query().Get("var_name") != "mail." || r.ContentLength > 0 || r.Header.Get("Authorization") != "owned-admin" {
 					t.Error("incorrect admin query contract")
 				}

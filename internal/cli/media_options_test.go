@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -67,7 +66,7 @@ func TestMediaOptionParser(t *testing.T) {
 func TestCLITranscriptionParamsSendBytes(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "input.wav")
 	os.WriteFile(file, []byte("client bytes"), 0600)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		json.NewDecoder(r.Body).Decode(&payload)
 		config, _ := payload["asr_config"].(map[string]any)
@@ -104,7 +103,7 @@ func TestCLISpeechSavePlayAndNoDefaultFiles(t *testing.T) {
 		}
 	}
 	audio := []byte("wave bytes")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		json.NewDecoder(r.Body).Decode(&payload)
 		cfg, _ := payload["tts_config"].(map[string]any)
@@ -168,7 +167,7 @@ func TestCLISpeechSavePlayAndNoDefaultFiles(t *testing.T) {
 }
 func TestCLIInvalidParamsZeroHTTPAndPlayerFailure(t *testing.T) {
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		io.WriteString(w, `{"code":0,"data":{"audio":"eA==","format":"mp3"}}`)
 	}))
@@ -198,7 +197,7 @@ func TestCLIInvalidParamsZeroHTTPAndPlayerFailure(t *testing.T) {
 }
 
 func TestDefaultSpeechSaveFormat(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"code":0,"data":{"audio":"bXAzLWJ5dGVz","format":"mp3"}}`)
 	}))
 	defer srv.Close()

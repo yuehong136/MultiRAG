@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -21,7 +20,7 @@ func TestChatEOFAndTimeoutFeedbackHTTP(t *testing.T) {
 				continue
 			}
 			t.Run(fmt.Sprintf("%s stream=%t", mode, stream), func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					_, _ = io.Copy(io.Discard, r.Body)
 					_ = r.Body.Close()
 					if r.URL.Path != "/api/v1/chat/completions" {

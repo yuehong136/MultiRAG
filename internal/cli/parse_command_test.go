@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -54,7 +53,7 @@ func TestParseTaskEnvelopeStrictness(t *testing.T) {
 
 func TestParseFileUsesSelectedModel(t *testing.T) {
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

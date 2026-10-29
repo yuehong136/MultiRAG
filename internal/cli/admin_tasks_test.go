@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -56,7 +55,7 @@ func TestAdminTasksHTTPContract(t *testing.T) {
 	} {
 		t.Run(test.body, func(t *testing.T) {
 			calls := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/admin/tasks" || r.Header.Get("Authorization") != "owned-admin-session" {
 					t.Error("wrong admin request contract")

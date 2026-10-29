@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -33,7 +32,7 @@ func TestListDatasetDocumentsSyntaxAndEnvelope(t *testing.T) {
 
 func TestDatasetDocumentNameResolution(t *testing.T) {
 	rows := []map[string]any{{"id": "9e235004-bd89-11f1-9fca-acde48001122", "name": "knowledge name"}}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/datasets" || r.URL.Query().Get("keywords") != "knowledge name" {
 			t.Error("name query lost")
 		}
@@ -64,7 +63,7 @@ func TestDatasetDocumentNameResolution(t *testing.T) {
 }
 
 func TestDatasetDocumentClientErrorReturnsNilInterface(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"code":500,"message":"invalid document metadata","data":null}`)
 	}))
 	defer srv.Close()

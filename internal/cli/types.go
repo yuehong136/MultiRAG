@@ -166,6 +166,11 @@ const (
 	TokenPlay
 	TokenSave
 	TokenPanic
+	TokenServer
+	TokenAPI
+	TokenHost
+	TokenConfig
+	TokenRetrieve
 
 	// Literals
 	TokenIdentifier

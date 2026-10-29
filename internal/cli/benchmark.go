@@ -167,6 +167,8 @@ func (c *MultiRAGClient) runBenchmarkConcurrent(concurrency, iterations int, nes
 
 	startTime := time.Now()
 
+	// Freeze credentials and endpoint before starting workers; the transport is safe to share.
+	connection := *c.HTTPClient
 	// Launch concurrent workers
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
@@ -174,8 +176,8 @@ func (c *MultiRAGClient) runBenchmarkConcurrent(concurrency, iterations int, nes
 			defer wg.Done()
 
 			// Create a new client for each goroutine to avoid race conditions
-			workerClient := NewMultiRAGClient(c.ServerType)
-			workerClient.HTTPClient = c.HTTPClient // Share the same HTTP client config
+			snapshot := connection
+			workerClient := &MultiRAGClient{ServerType: c.ServerType, HTTPClient: &snapshot}
 
 			// Execute benchmark silently (no output)
 			responseList := workerClient.executeBenchmarkSilent(nestedCmd, iterations)

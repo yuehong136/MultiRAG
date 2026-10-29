@@ -67,10 +67,12 @@ func validateOutputFormat(format string) error {
 
 // ConfigFile represents the multirag.yml connection config file structure.
 type ConfigFile struct {
-	Host     string `yaml:"host"`
-	APIToken string `yaml:"api_token"`
-	UserName string `yaml:"user_name"`
-	Password string `yaml:"password"`
+	Host        string                   `yaml:"host"`
+	APIToken    string                   `yaml:"api_token"`
+	UserName    string                   `yaml:"user_name"`
+	Password    string                   `yaml:"password"`
+	APIServers  map[string]*ServerConfig `yaml:"api_servers,omitempty"`
+	AdminServer *ServerConfig            `yaml:"admin_server,omitempty"`
 }
 
 // ConnectionArgs holds the parsed command line / config-file connection options.
@@ -86,6 +88,7 @@ type ConnectionArgs struct {
 	OutputFormat string
 	ShowHelp     bool
 	AdminMode    bool
+	Config       *ConfigFile
 }
 
 // LoadDefaultConfigFile reads multirag.yml from the current directory if present.
@@ -101,7 +104,7 @@ func LoadDefaultConfigFile() (*ConfigFile, error) {
 
 	var config ConfigFile
 	if err = yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse %s: %v", configFileName, err)
+		return nil, fmt.Errorf("failed to parse connection configuration")
 	}
 	return &config, nil
 }
@@ -115,7 +118,7 @@ func LoadConfigFileFromPath(path string) (*ConfigFile, error) {
 
 	var config ConfigFile
 	if err = yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config file %s: %v", path, err)
+		return nil, fmt.Errorf("failed to parse connection configuration")
 	}
 	return &config, nil
 }
@@ -126,23 +129,13 @@ func parseHostPort(hostPort string) (string, int, error) {
 		return "", -1, nil
 	}
 
-	parts := strings.Split(hostPort, ":")
-	if len(parts) != 2 {
-		return "", -1, fmt.Errorf("invalid host format, expected host:port, got: %s", hostPort)
-	}
-
-	host := parts[0]
-	port, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return "", -1, fmt.Errorf("invalid port number: %s", parts[1])
-	}
-	return host, port, nil
+	return validatedServerAddress(hostPort)
 }
 
 // ParseConnectionArgs parses CLI connection options with priority
 // command line > config file > defaults. Authentication is either an API token
 // (-t/--token) or username/password (-u/--user, -p/--password); the two are
-// mutually exclusive. Admin mode (--admin) ignores the config file.
+// mutually exclusive. Admin mode reads only admin_server from an explicitly supplied config file.
 func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 	// First pass: help, config file path and admin mode. Once a command word
 	// (non-flag arg) appears, stop treating "--help" as global help so that a
@@ -164,14 +157,18 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 			i++
 		case arg == "--admin" || arg == "-admin":
 			adminMode = true
+		case !foundCommand && (arg == "-h" || arg == "--host" || arg == "-t" || arg == "--token" || arg == "-u" || arg == "--user" || arg == "-p" || arg == "--password") || arg == "-o" || arg == "--output":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing flag value")
+			}
+			i++
 		}
 	}
 
-	result := &ConnectionArgs{}
+	result := &ConnectionArgs{AdminMode: adminMode}
 
-	// Apply config file first (lower priority). Admin mode ignores it, since the
-	// config carries user-mode auth (user_name/password/api_token).
-	if !adminMode {
+	// Apply config first. Admin mode reads only its explicit admin_server block.
+	if !adminMode || configFilePath != "" {
 		var config *ConfigFile
 		var err error
 		if configFilePath != "" {
@@ -183,6 +180,10 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 			return nil, err
 		}
 		if config != nil {
+			result.Config = config
+			if adminMode {
+				config = configForAdmin(config)
+			}
 			if config.Host != "" {
 				h, port, err := parseHostPort(config.Host)
 				if err != nil {
@@ -206,9 +207,14 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 		arg := args[i]
 		// Once the command word is reached, the rest belongs to the subcommand
 		// (including its own flags like -d/-q/-k/-t/-n).
-		if cmdStarted {
+		if cmdStarted && arg != "-o" && arg != "--output" && arg != "--admin" && arg != "-admin" && arg != "-f" && arg != "--config" {
 			nonFlagArgs = append(nonFlagArgs, arg)
 			continue
+		}
+		if arg == "-h" || arg == "--host" || arg == "-t" || arg == "--token" || arg == "-u" || arg == "--user" || arg == "-p" || arg == "--password" || arg == "-f" || arg == "--config" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return nil, fmt.Errorf("missing flag value")
+			}
 		}
 		switch arg {
 		case "-h", "--host":
@@ -237,6 +243,9 @@ func ParseConnectionArgs(args []string) (*ConnectionArgs, error) {
 				i++
 			}
 		case "-o", "--output":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing output format")
+			}
 			if i+1 < len(args) {
 				outputFormat = args[i+1]
 				i++
@@ -359,6 +368,7 @@ Options:
   -o, --output string    Output format: table (default), plain or json
   -f, --config string    Path to config file (YAML format)
   --admin, -admin        Run in admin mode
+  -o/--output and --admin also work after the command.
   --help                 Show this help message
 
 Mode:
@@ -375,7 +385,7 @@ Configuration File:
   The CLI automatically reads multirag.yml from the current directory if it exists.
   Use -f or --config to specify a custom config file path.
   Command line options override config file values.
-  Admin mode (--admin) ignores the config file.
+  Admin mode reads only admin_server from an explicitly supplied config file.
 
   Config file format:
     host: 127.0.0.1:9380
@@ -401,6 +411,11 @@ type CLI struct {
 	line          *liner.State
 	outputFormat  OutputFormat
 	args          *ConnectionArgs
+	apiServers    map[string]*MultiRAGClient
+	serverConfigs map[string]*ServerConfig
+	adminClient   *MultiRAGClient
+	adminConfig   *ServerConfig
+	activeAPI     string
 }
 
 // NewCLI creates a new CLI instance in interactive mode with default settings.
@@ -444,6 +459,12 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 		prompt = "MultiRAG(admin)> "
 	}
 
+	registry := &CLI{client: client, args: args, line: line}
+	if err := registry.initServers(); err != nil {
+		line.Close()
+		return nil, err
+	}
+	client = registry.client
 	// Auto-login when both username and password are supplied (and no API token).
 	// This makes single-command mode (and config-file credentials) authenticated
 	// without an interactive prompt. The "username without password" case is still
@@ -468,14 +489,10 @@ func NewCLIWithArgs(args *ConnectionArgs) (*CLI, error) {
 	engine.RegisterProvider(contextengine.NewFileProvider(&httpClientAdapter{client: client.HTTPClient}))
 	engine.RegisterProvider(contextengine.NewSkillProvider(&skillCoreClient{client: client.HTTPClient, ctx: context.Background()}))
 
-	return &CLI{
-		prompt:        prompt,
-		client:        client,
-		contextEngine: engine,
-		line:          line,
-		outputFormat:  outputFormat,
-		args:          args,
-	}, nil
+	registry.prompt = prompt
+	registry.contextEngine = engine
+	registry.outputFormat = outputFormat
+	return registry, nil
 }
 
 // Run starts the interactive CLI
@@ -540,7 +557,7 @@ func credentialInput(input string) bool {
 	lexer := NewLexer(input)
 	previous := TokenEOF
 	for token := lexer.NextToken(); token.Type != TokenEOF; token = lexer.NextToken() {
-		if token.Type == TokenKey || previous == TokenCheck && token.Type == TokenProvider {
+		if token.Type == TokenToken || token.Type == TokenPassword || token.Type == TokenKey || previous == TokenCheck && token.Type == TokenProvider {
 			return true
 		}
 		previous = token.Type
@@ -622,7 +639,10 @@ func (c *CLI) execute(input string) (executeErr error) {
 	if cmd.Type == "meta" {
 		return c.handleMetaCommand(cmd)
 	}
-	result, err := c.client.ExecuteCommand(cmd)
+	result, handled, err := c.executeCommon(cmd)
+	if !handled {
+		result, err = c.client.ExecuteCommand(cmd)
+	}
 	if result != nil {
 		result.SetOutputFormat(c.outputFormat)
 		result.PrintOut()
@@ -1134,15 +1154,9 @@ func (c *CLI) handleMetaCommand(cmd *Command) error {
 		// Clear screen (simple approach)
 		fmt.Print("\033[H\033[2J")
 	case "admin":
-		c.client.ServerType = "admin"
-		c.client.HTTPClient.Port = 9381
-		c.prompt = "MultiRAG(admin)> "
-		fmt.Println("Switched to ADMIN mode (port 9381)")
+		return c.selectMode("admin")
 	case "user":
-		c.client.ServerType = "user"
-		c.client.HTTPClient.Port = 9380
-		c.prompt = "MultiRAG(user)> "
-		fmt.Println("Switched to USER mode (port 9380)")
+		return c.selectMode("user")
 	case "host":
 		if len(args) == 0 {
 			fmt.Printf("Current host: %s\n", c.client.HTTPClient.Host)
@@ -1204,6 +1218,12 @@ Meta Commands:
   \q or \quit   - Exit CLI
   \c or \clear  - Clear screen
 
+Local Connection Commands (either mode):
+  ADD API SERVER 'name' HOST 'host:port' [TOKEN 'token'];
+  DELETE API SERVER 'name'; / LIST API SERVER; / SHOW API SERVER 'name';
+  ADD ADMIN SERVER HOST 'host:port'; / DELETE ADMIN SERVER; / SHOW ADMIN SERVER;
+  SHOW CURRENT; / SAVE CONFIG AS 'private-file.yml';
+
 SQL Commands (User Mode):
   LOGIN USER 'email';                                    - Login as user
   LOGOUT;                                                - End the current session
@@ -1264,6 +1284,7 @@ Media Commands (User Mode):
   SAVE/PLAY are explicit; default TTS creates no local file. PLAY uses afplay or mpv/ffplay.
 
 SQL Commands (Admin Mode):
+  LOGIN ADMIN 'email' [WITH PASSWORD 'password'];          - Login as admin
   LOGIN USER 'email';                                    - Login as admin
   LOGOUT;                                                - End the current session
   LIST USERS;                                            - List all users
@@ -1294,6 +1315,14 @@ For more information, see documentation.
 
 // Cleanup performs cleanup before exit, restoring the terminal state.
 func (c *CLI) Cleanup() {
+	for _, client := range c.apiServers {
+		if client != nil && client.HTTPClient != nil && client.HTTPClient.client != nil {
+			client.HTTPClient.client.CloseIdleConnections()
+		}
+	}
+	if c.adminClient != nil && c.adminClient.HTTPClient != nil && c.adminClient.HTTPClient.client != nil {
+		c.adminClient.HTTPClient.client.CloseIdleConnections()
+	}
 	if c.line != nil {
 		c.line.Close()
 	}

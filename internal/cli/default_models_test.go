@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -36,7 +35,7 @@ func TestDefaultModelCommandsUseModelsEndpoint(t *testing.T) {
 		method string
 		body   map[string]interface{}
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/models" {
 			t.Errorf("path = %q, want /api/v1/models", r.URL.Path)
 		}

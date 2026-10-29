@@ -7,7 +7,6 @@ import (
 	"math"
 	"multirag/internal/entity/models"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -46,7 +45,7 @@ func TestMediaParserContract(t *testing.T) {
 }
 func TestMediaCLIRejectsFailedOrMalformedResponse(t *testing.T) {
 	for _, raw := range []string{`{}`, `{"code":501,"message":"unsupported"}`, `{"code":0,"data":{}}`, `{"code":0,"data":null}`, `{"code":"0","data":{"text":"x"}}`, `not json`, `{"code":0,"data":{"audio":[1,2],"format":"wav"}}`} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, raw) }))
+		server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, raw) }))
 		u, _ := url.Parse(server.URL)
 		port, _ := strconv.Atoi(u.Port())
 		c := NewMultiRAGClient("user")
@@ -127,7 +126,7 @@ func TestMediaExplicitEmptyText(t *testing.T) {
 }
 
 func TestMediaResponseBufferBounds(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, strings.Repeat("x", 64)) }))
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, strings.Repeat("x", 64)) }))
 	defer server.Close()
 	u, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(u.Port())
@@ -151,7 +150,7 @@ func TestMediaResponseBufferBounds(t *testing.T) {
 }
 
 func TestOCRURLParserAndClient(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		if r.URL.Path != "/api/v1/file/ocr" || !strings.Contains(string(raw), `"url":"https://example.com/image.png"`) || strings.Contains(string(raw), `"content"`) {
 			t.Errorf("request %s %s", r.URL.Path, raw)

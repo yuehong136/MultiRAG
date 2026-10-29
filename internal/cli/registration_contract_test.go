@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -18,7 +17,7 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 	} {
 		t.Run(test.envelope+"/"+test.token, func(t *testing.T) {
 			reject := false
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/v1/users":
 					if r.Method != "POST" || r.Header.Get("Authorization") != "" {
@@ -88,9 +87,9 @@ func TestRegisterAndLogoutRESTContract(t *testing.T) {
 	}
 }
 
-func TestAdminLogoutRetainsLegacyAuthorization(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/admin/logout" || r.Header.Get("Authorization") != "owned-admin-session" {
+func TestAdminLogoutPOSTRetainsRawAuthorization(t *testing.T) {
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/admin/logout" || r.Header.Get("Authorization") != "owned-admin-session" {
 			t.Errorf("unexpected admin logout contract: %s %s", r.Method, r.URL.Path)
 		}
 		fmt.Fprint(w, `{"code":0}`)

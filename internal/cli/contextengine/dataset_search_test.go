@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"multirag/tests/support"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 )
@@ -36,7 +36,7 @@ func TestDatasetProviderSearchRESTHTTP(t *testing.T) {
 	for _, path := range []string{"", "knowledge"} {
 		t.Run(path, func(t *testing.T) {
 			searches := 0
-			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			api := support.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer controlled-session" {
 					t.Error("session lost")
 				}

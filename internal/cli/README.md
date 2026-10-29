@@ -34,8 +34,52 @@ go build -o multirag_cli ./cmd/multirag_cli.go
 ./multirag_cli -t <api-token> ls datasets
 ```
 
-Connection flags: `-h host[:port]`, `-u/--user`, `-p/--password`, `-t/--token`,
+Connection flags: `-h host:port`, `-u/--user`, `-p/--password`, `-t/--token`,
 `-f/--config <multirag.yml>`, `-o/--output table|plain|json`, `--admin`.
+
+### Connection registry and private configuration
+
+The active API connection starts as `default`. Named API profiles and the
+independent admin connection can be inspected and edited in either mode:
+
+```sql
+ADD API SERVER 'staging' HOST '127.0.0.1:9480' TOKEN 'example-token';
+LIST API SERVER;
+SHOW API SERVER 'staging';
+DELETE API SERVER 'staging';
+ADD ADMIN SERVER HOST '127.0.0.1:9481';
+SHOW ADMIN SERVER;
+SHOW CURRENT;
+SAVE CONFIG AS '/private/path/multirag.yml';
+```
+
+Registry commands require a terminating semicolon. The active API profile cannot
+be deleted. Named profiles are available for registry inspection and persistence;
+this version does not add `SWITCH` syntax. Existing `\admin` / `\user` commands
+select separate connection objects, preserving each connection's authentication
+and model state. `LOGIN ADMIN 'email' WITH PASSWORD 'password';` is available in
+admin mode; the existing `LOGIN USER` form remains usable. Admin logout uses POST.
+A failed logout retains the session.
+
+The YAML file keeps the default API connection in the existing top-level `host`,
+`api_token`, `user_name`, `password` fields. Additional profiles are a mapping under
+`api_servers`, with the same connection fields. `admin_server` is a separate
+connection block; admin startup reads it only when `-f/--config` is explicit and
+never reads API credentials as admin credentials. Command flags override config.
+API tokens and username/password are mutually exclusive in each API profile.
+
+`SAVE CONFIG AS` writes a real YAML file by private temporary file, sync and atomic
+rename, with mode 0600. It persists configured credentials and current endpoints;
+login session tokens and passwords entered at a login prompt are not persisted.
+Symlink or non-file destinations fail. Parent directories must already exist.
+Inspection reports credential presence as booleans and never prints their values
+or lengths. Commands containing token/password/key fields stay out of history.
+Keep credential-bearing config files outside the repository.
+
+`-o/--output` and `--admin` work before or after the command. Context Engine flags
+such as `search -t 0.5` and `ls -n 5` remain subcommand options. `RETRIEVE` uses the
+same strict dataset-search grammar as the existing `SEARCH ... ON DATASETS` form;
+the filesystem `search` command keeps its current behavior and structured output.
 
 ### Provider credential checks
 

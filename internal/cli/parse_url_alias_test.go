@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -13,7 +12,7 @@ import (
 
 func TestParseFileURLAliasDoesNotReadOrFetchFile(t *testing.T) {
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if r.URL.Path != "/api/v1/file/parse" {
 			t.Error(r.URL)

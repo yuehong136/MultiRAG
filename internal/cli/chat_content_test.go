@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,7 +20,7 @@ func TestChatMediaParserAndPayload(t *testing.T) {
 	}
 	for _, stream := range []bool{false, true} {
 		calls := 0
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
 			var body struct {
 				Messages []struct {

@@ -155,7 +155,7 @@ func (c *MultiRAGClient) Logout() (ResponseIf, error) {
 	path, method := "/auth/logout", http.MethodPost
 	var headers map[string]string
 	if c.ServerType == "admin" {
-		path, method = "/admin/logout", http.MethodGet
+		path, method = "/admin/logout", http.MethodPost
 	} else {
 		// Python's user auth dependency requires the Bearer scheme. The Go
 		// user router accepts it too; admin retains its legacy raw token.
@@ -326,14 +326,20 @@ func (c *MultiRAGClient) ListSupportedModels(cmd *Command) (ResponseIf, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to list supported models: HTTP %d, body: %s", resp.StatusCode, string(resp.Body))
 	}
-	var result CommonResponse
-	if err = json.Unmarshal(resp.Body, &result); err != nil {
-		return nil, fmt.Errorf("failed to list supported models: invalid JSON (%w)", err)
+	data, err := catalogResponseData(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("invalid supported-model response: %w", err)
 	}
-	if result.Code != 0 {
-		return nil, fmt.Errorf("%s", result.Message)
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(data, &rows); err != nil || rows == nil {
+		return nil, fmt.Errorf("invalid supported-model list")
 	}
-	return &result, nil
+	for _, row := range rows {
+		if !validCatalogModel(row) {
+			return nil, fmt.Errorf("supported model requires name")
+		}
+	}
+	return &CommonResponse{Data: rows}, nil
 }
 
 func (c *MultiRAGClient) ShowModel(cmd *Command) (ResponseIf, error) {

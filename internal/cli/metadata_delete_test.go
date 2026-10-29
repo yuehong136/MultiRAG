@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -39,7 +38,7 @@ func TestCanonicalStoreAndDeletionGrammar(t *testing.T) {
 func TestMetadataDeleteCLIRequiresAcknowledgment(t *testing.T) {
 	response := `{"code":0,"data":true}`
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if (r.URL.Path != "/api/v1/document/delete_meta" && r.URL.Path != "/api/v1/document/set_meta") || r.Method != "POST" || r.Header.Get("Authorization") != "Bearer owned" {
 			t.Fatal(r.URL, r.Header)

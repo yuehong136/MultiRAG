@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -82,7 +81,7 @@ func TestParseCheckProviderConnection(t *testing.T) {
 
 func TestNonStreamChatUsesThinkingPayload(t *testing.T) {
 	var body map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/chat/completions" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
@@ -134,7 +133,7 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 		{"partial", "event: message\ndata: [MESSAGE]partial\n\n", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/api/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer fixture-login" {
 					t.Errorf("route/auth = %s %q", r.URL.Path, r.Header.Get("Authorization"))
 				}
@@ -176,7 +175,7 @@ func TestStreamChatCompletionAndFailure(t *testing.T) {
 
 func TestChatCLIContentArray(t *testing.T) {
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var body struct {
 			Messages []struct {
@@ -218,7 +217,7 @@ func TestChatCLIContentArray(t *testing.T) {
 }
 
 func TestChatCLIPreservesBracketText(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Messages []struct{ Content string } }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
@@ -242,7 +241,7 @@ func TestChatCLIPreservesBracketText(t *testing.T) {
 
 func TestChatUsesAPITokenWithoutLogin(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer fixture-api" {
 				t.Error("API token missing")
 			}

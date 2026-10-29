@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -17,7 +16,7 @@ func TestLoginCommandRESTContract(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			calls := 0
 			reject := false
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				prefix := "/api/v1"
 				if mode == "admin" {
@@ -83,7 +82,7 @@ func TestLoginCommandRESTContract(t *testing.T) {
 
 func TestHTTPMethodsUseAPIBase(t *testing.T) {
 	count := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count++
 		if r.URL.Path != "/api/v1/probe" || r.Header.Get("Authorization") != "Bearer owned-api-key" {
 			t.Errorf("request contract: %s", r.URL.Path)

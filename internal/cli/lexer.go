@@ -178,6 +178,16 @@ func (l *Lexer) readQuotedString(quote byte) string {
 func (l *Lexer) lookupIdent(ident string) Token {
 	upper := strings.ToUpper(ident)
 	switch upper {
+	case "SERVER":
+		return Token{Type: TokenServer, Value: ident}
+	case "API":
+		return Token{Type: TokenAPI, Value: ident}
+	case "HOST":
+		return Token{Type: TokenHost, Value: ident}
+	case "CONFIG":
+		return Token{Type: TokenConfig, Value: ident}
+	case "RETRIEVE":
+		return Token{Type: TokenRetrieve, Value: ident}
 	case "LOGIN":
 		return Token{Type: TokenLogin, Value: ident}
 	case "LOGOUT":

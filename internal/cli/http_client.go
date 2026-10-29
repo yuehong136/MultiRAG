@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -61,7 +63,7 @@ func NewHTTPClient() *HTTPClient {
 
 // APIBase returns the API base URL
 func (c *HTTPClient) APIBase() string {
-	return fmt.Sprintf("%s:%d/api/%s", c.Host, c.Port, c.APIVersion)
+	return fmt.Sprintf("%s/api/%s", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), c.APIVersion)
 }
 
 // BuildURL builds the full URL for a given path
@@ -132,6 +134,9 @@ func (c *HTTPClient) RequestBounded(method, path, authKind string, headers map[s
 }
 
 func (c *HTTPClient) request(method, path, authKind string, headers map[string]string, jsonBody map[string]interface{}, maxBytes int64) (*Response, error) {
+	if c == nil || c.client == nil || c.Host == "" || c.Port < 1 || c.Port > 65535 {
+		return nil, fmt.Errorf("server client is not configured")
+	}
 	url := c.BuildURL(path)
 	mergedHeaders := c.Headers(authKind, headers)
 
