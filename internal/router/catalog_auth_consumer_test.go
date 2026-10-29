@@ -155,6 +155,21 @@ func TestCatalogActualAuthHTTPAndSQL(t *testing.T) {
 	}
 	catalogPath := writePrivate("catalog.json", []byte(`[{"name":"canonical","alias":["组织/a+b?"],"max_tokens":0,"model_types":["embedding"]}]`))
 	manager := &entity.ProviderManager{}
+	if err := manager.LoadAllModels(filepath.Join("..", "..", "configs", "all_models.json")); err != nil {
+		t.Fatal("shipped catalog load", err)
+	}
+	if len(manager.ListAllModels()) != 9 {
+		t.Fatal("shipped catalog incomplete")
+	}
+	for _, model := range manager.ListAllModels() {
+		for _, name := range append([]string{model.Name}, model.Alias...) {
+			resolved, err := manager.GetModelByNameOrAlias(name)
+			if err != nil || resolved.Name != model.Name {
+				t.Fatal("shipped canonical/alias resolution")
+			}
+		}
+	}
+
 	if err := manager.LoadAllModels(catalogPath); err != nil {
 		t.Fatal("static catalog load")
 	}
