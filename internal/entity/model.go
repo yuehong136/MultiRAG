@@ -672,7 +672,7 @@ func containsModelType(types []string, target string) bool {
 	return false
 }
 
-// LoadAllModels atomically loads an explicitly selected global catalog.
+// LoadAllModels replaces the catalog only after complete validation at startup.
 // Provider-only fixtures do not depend on a process working directory.
 func (pm *ProviderManager) LoadAllModels(path string) error {
 	raw, err := os.ReadFile(path)

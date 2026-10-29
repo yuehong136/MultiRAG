@@ -130,7 +130,7 @@ func (o *OllamaModel) request(method, suffix string, api *APIConfig, body any) (
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if api != nil && api.APIKey != nil && *api.APIKey != "" {
+	if api != nil && api.APIKey != nil && strings.TrimSpace(*api.APIKey) != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*api.APIKey))
 	}
 	response, err := o.httpClient.Do(req)

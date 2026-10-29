@@ -107,7 +107,11 @@ func (x *XiaomiModel) ttsBody(name *string, text string, config *TTSConfig) (map
 	if err := ValidateTTSConfig(config); err != nil {
 		return nil, "", err
 	}
-	format, voice := "wav", "mimo_default"
+	format, err := SpeechFormat(config)
+	if err != nil {
+		return nil, "", err
+	}
+	voice := "mimo_default"
 	var params map[string]any
 	if config != nil {
 		params = config.Params
@@ -122,7 +126,7 @@ func (x *XiaomiModel) ttsBody(name *string, text string, config *TTSConfig) (map
 	if err != nil {
 		return nil, "", err
 	}
-	for key, target := range map[string]*string{"format": &format, "voice": &voice} {
+	for key, target := range map[string]*string{"voice": &voice} {
 		if v, ok := body[key]; ok {
 			s, valid := v.(string)
 			if !valid {
@@ -131,6 +135,12 @@ func (x *XiaomiModel) ttsBody(name *string, text string, config *TTSConfig) (map
 			*target = s
 			delete(body, key)
 		}
+	}
+	delete(body, "format")
+	delete(body, "response_format")
+	delete(body, "audio_setting")
+	if config != nil && config.Voice != "" {
+		voice = config.Voice
 	}
 	if !ValidAudioFormat(format) || !xiaomiOption(voice) {
 		return nil, "", fmt.Errorf("invalid TTS format or voice")
@@ -202,6 +212,9 @@ func (x *XiaomiModel) mediaCall(body map[string]any, api *APIConfig, stream bool
 			return false, fmt.Errorf("ambiguous Xiaomi media choices")
 		}
 		choice := result.Choices[0]
+		if err := validateStrictChatFinish(choice.FinishReason); err != nil {
+			return false, err
+		}
 		message := choice.Message
 		if delta {
 			message = choice.Delta

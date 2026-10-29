@@ -287,3 +287,99 @@ func TestAfter7ddXiaomiMediaLaterErrorAndIdle(t *testing.T) {
 		t.Fatal("idle stream succeeded")
 	}
 }
+
+func TestAfter7ddXiaomiSpeechFormatContract(t *testing.T) {
+	name, key := "mimo", "key"
+	api := &APIConfig{APIKey: &key}
+	for _, cfg := range []*TTSConfig{nil, {Params: map[string]any{"voice": "voice"}}, {Format: "wav", Params: map[string]any{"format": "mp3"}}, {Params: map[string]any{"audio_setting": map[string]any{"format": "wav"}}}} {
+		for _, stream := range []bool{false, true} {
+			expected, err := SpeechFormat(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				json.NewDecoder(r.Body).Decode(&body)
+				if body["audio"].(map[string]any)["format"] != expected {
+					t.Error(body)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"choices":[{"message":{"audio":{"data":"YWJj"}}}]}`)
+			})
+			if stream {
+				err = d.AudioSpeechWithSender(&name, "text", api, cfg, func(result *TTSResponse) error {
+					if result.Format != expected {
+						t.Error(result)
+					}
+					return nil
+				})
+			} else {
+				var result *TTSResponse
+				result, err = d.AudioSpeech(&name, "text", api, cfg)
+				if result != nil && result.Format != expected {
+					t.Error(result)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestAfter7ddXiaomiRejectedFinishNeverDelivered(t *testing.T) {
+	name, key := "mimo", "key"
+	api := &APIConfig{APIKey: &key}
+	for _, stream := range []bool{false, true} {
+		for _, tts := range []bool{false, true} {
+			for _, reason := range []string{"content_filter", "error", "tool_calls"} {
+				d := xiaomiFixture(t, func(w http.ResponseWriter, r *http.Request) {
+					payload := `{"content":"partial"}`
+					if tts {
+						payload = `{"audio":{"data":"YWJj"}}`
+					}
+					if stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+						fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":%s,\"finish_reason\":%q}]}\n\ndata: [DONE]\n\n", payload, reason)
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprintf(w, `{"choices":[{"message":%s,"finish_reason":%q}]}`, payload, reason)
+					}
+				})
+				calls := 0
+				var err error
+				if tts {
+					if stream {
+						err = d.AudioSpeechWithSender(&name, "text", api, nil, func(*TTSResponse) error { calls++; return nil })
+					} else {
+						_, err = d.AudioSpeech(&name, "text", api, nil)
+					}
+				} else {
+					if stream {
+						err = d.TranscribeAudioWithSender(&name, []byte("abc"), api, nil, func(*ASRResponse) error { calls++; return nil })
+					} else {
+						_, err = d.TranscribeAudio(&name, []byte("abc"), api, nil)
+					}
+				}
+				if err == nil || calls != 0 {
+					t.Fatal(stream, tts, reason, err, calls)
+				}
+			}
+		}
+	}
+}
+
+func TestAfter7ddOllamaBlankKeyOmitsAuthorization(t *testing.T) {
+	key := " \t "
+	name := "model"
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, exists := r.Header["Authorization"]; exists {
+			t.Errorf("blank authorization sent %q", r.Header.Get("Authorization"))
+		}
+		fmt.Fprint(w, `{"message":{"content":"ok"},"done":true}`)
+	}))
+	d := NewOllamaModel(map[string]string{"default": srv.URL}, URLSuffix{Chat: "chat"})
+	if _, err := d.ChatWithMessages(name, &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "q"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
