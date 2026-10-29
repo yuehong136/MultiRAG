@@ -9,6 +9,8 @@ import threading
 import types
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from api.apps.services import memory_api_service
 from api.db.joint_services import memory_message_service as mms
@@ -42,14 +44,14 @@ def _fake_memory(**kw):
 
 
 @pytest.fixture
-def queue_stubs(monkeypatch):
+def queue_stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     _FakeBundle.instances = []
     seen: dict[str, object] = {}
 
     from api.db.services.memory_service import MemoryService
 
     monkeypatch.setattr(MemoryService, "get_by_memory_id", classmethod(lambda cls, s, mid: _fake_memory()))
-    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid, *, tenant_id: {"llm_name": "emb-m"})
+    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid, *, tenant_id, model_type: {"llm_name": "emb-m"})
     monkeypatch.setattr(mms, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(mms, "REDIS_CONN", types.SimpleNamespace(generate_auto_increment_id=lambda namespace: 42, queue_product=lambda name, message: True))
     monkeypatch.setattr(mms, "settings", types.SimpleNamespace(get_svr_queue_name=lambda priority: "q0"))
@@ -65,7 +67,7 @@ def queue_stubs(monkeypatch):
     return seen
 
 
-async def test_queue_save_strips_facade_and_offloads(async_db, queue_stubs):
+async def test_queue_save_strips_facade_and_offloads(async_db: AsyncSession, queue_stubs: dict[str, object]) -> None:
     ok, msg = await mms.queue_save_to_memory_task(async_db, ["mem1"], {"agent_id": "a", "session_id": "s", "user_input": "hi", "agent_response": "yo"})
 
     assert (ok, msg) == (True, "All add to task.")
@@ -96,14 +98,14 @@ async def test_queue_save_collects_embed_failures(async_db, queue_stubs, monkeyp
     assert "mem1" in msg and "boom" in msg
 
 
-async def test_embed_and_save_sync_twin_reports_progress(db, monkeypatch):
+async def test_embed_and_save_sync_twin_reports_progress(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     """task_executor 走的同步孪生：进度回调注入 TaskService.update_progress 保真。"""
     _FakeBundle.instances = []
     progress: list[float] = []
 
     from memory.services.messages import MessageService
 
-    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid, *, tenant_id: {"llm_name": "emb-m"})
+    monkeypatch.setattr(mms, "get_model_config_by_id", lambda s, mid, *, tenant_id, model_type: {"llm_name": "emb-m"})
     monkeypatch.setattr(mms, "LLMBundle", _FakeBundle)
     monkeypatch.setattr(mms.TaskService, "update_progress", classmethod(lambda cls, s, tid, info: progress.append(info["progress"])))
     monkeypatch.setattr(_FakeBundle, "encode", lambda self, texts: ([[0.1]] * len(texts), 3), raising=False)

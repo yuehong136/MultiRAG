@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import NoResultFound
 
 from api.db.db_models import db_connection
-from api.db.joint_services.memory_message_service import handle_save_to_memory_task
+from api.db.joint_services.memory_message_service import handle_save_to_memory_task, memory_for_task
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type, rebind_model_config
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.document_service import DocumentService
@@ -430,7 +430,10 @@ async def collect(db: Session) -> tuple[Any, Any]:
     elif task_type == PipelineTaskType.MEMORY.lower():
         # memory 任务特殊处理：直接从 Task 表获取
         task_obj = TaskService.get_by_id(db, msg["id"])
-        task = task_obj.to_dict() if task_obj else None
+        memory = memory_for_task(db, task_obj, msg) if task_obj else None
+        task = task_obj.to_dict() if memory is not None else None
+        if task is not None:
+            task["tenant_id"] = memory.tenant_id
     else:
         # 普通任务，从数据库获取
         task = TaskService.get_task(db, msg["id"])
@@ -449,7 +452,7 @@ async def collect(db: Session) -> tuple[Any, Any]:
         task["tenant_id"] = msg["tenant_id"]
         task["dataflow_id"] = msg["dataflow_id"]
         task["kb_id"] = msg.get("kb_id", "")
-    if task_type[:6] == "memory":
+    if task_type == PipelineTaskType.MEMORY.lower():
         task["memory_id"] = msg["memory_id"]
         task["source_id"] = msg["source_id"]
         task["message_dict"] = msg["message_dict"]

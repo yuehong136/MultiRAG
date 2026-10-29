@@ -20,6 +20,8 @@ Joint service for memory and message operations.
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -470,8 +472,8 @@ async def queue_save_to_memory_task(
         Tuple of (success, message)
     """
 
-    def new_task(_memory_id: str, _source_id: int):
-        return {"id": get_uuid(), "doc_id": _memory_id, "task_type": "memory", "progress": 0.0, "digest": str(_source_id)}
+    def new_task(_memory_id: str, _source_id: int) -> dict[str, Any]:
+        return {"id": get_uuid(), "doc_id": _memory_id, "task_type": "memory", "progress": 0.0, "begin_at": datetime.now(), "digest": str(_source_id)}
 
     def _no_report(progress: float, msg: str) -> None:
         return None
@@ -492,7 +494,7 @@ async def queue_save_to_memory_task(
         linked_memories = {memory.id: memory for memory in memories}
     for memory_id in memory_ids:
         memory = (
-            linked_memories[memory_id] if linked_memories is not None else await db.run_sync(lambda s, mid=memory_id: MemoryService.get_by_memory_id(s, mid))  # TODO(async-phase4)
+            linked_memories.get(memory_id) if linked_memories is not None else await db.run_sync(lambda s, mid=memory_id: MemoryService.get_by_memory_id(s, mid))  # TODO(async-phase4)
         )
         if not memory:
             not_found_memory.append(memory_id)
@@ -523,7 +525,15 @@ async def queue_save_to_memory_task(
 
         task = new_task(memory_id, raw_message_id)
         await db.run_sync(lambda s, t=task: bulk_insert_into_db(s, Task, [t], replace_on_conflict=True))  # TODO(async-phase4)
-        task_message = {"id": task["id"], "task_id": task["id"], "task_type": task["task_type"], "memory_id": memory_id, "source_id": raw_message_id, "message_dict": trusted_message_dict}
+        task_message = {
+            "id": task["id"],
+            "task_id": task["id"],
+            "task_type": task["task_type"],
+            "memory_id": memory_id,
+            "tenant_id": memory.tenant_id,
+            "source_id": raw_message_id,
+            "message_dict": trusted_message_dict,
+        }
         if not await asyncio.to_thread(REDIS_CONN.queue_product, settings.get_svr_queue_name(priority=0), message=task_message):
             failed_memory.append({"memory_id": memory_id, "fail_msg": "Can't access Redis."})
 
@@ -539,7 +549,18 @@ async def queue_save_to_memory_task(
     return True, "All add to task."
 
 
-async def handle_save_to_memory_task(db: Session, task_param: dict):
+def memory_for_task(db: Session, task: Task, task_param: dict[str, Any]) -> Memory | None:
+    """Bind queued work to its persisted task and memory before any side effects."""
+    source_id = task_param.get("source_id")
+    if task.task_type != "memory" or task.doc_id != task_param.get("memory_id") or not isinstance(source_id, int) or isinstance(source_id, bool) or source_id <= 0 or task.digest != str(source_id):
+        return None
+    memory = MemoryService.get_by_memory_id(db, task.doc_id)
+    if memory is None or not memory.tenant_id or memory.tenant_id != task_param.get("tenant_id"):
+        return None
+    return memory
+
+
+async def handle_save_to_memory_task(db: Session, task_param: dict) -> tuple[bool, str]:
     """
     Handle save to memory task.
 
@@ -548,6 +569,7 @@ async def handle_save_to_memory_task(db: Session, task_param: dict):
         task_param: Task parameters containing:
             - id: task_id
             - memory_id: id
+            - tenant_id: memory owner's tenant, verified against the DB task
             - source_id: id
             - message_dict: message data dict
 
@@ -557,6 +579,8 @@ async def handle_save_to_memory_task(db: Session, task_param: dict):
     task = TaskService.get_by_id(db, task_param["id"])
     if not task:
         return False, f"Task {task_param['id']} is not found."
+    if memory_for_task(db, task, task_param) is None:
+        return False, "Memory task ownership does not match."
     if task.progress == -1:
         return False, f"Task {task_param['id']} is already failed."
     TaskService.mark_started(db, task_param["id"])

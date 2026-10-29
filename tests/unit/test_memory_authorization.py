@@ -54,8 +54,9 @@ def test_raw_model_row_ids_rejected_before_cache(db: Session, memories: None, mo
 
 @pytest.mark.parametrize("path", ["embedding", "search"])
 def test_pipeline_model_id_binds_memory_owner(db: Session, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-    def scoped_lookup(db: Session, model_id: int, *, tenant_id: str) -> dict:
+    def scoped_lookup(db: Session, model_id: int, *, tenant_id: str, model_type: str) -> dict:
         assert model_id == 123 and tenant_id == "owner"
+        assert model_type == "embedding"
         raise LookupError("scoped denial")
 
     monkeypatch.setattr(mms, "get_model_config_by_id", scoped_lookup)
@@ -70,8 +71,9 @@ def test_pipeline_model_id_binds_memory_owner(db: Session, monkeypatch: pytest.M
 
 
 async def test_extraction_model_id_binds_owner(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    def scoped_lookup(db: Session, model_id: int, *, tenant_id: str) -> dict:
+    def scoped_lookup(db: Session, model_id: int, *, tenant_id: str, model_type: str) -> dict:
         assert (model_id, tenant_id) == (123, "owner")
+        assert model_type == "chat"
         raise LookupError("scoped denial")
 
     monkeypatch.setattr(mms, "resolve_model_type", lambda *args: ["chat"])

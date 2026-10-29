@@ -137,18 +137,24 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
         update_dict["permissions"] = new_settings["permissions"]
 
     if new_settings.get("embd_id"):
-        update_dict["embd_id"] = new_settings["embd_id"]
+        update_dict["embd_id"] = new_settings["embd_id"].strip()
+        if not update_dict["embd_id"]:
+            raise ArgumentException("Embedding model reference cannot be blank.")
 
     if new_settings.get("memory_type"):
-        memory_type_set = set(new_settings["memory_type"])
+        if not isinstance(new_settings["memory_type"], list) or not all(isinstance(value, str) for value in new_settings["memory_type"]):
+            raise ArgumentException("Memory type must be a list of strings.")
+        memory_type_set = {value.strip().lower() for value in new_settings["memory_type"]}
         valid_types = {e.name.lower() for e in MemoryType}
         invalid_types = memory_type_set - valid_types
         if invalid_types:
             raise ArgumentException(f"Memory type '{invalid_types}' is not supported.")
-        update_dict["memory_type"] = list(memory_type_set)
+        update_dict["memory_type"] = sorted(memory_type_set)
 
     if new_settings.get("llm_id"):
-        update_dict["llm_id"] = new_settings["llm_id"]
+        update_dict["llm_id"] = new_settings["llm_id"].strip()
+        if not update_dict["llm_id"]:
+            raise ArgumentException("Chat model reference cannot be blank.")
 
     if new_settings.get("memory_size"):
         if not 0 < int(new_settings["memory_size"]) <= MEMORY_SIZE_LIMIT:
@@ -173,17 +179,33 @@ def update_memory(db: Session, memory_id: str, new_settings: dict, *, user_id: s
     memory_dict = current_memory.to_dict()
     memory_dict["memory_type"] = get_memory_type_human(current_memory.memory_type)
 
+    update_dict = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, update_dict, strict=True)
+    for model_key in ("llm_id", "embd_id"):
+        if model_key not in update_dict:
+            continue
+        tenant_key = f"tenant_{model_key}"
+        current_id = memory_dict.get(tenant_key)
+        if current_id is None and memory_dict.get(model_key):
+            try:
+                current_id = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, {model_key: memory_dict[model_key]}).get(tenant_key)
+            except (LookupError, ValueError):
+                # An unusable legacy reference is a change, never a no-op.
+                current_id = None
+        if current_id is not None and current_id == update_dict[tenant_key]:
+            update_dict.pop(model_key)
+            update_dict.pop(tenant_key)
+
     to_update = {}
     for k, v in update_dict.items():
-        if isinstance(v, list) and set(memory_dict.get(k, [])) != set(v):
-            to_update[k] = v
+        if k == "memory_type":
+            if set(memory_dict[k]) != set(v):
+                to_update[k] = v
         elif memory_dict.get(k) != v:
             to_update[k] = v
 
     if not to_update:
         return True, memory_dict
 
-    to_update = ensure_tenant_model_id_for_params(db, current_memory.tenant_id, to_update, strict=True)
     memory_size = get_memory_size_cache(current_memory.tenant_id, memory_id)
     not_allowed_update = [f for f in ["tenant_embd_id", "embd_id", "memory_type"] if f in to_update and memory_size > 0]
     if not_allowed_update:
