@@ -205,11 +205,11 @@ class FulltextQueryer(QueryBase):
             q += v  # * v
         return s / q  # math.sqrt(3. * (s / q / math.log10( len(dtwt.keys()) + 512 )))
 
-    def paragraph(self, content_tks: str, keywords=None, keywords_topn=30):
+    def paragraph(self, content_tks: str | list[str], keywords: list[str] | None = None, keywords_topn: int = 30) -> MatchTextExpr:
         if keywords is None:
             keywords = []
         if isinstance(content_tks, str):
-            content_tks = [c.strip() for c in content_tks.strip() if c.strip()]
+            content_tks = content_tks.split()
         tks_w = self.tw.weights(content_tks, preprocess=False)
 
         origin_keywords = keywords.copy()
