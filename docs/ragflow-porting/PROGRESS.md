@@ -3,6 +3,13 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2026-10-29 · after-5e0a7ce4-20 本地验收索引
+
+连续 20 项、101 条逐提交路径的处置、实际 main/master 接受、固定 Web 消费者与恢复清理，见
+[5e0a7ce4 后二十项交付](batch-after-5e0a7ce4.md)。Python 生产后端、Go 并行实现和独立 Web
+分别验收；历史登记缺口与受控供应商边界保留，strictProtocolPassed=false。未 push、未部署，
+远程 ci-required 待运行。
+
 ## 2026-10-29 · after-98f2a2e6-20 本地验收索引
 
 连续20项、73条上游路径的逐项处置、真实main/master接受、固定Web消费者与恢复清理，见
