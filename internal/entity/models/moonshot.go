@@ -55,7 +55,8 @@ func (m *MoonshotModel) ChatStreamlyWithChannel(modelName, apiKey, message *stri
 }
 
 func moonshotChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
-	if strings.TrimSpace(modelName) == "" {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
 		return nil, fmt.Errorf("moonshot: model name is required")
 	}
 	if err := ValidateMessages(messages); err != nil {

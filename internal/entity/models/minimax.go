@@ -42,7 +42,8 @@ func (m *MinimaxModel) ChatStreamlyWithChannel(modelName, apiKey, message *strin
 }
 
 func minimaxChatBody(modelName string, messages []Message, config *ChatConfig, stream bool) (map[string]interface{}, error) {
-	if strings.TrimSpace(modelName) == "" {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
 		return nil, fmt.Errorf("minimax: model name is required")
 	}
 	if err := ValidateMessages(messages); err != nil {
@@ -133,7 +134,7 @@ func (m *MinimaxModel) chat(modelName string, messages []Message, apiConfig *API
 		aliyunChatResponse
 		minimaxStatus
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("minimax: decode response: %w", err)
 	}
 	if err := result.minimaxStatus.err(); err != nil {
@@ -288,7 +289,7 @@ func (m *MinimaxModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("minimax: decode model list: %w", err)
 	}
 	if err := result.minimaxStatus.err(); err != nil {
@@ -305,7 +306,7 @@ func (m *MinimaxModel) ListModels(apiConfig *APIConfig) ([]string, error) {
 		if strings.TrimSpace(model.ID) == "" {
 			return nil, fmt.Errorf("minimax: missing model ID")
 		}
-		names = append(names, model.ID)
+		names = append(names, strings.TrimSpace(model.ID))
 	}
 	return names, nil
 }
@@ -315,7 +316,14 @@ func (m *MinimaxModel) Balance(apiConfig *APIConfig) (map[string]interface{}, er
 }
 
 func (m *MinimaxModel) CheckConnection(apiConfig *APIConfig) error {
-	return checkBearerEndpointConnection(m.httpClient, m.BaseURL, m.URLSuffix.Files, apiConfig, m.Name())
+	names, err := m.ListModels(apiConfig)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("minimax: empty model list")
+	}
+	return nil
 }
 
 func (m *MinimaxModel) Rerank(modelName *string, query string, texts []string, apiConfig *APIConfig, rerankConfig *RerankConfig) (*RerankResponse, error) {

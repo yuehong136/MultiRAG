@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// GPUStackModel supports tenant-hosted chat, embeddings and discovery with a required key.
+// GPUStackModel supports tenant-hosted chat, embeddings and discovery with an optional key.
 type GPUStackModel struct{ *openAIChatDriver }
 
 func NewGPUStackModel(urls map[string]string, suffix URLSuffix) *GPUStackModel {
@@ -16,6 +16,7 @@ func NewGPUStackModel(urls map[string]string, suffix URLSuffix) *GPUStackModel {
 		base[region] = strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(endpoint), "/"), "/v1")
 	}
 	d := newOpenAIChatDriver(base, suffix, "gpustack", gpuStackChatBody)
+	d.optionalAPIKey = true
 	d.strictDiscovery, d.streamIdleTimeout = true, 60*time.Second
 	d.strictStream = true
 	d.httpClient.CheckRedirect = rejectModelRedirect
@@ -31,7 +32,7 @@ func gpuStackChatBody(name string, messages []Message, config *ChatConfig, strea
 
 // Embed uses the catalog's v1-openai endpoint and preserves strict indexed batches.
 func (g *GPUStackModel) Embed(name *string, texts []string, api *APIConfig, config *EmbeddingConfig) ([]EmbeddingData, error) {
-	return embedHTTPWithConfig(g.httpClient, g.BaseURL, g.URLSuffix.Embedding, name, texts, api, config)
+	return embedHTTPWithConfig(g.httpClient, g.BaseURL, g.URLSuffix.Embedding, name, texts, api, config, embeddingHTTPOptions{optionalAPIKey: true})
 }
 
 var _ ModelDriver = (*GPUStackModel)(nil)

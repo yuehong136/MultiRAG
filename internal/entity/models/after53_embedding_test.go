@@ -104,6 +104,11 @@ func TestAfter53EmbeddingNoHTTPPreflight(t *testing.T) {
 				{stringPtr("served"), &APIConfig{APIKey: stringPtr("key")}, &EmbeddingConfig{Dimension: -1}},
 			}
 			for i, c := range cases {
+				// GPUStack self-hosted endpoints allow absent credentials; malformed
+				// model/region/dimension inputs must still fail before HTTP.
+				if provider == "GPUStack" && i >= 3 && i <= 6 {
+					continue
+				}
 				if v, err := d.Embed(c.name, []string{"a"}, c.api, c.cfg); err == nil || v != nil {
 					t.Fatal(i, v, err)
 				}

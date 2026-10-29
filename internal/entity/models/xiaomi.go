@@ -58,7 +58,7 @@ func xiaomiChatBody(name string, messages []Message, config *ChatConfig, stream 
 }
 
 // This catalog has no model discovery endpoint. A successful chat does not
-// establish support for discovery, tools, audio or other model capabilities.
+// establish support for discovery, tools or other model capabilities.
 func (m *XiaomiModel) ListModels(api *APIConfig) ([]string, error) {
 	return nil, fmt.Errorf("%w: xiaomi model discovery", ErrUnsupportedCapability)
 }
