@@ -27,3 +27,17 @@ Voyage 实际 Embed/Rerank HTTP 合同由同包受控请求回归覆盖。
 
 远程 `ci-required` 待运行；未 push、未部署。已有 legacy 测试的资源登记边界仍单列，
 本次不宣称完整严格资源协议通过。
+
+## DOC_PARSE 声明专项收尾
+
+后续修正 `TestDocParseModelDeclaration`：声明检查采用当前 typed `models` 集合，
+显式和省略的 token limit 0 均按现有非负整数合同验收；保留两种选项顺序。
+实际 CLI Execute 请求检查 provider/instance、鉴权、完整模型载荷和一次请求语义。
+重复能力、DOC_PARSE 单独搭配 THINK、负数/小数/重复 token limit、缺少分号和
+尾随输入仍拒绝；程序化的重复能力和非法 THINK 同样在 HTTP 前拒绝。
+
+该专项只修改回归测试，保留现有解析器和消费者合同。此前完整 CLI 的首败记录继续
+保留，当前组合结果以独立 `20261030-go-doc-parse-regression` 交付回执为准。
+完整 CLI、entity、models 三包 race 共 660 个顶层测试通过，零失败、零 skip，包含
+DOC_PARSE 及此前四条旧失败。内部包 build/vet、三个入口 native 链接均通过。
+受控 HTTP 不代表真实 MinerU 解析服务验收；远程 `ci-required` 仍待运行，未 push。
