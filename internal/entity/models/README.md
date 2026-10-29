@@ -127,3 +127,28 @@ Zhipu discovery likewise returns raw IDs so they can be declared through the mod
 API. Shared unsupported embedding, rerank and balance methods return
 `ErrUnsupportedCapability` with the provider and operation; optional media/parser
 interfaces continue to describe actual implemented capabilities.
+
+Instance inventory (`GET /api/v1/providers/:provider_name/instances/:instance_name/models?supported=true`)
+returns one object per discovered ID, in provider order. Each row has `name`; the
+injected catalog supplies optional `max_tokens`, `dimension`, `model_types` and
+`thinking` metadata. Unknown fields are omitted, while declared `0`, empty type
+arrays and false thinking defaults are retained. Names and aliases are lookup
+keys only: remote IDs, including namespaces, are never rewritten. An empty
+inventory is `[]`; discovery failures publish no partial inventory.
+
+The service's `ListSupportedModelsWithContext` carries request cancellation through
+SQL ownership checks and the request-local driver. Catalog lookup performs no
+provider call or model registration. Drivers keep their name-only inventory
+contract; centralized enrichment also covers shared/embedded drivers without a
+global catalog singleton. Unsupported discovery remains an error. The catalog's
+integer token limits used by inference and registration remain unchanged; JSON
+presence is tracked separately for inventory metadata. Google/Ollama keep their
+nested-empty response and multimodal/optional-thinking safeguards.
+
+`TestSupportedDiscoveryMetadataHTTPAndSQL` uses `MULTIRAG_DISCOVERY_CONFIG` for a
+private local PostgreSQL admin config and creates a separately registered scratch
+database. `REQUIRE_SERVICES=1` makes missing configuration fail. It verifies actual
+JWT routing, instance endpoints/credentials, typed metadata, denial, timeout,
+cancellation and independently unchanged SQL state. `MULTIRAG_DISCOVERY_CLI` adds a
+source-built CLI consumer; provider HTTP is controlled. Case journals record exact
+resources before allocation and independent cleanup readback.

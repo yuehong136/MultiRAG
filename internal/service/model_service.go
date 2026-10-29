@@ -184,11 +184,6 @@ func (m *ModelProviderService) DeleteModelProvider(providerName, userID string) 
 	return common.CodeSuccess, nil
 }
 
-// ListSupportedModels is the non-HTTP entry point used by local consumers.
-func (m *ModelProviderService) ListSupportedModels(providerName, instanceName, userID string) ([]entity.SupportedModel, error) {
-	return m.ListSupportedModelsWithContext(context.Background(), providerName, instanceName, userID)
-}
-
 // ListSupportedModelsWithContext keeps SQL ownership checks and remote discovery
 // in the request's cancellation scope. No inventory result is persisted.
 func (m *ModelProviderService) ListSupportedModelsWithContext(ctx context.Context, providerName, instanceName, userID string) ([]entity.SupportedModel, error) {

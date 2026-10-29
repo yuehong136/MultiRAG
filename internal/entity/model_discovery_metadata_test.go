@@ -52,7 +52,9 @@ func TestSupportedModelMetadataPresenceAndIsolation(t *testing.T) {
 }
 
 func TestSupportedMetadataTypedDecodeAndFailedPublication(t *testing.T) {
+	journal := testsupport.NewCase(t)
 	path := filepath.Join(t.TempDir(), "catalog.json")
+	journal.Event("reserve-catalog", map[string]any{"path": path})
 	pm := &ProviderManager{}
 	if err := os.WriteFile(path, []byte(`[{"name":"kept","max_tokens":0}]`), 0600); err != nil {
 		t.Fatal(err)

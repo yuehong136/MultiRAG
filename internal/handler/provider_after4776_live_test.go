@@ -418,7 +418,7 @@ func TestAfter4776ProvidersHTTPCLIAndSQL(t *testing.T) {
 					runCLI(t, "after4776-g-owner", fmt.Sprintf(`LIST MODELS FROM 'FuturMix' %q;`, instance), true, p.chat)
 					runCLI(t, "after4776-g-owner", fmt.Sprintf(`LIST SUPPORTED MODELS FROM 'FuturMix' %q;`, instance), false, "")
 					runCLI(t, "after4776-g-owner", fmt.Sprintf(`CHECK INSTANCE %q FROM 'FuturMix';`, instance), false, "")
-					if _, err := svc.ListSupportedModels("FuturMix", instance, "after4776-g-owner"); err == nil || !strings.Contains(err.Error(), "unsupported") {
+					if _, err := svc.ListSupportedModelsWithContext(t.Context(), "FuturMix", instance, "after4776-g-owner"); err == nil || !strings.Contains(err.Error(), "unsupported") {
 						t.Fatal("dynamic discovery must be explicit unsupported", err)
 					}
 					if _, err := svc.CheckProviderConnection("FuturMix", instance, "after4776-g-owner"); err == nil || !strings.Contains(err.Error(), "unsupported") {

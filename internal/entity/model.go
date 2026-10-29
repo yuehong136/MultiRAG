@@ -164,16 +164,16 @@ type ModelThinking struct {
 
 // Model represents a single LLM model
 type Model struct {
-	Name              string   `json:"name"`
-	Alias             []string `json:"alias,omitempty"`
-	MaxTokens         int      `json:"max_tokens"`
-	Dimension         *int     `json:"dimension,omitempty"`
-	maxTokensDeclared bool
+	Name              string         `json:"name"`
+	Alias             []string       `json:"alias,omitempty"`
+	MaxTokens         int            `json:"max_tokens"`
+	Dimension         *int           `json:"dimension,omitempty"`
 	ModelTypes        []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
 	Features          Features       `json:"features"`
 	Thinking          *ModelThinking `json:"thinking,omitempty"`
 	Class             *string        `json:"class,omitempty"` // Model family, such as gpt or qwen3.
 	ModelTypeMap      map[string]bool
+	maxTokensDeclared bool
 }
 
 // UnmarshalJSON preserves an explicit zero token limit without changing the

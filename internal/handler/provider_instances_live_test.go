@@ -200,7 +200,7 @@ func TestProviderInstancesLiveHTTPAndSQL(t *testing.T) {
 		if row["status"] != "active" || row["max_tokens"] != float64(131072) || row["thinking"] != true {
 			t.Fatalf("model metadata %v", row)
 		}
-		names, err := svc.ListSupportedModels("vllm", instance, "owner")
+		names, err := svc.ListSupportedModelsWithContext(t.Context(), "vllm", instance, "owner")
 		if err != nil || len(names) != 1 || names[0].Name != "Qwen/custom" {
 			t.Fatalf("discovery %v %v", names, err)
 		}

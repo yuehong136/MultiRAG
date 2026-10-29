@@ -506,7 +506,7 @@ func TestProviderFixesHTTPCLIAndSQL(t *testing.T) {
 				}
 				if p.name == "LongCat" || p.name == "xAI" || p.name == "TokenHub" || p.name == "VolcEngine" {
 					runCLI("after0fb-d-owner", fmt.Sprintf(`LIST SUPPORTED MODELS FROM %q %q;`, p.name, instance), true, "discovered")
-					discovered, err := svc.ListSupportedModels(p.name, instance, "after0fb-d-owner")
+					discovered, err := svc.ListSupportedModelsWithContext(t.Context(), p.name, instance, "after0fb-d-owner")
 					if err != nil || len(discovered) != 1 || discovered[0].Name != "discovered" {
 						t.Fatal("SQL-bound real discovery", discovered, err)
 					}
