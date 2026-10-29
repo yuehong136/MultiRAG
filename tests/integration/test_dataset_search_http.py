@@ -990,8 +990,9 @@ def test_saved_search_weight_persistence_reaches_real_single_multi_ranking(searc
     assert settings.docStoreConn.insert([lexical], env["collections"]["dataset"], env["dataset"]) == []
     env["reader"].flush(env["collections"]["dataset"], timeout=60)
     from api.db.services import dialog_service
+    from api.db.services.llm_service import LLMBundle
 
-    class SearchBundle:
+    class SearchBundle(LLMBundle):
         max_length = 4096
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
