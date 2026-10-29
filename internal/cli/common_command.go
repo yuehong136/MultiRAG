@@ -441,14 +441,20 @@ func (c *MultiRAGClient) ListAllModels(cmd *Command) (ResponseIf, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result CommonResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("invalid catalog response: %w", err)
+	data, err := catalogResponseData(body)
+	if err != nil {
+		return nil, err
 	}
-	if result.Code != 0 {
-		return nil, fmt.Errorf("catalog request failed (code %d)", result.Code)
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(data, &rows); err != nil || rows == nil {
+		return nil, fmt.Errorf("invalid catalog list")
 	}
-	return &result, nil
+	for _, row := range rows {
+		if !validCatalogModel(row) {
+			return nil, fmt.Errorf("invalid catalog model")
+		}
+	}
+	return &CommonResponse{Data: rows}, nil
 }
 
 func (c *MultiRAGClient) ShowCatalogModel(cmd *Command) (ResponseIf, error) {
@@ -460,14 +466,15 @@ func (c *MultiRAGClient) ShowCatalogModel(cmd *Command) (ResponseIf, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result CommonDataResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("invalid catalog response: %w", err)
+	data, err := catalogResponseData(body)
+	if err != nil {
+		return nil, err
 	}
-	if result.Code != 0 {
-		return nil, fmt.Errorf("catalog request failed (code %d)", result.Code)
+	var row map[string]interface{}
+	if err := json.Unmarshal(data, &row); err != nil || !validCatalogModel(row) {
+		return nil, fmt.Errorf("invalid catalog detail")
 	}
-	return &result, nil
+	return &CommonDataResponse{Data: row}, nil
 }
 
 func (c *MultiRAGClient) catalogRequest(endpoint string) ([]byte, error) {
@@ -484,4 +491,28 @@ func (c *MultiRAGClient) catalogRequest(endpoint string) ([]byte, error) {
 		return nil, fmt.Errorf("catalog request failed: HTTP %d", response.StatusCode)
 	}
 	return response.Body, nil
+}
+
+// catalogResponseData requires an explicit business status and payload. Missing
+// fields and JSON null must never become successful zero-value responses.
+func catalogResponseData(body []byte) (json.RawMessage, error) {
+	var envelope struct {
+		Code *int            `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Code == nil {
+		return nil, fmt.Errorf("invalid catalog response")
+	}
+	if *envelope.Code != 0 {
+		return nil, fmt.Errorf("catalog request failed (code %d)", *envelope.Code)
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return nil, fmt.Errorf("missing catalog data")
+	}
+	return envelope.Data, nil
+}
+
+func validCatalogModel(row map[string]interface{}) bool {
+	name, ok := row["name"].(string)
+	return ok && strings.TrimSpace(name) != ""
 }

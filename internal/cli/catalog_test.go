@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,49 @@ func TestCatalogParserAndTransport(t *testing.T) {
 			result.SetOutputFormat(OutputFormatJSON)
 			if result == nil {
 				t.Fatal("nil response")
+			}
+		}
+	}
+}
+
+func TestCatalogResponseFailures(t *testing.T) {
+	for _, mode := range []string{"user", "admin"} {
+		for _, tc := range []struct {
+			body             string
+			status           int
+			listOK, detailOK bool
+		}{
+			{`null`, 200, false, false}, {`{}`, 200, false, false}, {`{"message":"failure"}`, 200, false, false},
+			{`{"code":null,"data":[]}`, 200, false, false}, {`{"code":0}`, 200, false, false},
+			{`{"code":0,"data":null}`, 200, false, false}, {`{"code":0,"data":[null]}`, 200, false, false},
+			{`{"code":0,"data":{}}`, 200, false, false}, {`{"code":0,"data":{"name":42}}`, 200, false, false},
+			{`{"code":0,"data":{"name":" "}}`, 200, false, false}, {`{"code":0,"data":[{}]}`, 200, false, false},
+			{`{"code":0,"data":[]}`, 200, true, false}, {`{"code":0,"data":{"name":"valid","max_tokens":0}}`, 200, false, true},
+			{`{"code":400,"data":[],"message":"secret-key"}`, 200, false, false},
+			{`secret-key`, 500, false, false}, {`{`, 200, false, false},
+		} {
+			server := providerKeyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
+			u, _ := url.Parse(server.URL)
+			port, _ := strconv.Atoi(u.Port())
+			client := NewMultiRAGClient(mode)
+			client.HTTPClient.Host = u.Hostname()
+			client.HTTPClient.Port = port
+			client.HTTPClient.LoginToken = "fixture"
+			for _, detail := range []bool{false, true} {
+				cmd := NewCommand("list_all_models")
+				want := tc.listOK
+				if detail {
+					cmd = NewCommand("show_catalog_model")
+					cmd.Params["model_name"] = "valid"
+					want = tc.detailOK
+				}
+				_, err := client.ExecuteCommand(cmd)
+				if (err == nil) != want {
+					t.Fatalf("mode %s detail %v body %s: %v", mode, detail, tc.body, err)
+				}
+				if err != nil && strings.Contains(err.Error(), "secret-key") {
+					t.Fatal("response leaked into error")
+				}
 			}
 		}
 	}
