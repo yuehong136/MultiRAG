@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"multirag/internal/common"
 	"multirag/internal/engine/types"
 	"multirag/internal/utility"
@@ -38,6 +39,9 @@ import (
 // It supports three matching types: MatchTextExpr (full-text), MatchDenseExpr (vector), and FusionExpr (combined).
 // If no match expressions are provided, Search relies solely on filter (e.g., doc_id, available_int) to find results.
 func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (*types.SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if req == nil {
 		return nil, fmt.Errorf("search request is required")
 	}
@@ -83,11 +87,6 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		offset = 0
 	}
 
-	db, err := e.client.conn.GetDatabase(e.client.dbName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database: %w", err)
-	}
-
 	isMetadataTable := false
 	for _, idx := range req.IndexNames {
 		if strings.HasPrefix(idx, "multirag_doc_meta_") {
@@ -117,6 +116,7 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 	hasVectorMatch := false
 	var matchText *types.MatchTextExpr
 	var matchDense *types.MatchDenseExpr
+	var fusionExpr *types.FusionExpr
 	if req.MatchExprs != nil && len(req.MatchExprs) > 0 {
 		for _, expr := range req.MatchExprs {
 			if expr == nil {
@@ -129,8 +129,17 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 			case *types.MatchDenseExpr:
 				hasVectorMatch = true
 				matchDense = e
+			case *types.FusionExpr:
+				fusionExpr = e
 			}
 		}
+	}
+	if _, err := infinityDenseThreshold(matchDense); err != nil {
+		return nil, err
+	}
+	db, err := e.client.conn.GetDatabase(e.client.dbName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
 	if hasTextMatch || hasVectorMatch {
@@ -182,13 +191,6 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 	var rankFeature map[string]float64
 	if req.RankFeature != nil {
 		rankFeature = req.RankFeature
-	}
-
-	var fusionExpr *types.FusionExpr
-	if len(req.MatchExprs) > 2 {
-		if fe, ok := req.MatchExprs[2].(*types.FusionExpr); ok {
-			fusionExpr = fe
-		}
 	}
 
 	var allResults []map[string]interface{}
@@ -326,19 +328,9 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 					vectorTopN = int(matchDense.TopN)
 				}
 
-				denseFilterStr := filterStr
-				if denseFilterStr == "" {
-					denseFilterStr = "available_int=1"
-				}
-
-				if hasTextMatch {
-					fieldsStr := strings.Join(convertedFields, ",")
-					filterFulltext := fmt.Sprintf("filter_fulltext('%s', '%s')", fieldsStr, questionText)
-					denseFilterStr = fmt.Sprintf("(%s) AND %s", denseFilterStr, filterFulltext)
-				}
-				extraOptions := map[string]string{
-					"threshold": utility.FloatToString(0.0),
-					"filter":    denseFilterStr,
+				extraOptions, err := infinityDenseOptions(filterStr, convertedFields, questionText, matchDense, fusionExpr != nil)
+				if err != nil {
+					return nil, err
 				}
 
 				common.Debug(fmt.Sprintf(
@@ -474,6 +466,47 @@ func (e *infinityEngine) Search(ctx context.Context, req *types.SearchRequest) (
 		Chunks: allResults,
 		Total:  totalHits,
 	}, nil
+}
+
+// infinityDenseOptions keeps explicit fusion's dense candidates independent of
+// lexical matches. Without fusion, retain the legacy lexical prefilter and use
+// the pinned SDK's exact string-literal rules rather than SQL quote doubling.
+func infinityDenseOptions(filter string, fields []string, question string, dense *types.MatchDenseExpr, explicitFusion bool) (map[string]string, error) {
+	threshold, err := infinityDenseThreshold(dense)
+	if err != nil {
+		return nil, err
+	}
+	if filter == "" {
+		filter = "available_int=1"
+	}
+	if question != "" && !explicitFusion {
+		fieldLiteral, err := filterLiteral(strings.Join(fields, ","))
+		if err != nil {
+			return nil, err
+		}
+		questionLiteral, err := filterLiteral(question)
+		if err != nil {
+			return nil, err
+		}
+		filter = fmt.Sprintf("(%s) AND filter_fulltext(%s, %s)", filter, fieldLiteral, questionLiteral)
+	}
+	return map[string]string{"threshold": threshold, "filter": filter}, nil
+}
+
+// Validate before obtaining any SDK database/table, and share that conversion
+// with the actual MatchDense options builder.
+func infinityDenseThreshold(dense *types.MatchDenseExpr) (string, error) {
+	threshold := 0.0
+	if dense != nil {
+		if value, present := dense.ExtraOptions["similarity"]; present {
+			var ok bool
+			threshold, ok = value.(float64)
+			if !ok || math.IsNaN(threshold) || math.IsInf(threshold, 0) {
+				return "", fmt.Errorf("dense similarity must be a finite number")
+			}
+		}
+	}
+	return utility.FloatToString(threshold), nil
 }
 
 // convertSelectFields converts RAG field names to Infinity column names for SELECT (output_columns).
