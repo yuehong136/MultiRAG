@@ -304,11 +304,11 @@ def bullets_category(sections):
     return res
 
 
-def is_english(texts):
+def is_english(texts: object) -> bool:
     if not texts:
         return False
 
-    pattern = re.compile(r"[`a-zA-Z0-9\s.,':;/\"?<>!\(\)\-]")
+    pattern = re.compile(r"[`a-zA-Z0-9\s.,':;/\"?<>!\(\)\-]+")
 
     if isinstance(texts, str):
         texts = list(texts)
