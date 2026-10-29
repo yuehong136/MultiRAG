@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"context"
 	"multirag/internal/entity"
 )
 
@@ -48,8 +49,12 @@ func (dao *TenantModelDAO) GetByID(id string) (*entity.TenantModel, error) {
 }
 
 func (dao *TenantModelDAO) GetModelByProviderIDAndInstanceIDAndModelName(providerID, instanceID, modelName string) (*entity.TenantModel, error) {
+	return dao.GetModelByProviderIDAndInstanceIDAndModelNameWithContext(context.Background(), providerID, instanceID, modelName)
+}
+
+func (dao *TenantModelDAO) GetModelByProviderIDAndInstanceIDAndModelNameWithContext(ctx context.Context, providerID, instanceID, modelName string) (*entity.TenantModel, error) {
 	var model entity.TenantModel
-	err := DB.Where("provider_id = ? AND instance_id = ? AND model_name = ?", providerID, instanceID, modelName).First(&model).Error
+	err := DB.WithContext(ctx).Where("provider_id = ? AND instance_id = ? AND model_name = ?", providerID, instanceID, modelName).First(&model).Error
 	if err != nil {
 		return nil, err
 	}

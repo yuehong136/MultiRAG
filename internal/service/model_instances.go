@@ -253,7 +253,11 @@ func (m *ModelProviderService) AddModels(ctx context.Context, providerName, inst
 	return common.CodeSuccess, nil
 }
 func (m *ModelProviderService) instanceModelDefinition(provider *entity.Provider, providerID, instanceID, name string) (*entity.Model, error) {
-	stored, err := m.modelDAO.GetModelByProviderIDAndInstanceIDAndModelName(providerID, instanceID, name)
+	return m.instanceModelDefinitionWithContext(context.Background(), provider, providerID, instanceID, name)
+}
+
+func (m *ModelProviderService) instanceModelDefinitionWithContext(ctx context.Context, provider *entity.Provider, providerID, instanceID, name string) (*entity.Model, error) {
+	stored, err := m.modelDAO.GetModelByProviderIDAndInstanceIDAndModelNameWithContext(ctx, providerID, instanceID, name)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err

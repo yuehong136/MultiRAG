@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"multirag/internal/common"
@@ -620,22 +621,55 @@ func (m *ModelProviderService) ChatToModelStreamWithMessages(providerName, insta
 
 // GetEmbeddingModel binds the shared driver to tenant credentials.
 func (m *ModelProviderService) GetEmbeddingModel(tenantID, compositeName string) (*modelModule.EmbeddingModel, error) {
-	driver, name, config, err := m.getModelConfig(tenantID, compositeName, entity.ModelTypeEmbedding)
+	return m.bindEmbeddingModel(context.Background(), tenantID, compositeName)
+}
+
+func (m *ModelProviderService) GetEmbeddingModelWithContext(ctx context.Context, tenantID, compositeName string) (*modelModule.EmbeddingModel, error) {
+	if err := requireActiveModelTenant(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	return m.bindEmbeddingModel(ctx, tenantID, compositeName)
+}
+
+func (m *ModelProviderService) bindEmbeddingModel(ctx context.Context, tenantID, compositeName string) (*modelModule.EmbeddingModel, error) {
+	driver, name, config, err := m.getModelConfigWithContext(ctx, tenantID, compositeName, entity.ModelTypeEmbedding)
 	if err != nil {
 		return nil, err
 	}
 	return modelModule.NewEmbeddingModel(driver, &name, config), nil
 }
 func (m *ModelProviderService) GetRerankModel(tenantID, compositeName string) (*modelModule.RerankModel, error) {
-	driver, name, config, err := m.getModelConfig(tenantID, compositeName, entity.ModelTypeRerank)
+	return m.bindRerankModel(context.Background(), tenantID, compositeName)
+}
+
+func (m *ModelProviderService) GetRerankModelWithContext(ctx context.Context, tenantID, compositeName string) (*modelModule.RerankModel, error) {
+	if err := requireActiveModelTenant(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	return m.bindRerankModel(ctx, tenantID, compositeName)
+}
+
+func (m *ModelProviderService) bindRerankModel(ctx context.Context, tenantID, compositeName string) (*modelModule.RerankModel, error) {
+	driver, name, config, err := m.getModelConfigWithContext(ctx, tenantID, compositeName, entity.ModelTypeRerank)
 	if err != nil {
 		return nil, err
 	}
 	return modelModule.NewRerankModel(driver, &name, config), nil
 }
 func (m *ModelProviderService) GetChatModel(tenantID, compositeName string) (*modelModule.ChatModel, error) {
+	return m.bindChatModel(context.Background(), tenantID, compositeName)
+}
+
+func (m *ModelProviderService) GetChatModelWithContext(ctx context.Context, tenantID, compositeName string) (*modelModule.ChatModel, error) {
+	if err := requireActiveModelTenant(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	return m.bindChatModel(ctx, tenantID, compositeName)
+}
+
+func (m *ModelProviderService) bindChatModel(ctx context.Context, tenantID, compositeName string) (*modelModule.ChatModel, error) {
 	defaults := modelModule.ChatConfig{}
-	driver, name, config, err := m.getModelConfig(tenantID, compositeName, entity.ModelTypeChat, &defaults)
+	driver, name, config, err := m.getModelConfigWithContext(ctx, tenantID, compositeName, entity.ModelTypeChat, &defaults)
 	if err != nil {
 		return nil, err
 	}
@@ -681,9 +715,24 @@ func splitModelInstance(compositeName string) (string, string, string, error) {
 }
 
 func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, modelType entity.ModelType, chatDefaults ...*modelModule.ChatConfig) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	return m.getModelConfigWithContext(context.Background(), tenantID, compositeName, modelType, chatDefaults...)
+}
+
+func (m *ModelProviderService) getModelConfigWithContext(ctx context.Context, tenantID, compositeName string, modelType entity.ModelType, chatDefaults ...*modelModule.ChatConfig) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	return m.getModelConfigWithIdentity(ctx, tenantID, compositeName, modelType, nil, chatDefaults...)
+}
+
+func (m *ModelProviderService) getModelConfigWithIdentity(ctx context.Context, tenantID, compositeName string, modelType entity.ModelType, identity *EmbeddingModelIdentity, chatDefaults ...*modelModule.ChatConfig) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
 	if compositeName == "" {
 		var err error
-		compositeName, err = NewTenantService().GetDefaultModelName(tenantID, modelType)
+		var tenant entity.Tenant
+		err = dao.DB.WithContext(ctx).Where("id = ?", tenantID).First(&tenant).Error
+		if err == nil {
+			compositeName, err = tenantDefaultModelName(&tenant, modelType)
+		}
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -694,6 +743,9 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 	name, instanceName, providerName, err := splitModelInstance(compositeName)
 	if err != nil {
 		return nil, "", nil, err
+	}
+	if strings.EqualFold(providerName, "Builtin") {
+		return m.getBuiltinModelConfig(ctx, tenantID, name, instanceName, modelType, identity)
 	}
 	if m.providerManager == nil {
 		return nil, "", nil, fmt.Errorf("model providers are not initialized")
@@ -708,17 +760,19 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 	if providerInfo == nil {
 		return nil, "", nil, fmt.Errorf("provider %s not found", providerName)
 	}
-	provider, err := m.modelProviderDAO.GetByTenantIDAndProviderName(tenantID, providerName)
+	var provider entity.TenantModelProvider
+	err = dao.DB.WithContext(ctx).Where("tenant_id = ? AND provider_name = ?", tenantID, providerName).First(&provider).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) && strings.Count(compositeName, "@") == 1 {
-		return m.getLegacyModelConfig(tenantID, providerName, name, modelType, providerInfo)
+		return m.getLegacyModelConfigWithContext(ctx, tenantID, providerName, name, modelType, providerInfo, identity)
 	}
 
 	if err != nil {
 		return nil, "", nil, err
 	}
-	instance, err := m.modelInstanceDAO.GetByProviderIDAndInstanceName(provider.ID, instanceName)
+	var instance entity.TenantModelInstance
+	err = dao.DB.WithContext(ctx).Where("provider_id = ? AND instance_name = ?", provider.ID, instanceName).First(&instance).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) && strings.Count(compositeName, "@") == 1 {
-		return m.getLegacyModelConfig(tenantID, providerName, name, modelType, providerInfo)
+		return m.getLegacyModelConfigWithContext(ctx, tenantID, providerName, name, modelType, providerInfo, identity)
 	}
 	if err != nil {
 		return nil, "", nil, err
@@ -726,7 +780,7 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 	if instance.Status != "active" {
 		return nil, "", nil, errModelInstanceDisabled
 	}
-	model, err := m.instanceModelDefinition(providerInfo, provider.ID, instance.ID, name)
+	model, err := m.instanceModelDefinitionWithContext(ctx, providerInfo, provider.ID, instance.ID, name)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -742,15 +796,30 @@ func (m *ModelProviderService) getModelConfig(tenantID, compositeName string, mo
 	if len(chatDefaults) > 0 {
 		applyModelChatDefaults(model, chatDefaults[0])
 	}
-	driver, config, err := instanceModelDriver(providerInfo, instance, m.driverFactory)
+	driver, config, err := instanceModelDriver(providerInfo, &instance, m.driverFactory)
+	if err == nil && identity != nil {
+		extra, extraErr := decodeProviderInstanceExtra(instance.Extra)
+		if extraErr != nil {
+			return nil, "", nil, extraErr
+		}
+		endpoint := extra.BaseURL
+		if endpoint == "" {
+			endpoint = providerInfo.URL[extra.Region]
+		}
+		*identity = EmbeddingModelIdentity{Provider: strings.ToLower(providerInfo.Name), Model: name, Endpoint: strings.TrimRight(endpoint, "/"), Region: extra.Region}
+	}
+	if config != nil {
+		config.Context = ctx
+	}
 	return driver, name, config, err
 }
 
 // getLegacyModelConfig keeps old tenant credentials usable while removing the
 // duplicate provider implementation. Only a missing provider/default instance
 // can select this path; database failures and disabled models remain errors.
-func (m *ModelProviderService) getLegacyModelConfig(tenantID, providerName, name string, modelType entity.ModelType, providerInfo *entity.Provider) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
-	legacy, err := dao.NewTenantLLMDAO().GetByTenantFactoryAndModelName(tenantID, providerName, name)
+func (m *ModelProviderService) getLegacyModelConfigWithContext(ctx context.Context, tenantID, providerName, name string, modelType entity.ModelType, providerInfo *entity.Provider, identities ...*EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	var legacy entity.TenantLLM
+	err := dao.DB.WithContext(ctx).Where("tenant_id = ? AND llm_factory = ? AND llm_name = ?", tenantID, providerName, name).First(&legacy).Error
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -785,7 +854,10 @@ func (m *ModelProviderService) getLegacyModelConfig(tenantID, providerName, name
 		return nil, "", nil, fmt.Errorf("model base URL is missing")
 	}
 	driver, err := modelModule.NewModelFactory().CreateModelDriver(providerInfo.Name, urls, providerInfo.URLSuffix)
-	return driver, name, &modelModule.APIConfig{APIKey: legacy.APIKey}, err
+	if err == nil && len(identities) > 0 && identities[0] != nil {
+		*identities[0] = EmbeddingModelIdentity{Provider: strings.ToLower(providerInfo.Name), Model: name, Endpoint: strings.TrimRight(urls["default"], "/"), Region: "default"}
+	}
+	return driver, name, &modelModule.APIConfig{Context: ctx, APIKey: legacy.APIKey}, err
 }
 
 // Chat accepts the multimodal capability as well as text chat. Media remains
@@ -796,4 +868,65 @@ func modelTypeMatches(raw string, expected entity.ModelType) bool {
 		return false
 	}
 	return actual == expected || expected == entity.ModelTypeChat && actual == entity.ModelTypeImage2Text
+}
+
+// Builtin is an explicitly configured shared TEI service. A name alone cannot
+// authorize use: the current tenant must own an active embedding declaration.
+func (m *ModelProviderService) getBuiltinModelConfig(ctx context.Context, tenantID, name, instance string, modelType entity.ModelType, identity *EmbeddingModelIdentity) (modelModule.ModelDriver, string, *modelModule.APIConfig, error) {
+	if modelType != entity.ModelTypeEmbedding || instance != "default" {
+		return nil, "", nil, fmt.Errorf("builtin supports the default embedding instance only")
+	}
+	configured := false
+	for _, profile := range strings.FieldsFunc(os.Getenv("COMPOSE_PROFILES"), func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		configured = configured || strings.HasPrefix(profile, "tei-")
+	}
+	endpoint := strings.TrimSpace(os.Getenv("TEI_BASE_URL"))
+	if !configured || name != strings.TrimSpace(os.Getenv("TEI_MODEL")) || endpoint == "" {
+		return nil, "", nil, fmt.Errorf("builtin TEI model is not configured")
+	}
+	var tenant entity.Tenant
+	if err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", tenantID, "1").First(&tenant).Error; err != nil {
+		return nil, "", nil, err
+	}
+	var binding entity.TenantLLM
+	if err := dao.DB.WithContext(ctx).Where("tenant_id = ? AND llm_factory = ? AND llm_name = ? AND mdl_type = ? AND status = ?", tenantID, "Builtin", name, entity.ModelTypeEmbedding, "1").First(&binding).Error; err != nil {
+		return nil, "", nil, err
+	}
+	driver, err := modelModule.NewBuiltinModel(endpoint, name)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if identity != nil {
+		*identity = EmbeddingModelIdentity{Provider: "builtin", Model: name, Endpoint: strings.TrimRight(endpoint, "/"), Region: "default"}
+	}
+	return driver, name, &modelModule.APIConfig{Context: ctx}, nil
+}
+
+// EmbeddingModelIdentity describes the selected embedding space without tenant
+// credentials. Dimensions are checked from the stored vectors by retrieval;
+// the model catalog has no reliable dimension field.
+type EmbeddingModelIdentity struct {
+	Provider string
+	Model    string
+	Endpoint string
+	Region   string
+}
+
+// ResolvedEmbeddingIdentity performs the same active, typed SQL binding as an
+// embedding call, without sending a provider request or exposing its API key.
+func (m *ModelProviderService) ResolvedEmbeddingIdentity(ctx context.Context, tenantID, compositeName string) (EmbeddingModelIdentity, error) {
+	var identity EmbeddingModelIdentity
+	if err := requireActiveModelTenant(ctx, tenantID); err != nil {
+		return identity, err
+	}
+	_, _, _, err := m.getModelConfigWithIdentity(ctx, tenantID, compositeName, entity.ModelTypeEmbedding, &identity)
+	return identity, err
+}
+
+func requireActiveModelTenant(ctx context.Context, tenantID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var tenant entity.Tenant
+	return dao.DB.WithContext(ctx).Select("id").Where("id = ? AND status = ?", tenantID, "1").First(&tenant).Error
 }
