@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 )
@@ -144,8 +145,13 @@ func searchOptionsPayload(options map[string]interface{}) (map[string]interface{
 				return nil, fmt.Errorf("meta_data_filter must be a quoted JSON object")
 			}
 			var filter map[string]interface{}
-			if err := json.Unmarshal([]byte(raw), &filter); err != nil || filter == nil {
+			decoder := json.NewDecoder(strings.NewReader(raw))
+			decoder.UseNumber()
+			if err := decoder.Decode(&filter); err != nil || filter == nil {
 				return nil, fmt.Errorf("meta_data_filter must be a valid JSON object")
+			}
+			if err := decoder.Decode(new(any)); err != io.EOF {
+				return nil, fmt.Errorf("meta_data_filter must contain exactly one JSON object")
 			}
 			payload[name] = filter
 		case "tenant_rerank_id":

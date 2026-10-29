@@ -12,8 +12,8 @@ import (
 )
 
 func TestSearchOptionsParserExecuteHTTPModes(t *testing.T) {
-	const syntax = `SEARCH 'q' ON DATASETS 'a' 'b' WITH TOP_K 0 PAGE 2 PAGE_SIZE 3 SIMILARITY_THRESHOLD 0 VECTOR_SIMILARITY_WEIGHT 0 KEYWORD false USE_KG false TENANT_RERANK_ID 9007199254740993 SEARCH_ID 'saved' META_DATA_FILTER '{"method":"and","conditions":[]}' CROSS_LANGUAGES [] DOC_IDS [];`
-	const expectedJSON = `{"question":"q","dataset_ids":["a-id","b-id"],"top_k":0,"page":2,"size":3,"similarity_threshold":0,"vector_similarity_weight":0,"keyword":false,"use_kg":false,"tenant_rerank_id":9007199254740993,"search_id":"saved","meta_data_filter":{"method":"and","conditions":[]},"cross_languages":[],"doc_ids":[]}`
+	const syntax = `SEARCH 'q' ON DATASETS 'a' 'b' WITH TOP_K 0 PAGE 2 PAGE_SIZE 3 SIMILARITY_THRESHOLD 0 VECTOR_SIMILARITY_WEIGHT 0 KEYWORD false USE_KG false TENANT_RERANK_ID 9007199254740993 SEARCH_ID 'saved' META_DATA_FILTER '{"method":"manual","conditions":[{"key":"serial","op":"eq","value":9007199254740993}]}' CROSS_LANGUAGES [] DOC_IDS [];`
+	const expectedJSON = `{"question":"q","dataset_ids":["a-id","b-id"],"top_k":0,"page":2,"size":3,"similarity_threshold":0,"vector_similarity_weight":0,"keyword":false,"use_kg":false,"tenant_rerank_id":9007199254740993,"search_id":"saved","meta_data_filter":{"method":"manual","conditions":[{"key":"serial","op":"eq","value":9007199254740993}]},"cross_languages":[],"doc_ids":[]}`
 	for _, mode := range []string{"normal", "native", "concurrent"} {
 		t.Run(mode, func(t *testing.T) {
 			var searches, lookups atomic.Int32
@@ -156,6 +156,7 @@ func TestSearchOptionsInvalidBeforeAnyHTTP(t *testing.T) {
 		"WITH KEYWORD 'false';", "WITH USE_KG 0;", "WITH KEYWORD maybe;",
 		"WITH DOC_IDS '[]';", "WITH DOC_IDS [1];", "WITH DOC_IDS ['a',];", "WITH DOC_IDS ['a','a'];", "WITH CROSS_LANGUAGES [' '];",
 		`WITH META_DATA_FILTER 'null';`, `WITH META_DATA_FILTER '[]';`, `WITH META_DATA_FILTER '{bad}';`,
+		`WITH META_DATA_FILTER '{} {}';`, `WITH META_DATA_FILTER '{} true';`,
 		"WITH TENANT_RERANK_ID 0;", "WITH TENANT_RERANK_ID 9223372036854775808;", "WITH TENANT_RERANK_ID '42';",
 		"WITH TENANT_RERANK_ID 42 RERANK_ID 'model';", "WITH RERANK_ID '';",
 		"WITH TOP_K 0; trailing", "WITH TOP_K 0", "; trailing",
