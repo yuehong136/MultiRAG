@@ -23,6 +23,7 @@ import (
 	"multirag/internal/dao"
 	"multirag/internal/entity"
 	"multirag/internal/handler"
+	"multirag/internal/router"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
 	"multirag/internal/service"
@@ -183,11 +184,7 @@ func TestAgentSessionsScratchPostgres(t *testing.T) {
 	before := snapshot()
 	gin.SetMode(gin.TestMode)
 	routes := gin.New()
-	routes.Use(handler.NewAuthHandler().AuthMiddleware())
-	h := handler.NewAgentHandler(service.NewAgentService())
-	routes.GET("/api/v1/agents/:agent_id/sessions", h.ListAgentSessions)
-	routes.GET("/api/v1/agents/:agent_id/sessions/:session_id", h.GetAgentSession)
-	routes.DELETE("/api/v1/agents/:agent_id/sessions/:session_id", h.DeleteAgentSessionItem)
+	router.NewRouter(handler.NewAuthHandler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).Setup(routes)
 	journal.Event("reserve-listener", map[string]any{"network": "tcp4", "address": cfg.Listen, "pid": os.Getpid()})
 	listener, err := net.Listen("tcp4", cfg.Listen)
 	if err != nil {
