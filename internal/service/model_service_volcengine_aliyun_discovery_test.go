@@ -3,15 +3,24 @@ package service
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
+
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"multirag/internal/entity"
+	"multirag/internal/entity/models"
 )
+
+type discoveryRejectedRegionFactory struct{ calls atomic.Int32 }
+
+func (f *discoveryRejectedRegionFactory) CreateModelDriver(name string, urls map[string]string, suffix models.URLSuffix) (models.ModelDriver, error) {
+	f.calls.Add(1)
+	return models.NewModelFactory().CreateModelDriver(name, urls, suffix)
+}
 
 func TestVolcEngineAliyunDiscoveryInstanceIsolationHTTP(t *testing.T) {
 	manager, err := entity.NewProviderManager(filepath.Join("..", "..", "configs", "models"))
@@ -27,7 +36,9 @@ func TestVolcEngineAliyunDiscoveryInstanceIsolationHTTP(t *testing.T) {
 			if name == "VolcEngine" && catalog.URLSuffix.Models != "models" {
 				t.Fatalf("Ark models suffix = %q", catalog.URLSuffix.Models)
 			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var requests atomic.Int32
+			server := serviceDiscoveryTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
 				parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
 				if len(parts) != 2 {
 					t.Error("missing instance path", r.URL.Path)
@@ -54,10 +65,23 @@ func TestVolcEngineAliyunDiscoveryInstanceIsolationHTTP(t *testing.T) {
 			defer server.Close()
 			urls := map[string]string{"default": server.URL + "/default/", "singapore": server.URL + "/singapore/"}
 			provider := &entity.Provider{Name: name, URL: urls, URLSuffix: catalog.URLSuffix, ModelDriver: catalog.ModelDriver}
+			// Unknown regions without an explicit endpoint fail before factory or
+			// network access; discovery must not silently fall back to default.
+			invalidRegion, err := encodeProviderInstanceExtra("unknown", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := "default-key"
+			if name == "VolcEngine" {
+				key = `{"ark_api_key":"default-key","endpoint_id":"ep"}`
+			}
+			factory := &discoveryRejectedRegionFactory{}
+			if driver, api, err := instanceModelDriver(provider, &entity.TenantModelInstance{Status: "active", APIKey: key, Extra: invalidRegion}, factory); err == nil || !strings.Contains(err.Error(), "base URL") || driver != nil || api != nil || factory.calls.Load() != 0 || requests.Load() != 0 {
+				t.Fatalf("unknown region reached factory/HTTP: %T %v %v", driver, api, err)
+			}
 			var group sync.WaitGroup
 			for _, test := range []struct{ region, base, id string }{
 				{"", "", "default"},
-				{"unknown", "", "default"},
 				{"singapore", "", "singapore"},
 				{"one", server.URL + "/one/", "one"},
 				{"two", server.URL + "/two/", "two"},

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"multirag/internal/entity"
@@ -18,7 +18,7 @@ func TestAnthropicCatalogBoundChatHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := manager.FindProvider("Anthropic")
-	if provider == nil || provider.ModelDriver.Name() != "anthropic" || provider.URLSuffix.Chat != "v1/messages" || len(provider.Models) != 9 {
+	if provider == nil || provider.ModelDriver.Name() != "anthropic" || provider.URLSuffix.Chat != "v1/messages" || len(provider.Models) != 13 {
 		t.Fatal("Anthropic catalog/factory missing")
 	}
 	for _, model := range provider.Models {
@@ -30,9 +30,9 @@ func TestAnthropicCatalogBoundChatHTTP(t *testing.T) {
 	for _, instance := range []string{"one", "two"} {
 		t.Run(instance, func(t *testing.T) {
 			t.Parallel()
-			calls := 0
-			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
+			var calls atomic.Int32
+			fixture := serviceDiscoveryTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
 				var body map[string]any
 				json.NewDecoder(r.Body).Decode(&body)
 				if r.URL.Path != "/instance/v1/messages" || r.Header.Get("x-api-key") != instance || body["system"] != "rules" {
@@ -56,8 +56,8 @@ func TestAnthropicCatalogBoundChatHTTP(t *testing.T) {
 			if err != nil || answer == nil || *answer.Answer != instance || *answer.ReasoningContent != "reason" {
 				t.Fatal(answer, err)
 			}
-			if err := bound.ChatStreamlyWithMessages(messages, nil, func(*string, *string) error { return nil }); err == nil || calls != 1 {
-				t.Fatal("unsupported stream made request", err, calls)
+			if err := bound.ChatStreamlyWithMessages(messages, nil, func(*string, *string) error { return nil }); err == nil || calls.Load() != 1 {
+				t.Fatal("unsupported stream made request", err, calls.Load())
 			}
 			if provider.URL["default"] != original {
 				t.Fatal("catalog mutated")
