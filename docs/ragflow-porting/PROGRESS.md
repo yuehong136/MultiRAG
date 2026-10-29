@@ -3916,3 +3916,15 @@ Infinity 就绪握手改在进程内执行（冷导入 8–17 秒，超过 5 秒
 - 原 28 WIP 与并发外部变动保留，本块单独暂存；当前 refs/pin、154 处置指针、bundle 实际隔离恢复及精确自有资源清理见外部 `20261029-batch-after-aab01af6/delivery-complete.json`。未 push/部署，远程 `ci-required`、真实付费厂商/生产/常驻 worker/全后端全套未运行；不自动下一批。
 
 <!-- END AFTER-AAB01AF6 LOCAL DELIVERY -->
+
+
+<!-- BEGIN AFTER-298A23F7 LOCAL DELIVERY -->
+
+## 2026-10-30 · 298a23f7 后二十项本地交付
+
+- 冻结排除 `298a23f7` 至 `10bbe6b5`，后修上限 `519e7d98`，未 fetch；20 项、139 路径的逐项处置和质量比较见 [本批记录](batch-after-298a23f7.md)。
+- Python 生产后端完成 GraphRAG 子阶段恢复、可信 memory task、地域/迁移与图片输出适配；Go 并行实现完成 CLI/profile、typed discovery、prompt/metadata GET、heartbeat，生产后端未切换。Web master/pin 为 `0a5f80fe312331794ffb968d23bc57e1b39880fd`，保留独立 `688703a5` 文本/语音成果。
+- 新组合定向 Python unit 520、core 12、最终固定 Web/JWT/受控供应商/SQL 5 项均通过且无 skip；lint/format/import/async 与纳管 mypy156 通过。Go 当前 build/vet/3 main native links、实际路由/最终 CLI、受影响 unit/race 分范围留证；额外专用 live skips 不计通过，初次失败和最小复跑保留。
+- 原28项 WIP保留，范围提交不含其内容；候选恢复包、实际 main/Web/pin、精确清理与限制见外部 `20261030-batch-after-298a23f7/delivery-complete.json`。未改 extractor fixture 的既有失败单列，历史/本批登记偏差使 strictProtocolPassed=false，不补写历史。未 push/部署，远程 ci-required 待运行，不自动继续下一批。
+
+<!-- END AFTER-298A23F7 LOCAL DELIVERY -->
