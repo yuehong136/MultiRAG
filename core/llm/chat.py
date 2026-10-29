@@ -43,6 +43,7 @@ from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.tool_decorator import resolve_tool_binding
+from core.llm.volc_auth import decode_volc_key
 from core.nlp import is_chinese, is_english
 
 
@@ -821,15 +822,9 @@ class LocalLLM(Base):
 class VolcEngineChat(Base):
     _FACTORY_NAME = "VolcEngine"
 
-    def __init__(self, key, model_name, base_url="https://ark.cn-beijing.volces.com/api/v3", **kwargs):
-        """
-        Since do not want to modify the original database fields, and the VolcEngine authentication method is quite special,
-        Assemble ark_api_key, ep_id into api_key, store it as a dictionary type, and parse it for use
-        model_name is for display only
-        """
+    def __init__(self, key: str, model_name: str, base_url: str | None = "https://ark.cn-beijing.volces.com/api/v3", **kwargs: Any) -> None:
         base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
-        ark_api_key = json.loads(key).get("ark_api_key", "")
-        model_name = json.loads(key).get("ep_id", "") + json.loads(key).get("endpoint_id", "")
+        ark_api_key, model_name, _payload = decode_volc_key(key, model_name)
         super().__init__(ark_api_key, model_name, base_url, **kwargs)
 
 

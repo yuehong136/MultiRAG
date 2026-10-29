@@ -36,6 +36,7 @@ from common.token_utils import num_tokens_from_string, total_token_count_from_re
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
 from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.tool_decorator import resolve_tool_binding
+from core.llm.volc_auth import decode_volc_key
 from core.nlp import is_english
 from core.prompts.generator import vision_llm_describe_prompt
 
@@ -760,13 +761,13 @@ class StepFunCV(GptV4):
 class VolcEngineCV(GptV4):
     _FACTORY_NAME = "VolcEngine"
 
-    def __init__(self, key, model_name, lang="Chinese", base_url="https://ark.cn-beijing.volces.com/api/v3", **kwargs):
+    def __init__(self, key: str, model_name: str, lang: str = "Chinese", base_url: str | None = "https://ark.cn-beijing.volces.com/api/v3", **kwargs: Any) -> None:
         if not base_url:
             base_url = "https://ark.cn-beijing.volces.com/api/v3"
-        ark_api_key = json.loads(key).get("ark_api_key", "")
+        ark_api_key, model_name, _payload = decode_volc_key(key, model_name)
         self.client = OpenAI(api_key=ark_api_key, base_url=base_url)
         self.async_client = AsyncOpenAI(api_key=ark_api_key, base_url=base_url)
-        self.model_name = json.loads(key).get("ep_id", "") + json.loads(key).get("endpoint_id", "")
+        self.model_name = model_name
         self.lang = lang
         Base.__init__(self, **kwargs)
 

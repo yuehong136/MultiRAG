@@ -39,6 +39,7 @@ from common.exceptions import ModelException
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version
+from core.llm.volc_auth import decode_volc_key
 
 
 def _model_request(call: Callable[..., Any], **kwargs: Any) -> Any:
@@ -1240,24 +1241,8 @@ class VolcEngineEmbed(Base):
 
     def __init__(self, key: str | dict[str, Any], model_name: str, base_url: str | None = "https://ark.cn-beijing.volces.com/api/v3", **kwargs: Any) -> None:
         base_url = base_url or "https://ark.cn-beijing.volces.com/api/v3"
-        key_payload: dict[str, Any]
-        if isinstance(key, str):
-            try:
-                key_payload = json.loads(key)
-            except json.JSONDecodeError as exc:
-                raise ValueError("VolcEngine 的 key 必须是 JSON 字符串，且包含 ark_api_key") from exc
-        elif isinstance(key, dict):
-            key_payload = key
-        else:
-            raise ValueError("VolcEngine 的 key 类型不支持")
-
-        self.api_key = key_payload.get("ark_api_key", "").strip()
-        if not self.api_key:
-            raise ValueError("缺少 ark_api_key")
-
-        self.model_name = model_name
-        if not self.model_name:
-            raise ValueError("VolcEngine 模型名称缺失，请显式传入 model_name")
+        # Embedding model IDs are explicit; a stored chat endpoint is unrelated.
+        self.api_key, self.model_name, key_payload = decode_volc_key(key, model_name, use_endpoint=False)
 
         self.base_url = base_url.rstrip("/")
         self.multimodal_endpoint = append_path_segment(self.base_url, "embeddings/multimodal")
@@ -1269,6 +1254,12 @@ class VolcEngineEmbed(Base):
         self.default_dimensions = kwargs.get("dimensions") or key_payload.get("dimensions")
         self.default_encoding_format = kwargs.get("encoding_format") or key_payload.get("encoding_format") or "float"
         self.session = requests.Session()
+
+    def close(self) -> None:
+        """Release the HTTP pool owned by this adapter, including failed probes."""
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.close()
 
     def encode(self, texts: list):
         if not texts:
@@ -1366,8 +1357,9 @@ class VolcEngineEmbed(Base):
         return embedding, usage_tokens
 
     def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-        response = self.session.post(
-            endpoint,
+        response = _model_request(
+            self.session.post,
+            url=endpoint,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -1376,11 +1368,14 @@ class VolcEngineEmbed(Base):
             timeout=self.timeout,
         )
         try:
-            response.raise_for_status()
+            _raise_model_exception_if_failed(response)
             return response.json()
-        except Exception as exc:
-            log_exception(exc, response.text if hasattr(response, "text") else response)
+        except ModelException:
             raise
+        except Exception:
+            raise ModelException("VolcEngine returned invalid embedding JSON", retryable=False) from None
+        finally:
+            response.close()
 
     def _extract_multimodal_embedding(self, data: dict[str, Any]) -> list[float]:
         container = data.get("data")
@@ -1393,19 +1388,20 @@ class VolcEngineEmbed(Base):
         else:
             raise ValueError("VolcEngine 多模态响应格式异常")
 
-        return self._decode_embedding(raw_embedding, data)
+        return self._decode_embedding(raw_embedding)
 
-    def _decode_embedding(self, raw_embedding: Any, context: dict[str, Any]) -> list[float]:
+    def _decode_embedding(self, raw_embedding: Any) -> list[float]:
         if isinstance(raw_embedding, list):
-            return raw_embedding
-        if isinstance(raw_embedding, str):
+            values = raw_embedding
+        elif isinstance(raw_embedding, str):
             try:
-                decoded = base64.b64decode(raw_embedding)
-            except Exception as exc:
-                log_exception(exc, {"raw": raw_embedding, "context": context})
-                raise ValueError("Base64 解码失败") from exc
-            return np.frombuffer(decoded, dtype="float32").tolist()
-        raise TypeError("未知的 embedding 数据类型")
+                decoded = base64.b64decode(raw_embedding, validate=True)
+                values = np.frombuffer(decoded, dtype="float32").tolist()
+            except Exception:
+                raise ModelException("Invalid VolcEngine embedding encoding", retryable=False) from None
+        else:
+            raise ModelException("Invalid VolcEngine embedding type", retryable=False)
+        return _validated_embedding_vectors([values], 1)[0].tolist()
 
 
 class GPUStackEmbed(OpenAIEmbed):
