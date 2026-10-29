@@ -32,10 +32,22 @@ from tests.support.resource_journal import ResourceJournal
 from tests.support.web_consumer import pinned_web_checkout
 
 pytestmark = pytest.mark.external_consumer
-PROVIDERS = ("OpenAI-API-Compatible", "VLLM", "LM-Studio", "Xinference", "LocalAI", "OpenRouter")
+PROVIDERS = ("OpenAI-API-Compatible", "VLLM", "LM-Studio", "Xinference", "LocalAI", "OpenRouter", "VolcEngine")
 
 
 def _inventory(provider: str, names: tuple[str, ...]) -> dict[str, Any]:
+    if provider == "VolcEngine":
+        return {
+            "data": [
+                {
+                    "id": name,
+                    "modalities": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+                    "features": {"tools": {"function_calling": True}},
+                    "token_limits": {"max_input_token_length": 0},
+                }
+                for name in names
+            ]
+        }
     if provider == "OpenRouter":
         return {
             "data": [
@@ -81,7 +93,7 @@ def _supplier_http(provider: str, names: tuple[str, ...], state: dict[str, Any],
             calls.append({"method": "GET", "path": self.path})
             if provider == "LocalAI" and path.path == "/api/tags":
                 self.reply({"models": None if state["bad_inventory"] else [{"name": name + ":latest"} for name in names]})
-            elif path.path == ("/api/v1/models" if provider == "OpenRouter" else "/v1/models"):
+            elif path.path == ("/api/v1/models" if provider == "OpenRouter" else "/api/v3/models" if provider == "VolcEngine" else "/v1/models"):
                 if provider == "OpenRouter" and parse_qs(path.query) != {"output_modalities": ["all"]}:
                     state["errors"].append("OpenRouter modalities query missing")
                 self.reply({"data": None} if state["bad_inventory"] else _inventory(provider, names))
@@ -98,7 +110,7 @@ def _supplier_http(provider: str, names: tuple[str, ...], state: dict[str, Any],
             calls.append({"method": "POST", "path": path, "model": model})
             if provider == "LocalAI" and path == "/api/show" and model in {name + ":latest" for name in names}:
                 self.reply({"capabilities": ["completion", "vision", "tools", "thinking"], "model_info": {"general.context_length": 0}})
-            elif path == ("/api/v1/chat/completions" if provider == "OpenRouter" else "/v1/chat/completions") and model in names:
+            elif path == ("/api/v1/chat/completions" if provider == "OpenRouter" else "/api/v3/chat/completions" if provider == "VolcEngine" else "/v1/chat/completions") and model in names:
                 self.reply(
                     {
                         "id": "controlled-provider-probe",
@@ -155,14 +167,14 @@ def test_after5e_provider_discovery_web_sql(
     journal = ResourceJournal("after5e-provider-discovery-" + provider)
     names = tuple(f"vision-{index:03}" for index in range(125)) if provider == "OpenRouter" else ("first-vision", "second-vision")
     key = "fixture-discovery-key"
-    has_tools = provider in {"Xinference", "LocalAI", "OpenRouter"}
+    has_tools = provider in {"Xinference", "LocalAI", "OpenRouter", "VolcEngine"}
     expected: dict[str, ExpectedDiscoveryModel] = {name: {"model_types": ["chat", "image2text"], "max_tokens": 0, "is_tools": has_tools} for name in names[:2]}
     state: dict[str, Any] = {"bad_inventory": False, "bad_chat": False, "errors": []}
     calls: list[dict[str, Any]] = []
     official_requests: list[dict[str, str]] = []
     for variable in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         monkeypatch.delenv(variable, raising=False)
-    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost,openrouter.ai")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost,openrouter.ai,ark.cn-beijing.volces.com")
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": provider, "llm": []}])
 
     async def active_probe(name: str, credential: str, base: str, declaration: ModelRegistration) -> dict[str, Any]:
@@ -185,17 +197,17 @@ def test_after5e_provider_discovery_web_sql(
             return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
 
     with _supplier_http(provider, names, state, calls, journal) as supplier:
-        base_url = "https://openrouter.ai/api/v1" if provider == "OpenRouter" else supplier + "/v1"
-        if provider == "OpenRouter":
+        base_url = "https://openrouter.ai/api/v1" if provider == "OpenRouter" else "https://ark.cn-beijing.volces.com/api/v3" if provider == "VolcEngine" else supplier + "/v1"
+        if provider in {"OpenRouter", "VolcEngine"}:
             original_transport = httpx.AsyncHTTPTransport.handle_async_request
             destination = urlsplit(supplier)
             assert destination.hostname is not None and destination.port is not None
 
             async def controlled_transport(transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
                 # All supplier HTTP remains real, but no public connection is made.
-                assert request.url.scheme == "https" and request.url.host == "openrouter.ai" and request.url.port in {None, 443}
-                assert request.url.path in {"/api/v1/models", "/api/v1/chat/completions"}
-                identity = {"method": request.method, "official_origin": "https://openrouter.ai", "path": request.url.path}
+                assert request.url.scheme == "https" and request.url.host == ("openrouter.ai" if provider == "OpenRouter" else "ark.cn-beijing.volces.com") and request.url.port in {None, 443}
+                assert request.url.path in ({"/api/v1/models", "/api/v1/chat/completions"} if provider == "OpenRouter" else {"/api/v3/models", "/api/v3/chat/completions"})
+                identity = {"method": request.method, "official_origin": "https://" + str(request.url.host), "path": request.url.path}
                 official_requests.append(identity)
                 journal.event("controlled-supplier-wire", **identity, destination=supplier)
                 request.url = request.url.copy_with(scheme="http", host=destination.hostname, port=destination.port)
@@ -266,13 +278,15 @@ def test_after5e_provider_discovery_web_sql(
             api_key=key,
             expected_models=expected,
             expected_page_lengths=(100, 25) if provider == "OpenRouter" else (),
-            controlled_transport=provider == "OpenRouter",
+            controlled_transport=provider in {"OpenRouter", "VolcEngine"},
             invalid_base_url="http://arbitrary.invalid",
         )
         assert counts() == [1, 0, 0, 0], "Only the registered parent provider may remain until scratch DB DROP"
         assert calls and any(call["path"].endswith("/chat/completions") for call in calls) and not state["errors"]
         if provider == "OpenRouter":
             assert {item["path"] for item in official_requests} == {"/api/v1/models", "/api/v1/chat/completions"}
+        if provider == "VolcEngine":
+            assert {item["path"] for item in official_requests} == {"/api/v3/models", "/api/v3/chat/completions"}
         journal.event(
             "after5e-provider-consumer-readback", provider=provider, web_sha=web_sha, database=engine.url.database, discovery_no_writes=True, failure_zero_writes=True, retained_parent_only=True
         )

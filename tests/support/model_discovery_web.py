@@ -214,7 +214,7 @@ def run_web_discovery(
         if expected_page_lengths:
             descriptor.update(expectedInventoryTotal=sum(expected_page_lengths), expectedPageLengths=list(expected_page_lengths))
         if controlled_transport:
-            assert provider_name == "OpenRouter" and base_url == "https://openrouter.ai/api/v1"
+            assert (provider_name, base_url) in {("OpenRouter", "https://openrouter.ai/api/v1"), ("VolcEngine", "https://ark.cn-beijing.volces.com/api/v3")}
             descriptor["controlledTransport"] = True
         journal.event("reserve-web-model-resources", database=engine.url.database, owner=owner, provider=provider_name, instance=descriptor["instanceName"], models=list(expected_models))
         _private_file(files[0], token, journal)

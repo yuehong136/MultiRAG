@@ -25,7 +25,8 @@ import (
 
 // Router admin router
 type Router struct {
-	handler *Handler
+	handler      *Handler
+	modelHandler *handler.ModelHandler
 }
 
 // NewRouter create admin router
@@ -33,6 +34,11 @@ func NewRouter(handler *Handler) *Router {
 	return &Router{
 		handler: handler,
 	}
+}
+
+// SetModelHandler binds the static catalog shared by the server and consumers.
+func (r *Router) SetModelHandler(models *handler.ModelHandler) {
+	r.modelHandler = models
 }
 
 // Setup setup routes
@@ -132,7 +138,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 			protected.GET("/log_level", r.handler.GetLogLevel)
 			protected.PUT("/log_level", r.handler.SetLogLevel)
 
-			modelHandler := handler.NewModelHandler(service.NewModelProviderService())
+			modelHandler := r.modelHandler
+			if modelHandler == nil {
+				modelHandler = handler.NewModelHandler(service.NewModelProviderService())
+			}
 			protected.GET("/all-models", modelHandler.ListAllModels)
 			protected.GET("/all-models/detail", modelHandler.ShowModel)
 
