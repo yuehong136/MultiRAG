@@ -1,4 +1,4 @@
-package common
+package kg
 
 import (
 	"encoding/csv"

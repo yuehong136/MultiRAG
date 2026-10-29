@@ -1,4 +1,4 @@
-package service
+package kg
 
 import (
 	"context"
@@ -132,7 +132,7 @@ func TestKGSearchRealElasticsearchHTTP(t *testing.T) {
 	journal := testsupport.NewCase(t)
 	journal.Event("register-controlled-engine-scope", map[string]any{"indices": []string{"multirag_a", "multirag_b"}, "datasets": []string{"kb-a", "kb-b"}, "mode": "HTTP fixture; no remote storage created"})
 	var calls atomic.Int64
-	fixture := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := testsupport.RegisteredHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Elastic-Product", "Elasticsearch")
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/" {

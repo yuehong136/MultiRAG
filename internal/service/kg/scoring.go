@@ -8,7 +8,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package kg
 
 import (
 	"encoding/csv"
@@ -18,47 +18,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-// KGEntity is an entity and its query, graph and neighbor scores.
-type KGEntity struct {
-	Sim         float64
-	PageRank    float64
-	Description string
-	NhopEnts    []NhopEntity
-}
-
-// NhopEntity is a neighbor path with one graph weight per edge.
-type NhopEntity struct {
-	Path    []string
-	Weights []float64
-}
-
-// KGRelation is a relation and its query and graph scores.
-type KGRelation struct {
-	Sim         float64
-	PageRank    float64
-	Description string
-}
-
-// Edge is a directed entity pair.
-type Edge struct{ From, To string }
-
-// EdgeScore is the accumulated N-hop similarity and graph weight.
-type EdgeScore struct{ Sim, PageRank float64 }
-
-// ScoredEntity is a ranked entity ready for output.
-type ScoredEntity struct {
-	Entity      string
-	Score       float64
-	Description string
-}
-
-// ScoredRelation is a ranked relation ready for output.
-type ScoredRelation struct {
-	From, To    string
-	Score       float64
-	Description string
-}
 
 func finiteKGScore(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 

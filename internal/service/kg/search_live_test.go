@@ -1,4 +1,4 @@
-package service
+package kg
 
 import (
 	"bytes"
@@ -211,7 +211,7 @@ func TestKGLiveSQLAndES(t *testing.T) {
 	documentHashes := make(map[string]string, len(documents))
 	documentIDs := make([]string, 0, len(documents))
 	for id, document := range documents {
-		document["available_int"], document["unprojected_marker"] = 1, "must-not-be-returned"
+		document["available_int"], document["unprojected_marker"] = 0, "must-not-be-returned"
 		encoded, err := json.Marshal(document)
 		if err != nil {
 			t.Fatal(err)

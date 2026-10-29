@@ -14,7 +14,7 @@
 //  limitations under the License.
 //
 
-package service
+package kg
 
 import (
 	"context"
@@ -30,34 +30,6 @@ import (
 	"multirag/internal/entity"
 	modelModule "multirag/internal/entity/models"
 )
-
-// KGEntity represents a knowledge graph entity.
-type KGEntity struct {
-	Name        string  // entity_kwd
-	Type        string  // entity_type_kwd
-	PageRank    float64 // rank_flt
-	Similarity  float64 // _score
-	Description string  // content_with_weight
-	NhopJSON    string  // n_hop_with_weight
-}
-
-// KGRelation represents a relation between two entities.
-type KGRelation struct {
-	From        string  // from_entity_kwd
-	To          string  // to_entity_kwd
-	Weight      int     // weight_int
-	Description string  // content_with_weight
-	Similarity  float64 // engine score
-}
-
-// KGCommunityReport represents a community report.
-type KGCommunityReport struct {
-	Title       string   // docnm_kwd
-	Content     string   // content_with_weight
-	Weight      float64  // weight_flt
-	Entities    string   // entities_kwd
-	EntityNames []string // complete keyword array
-}
 
 // buildKGDenseExpr computes the query vector and returns a MatchDenseExpr
 // for KG hybrid search. Returns nil if embModel or question is empty.
@@ -95,6 +67,11 @@ func buildKGDenseExpr(ctx context.Context, embModel *modelModule.EmbeddingModel,
 		return nil, fmt.Errorf("KG embedding returned no vector")
 	}
 	vector := embeddings[0].Embedding
+	for _, value := range vector {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, fmt.Errorf("KG embedding returned a non-finite vector")
+		}
+	}
 	return &types.MatchDenseExpr{
 		VectorColumnName:  fmt.Sprintf("q_%d_vec", len(vector)),
 		EmbeddingData:     vector,
@@ -441,8 +418,17 @@ type KGSearchService struct {
 	}
 }
 
-func NewKGSearchService(store engine.DocEngine) *KGSearchService {
-	return &KGSearchService{store: store, kbReader: dao.NewKnowledgebaseDAO()}
+// DatasetReader resolves an active, readable dataset for a caller.
+type DatasetReader interface {
+	GetReadableByID(context.Context, string, string) (*entity.Knowledgebase, error)
+}
+
+func NewKGSearchService(store engine.DocEngine, readers ...DatasetReader) *KGSearchService {
+	var reader DatasetReader = dao.NewKnowledgebaseDAO()
+	if len(readers) > 0 {
+		reader = readers[0]
+	}
+	return &KGSearchService{store: store, kbReader: reader}
 }
 
 type kgScope struct {
@@ -510,6 +496,8 @@ func (s *KGSearchService) search(ctx context.Context, scopes []kgScope, builder 
 		}
 		req := builder(append([]string{}, scope.kbIDs...))
 		req.IndexNames = []string{scope.index}
+		req.Kind = types.SearchKindKnowledgeGraph
+		req.Filter["available_int"] = 0
 		result, err := s.store.Search(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("KG search failed: %w", err)
