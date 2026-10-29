@@ -8,9 +8,9 @@ import (
 // parseServerCommand handles local registry commands before either SQL grammar.
 // It does not accept partial commands or silently discard trailing statements.
 func (p *Parser) parseServerCommand() (*Command, bool, error) {
-	verb := strings.ToUpper(p.curToken.Value)
-	next := strings.ToUpper(p.peekToken.Value)
-	if verb == "LOGIN" && next == "ADMIN" {
+	verb := p.curToken.Type
+	next := p.peekToken.Type
+	if verb == TokenLogin && next == TokenAdmin {
 		p.nextToken()
 		p.nextToken()
 		email, err := p.parseQuotedString()
@@ -35,11 +35,11 @@ func (p *Parser) parseServerCommand() (*Command, bool, error) {
 		}
 		return cmd, true, p.finishServerCommand()
 	}
-	if verb == "RETRIEVE" {
+	if verb == TokenRetrieve {
 		cmd, err := p.parseSearchCommand()
 		return cmd, true, err
 	}
-	if verb == "SHOW" && next == "CURRENT" {
+	if verb == TokenShow && next == TokenCurrent {
 		// Existing explicit MODEL/USER forms remain in their owning grammars.
 		// Only consume the aggregate when CURRENT is followed by end/semicolon.
 		saved := *p
@@ -53,7 +53,7 @@ func (p *Parser) parseServerCommand() (*Command, bool, error) {
 		*p.lexer = lexer
 		return nil, false, nil
 	}
-	if verb == "SAVE" && next == "CONFIG" {
+	if verb == TokenSave && next == TokenConfig {
 		p.nextToken()
 		p.nextToken()
 		if p.curToken.Type != TokenAs {
@@ -69,21 +69,25 @@ func (p *Parser) parseServerCommand() (*Command, bool, error) {
 		cmd.Params["path"] = path
 		return cmd, true, p.finishServerCommand()
 	}
-	if (verb != "ADD" && verb != "DELETE" && verb != "SHOW" && verb != "LIST") || (next != "API" && next != "ADMIN") {
+	if (verb != TokenAdd && verb != TokenDelete && verb != TokenShow && verb != TokenList) || (next != TokenAPI && next != TokenAdmin) {
 		return nil, false, nil
 	}
-	kind := strings.ToLower(next)
+	kind := "api"
+	if next == TokenAdmin {
+		kind = "admin"
+	}
 	p.nextToken()
 	p.nextToken()
-	if !strings.EqualFold(p.curToken.Value, "SERVER") {
+	if p.curToken.Type != TokenServer {
 		return nil, true, fmt.Errorf("expected SERVER")
 	}
 	p.nextToken()
-	if verb == "LIST" && kind != "api" {
+	if verb == TokenList && kind != "api" {
 		return nil, true, fmt.Errorf("LIST requires API SERVER")
 	}
-	cmd := NewCommand(strings.ToLower(verb) + "_" + kind + "_server")
-	if kind == "api" && verb != "LIST" {
+	action := map[int]string{TokenAdd: "add", TokenDelete: "delete", TokenShow: "show", TokenList: "list"}[verb]
+	cmd := NewCommand(action + "_" + kind + "_server")
+	if kind == "api" && verb != TokenList {
 		name, err := p.parseQuotedString()
 		if err != nil {
 			return nil, true, err
@@ -94,8 +98,8 @@ func (p *Parser) parseServerCommand() (*Command, bool, error) {
 		}
 		cmd.Params["name"] = name
 	}
-	if verb == "ADD" {
-		if !strings.EqualFold(p.curToken.Value, "HOST") {
+	if verb == TokenAdd {
+		if p.curToken.Type != TokenHost {
 			return nil, true, fmt.Errorf("expected HOST")
 		}
 		p.nextToken()

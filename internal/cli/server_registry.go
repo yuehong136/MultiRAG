@@ -132,9 +132,6 @@ func (c *CLI) selectMode(mode string) error {
 		if c.adminClient == nil {
 			config := &ServerConfig{Host: "127.0.0.1:9381"}
 			client, _ := newServerClient("admin", config)
-			if c.adminClient != nil {
-				c.adminClient.HTTPClient.client.CloseIdleConnections()
-			}
 			c.adminClient, c.adminConfig = client, config
 		}
 		client = c.adminClient
@@ -236,6 +233,9 @@ func (c *CLI) executeCommon(cmd *Command) (ResponseIf, bool, error) {
 		if kind == "admin" {
 			if c.adminClient != nil && c.adminClient.HTTPClient.LoginToken != "" {
 				return nil, true, fmt.Errorf("logout before replacing admin server")
+			}
+			if c.adminClient != nil {
+				c.adminClient.HTTPClient.client.CloseIdleConnections()
 			}
 			c.adminClient, c.adminConfig = client, config
 			if c.client.ServerType == "admin" {

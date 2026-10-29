@@ -330,3 +330,68 @@ func TestRegistryCommandLineEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// registryTransport exposes the standard transport lifecycle without opening a listener.
+type registryTransport struct{ closed int }
+
+func (t *registryTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("unexpected HTTP request")
+}
+func (t *registryTransport) CloseIdleConnections() { t.closed++ }
+
+func TestRegistryAdminReplacementClosesTransport(t *testing.T) {
+	c := registryCLI(t)
+	if _, err := registryCommand(t, c, `ADD ADMIN SERVER HOST '127.0.0.1:9001';`); err != nil {
+		t.Fatal(err)
+	}
+	old := c.adminClient
+	transport := &registryTransport{}
+	old.HTTPClient.client.Transport = transport
+	if _, err := registryCommand(t, c, `ADD ADMIN SERVER HOST '127.0.0.1:9002';`); err != nil {
+		t.Fatal(err)
+	}
+	if transport.closed != 1 || c.adminClient == old || c.adminClient.HTTPClient.Port != 9002 {
+		t.Fatal("replacement did not release previous connection transport")
+	}
+	active := c.adminClient
+	retained := &registryTransport{}
+	active.HTTPClient.client.Transport = retained
+	active.HTTPClient.LoginToken = "retained"
+	if _, err := registryCommand(t, c, `ADD ADMIN SERVER HOST '127.0.0.1:9003';`); err == nil {
+		t.Fatal("replaced logged-in admin")
+	}
+	if retained.closed != 0 || c.adminClient != active || c.adminClient.HTTPClient.LoginToken != "retained" {
+		t.Fatal("failed replacement changed live session or transport")
+	}
+}
+
+func TestRegistryQuotedKeywordsHaveNoSideEffects(t *testing.T) {
+	c := registryCLI(t)
+	path := registryConfigPath(t)
+	for _, input := range []string{
+		`"ADD" API SERVER 'b' HOST '127.0.0.1:9000';`,
+		`ADD "API" SERVER 'b' HOST '127.0.0.1:9000';`,
+		`ADD API "SERVER" 'b' HOST '127.0.0.1:9000';`,
+		`ADD API SERVER 'b' "HOST" '127.0.0.1:9000';`,
+		`"ADD" "API" "SERVER" 'b' "HOST" '127.0.0.1:9000';`,
+		`ADD ADMIN "SERVER" HOST '127.0.0.1:9001';`,
+		`ADD ADMIN SERVER "HOST" '127.0.0.1:9001';`,
+		`"SHOW" CURRENT;`,
+		`SHOW "CURRENT";`,
+		`"LOGIN" ADMIN 'admin';`,
+		`LOGIN "ADMIN" 'admin';`,
+		fmt.Sprintf(`"SAVE" CONFIG AS '%s';`, path),
+		fmt.Sprintf(`SAVE "CONFIG" AS '%s';`, path),
+		fmt.Sprintf(`SAVE CONFIG "AS" '%s';`, path),
+	} {
+		if err := c.RunSingleCommand(input); err == nil {
+			t.Fatalf("accepted quoted keyword: %s", input)
+		}
+		if len(c.apiServers) != 1 || c.apiServers["b"] != nil || c.adminClient != nil {
+			t.Fatal("invalid grammar changed registry")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("invalid grammar wrote configuration")
+		}
+	}
+}
