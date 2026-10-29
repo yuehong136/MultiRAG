@@ -205,7 +205,14 @@ RUN --mount=type=cache,id=multirag_uv,target=/root/.cache/uv,sharing=locked \
     if [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|pypi.org|pypi.tuna.tsinghua.edu.cn|g' uv.lock; \
     else \
-        sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \
+        # Rewrite only these build copies; keep source declarations and lock aligned. \
+        sed -i \
+            -e 's|https://mirrors.aliyun.com/pypi/packages/|https://files.pythonhosted.org/packages/|g' \
+            -e 's|https://pypi.tuna.tsinghua.edu.cn/packages/|https://files.pythonhosted.org/packages/|g' \
+            -e 's|https://mirrors.aliyun.com/pypi/simple|https://pypi.org/simple|g' \
+            -e 's|https://pypi.tuna.tsinghua.edu.cn/simple|https://pypi.org/simple|g' \
+            -e 's|https://gitee.com/infiniflow/graspologic.git|https://github.com/infiniflow/graspologic.git|g' \
+            pyproject.toml uv.lock; \
     fi; \
     uv sync --python 3.12 --frozen --all-extras && \
     # Ensure pip is available in the venv for runtime package installation (fixes #12651)

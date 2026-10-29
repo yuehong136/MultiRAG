@@ -59,6 +59,9 @@ services:
     container_name: multirag-es01
     volumes:
       - esdata01:/usr/share/elasticsearch/data
+    # Keep entrypoint temporary files writable for the image's non-root user.
+    tmpfs:
+      - /tmp:mode=1777,size=512m
     ports:
       - "${ES_PORT:-9200}:9200"
     env_file: .env
