@@ -3,6 +3,12 @@
 本记录只写单次提交的处理结论。稳定路径映射见
 [RAGFLOW_PORTING_MAP](../enterprise-identity-mcp/RAGFLOW_PORTING_MAP.md)；后续提交按各自任务处理。
 
+## 2026-10-29 · after-98f2a2e6-20 本地验收索引
+
+连续20项、73条上游路径的逐项处置、真实main/master接受、固定Web消费者与恢复清理，见
+[98f2a2e6 后二十项交付](batch-after-98f2a2e6.md)。本批定向组合已完成；扩大harness的既有
+Search夹具导入基线失败单列，不能称全局门禁全绿。未push、未部署，远程ci-required待运行。
+
 ## 2026-10-29 · after-67c3e73d-20 本地验收索引
 
 连续 20 项、133 条上游路径的处置、质量比较、串行主干接受及固定 Web 消费者，见
