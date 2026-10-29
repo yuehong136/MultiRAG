@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"multirag/internal/common"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -582,4 +583,50 @@ func (h *DocumentHandler) GetDocumentImage(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, mime, data)
+}
+
+// MetadataSummaryByDataset uses the same actor-scoped reader as document metadata.
+// Omitted or empty doc_ids means all documents, matching the Python GET API.
+func (h *DocumentHandler) MetadataSummaryByDataset(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	if user == nil || user.ID == "" {
+		jsonError(c, common.CodeUnauthorized, "User not found")
+		return
+	}
+	datasetID := c.Param("dataset_id")
+	if strings.TrimSpace(datasetID) == "" {
+		jsonError(c, common.CodeArgumentError, "dataset_id is required")
+		return
+	}
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid metadata query")
+		return
+	}
+	var docIDs []string
+	for key, values := range query {
+		if key != "doc_ids" || len(values) != 1 {
+			jsonError(c, common.CodeArgumentError, "Invalid metadata query")
+			return
+		}
+	}
+	if value := query.Get("doc_ids"); value != "" {
+		docIDs = strings.Split(value, ",")
+		for _, id := range docIDs {
+			if strings.TrimSpace(id) == "" || strings.TrimSpace(id) != id {
+				jsonError(c, common.CodeArgumentError, "doc_ids must contain non-empty document IDs")
+				return
+			}
+		}
+	}
+	summary, err := h.metadataReader().GetMetadataSummary(c.Request.Context(), datasetID, user.ID, docIDs)
+	if err != nil {
+		documentMetadataReadError(c, err)
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, gin.H{"summary": summary}, "success")
 }

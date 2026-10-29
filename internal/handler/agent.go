@@ -33,6 +33,7 @@ import (
 // AgentHandler agent handler
 type AgentHandler struct {
 	agentService *service.AgentService
+	loadPrompt   func(string) (string, error)
 }
 
 // NewAgentHandler create agent handler
@@ -346,4 +347,35 @@ func (h *AgentHandler) DeleteAgentSessionItem(c *gin.Context) {
 		return
 	}
 	jsonResponse(c, common.CodeSuccess, deleted, "success")
+}
+
+// GetPrompts returns the default agent prompts after authenticating the actor.
+func (h *AgentHandler) GetPrompts(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	if user == nil || user.ID == "" {
+		jsonError(c, common.CodeUnauthorized, "User not found")
+		return
+	}
+	load := h.loadPrompt
+	if load == nil {
+		load = service.LoadPrompt
+	}
+	names := []string{"analyze_task_system", "analyze_task_user", "next_step", "reflect", "citation_prompt"}
+	prompts := make([]string, len(names))
+	for i, name := range names {
+		value, err := load(name)
+		if err != nil {
+			jsonError(c, common.CodeServerError, "Agent prompts are unavailable.")
+			return
+		}
+		prompts[i] = value
+	}
+	jsonResponse(c, common.CodeSuccess, map[string]string{
+		"task_analysis":   prompts[0] + "\n\n" + prompts[1],
+		"plan_generation": prompts[2], "reflection": prompts[3], "citation_guidelines": prompts[4],
+	}, "success")
 }

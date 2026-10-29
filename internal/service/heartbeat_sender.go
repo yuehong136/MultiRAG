@@ -18,11 +18,11 @@ package service
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"multirag/internal/common"
 	"multirag/internal/server"
 	"multirag/internal/utility"
+	"net/http"
 	"time"
 
 	"go.uber.org/zap"
@@ -43,6 +43,9 @@ type HeartbeatSender struct {
 
 // NewHeartbeatSender creates a new heartbeat service instance
 func NewHeartbeatSender(logger *zap.Logger, serverType common.ServerType, serverName, host string, port int) *HeartbeatSender {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &HeartbeatSender{
 		logger:       logger,
 		serverType:   serverType,
@@ -57,6 +60,12 @@ func NewHeartbeatSender(logger *zap.Logger, serverType common.ServerType, server
 
 // InitHTTPClient initializes the HTTP client with admin server configuration
 func (h *HeartbeatSender) InitHTTPClient() error {
+	if h == nil {
+		return fmt.Errorf("heartbeat sender is unavailable")
+	}
+	if h.logger == nil {
+		h.logger = zap.NewNop()
+	}
 	adminConfig := server.GetAdminConfig()
 	if adminConfig == nil {
 		return fmt.Errorf("admin configuration not found")
@@ -78,6 +87,12 @@ func (h *HeartbeatSender) InitHTTPClient() error {
 
 // SendHeartbeat sends a heartbeat message to the admin server
 func (h *HeartbeatSender) SendHeartbeat() error {
+	if h == nil {
+		return fmt.Errorf("heartbeat sender is unavailable")
+	}
+	if h.logger == nil {
+		h.logger = zap.NewNop()
+	}
 
 	if h.attemptCount < 10 {
 		if h.lastSuccess {
@@ -119,17 +134,20 @@ func (h *HeartbeatSender) SendHeartbeat() error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		// extract the Code and Message field of the response
-		var responseBody map[string]interface{}
-		err = json.NewDecoder(resp.Body).Decode(&responseBody)
-		if err != nil {
-			return err
-		}
-		responseCode := common.ErrorCode(responseBody["code"].(float64))
-		if responseCode != common.CodeLicenseValid {
-			return errors.New(responseCode.Message())
-		}
+	// Decode into an integer pointer: omitted/null, strings and fractional codes
+	// are protocol errors, never license success. Non-200 is always a failure.
+	var responseBody struct {
+		Code *int `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err != nil {
+		return fmt.Errorf("invalid heartbeat response (status %d)", resp.StatusCode)
+	}
+	if responseBody.Code == nil {
+		return fmt.Errorf("heartbeat response (status %d) is missing code", resp.StatusCode)
+	}
+	responseCode := common.ErrorCode(*responseBody.Code)
+	if resp.StatusCode != http.StatusOK || responseCode != common.CodeLicenseValid {
+		return fmt.Errorf("heartbeat rejected (status %d, code %d): %s", resp.StatusCode, responseCode, responseCode.Message())
 	}
 
 	h.logger.Debug("Heartbeat sent successfully",
