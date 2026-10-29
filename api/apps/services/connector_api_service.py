@@ -50,7 +50,7 @@ _UPDATABLE_FIELDS = ("prune_freq", "refresh_freq", "config", "timeout_secs")
 
 AUTH_ERROR = "No authorization."
 
-_WORKER_STATE_FIELDS = {"imap": "imap_sync_scopes", "mysql": "rdbms_sync_scopes", "postgresql": "rdbms_sync_scopes"}
+_WORKER_STATE_FIELDS = {"imap": "imap_sync_scopes", "mysql": "rdbms_sync_scopes", "postgresql": "rdbms_sync_scopes", "mssql": "rdbms_sync_scopes"}
 
 
 def _validate_schedule(req: dict[str, Any]) -> str | None:

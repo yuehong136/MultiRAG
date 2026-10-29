@@ -24,6 +24,7 @@ _CURSOR_TYPE = "__ragflow_rdbms_cursor_type__"
 class DatabaseType(str, Enum):
     MYSQL = "mysql"
     POSTGRESQL = "postgresql"
+    MSSQL = "mssql"
 
 
 def _utc(value: datetime) -> datetime:
@@ -54,7 +55,10 @@ def rdbms_scope_signature(config: dict[str, Any], db_type: str) -> str:
     """Fingerprint the row/identity contract, excluding credentials rotation/state."""
     scope = {key: config.get(key) or "" for key in ("database", "query", "content_columns", "metadata_columns", "id_column", "timestamp_column")}
     scope.update(
-        db_type=db_type, host=config.get("host") or "localhost", port=int(config.get("port") or (3306 if db_type == "mysql" else 5432)), username=(config.get("credentials") or {}).get("username")
+        db_type=db_type,
+        host=config.get("host") or "localhost",
+        port=int(config.get("port") or ({"mysql": 3306, "postgresql": 5432, "mssql": 1433}[db_type])),
+        username=(config.get("credentials") or {}).get("username"),
     )
     return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -75,7 +79,7 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
     ) -> None:
         self.db_type = DatabaseType(db_type.lower())
         self.host, self.port, self.database = host.strip(), int(port), database.strip()
-        self.query = query.strip().rstrip(";").strip()
+        self.query = self._sanitize_query(query)
         self.content_columns = [col.strip() for col in (content_columns or "").split(",") if col.strip()]
         self.metadata_columns = [col.strip() for col in (metadata_columns or "").split(",") if col.strip()]
         self.id_column = id_column.strip() if id_column else None
@@ -86,6 +90,63 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         self._credentials: dict[str, Any] = {}
         self.pending_cursor: Any = None
         self.scope_signature: str | None = None
+
+    @staticmethod
+    def _sanitize_query(raw: str | None) -> str:
+        """Remove paste-only Markdown wrappers while preserving the SQL text."""
+        query = (raw or "").strip()
+        if query.startswith("```"):
+            if not query.endswith("```") or "\n" not in query:
+                raise ConnectorValidationError("RDBMS query has an incomplete Markdown fence")
+            query = query[3:-3].strip()
+        head, separator, tail = query.partition("\n")
+        if separator and head.strip().lower() in {"sql", "tsql", "t-sql", "mssql", "mysql", "postgresql", "psql"}:
+            query = tail.strip()
+        return query.rstrip(";").strip()
+
+    @staticmethod
+    def _tsql_top_level_tokens(query: str) -> list[tuple[str, int, int]]:
+        """Locate T-SQL clauses without interpreting literals, comments or subqueries."""
+        tokens: list[tuple[str, int, int]] = []
+        pattern = re.compile(r"--[^\r\n]*|/\*|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|\[(?:\]\]|[^\]])*\]|[A-Za-z_][\w$#@]*|[();]", re.DOTALL)
+        position, depth = 0, 0
+        while match := pattern.search(query, position):
+            token = match[0]
+            position = match.end()
+            if token == "/*":
+                comment_depth = 1
+                while comment_depth:
+                    boundary = re.search(r"/\*|\*/", query[position:])
+                    if boundary is None:
+                        raise ConnectorValidationError("RDBMS query has an unterminated comment")
+                    comment_depth += 1 if boundary[0] == "/*" else -1
+                    position += boundary.end()
+            elif token == "(":
+                depth += 1
+            elif token == ")":
+                depth -= 1
+                if depth < 0:
+                    raise ConnectorValidationError("RDBMS query has unbalanced parentheses")
+            elif not depth and (token[0].isalpha() or token == ";"):
+                tokens.append((token.upper(), match.start(), match.end()))
+        if depth:
+            raise ConnectorValidationError("RDBMS query has unbalanced parentheses")
+        return tokens
+
+    def _mssql_derived_query(self, base: str) -> str:
+        tokens = self._tsql_top_level_tokens(base)
+        if tokens and tokens[-1][0] == ";":
+            _, start, end = tokens.pop()
+            base = base[:start] + base[end:]
+        words = [token for token, _, _ in tokens]
+        if not words or words[0] != "SELECT" or ";" in words or "INTO" in words:
+            raise ConnectorValidationError("MSSQL requires a single SELECT query without INTO")
+        # OFFSET 0 makes ORDER BY legal in a derived table without dropping it
+        # or changing TOP/OFFSET/FETCH's configured row set. Window/subquery
+        # clauses, escaped identifiers and comments do not participate here.
+        if any(words[index : index + 2] == ["ORDER", "BY"] for index in range(len(words) - 1)) and "TOP" not in words and "OFFSET" not in words:
+            base += "\nOFFSET 0 ROWS"
+        return base
 
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         if not credentials.get("username") or not credentials.get("password"):
@@ -114,6 +175,46 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
             try:
                 connection.start_transaction(isolation_level="REPEATABLE READ", readonly=True)
             except Exception:
+                connection.close()
+                raise
+            return connection
+        if self.db_type == DatabaseType.MSSQL:
+            import pymssql
+
+            try:
+                connection = pymssql.connect(
+                    server=self.host,
+                    port=str(self.port),
+                    database=self.database,
+                    user=self._credentials["username"],
+                    password=self._credentials["password"],
+                    charset="UTF-8",
+                    login_timeout=10,
+                    timeout=30,
+                    autocommit=False,
+                )
+            except Exception:
+                # DBAPI errors can include the password or full connection string.
+                raise ConnectorValidationError("Unable to connect to MSSQL") from None
+            try:
+                cursor = connection.cursor()
+                try:
+                    cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                    cursor.execute("SET LOCK_TIMEOUT 30000")
+                    # SQL Server has no per-transaction READ ONLY mode. Require
+                    # a genuinely read-only principal before executing any SQL.
+                    cursor.execute("SELECT permission_name FROM sys.fn_my_permissions(NULL, 'DATABASE')")
+                    permissions = {row[0].upper() for row in cursor.fetchall()}
+                    if any(permission not in {"CONNECT", "SELECT", "REFERENCES", "UNMASK"} and not permission.startswith("VIEW ") for permission in permissions) or "SELECT" not in permissions:
+                        raise ConnectorValidationError("MSSQL requires a database-wide SELECT-only principal")
+                    cursor.execute(
+                        "SELECT p.permission_name FROM sys.objects AS o CROSS APPLY sys.fn_my_permissions(QUOTENAME(SCHEMA_NAME(o.schema_id)) + '.' + QUOTENAME(o.name), 'OBJECT') AS p WHERE o.is_ms_shipped=0"
+                    )
+                    if any(row[0].upper() not in {"SELECT", "REFERENCES", "UNMASK"} and not row[0].upper().startswith("VIEW ") for row in cursor.fetchall()):
+                        raise ConnectorValidationError("MSSQL requires a SELECT-only principal for all objects")
+                finally:
+                    cursor.close()
+            except BaseException:
                 connection.close()
                 raise
             return connection
@@ -150,6 +251,8 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
             connection.close()
 
     def _identifier(self, value: str) -> str:
+        if self.db_type == DatabaseType.MSSQL:
+            return "[" + value.replace("]", "]]") + "]"
         quote = "`" if self.db_type == DatabaseType.MYSQL else '"'
         return quote + value.replace(quote, quote * 2) + quote
 
@@ -171,6 +274,11 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
             if not permitted:
                 raise ConnectorValidationError("MySQL discovery requires database-wide SELECT; configure an explicit query")
             cursor.execute("SHOW TABLES")
+        elif self.db_type == DatabaseType.MSSQL:
+            # INFORMATION_SCHEMA is permission-filtered, even with database-wide
+            # SELECT when object/schema DENY applies. Never treat a partial list
+            # as authoritative deletion inventory.
+            raise ConnectorValidationError("MSSQL requires an explicit SELECT query; automatic discovery cannot guarantee a complete inventory")
         else:
             # pg_catalog retains inaccessible tables; SELECT then fails closed.
             cursor.execute("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public' ORDER BY tablename")
@@ -178,7 +286,11 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         return [f"SELECT * FROM {self._identifier(row[0])}" for row in tables]
 
     def _wrap_query(self, base: str, projection: str = "*") -> str:
-        return f"SELECT {projection} FROM ({base}) AS ragflow_src"
+        if self.db_type == DatabaseType.MSSQL:
+            base = self._mssql_derived_query(base)
+        # A final line comment must not swallow the derived-table boundary.
+        boundary = "\n" if "--" in base or self.db_type == DatabaseType.MSSQL else ""
+        return f"SELECT {projection} FROM ({base}{boundary}) AS ragflow_src"
 
     @staticmethod
     def serialize_cursor_value(value: Any) -> Any:
@@ -230,11 +342,16 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         for value, operator in ((start, ">="), (end, "<=")):
             if value is not None:
                 self.serialize_cursor_value(value)
-                conditions.append(f"ragflow_src.{self._identifier(self.timestamp_column)} {operator} %s")
+                field = self._identifier(self.timestamp_column)
+                if self.db_type == DatabaseType.MSSQL:
+                    field = field.replace("%", "%%")
+                conditions.append(f"ragflow_src.{field} {operator} %s")
                 bound = _utc(value) if isinstance(value, datetime) else value
-                if self.db_type == DatabaseType.MYSQL and isinstance(bound, datetime):
+                if self.db_type in {DatabaseType.MYSQL, DatabaseType.MSSQL} and isinstance(bound, datetime):
                     bound = bound.replace(tzinfo=None)
                 parameters.append(bound)
+        if conditions and self.db_type == DatabaseType.MSSQL:
+            query = query.replace("%", "%%")
         return query + (" WHERE " + " AND ".join(conditions) if conditions else ""), tuple(parameters)
 
     def _content_columns_for_row(self, row: dict[str, Any]) -> list[str]:
@@ -271,8 +388,15 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                 if self.content_columns:
                     selected = list(dict.fromkeys([*self.content_columns, *self.metadata_columns, *(column for column in (self.id_column, self.timestamp_column) if column)]))
                     projection = ", ".join("ragflow_src." + self._identifier(column) for column in selected)
+                    if parameters and self.db_type == DatabaseType.MSSQL:
+                        projection = projection.replace("%", "%%")
                     query = query.replace("SELECT * FROM (", f"SELECT {projection} FROM (", 1)
-                cursor.execute(query, parameters)
+                if parameters:
+                    cursor.execute(query, parameters)
+                elif self.db_type == DatabaseType.MSSQL:
+                    cursor.execute(query)
+                else:
+                    cursor.execute(query, parameters)
                 if cursor.description is None:
                     raise ConnectorValidationError("RDBMS query did not return rows")
                 columns = [column[0] for column in cursor.description]
@@ -338,7 +462,9 @@ class RDBMSConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                 total, valid = cursor.fetchone()
                 if total != valid:
                     raise ConnectorValidationError("RDBMS cursor column cannot contain NULL")
-                cursor.execute(self._wrap_query(base, field) + f" WHERE {field} IS NOT NULL ORDER BY {field} DESC LIMIT 1")
+                projection = f"TOP (1) {field}" if self.db_type == DatabaseType.MSSQL else field
+                limit = "" if self.db_type == DatabaseType.MSSQL else " LIMIT 1"
+                cursor.execute(self._wrap_query(base, projection) + f" WHERE {field} IS NOT NULL ORDER BY {field} DESC{limit}")
                 row = cursor.fetchone()
                 if row is None:
                     continue

@@ -31,7 +31,7 @@ GetObject。`reindex=1` 强制重新下载。缺少 ETag 时保守下载，其�
 ## 删除同步
 
 `config.sync_deleted_files` 默认关闭。当前支持 GitHub、Confluence、Notion、Jira、Box、
-S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV、RSS（当前 feed 成员镜像）、Moodle、IMAP、MySQL 和 PostgreSQL。
+S3、R2、Google Cloud Storage、OCI Storage、Airtable、Google Drive、Bitbucket、Gmail、GitLab、Dropbox、SeaFile、Asana、Zendesk articles、WebDAV、RSS（当前 feed 成员镜像）、Moodle、IMAP、MySQL、PostgreSQL 和 MSSQL。
 
 每个知识库关联分别维护 `sync`（增量入库）和 `prune`（完整清单核对删除）任务，日志的
 `task_type` 区分二者。sync 使用 `refresh_freq`；prune 仅在开关为 true 且 `prune_freq > 0`
@@ -298,3 +298,23 @@ JSON 对象文本或逐行 `key=value`；`request_body` 接受 JSON 对象或对
 
 显式邮箱、文件夹、时间窗口、正文与探测权限合同见 [Outlook 导入](outlook.md)。
 空邮箱数组不会扩大到整个租户；暂不开放删除同步，也不跨任务持久化 delta cursor。
+
+
+## MSSQL 查询同步
+
+Python 连接器使用 `source="mssql"` 和 pymssql，端口默认 1433。配置项与其他
+RDBMS 相同：`host`、`database`、`query`、`content_columns`、`metadata_columns`、
+`id_column`、`timestamp_column`、`batch_size`，以及 `credentials.username/password`。
+`query` 必须是单条 SELECT，可以使用 `[schema].[table]`；不接受 INTO 或多条语句。
+可直接粘贴完整 SQL Markdown 代码块。空 `content_columns` 使用除身份、游标列外的所有列。
+
+账号须具有数据库级 SELECT，数据库及对象权限仅允许读取、引用和查看元数据；写入、
+执行或管理权限会被拒绝。SQL Server 无事务 READ ONLY 模式，因此在查询前校验有效权限，
+并使用不提交的 REPEATABLE READ 事务。查询或取消失败仍关闭游标和连接。
+自动发现未启用：INFORMATION_SCHEMA 会按权限隐藏表，不能作为完整删除清单。
+
+增量范围包含上次游标边界，按知识库保存上限；prune 始终读取完整配置查询。
+查询中的 WHERE、TOP、ORDER BY、OFFSET/FETCH 保留。普通顶层 ORDER BY 在派生表内
+追加 OFFSET 0 ROWS，不删除排序或扩大选集。时间参数按 UTC 绑定，连接/登录超时 10 秒、
+查询超时 30 秒、锁等待上限 30 秒。pymssql/FreeTDS 的连接和查询超时具有进程级效果，
+取消检查位于协调器批次边界，不能视作驱动立即中断。

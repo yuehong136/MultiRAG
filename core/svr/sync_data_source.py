@@ -76,6 +76,7 @@ DELETED_FILE_SYNC_SOURCES = frozenset(
         FileSource.MOODLE,
         FileSource.MYSQL,
         FileSource.POSTGRESQL,
+        FileSource.MSSQL,
         FileSource.IMAP,
         FileSource.DINGTALK_AI_TABLE,
         FileSource.RSS,
@@ -1681,6 +1682,11 @@ class PostgreSQL(_RDBMSBase):
     DEFAULT_PORT = 5432
 
 
+class MSSQL(_RDBMSBase):
+    SOURCE_NAME: str = FileSource.MSSQL
+    DEFAULT_PORT = 1433
+
+
 func_factory = {
     FileSource.SALESFORCE: Salesforce,
     FileSource.AZURE_BLOB: AzureBlob,
@@ -1715,6 +1721,7 @@ func_factory = {
     FileSource.SEAFILE: SeaFile,
     FileSource.MYSQL: MySQL,
     FileSource.POSTGRESQL: PostgreSQL,
+    FileSource.MSSQL: MSSQL,
     FileSource.DINGTALK_AI_TABLE: DingTalkAITable,
 }
 

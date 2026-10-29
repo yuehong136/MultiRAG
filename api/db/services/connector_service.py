@@ -141,7 +141,7 @@ class ConnectorService(CommonService):
     def stage_rdbms_sync_state(cls, db: Session, connector_id: str, kb_id: str, state: dict[str, Any]) -> None:
         """Stage a per-KB cursor in the task completion transaction, without commit."""
         connector = db.scalar(select(cls.model).where(cls.model.id == connector_id).with_for_update().execution_options(populate_existing=True))
-        if connector is None or connector.source not in {"mysql", "postgresql"} or state.get("source") != connector.source:
+        if connector is None or connector.source not in {"mysql", "postgresql", "mssql"} or state.get("source") != connector.source:
             raise RuntimeError("RDBMS connector is unavailable")
         config = connector.config or {}
         signature = rdbms_scope_signature(config, connector.source)
