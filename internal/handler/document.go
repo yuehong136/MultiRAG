@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,10 +31,17 @@ import (
 	"multirag/internal/service"
 )
 
+type documentMetadataReader interface {
+	ListDocumentsByKBID(context.Context, string, string, int, int) ([]*service.DocumentResponse, int64, error)
+	GetDocumentMetadataByID(context.Context, string, string) (map[string]interface{}, error)
+	GetMetadataSummary(context.Context, string, string, []string) (map[string]interface{}, error)
+}
+
 // DocumentHandler document handler
 type DocumentHandler struct {
 	documentService *service.DocumentService
 	fileService     documentFileReader
+	metadataService documentMetadataReader
 }
 
 // NewDocumentHandler create document handler
@@ -41,6 +49,23 @@ func NewDocumentHandler(documentService *service.DocumentService) *DocumentHandl
 	return &DocumentHandler{
 		documentService: documentService,
 	}
+}
+
+func (h *DocumentHandler) metadataReader() documentMetadataReader {
+	if h.metadataService != nil {
+		return h.metadataService
+	}
+	return h.documentService
+}
+
+func documentMetadataReadError(c *gin.Context, err error) {
+	status, code := http.StatusInternalServerError, common.CodeExceptionError
+	if errors.Is(err, service.ErrDatasetAccessDenied) {
+		status, code = http.StatusForbidden, common.CodeForbidden
+	} else if errors.Is(err, service.ErrChunkNotFound) {
+		status, code = http.StatusNotFound, common.CodeDataError
+	}
+	c.JSON(status, gin.H{"code": code, "message": "Document metadata is unavailable.", "data": nil})
 }
 
 // CreateDocument create document
@@ -276,9 +301,13 @@ func (h *DocumentHandler) GetDocumentsByAuthorID(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/document/list [post]
 func (h *DocumentHandler) ListDocumentsByKB(c *gin.Context) {
-	_, errorCode, errorMessage := GetUser(c)
+	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
+		return
+	}
+	if user == nil || user.ID == "" {
+		jsonError(c, common.CodeUnauthorized, "User not found")
 		return
 	}
 
@@ -306,21 +335,18 @@ func (h *DocumentHandler) ListDocumentsByKB(c *gin.Context) {
 		pageSize = 10
 	}
 
-	documents, total, err := h.documentService.ListDocumentsByKBID(kbID, page, pageSize)
+	documents, total, err := h.metadataReader().ListDocumentsByKBID(c.Request.Context(), kbID, user.ID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    1,
-			"message": "failed to get documents",
-			"data":    map[string]interface{}{"total": 0, "docs": []interface{}{}},
-		})
+		documentMetadataReadError(c, err)
 		return
 	}
 
 	docs := make([]map[string]interface{}, 0, len(documents))
 	for _, doc := range documents {
-		metaFields, err := h.documentService.GetDocumentMetadataByID(doc.ID)
+		metaFields, err := h.metadataReader().GetDocumentMetadataByID(c.Request.Context(), doc.ID, user.ID)
 		if err != nil {
-			metaFields = make(map[string]interface{})
+			documentMetadataReadError(c, err)
+			return
 		}
 
 		docs = append(docs, map[string]interface{}{
@@ -355,9 +381,13 @@ func (h *DocumentHandler) ListDocumentsByKB(c *gin.Context) {
 // @Success 200 {object} map[string]interface{}
 // @Router /v1/document/metadata/summary [post]
 func (h *DocumentHandler) MetadataSummary(c *gin.Context) {
-	_, errorCode, errorMessage := GetUser(c)
+	user, errorCode, errorMessage := GetUser(c)
 	if errorCode != common.CodeSuccess {
 		jsonError(c, errorCode, errorMessage)
+		return
+	}
+	if user == nil || user.ID == "" {
+		jsonError(c, common.CodeUnauthorized, "User not found")
 		return
 	}
 
@@ -383,12 +413,9 @@ func (h *DocumentHandler) MetadataSummary(c *gin.Context) {
 		return
 	}
 
-	summary, err := h.documentService.GetMetadataSummary(kbID, requestBody.DocIDs)
+	summary, err := h.metadataReader().GetMetadataSummary(c.Request.Context(), kbID, user.ID, requestBody.DocIDs)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    1,
-			"message": "Failed to get metadata summary: " + err.Error(),
-		})
+		documentMetadataReadError(c, err)
 		return
 	}
 

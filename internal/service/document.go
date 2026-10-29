@@ -65,7 +65,7 @@ func NewDocumentService(documentEngines ...engine.DocEngine) *DocumentService {
 		kbDAO:       dao.NewKnowledgebaseDAO(),
 		docEngine:   store,
 		engineType:  engineType,
-		metadataSvc: NewMetadataService(),
+		metadataSvc: &MetadataService{kbDAO: dao.NewKnowledgebaseDAO(), docEngine: store},
 	}
 }
 
@@ -255,20 +255,136 @@ func (s *DocumentService) toResponse(doc *entity.Document) *DocumentResponse {
 	}
 }
 
-// ListDocumentsByKBID list documents by knowledge base ID
-func (s *DocumentService) ListDocumentsByKBID(kbID string, page, pageSize int) ([]*DocumentResponse, int64, error) {
-	offset := (page - 1) * pageSize
-	documents, total, err := s.documentDAO.ListByKBID(kbID, offset, pageSize)
-	if err != nil {
+// ListDocumentsByKBID reads only active documents after fresh actor/dataset authorization.
+func (s *DocumentService) ListDocumentsByKBID(ctx context.Context, kbID, userID string, page, pageSize int) ([]*DocumentResponse, int64, error) {
+	if _, err := s.readableMetadataKB(ctx, kbID, userID); err != nil {
 		return nil, 0, err
 	}
-
-	responses := make([]*DocumentResponse, len(documents))
-	for i, doc := range documents {
-		responses[i] = s.toResponse(doc)
+	if page < 1 || pageSize < 1 || pageSize > 100 {
+		return nil, 0, ErrInvalidChunkScope
 	}
+	query := s.db.WithContext(ctx).Model(&entity.Document{}).Where("kb_id=? AND status=?", kbID, string(entity.StatusValid))
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var documents []entity.Document
+	if err := query.Order("id").Offset((page - 1) * pageSize).Limit(pageSize).Find(&documents).Error; err != nil {
+		return nil, 0, err
+	}
+	responses := make([]*DocumentResponse, 0, len(documents))
+	for i := range documents {
+		responses = append(responses, s.toResponse(&documents[i]))
+	}
+	return responses, total, ctx.Err()
+}
 
-	return responses, total, nil
+// readableMetadataKB uses the DAO's active tenant/membership predicate and checks
+// the current actor's account state before any metadata index is read.
+func (s *DocumentService) readableMetadataKB(ctx context.Context, kbID, userID string) (*entity.Knowledgebase, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(kbID) == "" || strings.TrimSpace(userID) == "" {
+		return nil, ErrDatasetAccessDenied
+	}
+	if s.db == nil || s.kbDAO == nil {
+		return nil, fmt.Errorf("metadata SQL is unavailable")
+	}
+	kb, err := s.kbDAO.GetReadableByID(ctx, kbID, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrDatasetAccessDenied
+	}
+	if err != nil {
+		return nil, err
+	}
+	var actor entity.User
+	err = s.db.WithContext(ctx).Select("id").Where("id=? AND status=? AND is_active=?", userID, string(entity.StatusValid), true).Take(&actor).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrDatasetAccessDenied
+	}
+	if err != nil {
+		return nil, err
+	}
+	if kb.ID != kbID || strings.TrimSpace(kb.TenantID) == "" {
+		return nil, fmt.Errorf("metadata dataset identity is missing")
+	}
+	return kb, nil
+}
+
+// scopedMetadataRows validates the complete SQL document selection before the
+// index call and checks every returned row before decoding any metadata.
+func (s *DocumentService) scopedMetadataRows(ctx context.Context, kb *entity.Knowledgebase, docIDs []string) ([]map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if docIDs != nil && len(docIDs) == 0 {
+		return []map[string]interface{}{}, nil
+	}
+	query := s.db.WithContext(ctx).Model(&entity.Document{}).Where("kb_id=? AND status=?", kb.ID, string(entity.StatusValid))
+	selected := map[string]bool{}
+	if docIDs != nil {
+		for _, id := range docIDs {
+			if strings.TrimSpace(id) == "" {
+				return nil, ErrInvalidChunkScope
+			}
+			selected[id] = true
+		}
+		query = query.Where("id IN ?", docIDs)
+	}
+	var activeIDs []string
+	if err := query.Order("id").Pluck("id", &activeIDs).Error; err != nil {
+		return nil, err
+	}
+	if docIDs != nil && len(activeIDs) != len(selected) {
+		return nil, ErrChunkNotFound
+	}
+	if len(activeIDs) == 0 {
+		return []map[string]interface{}{}, nil
+	}
+	allowed := make(map[string]bool, len(activeIDs))
+	for _, id := range activeIDs {
+		allowed[id] = true
+	}
+	if s.metadataSvc == nil {
+		return nil, fmt.Errorf("document metadata service is unavailable")
+	}
+	var found *SearchMetadataResult
+	var err error
+	if docIDs == nil {
+		// Keep the metadata directory's complete paged scan for an all-documents
+		// request. SQL's active selection filters stale directory rows below.
+		found, err = s.metadataSvc.SearchMetadataByKBsContext(ctx, []string{kb.ID}, 1000)
+	} else {
+		found, err = s.metadataSvc.SearchMetadataContext(ctx, kb.ID, kb.TenantID, activeIDs, len(activeIDs))
+	}
+	if err != nil {
+		return nil, err
+	}
+	if found == nil {
+		return nil, fmt.Errorf("document metadata result is unavailable")
+	}
+	rows := make([]map[string]interface{}, 0, len(found.Chunks))
+	seen := map[string]bool{}
+	for _, row := range found.Chunks {
+		id, ok := row["id"].(string)
+		if !ok || id == "" || row["kb_id"] != kb.ID || seen[id] {
+			return nil, fmt.Errorf("document metadata scope mismatch")
+		}
+		seen[id] = true
+		if !allowed[id] {
+			if docIDs == nil {
+				continue
+			}
+			return nil, fmt.Errorf("document metadata scope mismatch")
+		}
+		fields, err := decodeDocumentMetadata(row["meta_fields"])
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, map[string]interface{}{"id": id, "kb_id": kb.ID, "meta_fields": fields})
+	}
+	return rows, ctx.Err()
 }
 
 // GetMetadataSummaryRequest request for metadata summary
@@ -282,20 +398,17 @@ type GetMetadataSummaryResponse struct {
 	Summary map[string]interface{} `json:"summary"`
 }
 
-// GetMetadataSummary get metadata summary for documents
-func (s *DocumentService) GetMetadataSummary(kbID string, docIDs []string) (map[string]interface{}, error) {
-	tenantID, err := s.metadataSvc.GetTenantIDByKBID(kbID)
+// GetMetadataSummary authorizes the full selection and preserves nil versus empty.
+func (s *DocumentService) GetMetadataSummary(ctx context.Context, kbID, userID string, docIDs []string) (map[string]interface{}, error) {
+	kb, err := s.readableMetadataKB(ctx, kbID, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	searchResult, err := s.metadataSvc.SearchMetadata(kbID, tenantID, docIDs, 1000)
+	rows, err := s.scopedMetadataRows(ctx, kb, docIDs)
 	if err != nil {
 		return nil, err
 	}
-
-	// Aggregate metadata from results
-	return aggregateMetadata(searchResult.Chunks), nil
+	return aggregateMetadata(rows), nil
 }
 
 // metadataScope authorizes SQL identities before touching the document engine.
@@ -311,10 +424,7 @@ func (s *DocumentService) metadataScope(ctx context.Context, docID, userID strin
 	if err != nil {
 		return nil, nil, err
 	}
-	kb, err := s.kbDAO.GetReadableByID(ctx, doc.KbID, userID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, ErrDatasetAccessDenied
-	}
+	kb, err := s.readableMetadataKB(ctx, doc.KbID, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -352,132 +462,79 @@ func (s *DocumentService) DeleteDocumentMetadata(ctx context.Context, docID, use
 	return err
 }
 
-// GetDocumentMetadataByID get metadata for a specific document
-func (s *DocumentService) GetDocumentMetadataByID(docID string) (map[string]interface{}, error) {
-	// Get document to find kb_id
-	doc, err := s.documentDAO.GetByID(docID)
-	if err != nil {
-		return nil, fmt.Errorf("document not found: %w", err)
-	}
-
-	tenantID, err := s.metadataSvc.GetTenantIDByKBID(doc.KbID)
+// GetDocumentMetadataByID validates an active exact-KB document before index access.
+func (s *DocumentService) GetDocumentMetadataByID(ctx context.Context, docID, userID string) (map[string]interface{}, error) {
+	doc, kb, err := s.metadataScope(ctx, docID, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	searchResult, err := s.metadataSvc.SearchMetadata(doc.KbID, tenantID, []string{docID}, 1)
+	rows, err := s.scopedMetadataRows(ctx, kb, []string{doc.ID})
 	if err != nil {
 		return nil, err
 	}
-
-	// Return metadata if found
-	if len(searchResult.Chunks) > 0 {
-		chunk := searchResult.Chunks[0]
-		return ExtractMetaFields(chunk)
+	if len(rows) == 0 {
+		return map[string]interface{}{}, nil
 	}
-
-	return make(map[string]interface{}), nil
+	return rows[0]["meta_fields"].(map[string]interface{}), nil
 }
 
-// GetMetadataByKBs get metadata for knowledge bases
-func (s *DocumentService) GetMetadataByKBs(kbIDs []string) (map[string]interface{}, error) {
-	if len(kbIDs) == 0 {
-		return make(map[string]interface{}), nil
-	}
-
-	searchResult, err := s.metadataSvc.SearchMetadataByKBs(kbIDs, 10000)
-	if err != nil {
+// GetMetadataByKBs authorizes every dataset before reading the first index.
+func (s *DocumentService) GetMetadataByKBs(ctx context.Context, userID string, kbIDs []string) (map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	flattenedMeta := make(map[string]map[string][]string)
-	numChunks := len(searchResult.Chunks)
-
-	var allMetaFields []map[string]interface{}
-	if numChunks > 1 && len(searchResult.Chunks) > 0 {
-		firstChunk := searchResult.Chunks[0]
-		if metaFieldsVal := firstChunk["meta_fields"]; metaFieldsVal != nil {
-			if v, ok := metaFieldsVal.([]byte); ok {
-				allMetaFields = ParseAllLengthPrefixedJSON(v)
-			}
-		}
-	}
-
-	for idx, chunk := range searchResult.Chunks {
-		docID, ok := ExtractDocumentID(chunk)
-		if !ok {
+	kbs := make([]*entity.Knowledgebase, 0, len(kbIDs))
+	seen := map[string]bool{}
+	for _, id := range kbIDs {
+		if seen[id] {
 			continue
 		}
-
-		var metaFields map[string]interface{}
-		var metaFieldsVal interface{}
-
-		if len(allMetaFields) > 0 && idx < len(allMetaFields) {
-			// Use pre-parsed meta_fields from concatenated data
-			metaFields = allMetaFields[idx]
-		} else {
-			// Normal case - get from chunk
-			metaFieldsVal = chunk["meta_fields"]
-			if metaFieldsVal != nil {
-				switch v := metaFieldsVal.(type) {
-				case string:
-					if err := json.Unmarshal([]byte(v), &metaFields); err != nil {
-						continue
-					}
-				case []byte:
-					// Try direct JSON parse first
-					if err := json.Unmarshal(v, &metaFields); err != nil {
-						// Try to parse as concatenated JSON objects
-						metaFields = ParseLengthPrefixedJSON(v)
-					}
-				case map[string]interface{}:
-					metaFields = v
-				default:
+		kb, err := s.readableMetadataKB(ctx, id, userID)
+		if err != nil {
+			return nil, err
+		}
+		seen[id] = true
+		kbs = append(kbs, kb)
+	}
+	flattened := map[string]map[string][]string{}
+	for _, kb := range kbs {
+		rows, err := s.scopedMetadataRows(ctx, kb, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			docID := row["id"].(string)
+			for field, raw := range row["meta_fields"].(map[string]interface{}) {
+				if field == "kb_id" || field == "id" {
 					continue
+				}
+				if flattened[field] == nil {
+					flattened[field] = map[string][]string{}
+				}
+				values, ok := raw.([]interface{})
+				if !ok {
+					values = []interface{}{raw}
+					if list, ok := raw.([]string); ok {
+						values = make([]interface{}, len(list))
+						for i, value := range list {
+							values[i] = value
+						}
+					}
+				}
+				for _, value := range values {
+					if value != nil {
+						label := fmt.Sprintf("%v", value)
+						flattened[field][label] = append(flattened[field][label], docID)
+					}
 				}
 			}
 		}
-
-		if metaFields == nil {
-			continue
-		}
-
-		// Process each metadata field
-		for fieldName, fieldValue := range metaFields {
-			if fieldName == "kb_id" || fieldName == "id" {
-				continue
-			}
-
-			if _, ok := flattenedMeta[fieldName]; !ok {
-				flattenedMeta[fieldName] = make(map[string][]string)
-			}
-
-			// Handle list and single values
-			var values []interface{}
-			switch v := fieldValue.(type) {
-			case []interface{}:
-				values = v
-			default:
-				values = []interface{}{v}
-			}
-
-			for _, val := range values {
-				if val == nil {
-					continue
-				}
-				strVal := fmt.Sprintf("%v", val)
-				flattenedMeta[fieldName][strVal] = append(flattenedMeta[fieldName][strVal], docID)
-			}
-		}
 	}
-
-	// Convert to map[string]interface{} for return
-	var metaResult map[string]interface{} = make(map[string]interface{})
-	for k, v := range flattenedMeta {
-		metaResult[k] = v
+	result := map[string]interface{}{}
+	for field, values := range flattened {
+		result[field] = values
 	}
-
-	return metaResult, nil
+	return result, ctx.Err()
 }
 
 // valueInfo holds count and order of first appearance
@@ -718,7 +775,7 @@ func getMetaValueType(value interface{}) string {
 		return "string"
 	case int, int8, int16, int32, int64:
 		return "number"
-	case float32, float64:
+	case float32, float64, json.Number:
 		return "number"
 	case string:
 		if isTimeString(v) {

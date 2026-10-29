@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -32,12 +33,44 @@ import (
 	"multirag/internal/cache"
 	"multirag/internal/common"
 	"multirag/internal/dao"
+	"multirag/internal/engine"
+	"multirag/internal/engine/types"
 	"multirag/internal/entity"
 	"multirag/internal/server"
 	"multirag/internal/server/local"
+	"multirag/internal/service"
 	"multirag/internal/storage"
 	"multirag/internal/testsupport"
 )
+
+type documentHTTPMetadataIndex struct {
+	engine.DocEngine
+	documentID, kbID, tenantID string
+	calls                      atomic.Int64
+}
+
+func (e *documentHTTPMetadataIndex) Search(ctx context.Context, request *types.SearchRequest) (*types.SearchResult, error) {
+	e.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(request.IndexNames) != 1 || request.IndexNames[0] != service.BuildMetadataIndexName(e.tenantID) || len(request.KbIDs) != 1 || request.KbIDs[0] != e.kbID {
+		return nil, fmt.Errorf("metadata request scope changed")
+	}
+	selected := request.Filter == nil
+	if values, ok := request.Filter["id"].([]string); ok {
+		for _, v := range values {
+			if v == e.documentID {
+				selected = true
+			}
+		}
+	}
+	rows := []map[string]interface{}{}
+	if selected {
+		rows = append(rows, map[string]interface{}{"id": e.documentID, "kb_id": e.kbID, "meta_fields": map[string]interface{}{"zero": 0, "tag": "owned"}})
+	}
+	return &types.SearchResult{Chunks: rows, Total: int64(len(rows))}, nil
+}
 
 type documentHTTPSecretStore struct{ secret string }
 
@@ -279,17 +312,20 @@ func TestAfterAabDocumentFilesHTTPAndWeb(t *testing.T) {
 		}
 		return token
 	}
-	ownerJWT, memberJWT := jwtFor("owner"), jwtFor("member")
+	ownerJWT, memberJWT, foreignJWT := jwtFor("owner"), jwtFor("member"), jwtFor("foreign")
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
-	dh := &DocumentHandler{}
+	metadataIndex := &documentHTTPMetadataIndex{documentID: ids["doc"], kbID: ids["kb"], tenantID: ids["token-tenant"]}
+	dh := NewDocumentHandler(service.NewDocumentService(metadataIndex))
 	ah := NewAuthHandler()
 	web := r.Group("/api/v1")
 	web.Use(func(c *gin.Context) { documentFileHeaders(c) }, ah.DocumentStatusAuthMiddleware())
 	web.GET("/documents/:id/preview", dh.GetDocumentPreview)
 	web.GET("/documents/:id/download", dh.DownloadDocumentFile)
 	web.GET("/documents/artifact/:filename", dh.GetDocumentArtifact)
+	web.POST("/document/list", dh.ListDocumentsByKB)
+	web.POST("/document/metadata/summary", dh.MetadataSummary)
 	r.GET("/api/v1/datasets/:dataset_id/documents/:document_id", ah.DatasetDocumentAuthMiddleware(), dh.DownloadDocument)
 	journal.Event("reserve-HTTP-listener-before-bind", map[string]any{"network": "tcp4", "requested": "127.0.0.1:0"})
 	lc := net.ListenConfig{Control: func(network, address string, _ syscall.RawConn) error {
@@ -359,6 +395,63 @@ func TestAfterAabDocumentFilesHTTPAndWeb(t *testing.T) {
 	get(preview, "", 401, nil)
 	get("/api/v1/datasets/"+ids["kb"]+"/documents/"+ids["doc"], apiToken, 200, objects[ids["folder"]+"/source.json"])
 	get("/api/v1/datasets/"+ids["foreign-kb"]+"/documents/"+ids["doc"], apiToken, 404, nil)
+	postMetadata := func(path, token, body string, want int) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, base+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal("metadata request unavailable")
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal("real metadata HTTP failed")
+		}
+		defer response.Body.Close()
+		raw, err := io.ReadAll(response.Body)
+		if err != nil || response.StatusCode != want {
+			t.Fatalf("metadata HTTP status=%d want=%d", response.StatusCode, want)
+		}
+		var envelope struct {
+			Code int `json:"code"`
+		}
+		if json.Unmarshal(raw, &envelope) != nil || (want == 200 && envelope.Code != 0) || (want != 200 && envelope.Code == 0) {
+			t.Fatal("metadata HTTP envelope failed")
+		}
+	}
+	summaryPath := "/api/v1/document/metadata/summary"
+	summaryBody := fmt.Sprintf(`{"kb_id":%q,"doc_ids":[%q]}`, ids["kb"], ids["doc"])
+	beforeMetadata := metadataIndex.calls.Load()
+	postMetadata(summaryPath, foreignJWT, summaryBody, http.StatusForbidden)
+	if metadataIndex.calls.Load() != beforeMetadata {
+		t.Fatal("foreign HTTP metadata denial reached index")
+	}
+	postMetadata(summaryPath, ownerJWT, fmt.Sprintf(`{"kb_id":%q,"doc_ids":[]}`, ids["kb"]), http.StatusOK)
+	if metadataIndex.calls.Load() != beforeMetadata {
+		t.Fatal("explicit empty HTTP metadata selection reached index")
+	}
+	postMetadata(summaryPath, memberJWT, summaryBody, http.StatusOK)
+	if metadataIndex.calls.Load() != beforeMetadata+1 {
+		t.Fatal("normal team HTTP metadata did not read exact scope")
+	}
+	beforeMetadata = metadataIndex.calls.Load()
+	if err := db.Model(&entity.Tenant{}).Where("id=?", ids["token-tenant"]).Update("status", "0").Error; err != nil {
+		t.Fatal("owned tenant status setup failed")
+	}
+	postMetadata(summaryPath, ownerJWT, summaryBody, http.StatusForbidden)
+	if metadataIndex.calls.Load() != beforeMetadata {
+		t.Fatal("inactive tenant HTTP metadata denial reached index")
+	}
+	if err := db.Model(&entity.Tenant{}).Where("id=?", ids["token-tenant"]).Update("status", "1").Error; err != nil {
+		t.Fatal("owned tenant status restoration failed")
+	}
+	beforeMetadata = metadataIndex.calls.Load()
+	postMetadata("/api/v1/document/list?id="+ids["kb"], foreignJWT, "", http.StatusForbidden)
+	if metadataIndex.calls.Load() != beforeMetadata {
+		t.Fatal("foreign HTTP document list denial reached index")
+	}
+	postMetadata("/api/v1/document/list?id="+ids["kb"], memberJWT, "", http.StatusOK)
+	journal.Event("legacy-metadata-real-HTTP-SQL-scope-readback", map[string]any{"foreign_summary_index_calls": 0, "foreign_list_index_calls": 0, "inactive_tenant_index_calls": 0, "explicit_empty_index_calls": 0, "normal_team_allowed": true})
 	journal.Event("real-HTTP-SQL-MinIO-Redis-contract-pass", map[string]any{"owner_download": true, "member_preview": true, "member_download_status": 403, "foreign_artifact_status": 404, "empty_object_status": 200, "SDK_original_token_tenant": true, "token_tenant_has_user_row": false})
 	runDocumentHTTPWebConsumer(t, journal, map[string]any{"base": base, "ownerJWT": ownerJWT, "memberJWT": memberJWT, "doc": ids["doc"], "empty": ids["empty"], "artifact": artifact, "source": string(objects[ids["folder"]+"/source.json"]), "artifactSource": string(objects["sandbox-artifacts/"+artifactFilename])})
 }
