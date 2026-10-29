@@ -13,6 +13,7 @@ ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
         "test_agent_retrieval_top_k.py",
+        "test_agent_tags_atomic.py",
         "test_async_engine.py",
         "test_beta_share_scope.py",
         "test_channel_candidate_gc.py",
@@ -55,6 +56,7 @@ DATABASE_TESTS = frozenset(
         "test_sandbox_provider_settings.py",
         "test_sync_log_checkpoint.py",
         "test_task_log_limits.py",
+        "test_volc_provider_credentials.py",
     }
 )
 REDIS_TESTS = frozenset({"test_shared_auth_secret.py", "test_synonym_redis.py"})
@@ -84,6 +86,7 @@ ISOLATED_STORAGE_TESTS = frozenset(
         "test_dataset_management_http.py",
         "test_dataset_search_http.py",
         "test_debug_response_start.py",
+        "test_dify_auth_http.py",
         "test_document_delete_scope.py",
         "test_document_file_http.py",
         "test_document_image_http.py",
@@ -167,6 +170,7 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_model_document_web_consumers.py",
                 "test_outlook_api.py",
                 "test_provider_web_consumers.py",
+                "test_salesforce_source_sync.py",
                 "test_search_connector_web_consumers.py",
                 "test_retrieval_rerank_authorization.py",
                 "test_document_file_http.py",

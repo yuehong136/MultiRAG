@@ -34,12 +34,17 @@ func TestCLIAPIRouteScope(t *testing.T) {
 		"GET /api/v1/agents/:agent_id/versions":             ".ListAgentVersions-fm",
 		"GET /api/v1/agents/:agent_id/versions/:version_id": ".GetAgentVersion-fm",
 		"POST /api/v1/agents/:agent_id/upload":              ".UploadAgentFile-fm",
+		"GET /api/v1/agents/templates":                      ".ListTemplates-fm",
+		"PUT /api/v1/agents/:agent_id/tags":                 ".UpdateAgentTags-fm",
+		"POST /api/v1/mcp/servers/import":                   ".ImportMCPServers-fm",
+		"POST /api/v1/mcp/servers/:mcp_id/test":             ".TestMCPServer-fm",
+		"GET /api/v1/mcp/servers/:mcp_id/tools":             ".GetMCPServerTools-fm",
 	} {
 		if !strings.HasSuffix(routes[route], method) {
 			t.Fatalf("agent route %s must bind %s", route, method)
 		}
 	}
-	for _, entry := range [][2]string{{"GET", "/api/v1/agents/id/versions"}, {"GET", "/api/v1/agents/id/versions/version"}, {"POST", "/api/v1/agents/id/upload"}, {"POST", "/api/v1/searchbots/related_questions"}} {
+	for _, entry := range [][2]string{{"GET", "/api/v1/agents/id/versions"}, {"GET", "/api/v1/agents/id/versions/version"}, {"POST", "/api/v1/agents/id/upload"}, {"POST", "/api/v1/searchbots/related_questions"}, {"GET", "/api/v1/agents/templates"}, {"PUT", "/api/v1/agents/id/tags"}, {"POST", "/api/v1/mcp/servers/import"}, {"POST", "/api/v1/mcp/servers/id/test"}, {"GET", "/api/v1/mcp/servers/id/tools"}} {
 		w := httptest.NewRecorder()
 		app.ServeHTTP(w, httptest.NewRequest(entry[0], entry[1], strings.NewReader(`{}`)))
 		if w.Code != http.StatusUnauthorized {

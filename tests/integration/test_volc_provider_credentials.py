@@ -22,9 +22,9 @@ from api.db.services import provider_verification
 from api.db.services.llm_service import LLMBundle
 from common import settings
 from common.config_utils import CONFIGS
-from tests.integration.test_provider_instances import REAL_VERIFY_MODEL
-from tests.integration.test_provider_instances import http as http
-from tests.integration.test_provider_instances import owned_engine as owned_engine
+from tests.support.provider_instances import REAL_VERIFY_MODEL
+from tests.support.provider_instances import http as http
+from tests.support.provider_instances import owned_engine as owned_engine
 from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration

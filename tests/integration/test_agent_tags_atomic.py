@@ -14,6 +14,7 @@ from sqlalchemy.pool import NullPool
 
 from api.db.db_models import Base, CanvasTemplate, UserCanvas, UserCanvasVersion
 from api.db.services.canvas_service import CanvasTemplateService, UserCanvasService
+from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
 
@@ -42,15 +43,21 @@ async def atomic_tags_engine(request: pytest.FixtureRequest) -> AsyncIterator[As
         assert url.database and url.database.startswith("multirag_test_"), "Only an owned scratch database is allowed"
     else:
         scratch: Engine = request.getfixturevalue("pg_scratch_engine")
-        Base.metadata.create_all(scratch, tables=[UserCanvas.__table__, UserCanvasVersion.__table__])
         url = scratch.url
+    journal = ResourceJournal("agent-tags-atomic")
+    journal.event("reserve-sql-scope", database=url.database, host=url.host, port=url.port, schema="usr_ai", tables=[UserCanvas.__tablename__, UserCanvasVersion.__tablename__])
+    if not supplied_dsn:
+        Base.metadata.create_all(scratch, tables=[UserCanvas.__table__, UserCanvasVersion.__table__])
+    journal.event("reserve-sql-rows", database=url.database, canvases=list(CANVAS_IDS), versions=[VERSION], owners=[OWNER, FOREIGN_OWNER], missing_canvas_probe=MISSING_CANVAS)
     engine = create_async_engine(url, poolclass=NullPool, connect_args={"options": "-c timezone=UTC"})
     seeded = False
+    scope_verified = False
     try:
         async with engine.begin() as connection:
             existing = (await connection.execute(select(UserCanvas.id).where(UserCanvas.id.in_((*CANVAS_IDS, MISSING_CANVAS))))).all()
             assert not existing, "The reserved atomic tag rows already exist"
             assert (await connection.execute(select(UserCanvasVersion.id).where(UserCanvasVersion.id == VERSION))).scalar_one_or_none() is None
+            scope_verified = True
             rows: list[dict[str, Any]] = []
             for canvas_id, owner, permission in (
                 (OWNED_CANVAS, OWNER, "me"),
@@ -96,9 +103,11 @@ async def atomic_tags_engine(request: pytest.FixtureRequest) -> AsyncIterator[As
                 async with engine.begin() as connection:
                     await connection.execute(delete(UserCanvasVersion).where(UserCanvasVersion.id == VERSION))
                     await connection.execute(delete(UserCanvas).where(UserCanvas.id.in_(CANVAS_IDS)))
+            if scope_verified:
                 async with engine.connect() as reader:
                     assert (await reader.execute(select(UserCanvas.id).where(UserCanvas.id.in_(CANVAS_IDS)))).all() == []
                     assert (await reader.execute(select(UserCanvasVersion.id).where(UserCanvasVersion.id == VERSION))).scalar_one_or_none() is None
+                journal.event("sql-cleanup-readback", database=url.database, canvases=list(CANVAS_IDS), versions=[VERSION], absent=True)
         finally:
             await engine.dispose()
 
@@ -171,6 +180,9 @@ def catalog_engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         engine = create_engine(url, poolclass=NullPool, connect_args={"options": "-c timezone=UTC"})
     else:
         engine = request.getfixturevalue("pg_scratch_engine")
+    journal = ResourceJournal("agent-template-catalog-schema")
+    journal.event("reserve-sql-scope", database=engine.url.database, host=engine.url.host, port=engine.url.port, schema="usr_ai", tables=[CanvasTemplate.__tablename__])
+    if not supplied_dsn:
         Base.metadata.create_all(engine, tables=[CanvasTemplate.__table__])
     try:
         yield engine
@@ -180,13 +192,17 @@ def catalog_engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
 
 
 def test_template_catalog_preserves_locale_dsl_and_stable_order(catalog_engine: Engine) -> None:
+    journal = ResourceJournal("agent-template-catalog-rows")
+    journal.event("reserve-sql-rows", database=catalog_engine.url.database, host=catalog_engine.url.host, port=catalog_engine.url.port, table=CanvasTemplate.__tablename__, ids=list(TEMPLATE_IDS))
     title = {"zh": "标题", "en": "Title", "fr": ""}
     description = {"en": "English fallback"}
     dsl = {"components": {"starter": {"params": {"count": 0, "values": []}}}, "history": [], "enabled": False}
     seeded = False
+    scope_verified = False
     try:
         with Session(catalog_engine) as writer:
             assert CanvasTemplateService.list_templates(writer) == [], "The isolated template catalogue must start empty"
+            scope_verified = True
             for template_id in (TEMPLATE_IDS[1], TEMPLATE_IDS[0], TEMPLATE_IDS[2]):
                 writer.execute(
                     insert(CanvasTemplate).values(
@@ -218,7 +234,9 @@ def test_template_catalog_preserves_locale_dsl_and_stable_order(catalog_engine: 
         if seeded:
             with catalog_engine.begin() as cleanup:
                 cleanup.execute(delete(CanvasTemplate).where(CanvasTemplate.id.in_(TEMPLATE_IDS)))
+        if scope_verified:
             with catalog_engine.connect() as reader:
                 assert reader.execute(select(CanvasTemplate.id).where(CanvasTemplate.id.in_(TEMPLATE_IDS))).all() == []
             with Session(catalog_engine) as reader:
                 assert CanvasTemplateService.list_templates(reader) == []
+            journal.event("sql-cleanup-readback", database=catalog_engine.url.database, table=CanvasTemplate.__tablename__, ids=list(TEMPLATE_IDS), absent=True)

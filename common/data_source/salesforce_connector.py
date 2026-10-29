@@ -291,6 +291,9 @@ class SalesforceConnector(LoadConnector, PollConnector, CheckpointedConnectorWit
         return fields
 
     def _query_records(self, obj: str, fields: list[str], start: float | None, end: float | None) -> Iterator[dict[str, Any]]:
+        instance_url = self._instance_url
+        if instance_url is None:
+            raise ConnectorMissingCredentialError("Salesforce")
         filters = []
         wire_start = math.floor(start) if start is not None else None
         wire_end = math.ceil(end) if end is not None else None
@@ -337,7 +340,7 @@ class SalesforceConnector(LoadConnector, PollConnector, CheckpointedConnectorWit
             if not isinstance(next_url, str) or not next_url or not records:
                 raise ConnectorValidationError("Salesforce query is missing its continuation")
             try:
-                url = self._safe_url(urljoin(self._instance_url + "/", next_url))
+                url = self._safe_url(urljoin(instance_url + "/", next_url))
                 parsed = urlsplit(url)
             except ValueError:
                 raise ConnectorValidationError("Salesforce continuation URL is invalid") from None

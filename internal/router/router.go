@@ -135,6 +135,9 @@ func (r *Router) Setup(engine *gin.Engine) {
 	{
 		authorized.GET("/api/v1/mcp/servers", r.mcpHandler.ListMCPServers)
 		authorized.POST("/api/v1/mcp/servers", r.mcpHandler.CreateMCPServer)
+		authorized.POST("/api/v1/mcp/servers/import", r.mcpHandler.ImportMCPServers)
+		authorized.POST("/api/v1/mcp/servers/:mcp_id/test", r.mcpHandler.TestMCPServer)
+		authorized.GET("/api/v1/mcp/servers/:mcp_id/tools", r.mcpHandler.GetMCPServerTools)
 		authorized.PUT("/api/v1/mcp/servers/:mcp_id", r.mcpHandler.UpdateMCPServer)
 		authorized.DELETE("/api/v1/mcp/servers/:mcp_id", r.mcpHandler.DeleteMCPServer)
 		authorized.POST("/api/v1/auth/logout", r.userHandler.Logout)
@@ -275,6 +278,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 			}
 
 			v1.GET("/agents", r.agentHandler.ListAgents)
+			v1.GET("/agents/templates", r.agentHandler.ListTemplates)
+			v1.PUT("/agents/:agent_id/tags", r.agentHandler.UpdateAgentTags)
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
 			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
 			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
