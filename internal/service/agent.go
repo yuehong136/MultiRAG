@@ -22,7 +22,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
+	"unicode"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"gorm.io/gorm"
 	"multirag/internal/common"
 	"multirag/internal/dao"
@@ -41,6 +45,83 @@ func NewAgentService() *AgentService {
 		canvasDAO:     dao.NewUserCanvasDAO(),
 		userTenantDAO: dao.NewUserTenantDAO(),
 	}
+}
+
+// ListTemplates returns the full system catalogue for an authenticated caller.
+func (s *AgentService) ListTemplates(ctx context.Context, userID string) ([]*entity.CanvasTemplate, common.ErrorCode, error) {
+	if userID == "" {
+		return nil, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	rows, err := dao.NewCanvasTemplateDAO().GetAll(ctx)
+	if err != nil {
+		return nil, common.CodeServerError, fmt.Errorf("Unable to list agent templates.")
+	}
+	return rows, common.CodeSuccess, nil
+}
+
+// normalizeAgentTags preserves first spelling and order within Unicode limits.
+// The accepted types match the production Python string/list-of-strings contract.
+func normalizeAgentTags(raw any) (string, error) {
+	var tags []string
+	switch value := raw.(type) {
+	case string:
+		tags = strings.Split(value, ",")
+	case []string:
+		tags = make([]string, len(value))
+		for i, tag := range value {
+			tags[i] = strings.ReplaceAll(tag, ",", " ")
+		}
+	default:
+		return "", fmt.Errorf("tags must be a string or array of strings")
+	}
+	result := []string{}
+	seen := map[string]bool{}
+	used := 0
+	lower := cases.Lower(language.Und)
+	for _, tag := range tags {
+		runes := []rune(strings.TrimFunc(tag, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }))
+		if len(runes) > 64 {
+			runes = runes[:64]
+		}
+		tag = string(runes)
+		key := lower.String(tag)
+		if tag == "" || seen[key] {
+			continue
+		}
+		extra := len(runes)
+		if len(result) > 0 {
+			extra++
+		}
+		if used+extra > 512 {
+			break
+		}
+		seen[key] = true
+		result = append(result, tag)
+		used += extra
+	}
+	return strings.Join(result, ","), nil
+}
+
+// UpdateAgentTags manages only the caller's canvas, regardless of team read access.
+func (s *AgentService) UpdateAgentTags(ctx context.Context, userID, canvasID string, tags any) (bool, common.ErrorCode, error) {
+	if userID == "" {
+		return false, common.CodeAuthenticationError, fmt.Errorf("No authorization.")
+	}
+	if canvasID == "" {
+		return false, common.CodeArgumentError, fmt.Errorf("agent_id is required")
+	}
+	normalized, err := normalizeAgentTags(tags)
+	if err != nil {
+		return false, common.CodeArgumentError, err
+	}
+	err = s.canvasDAO.UpdateTagsOwned(ctx, userID, canvasID, normalized)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, common.CodeOperatingError, fmt.Errorf("Agent not found or no permission.")
+	}
+	if err != nil {
+		return false, common.CodeServerError, fmt.Errorf("Unable to update agent tags.")
+	}
+	return true, common.CodeSuccess, nil
 }
 
 // AgentItem is one entry in the list response.

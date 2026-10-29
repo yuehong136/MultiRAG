@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +36,60 @@ type AgentHandler struct {
 // NewAgentHandler create agent handler
 func NewAgentHandler(agentService *service.AgentService) *AgentHandler {
 	return &AgentHandler{agentService: agentService}
+}
+
+// ListTemplates keeps the catalogue's multilingual objects and DSL intact.
+func (h *AgentHandler) ListTemplates(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	rows, code, err := h.agentService.ListTemplates(c.Request.Context(), user.ID)
+	if err != nil {
+		jsonError(c, code, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, rows, "success")
+}
+
+// UpdateAgentTags requires a present string or array of strings; [] clears tags.
+func (h *AgentHandler) UpdateAgentTags(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonResponse(c, code, false, message)
+		return
+	}
+	var request map[string]json.RawMessage
+	if err := bindObjectJSON(c, &request); err != nil || len(request) != 1 || len(request["tags"]) == 0 {
+		jsonResponse(c, common.CodeArgumentError, false, "tags must be a string or array of strings")
+		return
+	}
+	var tags any
+	var text string
+	if err := json.Unmarshal(request["tags"], &text); err == nil {
+		tags = text
+	} else {
+		var values []json.RawMessage
+		if err = json.Unmarshal(request["tags"], &values); err != nil {
+			jsonResponse(c, common.CodeArgumentError, false, "tags must be a string or array of strings")
+			return
+		}
+		stringsOnly := make([]string, len(values))
+		for i, value := range values {
+			if strings.TrimSpace(string(value)) == "null" || json.Unmarshal(value, &stringsOnly[i]) != nil {
+				jsonResponse(c, common.CodeArgumentError, false, "tags must be a string or array of strings")
+				return
+			}
+		}
+		tags = stringsOnly
+	}
+	updated, code, err := h.agentService.UpdateAgentTags(c.Request.Context(), user.ID, c.Param("agent_id"), tags)
+	if err != nil {
+		jsonResponse(c, code, false, err.Error())
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, updated, "success")
 }
 
 // ListAgents lists agent canvases for the current user.

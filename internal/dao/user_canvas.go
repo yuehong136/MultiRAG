@@ -20,6 +20,9 @@ import (
 	"context"
 	"fmt"
 	"multirag/internal/entity"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UserCanvasDAO user canvas data access object
@@ -118,6 +121,19 @@ func (dao *UserCanvasDAO) GetAllCanvasesByTenantIDs(tenantIDs []string, userID s
 // GetByCanvasID get user canvas by canvas ID (alias for GetByID)
 func (dao *UserCanvasDAO) GetByCanvasID(canvasID string) (*entity.UserCanvas, error) {
 	return dao.GetByID(canvasID)
+}
+
+// UpdateTagsOwned holds the authorized row through the owner-scoped write.
+// The lock also makes unchanged MySQL writes succeed without an unscoped fallback.
+func (dao *UserCanvasDAO) UpdateTagsOwned(ctx context.Context, userID, canvasID, tags string) error {
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row entity.UserCanvas
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("id = ? AND user_id = ?", canvasID, userID).Take(&row).Error; err != nil {
+			return err
+		}
+		return tx.Model(&entity.UserCanvas{}).Where("id = ? AND user_id = ?", canvasID, userID).Update("tags", tags).Error
+	})
 }
 
 // CanvasBasicInfo basic canvas information for list responses
