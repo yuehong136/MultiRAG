@@ -302,8 +302,8 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 		}
 		err := h.chatSessionService.CompletionStream(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID, sender)
 		if err != nil && c.Request.Context().Err() == nil {
-			if !c.Writer.Written() && errors.Is(err, service.ErrChatSessionAccessDenied) {
-				jsonError(c, common.CodeForbidden, "No authorization for the selected conversation")
+			if !c.Writer.Written() && (errors.Is(err, service.ErrChatSessionAccessDenied) || errors.Is(err, service.ErrDatasetAccessDenied)) {
+				jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
 				return
 			}
 			data, _ := json.Marshal(gin.H{"code": common.CodeServerError, "message": "Model stream failed", "data": gin.H{"answer": "**ERROR**: Model stream failed", "reference": []interface{}{}}})

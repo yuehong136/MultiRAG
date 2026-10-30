@@ -619,6 +619,30 @@ func TestAfter10bbeAskChatRAGJWTSQL(t *testing.T) {
 		}
 		j.Event("auth-denials-independent-readback", map[string]any{"conversation": "s-auth-session", "unchanged": true, "model_and_store_calls": 0})
 	})
+	t.Run("Chat-KB-denial-before-stream-output", func(t *testing.T) {
+		session(t, "s-kb-denied", "s-dialog", "s-member")
+		beforeSQL := readSession(t, "s-kb-denied")
+		if err := db.Model(&entity.Chat{}).Where("id = ?", "s-dialog").Update("kb_ids", entity.JSONSlice{"s-private"}).Error; err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := db.Model(&entity.Chat{}).Where("id = ?", "s-dialog").Update("kb_ids", entity.JSONSlice{"s-kb"}).Error; err != nil {
+				t.Error(err)
+			}
+		}()
+		for _, stream := range []bool{false, true} {
+			before := counts()
+			_, raw := do(t, "/v1/conversation/completion", completionBody("s-kb-denied", stream), "s-member")
+			if !strings.Contains(raw, `"code":403`) || strings.HasPrefix(raw, "data: ") || finalAnswer(t, raw) != nil {
+				t.Fatal("KB denial started model stream or returned wrong error", raw)
+			}
+			zeroCalls(t, before)
+			if readSession(t, "s-kb-denied") != beforeSQL {
+				t.Fatal("KB denial changed session")
+			}
+		}
+		j.Event("chat-KB-denial-independent-readback", map[string]any{"conversation": "s-kb-denied", "sync_stream": true, "no_SSE_started": true, "zero_model_store_calls": true, "unchanged": true})
+	})
 	t.Run("Ask-actual-automatic-citations", func(t *testing.T) {
 		before := counts()
 		status, raw := do(t, "/api/v1/searchbots/ask", askBody("s-search", []string{"s-kb"}), "s-member")
