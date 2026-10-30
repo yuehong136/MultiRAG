@@ -59,7 +59,7 @@ type chunkVectorScope struct {
 }
 
 // FetchChunkVectors authorizes and hydrates one citation candidate selection.
-// It does not implement the Go ask or citation insertion execution path.
+// Ask and Chat use this read to bind citation vectors to their visible chunk IDs.
 func (s *ChunkService) FetchChunkVectors(ctx context.Context, req *ChunkVectorRequest, userID string) (*ChunkVectorResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -36,15 +37,23 @@ type ChatSessionService struct {
 	chatDAO              *dao.ChatDAO
 	userTenantDAO        *dao.UserTenantDAO
 	modelProviderService *ModelProviderService
+	chunks               *ChunkService
 }
 
 // NewChatSessionService create chat session service
 func NewChatSessionService() *ChatSessionService {
+	provider := NewModelProviderService()
+	return NewChatSessionServiceWithModels(provider, NewChunkServiceWithModels(provider))
+}
+
+// NewChatSessionServiceWithModels uses one catalog for retrieval and generation.
+func NewChatSessionServiceWithModels(provider *ModelProviderService, chunks *ChunkService) *ChatSessionService {
 	return &ChatSessionService{
 		chatSessionDAO:       dao.NewChatSessionDAO(),
 		chatDAO:              dao.NewChatDAO(),
 		userTenantDAO:        dao.NewUserTenantDAO(),
-		modelProviderService: NewModelProviderService(),
+		modelProviderService: provider,
+		chunks:               chunks,
 	}
 }
 
@@ -230,30 +239,46 @@ func (s *ChatSessionService) ListChatSessions(userID string, dialogID string) (*
 	return &ListChatSessionsResponse{Sessions: sessions}, nil
 }
 
-// prepareCompletion resolves stored session/dialog and validates the final user turn.
-func (s *ChatSessionService) prepareCompletion(ctx context.Context, conversationID string, messages []map[string]interface{}, llmID string) (*entity.ChatSession, *entity.Chat, []interface{}, error) {
+// prepareCompletion binds the actual actor to both the conversation and dialog
+// before any model resolution, retrieval, or write. No tenant fallback is used.
+func (s *ChatSessionService) prepareCompletion(ctx context.Context, actor, conversationID string, messages []map[string]interface{}, llmID string) (*entity.ChatSession, *entity.Chat, []interface{}, error) {
+	if ctx == nil || !exactVectorID(actor) || !exactVectorID(conversationID) {
+		return nil, nil, nil, ErrChatSessionAccessDenied
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
-	if len(messages) == 0 {
-		return nil, nil, nil, errors.New("messages cannot be empty")
+	if len(messages) == 0 || messages[len(messages)-1]["role"] != "user" {
+		return nil, nil, nil, ErrRetrievalArgument
 	}
-	if messages[len(messages)-1]["role"] != "user" {
-		return nil, nil, nil, errors.New("the last content of this conversation is not from user")
+	if dao.DB == nil {
+		return nil, nil, nil, errors.New("chat database unavailable")
 	}
-	session, err := s.chatSessionDAO.GetByID(conversationID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("Conversation not found: %w", err)
+	var session entity.ChatSession
+	if err := authorizedChatSessionQuery(ctx, actor).Where("id = ?", conversationID).First(&session).Error; err != nil {
+		return nil, nil, nil, chatSessionReadError(err)
 	}
-	dialog, err := s.chatSessionDAO.GetDialogByID(session.DialogID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("Dialog not found: %w", err)
+	var dialog entity.Chat
+	if err := dao.DB.WithContext(ctx).Where("id = ? AND status = ?", session.DialogID, "1").First(&dialog).Error; err != nil {
+		return nil, nil, nil, chatSessionReadError(err)
+	}
+	if err := loadExactDialogConfig(ctx, &dialog); err != nil {
+		return nil, nil, nil, err
 	}
 	if llmID != "" {
-		dialog.LLMID = llmID
-		dialog.TenantLLMID = nil
+		selector, err := searchbotSelector(llmID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if id, err := strconv.ParseInt(selector, 10, 64); err == nil {
+			dialog.TenantLLMID = &id
+		} else {
+			dialog.LLMID = selector
+			dialog.TenantLLMID = nil
+		}
 	}
-	return session, dialog, s.initializeReference(session), nil
+	reference, err := s.initializeReference(&session)
+	return &session, &dialog, reference, err
 }
 
 func (s *ChatSessionService) completionModel(ctx context.Context, dialog *entity.Chat) (*models.ChatModel, error) {
@@ -267,103 +292,169 @@ func (s *ChatSessionService) completionModel(ctx context.Context, dialog *entity
 	if err != nil {
 		return nil, err
 	}
-	model.APIConfig.Context = ctx
-	return model, nil
+	if model == nil || model.ModelDriver == nil || model.ModelName == nil {
+		return nil, errors.New("chat model unavailable")
+	}
+	local, api := *model, models.APIConfig{}
+	if model.APIConfig != nil {
+		api = *model.APIConfig
+	}
+	api.Context, local.APIConfig = ctx, &api
+	return &local, nil
 }
 
-// Completion uses a tenant-bound chat model with complete text or image history.
+// Completion uses authorized retrieval, complete history and the same visible
+// answer/reference projection as streaming before committing a successful turn.
 func (s *ChatSessionService) Completion(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string) (map[string]interface{}, error) {
-	session, dialog, reference, err := s.prepareCompletion(ctx, conversationID, messages, llmID)
+	session, dialog, reference, err := s.prepareCompletion(ctx, userID, conversationID, messages, llmID)
 	if err != nil {
 		return nil, err
 	}
-	model, err := s.completionModel(ctx, dialog)
+	messages, err = completionMessages(session, messages)
 	if err != nil {
 		return nil, err
 	}
-	history, err := s.modelMessages(s.processMessages(messages, dialog), s.buildSystemPrompt(dialog))
+	knowledge, err := s.completionKnowledge(ctx, userID, dialog, messages)
 	if err != nil {
 		return nil, err
 	}
-	response, err := model.ChatWithMessages(history, s.buildGenConf(dialog, config))
+	var answer, reasoning string
+	if knowledge.emptyAnswer != nil {
+		answer = *knowledge.emptyAnswer
+	} else {
+		model, err := s.completionModel(ctx, dialog)
+		if err != nil {
+			return nil, err
+		}
+		response, err := model.ChatWithMessages(knowledge.history, s.buildGenConf(dialog, config))
+		if err != nil {
+			return nil, err
+		}
+		var parser ThinkStreamState
+		answer, reasoning = parser.Feed(*response.Answer)
+		parser.Finish()
+		if response.ReasoningContent != nil {
+			reasoning = *response.ReasoningContent + reasoning
+		}
+		if strings.TrimSpace(answer) == "" {
+			return nil, ErrNoVisibleAnswer
+		}
+	}
+	answer, refs, err := s.finalizeCompletion(ctx, userID, knowledge, answer)
 	if err != nil {
 		return nil, err
 	}
+	reference[len(reference)-1] = refs
 	if llmID == "" {
-		if err := s.persistCompletion(ctx, session, messages, *response.Answer, messageID, reference); err != nil {
+		if err := s.persistCompletion(ctx, userID, session, messages, answer, messageID, reference); err != nil {
 			return nil, err
 		}
 	}
-	return map[string]interface{}{"answer": *response.Answer, "reasoning_content": response.ReasoningContent, "reference": reference[len(reference)-1], "final": true, "id": messageID, "session_id": session.ID}, nil
+	return map[string]interface{}{"answer": answer, "reasoning_content": reasoning, "reference": refs, "final": true, "id": messageID, "session_id": session.ID}, nil
 }
 
-// CompletionStream runs the sender synchronously, so its error remains available
-// to the HTTP handler and downstream cancellation never leaves a blocked channel.
+// CompletionStream keeps all provider and sender calls synchronous. A failed
+// data send or cancellation before persistence leaves SQL unchanged. Once SQL
+// commits, delivery of the terminal frame cannot be atomic with that commit.
 func (s *ChatSessionService) CompletionStream(ctx context.Context, userID string, conversationID string, messages []map[string]interface{}, llmID string, config map[string]interface{}, messageID string, sender func(string) error) error {
 	if sender == nil {
 		return errors.New("completion sender is required")
 	}
-	session, dialog, reference, err := s.prepareCompletion(ctx, conversationID, messages, llmID)
+	session, dialog, reference, err := s.prepareCompletion(ctx, userID, conversationID, messages, llmID)
 	if err != nil {
 		return err
 	}
-	model, err := s.completionModel(ctx, dialog)
+	messages, err = completionMessages(session, messages)
 	if err != nil {
 		return err
 	}
-	var answer, reasoning strings.Builder
+	knowledge, err := s.completionKnowledge(ctx, userID, dialog, messages)
+	if err != nil {
+		return err
+	}
 	sendData := func(data interface{}) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		bytes, err := json.Marshal(map[string]interface{}{"code": 0, "message": "", "data": data})
+		raw, err := json.Marshal(map[string]interface{}{"code": 0, "message": "", "data": data})
 		if err != nil {
 			return err
 		}
-		return sender("data: " + string(bytes) + "\n\n")
-	}
-	history, err := s.modelMessages(s.processMessages(messages, dialog), s.buildSystemPrompt(dialog))
-	if err != nil {
-		return err
-	}
-	err = model.ChatStreamlyWithMessages(history, s.buildGenConf(dialog, config), func(content, thought *string) error {
-		if content != nil && *content == "[DONE]" {
-			return nil
-		}
-		if thought != nil {
-			reasoning.WriteString(*thought)
-		}
-		if content != nil {
-			answer.WriteString(*content)
-		}
-		return sendData(map[string]interface{}{"answer": answer.String(), "reasoning_content": reasoning.String(), "reference": reference, "conversation_id": session.ID, "message_id": messageID})
-	})
-	if err != nil {
-		return err
-	}
-	if llmID == "" {
-		if err := s.persistCompletion(ctx, session, messages, answer.String(), messageID, reference); err != nil {
+		if err := sender("data: " + string(raw) + "\n\n"); err != nil {
 			return err
 		}
+		return ctx.Err()
+	}
+	sendFrame := func(frame AnswerFrame) error {
+		frame = withoutNoAnswerCitations(frame, knowledge.noAnswer)
+		return sendData(map[string]interface{}{"answer": frame.Answer, "reasoning_content": frame.ReasoningContent, "reference": frame.Reference, "final": frame.Final, "conversation_id": session.ID, "message_id": messageID})
+	}
+	var answer, reasoning string
+	if knowledge.emptyAnswer != nil {
+		answer = *knowledge.emptyAnswer
+	} else {
+		model, err := s.completionModel(ctx, dialog)
+		if err != nil {
+			return err
+		}
+		answer, reasoning, err = streamVisibleAnswer(ctx, model, knowledge.history, s.buildGenConf(dialog, config), knowledge.chunks, knowledge.citations, sendFrame)
+		if err != nil {
+			return err
+		}
+	}
+	answer, refs, err := s.finalizeCompletion(ctx, userID, knowledge, answer)
+	if err != nil {
+		return err
+	}
+	// Give the sender the decorated content before the SQL commit; an ordinary
+	// send failure here must not persist a successful assistant message.
+	frame := AnswerFrame{Answer: answer, ReasoningContent: reasoning, Reference: refs}
+	if err := sendFrame(frame); err != nil {
+		return err
+	}
+	reference[len(reference)-1] = refs
+	if llmID == "" {
+		if err := s.persistCompletion(ctx, userID, session, messages, answer, messageID, reference); err != nil {
+			return err
+		}
+	}
+	frame.Final = true
+	if err := sendFrame(frame); err != nil {
+		return err
 	}
 	return sendData(true)
 }
 
-func (s *ChatSessionService) persistCompletion(ctx context.Context, session *entity.ChatSession, messages []map[string]interface{}, answer, messageID string, reference []interface{}) error {
+func (s *ChatSessionService) persistCompletion(ctx context.Context, actor string, session *entity.ChatSession, messages []map[string]interface{}, answer, messageID string, reference []interface{}) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	stored := s.buildSessionMessages(session, messages)
 	stored = append(stored, map[string]interface{}{"role": "assistant", "content": answer, "id": messageID})
-	messageJSON, err := json.Marshal(map[string]interface{}{"messages": stored})
+	raw, err := json.Marshal(map[string]interface{}{"messages": stored})
 	if err != nil {
 		return err
 	}
-	referenceJSON, err := json.Marshal(reference)
+	refs, err := json.Marshal(reference)
 	if err != nil {
 		return err
 	}
-	return dao.DB.WithContext(ctx).Model(&entity.ChatSession{}).Where("id = ?", session.ID).Updates(map[string]interface{}{"message": messageJSON, "reference": referenceJSON}).Error
+	// Recheck scope at the write and use the original snapshot to reject concurrent
+	// completions instead of silently losing an already committed conversation turn.
+	query := authorizedChatSessionQuery(ctx, actor).Where("id = ? AND dialog_id = ?", session.ID, session.DialogID)
+	if len(session.Message) > 0 {
+		query = query.Where("message = ?", session.Message)
+	} else {
+		query = query.Where("message IS NULL")
+	}
+	result := query.Updates(map[string]interface{}{"message": raw, "reference": refs})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("conversation changed or access was revoked")
+	}
+	return nil
 }
 
 // Helper methods
@@ -380,10 +471,12 @@ func (s *ChatSessionService) buildSessionMessages(session *entity.ChatSession, m
 	return sessionMessages
 }
 
-func (s *ChatSessionService) initializeReference(session *entity.ChatSession) []interface{} {
+func (s *ChatSessionService) initializeReference(session *entity.ChatSession) ([]interface{}, error) {
 	var reference []interface{}
 	if len(session.Reference) > 0 {
-		json.Unmarshal(session.Reference, &reference)
+		if err := json.Unmarshal(session.Reference, &reference); err != nil {
+			return nil, errors.New("invalid stored references")
+		}
 	}
 	// Filter out nil entries and append new reference
 	var filtered []interface{}
@@ -396,7 +489,7 @@ func (s *ChatSessionService) initializeReference(session *entity.ChatSession) []
 		"chunks":   []interface{}{},
 		"doc_aggs": []interface{}{},
 	})
-	return filtered
+	return filtered, nil
 }
 
 // buildSystemPrompt builds the system prompt from dialog configuration

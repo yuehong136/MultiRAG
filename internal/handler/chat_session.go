@@ -18,6 +18,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -206,11 +207,11 @@ type CompletionRequest struct {
 	LLMID            string                   `json:"llm_id,omitempty"`
 	Stream           *bool                    `json:"stream,omitempty"`
 	Thinking         *bool                    `json:"thinking,omitempty"`
-	Temperature      float64                  `json:"temperature,omitempty"`
-	TopP             float64                  `json:"top_p,omitempty"`
-	FrequencyPenalty float64                  `json:"frequency_penalty,omitempty"`
-	PresencePenalty  float64                  `json:"presence_penalty,omitempty"`
-	MaxTokens        int                      `json:"max_tokens,omitempty"`
+	Temperature      *float64                 `json:"temperature,omitempty"`
+	TopP             *float64                 `json:"top_p,omitempty"`
+	FrequencyPenalty *float64                 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64                 `json:"presence_penalty,omitempty"`
+	MaxTokens        *int                     `json:"max_tokens,omitempty"`
 }
 
 // Completion chat completion
@@ -242,20 +243,20 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 
 	// Build chat model config
 	chatModelConfig := make(map[string]interface{})
-	if req.Temperature != 0 {
-		chatModelConfig["temperature"] = req.Temperature
+	if req.Temperature != nil {
+		chatModelConfig["temperature"] = *req.Temperature
 	}
-	if req.TopP != 0 {
-		chatModelConfig["top_p"] = req.TopP
+	if req.TopP != nil {
+		chatModelConfig["top_p"] = *req.TopP
 	}
-	if req.FrequencyPenalty != 0 {
-		chatModelConfig["frequency_penalty"] = req.FrequencyPenalty
+	if req.FrequencyPenalty != nil {
+		chatModelConfig["frequency_penalty"] = *req.FrequencyPenalty
 	}
-	if req.PresencePenalty != 0 {
-		chatModelConfig["presence_penalty"] = req.PresencePenalty
+	if req.PresencePenalty != nil {
+		chatModelConfig["presence_penalty"] = *req.PresencePenalty
 	}
-	if req.MaxTokens != 0 {
-		chatModelConfig["max_tokens"] = req.MaxTokens
+	if req.MaxTokens != nil {
+		chatModelConfig["max_tokens"] = *req.MaxTokens
 	}
 
 	if req.Stream != nil {
@@ -286,17 +287,13 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 	// Call service
 	if req.Stream != nil && *req.Stream {
 		// Streaming response
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
-		c.Header("Connection", "keep-alive")
-		c.Header("X-Accel-Buffering", "no")
-
-		c.Writer.WriteHeader(http.StatusOK)
-		c.Writer.Flush()
 		sender := func(data string) error {
 			if err := c.Request.Context().Err(); err != nil {
 				return err
 			}
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("X-Accel-Buffering", "no")
 			if _, err := io.WriteString(c.Writer, data); err != nil {
 				return err
 			}
@@ -305,6 +302,10 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 		}
 		err := h.chatSessionService.CompletionStream(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID, sender)
 		if err != nil && c.Request.Context().Err() == nil {
+			if !c.Writer.Written() && errors.Is(err, service.ErrChatSessionAccessDenied) {
+				jsonError(c, common.CodeForbidden, "No authorization for the selected conversation")
+				return
+			}
 			data, _ := json.Marshal(gin.H{"code": common.CodeServerError, "message": "Model stream failed", "data": gin.H{"answer": "**ERROR**: Model stream failed", "reference": []interface{}{}}})
 			_ = sender("data: " + string(data) + "\n\n")
 		}
@@ -313,6 +314,10 @@ func (h *ChatSessionHandler) Completion(c *gin.Context) {
 		// Non-streaming response
 		result, err := h.chatSessionService.Completion(c.Request.Context(), userID, req.ConversationID, processedMessages, req.LLMID, chatModelConfig, messageID)
 		if err != nil {
+			if errors.Is(err, service.ErrChatSessionAccessDenied) || errors.Is(err, service.ErrDatasetAccessDenied) {
+				jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "Model request failed",

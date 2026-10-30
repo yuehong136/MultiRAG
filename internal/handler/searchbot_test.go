@@ -200,3 +200,54 @@ func TestSearchbotRetrievalErrorsAreNotSuccessOrPrivateData(t *testing.T) {
 		t.Fatal("unwired retrieval returned success")
 	}
 }
+
+type after10bbeAsk struct {
+	calls int
+	run   func(context.Context, string, *service.AskRequest, func(service.AnswerFrame) error) error
+}
+
+func (s *after10bbeAsk) Stream(ctx context.Context, actor string, req *service.AskRequest, send func(service.AnswerFrame) error) error {
+	s.calls++
+	return s.run(ctx, actor, req, send)
+}
+
+func TestAfter10bbeAskStrictDTOAndFailureEnvelope(t *testing.T) {
+	fake := &after10bbeAsk{run: func(context.Context, string, *service.AskRequest, func(service.AnswerFrame) error) error {
+		t.Fatal("invalid request reached Ask")
+		return nil
+	}}
+	for _, body := range []string{`null`, `[]`, `{}`, `{"question":"q","kb_ids":null}`, `{"question":"q","kb_ids":"kb"}`, `{"question":"q","kb_ids":[]}`, `{"question":"q","kb_ids":[" kb"]}`, `{"question":"q","kb_ids":["kb"],"extra":true}`, `{"question":"q","question":"q","kb_ids":["kb"]}`, `{"question":"q","kb_ids":["kb"],"search_id":null}`} {
+		c, w := searchbotContext(body)
+		NewSearchbotHandlerWithAsk(nil, nil, fake).Ask(c)
+		if w.Code != 400 || fake.calls != 0 {
+			t.Fatal(body, w.Code, w.Body.String())
+		}
+	}
+	for _, failure := range []error{nil, errors.New("private-key-provider-body"), context.Canceled, service.ErrSearchbotAccessDenied} {
+		c, w := searchbotContext(`{"question":"question","kb_ids":["kb"],"search_id":"search"}`)
+		fake.run = func(ctx context.Context, actor string, req *service.AskRequest, send func(service.AnswerFrame) error) error {
+			if ctx != c.Request.Context() || actor != "actor" || req.SearchID != "search" || len(req.KBIDs) != 1 {
+				t.Fatal("request binding lost")
+			}
+			if errors.Is(failure, service.ErrSearchbotAccessDenied) {
+				return failure
+			}
+			if err := send(service.AnswerFrame{Answer: "visible", Reference: map[string]interface{}{"chunks": []any{}, "doc_aggs": []any{}}}); err != nil {
+				return err
+			}
+			return failure
+		}
+		NewSearchbotHandlerWithAsk(nil, nil, fake).Ask(c)
+		raw := w.Body.String()
+		if strings.Contains(raw, "private-key") {
+			t.Fatal("provider error leaked")
+		}
+		if failure == nil {
+			if !strings.Contains(raw, `"data":true`) {
+				t.Fatal(raw)
+			}
+		} else if strings.Contains(raw, `"data":true`) || strings.Contains(raw, `"final":true`) {
+			t.Fatal("failed Ask ended successfully", raw)
+		}
+	}
+}

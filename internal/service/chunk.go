@@ -42,6 +42,7 @@ import (
 
 // ChunkService chunk service
 type ChunkService struct {
+	models         *ModelProviderService
 	docEngine      engine.DocEngine
 	engineType     server.EngineType
 	embeddingCache *utility.EmbeddingLRU
@@ -52,6 +53,12 @@ type ChunkService struct {
 
 // NewChunkService creates chunk service
 func NewChunkService(documentEngines ...engine.DocEngine) *ChunkService {
+	return NewChunkServiceWithModels(NewModelProviderService(), documentEngines...)
+}
+
+// NewChunkServiceWithModels shares the same catalog and request-scoped bindings
+// with answer generation; retrieval never constructs a second provider catalog.
+func NewChunkServiceWithModels(provider *ModelProviderService, documentEngines ...engine.DocEngine) *ChunkService {
 	cfg := server.GetConfig()
 	var engineType server.EngineType
 	if cfg != nil {
@@ -62,6 +69,7 @@ func NewChunkService(documentEngines ...engine.DocEngine) *ChunkService {
 		store = documentEngines[0]
 	}
 	return &ChunkService{
+		models:         provider,
 		docEngine:      store,
 		engineType:     engineType,
 		embeddingCache: utility.NewEmbeddingLRU(1000), // default capacity
@@ -73,6 +81,7 @@ func NewChunkService(documentEngines ...engine.DocEngine) *ChunkService {
 
 // RetrievalTestRequest retrieval test request
 type RetrievalTestRequest struct {
+	answer                 *answerRetrievalOptions
 	DatasetIDs             []string               `json:"dataset_ids" binding:"required"`
 	Question               string                 `json:"question" binding:"required"`
 	Page                   *int                   `json:"page,omitempty"`
@@ -98,10 +107,11 @@ type RetrievalTestRequest struct {
 
 // RetrievalTestResponse retrieval test response
 type RetrievalTestResponse struct {
-	Chunks  []map[string]interface{} `json:"chunks"`
-	DocAggs []map[string]interface{} `json:"doc_aggs"`
-	Labels  *map[string]float64      `json:"labels"`
-	Total   int64                    `json:"total"`
+	embedding *models.EmbeddingModel
+	Chunks    []map[string]interface{} `json:"chunks"`
+	DocAggs   []map[string]interface{} `json:"doc_aggs"`
+	Labels    *map[string]float64      `json:"labels"`
+	Total     int64                    `json:"total"`
 }
 
 // RetrievalTest performs retrieval test for a given question against specified knowledge bases.
@@ -121,6 +131,9 @@ type RetrievalTestResponse struct {
 //  7. scoped knowledge graph retrieval
 //  8. Apply retrieval by children to group child chunks under parent chunks
 func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequest, userID string) (*RetrievalTestResponse, error) {
+	if ctx == nil || !exactVectorID(userID) {
+		return nil, ErrDatasetAccessDenied
+	}
 	if err := validateRetrievalRequest(req); err != nil {
 		return nil, err
 	}
@@ -193,11 +206,20 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	chatTenantID := tenantIDs[0]
 	var chatModel *models.ChatModel
 	filter := req.Filter
+	if req.answer != nil {
+		chatTenantID, chatID = req.answer.chatTenantID, req.answer.chatID
+	}
 
 	if req.SearchID != nil && *req.SearchID != "" {
-		searchDetail, searchConfig, err := readableRetrievalConfig(ctx, userID, *req.SearchID)
-		if err != nil {
-			return nil, err
+		var searchDetail *entity.Search
+		var searchConfig map[string]interface{}
+		if req.answer != nil && req.answer.search != nil && req.answer.search.ID == *req.SearchID {
+			searchDetail, searchConfig = req.answer.search, req.answer.config
+		} else {
+			searchDetail, searchConfig, err = readableRetrievalConfig(ctx, userID, *req.SearchID)
+			if err != nil {
+				return nil, err
+			}
 		}
 		req, err = savedRetrievalRequest(req, searchConfig)
 		if err != nil {
@@ -215,27 +237,34 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	}
 	var rerankCompositeName string
 	var rerankModel *models.RerankModel
+	modelProvider := s.models
+	if modelProvider == nil {
+		modelProvider = NewModelProviderService()
+	}
+	rerankTenantID := tenantIDs[0]
+	if req.answer != nil && req.answer.rerankTenantID != "" {
+		rerankTenantID = req.answer.rerankTenantID
+	}
 	if req.TenantRerankID != nil || req.RerankID != nil && *req.RerankID != "" {
 		selector := ""
 		if req.RerankID != nil {
 			selector = *req.RerankID
 		}
-		rerankCompositeName, err = retrievalModelSelector(ctx, tenantIDs[0], entity.ModelTypeRerank, req.TenantRerankID, selector)
+		rerankCompositeName, err = retrievalModelSelector(ctx, rerankTenantID, entity.ModelTypeRerank, req.TenantRerankID, selector)
 		if err != nil {
 			return nil, fmt.Errorf("selected rerank model unavailable: %w", err)
 		}
-		provider := NewModelProviderService()
 		if req.TenantRerankID != nil {
-			rerankModel, err = provider.GetRerankModelByIDWithContext(ctx, tenantIDs[0], *req.TenantRerankID)
+			rerankModel, err = modelProvider.GetRerankModelByIDWithContext(ctx, rerankTenantID, *req.TenantRerankID)
 		} else {
-			rerankModel, err = provider.GetRerankModelWithContext(ctx, tenantIDs[0], rerankCompositeName)
+			rerankModel, err = modelProvider.GetRerankModelWithContext(ctx, rerankTenantID, rerankCompositeName)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("selected rerank model unavailable: %w", err)
 		}
 	}
 	if chatID != nil {
-		chatModel, err = NewSearchbotService(NewModelProviderService()).chatModel(ctx, chatTenantID, chatID)
+		chatModel, err = NewSearchbotService(modelProvider).chatModel(ctx, chatTenantID, chatID)
 		if err != nil {
 			return nil, fmt.Errorf("selected search model unavailable: %w", err)
 		}
@@ -246,7 +275,6 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	}
 
 	// Resolve every selected embedding binding before using one query vector.
-	modelProvider := NewModelProviderService()
 	var embdID string
 	var identity EmbeddingModelIdentity
 	for i, kb := range kbRecords {
@@ -308,7 +336,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 			}
 		}
 		if method == "auto" || method == "semi_auto" {
-			chatModel, err = NewSearchbotService(NewModelProviderService()).chatModel(ctx, chatTenantID, chatID)
+			chatModel, err = NewSearchbotService(modelProvider).chatModel(ctx, chatTenantID, chatID)
 			if err != nil {
 				return nil, fmt.Errorf("metadata filter model unavailable: %w", err)
 			}
@@ -328,8 +356,7 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 
 	// Get chat model for cross_languages and keyword_extraction
 	if len(req.CrossLanguages) > 0 || (req.Keyword != nil && *req.Keyword) {
-		modelProviderSvc := NewModelProviderService()
-		chatModel, err = modelProviderSvc.GetChatModelWithContext(ctx, tenantIDs[0], "")
+		chatModel, err = modelProvider.GetChatModelWithContext(ctx, tenantIDs[0], "")
 		if err != nil {
 			return nil, fmt.Errorf("default chat model unavailable: %w", err)
 		} else {
@@ -455,10 +482,11 @@ func (s *ChunkService) RetrievalTest(ctx context.Context, req *RetrievalTestRequ
 	common.Info("RetrievalTest completed", zap.String("userID", userID), zap.Any("kbID", req.DatasetIDs), zap.String("question", req.Question), zap.Int64("chunkCount", int64(len(filteredChunks))))
 
 	return &RetrievalTestResponse{
-		Chunks:  filteredChunks,
-		DocAggs: retrievalResult.DocAggs,
-		Labels:  &labels,
-		Total:   retrievalResult.Total,
+		embedding: embeddingModel,
+		Chunks:    filteredChunks,
+		DocAggs:   retrievalResult.DocAggs,
+		Labels:    &labels,
+		Total:     retrievalResult.Total,
 	}, nil
 }
 

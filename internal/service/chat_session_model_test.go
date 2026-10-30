@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -46,7 +45,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 	oldDB := dao.DB
 	dao.DB = db
 	t.Cleanup(func() { dao.DB = oldDB })
-	if err := db.AutoMigrate(&entity.Chat{}, &entity.ChatSession{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}, &entity.Tenant{}); err != nil {
+	if err := db.AutoMigrate(&entity.Chat{}, &entity.ChatSession{}, &entity.TenantModelProvider{}, &entity.TenantModelInstance{}, &entity.TenantModel{}, &entity.Tenant{}, &entity.User{}, &entity.UserTenant{}); err != nil {
 		t.Fatal(err)
 	}
 	readback, err := sql.Open("pgx", dsn)
@@ -59,7 +58,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requests atomic.Int32
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.URL.Path != "/fixture/chat/completions" || r.Header.Get("Authorization") != "Bearer session-fixture-key" {
 			t.Errorf("bad endpoint/credential %s", r.URL.Path)
@@ -108,6 +107,16 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := "1"
+	for _, id := range []string{"session-tenant", "session-user"} {
+		if err := db.Create(&entity.User{ID: id, Email: id + "@session.invalid", Nickname: id, Status: &active}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&entity.UserTenant{ID: "session-membership", UserID: "session-user", TenantID: "session-tenant", Role: "normal", Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	actor := "session-user"
+
 	name := "kimi-k2.5@fixture@Moonshot"
 	if err := db.Create(&entity.Tenant{ID: "session-tenant", LLMID: name, Status: &active}).Error; err != nil {
 		t.Fatal(err)
@@ -116,7 +125,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"sync-session", "stream-session", "embedded-session", "failed-session"} {
-		if err := db.Create(&entity.ChatSession{ID: id, DialogID: "session-dialog", Message: json.RawMessage(`{"messages":[]}`), Reference: json.RawMessage(`[]`)}).Error; err != nil {
+		if err := db.Create(&entity.ChatSession{ID: id, DialogID: "session-dialog", UserID: &actor, Message: json.RawMessage(`{"messages":[]}`), Reference: json.RawMessage(`[]`)}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -231,7 +240,7 @@ func TestChatSessionScratchPostgres(t *testing.T) {
 	imageParts := []interface{}{map[string]interface{}{"type": "text", "text": "describe"}, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/image.png"}}}
 	imageHistory := []map[string]interface{}{{"role": "assistant", "content": "previous", "reasoning_content": "old reasoning"}, {"role": "user", "content": imageParts, "id": "image-msg"}}
 	var imageCalls atomic.Int32
-	imageProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	imageProvider := registeredModelServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		imageCalls.Add(1)
 		var body struct{ Messages []models.Message }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

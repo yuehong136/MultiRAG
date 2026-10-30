@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -61,6 +62,17 @@ func (r *SearchbotRetrievalTestRequest) UnmarshalJSON(raw []byte) error {
 type SearchbotHandler struct {
 	service   relatedQuestionsService
 	retriever chunkRetriever
+	asker     askService
+}
+
+type askService interface {
+	Stream(context.Context, string, *service.AskRequest, func(service.AnswerFrame) error) error
+}
+
+// NewSearchbotHandlerWithAsk uses one authorized retrieval/model stack for all
+// searchbot consumers. The router supplies authentication for every route.
+func NewSearchbotHandlerWithAsk(svc relatedQuestionsService, retriever chunkRetriever, asker askService) *SearchbotHandler {
+	return &SearchbotHandler{service: svc, retriever: retriever, asker: asker}
 }
 
 func NewSearchbotHandler(svc relatedQuestionsService, retrievers ...chunkRetriever) *SearchbotHandler {
@@ -196,3 +208,68 @@ func (h *SearchbotHandler) RetrievalTest(c *gin.Context) {
 		jsonResponse(c, common.CodeSuccess, result, "success")
 	}
 }
+
+// Ask streams cumulative visible answers and their actual citations. The first
+// write is delayed until preparation succeeds, preserving normal auth errors.
+func (h *SearchbotHandler) Ask(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	if user == nil || !validActor(user.ID) {
+		jsonError(c, common.CodeUnauthorized, "User not found")
+		return
+	}
+	var req service.AskRequest
+	if err := bindObjectJSON(c, &req); err != nil || service.ValidateAskRequest(&req) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid ask request"})
+		return
+	}
+	if h.asker == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": common.CodeOperatingError, "data": nil, "message": "Ask is unavailable"})
+		return
+	}
+	ctx := c.Request.Context()
+	write := func(value any, code common.ErrorCode, message string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(gin.H{"code": code, "message": message, "data": value})
+		if err != nil {
+			return err
+		}
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("X-Accel-Buffering", "no")
+		if _, err := io.WriteString(c.Writer, "data: "+string(raw)+"\n\n"); err != nil {
+			return err
+		}
+		c.Writer.Flush()
+		return ctx.Err()
+	}
+	err := h.asker.Stream(ctx, user.ID, &req, func(frame service.AnswerFrame) error {
+		return write(frame, common.CodeSuccess, "")
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if !c.Writer.Written() {
+			switch {
+			case errors.Is(err, service.ErrSearchbotAccessDenied), errors.Is(err, service.ErrDatasetAccessDenied):
+				jsonError(c, common.CodeForbidden, "No authorization for the selected resources")
+			case errors.Is(err, service.ErrSearchbotArgument), errors.Is(err, service.ErrRetrievalArgument):
+				c.JSON(http.StatusBadRequest, gin.H{"code": common.CodeBadRequest, "data": nil, "message": "Invalid ask request"})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"code": common.CodeServerError, "data": nil, "message": "Ask failed"})
+			}
+		} else {
+			_ = write(service.AnswerFrame{Reference: map[string]interface{}{"chunks": []any{}, "doc_aggs": []any{}}}, common.CodeServerError, "Ask failed")
+		}
+		return
+	}
+	_ = write(true, common.CodeSuccess, "")
+}
+
+func validActor(id string) bool { return strings.TrimSpace(id) != "" && id == strings.TrimSpace(id) }
