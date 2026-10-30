@@ -17,7 +17,7 @@ import logging
 import os
 import secrets
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from common.app_config import get_app_config
 from common.constants import Storage
@@ -31,6 +31,21 @@ _state: dict[str, Any] = {}
 
 class ResourcesNotInitialized(RuntimeError):
     """资源未初始化即被访问。入口点需先调用 common.bootstrap.ensure_initialized()。"""
+
+
+class DDLResourceLock(Protocol):
+    """The Redis lock operations used by backend schema upgrades."""
+
+    def acquire(self) -> bool: ...
+
+    def release(self) -> None: ...
+
+
+def redis_ddl_lock(lock_name: str) -> DDLResourceLock:
+    """Compose a schema lock lazily, retaining the Redis lock's defaults."""
+    from core.utils.redis_conn import RedisDistributedLock
+
+    return RedisDistributedLock(lock_name)
 
 
 def _doc_engine() -> str:

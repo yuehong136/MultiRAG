@@ -20,6 +20,7 @@ import re
 import threading
 import time
 from abc import abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 from pymysql.converters import escape_string
@@ -27,6 +28,7 @@ from pyobvector import VECTOR, FtsIndexParam, FtsParser, ObVecClient
 from sqlalchemy import JSON, Column, Table
 from sqlalchemy.dialects.mysql import VARCHAR
 
+from common import resources
 from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr
 
 ATTEMPT_TIME = 2
@@ -65,15 +67,13 @@ def get_value_str(value: Any) -> str:
         return str(value)
 
 
-def _try_with_lock(lock_name: str, process_func, check_func, timeout: int = None):
+def _try_with_lock(lock_name: str, process_func: Callable[[], Any], check_func: Callable[[], bool], timeout: int | None = None) -> None:
     """Execute function with distributed lock."""
     if not timeout:
         timeout = int(os.environ.get("OB_DDL_TIMEOUT", "60"))
 
     if not check_func():
-        from rag.utils.redis_conn import RedisDistributedLock
-
-        lock = RedisDistributedLock(lock_name)
+        lock = resources.redis_ddl_lock(lock_name)
         if lock.acquire():
             try:
                 process_func()
@@ -423,15 +423,12 @@ class OBConnectionBase(DocStoreConnection):
         )
         self.logger.info(f"Created vector index '{vector_idx_name}' on table '{table_name}' with column '{vector_field_name}'.")
 
-    def _add_column(self, table_name: str, column: Column):
-        try:
-            self.client.add_columns(
-                table_name=table_name,
-                columns=[column.copy()],
-            )
-            self.logger.info(f"Added column '{column.name}' to table '{table_name}'.")
-        except Exception as e:
-            self.logger.warning(f"Failed to add column '{column.name}' to table '{table_name}': {e!s}")
+    def _add_column(self, table_name: str, column: Column) -> None:
+        self.client.add_columns(
+            table_name=table_name,
+            columns=[column.copy()],
+        )
+        self.logger.info(f"Added column '{column.name}' to table '{table_name}'.")
 
     def _ensure_vector_column_exists(self, table_name: str, vector_size: int, refresh_metadata: bool = True):
         """

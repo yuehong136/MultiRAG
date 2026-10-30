@@ -161,6 +161,16 @@ async def test_think_stream_parser_rejects_negative_batch_size() -> None:
         await anext(_stream_with_think_delta(_chunks(("answer",)), min_tokens=-1))
 
 
+async def test_repeated_close_stream_crosses_token_batch_threshold() -> None:
+    from common.token_utils import num_tokens_from_string
+
+    pieces = tuple(f" step {index}" for index in range(40))
+    reasoning = "Start" + "".join(pieces)
+    assert num_tokens_from_string(reasoning) > 16
+    chunks = ("<think>Start</think>", *(piece + "</think>" for piece in pieces), "Visible answer")
+    assert await _collect(_chunks(chunks), min_tokens=16) == (reasoning, "Visible answer", ("<think>", "</think>"))
+
+
 class _DeltaOnlyChatModel:
     max_length = 4096
 
