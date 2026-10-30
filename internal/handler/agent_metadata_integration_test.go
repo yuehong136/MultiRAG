@@ -45,16 +45,21 @@ func TestAfter10bbeAgentMetadataHTTPAndSQL(t *testing.T) {
 	}
 	j := testsupport.NewCase(t)
 	var cfg struct {
-		AdminDSN string `json:"admin_dsn"`
-		Listen   string `json:"listen"`
+		AdminDSN   string `json:"admin_dsn"`
+		Listen     string `json:"listen"`
+		PGEndpoint string `json:"pg_endpoint"`
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil || json.Unmarshal(raw, &cfg) != nil {
 		t.Fatal("private config unavailable")
 	}
 	u, err := url.Parse(cfg.AdminDSN)
-	if err != nil || u.Host != "127.0.0.1:5432" || u.Path != "/postgres" || cfg.Listen != "127.0.0.1:18961" {
+	if err != nil || u.Host != cfg.PGEndpoint || u.Hostname() != "127.0.0.1" || u.Path != "/postgres" || cfg.Listen != "127.0.0.1:18961" {
 		t.Fatal("exact local endpoints required")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		t.Fatal("explicit local PostgreSQL TCP port required")
 	}
 	name := "multirag_after10bbe_g_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 	tables := []string{"t_ai_users", "t_ai_tenants", "t_ai_user_tenants", "t_ai_api_tokens", "t_ai_user_canvases", "t_ai_api4conversations", "t_ai_knowledgebases", "t_ai_documents"}
