@@ -7,6 +7,7 @@ prompt rendering and chunk iteration to ``core.flow.extractor.Extractor``.
 
 import logging
 from copy import deepcopy
+from typing import Any
 
 from core.flow.extractor.extractor import Extractor, ExtractorParam
 
@@ -14,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 class _ExtractorCanvas:
-    def __init__(self, chunks: list[dict], doc_id: str | None = None):
+    def __init__(self, chunks: list[dict], doc_id: str | None = None) -> None:
         self._chunks = chunks
         self._doc_id = doc_id
+        self.globals: dict[str, Any] = {}
 
     def get_variable_value(self, name: str):
         if name == "sys.query":

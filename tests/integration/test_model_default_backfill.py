@@ -35,7 +35,10 @@ def defaults_engine(pg_scratch_engine: Engine) -> Iterator[Engine]:
     try:
         yield pg_scratch_engine
     finally:
-        event.remove(pg_scratch_engine, "before_cursor_execute", reserve)
+        try:
+            Base.metadata.drop_all(pg_scratch_engine, tables=tables)
+        finally:
+            event.remove(pg_scratch_engine, "before_cursor_execute", reserve)
 
 
 def add_tenant(db: Session, **values: Any) -> Tenant:
@@ -116,6 +119,39 @@ def test_ambiguous_default_rolls_back_earlier_repairs(defaults_engine: Engine) -
         stored = reader.get(Tenant, owner_id)
         assert stored.tenant_llm_id is None and stored.tenant_ocr_id is None
         assert len(list(reader.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner_id)))) == 3
+
+
+def test_concurrent_numeric_selection_is_not_counted_or_overwritten(defaults_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.services import provider_model_resolution
+
+    with Session(defaults_engine) as db:
+        owner = add_tenant(db)
+        owner.llm_id = "chat@OpenAI"
+        owner_id = owner.id
+        add_model(db, owner_id, "chat", "chat")
+        selected = add_model(db, owner_id, "chat", "selected")
+        db.commit()
+
+        find_model = provider_model_resolution.find_model_row
+
+        def resolve_then_select(session: Session, tenant_id: str, reference: str, model_type: str | None = None) -> TenantLLM | None:
+            model = find_model(session, tenant_id, reference, model_type)
+            with Session(defaults_engine) as concurrent:
+                stored = concurrent.get(Tenant, tenant_id)
+                assert stored is not None
+                stored.tenant_llm_id = selected
+                concurrent.commit()
+            return model
+
+        monkeypatch.setattr(provider_model_resolution, "find_model_row", resolve_then_select)
+        assert backfill_tenant_defaults(db) == 0
+        db.commit()
+
+    with Session(defaults_engine) as reader:
+        stored = reader.get(Tenant, owner_id)
+        assert stored is not None
+        assert stored.tenant_llm_id == selected
+        assert stored.llm_id == "chat@OpenAI"
 
 
 def test_alembic_version_and_backfill_commit_or_rollback_together(defaults_engine: Engine) -> None:

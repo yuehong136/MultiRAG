@@ -1,6 +1,9 @@
 import asyncio
+from copy import deepcopy
 from io import BytesIO
+from typing import Any
 
+import pytest
 from PIL import Image
 
 from core.flow.utils import FlowParser, extract_metadata, parse_file
@@ -13,7 +16,11 @@ class _FakeOCR:
 
 
 class _FakeLLM:
-    async def async_chat(self, system, history, gen_conf, **_kwargs):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> str:
+        self.calls.append({"system": system, "history": deepcopy(history), "gen_conf": deepcopy(gen_conf), "kwargs": deepcopy(kwargs)})
         return f"{system}:{history[-1]['content']}:{gen_conf.get('temperature')}"
 
 
@@ -124,15 +131,16 @@ def test_parser_utils_preserves_canonical_media_vlm_configs() -> None:
     assert setups["video"]["prompt"] == "describe"
 
 
-def test_extractor_utils_reuses_runtime_extractor_async_flow():
-    result = asyncio.run(
-        extract_metadata(
-            [{"content_with_weight": "chunk body", "source": "keep"}],
-            field_name="topic",
-            prompt="classify",
-            llm_model=_FakeLLM(),
-            temperature=0.2,
-        )
+async def test_extractor_utils_reuses_runtime_extractor_async_flow() -> None:
+    model = _FakeLLM()
+    chunks = [{"content_with_weight": "chunk body", "source": "keep"}, {"text": "second body", "nested": {"zero": 0}}]
+    original = deepcopy(chunks)
+    result = await extract_metadata(
+        chunks,
+        field_name="topic",
+        prompt="classify",
+        llm_model=model,
+        temperature=0.2,
     )
 
     assert result == [
@@ -141,18 +149,34 @@ def test_extractor_utils_reuses_runtime_extractor_async_flow():
             "source": "keep",
             "text": "chunk body",
             "topic": "classify:chunk body:0.2",
-        }
+        },
+        {"text": "second body", "nested": {"zero": 0}, "topic": "classify:second body:0.2"},
     ]
+    assert chunks == original
+    assert [call["history"][-1]["content"] for call in model.calls] == ["chunk body", "second body"]
+    assert all(call["kwargs"] == {} for call in model.calls)
 
 
-def test_extractor_utils_empty_chunks_skip_generation():
-    result = asyncio.run(
-        extract_metadata(
-            [],
-            field_name="topic",
-            prompt="classify",
-            llm_model=_FakeLLM(),
-        )
-    )
+async def test_extractor_utils_empty_chunks_skip_generation() -> None:
+    model = _FakeLLM()
+    result = await extract_metadata([], field_name="topic", prompt="classify", llm_model=model)
 
     assert result == []
+    assert model.calls == []
+
+
+async def test_extractor_utils_propagates_generation_failure_without_mutating_input() -> None:
+    class FailingLLM(_FakeLLM):
+        async def async_chat(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any], **kwargs: Any) -> str:
+            answer = await super().async_chat(system, history, gen_conf, **kwargs)
+            if len(self.calls) == 2:
+                raise RuntimeError("fixture generation failed")
+            return answer
+
+    model = FailingLLM()
+    chunks = [{"content_with_weight": "first"}, {"text": "second", "nested": {"zero": 0}}]
+    original = deepcopy(chunks)
+    with pytest.raises(RuntimeError, match="fixture generation failed"):
+        await extract_metadata(chunks, field_name="topic", prompt="classify", llm_model=model)
+    assert len(model.calls) == 2
+    assert chunks == original

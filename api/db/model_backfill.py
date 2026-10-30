@@ -3,11 +3,11 @@
 import hashlib
 import json
 from collections import defaultdict
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 import sqlalchemy as sa
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, CursorResult
 from sqlalchemy.orm import Session
 
 SCHEMA = "usr_ai"
@@ -123,7 +123,10 @@ def backfill_tenant_defaults(db: Session) -> int:
                     continue
                 model = find_model_row(db, tenant.id, reference, capability)
                 if model is not None:
-                    result = db.execute(sa.update(Tenant).where(Tenant.id == tenant.id, getattr(Tenant, target).is_(None), getattr(Tenant, field) == reference).values({target: model.id}))
+                    result = cast(
+                        CursorResult[Any],
+                        db.execute(sa.update(Tenant).where(Tenant.id == tenant.id, getattr(Tenant, target).is_(None), getattr(Tenant, field) == reference).values({target: model.id})),
+                    )
                     updated += result.rowcount
             last_id = tenant.id
         db.flush()

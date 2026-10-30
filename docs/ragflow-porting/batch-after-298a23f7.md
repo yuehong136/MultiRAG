@@ -55,8 +55,9 @@ live 用例 skip，不把这些 skip 计为验收通过。初次 service 假件�
 ## 留下的边界
 
 - 非完整 Python/Go/Web/真实供应商验收；生产、付费账号、常驻 worker、部署及远程 CI 未运行。
-- 未改调用链的 `test_extractor_utils_reuses_runtime_extractor_async_flow` 仍有旧 fake canvas 缺少
-  globals 的失败，未计入通过；P 额外查纳管外类型时发现的旧 Result.rowcount 问题另列证据。
+- 验收时另列的 extractor globals 与 Result.rowcount 失败，已由
+  [后续定向修复](extractor-backfill-followup.md) 收尾；其中 globals 缺口位于直调适配器，
+  并非测试 fake。首次失败仍保留在本批历史证据中，不倒填当时的通过数。
 - 旧 memory 队列消息缺少可信 tenant 时会拒绝并确认；本批没有查看生产 backlog。
 - 历史及本批登记偏差不补写。D 早期 cache、失败 smoke 误建 .venv 的路径登记不完整，
   后续已如实观察、精确清理并复验；因此 strictProtocolPassed=false，清理成功不等于历史协议通过。
