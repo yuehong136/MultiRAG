@@ -100,3 +100,99 @@ idempotent migration, defaults, credential separation and usage accounting.
 It does not prove vendor entitlement, paid-provider behavior or a production
 worker run. Browser acceptance against the Python application and final combined
 CI are separate checks.
+
+## Catalog and initialization
+
+Static declarations accept either a single `mdl_type` or a list of capabilities.
+Modern catalog and discovery retain the list, explicit `is_tools: false`, and a
+zero `max_tokens`. Existing tenant registrations remain authoritative for their
+capabilities; changing the static inventory does not rebind or enable saved models.
+The active legacy admin inventory stores a primary capability and the vision tag
+in its scalar SQL columns. Catalog replacement validates every declaration and
+rolls back the replacement on failure. New-user defaults read the typed catalog
+and seed only configured model references, rather than every model of each
+configured factory. User, tenant, membership, root folder, model linkage and
+numeric default identities commit together.
+
+MinerU, PaddleOCR and OpenDataLoader environment configuration is imported at
+startup and registration, and when a parser explicitly needs an env fallback.
+The importer uses the caller's transaction, creates linked provider/instance/model
+identities, preserves edited instances and disabled registrations, and is
+idempotent for unchanged credentials. GET model listings perform no imports.
+PDF parsers preserve complete `model@instance@provider` references; implicit
+selection prefers an active numeric OCR registration and honors an applicable
+numeric OCR default. Resolution still checks tenant ownership and capability.
+PaddleOCR uses an OCR candidate with zero tokens and keeps its typed algorithms,
+PDF job lifecycle and independent parser initialization.
+
+VolcEngine new structured credentials use a JSON string with `api_key` and optional
+`endpoint_id`. The raw key form and persisted `ark_api_key` envelopes remain
+accepted by discovery, verification and runtime. Conflicting key or endpoint aliases
+are rejected without echoing their values. Chat and vision use an explicit endpoint
+for the provider request while retaining the registered model name and numeric ID;
+embeddings use the registered model name. A blank PATCH key preserves stored
+credentials and endpoint options.
+
+## Provider websites
+
+These links identify providers with registered local adapters. They are informational
+websites; inference endpoints remain the `url`/`base_url` contract. A registered
+adapter or static model declaration does not establish access to a paid model or
+prove a vendor account's capabilities.
+
+| Provider | Website |
+| --- | --- |
+| Anthropic | [https://www.anthropic.com](https://www.anthropic.com) |
+| Astraflow | [https://astraflow.ucloud-global.com/en-us](https://astraflow.ucloud-global.com/en-us) |
+| Astraflow-CN | [https://astraflow.ucloud.cn/](https://astraflow.ucloud.cn/) |
+| Avian | [https://www.avian.io](https://www.avian.io) |
+| Azure-OpenAI | [https://azure.microsoft.com/en-us/products/ai-services/openai-service](https://azure.microsoft.com/en-us/products/ai-services/openai-service) |
+| BaiChuan | [https://www.baichuan-ai.com](https://www.baichuan-ai.com) |
+| BaiduYiyan | [https://yiyan.baidu.com](https://yiyan.baidu.com) |
+| Bedrock | [https://aws.amazon.com/bedrock/](https://aws.amazon.com/bedrock/) |
+| Cohere | [https://cohere.com](https://cohere.com) |
+| DeepSeek | [https://www.deepseek.com](https://www.deepseek.com) |
+| Fish Audio | [https://fish.audio](https://fish.audio) |
+| FuturMix | [https://futurmix.ai](https://futurmix.ai) |
+| Gemini | [https://gemini.google.com](https://gemini.google.com) |
+| Google Cloud | [https://cloud.google.com](https://cloud.google.com) |
+| GPUStack | [https://gpustack.ai](https://gpustack.ai) |
+| Groq | [https://groq.com](https://groq.com) |
+| HuggingFace | [https://huggingface.co](https://huggingface.co) |
+| Jina | [https://jina.ai](https://jina.ai) |
+| LocalAI | [https://localai.io](https://localai.io) |
+| LongCat | [https://longcat.chat](https://longcat.chat) |
+| LM-Studio | [https://lmstudio.ai](https://lmstudio.ai) |
+| MiniMax | [https://www.minimaxi.com](https://www.minimaxi.com) |
+| MinerU | [https://mineru.net/](https://mineru.net/) |
+| Mistral | [https://mistral.ai](https://mistral.ai) |
+| ModelScope | [https://www.modelscope.cn](https://www.modelscope.cn) |
+| Moonshot | [https://www.moonshot.cn](https://www.moonshot.cn) |
+| NovitaAI | [https://novita.ai](https://novita.ai) |
+| NVIDIA | [https://www.nvidia.com](https://www.nvidia.com) |
+| Ollama | [https://ollama.com](https://ollama.com) |
+| OpenAI | [https://openai.com](https://openai.com) |
+| OpenRouter | [https://openrouter.ai](https://openrouter.ai) |
+| Perplexity | [https://www.perplexity.ai](https://www.perplexity.ai) |
+| Replicate | [https://replicate.com](https://replicate.com) |
+| PPIO | [https://ppio.com](https://ppio.com) |
+| SILICONFLOW | [https://siliconflow.cn](https://siliconflow.cn) |
+| StepFun | [https://www.stepfun.com](https://www.stepfun.com) |
+| Tencent Hunyuan | [https://hunyuan.tencent.com](https://hunyuan.tencent.com) |
+| Tencent Cloud | [https://cloud.tencent.com](https://cloud.tencent.com) |
+| TogetherAI | [https://www.together.ai](https://www.together.ai) |
+| TokenPony | [https://tokenpony.cn](https://tokenpony.cn) |
+| Tongyi-Qianwen | [https://tongyi.aliyun.com](https://tongyi.aliyun.com) |
+| Upstage | [https://www.upstage.ai](https://www.upstage.ai) |
+| VLLM | [https://vllm.ai](https://vllm.ai) |
+| VolcEngine | [https://www.volcengine.com](https://www.volcengine.com) |
+| Voyage AI | [https://www.voyageai.com](https://www.voyageai.com) |
+| Xinference | [https://github.com/xorbitsai/inference](https://github.com/xorbitsai/inference) |
+| XunFei Spark | [https://xinghuo.xfyun.cn](https://xinghuo.xfyun.cn) |
+| xAI | [https://x.ai](https://x.ai) |
+| ZHIPU-AI | [https://www.zhipuai.cn](https://www.zhipuai.cn) |
+| DeepInfra | [https://deepinfra.com](https://deepinfra.com) |
+| 302.AI | [https://302.ai](https://302.ai) |
+| CometAPI | [https://cometapi.com](https://cometapi.com) |
+| DeerAPI | [https://deerapi.com](https://deerapi.com) |
+| Jiekou.AI | [https://jiekou.ai](https://jiekou.ai) |

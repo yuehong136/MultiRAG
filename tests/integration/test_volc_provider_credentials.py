@@ -92,7 +92,12 @@ def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple
     base, seen = provider_http
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "VolcEngine", "llm": []}])
     monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
-    for name, key, expected in (("raw", "fixture-raw-ark", "display-model"), ("envelope", json.dumps({"ark_api_key": "fixture-envelope-ark", "endpoint_id": "ep-instance"}), "ep-instance")):
+    cases = (
+        ("raw", "fixture-raw-ark", "display-model"),
+        ("envelope", json.dumps({"ark_api_key": "fixture-envelope-ark", "endpoint_id": "ep-instance"}), "ep-instance"),
+        ("canonical", json.dumps({"api_key": "fixture-canonical-ark", "endpoint_id": "ep-canonical"}), "ep-canonical"),
+    )
+    for index, (name, key, expected) in enumerate(cases):
         if capability == "embedding":
             expected = "display-model"
         candidate = {"api_key": key, "base_url": base, "region": "cn-beijing", "model_ids": [], "custom_model": {"model_name": "display-model", "model_types": [capability], "max_tokens": 0}}
@@ -100,16 +105,21 @@ def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple
         response = client.post("/api/v1/providers/VolcEngine/connection", json=candidate)
         assert response.status_code == 200 and response.json()["data"]["verified"] is True, response.text
         with Session(engine) as reader:
-            assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == (0 if name == "raw" else 1)
+            assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == index
         response = client.post("/api/v1/providers/VolcEngine/instances", json={**candidate, "instance_name": name})
         assert response.status_code == 200 and response.json()["code"] == 0, response.text
         assert response.json()["data"]["has_api_key"] is True and "ark" not in response.text
         model = client.get(f"/api/v1/providers/VolcEngine/instances/{name}/models").json()["data"]["items"][0]
         identifier = model["id"]
         assert type(identifier) is int and model["max_tokens"] == 0
+        assert client.patch("/api/v1/models/default", json={"model_type": capability, "model_id": identifier}).status_code == 200
+        edited_base = base + "/edited"
+        patched = client.patch(f"/api/v1/providers/VolcEngine/instances/{name}", json={"api_key": "", "base_url": edited_base})
+        assert patched.status_code == 200 and patched.json()["data"]["has_api_key"] is True
+        assert client.get(f"/api/v1/providers/VolcEngine/instances/{name}/models").json()["data"]["items"][0]["id"] == identifier
         with Session(engine) as reader:
             row = reader.scalar(select(TenantModelInstance).where(TenantModelInstance.instance_name == name))
-            assert row.api_key == key and row.region == "cn-beijing" and row.base_url == base
+            assert row.api_key == key and row.region == "cn-beijing" and row.base_url == edited_base
             config = get_model_config_by_id(reader, identifier, tenant_id=owner, model_type=capability)
             with pytest.raises(LookupError, match="not found"):
                 get_model_config_by_id(reader, identifier, tenant_id="foreign-owner", model_type=capability)
@@ -129,7 +139,7 @@ def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple
                 await bundle.aclose()
 
         asyncio.run(infer())
-        expected_key = "fixture-raw-ark" if name == "raw" else "fixture-envelope-ark"
+        expected_key = {"raw": "fixture-raw-ark", "envelope": "fixture-envelope-ark", "canonical": "fixture-canonical-ark"}[name]
         assert len(seen) == before + 3
         assert all(auth == "Bearer " + expected_key and model_name == expected for _path, auth, model_name in seen[before:])
     before = len(seen)
@@ -141,7 +151,7 @@ def test_verify_atomic_create_and_numeric_bundle_share_key_semantics(http: tuple
         assert "fixture-secret" not in response.text
     assert len(seen) == before
     with Session(engine) as reader:
-        assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 2
-        assert reader.scalar(select(func.count()).select_from(TenantModel)) == 2
-        assert reader.scalar(select(func.count()).select_from(TenantLLM)) == 2
+        assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 3
+        assert reader.scalar(select(func.count()).select_from(TenantModel)) == 3
+        assert reader.scalar(select(func.count()).select_from(TenantLLM)) == 3
         assert all(tokens == 0 for tokens in reader.scalars(select(TenantLLM.used_tokens)))

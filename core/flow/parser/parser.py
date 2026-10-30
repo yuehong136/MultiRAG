@@ -395,13 +395,13 @@ class Parser(ProcessBase):
         if isinstance(raw_parse_method, str):
             lowered = raw_parse_method.lower()
             if lowered.endswith("@mineru"):
-                parser_model_name = raw_parse_method.rsplit("@", 1)[0]
+                parser_model_name = raw_parse_method
                 parse_method = "MinerU"
             elif lowered.endswith("@paddleocr"):
-                parser_model_name = raw_parse_method.rsplit("@", 1)[0]
+                parser_model_name = raw_parse_method
                 parse_method = "PaddleOCR"
             elif lowered.endswith("@opendataloader"):
-                parser_model_name = raw_parse_method.rsplit("@", 1)[0]
+                parser_model_name = raw_parse_method
                 parse_method = "OpenDataLoader"
 
         if isinstance(raw_parse_method, str) and raw_parse_method.isdecimal():
@@ -423,7 +423,7 @@ class Parser(ProcessBase):
 
         elif parse_method.lower() == "mineru":
 
-            def resolve_mineru_llm_name():
+            def resolve_mineru_llm_name() -> str | None:
                 configured = parser_model_name or conf.get("mineru_llm_name")
                 if configured:
                     return configured
@@ -432,14 +432,12 @@ class Parser(ProcessBase):
                 if not tenant_id:
                     return None
 
-                from api.db.services.tenant_llm_service import TenantLLMService
+                from api.db.joint_services.tenant_model_service import get_ocr_model_reference
 
                 with db_connection() as db:
-                    env_name = TenantLLMService.ensure_mineru_from_env(db, tenant_id)
-                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR.value)
-                    if candidates:
-                        return candidates[0].llm_name
-                    return env_name
+                    reference = get_ocr_model_reference(db, tenant_id, "MinerU")
+                    db.commit()
+                    return reference
 
             parser_model_name = resolve_mineru_llm_name()
             if not parser_model_name:
@@ -513,14 +511,12 @@ class Parser(ProcessBase):
                 if not tenant_id:
                     return None
 
-                from api.db.services.tenant_llm_service import TenantLLMService
+                from api.db.joint_services.tenant_model_service import get_ocr_model_reference
 
                 with db_connection() as db:
-                    env_name = TenantLLMService.ensure_opendataloader_from_env(db, tenant_id)
-                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="OpenDataLoader", mdl_type=LLMType.OCR.value)
-                    if candidates:
-                        return candidates[0].llm_name
-                    return env_name
+                    reference = get_ocr_model_reference(db, tenant_id, "OpenDataLoader")
+                    db.commit()
+                    return reference
 
             parser_model_name = resolve_opendataloader_llm_name()
             if not parser_model_name:
@@ -607,7 +603,7 @@ class Parser(ProcessBase):
 
         elif parse_method.lower() == "paddleocr":
 
-            def resolve_paddleocr_llm_name():
+            def resolve_paddleocr_llm_name() -> str | None:
                 configured = parser_model_name or conf.get("paddleocr_llm_name")
                 if configured:
                     return configured
@@ -616,14 +612,12 @@ class Parser(ProcessBase):
                 if not tenant_id:
                     return None
 
-                from api.db.services.tenant_llm_service import TenantLLMService
+                from api.db.joint_services.tenant_model_service import get_ocr_model_reference
 
                 with db_connection() as db:
-                    env_name = TenantLLMService.ensure_paddleocr_from_env(db, tenant_id)
-                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="PaddleOCR", mdl_type=LLMType.OCR.value)
-                    if candidates:
-                        return candidates[0].llm_name
-                    return env_name
+                    reference = get_ocr_model_reference(db, tenant_id, "PaddleOCR")
+                    db.commit()
+                    return reference
 
             parser_model_name = resolve_paddleocr_llm_name()
             if not parser_model_name:

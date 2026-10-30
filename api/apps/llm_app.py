@@ -1482,9 +1482,6 @@ def delete_factory_restful(request: DeleteFactoryRequest, db: Session = Depends(
 @router.get("/my_llms", summary="获取用户的所有模型", response_description="成功获取到用户的所有模型")
 def my_llms(include_details: bool = False, db: Session = Depends(get_db), user: Any = Depends(manager)) -> Any:
     try:
-        TenantLLMService.ensure_mineru_from_env(db, user.id)
-        TenantLLMService.ensure_opendataloader_from_env(db, user.id)
-
         from api.db.services.provider_model_resolution import linked_model
 
         res: dict[str, Any] = {}
@@ -1877,8 +1874,6 @@ def list_app(mdl_type: str | None = None, db: Session = Depends(get_db), user: A
     weighted = ["Youdao", "BAAI"] if settings.LIGHTEN != 0 else []
     tenant_id = user.id
     try:
-        TenantLLMService.ensure_mineru_from_env(db, tenant_id)
-        TenantLLMService.ensure_opendataloader_from_env(db, tenant_id)
         objs = TenantLLMService.query(db, tenant_id=tenant_id)
         facts = {o.llm_factory for o in objs if o.api_key and o.status == StatusEnum.VALID.value}
         tenant_llm_mapping = {f"{o.llm_name}@{o.llm_factory}": o for o in objs}

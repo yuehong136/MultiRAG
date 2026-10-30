@@ -2,7 +2,7 @@ import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -13,7 +13,7 @@ from api.common.exceptions import AdminException, UserNotFoundError
 from api.db import UserTenantRole
 from api.db.db_models import SessionLocal, get_db
 from api.db.services import UserService
-from api.db.services.user_service import TenantService, UserTenantService
+from api.db.services.user_service import TenantService
 from api.utils.crypt import decrypt
 from common import settings
 from common.constants import ActiveEnum, StatusEnum
@@ -111,27 +111,15 @@ def init_default_admin(db: Session):
                 add_tenant_for_admin(db, default_admin, UserTenantRole.OWNER)
 
 
-def add_tenant_for_admin(db: Session, user_info: dict, role: str):
-    from api.db.services.llm_service import get_init_tenant_llm
-    from api.db.services.tenant_llm_service import TenantLLMService
+def add_tenant_for_admin(db: Session, user_info: dict[str, Any], role: str | UserTenantRole) -> None:
+    from api.db.joint_services.user_account_service import initialize_user_tenant
 
-    tenant = {
-        "id": user_info["id"],
-        "name": user_info["nickname"] + "'s Kingdom",
-        "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
-        "asr_id": settings.ASR_MDL,
-        "parser_ids": settings.PARSERS,
-        "img2txt_id": settings.IMAGE2TEXT_MDL,
-        "rerank_id": settings.RERANK_MDL,
-    }
-    usr_tenant = {"tenant_id": user_info["id"], "user_id": user_info["id"], "invited_by": user_info["id"], "role": role}
-
-    tenant_llm = get_init_tenant_llm(db, user_info["id"])
-    TenantService.insert(db, **tenant)
-    UserTenantService.insert(db, **usr_tenant)
-    TenantLLMService.insert_many(db, tenant_llm)
-    logging.info(f"Added tenant for email: {user_info['email']}, A default tenant has been set; changing the default models after login is strongly recommended.")
+    try:
+        initialize_user_tenant(db, user_info, role)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def login_admin(db: Session, email: str, password: str):

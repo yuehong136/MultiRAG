@@ -99,7 +99,7 @@ class UserService(CommonService):
         return db.scalars(stmt).all()
 
     @classmethod
-    def save(cls, db: Session, **kwargs: Any) -> User:
+    def save(cls, db: Session, *, commit: bool = True, **kwargs: Any) -> User:
         if "id" not in kwargs:
             kwargs["id"] = get_uuid()
         account_kind = str(kwargs.get("account_kind", UserAccountKind.LOCAL.value))
@@ -124,7 +124,10 @@ class UserService(CommonService):
         user = cls.model(**kwargs)
         db.add(user)
         try:
-            db.commit()
+            if commit:
+                db.commit()
+            else:
+                db.flush()
             db.refresh(user)
         except IntegrityError:
             db.rollback()

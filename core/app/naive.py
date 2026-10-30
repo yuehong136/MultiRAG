@@ -125,15 +125,11 @@ def by_mineru(
     if tenant_id:
         if not mineru_llm_name:
             try:
-                from api.db.services.tenant_llm_service import TenantLLMService
+                from api.db.joint_services.tenant_model_service import get_ocr_model_reference
 
                 with db_connection() as db:
-                    env_name = TenantLLMService.ensure_mineru_from_env(db, tenant_id)
-                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR)
-                    if candidates:
-                        mineru_llm_name = candidates[0].llm_name
-                    elif env_name:
-                        mineru_llm_name = env_name
+                    mineru_llm_name = get_ocr_model_reference(db, tenant_id, "MinerU")
+                    db.commit()
             except Exception as e:  # best-effort fallback
                 logging.warning(f"fallback to env mineru: {e}")
 
@@ -207,15 +203,11 @@ def by_opendataloader(
     if tenant_id:
         if not opendataloader_llm_name:
             try:
-                from api.db.services.tenant_llm_service import TenantLLMService
+                from api.db.joint_services.tenant_model_service import get_ocr_model_reference
 
                 with db_connection() as db:
-                    env_name = TenantLLMService.ensure_opendataloader_from_env(db, tenant_id)
-                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="OpenDataLoader", mdl_type=LLMType.OCR.value)
-                    if candidates:
-                        opendataloader_llm_name = candidates[0].llm_name
-                    elif env_name:
-                        opendataloader_llm_name = env_name
+                    opendataloader_llm_name = get_ocr_model_reference(db, tenant_id, "OpenDataLoader")
+                    db.commit()
             except Exception as exc:
                 logging.warning("fallback to env opendataloader: %s", exc)
 
@@ -270,15 +262,11 @@ def by_paddleocr(
     if tenant_id:
         if not paddleocr_llm_name:
             try:
-                from api.db.services.tenant_llm_service import TenantLLMService
+                from api.db.joint_services.tenant_model_service import get_ocr_model_reference
 
                 with db_connection() as db:
-                    env_name = TenantLLMService.ensure_paddleocr_from_env(db, tenant_id)
-                    candidates = TenantLLMService.query(db, tenant_id=tenant_id, llm_factory="PaddleOCR", mdl_type=LLMType.OCR)
-                    if candidates:
-                        paddleocr_llm_name = candidates[0].llm_name
-                    elif env_name:
-                        paddleocr_llm_name = env_name
+                    paddleocr_llm_name = get_ocr_model_reference(db, tenant_id, "PaddleOCR")
+                    db.commit()
             except Exception as e:  # best-effort fallback
                 logging.warning(f"fallback to env paddleocr: {e}")
 

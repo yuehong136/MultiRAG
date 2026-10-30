@@ -15,7 +15,7 @@ from core.llm.model_meta import Base, DiscoveryError, VolcEngine
 from tests.unit.test_model_metadata_adapters import transport
 
 
-@pytest.mark.parametrize("key", ["fixture-ark", '{"ark_api_key":"fixture-ark"}', '{"ark_api_key":"fixture-ark","ep_id":"ep-unrelated"}'])
+@pytest.mark.parametrize("key", ["fixture-ark", '{"api_key":"fixture-ark","endpoint_id":"ep-canonical"}', '{"ark_api_key":"fixture-ark"}', '{"ark_api_key":"fixture-ark","ep_id":"ep-unrelated"}'])
 async def test_official_inventory_and_readonly_service(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     rows = [
         {

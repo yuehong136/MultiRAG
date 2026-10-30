@@ -1,5 +1,6 @@
 """OpenAI catalog additions must reach the registered tenant model endpoint."""
 
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
@@ -29,15 +30,20 @@ def openai_catalog(monkeypatch: pytest.MonkeyPatch, db: Session) -> list[LLM]:
     factory = next(item for item in get_factory_llm_infos() if item["name"] == "OpenAI")
     rows: list[LLM] = []
 
-    def save_model(session: Session, **payload: Any) -> None:
-        assert session is db
-        rows.append(LLM(status="1", **payload))
-
     monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [factory])
+    monkeypatch.setattr(db, "begin_nested", nullcontext)
+    monkeypatch.setattr(db, "execute", lambda *args: None)
+    monkeypatch.setattr(db, "flush", lambda: None)
+    monkeypatch.setattr(db, "commit", lambda: None)
+
+    def capture_model(row: Any) -> None:
+        if isinstance(row, LLM):
+            row.status = "1"
+            rows.append(row)
+
+    monkeypatch.setattr(db, "add", capture_model)
     monkeypatch.setattr(LLMFactoriesService, "filter_delete", lambda *args: None)
-    monkeypatch.setattr(LLMFactoriesService, "save", lambda *args, **kwargs: None)
     monkeypatch.setattr(LLMService, "filter_delete", lambda *args: None)
-    monkeypatch.setattr(LLMService, "save", save_model)
     monkeypatch.setattr(TenantLLMService, "filter_delete", lambda *args: None)
     monkeypatch.setattr(TenantLLMService, "filter_update", lambda *args: None)
     monkeypatch.setattr(init_data.TenantService, "filter_update", lambda *args: None)
@@ -57,14 +63,11 @@ def openai_catalog(monkeypatch: pytest.MonkeyPatch, db: Session) -> list[LLM]:
 
 
 @pytest.mark.parametrize("mdl_type", [None, "chat", "embedding"])
-def test_default_openai_catalog_reaches_registered_list(monkeypatch: pytest.MonkeyPatch, db: Session, client: TestClient, openai_catalog: list[LLM], mdl_type: str | None) -> None:
-    config = {"factory": "OpenAI", "api_key": "fixture-key", "base_url": "https://fixture.invalid/v1"}
-    for name in ("CHAT_CFG", "EMBEDDING_CFG", "ASR_CFG", "IMAGE2TEXT_CFG", "RERANK_CFG"):
-        monkeypatch.setattr(settings, name, config)
-    monkeypatch.setattr(settings, "BUILTIN_EMBEDDING_MODELS", [])
-    monkeypatch.setattr(LLMService, "query", lambda session, **filters: [row for row in openai_catalog if row.fid == filters["fid"]])
-    defaults = get_init_tenant_llm(db, "user-unit")
-    tenants = [TenantLLM(id=index, status="1", **row) for index, row in enumerate(defaults, 1)]
+def test_explicit_openai_registrations_reach_legacy_list(monkeypatch: pytest.MonkeyPatch, db: Session, client: TestClient, openai_catalog: list[LLM], mdl_type: str | None) -> None:
+    tenants = [
+        TenantLLM(id=index, tenant_id="user-unit", llm_factory="OpenAI", llm_name=row.llm_name, mdl_type=row.mdl_type, api_key="fixture-key", max_tokens=row.max_tokens, status="1")
+        for index, row in enumerate(openai_catalog, 1)
+    ]
     tenants.append(TenantLLM(id=999, tenant_id="user-unit", llm_factory="Custom", llm_name="tenant-only", mdl_type="chat", api_key="fixture-key", status="1"))
     openai_catalog.append(LLM(fid="Builtin", llm_name="flag-embedding", mdl_type="embedding", status="1"))
 
@@ -111,3 +114,12 @@ def test_catalog_requires_authentication(client: TestClient, monkeypatch: pytest
     monkeypatch.setattr(LLMService, "get_all", forbidden_read)
     monkeypatch.setattr(TenantLLMService, "query", forbidden_read)
     assert client.get("/v1/llm/list").status_code == 401
+
+
+def test_default_seed_contains_only_configured_models_and_preserves_zero(monkeypatch: pytest.MonkeyPatch, db: Session) -> None:
+    for name in ("CHAT_CFG", "EMBEDDING_CFG", "ASR_CFG", "IMAGE2TEXT_CFG", "RERANK_CFG"):
+        monkeypatch.setattr(settings, name, {"model": "", "factory": "OpenAI"})
+    monkeypatch.setattr(settings, "CHAT_CFG", {"model": "gpt-6.1-sol@OpenAI", "factory": "OpenAI", "api_key": "fixture", "base_url": "", "max_tokens": 0})
+    rows = get_init_tenant_llm(db, "user-unit")
+    assert len(rows) == 1
+    assert rows[0]["llm_name"] == "gpt-6.1-sol" and rows[0]["max_tokens"] == 0

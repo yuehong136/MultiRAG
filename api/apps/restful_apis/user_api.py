@@ -6,6 +6,7 @@ import string
 import time
 from base64 import b64decode
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -15,12 +16,9 @@ from sqlalchemy.orm import Session
 
 from api.apps import manager
 from api.apps.auth import get_auth_client
-from api.db import FileType, UserAccountKind, UserTenantRole
-from api.db.db_models import TenantLLM, get_async_db
-from api.db.services.file_service import FileService
-from api.db.services.llm_service import get_init_tenant_llm
-from api.db.services.tenant_llm_service import TenantLLMService
-from api.db.services.user_service import TenantService, UserService, UserTenantService
+from api.db import UserAccountKind
+from api.db.db_models import User, get_async_db
+from api.db.services.user_service import TenantService, UserService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from api.utils.crypt import decrypt
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
@@ -437,68 +435,18 @@ def login_user(user):
     user.update_date = current_date
 
 
-def rollback_user_registration(db: Session, user_id: str):
-    try:
-        UserService.delete_by_id(db, user_id)
-    except Exception:
-        pass
-    try:
-        TenantService.delete_by_id(db, user_id)
-    except Exception:
-        pass
-    try:
-        u = UserTenantService.query(db, tenant_id=user_id)
-        if u:
-            UserTenantService.delete_by_id(db, u[0].id)
-    except Exception:
-        pass
-    try:
-        db.query(TenantLLM).filter(TenantLLM.tenant_id == user_id).delete()
-    except Exception:
-        pass
+def rollback_user_registration(db: Session, user_id: str) -> None:
+    # Registration writes now share one transaction, including model identities.
+    db.rollback()
 
 
-def user_register(db: Session, user_id: str, user: dict):
-    user["id"] = user_id
-    tenant = {
-        "id": user_id,
-        "name": user["nickname"] + "‘s Kingdom",
-        "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
-        "asr_id": settings.ASR_MDL,
-        "parser_ids": settings.PARSERS,
-        "img2txt_id": settings.IMAGE2TEXT_MDL,
-        "rerank_id": settings.RERANK_MDL,
-    }
-    usr_tenant = {"tenant_id": user_id, "user_id": user_id, "invited_by": user_id, "role": UserTenantRole.OWNER}
-    file_id = get_uuid()
-    file = {
-        "id": file_id,
-        "parent_id": file_id,
-        "tenant_id": user_id,
-        "created_by": user_id,
-        "name": "/",
-        "type": FileType.FOLDER.value,
-        "size": 0,
-        "location": "",
-    }
-
-    tenant_llm = get_init_tenant_llm(db, user_id)
+def user_register(db: Session, user_id: str, user: dict[str, Any]) -> list[User]:
+    from api.db.joint_services.user_account_service import register_user_account
 
     try:
-        if not UserService.save(db, **user):
-            return None
-        TenantService.insert(db, **tenant)
-        UserTenantService.insert(db, **usr_tenant)
-        TenantLLMService.insert_many(db, tenant_llm)
-        from api.db.model_backfill import backfill
-
-        db.flush()
-        backfill(db.connection(), user_id)
-        TenantService.update_by_id(db, user_id, ensure_tenant_model_id_for_params(db, user_id, tenant))
-        FileService.insert(db, file)
+        created = register_user_account(db, user_id, user)
         db.commit()
-        return UserService.query(db, email=user["email"])
+        return [created]
     except Exception as exc:
         db.rollback()
         logging.error("User registration transaction failed safely: %s", type(exc).__name__)

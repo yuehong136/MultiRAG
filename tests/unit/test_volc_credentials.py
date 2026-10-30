@@ -18,6 +18,8 @@ from core.llm.volc_auth import decode_volc_key
     [
         ("fixture-ark", "display-model"),
         ({"ark_api_key": "fixture-ark"}, "display-model"),
+        ({"api_key": "fixture-ark"}, "display-model"),
+        ({"api_key": "fixture-ark", "endpoint_id": "ep-canonical"}, "ep-canonical"),
         ({"ark_api_key": "fixture-ark", "ep_id": "ep-one"}, "ep-one"),
         ({"ark_api_key": "fixture-ark", "endpoint_id": "ep-two"}, "ep-two"),
         ({"ark_api_key": "fixture-ark", "ep_id": "ep-both", "endpoint_id": "ep-both"}, "ep-both"),
@@ -55,6 +57,8 @@ async def test_active_adapters_share_credentials_and_endpoint(payload: Any, expe
         '"fixture-secret"',
         '{"ark_api_key":"fixture-secret"',
         '{"ark_api_key":"fixture-secret","ark_api_key":"other"}',
+        '{"api_key":"fixture-secret","ark_api_key":"different"}',
+        '{"api_key":null}',
         '{"ark_api_key":null}',
         '{"ark_api_key":42}',
         '{"ark_api_key":""}',

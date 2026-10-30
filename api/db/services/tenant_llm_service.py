@@ -12,7 +12,7 @@ from typing import Any
 
 from langfuse import Langfuse
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from api.db.db_models import LLMFactories, TenantLLM, async_session_factory, db_connection
@@ -512,7 +512,16 @@ class TenantLLMService(CommonService):
     @classmethod
     def delete_by_tenant_id(cls, db: Session, tenant_id: str) -> int:
         """根据tenant_id删除所有相关的LLM配置记录"""
+        from sqlalchemy import delete
+
+        from api.db.db_models import TenantModel, TenantModelInstance, TenantModelProvider
+
         try:
+            providers = select(TenantModelProvider.id).where(TenantModelProvider.tenant_id == tenant_id)
+            instances = select(TenantModelInstance.id).where(TenantModelInstance.provider_id.in_(providers))
+            db.execute(delete(TenantModel).where(TenantModel.instance_id.in_(instances)))
+            db.execute(delete(TenantModelInstance).where(TenantModelInstance.provider_id.in_(providers)))
+            db.execute(delete(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id))
             result = db.query(cls.model).filter(cls.model.tenant_id == tenant_id).delete(synchronize_session=False)
             db.commit()
             return result
@@ -521,190 +530,75 @@ class TenantLLMService(CommonService):
             logging.exception(f"Failed to delete tenant LLM records for tenant_id={tenant_id}")
             raise e
 
-    @classmethod
-    def _collect_mineru_env_config(cls) -> dict | None:
-        cfg = MINERU_DEFAULT_CONFIG.copy()
+    @staticmethod
+    def _collect_ocr_env_config(keys: list[str], defaults: dict[str, Any]) -> dict[str, Any] | None:
+        config = dict(defaults)
         found = False
-        for key in MINERU_ENV_KEYS:
-            val = os.environ.get(key)
-            if val:
-                found = True
-                cfg[key] = val
-        return cfg if found else None
-
-    @classmethod
-    def ensure_mineru_from_env(cls, db: Session, tenant_id: str) -> str | None:
-        """
-        Ensure a MinerU OCR model exists for the tenant if env variables are present.
-        Return the existing or newly created llm_name, or None if env not set.
-        """
-        cfg = cls._collect_mineru_env_config()
-        if not cfg:
-            return None
-
-        saved_mineru_models = cls.query(db, tenant_id=tenant_id, llm_factory="MinerU", mdl_type=LLMType.OCR.value)
-
-        def _parse_api_key(raw: str) -> dict:
-            try:
-                return json.loads(raw or "{}")
-            except Exception:
-                return {}
-
-        for item in saved_mineru_models:
-            api_cfg = _parse_api_key(item.api_key)
-            normalized = {k: api_cfg.get(k, MINERU_DEFAULT_CONFIG.get(k)) for k in MINERU_ENV_KEYS}
-            if normalized == cfg:
-                return item.llm_name
-
-        used_names = {item.llm_name for item in saved_mineru_models}
-        idx = 1
-        base_name = "mineru-from-env"
-        while True:
-            candidate = f"{base_name}-{idx}"
-            if candidate in used_names:
-                idx += 1
-                continue
-
-            try:
-                cls.save(
-                    db,
-                    tenant_id=tenant_id,
-                    llm_factory="MinerU",
-                    llm_name=candidate,
-                    mdl_type=LLMType.OCR.value,
-                    api_key=json.dumps(cfg),
-                    api_base="",
-                    max_tokens=0,
-                )
-                return candidate
-            except IntegrityError:
-                logging.warning("MinerU env model %s already exists for tenant %s, retry with next name", candidate, tenant_id)
-                db.rollback()
-                used_names.add(candidate)
-                idx += 1
-                continue
-
-    @classmethod
-    def _collect_paddleocr_env_config(cls) -> dict | None:
-        cfg = PADDLEOCR_DEFAULT_CONFIG.copy()
-        found = False
-        for key in PADDLEOCR_ENV_KEYS:
-            val = os.environ.get(key)
-            if val:
-                found = True
-                cfg[key] = val
-        return cfg if found else None
-
-    @classmethod
-    def ensure_paddleocr_from_env(cls, db: Session, tenant_id: str) -> str | None:
-        """
-        Ensure a PaddleOCR model exists for the tenant if env variables are present.
-        Return the existing or newly created llm_name, or None if env not set.
-        """
-        cfg = cls._collect_paddleocr_env_config()
-        if not cfg:
-            return None
-
-        saved_paddleocr_models = cls.query(db, tenant_id=tenant_id, llm_factory="PaddleOCR", mdl_type=LLMType.OCR.value)
-
-        def _parse_api_key(raw: str) -> dict:
-            try:
-                return json.loads(raw or "{}")
-            except Exception:
-                return {}
-
-        for item in saved_paddleocr_models:
-            api_cfg = _parse_api_key(item.api_key)
-            normalized = {k: api_cfg.get(k, PADDLEOCR_DEFAULT_CONFIG.get(k)) for k in PADDLEOCR_ENV_KEYS}
-            if normalized == cfg:
-                return item.llm_name
-
-        used_names = {item.llm_name for item in saved_paddleocr_models}
-        idx = 1
-        base_name = "paddleocr-from-env"
-        while True:
-            candidate = f"{base_name}-{idx}"
-            if candidate in used_names:
-                idx += 1
-                continue
-
-            try:
-                cls.save(
-                    db,
-                    tenant_id=tenant_id,
-                    llm_factory="PaddleOCR",
-                    llm_name=candidate,
-                    mdl_type=LLMType.OCR.value,
-                    api_key=json.dumps(cfg),
-                    api_base="",
-                    max_tokens=0,
-                )
-                return candidate
-            except IntegrityError:
-                logging.warning("PaddleOCR env model %s already exists for tenant %s, retry with next name", candidate, tenant_id)
-                db.rollback()
-                used_names.add(candidate)
-                idx += 1
-                continue
-
-    @classmethod
-    def _collect_opendataloader_env_config(cls) -> dict[str, str] | None:
-        cfg = OPENDATALOADER_DEFAULT_CONFIG.copy()
-        found = False
-        for key in OPENDATALOADER_ENV_KEYS:
+        for key in keys:
             value = os.environ.get(key)
             if value:
                 found = True
-                cfg[key] = value
-        return cfg if found else None
+                config[key] = value
+        return config if found else None
+
+    @classmethod
+    def _ensure_ocr_from_env(cls, db: Session, tenant_id: str, provider: str, config: dict[str, Any] | None) -> str | None:
+        """Link env OCR in the caller's transaction; never edit a saved instance."""
+        if not config:
+            return None
+        from api.db.db_models import Tenant, TenantModelProvider
+        from api.db.model_backfill import backfill
+        from api.db.services.provider_model_resolution import linked_model
+
+        if db.scalar(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update()) is None:
+            raise LookupError("Tenant not found")
+        stored_provider = db.scalar(select(TenantModelProvider).where(TenantModelProvider.tenant_id == tenant_id, TenantModelProvider.provider_name == provider))
+        if stored_provider is not None and stored_provider.status != "active":
+            return None
+        rows = list(db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == tenant_id, TenantLLM.llm_factory == provider).order_by(TenantLLM.id)))
+        for row in rows:
+            link = linked_model(db, row.id, tenant_id)
+            if not link and row.mdl_type != "ocr":
+                continue
+            credential = link[1].api_key if link else row.api_key
+            try:
+                payload = json.loads(credential or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict) or any(payload.get(key, value) != value for key, value in config.items()):
+                continue
+            if row.status != "1" or (link and ("ocr" not in link[0].model_types or link[1].status != "active")):
+                return None
+            if not link:
+                db.flush()
+                backfill(db.connection(), tenant_id)
+            return str(row.id)
+        used = {row.llm_name for row in rows}
+        index = 1
+        while f"{provider.lower()}-from-env-{index}" in used:
+            index += 1
+        row = TenantLLM(tenant_id=tenant_id, llm_factory=provider, llm_name=f"{provider.lower()}-from-env-{index}", mdl_type="ocr", api_key=json.dumps(config), api_base="", max_tokens=0)
+        db.add(row)
+        db.flush()
+        backfill(db.connection(), tenant_id)
+        return str(row.id)
+
+    @classmethod
+    def ensure_mineru_from_env(cls, db: Session, tenant_id: str) -> str | None:
+        return cls._ensure_ocr_from_env(db, tenant_id, "MinerU", cls._collect_ocr_env_config(MINERU_ENV_KEYS, MINERU_DEFAULT_CONFIG))
+
+    @classmethod
+    def ensure_paddleocr_from_env(cls, db: Session, tenant_id: str) -> str | None:
+        return cls._ensure_ocr_from_env(db, tenant_id, "PaddleOCR", cls._collect_ocr_env_config(PADDLEOCR_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG))
 
     @classmethod
     def ensure_opendataloader_from_env(cls, db: Session, tenant_id: str) -> str | None:
-        """Ensure one tenant-scoped OpenDataLoader OCR model for the env config."""
-        cfg = cls._collect_opendataloader_env_config()
-        if not cfg:
-            return None
+        return cls._ensure_ocr_from_env(db, tenant_id, "OpenDataLoader", cls._collect_ocr_env_config(OPENDATALOADER_ENV_KEYS, OPENDATALOADER_DEFAULT_CONFIG))
 
-        saved_models = cls.query(db, tenant_id=tenant_id, llm_factory="OpenDataLoader", mdl_type=LLMType.OCR.value)
-
-        def parse_api_key(raw: str) -> dict[str, object]:
-            try:
-                parsed = json.loads(raw or "{}")
-            except json.JSONDecodeError:
-                return {}
-            return parsed if isinstance(parsed, dict) else {}
-
-        for item in saved_models:
-            api_cfg = parse_api_key(item.api_key)
-            normalized = {key: api_cfg.get(key, OPENDATALOADER_DEFAULT_CONFIG.get(key)) for key in OPENDATALOADER_ENV_KEYS}
-            if normalized == cfg:
-                return item.llm_name
-
-        used_names = {item.llm_name for item in saved_models}
-        idx = 1
-        base_name = "opendataloader-from-env"
-        while True:
-            candidate = f"{base_name}-{idx}"
-            if candidate in used_names:
-                idx += 1
-                continue
-            try:
-                cls.save(
-                    db,
-                    tenant_id=tenant_id,
-                    llm_factory="OpenDataLoader",
-                    llm_name=candidate,
-                    mdl_type=LLMType.OCR.value,
-                    api_key=json.dumps(cfg),
-                    api_base="",
-                    max_tokens=0,
-                )
-                return candidate
-            except IntegrityError:
-                logging.warning("OpenDataLoader env model %s already exists for tenant %s, retry with next name", candidate, tenant_id)
-                db.rollback()
-                used_names.add(candidate)
-                idx += 1
+    @classmethod
+    def ensure_ocr_models_from_env(cls, db: Session, tenant_id: str) -> None:
+        for ensure in (cls.ensure_mineru_from_env, cls.ensure_paddleocr_from_env, cls.ensure_opendataloader_from_env):
+            ensure(db, tenant_id)
 
 
 class LLM4Tenant:

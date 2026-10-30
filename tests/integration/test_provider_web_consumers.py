@@ -38,7 +38,9 @@ def _consumer(checkout: Path, descriptor: Path, phase: str, evidence: Path, jour
     assert script.is_file(), "The pinned Web provider-instance consumer is required"
     inputs = [runner, runner.with_name("resource_journal.py"), Path(__file__), ROOT / "tests/support/web_consumer.py", descriptor, script, Path(node), ROOT / ".github/consumer-web.json"]
     configuration = json.loads(descriptor.read_text())
-    inputs.extend(Path(configuration[key]) for key in ("ownerTokenFile", "foreignTokenFile", "providerKeyFile", "readbackFile") if key in configuration and Path(configuration[key]).is_file())
+    inputs.extend(
+        Path(configuration[key]) for key in ("ownerTokenFile", "foreignTokenFile", "providerKeyFile", "formsFile", "readbackFile") if key in configuration and Path(configuration[key]).is_file()
+    )
     inputs.extend(path for path in (checkout / "src").rglob("*") if path.is_file() and path.suffix in {".ts", ".tsx", ".json"})
     inputs.extend(checkout / name for name in ("package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "tsconfig.json", "tsconfig.app.json") if (checkout / name).is_file())
     for package in ("tsx", "esbuild", "@esbuild", "get-tsconfig", "resolve-pkg-maps"):
@@ -350,3 +352,201 @@ def test_actual_web_microsoft_connector_contract_and_foreign_denials(
                 path.unlink()
         private.rmdir()
         journal.event("consumer-private-cleanup", files_absent=all(not path.exists() for path in owned_files), directory_absent=not private.exists())
+
+
+@pytest.fixture
+def provider_form_http() -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    """Serve the actual PaddleOCR and chat SDK wire protocols on one owned port."""
+    journal = ResourceJournal("provider-form-sdk-http")
+    calls: list[dict[str, Any]] = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            return
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append({"path": self.path, "model": payload.get("model"), "authSHA256": hashlib.sha256(self.headers.get("Authorization", "").encode()).hexdigest()})
+            if self.path == "/paddle/layout-parsing":
+                value = {
+                    "errorCode": 0,
+                    "result": {"layoutParsingResults": [{"prunedResult": {"parsing_res_list": [{"block_content": "controlled Paddle text", "block_label": "text", "block_bbox": [10, 10, 100, 40]}]}}]},
+                }
+            else:
+                assert self.path.endswith("/chat/completions")
+                value = {
+                    "id": "controlled",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": payload["model"],
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
+            raw = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    with ExitStack() as cleanup:
+        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
+        journal.event("reserve-listener", address=list(address))
+        server = ThreadingHTTPServer(address, Provider, bind_and_activate=False)
+        cleanup.callback(server.server_close)
+        server.server_bind()
+        server.server_activate()
+        thread = threading.Thread(target=server.serve_forever, name="provider-form-sdk")
+        journal.event("reserve-thread", name=thread.name, address=list(address))
+        thread.start()
+        cleanup.callback(thread.join, 5)
+        cleanup.callback(server.shutdown)
+        yield f"http://127.0.0.1:{address[1]}", calls
+    with socket.socket() as reader:
+        assert reader.connect_ex(address) != 0
+    assert not thread.is_alive()
+    journal.event("listener-cleanup-readback", address=list(address), absent=True, thread_absent=True, requests=calls)
+
+
+def test_actual_web_forms_ocr_volc_multi_capabilities_and_sql(
+    rest_documents: dict[str, Any], provider_form_http: tuple[str, list[dict[str, Any]]], tmp_path: Path, record_property: Callable[[str, object], None]
+) -> None:
+    import asyncio
+
+    from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider
+    from api.db.joint_services.tenant_model_service import get_model_config_by_id
+    from api.db.services.llm_service import LLMBundle
+
+    env = rest_documents
+    journal = env["journal"]
+    checkout, web_sha = _pinned_checkout()
+    base, calls = provider_form_http
+    private = tmp_path / "provider-forms-private"
+    evidence = journal.path.parent / (journal.run_id + "-form-consumer")
+    journal.event("reserve-form-directories", private=str(private), evidence=str(evidence))
+    private.mkdir(mode=0o700)
+    evidence.mkdir(mode=0o700)
+    paths = {name: private / name for name in ("owner.token", "foreign.token", "forms.json", "readback.json", "descriptor.json")}
+    forms = [
+        {
+            "provider": "VolcEngine",
+            "instanceName": "form-volc-first",
+            "values": {
+                "apiKey": "controlled-volc-first",
+                "endpointId": "ep-first",
+                "baseUrl": base + "/first/v3",
+                "modelType": "chat,image2text",
+                "modelName": "shared-display",
+                "maxTokens": 0,
+                "isTools": False,
+            },
+        },
+        {
+            "provider": "VolcEngine",
+            "instanceName": "form-volc-second",
+            "values": {
+                "apiKey": "controlled-volc-second",
+                "endpointId": "ep-second",
+                "baseUrl": base + "/second/v3",
+                "modelType": "chat,image2text",
+                "modelName": "shared-display",
+                "maxTokens": 0,
+                "isTools": False,
+            },
+        },
+        {
+            "provider": "PaddleOCR",
+            "instanceName": "form-paddle",
+            "values": {
+                "paddleocrApiUrl": base + "/paddle/layout-parsing",
+                "paddleocrAccessToken": "controlled-paddle",
+                "paddleocrAlgorithm": "PaddleOCR-VL",
+                "modelName": "PaddleOCR",
+                "maxTokens": 0,
+                "isTools": False,
+            },
+        },
+        {
+            "provider": "OpenRouter",
+            "instanceName": "form-router",
+            "values": {"apiKey": "controlled-router", "baseUrl": base + "/router/v1", "modelType": "chat,image2text", "modelName": "router-display", "maxTokens": 0, "isTools": False},
+        },
+    ]
+    descriptor = {
+        "origin": env["base"],
+        "ownerTokenFile": str(paths["owner.token"]),
+        "foreignTokenFile": str(paths["foreign.token"]),
+        "formsFile": str(paths["forms.json"]),
+        "readbackFile": str(paths["readback.json"]),
+        "scratchDatabase": env["engine"].url.database,
+    }
+    journal.event(
+        "reserve-web-form-resources",
+        private_paths=[str(path) for path in paths.values()],
+        database=descriptor["scratchDatabase"],
+        forms=[{key: value for key, value in form.items() if key != "values"} for form in forms],
+    )
+    owned: list[Path] = []
+    script = "verify-provider-form-routes.ts"
+    try:
+        for name, value in (("owner.token", env["jwt"][0]), ("foreign.token", env["jwt"][1]), ("forms.json", json.dumps(forms)), ("descriptor.json", json.dumps(descriptor))):
+            _private_file(paths[name], value, journal, owned)
+        # The real Web script reserves and exclusively creates its readback file.
+        owned.append(paths["readback.json"])
+        result = _consumer(checkout, paths["descriptor.json"], "owner", evidence, journal, script)
+        assert result["emptyCandidateStatuses"] == [400, 400]
+        assert len(calls) == 8
+        assert len([call for call in calls if call["path"] == "/paddle/layout-parsing"]) == 2
+        for lane in ("first", "second"):
+            selected = [call for call in calls if call["path"] == f"/{lane}/v3/chat/completions"]
+            assert len(selected) == 2 and {call["model"] for call in selected} == {"ep-" + lane}
+            assert {call["authSHA256"] for call in selected} == {hashlib.sha256(("Bearer controlled-volc-" + lane).encode()).hexdigest()}
+        identifiers = {form["modelIds"][0] for form in result["forms"]}
+        with Session(env["engine"]) as reader:
+            for form in result["forms"]:
+                identifier = form["modelIds"][0]
+                row = reader.get(TenantLLM, identifier)
+                model = reader.get(TenantModel, identifier)
+                instance = reader.get(TenantModelInstance, model.instance_id)
+                assert row.tenant_id == env["owners"][0] and row.max_tokens == 0 and model.is_tools is False
+                assert model.model_types == form["candidate"]["custom_model"]["model_types"]
+                assert hashlib.sha256(instance.api_key.encode()).hexdigest() == form["credentialSHA256"]
+                if form["provider"] == "VolcEngine":
+                    credential = json.loads(instance.api_key)
+                    assert set(credential) == {"api_key", "endpoint_id"} and model.model_name == "shared-display"
+
+                    async def infer() -> None:
+                        for capability in ("chat", "image2text"):
+                            config = get_model_config_by_id(reader, identifier, tenant_id=env["owners"][0], model_type=capability)
+                            bundle = LLMBundle(reader, env["owners"][0], config, max_retries=0)
+                            bundle.db = None
+                            try:
+                                answer, _tokens = await bundle.mdl.async_chat("", [{"role": "user", "content": "hello"}], {})
+                                assert answer == "OK" and bundle.mdl.model_name == credential["endpoint_id"]
+                            finally:
+                                await bundle.aclose()
+
+                    asyncio.run(infer())
+            owner = reader.get(Tenant, env["owners"][0])
+            for choice in result["defaults"]:
+                from api.db.model_contract import DEFAULT_MODEL_FIELDS
+
+                assert getattr(owner, "tenant_" + DEFAULT_MODEL_FIELDS[choice["model_type"]]) == choice["model_id"]
+        before = snapshot(env)
+        foreign = _consumer(checkout, paths["descriptor.json"], "foreign", evidence, journal, script)
+        assert foreign["ownerModelsHidden"] is True and len(foreign["statuses"]) == 16
+        assert snapshot(env) == before
+        cleanup = _consumer(checkout, paths["descriptor.json"], "cleanup", evidence, journal, script)
+        assert cleanup["providersAbsent"] and cleanup["modelsAbsent"]
+        with Session(env["engine"]) as reader:
+            assert reader.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == env["owners"][0])) == 0
+            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.id.in_(identifiers))) == 0
+            assert reader.scalar(select(func.count()).select_from(TenantModel).where(TenantModel.id.in_(identifiers))) == 0
+        journal.event("web-form-independent-readback", web_sha=web_sha, model_ids=sorted(identifiers), no_foreign_side_effects=True, models_instances_providers_absent=True)
+        record_property("actual_web_forms_sdk_sql", json.dumps({"web_sha": web_sha, "forms": result, "foreign": foreign, "cleanup": cleanup}))
+    finally:
+        for path in owned:
+            if path.exists():
+                path.unlink()
+        private.rmdir()
+        journal.event("web-form-private-cleanup", absent=not private.exists())

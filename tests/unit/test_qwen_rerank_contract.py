@@ -85,3 +85,30 @@ def test_qwen_rerank_provider_failure_is_not_returned_as_scores(monkeypatch: pyt
     model = RerankModel["Tongyi-Qianwen"]("unit-test-key", "qwen3-rerank")
     with pytest.raises(ValueError, match="qwen3-rerank: 400 - unsupported parameter"):
         model.similarity("query", ["document"])
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status_code": 400, "message": "unsupported parameter", "api_key": "private-value"},
+        SimpleNamespace(status_code=400, code="InvalidParameter", api_key="private-value"),
+        {"status_code": 400, "api_key": "private-value"},
+        {"status_code": 400, "text": {"api_key": "private-value"}},
+        {"status_code": 400, "message": "credential unit-test-key was rejected"},
+    ],
+)
+def test_qwen_error_shapes_do_not_serialize_response_or_key(monkeypatch: pytest.MonkeyPatch, response: Any) -> None:
+    monkeypatch.setattr(dashscope.TextReRank, "call", lambda **kwargs: response)
+    with pytest.raises(ValueError) as failure:
+        QWenRerank("unit-test-key").similarity("query", ["document"])
+    assert "400" in str(failure.value)
+    assert "private-value" not in str(failure.value) and "unit-test-key" not in str(failure.value)
+
+
+def test_real_sdk_failure_without_text_remains_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def rejected(cls: type[BaseApi], **kwargs: Any) -> DashScopeAPIResponse:
+        return DashScopeAPIResponse(status_code=400, code="InvalidParameter", message="bad parameter")
+
+    monkeypatch.setattr(BaseApi, "call", classmethod(rejected))
+    with pytest.raises(ValueError, match="400 - bad parameter"):
+        QWenRerank("unit-test-key").similarity("query", ["document"])

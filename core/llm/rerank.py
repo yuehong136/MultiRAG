@@ -529,11 +529,14 @@ class QWenRerank(Base):
                 base_address=self._dashscope_http_api_url,
             )
 
-        if resp.status_code == HTTPStatus.OK:
+        status = _field(resp, "status_code")
+        if status == HTTPStatus.OK:
             rank = _rank_from_results(_field(_field(resp, "output"), "results"), len(texts))
             return rank, total_token_count_from_response(resp)
-        detail = _field(resp, "text") or _field(resp, "message") or _field(resp, "code") or "Provider request failed"
-        raise ValueError(f"Error calling QWenRerank model {self.model_name}: {resp.status_code} - {detail}")
+        detail = next((value for field in ("text", "message", "code") if isinstance(value := _field(resp, field), str) and value), "Provider request failed")
+        if self.api_key:
+            detail = detail.replace(self.api_key, "[redacted]")
+        raise ValueError(f"Error calling QWenRerank model {self.model_name}: {status} - {detail[:512]}")
 
 
 class HuggingfaceRerank(Base):

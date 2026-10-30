@@ -27,9 +27,11 @@ def decode_volc_credentials(key: str | dict[str, Any]) -> tuple[str, dict[str, A
             payload = {"ark_api_key": key}
     if not isinstance(payload, dict):
         raise ValueError("VolcEngine credentials must be an object or raw Ark key")
-    api_key = payload.get("ark_api_key")
+    api_key = payload.get("api_key", payload.get("ark_api_key"))
+    if "api_key" in payload and "ark_api_key" in payload and payload["api_key"] != payload["ark_api_key"]:
+        raise ValueError("Conflicting VolcEngine credential fields")
     if not isinstance(api_key, str) or not api_key or api_key != api_key.strip() or any(ord(char) < 32 for char in api_key):
-        raise ValueError("VolcEngine requires a nonempty ark_api_key string")
+        raise ValueError("VolcEngine requires a nonempty api_key string")
     endpoints: list[str] = []
     for field in ("ep_id", "endpoint_id"):
         if field in payload:

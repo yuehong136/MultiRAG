@@ -43,25 +43,7 @@ def test_create_new_user_returns_only_public_projection(
         access_token="stored-access-token",
         account_kind=UserAccountKind.LOCAL.value,
     )
-    monkeypatch.setattr(
-        user_account_service.UserService,
-        "save",
-        classmethod(lambda cls, db, **kwargs: persisted_user),
-    )
-    monkeypatch.setattr(user_account_service, "get_init_tenant_llm", lambda db, user_id: [])
-    monkeypatch.setattr(
-        user_account_service,
-        "ensure_tenant_model_id_for_params",
-        lambda db, user_id, tenant: tenant,
-    )
-    for service, method in (
-        (user_account_service.TenantService, "insert"),
-        (user_account_service.TenantService, "update_by_id"),
-        (user_account_service.UserTenantService, "insert"),
-        (user_account_service.TenantLLMService, "insert_many"),
-        (user_account_service.FileService, "insert"),
-    ):
-        monkeypatch.setattr(service, method, Mock(return_value=True))
+    monkeypatch.setattr(user_account_service, "register_user_account", lambda *args: persisted_user)
 
     result = user_account_service.create_new_user(
         db,

@@ -488,7 +488,7 @@ class VolcEngine(Base):
         if parsed.scheme != "https" or parsed.hostname != "ark.cn-beijing.volces.com" or parsed.port not in {None, 443} or parsed.path not in {"", "/api/v3"}:
             raise ValueError("VolcEngine discovery requires its official HTTPS origin")
         token, payload = decode_volc_credentials(self.api_key)
-        if set(payload) - {"ark_api_key", "ep_id", "endpoint_id", "dimensions", "encoding_format", "is_tools"}:
+        if set(payload) - {"api_key", "ark_api_key", "ep_id", "endpoint_id", "dimensions", "encoding_format", "is_tools"}:
             raise ValueError("Invalid VolcEngine credential fields")
         if any(not 33 <= ord(char) <= 126 for char in token):
             raise ValueError("Invalid VolcEngine API key")

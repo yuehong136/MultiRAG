@@ -16,7 +16,6 @@ from api.db.db_models import LLM
 from api.db.services.common_service import CommonService
 from api.db.services.tenant_llm_service import LLM4Tenant, TenantLLMService
 from common.asyncio_utils import finish_owned_work
-from common.constants import LLMType
 from common.token_utils import num_tokens_from_string
 
 _owned_bundles: ContextVar[list["LLMBundle"] | None] = ContextVar("owned_llm_bundles", default=None)
@@ -63,67 +62,76 @@ class LLMService(CommonService):
         super().__init__(LLM)
 
 
-def get_init_tenant_llm(db, user_id):
+def get_init_tenant_llm(db: Session, user_id: str) -> list[dict[str, Any]]:
+    """Seed only explicitly configured defaults, preserving zero token limits."""
+    from api.db.services.model_provider_service import catalog
     from common import settings
 
-    tenant_llm = []
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for capability, config in (
+        ("chat", settings.CHAT_CFG),
+        ("embedding", settings.EMBEDDING_CFG),
+        ("speech2text", settings.ASR_CFG),
+        ("image2text", settings.IMAGE2TEXT_CFG),
+        ("rerank", settings.RERANK_CFG),
+    ):
+        reference = config.get("model", "")
+        if not reference:
+            continue
+        name, factory = TenantLLMService.split_model_name_and_factory(reference)
+        factory = factory or config.get("factory", "")
+        if not factory:
+            raise ValueError("Configured default model requires a provider")
+        declarations = [item for item in catalog(factory) if item.model_name == name]
+        if declarations and capability not in declarations[0].model_types:
+            raise ValueError("Configured default model does not support its capability")
+        token_limit = config.get("max_tokens")
+        if token_limit is None:
+            token_limit = declarations[0].max_tokens if declarations else 8192
+        record = {
+            "tenant_id": user_id,
+            "llm_factory": factory,
+            "llm_name": name,
+            "mdl_type": capability,
+            "api_key": config.get("api_key", ""),
+            "api_base": config.get("base_url", ""),
+            "max_tokens": token_limit,
+        }
+        previous = records.get((factory, name))
+        if previous and (previous["api_key"], previous["api_base"]) != (record["api_key"], record["api_base"]):
+            raise ValueError("Configured defaults require distinct provider instances")
+        records.setdefault((factory, name), record)
+    return list(records.values())
 
-    model_configs = {
-        LLMType.CHAT: settings.CHAT_CFG,
-        LLMType.EMBEDDING: settings.EMBEDDING_CFG,
-        LLMType.SPEECH2TEXT: settings.ASR_CFG,
-        LLMType.IMAGE2TEXT: settings.IMAGE2TEXT_CFG,
-        LLMType.RERANK: settings.RERANK_CFG,
-    }
 
-    seen = set()
-    factory_configs = []
-    for factory_config in [
-        settings.CHAT_CFG,
-        settings.EMBEDDING_CFG,
-        settings.ASR_CFG,
-        settings.IMAGE2TEXT_CFG,
-        settings.RERANK_CFG,
-    ]:
-        factory_name = factory_config["factory"]
-        if factory_name not in seen:
-            seen.add(factory_name)
-            factory_configs.append(factory_config)
+def initialize_tenant_models(db: Session, tenant_id: str) -> None:
+    """Create configured defaults and env OCR in the caller's transaction."""
+    from sqlalchemy import select
 
-    for factory_config in factory_configs:
-        for llm in LLMService.query(db, fid=factory_config["factory"]):
-            tenant_llm.append(
-                {
-                    "tenant_id": user_id,
-                    "llm_factory": factory_config["factory"],
-                    "llm_name": llm.llm_name,
-                    "mdl_type": llm.mdl_type,
-                    "api_key": model_configs.get(llm.mdl_type, {}).get("api_key", factory_config["api_key"]),
-                    "api_base": model_configs.get(llm.mdl_type, {}).get("base_url", factory_config["base_url"]),
-                    "max_tokens": llm.max_tokens if llm.max_tokens else 8192,
-                }
-            )
+    from api.db.db_models import TenantLLM, TenantModel
+    from api.db.model_backfill import backfill
+    from api.db.services.model_provider_service import catalog
 
-    for buildin_embedding_model in settings.BUILTIN_EMBEDDING_MODELS:
-        mdlnm, fid = TenantLLMService.split_model_name_and_factory(buildin_embedding_model)
-        tenant_llm.append(
-            {
-                "tenant_id": user_id,
-                "llm_factory": fid,
-                "llm_name": mdlnm,
-                "mdl_type": "embedding",
-                "api_key": "",
-                "api_base": "",
-                "max_tokens": 1024 if buildin_embedding_model == "BAAI/bge-large-zh-v1.5@BAAI" else 512,
-            }
-        )
-
-    unique = {}
-    for item in tenant_llm:
-        key = (item["tenant_id"], item["llm_factory"], item["llm_name"])
-        if key not in unique:
-            unique[key] = item
-    return list(unique.values())
+    created: list[tuple[TenantLLM, list[str], bool]] = []
+    for record in get_init_tenant_llm(db, tenant_id):
+        existing = db.scalar(select(TenantLLM.id).where(TenantLLM.tenant_id == tenant_id, TenantLLM.llm_factory == record["llm_factory"], TenantLLM.llm_name == record["llm_name"]))
+        if existing is not None:
+            continue
+        declarations = [item for item in catalog(record["llm_factory"]) if item.model_name == record["llm_name"]]
+        capabilities = declarations[0].model_types if declarations else [record["mdl_type"]]
+        row = TenantLLM(**record)
+        db.add(row)
+        created.append((row, capabilities, declarations[0].is_tools if declarations else False))
+    db.flush()
+    backfill(db.connection(), tenant_id)
+    for row, capabilities, tools in created:
+        model = db.get(TenantModel, row.id)
+        if model is None:
+            raise RuntimeError("Configured default was not linked")
+        model.model_types = list(capabilities)
+        model.is_tools = tools
+    db.flush()
+    TenantLLMService.ensure_ocr_models_from_env(db, tenant_id)
 
 
 class LLMBundle(LLM4Tenant):

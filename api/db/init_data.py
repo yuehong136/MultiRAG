@@ -4,10 +4,9 @@ import logging
 import os
 import time
 import uuid
-from copy import deepcopy
 
 from fastapi import HTTPException
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from api.db import UserTenantRole
@@ -20,13 +19,12 @@ from api.db.services.canvas_service import CanvasTemplateService
 from api.db.services.dialog_service import DialogService
 from api.db.services.document_service import DocumentService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.llm_service import LLMBundle, LLMService, get_init_tenant_llm
+from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.memory_service import MemoryService
 from api.db.services.system_settings_service import SystemSettingsService
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
-from api.db.services.user_service import TenantService, UserTenantService
+from api.db.services.user_service import TenantService
 from api.db.template_utils import normalize_canvas_template_categories
-from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 
 # from api.common.base64 import encode_to_base64
 from common import settings
@@ -42,7 +40,7 @@ DEFAULT_SUPERUSER_PASSWORD = os.getenv("DEFAULT_SUPERUSER_PASSWORD", "admin")
 
 def init_superuser(
     db: Session, nickname: str = DEFAULT_SUPERUSER_NICKNAME, email: str = DEFAULT_SUPERUSER_EMAIL, password: str = DEFAULT_SUPERUSER_PASSWORD, role: UserTenantRole = UserTenantRole.OWNER
-):
+) -> None:
     """
     初始化超级用户
 
@@ -67,56 +65,16 @@ def init_superuser(
         "email": email,
         "status": "1",
     }
-    tenant = {
-        "id": user_info["id"],
-        "name": user_info["nickname"] + "'s Kingdom",
-        "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
-        "asr_id": settings.ASR_MDL,
-        "parser_ids": settings.PARSERS,
-        "img2txt_id": settings.IMAGE2TEXT_MDL,
-        "rerank_id": settings.RERANK_MDL,
-    }
-    usr_tenant = {"tenant_id": user_info["id"], "user_id": user_info["id"], "invited_by": user_info["id"], "role": role}
-
-    # get_init_tenant_llm 已经包含了所有配置的 LLM factory，无需重复添加
-    tenant_llm = get_init_tenant_llm(db, user_info["id"])
+    from api.db.joint_services.user_account_service import initialize_user_tenant
 
     try:
-        if not UserService.save(db, **user_info):
-            logging.error("can't init admin.")
-            return
-    except IntegrityError:
-        logging.info("User with email %s already exists, skipping.", email)
-        return
-
-    # 检查 Tenant 是否已存在，避免重复插入
-    existing_tenant = TenantService.get_or_none(db, id=tenant["id"])
-    if not existing_tenant:
-        TenantService.insert(db, **tenant)
-    else:
-        logging.info(f"Tenant {tenant['id']} already exists, skipping creation.")
-
-    # 检查 UserTenant 是否已存在
-    existing_user_tenant = UserTenantService.get_or_none(db, tenant_id=usr_tenant["tenant_id"], user_id=usr_tenant["user_id"])
-    if not existing_user_tenant:
-        UserTenantService.insert(db, **usr_tenant)
-    else:
-        logging.info(f"UserTenant for user {usr_tenant['user_id']} already exists, skipping creation.")
-
-    # 清理该 tenant 已有的 TenantLLM 记录，然后重新插入（避免唯一约束冲突）
-    try:
-        TenantLLMService.filter_delete(db, [TenantLLM.tenant_id == user_info["id"]])
-        logging.info(f"Cleaned existing TenantLLM records for tenant {user_info['id']}")
-    except Exception as e:
-        logging.warning(f"Failed to clean TenantLLM records: {e}")
-
-    TenantLLMService.insert_many(db, tenant_llm)
-    from api.db.model_backfill import backfill
-
-    db.flush()
-    backfill(db.connection(), user_info["id"])
-    TenantService.update_by_id(db, user_info["id"], ensure_tenant_model_id_for_params(db, user_info["id"], tenant))
+        UserService.save(db, commit=False, **user_info)
+        tenant_object = initialize_user_tenant(db, user_info, role)
+        tenant = tenant_object.to_dict()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     logging.info(f"Super user initialized. email: {email},A default password has been set; changing the password after login is strongly recommended.")
 
@@ -135,31 +93,25 @@ def init_superuser(
             logging.error("'{}' doesn't work!".format(tenant["embd_id"]))
 
 
-def init_llm_factory(db: Session):
-    LLMFactoriesService.filter_delete(db, [1 == 1])
-    factory_llm_infos = settings.FACTORY_LLM_INFOS
-    llm_factory_fields = set(LLMFactories.__table__.columns.keys())
-    for factory_llm_info in factory_llm_infos:
-        info = deepcopy(factory_llm_info)
-        llm_infos = info.pop("llm")
-        # Runtime-only config keys such as `url` live in FACTORY_LLM_INFOS and
-        # should not be persisted into the LLMFactories ORM model.
-        # TODO: Replace this ORM-column filter with an explicit config schema or
-        # fixed DB-field mapping if llm_factories.json gains more non-persistent fields.
-        info = {key: value for key, value in info.items() if key in llm_factory_fields}
-        try:
-            LLMFactoriesService.save(db, **info)
-        except Exception as e:
-            db.rollback()
-            logging.warning(f"初始化 LLMFactory 失败，已回滚: {e}")
-        LLMService.filter_delete(db, [LLM.fid == factory_llm_info["name"]])
-        for llm_info in llm_infos:
-            llm_info["fid"] = factory_llm_info["name"]
-            try:
-                LLMService.save(db, **llm_info)
-            except Exception as e:
-                db.rollback()
-                logging.warning(f"初始化 LLM 失败，已回滚: {e}")
+def init_llm_factory(db: Session) -> None:
+    from api.db.services.model_provider_service import catalog
+
+    # The modern catalog is authoritative. The legacy table keeps a primary
+    # capability and IMAGE2TEXT tag for the active admin read projection.
+    with db.begin_nested():
+        db.execute(delete(LLMFactories))
+        db.execute(delete(LLM))
+        factory_fields = set(LLMFactories.__table__.columns.keys())
+        for factory in settings.FACTORY_LLM_INFOS:
+            db.add(LLMFactories(**{key: value for key, value in factory.items() if key in factory_fields}))
+            for model in catalog(factory["name"]):
+                raw = next(item for item in factory["llm"] if item["llm_name"] == model.model_name)
+                tags = list(dict.fromkeys(tag.strip() for tag in raw.get("tags", "").split(",") if tag.strip()))
+                if "image2text" in model.model_types and "IMAGE2TEXT" not in tags:
+                    tags.append("IMAGE2TEXT")
+                db.add(LLM(fid=factory["name"], llm_name=model.model_name, mdl_type=model.model_types[0], max_tokens=model.max_tokens, tags=",".join(tags), is_tools=model.is_tools))
+        db.flush()
+    db.commit()
 
     LLMFactoriesService.filter_delete(db, [(LLMFactories.name == "Local") | (LLMFactories.name == "novita.ai")])
     LLMService.filter_delete(db, [LLM.fid == "Local"])
@@ -374,6 +326,10 @@ def _init_web_data_with_db(db: Session) -> None:
             else:
                 logging.info("超级用户已存在，跳过初始化")
                 all_users = [existing_admin]
+
+        for tenant_id in db.scalars(select(TenantService.model.id).order_by(TenantService.model.id)):
+            TenantLLMService.ensure_ocr_models_from_env(db, tenant_id)
+        db.commit()
 
         add_graph_templates(db)
 

@@ -15,10 +15,12 @@
 #
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api.db import FileType, UserTenantRole  # , ActiveEnum
+from api.db import FileType, UserTenantRole
+from api.db.db_models import File, Tenant, User, UserTenant
 from api.db.services.api_service import API4ConversationService, APITokenService
 from api.db.services.canvas_service import UserCanvasService
 from api.db.services.conversation_service import ConversationService
@@ -29,7 +31,7 @@ from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
-from api.db.services.llm_service import get_init_tenant_llm
+from api.db.services.llm_service import initialize_tenant_models
 from api.db.services.mcp_server_service import MCPServerService
 from api.db.services.memory_service import MemoryService
 from api.db.services.search_service import SearchService
@@ -44,137 +46,50 @@ from core.nlp import search
 from memory.services.messages import MessageService
 
 
-def create_new_user(db: Session, user_info: dict) -> dict:
-    """
-    Add a new user, and create tenant, tenant llm, file folder for new user.
+def initialize_user_tenant(db: Session, user_info: dict[str, Any], role: str | UserTenantRole = UserTenantRole.OWNER) -> Tenant:
+    """Initialize only configured models, without committing the caller's work."""
+    tenant_id = user_info["id"]
+    tenant = Tenant(
+        id=tenant_id,
+        name=user_info["nickname"] + "'s Kingdom",
+        llm_id=settings.CHAT_MDL,
+        embd_id=settings.EMBEDDING_MDL,
+        asr_id=settings.ASR_MDL,
+        parser_ids=settings.PARSERS,
+        img2txt_id=settings.IMAGE2TEXT_MDL,
+        rerank_id=settings.RERANK_MDL,
+    )
+    db.add(tenant)
+    db.add(UserTenant(id=uuid.uuid4().hex, tenant_id=tenant_id, user_id=tenant_id, invited_by=tenant_id, role=role.value if isinstance(role, UserTenantRole) else role))
+    db.flush()
+    initialize_tenant_models(db, tenant_id)
+    values = {field: getattr(tenant, field) for field in ("llm_id", "embd_id", "asr_id", "img2txt_id", "rerank_id")}
+    for field, value in ensure_tenant_model_id_for_params(db, tenant_id, values).items():
+        setattr(tenant, field, value)
+    db.flush()
+    return tenant
 
-    Args:
-        db: 数据库会话
-        user_info: {
-            "email": <example@example.com>,
-            "nickname": <str, "name">,
-            "password": <decrypted password>,
-            "login_channel": <enum, "password">,
-            "is_superuser": <bool, role == "admin">,
-        }
 
-    Returns:
-        {
-            "success": <bool>,
-            "user_info": <dict>, # if true, return user_info
-        }
-    """
-    # generate user_id and access_token for user
-    user_id = uuid.uuid1().hex
-    user_info["id"] = user_id
-    user_info["access_token"] = uuid.uuid1().hex
+def register_user_account(db: Session, user_id: str, user_info: dict[str, Any]) -> User:
+    """Stage a complete registration; the route/admin caller commits once."""
+    user = UserService.save(db, commit=False, **{**user_info, "id": user_id})
+    initialize_user_tenant(db, {**user_info, "id": user_id})
+    folder_id = uuid.uuid4().hex
+    db.add(File(id=folder_id, parent_id=folder_id, tenant_id=user_id, created_by=user_id, name="/", type=FileType.FOLDER.value, size=0, location=""))
+    db.flush()
+    return user
 
-    # construct tenant info
-    tenant = {
-        "id": user_id,
-        "name": user_info["nickname"] + "'s Kingdom",
-        "llm_id": settings.CHAT_MDL,
-        "embd_id": settings.EMBEDDING_MDL,
-        "asr_id": settings.ASR_MDL,
-        "parser_ids": settings.PARSERS,
-        "img2txt_id": settings.IMAGE2TEXT_MDL,
-        "rerank_id": settings.RERANK_MDL,
-    }
 
-    usr_tenant = {
-        "tenant_id": user_id,
-        "user_id": user_id,
-        "invited_by": user_id,
-        "role": UserTenantRole.OWNER,
-    }
-
-    # construct file folder info（根目录：parent_id 等于自己的 id）
-    file_id = uuid.uuid1().hex
-    file = {
-        "id": file_id,
-        "parent_id": file_id,
-        "tenant_id": user_id,
-        "created_by": user_id,
-        "name": "/",
-        "type": FileType.FOLDER.value,
-        "size": 0,
-        "location": "",
-    }
-
+def create_new_user(db: Session, user_info: dict[str, Any]) -> dict[str, Any]:
+    user_id = uuid.uuid4().hex
     try:
-        # 获取初始租户 LLM 配置
-        logging.info(f"Getting initial tenant LLM config for user_id: {user_id}")
-        tenant_llm = get_init_tenant_llm(db, user_id)
-
-        # 创建用户
-        logging.info(f"Creating user with info: email={user_info.get('email')}, nickname={user_info.get('nickname')}")
-        user = UserService.save(db, **user_info)
-        if not user:
-            logging.error("UserService.save returned None")
-            return {"success": False}
-
-        # 创建租户
-        logging.info(f"Creating tenant for user_id: {user_id}")
-        TenantService.insert(db, **tenant)
-
-        # 创建用户-租户关系
-        logging.info("Creating user-tenant relationship")
-        UserTenantService.insert(db, **usr_tenant)
-
-        # 批量插入租户 LLM 配置
-        logging.info(f"Inserting tenant LLM configs, count: {len(tenant_llm)}")
-        TenantLLMService.insert_many(db, tenant_llm)
-        TenantService.update_by_id(db, user_id, ensure_tenant_model_id_for_params(db, user_id, tenant))
-
-        # 创建根文件夹
-        # 注意：FileService.insert(db, file_dict) 接受字典作为第二个参数
-        logging.info("Creating root folder for user")
-        FileService.insert(db, file)
-
-        logging.info("User created successfully: user_id=%s", user_id)
-        return {
-            "success": True,
-            "user_info": user.to_dict(),
-        }
-
-    except Exception as create_error:
-        logging.exception(f"Exception occurred while creating user: {create_error}")
-        # 发生异常时回滚数据库
+        user = register_user_account(db, user_id, {**user_info, "access_token": uuid.uuid4().hex})
+        db.commit()
+        return {"success": True, "user_info": user.to_dict()}
+    except Exception as exc:
         db.rollback()
-
-        # 清理已创建的数据
-        try:
-            DocMetadataService.delete_tenant_metadata_container(user_id)
-        except Exception as e:
-            logging.exception(e)
-        try:
-            TenantService.delete_by_id(db, user_id)
-        except Exception as e:
-            logging.exception(e)
-
-        try:
-            u = UserTenantService.query(db, tenant_id=user_id)
-            if u:
-                UserTenantService.delete_by_id(db, u[0].id)
-        except Exception as e:
-            logging.exception(e)
-
-        try:
-            TenantLLMService.delete_by_tenant_id(db, user_id)
-        except Exception as e:
-            logging.exception(e)
-        try:
-            FileService.delete_by_id(db, file["id"])
-        except Exception as e:
-            logging.exception(e)
-        # delete user row finally
-        try:
-            UserService.delete_by_id(db, user_id)
-        except Exception as e:
-            logging.exception(e)
-
-        # reraise
-        raise create_error
+        logging.error("User registration transaction failed safely: %s", type(exc).__name__)
+        raise
 
 
 def delete_user_data(db: Session, user_id: str) -> dict:

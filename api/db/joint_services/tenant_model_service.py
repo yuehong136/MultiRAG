@@ -7,12 +7,45 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from api.db.db_models import TenantLLM, db_connection
+from api.db.db_models import Tenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider, db_connection
 from api.db.services.llm_service import LLMBundle, LLMService
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_service import TenantService
 from common import settings
 from common.constants import LLMType
+
+
+def get_ocr_model_reference(db: Session, tenant_id: str, provider_name: str) -> str | None:
+    """Prefer an active numeric registration, then atomically import env config."""
+    query = (
+        select(TenantLLM, TenantModel)
+        .join(TenantModel, TenantModel.id == TenantLLM.id)
+        .join(TenantModelInstance, TenantModelInstance.id == TenantModel.instance_id)
+        .join(TenantModelProvider, TenantModelProvider.id == TenantModelInstance.provider_id)
+        .where(
+            TenantLLM.tenant_id == tenant_id,
+            TenantModelProvider.tenant_id == tenant_id,
+            TenantModelProvider.provider_name == provider_name,
+            TenantModelProvider.status == "active",
+            TenantModelInstance.status == "active",
+            TenantLLM.status == "1",
+        )
+        .order_by(TenantLLM.id)
+    )
+    candidates = [row.id for row, model in db.execute(query) if "ocr" in model.model_types]
+    owner = db.get(Tenant, tenant_id)
+    if owner is None:
+        raise LookupError("Tenant not found")
+    if owner.tenant_ocr_id in candidates:
+        return str(owner.tenant_ocr_id)
+    if candidates:
+        return str(candidates[0])
+    ensure = {"MinerU": TenantLLMService.ensure_mineru_from_env, "PaddleOCR": TenantLLMService.ensure_paddleocr_from_env, "OpenDataLoader": TenantLLMService.ensure_opendataloader_from_env}.get(
+        provider_name
+    )
+    if ensure is None:
+        raise ValueError("Unsupported PDF OCR provider")
+    return ensure(db, tenant_id)
 
 
 def detached_bundle(db: Session, tenant_id: str, model_config: dict[str, Any], **kwargs: Any) -> LLMBundle:
