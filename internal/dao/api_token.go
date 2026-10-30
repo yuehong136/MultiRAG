@@ -21,6 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"multirag/internal/entity"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // APITokenDAO API token data access object
@@ -51,12 +54,27 @@ func (dao *APITokenDAO) DeleteByTenantID(tenantID string) (int64, error) {
 
 // GetUserByAPIToken gets API token by access key
 func (dao *APITokenDAO) GetUserByAPIToken(token string) (*entity.APIToken, error) {
-	var apiToken entity.APIToken
-	err := DB.Where("token = ?", token).First(&apiToken).Error
-	if err != nil {
+	return dao.GetUserByAPITokenContext(context.Background(), token)
+}
+
+// GetUserByAPITokenContext preserves the single token-to-tenant binding and
+// refuses disabled tenants. A duplicate key must never choose an arbitrary owner.
+func (dao *APITokenDAO) GetUserByAPITokenContext(ctx context.Context, token string) (*entity.APIToken, error) {
+	var tokens []entity.APIToken
+	if err := DB.WithContext(ctx).Where("token = ?", token).Limit(2).Find(&tokens).Error; err != nil {
 		return nil, err
 	}
-	return &apiToken, nil
+	if len(tokens) != 1 || tokens[0].TenantID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var active int64
+	if err := DB.WithContext(ctx).Model(&entity.Tenant{}).Where("id = ? AND status = ?", tokens[0].TenantID, "1").Count(&active).Error; err != nil {
+		return nil, err
+	}
+	if active != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &tokens[0], nil
 }
 
 // DeleteByDialogIDs deletes API tokens by dialog IDs (hard delete)
@@ -131,4 +149,48 @@ func (d *API4ConversationDAO) GetBySessionID(ctx context.Context, sessionID, age
 func (d *API4ConversationDAO) DeleteBySessionIDAndAgentID(ctx context.Context, sessionID, agentID string) (int64, error) {
 	result := DB.WithContext(ctx).Where("id = ? AND dialog_id = ? AND source = ?", sessionID, agentID, "agent").Delete(&entity.API4Conversation{})
 	return result.RowsAffected, result.Error
+}
+
+// ListIDsByAgentID never includes ordinary chat sessions sharing the dialog ID.
+func (d *API4ConversationDAO) ListIDsByAgentID(ctx context.Context, agentID string) ([]string, error) {
+	ids := []string{}
+	err := DB.WithContext(ctx).Model(&entity.API4Conversation{}).Where("dialog_id = ? AND source = ?", agentID, "agent").Order("id").Pluck("id", &ids).Error
+	return ids, err
+}
+
+// DeleteAgentSessionsOwned holds the owner row and commits all SQL deletes together.
+// Business-level missing IDs are returned separately from storage failures.
+func (d *API4ConversationDAO) DeleteAgentSessionsOwned(ctx context.Context, actorID, agentID string, ids []string, deleteAll bool) (int, []string, error) {
+	count := 0
+	missing := []string{}
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var parent entity.UserCanvas
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("id = ? AND user_id = ?", agentID, actorID).
+			Where("EXISTS (SELECT 1 FROM t_ai_users u WHERE u.id = ? AND u.status = ? AND u.is_active = ?)", actorID, "1", true).
+			Where("EXISTS (SELECT 1 FROM t_ai_tenants t WHERE t.id = ? AND t.status = ?)", actorID, "1").Take(&parent).Error; err != nil {
+			return err
+		}
+		if ids == nil && deleteAll {
+			if err := tx.Model(&entity.API4Conversation{}).Where("dialog_id = ? AND source = ?", agentID, "agent").Order("id").Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+		}
+		for _, id := range ids {
+			result := tx.Where("id = ? AND dialog_id = ? AND source = ?", id, agentID, "agent").Delete(&entity.API4Conversation{})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				missing = append(missing, "The agent doesn't own the session "+id)
+			} else {
+				count++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, missing, nil
 }

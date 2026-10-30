@@ -17,11 +17,39 @@
 package dao
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"multirag/internal/entity"
 )
+
+// GetByDocumentIDAndDatasetID locks and reloads the current parser configuration.
+// tx must be the caller's context-bearing transaction, retained until commit.
+func (dao *DocumentDAO) GetByDocumentIDAndDatasetID(tx *gorm.DB, documentID, datasetID string) (*entity.Document, error) {
+	var document entity.Document
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND kb_id = ? AND status = ?", documentID, datasetID, "1").Take(&document).Error
+	if err != nil {
+		return nil, err
+	}
+	// The legacy JSONMap scanner uses float64. Decode from the locked row with
+	// UseNumber before a merge so existing IDs and template defaults stay exact.
+	var raw []byte
+	if err := tx.Model(&entity.Document{}).Select("parser_config").Where("id = ? AND kb_id = ?", documentID, datasetID).Row().Scan(&raw); err != nil {
+		return nil, err
+	}
+	document.ParserConfig = entity.JSONMap{}
+	if len(raw) > 0 && string(raw) != "null" {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&document.ParserConfig); err != nil {
+			return nil, err
+		}
+	}
+	return &document, nil
+}
 
 // UpdateStatus requires an existing row in the authorized dataset.
 func (dao *DocumentDAO) UpdateStatus(tx *gorm.DB, id, datasetID, status string) error {
