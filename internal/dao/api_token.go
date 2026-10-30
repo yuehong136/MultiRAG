@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"multirag/internal/entity"
+	"os"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -60,6 +61,9 @@ func (dao *APITokenDAO) GetUserByAPIToken(token string) (*entity.APIToken, error
 // GetUserByAPITokenContext preserves the single token-to-tenant binding and
 // refuses disabled tenants. A duplicate key must never choose an arbitrary owner.
 func (dao *APITokenDAO) GetUserByAPITokenContext(ctx context.Context, token string) (*entity.APIToken, error) {
+	if os.Getenv("DISABLE_SDK") != "" || token == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
 	var tokens []entity.APIToken
 	if err := DB.WithContext(ctx).Where("token = ?", token).Limit(2).Find(&tokens).Error; err != nil {
 		return nil, err

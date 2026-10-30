@@ -44,6 +44,7 @@ func TestAfter10bbeAgentMetadataHTTPAndSQL(t *testing.T) {
 		t.Fatal("registered scratch config and REQUIRE_SERVICES=1 required")
 	}
 	j := testsupport.NewCase(t)
+	t.Setenv("DISABLE_SDK", "")
 	var cfg struct {
 		AdminDSN   string `json:"admin_dsn"`
 		Listen     string `json:"listen"`
@@ -244,6 +245,18 @@ func TestAfter10bbeAgentMetadataHTTPAndSQL(t *testing.T) {
 	metadata := "/api/v1/datasets/" + kb + "/documents/doc/metadata/config"
 	probe := "/api/v1/agents/test_db_connection"
 	beforeSessions, beforeDocs := snapshot("t_ai_api4conversations"), snapshot("t_ai_documents")
+	// API-key disable is shared with the current scoped token resolver. Web JWT
+	// remains usable, and rejected key requests must not touch either data set.
+	t.Setenv("DISABLE_SDK", "1")
+	request("DELETE", sessions, "owner-key", `{"delete_all":true}`, common.CodeUnauthorized)
+	request("PUT", metadata, "owner-key", `{"metadata":[]}`, common.CodeUnauthorized)
+	request("POST", probe, "owner-key", `{}`, common.CodeUnauthorized)
+	request("DELETE", sessions, "owner", `{"ids":[]}`, common.CodeSuccess)
+	request("POST", probe, "owner", `{}`, common.CodeArgumentError)
+	if snapshot("t_ai_api4conversations") != beforeSessions || snapshot("t_ai_documents") != beforeDocs {
+		t.Fatal("disabled API-key request changed rows")
+	}
+	t.Setenv("DISABLE_SDK", "")
 	for _, r := range []struct{ method, path, payload string }{{"DELETE", sessions, `{"delete_all":true}`}, {"PUT", metadata, `{"metadata":[]}`}, {"POST", probe, `{}`}} {
 		request(r.method, r.path, "", r.payload, common.CodeUnauthorized)
 	}
