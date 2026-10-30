@@ -10,6 +10,24 @@ import (
 func (p *Parser) parseServerCommand() (*Command, bool, error) {
 	verb := p.curToken.Type
 	next := p.peekToken.Type
+	if verb == TokenUse && (next == TokenAPI || next == TokenAdmin) {
+		p.nextToken()
+		p.nextToken()
+		cmd := NewCommand("use_admin_server")
+		if next == TokenAPI {
+			name, err := p.parseQuotedString()
+			if err != nil {
+				return nil, true, err
+			}
+			if strings.TrimSpace(name) == "" {
+				return nil, true, fmt.Errorf("server name required")
+			}
+			cmd.Type = "use_api_server"
+			cmd.Params["name"] = name
+			p.nextToken()
+		}
+		return cmd, true, p.finishServerCommand()
+	}
 	if verb == TokenLogin && next == TokenAdmin {
 		p.nextToken()
 		p.nextToken()

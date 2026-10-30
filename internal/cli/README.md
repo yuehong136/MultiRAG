@@ -46,18 +46,24 @@ independent admin connection can be inspected and edited in either mode:
 ADD API SERVER 'staging' HOST '127.0.0.1:9480' TOKEN 'example-token';
 LIST API SERVER;
 SHOW API SERVER 'staging';
+USE API 'staging';
+USE API 'default';
 DELETE API SERVER 'staging';
 ADD ADMIN SERVER HOST '127.0.0.1:9481';
+USE ADMIN;
 SHOW ADMIN SERVER;
 SHOW CURRENT;
 SAVE CONFIG AS '/private/path/multirag.yml';
 ```
 
-Registry commands require a terminating semicolon. The active API profile cannot
-be deleted. Named profiles are available for registry inspection and persistence;
-this version does not add `SWITCH` syntax. Existing `\admin` / `\user` commands
-select separate connection objects, preserving each connection's authentication
-and model state. `LOGIN ADMIN 'email' WITH PASSWORD 'password';` is available in
+Registry commands require a terminating semicolon and reject trailing statements.
+`USE API 'name';` selects an existing profile; `USE ADMIN;` requires a configured
+admin connection. A failed selection leaves the current connection intact.
+The active API profile cannot be deleted. Existing `\admin` / `\user` commands
+select the configured admin or most recently selected API profile. Selection
+preserves each connection's login token and model, closes the previous client's
+idle connections and rebinds HTTP, Context Engine and inference requests.
+`LOGIN ADMIN 'email' WITH PASSWORD 'password';` is available in
 admin mode; the existing `LOGIN USER` form remains usable. Admin logout uses POST.
 A failed logout retains the session.
 
@@ -67,6 +73,12 @@ The YAML file keeps the default API connection in the existing top-level `host`,
 connection block; admin startup reads it only when `-f/--config` is explicit and
 never reads API credentials as admin credentials. Command flags override config.
 API tokens and username/password are mutually exclusive in each API profile.
+An optional `public_key_file` in the default, named or admin connection selects
+its RSA public key for login, registration and admin password operations. Relative
+paths resolve from the CLI working directory; without it, the CLI uses
+`configs/public.pem` under the project root. Switching never reads another
+profile's key. It does not log in automatically; use `LOGIN USER` or `LOGIN ADMIN`
+when the selected profile has no session.
 
 `SAVE CONFIG AS` writes a real YAML file by private temporary file, sync and atomic
 rename, with mode 0600. It persists configured credentials and current endpoints;
@@ -75,6 +87,8 @@ Symlink or non-file destinations fail. Parent directories must already exist.
 Inspection reports credential presence as booleans and never prints their values
 or lengths. Commands containing token/password/key fields stay out of history.
 Keep credential-bearing config files outside the repository.
+Interactive history defaults to `~/.multirag_cli_history`; `MULTIRAG_CLI_HISTORY`
+can select an isolated history file without changing the user's home directory.
 
 `-o/--output` and `--admin` work before or after the command. Context Engine flags
 such as `search -t 0.5` and `ls -n 5` remain subcommand options. `RETRIEVE` uses the

@@ -216,7 +216,7 @@ func (c *MultiRAGClient) CreateUser(cmd *Command) (ResponseIf, error) {
 	}
 
 	// Encrypt password using RSA
-	encryptedPassword, err := EncryptPassword(password)
+	encryptedPassword, err := c.encryptPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -315,7 +315,7 @@ func (c *MultiRAGClient) AlterUserPassword(cmd *Command) (ResponseIf, error) {
 	}
 
 	// Encrypt password using RSA
-	encryptedPassword, err := EncryptPassword(password)
+	encryptedPassword, err := c.encryptPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt password: %w", err)
 	}

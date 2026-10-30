@@ -69,6 +69,7 @@ type MultiRAGClient struct {
 	PasswordPrompt PasswordPromptFunc // Function for password input
 	OutputFormat   OutputFormat       // Output format used when rendering CE results
 	CurrentModel   *CurrentModel      // Current model configuration
+	PublicKeyFile  string             // Optional RSA public key for this connection
 }
 
 // NewMultiRAGClient creates a new MultiRAG client

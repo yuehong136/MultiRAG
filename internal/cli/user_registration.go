@@ -16,7 +16,7 @@ func (c *MultiRAGClient) RegisterUser(cmd *Command) (ResponseIf, error) {
 	if !ok {
 		return nil, fmt.Errorf("no nickname")
 	}
-	encryptedPassword, err := EncryptPassword(password)
+	encryptedPassword, err := c.encryptPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt password: %w", err)
 	}

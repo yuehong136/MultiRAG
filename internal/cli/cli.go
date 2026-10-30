@@ -38,6 +38,9 @@ import (
 
 // HistoryFile returns the path to the history file
 func HistoryFile() string {
+	if path := os.Getenv("MULTIRAG_CLI_HISTORY"); path != "" {
+		return path
+	}
 	return os.Getenv("HOME") + "/" + historyFileName
 }
 
@@ -67,12 +70,13 @@ func validateOutputFormat(format string) error {
 
 // ConfigFile represents the multirag.yml connection config file structure.
 type ConfigFile struct {
-	Host        string                   `yaml:"host"`
-	APIToken    string                   `yaml:"api_token"`
-	UserName    string                   `yaml:"user_name"`
-	Password    string                   `yaml:"password"`
-	APIServers  map[string]*ServerConfig `yaml:"api_servers,omitempty"`
-	AdminServer *ServerConfig            `yaml:"admin_server,omitempty"`
+	Host          string                   `yaml:"host"`
+	APIToken      string                   `yaml:"api_token"`
+	UserName      string                   `yaml:"user_name"`
+	Password      string                   `yaml:"password"`
+	PublicKeyFile string                   `yaml:"public_key_file,omitempty"`
+	APIServers    map[string]*ServerConfig `yaml:"api_servers,omitempty"`
+	AdminServer   *ServerConfig            `yaml:"admin_server,omitempty"`
 }
 
 // ConnectionArgs holds the parsed command line / config-file connection options.
@@ -518,7 +522,7 @@ func (c *CLI) Run() error {
 	// Save history on exit
 	defer func() {
 		c.saveHistory(histFile)
-		c.line.Close()
+		c.Cleanup()
 	}()
 
 	fmt.Println("Welcome to MultiRAG CLI")
@@ -1222,6 +1226,7 @@ Local Connection Commands (either mode):
   ADD API SERVER 'name' HOST 'host:port' [TOKEN 'token'];
   DELETE API SERVER 'name'; / LIST API SERVER; / SHOW API SERVER 'name';
   ADD ADMIN SERVER HOST 'host:port'; / DELETE ADMIN SERVER; / SHOW ADMIN SERVER;
+  USE API 'name'; / USE ADMIN;
   SHOW CURRENT; / SAVE CONFIG AS 'private-file.yml';
 
 SQL Commands (User Mode):

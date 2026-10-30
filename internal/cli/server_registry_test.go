@@ -144,9 +144,7 @@ func TestRegistryNamedCredentialsModeAndHTTP(t *testing.T) {
 	if requests != 0 {
 		t.Fatal("local command sent HTTP")
 	}
-	// Select a named profile internally: SWITCH belongs to a later frozen item.
-	c.activeAPI = "b"
-	if err := c.selectMode("user"); err != nil {
+	if _, err := registryCommand(t, c, "USE API 'b';"); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.RunSingleCommand("PING;"); err != nil {

@@ -110,8 +110,8 @@ func (c *MultiRAGClient) LoginUser(cmd *Command) error {
 
 // loginUser performs the actual login request
 func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
-	// Encrypt the password with the shared RSA public key.
-	encryptedPassword, err := EncryptPassword(password)
+	// Encrypt with the selected connection's RSA public key.
+	encryptedPassword, err := c.encryptPassword(password)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt password: %w", err)
 	}

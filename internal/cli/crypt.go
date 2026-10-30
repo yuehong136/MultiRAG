@@ -30,11 +30,22 @@ import (
 // EncryptPassword encrypts a password using RSA public key
 // This matches the Python implementation in api/utils/crypt.py
 func EncryptPassword(password string) (string, error) {
-	// Read public key from conf/public.pem
 	publicKeyPath := filepath.Join(getProjectBaseDirectory(), "configs", "public.pem")
+	return encryptPasswordFile(password, publicKeyPath)
+}
+
+// encryptPassword uses only the selected connection's key configuration.
+func (c *MultiRAGClient) encryptPassword(password string) (string, error) {
+	if c.PublicKeyFile == "" {
+		return EncryptPassword(password)
+	}
+	return encryptPasswordFile(password, c.PublicKeyFile)
+}
+
+func encryptPasswordFile(password, publicKeyPath string) (string, error) {
 	publicKeyPEM, err := os.ReadFile(publicKeyPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read public key: %w", err)
+		return "", fmt.Errorf("failed to read configured public key")
 	}
 
 	// Parse public key

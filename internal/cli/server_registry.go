@@ -16,10 +16,11 @@ import (
 
 // ServerConfig contains persistent connection credentials, never session tokens.
 type ServerConfig struct {
-	Host     string `yaml:"host"`
-	APIToken string `yaml:"api_token,omitempty"`
-	UserName string `yaml:"user_name,omitempty"`
-	Password string `yaml:"password,omitempty"`
+	Host          string `yaml:"host"`
+	APIToken      string `yaml:"api_token,omitempty"`
+	UserName      string `yaml:"user_name,omitempty"`
+	Password      string `yaml:"password,omitempty"`
+	PublicKeyFile string `yaml:"public_key_file,omitempty"`
 }
 
 func configForAdmin(config *ConfigFile) *ConfigFile {
@@ -27,7 +28,7 @@ func configForAdmin(config *ConfigFile) *ConfigFile {
 		return &ConfigFile{}
 	}
 	a := config.AdminServer
-	return &ConfigFile{Host: a.Host, UserName: a.UserName, Password: a.Password}
+	return &ConfigFile{Host: a.Host, UserName: a.UserName, Password: a.Password, PublicKeyFile: a.PublicKeyFile}
 }
 
 func validatedServerAddress(address string) (string, int, error) {
@@ -61,6 +62,7 @@ func newServerClient(kind string, config *ServerConfig) (*MultiRAGClient, error)
 	}
 	client := NewMultiRAGClient(kind)
 	client.HTTPClient.Host, client.HTTPClient.Port, client.HTTPClient.APIKey = host, port, config.APIToken
+	client.PublicKeyFile = config.PublicKeyFile
 	return client, nil
 }
 
@@ -73,13 +75,21 @@ func (c *CLI) initServers() error {
 	if c.args != nil {
 		defaultConfig.UserName = c.args.UserName
 		defaultConfig.Password = c.args.Password
+		if c.args.Config != nil {
+			config := c.args.Config
+			if current.ServerType == "admin" {
+				config = configForAdmin(config)
+			}
+			defaultConfig.PublicKeyFile = config.PublicKeyFile
+			current.PublicKeyFile = config.PublicKeyFile
+		}
 	}
 	if current.ServerType == "admin" {
 		c.adminClient, c.adminConfig = current, defaultConfig
 		defaultConfig = &ServerConfig{Host: "127.0.0.1:9380"}
 		if c.args != nil && c.args.Config != nil {
 			config := c.args.Config
-			defaultConfig = &ServerConfig{Host: config.Host, APIToken: config.APIToken, UserName: config.UserName, Password: config.Password}
+			defaultConfig = &ServerConfig{Host: config.Host, APIToken: config.APIToken, UserName: config.UserName, Password: config.Password, PublicKeyFile: config.PublicKeyFile}
 			if defaultConfig.Host == "" {
 				defaultConfig.Host = "127.0.0.1:9380"
 			}
@@ -127,26 +137,50 @@ func (c *CLI) selectMode(mode string) error {
 			return err
 		}
 	}
-	var client *MultiRAGClient
-	if mode == "admin" {
-		if c.adminClient == nil {
-			config := &ServerConfig{Host: "127.0.0.1:9381"}
-			client, _ := newServerClient("admin", config)
-			c.adminClient, c.adminConfig = client, config
+	return c.selectServer(mode, c.activeAPI)
+}
+
+// selectServer validates the complete target before changing the active state.
+// Runtime selection never creates an unconfigured connection.
+func (c *CLI) selectServer(mode, name string) error {
+	if c.apiServers == nil {
+		if err := c.initServers(); err != nil {
+			return err
 		}
-		client = c.adminClient
-	} else {
-		client = c.apiServers[c.activeAPI]
 	}
-	if client == nil {
+	var client *MultiRAGClient
+	switch mode {
+	case "admin":
+		client = c.adminClient
+		if c.adminConfig == nil {
+			return fmt.Errorf("admin server is not configured")
+		}
+	case "user":
+		client = c.apiServers[name]
+		if c.serverConfigs[name] == nil {
+			return fmt.Errorf("API server does not exist")
+		}
+	default:
+		return fmt.Errorf("invalid server mode")
+	}
+	if client == nil || client.HTTPClient == nil || client.HTTPClient.client == nil {
 		return fmt.Errorf("selected server is not configured")
 	}
+	if c.client != nil && c.client != client && c.client.HTTPClient != nil && c.client.HTTPClient.client != nil {
+		c.client.HTTPClient.client.CloseIdleConnections()
+	}
 	c.client = client
+	if mode == "user" {
+		c.activeAPI = name
+	}
 	if c.line != nil {
 		client.PasswordPrompt = c.line.PasswordPrompt
 	}
 	client.OutputFormat = c.outputFormat
 	c.prompt = "MultiRAG(" + mode + ")> "
+	if mode == "user" {
+		c.prompt = "MultiRAG(user/" + name + ")> "
+	}
 	engine := contextengine.NewEngine()
 	engine.RegisterProvider(contextengine.NewDatasetProvider(&httpClientAdapter{client: client.HTTPClient}))
 	engine.RegisterProvider(contextengine.NewFileProvider(&httpClientAdapter{client: client.HTTPClient}))
@@ -171,7 +205,7 @@ func serverInfo(name string, config *ServerConfig, client *MultiRAGClient) map[s
 // executeCommon is the single dispatcher for local configuration in both modes.
 func (c *CLI) executeCommon(cmd *Command) (ResponseIf, bool, error) {
 	switch cmd.Type {
-	case "add_api_server", "delete_api_server", "show_api_server", "list_api_server", "add_admin_server", "delete_admin_server", "show_admin_server", "show_current", "save_config", "login_admin":
+	case "add_api_server", "delete_api_server", "show_api_server", "list_api_server", "add_admin_server", "delete_admin_server", "show_admin_server", "show_current", "save_config", "login_admin", "use_api_server", "use_admin_server":
 	default:
 		return nil, false, nil
 	}
@@ -182,6 +216,14 @@ func (c *CLI) executeCommon(cmd *Command) (ResponseIf, bool, error) {
 	}
 	name, _ := cmd.Params["name"].(string)
 	switch cmd.Type {
+	case "use_api_server":
+		if err := c.selectServer("user", name); err != nil {
+			return nil, true, err
+		}
+	case "use_admin_server":
+		if err := c.selectMode("admin"); err != nil {
+			return nil, true, err
+		}
 	case "login_admin":
 		if c.client.ServerType != "admin" {
 			return nil, true, fmt.Errorf("LOGIN ADMIN requires admin mode")
@@ -287,6 +329,7 @@ func (c *CLI) saveServerConfig(path string) error {
 		config.APIToken = value.APIToken
 		config.UserName = value.UserName
 		config.Password = value.Password
+		config.PublicKeyFile = value.PublicKeyFile
 	}
 	for name, value := range c.serverConfigs {
 		if name != "default" {
@@ -299,6 +342,7 @@ func (c *CLI) saveServerConfig(path string) error {
 		if saved := c.serverConfigs[name]; saved != nil {
 			item.UserName = saved.UserName
 			item.Password = saved.Password
+			item.PublicKeyFile = saved.PublicKeyFile
 		}
 		if name == "default" {
 			config.Host = item.Host
