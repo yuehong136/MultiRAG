@@ -280,6 +280,26 @@ jobs:
               'port': int(os.environ['PG_PORT']), 'container': os.environ['PG_CONTAINER'],
               'status': 'registered-before-create', 'borrowed_service': True,
           }, indent=2))
+          private = Path(os.environ['RUNNER_TEMP']) / 'go-after10bbe.json'
+          probe = Path(os.environ['RUNNER_TEMP']) / 'go-after10bbe-probe.json'
+          Path('.test-results/go/deepseek-config.json').write_text(json.dumps({
+              'paths': [str(private), str(probe)], 'host': '127.0.0.1',
+              'port': int(os.environ['PG_PORT']),
+              'status': 'registered-before-create', 'credentials_omitted': True,
+          }, indent=2))
+          from urllib.parse import quote
+          import secrets
+          dsn = ('postgres://' + quote(os.environ['PGUSER'], safe='') + ':' +
+                 quote(os.environ['PGPASSWORD'], safe='') + '@127.0.0.1:' +
+                 os.environ['PG_PORT'] + '/postgres?sslmode=disable')
+          for path, listen in [(private, '127.0.0.1:18961'), (probe, '127.0.0.1:18962')]:
+              with path.open('x') as output:
+                  os.chmod(path, 0o600)
+                  json.dump({
+                      'admin_dsn': dsn, 'pg_endpoint': '127.0.0.1:' + os.environ['PG_PORT'],
+                      'listen': listen, 'mysql_listen': '127.0.0.1:18962',
+                      'multirag': {'secret_key': secrets.token_hex(32)},
+                  }, output)
           PY
           psql -v ON_ERROR_STOP=1 -c 'CREATE DATABASE multirag_after33_g_ci'
       - name: Go race regression (live opt-ins remain explicit)
@@ -287,9 +307,17 @@ jobs:
           MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_go_models_a_skills_ci?sslmode=disable
           MULTIRAG_AFTER33_G_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_after33_g_ci?sslmode=disable
           MULTIRAG_AFTER33_CLI: ${{ github.workspace }}/.test-results/go/bin/multirag_cli
+          MULTIRAG_DEEPSEEK_CONFIG: ${{ runner.temp }}/go-after10bbe.json
+          MULTIRAG_AFTER10BBE_S_CONFIG: ${{ runner.temp }}/go-after10bbe.json
         run: |
           set -euo pipefail
           go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
+          REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
+            go test -race -tags integration -count=1 -json ./internal/handler \
+              -run '^TestAfter10bbeAgentMetadataHTTPAndSQL$' | tee -a .test-results/go/tests.jsonl
+          REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe-probe.json" \
+            go test -race -tags integration -count=1 -json ./internal/service \
+              -run '^TestAfter10bbeDBProbeMySQLProtocol$' | tee -a .test-results/go/tests.jsonl
           python3 scripts/ci_checks.py go-audit --reports .test-results/go
       - name: Drop owned management regression database
         if: always()
@@ -321,6 +349,7 @@ jobs:
           docker logs --tail 200 ci-go-minio > .test-results/go/minio.log 2>&1 || true
           docker rm -f -v ci-go-minio >/dev/null 2>&1 || true
           rm -f "$MULTIRAG_GO_TEST_MINIO_CONFIG"
+          rm -f "$RUNNER_TEMP/go-after10bbe.json" "$RUNNER_TEMP/go-after10bbe-probe.json"
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:

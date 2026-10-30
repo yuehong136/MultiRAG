@@ -155,6 +155,10 @@ GO_LIVE_OPT_INS = {
 
 GO_REQUIRED_TESTS = frozenset(
     {
+        "multirag/internal/handler::TestAfter10bbeAskChatRAGJWTSQL",
+        "multirag/internal/handler::TestAfter10bbeAgentMetadataHTTPAndSQL",
+        "multirag/internal/service::TestAfter10bbeDBProbeMySQLProtocol",
+        "multirag/internal/service::TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL",
         "multirag/internal/skills::TestLegacyEmbeddingScratchPostgres",
         "multirag/internal/router::TestAfter33GManagementHTTPAndSQL",
         "multirag/internal/router::TestAfter33GManagementHTTPAndSQL/built_CLI_consumer",

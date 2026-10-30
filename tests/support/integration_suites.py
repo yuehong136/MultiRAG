@@ -12,6 +12,7 @@ EVALS = ROOT / "tests" / "evals"
 ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
+        "test_after10bbe_provider_parser.py",
         "test_after5e_agent_history_web.py",
         "test_after5e_mssql_web.py",
         "test_after5e_provider_discovery_web.py",
