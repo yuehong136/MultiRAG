@@ -182,6 +182,10 @@ Web 是独立仓库，本指南不配置前端代理。需要 Web 联调时，�
 
 ### 模型、图谱与存储合同
 
+共享 `configs/all_models.json` 只为实际发现的模型 ID 补充元数据；名称和别名索引忽略
+大小写，但保留供应商原始 ID、顺序与数量。目录规范化同模型的冗余拼写，索引加载仍
+拒绝重复或跨模型碰撞，失败时不发布半份目录；独立 provider 目录与模型退役策略不变。
+
 Go 模型目录支持 MinerU URL 异步解析、Replicate prediction/SSE、Xinference 本地聊天、
 TogetherAI 聊天与 reasoning，以及 302.AI、JieKouAI 和 CometAPI 的非流式 ASR/TTS。
 另支持 MinerU_Local 文件内容任务（provider `mineru_local`、`doc_parse`、租户自定义 URL，
