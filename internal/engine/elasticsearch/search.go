@@ -566,6 +566,9 @@ func (e *elasticsearchEngine) GetFields(chunks []map[string]interface{}, fields 
 		for key, value := range chunk {
 			row[key] = value
 		}
+		// Project the same stable identity used for the outer key without
+		// mutating a source row whose logical ID is absent or empty.
+		row["id"] = id
 		for source, targets := range map[string][]string{"docnm": {"docnm_kwd", "title_tks", "title_sm_tks"}, "content": {"content_with_weight", "content_ltks", "content_sm_ltks"}, "authors": {"authors_tks", "authors_sm_tks"}} {
 			if value, ok := chunk[source]; ok {
 				for _, target := range targets {

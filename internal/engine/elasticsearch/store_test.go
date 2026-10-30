@@ -2,26 +2,61 @@ package elasticsearch
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	es "github.com/elastic/go-elasticsearch/v8"
 	"multirag/internal/engine/types"
+	"multirag/internal/testsupport"
 )
 
 func testEngine(t *testing.T, handler http.HandlerFunc) *elasticsearchEngine {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	journal := testsupport.NewCase(t)
+	var listener net.Listener
+	var address string
+	for attempt := 0; attempt < 30; attempt++ {
+		var value [2]byte
+		if _, err := rand.Read(value[:]); err != nil {
+			t.Fatal(err)
+		}
+		address = fmt.Sprintf("127.0.0.1:%d", 30000+int(binary.BigEndian.Uint16(value[:]))%20000)
+		journal.Event("reserve-ES-listener", map[string]any{"address": address})
+		var err error
+		listener, err = net.Listen("tcp", address)
+		if err == nil {
+			break
+		}
+		journal.Event("ES-listener-bind-failed", map[string]any{"address": address})
+	}
+	if listener == nil {
+		t.Fatal("owned ES listener unavailable")
+	}
+	srv := &httptest.Server{Listener: listener, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Elastic-Product", "Elasticsearch")
 		handler(w, r)
-	}))
-	t.Cleanup(srv.Close)
+	})}}
+	srv.Start()
+	t.Cleanup(func() {
+		srv.Close()
+		connection, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
+		if err == nil {
+			connection.Close()
+			t.Error("owned ES listener survived cleanup")
+			return
+		}
+		journal.Event("ES-listener-cleaned", map[string]any{"address": address})
+	})
 	client, err := es.NewClient(es.Config{Addresses: []string{srv.URL}, DisableRetry: true})
 	if err != nil {
 		t.Fatal(err)
