@@ -756,10 +756,12 @@ func (pm *ProviderManager) LoadAllModels(path string) error {
 			if name == "" || strings.TrimSpace(name) != name {
 				return fmt.Errorf("invalid catalog alias")
 			}
-			if _, exists := index[name]; exists {
+			// Normalize lookup keys only; catalog names and remote IDs stay intact.
+			key := strings.ToLower(name)
+			if _, exists := index[key]; exists {
 				return fmt.Errorf("duplicate catalog name or alias %q", name)
 			}
-			index[name] = model
+			index[key] = model
 		}
 	}
 	pm.allModels, pm.modelIndex = catalog, index
@@ -775,7 +777,7 @@ func (pm *ProviderManager) ListAllModels() []*Model {
 }
 
 func (pm *ProviderManager) GetModelByNameOrAlias(name string) (*Model, error) {
-	model, ok := pm.modelIndex[name]
+	model, ok := pm.modelIndex[strings.ToLower(name)]
 	if !ok {
 		return nil, fmt.Errorf("model %q not found", name)
 	}
