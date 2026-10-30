@@ -290,3 +290,37 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
     options = {provider.lower() + "_llm_name": config["parse_method"]}
     sections, _, _ = method("fixture.pdf", binary=b"controlled-pdf", tenant_id=owner, **options)
     assert sections[0][0] == str(ids[1])
+
+
+def test_default_admin_first_start_model_failure_rolls_back_user(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    from admin.server.auth import init_default_admin
+    from api.db import model_backfill
+
+    monkeypatch.setenv("PADDLEOCR_API_URL", "http://127.0.0.1:39413/controlled")
+    original = model_backfill.backfill
+    calls = 0
+
+    def fail_after_env_link(*args: Any, **kwargs: Any) -> None:
+        nonlocal calls
+        calls += 1
+        original(*args, **kwargs)
+        if calls == 2:
+            raise RuntimeError("controlled first-admin post-env failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(model_backfill, "backfill", fail_after_env_link)
+        with Session(owned_engine) as db, pytest.raises(RuntimeError, match="post-env"):
+            init_default_admin(db)
+    assert calls == 2
+    with Session(owned_engine) as reader:
+        assert all(reader.scalar(select(func.count()).select_from(model)) == 0 for model in (User, Tenant, UserTenant, TenantLLM, TenantModel, TenantModelInstance, TenantModelProvider))
+    with Session(owned_engine) as db:
+        init_default_admin(db)
+        init_default_admin(db)
+    with Session(owned_engine) as reader:
+        user = reader.scalars(select(User)).one()
+        assert user.email == "admin@datav.com" and user.is_superuser is True
+        assert reader.get(Tenant, user.id) is not None
+        assert reader.scalars(select(UserTenant)).one().role == "owner"
+        assert reader.scalars(select(TenantLLM)).one().max_tokens == 0
+        assert reader.scalars(select(TenantModel)).one().model_types == ["ocr"]

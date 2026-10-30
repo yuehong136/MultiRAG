@@ -80,7 +80,7 @@ def load_admin_user(email: str, db: Session = None):
             db.close()
 
 
-def init_default_admin(db: Session):
+def init_default_admin(db: Session) -> None:
     """初始化默认管理员账号"""
     DEFAULT_ADMIN_EMAIL = "admin@datav.com"
     DEFAULT_ADMIN_PASSWORD = "admin"
@@ -94,10 +94,9 @@ def init_default_admin(db: Session):
             "nickname": "admin",
             "is_superuser": True,
             "email": DEFAULT_ADMIN_EMAIL,
-            "creator": "system",
             "status": "1",
         }
-        if not UserService.save(db, **user_info):
+        if not UserService.save(db, commit=False, **user_info):
             raise AdminException("Can't init admin.", 500)
         add_tenant_for_admin(db, user_info, UserTenantRole.OWNER)
         logging.info("Default admin account created successfully")
