@@ -137,7 +137,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 		r.agentHandler = handler.NewAgentHandler(service.NewAgentService())
 	}
 	if r.searchbotHandler == nil {
-		r.searchbotHandler = handler.NewSearchbotHandler(service.NewSearchbotService(service.NewModelProviderService()), service.NewChunkService())
+		models := service.NewModelProviderService()
+		chunks := service.NewChunkServiceWithModels(models)
+		ask := service.NewAskService(chunks, models)
+		r.searchbotHandler = handler.NewSearchbotHandlerWithAsk(service.NewSearchbotService(models), chunks, ask)
 	}
 	if r.pluginHandler == nil {
 		r.pluginHandler = handler.NewPluginHandler(service.NewPluginService())
@@ -257,6 +260,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				datasets.GET("/:dataset_id/ingestions/summary", r.datasetsHandler.GetIngestionSummary)
 				datasets.GET("/:dataset_id/metadata/config", r.datasetsHandler.GetMetadataConfig)
 				datasets.PUT("/:dataset_id/metadata/config", r.datasetsHandler.UpdateMetadataConfig)
+				datasets.PUT("/:dataset_id/documents/:document_id/metadata/config", r.datasetsHandler.UpdateDocumentMetadataConfig)
 				datasets.GET("/:dataset_id/ingestions", r.datasetsHandler.ListIngestionLogs)
 				datasets.GET("/:dataset_id/ingestions/:log_id", r.datasetsHandler.GetIngestionLog)
 				datasets.GET("/:dataset_id/graph", r.datasetsHandler.GetKnowledgeGraph)
@@ -321,17 +325,20 @@ func (r *Router) Setup(engine *gin.Engine) {
 			}
 
 			v1.GET("/agents", r.agentHandler.ListAgents)
+			v1.POST("/agents/test_db_connection", r.agentHandler.TestDBConnection)
 			v1.GET("/agents/prompts", r.agentHandler.GetPrompts)
 			v1.GET("/agents/templates", r.agentHandler.ListTemplates)
 			v1.PUT("/agents/:agent_id/tags", r.agentHandler.UpdateAgentTags)
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
 			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
 			v1.GET("/agents/:agent_id/sessions", r.agentHandler.ListAgentSessions)
+			v1.DELETE("/agents/:agent_id/sessions", r.agentHandler.DeleteAgentSessions)
 			v1.GET("/agents/:agent_id/sessions/:session_id", r.agentHandler.GetAgentSession)
 			v1.DELETE("/agents/:agent_id/sessions/:session_id", r.agentHandler.DeleteAgentSessionItem)
 			v1.POST("/agents/:agent_id/upload", r.agentHandler.UploadAgentFile)
 			v1.POST("/searchbots/related_questions", r.searchbotHandler.Handle)
 			v1.POST("/searchbots/retrieval_test", r.searchbotHandler.RetrievalTest)
+			v1.POST("/searchbots/ask", r.searchbotHandler.Ask)
 
 			if r.modelHandler != nil {
 				v1.GET("/all-models", r.modelHandler.ListAllModels)
