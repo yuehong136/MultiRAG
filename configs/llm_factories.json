@@ -2660,7 +2660,7 @@
         {
             "name": "SILICONFLOW",
             "logo": "",
-            "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,IMAGE2TEXT",
+            "tags": "LLM,TEXT EMBEDDING,TEXT RE-RANK,IMAGE2TEXT,TTS",
             "status": "1",
             "url": "https://api.siliconflow.cn/v1",
             "rank": "986",
@@ -3158,6 +3158,20 @@
                         "image2text",
                         "chat"
                     ]
+                },
+                {
+                    "llm_name": "fnlp/MOSS-TTSD-v0.5",
+                    "tags": "TTS",
+                    "max_tokens": 26214400,
+                    "is_tools": false,
+                    "mdl_type": "tts"
+                },
+                {
+                    "llm_name": "FunAudioLLM/CosyVoice2-0.5B",
+                    "tags": "TTS",
+                    "max_tokens": 26214400,
+                    "is_tools": false,
+                    "mdl_type": "tts"
                 }
             ]
         },

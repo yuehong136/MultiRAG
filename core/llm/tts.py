@@ -417,14 +417,14 @@ class SILICONFLOWTTS(HTTPBasedTTS):
             base_url = "https://api.siliconflow.cn/v1"
         super().__init__(key, model_name, base_url)
 
-    def _build_payload(self, text, voice, **kwargs):
+    def _build_payload(self, text: str, voice: str, **kwargs: Any) -> dict[str, Any]:
         # Custom payload structure for SILICONFLOW
         return {
             "model": self.model_name,
             "input": text,
             "voice": f"{self.model_name}:{voice}",
             "response_format": "mp3",
-            "sample_rate": 123,
+            "sample_rate": 32000,
             "stream": True,
             "speed": 1,
             "gain": 0,

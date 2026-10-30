@@ -60,6 +60,7 @@ DATABASE_TESTS = frozenset(
         "test_retrieval_rerank_authorization.py",
         "test_sandbox_provider_settings.py",
         "test_search_detail_guard.py",
+        "test_siliconflow_tts.py",
         "test_sync_log_checkpoint.py",
         "test_task_log_limits.py",
         "test_table_auto_metadata_sql.py",

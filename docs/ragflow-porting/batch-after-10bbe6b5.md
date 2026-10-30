@@ -41,7 +41,7 @@
 | 17 / `68223074` | Web 统一 api_key+endpoint_id envelope；Python 活跃 legacy ark 读取及空白 key 的 URL 编辑兼容保留。不同 endpoint 的真实固定 Web 消费通过。 |
 | 18 / `899f76af` | OpenRouter 默认 URL 修正；空模型选择在 Web 零 verify/save HTTP，后端也拒绝。保留 typed 真实能力，不按名字猜测能力。 |
 | 19 / `478c9846` | typed catalog 用于启动、注册、admin 和环境凭据事务；补首个 admin 创建，移除无效 creator User 参数，User/Tenant/credential 同事务。失败独立读回均为零，首次和重复成功通过。 |
-| 20 / `dcf623d6` | 166 个目录差异逐项处置（95 修改、39 新增、32 移除目标），按实际 adapter 发布能力。两项新增 SiliconFlow TTS 因当前 sample_rate=123 合同问题暂不宣称支持，未扩展修复无关 TTS。 |
+| 20 / `dcf623d6` | 166 个目录差异逐项处置（95 修改、39 新增、32 移除目标），按实际 adapter 发布能力。原批次因 sample_rate=123 暂未发布两项 SiliconFlow TTS；随后单独[补修采样率合同和两项目录](siliconflow-tts-followup.md)，追加验证与接收证据，不改写原批次结果。 |
 
 ## 实际接收映射
 
