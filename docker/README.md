@@ -1064,6 +1064,12 @@ docker exec tei-gpu nvidia-smi
 
 如果修改了代码或 Dockerfile，需要重新构建镜像：
 
+主镜像使用 `Dockerfile.dockerignore` 收敛构建上下文；日志、运行数据、测试结果和
+本地编译产物不会传入构建器，`.git`、`bin`、`mirror` 仍是所需输入。
+Redis 在独立阶段编译，Python 扩展的编译器和头文件只安装在 builder 阶段。
+运行阶段保留对应共享库、Redis 程序，以及 worker 启动使用的 pkg-config/jemalloc。
+`scripts/build_docker_image.sh` 在完整镜像构建后检查这些运行依赖和编译器隔离。
+
 ```bash
 # 从项目根目录构建
 docker build -t multirag:latest .

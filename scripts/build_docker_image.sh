@@ -67,6 +67,13 @@ docker build \
 echo "[4/4] Verifying uv and the external-model contract"
 docker run --rm --entrypoint uv "${MULTIRAG_IMAGE}" --version
 docker run --rm --entrypoint bash "${MULTIRAG_IMAGE}" -c '
+  set -eu
+  test -x /usr/local/redis/bin/redis-server
+  /usr/local/redis/bin/redis-server --version
+  pkg-config --exists jemalloc
+  test -f "$(pkg-config --variable=libdir jemalloc)/libjemalloc.so"
+  ! command -v gcc
+  ! command -v g++
   test -d /root/.ragdatav
   test -z "$(find /root/.ragdatav -mindepth 1 -print -quit)"
   test ! -e /multirag/configs/local.service_conf.yaml

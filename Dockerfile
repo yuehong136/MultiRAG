@@ -1,6 +1,25 @@
 ARG MULTIRAG_DEPS_IMAGE=multirag_deps:uv0.12.5-tika3.3.0-build-only
 FROM ${MULTIRAG_DEPS_IMAGE} AS multirag_deps
 
+# Redis is compiled here so its compiler and source tree never enter base.
+FROM ubuntu:24.04 AS redis_builder
+SHELL ["/bin/bash", "-c"]
+ARG NEED_MIRROR=0
+ARG REDIS_BUILD_JOBS=2
+RUN if [ "$NEED_MIRROR" == "1" ]; then \
+        sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
+    fi && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates build-essential wget && \
+    rm -rf /var/lib/apt/lists/*
+RUN wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
+    tar -zxf redis-7.4.3.tar.gz && \
+    cd redis-7.4.3 && \
+    make -j"${REDIS_BUILD_JOBS}" OPT="-O2" && \
+    make install PREFIX=/usr/local/redis && \
+    mkdir -p /etc/redis && \
+    cp redis.conf /etc/redis/redis.conf
+
 # base stage
 FROM ubuntu:24.04 AS base
 USER root
@@ -34,7 +53,8 @@ RUN if [ "$NEED_MIRROR" == "1" ]; then \
     apt update && apt -y install locales && \
     locale-gen zh_CN.UTF-8 && \
     locale-gen en_US.UTF-8 && \
-    update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
+    update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8 && \
+    rm -rf /var/lib/apt/lists/*
 
 # 设置环境变量: 系统级 UTF-8 编码
 ENV LANG=zh_CN.UTF-8 \
@@ -46,22 +66,23 @@ ENV LANG=zh_CN.UTF-8 \
 # opencv-python: libglib2.0-0 libglx-mesa0 libgl1
 # python-pptx:   default-jdk
 # selenium:      libatk-bridge2.0-0
-# Building C extensions: libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev
+# Keep runtime libraries here; C-extension headers are installed in builder.
+# pkg-config/libjemalloc-dev are runtime inputs for entrypoint.sh task_exe.
 RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     apt update && apt -y install ca-certificates && \
     if [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
         sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
         sed -i 's|http://mirrors.aliyun.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
-    fi; \
+    fi && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt update && \
     apt install -y libglib2.0-0 libglx-mesa0 libgl1 && \
-    apt install -y pkg-config libicu-dev libgdiplus && \
+    apt install -y pkg-config libicu74 libgdiplus && \
     apt install -y default-jdk && \
     apt install -y libatk-bridge2.0-0 && \
-    apt install -y libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev && \
+    apt install -y libgtk-4-1 libnss3 xdg-utils libgbm1 && \
     apt install -y libjemalloc-dev && \
     apt install -y gnupg unzip curl wget git vim less && \
     apt install -y ghostscript && \
@@ -70,7 +91,8 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     apt install -y fonts-freefont-ttf fonts-noto-cjk && \
     apt install -y postgresql-client && \
     apt install -y fonts-wqy-zenhei fonts-wqy-microhei && \
-    apt install -y lsb-release build-essential gcc libdatrie-dev net-tools tcl-dev ffmpeg
+    apt install -y lsb-release libdatrie1 net-tools ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 # Download resource from GitHub to /usr/share/infinity
 RUN mkdir -p /usr/share/infinity/resource && \
@@ -89,7 +111,8 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     echo "deb [signed-by=/etc/apt/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu/ noble nginx" > /etc/apt/sources.list.d/nginx.list && \
     apt update && \
     apt install -y nginx=${NGINX_VERSION} && \
-    apt-mark hold nginx
+    apt-mark hold nginx && \
+    rm -rf /var/lib/apt/lists/*
 
 # 安装 MSSQL ODBC 驱动 (pyodbc 依赖)
 # macOS ARM64 环境安装 msodbcsql18，x86_64 环境安装 msodbcsql17
@@ -101,32 +124,23 @@ RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
     apt update && \
     arch="$(uname -m)"; \
     if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
-        ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql18; \
+        ACCEPT_EULA=Y apt install -y unixodbc msodbcsql18; \
     else \
-        ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
-    fi || \
+        ACCEPT_EULA=Y apt install -y unixodbc msodbcsql17; \
+    fi && \
+    rm -rf /var/lib/apt/lists/* || \
     { echo "Failed to install ODBC driver"; exit 1; }
 
-# 安装Redis (从源码编译)
-ARG REDIS_BUILD_JOBS=2
-RUN wget https://download.redis.io/releases/redis-7.4.3.tar.gz && \
-    tar -zxvf redis-7.4.3.tar.gz && \
-    cd redis-7.4.3 && \
-    make -j"${REDIS_BUILD_JOBS}" OPT="-O2" && \
-    make install PREFIX=/usr/local/redis && \
-    mkdir -p /etc/redis /mirror && \
-    cp redis.conf /etc/redis/redis.conf && \
-    cd .. && \
-    rm -rf redis-7.4.3 redis-7.4.3.tar.gz && \
+# Install only the compiled Redis runtime and its configuration.
+COPY --from=redis_builder /usr/local/redis /usr/local/redis
+COPY --from=redis_builder /etc/redis/redis.conf /etc/redis/redis.conf
+RUN mkdir -p /mirror && \
     ln -s /usr/local/redis/bin/redis-server /usr/local/bin/redis-server && \
     ln -s /usr/local/redis/bin/redis-cli /usr/local/bin/redis-cli && \
     ln -s /usr/local/redis/bin/redis-benchmark /usr/local/bin/redis-benchmark && \
     sed -i 's/daemonize no/daemonize yes/' /etc/redis/redis.conf && \
     sed -i 's/# supervised no/supervised systemd/' /etc/redis/redis.conf && \
-    echo "pidfile /var/run/redis.pid" >> /etc/redis/redis.conf && \
-    # 清理apt缓存
-    apt clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+    echo "pidfile /var/run/redis.pid" >> /etc/redis/redis.conf
 #将本地/mirror下的所有文件复制到容器中/mirror
 COPY mirror/ /mirror/
 
@@ -195,6 +209,12 @@ FROM base AS builder
 USER root
 
 WORKDIR /multirag
+
+# Build Python C extensions without inheriting the toolchain in production.
+RUN --mount=type=cache,id=multirag_apt,target=/var/cache/apt,sharing=locked \
+    apt update && \
+    apt install -y build-essential libpython3-dev libicu-dev libgbm-dev libdatrie-dev unixodbc-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # install dependencies from uv.lock file
 COPY pyproject.toml uv.lock ./

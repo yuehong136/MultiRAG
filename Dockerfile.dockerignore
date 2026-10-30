@@ -5,15 +5,41 @@
 .mypy_cache/
 .dmypy.json
 .coverage
+htmlcov/
+coverage/
 coverage.xml
+.hypothesis/
+.nox/
+.test-results/
 **/__pycache__/
 **/*.pyc
 **/*.pyo
 .DS_Store
+.idea/
+.vscode/
+.cursor/
+.trae/
+
+# Local logs, service state and compiler outputs are never image inputs.
+logs/
+**/*.log
+docker/multirag-logs/
+docker/ragflow-logs/
+docker/data/
+docker/oceanbase/
+docker/seekdb/
+internal/cpp/build/
+internal/cpp/cmake-build-release/
+internal/cpp/cmake-build-debug/
+target/
+resource/
 
 # Local configuration can contain credentials and must never override the
 # externally mounted standalone configuration.
 configs/local.service_conf.yaml
+docker/.env
+docker/.env.*
+!docker/.env.example
 
 # Generated resources are supplied by the build-only dependency image. Ignore
 # local copies so COPY core core cannot duplicate them in a later layer.
@@ -29,6 +55,7 @@ nltk_data/
 chrome-linux64-121-0-6167-85
 chromedriver-linux64-121-0-6167-85
 cl100k_base.tiktoken
+9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 libssl*.deb
 tika-server*.jar
 tika-server*.jar.md5
