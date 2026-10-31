@@ -49,7 +49,8 @@ import (
 
 // UserService user service
 type UserService struct {
-	userDAO *dao.UserDAO
+	userDAO  *dao.UserDAO
+	recovery *PasswordRecoveryService
 }
 
 // NewUserService create user service

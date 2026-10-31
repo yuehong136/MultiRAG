@@ -43,6 +43,7 @@ type AuthenticationConfig struct {
 
 // Config application configuration
 type Config struct {
+	SMTP             common.SMTPConfig      `mapstructure:"smtp"`
 	Authentication   AuthenticationConfig   `mapstructure:"authentication"`
 	Server           ServerConfig           `mapstructure:"server"`
 	Database         DatabaseConfig         `mapstructure:"database"`
