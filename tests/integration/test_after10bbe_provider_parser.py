@@ -251,6 +251,7 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
             db.flush()
             db.add(TenantModel(id=row.id, instance_id=instance.id, model_name="shared-name", model_types=["ocr"], is_tools=False))
             ids.append(row.id)
+        db.get(Tenant, owner).tenant_ocr_id = ids[1]
         db.commit()
 
     @contextmanager
@@ -284,12 +285,20 @@ def test_naive_and_pipeline_keep_complete_instance_reference(owned_engine: Engin
     process = SimpleNamespace(
         _param=SimpleNamespace(setups={"pdf": config}), _canvas=SimpleNamespace(_tenant_id=owner), callback=lambda *args: None, set_output=lambda key, value: outputs.__setitem__(key, value)
     )
-    pipeline.Parser._pdf(process, "fixture.pdf", b"controlled-pdf")
-    assert outputs["json"][0]["text"] == str(ids[1])
     method = getattr(naive, "by_" + provider.lower())
-    options = {provider.lower() + "_llm_name": config["parse_method"]}
-    sections, _, _ = method("fixture.pdf", binary=b"controlled-pdf", tenant_id=owner, **options)
-    assert sections[0][0] == str(ids[1])
+    for explicit in (True, False):
+        config["parse_method"] = f"shared-name@second@{provider}" if explicit else provider
+        pipeline.Parser._pdf(process, "fixture.pdf", b"controlled-pdf")
+        assert outputs["json"][0]["text"] == str(ids[1])
+        options = {provider.lower() + "_llm_name": config["parse_method"]} if explicit else {}
+        sections, _, _ = method("fixture.pdf", binary=b"controlled-pdf", tenant_id=owner, **options)
+        assert sections[0][0] == str(ids[1])
+    with Session(owned_engine) as db:
+        db.get(TenantLLM, ids[1]).status = "0"
+        db.commit()
+    with Session(owned_engine) as reader:
+        assert get_ocr_model_reference(reader, owner, provider) == str(ids[0])
+        assert reader.get(Tenant, owner).tenant_ocr_id == ids[1]
 
 
 def test_default_admin_first_start_model_failure_rolls_back_user(owned_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:

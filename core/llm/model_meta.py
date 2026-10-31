@@ -369,9 +369,15 @@ class LocalAI(Ollama):
                 names: list[tuple[str, str]] = []
                 for model in tags:
                     tagged = model["name"]
-                    name = tagged if tagged in callable_names else tagged.removesuffix(":latest")
+                    name = tagged
                     if name not in callable_names:
-                        raise DiscoveryError("LocalAI tag has no callable model identity")
+                        # Only normalize a terminal tag when the second inventory
+                        # confirms the base ID. Exact callable IDs take priority;
+                        # a registry host's port is not a model tag.
+                        candidate, separator, tag = tagged.rpartition(":")
+                        if not separator or not tag or "/" in tag or candidate not in callable_names:
+                            raise DiscoveryError("LocalAI tag has no callable model identity")
+                        name = candidate
                     names.append((tagged, name))
                 if len({name for _, name in names}) != len(names) or {name for _, name in names} != callable_names:
                     raise DiscoveryError("Ambiguous or incomplete LocalAI inventory")

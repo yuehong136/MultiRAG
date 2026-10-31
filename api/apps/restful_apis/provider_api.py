@@ -104,7 +104,7 @@ async def providers(request: Request, db: AsyncSession = Depends(get_async_db), 
         items = [
             {
                 "name": factory["name"],
-                "model_types": sorted({capability for model in service.catalog(factory["name"]) for capability in model.model_types}),
+                "model_types": sorted(service.supported_capabilities(factory["name"])),
                 "status": "active",
                 **({"url": provider_urls(factory["name"])} if provider_urls(factory["name"]) else {}),
             }
@@ -116,7 +116,7 @@ async def providers(request: Request, db: AsyncSession = Depends(get_async_db), 
         stored_types = await service.provider_capabilities_for_owner(db, user.id)
         items = []
         for row in rows:
-            catalog_types = {capability for model in service.catalog(row.provider_name) for capability in model.model_types} if row.provider_name in known else set()
+            catalog_types = service.supported_capabilities(row.provider_name) if row.provider_name in known else set()
             items.append(
                 {
                     "id": row.id,
