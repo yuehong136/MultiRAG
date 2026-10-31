@@ -32,29 +32,43 @@ func (s *MemoryService) ForgetMessage(ctx context.Context, userID, memoryID stri
 	if store == nil {
 		store, _ = engine.Get().(types.MemoryMessageStore)
 	}
-	return dao.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var memory entity.Memory
-		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id=?", memoryID).Take(&memory).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrMemoryUnavailable
-			}
+	// Acquisition and authorization reads honor the request. The transaction's
+	// lifetime must outlive cancellation once an uncancellable native RPC has
+	// started: database/sql otherwise rolls it back and drops authority locks
+	// while that RPC can still write. Return the pinned connection only after
+	// the store has drained its write/readback/close.
+	return dao.DB.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if memory.TenantID != userID && memory.Permissions != "team" {
-			return ErrMemoryUnavailable
-		}
-		// Hold current actor/tenant/membership authority through the external
-		// write. Invitations, revoked members and inactive owners fail closed.
-		if err := authorizeLinkTenant(tx, userID, memory.TenantID); err != nil {
-			if errors.Is(err, ErrLinkUnavailable) {
+		return conn.Session(&gorm.Session{NewDB: true, Context: context.WithoutCancel(ctx)}).Transaction(func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			var memory entity.Memory
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id=?", memoryID).Take(&memory).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrMemoryUnavailable
+				}
+				return err
+			}
+			if memory.TenantID != userID && memory.Permissions != "team" {
 				return ErrMemoryUnavailable
 			}
-			return err
-		}
-		if store == nil {
-			return types.ErrMemoryWriteUnavailable
-		}
-		_, err := store.ForgetMemoryMessage(ctx, memory.TenantID, memory.ID, messageID, time.Now().UTC())
-		return err
+			// Hold current actor/tenant/membership authority through the external
+			// write. Invitations, revoked members and inactive owners fail closed.
+			if err := authorizeLinkTenant(tx, userID, memory.TenantID); err != nil {
+				if errors.Is(err, ErrLinkUnavailable) {
+					return ErrMemoryUnavailable
+				}
+				return err
+			}
+			if store == nil {
+				return types.ErrMemoryWriteUnavailable
+			}
+			_, err := store.ForgetMemoryMessage(ctx, memory.TenantID, memory.ID, messageID, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			return ctx.Err()
+		})
 	})
 }
