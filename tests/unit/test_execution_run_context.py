@@ -229,18 +229,6 @@ def test_agent_passes_the_same_run_context_into_mcp_session(
     monkeypatch.setattr(LLM, "__init__", _fake_llm_init)
     monkeypatch.setattr("agent.component.agent_with_tools.db_connection", lambda: _DBContext())
     monkeypatch.setattr(
-        "agent.component.agent_with_tools.get_model_config_by_type_and_name",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        "agent.component.agent_with_tools.resolve_model_type",
-        lambda *_args, **_kwargs: ["chat"],
-    )
-    monkeypatch.setattr(
-        "agent.component.agent_with_tools.LLMBundle",
-        lambda *_args, **_kwargs: _ChatModel(),
-    )
-    monkeypatch.setattr(
         "agent.component.agent_with_tools.MCPServerService.get_by_id",
         lambda _db, server_id: SimpleNamespace(id=server_id, variables={}),
     )

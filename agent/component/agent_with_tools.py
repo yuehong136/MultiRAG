@@ -29,7 +29,6 @@ import json_repair
 from agent.component.llm import LLM, LLMParam
 from agent.tools.base import LLMToolPluginCallSession, ToolBase, ToolMeta, ToolParamBase
 from api.db.db_models import db_connection
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.llm_service import LLMBundle
 from api.db.services.mcp_server_service import MCPServerService
 from api.identity.mcp_delegation.runtime import resolve_mcp_credential_provider
@@ -85,29 +84,6 @@ class Agent(LLM, ToolBase):
             original_name = cpn.get_meta()["function"]["name"]
             indexed_name = f"{original_name}_{idx}"
             self.tools[indexed_name] = cpn
-        try:
-            with db_connection() as db:
-                model_types = resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id)
-                model_type = "chat" if "chat" in model_types else "image2text" if "image2text" in model_types else None
-                if model_type is None:
-                    raise LookupError("A chat or vision model is required")
-                model_config = get_model_config_by_type_and_name(
-                    db,
-                    self._canvas.get_tenant_id(),
-                    model_type,
-                    self._param.llm_id,
-                )
-                self.chat_mdl = LLMBundle(
-                    db,
-                    self._canvas.get_tenant_id(),
-                    model_config,
-                    max_retries=self._param.max_retries,
-                    retry_interval=self._param.delay_after_error,
-                    max_rounds=self._param.max_rounds,
-                    verbose_tool_use=False,
-                )
-        except LookupError as e:
-            logging.warning("Agent component %s: model '%s' not found, will fail at run time: %s", id, self._param.llm_id, e)
         self.tool_meta = []
         for indexed_name, tool_obj in self.tools.items():
             original_meta = tool_obj.get_meta()
@@ -191,6 +167,13 @@ class Agent(LLM, ToolBase):
         if self.tool_meta and self.chat_mdl is not None:
             self.chat_mdl.bind_tools(self.toolcall_session, self.tool_meta)
 
+    def _bundle_options(self) -> dict[str, Any]:
+        return {**super()._bundle_options(), "max_rounds": self._param.max_rounds, "verbose_tool_use": False}
+
+    def _configure_chat_model(self, bundle: LLMBundle) -> None:
+        if self.tool_meta:
+            bundle.bind_tools(self.toolcall_session, self.tool_meta)
+
     def _fit_messages(self, prompt: str, msg: list[dict]) -> list[dict]:
         _, fitted_messages = message_fit_in(
             [{"role": "system", "content": prompt}, *msg],
@@ -268,10 +251,8 @@ class Agent(LLM, ToolBase):
         return asyncio.run(self._invoke_async(**kwargs))
 
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 20 * 60)))
-    async def _invoke_async(self, **kwargs):
+    async def _invoke_async(self, **kwargs: Any) -> Any:
         """异步版本 - 主要实现"""
-        if self.chat_mdl is None:
-            raise LookupError(f"Agent model '{self._param.llm_id}' is not available. Please configure the model API key in the model management page.")
         if self.check_if_canceled("Agent processing"):
             return
 
@@ -292,7 +273,8 @@ class Agent(LLM, ToolBase):
                 return
             return await LLM._invoke_async(self, **kwargs)
 
-        prompt, msg, user_defined_prompt = self._prepare_prompt_variables()
+        prompt, msg, user_defined_prompt = await asyncio.to_thread(self._prepare_prompt_variables)
+        await self._prepare_chat_model()
         output_schema = self._get_output_schema()
         schema_prompt = ""
         if output_schema:

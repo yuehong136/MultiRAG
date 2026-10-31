@@ -9,6 +9,7 @@ final 事件是同一模式，共用该契约。
 ``_extract_visible_answer`` 的钉板也收在本文件。
 """
 
+import asyncio
 import types
 from collections.abc import AsyncIterator
 from typing import Any
@@ -108,6 +109,35 @@ async def test_think_stream_keeps_short_answer_after_closing_marker() -> None:
         ("marker", "</think>", False),
         ("text", "我也爱你", False),
     ]
+
+
+async def test_async_ask_delivers_short_reasoning_before_producer_continues(async_db: AsyncSession, final_answer_stubs: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    resume = asyncio.Event()
+    producer_continued = asyncio.Event()
+
+    class PausedBundle(_FakeBundle):
+        async def async_chat_streamly_delta(self, system: str, history: list[dict[str, Any]], gen_conf: dict[str, Any]) -> AsyncIterator[str]:
+            yield "<think>短"
+            producer_continued.set()
+            await resume.wait()
+            yield "</think>answer"
+
+    monkeypatch.setattr(tenant_model_service, "LLMBundle", PausedBundle)
+    monkeypatch.setattr(settings.retriever, "insert_citations", lambda text, *args, **kwargs: (text, set()))
+    events = async_ask(async_db, "q", [], "t1")
+    try:
+        start = await asyncio.wait_for(anext(events), timeout=2)
+        assert start["start_to_think"] is True
+        reasoning = await asyncio.wait_for(anext(events), timeout=2)
+        assert reasoning["answer"] == "短" and reasoning["final"] is False
+        assert not resume.is_set() and not producer_continued.is_set()
+        resume.set()
+        tail = [event async for event in events]
+        assert producer_continued.is_set()
+        assert tail[-1]["final"] is True and tail[-1]["answer"] == "<think>短</think>answer"
+    finally:
+        resume.set()
+        await events.aclose()
 
 
 @pytest.mark.parametrize(

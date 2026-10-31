@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from agent.canvas import Canvas
-from agent.component import agent_with_tools, categorize, llm
+from agent.component import categorize, llm
 from agent.tools.retrieval import Retrieval
 from core.utils.redis_conn import REDIS_CONN
 
@@ -104,11 +104,10 @@ def runtime(monkeypatch: pytest.MonkeyPatch, db: Session) -> Iterator[tuple[list
         calls.append(("retrieval", self._id, list(self._dataset_ids)))
         self.set_output("formalized_content", "schema:" + self._id)
 
-    for module in (llm, agent_with_tools):
-        monkeypatch.setattr(module, "db_connection", model_db)
-        monkeypatch.setattr(module, "resolve_model_type", resolve)
-        monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *args: object())
-        monkeypatch.setattr(module, "LLMBundle", lambda *args, **kwargs: Model())
+    monkeypatch.setattr(llm, "db_connection", model_db)
+    monkeypatch.setattr(llm, "resolve_model_type", resolve)
+    monkeypatch.setattr(llm, "get_model_config_by_type_and_name", lambda *args: {})
+    monkeypatch.setattr(llm, "LLMBundle", lambda *args, **kwargs: Model())
     monkeypatch.setattr(categorize, "build_named_bundle_async", classify_model)
     monkeypatch.setattr(Retrieval, "_retrieve_kb", retrieve)
     monkeypatch.setattr(Canvas, "is_canceled", lambda self: False)
