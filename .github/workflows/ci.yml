@@ -218,6 +218,12 @@ jobs:
           --tmpfs /var/lib/postgresql/data:rw,size=536870912
           --health-cmd "pg_isready -U ci_go -d multirag_go_models_a_skills_ci"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: valkey/valkey:8
+        ports: ['6379/tcp']
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -302,13 +308,98 @@ jobs:
                   }, output)
           PY
           psql -v ON_ERROR_STOP=1 -c 'CREATE DATABASE multirag_after33_g_ci'
+      - name: Prepare isolated Go file, memory and recovery services
+        env:
+          PG_PORT: ${{ job.services.postgres.ports[5432] }}
+          REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+        run: |
+          set -euo pipefail
+          sudo sysctl -w vm.max_map_count=262144
+          python3 - <<'PY'
+          import json, os, socket, subprocess, sys, time, urllib.request
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from resource_journal import Journal
+          root = Path('.test-results/go')
+          private = Path(os.environ['RUNNER_TEMP'])
+          identity = os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+          images = {'ci-go-afterdcf-es': 'elasticsearch:8.11.3',
+                    'ci-go-afterdcf-infinity': 'infiniflow/infinity:v0.7.0'}
+          files = [private / 'go-afterdcf.json', private / 'go-afterdcf-infinity.json',
+                   private / 'go-afterdcf-infinity.toml']
+          journal = Journal(root / 'afterdcf-services.jsonl', create=True)
+          journal.event('reserve-ci-services', containers=images, identity=identity,
+                        private_paths=[str(path) for path in files],
+                        outputs=['afterdcf-services.json', 'afterdcf-cleanup.json'],
+                        diagnostics=[name + '.log' for name in images])
+          ports, listeners = [], []
+          for _ in range(3):
+              journal.event('reserve-ci-port', host='127.0.0.1', port=0, owner=identity)
+              listener = socket.socket()
+              listener.bind(('127.0.0.1', 0))
+              listeners.append(listener)
+              ports.append(listener.getsockname()[1])
+          es, thrift, http = ports
+          journal.event('reserve-ci-container-ports', es=es, infinity_thrift=thrift, infinity_http=http)
+          for listener in listeners:
+              listener.close()
+          record = {'identity': identity, 'containers': images, 'ports': ports,
+                    'private_paths': [str(path) for path in files]}
+          with (root / 'afterdcf-services.json').open('x') as output:
+              json.dump(record, output); output.flush(); os.fsync(output.fileno())
+          config = Path('docker/infinity_conf.toml').read_text()
+          config = config.replace('buffer_manager_size      = "8GB"', 'buffer_manager_size      = "1GB"')
+          config = config.replace('memindex_memory_quota    = "1GB"', 'memindex_memory_quota    = "512MB"')
+          config = config.replace('connection_pool_size     = 128', 'connection_pool_size     = 32')
+          os.umask(0o077)
+          with files[2].open('x') as output:
+              output.write(config); output.flush(); os.fsync(output.fileno())
+          label = 'multirag.ci.afterdcf=' + identity
+          subprocess.run(['docker', 'run', '-d', '--name', 'ci-go-afterdcf-es', '--label', label,
+                          '--memory', '2g', '-p', f'127.0.0.1:{es}:9200',
+                          '-e', 'discovery.type=single-node', '-e', 'xpack.security.enabled=false',
+                          '-e', 'ES_JAVA_OPTS=-Xms512m -Xmx512m', images['ci-go-afterdcf-es']], check=True)
+          subprocess.run(['docker', 'run', '-d', '--name', 'ci-go-afterdcf-infinity', '--label', label,
+                          '--memory', '2g', '--tmpfs', '/var/infinity:rw,size=2147483648',
+                          '-p', f'127.0.0.1:{thrift}:23817', '-p', f'127.0.0.1:{http}:23820',
+                          '--ulimit', 'nofile=500000:500000',
+                          '-v', str(files[2]) + ':/infinity_conf.toml:ro',
+                          images['ci-go-afterdcf-infinity'], '-f', '/infinity_conf.toml'], check=True)
+          for endpoint in [f'http://127.0.0.1:{es}', f'http://127.0.0.1:{http}/admin/node/current']:
+              for attempt in range(90):
+                  try:
+                      with urllib.request.urlopen(endpoint, timeout=2) as response:
+                          if response.status == 200:
+                              break
+                  except OSError:
+                      pass
+                  time.sleep(2)
+              else:
+                  raise RuntimeError('Owned Go service did not become ready')
+          configs = [
+              {'Database': {'Driver': 'postgres', 'Host': '127.0.0.1', 'Port': int(os.environ['PG_PORT']),
+                            'Database': 'postgres', 'Username': 'ci_go', 'Password': '123456', 'Schema': 'usr_ai'},
+               'Redis': {'Host': '127.0.0.1', 'Port': int(os.environ['REDIS_PORT']), 'DB': 1},
+               'MinIO': {'Host': '127.0.0.1:9000', 'User': 'minioadmin', 'Password': '12345678'},
+               'Elasticsearch': {'Hosts': f'http://127.0.0.1:{es}'}},
+              {'URI': f'127.0.0.1:{thrift}', 'DBName': 'default_db'},
+          ]
+          for path, value in zip(files[:2], configs, strict=True):
+              with path.open('x') as output:
+                  json.dump(value, output); output.flush(); os.fsync(output.fileno())
+          journal.event('ci-services-ready', identity=identity, ports=ports)
+          journal.close()
+          PY
       - name: Go race regression (live opt-ins remain explicit)
         env:
           MULTIRAG_SKILL_EMBEDDING_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_go_models_a_skills_ci?sslmode=disable
           MULTIRAG_AFTER33_G_DSN: postgres://ci_go:123456@127.0.0.1:${{ job.services.postgres.ports[5432] }}/multirag_after33_g_ci?sslmode=disable
           MULTIRAG_AFTER33_CLI: ${{ github.workspace }}/.test-results/go/bin/multirag_cli
           MULTIRAG_DEEPSEEK_CONFIG: ${{ runner.temp }}/go-after10bbe.json
+          MULTIRAG_QWEN_CONFIG: ${{ runner.temp }}/go-after10bbe.json
           MULTIRAG_AFTER10BBE_S_CONFIG: ${{ runner.temp }}/go-after10bbe.json
+          MULTIRAG_AFTERDCF_G_CONFIG: ${{ runner.temp }}/go-afterdcf.json
+          MULTIRAG_AFTERDCF_G_INFINITY_CONFIG: ${{ runner.temp }}/go-afterdcf-infinity.json
         run: |
           set -euo pipefail
           go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
@@ -319,6 +410,39 @@ jobs:
             go test -race -tags integration -count=1 -json ./internal/service \
               -run '^TestAfter10bbeDBProbeMySQLProtocol$' | tee -a .test-results/go/tests.jsonl
           python3 scripts/ci_checks.py go-audit --reports .test-results/go
+      - name: Go memory service diagnostics and precise cleanup
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, socket, subprocess
+          from pathlib import Path
+          root = Path('.test-results/go')
+          path = root / 'afterdcf-services.json'
+          if not path.exists():
+              raise SystemExit(0)
+          record = json.loads(path.read_text())
+          for name in record['containers']:
+              state = subprocess.run(['docker', 'inspect', name], capture_output=True, text=True)
+              if state.returncode == 0:
+                  container = json.loads(state.stdout)[0]
+                  if container['Config']['Labels'].get('multirag.ci.afterdcf') != record['identity']:
+                      raise RuntimeError('Refuse cleanup of unowned Go service')
+                  logs = subprocess.run(['docker', 'logs', name], capture_output=True, text=True)
+                  (root / (name + '.log')).write_text(logs.stdout + logs.stderr)
+                  subprocess.run(['docker', 'rm', '-f', '-v', name], check=True)
+              if subprocess.run(['docker', 'inspect', name], capture_output=True).returncode == 0:
+                  raise RuntimeError('Owned Go service remains')
+          for port in record['ports']:
+              with socket.socket() as reader:
+                  reader.settimeout(1)
+                  if reader.connect_ex(('127.0.0.1', port)) == 0:
+                      raise RuntimeError('Owned Go port remains open')
+          for name in record['private_paths']:
+              Path(name).unlink(missing_ok=True)
+          record.update(containers_absent=True, ports_closed=True, private_files_absent=True)
+          with (root / 'afterdcf-cleanup.json').open('x') as output:
+              json.dump(record, output); output.flush(); os.fsync(output.fileno())
+          PY
       - name: Drop owned management regression database
         if: always()
         env:
