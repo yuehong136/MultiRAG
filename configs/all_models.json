@@ -789,21 +789,4849 @@
     ]
   },
   {
-    "name": "qwen3-asr-1.7b",
-    "alias": [
-      "qwen/qwen3-asr-1.7b"
-    ],
-    "model_types": [
-      "asr"
-    ]
-  },
-  {
     "name": "paddleocr-vl-0.9b",
     "alias": [
       "paddleocr-vl-1.5"
     ],
     "model_types": [
       "ocr"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-35b-a3b-base-w128k-l0_100",
+    "alias": [
+      "sae-res-qwen3.5-35b-a3b-base-w128k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-35b-a3b-base-w32k-l0_50",
+    "alias": [
+      "sae-res-qwen3.5-35b-a3b-base-w32k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3-30b-a3b-base-w128k-l0_100",
+    "alias": [
+      "sae-res-qwen3-30b-a3b-base-w128k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3-30b-a3b-base-w32k-l0_50",
+    "alias": [
+      "sae-res-qwen3-30b-a3b-base-w32k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-27b-w80k-l0_100",
+    "alias": [
+      "sae-res-qwen3.5-27b-w80k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-27b-w80k-l0_50",
+    "alias": [
+      "sae-res-qwen3.5-27b-w80k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-9b-base-w64k-l0_100",
+    "alias": [
+      "sae-res-qwen3.5-9b-base-w64k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-2b-base-w32k-l0_100",
+    "alias": [
+      "sae-res-qwen3.5-2b-base-w32k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-9b-base-w64k-l0_50",
+    "alias": [
+      "sae-res-qwen3.5-9b-base-w64k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3.5-2b-base-w32k-l0_50",
+    "alias": [
+      "sae-res-qwen3.5-2b-base-w32k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3-8b-base-w64k-l0_100",
+    "alias": [
+      "sae-res-qwen3-8b-base-w64k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3-8b-base-w64k-l0_50",
+    "alias": [
+      "sae-res-qwen3-8b-base-w64k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3-1.7b-base-w32k-l0_100",
+    "alias": [
+      "sae-res-qwen3-1.7b-base-w32k-l0_100"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/sae-res-qwen3-1.7b-base-w32k-l0_50",
+    "alias": [
+      "sae-res-qwen3-1.7b-base-w32k-l0_50"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.6-27b-fp8",
+    "alias": [
+      "qwen3.6-27b-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-27b",
+    "alias": [
+      "qwen3.6-27b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-35b-a3b-fp8",
+    "alias": [
+      "qwen3.6-35b-a3b-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-35b-a3b",
+    "alias": [
+      "qwen3.6-35b-a3b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-35b-a3b-gptq-int4",
+    "alias": [
+      "qwen3.5-35b-a3b-gptq-int4"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-27b-gptq-int4",
+    "alias": [
+      "qwen3.5-27b-gptq-int4"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-397b-a17b-gptq-int4",
+    "alias": [
+      "qwen3.5-397b-a17b-gptq-int4"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-122b-a10b-gptq-int4",
+    "alias": [
+      "qwen3.5-122b-a10b-gptq-int4"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-0.8b-base",
+    "alias": [
+      "qwen3.5-0.8b-base"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.5-2b-base",
+    "alias": [
+      "qwen3.5-2b-base"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.5-0.8b",
+    "alias": [
+      "qwen3.5-0.8b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-2b",
+    "alias": [
+      "qwen3.5-2b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-4b",
+    "alias": [
+      "qwen3.5-4b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-4b-base",
+    "alias": [
+      "qwen3.5-4b-base"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.5-9b",
+    "alias": [
+      "qwen3.5-9b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-9b-base",
+    "alias": [
+      "qwen3.5-9b-base"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.5-35b-a3b-fp8",
+    "alias": [
+      "qwen3.5-35b-a3b-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-27b-fp8",
+    "alias": [
+      "qwen3.5-27b-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-122b-a10b-fp8",
+    "alias": [
+      "qwen3.5-122b-a10b-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-122b-a10b",
+    "alias": [
+      "qwen3.5-122b-a10b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-35b-a3b-base",
+    "alias": [
+      "qwen3.5-35b-a3b-base"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.5-27b",
+    "alias": [
+      "qwen3.5-27b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-35b-a3b",
+    "alias": [
+      "qwen3.5-35b-a3b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-397b-a17b-fp8",
+    "alias": [
+      "qwen3.5-397b-a17b-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-397b-a17b",
+    "alias": [
+      "qwen3.5-397b-a17b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/webworld-32b",
+    "alias": [
+      "webworld-32b"
+    ],
+    "max_tokens": 40960,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/webworld-14b",
+    "alias": [
+      "webworld-14b"
+    ],
+    "max_tokens": 40960,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/webworld-8b",
+    "alias": [
+      "webworld-8b"
+    ],
+    "max_tokens": 40960,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-next-gguf",
+    "alias": [
+      "qwen3-coder-next-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-coder-next-base",
+    "alias": [
+      "qwen3-coder-next-base"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-next-fp8",
+    "alias": [
+      "qwen3-coder-next-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-next",
+    "alias": [
+      "qwen3-coder-next"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-forcedaligner-0.6b",
+    "alias": [
+      "qwen3-forcedaligner-0.6b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-1.7b",
+    "alias": [
+      "qwen3-asr-1.7b"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-0.6b",
+    "alias": [
+      "qwen3-asr-0.6b"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-12hz-0.6b-base",
+    "alias": [
+      "qwen3-tts-12hz-0.6b-base"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-12hz-0.6b-customvoice",
+    "alias": [
+      "qwen3-tts-12hz-0.6b-customvoice"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-12hz-1.7b-base",
+    "alias": [
+      "qwen3-tts-12hz-1.7b-base"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-12hz-1.7b-customvoice",
+    "alias": [
+      "qwen3-tts-12hz-1.7b-customvoice"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-tokenizer-12hz",
+    "alias": [
+      "qwen3-tts-tokenizer-12hz"
+    ],
+    "max_tokens": 8000,
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-12hz-1.7b-voicedesign",
+    "alias": [
+      "qwen3-tts-12hz-1.7b-voicedesign"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-reranker-8b",
+    "alias": [
+      "qwen3-vl-reranker-8b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-reranker-2b",
+    "alias": [
+      "qwen3-vl-reranker-2b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-embedding-2b",
+    "alias": [
+      "qwen3-vl-embedding-2b"
+    ],
+    "max_tokens": 32768,
+    "dimension": 2048,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-embedding-8b",
+    "alias": [
+      "qwen3-vl-embedding-8b"
+    ],
+    "max_tokens": 32768,
+    "dimension": 4096,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-2512",
+    "alias": [
+      "qwen-image-2512"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation",
+      "image_edit",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-layered",
+    "alias": [
+      "qwen-image-layered"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_layer_decomposition",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-2511",
+    "alias": [
+      "qwen-image-edit-2511"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-next-80b-a3b-thinking-gguf",
+    "alias": [
+      "qwen3-next-80b-a3b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-next-80b-a3b-instruct-gguf",
+    "alias": [
+      "qwen3-next-80b-a3b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-235b-a22b-thinking-gguf",
+    "alias": [
+      "qwen3-vl-235b-a22b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-30b-a3b-thinking-gguf",
+    "alias": [
+      "qwen3-vl-30b-a3b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-235b-a22b-instruct-gguf",
+    "alias": [
+      "qwen3-vl-235b-a22b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-30b-a3b-instruct-gguf",
+    "alias": [
+      "qwen3-vl-30b-a3b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-2b-thinking-gguf",
+    "alias": [
+      "qwen3-vl-2b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-4b-thinking-gguf",
+    "alias": [
+      "qwen3-vl-4b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-8b-thinking-gguf",
+    "alias": [
+      "qwen3-vl-8b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-32b-thinking-gguf",
+    "alias": [
+      "qwen3-vl-32b-thinking-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-32b-instruct-gguf",
+    "alias": [
+      "qwen3-vl-32b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-8b-instruct-gguf",
+    "alias": [
+      "qwen3-vl-8b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-4b-instruct-gguf",
+    "alias": [
+      "qwen3-vl-4b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-2b-instruct-gguf",
+    "alias": [
+      "qwen3-vl-2b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 262144
+  },
+  {
+    "name": "qwen/qwen3-vl-2b-thinking-fp8",
+    "alias": [
+      "qwen3-vl-2b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-2b-thinking",
+    "alias": [
+      "qwen3-vl-2b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-2b-instruct-fp8",
+    "alias": [
+      "qwen3-vl-2b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-2b-instruct",
+    "alias": [
+      "qwen3-vl-2b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-32b-instruct-fp8",
+    "alias": [
+      "qwen3-vl-32b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-32b-thinking-fp8",
+    "alias": [
+      "qwen3-vl-32b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-32b-thinking",
+    "alias": [
+      "qwen3-vl-32b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-32b-instruct",
+    "alias": [
+      "qwen3-vl-32b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-8b-instruct-fp8",
+    "alias": [
+      "qwen3-vl-8b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-8b-thinking-fp8",
+    "alias": [
+      "qwen3-vl-8b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-4b-thinking-fp8",
+    "alias": [
+      "qwen3-vl-4b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-4b-instruct-fp8",
+    "alias": [
+      "qwen3-vl-4b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-8b-thinking",
+    "alias": [
+      "qwen3-vl-8b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-4b-thinking",
+    "alias": [
+      "qwen3-vl-4b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-8b-instruct",
+    "alias": [
+      "qwen3-vl-8b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-4b-instruct",
+    "alias": [
+      "qwen3-vl-4b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-30b-a3b-thinking-fp8",
+    "alias": [
+      "qwen3-vl-30b-a3b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-30b-a3b-instruct-fp8",
+    "alias": [
+      "qwen3-vl-30b-a3b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-235b-a22b-thinking-fp8",
+    "alias": [
+      "qwen3-vl-235b-a22b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-235b-a22b-instruct-fp8",
+    "alias": [
+      "qwen3-vl-235b-a22b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-30b-a3b-thinking",
+    "alias": [
+      "qwen3-vl-30b-a3b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-30b-a3b-instruct",
+    "alias": [
+      "qwen3-vl-30b-a3b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-saferl",
+    "alias": [
+      "qwen3-4b-saferl"
+    ],
+    "max_tokens": 40960,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3guard-stream-8b",
+    "alias": [
+      "qwen3guard-stream-8b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3guard-stream-4b",
+    "alias": [
+      "qwen3guard-stream-4b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3guard-stream-0.6b",
+    "alias": [
+      "qwen3guard-stream-0.6b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3guard-gen-8b",
+    "alias": [
+      "qwen3guard-gen-8b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3guard-gen-4b",
+    "alias": [
+      "qwen3guard-gen-4b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3guard-gen-0.6b",
+    "alias": [
+      "qwen3guard-gen-0.6b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-2509",
+    "alias": [
+      "qwen-image-edit-2509"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-235b-a22b-thinking",
+    "alias": [
+      "qwen3-vl-235b-a22b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-235b-a22b-instruct",
+    "alias": [
+      "qwen3-vl-235b-a22b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-next-80b-a3b-thinking-fp8",
+    "alias": [
+      "qwen3-next-80b-a3b-thinking-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-next-80b-a3b-instruct-fp8",
+    "alias": [
+      "qwen3-next-80b-a3b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-30b-a3b-instruct",
+    "alias": [
+      "qwen3-omni-30b-a3b-instruct"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding",
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-30b-a3b-thinking",
+    "alias": [
+      "qwen3-omni-30b-a3b-thinking"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-omni-30b-a3b-captioner",
+    "alias": [
+      "qwen3-omni-30b-a3b-captioner"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "audio_caption",
+      "audio2text",
+      "audio_understanding",
+      "caption"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-next-80b-a3b-thinking",
+    "alias": [
+      "qwen3-next-80b-a3b-thinking"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-next-80b-a3b-instruct",
+    "alias": [
+      "qwen3-next-80b-a3b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-bench",
+    "alias": [
+      "qwen-image-bench"
+    ],
+    "model_types": [
+      "benchmark",
+      "image_eval",
+      "benchmark_judge",
+      "image2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit",
+    "alias": [
+      "qwen-image-edit"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-instruct-2507-fp8",
+    "alias": [
+      "qwen3-4b-instruct-2507-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-thinking-2507-fp8",
+    "alias": [
+      "qwen3-4b-thinking-2507-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-4b-thinking-2507",
+    "alias": [
+      "qwen3-4b-thinking-2507"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-4b-instruct-2507",
+    "alias": [
+      "qwen3-4b-instruct-2507"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image",
+    "alias": [
+      "qwen-image"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation",
+      "image_edit",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-30b-a3b-instruct-fp8",
+    "alias": [
+      "qwen3-coder-30b-a3b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-30b-a3b-instruct",
+    "alias": [
+      "qwen3-coder-30b-a3b-instruct"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-thinking-2507-fp8",
+    "alias": [
+      "qwen3-30b-a3b-thinking-2507-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-thinking-2507",
+    "alias": [
+      "qwen3-30b-a3b-thinking-2507"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-instruct-2507-fp8",
+    "alias": [
+      "qwen3-30b-a3b-instruct-2507-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-instruct-2507",
+    "alias": [
+      "qwen3-30b-a3b-instruct-2507"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-thinking-2507-fp8",
+    "alias": [
+      "qwen3-235b-a22b-thinking-2507-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-thinking-2507",
+    "alias": [
+      "qwen3-235b-a22b-thinking-2507"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-coder-480b-a35b-instruct-fp8",
+    "alias": [
+      "qwen3-coder-480b-a35b-instruct-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-480b-a35b-instruct",
+    "alias": [
+      "qwen3-coder-480b-a35b-instruct",
+      "qwen3-coder-480b"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-instruct-2507-fp8",
+    "alias": [
+      "qwen3-235b-a22b-instruct-2507-fp8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-instruct-2507",
+    "alias": [
+      "qwen3-235b-a22b-instruct-2507"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-mlx-bf16",
+    "alias": [
+      "qwen3-14b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-mlx-8bit",
+    "alias": [
+      "qwen3-235b-a22b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-mlx-6bit",
+    "alias": [
+      "qwen3-235b-a22b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-mlx-4bit",
+    "alias": [
+      "qwen3-235b-a22b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-mlx-bf16",
+    "alias": [
+      "qwen3-235b-a22b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-mlx-4bit",
+    "alias": [
+      "qwen3-30b-a3b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-mlx-6bit",
+    "alias": [
+      "qwen3-30b-a3b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-mlx-8bit",
+    "alias": [
+      "qwen3-30b-a3b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-mlx-bf16",
+    "alias": [
+      "qwen3-30b-a3b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b-mlx-4bit",
+    "alias": [
+      "qwen3-32b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b-mlx-6bit",
+    "alias": [
+      "qwen3-32b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b-mlx-8bit",
+    "alias": [
+      "qwen3-32b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b-mlx-bf16",
+    "alias": [
+      "qwen3-32b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-embedding-0.6b-gguf",
+    "alias": [
+      "qwen3-embedding-0.6b-gguf"
+    ],
+    "max_tokens": 32768,
+    "dimension": 1024,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-embedding-4b-gguf",
+    "alias": [
+      "qwen3-embedding-4b-gguf"
+    ],
+    "max_tokens": 32768,
+    "dimension": 2560,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-embedding-8b-gguf",
+    "alias": [
+      "qwen3-embedding-8b-gguf"
+    ],
+    "max_tokens": 32768,
+    "dimension": 4096,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-reranker-4b",
+    "alias": [
+      "qwen3-reranker-4b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-embedding-8b",
+    "alias": [
+      "qwen3-embedding-8b"
+    ],
+    "max_tokens": 32768,
+    "dimension": 4096,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-embedding-4b",
+    "alias": [
+      "qwen3-embedding-4b"
+    ],
+    "max_tokens": 32768,
+    "dimension": 2560,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-embedding-0.6b",
+    "alias": [
+      "qwen3-embedding-0.6b"
+    ],
+    "max_tokens": 32768,
+    "dimension": 1024,
+    "model_types": [
+      "embedding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-reranker-0.6b",
+    "alias": [
+      "qwen3-reranker-0.6b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-reranker-8b",
+    "alias": [
+      "qwen3-reranker-8b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-mlx-4bit",
+    "alias": [
+      "qwen3-14b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-mlx-4bit",
+    "alias": [
+      "qwen3-4b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-mlx-6bit",
+    "alias": [
+      "qwen3-4b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-mlx-6bit",
+    "alias": [
+      "qwen3-14b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-mlx-8bit",
+    "alias": [
+      "qwen3-4b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-mlx-8bit",
+    "alias": [
+      "qwen3-14b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-mlx-bf16",
+    "alias": [
+      "qwen3-4b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b-mlx-bf16",
+    "alias": [
+      "qwen3-8b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b-mlx-8bit",
+    "alias": [
+      "qwen3-8b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b-mlx-4bit",
+    "alias": [
+      "qwen3-8b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-mlx-4bit",
+    "alias": [
+      "qwen3-1.7b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-mlx-8bit",
+    "alias": [
+      "qwen3-1.7b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-mlx-6bit",
+    "alias": [
+      "qwen3-1.7b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b-mlx-6bit",
+    "alias": [
+      "qwen3-8b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-mlx-bf16",
+    "alias": [
+      "qwen3-1.7b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-mlx-8bit",
+    "alias": [
+      "qwen3-0.6b-mlx-8bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-mlx-bf16",
+    "alias": [
+      "qwen3-0.6b-mlx-bf16"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-mlx-6bit",
+    "alias": [
+      "qwen3-0.6b-mlx-6bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-mlx-4bit",
+    "alias": [
+      "qwen3-0.6b-mlx-4bit"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/worldpm-72b-rlhflow",
+    "alias": [
+      "worldpm-72b-rlhflow"
+    ],
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/worldpm-72b-ultrafeedback",
+    "alias": [
+      "worldpm-72b-ultrafeedback"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/worldpm-72b-helpsteer2",
+    "alias": [
+      "worldpm-72b-helpsteer2"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/worldpm-72b",
+    "alias": [
+      "worldpm-72b"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-omni-7b-gptq-int4",
+    "alias": [
+      "qwen2.5-omni-7b-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding",
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-omni-7b-awq",
+    "alias": [
+      "qwen2.5-omni-7b-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding",
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-gguf",
+    "alias": [
+      "qwen3-235b-a22b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-gptq-int4",
+    "alias": [
+      "qwen3-235b-a22b-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-gptq-int8",
+    "alias": [
+      "qwen3-0.6b-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-gptq-int8",
+    "alias": [
+      "qwen3-1.7b-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-awq",
+    "alias": [
+      "qwen3-4b-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-gguf",
+    "alias": [
+      "qwen3-0.6b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-1.7b-gguf",
+    "alias": [
+      "qwen3-1.7b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-gptq-int4",
+    "alias": [
+      "qwen3-30b-a3b-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-gguf",
+    "alias": [
+      "qwen3-4b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-gguf",
+    "alias": [
+      "qwen3-30b-a3b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-8b-gguf",
+    "alias": [
+      "qwen3-8b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-8b-awq",
+    "alias": [
+      "qwen3-8b-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-awq",
+    "alias": [
+      "qwen3-14b-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b-awq",
+    "alias": [
+      "qwen3-32b-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-gguf",
+    "alias": [
+      "qwen3-14b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen3-32b-gguf",
+    "alias": [
+      "qwen3-32b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 32768
+  },
+  {
+    "name": "qwen/qwen2.5-omni-3b",
+    "alias": [
+      "qwen2.5-omni-3b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding",
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b-fp8",
+    "alias": [
+      "qwen3-235b-a22b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-fp8",
+    "alias": [
+      "qwen3-30b-a3b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b-fp8",
+    "alias": [
+      "qwen3-32b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-fp8",
+    "alias": [
+      "qwen3-14b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b-fp8",
+    "alias": [
+      "qwen3-8b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-fp8",
+    "alias": [
+      "qwen3-4b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-fp8",
+    "alias": [
+      "qwen3-1.7b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-fp8",
+    "alias": [
+      "qwen3-0.6b-fp8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b-base",
+    "alias": [
+      "qwen3-0.6b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b-base",
+    "alias": [
+      "qwen3-14b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b-base",
+    "alias": [
+      "qwen3-1.7b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b-base",
+    "alias": [
+      "qwen3-4b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b-base",
+    "alias": [
+      "qwen3-8b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b-base",
+    "alias": [
+      "qwen3-30b-a3b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-235b-a22b",
+    "alias": [
+      "qwen3-235b-a22b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-32b",
+    "alias": [
+      "qwen3-32b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-30b-a3b",
+    "alias": [
+      "qwen3-30b-a3b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-14b",
+    "alias": [
+      "qwen3-14b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-8b",
+    "alias": [
+      "qwen3-8b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-4b",
+    "alias": [
+      "qwen3-4b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-1.7b",
+    "alias": [
+      "qwen3-1.7b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-0.6b",
+    "alias": [
+      "qwen3-0.6b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-32b-instruct-awq",
+    "alias": [
+      "qwen2.5-vl-32b-instruct-awq"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-omni-7b",
+    "alias": [
+      "qwen2.5-omni-7b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding",
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-32b-instruct",
+    "alias": [
+      "qwen2.5-vl-32b-instruct",
+      "Qwen2.5-VL-32B"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwq-32b-gguf",
+    "alias": [
+      "qwq-32b-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    },
+    "max_tokens": 131072
+  },
+  {
+    "name": "qwen/qwq-32b",
+    "alias": [
+      "qwq-32b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwq-32b-awq",
+    "alias": [
+      "qwq-32b-awq"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen2.5-vl-7b-instruct-awq",
+    "alias": [
+      "qwen2.5-vl-7b-instruct-awq"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-72b-instruct-awq",
+    "alias": [
+      "qwen2.5-vl-72b-instruct-awq"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-3b-instruct-awq",
+    "alias": [
+      "qwen2.5-vl-3b-instruct-awq"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-72b-instruct",
+    "alias": [
+      "qwen2.5-vl-72b-instruct",
+      "qwen-2.5-vl-72b-instruct",
+      "Qwen2.5-VL-72B"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-7b-instruct",
+    "alias": [
+      "qwen2.5-vl-7b-instruct",
+      "qwen-2.5-vl-7b-instruct"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-vl-3b-instruct",
+    "alias": [
+      "qwen2.5-vl-3b-instruct"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-7b-instruct-1m",
+    "alias": [
+      "qwen2.5-7b-instruct-1m"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-14b-instruct-1m",
+    "alias": [
+      "qwen2.5-14b-instruct-1m"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-prm-7b",
+    "alias": [
+      "qwen2.5-math-prm-7b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-prm-72b",
+    "alias": [
+      "qwen2.5-math-prm-72b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-7b-prm800k",
+    "alias": [
+      "qwen2.5-math-7b-prm800k"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qvq-72b-preview",
+    "alias": [
+      "qvq-72b-preview"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-72b",
+    "alias": [
+      "qwen2-vl-72b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwq-32b-preview",
+    "alias": [
+      "qwq-32b-preview"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen2.5-coder-0.5b-instruct-gguf",
+    "alias": [
+      "qwen2.5-coder-0.5b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-0.5b-instruct-awq",
+    "alias": [
+      "qwen2.5-coder-0.5b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-3b-instruct-gguf",
+    "alias": [
+      "qwen2.5-coder-3b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-3b-instruct-awq",
+    "alias": [
+      "qwen2.5-coder-3b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-14b-instruct-gguf",
+    "alias": [
+      "qwen2.5-coder-14b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-14b-instruct-awq",
+    "alias": [
+      "qwen2.5-coder-14b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-32b-instruct-gguf",
+    "alias": [
+      "qwen2.5-coder-32b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-32b-instruct-awq",
+    "alias": [
+      "qwen2.5-coder-32b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-32b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-coder-32b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-32b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-coder-32b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-14b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-coder-14b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-14b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-coder-14b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-3b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-coder-3b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-3b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-coder-3b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-0.5b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-coder-0.5b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-0.5b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-coder-0.5b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-32b",
+    "alias": [
+      "qwen2.5-coder-32b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-14b",
+    "alias": [
+      "qwen2.5-coder-14b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-3b",
+    "alias": [
+      "qwen2.5-coder-3b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-0.5b",
+    "alias": [
+      "qwen2.5-coder-0.5b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-32b-instruct",
+    "alias": [
+      "qwen2.5-coder-32b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-14b-instruct",
+    "alias": [
+      "qwen2.5-coder-14b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-3b-instruct",
+    "alias": [
+      "qwen2.5-coder-3b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-0.5b-instruct",
+    "alias": [
+      "qwen2.5-coder-0.5b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-1.5b-instruct-awq",
+    "alias": [
+      "qwen2.5-coder-1.5b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-7b-instruct-awq",
+    "alias": [
+      "qwen2.5-coder-7b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-7b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-coder-7b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-7b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-coder-7b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-1.5b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-coder-1.5b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-1.5b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-coder-1.5b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-7b-instruct",
+    "alias": [
+      "qwen2.5-math-7b-instruct"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-1.5b-instruct-gguf",
+    "alias": [
+      "qwen2.5-coder-1.5b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-7b-instruct-gguf",
+    "alias": [
+      "qwen2.5-coder-7b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-1.5b-instruct",
+    "alias": [
+      "qwen2.5-coder-1.5b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-1.5b",
+    "alias": [
+      "qwen2.5-coder-1.5b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b-instruct-mlx",
+    "alias": [
+      "qwen2-7b-instruct-mlx"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-1.5b-instruct",
+    "alias": [
+      "qwen2.5-1.5b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-3b-instruct",
+    "alias": [
+      "qwen2.5-3b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-72b-instruct-gguf",
+    "alias": [
+      "qwen2.5-72b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 131072
+  },
+  {
+    "name": "qwen/qwen2.5-32b-instruct-gguf",
+    "alias": [
+      "qwen2.5-32b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 131072
+  },
+  {
+    "name": "qwen/qwen2.5-14b-instruct-gguf",
+    "alias": [
+      "qwen2.5-14b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 131072
+  },
+  {
+    "name": "qwen/qwen2.5-7b-instruct-gguf",
+    "alias": [
+      "qwen2.5-7b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 131072
+  },
+  {
+    "name": "qwen/qwen2.5-3b-instruct-gguf",
+    "alias": [
+      "qwen2.5-3b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-1.5b-instruct-gguf",
+    "alias": [
+      "qwen2.5-1.5b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-0.5b-instruct-gguf",
+    "alias": [
+      "qwen2.5-0.5b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-72b-instruct-awq",
+    "alias": [
+      "qwen2.5-72b-instruct-awq"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-32b-instruct-awq",
+    "alias": [
+      "qwen2.5-32b-instruct-awq"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-14b-instruct-awq",
+    "alias": [
+      "qwen2.5-14b-instruct-awq"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-7b-instruct-awq",
+    "alias": [
+      "qwen2.5-7b-instruct-awq"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-3b-instruct-awq",
+    "alias": [
+      "qwen2.5-3b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-1.5b-instruct-awq",
+    "alias": [
+      "qwen2.5-1.5b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-0.5b-instruct-awq",
+    "alias": [
+      "qwen2.5-0.5b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-7b-instruct",
+    "alias": [
+      "qwen2.5-coder-7b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-72b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-72b-instruct-gptq-int8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-72b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-72b-instruct-gptq-int4"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-32b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-32b-instruct-gptq-int8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-32b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-32b-instruct-gptq-int4"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-14b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-14b-instruct-gptq-int8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-14b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-14b-instruct-gptq-int4"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-7b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-7b-instruct-gptq-int8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-7b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-7b-instruct-gptq-int4"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-3b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-3b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-3b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-3b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-1.5b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-1.5b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-1.5b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-1.5b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-0.5b-instruct-gptq-int8",
+    "alias": [
+      "qwen2.5-0.5b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-0.5b-instruct-gptq-int4",
+    "alias": [
+      "qwen2.5-0.5b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-rm-72b",
+    "alias": [
+      "qwen2-math-rm-72b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-rm-72b",
+    "alias": [
+      "qwen2.5-math-rm-72b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-72b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-vl-72b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-72b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-vl-72b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-72b-instruct-awq",
+    "alias": [
+      "qwen2-vl-72b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-72b-instruct",
+    "alias": [
+      "qwen2-vl-72b-instruct",
+      "qwen/qwen-2-vl-72b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-32b-instruct",
+    "alias": [
+      "qwen2.5-32b-instruct"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-72b-instruct",
+    "alias": [
+      "qwen2.5-math-72b-instruct"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-72b",
+    "alias": [
+      "qwen2.5-math-72b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-7b",
+    "alias": [
+      "qwen2.5-math-7b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-1.5b-instruct",
+    "alias": [
+      "qwen2.5-math-1.5b-instruct"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-math-1.5b",
+    "alias": [
+      "qwen2.5-math-1.5b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-coder-7b",
+    "alias": [
+      "qwen2.5-coder-7b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-72b-instruct",
+    "alias": [
+      "qwen2.5-72b-instruct",
+      "qwen/qwen-2.5-72b-instruct"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-14b-instruct",
+    "alias": [
+      "qwen2.5-14b-instruct"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-7b-instruct",
+    "alias": [
+      "qwen2.5-7b-instruct"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-0.5b-instruct",
+    "alias": [
+      "qwen2.5-0.5b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-72b",
+    "alias": [
+      "qwen2.5-72b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-32b",
+    "alias": [
+      "qwen2.5-32b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-14b",
+    "alias": [
+      "qwen2.5-14b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-7b",
+    "alias": [
+      "qwen2.5-7b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-3b",
+    "alias": [
+      "qwen2.5-3b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-1.5b",
+    "alias": [
+      "qwen2.5-1.5b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2.5-0.5b",
+    "alias": [
+      "qwen2.5-0.5b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-7b",
+    "alias": [
+      "qwen2-vl-7b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-2b",
+    "alias": [
+      "qwen2-vl-2b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-2b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-vl-2b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-2b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-vl-2b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-2b-instruct-awq",
+    "alias": [
+      "qwen2-vl-2b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-7b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-vl-7b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-7b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-vl-7b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-7b-instruct-awq",
+    "alias": [
+      "qwen2-vl-7b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-7b-instruct",
+    "alias": [
+      "qwen2-vl-7b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-vl-2b-instruct",
+    "alias": [
+      "qwen2-vl-2b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-1.5b",
+    "alias": [
+      "qwen2-math-1.5b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-7b",
+    "alias": [
+      "qwen2-math-7b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-72b",
+    "alias": [
+      "qwen2-math-72b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-1.5b-instruct",
+    "alias": [
+      "qwen2-math-1.5b-instruct"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-7b-instruct",
+    "alias": [
+      "qwen2-math-7b-instruct"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-math-72b-instruct",
+    "alias": [
+      "qwen2-math-72b-instruct"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-audio-7b-instruct",
+    "alias": [
+      "qwen2-audio-7b-instruct"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-audio-7b",
+    "alias": [
+      "qwen2-audio-7b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-57b-a14b-instruct-gguf",
+    "alias": [
+      "qwen2-57b-a14b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b-instruct-gguf",
+    "alias": [
+      "qwen2-1.5b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b-instruct-gguf",
+    "alias": [
+      "qwen2-7b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-72b-instruct-gguf",
+    "alias": [
+      "qwen2-72b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b-instruct-mlx",
+    "alias": [
+      "qwen2-1.5b-instruct-mlx"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b-instruct-gguf",
+    "alias": [
+      "qwen2-0.5b-instruct-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b-instruct-mlx",
+    "alias": [
+      "qwen2-0.5b-instruct-mlx"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b-instruct-awq",
+    "alias": [
+      "qwen2-0.5b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-0.5b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-0.5b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b-instruct-awq",
+    "alias": [
+      "qwen2-7b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-7b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-7b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b-instruct-awq",
+    "alias": [
+      "qwen2-1.5b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-1.5b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-1.5b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-57b-a14b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-57b-a14b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b",
+    "alias": [
+      "qwen2-7b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-7b-instruct",
+    "alias": [
+      "qwen2-7b-instruct",
+      "qwen/qwen-2-7b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-57b-a14b-instruct",
+    "alias": [
+      "qwen2-57b-a14b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-72b-instruct-awq",
+    "alias": [
+      "qwen2-72b-instruct-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-72b-instruct-gptq-int8",
+    "alias": [
+      "qwen2-72b-instruct-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-72b-instruct-gptq-int4",
+    "alias": [
+      "qwen2-72b-instruct-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b-instruct",
+    "alias": [
+      "qwen2-1.5b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b-instruct",
+    "alias": [
+      "qwen2-0.5b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-1.5b",
+    "alias": [
+      "qwen2-1.5b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-0.5b",
+    "alias": [
+      "qwen2-0.5b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-72b-instruct",
+    "alias": [
+      "qwen2-72b-instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-57b-a14b",
+    "alias": [
+      "qwen2-57b-a14b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen2-72b",
+    "alias": [
+      "qwen2-72b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-110b-chat-gguf",
+    "alias": [
+      "qwen1.5-110b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-110b-chat-awq",
+    "alias": [
+      "qwen1.5-110b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-110b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-110b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-110b-chat",
+    "alias": [
+      "qwen1.5-110b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-110b",
+    "alias": [
+      "qwen1.5-110b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/codeqwen1.5-7b-awq",
+    "alias": [
+      "codeqwen1.5-7b-awq"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/codeqwen1.5-7b-chat-gguf",
+    "alias": [
+      "codeqwen1.5-7b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/codeqwen1.5-7b-chat-awq",
+    "alias": [
+      "codeqwen1.5-7b-chat-awq"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/codeqwen1.5-7b-chat",
+    "alias": [
+      "codeqwen1.5-7b-chat"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/codeqwen1.5-7b",
+    "alias": [
+      "codeqwen1.5-7b"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-32b-chat-awq",
+    "alias": [
+      "qwen1.5-32b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-32b-chat-gguf",
+    "alias": [
+      "qwen1.5-32b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-32b-chat",
+    "alias": [
+      "qwen1.5-32b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-32b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-32b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-32b",
+    "alias": [
+      "qwen1.5-32b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-moe-a2.7b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-moe-a2.7b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-moe-a2.7b-chat",
+    "alias": [
+      "qwen1.5-moe-a2.7b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-moe-a2.7b",
+    "alias": [
+      "qwen1.5-moe-a2.7b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-0.5b-chat-gptq-int8",
+    "alias": [
+      "qwen1.5-0.5b-chat-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-0.5b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-0.5b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-1.8b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-1.8b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-1.8b-chat-gptq-int8",
+    "alias": [
+      "qwen1.5-1.8b-chat-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-4b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-4b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-4b-chat-gptq-int8",
+    "alias": [
+      "qwen1.5-4b-chat-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-7b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-7b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-7b-chat-gptq-int8",
+    "alias": [
+      "qwen1.5-7b-chat-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-14b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-14b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-14b-chat-gptq-int8",
+    "alias": [
+      "qwen1.5-14b-chat-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-72b-chat-gptq-int4",
+    "alias": [
+      "qwen1.5-72b-chat-gptq-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-72b-chat-gptq-int8",
+    "alias": [
+      "qwen1.5-72b-chat-gptq-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-4b-chat-gguf",
+    "alias": [
+      "qwen1.5-4b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-1.8b-chat-gguf",
+    "alias": [
+      "qwen1.5-1.8b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-0.5b-chat-gguf",
+    "alias": [
+      "qwen1.5-0.5b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-14b-chat-gguf",
+    "alias": [
+      "qwen1.5-14b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-7b-chat-gguf",
+    "alias": [
+      "qwen1.5-7b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-72b-chat-gguf",
+    "alias": [
+      "qwen1.5-72b-chat-gguf"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-0.5b-chat-awq",
+    "alias": [
+      "qwen1.5-0.5b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-1.8b-chat-awq",
+    "alias": [
+      "qwen1.5-1.8b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-4b-chat-awq",
+    "alias": [
+      "qwen1.5-4b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-7b-chat-awq",
+    "alias": [
+      "qwen1.5-7b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-14b-chat-awq",
+    "alias": [
+      "qwen1.5-14b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-72b-chat-awq",
+    "alias": [
+      "qwen1.5-72b-chat-awq"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-0.5b-chat",
+    "alias": [
+      "qwen1.5-0.5b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-72b-chat",
+    "alias": [
+      "qwen1.5-72b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-14b-chat",
+    "alias": [
+      "qwen1.5-14b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-7b-chat",
+    "alias": [
+      "qwen1.5-7b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-4b-chat",
+    "alias": [
+      "qwen1.5-4b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-1.8b-chat",
+    "alias": [
+      "qwen1.5-1.8b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-72b",
+    "alias": [
+      "qwen1.5-72b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-14b",
+    "alias": [
+      "qwen1.5-14b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-7b",
+    "alias": [
+      "qwen1.5-7b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-4b",
+    "alias": [
+      "qwen1.5-4b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-1.8b",
+    "alias": [
+      "qwen1.5-1.8b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen1.5-0.5b",
+    "alias": [
+      "qwen1.5-0.5b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-audio-chat",
+    "alias": [
+      "qwen-audio-chat"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-audio",
+    "alias": [
+      "qwen-audio"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-72b-chat-int8",
+    "alias": [
+      "qwen-72b-chat-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-72b-chat-int4",
+    "alias": [
+      "qwen-72b-chat-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-1_8b-chat-int4",
+    "alias": [
+      "qwen-1_8b-chat-int4"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-1_8b-chat-int8",
+    "alias": [
+      "qwen-1_8b-chat-int8"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-1_8b",
+    "alias": [
+      "qwen-1_8b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-72b-chat",
+    "alias": [
+      "qwen-72b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-72b",
+    "alias": [
+      "qwen-72b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-14b-chat-int8",
+    "alias": [
+      "qwen-14b-chat-int8"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-7b-chat-int8",
+    "alias": [
+      "qwen-7b-chat-int8"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-14b",
+    "alias": [
+      "qwen-14b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-14b-chat",
+    "alias": [
+      "qwen-14b-chat"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-14b-chat-int4",
+    "alias": [
+      "qwen-14b-chat-int4"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-chat-int4",
+    "alias": [
+      "qwen-vl-chat-int4"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-7b-chat-int4",
+    "alias": [
+      "qwen-7b-chat-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-chat",
+    "alias": [
+      "qwen-vl-chat"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl",
+    "alias": [
+      "qwen-vl"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-7b-chat",
+    "alias": [
+      "qwen-7b-chat"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-7b",
+    "alias": [
+      "qwen-7b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-tokenizer",
+    "alias": [
+      "qwen-tokenizer"
+    ],
+    "model_types": [
+      "tokenizer"
     ]
   }
 ]
