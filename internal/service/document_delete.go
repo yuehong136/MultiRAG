@@ -896,6 +896,15 @@ func (s *DocumentDeleteService) unreferencedDocumentObjects(ctx context.Context,
 	// Protect actual bucket/key addresses registered by surviving Files and
 	// Documents above. Another mapping to the same File does not protect an
 	// old dataset copy when the surviving document owns different bytes.
+	// A pending same-dataset attachment may not have populated its document
+	// location yet; its registered source key still belongs to that dataset.
+	var pendingSources []struct{ Bucket, Key string }
+	if err := tx.Table("t_ai_file2documents AS link").Select("doc.kb_id AS bucket,source.location AS key").Joins("JOIN t_ai_documents doc ON doc.id=link.document_id JOIN t_ai_files source ON source.id=link.file_id").Where("doc.id NOT IN ? AND source.source_type=? AND (doc.location IS NULL OR doc.location='') AND source.location IS NOT NULL", ids, string(entity.FileSourceKnowledgebase)).Find(&pendingSources).Error; err != nil {
+		return nil, err
+	}
+	for _, source := range pendingSources {
+		protected[documentDeleteObject{source.Bucket, source.Key}] = true
+	}
 	candidates := make([]string, 0, len(objects))
 	for _, object := range objects {
 		candidates = append(candidates, object.bucket+"-"+object.key)
