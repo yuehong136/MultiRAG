@@ -219,25 +219,50 @@ async def test_cancelled_model_switch_finishes_construction_and_closes_old_bundl
         await component.chat_mdl.aclose()
 
 
-async def test_old_client_close_failure_disposes_replacement_and_prevents_reuse(model_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    _canvas, component = load(model_env, "LLM")
+@pytest.mark.parametrize("kind", ["LLM", "Agent"])
+async def test_canvas_recovers_next_turn_after_provider_close_failure(model_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    canvas, component = load(model_env, kind)
     previous = component.chat_mdl
-    close = previous.aclose
+    close = previous.mdl.aclose
 
     async def failed_close() -> None:
         await close()
         raise RuntimeError("close failed")
 
-    monkeypatch.setattr(previous, "aclose", failed_close)
-    component.imgs = [IMAGE]
-    with pytest.raises(RuntimeError, match="close failed"):
-        await component._prepare_chat_model()
-    assert component.chat_mdl is None
-    assert [provider.closed for provider in model_env["providers"]] == [1, 1]
-    assert all(not provider.calls for provider in model_env["providers"])
-    await component._prepare_chat_model()
-    assert component.chat_mdl is not previous
-    await component.chat_mdl.aclose()
+    # Exercise the real bundle's ExceptionGroup and closed-state handling,
+    # rather than replacing LLMBundle.aclose or re-entering a private helper.
+    monkeypatch.setattr(previous.mdl, "aclose", failed_close)
+    canvas.globals["sys.visual_files"] = [IMAGE]
+    try:
+        [event async for event in canvas.run(query="first turn")]
+        assert "Failed to close owned model resources" in canvas.error
+        assert component.error() == canvas.error
+        assert previous._provider_closed and component.chat_mdl is None
+        assert [provider.closed for provider in model_env["providers"]] == [1, 1]
+        assert all(not provider.calls for provider in model_env["providers"])
+        assert model_env["tool"].calls == []
+
+        await run(canvas, [IMAGE])
+        recovered = component.chat_mdl
+        assert recovered is not previous and not recovered._provider_closed
+        assert recovered.llm_type == "image2text" and recovered.db is None
+        assert recovered.mdl.calls == [{"tools": kind == "Agent", "images": [IMAGE]}]
+        assert component.output("content") == "answer"
+        assert component.error() is None
+        assert [provider.closed for provider in model_env["providers"]] == [1, 1, 0]
+        if kind == "Agent":
+            assert recovered.mdl.session is component.toolcall_session
+            assert recovered.mdl.options["max_rounds"] == 3 and recovered.verbose_tool_use is False
+            assert model_env["tool"].calls == ["called"]
+
+        await run(canvas, [])
+        assert recovered._provider_closed and recovered.mdl.closed == 1
+        assert component.chat_mdl.llm_type == "chat" and component.chat_mdl is not previous
+        assert component.chat_mdl.mdl.calls == [{"tools": kind == "Agent"}]
+        assert model_env["tool"].calls == (["called", "called"] if kind == "Agent" else [])
+    finally:
+        if component.chat_mdl is not None:
+            await component.chat_mdl.aclose()
 
 
 async def test_tool_binding_failure_closes_new_bundle_and_keeps_previous(model_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:

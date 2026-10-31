@@ -150,6 +150,11 @@ class LLM(ComponentBase):
         # A cancellation must not abandon a newly built client in a worker or
         # interrupt disposal of the superseded bundle.
         await finish_owned_work(replace())
+        # Failed nodes can be absent from the Canvas path reset on the next
+        # turn. Clear the previous attempt's error only after preparation
+        # succeeds; current failures still propagate to the invocation wrapper.
+        if self.error():
+            self.set_output("_ERROR", None)
 
     def get_input_form(self) -> dict[str, dict]:
         res = {}
@@ -432,8 +437,6 @@ class LLM(ComponentBase):
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 10 * 60)))
     async def _invoke_async(self, **kwargs: Any) -> None:
         """异步版本 - 主要实现"""
-        if self.chat_mdl is None:
-            raise LookupError(f"LLM model '{self._param.llm_id}' is not available. Please configure the model API key in the model management page.")
         if self.check_if_canceled("LLM processing"):
             return
 
@@ -444,6 +447,8 @@ class LLM(ComponentBase):
 
         # Prompt inspection (including thoughts()) never constructs a provider.
         prompt, msg, _ = await asyncio.to_thread(self._prepare_prompt_variables)
+        # A previous close failure can clear the bundle. Resolve this turn's
+        # registration before deciding whether a model is available.
         await self._prepare_chat_model()
         extra_chat_kwargs = self._get_chat_template_kwargs()
         error: str = ""

@@ -253,8 +253,6 @@ class Agent(LLM, ToolBase):
     @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 20 * 60)))
     async def _invoke_async(self, **kwargs: Any) -> Any:
         """异步版本 - 主要实现"""
-        if self.chat_mdl is None:
-            raise LookupError(f"Agent model '{self._param.llm_id}' is not available. Please configure the model API key in the model management page.")
         if self.check_if_canceled("Agent processing"):
             return
 
