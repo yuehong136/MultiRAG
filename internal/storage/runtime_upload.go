@@ -52,6 +52,14 @@ func (s *runtimeUploadStorage) Get(bucket, key string, tenantID ...string) ([]by
 	return s.Storage.Get(bucket, bucket+"/"+key, tenantID...)
 }
 
+func (s *runtimeUploadStorage) GetContext(ctx context.Context, bucket, key string, tenantID ...string) ([]byte, error) {
+	reader, ok := s.Storage.(ContextReader)
+	if !ok {
+		return nil, fmt.Errorf("runtime storage cannot read with cancellation")
+	}
+	return reader.GetContext(ctx, bucket, bucket+"/"+key, tenantID...)
+}
+
 func (s *runtimeUploadStorage) Remove(bucket, key string, tenantID ...string) error {
 	return s.RemoveContext(context.Background(), bucket, key, tenantID...)
 }

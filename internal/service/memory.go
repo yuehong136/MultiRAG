@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"multirag/internal/dao"
+	"multirag/internal/engine"
+	enginetypes "multirag/internal/engine/types"
 	"multirag/internal/entity"
 
 	"gorm.io/gorm"
@@ -209,16 +211,22 @@ func generateOutputFormat(typesToExtract []string) string {
 // MemoryService handles business logic for memory operations
 // It provides methods for creating, updating, deleting, and querying memories
 type MemoryService struct {
-	memoryDAO *dao.MemoryDAO
+	memoryDAO    *dao.MemoryDAO
+	messageStore enginetypes.MemoryMessageStore
 }
 
 // NewMemoryService creates a new MemoryService instance
 //
 // Returns:
 //   - *MemoryService: Initialized service instance with DAO
-func NewMemoryService() *MemoryService {
+func NewMemoryService(stores ...enginetypes.MemoryMessageStore) *MemoryService {
+	store, _ := engine.Get().(enginetypes.MemoryMessageStore)
+	if len(stores) > 0 {
+		store = stores[0]
+	}
 	return &MemoryService{
-		memoryDAO: dao.NewMemoryDAO(),
+		memoryDAO:    dao.NewMemoryDAO(),
+		messageStore: store,
 	}
 }
 

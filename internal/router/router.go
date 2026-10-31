@@ -110,6 +110,9 @@ func (r *Router) SetDifyRetrievalHandler(difyHandler *handler.DifyRetrievalHandl
 }
 
 func documentBinaryPath(path string) bool {
+	if path == "/api/v1/agents/download" {
+		return true
+	}
 	if path == "/api/v1/thumbnails" || strings.HasPrefix(path, "/api/v1/documents/images/") || strings.HasPrefix(path, "/api/v1/documents/artifact/") {
 		return true
 	}
@@ -122,6 +125,7 @@ func documentBinaryPath(path string) bool {
 
 // Setup setup routes
 func (r *Router) Setup(engine *gin.Engine) {
+	engine.Use(handler.PasswordRecoveryOriginMiddleware())
 	// Mark even authentication denials before the protected middleware runs.
 	engine.Use(func(c *gin.Context) {
 		if documentBinaryPath(c.Request.URL.Path) {
@@ -166,6 +170,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 		public.GET("/system/config", r.systemHandler.GetConfig)
 		public.GET("/system/version", r.systemHandler.GetVersion)
 		public.POST("/auth/login", r.userHandler.Login)
+		public.POST("/auth/password/forgot/captcha", r.userHandler.ForgotCaptcha)
+		public.POST("/auth/password/forgot/otp", r.userHandler.ForgotSendOTP)
+		public.POST("/auth/password/forgot/otp/verify", r.userHandler.ForgotVerifyOTP)
+		public.POST("/auth/password/reset", r.userHandler.ForgotResetPassword)
 		public.POST("/users", r.userHandler.Register)
 		public.GET("/auth/login/channels", r.userHandler.GetLoginChannels)
 		public.GET("/auth/login/:channel", r.userHandler.OAuthLogin)
@@ -328,6 +336,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			v1.POST("/agents/test_db_connection", r.agentHandler.TestDBConnection)
 			v1.GET("/agents/prompts", r.agentHandler.GetPrompts)
 			v1.GET("/agents/templates", r.agentHandler.ListTemplates)
+			v1.GET("/agents/download", r.agentHandler.DownloadAgentFile)
 			v1.PUT("/agents/:agent_id/tags", r.agentHandler.UpdateAgentTags)
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
 			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
@@ -358,6 +367,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				files.GET("", r.fileHandler.ListFiles)
 				files.DELETE("", r.fileHandler.DeleteFiles)
 				files.POST("/move", r.fileHandler.MoveFiles)
+				files.POST("/link-to-datasets", r.fileHandler.LinkToDatasets)
 				files.GET("/:id/ancestors", r.fileHandler.GetFileAncestors)
 				files.GET("/:id/parent", r.fileHandler.GetParentFolder)
 				files.GET("/:id", r.fileHandler.Download)
@@ -398,16 +408,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 				}
 			}
 
-			// TODO: Message routes - Implementation pending - depends on CanvasService, TaskService and embedding engine
-			// message := v1.Group("/messages")
-			// {
-			// 	message.POST("", r.memoryHandler.AddMessage)
-			// 	message.DELETE("/:memory_id/:message_id", r.memoryHandler.ForgetMessage)
-			// 	message.PUT("/:memory_id/:message_id", r.memoryHandler.UpdateMessage)
-			// 	message.GET("/search", r.memoryHandler.SearchMessage)
-			// 	message.GET("", r.memoryHandler.GetMessages)
-			// 	message.GET("/:memory_id/:message_id/content", r.memoryHandler.GetMessageContent)
-			// }
+			v1.DELETE("/messages/:memory_message", r.memoryHandler.ForgetMessage)
 		}
 
 		// Knowledge base routes

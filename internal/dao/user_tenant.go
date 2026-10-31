@@ -17,6 +17,7 @@
 package dao
 
 import (
+	"context"
 	"multirag/internal/entity"
 )
 
@@ -146,7 +147,11 @@ func (dao *UserTenantDAO) GetByUserIDAll(userID string) ([]*entity.UserTenant, e
 
 // GetActiveByUserID returns accepted resource memberships; invitations remain in GetByUserID for presentation.
 func (dao *UserTenantDAO) GetActiveByUserID(userID string) ([]*entity.UserTenant, error) {
+	return dao.GetActiveByUserIDWithContext(context.Background(), userID)
+}
+
+func (dao *UserTenantDAO) GetActiveByUserIDWithContext(ctx context.Context, userID string) ([]*entity.UserTenant, error) {
 	rows := []*entity.UserTenant{}
-	err := DB.Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"}).Find(&rows).Error
+	err := DB.WithContext(ctx).Where("user_id = ? AND status = ? AND role IN ?", userID, "1", []string{"owner", "admin", "normal"}).Find(&rows).Error
 	return rows, err
 }

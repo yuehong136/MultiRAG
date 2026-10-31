@@ -291,7 +291,7 @@ func documentDeleteLiveFixture(t *testing.T) *deleteLiveFixture {
 		}
 		cfg.Redis.Host = host
 	}
-	if cfg.Database.Host != "127.0.0.1" || cfg.Database.Port != 5432 || !strings.HasPrefix(cfg.Database.Database, "multirag_batch_g_") || cfg.Database.Schema != "usr_ai" || cfg.Redis.Host != "127.0.0.1" || cfg.Redis.Port != 6379 || cfg.Redis.DB != 1 {
+	if cfg.Database.Host != "127.0.0.1" || cfg.Database.Port < 1 || cfg.Database.Port > 65535 || !(strings.HasPrefix(cfg.Database.Database, "multirag_batch_g_") || strings.HasPrefix(cfg.Database.Database, "multirag_afterdcf_gdcf")) || cfg.Database.Schema != "usr_ai" || cfg.Redis.Host != "127.0.0.1" || cfg.Redis.Port < 1 || cfg.Redis.Port > 65535 || cfg.Redis.DB != 1 {
 		t.Fatal("unowned SQL/Redis endpoint")
 	}
 	journal := testsupport.NewCase(t)

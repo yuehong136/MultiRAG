@@ -487,15 +487,52 @@ func (h *MemoryHandler) AddMessage(c *gin.Context) {
 }
 
 // ForgetMessage handles DELETE request for forgetting messages
-// API Path: DELETE /api/v1/messages/:memory_id/:message_id
-//
-// TODO: Implementation pending - depends on embedding engine
+// API Path: DELETE /api/v1/messages/:memory_message
 func (h *MemoryHandler) ForgetMessage(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"code":    common.CodeServerError,
-		"message": "ForgetMessage not implemented - pending embedding engine dependency",
-		"data":    nil,
-	})
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	memoryID, messageID, err := parseMemoryMessagePath(c.Param("memory_message"))
+	if err != nil {
+		jsonError(c, common.CodeArgumentError, err.Error())
+		return
+	}
+	if err = h.memoryService.ForgetMessage(c.Request.Context(), user.ID, memoryID, messageID); err != nil {
+		if errors.Is(err, service.ErrMemoryUnavailable) {
+			jsonResponse(c, common.CodeNotFound, false, service.ErrMemoryUnavailable.Error())
+		} else {
+			jsonResponse(c, common.CodeServerError, false, "Internal server error")
+		}
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, true, "")
+}
+
+func parseMemoryMessagePath(value string) (string, int64, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.TrimSpace(value) != value {
+		return "", 0, errors.New("message path must be memory_id:message_id")
+	}
+	for _, c := range parts[0] {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return "", 0, errors.New("invalid memory id")
+		}
+	}
+	if len(parts[0]) > 128 {
+		return "", 0, errors.New("invalid memory id")
+	}
+	for _, c := range parts[1] {
+		if c < '0' || c > '9' {
+			return "", 0, errors.New("message_id must be a non-negative integer")
+		}
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return "", 0, errors.New("message_id must be a non-negative integer")
+	}
+	return parts[0], id, nil
 }
 
 // UpdateMessage handles PUT request for updating message status

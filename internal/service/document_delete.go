@@ -893,27 +893,17 @@ func (s *DocumentDeleteService) unreferencedDocumentObjects(ctx context.Context,
 			protected[documentDeleteObject{doc.KbID, *doc.Thumbnail}] = true
 		}
 	}
-	// A shared original source remains registered by another File2Document,
-	// including a local file whose bucket differs from the dataset namespace.
-	var shared []struct{ DocumentID string }
-	if err := tx.Table("t_ai_file2documents AS link").Select("link.document_id").Joins("JOIN t_ai_files AS f ON f.id=link.file_id").Where("link.document_id IN ? AND (f.source_type <> ? OR EXISTS (SELECT 1 FROM t_ai_file2documents other WHERE other.file_id=f.id AND (other.document_id NOT IN ? OR other.document_id IS NULL)))", ids, string(entity.FileSourceKnowledgebase), ids).Find(&shared).Error; err != nil {
+	// Protect actual bucket/key addresses registered by surviving Files and
+	// Documents above. Another mapping to the same File does not protect an
+	// old dataset copy when the surviving document owns different bytes.
+	// A pending same-dataset attachment may not have populated its document
+	// location yet; its registered source key still belongs to that dataset.
+	var pendingSources []struct{ Bucket, Key string }
+	if err := tx.Table("t_ai_file2documents AS link").Select("doc.kb_id AS bucket,source.location AS key").Joins("JOIN t_ai_documents doc ON doc.id=link.document_id JOIN t_ai_files source ON source.id=link.file_id").Where("doc.id NOT IN ? AND source.source_type=? AND (doc.location IS NULL OR doc.location='') AND source.location IS NOT NULL", ids, string(entity.FileSourceKnowledgebase)).Find(&pendingSources).Error; err != nil {
 		return nil, err
 	}
-	sharedDocs := map[string]bool{}
-	for _, row := range shared {
-		sharedDocs[row.DocumentID] = true
-	}
-	for _, id := range ids {
-		if !sharedDocs[id] {
-			continue
-		}
-		var doc entity.Document
-		if err := tx.Where("id=?", id).Take(&doc).Error; err != nil {
-			return nil, err
-		}
-		if doc.Location != nil {
-			protected[documentDeleteObject{doc.KbID, *doc.Location}] = true
-		}
+	for _, source := range pendingSources {
+		protected[documentDeleteObject{source.Bucket, source.Key}] = true
 	}
 	candidates := make([]string, 0, len(objects))
 	for _, object := range objects {

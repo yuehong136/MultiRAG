@@ -37,12 +37,14 @@ const DefaultConnectTimeout = 5 * time.Second
 
 // AuthenticationConfig controls local password login and registration.
 type AuthenticationConfig struct {
-	DisablePasswordLogin bool `mapstructure:"disable_password_login"`
-	EnableRegister       bool `mapstructure:"enable_register"`
+	DisablePasswordLogin    bool     `mapstructure:"disable_password_login"`
+	EnableRegister          bool     `mapstructure:"enable_register"`
+	PasswordRecoveryOrigins []string `mapstructure:"password_recovery_origins"`
 }
 
 // Config application configuration
 type Config struct {
+	SMTP             common.SMTPConfig      `mapstructure:"smtp"`
 	Authentication   AuthenticationConfig   `mapstructure:"authentication"`
 	Server           ServerConfig           `mapstructure:"server"`
 	Database         DatabaseConfig         `mapstructure:"database"`
