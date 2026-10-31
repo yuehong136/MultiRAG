@@ -32,7 +32,7 @@ import (
 func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "", nil, nil)
 	if err != nil {
-		return fmt.Errorf("login ping failed: %w", err)
+		return &authError{message: "login ping failed", cause: err}
 	}
 	if !pingResponseOK(resp) {
 		return fmt.Errorf("server is down")
@@ -52,8 +52,6 @@ func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 	// Login
 	token, err := c.loginUser(username, password)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		fmt.Println("Can't access server for login (connection failed)")
 		return err
 	}
 
@@ -66,7 +64,7 @@ func (c *MultiRAGClient) LoginUserInteractive(username, password string) error {
 func (c *MultiRAGClient) LoginUser(cmd *Command) error {
 	resp, err := c.HTTPClient.Request("GET", c.pingPath(), "", nil, nil)
 	if err != nil {
-		return fmt.Errorf("login ping failed: %w", err)
+		return &authError{message: "login ping failed", cause: err}
 	}
 	if !pingResponseOK(resp) {
 		return fmt.Errorf("server is down")
@@ -98,8 +96,6 @@ func (c *MultiRAGClient) LoginUser(cmd *Command) error {
 	// Login
 	token, err := c.loginUser(email, password)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		fmt.Println("Can't access server for login (connection failed)")
 		return err
 	}
 
@@ -132,16 +128,16 @@ func (c *MultiRAGClient) loginUser(email, password string) (string, error) {
 
 	resp, err := c.HTTPClient.Request("POST", path, "", nil, payload)
 	if err != nil {
-		return "", err
+		return "", &authError{message: "login request failed", cause: err}
 	}
 
-	if err := checkAuthResponse("login", resp); err != nil {
+	if err := checkLoginResponse(resp); err != nil {
 		return "", err
 	}
 
 	token := resp.Headers.Get("Authorization")
 	if token == "" {
-		return "", fmt.Errorf("login failed: missing Authorization header")
+		return "", &authError{message: "login failed: missing Authorization header"}
 	}
 
 	return token, nil
