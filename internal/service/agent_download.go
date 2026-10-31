@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"multirag/internal/storage"
 )
@@ -22,6 +23,8 @@ func (s *FileService) DownloadAgentFile(ctx context.Context, userID, fileID stri
 }
 
 func downloadAgentFile(ctx context.Context, userID, fileID string, store storage.Storage) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -31,6 +34,10 @@ func downloadAgentFile(ctx context.Context, userID, fileID string, store storage
 	checker, ok := store.(agentUploadObjectChecker)
 	if !ok || store == nil {
 		return nil, fmt.Errorf("runtime upload storage is unavailable")
+	}
+	reader, ok := store.(storage.ContextReader)
+	if !ok {
+		return nil, fmt.Errorf("runtime upload storage cannot read with cancellation")
 	}
 	bucket := userID + "-downloads"
 	for _, key := range []string{fileID + ".upload.json", fileID} {
@@ -42,7 +49,7 @@ func downloadAgentFile(ctx context.Context, userID, fileID string, store storage
 			return nil, ErrAgentFileUnavailable
 		}
 	}
-	raw, err := store.Get(bucket, fileID+".upload.json")
+	raw, err := reader.GetContext(ctx, bucket, fileID+".upload.json")
 	if errors.Is(err, storage.ErrNotFound) {
 		return nil, ErrAgentFileUnavailable
 	}
@@ -66,7 +73,7 @@ func downloadAgentFile(ctx context.Context, userID, fileID string, store storage
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	blob, err := store.Get(bucket, fileID)
+	blob, err := reader.GetContext(ctx, bucket, fileID)
 	if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrBucketNotFound) {
 		return nil, ErrAgentFileUnavailable
 	}

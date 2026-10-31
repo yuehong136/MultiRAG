@@ -8,6 +8,13 @@ import (
 	"testing"
 )
 
+func (s *memoryAgentUploadStore) GetContext(ctx context.Context, bucket, key string, tenant ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.Get(bucket, key, tenant...)
+}
+
 func TestAgentDownloadAuthority(t *testing.T) {
 	id := strings.Repeat("a", 32)
 	metadata := AgentUploadDescriptor{ID: id, CreatedBy: "alice", Name: "x.html", MIMEType: "text/html", Extension: "html", Size: 3, CreatedAt: 1}

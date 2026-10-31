@@ -19,6 +19,13 @@ type downloadStore struct {
 	calls   int
 }
 
+func (s *downloadStore) GetContext(ctx context.Context, bucket, key string, tenant ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.Get(bucket, key, tenant...)
+}
+
 func (s *downloadStore) Get(bucket, key string, _ ...string) ([]byte, error) {
 	s.calls++
 	b, ok := s.objects[bucket+"/"+key]
