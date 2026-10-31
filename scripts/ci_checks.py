@@ -164,6 +164,8 @@ GO_REQUIRED_TESTS = frozenset(
         "multirag/internal/service::TestAgentDownloadAuthority",
         "multirag/internal/service::TestAgentDownloadStorageFailures",
         "multirag/internal/storage::TestStorageContextReadCancellationClosesBody",
+        "multirag/internal/storage::TestRuntimeUploadAdapterRetainsActorForEntireObjectLifecycle",
+        "multirag/internal/storage::TestRuntimeUploadAdapterS3ConfigurationSnapshotHonorsExplicitEmptyValues",
         "multirag/internal/service::TestFileLinkScratchLifecycle",
         "multirag/internal/service::TestFileLinkReplaceSerializesRetirement",
         "multirag/internal/service::TestMemoryForgetScratch",
