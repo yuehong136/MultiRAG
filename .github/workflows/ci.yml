@@ -422,15 +422,16 @@ jobs:
               raise SystemExit(0)
           record = json.loads(path.read_text())
           for name in record['containers']:
-              state = subprocess.run(['docker', 'inspect', name], capture_output=True, text=True)
-              if state.returncode == 0:
-                  container = json.loads(state.stdout)[0]
+              inventory = subprocess.check_output(['docker', 'container', 'ls', '-a', '--format', '{{.Names}}'], text=True).splitlines()
+              if name in inventory:
+                  container = json.loads(subprocess.check_output(['docker', 'inspect', name], text=True))[0]
                   if container['Config']['Labels'].get('multirag.ci.afterdcf') != record['identity']:
                       raise RuntimeError('Refuse cleanup of unowned Go service')
                   logs = subprocess.run(['docker', 'logs', name], capture_output=True, text=True)
                   (root / (name + '.log')).write_text(logs.stdout + logs.stderr)
                   subprocess.run(['docker', 'rm', '-f', '-v', name], check=True)
-              if subprocess.run(['docker', 'inspect', name], capture_output=True).returncode == 0:
+              inventory = subprocess.check_output(['docker', 'container', 'ls', '-a', '--format', '{{.Names}}'], text=True).splitlines()
+              if name in inventory:
                   raise RuntimeError('Owned Go service remains')
           for port in record['ports']:
               with socket.socket() as reader:
