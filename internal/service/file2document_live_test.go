@@ -1,11 +1,14 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"github.com/redis/go-redis/v9"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"multirag/internal/dao"
 	"multirag/internal/entity"
@@ -235,6 +238,9 @@ func TestFileLinkScratchLifecycle(t *testing.T) {
 	}
 	assertCount(a, 0)
 	assertCount(b, 1)
+	if slices.Contains(f.ObjectKeys(t), a+"/"+sourceLocation) {
+		t.Fatal("retired original dataset object leaked")
+	}
 	var copiedID, copiedLocation string
 	if err := f.Read.QueryRow("SELECT id,location FROM t_ai_documents WHERE kb_id=$1", b).Scan(&copiedID, &copiedLocation); err != nil {
 		t.Fatal(err)
@@ -244,6 +250,9 @@ func TestFileLinkScratchLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCount(b, 0)
+	if slices.Contains(f.ObjectKeys(t), b+"/"+copiedLocation) {
+		t.Fatal("retired copied dataset object leaked")
+	}
 	var sourceType, localLocation string
 	if err := f.Read.QueryRow("SELECT source_type,location FROM t_ai_files WHERE id=$1", sourceFile).Scan(&sourceType, &localLocation); err != nil || sourceType != "local" {
 		t.Fatal("last reference source not retained", err)
@@ -253,6 +262,153 @@ func TestFileLinkScratchLifecycle(t *testing.T) {
 		t.Fatal("detached source cannot relink", err)
 	}
 	assertCount(a, 1)
+	// Cross-tenant targets are rejected before any SQL/object mutation, even
+	// when a valid admin membership grants the actor access to the other team.
+	foreignKB := p + "foreignkb"
+	if err := f.DB.Create(&entity.UserTenant{ID: p + "crossmember", UserID: owner, TenantID: other, Role: "admin", Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DB.Create(&entity.Knowledgebase{ID: foreignKB, TenantID: other, CreatedBy: other, Name: foreignKB, EmbdID: "", ParserID: "naive", ParserConfig: entity.JSONMap{}, Permission: "team", Status: &active}).Error; err != nil {
+		t.Fatal(err)
+	}
+	before = state()
+	calls := f.Store.Calls
+	objectKeys := f.ObjectKeys(t)
+	if err := link([]string{one}, []string{a, foreignKB}, "add"); !errors.Is(err, ErrLinkUnavailable) {
+		t.Fatal("cross-tenant source registration accepted", err)
+	}
+	if !reflect.DeepEqual(before, state()) || calls != f.Store.Calls || !reflect.DeepEqual(objectKeys, f.ObjectKeys(t)) {
+		t.Fatal("cross-tenant rejection had side effects")
+	}
+	assertCount(foreignKB, 0)
+	// A genuinely shared bucket/key survives until its final independent SQL
+	// reference is retired, while mappings to differently addressed copies do
+	// not preserve the old source object.
+	sharedFile, sharedDoc, keepDoc := p+"sharedfile", p+"shareddoc", p+"keepdoc"
+	sharedLocation := "shared.txt"
+	if err := f.DB.Create(&entity.File{ID: sharedFile, ParentID: folder, TenantID: owner, CreatedBy: owner, Name: sharedLocation, Type: "doc", SourceType: "knowledgebase", Location: &sharedLocation, Size: 3}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{sharedDoc, keepDoc} {
+		if err := f.DB.Create(&entity.Document{ID: id, KbID: a, CreatedBy: owner, Name: &sharedLocation, Type: "doc", ParserID: "naive", ParserConfig: entity.JSONMap{}, Suffix: "txt", Location: &sharedLocation, Status: &active, Size: 3}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.DB.Create(&entity.File2Document{ID: p + "sharedlink", FileID: &sharedFile, DocumentID: &sharedDoc}).Error; err != nil {
+		t.Fatal(err)
+	}
+	f.DB.Model(&entity.Knowledgebase{}).Where("id=?", a).Update("doc_num", 3)
+	if err := f.Store.Put(a, sharedLocation, []byte("def")); err != nil {
+		t.Fatal(err)
+	}
+	if err := link([]string{sharedFile}, []string{b}, "replace"); err != nil {
+		t.Fatal(err)
+	}
+	f.ReadObject(t, a, sharedLocation, []byte("def"))
+	if _, err := s.deletion.DeleteDocuments(t.Context(), a, owner, []string{keepDoc}, false); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.ObjectKeys(t), a+"/"+sharedLocation) {
+		t.Fatal("last shared source reference leaked")
+	}
+}
+
+type pausedFileRetirer struct {
+	inner            *DocumentDeleteService
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (s *pausedFileRetirer) DeleteDocuments(ctx context.Context, kb, actor string, ids []string, all bool) (int, error) {
+	s.once.Do(func() { close(s.entered); <-s.release })
+	return s.inner.DeleteDocuments(ctx, kb, actor, ids, all)
+}
+
+func TestFileLinkReplaceSerializesRetirement(t *testing.T) {
+	f := scratch.New(t)
+	previous := dao.DB
+	dao.DB = f.DB
+	t.Cleanup(func() { dao.DB = previous })
+	if err := f.DB.AutoMigrate(&entity.User{}, &entity.Tenant{}, &entity.UserTenant{}, &entity.Knowledgebase{}, &entity.File{}, &entity.Document{}, &entity.File2Document{}, &entity.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	p := f.Prefix
+	actor, root, file, a, b := p+"owner", p+"root", p+"file", p+"a", p+"b"
+	active := "1"
+	location := "source.txt"
+	for _, row := range []any{&entity.User{ID: actor, Email: actor + "@example.test", Nickname: "actor", Status: &active}, &entity.Tenant{ID: actor, Status: &active}, &entity.File{ID: root, ParentID: root, TenantID: actor, CreatedBy: actor, Name: "/", Type: "folder"}, &entity.File{ID: file, ParentID: root, TenantID: actor, CreatedBy: actor, Name: location, Type: "doc", Location: &location, SourceType: "local", Size: 3}} {
+		if err := f.DB.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{a, b} {
+		if err := f.DB.Create(&entity.Knowledgebase{ID: id, TenantID: actor, CreatedBy: actor, Name: id, EmbdID: "", ParserID: "naive", ParserConfig: entity.JSONMap{}, Permission: "me", Status: &active}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Store.Put(root, location, []byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	index := &deleteLiveIndex{datasets: map[string]bool{}, rows: map[string]map[string]any{}, metadata: map[string]string{}, expectedBase: map[string]string{}}
+	deleter := NewDocumentDeleteService(f.DB, f.Redis, index, f.Store, server.EngineElasticsearch)
+	s := &File2DocumentService{db: f.DB, objects: f.Store, deletion: deleter}
+	request := func(kb string) LinkToDatasetsRequest {
+		return LinkToDatasetsRequest{FileIDs: []string{file}, KBIDs: []string{kb}}
+	}
+	if err := s.LinkToDatasets(t.Context(), actor, request(a), "replace"); err != nil {
+		t.Fatal(err)
+	}
+	barrier := &pausedFileRetirer{inner: deleter, entered: make(chan struct{}), release: make(chan struct{})}
+	first := *s
+	first.deletion = barrier
+	var once sync.Once
+	release := func() { once.Do(func() { close(barrier.release) }) }
+	defer release()
+	done1, done2 := make(chan error, 1), make(chan error, 1)
+	go func() { done1 <- first.LinkToDatasets(t.Context(), actor, request(b), "replace") }()
+	select {
+	case <-barrier.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first replace did not reach pre-retirement barrier")
+	}
+	go func() { done2 <- s.LinkToDatasets(t.Context(), actor, request(a), "replace") }()
+	// Wait for evidence from PostgreSQL that R2 is blocked on the stable
+	// advisory intent, while R1 has already committed B and has not retired A.
+	deadline := time.Now().Add(3 * time.Second)
+	waiting := false
+	for time.Now().Before(deadline) {
+		var count int
+		err := f.Read.QueryRow("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=$1 AND l.locktype='advisory' AND NOT l.granted", f.Database).Scan(&count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count > 0 {
+			waiting = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !waiting {
+		release()
+		t.Fatal("second replace was not serialized before retirement")
+	}
+	release()
+	for _, done := range []chan error{done1, done2} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("serialized replace did not complete")
+		}
+	}
+	var count int
+	var finalKB string
+	if err := f.Read.QueryRow("SELECT count(*),min(d.kb_id) FROM t_ai_file2documents f JOIN t_ai_documents d ON d.id=f.document_id WHERE f.file_id=$1", file).Scan(&count, &finalKB); err != nil || count != 1 || finalKB != a {
+		t.Fatal("non-serial replace result", count, finalKB, err)
+	}
+	f.ReadObject(t, root, location, []byte("abc"))
 }
 
 func TestFileLinkArguments(t *testing.T) {

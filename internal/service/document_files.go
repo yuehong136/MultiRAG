@@ -69,7 +69,13 @@ func (s *DocumentFileService) readObject(ctx context.Context, bucket, key string
 		}
 		confirmed = true
 	}
-	data, err := store.Get(bucket, key)
+	var data []byte
+	var err error
+	if reader, ok := store.(storage.ContextReader); ok {
+		data, err = reader.GetContext(ctx, bucket, key)
+	} else {
+		data, err = store.Get(bucket, key)
+	}
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrBucketNotFound) {
 			return nil, ErrDocumentFileUnavailable

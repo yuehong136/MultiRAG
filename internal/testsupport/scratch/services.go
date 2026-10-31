@@ -30,9 +30,10 @@ import (
 )
 
 type Config struct {
-	Database server.DatabaseConfig
-	Redis    server.RedisConfig
-	MinIO    server.MinioConfig
+	Database      server.DatabaseConfig
+	Redis         server.RedisConfig
+	MinIO         server.MinioConfig
+	Elasticsearch server.ElasticsearchConfig
 }
 
 type Services struct {
@@ -113,18 +114,18 @@ func New(t testing.TB) *Services {
 	if json.Unmarshal(raw, &cfg) != nil {
 		t.Fatal("invalid private scratch config")
 	}
-	if cfg.Database.Host != "127.0.0.1" || cfg.Database.Port != 5432 || cfg.Database.Database != "postgres" || cfg.Redis.Host != "127.0.0.1" || cfg.Redis.Port != 6379 || cfg.Redis.DB != 1 {
+	if !loopbackHost(cfg.Database.Host) || cfg.Database.Port < 1 || cfg.Database.Port > 65535 || cfg.Database.Database != "postgres" || !loopbackHost(cfg.Redis.Host) || cfg.Redis.Port < 1 || cfg.Redis.Port > 65535 || cfg.Redis.DB < 0 {
 		t.Fatal("loopback admin/isolated Redis configuration required")
 	}
 	host, _, err := net.SplitHostPort(cfg.MinIO.Host)
-	if err != nil || host != "127.0.0.1" || cfg.MinIO.Bucket != "" || cfg.MinIO.PrefixPath != "" {
+	if err != nil || !loopbackHost(host) || cfg.MinIO.Bucket != "" || cfg.MinIO.PrefixPath != "" {
 		t.Fatal("unprefixed loopback object config required")
 	}
 	j := testsupport.NewCase(t)
 	prefix := "gdcf" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 	name := "multirag_afterdcf_" + prefix
 	bucket := "multirag-afterdcf-" + prefix
-	j.Event("reserve-services", map[string]any{"database": name, "sql_endpoint": "127.0.0.1:5432", "schema": "usr_ai", "redis_endpoint": "127.0.0.1:6379", "redis_db": 1, "redis_owned_key_pattern": "*" + prefix + "*", "object_endpoint": cfg.MinIO.Host, "physical_bucket": bucket, "config_file": path})
+	j.Event("reserve-services", map[string]any{"database": name, "sql_endpoint": net.JoinHostPort(cfg.Database.Host, fmt.Sprint(cfg.Database.Port)), "schema": "usr_ai", "redis_endpoint": net.JoinHostPort(cfg.Redis.Host, fmt.Sprint(cfg.Redis.Port)), "redis_db": cfg.Redis.DB, "redis_owned_key_pattern": "*" + prefix + "*", "object_endpoint": cfg.MinIO.Host, "physical_bucket": bucket, "config_file": path})
 	dsn, err := dao.PostgresDSN(cfg.Database)
 	if err != nil {
 		t.Fatal("admin DSN")
@@ -175,7 +176,7 @@ func New(t testing.TB) *Services {
 		t.Fatal("readback connection")
 	}
 	t.Cleanup(func() { read.Close() })
-	options := &redis.Options{Addr: "127.0.0.1:6379", Password: cfg.Redis.Password, DB: 1}
+	options := &redis.Options{Addr: net.JoinHostPort(cfg.Redis.Host, fmt.Sprint(cfg.Redis.Port)), Password: cfg.Redis.Password, DB: cfg.Redis.DB}
 	client := redis.NewClient(options)
 	t.Cleanup(func() { client.Close() })
 	if client.Ping(t.Context()).Err() != nil {
@@ -285,4 +286,12 @@ func (s *Services) ObjectKeys(t testing.TB) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

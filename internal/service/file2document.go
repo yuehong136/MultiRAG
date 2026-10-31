@@ -36,7 +36,11 @@ type LinkToDatasetsRequest struct {
 type File2DocumentService struct {
 	db       *gorm.DB
 	objects  storage.Storage
-	deletion *DocumentDeleteService
+	deletion fileDocumentRetirer
+}
+
+type fileDocumentRetirer interface {
+	DeleteDocuments(context.Context, string, string, []string, bool) (int, error)
 }
 
 func NewFile2DocumentService() *File2DocumentService { return &File2DocumentService{db: dao.DB} }
@@ -236,14 +240,18 @@ func copyLinkSource(ctx context.Context, store storage.Storage, bucket, key stri
 	if err = store.Put(bucket, key, data); err != nil {
 		return err
 	}
-	read, err := store.Get(bucket, key)
+	reader, ok := store.(storage.ContextReader)
+	if !ok {
+		return errors.New("conversion object reads cannot be canceled")
+	}
+	read, err := reader.GetContext(ctx, bucket, key)
 	if err != nil || !bytes.Equal(read, data) {
 		return errors.New("converted source bytes could not be verified")
 	}
 	return ctx.Err()
 }
 
-func (s *File2DocumentService) LinkToDatasets(ctx context.Context, actor string, req LinkToDatasetsRequest, mode string) (resultErr error) {
+func (s *File2DocumentService) linkToDatasets(ctx context.Context, actor string, req LinkToDatasetsRequest, mode string, expectedLeaves []string) (resultErr error) {
 	fileIDs, err := linkIDs(req.FileIDs)
 	if err != nil || len(fileIDs) == 0 {
 		return ErrLinkArgument
@@ -292,6 +300,9 @@ func (s *File2DocumentService) LinkToDatasets(ctx context.Context, actor string,
 		files, leaves, err := collectLinkFiles(tx, actor, fileIDs)
 		if err != nil {
 			return err
+		}
+		if !reflect.DeepEqual(leaves, expectedLeaves) {
+			return ErrLinkChanged
 		}
 		var links []entity.File2Document
 		if len(leaves) > 0 {
@@ -351,6 +362,16 @@ func (s *File2DocumentService) LinkToDatasets(ctx context.Context, actor string,
 			}
 			if !reflect.DeepEqual(fresh, files[id]) {
 				return ErrLinkChanged
+			}
+		}
+		// Existing deletion intentionally requires every document's source file
+		// to belong to its dataset tenant. Do not create undeletable cross-tenant
+		// registrations, even when the actor has access to both resources.
+		for _, id := range leaves {
+			for _, kbID := range targets {
+				if files[id].TenantID != kbs[kbID].TenantID {
+					return ErrLinkUnavailable
+				}
 			}
 		}
 		var freshLinks []entity.File2Document
@@ -439,6 +460,9 @@ func (s *File2DocumentService) LinkToDatasets(ctx context.Context, actor string,
 						return err
 					}
 				} else {
+					if _, ok := store.(storage.ContextReader); !ok {
+						return errors.New("conversion object reads cannot be canceled")
+					}
 					if !safeStorageAddress(file.ParentID, location) {
 						return ErrLinkUnavailable
 					}

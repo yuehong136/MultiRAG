@@ -78,14 +78,7 @@ func (s *S3Storage) GetContext(ctx context.Context, bucket, key string, _ ...str
 	if s == nil {
 		return nil, fmt.Errorf("storage is not initialized")
 	}
-	effective := s
-	if s.config != nil {
-		copy := *s
-		copy.bucket = s.config.Bucket
-		copy.prefixPath = s.config.PrefixPath
-		effective = &copy
-	}
-	bucket, key = effective.resolveBucketAndPath(bucket, key)
+	bucket, key = s.resolveBucketAndPath(bucket, key)
 	return readS3Context(ctx, s.client, bucket, key)
 }
 func (o *OSSStorage) GetContext(ctx context.Context, bucket, key string, _ ...string) ([]byte, error) {
