@@ -18,6 +18,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,12 +34,39 @@ import (
 // AgentHandler agent handler
 type AgentHandler struct {
 	agentService *service.AgentService
+	fileService  *service.FileService
 	loadPrompt   func(string) (string, error)
 }
 
 // NewAgentHandler create agent handler
 func NewAgentHandler(agentService *service.AgentService) *AgentHandler {
-	return &AgentHandler{agentService: agentService}
+	return &AgentHandler{agentService: agentService, fileService: service.NewFileService()}
+}
+
+// DownloadAgentFile accepts only runtime upload IDs owned by the authenticated caller.
+func (h *AgentHandler) DownloadAgentFile(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil || len(query) != 1 || len(query["id"]) != 1 {
+		jsonError(c, common.CodeArgumentError, "Provide one upload id.")
+		return
+	}
+	blob, err := h.fileService.DownloadAgentFile(c.Request.Context(), user.ID, query.Get("id"))
+	if errors.Is(err, service.ErrAgentFileUnavailable) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		jsonError(c, common.CodeServerError, "Unable to download agent file.")
+		return
+	}
+	c.Data(http.StatusOK, "application/octet-stream", blob)
 }
 
 // ListTemplates keeps the catalogue's multilingual objects and DSL intact.

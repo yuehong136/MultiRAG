@@ -110,6 +110,9 @@ func (r *Router) SetDifyRetrievalHandler(difyHandler *handler.DifyRetrievalHandl
 }
 
 func documentBinaryPath(path string) bool {
+	if path == "/api/v1/agents/download" {
+		return true
+	}
 	if path == "/api/v1/thumbnails" || strings.HasPrefix(path, "/api/v1/documents/images/") || strings.HasPrefix(path, "/api/v1/documents/artifact/") {
 		return true
 	}
@@ -328,6 +331,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 			v1.POST("/agents/test_db_connection", r.agentHandler.TestDBConnection)
 			v1.GET("/agents/prompts", r.agentHandler.GetPrompts)
 			v1.GET("/agents/templates", r.agentHandler.ListTemplates)
+			v1.GET("/agents/download", r.agentHandler.DownloadAgentFile)
 			v1.PUT("/agents/:agent_id/tags", r.agentHandler.UpdateAgentTags)
 			v1.GET("/agents/:agent_id/versions", r.agentHandler.ListAgentVersions)
 			v1.GET("/agents/:agent_id/versions/:version_id", r.agentHandler.GetAgentVersion)
