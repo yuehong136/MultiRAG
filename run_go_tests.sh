@@ -1,31 +1,8 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-PACKAGES=(
-    "./internal/admin/..."
-#    "./internal/binding/..."
-    "./internal/cache/..."
-    "./internal/cli/..."
-    "./internal/common/..."
-    "./internal/dao/..."
-    "./internal/engine/..."
-    "./internal/handler/..."
-    "./internal/logger/..."
-    "./internal/model/..."
-    "./internal/router/..."
-    "./internal/server/..."
-#    "./internal/service/..."
-    "./internal/storage/..."
-    "./internal/tokenizer/..."
-#    "./internal/utility/..."
-)
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
-echo "Running tests for specific packages..."
-for pkg in "${PACKAGES[@]}"; do
-    echo "=== Testing $pkg ==="
-    go test $pkg -v -cover -test.v
-    echo ""
-done
-
-#echo "Running all tests except failed packages..."
-#go test $(go list ./internal/... | grep -v -E '(cli|service|binding)$') -v
+# Match CI's package discovery and race checks, including new internal packages.
+# Additional go test flags, such as -run or -json, support focused local checks.
+exec go test -race -count=1 -v -cover "$@" ./internal/...
