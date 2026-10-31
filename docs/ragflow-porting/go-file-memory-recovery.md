@@ -89,13 +89,18 @@ Origin 为 null、未列明来源或 cross-site fetch metadata 的请求在副�
 OTP 有五分钟期限、五次尝试上限、30 分钟锁和 60 秒重发间隔。
 Redis Lua 原子处理验证码消费、尝试、锁、发送 nonce 和恢复凭证。
 SMTP 失败仅在 nonce/code 仍相同的情况下恢复旧值及剩余 TTL；已接受 DATA 的邮件
-不会因为 QUIT 或调用方随后取消而撤销 OTP。SQL 失败只有在独立读回确认未提交后才
-恢复绑定凭证及剩余 TTL，同一 cookie 可重试；丢失提交确认用已持久化密码哈希判定。
+不会因为 QUIT 或调用方随后取消而撤销 OTP。SQL 回调失败后，以最长五秒的独立
+READ COMMITTED 事务执行 `FOR UPDATE`，等待原事务结束，并在持锁期间补偿绑定凭证
+及剩余 TTL，同一 cookie 可重试。回调成功而 COMMIT 报错属于结果不确定；只有锁定
+读回本次唯一密码哈希才能识别已提交。其他哈希、读回失败或超时均保留防重试占位，
+不恢复已消费凭证，客户端需稍后重新完成 OTP 验证；普通 MVCC 旧值不能证明未提交。
 
 `smtp` 配置使用 `mail_server`、`mail_port`、`mail_use_ssl`、`mail_use_tls`、
 `mail_username`、`mail_password`、`mail_from_name`、`mail_from_address` 和
 `timeout_seconds`；期限默认 10 秒，可设 1–120 秒。带用户名的 SMTP 认证必须加密。
 错误和日志不回显凭据、验证码或 OTP。
+本地 SMTP 验证使用无认证的自有 loopback 服务；TLS/STARTTLS 与认证未做实际运行验收，
+相关限制仅作源码核对。
 
 上述绑定只修改 Go。生产 Python 现有邮箱验证标记未在此修复，不能用本页宣称其安全问题
 已解决；同源及跨源 CORS 兼容验证也不代表生产恢复流程已完成验收。

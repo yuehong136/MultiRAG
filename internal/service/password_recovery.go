@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -354,6 +355,7 @@ func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotR
 	var previousTTL int64
 	var userID, hash string
 	var claimed bool
+	var callbackSucceeded bool
 	var started time.Time
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		user, err := s.user(ctx, tx, email, true)
@@ -390,6 +392,7 @@ func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotR
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("reset account changed")
 		}
+		callbackSucceeded = true
 		return nil
 	})
 	cleanup, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -399,16 +402,33 @@ func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotR
 			return common.CodeAuthenticationError, fmt.Errorf("email not verified")
 		}
 		if claimed {
-			// A commit acknowledgement can be lost. Only restore a claim after an
-			// independent SQL read confirms that our unique hash was not committed.
-			var user entity.User
-			readErr := s.db.WithContext(cleanup).Where("id=?", userID).Take(&user).Error
-			if readErr == nil && hash != "" && user.Password != nil && *user.Password == hash {
-				err = nil
-			} else if readErr == nil {
-				if e := s.redis.Eval(cleanup, restoreRecoveryReset, []string{keys[5], keys[7], keys[6], keys[1]}, nonce, previous, previousTTL, time.Since(started).Milliseconds()).Err(); e != nil {
-					return common.CodeServerError, fmt.Errorf("reset failed; verification cleanup could not be confirmed")
+			// An ordinary MVCC SELECT can see the old password while the original
+			// COMMIT is still running. A bounded, independent READ COMMITTED row
+			// lock waits for that transaction to settle and keeps recovery fenced.
+			committed := false
+			readErr := s.db.Session(&gorm.Session{NewDB: true}).WithContext(cleanup).Transaction(func(read *gorm.DB) error {
+				var user entity.User
+				if e := read.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", userID).Take(&user).Error; e != nil {
+					return e
 				}
+				if hash != "" && user.Password != nil && *user.Password == hash {
+					committed = true
+					return nil
+				}
+				// A successful callback followed by a COMMIT error is uncertain.
+				// A different current hash cannot prove that COMMIT never happened;
+				// retain the claim and require a new verification, never restore it.
+				if callbackSucceeded {
+					return errRecoveryCommitUncertain
+				}
+				return s.redis.Eval(cleanup, restoreRecoveryReset, []string{keys[5], keys[7], keys[6], keys[1]}, nonce, previous, previousTTL, time.Since(started).Milliseconds()).Err()
+			}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+			if readErr == nil && committed {
+				err = nil
+			} else if callbackSucceeded {
+				return common.CodeServerError, fmt.Errorf("password reset outcome could not be confirmed; verify again later")
+			} else if readErr != nil {
+				return common.CodeServerError, fmt.Errorf("reset failed; verification cleanup could not be confirmed")
 			}
 		}
 		if err != nil {
@@ -423,6 +443,7 @@ func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotR
 }
 
 var errRecoveryNotVerified = errors.New("email not verified")
+var errRecoveryCommitUncertain = errors.New("password reset commit outcome is uncertain")
 
 // recoveryProof never stores the bearer credential in Redis. Its Go-only key
 // namespace also prevents the historical Python email flag from authorizing Go.
