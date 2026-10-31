@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -57,6 +58,7 @@ def _build_agent(*, cite: bool = False, has_references: bool = False) -> tuple[A
 async def test_non_streaming_agent_keeps_artifact_link_without_attachment_metadata() -> None:
     agent, outputs = _build_agent()
     agent._prepare_prompt_variables = lambda: ("prompt", [], {})
+    agent._prepare_chat_model = AsyncMock()
     agent._get_output_schema = lambda: None
     agent.exception_handler = lambda: None
     agent._fit_messages = lambda _prompt, messages: messages

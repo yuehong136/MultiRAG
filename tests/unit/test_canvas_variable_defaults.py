@@ -85,7 +85,7 @@ def test_mutable_defaults_survive_actual_assigner_and_repeated_reset(monkeypatch
 
 @pytest.mark.parametrize("template_path", _LIST_VARIABLE_TEMPLATES, ids=lambda path: path.name)
 def test_real_templates_with_legacy_empty_variables_reset(monkeypatch: pytest.MonkeyPatch, db: Session, template_path: Path) -> None:
-    from agent.component import agent_with_tools, llm
+    from agent.component import llm
 
     class ConfiguredModel:
         def bind_tools(self, session: Any, metadata: list[dict[str, Any]]) -> None:
@@ -102,11 +102,10 @@ def test_real_templates_with_legacy_empty_variables_reset(monkeypatch: pytest.Mo
     # Keep actual Graph/Canvas and every component constructor/check/reset.
     # Only model configuration and provider construction use explicit unit
     # boundaries; no missing-model exception is accepted as a passing reset.
-    for module in (llm, agent_with_tools):
-        monkeypatch.setattr(module, "db_connection", model_config_db)
-        monkeypatch.setattr(module, "resolve_model_type", model_types)
-        monkeypatch.setattr(module, "get_model_config_by_type_and_name", lambda *args: object())
-        monkeypatch.setattr(module, "LLMBundle", lambda *args, **kwargs: ConfiguredModel())
+    monkeypatch.setattr(llm, "db_connection", model_config_db)
+    monkeypatch.setattr(llm, "resolve_model_type", model_types)
+    monkeypatch.setattr(llm, "get_model_config_by_type_and_name", lambda *args: {})
+    monkeypatch.setattr(llm, "LLMBundle", lambda *args, **kwargs: ConfiguredModel())
     monkeypatch.setattr(REDIS_CONN, "delete", lambda *args: None)
     source = json.loads(template_path.read_text(encoding="utf-8"))["dsl"]
     assert source["variables"] == []

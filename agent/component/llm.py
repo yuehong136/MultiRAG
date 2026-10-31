@@ -30,6 +30,7 @@ from api.db.db_models import db_connection
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, resolve_model_type
 from api.db.services.dialog_service import _stream_with_think_delta
 from api.db.services.llm_service import LLMBundle
+from common.asyncio_utils import finish_owned_work
 from common.connection_utils import timeout
 from common.constants import LLMType
 from core.prompts.generator import citation_prompt, message_fit_in, structured_output_prompt, tool_call_summary
@@ -91,22 +92,64 @@ class LLM(ComponentBase):
     def __init__(self, canvas: Any, component_id: str, param: ComponentParamBase) -> None:
         super().__init__(canvas, component_id, param)
         self.chat_mdl = None
+        self.imgs: list[str] = []
+        self._model_selection: tuple[str, str, str, dict[str, Any]] | None = None
         try:
-            with db_connection() as db:
-                model_types = resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id)
-                model_type = "chat" if "chat" in model_types else "image2text" if "image2text" in model_types else None
-                if model_type is None:
-                    raise LookupError("A chat or vision model is required")
-                model_config = get_model_config_by_type_and_name(
-                    db,
-                    self._canvas.get_tenant_id(),
-                    model_type,
-                    self._param.llm_id,
-                )
-                self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config, max_retries=self._param.max_retries, retry_interval=self._param.delay_after_error)
+            self.chat_mdl, self._model_selection = self._load_chat_model()
         except LookupError as e:
             logging.warning("LLM component %s: model '%s' not found, will fail at run time: %s", component_id, self._param.llm_id, e)
-        self.imgs = []
+
+    def _bundle_options(self) -> dict[str, Any]:
+        return {"max_retries": self._param.max_retries, "retry_interval": self._param.delay_after_error}
+
+    def _configure_chat_model(self, bundle: LLMBundle) -> None:
+        """Allow Agent to attach its existing tool session after a switch."""
+
+    def _load_chat_model(self) -> tuple[LLMBundle, tuple[str, str, str, dict[str, Any]]]:
+        tenant_id, reference = self._canvas.get_tenant_id(), self._param.llm_id
+        with db_connection() as db:
+            # Resolve on every invocation, even when reusing a provider, so a
+            # disabled or foreign registration cannot keep using a cached key.
+            model_types = resolve_model_type(db, tenant_id, reference)
+            if self.imgs and LLMType.IMAGE2TEXT.value in model_types:
+                model_type = LLMType.IMAGE2TEXT.value
+            elif LLMType.CHAT.value in model_types:
+                model_type = LLMType.CHAT.value
+            elif LLMType.IMAGE2TEXT.value in model_types:
+                model_type = LLMType.IMAGE2TEXT.value
+            else:
+                raise LookupError("A chat or vision model is required")
+            config = get_model_config_by_type_and_name(db, tenant_id, model_type, reference)
+            # Token accounting changes every call. Runtime configuration,
+            # including rotated credentials and tool capability, must refresh.
+            runtime_config = {key: value for key, value in config.items() if key not in {"used_tokens", "create_time", "create_date", "update_time", "update_date"}}
+            options = self._bundle_options()
+            selection = (tenant_id, reference, model_type, deepcopy({"config": runtime_config, "options": options}))
+            if self.chat_mdl is not None and selection == self._model_selection:
+                return self.chat_mdl, selection
+            bundle = LLMBundle(db, tenant_id, config, **options)
+            bundle.db = None
+            return bundle, selection
+
+    async def _prepare_chat_model(self) -> None:
+        async def replace() -> None:
+            bundle, selection = await asyncio.to_thread(self._load_chat_model)
+            if bundle is self.chat_mdl:
+                return
+            previous = self.chat_mdl
+            try:
+                self._configure_chat_model(bundle)
+                if previous is not None:
+                    self.chat_mdl, self._model_selection = None, None
+                    await previous.aclose()
+            except BaseException:
+                await bundle.aclose()
+                raise
+            self.chat_mdl, self._model_selection = bundle, selection
+
+        # A cancellation must not abandon a newly built client in a worker or
+        # interrupt disposal of the superseded bundle.
+        await finish_owned_work(replace())
 
     def get_input_form(self) -> dict[str, dict]:
         res = {}
@@ -238,7 +281,7 @@ class LLM(ComponentBase):
 
         return value
 
-    def _prepare_prompt_variables(self) -> tuple[str, list[dict[str, Any]], str]:
+    def _prepare_prompt_variables(self) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
         self.imgs = []
         if self._param.visual_files_var:
             visual_val = self._canvas.get_variable_value(self._param.visual_files_var)
@@ -261,16 +304,6 @@ class LLM(ComponentBase):
             self.set_input_value(k, args[k])
 
         self.imgs = self._uniq_images(self.imgs + extracted_imgs)
-        if self.imgs:
-            with db_connection() as db:
-                if "chat" in resolve_model_type(db, self._canvas.get_tenant_id(), self._param.llm_id):
-                    model_config = get_model_config_by_type_and_name(
-                        db,
-                        self._canvas.get_tenant_id(),
-                        LLMType.IMAGE2TEXT.value,
-                        self._param.llm_id,
-                    )
-                    self.chat_mdl = LLMBundle(db, self._canvas.get_tenant_id(), model_config, max_retries=self._param.max_retries, retry_interval=self._param.delay_after_error)
 
         msg, sys_prompt = self._sys_prompt_and_msg(self._canvas.get_history(self._param.message_history_window_size)[:-1], args)
         user_defined_prompt, sys_prompt = self._extract_prompts(sys_prompt)
@@ -279,7 +312,7 @@ class LLM(ComponentBase):
 
         return sys_prompt, msg, user_defined_prompt
 
-    def _extract_prompts(self, sys_prompt):
+    def _extract_prompts(self, sys_prompt: str) -> tuple[dict[str, str], str]:
         pts = {}
         for tag in ["TASK_ANALYSIS", "PLAN_GENERATION", "REFLECTION", "CONTEXT_SUMMARY", "CONTEXT_RANKING", "CITATION_GUIDELINES"]:
             r = re.search(rf"<{tag}>(.*?)</{tag}>", sys_prompt, flags=re.DOTALL | re.IGNORECASE)
@@ -409,8 +442,9 @@ class LLM(ComponentBase):
             ans = re.sub(r"^.*```json", "", ans, flags=re.DOTALL)
             return re.sub(r"```\n*$", "", ans, flags=re.DOTALL)
 
-        # 同步 prompt 组装：内含自开连接的模型查询与（有图片时）视觉模型构造——入线程池
+        # Prompt inspection (including thoughts()) never constructs a provider.
         prompt, msg, _ = await asyncio.to_thread(self._prepare_prompt_variables)
+        await self._prepare_chat_model()
         extra_chat_kwargs = self._get_chat_template_kwargs()
         error: str = ""
         output_structure = None

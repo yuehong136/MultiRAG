@@ -40,7 +40,7 @@ def workflow(monkeypatch: pytest.MonkeyPatch, db: Session) -> Iterator[tuple[lis
     model = Model()
     monkeypatch.setattr(llm, "db_connection", model_db)
     monkeypatch.setattr(llm, "resolve_model_type", lambda *args: ["chat"])
-    monkeypatch.setattr(llm, "get_model_config_by_type_and_name", lambda *args: object())
+    monkeypatch.setattr(llm, "get_model_config_by_type_and_name", lambda *args: {})
     monkeypatch.setattr(llm, "LLMBundle", lambda *args, **kwargs: model)
     monkeypatch.setattr(Canvas, "is_canceled", lambda self: False)
     monkeypatch.setattr(REDIS_CONN, "delete", lambda *args: None)

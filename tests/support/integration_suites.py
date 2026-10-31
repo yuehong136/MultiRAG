@@ -17,6 +17,7 @@ DATABASE_TESTS = frozenset(
         "test_after5e_mssql_web.py",
         "test_after5e_provider_discovery_web.py",
         "test_agent_retrieval_top_k.py",
+        "test_agent_model_routing.py",
         "test_agent_tags_atomic.py",
         "test_async_engine.py",
         "test_beta_share_scope.py",
