@@ -108,7 +108,7 @@ func TestForgotPasswordScratch(t *testing.T) {
 	var wrongWG sync.WaitGroup
 	for range 16 {
 		wrongWG.Add(1)
-		go func() { defer wrongWG.Done(); _, _ = s.VerifyOTP(t.Context(), email, bad) }()
+		go func() { defer wrongWG.Done(); _, _, _ = s.VerifyOTP(t.Context(), email, bad) }()
 	}
 	wrongWG.Wait()
 	attempts, err := f.Redis.Get(t.Context(), keys[2]).Int()
@@ -131,13 +131,18 @@ func TestForgotPasswordScratch(t *testing.T) {
 	}
 	var correctWG sync.WaitGroup
 	var verified atomic.Int32
+	var verifiedSession string
+	var sessionMu sync.Mutex
 	for range 8 {
 		correctWG.Add(1)
 		go func() {
 			defer correctWG.Done()
-			code, err := s.VerifyOTP(t.Context(), email, strings.ToLower(otp))
+			session, code, err := s.VerifyOTP(t.Context(), email, strings.ToLower(otp))
 			if err == nil && code == common.CodeSuccess {
 				verified.Add(1)
+				sessionMu.Lock()
+				verifiedSession = session
+				sessionMu.Unlock()
 			}
 		}()
 	}
@@ -145,7 +150,26 @@ func TestForgotPasswordScratch(t *testing.T) {
 	if verified.Load() != 1 {
 		t.Fatal("OTP was consumed more than once")
 	}
-	if code, err := s.ResetPassword(t.Context(), ForgotResetPasswordRequest{Email: email, NewPassword: "new password", ConfirmNewPassword: "different"}); err == nil || code != common.CodeArgumentError {
+	if len(verifiedSession) != 64 {
+		t.Fatal("recovery credential entropy")
+	}
+	if value, _ := f.Redis.Get(t.Context(), keys[5]).Result(); value != recoveryProof(verifiedSession) || value == verifiedSession {
+		t.Fatal("bound recovery credential digest")
+	}
+	proofTTL, _ := f.Redis.PTTL(t.Context(), keys[5]).Result()
+	if proofTTL <= 0 || proofTTL > utility.OTPTTL {
+		t.Fatal("recovery credential expiry")
+	}
+	blockedRequest := ForgotResetPasswordRequest{Email: email, NewPassword: "attacker", ConfirmNewPassword: "attacker"}
+	for _, token := range []string{"", strings.Repeat("0", 64), "malformed"} {
+		if code, err := s.ResetPassword(t.Context(), blockedRequest, token); err == nil || code != common.CodeAuthenticationError {
+			t.Fatal("unbound client reset password")
+		}
+		if value, _ := f.Redis.Get(t.Context(), keys[5]).Result(); value != recoveryProof(verifiedSession) || readPassword() != oldHash {
+			t.Fatal("unbound client consumed another client's proof")
+		}
+	}
+	if code, err := s.ResetPassword(t.Context(), ForgotResetPasswordRequest{Email: email, NewPassword: "new password", ConfirmNewPassword: "different"}, verifiedSession); err == nil || code != common.CodeArgumentError {
 		t.Fatal("mismatched password accepted")
 	}
 	var resetWG sync.WaitGroup
@@ -155,7 +179,7 @@ func TestForgotPasswordScratch(t *testing.T) {
 		resetWG.Add(1)
 		go func() {
 			defer resetWG.Done()
-			code, err := s.ResetPassword(t.Context(), req)
+			code, err := s.ResetPassword(t.Context(), req, verifiedSession)
 			if err == nil && code == common.CodeSuccess {
 				reset.Add(1)
 			}
@@ -177,14 +201,14 @@ func TestForgotPasswordScratch(t *testing.T) {
 		t.Fatal("verification/claim remained after reset")
 	}
 	// Real SQL failure restores the original proof with its remaining TTL.
-	if err = f.Redis.Set(t.Context(), keys[5], "previous-proof", 90*time.Second).Err(); err != nil {
+	if err = f.Redis.Set(t.Context(), keys[5], recoveryProof(verifiedSession), 90*time.Second).Err(); err != nil {
 		t.Fatal(err)
 	}
 	beforeHash := readPassword()
 	if err = f.DB.Exec(`CREATE FUNCTION reject_g_reset() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled password failure'; END $$; CREATE TRIGGER reject_g_reset BEFORE UPDATE OF password ON t_ai_users FOR EACH ROW EXECUTE FUNCTION reject_g_reset()`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if code, err := s.ResetPassword(t.Context(), req); err == nil || code != common.CodeServerError {
+	if code, err := s.ResetPassword(t.Context(), req, verifiedSession); err == nil || code != common.CodeServerError {
 		t.Fatal("SQL failure acknowledged success")
 	}
 	if readPassword() != beforeHash {
@@ -192,11 +216,35 @@ func TestForgotPasswordScratch(t *testing.T) {
 	}
 	proof, _ := f.Redis.Get(t.Context(), keys[5]).Result()
 	ttl, _ := f.Redis.PTTL(t.Context(), keys[5]).Result()
-	if proof != "previous-proof" || ttl <= 0 || ttl > 90*time.Second {
+	if proof != recoveryProof(verifiedSession) || ttl <= 0 || ttl > 90*time.Second {
 		t.Fatal("verification proof compensation or ttl")
 	}
 	if err = f.DB.Exec("DROP TRIGGER reject_g_reset ON t_ai_users; DROP FUNCTION reject_g_reset()").Error; err != nil {
 		t.Fatal(err)
+	}
+	if code, err := s.ResetPassword(t.Context(), req, verifiedSession); err != nil || code != common.CodeSuccess {
+		t.Fatal("SQL compensation did not preserve retryable bound session")
+	}
+	beforeHash = readPassword()
+	// A Python email-only flag, and an expired Go proof, cannot authorize Go.
+	legacyKey := "otp:verified:" + email
+	if err := f.Redis.Set(t.Context(), legacyKey, "1", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if code, err := s.ResetPassword(t.Context(), req, verifiedSession); err == nil || code != common.CodeAuthenticationError {
+		t.Fatal("legacy email-only proof authorized Go")
+	}
+	if err := f.Redis.Del(t.Context(), legacyKey).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Redis.Set(t.Context(), keys[5], recoveryProof(verifiedSession), time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Redis.PExpireAt(t.Context(), keys[5], time.Now().Add(-time.Second)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if code, err := s.ResetPassword(t.Context(), req, verifiedSession); err == nil || code != common.CodeAuthenticationError || readPassword() != beforeHash {
+		t.Fatal("expired proof authorized reset")
 	}
 	// SMTP failure compensates exactly the prior OTP/attempt/cooldown/proof.
 	priorSalt, _ := utility.GenerateOTPSalt()
@@ -263,7 +311,7 @@ func TestForgotPasswordScratch(t *testing.T) {
 	if _, code, err := blocked.IssueCaptcha(t.Context(), email); err == nil || code != common.CodeServerError {
 		t.Fatal("unavailable Redis issued captcha")
 	}
-	if code, err := blocked.ResetPassword(t.Context(), req); err == nil || code != common.CodeServerError {
+	if code, err := blocked.ResetPassword(t.Context(), req, verifiedSession); err == nil || code != common.CodeServerError {
 		t.Fatal("unavailable Redis reset password")
 	}
 	if readPassword() != beforeHash {
@@ -312,5 +360,56 @@ func TestForgotSMTPDeadlineAndCancellation(t *testing.T) {
 	cancel()
 	if err := utility.SendResetCodeEmail(ctx, cfg, "reader@example.test", "ABCD", 5); err == nil {
 		t.Fatal("canceled SMTP succeeded")
+	}
+}
+
+func TestForgotSMTPAcceptedBeforeCancellation(t *testing.T) {
+	f := scratch.New(t)
+	smtp := testsupport.NewSMTP(t)
+	host, port := smtp.HostPort()
+	if err := f.DB.AutoMigrate(&entity.User{}); err != nil {
+		t.Fatal(err)
+	}
+	status := "1"
+	email := f.Prefix + "@example.test"
+	if err := f.DB.Create(&entity.User{ID: f.Prefix, Email: email, Nickname: "accepted", AccountKind: "local", Status: &status}).Error; err != nil {
+		t.Fatal(err)
+	}
+	s := NewPasswordRecoveryService(f.DB, f.Redis, common.SMTPConfig{MailServer: host, MailPort: port, MailFromAddress: "no-reply@example.test", TimeoutSeconds: 2})
+	if _, _, err := s.IssueCaptcha(t.Context(), email); err != nil {
+		t.Fatal(err)
+	}
+	captcha, err := f.Redis.Get(t.Context(), utility.CaptchaRedisKey(email)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := smtp.PauseQuit()
+	defer release()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan common.ErrorCode, 1)
+	go func() { code, _ := s.SendOTP(ctx, email, captcha); done <- code }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SMTP acceptance boundary not reached")
+	}
+	cancel()
+	if code := <-done; code != common.CodeSuccess {
+		t.Fatal("accepted DATA lost its recovery transition", code)
+	}
+	keys := recoveryKeys(email)
+	if pending, _ := f.Redis.Exists(t.Context(), keys[6]).Result(); pending != 0 {
+		t.Fatal("accepted OTP stayed pending after cancellation")
+	}
+	if len(smtp.Messages()) != 1 {
+		t.Fatal("accepted message missing")
+	}
+	match := regexp.MustCompile(`reset code is: ([A-Z]{4})`).FindStringSubmatch(smtp.Messages()[0])
+	if len(match) != 2 {
+		t.Fatal("accepted code unavailable")
+	}
+	if token, code, err := s.VerifyOTP(t.Context(), email, match[1]); err != nil || code != common.CodeSuccess || len(token) != 64 {
+		t.Fatal("accepted OTP cannot establish client proof")
 	}
 }

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -107,11 +109,11 @@ func (s *UserService) ForgotIssueCaptcha(ctx context.Context, email string) ([]b
 func (s *UserService) ForgotSendOTP(ctx context.Context, email, captcha string) (common.ErrorCode, error) {
 	return s.passwordRecovery().SendOTP(ctx, email, captcha)
 }
-func (s *UserService) ForgotVerifyOTP(ctx context.Context, email, otp string) (common.ErrorCode, error) {
+func (s *UserService) ForgotVerifyOTP(ctx context.Context, email, otp string) (string, common.ErrorCode, error) {
 	return s.passwordRecovery().VerifyOTP(ctx, email, otp)
 }
-func (s *UserService) ForgotResetPassword(ctx context.Context, req ForgotResetPasswordRequest) (common.ErrorCode, error) {
-	return s.passwordRecovery().ResetPassword(ctx, req)
+func (s *UserService) ForgotResetPassword(ctx context.Context, req ForgotResetPasswordRequest, session string) (common.ErrorCode, error) {
+	return s.passwordRecovery().ResetPassword(ctx, req, session)
 }
 
 func (s *PasswordRecoveryService) IssueCaptcha(ctx context.Context, email string) ([]byte, common.ErrorCode, error) {
@@ -137,7 +139,7 @@ func (s *PasswordRecoveryService) IssueCaptcha(ctx context.Context, email string
 
 func recoveryKeys(email string) []string {
 	code, attempts, last, lock := utility.OTPRedisKeys(email)
-	return []string{utility.CaptchaRedisKey(email), code, attempts, last, lock, utility.OTPVerifiedRedisKey(email), "otp:pending:" + email, "otp:reset:" + email}
+	return []string{utility.CaptchaRedisKey(email), code, attempts, last, lock, utility.OTPVerifiedRedisKey(email), "otp:pending:" + email, "otp:go:reset:" + email}
 }
 
 const beginRecoveryOTP = `
@@ -237,7 +239,9 @@ func (s *PasswordRecoveryService) SendOTP(ctx context.Context, email, captcha st
 		}
 		return common.CodeServerError, fmt.Errorf("failed to send email")
 	}
-	completed, err := s.redis.Eval(ctx, completeRecoveryOTP, []string{keys[1], keys[6]}, stored, nonce).Int64()
+	cleanup, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cleanupCancel()
+	completed, err := s.redis.Eval(cleanup, completeRecoveryOTP, []string{keys[1], keys[6]}, stored, nonce).Int64()
 	if err != nil || completed != 1 {
 		return common.CodeServerError, fmt.Errorf("email accepted; recovery state could not be confirmed")
 	}
@@ -259,49 +263,50 @@ end
 redis.call('SET',KEYS[6],ARGV[3],'PX',ARGV[4])
 redis.call('DEL',KEYS[2],KEYS[3],KEYS[4]);return 1`
 
-func (s *PasswordRecoveryService) VerifyOTP(ctx context.Context, email, otp string) (common.ErrorCode, error) {
+func (s *PasswordRecoveryService) VerifyOTP(ctx context.Context, email, otp string) (string, common.ErrorCode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	email, code, err := s.ready(ctx, email)
 	if err != nil {
-		return code, err
+		return "", code, err
 	}
 	otp = strings.ToUpper(strings.TrimSpace(otp))
 	if otp == "" {
-		return common.CodeArgumentError, fmt.Errorf("email and otp are required")
+		return "", common.CodeArgumentError, fmt.Errorf("email and otp are required")
 	}
 	keys := recoveryKeys(email)
 	stored, err := s.redis.Get(ctx, keys[1]).Result()
 	if errors.Is(err, redis.Nil) {
-		return common.CodeNotEffective, fmt.Errorf("expired otp")
+		return "", common.CodeNotEffective, fmt.Errorf("expired otp")
 	}
 	if err != nil {
-		return common.CodeServerError, fmt.Errorf("otp state unavailable")
+		return "", common.CodeServerError, fmt.Errorf("otp state unavailable")
 	}
 	hash, salt, err := utility.DecodeOTPStorageValue(stored)
 	if err != nil {
-		return common.CodeServerError, fmt.Errorf("otp storage corrupted")
+		return "", common.CodeServerError, fmt.Errorf("otp storage corrupted")
 	}
 	match := strconv.Itoa(subtle.ConstantTimeCompare([]byte(hash), []byte(utility.HashOTPCode(otp, salt))))
-	nonceBytes, err := utility.GenerateOTPSalt()
-	if err != nil {
-		return common.CodeServerError, fmt.Errorf("otp verification unavailable")
+	var nonceBytes [32]byte
+	if _, err = rand.Read(nonceBytes[:]); err != nil {
+		return "", common.CodeServerError, fmt.Errorf("otp verification unavailable")
 	}
-	result, err := s.redis.Eval(ctx, verifyRecoveryOTP, keys, stored, match, hex.EncodeToString(nonceBytes), utility.OTPTTL.Milliseconds(), utility.OTPAttemptLimit, utility.OTPAttemptLockDuration.Milliseconds()).Int64()
+	session := hex.EncodeToString(nonceBytes[:])
+	result, err := s.redis.Eval(ctx, verifyRecoveryOTP, keys, stored, match, recoveryProof(session), utility.OTPTTL.Milliseconds(), utility.OTPAttemptLimit, utility.OTPAttemptLockDuration.Milliseconds()).Int64()
 	if err != nil {
-		return common.CodeServerError, fmt.Errorf("otp verification unavailable")
+		return "", common.CodeServerError, fmt.Errorf("otp verification unavailable")
 	}
 	switch result {
 	case 1:
-		return common.CodeSuccess, nil
+		return session, common.CodeSuccess, nil
 	case -1:
-		return common.CodeAuthenticationError, fmt.Errorf("invalid otp")
+		return "", common.CodeAuthenticationError, fmt.Errorf("invalid otp")
 	case -2:
-		return common.CodeNotEffective, fmt.Errorf("too many attempts, try later")
+		return "", common.CodeNotEffective, fmt.Errorf("too many attempts, try later")
 	case -3:
-		return common.CodeNotEffective, fmt.Errorf("password recovery is in progress")
+		return "", common.CodeNotEffective, fmt.Errorf("password recovery is in progress")
 	default:
-		return common.CodeNotEffective, fmt.Errorf("expired otp")
+		return "", common.CodeNotEffective, fmt.Errorf("expired otp")
 	}
 }
 
@@ -313,7 +318,7 @@ type ForgotResetPasswordRequest struct {
 
 const claimRecoveryReset = `
 if redis.call('EXISTS',KEYS[2])==1 or redis.call('EXISTS',KEYS[3])==1 then return {0} end
-local verified=redis.call('GET',KEYS[1]);local ttl=redis.call('PTTL',KEYS[1]);if not verified or ttl<=0 then return {0} end
+local verified=redis.call('GET',KEYS[1]);local ttl=redis.call('PTTL',KEYS[1]);if not verified or verified~=ARGV[2] or ttl<=0 then return {0} end
 redis.call('SET',KEYS[2],ARGV[1],'PX',60000);redis.call('DEL',KEYS[1]);return {1,verified,ttl}`
 const restoreRecoveryReset = `
 if redis.call('GET',KEYS[2])~=ARGV[1] then return 0 end
@@ -322,12 +327,16 @@ if ttl>0 and redis.call('EXISTS',KEYS[1])==0 and redis.call('EXISTS',KEYS[3])==0
 redis.call('DEL',KEYS[2]);return restored`
 const clearRecoveryReset = `if redis.call('GET',KEYS[1])==ARGV[1] then redis.call('DEL',KEYS[1]);return 1 else return 0 end`
 
-func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotResetPasswordRequest) (common.ErrorCode, error) {
+func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotResetPasswordRequest, session string) (common.ErrorCode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	email, code, err := s.ready(ctx, req.Email)
 	if err != nil {
 		return code, err
+	}
+	proof := recoveryProof(session)
+	if proof == "" {
+		return common.CodeAuthenticationError, fmt.Errorf("recovery session required")
 	}
 	if req.NewPassword == "" || req.ConfirmNewPassword == "" || len(req.NewPassword) > 4096 {
 		return common.CodeArgumentError, fmt.Errorf("email and passwords are required")
@@ -352,7 +361,7 @@ func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotR
 			return err
 		}
 		userID = user.ID
-		claim, err := s.redis.Eval(ctx, claimRecoveryReset, []string{keys[5], keys[7], keys[6]}, nonce).Slice()
+		claim, err := s.redis.Eval(ctx, claimRecoveryReset, []string{keys[5], keys[7], keys[6]}, nonce, proof).Slice()
 		if err != nil {
 			return err
 		}
@@ -414,3 +423,14 @@ func (s *PasswordRecoveryService) ResetPassword(ctx context.Context, req ForgotR
 }
 
 var errRecoveryNotVerified = errors.New("email not verified")
+
+// recoveryProof never stores the bearer credential in Redis. Its Go-only key
+// namespace also prevents the historical Python email flag from authorizing Go.
+func recoveryProof(token string) string {
+	decoded, err := hex.DecodeString(token)
+	if err != nil || len(decoded) != 32 {
+		return ""
+	}
+	digest := sha256.Sum256(decoded)
+	return "session:" + hex.EncodeToString(digest[:])
+}

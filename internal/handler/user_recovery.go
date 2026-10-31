@@ -53,11 +53,12 @@ func (h *UserHandler) ForgotVerifyOTP(c *gin.Context) {
 		jsonResponse(c, common.CodeArgumentError, false, "email and otp are required")
 		return
 	}
-	code, err := h.userService.ForgotVerifyOTP(c.Request.Context(), req.Email, req.OTP)
+	session, code, err := h.userService.ForgotVerifyOTP(c.Request.Context(), req.Email, req.OTP)
 	if err != nil {
 		jsonResponse(c, code, false, err.Error())
 		return
 	}
+	setRecoveryCookie(c, session, 300)
 	jsonResponse(c, common.CodeSuccess, true, "otp verified")
 }
 
@@ -68,10 +69,12 @@ func (h *UserHandler) ForgotResetPassword(c *gin.Context) {
 		jsonResponse(c, common.CodeArgumentError, false, "email and passwords are required")
 		return
 	}
-	code, err := h.userService.ForgotResetPassword(c.Request.Context(), req)
+	session, _ := c.Cookie(recoveryCookieName)
+	code, err := h.userService.ForgotResetPassword(c.Request.Context(), req, session)
 	if err != nil {
 		jsonResponse(c, code, false, err.Error())
 		return
 	}
+	setRecoveryCookie(c, "", -1)
 	jsonResponse(c, common.CodeSuccess, true, "Password reset successful.")
 }

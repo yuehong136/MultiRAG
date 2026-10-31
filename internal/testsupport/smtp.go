@@ -25,6 +25,8 @@ type SMTPServer struct {
 	reject      bool
 	entered     chan struct{}
 	release     chan struct{}
+	quitEntered chan struct{}
+	quitRelease chan struct{}
 	shutdown    chan struct{}
 	wg          sync.WaitGroup
 }
@@ -125,6 +127,16 @@ func (s *SMTPServer) PauseData() (<-chan struct{}, func()) {
 	return s.entered, func() { once.Do(func() { close(release) }) }
 }
 
+func (s *SMTPServer) PauseQuit() (<-chan struct{}, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quitEntered = make(chan struct{})
+	s.quitRelease = make(chan struct{})
+	release := s.quitRelease
+	var once sync.Once
+	return s.quitEntered, func() { once.Do(func() { close(release) }) }
+}
+
 func (s *SMTPServer) serve(connection net.Conn) {
 	reader := textproto.NewReader(bufio.NewReader(connection))
 	writer := bufio.NewWriter(connection)
@@ -185,6 +197,18 @@ func (s *SMTPServer) serve(connection net.Conn) {
 				}
 			}
 		case "QUIT":
+			s.mu.Lock()
+			entered, release := s.quitEntered, s.quitRelease
+			s.quitEntered, s.quitRelease = nil, nil
+			s.mu.Unlock()
+			if entered != nil {
+				close(entered)
+				select {
+				case <-release:
+				case <-s.shutdown:
+					return
+				}
+			}
 			reply("221 bye")
 			return
 		default:

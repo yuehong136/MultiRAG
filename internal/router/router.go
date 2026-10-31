@@ -125,6 +125,7 @@ func documentBinaryPath(path string) bool {
 
 // Setup setup routes
 func (r *Router) Setup(engine *gin.Engine) {
+	engine.Use(handler.PasswordRecoveryOriginMiddleware())
 	// Mark even authentication denials before the protected middleware runs.
 	engine.Use(func(c *gin.Context) {
 		if documentBinaryPath(c.Request.URL.Path) {

@@ -16,7 +16,7 @@
 
 // OTP / captcha helpers for the forgot-password flow.
 // Constants and key shapes mirror api/utils/web_utils.py so the Python
-// and Go backends share the same Redis namespace and contract.
+// and Go backends share OTP challenges. Verified Go sessions are separate.
 package utility
 
 import (
@@ -69,11 +69,10 @@ func OTPRedisKeys(email string) (codeKey, attemptsKey, lastSentKey, lockKey stri
 		"otp_lock:" + email
 }
 
-// OTPVerifiedRedisKey returns the Redis key that records a successful OTP
-// verification, used as the gate for the password-reset step (matches
-// Python “_verified_key“).
+// OTPVerifiedRedisKey holds a digest of the Go client's recovery credential.
+// The legacy Python email-only flag cannot authorize this flow.
 func OTPVerifiedRedisKey(email string) string {
-	return "otp:verified:" + normalizeEmail(email)
+	return "otp:go:verified:" + normalizeEmail(email)
 }
 
 // HashOTPCode computes the HMAC-SHA256 of an OTP using the given salt and
