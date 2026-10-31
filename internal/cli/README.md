@@ -90,6 +90,11 @@ Keep credential-bearing config files outside the repository.
 Interactive history defaults to `~/.multirag_cli_history`; `MULTIRAG_CLI_HISTORY`
 can select an isolated history file without changing the user's home directory.
 
+Login failures report the HTTP status or Go/Python business code once. Raw
+authentication response messages and transport diagnostics are withheld from
+terminal output; callers can inspect wrapped transport/JSON causes. A failed
+login preserves the current session, and interactive startup retains three attempts.
+
 `-o/--output` and `--admin` work before or after the command. Context Engine flags
 such as `search -t 0.5` and `ls -n 5` remain subcommand options. `RETRIEVE` uses the
 same strict dataset-search grammar as the existing `SEARCH ... ON DATASETS` form;

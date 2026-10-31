@@ -586,7 +586,12 @@ func (c *CLI) execute(input string) (executeErr error) {
 	if credentialInput(input) {
 		defer func() {
 			if executeErr != nil {
-				executeErr = fmt.Errorf("credential command failed; check syntax, authentication and provider configuration")
+				var safeAuth *authError
+				if errors.As(executeErr, &safeAuth) {
+					executeErr = safeAuth
+				} else {
+					executeErr = fmt.Errorf("credential command failed; check syntax, authentication and provider configuration")
+				}
 			}
 		}()
 	}
