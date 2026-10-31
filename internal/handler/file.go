@@ -35,16 +35,55 @@ import (
 
 // FileHandler file handler
 type FileHandler struct {
-	fileService *service.FileService
-	userService *service.UserService
+	fileService          *service.FileService
+	userService          *service.UserService
+	file2DocumentService *service.File2DocumentService
 }
 
 // NewFileHandler create file handler
 func NewFileHandler(fileService *service.FileService, userService *service.UserService) *FileHandler {
 	return &FileHandler{
-		fileService: fileService,
-		userService: userService,
+		fileService:          fileService,
+		userService:          userService,
+		file2DocumentService: service.NewFile2DocumentService(),
 	}
+}
+
+// LinkToDatasets acknowledges only completed conversion, including retirement.
+func (h *FileHandler) LinkToDatasets(c *gin.Context) {
+	user, code, message := GetUser(c)
+	if code != common.CodeSuccess {
+		jsonError(c, code, message)
+		return
+	}
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil || len(query) > 1 || (len(query) > 0 && len(query["mode"]) != 1) {
+		jsonError(c, common.CodeArgumentError, "Invalid mode.")
+		return
+	}
+	mode := query.Get("mode")
+	if len(query) == 0 {
+		mode = "replace"
+	}
+	var req service.LinkToDatasetsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonError(c, common.CodeArgumentError, "Invalid conversion request.")
+		return
+	}
+	if err := h.file2DocumentService.LinkToDatasets(c.Request.Context(), user.ID, req, mode); err != nil {
+		code := common.CodeServerError
+		message := "Unable to complete file conversion."
+		if errors.Is(err, service.ErrLinkArgument) {
+			code = common.CodeArgumentError
+			message = err.Error()
+		} else if errors.Is(err, service.ErrLinkUnavailable) || errors.Is(err, service.ErrDocumentDeleteForbidden) {
+			code = common.CodeDataError
+			message = service.ErrLinkUnavailable.Error()
+		}
+		jsonError(c, code, message)
+		return
+	}
+	jsonResponse(c, common.CodeSuccess, true, "success")
 }
 
 // ListFiles list files (endpoint at /api/v1/files matching Python /files)

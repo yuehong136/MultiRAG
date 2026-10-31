@@ -896,7 +896,7 @@ func (s *DocumentDeleteService) unreferencedDocumentObjects(ctx context.Context,
 	// A shared original source remains registered by another File2Document,
 	// including a local file whose bucket differs from the dataset namespace.
 	var shared []struct{ DocumentID string }
-	if err := tx.Table("t_ai_file2documents AS link").Select("link.document_id").Joins("JOIN t_ai_files AS f ON f.id=link.file_id").Where("link.document_id IN ? AND (f.source_type <> ? OR EXISTS (SELECT 1 FROM t_ai_file2documents other WHERE other.file_id=f.id AND (other.document_id NOT IN ? OR other.document_id IS NULL)))", ids, string(entity.FileSourceKnowledgebase), ids).Find(&shared).Error; err != nil {
+	if err := tx.Table("t_ai_file2documents AS link").Select("link.document_id").Joins("JOIN t_ai_files AS f ON f.id=link.file_id JOIN t_ai_documents AS d ON d.id=link.document_id").Where("link.document_id IN ? AND ((f.source_type <> ? AND f.location=d.location) OR EXISTS (SELECT 1 FROM t_ai_file2documents other WHERE other.file_id=f.id AND (other.document_id NOT IN ? OR other.document_id IS NULL)))", ids, string(entity.FileSourceKnowledgebase), ids).Find(&shared).Error; err != nil {
 		return nil, err
 	}
 	sharedDocs := map[string]bool{}
