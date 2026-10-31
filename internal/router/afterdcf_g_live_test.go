@@ -410,6 +410,48 @@ func TestAfterDCFRouterScratch(t *testing.T) {
 	jarB.SetCookies(apiURL, []*http.Cookie{&wrongCookie})
 	assertDenied(clientB, "", 200, common.CodeAuthenticationError)
 	assertDenied(clientA, "https://hostile.example.test", 403, common.CodeForbidden)
+	// Expiry is enforced by Redis even while the browser still has its cookie.
+	if err := f.Redis.PExpireAt(t.Context(), utility.OTPVerifiedRedisKey(email), time.Now().Add(-time.Second)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	jsonRequest("POST", "/api/v1/auth/password/reset", "", resetBody, common.CodeAuthenticationError, false)
+	var afterExpired string
+	if err := f.Read.QueryRow("SELECT COALESCE(password,'') FROM t_ai_users WHERE id=$1", owner).Scan(&afterExpired); err != nil || afterExpired != beforePassword {
+		t.Fatal("expired HTTP recovery changed SQL")
+	}
+	if exists, err := f.Redis.Exists(t.Context(), utility.OTPVerifiedRedisKey(email)).Result(); err != nil || exists != 0 {
+		t.Fatal("expired proof still available")
+	}
+	// A new actual captcha/SMTP/OTP verification rotates the browser token.
+	status, _, _ = request("POST", "/api/v1/auth/password/forgot/captcha?email="+url.QueryEscape(email), "", nil)
+	if status != 200 {
+		t.Fatal("new recovery captcha")
+	}
+	captcha, err = f.Redis.Get(t.Context(), utility.CaptchaRedisKey(email)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonRequest("POST", "/api/v1/auth/password/forgot/otp", "", map[string]any{"email": email, "captcha": captcha}, common.CodeSuccess, true)
+	messages = smtp.Messages()
+	if len(messages) != 2 {
+		t.Fatal("rotated recovery SMTP receipt")
+	}
+	match = regexp.MustCompile(`reset code is: ([A-Z]{4})`).FindStringSubmatch(messages[1])
+	if len(match) != 2 {
+		t.Fatal("rotated recovery SMTP code")
+	}
+	verifyHeaders = jsonRequest("POST", "/api/v1/auth/password/forgot/otp/verify", "", map[string]any{"email": email, "otp": match[1]}, common.CodeSuccess, true)
+	newCookies := (&http.Response{Header: verifyHeaders}).Cookies()
+	if len(newCookies) != 1 || newCookies[0].Value == oldCookie.Value {
+		t.Fatal("new OTP did not rotate client credential")
+	}
+	boundProof, err = f.Redis.Get(t.Context(), utility.OTPVerifiedRedisKey(email)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jarB.SetCookies(apiURL, []*http.Cookie{&oldCookie})
+	assertDenied(clientB, "", 200, common.CodeAuthenticationError)
+	oldCookie = *newCookies[0]
 	// A real SQL failure must leave this same browser credential retryable.
 	if err := f.DB.Exec(`CREATE FUNCTION reject_g_http_reset() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled password failure'; END $$; CREATE TRIGGER reject_g_http_reset BEFORE UPDATE OF password ON t_ai_users FOR EACH ROW EXECUTE FUNCTION reject_g_http_reset()`).Error; err != nil {
 		t.Fatal(err)
