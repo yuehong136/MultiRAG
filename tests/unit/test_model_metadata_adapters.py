@@ -136,7 +136,20 @@ async def test_openrouter_rejects_other_origins_before_credentials(monkeypatch: 
     assert clients == []
 
 
-@pytest.mark.parametrize("tag,callable_name", [("model:latest", "model"), ("model:latest", "model:latest"), ("model:custom", "model:custom"), ("host:5000/model:latest", "host:5000/model")])
+@pytest.mark.parametrize(
+    "tag,callable_name",
+    [
+        ("model:latest", "model"),
+        ("model:latest", "model:latest"),
+        ("model:custom", "model:custom"),
+        ("llama3:7b", "llama3"),
+        ("mistral:q4_K_M", "mistral"),
+        ("host:5000/model:latest", "host:5000/model"),
+        ("registry.example.com:5000/team/model:v1.0", "registry.example.com:5000/team/model"),
+        ("registry.example.com:5000/team/model", "registry.example.com:5000/team/model"),
+        ("plain", "plain"),
+    ],
+)
 async def test_localai_joins_tags_to_real_callable_ids(monkeypatch: pytest.MonkeyPatch, tag: str, callable_name: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer fixture-token"
@@ -155,7 +168,18 @@ async def test_localai_joins_tags_to_real_callable_ids(monkeypatch: pytest.Monke
     assert all(client.is_closed for client in clients)
 
 
-@pytest.mark.parametrize("tags,ids", [(["same", "same:latest"], ["same"]), (["model:custom"], ["model"]), (["model:latest"], ["other"]), (["model"], ["model", "extra"])])
+@pytest.mark.parametrize(
+    "tags,ids",
+    [
+        (["same", "same:latest"], ["same"]),
+        (["model:q4", "model:q8"], ["model"]),
+        (["model:custom"], ["other"]),
+        (["model:latest"], ["other"]),
+        (["model:"], ["model"]),
+        (["registry.example.com:5000/team/model"], ["registry.example.com"]),
+        (["model"], ["model", "extra"]),
+    ],
+)
 async def test_localai_rejects_missing_or_colliding_callable_identity(monkeypatch: pytest.MonkeyPatch, tags: list[str], ids: list[str]) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
@@ -164,6 +188,21 @@ async def test_localai_rejects_missing_or_colliding_callable_identity(monkeypatc
     transport(monkeypatch, handler)
     with pytest.raises(DiscoveryError):
         await LocalAI("", "http://127.0.0.1").get_model_list()
+
+
+async def test_localai_exact_tagged_id_wins_when_base_is_also_callable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        names = ["model:custom", "model"]
+        if request.url.path.endswith("/tags"):
+            return httpx.Response(200, json={"models": [{"name": name} for name in names]})
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": name} for name in names]})
+        return httpx.Response(200, json={"capabilities": ["completion"], "model_info": {}})
+
+    clients = transport(monkeypatch, handler)
+    result = await LocalAI("", "http://127.0.0.1").get_model_list()
+    assert [model.name for model in result] == ["model:custom", "model"]
+    assert all(client.is_closed for client in clients)
 
 
 @pytest.mark.parametrize("adapter", ADAPTERS)

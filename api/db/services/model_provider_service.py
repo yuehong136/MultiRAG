@@ -49,6 +49,14 @@ def catalog(provider_name: str, region: str = "") -> list[ModelRegistration]:
     return sorted(merged.values(), key=lambda model: model.model_name)
 
 
+def supported_capabilities(provider_name: str) -> set[str]:
+    """Expose provider capabilities even when model declarations are supplied by users."""
+    capabilities: set[str] = {capability for model in catalog(provider_name) for capability in model.model_types}
+    if provider_name in {"MinerU", "PaddleOCR", "OpenDataLoader"}:
+        capabilities.add("ocr")
+    return capabilities
+
+
 async def discover_models(provider_name: str, request: DiscoveryInput) -> list[DiscoveredModel]:
     """Discover declarations only; no SQL, registration, inference or credential cache."""
     if provider_name not in {item["name"] for item in public_factories()}:

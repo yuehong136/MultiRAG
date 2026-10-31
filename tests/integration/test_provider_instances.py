@@ -1,8 +1,13 @@
 """Owned PostgreSQL and HTTP evidence for provider-instance model lifecycles."""
 
+import errno
 import importlib.util
 import json
-from collections.abc import AsyncIterator
+import socket
+import threading
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -28,6 +33,37 @@ from tests.support.provider_instances import owned_engine as owned_engine
 from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
+
+
+@contextmanager
+def registered_provider(handler: type[BaseHTTPRequestHandler], case: str) -> Iterator[str]:
+    journal = ResourceJournal(case)
+    for attempt in range(32):
+        address = ("127.0.0.1", 30000 + int(uuid4().hex[:4], 16) % 20000)
+        journal.event("reserve-listener", address=list(address), attempt=attempt + 1)
+        server = ThreadingHTTPServer(address, handler, bind_and_activate=False)
+        try:
+            server.server_bind()
+            server.server_activate()
+        except OSError as error:
+            server.server_close()
+            if error.errno != errno.EADDRINUSE or attempt == 31:
+                raise
+            continue
+        break
+    journal.event("reserve-thread", name=case, listener=list(address))
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, name=case)
+    worker.start()
+    try:
+        yield f"http://{address[0]}:{address[1]}"
+    finally:
+        server.shutdown()
+        worker.join(5)
+        server.server_close()
+        assert not worker.is_alive()
+        with socket.socket() as reader:
+            assert reader.connect_ex(address) != 0
+        journal.event("listener-independent-readback", address=list(address), absent=True, worker_joined=True)
 
 
 def _exercise_discovery(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, web_checkout: Path | None = None) -> None:
@@ -374,6 +410,37 @@ def test_instances_preserve_credentials_capabilities_defaults_and_secret_project
         assert db.scalar(select(func.count()).select_from(TenantModelProvider)) == 0
         assert db.scalar(select(func.count()).select_from(TenantModelInstance)) == 0
         assert db.scalar(select(func.count()).select_from(TenantLLM)) == 0
+
+
+def test_inactive_instances_and_models_keep_stable_order_across_pages(http: tuple[Any, ...]) -> None:
+    client, _owner, engine, _module = http
+    for name in ("c_last", "a_first", "b_middle"):
+        create(client, name)
+    prefix = "/api/v1/providers/OpenAI/instances"
+    assert client.patch(prefix + "/a_first", json={"status": "inactive"}).status_code == 200
+    pages = [client.get(f"{prefix}?page={page}&page_size=1").json()["data"] for page in (1, 2, 3)]
+    assert all(page["total"] == 3 for page in pages)
+    instances = [page["items"][0] for page in pages]
+    assert [row["instance_name"] for row in instances] == ["a_first", "b_middle", "c_last"]
+    assert [row["status"] for row in instances] == ["inactive", "active", "active"]
+
+    model_path = prefix + "/b_middle/models"
+    for name in ("z_last", "a_first", "m_middle"):
+        response = client.post(model_path, json={"model_name": name, "model_types": ["chat"], "max_tokens": 0})
+        assert response.status_code == 200, response.text
+    before = client.get(model_path).json()["data"]["items"]
+    assert [row["name"] for row in before] == ["a_first", "catalog-chat", "m_middle", "z_last"]
+    for row in before[::2]:
+        assert client.patch(f"{model_path}/{row['id']}", json={"status": "inactive"}).status_code == 200
+    pages = [client.get(f"{model_path}?page={page}&page_size=1").json()["data"] for page in range(1, 5)]
+    after = [page["items"][0] for page in pages]
+    assert all(page["total"] == 4 for page in pages)
+    assert [row["id"] for row in after] == [row["id"] for row in before]
+    assert [row["status"] for row in after] == ["inactive", "active", "inactive", "active"]
+    with Session(engine) as reader:
+        assert {row.id: row.status for row in reader.scalars(select(TenantLLM).where(TenantLLM.id.in_([row["id"] for row in after])))} == {
+            row["id"]: "1" if row["status"] == "active" else "0" for row in after
+        }
 
 
 def test_blank_patch_status_and_rejections_have_independent_readback(http: tuple[Any, ...]) -> None:
@@ -1088,6 +1155,37 @@ def test_region_catalog_effective_status_order_and_legacy_key_readback(http: tup
     assert item["status"] == "active" and item["effective_status"] == "inactive"
 
 
+def test_empty_ocr_provider_directories_advertise_capability_without_models(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, owner, engine, _module = http
+    names = ["MinerU", "PaddleOCR", "OpenDataLoader"]
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": name, "llm": []} for name in names])
+    available = client.get("/api/v1/providers?available=true")
+    assert available.status_code == 200, available.text
+    items = available.json()["data"]["items"]
+    assert {item["name"]: item["model_types"] for item in items} == {name: ["ocr"] for name in names}
+    assert all("id" not in item for item in items)
+    for name in names:
+        assert client.put("/api/v1/providers", json={"provider_name": name}).status_code == 200
+        directory = client.get(f"/api/v1/providers/{name}/models").json()["data"]
+        assert directory["items"] == [] and directory["total"] == 0
+        instances = client.get(f"/api/v1/providers/{name}/instances").json()["data"]
+        assert instances["items"] == [] and instances["total"] == 0
+    configured = client.get("/api/v1/providers").json()["data"]["items"]
+    assert {item["name"]: item["model_types"] for item in configured} == {name: ["ocr"] for name in names}
+    assert len({item["id"] for item in configured}) == 3
+    # Catalog OCR declarations merge with the provider capability once.
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": name, "llm": [{"llm_name": "declared", "mdl_type": ["ocr", "image2text"], "max_tokens": 0}]} for name in names])
+    for query in ("", "?available=true"):
+        result = client.get("/api/v1/providers" + query)
+        assert {item["name"]: item["model_types"] for item in result.json()["data"]["items"]} == {name: ["image2text", "ocr"] for name in names}
+    assert client.get("/api/v1/models").json()["data"]["items"] == []
+    with Session(engine) as reader:
+        assert reader.scalar(select(func.count()).select_from(TenantModelProvider).where(TenantModelProvider.tenant_id == owner)) == 3
+        for model in (TenantLLM, TenantModel, TenantModelInstance):
+            assert reader.scalar(select(func.count()).select_from(model)) == 0
+        assert reader.get(Tenant, owner).tenant_ocr_id is None
+
+
 def test_provider_inventory_projects_owned_capabilities_without_credentials(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
     client, owner, engine, module = http
     create(client)
@@ -1414,3 +1512,128 @@ def test_backfill_new_import_does_not_rebind_edited_instance(owned_engine: Engin
         assert get_model_config_by_id(reader, first_id, tenant_id=owner, model_type="chat")["api_base"] == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         assert get_model_config_by_id(reader, second_id, tenant_id=owner, model_type="chat")["api_base"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
         assert reader.scalar(select(func.count()).select_from(TenantModelInstance)) == 2
+
+
+def test_localai_custom_tag_rest_uses_authoritative_callable_id(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, owner, engine, _module = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "LocalAI", "llm": []}])
+    monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
+    state: dict[str, Any] = {"ambiguous": False, "calls": []}
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            return
+
+        def reply(self, value: dict[str, Any]) -> None:
+            content = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def do_GET(self) -> None:
+            if self.path == "/api/tags":
+                names = ["llama3:7b", "llama3:q4"] if state["ambiguous"] else ["llama3:7b"]
+                self.reply({"models": [{"name": name} for name in names]})
+            else:
+                assert self.path == "/v1/models"
+                self.reply({"data": [{"id": "llama3"}]})
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            state["calls"].append((self.path, payload["model"]))
+            if self.path == "/api/show":
+                assert payload["model"] == "llama3:7b"
+                self.reply({"capabilities": ["completion"], "model_info": {"general.context_length": 0}})
+            else:
+                assert self.path == "/v1/chat/completions" and payload["model"] == "llama3"
+                self.reply({"id": "controlled", "model": "llama3", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}]})
+
+    with registered_provider(Provider, "localai-custom-tag-http") as base:
+        discovered = client.post("/api/v1/providers/LocalAI/models/discovery", json={"base_url": base, "api_key": ""})
+        assert discovered.status_code == 200, discovered.text
+        declarations = discovered.json()["data"]["items"]
+        assert [item["model_name"] for item in declarations] == ["llama3"]
+        candidate = {"base_url": base, "api_key": "", "model_ids": [], "custom_models": [{key: item[key] for key in ("model_name", "model_types", "max_tokens", "is_tools")} for item in declarations]}
+        verified = client.post("/api/v1/providers/LocalAI/connection", json=candidate)
+        assert verified.status_code == 200 and verified.json()["data"]["model_name"] == "llama3", verified.text
+        created = client.post("/api/v1/providers/LocalAI/instances", json={"instance_name": "local", **candidate})
+        assert created.status_code == 200, created.text
+        with Session(engine) as reader:
+            model = reader.scalar(select(TenantModel))
+            row = reader.get(TenantLLM, model.id)
+            assert model.model_name == "llama3" and model.model_types == ["chat"]
+            assert row.tenant_id == owner and row.max_tokens == 0
+            assert get_model_config_by_id(reader, row.id, tenant_id=owner, model_type="chat")["llm_name"] == "llama3"
+        assert state["calls"] == [("/api/show", "llama3:7b"), ("/v1/chat/completions", "llama3"), ("/v1/chat/completions", "llama3")]
+        state["ambiguous"] = True
+        ambiguous = client.post("/api/v1/providers/LocalAI/models/discovery", json={"base_url": base, "api_key": ""})
+        assert ambiguous.status_code == 502
+        with Session(engine) as reader:
+            assert reader.scalar(select(func.count()).select_from(TenantModel)) == 1
+
+
+def test_fish_audio_real_adapter_verification_and_atomic_sql(http: tuple[Any, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    import ormsgpack
+
+    from api.db.services.llm_service import LLMBundle
+    from api.utils.api_utils import async_current_user
+
+    client, owner, engine, _module = http
+    monkeypatch.setattr(settings, "FACTORY_LLM_INFOS", [{"name": "Fish Audio", "llm": []}])
+    monkeypatch.setattr(provider_verification, "verify_model", REAL_VERIFY_MODEL)
+    voice = "1234567890abcdef12345678"
+    state: dict[str, Any] = {"status": 200, "empty": False, "calls": 0}
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            return
+
+        def do_POST(self) -> None:
+            payload = ormsgpack.unpackb(self.rfile.read(int(self.headers["Content-Length"])))
+            assert self.path == "/v1/tts" and self.headers["api-key"] == "synthetic-fish-key"
+            assert self.headers["content-type"] == "application/msgpack" and payload["reference_id"] == voice
+            state["calls"] += 1
+            content = (b"" if state["empty"] else b"ID3-controlled-fish-audio") if state["status"] == 200 else b"private provider diagnostic"
+            self.send_response(state["status"])
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+    def counts() -> list[int]:
+        with Session(engine) as reader:
+            return [reader.scalar(select(func.count()).select_from(model)) for model in (TenantModelProvider, TenantModelInstance, TenantModel, TenantLLM)]
+
+    with registered_provider(Provider, "fish-audio-real-http") as base:
+        candidate = {"api_key": "synthetic-fish-key", "base_url": base + "/v1/tts", "model_ids": [], "custom_models": [{"model_name": voice, "model_types": ["tts"], "max_tokens": 0}]}
+        verified = client.post("/api/v1/providers/Fish Audio/connection", json=candidate)
+        assert verified.status_code == 200 and verified.json()["data"] == {"verified": True, "model_name": voice, "model_type": "tts"}, verified.text
+        assert counts() == [0, 0, 0, 0]
+        created = client.post("/api/v1/providers/Fish Audio/instances", json={"instance_name": "speech", **candidate})
+        assert created.status_code == 200 and "synthetic-fish-key" not in created.text, created.text
+        assert counts() == [1, 1, 1, 1]
+        model = client.get("/api/v1/models?model_type=tts").json()["data"]["items"][0]
+        identifier = model["id"]
+        assert type(identifier) is int and model["name"] == voice and model["reference"] == str(identifier)
+        assert client.patch("/api/v1/models/default", json={"model_type": "tts", "model_id": identifier}).status_code == 200
+        with Session(engine) as reader:
+            config = get_tenant_default_model_by_type(reader, owner, "tts")
+            assert config["id"] == identifier and config["llm_name"] == voice and config["max_tokens"] == 0
+            bundle = LLMBundle(reader, owner, config)
+            assert b"".join(bundle.tts("Runtime speech")) == b"ID3-controlled-fish-audio"
+        before_denial = state["calls"]
+        authenticated = client.app.dependency_overrides[async_current_user]
+        client.app.dependency_overrides[async_current_user] = lambda: SimpleNamespace(id=uuid4().hex)
+        try:
+            denied = client.post("/api/v1/providers/Fish Audio/instances", json={"instance_name": "foreign", **candidate})
+            assert denied.status_code == 404 and state["calls"] == before_denial
+        finally:
+            client.app.dependency_overrides[async_current_user] = authenticated
+        state["status"] = 401
+        rejected = client.post("/api/v1/providers/Fish Audio/instances", json={"instance_name": "rejected", **candidate})
+        assert rejected.status_code == 400 and "private provider diagnostic" not in rejected.text and "synthetic-fish-key" not in rejected.text
+        state.update(status=200, empty=True)
+        empty = client.post("/api/v1/providers/Fish Audio/instances", json={"instance_name": "empty", **candidate})
+        assert empty.status_code == 400 and counts() == [1, 1, 1, 1]
