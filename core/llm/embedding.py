@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import asyncio
 import base64
 import json
 import logging
@@ -21,7 +22,8 @@ import re
 import threading
 import time
 from abc import ABC
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
+from contextlib import closing
 from typing import Annotated, Any, Literal
 
 import dashscope
@@ -38,7 +40,9 @@ from common.exceptions import ModelException
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version
+from core.llm.async_stream import iterate_owned_stream
 from core.llm.dashscope_transport import native_http_api_url
+from core.llm.replicate_auth import normalize_replicate_key, replicate_session
 from core.llm.volc_auth import decode_volc_key
 
 
@@ -1046,24 +1050,40 @@ class SILICONFLOWEmbed(Base):
 class ReplicateEmbed(Base):
     _FACTORY_NAME = "Replicate"
 
-    def __init__(self, key, model_name, base_url=None):
-        from replicate.client import Client
-
+    def __init__(self, key: str | dict[str, Any], model_name: str, base_url: str | None = None, timeout: float = 30.0) -> None:
+        self.api_key = normalize_replicate_key(key)
         self.model_name = model_name
-        self.client = Client(api_token=key)
+        self.base_url = base_url
+        self.timeout = timeout
 
-    def encode(self, texts: list):
-        batch_size = 16
-        token_count = sum([num_tokens_from_string(text) for text in texts])
-        ress = []
-        for i in range(0, len(texts), batch_size):
-            res = self.client.run(self.model_name, input={"texts": texts[i : i + batch_size]})
-            ress.extend(res)
-        return np.array(ress), token_count
+    async def _encode(self, texts: list[str]) -> np.ndarray:
+        vectors: list[Any] = []
+        try:
+            async with asyncio.timeout(self.timeout), replicate_session(self.api_key, self.base_url, self.timeout) as client:
+                for start in range(0, len(texts), 16):
+                    batch = texts[start : start + 16]
+                    response = await client.async_run(self.model_name, input={"texts": batch})
+                    vectors.extend(_validated_embedding_vectors(response, len(batch)).tolist())
+        except ModelException:
+            raise
+        except Exception as error:
+            raise ModelException("Replicate embedding request failed", retryable=isinstance(error, TimeoutError)) from None
+        return _validated_embedding_vectors(vectors, len(texts))
 
-    def encode_queries(self, text):
-        res = self.client.embed(self.model_name, input={"texts": [text]})
-        return np.array(res), num_tokens_from_string(text)
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        if not texts:
+            return np.array([]), 0
+
+        async def result() -> AsyncGenerator[np.ndarray, None]:
+            yield await self._encode(texts)
+
+        with closing(iterate_owned_stream(result)) as stream:
+            vectors = next(stream)
+        return vectors, sum(num_tokens_from_string(text) for text in texts)
+
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
 
 
 class VoyageEmbed(Base):

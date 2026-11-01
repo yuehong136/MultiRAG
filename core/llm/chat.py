@@ -23,7 +23,7 @@ import re
 import time
 from abc import ABC
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
-from contextlib import asynccontextmanager, closing
+from contextlib import aclosing, asynccontextmanager, closing
 from copy import deepcopy
 from enum import StrEnum
 from typing import Any
@@ -43,6 +43,7 @@ from core.llm.chat_model.minimax_auth import decode_minimax_key, minimax_request
 from core.llm.chat_model.tool_history import ToolHistoryMixin, ToolResult
 from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.openrouter_auth import decode_openrouter_key
+from core.llm.replicate_auth import normalize_replicate_key, replicate_session
 from core.llm.tool_decorator import resolve_tool_binding
 from core.llm.volc_auth import decode_volc_key
 from core.nlp import is_chinese, is_english
@@ -923,44 +924,74 @@ class LeptonAIChat(Base):
 class ReplicateChat(Base):
     _FACTORY_NAME = "Replicate"
 
-    def __init__(self, key, model_name, base_url=None, **kwargs):
-        super().__init__(key, model_name, base_url=base_url, **kwargs)
-
-        from replicate.client import Client
-
+    def __init__(self, key: str | dict[str, Any], model_name: str, base_url: str | None = None, **kwargs: Any) -> None:
+        self.api_key = normalize_replicate_key(key)
         self.model_name = model_name
-        self.client = Client(api_token=key)
+        self.base_url = base_url
+        self.timeout = float(kwargs.get("timeout", os.environ.get("LLM_TIMEOUT_SECONDS", 600)))
+        self.is_tools = False
+        self.tools = []
+        self.toolcall_sessions = {}
+        self.max_rounds = kwargs.get("max_rounds", 5)
+
+    def bind_tools(self, toolcall_session: Any = None, tools: list[Any] | None = None) -> None:
+        raise ValueError("Replicate tool calling is unavailable")
+
+    @staticmethod
+    def _input(system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None) -> dict[str, Any]:
+        options = deepcopy(gen_conf or {})
+        options.pop("max_tokens", None)
+        messages = deepcopy(history or [])
+        if system and (not messages or messages[0].get("role") != "system"):
+            messages.insert(0, {"role": "system", "content": system})
+        system_prompt = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
+        prompt = "\n".join(item["role"] + ":" + item["content"] for item in messages[-5:] if item.get("role") != "system")
+        return {**options, "system_prompt": system_prompt, "prompt": prompt}
+
+    async def async_chat(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
+        try:
+            async with asyncio.timeout(self.timeout), replicate_session(self.api_key, self.base_url, self.timeout) as client:
+                response = await client.async_run(self.model_name, input=self._input(system, history, gen_conf))
+                if isinstance(response, str):
+                    answer = response
+                elif isinstance(response, list) and all(isinstance(part, str) for part in response):
+                    answer = "".join(response)
+                elif hasattr(response, "__aiter__"):
+                    async with aclosing(response):
+                        parts = [part async for part in response]
+                    if any(not isinstance(part, str) for part in parts):
+                        raise ValueError("Invalid Replicate chat output")
+                    answer = "".join(parts)
+                else:
+                    raise ValueError("Invalid Replicate chat output")
+            return answer, num_tokens_from_string(answer)
+        except Exception:
+            return "**ERROR**: Replicate chat request failed", 0
+
+    async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> AsyncIterator[str | int]:
+        answer = ""
+        try:
+            async with asyncio.timeout(self.timeout), replicate_session(self.api_key, self.base_url, self.timeout) as client:
+                async with aclosing(await client.async_stream(self.model_name, input=self._input(system, history, gen_conf))) as stream:
+                    async for event in stream:
+                        delta = str(event)
+                        if delta:
+                            answer += delta
+                            yield delta
+        except Exception:
+            yield "**ERROR**: Replicate chat request failed"
+        yield num_tokens_from_string(answer)
 
     def _chat(self, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> tuple[str, int]:
-        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
-        system = history[0]["content"] if history and history[0]["role"] == "system" else ""
-        prompt = "\n".join([item["role"] + ":" + item["content"] for item in history[-5:] if item["role"] != "system"])
-        response = self.client.run(
-            self.model_name,
-            input={"system_prompt": system, "prompt": prompt, **gen_conf},
-        )
-        ans = "".join(response)
-        return ans, num_tokens_from_string(ans)
+        async def result() -> AsyncGenerator[tuple[str, int], None]:
+            yield await self.async_chat(None, history, gen_conf, **kwargs)
+
+        with closing(iterate_owned_stream(result)) as stream:
+            return next(stream)
 
     def chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[str | int]:
-        gen_conf = deepcopy(gen_conf) if gen_conf is not None else {}
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        prompt = "\n".join([item["role"] + ":" + item["content"] for item in history[-5:]])
-        ans = ""
-        try:
-            response = self.client.run(
-                self.model_name,
-                input={"system_prompt": system, "prompt": prompt, **gen_conf},
-            )
-            for resp in response:
-                ans = resp
-                yield ans
-
-        except Exception as e:
-            yield ans + "\n**ERROR**: " + str(e)
-
-        yield num_tokens_from_string(ans)
+        with closing(iterate_owned_stream(lambda: self.async_chat_streamly(system, history, gen_conf, **kwargs))) as stream:
+            yield from stream
 
 
 class SparkChat(Base):
