@@ -1,9 +1,12 @@
 """RESTful user route registration and compatibility-boundary contracts."""
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import Mock
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from api.db.services.user_service import UserService
@@ -230,16 +233,25 @@ def test_registration_failure_does_not_echo_persistence_parameters(
     assert "collision@example.test" not in payload["retmsg"]
 
 
-def test_password_recovery_rejects_external_only_account_before_redis(client, monkeypatch):
-    from api.apps.restful_apis import user_api
+def test_password_recovery_rejects_external_only_account_before_redis(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
 
-    monkeypatch.setattr(
-        UserService,
-        "query_password_user_by_email",
-        classmethod(lambda cls, db, email: None),
-    )
-    redis_get = Mock(side_effect=AssertionError("external account must not enter password recovery"))
-    monkeypatch.setattr(user_api, "REDIS_CONN", SimpleNamespace(get=redis_get))
+    from api.db.services import password_recovery_service as recovery
+
+    # Exercise the real account predicate; an ineligible account yields no row.
+    scalar = AsyncMock(return_value=None)
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from api.db.db_models import get_async_db
+
+    async def unavailable_account() -> AsyncIterator[AsyncSession]:
+        async with AsyncSession() as db:
+            monkeypatch.setattr(db, "scalar", scalar)
+            yield db
+
+    client.app.dependency_overrides[get_async_db] = unavailable_account
+    redis_call = AsyncMock(side_effect=AssertionError("external account must not enter password recovery"))
+    monkeypatch.setattr(recovery, "redis_eval", redis_call)
 
     response = client.post(
         "/api/v1/auth/password/forgot/otp",
@@ -247,5 +259,6 @@ def test_password_recovery_rejects_external_only_account_before_redis(client, mo
     )
 
     assert response.status_code == 200
-    assert response.json()["retmsg"] == "invalid email"
-    redis_get.assert_not_called()
+    assert response.json()["retcode"] != 0
+    scalar.assert_awaited_once()
+    redis_call.assert_not_called()

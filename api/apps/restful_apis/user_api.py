@@ -1,9 +1,7 @@
 import logging
-import os
 import re
 import secrets
 import string
-import time
 from base64 import b64decode
 from datetime import datetime
 from typing import Any
@@ -18,28 +16,24 @@ from api.apps import manager
 from api.apps.auth import get_auth_client
 from api.db import UserAccountKind
 from api.db.db_models import User, get_async_db
+from api.db.services import password_recovery_service as recovery
 from api.db.services.user_service import TenantService, UserService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from api.utils.crypt import decrypt
+from api.utils.password_recovery import check_origin as check_recovery_origin
+from api.utils.password_recovery import clear_token as clear_recovery_token
+from api.utils.password_recovery import request_token as recovery_request_token
+from api.utils.password_recovery import set_token as set_recovery_token
 from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.utils.web_utils import (
-    ATTEMPT_LIMIT,
-    ATTEMPT_LOCK_SECONDS,
     OTP_LENGTH,
-    OTP_TTL_SECONDS,
-    RESEND_COOLDOWN_SECONDS,
-    captcha_key,
-    hash_code,
-    otp_keys,
     send_email_html,
-    verified_key,
 )
 from common import settings
 from common.connection_utils import construct_response
 from common.constants import RetCode
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
-from core.utils.redis_conn import REDIS_CONN
 
 router = APIRouter()
 
@@ -538,235 +532,77 @@ async def set_tenant_info(
 
 
 @router.post("/auth/password/forgot/captcha", summary="获取图片验证码")
-async def forget_get_captcha(email: str, db: AsyncSession = Depends(get_async_db)):
-    """
-    获取图片验证码
-
-    该接口用于生成图片验证码并缓存到 Redis 中。
-
-    参数:
-    - email: str 用户的邮箱地址（查询参数）
-
-    返回:
-    - 成功时返回 base64 编码的验证码图片 data URI
-    - 失败时返回错误信息
-    """
+async def forget_get_captcha(request: Request, email: str, db: AsyncSession = Depends(get_async_db)) -> Response:
+    check_recovery_origin(request)
+    email = email.strip()
     if not email:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email is required")
+    text = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(OTP_LENGTH))
+    try:
+        await recovery.set_captcha(db, email, text)
+        from captcha.image import ImageCaptcha
 
-    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
-    if user is None:
-        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
-
-    # Generate captcha text
-    allowed = string.ascii_uppercase + string.digits
-    captcha_text = "".join(secrets.choice(allowed) for _ in range(OTP_LENGTH))
-    REDIS_CONN.set(captcha_key(email), captcha_text, 60)  # Valid for 60 seconds
-
-    from captcha.image import ImageCaptcha
-
-    image = ImageCaptcha(width=300, height=120, font_sizes=[50, 60, 70])
-    img_bytes = image.generate(captcha_text).read()
-
-    return Response(content=img_bytes, media_type="image/jpeg")
+        image = ImageCaptcha(width=300, height=120, font_sizes=[50, 60, 70])
+        return Response(content=image.generate(text).read(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    except recovery.RecoveryError:
+        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email or recovery unavailable")
+    except Exception as error:
+        logging.error("Recovery captcha failed: %s", type(error).__name__)
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="recovery unavailable")
 
 
 @router.post("/auth/password/forgot/otp", summary="发送邮箱OTP验证码")
-async def forget_send_otp(request: SendOtpRequest, db: AsyncSession = Depends(get_async_db)):
-    """
-    发送邮箱OTP验证码
-
-    该接口用于验证图片验证码，并生成邮箱OTP验证码发送到用户邮箱。
-
-    参数:
-    - request: SendOtpRequest对象，包含邮箱和图片验证码
-        - email: str 用户的邮箱地址
-        - captcha: str 图片验证码
-
-    返回:
-    - 成功时返回成功消息
-    - 失败时返回错误信息
-    """
-    email = request.email.strip() if request.email else ""
-    captcha = request.captcha.strip() if request.captcha else ""
-
+async def forget_send_otp(request: Request, body: SendOtpRequest, db: AsyncSession = Depends(get_async_db)) -> JSONResponse:
+    check_recovery_origin(request)
+    email, captcha = body.email.strip(), body.captcha.strip()
     if not email or not captcha:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and captcha required")
-
-    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
-    if user is None:
-        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
-
-    stored_captcha = REDIS_CONN.get(captcha_key(email))
-    if not stored_captcha:
-        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="invalid or expired captcha")
-
-    if (stored_captcha or "").strip().lower() != captcha.lower():
-        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="invalid or expired captcha")
-
-    # Delete captcha to prevent reuse
-    REDIS_CONN.delete(captcha_key(email))
-
-    k_code, k_attempts, k_last, k_lock = otp_keys(email)
-    now = int(time.time())
-    last_ts = REDIS_CONN.get(k_last)
-
-    if last_ts:
-        try:
-            elapsed = now - int(last_ts)
-        except Exception:
-            elapsed = RESEND_COOLDOWN_SECONDS
-
-        remaining = RESEND_COOLDOWN_SECONDS - elapsed
-        if remaining > 0:
-            return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg=f"you still have to wait {remaining} seconds")
-
-    # Generate OTP (uppercase letters only) and store hashed
-    otp = "".join(secrets.choice(string.ascii_uppercase) for _ in range(OTP_LENGTH))
-    salt = os.urandom(16)
-    code_hash = hash_code(otp, salt)
-
-    REDIS_CONN.set(k_code, f"{code_hash}:{salt.hex()}", OTP_TTL_SECONDS)
-    REDIS_CONN.set(k_attempts, 0, OTP_TTL_SECONDS)
-    REDIS_CONN.set(k_last, now, OTP_TTL_SECONDS)
-    REDIS_CONN.delete(k_lock)
-
-    ttl_min = OTP_TTL_SECONDS // 60
-
     try:
-        await send_email_html(
-            subject="Your Password Reset Code",
-            to_email=email,
-            template_key="reset_code",
-            code=otp,
-            ttl_min=ttl_min,
-        )
-    except Exception as e:
-        logging.exception(e)
+        await recovery.send_otp(db, email, captcha, send_email_html)
+    except recovery.RecoveryError:
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="invalid captcha or recovery unavailable")
+    except Exception as error:
+        logging.error("Recovery send failed: %s", type(error).__name__)
         return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="failed to send email")
-
     return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="verification passed, email sent")
 
 
 @router.post("/auth/password/forgot/otp/verify", summary="验证OTP")
-async def forget_verify_otp(request: VerifyOtpRequest, db: AsyncSession = Depends(get_async_db)):
-    """
-    验证邮箱OTP验证码
-
-    该接口仅验证OTP，成功后会设置一个短期验证标记。
-    然后使用 /forget/reset-password 接口完成密码重置。
-
-    参数:
-    - request: VerifyOtpRequest对象
-        - email: str 用户的邮箱地址
-        - otp: str 邮箱验证码
-
-    返回:
-    - 成功时返回 data=True
-    - 失败时返回错误信息
-    """
-    email = request.email.strip() if request.email else ""
-    otp = request.otp.strip() if request.otp else ""
-
-    if not all([email, otp]):
+async def forget_verify_otp(request: Request, body: VerifyOtpRequest, db: AsyncSession = Depends(get_async_db)) -> JSONResponse:
+    check_recovery_origin(request)
+    email, otp = body.email.strip(), body.otp.strip()
+    if not email or not otp:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and otp are required")
-
-    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
-    if user is None:
-        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
-
-    # Verify OTP from Redis
-    k_code, k_attempts, k_last, k_lock = otp_keys(email)
-
-    if REDIS_CONN.get(k_lock):
-        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="too many attempts, try later")
-
-    stored = REDIS_CONN.get(k_code)
-    if not stored:
-        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="expired otp")
-
     try:
-        stored_hash, salt_hex = str(stored).split(":", 1)
-        salt = bytes.fromhex(salt_hex)
-    except Exception:
-        return get_json_result(data=False, retcode=RetCode.EXCEPTION_ERROR, retmsg="otp storage corrupted")
-
-    # Case-insensitive verification: OTP generated uppercase
-    calc = hash_code(otp.upper(), salt)
-    if calc != stored_hash:
-        # Increment attempts
-        try:
-            attempts = int(REDIS_CONN.get(k_attempts) or 0) + 1
-        except Exception:
-            attempts = 1
-
-        REDIS_CONN.set(k_attempts, attempts, OTP_TTL_SECONDS)
-
-        if attempts >= ATTEMPT_LIMIT:
-            REDIS_CONN.set(k_lock, int(time.time()), ATTEMPT_LOCK_SECONDS)
-
-        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="invalid otp")
-
-    # Success: consume OTP and set verified flag
-    REDIS_CONN.delete(k_code)
-    REDIS_CONN.delete(k_attempts)
-    REDIS_CONN.delete(k_last)
-    REDIS_CONN.delete(k_lock)
-
-    # Set verified flag with limited TTL
-    try:
-        REDIS_CONN.set(verified_key(email), "1", OTP_TTL_SECONDS)
-    except Exception:
-        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="failed to set verification state")
-
-    return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="otp verified")
+        token = await recovery.verify_otp(db, email, otp)
+    except recovery.RecoveryError:
+        return get_json_result(data=False, retcode=RetCode.NOT_EFFECTIVE, retmsg="invalid or expired otp")
+    except Exception as error:
+        logging.error("Recovery verify failed: %s", type(error).__name__)
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="recovery unavailable")
+    response = get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="otp verified")
+    set_recovery_token(response, request, token)
+    return response
 
 
 @router.post("/auth/password/reset", summary="重置密码")
-async def forget_reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)) -> JSONResponse:
-    """
-    OTP验证成功后重置密码
-
-    该接口需要在 /forget/verify-otp 验证成功后调用。
-
-    参数:
-    - request: ResetPasswordRequest对象
-        - email: str 用户的邮箱地址
-        - new_password: str 新密码
-        - confirm_new_password: str 确认新密码
-
-    返回:
-    - 成功时返回 data=True
-    - 失败时返回错误信息
-    """
-    email = request.email.strip() if request.email else ""
-    new_pwd = request.new_password
-    new_pwd2 = request.confirm_new_password
-
-    if not all([email, new_pwd, new_pwd2]):
+async def forget_reset_password(request: Request, body: ResetPasswordRequest, db: AsyncSession = Depends(get_async_db)) -> JSONResponse:
+    check_recovery_origin(request)
+    email, password = body.email.strip(), body.new_password
+    if not all([email, password, body.confirm_new_password]):
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="email and passwords are required")
-
-    if not REDIS_CONN.get(verified_key(email)):
-        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="email not verified")
-
-    if new_pwd != new_pwd2:
+    if password != body.confirm_new_password:
         return get_json_result(data=False, retcode=RetCode.ARGUMENT_ERROR, retmsg="passwords do not match")
-
-    user = await db.run_sync(lambda s: UserService.query_password_user_by_email(s, email))  # TODO(async-phase4)
-    if user is None:
-        return get_json_result(data=False, retcode=RetCode.DATA_ERROR, retmsg="invalid email")
-
-    # Reset password
+    token = recovery_request_token(request)
+    if token is None:
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="email not verified")
     try:
-        await db.run_sync(lambda s: UserService.update_user_password(s, user.id, new_pwd))  # TODO(async-phase4)
-    except Exception as e:
-        logging.exception(e)
-        return get_json_result(data=False, retcode=RetCode.EXCEPTION_ERROR, retmsg="failed to reset password")
-
-    # Clear verified flag
-    try:
-        REDIS_CONN.delete(verified_key(email))
-    except Exception:
-        pass
-
-    return get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="Password reset successful.")
+        await recovery.reset_password(db, email, password, token)
+    except recovery.RecoveryError:
+        return get_json_result(data=False, retcode=RetCode.AUTHENTICATION_ERROR, retmsg="email not verified or recovery unavailable")
+    except Exception as error:
+        logging.error("Recovery reset failed: %s", type(error).__name__)
+        return get_json_result(data=False, retcode=RetCode.SERVER_ERROR, retmsg="failed to reset password")
+    response = get_json_result(data=True, retcode=RetCode.SUCCESS, retmsg="Password reset successful.")
+    clear_recovery_token(response)
+    return response

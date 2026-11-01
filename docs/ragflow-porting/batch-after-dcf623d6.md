@@ -47,4 +47,4 @@ Go为停滞的并行实现：组合定向race **209个顶层用例、532条含�
 
 Go详细接口与限制见[文件、memory、恢复密码合同](go-file-memory-recovery.md)。文件转换以PostgreSQL和同租户目标为界，Python当前允许的授权跨租户绑定不宣称Go已完全等价；旧Put调用虽等待/补偿，不属于下载30秒context读取保证。Memory的Milvus能力仍不支持。提交故障使用真实PostgreSQL与受控事务返回值，不等于真实网络故障注入；TLS/STARTTLS认证与真实邮件供应商未实测。
 
-Python生产恢复密码仍使用历史邮箱全局证明，本批Go客户端绑定修复不代表该Python风险已修复。扩展P单测保留一条基线VolcEngine registry旧期望失败；扩展非纳管mypy三条基线错误仍保留，不能称全库质量全绿。未push、未部署、未跑远程CI、未做完整生产/真实供应商验收，不推进下一批。
+本批交付时Python生产恢复密码仍使用历史邮箱全局证明，Go客户端绑定修复不代表该Python风险已修复；扩展P单测有一条VolcEngine registry旧期望失败及三条非纳管mypy基线错误。随后另行[补修Python恢复流程及四处遗留检查](python-recovery-followup.md)，不改写本批原始失败、协议偏差或验收记录。未push、未部署、未跑远程CI、未做完整生产/真实供应商验收，不推进下一批。

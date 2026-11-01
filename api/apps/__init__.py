@@ -245,6 +245,11 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "Authorization"],
 )
 
+# Recovery has an explicit credentialed-origin policy outside general CORS.
+from api.utils.password_recovery import RecoveryOriginMiddleware
+
+app.add_middleware(RecoveryOriginMiddleware)
+
 # request_id 中间件（add_middleware 后添加者在最外层）：置于最外层，
 # Session/CORS 及路由的日志全部携带 request_id；生成/透传 X-Request-ID
 # 并绑定日志上下文（common/log_ctx），响应头回写

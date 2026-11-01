@@ -60,19 +60,29 @@ def _build_email_message(subject: str, to_email: str, html_body: str) -> EmailMe
 
 
 def _send_email_sync(message: EmailMessage) -> None:
-    if settings.MAIL_USE_SSL:
-        with smtplib.SMTP_SSL(settings.MAIL_SERVER, settings.MAIL_PORT) as smtp:
+    accepted = False
+    try:
+        if settings.MAIL_USE_SSL:
+            with smtplib.SMTP_SSL(settings.MAIL_SERVER, settings.MAIL_PORT) as smtp:
+                if settings.MAIL_USERNAME:
+                    smtp.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
+                smtp.send_message(message)
+                accepted = True
+            return
+
+        with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as smtp:
+            if settings.MAIL_USE_TLS:
+                smtp.starttls()
             if settings.MAIL_USERNAME:
                 smtp.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
             smtp.send_message(message)
-        return
-
-    with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as smtp:
-        if settings.MAIL_USE_TLS:
-            smtp.starttls()
-        if settings.MAIL_USERNAME:
-            smtp.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
-        smtp.send_message(message)
+            accepted = True
+    except (smtplib.SMTPException, OSError) as error:
+        if not accepted:
+            raise
+        # SMTP DATA acceptance is the delivery boundary; __exit__ closes the
+        # socket even when QUIT fails. Never revoke an already delivered code.
+        logging.warning("SMTP close failed after accepted DATA: %s", type(error).__name__)
 
 
 async def _send_email_message(message: EmailMessage) -> None:
