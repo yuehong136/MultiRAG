@@ -86,7 +86,7 @@ Python 是生产后端；Go 是并行实现，Web 单独交付。全部提交仅
 - 扩大到完整 `test_integration_harness.py` 时为 46 通过、1 失败：既有 consumer 清单包含未标记
   `external_consumer` 的 `test_search_detail_guard.py`。相关文件与 c17 基线一致，未放宽断言；本批数据库分类专项通过。
 - S 两个 common 文件的定向 mypy 有 5 条错误，在冻结 c17 文件副本重现相同 5 条；没有把它称为通过，也未扩大为无关类型迁移。
-- `strictProtocolPassed=false`：I 初次登记失败后提前创建树/ref/admin；P/A/D/S 初次导入涉及精确资产、
+- `strictProtocolPassed=false`：I 初次登记失败后提前创建树/ref/admin，树内日志与 Ruff 缓存也未精确预登记；P/A/D/S 初次导入涉及精确资产、
   token cache 或日志路径预登记不足；G 的旧测试存在 31 个未先登记的监听器；W 强制 lint-staged hook 自动暂存 stash。
   各线历史原始记录保留，后续补登记、复跑和清理不追认历史协议通过。
 - 供应商 SDK 使用真实库和受控传输。未验收付费端点、真实 Discord/WebDAV 账号、供应商端取消/账单、
