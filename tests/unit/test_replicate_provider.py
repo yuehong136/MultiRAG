@@ -165,6 +165,21 @@ async def test_sync_stream_bridge_works_inside_a_running_loop(sdk_http: SDKHTTP)
     sdk_http.assert_closed()
 
 
+async def test_sync_stream_bridge_keeps_the_deadline_after_the_first_chunk(sdk_http: SDKHTTP) -> None:
+    class SlowSSE(PausedSSE):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"event: output\ndata: first\nid: 1\n\n"
+            await asyncio.sleep(0.2)
+            yield b"event: output\ndata: late\nid: 2\n\n"
+
+    body = SlowSSE()
+    await stream_response(sdk_http, body)
+    model = ReplicateChat("fixture", "meta/model", timeout=0.05)
+    assert list(model.chat_streamly("", [], {})) == ["first", "**ERROR**: Replicate chat request failed", num_tokens_from_string("first")]
+    assert body.closed
+    sdk_http.assert_closed()
+
+
 async def test_provider_errors_never_echo_credentials_or_private_responses(sdk_http: SDKHTTP) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"detail": "private-key private-prompt"})
