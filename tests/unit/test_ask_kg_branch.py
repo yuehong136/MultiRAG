@@ -1,6 +1,6 @@
 """ask/async_ask KG 分支 correctness（§11 Phase 2 任务 6）。
 
-钉两点：空 KB 列表不得被 all(空)=True 误判成 KG（应走 Dealer 检索）；
+钉两点：async_ask 空 KB 列表应返回最终错误，不进入任何检索；
 KG 分支按全库统一约定位置传参调用 KGSearch.retrieval
 （旧代码把 Dealer kwargs 传给 KGSearch.retrieval 必 TypeError）。
 哨兵异常在检索点截断生成器，不进入下游 LLM 流式。
@@ -10,6 +10,7 @@ import types
 from typing import Any
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.db.joint_services import tenant_model_service
@@ -63,15 +64,12 @@ def ask_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "kg_retriever", types.SimpleNamespace(retrieval=_kg_retrieval))
 
 
-async def test_async_ask_empty_kbs_use_dealer_not_kg(monkeypatch, async_db, ask_stubs):
+async def test_async_ask_empty_kbs_return_before_retrieval(monkeypatch: pytest.MonkeyPatch, async_db: AsyncSession, ask_stubs: None) -> None:
     monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
     monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
 
-    with pytest.raises(_Sentinel) as exc:
-        async for _ in async_ask(async_db, "q", [], "t1"):
-            pass
-
-    assert exc.value.which == "dealer"
+    events = [event async for event in async_ask(async_db, "q", [], "t1")]
+    assert events == [{"answer": "**ERROR**: No KB selected", "reference": {}, "final": True}]
 
 
 async def test_async_ask_kg_branch_uses_positional_convention(monkeypatch, async_db, ask_stubs):

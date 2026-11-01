@@ -110,11 +110,14 @@ def _chat_capability(model_types: list[str]) -> str:
     raise LookupError("A chat or vision model is required")
 
 
-def _resolve_dialog_primary_model_config(db: Session, dialog: Any) -> dict:
-    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
+def _resolve_dialog_primary_model_config(db: Session, dialog: Any) -> dict[str, Any]:
+    reference = str(dialog.tenant_llm_id) if dialog.tenant_llm_id else dialog.llm_id
+    if not reference:
+        return get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.CHAT)
+    model_types = resolve_model_type(db, dialog.tenant_id, reference)
     llm_type = _chat_capability(model_types)
     model_type = LLMType.IMAGE2TEXT.value if llm_type == "image2text" else LLMType.CHAT.value
-    return _resolve_model_config(db, dialog.tenant_id, dialog.tenant_llm_id, model_type, dialog.llm_id)
+    return _resolve_model_config(db, dialog.tenant_id, dialog.tenant_llm_id, model_type, reference)
 
 
 def sync_async_generator(async_gen: AsyncGenerator[Any, None]) -> Generator[Any, None, None]:
@@ -426,8 +429,8 @@ class DialogService(CommonService):
 
 
 def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> Generator[dict[str, Any], None, None]:
-    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = _chat_capability(model_types)
+    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
+    llm_type = _chat_capability([llm_model_config["mdl_type"]])
     attachments = ""
     image_attachments = []
     image_files = []
@@ -438,7 +441,6 @@ def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: 
             text_attachments, image_files = split_file_attachments(messages[-1]["files"], raw=True)
         attachments = "\n\n".join(text_attachments)
 
-    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
 
     chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config)
@@ -475,8 +477,8 @@ def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: 
 
 async def async_chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 chat_solo"""
-    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = _chat_capability(model_types)
+    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
+    llm_type = _chat_capability([llm_model_config["mdl_type"]])
     attachments = ""
     image_attachments = []
     image_files = []
@@ -487,7 +489,6 @@ async def async_chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any
             text_attachments, image_files = split_file_attachments(messages[-1]["files"], raw=True)
         attachments = "\n\n".join(text_attachments)
 
-    llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
 
     chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config)
@@ -734,9 +735,8 @@ def chat(
     # are preserved; the upstream solo fallback does not apply to this architecture.
     chat_start_ts = timer()
 
-    model_types = resolve_model_type(db, dialog.tenant_id, dialog.llm_id)
-    llm_type = _chat_capability(model_types)
     llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
+    llm_type = _chat_capability([llm_model_config["mdl_type"]])
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
     max_tokens = llm_model_config.get("max_tokens", 8192)
@@ -1125,11 +1125,9 @@ async def async_chat(
     # are preserved; the upstream solo fallback does not apply to this architecture.
     chat_start_ts = timer()
 
-    # TODO(async-phase4): Resolve through the request session without global model lookups.
-    model_types = await db.run_sync(lambda s: resolve_model_type(s, dialog.tenant_id, dialog.llm_id))
-    llm_type = _chat_capability(model_types)
     # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
     llm_model_config = await db.run_sync(lambda s: _resolve_dialog_primary_model_config(s, dialog))
+    llm_type = _chat_capability([llm_model_config["mdl_type"]])
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
     max_tokens = llm_model_config.get("max_tokens", 8192)
@@ -2315,20 +2313,23 @@ async def async_ask(
             raise PermissionError("No authorization for the selected dataset.")
 
     kbs = await db.run_sync(lambda s: KnowledgebaseService.get_by_ids(s, kb_ids))  # TODO(async-phase4)
+    if not kbs:
+        error = "No KB selected" if not kb_ids else "The selected KB is not valid"
+        yield {"answer": "**ERROR**: " + error, "reference": {}, "final": True}
+        return
     KnowledgebaseService.ensure_same_embedding_model(kbs)
 
-    # all(空)=True 会把空 KB 误判成 KG，必须先确认非空
-    is_knowledge_graph = bool(kbs) and all(kb.parser_id == ParserType.KG for kb in kbs)
+    is_knowledge_graph = all(kb.parser_id == ParserType.KG for kb in kbs)
     retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
-    embd_owner_tenant_id = kbs[0].tenant_id if kbs else tenant_id
+    embd_owner_tenant_id = kbs[0].tenant_id
     embd_model_config = await db.run_sync(  # TODO(async-phase4)
         lambda s: _resolve_model_config(
             s,
             embd_owner_tenant_id,
-            kbs[0].tenant_embd_id if kbs else None,
+            kbs[0].tenant_embd_id,
             LLMType.EMBEDDING.value,
-            kbs[0].embd_id if kbs else "",
+            kbs[0].embd_id,
         )
     )
     embd_mdl = await db.run_sync(lambda s: detached_bundle(s, embd_owner_tenant_id, embd_model_config))  # TODO(async-phase4)

@@ -1,5 +1,6 @@
 """Beta identity stays scoped before shared Redis, model and retrieval work."""
 
+import json
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -82,8 +83,16 @@ def test_search_detail_allows_live_joined_membership(db: Session, monkeypatch: p
     membership.assert_called_once_with(db, tenant_id="team", user_id="owner")
 
 
-@pytest.mark.parametrize("path", ["/searchbots/ask", "/searchbots/mindmap"])
-@pytest.mark.parametrize("datasets", [[], ["foreign"], ["owned", "foreign"]])
+@pytest.mark.parametrize(
+    ("path", "datasets"),
+    [
+        ("/searchbots/ask", ["foreign"]),
+        ("/searchbots/ask", ["owned", "foreign"]),
+        ("/searchbots/mindmap", []),
+        ("/searchbots/mindmap", ["foreign"]),
+        ("/searchbots/mindmap", ["owned", "foreign"]),
+    ],
+)
 def test_shared_dataset_denial_precedes_stream_and_execution(shared_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, datasets: list[str]) -> None:
     module = sys.modules["api.apps.restful_apis.bot"]
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", lambda _db, kb_id, _user: kb_id == "owned")
@@ -102,10 +111,15 @@ def test_saved_search_effective_dataset_does_not_fall_back_to_request(shared_cli
     monkeypatch.setattr(module.SearchService, "get_detail", lambda *_: {"tenant_id": "owner", "search_config": {"kb_ids": []}})
     monkeypatch.setattr(module.UserTenantService, "get_membership", lambda *_a, **_kw: SimpleNamespace(role="owner"))
     forbidden = Mock(side_effect=AssertionError("Empty effective selection reached provider"))
-    monkeypatch.setattr(module, "async_ask", forbidden)
     monkeypatch.setattr(module.KnowledgebaseService, "accessible", forbidden)
+    monkeypatch.setattr(module.KnowledgebaseService, "get_by_ids", lambda *_args: [])
+    from api.db.services import dialog_service
+
+    monkeypatch.setattr(dialog_service, "_resolve_model_config", forbidden)
+    monkeypatch.setattr(dialog_service, "detached_bundle", forbidden)
     response = shared_client.post("/api/v1/searchbots/ask", json={"question": "q", "kb_ids": ["owned"], "search_id": "search"})
-    assert response.json()["code"] == 109
+    events = [json.loads(part.removeprefix("data:")) for part in response.text.split("\n\n") if part.startswith("data:")]
+    assert events[0] == {"code": 0, "message": "", "data": {"answer": "**ERROR**: No KB selected", "reference": {}, "final": True}}
     forbidden.assert_not_called()
 
 

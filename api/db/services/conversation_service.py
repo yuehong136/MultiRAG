@@ -332,8 +332,10 @@ def iframe_completion(db: Session, dialog_id: str, question: str | None, session
         yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
         return
     assert existing_conv is not None
-    conv = existing_conv
-    conv.message = deepcopy(conv.message or [])
+    # Keep runtime JSON mutations outside the request's identity map. Model
+    # resolution can autoflush reads before the final answer is ready to commit.
+    conv = API4Conversation(**deepcopy(existing_conv.to_dict()))
+    conv.message = conv.message or []
     messages = conv.message
     question_message = {"role": "user", "content": question, "id": str(uuid4())}
 
@@ -400,8 +402,10 @@ async def async_iframe_completion(
         yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
         return
     assert existing_conv is not None
-    conv = existing_conv
-    conv.message = deepcopy(conv.message or [])
+    # Keep runtime JSON mutations outside the request's identity map. Model
+    # resolution can autoflush reads before the final answer is ready to commit.
+    conv = API4Conversation(**deepcopy(existing_conv.to_dict()))
+    conv.message = conv.message or []
     messages = conv.message
     question_message = {"role": "user", "content": question, "id": str(uuid4())}
 

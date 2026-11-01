@@ -78,7 +78,7 @@ def dialog_pipeline_stubs(monkeypatch: pytest.MonkeyPatch) -> _PipelineProbe:
         return ["chat"]
 
     def fake_primary_model_config(_db: Session, _dialog: Any) -> dict[str, Any]:
-        return {"llm_name": "chat-model", "max_tokens": 8192}
+        return {"llm_name": "chat-model", "mdl_type": "chat", "max_tokens": 8192}
 
     def fake_langfuse_keys(
         cls: type[Any],

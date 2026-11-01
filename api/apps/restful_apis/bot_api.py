@@ -757,7 +757,8 @@ async def ask_about_embedded(
         except PermissionError as error:
             return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg=str(error))
         search_config = search_app.get("search_config") or {}
-    if not await _accessible_shared_kbs(db, search_config.get("kb_ids", req["kb_ids"]), tenant_id):
+    selected_kbs = search_config.get("kb_ids", req["kb_ids"])
+    if selected_kbs != [] and not await _accessible_shared_kbs(db, selected_kbs, tenant_id):
         return get_error_data_result(retcode=RetCode.AUTHENTICATION_ERROR, retmsg="No authorization for the selected dataset.")
 
     async def stream() -> AsyncGenerator[str, None]:
