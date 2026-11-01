@@ -66,6 +66,7 @@ DATABASE_TESTS = frozenset(
         "test_task_log_limits.py",
         "test_table_auto_metadata_sql.py",
         "test_volc_provider_credentials.py",
+        "test_webdav_size_protocol.py",
     }
 )
 REDIS_TESTS = frozenset({"test_shared_auth_secret.py", "test_synonym_redis.py"})
