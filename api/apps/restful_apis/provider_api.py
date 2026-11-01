@@ -1,7 +1,7 @@
 """Provider/instance management with tenant ownership and atomic writes."""
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -20,10 +20,10 @@ from api.utils.api_utils import Principal, async_current_user
 
 
 class ModelRoute(APIRoute):
-    def get_route_handler(self) -> Callable[[Request], Awaitable[Any]]:
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
 
-        async def safe_handler(request: Request) -> Any:
+        async def safe_handler(request: Request) -> Response:
             try:
                 response = await handler(request)
             except RequestValidationError as error:

@@ -417,7 +417,7 @@ async def require_unreferenced(db: AsyncSession, rows: list[tuple[TenantLLM, Ten
         for item in (await db.scalars(select(entity))).all():
             data = item.to_dict()
             item_owner = data.get("tenant_id", data.get("user_id"))
-            if entity is UserCanvasVersion:
+            if isinstance(item, UserCanvasVersion):
                 item_owner = await db.scalar(select(UserCanvas.user_id).where(UserCanvas.id == item.user_canvas_id))
             if _references(data, identifiers, names if item_owner in owners else set()):
                 raise ModelConflict("Model is referenced; update its consumers before deletion")
@@ -509,7 +509,7 @@ async def resolve_config(db: AsyncSession, tenant_id: str, model_id: int, model_
         decoded = TenantLLMService.decode_model_config(config)
         decoded["is_tools"] = model.is_tools
         return decoded
-    row = await db.scalar(select(TenantLLM).where(TenantLLM.id == model_id, TenantLLM.tenant_id == tenant_id, TenantLLM.mdl_type == model_type, TenantLLM.status == "1"))
-    if row is None:
+    legacy_row = await db.scalar(select(TenantLLM).where(TenantLLM.id == model_id, TenantLLM.tenant_id == tenant_id, TenantLLM.mdl_type == model_type, TenantLLM.status == "1"))
+    if legacy_row is None:
         raise LookupError("Model is unavailable for the requested capability")
-    return TenantLLMService.decode_model_config(row.to_dict())
+    return TenantLLMService.decode_model_config(legacy_row.to_dict())

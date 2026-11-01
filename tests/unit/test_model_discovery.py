@@ -414,6 +414,7 @@ def test_modelmeta_registry_loads_only_metadata_module_and_surfaces_failure(monk
             "LM-Studio": "LMStudio",
             "Xinference": "Xinference",
             "LocalAI": "LocalAI",
+            "VolcEngine": "VolcEngine",
         }.items()
     }
     assert llm.ModelMeta is registry
