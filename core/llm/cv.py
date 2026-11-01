@@ -34,6 +34,7 @@ from openai.lib.azure import AsyncAzureOpenAI, AzureOpenAI
 from common.misc_utils import thread_pool_exec
 from common.token_utils import num_tokens_from_string, total_token_count_from_response
 from common.url_utils import append_path_segment, ensure_api_version, strip_trailing_segment
+from core.llm.azure_auth import resolve_azure_credentials
 from core.llm.dashscope_transport import native_http_api_url
 from core.llm.model_policies import apply_claude_sampling_policy
 from core.llm.openrouter_auth import decode_openrouter_key
@@ -505,9 +506,8 @@ class FuturMixCV(GptV4):
 class AzureGptV4(GptV4):
     _FACTORY_NAME = "Azure-OpenAI"
 
-    def __init__(self, key, model_name, lang="Chinese", **kwargs):
-        api_key = json.loads(key).get("api_key", "")
-        api_version = json.loads(key).get("api_version", "2024-02-01")
+    def __init__(self, key: str | dict[str, Any], model_name: str, lang: str = "Chinese", **kwargs: Any) -> None:
+        api_key, api_version = resolve_azure_credentials(key)
         self.client = AzureOpenAI(api_key=api_key, azure_endpoint=kwargs["base_url"], api_version=api_version)
         self.async_client = AsyncAzureOpenAI(api_key=api_key, azure_endpoint=kwargs["base_url"], api_version=api_version)
         self.model_name = model_name

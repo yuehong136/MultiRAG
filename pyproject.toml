@@ -77,7 +77,8 @@ dependencies = [
     # 1.7.2 is the EIM-F1 verified baseline for the existing IM/CardKit calls
     # plus the Contact V3 typed response contract consumed by EIM-I4.
     "lark-oapi>=1.7.2,<2.0.0",
-    "litellm~=1.82.0,!=1.82.7,!=1.82.8",
+    # 1.82.6 can fail during import; retain the security exclusions as well.
+    "litellm~=1.82.0,!=1.82.6,!=1.82.7,!=1.82.8",
     "mammoth>=1.11.0",
     "markdown==3.8.2",
     "markdown-to-json==2.1.1",

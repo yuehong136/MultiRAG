@@ -11,7 +11,6 @@ resolution-markers = [
 ]
 
 [manifest]
-excludes = ["unclecode-litellm"]
 constraints = [
     { name = "datasets", specifier = ">=5.0.1,<6.0.0" },
     { name = "fastmcp-slim", specifier = "==4.0.0b3" },
@@ -23,6 +22,7 @@ overrides = [
     { name = "numpy", marker = "python_full_version < '3.13'", specifier = ">=1.26.4,<2" },
     { name = "numpy", marker = "python_full_version >= '3.13'", specifier = ">=2.1,<2.2" },
 ]
+excludes = ["unclecode-litellm"]
 
 [[package]]
 name = "accelerate"
@@ -3952,7 +3952,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.82.6"
+version = "1.82.5"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -3968,9 +3968,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/29/75/1c537aa458426a9127a92bc2273787b2f987f4e5044e21f01f2eed5244fd/litellm-1.82.6.tar.gz", hash = "sha256:2aa1c2da21fe940c33613aa447119674a3ad4d2ad5eb064e4d5ce5ee42420136" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d7/f0/ec42ee14b388ce1d08a1df638f894ed7f1e6ac35b9daf0588ff7f7d52262/litellm-1.82.5.tar.gz", hash = "sha256:7988a9b48c8ccd9e5ebced80a4dfce9ce87083b303c3f67082450a4ad6dd312f" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/02/6c/5327667e6dbe9e98cbfbd4261c8e91386a52e38f41419575854248bbab6a/litellm-1.82.6-py3-none-any.whl", hash = "sha256:164a3ef3e19f309e3cabc199bef3d2045212712fefdfa25fc7f75884a5b5b205" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/68/1f/b6c8043eec81eade53a4d0e15a50b788ab0e82661e01a25e0b8536a4dca0/litellm-1.82.5-py3-none-any.whl", hash = "sha256:e1012ab816352215c4e00776dd48b0c68058b537888a8ff82cca62af19e6fb11" },
 ]
 
 [[package]]
@@ -4739,7 +4739,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "langfuse", specifier = ">=4.0.1" },
     { name = "lark-oapi", specifier = ">=1.7.2,<2.0.0" },
-    { name = "litellm", specifier = "~=1.82.0,!=1.82.7,!=1.82.8" },
+    { name = "litellm", specifier = "~=1.82.0,!=1.82.6,!=1.82.7,!=1.82.8" },
     { name = "mammoth", specifier = ">=1.11.0" },
     { name = "markdown", specifier = "==3.8.2" },
     { name = "markdown-to-json", specifier = "==2.1.1" },
