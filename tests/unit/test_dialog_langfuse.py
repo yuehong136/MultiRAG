@@ -27,7 +27,7 @@ from common.token_utils import num_tokens_from_string
 from core.prompts.generator import message_fit_in
 
 _KEYS = SimpleNamespace(public_key="pk-test-tracing", secret_key="sk-test-tracing", host="http://langfuse.invalid")
-_MODEL = {"llm_name": "controlled-model", "max_tokens": 256}
+_MODEL = {"llm_name": "controlled-model", "mdl_type": "chat", "max_tokens": 256}
 _ANSWER = "<think>Reasoning about the evidence.</think>A model reply."
 _DECORATED = "<think>Reasoning about the evidence.</think>A decorated reply ##0$$."
 _MESSAGES = [
@@ -146,6 +146,7 @@ def tracing_chat(monkeypatch: pytest.MonkeyPatch) -> _Probe:
     monkeypatch.setattr(dialog_service, "_resolve_dialog_primary_model_config", lambda *_args: _MODEL)
     monkeypatch.setattr(dialog_service.TenantLangfuseService, "filter_by_tenant", lambda *_args, **_kwargs: probe.keys)
     monkeypatch.setattr(dialog_service, "get_models", lambda *_args: ([kb], SimpleNamespace(db=None), None, bundle, None))
+    monkeypatch.setattr(dialog_service, "get_detached_models", lambda *_args: ([kb], SimpleNamespace(db=None), None, bundle, None))
     monkeypatch.setattr(dialog_service.KnowledgebaseService, "get_field_map", lambda *_args: {})
     monkeypatch.setattr(dialog_service, "label_question", lambda *_args: {})
     monkeypatch.setattr(dialog_service, "kb_prompt", lambda *_args: ["Evidence text."])

@@ -41,7 +41,11 @@ class _FakeBundle(dialog_service.LLMBundle):
 @pytest.fixture
 def final_answer_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(KnowledgebaseService, "accessible", classmethod(lambda *_a, **_k: True))
-    monkeypatch.setattr(KnowledgebaseService, "get_by_ids", classmethod(lambda cls, s, ids, cols=None: []))
+    monkeypatch.setattr(
+        KnowledgebaseService,
+        "get_by_ids",
+        classmethod(lambda cls, s, ids, cols=None: [types.SimpleNamespace(id="kb-1", name="dataset", tenant_id="t1", tenant_embd_id=7, embd_id="embedding", parser_id="naive")]),
+    )
     monkeypatch.setattr(KnowledgebaseService, "ensure_same_embedding_model", classmethod(lambda cls, kbs: None))
     monkeypatch.setattr(dialog_service, "_resolve_model_config", lambda s, tid, inst, t, name: {"llm_name": "emb-m"})
     monkeypatch.setattr(dialog_service, "get_model_config_by_type_and_name", lambda s, tid, t, name: {"llm_name": "chat-m"})
@@ -59,8 +63,8 @@ def final_answer_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "retriever", types.SimpleNamespace(retrieval=_retrieval, insert_citations=_insert_citations))
 
 
-async def test_async_ask_final_event_carries_decorated_answer(async_db, final_answer_stubs):
-    events = [event async for event in async_ask(async_db, "q", [], "t1")]
+async def test_async_ask_final_event_carries_decorated_answer(async_db: AsyncSession, final_answer_stubs: None) -> None:
+    events = [event async for event in async_ask(async_db, "q", ["kb-1"], "t1")]
 
     assert events, "async_ask 应产出流式事件"
     final_events = [event for event in events if event.get("final")]
@@ -81,7 +85,7 @@ async def test_async_ask_final_event_normalizes_think_tags(async_db: AsyncSessio
     monkeypatch.setattr(tenant_model_service, "LLMBundle", _RepeatedThinkBundle)
     monkeypatch.setattr(settings.retriever, "insert_citations", lambda answer, *args, **kwargs: (answer, set()))
 
-    events = [event async for event in async_ask(async_db, "q", [], "t1")]
+    events = [event async for event in async_ask(async_db, "q", ["kb-1"], "t1")]
 
     final_events = [event for event in events if event.get("final")]
     assert len(final_events) == 1
@@ -124,7 +128,7 @@ async def test_async_ask_delivers_short_reasoning_before_producer_continues(asyn
 
     monkeypatch.setattr(tenant_model_service, "LLMBundle", PausedBundle)
     monkeypatch.setattr(settings.retriever, "insert_citations", lambda text, *args, **kwargs: (text, set()))
-    events = async_ask(async_db, "q", [], "t1")
+    events = async_ask(async_db, "q", ["kb-1"], "t1")
     try:
         start = await asyncio.wait_for(anext(events), timeout=2)
         assert start["start_to_think"] is True
@@ -187,7 +191,7 @@ async def test_async_ask_separates_reasoning_and_visible_answer(
     monkeypatch.setattr(tenant_model_service, "LLMBundle", ProviderBundle)
     monkeypatch.setattr(settings.retriever, "insert_citations", lambda text, *args, **kwargs: (text, set()))
 
-    events = [event async for event in async_ask(async_db, "q", [], "t1")]
+    events = [event async for event in async_ask(async_db, "q", ["kb-1"], "t1")]
 
     assert [event for event in events if event.get("final")] == [events[-1]]
     assert events[-1]["answer"] == f"<think>{reasoning}</think>{answer}"
