@@ -29,7 +29,7 @@ from api.utils.document_update_contract import DocumentUpdateError
 from common import settings
 from common.constants import MAXIMUM_TASK_PAGE_NUMBER, RetCode
 from common.doc_store.availability import availability_parent_ids
-from common.doc_store.document_history import delete_document_history, document_history, restore_document_history
+from common.doc_store.document_history import delete_document_history, document_history, document_index_exists, restore_document_history
 from core.nlp import search
 from core.utils.redis_conn import REDIS_CONN
 from core.utils.task_runtime import TASK_CANCEL_MARKER, TASK_RUNTIME_TTL
@@ -482,6 +482,7 @@ def _operate(selection: Selection, principal_id: str, run: str, clear: bool, app
                     (run == "1" or clear)
                     and not snapshot
                     and (doc.chunk_num or doc.token_num or any(task.chunk_ids for task in old_tasks if (task.task_type or "") in {"", "dataflow", "dataflow_rerun"}))
+                    and (not clear or document_index_exists(settings.docStoreConn, index_name, kb.id))
                 ):
                     raise IngestError("Document history is unavailable; restore the index before retrying.")
             obsolete: list[str] = []

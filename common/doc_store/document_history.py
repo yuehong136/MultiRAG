@@ -6,6 +6,41 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def document_index_exists(store: Any, index_name: str, dataset_id: str) -> bool:
+    """Only native, failure-preserving probes may confirm an absent index.
+
+    The public index_exist wrappers also return False on transport/auth errors.
+    Unhandled backends retain unconditional cleanup rather than infer absence.
+    """
+    backend = store.db_type()
+    if backend in {"elasticsearch", "opensearch"}:
+        client = store.es if backend == "elasticsearch" else store.os
+        response = client.indices.exists(index=index_name)
+        exists = getattr(response, "body", response)
+    elif backend == "milvus":
+        exists = store._get_connection().has_collection(index_name)
+    elif backend == "infinity":
+        from infinity.common import InfinityException
+        from infinity.errors import ErrorCode
+
+        connection = store.connPool.get_conn()
+        try:
+            try:
+                connection.get_database(store.dbName).get_table(f"{index_name}_{dataset_id}")
+            except InfinityException as error:
+                if error.error_code == ErrorCode.TABLE_NOT_EXIST:
+                    return False
+                raise
+            return True
+        finally:
+            store.connPool.release_conn(connection)
+    else:
+        return True
+    if type(exists) is not bool:
+        raise RuntimeError("Document index existence could not be confirmed.")
+    return exists
+
+
 def confirm_history_visibility(store: Any, index_name: str) -> None:
     """Refresh mutation/recovery paths that do not promise a wait_for barrier."""
     backend = store.db_type()
@@ -82,7 +117,7 @@ def document_history(store: Any, index_name: str, dataset_id: str, document_id: 
             iterator.close()
         return sorted([_native_value({**copy.deepcopy(row), "id": row.get("id") or row["pk"]}) for row in rows], key=lambda row: row.get("id") or row["pk"])
     if backend == "infinity":
-        if not store.index_exist(index_name, dataset_id):
+        if not document_index_exists(store, index_name, dataset_id):
             return []
         connection = store.connPool.get_conn()
         try:
@@ -93,7 +128,7 @@ def document_history(store: Any, index_name: str, dataset_id: str, document_id: 
         finally:
             store.connPool.release_conn(connection)
     if backend in {"elasticsearch", "opensearch"}:
-        if not store.index_exist(index_name, dataset_id):
+        if not document_index_exists(store, index_name, dataset_id):
             return []
         client = store.es if backend == "elasticsearch" else store.os
         query = {"bool": {"filter": [{"term": {"doc_id": document_id}}, {"term": {"kb_id": dataset_id}}]}}
@@ -141,6 +176,42 @@ def document_history(store: Any, index_name: str, dataset_id: str, document_id: 
     raise RuntimeError("Document history snapshots are unavailable for this store.")
 
 
+def _delete_history_rows(store: Any, condition: dict[str, Any], index_name: str, dataset_id: str) -> Any:
+    """Keep native failures visible on destructive, compensating history paths.
+
+    The general connector delete methods can report backend errors as zero
+    deletions. Here zero must be an actual acknowledgement, including retries
+    on an already empty document.
+    """
+    backend = store.db_type()
+    if backend in {"elasticsearch", "opensearch"}:
+        client = store.es if backend == "elasticsearch" else store.os
+        filters: list[dict[str, Any]] = [{"term": {"doc_id": condition["doc_id"]}}, {"term": {"kb_id": dataset_id}}]
+        if "id" in condition:
+            filters.append({"ids": {"values": condition["id"]}})
+        response = client.delete_by_query(index=index_name, body={"query": {"bool": {"filter": filters}}}, refresh=True)
+        raw = getattr(response, "body", response)
+        if not isinstance(raw, Mapping) or raw.get("timed_out") is not False or raw.get("failures") != [] or raw.get("version_conflicts") != 0:
+            raise RuntimeError("Document history native deletion failed.")
+        return raw.get("deleted")
+    if backend == "milvus":
+        expression = f"doc_id == {json.dumps(condition['doc_id'])} && kb_id == {json.dumps(dataset_id)}"
+        if "id" in condition:
+            expression += f" && pk in {json.dumps(condition['id'])}"
+        return store._get_connection().delete(index_name, expression=expression).delete_count
+    if backend == "infinity":
+        connection = store.connPool.get_conn()
+        try:
+            table = connection.get_database(store.dbName).get_table(f"{index_name}_{dataset_id}")
+            result = table.delete(store.equivalent_condition_to_str(condition, table))
+            if result.error_code != 0:
+                raise RuntimeError("Document history native deletion failed.")
+            return result.deleted_rows
+        finally:
+            store.connPool.release_conn(connection)
+    return store.delete(condition, index_name, dataset_id)
+
+
 def delete_document_history(store: Any, index_name: str, dataset_id: str, document_id: str, *, ids: list[str] | None = None) -> None:
     """Require a typed acknowledgement and verify the exact target is absent."""
     condition: dict[str, Any] = {"doc_id": document_id}
@@ -148,12 +219,14 @@ def delete_document_history(store: Any, index_name: str, dataset_id: str, docume
         if not ids:
             return
         condition["id"] = ids
-    acknowledgement = store.delete(condition, index_name, dataset_id)
+    if not document_index_exists(store, index_name, dataset_id):
+        return
+    acknowledgement = _delete_history_rows(store, condition, index_name, dataset_id)
     if type(acknowledgement) is not int or acknowledgement < 0:
         raise RuntimeError("Document history deletion failed.")
     # delete_by_query already refreshes the actual connector; a second precise
     # boundary also covers alternate transports and incomplete acknowledgements.
-    if store.db_type() in {"elasticsearch", "opensearch"} and store.index_exist(index_name, dataset_id):
+    if store.db_type() in {"elasticsearch", "opensearch"} and document_index_exists(store, index_name, dataset_id):
         confirm_history_visibility(store, index_name)
     remaining = document_history(store, index_name, dataset_id, document_id)
     if remaining if ids is None else any(row.get("id", row.get("pk")) in ids for row in remaining):

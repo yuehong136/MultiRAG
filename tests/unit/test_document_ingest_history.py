@@ -22,7 +22,12 @@ def response(rows: list[dict[str, Any]], count: int) -> dict[str, Any]:
 def test_scroll_preserves_complete_payload_and_vectors(backend: str) -> None:
     original = [{"id": "child", "doc_id": "doc", "kb_id": "kb", "mom_id": "parent", "vector": [0.1, 0.2], "create_time": "original", "custom": {"nested": [1, 2]}}]
     cleared = []
-    client = SimpleNamespace(search=lambda **kwargs: response(original, 1), scroll=lambda **kwargs: response([], 1), clear_scroll=lambda **kwargs: cleared.append(kwargs))
+    client = SimpleNamespace(
+        indices=SimpleNamespace(exists=lambda **kwargs: True),
+        search=lambda **kwargs: response(original, 1),
+        scroll=lambda **kwargs: response([], 1),
+        clear_scroll=lambda **kwargs: cleared.append(kwargs),
+    )
     store = SimpleNamespace(db_type=lambda: backend, index_exist=lambda *args: True, es=client, os=client)
     rows = history.document_history(store, "index", "kb", "doc")
     assert rows == original and cleared == [{"scroll_id": "owned-cursor"}]
@@ -43,7 +48,11 @@ def test_incomplete_scroll_is_never_an_empty_history(fault: str) -> None:
         first["hits"]["total"]["value"] = 1
         first["hits"]["hits"] = [{"_id": "missing"}]
     cleared = []
-    store = SimpleNamespace(db_type=lambda: "elasticsearch", index_exist=lambda *args: True, es=SimpleNamespace(search=lambda **kwargs: first, clear_scroll=lambda **kwargs: cleared.append(kwargs)))
+    store = SimpleNamespace(
+        db_type=lambda: "elasticsearch",
+        index_exist=lambda *args: True,
+        es=SimpleNamespace(indices=SimpleNamespace(exists=lambda **kwargs: True), search=lambda **kwargs: first, clear_scroll=lambda **kwargs: cleared.append(kwargs)),
+    )
     with pytest.raises(RuntimeError):
         history.document_history(store, "index", "kb", "doc")
     assert cleared == [{"scroll_id": "owned-cursor"}]
@@ -51,14 +60,14 @@ def test_incomplete_scroll_is_never_an_empty_history(fault: str) -> None:
 
 @pytest.mark.parametrize("acknowledgement", [True, False, None, "0", -1])
 def test_delete_requires_typed_ack_even_when_readback_is_empty(monkeypatch: pytest.MonkeyPatch, acknowledgement: Any) -> None:
-    store = SimpleNamespace(delete=lambda *args: acknowledgement)
+    store = SimpleNamespace(db_type=lambda: "controlled", delete=lambda *args: acknowledgement)
     monkeypatch.setattr(history, "document_history", lambda *args: [])
     with pytest.raises(RuntimeError, match="deletion failed"):
         history.delete_document_history(store, "index", "kb", "doc")
 
 
 def test_zero_delete_requires_actual_absence(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = SimpleNamespace(delete=lambda *args: 0, db_type=lambda: "milvus")
+    store = SimpleNamespace(delete=lambda *args: 0, db_type=lambda: "controlled")
     monkeypatch.setattr(history, "document_history", lambda *args: [{"id": "still-present"}])
     with pytest.raises(RuntimeError, match="could not be confirmed"):
         history.delete_document_history(store, "index", "kb", "doc")

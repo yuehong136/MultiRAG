@@ -309,12 +309,12 @@ def parse_dataset_documents(db: Session, dataset_id: str, tenant_id: str, docume
 
 
 def stop_dataset_documents(db: Session, dataset_id: str, document_ids: list[str], errors: list[str], *, principal_id: str) -> dict[str, Any]:
-    """Cancel submission keeps partial chunks/counters by default."""
+    """Cancel this dataset's work and remove its partial chunks and counters."""
     valid_ids, missing_ids = _partition_dataset_documents(db, dataset_id, document_ids)
     if missing_ids:
         raise DocumentParseError(f"Documents not found: {missing_ids}")
     try:
-        submitted = ingest_documents_sync(db, valid_ids, principal_id, "2", dataset_id=dataset_id)
+        submitted = ingest_documents_sync(db, valid_ids, principal_id, "2", clear=True, dataset_id=dataset_id)
         return _canonical_result(submitted, valid_ids, errors)
     except IngestError as exc:
         partial = exc.result.get("results", {}) if exc.result else {}
