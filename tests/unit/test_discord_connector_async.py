@@ -149,7 +149,15 @@ def connector(*, batch_size: int = 2) -> discord.DiscordConnector:
 
 
 @pytest.mark.parametrize("mode", ["full", "incremental"])
-@pytest.mark.parametrize("scope", [{"server_ids": [" 1 "], "channels": [" selected "]}, {"server_ids": " 1, ", "channel_names": "selected,"}])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"server_ids": [" 1 ", None, ""], "channels": [" selected ", None, ""]},
+        {"server_ids": " 1, ", "channel_names": "selected,"},
+        {"server_ids": (1,), "channels": ("selected",)},
+        {"server_ids": {1}, "channels": {"selected"}},
+    ],
+)
 async def test_async_driver_reads_existing_merged_documents(discord_source: DiscordSource, mode: str, scope: dict[str, Any]) -> None:
     for message_id in range(1, 6):
         discord_source.add_message(message_id)
@@ -258,12 +266,51 @@ async def test_channel_key_precedence_and_legacy_fallback(channels: Any) -> None
     assert sync.connector.batch_size == 1024
 
 
-@pytest.mark.parametrize("scope", [{"server_ids": ["invalid"]}, {"server_ids": ["1", "invalid"]}, {"server_ids": {}}, {"channels": [True]}])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"server_ids": ["invalid"]},
+        {"server_ids": ["1", "invalid"]},
+        {"server_ids": {}},
+        {"server_ids": 0},
+        {"server_ids": False},
+        {"server_ids": [True]},
+        {"server_ids": [1, 1.5]},
+        {"channels": [True]},
+        {"channels": ["selected", {}]},
+    ],
+)
 async def test_invalid_scope_fails_before_remote_access(discord_source: DiscordSource, scope: dict[str, Any]) -> None:
     sync = sync_module.Discord({**scope, "credentials": {"discord_bot_token": "controlled-test-token"}})
     with pytest.raises(ValueError):
         await sync._generate(task())
     assert not discord_source.clients
+
+
+@pytest.mark.parametrize("server_ids", [[0], ["0"], (0,), {0}])
+async def test_zero_server_id_does_not_expand_to_all_servers(discord_source: DiscordSource, server_ids: Any) -> None:
+    discord_source.add_message(1)
+    sync = sync_module.Discord({"server_ids": server_ids, "credentials": {"discord_bot_token": "controlled-test-token"}})
+
+    assert list(await sync._generate(task())) == []
+    assert sync.connector.server_ids == [0]
+    assert not discord_source.channels[0].history_calls
+    discord_source.assert_closed()
+
+
+@pytest.mark.parametrize("server_ids", [None, [], " , "])
+async def test_empty_server_scope_still_respects_channel_selection(discord_source: DiscordSource, server_ids: Any) -> None:
+    selected_elsewhere = FakeChannel(server_id=2)
+    unselected = FakeChannel("unselected")
+    discord_source.channels.extend([selected_elsewhere, unselected])
+    discord_source.add_message(1)
+    discord_source.add_message(2, selected_elsewhere)
+    discord_source.add_message(3, unselected)
+    sync = sync_module.Discord({"server_ids": server_ids, "channels": ["selected"], "batch_size": 1, "credentials": {"discord_bot_token": "controlled-test-token"}})
+
+    assert [doc.id for batch in await sync._generate(task()) for doc in batch] == ["DISCORD_1", "DISCORD_2"]
+    assert not unselected.history_calls
+    discord_source.assert_closed()
 
 
 @pytest.mark.parametrize("failure", ["none", "read", "ingestion"])
