@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import MethodType, SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from agent.component.llm import LLM
 from api.db.services.dialog_service import _stream_with_think_delta
+from api.db.services.llm_service import LLMBundle
+from core.llm import ChatModel, chat
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,3 +292,111 @@ async def test_agent_canvas_retries_reasoning_only_stream_without_exposing_cot(
     assert answer == "重试后可见回答"
     assert markers == ("<think>", "</think>")
     assert outputs["content"] == ("<think>provider returned only private reasoning</think>重试后可见回答")
+
+
+@pytest.mark.parametrize("case_name", ["minimax_open_reasoning", "markers_split_across_deltas", "cumulative_close_with_answer"])
+@pytest.mark.parametrize("images", [[], ["data:image/png;base64,fixture"]])
+async def test_agent_minimax_shapes_preserve_final_content_and_request_options(case_name: str, images: list[str]) -> None:
+    requests: list[dict[str, Any]] = []
+    case = _CASES[case_name]
+
+    class Model:
+        max_length = 4096
+
+        async def async_chat_streamly_delta(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+            requests.append(kwargs)
+            for value in case.chunks:
+                yield value
+
+    component, outputs = _make_component(Model())
+    component.imgs = images
+    component._canvas.globals["sys.chat_template_kwargs"] = {"thinking": {"type": "enabled"}}
+    emitted = await _run_component(component)
+    assert await _collect(_chunks(tuple(emitted)), min_tokens=0) == (case.reasoning, case.answer, case.markers)
+    assert outputs["content"] == "".join(emitted)
+    assert requests == [{**({"images": images} if images else {}), "chat_template_kwargs": {"thinking": {"type": "enabled"}}}]
+
+
+@pytest.mark.parametrize("surface", ["generate", "output"])
+async def test_agent_first_reasoning_is_immediate_and_close_reaches_producer(surface: str) -> None:
+    resume = asyncio.Event()
+    continued = asyncio.Event()
+    closed = asyncio.Event()
+
+    class Model:
+        max_length = 4096
+
+        async def async_chat_streamly_delta(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+            try:
+                yield "<think>reason"
+                continued.set()
+                await resume.wait()
+                yield "</think>answer"
+            finally:
+                closed.set()
+
+    component, outputs = _make_component(Model())
+    messages = [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}]
+    stream = component._generate_streamly(messages) if surface == "generate" else component._stream_output_async("system", messages[1:])
+    try:
+        assert await asyncio.wait_for(anext(stream), timeout=2) == "<think>"
+        assert await asyncio.wait_for(anext(stream), timeout=2) == "reason"
+        assert not continued.is_set()
+    finally:
+        await stream.aclose()
+        resume.set()
+    assert closed.is_set(), "Closing an Agent stream must close its owned provider iterator before returning"
+    assert "content" not in outputs
+
+
+@pytest.mark.parametrize("surface", ["generate", "output"])
+@pytest.mark.parametrize("tools", [False, True])
+@pytest.mark.parametrize("early_close", [False, True])
+async def test_minimax_sdk_stream_through_agent_and_bundle_closes_owned_client(monkeypatch: pytest.MonkeyPatch, surface: str, tools: bool, early_close: bool) -> None:
+    clients: list[Any] = []
+    real_client = chat.AsyncOpenAI
+
+    def create(**kwargs: Any) -> Any:
+        client = real_client(**kwargs)
+        clients.append(client)
+        return client
+
+    async def send(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "fixture.invalid"
+        body = json.loads(request.content)
+        assert body["stream"] is True and body["model"] == "MiniMax-M2"
+        chunks = [
+            {"id": "fixture", "created": 1, "model": "MiniMax-M2", "choices": [{"index": 0, "delta": {"content": "<think>reason"}, "finish_reason": None}]},
+            {"id": "fixture", "created": 1, "model": "MiniMax-M2", "choices": [{"index": 0, "delta": {"content": "</think>answer"}, "finish_reason": "stop"}], "usage": {"total_tokens": 5}},
+        ]
+        content = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"}, request=request)
+
+    transport = httpx.MockTransport(send)
+    monkeypatch.setattr(chat, "AsyncOpenAI", create)
+    monkeypatch.setattr(httpx.AsyncClient, "_transport_for_url", lambda self, url: transport)
+    model = ChatModel["MiniMax"]("fixture-key", "MiniMax-M2", "http://fixture.invalid/v1", provider="MiniMax", max_retries=0)
+    model.is_tools = tools
+    bundle = object.__new__(LLMBundle)
+    bundle.mdl, bundle.langfuse, bundle.is_tools, bundle.verbose_tool_use = model, None, tools, False
+    bundle.max_length = 4096
+    bundle._record_usage_async = AsyncMock(return_value=True)
+    component, outputs = _make_component(bundle)
+    messages = [{"role": "system", "content": "system"}, {"role": "user", "content": "hello"}]
+    stream = component._generate_streamly(messages) if surface == "generate" else component._stream_output_async("system", messages[1:])
+    try:
+        if early_close:
+            assert await anext(stream) == "<think>"
+            assert await anext(stream) == "reason"
+            await stream.aclose()
+            assert "content" not in outputs
+        else:
+            assert "".join([value async for value in stream]) == "<think>reason</think>answer"
+            if surface == "output":
+                assert outputs["content"] == "<think>reason</think>answer"
+        assert len(clients) == 1 and all(client.is_closed() for client in clients)
+    finally:
+        await stream.aclose()
+        for client in clients:
+            await client.close()
+        await transport.aclose()
