@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from copy import deepcopy
 from pathlib import Path
@@ -106,7 +107,7 @@ class PausedSSE(httpx.AsyncByteStream):
         self.closed = True
 
 
-async def stream_response(sdk_http: SDKHTTP, body: PausedSSE) -> None:
+def stream_response(sdk_http: SDKHTTP, body: PausedSSE) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
             assert json.loads(request.content)["stream"] is True
@@ -118,7 +119,7 @@ async def stream_response(sdk_http: SDKHTTP, body: PausedSSE) -> None:
 
 async def test_stream_yields_before_completion_and_counts_the_entire_answer(sdk_http: SDKHTTP) -> None:
     body = PausedSSE()
-    await stream_response(sdk_http, body)
+    stream_response(sdk_http, body)
     model = ReplicateChat('{"api_key":"fixture"}', "meta/model", base_url="https://replicate.test", timeout=1)
     history = [{"role": "user", "content": "Hi"}]
     before = deepcopy(history)
@@ -138,7 +139,7 @@ async def test_stream_yields_before_completion_and_counts_the_entire_answer(sdk_
 @pytest.mark.parametrize("mode", ["early-close", "cancel", "timeout"])
 async def test_stream_closes_http_response_on_every_exit(sdk_http: SDKHTTP, mode: str) -> None:
     body = PausedSSE()
-    await stream_response(sdk_http, body)
+    stream_response(sdk_http, body)
     model = ReplicateChat("fixture", "meta/model", timeout=0.03 if mode == "timeout" else 1)
     stream = model.async_chat_streamly("", [], {})
     assert await anext(stream) == "first"
@@ -158,7 +159,7 @@ async def test_stream_closes_http_response_on_every_exit(sdk_http: SDKHTTP, mode
 async def test_sync_stream_bridge_works_inside_a_running_loop(sdk_http: SDKHTTP) -> None:
     body = PausedSSE()
     body.release.set()
-    await stream_response(sdk_http, body)
+    stream_response(sdk_http, body)
     model = ReplicateChat("fixture", "meta/model")
     assert list(model.chat_streamly("", [], {})) == ["first", " second", num_tokens_from_string("first second")]
     assert body.closed
@@ -173,9 +174,31 @@ async def test_sync_stream_bridge_keeps_the_deadline_after_the_first_chunk(sdk_h
             yield b"event: output\ndata: late\nid: 2\n\n"
 
     body = SlowSSE()
-    await stream_response(sdk_http, body)
+    stream_response(sdk_http, body)
     model = ReplicateChat("fixture", "meta/model", timeout=0.05)
     assert list(model.chat_streamly("", [], {})) == ["first", "**ERROR**: Replicate chat request failed", num_tokens_from_string("first")]
+    assert body.closed
+    sdk_http.assert_closed()
+
+
+def test_sync_stream_bridge_rejects_buffered_chunks_after_the_deadline(sdk_http: SDKHTTP) -> None:
+    class BufferedSSE(PausedSSE):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"event: output\ndata: first\nid: 1\n\nevent: output\ndata: late\nid: 2\n\nevent: done\ndata: {}\nid: 3\n\n"
+
+    body = BufferedSSE()
+    stream_response(sdk_http, body)
+    model = ReplicateChat("fixture", "meta/model", timeout=0.05)
+    stream = model.chat_streamly("", [], {})
+    try:
+        assert next(stream) == "first"
+        time.sleep(0.08)
+        assert next(stream) == "**ERROR**: Replicate chat request failed"
+        assert next(stream) == num_tokens_from_string("first")
+        with pytest.raises(StopIteration):
+            next(stream)
+    finally:
+        stream.close()
     assert body.closed
     sdk_http.assert_closed()
 

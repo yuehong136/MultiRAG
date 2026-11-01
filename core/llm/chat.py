@@ -971,12 +971,15 @@ class ReplicateChat(Base):
     async def async_chat_streamly(self, system: str | None, history: list[dict[str, Any]], gen_conf: dict[str, Any] | None = None, **kwargs: Any) -> AsyncIterator[str | int]:
         answer = ""
         try:
-            deadline = asyncio.get_running_loop().time() + self.timeout
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.timeout
             async with replicate_session(self.api_key, self.base_url, self.timeout) as client:
                 async with asyncio.timeout_at(deadline):
                     response = await client.async_stream(self.model_name, input=self._input(system, history, gen_conf))
                 async with aclosing(response) as stream:
                     while True:
+                        if loop.time() >= deadline:
+                            raise TimeoutError
                         # The sync bridge advances each item in a new task. Do
                         # not keep a task-bound timeout context across a yield.
                         async with asyncio.timeout_at(deadline):
@@ -984,6 +987,8 @@ class ReplicateChat(Base):
                                 event = await anext(stream)
                             except StopAsyncIteration:
                                 break
+                        if loop.time() >= deadline:
+                            raise TimeoutError
                         delta = str(event)
                         if delta:
                             answer += delta
