@@ -13,6 +13,8 @@ ACCEPTANCE = ROOT / "tests" / "acceptance"
 DATABASE_TESTS = frozenset(
     {
         "test_after10bbe_provider_parser.py",
+        "test_after325_model_instance_indexes.py",
+        "test_after325_storage_contract.py",
         "test_after5e_agent_history_web.py",
         "test_after5e_mssql_web.py",
         "test_after5e_provider_discovery_web.py",
@@ -210,6 +212,9 @@ def required_services(paths: list[Path]) -> set[str]:
             continue
         if path.name == "test_connector_task_controls.py":
             required.add("postgresql")
+            continue
+        if path.name == "test_after325_native_history.py":
+            required.update(("elasticsearch", "infinity"))
             continue
         if path.name in {"test_tts_cache.py", "test_customer_service_template.py"}:
             required.update(("postgresql", "redis"))
