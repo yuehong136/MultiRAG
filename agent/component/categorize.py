@@ -38,8 +38,9 @@ class CategorizeParam(LLMParam):
         self.message_history_window_size = 1
         self.update_prompt()
 
-    def check(self):
-        self.check_positive_integer(self.message_history_window_size, "[Categorize] Message window size > 0")
+    def check(self) -> None:
+        if type(self.message_history_window_size) is not int or self.message_history_window_size < 0:
+            raise ValueError("[Categorize] Message window size must be a non-negative integer")
         self.check_empty(self.category_description, "[Categorize] Category examples")
         for k, v in self.category_description.items():
             if not k:
