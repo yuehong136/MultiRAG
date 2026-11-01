@@ -1,12 +1,13 @@
 """RESTful 文档解析/停止端点的服务与路由契约。
 
 这两条端点取代了 legacy `/document/run` 的 run=1 / run=2 多态分支，
-所以 doc-store 清理必须保留 legacy 分支里的 milvus 差异：milvus 没有
-index_exist，走 has_collection + 每数据集一个 collection。
+所以 doc-store 清理必须保留 legacy 分支里的 milvus 差异：milvus 的
+兼容 index_exist 会吞掉探测错误，历史清理使用原生 has_collection。
 """
 
 import types
 from contextlib import contextmanager
+from typing import Any
 
 import pytest
 from sqlalchemy.orm import Session
@@ -73,10 +74,10 @@ def test_parse_continues_with_valid_documents_and_reports_the_rest(db, parse_stu
     assert parse_stubs[0][0] == ["d1"]
 
 
-def test_stop_cancels_running_documents(db, parse_stubs, monkeypatch):
+def test_stop_cancels_running_documents(db: Session, parse_stubs: list[Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: [_doc(run="1")]))
     assert document_api_service.stop_dataset_documents(db, "kb1", ["d1"], [], principal_id="t1") == {"success_count": 1}
-    assert parse_stubs == [(["d1"], "t1", "2", False, False, "kb1")]
+    assert parse_stubs == [(["d1"], "t1", "2", True, False, "kb1")]
 
 
 def test_stop_refuses_documents_that_never_started(db, monkeypatch):
@@ -94,10 +95,10 @@ def test_stop_refuses_documents_that_never_started(db, monkeypatch):
     assert "no active" in exc.value.result["results"]["d1"]["error"]
 
 
-def test_stop_allows_a_done_document_with_an_unfinished_task(db, parse_stubs, monkeypatch):
+def test_stop_allows_a_done_document_with_an_unfinished_task(db: Session, parse_stubs: list[Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(DocumentService, "query", classmethod(lambda cls, s, **kw: [_doc(run="3")]))
     assert document_api_service.stop_dataset_documents(db, "kb1", ["d1"], [], principal_id="t1") == {"success_count": 1}
-    assert parse_stubs[0][2:4] == ("2", False)
+    assert parse_stubs[0][2:4] == ("2", True)
 
 
 # ---------------------------------------------------------------------------
