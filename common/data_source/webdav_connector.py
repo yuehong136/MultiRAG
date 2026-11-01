@@ -5,6 +5,7 @@ import os
 import posixpath
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from webdav4.client import Client as WebDAVClient
 from webdav4.multistatus import MultiStatusResponse
@@ -132,6 +133,28 @@ class WebDAVConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
         raise ValueError("WebDAV file has no valid size metadata")
 
     @staticmethod
+    def _get_log_file_identifier(file_path: str) -> str:
+        try:
+            parsed = urlsplit(file_path)
+        except ValueError:
+            return "<unknown>"
+        path = parsed.path if parsed.scheme or parsed.netloc else file_path
+        path = path.split("?", 1)[0].split("#", 1)[0]
+        identifier = os.path.basename(path.rstrip("/")) or "<unknown>"
+        return identifier.encode("unicode_escape").decode("ascii")
+
+    def _exceeds_size_threshold(self, size_bytes: int, file_path: str) -> bool:
+        if self.size_threshold is None or size_bytes <= self.size_threshold:
+            return False
+        logging.warning(
+            "%s exceeds size threshold of %s (size_bytes=%s). Skipping.",
+            self._get_log_file_identifier(file_path),
+            self.size_threshold,
+            size_bytes,
+        )
+        return True
+
+    @staticmethod
     def _modified_at(file_info: dict[str, Any], fallback: datetime) -> datetime:
         value = file_info.get("modified")
         if isinstance(value, datetime):
@@ -182,7 +205,7 @@ class WebDAVConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                 if not self._is_supported_file(os.path.basename(item_path)):
                     continue
                 size_bytes = self._get_size_bytes(item)
-                if self.size_threshold is not None and size_bytes > self.size_threshold:
+                if self._exceeds_size_threshold(size_bytes, item_path):
                     continue
                 if not filter_by_mtime or start < self._modified_at(item, end) <= end:
                     files.append((item_path, item))
@@ -237,8 +260,7 @@ class WebDAVConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                 continue
 
             size_bytes = self._get_size_bytes(file_info)
-            if self.size_threshold is not None and size_bytes > self.size_threshold:
-                logging.warning(f"{file_name} exceeds size threshold of {self.size_threshold}. Skipping.")
+            if self._exceeds_size_threshold(size_bytes, file_path):
                 continue
 
             try:
@@ -273,7 +295,7 @@ class WebDAVConnector(LoadConnector, PollConnector, SlimConnectorWithPermSync):
                         semantic_identifier=semantic_id,
                         extension=get_file_ext(file_name),
                         doc_updated_at=modified,
-                        size_bytes=size_bytes if size_bytes else 0,
+                        size_bytes=size_bytes,
                     )
                 )
 
