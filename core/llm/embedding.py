@@ -41,6 +41,7 @@ from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version
 from core.llm.async_stream import iterate_owned_stream
+from core.llm.azure_auth import resolve_azure_credentials
 from core.llm.dashscope_transport import native_http_api_url
 from core.llm.replicate_auth import normalize_replicate_key, replicate_session
 from core.llm.volc_auth import decode_volc_key
@@ -282,11 +283,10 @@ class LocalAIEmbed(Base):
 class AzureEmbed(OpenAIEmbed):
     _FACTORY_NAME = "Azure-OpenAI"
 
-    def __init__(self, key, model_name, **kwargs):
+    def __init__(self, key: str | dict[str, Any], model_name: str, **kwargs: Any) -> None:
         from openai.lib.azure import AzureOpenAI
 
-        api_key = json.loads(key).get("api_key", "")
-        api_version = json.loads(key).get("api_version", "2024-02-01")
+        api_key, api_version = resolve_azure_credentials(key)
         self.client = AzureOpenAI(api_key=api_key, azure_endpoint=kwargs["base_url"], api_version=api_version)
         self.model_name = model_name
 
