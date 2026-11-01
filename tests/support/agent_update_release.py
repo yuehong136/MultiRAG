@@ -138,7 +138,8 @@ def release_api(bootstrapped_engine: sa.Engine, monkeypatch: pytest.MonkeyPatch)
                 remaining = {}
                 for table_name, row_ids in registered_rows.items():
                     table = db_models.Base.metadata.tables["usr_ai." + table_name]
-                    remaining[table_name] = reader.scalar(sa.select(sa.func.count()).select_from(table).where(table.c.id.in_(sorted(row_ids))))
+                    typed_ids = [table.c.id.type.python_type(value) for value in sorted(row_ids)]
+                    remaining[table_name] = reader.scalar(sa.select(sa.func.count()).select_from(table).where(table.c.id.in_(typed_ids)))
                 assert not any(remaining.values()), remaining
             report["cleanup"]["sql_rows_absent"] = True
             report["cleanup"]["remaining_rows"] = remaining
