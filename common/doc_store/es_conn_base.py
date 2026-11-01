@@ -24,7 +24,7 @@ from abc import abstractmethod
 from typing import Any
 
 from elastic_transport import ConnectionTimeout
-from elasticsearch import NotFoundError
+from elasticsearch import BadRequestError, NotFoundError
 from elasticsearch_dsl import Index
 
 from common import settings
@@ -300,7 +300,7 @@ class ESConnectionBase(SearchMetadata, DocStoreConnection):
     SQL
     """
 
-    def sql(self, sql: str, fetch_size: int, format: str):
+    def sql(self, sql: str, fetch_size: int, format: str) -> Any:
         self.logger.debug(f"ESConnection.sql get sql: {sql}")
         sql = re.sub(r"[ `]+", " ", sql)
         sql = sql.replace("%", "")
@@ -323,6 +323,12 @@ class ESConnectionBase(SearchMetadata, DocStoreConnection):
                 time.sleep(3)
                 self._connect()
                 continue
+            except BadRequestError as e:
+                # Invalid generated SQL is retried or falls back to retrieval in
+                # dialog_service.use_sql; preserve that error contract without
+                # reporting the expected query rejection as a backend failure.
+                self.logger.warning("ESConnection.sql rejected SQL:\n%s\nError: %s", sql, e)
+                raise Exception(f"SQL error: {e}\n\nSQL: {sql}") from e
             except Exception as e:
                 self.logger.exception(f"ESConnection.sql got exception. SQL:\n{sql}")
                 raise Exception(f"SQL error: {e}\n\nSQL: {sql}")
