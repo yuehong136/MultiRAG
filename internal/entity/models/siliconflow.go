@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"strings"
@@ -276,67 +275,10 @@ func (m *SiliconFlowModel) Embed(modelName *string, texts []string, apiConfig *A
 }
 
 func (m *SiliconFlowModel) ListModels(apiConfig *APIConfig) ([]string, error) {
-	apiConfig, cancelCall := modelCallConfig(apiConfig)
-	defer cancelCall()
 	if apiConfig == nil || apiConfig.APIKey == nil || strings.TrimSpace(*apiConfig.APIKey) == "" {
 		return nil, fmt.Errorf("siliconflow: model discovery API key is required")
 	}
-	baseURL, err := resolveModelBaseURL(m.BaseURL, apiConfig.Region)
-	if err != nil {
-		return nil, err
-	}
-	if m.URLSuffix.Models == "" {
-		return nil, fmt.Errorf("siliconflow: models endpoint is missing")
-	}
-	url := joinModelURL(baseURL, m.URLSuffix.Models)
-
-	// Build request body
-	reqBody := map[string]interface{}{}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(requestContext(apiConfig), "GET", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*apiConfig.APIKey))
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
-	}
-
-	// Parse response
-	var modelList providerModelList
-	if err = json.Unmarshal(body, &modelList); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	var models []string
-	for _, model := range modelList.Models {
-		modelName := model.ID
-		if model.OwnedBy != "" {
-			modelName = model.ID + "@" + model.OwnedBy
-		}
-		models = append(models, modelName)
-	}
-
-	return models, nil
+	return listProviderModels(m.httpClient, m.BaseURL, m.URLSuffix.Models, apiConfig, true)
 }
 
 type siliconFlowBalanceResponse struct {

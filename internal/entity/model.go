@@ -216,6 +216,17 @@ func (pm *ProviderManager) DescribeSupportedModels(providerName string, names []
 			// Provider-specific declarations are useful when the shared catalog has
 			// no matching name. Unknown aliases never fall back to another model.
 			model, _ = pm.GetModelByName(providerName, name)
+			if model == nil && strings.EqualFold(providerName, "SiliconFlow") {
+				// This driver's inventory appends owned_by to the remote ID. Only
+				// metadata lookup drops that suffix; the published ID stays intact.
+				if separator := strings.LastIndexByte(name, '@'); separator > 0 && separator < len(name)-1 {
+					lookupName := name[:separator]
+					model, _ = pm.GetModelByNameOrAlias(lookupName)
+					if model == nil {
+						model, _ = pm.GetModelByName(providerName, lookupName)
+					}
+				}
+			}
 			if model != nil {
 				model = cloneCatalogModel(model)
 			}

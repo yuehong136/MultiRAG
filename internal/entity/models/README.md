@@ -145,6 +145,12 @@ integer token limits used by inference and registration remain unchanged; JSON
 presence is tracked separately for inventory metadata. Google/Ollama keep their
 nested-empty response and multimodal/optional-thinking safeguards.
 
+SiliconFlow retains its existing `id@owned_by` inventory names. After an exact
+catalog miss, only this provider may use the ID before the final owner suffix for
+metadata lookup; other providers and the published name keep their full IDs.
+Its discovery parser rejects malformed or duplicate IDs and provider errors,
+bounds the response read, and preserves an explicit empty inventory.
+
 `TestSupportedDiscoveryMetadataHTTPAndSQL` uses `MULTIRAG_DISCOVERY_CONFIG` for a
 private local PostgreSQL admin config and creates a separately registered scratch
 database. `REQUIRE_SERVICES=1` makes missing configuration fail. It verifies actual
