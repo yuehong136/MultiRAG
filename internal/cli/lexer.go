@@ -54,6 +54,9 @@ func (l *Lexer) peekChar() byte {
 }
 
 func (l *Lexer) peekToken() string {
+	if l.readPos >= len(l.input) {
+		return ""
+	}
 	// Skip whitespace starting from readPos
 	skipPos := l.readPos
 	for skipPos < len(l.input) && (l.input[skipPos] == ' ' || l.input[skipPos] == '\t' || l.input[skipPos] == '\n' || l.input[skipPos] == '\r') {

@@ -170,6 +170,18 @@ The local parser requires a configured instance URL. Submission returns a pendin
 task; poll the task for completed segments. Its URL submission and task listing
 capabilities remain unavailable.
 
+`PARSE FILE` submits the client's file bytes to the selected document-parser
+provider through the Go `/api/v1/file/parse` endpoint. It requires user credentials
+and an explicit `WITH 'model@instance@provider'` or a model selected by `USE MODEL`.
+This command does not attach a document to a dataset; `IN DATASET` is unsupported.
+`-o json` reports the returned task ID and status; a pending task has no parsed
+segments. Provider task execution is separate from Python dataset ingestion.
+
+Standalone local `CHUNK ... WITH ...`, `EXPLAIN CHUNK ...` and the multi-model
+`PARSE FILE ... VISION ... CHAT ...` grammar are unavailable. There is no local
+DSL ingestion engine behind these commands. They fail without submitting work
+or printing a successful parse/chunk result.
+
 ## Architecture
 
 ```
