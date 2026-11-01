@@ -65,6 +65,7 @@ def stop_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iter
         collection=env["collection"],
         ids=ids,
         redis_keys=sorted(keys),
+        queue=env["queue"],
         objects=[f"{env['kb']}/{key}.txt" for key in ["document", "sibling"]],
     )
     for doc_key, task_key in [("document", "task"), ("sibling", "sibling_task")]:
@@ -124,9 +125,18 @@ def stop_api(parse_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iter
         with env["engine"].connect() as reader:
             remaining = {model.__tablename__: reader.scalar(sa.select(sa.func.count()).select_from(model).where(condition)) for model, condition in scoped}
         assert not any(remaining.values()), remaining
-        REDIS_CONN.REDIS.delete(*sorted(keys))
+        REDIS_CONN.REDIS.delete(*sorted(keys), env["queue"])
+        assert not REDIS_CONN.REDIS.exists(env["queue"])
         assert not any(REDIS_CONN.REDIS.exists(key) for key in keys)
-        env["journal"].event("stop-case-independent-cleanup-readback", sql_remaining=remaining, redis_keys_absent=sorted(keys), native_rows_absent=True, source_objects_absent=True)
+        env["journal"].event(
+            "stop-case-independent-cleanup-readback",
+            sql_remaining=remaining,
+            redis_keys_absent=sorted(keys),
+            queue=env["queue"],
+            queue_absent=True,
+            native_rows_absent=True,
+            source_objects_absent=True,
+        )
 
 
 def _row(env: dict[str, Any], document_key: str, chunk_key: str) -> dict[str, Any]:
