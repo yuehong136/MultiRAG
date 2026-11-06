@@ -25,6 +25,17 @@ import (
 	"multirag/internal/common"
 )
 
+// jsonInternalError keeps backend details in server logs and preserves the
+// existing internal-error HTTP status and business code for API consumers.
+func jsonInternalError(c *gin.Context, err error) {
+	common.Warn("handler internal error",
+		zap.Error(err),
+		zap.String("method", c.Request.Method),
+		zap.String("path", c.Request.URL.Path),
+	)
+	jsonError(c, common.CodeServerError, common.CodeServerError.Message())
+}
+
 // HandleNoRoute handles requests to undefined routes
 func HandleNoRoute(c *gin.Context) {
 	// Log the request details on server side

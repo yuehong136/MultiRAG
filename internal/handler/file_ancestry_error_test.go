@@ -29,6 +29,7 @@ func TestFileAncestryErrorClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/files/id/ancestors", nil)
 			respondFileAncestryError(c, tc.err)
 			var body struct {
 				Code int
@@ -39,6 +40,9 @@ func TestFileAncestryErrorClassification(t *testing.T) {
 			}
 			if w.Code != tc.status || body.Code != tc.code || body.Data != nil || strings.Contains(w.Body.String(), "private query context") {
 				t.Fatalf("unexpected ancestry error: %s", w.Body)
+			}
+			if tc.code == 500 && strings.Contains(w.Body.String(), "test failure") {
+				t.Fatal("ancestry response leaked internal error")
 			}
 		})
 	}

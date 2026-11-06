@@ -156,7 +156,7 @@ func (h *FileHandler) ListFiles(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
 			return
 		}
-		jsonError(c, common.CodeServerError, err.Error())
+		jsonInternalError(c, err)
 		return
 	}
 
@@ -186,7 +186,7 @@ func (h *FileHandler) GetRootFolder(c *gin.Context) {
 	// Get root folder
 	rootFolder, err := h.fileService.GetRootFolder(userID)
 	if err != nil {
-		jsonError(c, common.CodeServerError, err.Error())
+		jsonInternalError(c, err)
 		return
 	}
 
@@ -206,7 +206,7 @@ func respondFileAncestryError(c *gin.Context, err error) {
 		jsonError(c, common.CodeDataError, service.ErrFileNoAuthorization.Error())
 		return
 	}
-	jsonError(c, common.CodeServerError, err.Error())
+	jsonInternalError(c, err)
 }
 
 // GetParentFolder gets parent folder of a file
@@ -372,7 +372,7 @@ func (h *FileHandler) UploadFile(c *gin.Context) {
 		if parentID == "" {
 			rootFolder, err := h.fileService.GetRootFolder(userID)
 			if err != nil {
-				jsonError(c, common.CodeServerError, err.Error())
+				jsonInternalError(c, err)
 				return
 			}
 			parentID = rootFolder["id"].(string)
@@ -429,7 +429,7 @@ func (h *FileHandler) UploadFile(c *gin.Context) {
 		if parentID == "" {
 			rootFolder, err := h.fileService.GetRootFolder(userID)
 			if err != nil {
-				jsonError(c, common.CodeServerError, err.Error())
+				jsonInternalError(c, err)
 				return
 			}
 			parentID = rootFolder["id"].(string)
@@ -630,7 +630,7 @@ func (h *FileHandler) Download(c *gin.Context) {
 				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Not found", "data": nil})
 				return
 			}
-			jsonError(c, common.CodeServerError, "Failed to get file storage address: "+err.Error())
+			jsonInternalError(c, err)
 			return
 		}
 		blob, getErr = storageImpl.Get(storageAddr.Bucket, storageAddr.Name)
@@ -638,11 +638,10 @@ func (h *FileHandler) Download(c *gin.Context) {
 
 	// Check if we got valid data
 	if len(blob) == 0 {
-		errMsg := "Failed to retrieve file blob"
-		if getErr != nil {
-			errMsg += ": " + getErr.Error()
+		if getErr == nil {
+			getErr = errors.New("empty file blob")
 		}
-		jsonError(c, common.CodeServerError, errMsg)
+		jsonInternalError(c, getErr)
 		return
 	}
 

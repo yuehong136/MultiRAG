@@ -249,7 +249,7 @@ func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 	indexName := fmt.Sprintf("multirag_%s", tenantID)
 	exists, err := docEngine.ChunkStoreExists(c.Request.Context(), indexName, datasetID)
 	if err != nil {
-		jsonError(c, common.CodeServerError, err.Error())
+		jsonInternalError(c, err)
 		return
 	}
 
@@ -274,7 +274,7 @@ func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 		},
 	})
 	if err != nil {
-		jsonError(c, common.CodeServerError, err.Error())
+		jsonInternalError(c, err)
 		return
 	}
 	if searchResult == nil {
@@ -314,7 +314,7 @@ func (h *DatasetsHandler) GetKnowledgeGraph(c *gin.Context) {
 		return
 	}
 	if err := sortKnowledgeGraph(graphData); err != nil {
-		jsonError(c, common.CodeServerError, err.Error())
+		jsonInternalError(c, err)
 		return
 	}
 	result[graphType] = graphData
@@ -368,7 +368,7 @@ func (h *DatasetsHandler) DeleteKnowledgeGraph(c *gin.Context) {
 	if _, err := docEngine.DeleteChunks(c.Request.Context(), map[string]interface{}{
 		"knowledge_graph_kwd": []string{"graph", "subgraph", "entity", "relation", "community_report"},
 	}, indexName, datasetID); err != nil {
-		jsonError(c, common.CodeServerError, err.Error())
+		jsonInternalError(c, err)
 		return
 	}
 
