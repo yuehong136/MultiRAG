@@ -405,7 +405,7 @@ jobs:
           go test -race -count=1 -json ./internal/... | tee .test-results/go/tests.jsonl
           REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe.json" \
             go test -race -tags integration -count=1 -json ./internal/handler \
-              -run '^TestAfter10bbeAgentMetadataHTTPAndSQL$' | tee -a .test-results/go/tests.jsonl
+              -run '^(TestAfter10bbeAgentMetadataHTTPAndSQL|TestHandlerInternalErrorsSQLHTTP)$' | tee -a .test-results/go/tests.jsonl
           REQUIRE_SERVICES=1 MULTIRAG_AFTER10BBE_G_CONFIG="$RUNNER_TEMP/go-after10bbe-probe.json" \
             go test -race -tags integration -count=1 -json ./internal/service \
               -run '^TestAfter10bbeDBProbeMySQLProtocol$' | tee -a .test-results/go/tests.jsonl

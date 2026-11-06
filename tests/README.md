@@ -108,6 +108,12 @@ PR 后续更新取消尚未结束的旧运行；已有同一提交的适用通�
 本批新增 Go 实际验收入口如下；它们在普通无服务 race 中仅登记为未验证的 opt-in。
 设置 `REQUIRE_SERVICES=1` 后缺失配置必须失败，不能以 skip 代替实际运行。
 
+`handler.TestHandlerInternalErrorsSQLHTTP` 使用 `-tags integration`，由 Go CI 与 Agent metadata
+专项一起显式运行；读取已有 `MULTIRAG_AFTERDCF_G_CONFIG`，通过 `scratch.New` 登记独占
+PostgreSQL 数据库、Redis key、MinIO bucket 和 HTTP listener。实际 Router/JWT 验证图谱与
+文件内部错误脱敏、授权拒绝及公开错误合同；独立 SQL/对象读回确认失败无写入副作用。
+本地执行需设置 `REQUIRE_SERVICES=1`，通用无服务 race 不能替代这项验收。
+
 after-67c3e73d 的 live 合同另需下列明确输入，均由当前 registered runner 和逐案资源 journal
 记录临时路径、SQL/Redis/对象身份、listener 及独立清理读回；只使用自有 loopback scratch 资源。
 
