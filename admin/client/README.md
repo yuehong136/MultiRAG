@@ -4,7 +4,7 @@
 
 Admin Service is a dedicated management component designed to monitor, maintain, and administrate the MultiRAG system. It provides comprehensive tools for ensuring system stability, performing operational tasks, and managing users and permissions efficiently.
 
-The service offers real-time monitoring of critical components, including the MultiRAG server, Task Executor processes, and dependent services such as PostgreSQL/MySQL, Milvus, Elasticsearch, Infinity, VastBase, Redis, and MinIO. It automatically checks their health status, resource usage, and uptime, and performs restarts in case of failures to minimize downtime.
+The service reports health information for configured components, including the MultiRAG server, Task Executor processes, databases, retrieval engines, Redis, and object storage. `LIST SERVICES;` and `SHOW SERVICE <id>;` run checks on demand through the [service manager](../server/services.py) and [component health probes](../../api/utils/health_utils.py); the returned details depend on the component. The Python service manager currently leaves restart and shutdown operations unimplemented.
 
 For user and system management, it supports listing, creating, modifying, and deleting users and their associated resources like knowledge bases and Agents.
 
