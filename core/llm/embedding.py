@@ -37,7 +37,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from api.utils.file_utils import get_home_cache_dir
 from common import settings
 from common.exceptions import ModelException
-from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, total_token_count_from_response, truncate
 from common.url_utils import append_path_segment, ensure_api_version
 from core.llm.async_stream import iterate_owned_stream
@@ -55,6 +54,10 @@ def _model_request(call: Callable[..., Any], **kwargs: Any) -> Any:
         raise
     except Exception as exc:
         status = getattr(exc, "status_code", None)
+        if status is None:
+            response = getattr(exc, "response", None)
+            if isinstance(response, Mapping) and isinstance(response.get("ResponseMetadata"), Mapping):
+                status = response["ResponseMetadata"].get("HTTPStatusCode")
         if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
             status = None
         retryable = status in {408, 429} or (status is not None and status >= 500)
@@ -74,7 +77,8 @@ def _raise_model_exception_if_failed(response: requests.Response) -> None:
 
 
 def _post_embedding(url: str, **kwargs: Any) -> requests.Response:
-    response = _model_request(requests.post, url=url, timeout=30, **kwargs)
+    kwargs.setdefault("timeout", 30)
+    response = _model_request(requests.post, url=url, **kwargs)
     try:
         _raise_model_exception_if_failed(response)
     except ModelException:
@@ -123,6 +127,34 @@ class Base(ABC):
 
     def encode_queries(self, text: str):
         raise NotImplementedError("Please implement encode method!")
+
+    def _batched_encode(self, texts: list[Any], call_fn: Callable[..., tuple[Any, int]], *, batch_size: int = 16, truncate_to: int | None = None) -> tuple[np.ndarray, int]:
+        """Validate every batch and final dimensions before returning any vectors."""
+        if truncate_to is not None:
+            texts = [truncate(text, truncate_to) for text in texts]
+        vectors: list[Any] = []
+        tokens = 0
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            values, used = _model_request(call_fn, batch=batch)
+            vectors.extend(_validated_embedding_vectors(values, len(batch)))
+            if not isinstance(used, int) or isinstance(used, bool) or used < 0:
+                raise ModelException("Invalid embedding provider response: token usage")
+            tokens += used
+        return _validated_embedding_vectors(vectors, len(texts)), tokens
+
+    @staticmethod
+    def _openai_http_embeddings(response: requests.Response, count: int) -> tuple[list[Any], int]:
+        try:
+            _raise_model_exception_if_failed(response)
+            res = response.json()
+            return [item["embedding"] for item in _ordered_embedding_entries(res["data"], count)], total_token_count_from_response(res)
+        except ModelException:
+            raise
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
+        finally:
+            response.close()
 
 
 class DefaultEmbedding(Base):
@@ -262,22 +294,24 @@ class LocalAIEmbed(Base):
         self.client = OpenAI(api_key="empty", base_url=base_url)
         self.model_name = model_name.split("___")[0]
 
-    def encode(self, texts: list):
-        batch_size = 16
-        ress = []
-        for i in range(0, len(texts), batch_size):
-            res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name)
-            try:
-                ress.extend([d.embedding for d in res.data])
-            except Exception as _e:
-                log_exception(_e, res)
-                raise Exception(f"Error: {res}")
-        # local embedding for LmStudio donot count tokens
-        return np.array(ress), 1024
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call)
 
-    def encode_queries(self, text):
-        embds, cnt = self.encode([text])
-        return np.array(embds[0]), cnt
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str]) -> tuple[list[Any], int]:
+        res = _model_request(self.client.embeddings.create, input=batch, model=self.model_name)
+        try:
+            tokens = total_token_count_from_response(res)
+            if getattr(getattr(res, "usage", None), "total_tokens", None) is None:
+                tokens = sum(num_tokens_from_string(text) for text in batch)
+            return [item.embedding for item in _ordered_embedding_entries(res.data, len(batch))], tokens
+        except ModelException:
+            raise
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
 
 
 class AzureEmbed(OpenAIEmbed):
@@ -429,51 +463,25 @@ class ZhipuEmbed(Base):
         self.model_name = model_name
 
     def _request_embeddings(self, input_text: str | list[str]) -> dict[str, Any]:
-        payload = {
-            "model": self.model_name,
-            "input": input_text,
-        }
-        response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=120)
+        response = _post_embedding(self.base_url, json={"model": self.model_name, "input": input_text}, headers=self.headers, timeout=120)
         try:
-            res = response.json()
-        except Exception as _e:
-            log_exception(_e, response)
-            raise Exception(f"Error: {response}")
-        if response.status_code != 200:
-            err = res.get("error", {})
-            message = err.get("message", str(res))
-            raise Exception(f"Error: {message}")
-        return res
+            return response.json()
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
+        finally:
+            response.close()
 
-    def encode(self, texts: list):
-        arr = []
-        tks_num = 0
-        max_len = -1
-        if self.model_name.lower() == "embedding-2":
-            max_len = 512
-        if self.model_name.lower() == "embedding-3":
-            max_len = 3072
-        if max_len > 0:
-            texts = [truncate(t, max_len) for t in texts]
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        limit = {"embedding-2": 512, "embedding-3": 3072}.get(self.model_name.lower(), 8192)
+        return self._batched_encode(texts, self._call, truncate_to=limit)
 
-        for txt in texts:
-            res = None
-            try:
-                res = self._request_embeddings(txt)
-                arr.append(res["data"][0]["embedding"])
-                tks_num += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, res if res is not None else {"model": self.model_name, "input": txt})
-                raise Exception(f"Error: {res}") from _e
-        return np.array(arr), tks_num
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
 
-    def encode_queries(self, text):
-        res = self._request_embeddings(text)
-        try:
-            return np.array(res["data"][0]["embedding"]), total_token_count_from_response(res)
-        except Exception as _e:
-            log_exception(_e, res)
-            raise Exception(f"Error: {res}")
+    def _call(self, batch: list[str]) -> tuple[list[Any], int]:
+        res = self._request_embeddings(batch)
+        return [item["embedding"] for item in _ordered_embedding_entries(res["data"], len(batch))], total_token_count_from_response(res)
 
 
 class OllamaEmbed(Base):
@@ -486,32 +494,20 @@ class OllamaEmbed(Base):
         self.model_name = model_name
         self.keep_alive = kwargs.get("ollama_keep_alive", int(os.environ.get("OLLAMA_KEEP_ALIVE", -1)))
 
-    def encode(self, texts: list):
-        arr = []
-        tks_num = 0
-        for txt in texts:
-            # remove special tokens if they exist base on regex in one request
-            for token in OllamaEmbed._special_tokens:
-                txt = txt.replace(token, "")
-            res = self.client.embeddings(prompt=txt, model=self.model_name, options={"use_mmap": True}, keep_alive=self.keep_alive)
-            try:
-                arr.append(res["embedding"])
-            except Exception as _e:
-                log_exception(_e, res)
-                raise Exception(f"Error: {res}")
-            tks_num += 128
-        return np.array(arr), tks_num
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call)
 
-    def encode_queries(self, text):
-        # remove special tokens if they exist
-        for token in OllamaEmbed._special_tokens:
-            text = text.replace(token, "")
-        res = self.client.embeddings(prompt=text, model=self.model_name, options={"use_mmap": True}, keep_alive=self.keep_alive)
-        try:
-            return np.array(res["embedding"]), 128
-        except Exception as _e:
-            log_exception(_e, res)
-            raise Exception(f"Error: {res}")
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str]) -> tuple[Any, int]:
+        cleaned = batch[:]
+        for special in self._special_tokens:
+            cleaned = [text.replace(special, "") for text in cleaned]
+        res = _model_request(self.client.embed, model=self.model_name, input=cleaned, truncate=True, options={"use_mmap": True}, keep_alive=self.keep_alive)
+        tokens = res.get("prompt_eval_count")
+        return res["embeddings"], tokens if tokens is not None else sum(num_tokens_from_string(text) for text in cleaned)
 
 
 class XinferenceEmbed(Base):
@@ -522,29 +518,24 @@ class XinferenceEmbed(Base):
         self.client = OpenAI(api_key=key, base_url=base_url)
         self.model_name = model_name
 
-    def encode(self, texts: list):
-        batch_size = 16
-        ress = []
-        total_tokens = 0
-        for i in range(0, len(texts), batch_size):
-            res = None
-            try:
-                res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name)
-                ress.extend([d.embedding for d in res.data])
-                total_tokens += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, res)
-                raise Exception(f"Error: {res}")
-        return np.array(ress), total_tokens
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call)
 
-    def encode_queries(self, text):
-        res = None
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str]) -> tuple[list[Any], int]:
+        res = _model_request(self.client.embeddings.create, input=batch, model=self.model_name)
         try:
-            res = self.client.embeddings.create(input=[text], model=self.model_name)
-            return np.array(res.data[0].embedding), total_token_count_from_response(res)
-        except Exception as _e:
-            log_exception(_e, res)
-            raise Exception(f"Error: {res}")
+            tokens = total_token_count_from_response(res)
+            if getattr(getattr(res, "usage", None), "total_tokens", None) is None:
+                tokens = sum(num_tokens_from_string(text) for text in batch)
+            return [item.embedding for item in _ordered_embedding_entries(res.data, len(batch))], tokens
+        except ModelException:
+            raise
+        except Exception:
+            raise ModelException("Invalid embedding provider response") from None
 
 
 class YoudaoEmbed(Base):
@@ -627,6 +618,8 @@ class JinaMultiVecEmbed(Base):
                 token_count += total_token_count_from_response(res)
             except Exception:
                 raise ModelException("Invalid embedding provider response") from None
+            finally:
+                response.close()
         return _validated_embedding_vectors(ress, len(texts)), token_count
 
     def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
@@ -643,45 +636,23 @@ class MistralEmbed(Base):
         self.client = MistralClient(api_key=key)
         self.model_name = model_name
 
-    def encode(self, texts: list):
-        import random
-        import time
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call, truncate_to=8192)
 
-        texts = [truncate(t, 8196) for t in texts]
-        batch_size = 16
-        ress = []
-        token_count = 0
-        for i in range(0, len(texts), batch_size):
-            retry_max = 5
-            while retry_max > 0:
-                try:
-                    res = self.client.embeddings(input=texts[i : i + batch_size], model=self.model_name)
-                    ress.extend([d.embedding for d in res.data])
-                    token_count += total_token_count_from_response(res)
-                    break
-                except Exception as _e:
-                    if retry_max == 1:
-                        log_exception(_e)
-                    delay = random.uniform(20, 60)
-                    time.sleep(delay)
-                    retry_max -= 1
-        return np.array(ress), token_count
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
 
-    def encode_queries(self, text):
-        import random
-        import time
-
-        retry_max = 5
-        while retry_max > 0:
+    def _call(self, batch: list[str]) -> tuple[list[Any], int]:
+        for attempt in range(5):
             try:
-                res = self.client.embeddings(input=[truncate(text, 8196)], model=self.model_name)
-                return np.array(res.data[0].embedding), total_token_count_from_response(res)
-            except Exception as _e:
-                if retry_max == 1:
-                    log_exception(_e)
-                delay = random.randint(20, 60)
-                time.sleep(delay)
-                retry_max -= 1
+                res = _model_request(self.client.embeddings, input=batch, model=self.model_name)
+                break
+            except ModelException as exc:
+                if not exc.retryable or attempt == 4:
+                    raise
+                time.sleep(20)
+        return [item.embedding for item in _ordered_embedding_entries(res.data, len(batch))], total_token_count_from_response(res)
 
 
 class BedrockEmbed(Base):
@@ -728,42 +699,29 @@ class BedrockEmbed(Base):
         else:  # assume_role
             self.client = boto3.client("bedrock-runtime", region_name=self.bedrock_region)
 
-    def encode(self, texts: list):
-        texts = [truncate(t, 8196) for t in texts]
-        embeddings = []
-        token_count = 0
-        for text in texts:
-            if self.is_amazon:
-                body = {"inputText": text}
-            elif self.is_cohere:
-                body = {"texts": [text], "input_type": "search_document"}
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call, batch_size=1, truncate_to=8192)
 
-            response = self.client.invoke_model(modelId=self.model_name, body=json.dumps(body))
-            try:
-                model_response = json.loads(response["body"].read())
-                embeddings.extend([model_response["embedding"]])
-                token_count += num_tokens_from_string(text)
-            except Exception as _e:
-                log_exception(_e, response)
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self._batched_encode([text], lambda batch: self._call(batch, "search_query"), batch_size=1, truncate_to=8192)
+        return vectors[0], tokens
 
-        return np.array(embeddings), token_count
-
-    def encode_queries(self, text):
-        embeddings = []
-        token_count = num_tokens_from_string(text)
+    def _call(self, batch: list[str], input_type: str = "search_document") -> tuple[Any, int]:
+        text = batch[0]
         if self.is_amazon:
-            body = {"inputText": truncate(text, 8196)}
+            body = {"inputText": text}
         elif self.is_cohere:
-            body = {"texts": [truncate(text, 8196)], "input_type": "search_query"}
-
-        response = self.client.invoke_model(modelId=self.model_name, body=json.dumps(body))
+            body = {"texts": [text], "input_type": input_type, "truncate": "END"}
+        else:
+            raise ModelException("Unsupported Bedrock embedding model")
+        response = _model_request(self.client.invoke_model, modelId=self.model_name, body=json.dumps(body))
+        stream = response["body"]
         try:
-            model_response = json.loads(response["body"].read())
-            embeddings.extend(model_response["embedding"])
-        except Exception as _e:
-            log_exception(_e, response)
-
-        return np.array(embeddings), token_count
+            result = json.loads(stream.read())
+            values = result["embeddings"] if self.is_cohere else [result["embedding"]]
+            return values, num_tokens_from_string(text)
+        finally:
+            stream.close()
 
 
 class GeminiEmbed(Base):
@@ -819,40 +777,24 @@ class GeminiEmbed(Base):
             # Compatible with SDK versions that do not accept title in embed config.
             return self.types.EmbedContentConfig(task_type=task_type)
 
-    def encode(self, texts: list):
-        texts = [truncate(t, 2048) for t in texts]
-        token_count = sum(num_tokens_from_string(text) for text in texts)
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
         config = self._build_embedding_config()
-        batch_size = 16
-        ress = []
-        for i in range(0, len(texts), batch_size):
-            result = None
-            try:
-                result = self.client.models.embed_content(
-                    model=self.model_name,
-                    contents=texts[i : i + batch_size],
-                    config=config,
-                )
-                ress.extend(self._parse_embedding_response(result))
-            except Exception as _e:
-                log_exception(_e, result)
-                raise Exception(f"Error: {result}")
-        return np.array(ress), token_count
 
-    def encode_queries(self, text):
+        def call(batch: list[str]) -> tuple[Any, int]:
+            result = _model_request(self.client.models.embed_content, model=self.model_name, contents=batch, config=config)
+            return self._parse_embedding_response(result), sum(num_tokens_from_string(text) for text in batch)
+
+        return self._batched_encode(texts, call, truncate_to=2048)
+
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
         config = self._build_embedding_config()
-        result = None
-        token_count = num_tokens_from_string(text)
-        try:
-            result = self.client.models.embed_content(
-                model=self.model_name,
-                contents=[truncate(text, 2048)],
-                config=config,
-            )
-            return np.array(self._parse_embedding_response(result)[0]), token_count
-        except Exception as _e:
-            log_exception(_e, result)
-            raise Exception(f"Error: {result}")
+
+        def call(batch: list[str]) -> tuple[Any, int]:
+            result = _model_request(self.client.models.embed_content, model=self.model_name, contents=batch, config=config)
+            return self._parse_embedding_response(result), sum(num_tokens_from_string(value) for value in batch)
+
+        vectors, tokens = self._batched_encode([text], call, truncate_to=2048)
+        return vectors[0], tokens
 
 
 class NvidiaEmbed(Base):
@@ -876,29 +818,15 @@ class NvidiaEmbed(Base):
             self.base_url = "https://ai.api.nvidia.com/v1/retrieval/snowflake/arctic-embed-l/embeddings"
 
     def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
-        batch_size = 16
-        ress = []
-        token_count = 0
-        for i in range(0, len(texts), batch_size):
-            payload = {
-                "input": texts[i : i + batch_size],
-                "input_type": "query",
-                "model": self.model_name,
-                "encoding_format": "float",
-                "truncate": "END",
-            }
-            response = _post_embedding(self.base_url, headers=self.headers, json=payload)
-            try:
-                res = response.json()
-                ress.extend([d["embedding"] for d in _ordered_embedding_entries(res["data"], len(payload["input"]))])
-                token_count += total_token_count_from_response(res)
-            except Exception:
-                raise ModelException("Invalid embedding provider response") from None
-        return _validated_embedding_vectors(ress, len(texts)), token_count
+        return self._batched_encode(texts, lambda batch: self._call(batch, "passage"))
 
     def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
-        embds, cnt = self.encode([text])
-        return np.array(embds[0]), cnt
+        vectors, tokens = self._batched_encode([text], lambda batch: self._call(batch, "query"))
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str], input_type: str) -> tuple[Any, int]:
+        response = _post_embedding(self.base_url, headers=self.headers, json={"input": batch, "input_type": input_type, "model": self.model_name, "encoding_format": "float", "truncate": "END"})
+        return self._openai_http_embeddings(response, len(batch))
 
 
 class LmStudioEmbed(LocalAIEmbed):
@@ -932,37 +860,16 @@ class CoHereEmbed(Base):
         self.client = Client(api_key=key)
         self.model_name = model_name
 
-    def encode(self, texts: list):
-        batch_size = 16
-        ress = []
-        token_count = 0
-        for i in range(0, len(texts), batch_size):
-            res = self.client.embed(
-                texts=texts[i : i + batch_size],
-                model=self.model_name,
-                input_type="search_document",
-                embedding_types=["float"],
-            )
-            try:
-                ress.extend(list(res.embeddings.float))
-                token_count += total_token_count_from_response(res)
-            except Exception as _e:
-                log_exception(_e, res)
-                raise Exception(f"Error: {res}")
-        return np.array(ress), token_count
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call)
 
-    def encode_queries(self, text):
-        res = self.client.embed(
-            texts=[text],
-            model=self.model_name,
-            input_type="search_query",
-            embedding_types=["float"],
-        )
-        try:
-            return np.array(res.embeddings.float[0]), int(total_token_count_from_response(res))
-        except Exception as _e:
-            log_exception(_e, res)
-            raise Exception(f"Error: {res}")
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self._batched_encode([text], lambda batch: self._call(batch, "search_query"))
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str], input_type: str = "search_document") -> tuple[Any, int]:
+        res = _model_request(self.client.embed, texts=batch, model=self.model_name, input_type=input_type, embedding_types=["float"], truncate="END")
+        return res.embeddings.float, total_token_count_from_response(res)
 
 
 class TogetherAIEmbed(OpenAIEmbed):
@@ -1007,44 +914,18 @@ class SILICONFLOWEmbed(Base):
         self.model_name = model_name
 
     def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
-        batch_size = 16
-        ress = []
-        token_count = 0
-        for i in range(0, len(texts), batch_size):
-            texts_batch = texts[i : i + batch_size]
-            if self.model_name in ["BAAI/bge-large-zh-v1.5", "BAAI/bge-large-en-v1.5"]:
-                # limit 512, 340 is almost safe
-                texts_batch = [" " if not text.strip() else truncate(text, 256) for text in texts_batch]
-            else:
-                texts_batch = [" " if not text.strip() else text for text in texts_batch]
-
-            payload = {
-                "model": self.model_name,
-                "input": texts_batch,
-                "encoding_format": "float",
-            }
-            response = _post_embedding(self.base_url, json=payload, headers=self.headers)
-            try:
-                res = response.json()
-                ress.extend([d["embedding"] for d in _ordered_embedding_entries(res["data"], len(payload["input"]))])
-                token_count += total_token_count_from_response(res)
-            except Exception:
-                raise ModelException("Invalid embedding provider response") from None
-
-        return _validated_embedding_vectors(ress, len(texts)), token_count
+        return self._batched_encode(texts, self._call)
 
     def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
-        payload = {
-            "model": self.model_name,
-            "input": text,
-            "encoding_format": "float",
-        }
-        response = _post_embedding(self.base_url, json=payload, headers=self.headers)
-        try:
-            res = response.json()
-            return _validated_embedding_vectors([_ordered_embedding_entries(res["data"], 1)[0]["embedding"]], 1)[0], total_token_count_from_response(res)
-        except Exception:
-            raise ModelException("Invalid embedding provider response") from None
+        vectors, tokens = self.encode([text])
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str]) -> tuple[Any, int]:
+        cleaned = [" " if not text.strip() else text for text in batch]
+        if self.model_name in {"BAAI/bge-large-zh-v1.5", "BAAI/bge-large-en-v1.5"}:
+            cleaned = [truncate(text, 256) for text in cleaned]
+        response = _post_embedding(self.base_url, headers=self.headers, json={"model": self.model_name, "input": cleaned, "encoding_format": "float"})
+        return self._openai_http_embeddings(response, len(batch))
 
 
 class ReplicateEmbed(Base):
@@ -1095,27 +976,16 @@ class VoyageEmbed(Base):
         self.client = voyageai.Client(api_key=key)
         self.model_name = model_name
 
-    def encode(self, texts: list):
-        batch_size = 16
-        ress = []
-        token_count = 0
-        for i in range(0, len(texts), batch_size):
-            res = self.client.embed(texts=texts[i : i + batch_size], model=self.model_name, input_type="document")
-            try:
-                ress.extend(res.embeddings)
-                token_count += res.total_tokens
-            except Exception as _e:
-                log_exception(_e, res)
-                raise Exception(f"Error: {res}")
-        return np.array(ress), token_count
+    def encode(self, texts: list[str]) -> tuple[np.ndarray, int]:
+        return self._batched_encode(texts, self._call)
 
-    def encode_queries(self, text):
-        res = self.client.embed(texts=text, model=self.model_name, input_type="query")
-        try:
-            return np.array(res.embeddings)[0], res.total_tokens
-        except Exception as _e:
-            log_exception(_e, res)
-            raise Exception(f"Error: {res}")
+    def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
+        vectors, tokens = self._batched_encode([text], lambda batch: self._call(batch, "query"))
+        return vectors[0], tokens
+
+    def _call(self, batch: list[str], input_type: str = "document") -> tuple[Any, int]:
+        res = _model_request(self.client.embed, texts=batch, model=self.model_name, input_type=input_type, truncation=True)
+        return res.embeddings, res.total_tokens
 
 
 class HuggingFaceEmbed(Base):
@@ -1137,6 +1007,8 @@ class HuggingFaceEmbed(Base):
             return _validated_embedding_vectors(embeddings, len(texts)), sum(num_tokens_from_string(text) for text in texts)
         except Exception:
             raise ModelException("Invalid embedding provider response") from None
+        finally:
+            response.close()
 
     def encode_queries(self, text: str) -> tuple[np.ndarray, int]:
         response = _post_embedding(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"})
@@ -1144,6 +1016,8 @@ class HuggingFaceEmbed(Base):
             return _validated_embedding_vectors(response.json(), 1)[0], num_tokens_from_string(text)
         except Exception:
             raise ModelException("Invalid embedding provider response") from None
+        finally:
+            response.close()
 
 
 # class VolcEngineEmbed(OpenAIEmbed):
@@ -1529,6 +1403,8 @@ class PerplexityEmbed(Base):
                     token_count += res.get("usage", {}).get("total_tokens", 0)
                 except Exception:
                     raise ModelException("Invalid embedding provider response") from None
+                finally:
+                    response.close()
         else:
             url = f"{self.base_url}/v1/embeddings"
             for i in range(0, len(texts), batch_size):
@@ -1546,6 +1422,8 @@ class PerplexityEmbed(Base):
                     token_count += res.get("usage", {}).get("total_tokens", 0)
                 except Exception:
                     raise ModelException("Invalid embedding provider response") from None
+                finally:
+                    response.close()
 
         return _validated_embedding_vectors(ress, len(texts)), token_count
 
