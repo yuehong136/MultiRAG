@@ -123,3 +123,68 @@ def test_provider_credentials_survive_probe_save_and_reload(bootstrapped_engine:
         config = get_model_config_by_id(db, row_id, tenant_id=owner)
         assert config["is_tools"] is True
         assert json.loads(config["api_key_payload"]) == expected
+
+
+@pytest.mark.parametrize("limit,tools", [(0, False), (32768, True)])
+def test_model_record_metadata_survives_commit_all_resolvers_and_bundle(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, limit: int, tools: bool) -> None:
+    from sqlalchemy import delete, func
+
+    from api.db.db_models import Tenant, TenantModel, TenantModelInstance, TenantModelProvider
+    from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
+    from api.db.services.llm_service import LLMBundle
+    from api.db.services.tenant_llm_service import TenantLangfuseService
+    from tests.support.provider_instances import tenant
+    from tests.support.resource_journal import ResourceJournal
+
+    owner, foreign, pid, iid = (uuid.uuid4().hex for _ in range(4))
+    journal = ResourceJournal("model-record-metadata")
+    journal.event("reserve-sql-rows", database=bootstrapped_engine.url.database, owner=owner, provider=pid, instance=iid)
+    try:
+        with Session(bootstrapped_engine) as db:
+            db.add(tenant(owner))
+            db.add(TenantModelProvider(id=pid, tenant_id=owner, provider_name="OpenAI", status="active"))
+            db.flush()
+            db.add(TenantModelInstance(id=iid, provider_id=pid, instance_name="fixture", api_key=json.dumps({"api_key": "fixture", "is_tools": not tools}), base_url="", status="active"))
+            row = TenantLLM(tenant_id=owner, llm_factory="OpenAI", llm_name="opaque-record", mdl_type="chat", max_tokens=limit, api_key="old-key", status="1")
+            db.add(row)
+            db.flush()
+            identifier = row.id
+            db.add(TenantModel(id=identifier, instance_id=iid, model_name="callable-model", model_types=["chat", "image2text"], is_tools=tools))
+            db.get(Tenant, owner).tenant_llm_id = identifier
+            db.commit()
+        monkeypatch.setattr(TenantLLMService, "model_instance", lambda *_args, **_kwargs: object())
+        monkeypatch.setattr(TenantLangfuseService, "filter_by_tenant", lambda *_args, **_kwargs: None)
+        with Session(bootstrapped_engine) as db:
+            configs = [
+                get_model_config_by_id(db, identifier, tenant_id=owner, model_type="chat"),
+                get_model_config_by_type_and_name(db, owner, "image2text", str(identifier)),
+                get_model_config_by_type_and_name(db, owner, "chat", "callable-model@fixture@OpenAI"),
+                get_tenant_default_model_by_type(db, owner, "chat"),
+            ]
+            for config in configs:
+                assert config["max_tokens"] == limit and config["is_tools"] is tools
+                assert config["tenant_id"] == owner and config["api_key"] == "fixture"
+                bundle = LLMBundle(db, owner, config)
+                assert bundle.max_length == limit and bundle.is_tools is tools
+            with pytest.raises(LookupError):
+                get_model_config_by_id(db, identifier, tenant_id=foreign, model_type="chat")
+            with pytest.raises(LookupError):
+                get_model_config_by_id(db, identifier, allowed_tenant_ids=set(), model_type="chat")
+            with pytest.raises(LookupError, match="capability is required"):
+                get_model_config_by_id(db, identifier, tenant_id=owner)
+        with Session(bootstrapped_engine) as reader:
+            assert reader.get(TenantLLM, identifier).max_tokens == limit
+            assert reader.get(TenantModel, identifier).is_tools is tools
+        journal.event("independent-metadata-readback", model_id=identifier, max_tokens=limit, is_tools=tools, resolver_count=len(configs))
+    finally:
+        with Session(bootstrapped_engine) as writer:
+            writer.execute(delete(TenantModel).where(TenantModel.instance_id == iid))
+            writer.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+            writer.execute(delete(TenantModelInstance).where(TenantModelInstance.id == iid))
+            writer.execute(delete(TenantModelProvider).where(TenantModelProvider.id == pid))
+            writer.execute(delete(Tenant).where(Tenant.id == owner))
+            writer.commit()
+        with Session(bootstrapped_engine) as reader:
+            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
+            assert reader.get(TenantModelInstance, iid) is None and reader.get(TenantModelProvider, pid) is None
+        journal.event("cleanup-readback", remaining=0)
