@@ -59,3 +59,17 @@ def test_success_returns_original_response(connection: Any) -> None:
     response = {"columns": [{"name": "n"}], "rows": [[1]]}
     connection.es.sql.query.return_value = response
     assert connection.sql("SELECT count(*) AS n FROM chunks", 10, "json") is response
+
+
+def test_multiple_tokenized_predicates_keep_sql_rewrite_contract(connection: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(es_conn_base.rag_tokenizer, "tokenize", lambda value: "token:" + value)
+    monkeypatch.setattr(es_conn_base.rag_tokenizer, "fine_grained_tokenize", lambda value: "fine:" + value)
+    connection.sql("SELECT * FROM chunks WHERE title_ltks like 'Alpha' OR body_tks = 'Beta'", 10, "json")
+    connection.es.sql.query.assert_called_once_with(
+        body={
+            "query": "SELECT * FROM chunks WHERE  MATCH(title_ltks, 'fine:token:Alpha', 'operator=OR;minimum_should_match=30%')  OR  MATCH(body_tks, 'fine:token:Beta', 'operator=OR;minimum_should_match=30%') ",
+            "fetch_size": 10,
+        },
+        format="json",
+        request_timeout="2s",
+    )

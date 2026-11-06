@@ -197,7 +197,6 @@ def suite_paths(suite: str) -> list[Path]:
                 "test_metadata_config_contract.py",
                 "test_shared_chunk_owner_contract.py",
                 "test_sandbox_provider_settings.py",
-                "test_search_detail_guard.py",
             )
         ]
     if suite == "core":

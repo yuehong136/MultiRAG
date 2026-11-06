@@ -139,6 +139,14 @@ def test_consumer_suite_contains_every_external_consumer_module() -> None:
     assert set(suite_paths("consumer")) == consumers
 
 
+def test_search_detail_guard_keeps_database_and_core_coverage() -> None:
+    path = INTEGRATION / "test_search_detail_guard.py"
+    assert path in suite_paths("db")
+    assert path in suite_paths("core")
+    assert path not in suite_paths("consumer")
+    assert required_services([path]) == {"postgresql"}
+
+
 def test_pytest_filter_and_ignore_values_are_not_mistaken_for_targets() -> None:
     assert selected_paths("db", ["-k", "api", "--ignore", str(INTEGRATION / "test_async_engine.py")]) == suite_paths("db")
 

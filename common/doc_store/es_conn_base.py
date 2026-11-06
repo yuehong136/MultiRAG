@@ -38,12 +38,12 @@ ATTEMPT_TIME = 2
 
 
 class ESConnectionBase(SearchMetadata, DocStoreConnection):
-    def __init__(self, mapping_file_name: str = "es_mapping.json", logger_name: str = "multirag.es_conn"):
+    def __init__(self, mapping_file_name: str = "es_mapping.json", logger_name: str = "multirag.es_conn") -> None:
         from common.doc_store.es_conn_pool import ES_CONN
 
         self.logger = logging.getLogger(logger_name)
 
-        self.info = {}
+        self.info: dict[str, Any] = {}
         self.logger.info(f"Use Elasticsearch {settings.ES['hosts']} as the doc engine.")
         self.es = ES_CONN.get_conn()
         fp_mapping = os.path.join(get_project_base_directory(), "configs", mapping_file_name)
@@ -304,14 +304,14 @@ class ESConnectionBase(SearchMetadata, DocStoreConnection):
         self.logger.debug(f"ESConnection.sql get sql: {sql}")
         sql = re.sub(r"[ `]+", " ", sql)
         sql = sql.replace("%", "")
-        replaces = []
-        for r in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
-            fld, v = r.group(1), r.group(3)
+        replacements: list[tuple[str, str]] = []
+        for sql_match in re.finditer(r" ([a-z_]+_l?tks)( like | ?= ?)'([^']+)'", sql):
+            fld, v = sql_match.group(1), sql_match.group(3)
             match = f" MATCH({fld}, '{rag_tokenizer.fine_grained_tokenize(rag_tokenizer.tokenize(v))}', 'operator=OR;minimum_should_match=30%') "
-            replaces.append((f"{r.group(1)}{r.group(2)}'{r.group(3)}'", match))
+            replacements.append((f"{sql_match.group(1)}{sql_match.group(2)}'{sql_match.group(3)}'", match))
 
-        for p, r in replaces:
-            sql = sql.replace(p, r, 1)
+        for pattern, replacement in replacements:
+            sql = sql.replace(pattern, replacement, 1)
         self.logger.debug(f"ESConnection.sql to es: {sql}")
 
         for i in range(ATTEMPT_TIME):

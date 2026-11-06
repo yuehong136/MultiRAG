@@ -83,6 +83,9 @@ Python 是生产后端；Go 是并行实现，Web 单独交付。全部提交仅
 
 ## 既有失败与验收限制
 
+交付时保留的 harness 失败和五条 mypy 错误已于 2026-11-06
+[单独修复并复验](after325-checks-followup.md)。下列首轮失败和历史登记偏差仍作为原始证据保留。
+
 - 扩大到完整 `test_integration_harness.py` 时为 46 通过、1 失败：既有 consumer 清单包含未标记
   `external_consumer` 的 `test_search_detail_guard.py`。相关文件与 c17 基线一致，未放宽断言；本批数据库分类专项通过。
 - S 两个 common 文件的定向 mypy 有 5 条错误，在冻结 c17 文件副本重现相同 5 条；没有把它称为通过，也未扩大为无关类型迁移。

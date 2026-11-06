@@ -53,7 +53,7 @@ def confirm_history_visibility(store: Any, index_name: str) -> None:
     total, successful, failed = (shards.get(key) for key in ["total", "successful", "failed"])
     # Unassigned replicas are included in total without being failures. Every
     # active shard must refresh; the subsequent complete search checks primaries.
-    if any(type(value) is not int for value in [total, successful, failed]) or failed != 0 or not 0 < successful <= total:
+    if type(total) is not int or type(successful) is not int or type(failed) is not int or failed != 0 or not 0 < successful <= total:
         raise RuntimeError("Document history visibility could not be confirmed.")
 
 

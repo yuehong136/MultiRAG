@@ -18,6 +18,16 @@ def response(rows: list[dict[str, Any]], count: int) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("field", ["total", "successful", "failed"])
+@pytest.mark.parametrize("value", [None, True, "1", 1.0])
+def test_visibility_rejects_untyped_shard_acknowledgements(field: str, value: Any) -> None:
+    shards: dict[str, Any] = {"total": 1, "successful": 1, "failed": 0}
+    shards[field] = value
+    store = SimpleNamespace(db_type=lambda: "elasticsearch", es=SimpleNamespace(indices=SimpleNamespace(refresh=lambda **kwargs: {"_shards": shards})))
+    with pytest.raises(RuntimeError, match="visibility could not be confirmed"):
+        history.confirm_history_visibility(store, "index")
+
+
 @pytest.mark.parametrize("backend", ["elasticsearch", "opensearch"])
 def test_scroll_preserves_complete_payload_and_vectors(backend: str) -> None:
     original = [{"id": "child", "doc_id": "doc", "kb_id": "kb", "mom_id": "parent", "vector": [0.1, 0.2], "create_time": "original", "custom": {"nested": [1, 2]}}]
