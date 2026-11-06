@@ -1041,6 +1041,7 @@ func (s *Service) ListServices() ([]map[string]interface{}, error) {
 
 	id := len(result)
 	serverList := GlobalServerStatusStore.GetAllStatuses()
+	now := time.Now()
 	for _, serverStatus := range serverList {
 		serverItem := make(map[string]interface{})
 		serverItem["name"] = serverStatus.ServerName
@@ -1049,7 +1050,7 @@ func (s *Service) ListServices() ([]map[string]interface{}, error) {
 		id++
 		serverItem["host"] = serverStatus.Host
 		serverItem["port"] = serverStatus.Port
-		serverItem["status"] = "alive"
+		serverItem["status"] = heartbeatServiceStatus(serverStatus.Timestamp, now)
 		result = append(result, serverItem)
 	}
 	return result, nil
@@ -1671,12 +1672,17 @@ func (s *Service) TestSandboxConnection(providerType string, config map[string]i
 	}, nil
 }
 
-var heartBeatCount int64 = 0
+const heartbeatTimeout = 30 * time.Second
+
+func heartbeatServiceStatus(receivedAt, now time.Time) string {
+	if age := now.Sub(receivedAt); !receivedAt.IsZero() && age >= 0 && age < heartbeatTimeout {
+		return "alive"
+	}
+	return "timeout"
+}
 
 // HandleHeartbeat handle heartbeat
 func (s *Service) HandleHeartbeat(message *common.BaseMessage) (common.ErrorCode, string) {
-	heartBeatCount++
-
 	status := &common.BaseMessage{
 		ServerName: message.ServerName,
 		ServerType: message.ServerType,

@@ -21,7 +21,12 @@ var GlobalServerStatusStore = &ServerStatusStore{
 func (s *ServerStatusStore) UpdateStatus(serverName string, status *common.BaseMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.servers[serverName] = status
+	// Use receipt time, including its monotonic clock, for liveness. A remote
+	// clock can be missing, skewed or in the future. Own the stored snapshot so
+	// the caller cannot change the server's identity or receipt time afterwards.
+	snapshot := *status
+	snapshot.Timestamp = time.Now()
+	s.servers[serverName] = &snapshot
 }
 
 // GetStatus gets a single server status
@@ -29,7 +34,11 @@ func (s *ServerStatusStore) GetStatus(serverName string) (*common.BaseMessage, b
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	status, ok := s.servers[serverName]
-	return status, ok
+	if !ok {
+		return nil, false
+	}
+	snapshot := *status
+	return &snapshot, true
 }
 
 // GetAllStatuses gets all server statuses
@@ -38,7 +47,8 @@ func (s *ServerStatusStore) GetAllStatuses() []*common.BaseMessage {
 	defer s.mu.RUnlock()
 	result := make([]*common.BaseMessage, 0, len(s.servers))
 	for _, status := range s.servers {
-		result = append(result, status)
+		snapshot := *status
+		result = append(result, &snapshot)
 	}
 	return result
 }
@@ -50,7 +60,8 @@ func (s *ServerStatusStore) GetStatusesByType(serverType common.ServerType) []*c
 	result := make([]*common.BaseMessage, 0)
 	for _, status := range s.servers {
 		if status.ServerType == serverType {
-			result = append(result, status)
+			snapshot := *status
+			result = append(result, &snapshot)
 		}
 	}
 	return result
