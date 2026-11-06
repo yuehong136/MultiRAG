@@ -555,6 +555,8 @@ async def completion(request: CompletionRequest, db: AsyncSession = Depends(get_
             dia.llm_setting = chat_model_config
 
         is_embedded = bool(chat_model_id)
+        req["session_id"] = conv.id
+        req["trace_user_id"] = user.id
 
         async def stream_response():
             nonlocal dia, msg, db, req, conv

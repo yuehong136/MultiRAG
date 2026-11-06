@@ -1,6 +1,7 @@
 """Real embedding factory, owned HTTP provider and independently read SQL usage."""
 
 import json
+import socket
 import threading
 import uuid
 from collections.abc import Iterator
@@ -13,7 +14,6 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from openai import BadRequestError
 from sqlalchemy import delete, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -22,7 +22,9 @@ from api.db.db_models import TenantLLM
 from api.db.joint_services.tenant_model_service import get_model_config_by_id
 from api.db.services import tenant_llm_service
 from api.db.services.llm_service import LLMBundle
+from common.exceptions import ModelException
 from core.llm.embedding import OpenAIEmbed
+from tests.support.resource_journal import ResourceJournal
 
 
 @dataclass
@@ -30,6 +32,7 @@ class _Provider:
     requests: list[dict[str, Any]] = field(default_factory=list)
     tokens: int = 7
     reject: bool = False
+    reject_at: int = 0
 
 
 @pytest.fixture
@@ -45,7 +48,7 @@ def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, 
             provider.requests.append({"path": self.path, **payload})
             inputs = payload.get("input", [])
             valid = self.path == "/v1/embeddings" and inputs and all(isinstance(text, str) and text.strip() for text in inputs)
-            if provider.reject or not valid:
+            if provider.reject or provider.reject_at == len(provider.requests) or not valid:
                 status = 400
                 body = {"error": {"message": "controlled embedding input rejection", "type": "invalid_request_error"}}
             else:
@@ -63,11 +66,26 @@ def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, 
             self.end_headers()
             self.wfile.write(encoded)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    journal = ResourceJournal("llm-embedding-inputs")
+    for attempt in range(32):
+        address = ("127.0.0.1", 30000 + int(uuid.uuid4().hex[:4], 16) % 20000)
+        journal.event("reserve-listener", address=list(address), attempt=attempt + 1)
+        server = ThreadingHTTPServer(address, Handler, bind_and_activate=False)
+        try:
+            server.server_bind()
+            server.server_activate()
+            break
+        except OSError:
+            server.server_close()
+            if attempt == 31:
+                raise
+    thread_name = "p-embedding-provider-" + journal.run_id
+    journal.event("reserve-thread", name=thread_name, listener=list(address))
+    thread = threading.Thread(target=server.serve_forever, name=thread_name, daemon=True)
     thread.start()
     owner = uuid.uuid4().hex
     engine = bootstrapped_engine
+    journal.event("reserve-sql-rows", database=engine.url.database, owner=owner)
     report: dict[str, Any] = {"database": engine.url.database, "provider_host": "127.0.0.1", "provider_port": server.server_port, "tenant": owner, "cleanup": {}}
 
     @contextmanager
@@ -114,6 +132,9 @@ def embedding_env(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, 
                 Path(directory, f"resources-{owner}.json").write_text(json.dumps(report, indent=2) + "\n")
             assert not thread.is_alive()
             assert server.fileno() == -1
+            with socket.socket() as reader:
+                assert reader.connect_ex(address) != 0
+            journal.event("cleanup-readback", remaining_model_rows=0, thread_alive=thread.is_alive(), socket_absent=True)
 
 
 def _read_usage(engine: Engine, model_id: int, sibling_id: int) -> int:
@@ -196,11 +217,37 @@ def test_provider_rejection_propagates_without_billing_or_success_trace(embeddin
         bundle = LLMBundle(db, owner, get_model_config_by_id(db, model_id, tenant_id=owner))
         clients.callback(bundle.mdl.client.close)
         bundle.langfuse = MagicMock()
-        with pytest.raises(BadRequestError, match="controlled embedding input rejection"):
+        with pytest.raises(ModelException) as caught:
             bundle.encode([None])
+        assert caught.value.status_code == 400 and caught.value.retryable is False
+        assert "controlled embedding input rejection" not in str(caught.value)
         assert _read_usage(engine, model_id, sibling_id) == 0
-        with pytest.raises(BadRequestError, match="controlled embedding input rejection"):
+        with pytest.raises(ModelException) as caught:
             bundle.encode_queries(None)
         assert _read_usage(engine, model_id, sibling_id) == 0
+        assert caught.value.status_code == 400 and caught.value.retryable is False
         assert [call["input"] for call in provider.requests] == [["None"], ["None"]]
         bundle.langfuse.start_observation.return_value.update.assert_not_called()
+        assert bundle.langfuse.start_observation.return_value.end.call_count == 2
+
+
+def test_localai_partial_batch_failure_never_bills_partial_vectors(embedding_env: tuple[Engine, str, int, int, _Provider]) -> None:
+    from core.llm.embedding import LocalAIEmbed
+
+    engine, owner, model_id, sibling_id, provider = embedding_env
+    provider.reject_at = 2
+    with Session(engine) as writer:
+        writer.get(TenantLLM, model_id).llm_factory = "LocalAI"
+        writer.commit()
+    with Session(engine) as db, ExitStack() as clients:
+        bundle = LLMBundle(db, owner, get_model_config_by_id(db, model_id, tenant_id=owner))
+        assert type(bundle.mdl) is LocalAIEmbed
+        clients.callback(bundle.mdl.client.close)
+        bundle.langfuse = MagicMock()
+        with pytest.raises(ModelException) as caught:
+            bundle.encode([f"document {index}" for index in range(20)])
+        assert caught.value.status_code == 400 and caught.value.retryable is False
+        assert [len(call["input"]) for call in provider.requests] == [16, 4]
+        assert _read_usage(engine, model_id, sibling_id) == 0
+        bundle.langfuse.start_observation.return_value.update.assert_not_called()
+        bundle.langfuse.start_observation.return_value.end.assert_called_once_with()

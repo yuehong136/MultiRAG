@@ -496,3 +496,64 @@ def test_chat_numeric_wire_boundary_and_independent_sql_readback(rest_chat_contr
     assert references[0]["term_similarity"] == 0 and references[0]["positions"] == [[0, 2]]
     assert np.isnan(source["reference"]["chunks"][0]["similarity"])
     assert ctx.snapshot() == before
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_authorized_server_session_groups_real_sdk_observations_across_entrypoints(rest_chat_contract: RestChatContract, monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    import hashlib
+    from types import SimpleNamespace
+
+    from langfuse import Langfuse
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from api.db.services import dialog_service, tenant_llm_service
+
+    ctx = rest_chat_contract
+    owner = ctx.runtime["owners"][0]
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    client = Langfuse(public_key="pk-" + uuid4().hex, secret_key="fixture", base_url="http://langfuse.invalid", tracer_provider=provider, span_exporter=exporter)
+    keys = SimpleNamespace(public_key="pk-fixture", secret_key="fixture", host="http://langfuse.invalid")
+    monkeypatch.setattr(tenant_llm_service.TenantLangfuseService, "filter_by_tenant", lambda *_args, **_kw: keys)
+    monkeypatch.setattr(tenant_llm_service, "Langfuse", lambda **_kwargs: client)
+    monkeypatch.setattr(dialog_service, "Langfuse", lambda **_kwargs: client)
+    try:
+        chat = ctx.create_chat(prompt_config={"system": "Answer directly", "parameters": [], "refine_multiturn": True})
+        sid = ctx.request("POST", f"/chats/{chat['id']}/sessions", json={}).json()["data"]["id"]
+        for index in range(2):
+            response = ctx.request("POST", "/chat/completions", json={"chat_id": chat["id"], "session_id": sid, "question": f"turn {index}", "stream": stream, "trace_user_id": "forged-user"})
+            assert response.status_code == 200, response.text
+            frames = sse_frames(response) if stream else [response.json()]
+            assert all(frame["code"] == 0 for frame in frames), frames
+            assert ctx.read_session(sid)["message"][-1]["content"] == "Controlled answer"
+        ctx.runtime["journal"].event("reserve-legacy-trace-request", owner=owner, session=sid)
+        legacy = requests.post(
+            f"{ctx.runtime['base']}/v1/conversation/completion",
+            headers={"Authorization": f"Bearer {ctx.runtime['jwt']}"},
+            json={"conversation_id": sid, "messages": [{"role": "user", "content": "legacy turn"}], "stream": stream},
+            timeout=30,
+        )
+        assert legacy.status_code == 200, legacy.text
+        legacy_frames = sse_frames(legacy) if stream else [legacy.json()]
+        assert all(frame["retcode"] == 0 for frame in legacy_frames), legacy_frames
+        assert ctx.read_session(sid)["message"][-1]["content"] == "Controlled answer"
+        client.flush()
+        spans = exporter.get_finished_spans()
+        expected = hashlib.sha256(json.dumps([owner, owner, sid], ensure_ascii=False).encode()).hexdigest()
+        assert len(spans) >= 6
+        assert all(span.attributes.get("session.id") == expected for span in spans), [(span.name, span.attributes.get("session.id")) for span in spans]
+        assert len({span.context.trace_id for span in spans}) == 3
+        # Trace metadata cannot appear in the provider's generation config/history.
+        assert "forged-user" not in json.dumps(ctx.provider["calls"])
+        before = ctx.snapshot()
+        count = len(spans)
+        denied = ctx.request("POST", "/chat/completions", json={"chat_id": uuid4().hex, "session_id": sid, "question": "denied", "stream": False})
+        assert denied.status_code == 200 and denied.json()["code"] != 0
+        assert ctx.snapshot() == before
+        client.flush()
+        assert len(exporter.get_finished_spans()) == count
+        ctx.runtime["journal"].event("trace-session-readback", session=sid, trace_count=3, observations=count, independent_history=True, denied_no_side_effect=True)
+    finally:
+        client.shutdown()
+        provider.shutdown()

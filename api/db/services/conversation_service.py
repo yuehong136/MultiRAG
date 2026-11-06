@@ -140,7 +140,7 @@ def structure_answer(conv, ans, message_id, session_id):
     return ans
 
 
-def completion(db, tenant_id, chat_id, question, name="New session", session_id=None, stream=True, **kwargs):
+def completion(db: Session, tenant_id: str, chat_id: str, question: str | None, name: str = "New session", session_id: str | None = None, stream: bool | None = True, **kwargs: Any) -> Iterator[Any]:
     assert name, "`name` can not be empty."
     dia = DialogService.query(db, id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)
     assert dia, "You do not own the chat."
@@ -199,6 +199,8 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
     conv.message.append({"role": "assistant", "content": "", "id": message_id})
     conv.reference.append({"chunks": [], "doc_aggs": []})
 
+    kwargs["session_id"] = session_id
+    kwargs["trace_user_id"] = tenant_id
     if stream:
         try:
             for ans in chat(dia, msg, db, True, **kwargs):
@@ -218,7 +220,9 @@ def completion(db, tenant_id, chat_id, question, name="New session", session_id=
         yield answer
 
 
-async def async_completion(db: AsyncSession, tenant_id, chat_id, question, name="New session", session_id=None, stream=True, **kwargs):
+async def async_completion(
+    db: AsyncSession, tenant_id: str, chat_id: str, question: str | None, name: str = "New session", session_id: str | None = None, stream: bool | None = True, **kwargs: Any
+) -> AsyncIterator[Any]:
     """异步版本的 completion(AsyncSession;遗留同步 service 经 run_sync 桥接)"""
     assert name, "`name` can not be empty."
     dia = await db.run_sync(lambda s: DialogService.query(s, id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value))  # TODO(async-phase4)
@@ -278,6 +282,8 @@ async def async_completion(db: AsyncSession, tenant_id, chat_id, question, name=
     conv.message.append({"role": "assistant", "content": "", "id": message_id})
     conv.reference.append({"chunks": [], "doc_aggs": []})
 
+    kwargs["session_id"] = session_id
+    kwargs["trace_user_id"] = tenant_id
     if stream:
         try:
             async for ans in async_chat(dia, msg, db, True, **kwargs):
@@ -359,6 +365,8 @@ def iframe_completion(db: Session, dialog_id: str, question: str | None, session
     conv.reference = deepcopy(conv.reference or [])
     conv.reference.append({"chunks": [], "doc_aggs": []})
 
+    kwargs["session_id"] = session_id
+    kwargs["trace_user_id"] = tenant_id
     if stream:
         try:
             for ans in chat(dia, msg, db, True, **kwargs):
@@ -429,6 +437,8 @@ async def async_iframe_completion(
     conv.reference = deepcopy(conv.reference or [])
     conv.reference.append({"chunks": [], "doc_aggs": []})
 
+    kwargs["session_id"] = session_id
+    kwargs["trace_user_id"] = tenant_id
     if stream:
         try:
             async for ans in async_chat(dia, msg, db, True, **kwargs):

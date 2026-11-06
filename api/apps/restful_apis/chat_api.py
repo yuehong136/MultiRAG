@@ -1383,6 +1383,8 @@ async def session_completion(
             dialog.llm_id = f"{default_model['llm_name']}@{default_model['llm_factory']}"
             dialog.tenant_llm_id = default_model.get("id")
         merge_generation_config(dialog, chat_model_config)
+        req["session_id"] = session_id or None
+        req["trace_user_id"] = tenant_id
 
         def _format_answer(ans: dict[str, Any]) -> dict[str, Any]:
             formatted = structure_answer(conv, ans, message_id, session_id)

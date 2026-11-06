@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -10,7 +11,8 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from langfuse import Langfuse
+from langfuse import Langfuse, propagate_attributes
+from opentelemetry import context as otel_context
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -30,6 +32,28 @@ from common.constants import (
     PADDLEOCR_ENV_KEYS,
     LLMType,
 )
+
+
+def start_langfuse_observation(client: Any, *, tenant_id: str, session_id: str | None = None, user_id: str | None = None, **kwargs: Any) -> Any:
+    """Apply SDK v4 trace attributes only while creating this observation.
+
+    Hash the server-authorized identity tuple so shared projects cannot group
+    equal session IDs across tenants/users. Never keep an OTel context attached
+    across a streaming yield or forward identity to the model provider.
+    """
+
+    def identity(parts: list[str | None]) -> str:
+        return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+
+    token = otel_context.attach(otel_context.Context())
+    try:
+        with propagate_attributes(
+            session_id=identity([tenant_id, user_id, session_id]) if session_id else None,
+            user_id=identity([tenant_id, user_id]) if user_id else None,
+        ):
+            return client.start_observation(**kwargs)
+    finally:
+        otel_context.detach(token)
 
 
 class LLMFactoriesService(CommonService):
@@ -610,7 +634,10 @@ class LLM4Tenant:
         self.llm_type = model_config.get("mdl_type") or model_config.get("model_type")
         self.llm_name = model_config.get("llm_name")
         self.langfuse = None
-        self.trace_context = {}
+        self.trace_context = dict(kwargs.pop("trace_context", None) or {})
+        self.langfuse_session_id = kwargs.pop("langfuse_session_id", None)
+        self.langfuse_user_id = kwargs.pop("langfuse_user_id", None)
+        self.langfuse_trace_tenant_id = kwargs.pop("langfuse_trace_tenant_id", tenant_id)
         self.verbose_tool_use = kwargs.get("verbose_tool_use")
         self._provider_condition = threading.Condition()
         self._provider_closed = False
@@ -708,9 +735,10 @@ class LLM4Tenant:
             # 会冻结整个事件循环）。凭据有效性在配置写入期校验（langfuse_api_service）；此处 fail-open。
             try:
                 self.langfuse = Langfuse(public_key=langfuse_keys.public_key, secret_key=langfuse_keys.secret_key, host=langfuse_keys.host)
-                self.trace_context = {"trace_id": self.langfuse.create_trace_id()}
+                if not self.trace_context:
+                    self.trace_context = {"trace_id": self.langfuse.create_trace_id()}
             except Exception:
-                logging.warning("Langfuse tracer init failed; tracing disabled for this bundle", exc_info=True)
+                logging.warning("Langfuse tracer init failed; tracing disabled for this bundle")
                 self.langfuse = None
                 self.trace_context = {}
 

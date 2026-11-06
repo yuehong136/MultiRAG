@@ -24,9 +24,11 @@ def bots(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iterat
     sessions = {name: uuid4().hex for name in ["owned", "other", "foreign", "wrong_owner", "unbound", "missing"]}
     beta = {name: uuid4().hex for name in ["owned", "foreign", "inactive", "orphan", "ambiguous"]}
     calls: list[str] = []
+    trace_calls: list[dict[str, Any]] = []
 
     async def answer(dialog: Dialog, messages: list[dict[str, Any]], db: Any, stream: bool, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         calls.append(dialog.id)
+        trace_calls.append(dict(kwargs))
         yield {"answer": "controlled answer", "reference": {}}
 
     monkeypatch.setattr(conversation_service, "async_chat", answer)
@@ -65,7 +67,7 @@ def bots(release_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iterat
                 actor = "" if name == "unbound" else foreign if name in {"foreign", "wrong_owner"} else owner
                 db.add(API4Conversation(id=sessions[name], dialog_id=dialog, user_id=actor, message=[{"role": "assistant", "content": "Hello"}], reference=[]))
             db.commit()
-        yield dict(env, dialogs=dialogs, sessions=sessions, beta=beta, calls=calls)
+        yield dict(env, dialogs=dialogs, sessions=sessions, beta=beta, calls=calls, trace_calls=trace_calls)
 
 
 def state(env: dict[str, Any]) -> Any:
@@ -144,3 +146,6 @@ def test_owned_chatbot_info_creation_and_resume_readback(bots: dict[str, Any]) -
             assert saved is not None and any(message["content"] == "continue" for message in saved.message)
             assert saved.user_id == env["owners"][0]
     assert env["calls"] == [env["dialogs"]["owned"]] * 3
+    assert len(env["trace_calls"]) == 3
+    for call in env["trace_calls"]:
+        assert call["session_id"] and call["trace_user_id"] == env["owners"][0]

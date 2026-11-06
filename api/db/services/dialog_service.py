@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Generator, Iterator, Mapping
 from contextlib import aclosing, suppress
 from copy import deepcopy
 from datetime import datetime
@@ -23,7 +23,8 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
-from api.db.services.llm_service import LLMBundle
+from api.db.services.llm_service import LLMBundle, bundle_trace_scope, llm_bundle_scope
+from api.db.services.tenant_llm_service import start_langfuse_observation
 from api.identity.run_context import RunContext
 from api.utils.dataset_search import normalize_search_mode, saved_search_mode, validate_search_config
 from api.utils.reference_metadata import enrich_reference_metadata, enrich_reference_metadata_async, reference_dataset_id, resolve_reference_metadata_preferences
@@ -428,7 +429,9 @@ class DialogService(CommonService):
         return db.execute(stmt).all()
 
 
-def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> Generator[dict[str, Any], None, None]:
+def chat_solo(
+    db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True, *, session_id: str | None = None, trace_user_id: str | None = None
+) -> Generator[dict[str, Any], None, None]:
     llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
     llm_type = _chat_capability([llm_model_config["mdl_type"]])
     attachments = ""
@@ -443,13 +446,13 @@ def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: 
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
 
-    chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config)
+    chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config, langfuse_session_id=session_id, langfuse_user_id=trace_user_id)
 
     prompt_config = dialog.prompt_config
     tts_mdl = None
     if prompt_config.get("tts"):
         tts_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.TTS)
-        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config)
+        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config, trace_context=chat_mdl.trace_context, langfuse_session_id=session_id, langfuse_user_id=trace_user_id)
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if attachments and msg:
         msg[-1]["content"] += attachments
@@ -475,7 +478,9 @@ def chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: 
         yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
-async def async_chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True) -> AsyncGenerator[dict[str, Any], None]:
+async def async_chat_solo(
+    db: Session, dialog: Any, messages: list[dict[str, Any]], stream: bool = True, *, session_id: str | None = None, trace_user_id: str | None = None
+) -> AsyncGenerator[dict[str, Any], None]:
     """异步版本的 chat_solo"""
     llm_model_config = _resolve_dialog_primary_model_config(db, dialog)
     llm_type = _chat_capability([llm_model_config["mdl_type"]])
@@ -491,13 +496,13 @@ async def async_chat_solo(db: Session, dialog: Any, messages: list[dict[str, Any
 
     factory = llm_model_config.get("llm_factory", "") if llm_model_config else ""
 
-    chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config)
+    chat_mdl = LLMBundle(db, dialog.tenant_id, llm_model_config, langfuse_session_id=session_id, langfuse_user_id=trace_user_id)
 
     prompt_config = dialog.prompt_config
     tts_mdl = None
     if prompt_config.get("tts"):
         tts_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.TTS)
-        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config)
+        tts_mdl = LLMBundle(db, dialog.tenant_id, tts_model_config, trace_context=chat_mdl.trace_context, langfuse_session_id=session_id, langfuse_user_id=trace_user_id)
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if attachments and msg:
         msg[-1]["content"] += attachments
@@ -713,6 +718,25 @@ def _end_chat_observation(generation: LangfuseGeneration | None) -> None:
             logging.warning("Langfuse chat observation end failed; continuing without tracing")
 
 
+async def _trace_chat_query(call: Awaitable[str], *, tenant_id: str, trace_context: dict[str, str], session_id: str | None, user_id: str | None) -> str:
+    """Own auxiliary model resources and inherit only this authorized chat trace."""
+    async with llm_bundle_scope():
+        with bundle_trace_scope(tenant_id, trace_context, session_id, user_id):
+            return await call
+
+
+def _bind_chat_trace(bundles: tuple[Any, ...], trace_context: dict[str, Any], tenant_id: str, session_id: str | None, user_id: str | None) -> None:
+    for bundle in bundles:
+        if not isinstance(bundle, LLMBundle):
+            continue
+        # Credentials and billing stay with the authorized model owner. Grouping
+        # uses the requesting tenant's namespace, including for shared KB models.
+        bundle.trace_context = dict(trace_context)
+        bundle.langfuse_trace_tenant_id = tenant_id
+        bundle.langfuse_session_id = session_id
+        bundle.langfuse_user_id = user_id
+
+
 def chat(
     dialog: Any,
     messages: list[dict[str, Any]],
@@ -758,8 +782,12 @@ def chat(
             langfuse_tracer = None
             trace_context = {}
 
+    session_id = kwargs.pop("session_id", None)
+    trace_user_id = kwargs.pop("trace_user_id", None)
     check_langfuse_tracer_ts = timer()
     kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(db, dialog)
+    _bind_chat_trace((embd_mdl, rerank_mdl, chat_mdl, tts_mdl), trace_context, dialog.tenant_id, session_id, trace_user_id)
+    trace_query = partial(_trace_chat_query, tenant_id=dialog.tenant_id, trace_context=trace_context, session_id=session_id, user_id=trace_user_id)
     toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
     if toolcall_session and tools:
         chat_mdl.bind_tools(toolcall_session, tools)
@@ -822,12 +850,12 @@ def chat(
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
-        questions = [asyncio.run(full_question(tenant_id=dialog.tenant_id, llm_id=dialog.llm_id, messages=messages))]
+        questions = [asyncio.run(trace_query(full_question(tenant_id=dialog.tenant_id, llm_id=dialog.llm_id, messages=messages)))]
     else:
         questions = questions[-1:]
 
     if prompt_config.get("cross_languages"):
-        questions = [asyncio.run(cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"]))]
+        questions = [asyncio.run(trace_query(cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])))]
 
     if dialog.meta_data_filter:
 
@@ -919,7 +947,15 @@ def chat(
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
                 kg_chat_model_config = get_tenant_default_model_by_type(db, dialog.tenant_id, LLMType.CHAT)
-                ck = asyncio.run(settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, LLMBundle(db, dialog.tenant_id, kg_chat_model_config)))
+                ck = asyncio.run(
+                    settings.kg_retriever.retrieval(
+                        " ".join(questions),
+                        tenant_ids,
+                        dialog.kb_ids,
+                        embd_mdl,
+                        LLMBundle(db, dialog.tenant_id, kg_chat_model_config, trace_context=trace_context, langfuse_session_id=session_id, langfuse_user_id=trace_user_id),
+                    )
+                )
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
 
@@ -1046,8 +1082,16 @@ def chat(
 
     if langfuse_tracer is not None:
         try:
-            langfuse_generation = langfuse_tracer.start_observation(
-                as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+            langfuse_generation = start_langfuse_observation(
+                langfuse_tracer,
+                tenant_id=dialog.tenant_id,
+                session_id=session_id,
+                user_id=trace_user_id,
+                as_type="generation",
+                trace_context=trace_context,
+                name="chat",
+                model=llm_model_config["llm_name"],
+                input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg},
             )
         except Exception:
             logging.warning("Langfuse chat observation start failed; continuing without tracing")
@@ -1149,8 +1193,14 @@ async def async_chat(
             langfuse_tracer = None
             trace_context = {}
 
+    session_id = kwargs.pop("session_id", None)
+    trace_user_id = kwargs.pop("trace_user_id", None)
+    if run_context is not None:
+        trace_user_id = run_context.platform_user_id
     check_langfuse_tracer_ts = timer()
     kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = await db.run_sync(lambda s: get_detached_models(s, dialog))  # TODO(async-phase4)
+    _bind_chat_trace((embd_mdl, rerank_mdl, chat_mdl, tts_mdl), trace_context, dialog.tenant_id, session_id, trace_user_id)
+    trace_query = partial(_trace_chat_query, tenant_id=dialog.tenant_id, trace_context=trace_context, session_id=session_id, user_id=trace_user_id)
     toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
     if toolcall_session and tools:
         chat_mdl.bind_tools(toolcall_session, tools)
@@ -1214,12 +1264,12 @@ async def async_chat(
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
-        questions = [await full_question(tenant_id=dialog.tenant_id, llm_id=dialog.llm_id, messages=messages)]
+        questions = [await trace_query(full_question(tenant_id=dialog.tenant_id, llm_id=dialog.llm_id, messages=messages))]
     else:
         questions = questions[-1:]
 
     if prompt_config.get("cross_languages"):
-        questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+        questions = [await trace_query(cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"]))]
 
     if dialog.meta_data_filter:
 
@@ -1312,7 +1362,16 @@ async def async_chat(
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
                 # TODO(async-phase4): 遗留同步 service 经 run_sync 桥接
-                kg_chat_mdl = await db.run_sync(lambda s: detached_bundle(s, dialog.tenant_id, get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT)))
+                kg_chat_mdl = await db.run_sync(
+                    lambda s: detached_bundle(
+                        s,
+                        dialog.tenant_id,
+                        get_tenant_default_model_by_type(s, dialog.tenant_id, LLMType.CHAT),
+                        trace_context=trace_context,
+                        langfuse_session_id=session_id,
+                        langfuse_user_id=trace_user_id,
+                    )
+                )
                 ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl, kg_chat_mdl)
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
@@ -1435,8 +1494,16 @@ async def async_chat(
 
     if langfuse_tracer is not None:
         try:
-            langfuse_generation = langfuse_tracer.start_observation(
-                as_type="generation", trace_context=trace_context, name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg}
+            langfuse_generation = start_langfuse_observation(
+                langfuse_tracer,
+                tenant_id=dialog.tenant_id,
+                session_id=session_id,
+                user_id=trace_user_id,
+                as_type="generation",
+                trace_context=trace_context,
+                name="chat",
+                model=llm_model_config["llm_name"],
+                input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg},
             )
         except Exception:
             logging.warning("Langfuse chat observation start failed; continuing without tracing")
