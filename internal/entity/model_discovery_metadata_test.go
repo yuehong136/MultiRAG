@@ -14,7 +14,7 @@ func TestSupportedModelMetadataPresenceAndIsolation(t *testing.T) {
 	journal := testsupport.NewCase(t)
 	path := filepath.Join(t.TempDir(), "catalog.json")
 	journal.Event("reserve-catalog", map[string]any{"path": path})
-	raw := `[{"name":"canonical","alias":["namespace/raw"],"max_tokens":42,"dimension":128,"model_types":["embedding"],"thinking":{"default_value":false,"clear_thinking":false}}, {"name":"zero","max_tokens":0,"dimension":0,"model_types":[]}, {"name":"absent"}, {"name":"null","max_tokens":null,"model_types":null,"dimension":null,"thinking":null}]`
+	raw := `[{"name":"canonical","alias":["namespace/raw"],"max_tokens":42,"max_dimension":128,"dimensions":[64,128],"model_types":["embedding"],"thinking":{"default_value":false,"clear_thinking":false}}, {"name":"zero","max_tokens":0,"max_dimension":0,"dimensions":[],"model_types":[]}, {"name":"absent"}, {"name":"null","max_tokens":null,"model_types":null,"max_dimension":null,"thinking":null}]`
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -28,15 +28,16 @@ func TestSupportedModelMetadataPresenceAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := `[{"name":"namespace/raw","max_tokens":42,"dimension":128,"model_types":["embedding"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"unknown"},{"name":"canonical","max_tokens":42,"dimension":128,"model_types":["embedding"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"zero","max_tokens":0,"dimension":0,"model_types":[]},{"name":"absent"},{"name":"null"}]`
+	expected := `[{"name":"namespace/raw","max_tokens":42,"max_dimension":128,"dimensions":[64,128],"model_types":["embedding"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"unknown"},{"name":"canonical","max_tokens":42,"max_dimension":128,"dimensions":[64,128],"model_types":["embedding"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"zero","max_tokens":0,"max_dimension":0,"dimensions":[],"model_types":[]},{"name":"absent"},{"name":"null"}]`
 	if string(got) != expected {
 		t.Fatalf("metadata presence/order/cardinality: %s", got)
 	}
 	*rows[0].MaxTokens = 99
-	*rows[0].Dimension = 99
+	*rows[0].MaxDimension = 99
+	(*rows[0].Dimensions)[0] = 99
 	(*rows[0].ModelTypes)[0] = "chat"
 	rows[0].Thinking.DefaultValue = true
-	if rows[2].Thinking.DefaultValue || *rows[2].Dimension != 128 || *rows[2].MaxTokens != 42 || (*rows[2].ModelTypes)[0] != "embedding" {
+	if (*rows[2].Dimensions)[0] != 64 || rows[2].Thinking.DefaultValue || *rows[2].MaxDimension != 128 || *rows[2].MaxTokens != 42 || (*rows[2].ModelTypes)[0] != "embedding" {
 		t.Fatal("rows share metadata")
 	}
 	again := pm.DescribeSupportedModels("unknown-provider", names)
@@ -63,7 +64,7 @@ func TestSupportedMetadataTypedDecodeAndFailedPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := pm.DescribeSupportedModels("", []string{"kept"})
-	for _, raw := range []string{`[{"name":"bad","max_tokens":"0"}]`, `[{"name":"bad","dimension":"128"}]`, `[{"name":"bad","model_types":false}]`, `[{"name":"bad","thinking":false}]`, `[{"name":"dup","alias":["dup"]}]`, `[{"name":"bad"},null]`, `broken`} {
+	for _, raw := range []string{`[{"name":"bad","max_tokens":"0"}]`, `[{"name":"bad","max_dimension":"128"}]`, `[{"name":"bad","dimensions":"128"}]`, `[{"name":"bad","model_types":false}]`, `[{"name":"bad","thinking":false}]`, `[{"name":"dup","alias":["dup"]}]`, `[{"name":"bad"},null]`, `broken`} {
 		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 			t.Fatal(err)
 		}

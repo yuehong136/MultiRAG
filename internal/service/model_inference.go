@@ -39,7 +39,10 @@ func (m *ModelProviderService) EmbedText(provider, instance, name, user string, 
 	if err != nil {
 		return nil, code, err
 	}
-	bound := models.NewEmbeddingModel(driver, &name, resolved)
+	bound := m.newEmbeddingModel(driver, name, resolved)
+	if err := bound.ValidateDimension(config); err != nil {
+		return nil, common.CodeBadRequest, err
+	}
 	bound.EmbeddingConfig = config
 	response, err := bound.Embed(texts)
 	if err != nil {

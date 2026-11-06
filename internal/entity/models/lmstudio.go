@@ -22,7 +22,7 @@ type LMStudioModel struct {
 }
 
 func NewLMStudioModel(baseURL map[string]string, suffix URLSuffix) *LMStudioModel {
-	return &LMStudioModel{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{}}
+	return &LMStudioModel{DummyModel: NewDummyModel(maps.Clone(baseURL), suffix), httpClient: &http.Client{Transport: openAIChatTransport}}
 }
 func (l *LMStudioModel) Name() string { return "LM-Studio" }
 
@@ -103,7 +103,7 @@ func (l *LMStudioModel) chat(name string, messages []Message, apiConfig *APIConf
 	}
 	defer resp.Body.Close()
 	var result aliyunChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("lmstudio: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
@@ -158,17 +158,16 @@ func (l *LMStudioModel) ChatStreamlyWithMessages(name string, messages []Message
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	receivedAnswer := false
-	for scanner.Scan() {
+	for {
 		if err := requestContext(apiConfig).Err(); err != nil {
 			return err
 		}
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+		data, ok, err := nextOpenAIStreamData(scanner, true)
+		if err != nil {
+			return err
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
+		if !ok {
+			break
 		}
 		if data == "[DONE]" {
 			if err := requestContext(apiConfig).Err(); err != nil {
@@ -253,7 +252,7 @@ func (l *LMStudioModel) ListModels(config *APIConfig) ([]string, error) {
 		} `json:"data"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, err
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {

@@ -24,7 +24,7 @@ import (
 
 // The real inventory driver, SQL ownership checks, metadata service, handlers and
 // CLI consume every catalog alias. Provider HTTP and route identity are controlled.
-func TestQwenCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
+func TestExpandedCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	config := os.Getenv("MULTIRAG_QWEN_CONFIG")
 	if config == "" {
 		if os.Getenv("REQUIRE_SERVICES") == "1" {
@@ -52,9 +52,6 @@ func TestQwenCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	seen := map[string]bool{}
 	count := 0
 	for _, model := range pm.ListAllModels() {
-		if !strings.HasPrefix(model.Name, "qwen/") {
-			continue
-		}
 		count++
 		for _, alias := range append([]string{model.Name}, model.Alias...) {
 			for _, rawID := range []string{alias, strings.ToUpper(alias)} {
@@ -64,7 +61,10 @@ func TestQwenCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 				seen[rawID] = true
 				ids = append(ids, rawID)
 				types := append([]string{}, model.ModelTypes...)
-				row := entity.SupportedModel{Name: rawID, Dimension: model.Dimension, ModelTypes: &types, Thinking: model.Thinking}
+				row := entity.SupportedModel{Name: rawID, MaxDimension: model.MaxDimension, ModelTypes: &types, Thinking: model.Thinking}
+				if model.Dimensions != nil {
+					row.Dimensions = &model.Dimensions
+				}
 				if model.MaxTokens != 0 {
 					tokens := model.MaxTokens
 					row.MaxTokens = &tokens
@@ -73,8 +73,8 @@ func TestQwenCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 			}
 		}
 	}
-	if count != 454 {
-		t.Fatalf("Qwen catalog entries = %d, want 454", count)
+	if count != 1124 {
+		t.Fatalf("catalog entries = %d, want 1124", count)
 	}
 	ids = append(ids, "unknown-provider-qwen")
 	expected = append(expected, entity.SupportedModel{Name: "unknown-provider-qwen"})
@@ -160,7 +160,7 @@ func TestQwenCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 			t.Fatal(err)
 		}
 		list, ok := result.(*cli.CommonResponse)
-		if !ok || len(list.Data) != 530 {
+		if !ok || len(list.Data) != 1124 {
 			t.Fatalf("%s CLI catalog cardinality: %T", mode, result)
 		}
 		for _, tc := range []struct {
@@ -172,6 +172,10 @@ func TestQwenCatalogDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 			{"Qwen3-Embedding-8B", "qwen/qwen3-embedding-8b", 32768},
 			{"QWEN/QWEN3.6-27B", "qwen/qwen3.6-27b", 262144},
 			{"DEEPSEEK-CHAT", "deepseek-v4-flash", 1048576},
+			{"qwen-plus", "qwen/qwen-plus", 1000000},
+			{"z-ai/glm-4.5v", "zai-org/glm-4.5v", 128000},
+			{"embedding-3", "zai-org/embedding-3", 8192},
+			{"jina-embeddings-v3", "jinaai/jina-embeddings-v3", 8192},
 		} {
 			show, err := cli.NewParser("SHOW MODEL '" + tc.alias + "';").Parse(mode == "admin")
 			if err != nil {

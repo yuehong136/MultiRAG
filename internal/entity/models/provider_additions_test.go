@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,24 +14,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func addedProviderServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(handler)
-	address := server.Listener.Addr().String()
-	t.Logf("resource-open httptest %s", address)
-	t.Cleanup(func() {
-		server.Close()
-		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		if err == nil {
-			connection.Close()
-			t.Errorf("resource remained reachable: %s", address)
-		}
-		t.Logf("resource-closed-readback httptest %s", address)
-	})
-	return server
+	return providerTestServer(t, handler)
 }
 
 func addedProviderDriver(t *testing.T, name, endpoint string) ModelDriver {

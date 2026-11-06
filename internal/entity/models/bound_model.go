@@ -12,14 +12,41 @@ type EmbeddingModel struct {
 	ModelName       *string
 	APIConfig       *APIConfig
 	EmbeddingConfig *EmbeddingConfig
+	MaxDimension    *int
+	Dimensions      []int
 }
 
 func NewEmbeddingModel(driver ModelDriver, name *string, config *APIConfig) *EmbeddingModel {
 	return &EmbeddingModel{ModelDriver: driver, ModelName: name, APIConfig: config}
 }
+
+// ValidateDimension checks catalog constraints before any provider request. Zero
+// keeps the provider default; an unknown catalog declaration adds no restriction.
+func (m *EmbeddingModel) ValidateDimension(config *EmbeddingConfig) error {
+	if config == nil || config.Dimension == 0 {
+		return nil
+	}
+	requested := config.Dimension
+	if requested < 0 {
+		return fmt.Errorf("embedding dimension must be non-negative")
+	}
+	if len(m.Dimensions) > 0 {
+		for _, dimension := range m.Dimensions {
+			if requested == dimension {
+				return nil
+			}
+		}
+		return fmt.Errorf("embedding dimension %d is not supported; supported dimensions: %v", requested, m.Dimensions)
+	}
+	if m.MaxDimension != nil && requested > *m.MaxDimension {
+		return fmt.Errorf("embedding dimension %d exceeds max dimension %d", requested, *m.MaxDimension)
+	}
+	return nil
+}
+
 func (m *EmbeddingModel) Embed(texts []string) ([]EmbeddingData, error) {
-	if m.EmbeddingConfig != nil && m.EmbeddingConfig.Dimension < 0 {
-		return nil, fmt.Errorf("embedding dimension must be non-negative")
+	if err := m.ValidateDimension(m.EmbeddingConfig); err != nil {
+		return nil, err
 	}
 	if err := requestContext(m.APIConfig).Err(); err != nil {
 		return nil, err

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -19,7 +18,7 @@ func TestVolcEngineMultimodalEmbeddingHTTP(t *testing.T) {
 		t.Run(instance, func(t *testing.T) {
 			t.Parallel()
 			var inputs []string
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost || r.URL.Path != "/ark/embeddings/multimodal" || r.Header.Get("Authorization") != "Bearer "+instance {
 					t.Error("wrong instance endpoint or key")
 				}
@@ -63,7 +62,7 @@ func TestVolcEngineEmbeddingMalformedAndPartialFailureHTTP(t *testing.T) {
 	} {
 		t.Run(test.body, func(t *testing.T) {
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if calls.Add(1) == 1 {
 					fmt.Fprint(w, `{"data":{"embedding":[1,2]}}`)
 					return
@@ -84,7 +83,7 @@ func TestVolcEngineEmbeddingMalformedAndPartialFailureHTTP(t *testing.T) {
 
 func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		fmt.Fprint(w, `{"data":{"embedding":[1,2]}}`)
 	}))
@@ -117,7 +116,7 @@ func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 	stopped := make(chan struct{})
 	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	blocked := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(stopped)
 		var body any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -141,7 +140,7 @@ func TestVolcEngineEmbeddingPreflightAndCancellationHTTP(t *testing.T) {
 
 func TestSiliconFlowDiscoveryNilConfigAndEmptyRegionHTTP(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("incorrect discovery endpoint/key")

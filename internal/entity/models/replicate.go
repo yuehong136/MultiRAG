@@ -419,6 +419,7 @@ func (r *ReplicateModel) ListModels(api *APIConfig) ([]string, error) {
 	defer resp.Body.Close()
 	var result struct {
 		Results *[]struct {
+			ID    string `json:"id"`
 			Owner string `json:"owner"`
 			Name  string `json:"name"`
 		} `json:"results"`
@@ -429,8 +430,12 @@ func (r *ReplicateModel) ListModels(api *APIConfig) ([]string, error) {
 	}
 	names, seen := make([]string, 0, len(*result.Results)), map[string]bool{}
 	for _, item := range *result.Results {
-		name := item.Owner + "/" + item.Name
-		if !replicateModelPart(item.Owner) || !replicateModelPart(item.Name) || seen[name] {
+		name := item.ID
+		if name == "" {
+			name = item.Owner + "/" + item.Name
+		}
+		parts := strings.Split(name, "/")
+		if len(parts) != 2 || !replicateModelPart(parts[0]) || !replicateModelPart(parts[1]) || seen[name] {
 			return nil, fmt.Errorf("replicate: invalid or duplicate model ID")
 		}
 		seen[name] = true

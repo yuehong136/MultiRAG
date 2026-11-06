@@ -25,7 +25,6 @@ import (
 	"maps"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // AliyunModel implements the DashScope OpenAI-compatible chat API.
@@ -38,15 +37,9 @@ type AliyunModel struct {
 // NewAliyunModel creates a DashScope driver for the configured regions.
 func NewAliyunModel(baseURL map[string]string, urlSuffix URLSuffix) *AliyunModel {
 	return &AliyunModel{
-		BaseURL:   maps.Clone(baseURL),
-		URLSuffix: urlSuffix,
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
+		BaseURL:    maps.Clone(baseURL),
+		URLSuffix:  urlSuffix,
+		httpClient: &http.Client{Transport: openAIChatTransport},
 	}
 }
 

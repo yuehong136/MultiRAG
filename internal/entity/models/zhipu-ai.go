@@ -25,7 +25,6 @@ import (
 	"maps"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // ZhipuAIModel implements ModelDriver for Zhipu AI
@@ -38,16 +37,9 @@ type ZhipuAIModel struct {
 // NewZhipuAIModel creates a new Zhipu AI model instance
 func NewZhipuAIModel(baseURL map[string]string, urlSuffix URLSuffix) *ZhipuAIModel {
 	return &ZhipuAIModel{
-		BaseURL:   maps.Clone(baseURL),
-		URLSuffix: urlSuffix,
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-				DisableCompression:  false,
-			},
-		},
+		BaseURL:    maps.Clone(baseURL),
+		URLSuffix:  urlSuffix,
+		httpClient: &http.Client{Transport: openAIChatTransport},
 	}
 }
 
@@ -345,7 +337,7 @@ func (z *ZhipuAIModel) ChatWithMessages(modelName string, apiConfig *APIConfig, 
 	}
 	defer resp.Body.Close()
 	var result aliyunChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeBoundedModelJSON(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("zhipu-ai: decode response: %w", err)
 	}
 	if len(result.Error) != 0 && string(result.Error) != "null" {
@@ -432,14 +424,13 @@ func (z *ZhipuAIModel) ChatStreamlyWithMessages(name string, messages []Message,
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	receivedAnswer := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+	for {
+		data, ok, err := nextOpenAIStreamData(scanner, true)
+		if err != nil {
+			return err
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
+		if !ok {
+			break
 		}
 		if data == "[DONE]" {
 			if err := requestContext(apiConfig).Err(); err != nil {

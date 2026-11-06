@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,7 +23,7 @@ func TestReplicateEmbeddingPredictionContract(t *testing.T) {
 					}
 					texts := []string{"a", "b", "c"}[:count]
 					calls := 0
-					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if r.Header.Get("Authorization") != "Bearer key" {
 							t.Error("auth lost")
 						}
@@ -91,7 +90,7 @@ func TestReplicateEmbeddingPredictionContract(t *testing.T) {
 func TestReplicateEmbeddingRejectsInvalidRawOutput(t *testing.T) {
 	for _, raw := range []string{`null`, `{}`, `[]`, `[null]`, `[{}]`, `[{"embedding":null}]`, `[{"embedding":[]}]`, `[[null,1]]`, `[["0",1]]`, `[[0]]`, `[[0,1],[0,1]]`, `[[NaN,1]]`, `[[1e9999,1]]`} {
 		t.Run(raw, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, `{"id":"pred-1","status":"succeeded","output":%s}`, raw)
 			}))
 			defer srv.Close()
@@ -103,7 +102,7 @@ func TestReplicateEmbeddingRejectsInvalidRawOutput(t *testing.T) {
 		})
 	}
 	// Consistency is checked even when the caller does not request a dimension.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"id":"pred-1","status":"succeeded","output":[[0,1],[0]]}`)
 	}))
 	defer srv.Close()
@@ -119,7 +118,7 @@ func TestReplicateEmbeddingCancellationAndEmpty(t *testing.T) {
 		t.Fatal(data, err)
 	}
 	started, closed := make(chan struct{}), make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" {
 			fmt.Fprintf(w, `{"id":"pred-1","status":"starting","urls":{"get":"http://%s/v1/predictions/pred-1"}}`, r.Host)
 			return

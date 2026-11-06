@@ -9,7 +9,7 @@ import (
 )
 
 func TestAstraflowCapabilitiesHTTP(t *testing.T) {
-	fixture := afterf9Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fixture" {
 			t.Error("lost credentials")
 		}

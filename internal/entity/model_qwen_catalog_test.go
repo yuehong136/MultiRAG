@@ -43,7 +43,7 @@ func TestQwenCatalogMetadataAndAliases(t *testing.T) {
 			t.Fatalf("catalog type aliases were not normalized: %q %v", model.Name, model.ModelTypes)
 		}
 	}
-	if qwen != 454 || deepSeek != 70 || len(pm.ListAllModels()) != 530 {
+	if qwen != 627 || deepSeek != 70 || len(pm.ListAllModels()) != 1124 {
 		t.Fatalf("catalog models: Qwen=%d DeepSeek=%d total=%d", qwen, deepSeek, len(pm.ListAllModels()))
 	}
 	for _, tc := range []struct {
@@ -67,15 +67,15 @@ func TestQwenCatalogMetadataAndAliases(t *testing.T) {
 		if err != nil || model.Name != tc.canonical || model.MaxTokens != tc.tokens || !reflect.DeepEqual(model.ModelTypes, tc.types) {
 			t.Fatalf("metadata for %q: %#v %v", tc.alias, model, err)
 		}
-		if tc.dimension == 0 && model.Dimension != nil || tc.dimension != 0 && (model.Dimension == nil || *model.Dimension != tc.dimension) {
-			t.Fatalf("dimension for %q: %v", tc.alias, model.Dimension)
+		if tc.dimension == 0 && model.MaxDimension != nil || tc.dimension != 0 && (model.MaxDimension == nil || *model.MaxDimension != tc.dimension) {
+			t.Fatalf("dimension for %q: %v", tc.alias, model.MaxDimension)
 		}
 		if (model.Thinking != nil) != tc.thinking || tc.thinking && (!model.Thinking.DefaultValue || !model.Thinking.ClearThinking) {
 			t.Fatalf("thinking for %q: %#v", tc.alias, model.Thinking)
 		}
 	}
 	glm, err := pm.GetModelByNameOrAlias("GLM-4.5V")
-	if err != nil || !reflect.DeepEqual(glm.ModelTypes, []string{"image2text"}) {
+	if err != nil || glm.Name != "zai-org/glm-4.5v" || !reflect.DeepEqual(glm.ModelTypes, []string{"chat", "image2text"}) {
 		t.Fatalf("existing vision type mapping changed: %#v %v", glm, err)
 	}
 }
@@ -95,7 +95,7 @@ func TestQwenCatalogDiscoveryIdentityAndCopies(t *testing.T) {
 			t.Fatalf("discovery rewrote remote ID %q to %q", ids[i], row.Name)
 		}
 	}
-	if rows[0].MaxTokens == nil || *rows[0].MaxTokens != 32768 || rows[0].Dimension == nil || *rows[0].Dimension != 4096 || rows[1].MaxTokens == nil || *rows[1].MaxTokens != 65536 {
+	if rows[0].MaxTokens == nil || *rows[0].MaxTokens != 32768 || rows[0].MaxDimension == nil || *rows[0].MaxDimension != 4096 || rows[1].MaxTokens == nil || *rows[1].MaxTokens != 65536 {
 		t.Fatalf("discovered metadata missing: %#v", rows)
 	}
 	// Image generation and tokenizer tags describe catalog metadata. They do not
@@ -105,7 +105,7 @@ func TestQwenCatalogDiscoveryIdentityAndCopies(t *testing.T) {
 	}
 	before := pm.DescribeSupportedModels("", ids)
 	*rows[0].MaxTokens = 1
-	*rows[0].Dimension = 1
+	*rows[0].MaxDimension = 1
 	(*rows[0].ModelTypes)[0] = "changed"
 	listed := pm.ListAllModels()
 	for _, model := range listed {

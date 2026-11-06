@@ -9,7 +9,7 @@ import (
 func TestSupportedSiliconFlowOwnerSuffixMetadata(t *testing.T) {
 	var raw, providerOnly, exact, versioned Model
 	for target, text := range map[*Model]string{
-		&raw:          `{"name":"org/raw","max_tokens":0,"dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}`,
+		&raw:          `{"name":"org/raw","max_tokens":0,"max_dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}`,
 		&providerOnly: `{"name":"provider-only","max_tokens":32,"model_types":["chat"]}`,
 		&exact:        `{"name":"org/raw@literal","max_tokens":7}`,
 		&versioned:    `{"name":"org/raw@revision","max_tokens":16}`,
@@ -28,11 +28,11 @@ func TestSupportedSiliconFlowOwnerSuffixMetadata(t *testing.T) {
 	before := append([]string{}, names...)
 	rows := pm.DescribeSupportedModels("sILICONfLOW", names)
 	encoded, err := json.Marshal(rows)
-	want := `[{"name":"org/raw@owner","max_tokens":0,"dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"provider-only@owner","max_tokens":32,"model_types":["chat"]},{"name":"org/raw@literal","max_tokens":7},{"name":"org/raw@revision@owner","max_tokens":16},{"name":"unknown@owner"},{"name":"org/raw@"},{"name":"@owner"}]`
+	want := `[{"name":"org/raw@owner","max_tokens":0,"max_dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"provider-only@owner","max_tokens":32,"model_types":["chat"]},{"name":"org/raw@literal","max_tokens":7},{"name":"org/raw@revision@owner","max_tokens":16},{"name":"unknown@owner"},{"name":"org/raw@"},{"name":"@owner"}]`
 	if err != nil || string(encoded) != want || !reflect.DeepEqual(names, before) {
 		t.Fatalf("metadata/identity/order = %s, %v; want %s", encoded, err, want)
 	}
-	*rows[0].MaxTokens, *rows[0].Dimension = 99, 99
+	*rows[0].MaxTokens, *rows[0].MaxDimension = 99, 99
 	rows[0].Thinking.DefaultValue = true
 	*rows[1].ModelTypes = append(*rows[1].ModelTypes, "changed")
 	again, _ := json.Marshal(pm.DescribeSupportedModels("SiliconFlow", names))

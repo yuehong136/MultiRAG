@@ -258,6 +258,9 @@ func (v *VolcEngine) Embed(name *string, texts []string, api *APIConfig, config 
 			"encoding_format": "float",
 			"input":           []map[string]string{{"type": "text", "text": text}},
 		}
+		if config != nil && config.Dimension > 0 {
+			body["dimensions"] = config.Dimension
+		}
 		response, err := v.request(http.MethodPost, v.URLSuffix.Embedding, local, body)
 		if err != nil {
 			return nil, err

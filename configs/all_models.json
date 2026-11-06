@@ -752,17 +752,6 @@
     }
   },
   {
-    "name": "glm-4.5v",
-    "max_tokens": 64000,
-    "model_types": [
-      "image2text"
-    ],
-    "thinking": {
-      "default_value": true,
-      "clear_thinking": true
-    }
-  },
-  {
     "name": "bge-m3",
     "alias": [
       "baai/bge-m3"
@@ -942,7 +931,8 @@
   {
     "name": "qwen/qwen3.6-27b",
     "alias": [
-      "qwen3.6-27b"
+      "qwen3.6-27b",
+      "qwen/qwen3.6-27b-20260422"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -974,7 +964,8 @@
   {
     "name": "qwen/qwen3.6-35b-a3b",
     "alias": [
-      "qwen3.6-35b-a3b"
+      "qwen3.6-35b-a3b",
+      "qwen/qwen3.6-35b-a3b-20260415"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1061,7 +1052,11 @@
       "chat",
       "image2text",
       "video_understanding"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3.5-2b-base",
@@ -1073,7 +1068,11 @@
       "chat",
       "image2text",
       "video_understanding"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3.5-0.8b",
@@ -1133,12 +1132,17 @@
       "chat",
       "image2text",
       "video_understanding"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3.5-9b",
     "alias": [
-      "qwen3.5-9b"
+      "qwen3.5-9b",
+      "qwen/qwen3.5-9b-20260310"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1161,7 +1165,11 @@
       "chat",
       "image2text",
       "video_understanding"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3.5-35b-a3b-fp8",
@@ -1214,7 +1222,8 @@
   {
     "name": "qwen/qwen3.5-122b-a10b",
     "alias": [
-      "qwen3.5-122b-a10b"
+      "qwen3.5-122b-a10b",
+      "qwen/qwen3.5-122b-a10b-20260224"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1237,12 +1246,17 @@
       "chat",
       "image2text",
       "video_understanding"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3.5-27b",
     "alias": [
-      "qwen3.5-27b"
+      "qwen3.5-27b",
+      "qwen/qwen3.5-27b-20260224"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1258,7 +1272,8 @@
   {
     "name": "qwen/qwen3.5-35b-a3b",
     "alias": [
-      "qwen3.5-35b-a3b"
+      "qwen3.5-35b-a3b",
+      "qwen/qwen3.5-35b-a3b-20260224"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1290,7 +1305,8 @@
   {
     "name": "qwen/qwen3.5-397b-a17b",
     "alias": [
-      "qwen3.5-397b-a17b"
+      "qwen3.5-397b-a17b",
+      "qwen/qwen3.5-397b-a17b-20260216"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1366,7 +1382,8 @@
   {
     "name": "qwen/qwen3-coder-next",
     "alias": [
-      "qwen3-coder-next"
+      "qwen3-coder-next",
+      "qwen/qwen3-coder-next-2025-02-03"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -1489,7 +1506,7 @@
       "qwen3-vl-embedding-2b"
     ],
     "max_tokens": 32768,
-    "dimension": 2048,
+    "max_dimension": 2048,
     "model_types": [
       "embedding"
     ]
@@ -1500,7 +1517,7 @@
       "qwen3-vl-embedding-8b"
     ],
     "max_tokens": 32768,
-    "dimension": 4096,
+    "max_dimension": 4096,
     "model_types": [
       "embedding"
     ]
@@ -1597,7 +1614,11 @@
     "model_types": [
       "chat"
     ],
-    "max_tokens": 262144
+    "max_tokens": 262144,
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-30b-a3b-instruct-gguf",
@@ -1607,7 +1628,11 @@
     "model_types": [
       "chat"
     ],
-    "max_tokens": 262144
+    "max_tokens": 262144,
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-2b-thinking-gguf",
@@ -1673,7 +1698,11 @@
     "model_types": [
       "chat"
     ],
-    "max_tokens": 262144
+    "max_tokens": 262144,
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-8b-instruct-gguf",
@@ -1683,7 +1712,11 @@
     "model_types": [
       "chat"
     ],
-    "max_tokens": 262144
+    "max_tokens": 262144,
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-4b-instruct-gguf",
@@ -1693,7 +1726,11 @@
     "model_types": [
       "chat"
     ],
-    "max_tokens": 262144
+    "max_tokens": 262144,
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-2b-instruct-gguf",
@@ -1703,7 +1740,11 @@
     "model_types": [
       "chat"
     ],
-    "max_tokens": 262144
+    "max_tokens": 262144,
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-2b-thinking-fp8",
@@ -1741,7 +1782,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-2b-instruct",
@@ -1751,7 +1796,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-32b-instruct-fp8",
@@ -1761,7 +1810,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-32b-thinking-fp8",
@@ -1799,7 +1852,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-8b-instruct-fp8",
@@ -1809,7 +1866,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-8b-thinking-fp8",
@@ -1847,7 +1908,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-8b-thinking",
@@ -1885,7 +1950,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-4b-instruct",
@@ -1895,7 +1964,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-30b-a3b-thinking-fp8",
@@ -1919,7 +1992,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-235b-a22b-thinking-fp8",
@@ -1943,7 +2020,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-vl-30b-a3b-thinking",
@@ -1967,7 +2048,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-4b-saferl",
@@ -2072,7 +2157,11 @@
     "max_tokens": 262144,
     "model_types": [
       "chat"
-    ]
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
   },
   {
     "name": "qwen/qwen3-next-80b-a3b-thinking-fp8",
@@ -2151,7 +2240,8 @@
   {
     "name": "qwen/qwen3-next-80b-a3b-thinking",
     "alias": [
-      "qwen3-next-80b-a3b-thinking"
+      "qwen3-next-80b-a3b-thinking",
+      "qwen/qwen3-next-80b-a3b-thinking-2509"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -2165,7 +2255,10 @@
   {
     "name": "qwen/qwen3-next-80b-a3b-instruct",
     "alias": [
-      "qwen3-next-80b-a3b-instruct"
+      "qwen3-next-80b-a3b-instruct",
+      "qwen/qwen3-next-80b-a3b-instruct-2509",
+      "qwen/qwen3-next-80b-a3b-instruct-2509:free",
+      "qwen/qwen3-next-80b-a3b-instruct:free"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -2365,7 +2458,14 @@
     "name": "qwen/qwen3-coder-480b-a35b-instruct",
     "alias": [
       "qwen3-coder-480b-a35b-instruct",
-      "qwen3-coder-480b"
+      "qwen3-coder-480b",
+      "qwen/qwen3-coder",
+      "qwen/qwen3-coder:free",
+      "qwen/qwen3-coder-480b-a35b-07-25",
+      "qwen/qwen3-coder-480b-a35b-07-25:free",
+      "qwen/qwen3-coder-480b-a35b-instruct-maas",
+      "qwen.qwen3-coder-480b-a35b-instruct",
+      "qwen.qwen3-coder-480b-a35b-v1:0"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -2385,7 +2485,11 @@
   {
     "name": "qwen/qwen3-235b-a22b-instruct-2507",
     "alias": [
-      "qwen3-235b-a22b-instruct-2507"
+      "qwen3-235b-a22b-instruct-2507",
+      "qwen/qwen3-235b-a22b-07-25",
+      "qwen/qwen3-235b-a22b-2507",
+      "qwen.qwen3-235b-a22b-2507",
+      "qwen.qwen3-235b-a22b-2507-v1:0"
     ],
     "max_tokens": 262144,
     "model_types": [
@@ -2528,7 +2632,7 @@
       "qwen3-embedding-0.6b-gguf"
     ],
     "max_tokens": 32768,
-    "dimension": 1024,
+    "max_dimension": 1024,
     "model_types": [
       "embedding"
     ]
@@ -2539,7 +2643,7 @@
       "qwen3-embedding-4b-gguf"
     ],
     "max_tokens": 32768,
-    "dimension": 2560,
+    "max_dimension": 2560,
     "model_types": [
       "embedding"
     ]
@@ -2550,7 +2654,7 @@
       "qwen3-embedding-8b-gguf"
     ],
     "max_tokens": 32768,
-    "dimension": 4096,
+    "max_dimension": 4096,
     "model_types": [
       "embedding"
     ]
@@ -2571,7 +2675,7 @@
       "qwen3-embedding-8b"
     ],
     "max_tokens": 32768,
-    "dimension": 4096,
+    "max_dimension": 4096,
     "model_types": [
       "embedding"
     ]
@@ -2582,7 +2686,7 @@
       "qwen3-embedding-4b"
     ],
     "max_tokens": 32768,
-    "dimension": 2560,
+    "max_dimension": 2560,
     "model_types": [
       "embedding"
     ]
@@ -2593,7 +2697,7 @@
       "qwen3-embedding-0.6b"
     ],
     "max_tokens": 32768,
-    "dimension": 1024,
+    "max_dimension": 1024,
     "model_types": [
       "embedding"
     ]
@@ -3211,7 +3315,9 @@
   {
     "name": "qwen/qwen3-32b",
     "alias": [
-      "qwen3-32b"
+      "qwen3-32b",
+      "qwen.qwen3-32b",
+      "qwen.qwen3-32b-v1:0"
     ],
     "max_tokens": 32768,
     "model_types": [
@@ -5632,6 +5738,7336 @@
     ],
     "model_types": [
       "tokenizer"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-m3-235b-q4_k_m-gguf",
+    "alias": [
+      "Baichuan-M3-235B-Q4_K_M-GGUF"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuan-m2-32b-q4_k_m-gguf",
+    "alias": [
+      "Baichuan-M2-32B-Q4_K_M-GGUF"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuan-m3-235b-gptq-int4",
+    "alias": [
+      "Baichuan-M3-235B-GPTQ-INT4"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuan-m3-235b-fp8",
+    "alias": [
+      "Baichuan-M3-235B-FP8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuan-m3-235b",
+    "alias": [
+      "Baichuan-M3-235B"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuan-m2-32b",
+    "alias": [
+      "Baichuan-M2-32B"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuan-m2-32b-gptq-int4",
+    "alias": [
+      "Baichuan-M2-32B-GPTQ-Int4"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baichuan-inc/baichuanmed-ocr-7b",
+    "alias": [
+      "BaichuanMed-OCR-7B"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuanmed-ocr-72b",
+    "alias": [
+      "BaichuanMed-OCR-72B"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-audio-base",
+    "alias": [
+      "Baichuan-Audio-Base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "audio",
+      "speech2text",
+      "tts"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-audio-instruct",
+    "alias": [
+      "Baichuan-Audio-Instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "audio",
+      "speech2text",
+      "tts",
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-m1-14b-instruct",
+    "alias": [
+      "Baichuan-M1-14B-Instruct"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-m1-14b-base",
+    "alias": [
+      "Baichuan-M1-14B-Base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-omni-1d5-base",
+    "alias": [
+      "Baichuan-Omni-1d5-Base",
+      "Baichuan-Omni-1.5-Base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text",
+      "audio",
+      "speech2text",
+      "tts",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-omni-1d5",
+    "alias": [
+      "Baichuan-Omni-1d5",
+      "Baichuan-Omni-1.5"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text",
+      "audio",
+      "speech2text",
+      "tts",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-13b-chat",
+    "alias": [
+      "Baichuan2-13B-Chat"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-7b-chat",
+    "alias": [
+      "Baichuan2-7B-Chat"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-7b-base",
+    "alias": [
+      "Baichuan2-7B-Base"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-13b-chat",
+    "alias": [
+      "Baichuan-13B-Chat"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-7b",
+    "alias": [
+      "Baichuan-7B"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-13b-chat-4bits",
+    "alias": [
+      "Baichuan2-13B-Chat-4bits"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-7b-chat-4bits",
+    "alias": [
+      "Baichuan2-7B-Chat-4bits"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-13b-base",
+    "alias": [
+      "Baichuan2-13B-Base"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan2-7b-intermediate-checkpoints",
+    "alias": [
+      "Baichuan2-7B-Intermediate-Checkpoints"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baichuan-inc/baichuan-13b-base",
+    "alias": [
+      "Baichuan-13B-Base"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/nava",
+    "alias": [
+      "nava"
+    ],
+    "model_types": [
+      "video_generation"
+    ]
+  },
+  {
+    "name": "baidu/ernie-image-aes",
+    "alias": [
+      "ernie-image-aes"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "baidu/ernie-image-turbo",
+    "alias": [
+      "ernie-image-turbo"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "baidu/ernie-image",
+    "alias": [
+      "ernie-image"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "baidu/qianfan-ocr",
+    "alias": [
+      "qianfan-ocr"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "baidu/qianfan-vl-70b",
+    "alias": [
+      "qianfan-vl-70b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baidu/qianfan-vl-8b",
+    "alias": [
+      "qianfan-vl-8b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baidu/qianfan-vl-3b",
+    "alias": [
+      "qianfan-vl-3b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-28b-a3b-pt",
+    "alias": [
+      "ernie-4.5-vl-28b-a3b-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-28b-a3b-thinking",
+    "alias": [
+      "ernie-4.5-vl-28b-a3b-thinking"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-28b-a3b-base-pt",
+    "alias": [
+      "ernie-4.5-vl-28b-a3b-base-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "image2text"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-424b-a47b-pt",
+    "alias": [
+      "ernie-4.5-vl-424b-a47b-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-424b-a47b-base-pt",
+    "alias": [
+      "ernie-4.5-vl-424b-a47b-base-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "image2text"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-21b-a3b-base-pt",
+    "alias": [
+      "ernie-4.5-21b-a3b-base-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-base-pt",
+    "alias": [
+      "ernie-4.5-300b-a47b-base-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-21b-a3b-thinking",
+    "alias": [
+      "ernie-4.5-21b-a3b-thinking"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "baidu/ernie-4.5-21b-a3b-pt",
+    "alias": [
+      "ernie-4.5-21b-a3b-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-pt",
+    "alias": [
+      "ernie-4.5-300b-a47b-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-2bits-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-2bits-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-2bits-tp4-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-2bits-tp4-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-2bits-tp2-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-2bits-tp2-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-21b-a3b-paddle",
+    "alias": [
+      "ernie-4.5-21b-a3b-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-base-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-base-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-fp8-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-fp8-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-300b-a47b-w4a8c8-tp4-paddle",
+    "alias": [
+      "ernie-4.5-300b-a47b-w4a8c8-tp4-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-0.3b-base-pt",
+    "alias": [
+      "ernie-4.5-0.3b-base-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-0.3b-pt",
+    "alias": [
+      "ernie-4.5-0.3b-pt"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-424b-a47b-paddle",
+    "alias": [
+      "ernie-4.5-vl-424b-a47b-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-28b-a3b-base-paddle",
+    "alias": [
+      "ernie-4.5-vl-28b-a3b-base-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "image2text"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-21b-a3b-base-paddle",
+    "alias": [
+      "ernie-4.5-21b-a3b-base-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-28b-a3b-paddle",
+    "alias": [
+      "ernie-4.5-vl-28b-a3b-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-0.3b-base-paddle",
+    "alias": [
+      "ernie-4.5-0.3b-base-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-0.3b-paddle",
+    "alias": [
+      "ernie-4.5-0.3b-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "baidu/ernie-4.5-vl-424b-a47b-base-paddle",
+    "alias": [
+      "ernie-4.5-vl-424b-a47b-base-paddle"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "image2text"
+    ]
+  },
+  {
+    "name": "mimo-v2.5-pro",
+    "max_tokens": 1048576,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "mimo-v2.5",
+    "max_tokens": 1048576,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "mimo-v2.5-asr",
+    "max_tokens": 8192,
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "mimo-v2.5-tts",
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "mimo-v2-tts",
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-video-avatar-1.5",
+    "alias": [
+      "LongCat-Video-Avatar-1.5"
+    ],
+    "model_types": [
+      "video_generation"
+    ]
+  },
+  {
+    "name": "meituan-longcat/wbench-weights",
+    "alias": [
+      "WBench-weights"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-next",
+    "alias": [
+      "LongCat-Next"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "audio",
+      "speech2text",
+      "tts",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-audiodit-1b",
+    "alias": [
+      "LongCat-AudioDiT-1B"
+    ],
+    "model_types": [
+      "audio_generation"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-audiodit-3.5b",
+    "alias": [
+      "LongCat-AudioDiT-3.5B"
+    ],
+    "model_types": [
+      "audio_generation"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-prover",
+    "alias": [
+      "LongCat-Flash-Prover"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-lite-fp8",
+    "alias": [
+      "LongCat-Flash-Lite-FP8"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-lite",
+    "alias": [
+      "LongCat-Flash-Lite"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-image-edit-turbo",
+    "alias": [
+      "LongCat-Image-Edit-Turbo"
+    ],
+    "model_types": [
+      "image_edit"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-thinking-zigzag",
+    "alias": [
+      "LongCat-Flash-Thinking-ZigZag"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-thinking-2601-fp8",
+    "alias": [
+      "LongCat-Flash-Thinking-2601-FP8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-thinking-2601",
+    "alias": [
+      "LongCat-Flash-Thinking-2601"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-heavymode-summary",
+    "alias": [
+      "LongCat-HeavyMode-Summary"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-video-avatar",
+    "alias": [
+      "LongCat-Video-Avatar"
+    ],
+    "model_types": [
+      "video_generation"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-image",
+    "alias": [
+      "LongCat-Image"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-image-edit",
+    "alias": [
+      "LongCat-Image-Edit"
+    ],
+    "model_types": [
+      "image_edit"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-image-dev",
+    "alias": [
+      "LongCat-Image-Dev"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-omni",
+    "alias": [
+      "LongCat-Flash-Omni"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "audio",
+      "speech2text",
+      "tts",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-omni-fp8",
+    "alias": [
+      "LongCat-Flash-Omni-FP8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat",
+      "image2text",
+      "audio",
+      "speech2text",
+      "tts",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-video",
+    "alias": [
+      "LongCat-Video"
+    ],
+    "model_types": [
+      "video_generation"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-audio-codec",
+    "alias": [
+      "LongCat-Audio-Codec"
+    ],
+    "model_types": [
+      "audio_codec"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-thinking-fp8",
+    "alias": [
+      "LongCat-Flash-Thinking-FP8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-thinking",
+    "alias": [
+      "LongCat-Flash-Thinking"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-chat-fp8",
+    "alias": [
+      "LongCat-Flash-Chat-FP8"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "meituan-longcat/longcat-flash-chat",
+    "alias": [
+      "LongCat-Flash-Chat"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-text-matching",
+    "alias": [
+      "jina-embeddings-v5-omni-small-text-matching"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-retrieval",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-retrieval"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-classification",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-classification"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-clustering",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-clustering"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-text-matching",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-text-matching"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano",
+    "alias": [
+      "jina-embeddings-v5-omni-nano"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-retrieval",
+    "alias": [
+      "jina-embeddings-v5-omni-small-retrieval"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-classification",
+    "alias": [
+      "jina-embeddings-v5-omni-small-classification"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-clustering",
+    "alias": [
+      "jina-embeddings-v5-omni-small-clustering"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small",
+    "alias": [
+      "jina-embeddings-v5-omni-small"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-small-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-text-matching-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-small-text-matching-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-clustering-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-small-clustering-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-classification-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-small-classification-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-retrieval-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-small-retrieval-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-text-matching-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-text-matching-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-clustering-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-clustering-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-classification-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-classification-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-retrieval-gguf",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-retrieval-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-text-matching-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-small-text-matching-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-clustering-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-small-clustering-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-classification-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-small-classification-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-small-retrieval-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-small-retrieval-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-text-matching-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-text-matching-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-clustering-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-clustering-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-classification-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-classification-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-omni-nano-retrieval-mlx",
+    "alias": [
+      "jina-embeddings-v5-omni-nano-retrieval-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text",
+      "audio",
+      "video_understanding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-text-matching",
+    "alias": [
+      "jina-embeddings-v5-text-small-text-matching"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-classification",
+    "alias": [
+      "jina-embeddings-v5-text-small-classification"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-clustering",
+    "alias": [
+      "jina-embeddings-v5-text-small-clustering"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-retrieval",
+    "alias": [
+      "jina-embeddings-v5-text-small-retrieval"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-classification",
+    "alias": [
+      "jina-embeddings-v5-text-nano-classification"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-clustering",
+    "alias": [
+      "jina-embeddings-v5-text-nano-clustering"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-text-matching",
+    "alias": [
+      "jina-embeddings-v5-text-nano-text-matching"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-retrieval",
+    "alias": [
+      "jina-embeddings-v5-text-nano-retrieval"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano",
+    "alias": [
+      "jina-embeddings-v5-text-nano"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small",
+    "alias": [
+      "jina-embeddings-v5-text-small"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-reranker-m0",
+    "alias": [
+      "jina-reranker-m0"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4",
+    "alias": [
+      "jina-embeddings-v4"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-embeddings-v3-hf",
+    "alias": [
+      "jina-embeddings-v3-hf"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v3",
+    "alias": [
+      "jina-embeddings-v3"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-clip-v1",
+    "alias": [
+      "jina-clip-v1"
+    ],
+    "dimensions": [
+      64,
+      128,
+      256,
+      512,
+      768
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-clip-v2",
+    "alias": [
+      "jina-clip-v2"
+    ],
+    "dimensions": [
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-vlm",
+    "alias": [
+      "jina-vlm"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "jinaai/jina-reranker-v3",
+    "alias": [
+      "jina-reranker-v3"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-mlx-8bit",
+    "alias": [
+      "jina-embeddings-v4-mlx-8bit"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/xlm-roberta-flash-implementation",
+    "alias": [
+      "xlm-roberta-flash-implementation"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-classification-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-nano-classification-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-clustering-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-nano-clustering-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-retrieval-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-nano-retrieval-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-text-matching-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-nano-text-matching-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-nano-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-small-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-classification-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-nano-classification-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-clustering-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-nano-clustering-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-text-matching-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-nano-text-matching-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-nano-retrieval-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-nano-retrieval-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-classification-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-small-classification-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-clustering-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-small-clustering-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-text-matching-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-small-text-matching-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-retrieval-mlx",
+    "alias": [
+      "jina-embeddings-v5-text-small-retrieval-mlx"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-code-embeddings-1.5b-mlx",
+    "alias": [
+      "jina-code-embeddings-1.5b-mlx"
+    ],
+    "dimensions": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-code-embeddings-0.5b-mlx",
+    "alias": [
+      "jina-code-embeddings-0.5b-mlx"
+    ],
+    "dimensions": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-retrieval-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-small-retrieval-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-classification-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-small-classification-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-clustering-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-small-clustering-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v5-text-small-text-matching-gguf",
+    "alias": [
+      "jina-embeddings-v5-text-small-text-matching-GGUF"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-vlm-mlx",
+    "alias": [
+      "jina-vlm-mlx"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "jinaai/jina-reranker-v2-base-multilingual",
+    "alias": [
+      "jina-reranker-v2-base-multilingual"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/jina-reranker-v3-gguf",
+    "alias": [
+      "jina-reranker-v3-GGUF"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/jina-reranker-v3-mlx",
+    "alias": [
+      "jina-reranker-v3-mlx"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/jina-code-embeddings-0.5b",
+    "alias": [
+      "jina-code-embeddings-0.5b"
+    ],
+    "dimensions": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-code-embeddings-1.5b",
+    "alias": [
+      "jina-code-embeddings-1.5b"
+    ],
+    "dimensions": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-text-matching-gguf",
+    "alias": [
+      "jina-embeddings-v4-text-matching-GGUF"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-text-code-gguf",
+    "alias": [
+      "jina-embeddings-v4-text-code-GGUF"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-text-retrieval-gguf",
+    "alias": [
+      "jina-embeddings-v4-text-retrieval-GGUF"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-vllm-retrieval",
+    "alias": [
+      "jina-embeddings-v4-vllm-retrieval"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-reranker-v1-tiny-en",
+    "alias": [
+      "jina-reranker-v1-tiny-en"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 512
+  },
+  {
+    "name": "jinaai/jina-reranker-v1-turbo-en",
+    "alias": [
+      "jina-reranker-v1-turbo-en"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 512
+  },
+  {
+    "name": "jinaai/jina-code-embeddings-1.5b-gguf",
+    "alias": [
+      "jina-code-embeddings-1.5b-GGUF"
+    ],
+    "dimensions": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-code-embeddings-0.5b-gguf",
+    "alias": [
+      "jina-code-embeddings-0.5b-GGUF"
+    ],
+    "dimensions": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-vllm-code",
+    "alias": [
+      "jina-embeddings-v4-vllm-code"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-embeddings-v4-vllm-text-matching",
+    "alias": [
+      "jina-embeddings-v4-vllm-text-matching"
+    ],
+    "dimensions": [
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "jinaai/jina-reranker-m0-gguf",
+    "alias": [
+      "jina-reranker-m0-GGUF"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/jina-clip-implementation",
+    "alias": [
+      "jina-clip-implementation"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/jina-reranker-m0-debug",
+    "alias": [
+      "jina-reranker-m0-debug"
+    ],
+    "model_types": [
+      "rerank"
+    ],
+    "max_tokens": 8192
+  },
+  {
+    "name": "jinaai/readerlm-v2",
+    "alias": [
+      "ReaderLM-v2"
+    ],
+    "max_tokens": 256000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/jina-colbert-v2",
+    "alias": [
+      "jina-colbert-v2"
+    ],
+    "dimensions": [
+      128
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 128
+  },
+  {
+    "name": "jinaai/reader-lm-1.5b",
+    "alias": [
+      "reader-lm-1.5b"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/jina-embedding-s-en-v1",
+    "alias": [
+      "jina-embedding-s-en-v1"
+    ],
+    "dimensions": [
+      512
+    ],
+    "max_tokens": 512,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 512
+  },
+  {
+    "name": "jinaai/jina-embedding-b-en-v1",
+    "alias": [
+      "jina-embedding-b-en-v1"
+    ],
+    "dimensions": [
+      768
+    ],
+    "max_tokens": 512,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-embedding-l-en-v1",
+    "alias": [
+      "jina-embedding-l-en-v1"
+    ],
+    "dimensions": [
+      1024
+    ],
+    "max_tokens": 512,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-embeddings-v2-base-code",
+    "alias": [
+      "jina-embeddings-v2-base-code"
+    ],
+    "dimensions": [
+      768
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-embeddings-v2-base-es",
+    "alias": [
+      "jina-embeddings-v2-base-es"
+    ],
+    "dimensions": [
+      768
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-embeddings-v2-base-de",
+    "alias": [
+      "jina-embeddings-v2-base-de"
+    ],
+    "dimensions": [
+      768
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-embeddings-v2-small-en",
+    "alias": [
+      "jina-embeddings-v2-small-en"
+    ],
+    "dimensions": [
+      512
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 512
+  },
+  {
+    "name": "jinaai/jina-embeddings-v2-base-zh",
+    "alias": [
+      "jina-embeddings-v2-base-zh"
+    ],
+    "dimensions": [
+      768
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-embeddings-v2-base-en",
+    "alias": [
+      "jina-embeddings-v2-base-en"
+    ],
+    "dimensions": [
+      768
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "jinaai/jina-colbert-v1-en",
+    "alias": [
+      "jina-colbert-v1-en"
+    ],
+    "dimensions": [
+      128
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 128
+  },
+  {
+    "name": "jinaai/jina-colbert-v2-64",
+    "alias": [
+      "jina-colbert-v2-64"
+    ],
+    "dimensions": [
+      64
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 64
+  },
+  {
+    "name": "jinaai/reader-lm-0.5b",
+    "alias": [
+      "reader-lm-0.5b"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/text-seg-lm-qwen2-0.5b",
+    "alias": [
+      "text-seg-lm-qwen2-0.5b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/text-seg-lm-qwen2-0.5b-summary-chunking",
+    "alias": [
+      "text-seg-lm-qwen2-0.5b-summary-chunking"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/text-seg-lm-qwen2-0.5b-cot-topic-chunking",
+    "alias": [
+      "text-seg-lm-qwen2-0.5b-cot-topic-chunking"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/xlm-roberta-flash-implementation-onnx",
+    "alias": [
+      "xlm-roberta-flash-implementation-onnx"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/jina-embeddings-v3-small-ci",
+    "alias": [
+      "jina-embeddings-v3-small-ci"
+    ],
+    "dimensions": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      768,
+      1024
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "jinaai/jina-bert-flash-implementation",
+    "alias": [
+      "jina-bert-flash-implementation"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/phi-3-tiny-untrained",
+    "alias": [
+      "Phi-3-tiny-untrained"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/jina-bert-v2-qk-post-norm",
+    "alias": [
+      "jina-bert-v2-qk-post-norm"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/jina-bert-v2-qk-devlin-norm-1e-2",
+    "alias": [
+      "jina-bert-v2-qk-devlin-norm-1e-2"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/jina-bert-implementation",
+    "alias": [
+      "jina-bert-implementation"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/clip-models",
+    "alias": [
+      "clip-models"
+    ],
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "jinaai/jina-embedding-t-en-v1",
+    "alias": [
+      "jina-embedding-t-en-v1"
+    ],
+    "dimensions": [
+      312
+    ],
+    "max_tokens": 512,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 312
+  },
+  {
+    "name": "jinaai/starcoder-1b-textbook",
+    "alias": [
+      "starcoder-1b-textbook"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/flat-2d-animerge",
+    "alias": [
+      "flat-2d-animerge"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "jinaai/falcon-7b-code-alpaca-lora",
+    "alias": [
+      "falcon-7b-code-alpaca-lora"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/falcon-40b-code-alpaca",
+    "alias": [
+      "falcon-40b-code-alpaca"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/falcon-40b-code-alpaca-lora",
+    "alias": [
+      "falcon-40b-code-alpaca-lora"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "jinaai/falcon-7b-code-alpaca",
+    "alias": [
+      "falcon-7b-code-alpaca"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "openai/privacy-filter",
+    "alias": [
+      "privacy-filter"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "other"
+    ]
+  },
+  {
+    "name": "openai/gpt-oss-safeguard-20b",
+    "alias": [
+      "gpt-oss-safeguard-20b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "openai/circuit-sparsity",
+    "alias": [
+      "circuit-sparsity"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "openai/gpt-oss-safeguard-120b",
+    "alias": [
+      "gpt-oss-safeguard-120b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "openai/gpt-oss-20b",
+    "alias": [
+      "gpt-oss-20b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "openai/gpt-oss-120b",
+    "alias": [
+      "gpt-oss-120b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "openai/whisper-large-v3-turbo",
+    "alias": [
+      "whisper-large-v3-turbo"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-large-v3",
+    "alias": [
+      "whisper-large-v3"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-large-v2",
+    "alias": [
+      "whisper-large-v2"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-large",
+    "alias": [
+      "whisper-large"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-medium",
+    "alias": [
+      "whisper-medium"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-small",
+    "alias": [
+      "whisper-small"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-tiny",
+    "alias": [
+      "whisper-tiny"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-base",
+    "alias": [
+      "whisper-base"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/clip-vit-base-patch32",
+    "alias": [
+      "clip-vit-base-patch32"
+    ],
+    "dimensions": [
+      512
+    ],
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 512
+  },
+  {
+    "name": "openai/whisper-medium.en",
+    "alias": [
+      "whisper-medium.en"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-small.en",
+    "alias": [
+      "whisper-small.en"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-tiny.en",
+    "alias": [
+      "whisper-tiny.en"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/whisper-base.en",
+    "alias": [
+      "whisper-base.en"
+    ],
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "openai/shap-e",
+    "alias": [
+      "shap-e"
+    ],
+    "model_types": [
+      "3d_generation"
+    ]
+  },
+  {
+    "name": "openai/consistency-decoder",
+    "alias": [
+      "consistency-decoder"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-ct_imagenet64",
+    "alias": [
+      "diffusers-ct_imagenet64"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-cd_imagenet64_lpips",
+    "alias": [
+      "diffusers-cd_imagenet64_lpips"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-cd_imagenet64_l2",
+    "alias": [
+      "diffusers-cd_imagenet64_l2"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/clip-vit-large-patch14",
+    "alias": [
+      "clip-vit-large-patch14"
+    ],
+    "dimensions": [
+      768
+    ],
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "openai/shap-e-img2img",
+    "alias": [
+      "shap-e-img2img"
+    ],
+    "model_types": [
+      "image2image",
+      "3d_generation"
+    ]
+  },
+  {
+    "name": "openai/diffusers-cd_cat256_lpips",
+    "alias": [
+      "diffusers-cd_cat256_lpips"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-cd_cat256_l2",
+    "alias": [
+      "diffusers-cd_cat256_l2"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-cd_bedroom256_l2",
+    "alias": [
+      "diffusers-cd_bedroom256_l2"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-ct_bedroom256",
+    "alias": [
+      "diffusers-ct_bedroom256"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-cd_bedroom256_lpips",
+    "alias": [
+      "diffusers-cd_bedroom256_lpips"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/diffusers-ct_cat256",
+    "alias": [
+      "diffusers-ct_cat256"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/imagegpt-small",
+    "alias": [
+      "imagegpt-small"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/imagegpt-medium",
+    "alias": [
+      "imagegpt-medium"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/imagegpt-large",
+    "alias": [
+      "imagegpt-large"
+    ],
+    "model_types": [
+      "image"
+    ]
+  },
+  {
+    "name": "openai/jukebox-5b-lyrics",
+    "alias": [
+      "jukebox-5b-lyrics"
+    ],
+    "model_types": [
+      "audio_generation"
+    ]
+  },
+  {
+    "name": "openai/jukebox-1b-lyrics",
+    "alias": [
+      "jukebox-1b-lyrics"
+    ],
+    "model_types": [
+      "audio_generation"
+    ]
+  },
+  {
+    "name": "openai/clip-vit-base-patch16",
+    "alias": [
+      "clip-vit-base-patch16"
+    ],
+    "dimensions": [
+      512
+    ],
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 512
+  },
+  {
+    "name": "openai/clip-vit-large-patch14-336",
+    "alias": [
+      "clip-vit-large-patch14-336"
+    ],
+    "dimensions": [
+      768
+    ],
+    "model_types": [
+      "embedding",
+      "image2text"
+    ],
+    "max_dimension": 768
+  },
+  {
+    "name": "gpt-5.4",
+    "max_tokens": 1050000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-image-2",
+    "model_types": [
+      "image",
+      "image_edit"
+    ]
+  },
+  {
+    "name": "gpt-5.1",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.2",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.4-mini",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5-codex",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.3-codex",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.1-codex",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.3-codex-spark",
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5-codex-mini",
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.1-codex-max",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.5",
+    "max_tokens": 1050000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.1-codex-mini",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "gpt-5.2-codex",
+    "max_tokens": 400000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-fable-5",
+    "alias": [
+      "anthropic.claude-fable-5"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-mythos-5",
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-opus-4-8",
+    "alias": [
+      "anthropic.claude-opus-4-8"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-sonnet-4-7",
+    "alias": [
+      "anthropic.claude-sonnet-4-7"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-sonnet-4-6",
+    "alias": [
+      "anthropic.claude-sonnet-4-6"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-sonnet-4-5",
+    "alias": [
+      "anthropic.claude-sonnet-4-5"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "claude-haiku-4-5-20251001",
+    "alias": [
+      "claude-haiku-4-5",
+      "anthropic.claude-haiku-4-5-20251001-v1:0"
+    ],
+    "max_tokens": 200000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/embedding-3",
+    "alias": [
+      "embedding-3"
+    ],
+    "max_tokens": 8192,
+    "dimensions": [
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 2048
+  },
+  {
+    "name": "zai-org/embedding-2",
+    "alias": [
+      "embedding-2"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "max_dimension": 1024
+  },
+  {
+    "name": "zai-org/rerank",
+    "alias": [
+      "rerank"
+    ],
+    "max_chars": 4096,
+    "max_documents": 128,
+    "model_types": [
+      "rerank"
+    ]
+  },
+  {
+    "name": "zai-org/scail-2",
+    "alias": [
+      "SCAIL-2"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/glm-5.1-fp8",
+    "alias": [
+      "GLM-5.1-FP8"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-5.1",
+    "alias": [
+      "GLM-5.1",
+      "z-ai/glm-5.1",
+      "ZHIPU/GLM-5.1",
+      "Pro/zai-org/GLM-5.1",
+      "Z-AI/GLM 5.1"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-5",
+    "alias": [
+      "GLM-5",
+      "z-ai/glm-5",
+      "ZHIPU/GLM-5"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-5-fp8",
+    "alias": [
+      "GLM-5-FP8"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-ocr",
+    "alias": [
+      "GLM-OCR"
+    ],
+    "max_tokens": 655380,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4.7-flash",
+    "alias": [
+      "GLM-4.7-Flash",
+      "z-ai/glm-4.7-flash"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-image",
+    "alias": [
+      "GLM-Image"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4.7-fp8",
+    "alias": [
+      "GLM-4.7-FP8"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.7",
+    "alias": [
+      "GLM-4.7",
+      "z-ai/glm-4.7",
+      "Pro/zai-org/GLM-4.7",
+      "Z-Ai/GLM 4.7"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/realvideo",
+    "alias": [
+      "RealVideo"
+    ],
+    "model_types": [
+      "omni"
+    ]
+  },
+  {
+    "name": "zai-org/glm-tts",
+    "alias": [
+      "GLM-TTS"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "zai-org/glm-asr-nano-2512",
+    "alias": [
+      "GLM-ASR-Nano-2512"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "speech2text"
+    ]
+  },
+  {
+    "name": "zai-org/autoglm-phone-9b-multilingual",
+    "alias": [
+      "AutoGLM-Phone-9B-Multilingual"
+    ],
+    "max_tokens": 64000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/scail-preview",
+    "alias": [
+      "SCAIL-Preview"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/autoglm-phone-9b",
+    "alias": [
+      "AutoGLM-Phone-9B"
+    ],
+    "max_tokens": 64000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4.6v-fp8",
+    "alias": [
+      "GLM-4.6V-FP8"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.6v",
+    "alias": [
+      "GLM-4.6V",
+      "z-ai/glm-4.6v"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.6v-flash",
+    "alias": [
+      "GLM-4.6V-Flash"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/ssvae",
+    "alias": [
+      "SSVAE"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/webvia-agent",
+    "alias": [
+      "WebVIA-Agent"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/ui2code_n",
+    "alias": [
+      "UI2Code_N"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/kaleido-14b-s2v",
+    "alias": [
+      "Kaleido-14B-S2V"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/glyph",
+    "alias": [
+      "Glyph"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4.6",
+    "alias": [
+      "GLM-4.6",
+      "z-ai/glm-4.6",
+      "Z-AI/GLM 4.6"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.6-fp8",
+    "alias": [
+      "GLM-4.6-FP8"
+    ],
+    "max_tokens": 202752,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5v",
+    "alias": [
+      "GLM-4.5V",
+      "z-ai/glm-4.5v"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5v-fp8",
+    "alias": [
+      "GLM-4.5V-FP8"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5-base",
+    "alias": [
+      "GLM-4.5-Base"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5-air-fp8",
+    "alias": [
+      "GLM-4.5-Air-FP8"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5-fp8",
+    "alias": [
+      "GLM-4.5-FP8"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5-air",
+    "alias": [
+      "GLM-4.5-Air",
+      "z-ai/glm-4.5-air",
+      "z-ai/glm-4.5-air:free",
+      "GLM 4.5 Air (free)"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5",
+    "alias": [
+      "GLM-4.5",
+      "z-ai/glm-4.5",
+      "GLM 4.5"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.5-air-base",
+    "alias": [
+      "GLM-4.5-Air-Base"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.1v-9b-thinking",
+    "alias": [
+      "GLM-4.1V-9B-Thinking"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat",
+      "image2text"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4.1v-9b-base",
+    "alias": [
+      "GLM-4.1V-9B-Base"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/androidgen-llama-3-70b",
+    "alias": [
+      "androidgen-llama-3-70b"
+    ],
+    "max_tokens": 16384,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/androidgen-glm-4-9b",
+    "alias": [
+      "androidgen-glm-4-9b"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-z1-rumination-32b-0414",
+    "alias": [
+      "GLM-Z1-Rumination-32B-0414"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-z1-32b-0414",
+    "alias": [
+      "GLM-Z1-32B-0414"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-z1-9b-0414",
+    "alias": [
+      "GLM-Z1-9B-0414",
+      "THUDM/GLM-Z1-9B-0414"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "zai-org/glm-4-32b-base-0414",
+    "alias": [
+      "GLM-4-32B-Base-0414"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-32b-0414",
+    "alias": [
+      "GLM-4-32B-0414",
+      "THUDM/GLM-4-32B-0414"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b-0414",
+    "alias": [
+      "GLM-4-9B-0414"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/swe-dev-9b",
+    "alias": [
+      "SWE-Dev-9B"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/swe-dev-32b",
+    "alias": [
+      "SWE-Dev-32B"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/swe-dev-7b",
+    "alias": [
+      "SWE-Dev-7B"
+    ],
+    "max_tokens": 163840,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogview4-6b",
+    "alias": [
+      "CogView4-6B"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/visionreward-image-bf16",
+    "alias": [
+      "VisionReward-Image-bf16"
+    ],
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b-hf",
+    "alias": [
+      "glm-4-9b-hf"
+    ],
+    "max_tokens": 8000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogagent-9b-20241220",
+    "alias": [
+      "cogagent-9b-20241220"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/visionreward-image",
+    "alias": [
+      "VisionReward-Image"
+    ],
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/visionreward-video",
+    "alias": [
+      "VisionReward-Video"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "zai-org/webrl-orm-llama-3.1-8b",
+    "alias": [
+      "webrl-orm-llama-3.1-8b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/mathglm-vision-19b",
+    "alias": [
+      "MathGLM-Vision-19B"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/mathglm-vision",
+    "alias": [
+      "MathGLM-Vision"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-4b-chat-gguf",
+    "alias": [
+      "glm-edge-4b-chat-gguf"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-1.5b-chat-gguf",
+    "alias": [
+      "glm-edge-1.5b-chat-gguf"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-v-2b-gguf",
+    "alias": [
+      "glm-edge-v-2b-gguf"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-v-5b-gguf",
+    "alias": [
+      "glm-edge-v-5b-gguf"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-v-5b",
+    "alias": [
+      "glm-edge-v-5b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-v-2b",
+    "alias": [
+      "glm-edge-v-2b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-4b-chat",
+    "alias": [
+      "glm-edge-4b-chat"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-edge-1.5b-chat",
+    "alias": [
+      "glm-edge-1.5b-chat"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/webrl-llama-3.1-70b",
+    "alias": [
+      "webrl-llama-3.1-70b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/webrl-llama-3.1-8b",
+    "alias": [
+      "webrl-llama-3.1-8b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/webrl-glm-4-9b",
+    "alias": [
+      "webrl-glm-4-9b"
+    ],
+    "max_tokens": 8000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideox1.5-5b-sat",
+    "alias": [
+      "CogVideoX1.5-5B-SAT"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideox1.5-5b-i2v",
+    "alias": [
+      "CogVideoX1.5-5B-I2V"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideox1.5-5b",
+    "alias": [
+      "CogVideoX1.5-5B"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/longreward-glm4-9b-dpo",
+    "alias": [
+      "LongReward-glm4-9b-DPO"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-voice-9b",
+    "alias": [
+      "glm-4-voice-9b"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-voice-tokenizer",
+    "alias": [
+      "glm-4-voice-tokenizer"
+    ],
+    "model_types": [
+      "tokenizer"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-voice-decoder",
+    "alias": [
+      "glm-4-voice-decoder"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b-chat-1m-hf",
+    "alias": [
+      "glm-4-9b-chat-1m-hf"
+    ],
+    "max_tokens": 1024000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b-chat-hf",
+    "alias": [
+      "glm-4-9b-chat-hf"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longreward-llama3.1-8b-dpo",
+    "alias": [
+      "LongReward-llama3.1-8b-DPO"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogview3-plus-3b",
+    "alias": [
+      "CogView3-Plus-3B"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-caption",
+    "alias": [
+      "cogvlm2-llama3-caption"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat",
+      "video_understanding",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideox-5b-i2v",
+    "alias": [
+      "CogVideoX-5b-I2V"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/longcite-llama3.1-8b",
+    "alias": [
+      "LongCite-llama3.1-8b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longcite-glm4-9b",
+    "alias": [
+      "LongCite-glm4-9b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideox-5b",
+    "alias": [
+      "CogVideoX-5b"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/longwriter-glm4-9b",
+    "alias": [
+      "LongWriter-glm4-9b"
+    ],
+    "max_tokens": 1048576,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longwriter-llama3.1-8b",
+    "alias": [
+      "LongWriter-llama3.1-8b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideox-2b",
+    "alias": [
+      "CogVideoX-2b"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/apar-13b",
+    "alias": [
+      "apar-13b"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/apar-7b",
+    "alias": [
+      "apar-7b"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/codegeex4-all-9b-gguf",
+    "alias": [
+      "codegeex4-all-9b-GGUF"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/codegeex4-all-9b",
+    "alias": [
+      "codegeex4-all-9b"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-video-llama3-base",
+    "alias": [
+      "cogvlm2-video-llama3-base"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-video-llama3-chat",
+    "alias": [
+      "cogvlm2-video-llama3-chat"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "zai-org/msagpt",
+    "alias": [
+      "MSAGPT"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-chat-19b-tgi",
+    "alias": [
+      "cogvlm2-llama3-chat-19B-tgi"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-chinese-chat-19b-tgi",
+    "alias": [
+      "cogvlm2-llama3-chinese-chat-19B-tgi"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b-chat-1m",
+    "alias": [
+      "glm-4-9b-chat-1m"
+    ],
+    "max_tokens": 1024000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b-chat",
+    "alias": [
+      "glm-4-9b-chat"
+    ],
+    "max_tokens": 128000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4-9b",
+    "alias": [
+      "glm-4-9b"
+    ],
+    "max_tokens": 8000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-4v-9b",
+    "alias": [
+      "glm-4v-9b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-chinese-chat-19b-int4",
+    "alias": [
+      "cogvlm2-llama3-chinese-chat-19B-int4"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-chat-19b-int4",
+    "alias": [
+      "cogvlm2-llama3-chat-19B-int4"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-chinese-chat-19b",
+    "alias": [
+      "cogvlm2-llama3-chinese-chat-19B"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm2-llama3-chat-19b",
+    "alias": [
+      "cogvlm2-llama3-chat-19B"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm3-6b-128k",
+    "alias": [
+      "chatglm3-6b-128k"
+    ],
+    "max_tokens": 131072,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longalign-13b-64k-base",
+    "alias": [
+      "LongAlign-13B-64k-base"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longalign-7b-64k-base",
+    "alias": [
+      "LongAlign-7B-64k-base"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longalign-6b-64k-base",
+    "alias": [
+      "LongAlign-6B-64k-base"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longalign-13b-64k",
+    "alias": [
+      "LongAlign-13B-64k"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longalign-6b-64k",
+    "alias": [
+      "LongAlign-6B-64k"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/longalign-7b-64k",
+    "alias": [
+      "LongAlign-7B-64k"
+    ],
+    "max_tokens": 65536,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogagent-vqa-hf",
+    "alias": [
+      "cogagent-vqa-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogagent",
+    "alias": [
+      "CogAgent"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogagent-chat-hf",
+    "alias": [
+      "cogagent-chat-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/bpo",
+    "alias": [
+      "BPO"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm-grounding-generalist-hf",
+    "alias": [
+      "cogvlm-grounding-generalist-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm-grounding-base-hf",
+    "alias": [
+      "cogvlm-grounding-base-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm-base-490-hf",
+    "alias": [
+      "cogvlm-base-490-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm-base-224-hf",
+    "alias": [
+      "cogvlm-base-224-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm-chat-hf",
+    "alias": [
+      "cogvlm-chat-hf"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm3-6b-32k",
+    "alias": [
+      "chatglm3-6b-32k"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm3-6b-base",
+    "alias": [
+      "chatglm3-6b-base"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm3-6b",
+    "alias": [
+      "chatglm3-6b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/agentlm-7b",
+    "alias": [
+      "agentlm-7b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvlm",
+    "alias": [
+      "CogVLM"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/agentlm-70b",
+    "alias": [
+      "agentlm-70b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/agentlm-13b",
+    "alias": [
+      "agentlm-13b"
+    ],
+    "max_tokens": 4096,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/mathglm",
+    "alias": [
+      "MathGLM"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm2-6b-32k-int4",
+    "alias": [
+      "chatglm2-6b-32k-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm2-6b-32k",
+    "alias": [
+      "chatglm2-6b-32k"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/codegeex2-6b-int4",
+    "alias": [
+      "codegeex2-6b-int4"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/codegeex2-6b",
+    "alias": [
+      "codegeex2-6b"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm2-6b-int4",
+    "alias": [
+      "chatglm2-6b-int4"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm2-6b",
+    "alias": [
+      "chatglm2-6b"
+    ],
+    "max_tokens": 32768,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/webglm-2b",
+    "alias": [
+      "WebGLM-2B"
+    ],
+    "max_tokens": 1024,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/webglm",
+    "alias": [
+      "WebGLM"
+    ],
+    "max_tokens": 1024,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/visualglm-6b",
+    "alias": [
+      "visualglm-6b"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat",
+      "image2text"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm-6b-int8",
+    "alias": [
+      "chatglm-6b-int8"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/imagereward",
+    "alias": [
+      "ImageReward"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm-6b-int4-qe",
+    "alias": [
+      "chatglm-6b-int4-qe"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm-6b-int4",
+    "alias": [
+      "chatglm-6b-int4"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/chatglm-6b",
+    "alias": [
+      "chatglm-6b"
+    ],
+    "max_tokens": 2048,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-roberta-large",
+    "alias": [
+      "glm-roberta-large"
+    ],
+    "max_tokens": 512,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-large-chinese",
+    "alias": [
+      "glm-large-chinese"
+    ],
+    "max_tokens": 1024,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-2b",
+    "alias": [
+      "glm-2b"
+    ],
+    "max_tokens": 1024,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-10b",
+    "alias": [
+      "glm-10b"
+    ],
+    "max_tokens": 1024,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/glm-10b-chinese",
+    "alias": [
+      "glm-10b-chinese"
+    ],
+    "max_tokens": 1024,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "zai-org/cogvideo",
+    "alias": [
+      "CogVideo"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "zai-org/cogview2",
+    "alias": [
+      "CogView2"
+    ],
+    "model_types": [
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.7-max",
+    "alias": [
+      "qwen3.7-max",
+      "qwen3.7-max-latest"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.7-max-2026-06-08",
+    "alias": [
+      "qwen3.7-max-2026-06-08"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.7-max-2026-05-20",
+    "alias": [
+      "qwen3.7-max-2026-05-20",
+      "qwen/qwen3.7-max-20260520"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.7-max-preview",
+    "alias": [
+      "qwen3.7-max-preview"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-max-preview",
+    "alias": [
+      "qwen3.6-max-preview",
+      "qwen/qwen3.6-max-preview-20260420"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-max",
+    "alias": [
+      "qwen3-max"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-max-2026-01-23",
+    "alias": [
+      "qwen3-max-2026-01-23"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-max-2025-09-23",
+    "alias": [
+      "qwen3-max-2025-09-23"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-max-preview",
+    "alias": [
+      "qwen3-max-preview"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-max-thinking",
+    "alias": [
+      "qwen3-max-thinking",
+      "qwen/qwen3-max-thinking-20260123"
+    ],
+    "max_tokens": 262144,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen2.5-max",
+    "alias": [
+      "qwen2.5-max"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-max",
+    "alias": [
+      "qwen-max",
+      "qwen-max-latest"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-max-2025-03-25",
+    "alias": [
+      "qwen-max-2025-03-25"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-max-2025-01-25",
+    "alias": [
+      "qwen-max-2025-01-25",
+      "qwen-max-0125"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-max-2024-09-19",
+    "alias": [
+      "qwen-max-2024-09-19",
+      "qwen-max-0919"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-max-intl-sp",
+    "alias": [
+      "qwen-max-intl-sp"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.7-plus",
+    "alias": [
+      "qwen3.7-plus",
+      "qwen3.7-plus-latest",
+      "qwen/qwen3.7-plus-20260602"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.7-plus-2026-05-26",
+    "alias": [
+      "qwen3.7-plus-2026-05-26"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-plus",
+    "alias": [
+      "qwen3.6-plus"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-plus-2026-04-02",
+    "alias": [
+      "qwen3.6-plus-2026-04-02",
+      "qwen/qwen3.6-plus-04-02",
+      "qwen/qwen3.6-plus-04-02:free"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-plus",
+    "alias": [
+      "qwen3.5-plus"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-plus-2026-02-15",
+    "alias": [
+      "qwen3.5-plus-2026-02-15",
+      "qwen/qwen3.5-plus-02-15",
+      "qwen/qwen3.5-plus-20260216"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-plus",
+    "alias": [
+      "qwen-plus",
+      "qwen-plus-latest"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-plus-2025-12-01",
+    "alias": [
+      "qwen-plus-2025-12-01"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-09-11",
+    "alias": [
+      "qwen-plus-2025-09-11"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-07-28",
+    "alias": [
+      "qwen-plus-2025-07-28",
+      "qwen-plus-0728",
+      "qwen/qwen-plus-2025-07-28:thinking"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-07-14",
+    "alias": [
+      "qwen-plus-2025-07-14",
+      "qwen-plus-0714"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-05-15",
+    "alias": [
+      "qwen-plus-2025-05-15"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-04-28",
+    "alias": [
+      "qwen-plus-2025-04-28",
+      "qwen-plus-0428"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-plus-2025-01-25",
+    "alias": [
+      "qwen-plus-2025-01-25",
+      "qwen-plus-0125"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-01-12",
+    "alias": [
+      "qwen-plus-2025-01-12",
+      "qwen-plus-0112"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2024-12-20",
+    "alias": [
+      "qwen-plus-2024-12-20",
+      "qwen-plus-1220"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2024-11-27",
+    "alias": [
+      "qwen-plus-2024-11-27"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2024-11-25",
+    "alias": [
+      "qwen-plus-2024-11-25"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2024-09-19",
+    "alias": [
+      "qwen-plus-2024-09-19"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2024-08-06",
+    "alias": [
+      "qwen-plus-2024-08-06"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-us",
+    "alias": [
+      "qwen-plus-us"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-2025-12-01-us",
+    "alias": [
+      "qwen-plus-2025-12-01-us"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3.6-flash",
+    "alias": [
+      "qwen3.6-flash"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.6-flash-2026-04-16",
+    "alias": [
+      "qwen3.6-flash-2026-04-16"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-flash",
+    "alias": [
+      "qwen3.5-flash"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-flash-2026-02-23",
+    "alias": [
+      "qwen3.5-flash-2026-02-23",
+      "qwen/qwen3.5-flash-02-23",
+      "qwen/qwen3.5-flash-20260224"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-flash",
+    "alias": [
+      "qwen-flash"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-flash-2025-07-28",
+    "alias": [
+      "qwen-flash-2025-07-28"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-flash-us",
+    "alias": [
+      "qwen-flash-us"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-flash-2025-07-28-us",
+    "alias": [
+      "qwen-flash-2025-07-28-us"
+    ],
+    "max_tokens": 1000000,
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-turbo",
+    "alias": [
+      "qwen-turbo",
+      "qwen-turbo-latest"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-turbo-2025-07-15",
+    "alias": [
+      "qwen-turbo-2025-07-15",
+      "qwen-turbo-0715"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-turbo-2025-04-28",
+    "alias": [
+      "qwen-turbo-2025-04-28",
+      "qwen-turbo-0428"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-turbo-2024-11-01",
+    "alias": [
+      "qwen-turbo-2024-11-01",
+      "qwen-turbo-1101"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-turbo-2024-09-19",
+    "alias": [
+      "qwen-turbo-2024-09-19"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-long",
+    "alias": [
+      "qwen-long",
+      "qwen-long-latest"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-long-2025-01-25",
+    "alias": [
+      "qwen-long-2025-01-25",
+      "qwen-long-0125"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-coder-plus",
+    "alias": [
+      "qwen3-coder-plus"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 1000000
+  },
+  {
+    "name": "qwen/qwen3-coder-plus-2025-09-23",
+    "alias": [
+      "qwen3-coder-plus-2025-09-23"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 1000000
+  },
+  {
+    "name": "qwen/qwen3-coder-plus-2025-07-22",
+    "alias": [
+      "qwen3-coder-plus-2025-07-22"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 1000000
+  },
+  {
+    "name": "qwen/qwen3-coder-flash",
+    "alias": [
+      "qwen3-coder-flash"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 1000000
+  },
+  {
+    "name": "qwen/qwen3-coder-flash-2025-07-28",
+    "alias": [
+      "qwen3-coder-flash-2025-07-28"
+    ],
+    "model_types": [
+      "chat"
+    ],
+    "max_tokens": 1000000
+  },
+  {
+    "name": "qwen/qwen-coder-plus",
+    "alias": [
+      "qwen-coder-plus",
+      "qwen-coder-plus-latest"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-coder-plus-2024-11-06",
+    "alias": [
+      "qwen-coder-plus-2024-11-06",
+      "qwen-coder-plus-1106"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-coder-turbo",
+    "alias": [
+      "qwen-coder-turbo",
+      "qwen-coder-turbo-latest"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-coder-turbo-2024-09-19",
+    "alias": [
+      "qwen-coder-turbo-2024-09-19",
+      "qwen-coder-turbo-0919"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-math-plus",
+    "alias": [
+      "qwen-math-plus",
+      "qwen-math-plus-latest"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-math-plus-2024-09-19",
+    "alias": [
+      "qwen-math-plus-2024-09-19",
+      "qwen-math-plus-0919"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-math-plus-2024-08-16",
+    "alias": [
+      "qwen-math-plus-2024-08-16",
+      "qwen-math-plus-0816"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-math-turbo",
+    "alias": [
+      "qwen-math-turbo",
+      "qwen-math-turbo-latest"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-math-turbo-2024-09-19",
+    "alias": [
+      "qwen-math-turbo-2024-09-19",
+      "qwen-math-turbo-0919"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-plus",
+    "alias": [
+      "qwen3-vl-plus"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-plus-2025-12-19",
+    "alias": [
+      "qwen3-vl-plus-2025-12-19"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-plus-2025-09-23",
+    "alias": [
+      "qwen3-vl-plus-2025-09-23"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-flash",
+    "alias": [
+      "qwen3-vl-flash"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-flash-2026-01-22",
+    "alias": [
+      "qwen3-vl-flash-2026-01-22"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-flash-2026-01-22-us",
+    "alias": [
+      "qwen3-vl-flash-2026-01-22-us"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-flash-2025-10-15",
+    "alias": [
+      "qwen3-vl-flash-2025-10-15"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-flash-2025-10-15-us",
+    "alias": [
+      "qwen3-vl-flash-2025-10-15-us"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-vl-flash-us",
+    "alias": [
+      "qwen3-vl-flash-us"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen-vl-max",
+    "alias": [
+      "qwen-vl-max",
+      "qwen-vl-max-latest"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2025-08-13",
+    "alias": [
+      "qwen-vl-max-2025-08-13",
+      "qwen-vl-max-0813"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2025-04-08",
+    "alias": [
+      "qwen-vl-max-2025-04-08",
+      "qwen-vl-max-0408"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2025-04-02",
+    "alias": [
+      "qwen-vl-max-2025-04-02",
+      "qwen-vl-max-0402"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2025-01-25",
+    "alias": [
+      "qwen-vl-max-2025-01-25",
+      "qwen-vl-max-0125"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2024-12-30",
+    "alias": [
+      "qwen-vl-max-2024-12-30",
+      "qwen-vl-max-1230"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2024-11-19",
+    "alias": [
+      "qwen-vl-max-2024-11-19",
+      "qwen-vl-max-1119"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2024-10-30",
+    "alias": [
+      "qwen-vl-max-2024-10-30"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-max-2024-08-09",
+    "alias": [
+      "qwen-vl-max-2024-08-09"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus",
+    "alias": [
+      "qwen-vl-plus",
+      "qwen-vl-plus-latest"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus-2025-08-15",
+    "alias": [
+      "qwen-vl-plus-2025-08-15",
+      "qwen-vl-plus-0815"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus-2025-07-10",
+    "alias": [
+      "qwen-vl-plus-2025-07-10",
+      "qwen-vl-plus-0710"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus-2025-05-07",
+    "alias": [
+      "qwen-vl-plus-2025-05-07",
+      "qwen-vl-plus-0507"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus-2025-01-25",
+    "alias": [
+      "qwen-vl-plus-2025-01-25",
+      "qwen-vl-plus-0125"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus-2025-01-02",
+    "alias": [
+      "qwen-vl-plus-2025-01-02",
+      "qwen-vl-plus-0102"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-plus-2024-08-09",
+    "alias": [
+      "qwen-vl-plus-2024-08-09"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-ocr",
+    "alias": [
+      "qwen-vl-ocr",
+      "qwen-vl-ocr-latest"
+    ],
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-ocr-2025-11-20",
+    "alias": [
+      "qwen-vl-ocr-2025-11-20",
+      "qwen-vl-ocr-1120"
+    ],
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-ocr-2025-08-28",
+    "alias": [
+      "qwen-vl-ocr-2025-08-28",
+      "qwen-vl-ocr-0828"
+    ],
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-ocr-2025-04-13",
+    "alias": [
+      "qwen-vl-ocr-2025-04-13",
+      "qwen-vl-ocr-0413"
+    ],
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen-vl-ocr-2024-10-28",
+    "alias": [
+      "qwen-vl-ocr-2024-10-28",
+      "qwen-vl-ocr-1028"
+    ],
+    "model_types": [
+      "ocr",
+      "image2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-vl-embedding",
+    "alias": [
+      "qwen3-vl-embedding"
+    ],
+    "max_tokens": 8192,
+    "model_types": [
+      "embedding"
+    ],
+    "dimensions": [
+      2560,
+      2048,
+      1536,
+      1024,
+      768,
+      512,
+      256
+    ],
+    "max_dimension": 2560
+  },
+  {
+    "name": "qwen/qwen3-vl-rerank",
+    "alias": [
+      "qwen3-vl-rerank"
+    ],
+    "max_tokens": 30000,
+    "model_types": [
+      "rerank"
+    ],
+    "max_documents": 500
+  },
+  {
+    "name": "qwen/qwen3.5-omni-plus",
+    "alias": [
+      "qwen3.5-omni-plus"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-omni-plus-2026-03-15",
+    "alias": [
+      "qwen3.5-omni-plus-2026-03-15"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-omni-flash",
+    "alias": [
+      "qwen3.5-omni-flash"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3.5-omni-flash-2026-03-15",
+    "alias": [
+      "qwen3.5-omni-flash-2026-03-15"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ],
+    "thinking": {
+      "default_value": true,
+      "clear_thinking": true
+    }
+  },
+  {
+    "name": "qwen/qwen3-omni-flash",
+    "alias": [
+      "qwen3-omni-flash"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-flash-2025-12-01",
+    "alias": [
+      "qwen3-omni-flash-2025-12-01"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-flash-2025-09-15",
+    "alias": [
+      "qwen3-omni-flash-2025-09-15",
+      "qwen3-omni-flash-0915"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-flash-realtime",
+    "alias": [
+      "qwen3-omni-flash-realtime"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-flash-realtime-2025-12-01",
+    "alias": [
+      "qwen3-omni-flash-realtime-2025-12-01"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-flash-realtime-2025-09-15",
+    "alias": [
+      "qwen3-omni-flash-realtime-2025-09-15"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-omni-captioner",
+    "alias": [
+      "qwen3-omni-captioner"
+    ],
+    "model_types": [
+      "audio_caption",
+      "audio2text",
+      "audio_understanding",
+      "caption"
+    ]
+  },
+  {
+    "name": "qwen/qwen-omni-turbo",
+    "alias": [
+      "qwen-omni-turbo",
+      "qwen-omni-turbo-latest"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-omni-turbo-2025-05-08",
+    "alias": [
+      "qwen-omni-turbo-2025-05-08"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-omni-turbo-2025-03-26",
+    "alias": [
+      "qwen-omni-turbo-2025-03-26",
+      "qwen-omni-turbo-0326"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-omni-turbo-2025-01-19",
+    "alias": [
+      "qwen-omni-turbo-2025-01-19",
+      "qwen-omni-turbo-0119"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-omni-turbo-realtime",
+    "alias": [
+      "qwen-omni-turbo-realtime",
+      "qwen-omni-turbo-realtime-latest"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-omni-turbo-realtime-2025-05-08",
+    "alias": [
+      "qwen-omni-turbo-realtime-2025-05-08"
+    ],
+    "model_types": [
+      "chat",
+      "omni",
+      "image2text",
+      "video_understanding",
+      "audio2text",
+      "speech2text",
+      "audio_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash",
+    "alias": [
+      "qwen3-asr-flash"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-2026-02-10",
+    "alias": [
+      "qwen3-asr-flash-2026-02-10"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-2025-09-08",
+    "alias": [
+      "qwen3-asr-flash-2025-09-08"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-us",
+    "alias": [
+      "qwen3-asr-flash-us"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-2025-09-08-us",
+    "alias": [
+      "qwen3-asr-flash-2025-09-08-us"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-filetrans",
+    "alias": [
+      "qwen3-asr-flash-filetrans"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-filetrans-2025-11-17",
+    "alias": [
+      "qwen3-asr-flash-filetrans-2025-11-17"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-realtime",
+    "alias": [
+      "qwen3-asr-flash-realtime"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-realtime-2026-02-10",
+    "alias": [
+      "qwen3-asr-flash-realtime-2026-02-10"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-asr-flash-realtime-2025-10-27",
+    "alias": [
+      "qwen3-asr-flash-realtime-2025-10-27"
+    ],
+    "model_types": [
+      "speech2text",
+      "audio2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-flash",
+    "alias": [
+      "qwen3-tts-flash"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-flash-2025-11-27",
+    "alias": [
+      "qwen3-tts-flash-2025-11-27"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-flash-2025-09-18",
+    "alias": [
+      "qwen3-tts-flash-2025-09-18"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-flash-realtime",
+    "alias": [
+      "qwen3-tts-flash-realtime"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-flash-realtime-2025-11-27",
+    "alias": [
+      "qwen3-tts-flash-realtime-2025-11-27"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-flash-realtime-2025-09-18",
+    "alias": [
+      "qwen3-tts-flash-realtime-2025-09-18"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-instruct-flash",
+    "alias": [
+      "qwen3-tts-instruct-flash"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-instruct-flash-2026-01-26",
+    "alias": [
+      "qwen3-tts-instruct-flash-2026-01-26"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-instruct-flash-realtime",
+    "alias": [
+      "qwen3-tts-instruct-flash-realtime"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-instruct-flash-realtime-2026-01-22",
+    "alias": [
+      "qwen3-tts-instruct-flash-realtime-2026-01-22"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-vc-2026-01-22",
+    "alias": [
+      "qwen3-tts-vc-2026-01-22"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-vc-realtime-2026-01-15",
+    "alias": [
+      "qwen3-tts-vc-realtime-2026-01-15"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-vc-realtime-2025-11-27",
+    "alias": [
+      "qwen3-tts-vc-realtime-2025-11-27"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-vd-2026-01-26",
+    "alias": [
+      "qwen3-tts-vd-2026-01-26"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-vd-realtime-2026-01-15",
+    "alias": [
+      "qwen3-tts-vd-realtime-2026-01-15"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-tts-vd-realtime-2025-12-16",
+    "alias": [
+      "qwen3-tts-vd-realtime-2025-12-16"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen-tts",
+    "alias": [
+      "qwen-tts",
+      "qwen-tts-latest"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen-tts-2025-05-22",
+    "alias": [
+      "qwen-tts-2025-05-22"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen-tts-2025-04-10",
+    "alias": [
+      "qwen-tts-2025-04-10"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen-tts-realtime",
+    "alias": [
+      "qwen-tts-realtime",
+      "qwen-tts-realtime-latest"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen-tts-realtime-2025-07-15",
+    "alias": [
+      "qwen-tts-realtime-2025-07-15"
+    ],
+    "model_types": [
+      "tts"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-livetranslate-flash",
+    "alias": [
+      "qwen3-livetranslate-flash"
+    ],
+    "model_types": [
+      "speech_translation",
+      "audio2text",
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-livetranslate-flash-2025-12-01",
+    "alias": [
+      "qwen3-livetranslate-flash-2025-12-01"
+    ],
+    "model_types": [
+      "speech_translation",
+      "audio2text",
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-livetranslate-flash-realtime",
+    "alias": [
+      "qwen3-livetranslate-flash-realtime"
+    ],
+    "model_types": [
+      "speech_translation",
+      "audio2text",
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen3-livetranslate-flash-realtime-2025-09-22",
+    "alias": [
+      "qwen3-livetranslate-flash-realtime-2025-09-22"
+    ],
+    "model_types": [
+      "speech_translation",
+      "audio2text",
+      "speech2text"
+    ]
+  },
+  {
+    "name": "qwen/qwen-mt-plus",
+    "alias": [
+      "qwen-mt-plus"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-mt-turbo",
+    "alias": [
+      "qwen-mt-turbo"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-mt-flash",
+    "alias": [
+      "qwen-mt-flash"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-mt-lite",
+    "alias": [
+      "qwen-mt-lite"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-mt-image",
+    "alias": [
+      "qwen-mt-image"
+    ],
+    "model_types": [
+      "chat",
+      "image2text",
+      "video_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-2.0-pro",
+    "alias": [
+      "qwen-image-2.0-pro"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-2.0-pro-2026-03-03",
+    "alias": [
+      "qwen-image-2.0-pro-2026-03-03"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-2.0",
+    "alias": [
+      "qwen-image-2.0"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-2.0-2026-03-03",
+    "alias": [
+      "qwen-image-2.0-2026-03-03"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-max",
+    "alias": [
+      "qwen-image-max"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-max-2025-12-30",
+    "alias": [
+      "qwen-image-max-2025-12-30"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-plus",
+    "alias": [
+      "qwen-image-plus"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-plus-2026-01-09",
+    "alias": [
+      "qwen-image-plus-2026-01-09"
+    ],
+    "model_types": [
+      "text-to-image",
+      "image_generation"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-max",
+    "alias": [
+      "qwen-image-edit-max"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-max-2026-01-16",
+    "alias": [
+      "qwen-image-edit-max-2026-01-16"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-plus",
+    "alias": [
+      "qwen-image-edit-plus"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-plus-2025-12-15",
+    "alias": [
+      "qwen-image-edit-plus-2025-12-15"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-image-edit-plus-2025-10-30",
+    "alias": [
+      "qwen-image-edit-plus-2025-10-30"
+    ],
+    "model_types": [
+      "image_edit",
+      "image_generation",
+      "image_understanding"
+    ]
+  },
+  {
+    "name": "qwen/qwen-deep-research",
+    "alias": [
+      "qwen-deep-research"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-doc-turbo",
+    "alias": [
+      "qwen-doc-turbo"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-character",
+    "alias": [
+      "qwen-plus-character"
+    ],
+    "model_types": [
+      "chat"
+    ]
+  },
+  {
+    "name": "qwen/qwen-plus-character-ja",
+    "alias": [
+      "qwen-plus-character-ja"
+    ],
+    "model_types": [
+      "chat"
     ]
   }
 ]

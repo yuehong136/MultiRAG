@@ -38,7 +38,7 @@ func TestVolcEngineAliyunSupportedModelsCLIHTTP(t *testing.T) {
 			journal := testsupport.NewCase(t)
 			catalogPath := filepath.Join(t.TempDir(), "catalog.json")
 			journal.Event("reserve-catalog", map[string]any{"path": catalogPath})
-			if err := os.WriteFile(catalogPath, []byte(`[{"name":"catalog-a","alias":["model-a"],"max_tokens":0,"dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}]`), 0600); err != nil {
+			if err := os.WriteFile(catalogPath, []byte(`[{"name":"catalog-a","alias":["model-a"],"max_tokens":0,"max_dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}]`), 0600); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
@@ -77,7 +77,7 @@ func TestVolcEngineAliyunSupportedModelsCLIHTTP(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, ok := response.(*CommonResponse)
-			want := []map[string]any{{"name": "model-b"}, {"name": "model-a", "max_tokens": float64(0), "dimension": float64(0), "model_types": []any{}, "thinking": map[string]any{"default_value": false, "clear_thinking": false}}}
+			want := []map[string]any{{"name": "model-b"}, {"name": "model-a", "max_tokens": float64(0), "max_dimension": float64(0), "model_types": []any{}, "thinking": map[string]any{"default_value": false, "clear_thinking": false}}}
 			if !ok || !reflect.DeepEqual(result.Data, want) {
 				t.Fatalf("response = %#v", response)
 			}

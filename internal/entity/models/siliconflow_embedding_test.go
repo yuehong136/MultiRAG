@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"sync/atomic"
@@ -21,7 +20,7 @@ func TestSiliconFlowEmbeddingBatchBoundariesAndDimensions(t *testing.T) {
 	for _, size := range []int{0, 1, 32, 33, 65} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			var batches []int
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Model      string
 					Input      []string
@@ -70,7 +69,7 @@ func TestSiliconFlowEmbeddingBatchBoundariesAndDimensions(t *testing.T) {
 
 func TestSiliconFlowEmbeddingDimensionValidation(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1]}]}`)
 	}))
@@ -91,7 +90,7 @@ func TestSiliconFlowEmbeddingLaterBatchFailure(t *testing.T) {
 	for _, failure := range []string{"http", "duplicate", "dimension", "null"} {
 		t.Run(failure, func(t *testing.T) {
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				call := calls.Add(1)
 				var body struct{ Input []string }
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -131,7 +130,7 @@ func TestSiliconFlowEmbeddingLaterBatchFailure(t *testing.T) {
 func TestSiliconFlowEmbeddingLaterBatchCancellation(t *testing.T) {
 	started := make(chan struct{})
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := calls.Add(1)
 		var body struct{ Input []string }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

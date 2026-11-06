@@ -23,7 +23,6 @@ import (
 	"maps"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // SiliconFlowModel implements ModelDriver for SiliconFlow.
@@ -36,16 +35,9 @@ type SiliconFlowModel struct {
 // NewSiliconFlowModel creates a new SiliconFlow model instance.
 func NewSiliconFlowModel(baseURL map[string]string, urlSuffix URLSuffix) *SiliconFlowModel {
 	return &SiliconFlowModel{
-		BaseURL:   maps.Clone(baseURL),
-		URLSuffix: urlSuffix,
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-				DisableCompression:  false,
-			},
-		},
+		BaseURL:    maps.Clone(baseURL),
+		URLSuffix:  urlSuffix,
+		httpClient: &http.Client{Transport: openAIChatTransport},
 	}
 }
 

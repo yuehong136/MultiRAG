@@ -656,7 +656,7 @@ func (m *ModelProviderService) bindEmbeddingModel(ctx context.Context, tenantID,
 	if err != nil {
 		return nil, err
 	}
-	return modelModule.NewEmbeddingModel(driver, &name, config), nil
+	return m.newEmbeddingModel(driver, name, config), nil
 }
 func (m *ModelProviderService) GetRerankModel(tenantID, compositeName string) (*modelModule.RerankModel, error) {
 	return m.bindRerankModel(context.Background(), tenantID, compositeName)
@@ -1029,7 +1029,7 @@ func (m *ModelProviderService) GetEmbeddingModelByIDWithContext(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	return modelModule.NewEmbeddingModel(driver, &name, config), nil
+	return m.newEmbeddingModel(driver, name, config), nil
 }
 func (m *ModelProviderService) GetRerankModelByIDWithContext(ctx context.Context, tenantID string, id int64) (*modelModule.RerankModel, error) {
 	driver, name, config, err := m.getModelConfigByID(ctx, tenantID, id, entity.ModelTypeRerank, nil)
@@ -1116,4 +1116,18 @@ func (m *ModelProviderService) ShowModel(name string) (*entity.Model, error) {
 		return nil, fmt.Errorf("model catalog unavailable")
 	}
 	return m.providerManager.GetModelByNameOrAlias(name)
+}
+
+// newEmbeddingModel snapshots metadata from this service's injected catalog.
+// The driver receives the original callable ID even when an alias supplied it.
+func (m *ModelProviderService) newEmbeddingModel(driver modelModule.ModelDriver, name string, config *modelModule.APIConfig) *modelModule.EmbeddingModel {
+	bound := modelModule.NewEmbeddingModel(driver, &name, config)
+	if m.providerManager != nil {
+		row := m.providerManager.DescribeSupportedModels(driver.Name(), []string{name})[0]
+		bound.MaxDimension = row.MaxDimension
+		if row.Dimensions != nil {
+			bound.Dimensions = *row.Dimensions
+		}
+	}
+	return bound
 }

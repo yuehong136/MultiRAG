@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -19,7 +18,7 @@ func TestJinaEmbeddingsHTTP(t *testing.T)    { testHostedEmbeddingsHTTP(t, "Jina
 func TestMistralChatStructuredContentHTTP(t *testing.T) {
 	var body map[string]any
 	var response = `{"choices":[{"message":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"reason"}]},{"type":"citation"},{"type":"text","text":"answer"}]}}]}`
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer key" || r.URL.Path != "/v1/chat/completions" {
 			t.Error("endpoint or key")
 		}
@@ -57,7 +56,7 @@ func TestMistralStreamHTTP(t *testing.T) {
 		{"late error", "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"error\":{\"message\":\"private-body\"}}\n\n", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.events) }))
+			server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.events) }))
 			defer server.Close()
 			d := NewMistralModel(map[string]string{"default": server.URL}, URLSuffix{Chat: "chat"})
 			done := 0
@@ -78,7 +77,7 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 	var response string
 	var calls atomic.Int32
 	var task string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Method == http.MethodGet {
 			if r.Header.Get("Authorization") != "" {
@@ -164,7 +163,7 @@ func TestJinaTaskDiscoveryRerankHTTP(t *testing.T) {
 
 func TestMistralNativeEmbeddingDimensionHTTP(t *testing.T) {
 	var calls atomic.Int32
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fixture := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

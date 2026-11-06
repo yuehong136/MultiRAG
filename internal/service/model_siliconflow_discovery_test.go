@@ -62,7 +62,7 @@ func TestSiliconFlowDiscoveryConsumersHTTPAndSQL(t *testing.T) {
 	}
 	expected[0].Name += "@owner"
 	var zero entity.Model
-	if err := json.Unmarshal([]byte(`{"name":"controlled-zero","max_tokens":0,"dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}`), &zero); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"controlled-zero","max_tokens":0,"max_dimension":0,"model_types":[],"thinking":{"default_value":false,"clear_thinking":false}}`), &zero); err != nil {
 		t.Fatal(err)
 	}
 	provider.Models = append(provider.Models, &zero)

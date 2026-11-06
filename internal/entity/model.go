@@ -167,7 +167,8 @@ type Model struct {
 	Name              string         `json:"name"`
 	Alias             []string       `json:"alias,omitempty"`
 	MaxTokens         int            `json:"max_tokens"`
-	Dimension         *int           `json:"dimension,omitempty"`
+	MaxDimension      *int           `json:"max_dimension,omitempty"`
+	Dimensions        []int          `json:"dimensions,omitempty"`
 	ModelTypes        []string       `json:"model_types"` // Capabilities, such as chat, embedding and rerank.
 	Features          Features       `json:"features"`
 	Thinking          *ModelThinking `json:"thinking,omitempty"`
@@ -198,11 +199,12 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 // SupportedModel describes a discovered remote ID. Unknown metadata is omitted;
 // pointers preserve declared zero values, false thinking defaults and empty types.
 type SupportedModel struct {
-	Name       string         `json:"name"`
-	MaxTokens  *int           `json:"max_tokens,omitempty"`
-	Dimension  *int           `json:"dimension,omitempty"`
-	ModelTypes *[]string      `json:"model_types,omitempty"`
-	Thinking   *ModelThinking `json:"thinking,omitempty"`
+	Name         string         `json:"name"`
+	MaxTokens    *int           `json:"max_tokens,omitempty"`
+	MaxDimension *int           `json:"max_dimension,omitempty"`
+	Dimensions   *[]int         `json:"dimensions,omitempty"`
+	ModelTypes   *[]string      `json:"model_types,omitempty"`
+	Thinking     *ModelThinking `json:"thinking,omitempty"`
 }
 
 // DescribeSupportedModels enriches inventory without changing its IDs, order or
@@ -236,7 +238,10 @@ func (pm *ProviderManager) DescribeSupportedModels(providerName string, names []
 				value := model.MaxTokens
 				row.MaxTokens = &value
 			}
-			row.Dimension = model.Dimension
+			row.MaxDimension = model.MaxDimension
+			if model.Dimensions != nil {
+				row.Dimensions = &model.Dimensions
+			}
 			if model.ModelTypes != nil {
 				row.ModelTypes = &model.ModelTypes
 			}
@@ -436,6 +441,12 @@ func (pm *ProviderManager) ListModels(providerName string) ([]map[string]interfa
 			"max_tokens":  model.MaxTokens,
 			"model_types": model.ModelTypes,
 			"features":    getFeatureNames(model),
+		}
+		if model.MaxDimension != nil {
+			modelData["max_dimension"] = *model.MaxDimension
+		}
+		if model.Dimensions != nil {
+			modelData["dimensions"] = slices.Clone(model.Dimensions)
 		}
 		models = append(models, modelData)
 	}
@@ -798,10 +809,11 @@ func (pm *ProviderManager) GetModelByNameOrAlias(name string) (*Model, error) {
 // cloneCatalogModel prevents consumers from changing catalog identity or metadata.
 func cloneCatalogModel(model *Model) *Model {
 	clone := *model
-	if model.Dimension != nil {
-		v := *model.Dimension
-		clone.Dimension = &v
+	if model.MaxDimension != nil {
+		v := *model.MaxDimension
+		clone.MaxDimension = &v
 	}
+	clone.Dimensions = slices.Clone(model.Dimensions)
 	clone.Alias = slices.Clone(model.Alias)
 	clone.ModelTypes = slices.Clone(model.ModelTypes)
 	clone.ModelTypeMap = maps.Clone(model.ModelTypeMap)

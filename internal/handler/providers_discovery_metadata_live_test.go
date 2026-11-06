@@ -102,7 +102,7 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 		t.Fatal("private discovery config unavailable")
 	}
 	parsed, err := url.Parse(cfg.AdminDSN)
-	if err != nil || parsed.Host != "127.0.0.1:5432" || cfg.PGEndpoint != parsed.Host {
+	if err != nil || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || cfg.PGEndpoint != parsed.Host {
 		t.Fatal("explicit local TCP database required")
 	}
 	admin, err := sql.Open("pgx", cfg.AdminDSN)
@@ -181,6 +181,8 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 		tokens[id] = token
 	}
 	calls := atomic.Int32{}
+	embedCalls := atomic.Int32{}
+	embedFailure := atomic.Bool{}
 	started := make(chan struct{}, 2)
 	cancelled := make(chan struct{}, 2)
 	upstream := discoveryMetadataServer(t, j, "provider", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +191,34 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 		expectedKey := ""
 		if len(parts) == 3 && parts[0] == "openai" {
 			expectedKey = "Bearer " + parts[1] + "-key"
+		}
+		if len(parts) == 3 && parts[2] == "embeddings" && r.Method == http.MethodPost {
+			call := embedCalls.Add(1)
+			var input struct {
+				Model      string
+				Input      []string
+				Dimensions int
+			}
+			if json.NewDecoder(r.Body).Decode(&input) != nil || input.Model != "namespace/raw" || r.Header.Get("Authorization") != "Bearer one-key" {
+				t.Error("embedding identity or credentials")
+				w.WriteHeader(400)
+				return
+			}
+			if embedFailure.Load() && call%2 == 0 {
+				w.WriteHeader(503)
+				fmt.Fprint(w, "private-provider-error")
+				return
+			}
+			dimension := input.Dimensions
+			if dimension == 0 {
+				dimension = 128
+			}
+			data := make([]models.EmbeddingData, len(input.Input))
+			for i := range data {
+				data[i] = models.EmbeddingData{Index: len(data) - 1 - i, Embedding: make([]float64, dimension)}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": data})
+			return
 		}
 		if len(parts) != 3 || parts[2] != "models" || r.Method != http.MethodGet || r.Header.Get("Authorization") != expectedKey {
 			t.Error("wrong instance URL/method/key")
@@ -221,7 +251,7 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 	}
 	catalogPath := filepath.Join(t.TempDir(), "catalog.json")
 	j.Event("reserve-catalog", map[string]any{"path": catalogPath})
-	if err = os.WriteFile(catalogPath, []byte(`[{"name":"canonical","alias":["namespace/raw"],"max_tokens":8192,"dimension":128,"model_types":["embedding","chat"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"zero","max_tokens":0,"dimension":0,"model_types":[]}]`), 0600); err != nil {
+	if err = os.WriteFile(catalogPath, []byte(`[{"name":"canonical","alias":["namespace/raw"],"max_tokens":8192,"max_dimension":128,"dimensions":[64,128],"model_types":["embedding","chat"],"thinking":{"default_value":false,"clear_thinking":false}},{"name":"zero","max_tokens":0,"max_dimension":0,"dimensions":[],"model_types":[]}]`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err = pm.LoadAllModels(catalogPath); err != nil {
@@ -231,6 +261,8 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 		provider := pm.FindProvider(providerName)
 		provider.URL = map[string]string{"default": upstream.URL + "/" + strings.ToLower(providerName) + "/one", "other": upstream.URL + "/" + strings.ToLower(providerName) + "/two"}
 		provider.URLSuffix.Models = "models"
+		provider.URLSuffix.Embedding = "embeddings"
+		provider.Models = append(provider.Models, &entity.Model{Name: "namespace/raw", ModelTypes: []string{"embedding"}, ModelTypeMap: map[string]bool{"embedding": true}})
 		providerID := strings.ToLower(providerName)
 		if err = db.Create(&entity.TenantModelProvider{ID: providerID, ProviderName: providerName, TenantID: "owner-tenant"}).Error; err != nil {
 			t.Fatal(err)
@@ -316,7 +348,7 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 				t.Fatalf("inventory status/code/cardinality: %d %s", status, body)
 			}
 			rows := response.Data
-			if rows[0].Name != "namespace/raw" || rows[1].Name != "unknown" || rows[2].Name != "zero" || rows[0].MaxTokens == nil || *rows[0].MaxTokens != 8192 || rows[0].Dimension == nil || *rows[0].Dimension != 128 || rows[0].Thinking == nil || rows[0].Thinking.DefaultValue || rows[0].ModelTypes == nil || len(*rows[0].ModelTypes) != 2 || rows[1].MaxTokens != nil || rows[1].ModelTypes != nil || rows[2].MaxTokens == nil || *rows[2].MaxTokens != 0 || rows[2].ModelTypes == nil || len(*rows[2].ModelTypes) != 0 {
+			if rows[0].Name != "namespace/raw" || rows[1].Name != "unknown" || rows[2].Name != "zero" || rows[0].MaxTokens == nil || *rows[0].MaxTokens != 8192 || rows[0].MaxDimension == nil || *rows[0].MaxDimension != 128 || rows[0].Thinking == nil || rows[0].Thinking.DefaultValue || rows[0].ModelTypes == nil || len(*rows[0].ModelTypes) != 2 || rows[1].MaxTokens != nil || rows[1].ModelTypes != nil || rows[2].MaxTokens == nil || *rows[2].MaxTokens != 0 || rows[2].ModelTypes == nil || len(*rows[2].ModelTypes) != 0 {
 				t.Fatalf("typed metadata: %s", body)
 			}
 			if bytes.Contains(body, []byte("model_name")) || bytes.Contains(body, []byte("vendor")) || !bytes.Contains(body, []byte(`{"name":"unknown"}`)) {
@@ -391,6 +423,49 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 	if snapshot() != before {
 		t.Fatal("cancel/timeout mutated SQL")
 	}
+	// The real JWT route binds SQL ownership before catalog preflight. Rejected
+	// dimensions and upstream failures leave every inventory/binding row intact.
+	for _, dimension := range []int{0, 64, 65, 256, -1} {
+		payload, _ := json.Marshal(map[string]any{"provider_name": "Gitee", "instance_name": "one", "model_name": "namespace/raw", "texts": []string{"a", "b"}, "dimension": dimension})
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, api.URL+"/api/v1/embeddings", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+tokens["owner"])
+		req.Header.Set("Content-Type", "application/json")
+		beforeCalls := embedCalls.Load()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output struct {
+			Code common.ErrorCode
+			Data []models.EmbeddingData
+		}
+		err = json.NewDecoder(resp.Body).Decode(&output)
+		resp.Body.Close()
+		valid := dimension == 0 || dimension == 64
+		if err != nil || resp.StatusCode != 200 || valid && (output.Code != common.CodeSuccess || len(output.Data) != 2 || output.Data[0].Index != 0) || !valid && (output.Code != common.CodeBadRequest || output.Data != nil || embedCalls.Load() != beforeCalls) {
+			t.Fatalf("dimension=%d HTTP=%d result=%#v error=%v", dimension, resp.StatusCode, output, err)
+		}
+	}
+	bound, err := svc.GetEmbeddingModel("owner-tenant", "namespace/raw@one@Gitee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound.EmbeddingConfig = &models.EmbeddingConfig{Dimension: 65}
+	beforeEmbed := embedCalls.Load()
+	if result, err := bound.Embed([]string{"q"}); err == nil || result != nil || embedCalls.Load() != beforeEmbed {
+		t.Fatal("bound consumer bypassed dimension preflight", err)
+	}
+	bound.EmbeddingConfig.Dimension = 64
+	embedCalls.Store(0)
+	embedFailure.Store(true)
+	if result, err := bound.Embed(make([]string, 33)); err == nil || result != nil || embedCalls.Load() != 2 {
+		t.Fatal("partial embedding failure succeeded", err)
+	}
+	embedFailure.Store(false)
+	if snapshot() != before {
+		t.Fatal("embedding preflight/success/failure mutated SQL")
+	}
+	j.Event("embedding-dimension-consumers", map[string]any{"JWTHTTP": true, "boundModel": true, "validDimensions": []int{0, 64}, "rejectedBeforeHTTP": []int{-1, 65, 256}, "secondBatchFailureNoPartial": true, "SQLUnchanged": snapshot() == before})
 	if binary := os.Getenv("MULTIRAG_DISCOVERY_CLI"); binary != "" {
 		content, err := os.ReadFile(binary)
 		if err != nil {
@@ -406,6 +481,19 @@ func TestSupportedDiscoveryMetadataHTTPAndSQL(t *testing.T) {
 			t.Fatalf("CLI discovery: %v %s", err, output)
 		}
 		j.Event("cli-process-exit", map[string]any{"pid": cmd.Process.Pid, "exit": cmd.ProcessState.ExitCode(), "typedMetadata": true})
+		for _, dimension := range []int{64, 65} {
+			syntax := fmt.Sprintf(`EMBED TEXT "a" "b" WITH "namespace/raw@one@Gitee" DIMENSION %d;`, dimension)
+			j.Event("reserve-cli-process", map[string]any{"binary": binary, "syntax": syntax})
+			cmd := exec.CommandContext(t.Context(), binary, "-h", u.Host, "-t", tokens["owner"], "-o", "json", syntax)
+			cmd.Dir = t.TempDir()
+			beforeCalls := embedCalls.Load()
+			output, err := cmd.CombinedOutput()
+			if dimension == 64 && (err != nil || !bytes.Contains(output, []byte(`"dimension": 64`))) || dimension == 65 && (err == nil || embedCalls.Load() != beforeCalls) {
+				t.Fatalf("CLI dimension %d: %v %s", dimension, err, output)
+			}
+			j.Event("cli-process-exit", map[string]any{"pid": cmd.Process.Pid, "exit": cmd.ProcessState.ExitCode(), "embeddingDimension": dimension})
+		}
+
 	}
 	j.Event("discovery-contract", map[string]any{"providers": 2, "knownUnknownZero": true, "strictFailures": true, "SQLUnchanged": snapshot() == before, "snapshotBefore": before, "snapshotAfter": snapshot(), "cancelTimeout": true, "cli": os.Getenv("MULTIRAG_DISCOVERY_CLI") != ""})
 }
