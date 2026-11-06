@@ -27,6 +27,7 @@ from contextlib import closing
 from typing import Annotated, Any, Literal
 
 import dashscope
+import httpx
 import numpy as np
 import requests
 from huggingface_hub import snapshot_download
@@ -53,16 +54,34 @@ def _model_request(call: Callable[..., Any], **kwargs: Any) -> Any:
     except ModelException:
         raise
     except Exception as exc:
-        status = getattr(exc, "status_code", None)
-        if status is None:
-            response = getattr(exc, "response", None)
-            if isinstance(response, Mapping) and isinstance(response.get("ResponseMetadata"), Mapping):
-                status = response["ResponseMetadata"].get("HTTPStatusCode")
-        if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
-            status = None
+        response = getattr(exc, "response", None)
+        metadata = response.get("ResponseMetadata") if isinstance(response, Mapping) else None
+        candidates = (
+            getattr(exc, "status_code", None),
+            getattr(exc, "http_status", None),
+            getattr(exc, "code", None),
+            metadata.get("HTTPStatusCode") if isinstance(metadata, Mapping) else None,
+            getattr(response, "status_code", None),
+        )
+        status = next((value for value in candidates if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599), None)
         retryable = status in {408, 429} or (status is not None and status >= 500)
         if status is None:
-            retryable = isinstance(exc, (requests.Timeout, requests.ConnectionError, APIConnectionError, TimeoutError, ConnectionError))
+            retryable = isinstance(
+                exc, (requests.Timeout, requests.ConnectionError, httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, APIConnectionError, TimeoutError, ConnectionError)
+            )
+            # These installed SDKs use dedicated transport exceptions rather than
+            # HTTP status objects. Import only the SDK that raised the error.
+            modules = {base.__module__ for base in type(exc).__mro__}
+            if "mistralai.exceptions" in modules:
+                from mistralai.exceptions import MistralAPIStatusException, MistralConnectionException
+
+                retryable = isinstance(exc, (MistralAPIStatusException, MistralConnectionException))
+            elif "voyageai.error" in modules:
+                from voyageai.error import APIConnectionError as VoyageConnectionError
+                from voyageai.error import RateLimitError, ServiceUnavailableError, TryAgain
+                from voyageai.error import Timeout as VoyageTimeout
+
+                retryable = isinstance(exc, (VoyageConnectionError, VoyageTimeout, RateLimitError, ServiceUnavailableError, TryAgain))
         suffix = f" (HTTP {status})" if status is not None else ""
         raise ModelException(f"Embedding provider request failed{suffix}", status_code=status, retryable=retryable) from None
 

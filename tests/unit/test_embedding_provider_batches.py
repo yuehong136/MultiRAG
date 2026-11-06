@@ -230,3 +230,45 @@ def test_http_parse_failure_releases_response(monkeypatch: pytest.MonkeyPatch, f
     with pytest.raises(ModelException):
         model.encode(["document"])
     assert closed == [1]
+
+
+@pytest.mark.parametrize("sdk,status,retryable", [("voyage", 429, True), ("mistral", 503, True), ("gemini", 500, True), ("cohere", 401, False), ("ollama", 408, True)])
+def test_actual_locked_sdk_exception_metadata_is_preserved(sdk: str, status: int, retryable: bool, caplog: pytest.LogCaptureFixture) -> None:
+    from cohere.core.api_error import ApiError
+    from google.genai.errors import APIError
+    from mistralai.exceptions import MistralAPIException
+    from ollama import ResponseError
+    from voyageai.error import RateLimitError
+
+    error = {
+        "voyage": RateLimitError("private-sdk-credential", http_status=status),
+        "mistral": MistralAPIException("private-sdk-credential", http_status=status),
+        "gemini": APIError(status, {"error": {"message": "private-sdk-credential", "code": status}}),
+        "cohere": ApiError(status_code=status, body={"message": "private-sdk-credential"}),
+        "ollama": ResponseError("private-sdk-credential", status_code=status),
+    }[sdk]
+
+    def fail() -> Any:
+        raise error
+
+    with pytest.raises(ModelException) as caught:
+        embedding._model_request(fail)
+    assert caught.value.status_code == status and caught.value.retryable is retryable
+    assert "private-sdk-credential" not in str(caught.value) + caplog.text
+
+
+@pytest.mark.parametrize("sdk", ["mistral", "voyage", "httpx"])
+def test_actual_locked_sdk_transport_failures_are_retryable(sdk: str) -> None:
+    import httpx
+    from mistralai.exceptions import MistralConnectionException
+    from voyageai.error import Timeout
+
+    error = {"mistral": MistralConnectionException("private"), "voyage": Timeout("private"), "httpx": httpx.ConnectError("private")}[sdk]
+
+    def fail() -> Any:
+        raise error
+
+    with pytest.raises(ModelException) as caught:
+        embedding._model_request(fail)
+    assert caught.value.status_code is None and caught.value.retryable is True
+    assert "private" not in str(caught.value)
