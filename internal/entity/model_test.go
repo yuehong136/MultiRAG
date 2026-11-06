@@ -336,14 +336,51 @@ func TestProviderFixCatalogRoutingAndCapabilities(t *testing.T) {
 	if err != nil || !voice.ModelTypeMap["tts"] {
 		t.Fatal("xAI voice catalog", voice, err)
 	}
-	found := false
-	for _, model := range manager.FindProvider("Replicate").Models {
-		if model.ModelTypeMap["rerank"] {
-			found = true
-		}
+}
+
+func TestReplicateCatalogCapabilities(t *testing.T) {
+	manager, err := NewProviderManager(filepath.Join("..", "..", "configs", "models"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("Replicate rerank catalog")
+	provider := manager.FindProvider("Replicate")
+	if provider == nil || provider.ModelDriver.Name() != "replicate" || provider.Class != "replicate" {
+		t.Fatalf("Replicate driver registration: %#v", provider)
+	}
+	want := map[string]string{
+		"meta/llama-4-maverick-instruct": "chat",
+		"meta/llama-4-scout-instruct":    "chat",
+		"meta/meta-llama-3-70b-instruct": "chat",
+		"meta/meta-llama-3-8b-instruct":  "chat",
+		"replicate/all-mpnet-base-v2:b6b7585c9640cd7a9572c6e129c9549d79c9c31f0d3fdce7baac7c67ca38f305":                     "embedding",
+		"ibm-granite/granite-embedding-278m-multilingual:1f76d42a05f120e12272746d5a2d86b525c13420773f795a4cbef9117d8685f1": "embedding",
+	}
+	listed, err := manager.ListModels("Replicate")
+	if err != nil || len(listed) != len(want) {
+		t.Fatalf("Replicate public catalog: %#v, %v", listed, err)
+	}
+	for _, row := range listed {
+		name, ok := row["name"].(string)
+		typ, known := want[name]
+		if !ok || !known {
+			t.Fatalf("unexpected catalog model: %#v", row)
+		}
+		model, err := manager.GetModelByName("Replicate", name)
+		if err != nil || !slices.Equal(model.ModelTypes, []string{typ}) || !model.ModelTypeMap[typ] {
+			t.Fatalf("catalog capability for %s: %#v, %v", name, model, err)
+		}
+		if url, _, err := manager.GetModelUrl("Replicate", name, "rerank"); err == nil || url != nil {
+			t.Fatalf("catalog model %s advertised as reranker: %v, %v", name, url, err)
+		}
+		delete(want, name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("catalog models missing: %#v", want)
+	}
+	// Catalog retirement does not remove the explicit Replicate rerank driver.
+	const retired = "yxzwayne/bge-reranker-v2-m3:7f7c6e9d18336e2cbf07d88e9362d881d2fe4d6a9854ec1260f115cabc106a8c"
+	if model, err := manager.GetModelByName("Replicate", retired); err == nil || model != nil {
+		t.Fatalf("retired reranker still advertised: %#v, %v", model, err)
 	}
 }
 

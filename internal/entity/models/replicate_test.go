@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,7 +23,7 @@ func TestReplicatePredictionRoutesAndPrompt(t *testing.T) {
 	for _, name := range []string{"owner/model", version, "owner/model:" + version} {
 		t.Run(name, func(t *testing.T) {
 			key := "controlled-key"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				path := "/v1/predictions"
 				if name == "owner/model" {
 					path = "/v1/models/owner/model/predictions"
@@ -68,7 +67,7 @@ func TestReplicatePollingAndFallbackTerminalState(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-stream=%v", status, stream), func(t *testing.T) {
 				var polls atomic.Int64
 				key := "key"
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method == http.MethodPost {
 						fmt.Fprintf(w, `{"id":"pred-1","status":"starting","urls":{"get":"http://%s/v1/predictions/pred-1"}}`, r.Host)
 					} else {
@@ -119,7 +118,7 @@ func TestReplicateSSETerminalContract(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			key := "key"
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost {
 					fmt.Fprintf(w, `{"id":"pred-1","status":"processing","urls":{"stream":"http://%s/stream"}}`, r.Host)
 					return
@@ -144,7 +143,7 @@ func TestReplicateSSETerminalContract(t *testing.T) {
 func TestReplicateInvalidResponsesAndInputs(t *testing.T) {
 	key := "key"
 	for _, response := range []string{`{}`, `{"id":"pred-1","status":"successful","output":"bad"}`, `{"id":"pred-1","status":"succeeded","output":null}`, `{"id":"pred-1","status":"succeeded","output":{}}`, `{"id":"pred-1","status":"succeeded","output":[null,"text"]}`, `{"id":"pred-1","status":"succeeded","output":" "}`, `{"id":"pred-1","status":"succeeded","error":"private-provider-body","output":"text"}`, `{"id":"pred-1","status":"starting","urls":{"get":"https://untrusted.invalid/poll"}}`} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
+		srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 		m := newReplicateTestModel(srv.URL)
 		if _, err := m.ChatWithMessages("owner/model", &APIConfig{APIKey: &key}, []Message{{Role: "user", Content: "hello"}}, nil); err == nil || strings.Contains(err.Error(), "private-provider-body") {
 			t.Fatal("malformed prediction accepted or leaked", response, err)
@@ -152,7 +151,7 @@ func TestReplicateInvalidResponsesAndInputs(t *testing.T) {
 		srv.Close()
 	}
 	var calls atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer srv.Close()
 	m := newReplicateTestModel(srv.URL)
 	for _, name := range []string{"", " ", "owner/../model", "../model", "owner/model:bad", "bad-version", "owner/model?query"} {
@@ -170,7 +169,7 @@ func TestReplicateInvalidResponsesAndInputs(t *testing.T) {
 
 func TestReplicateDiscoveryCancellationAndSender(t *testing.T) {
 	key := "key"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
 			if r.Method != http.MethodGet || r.ContentLength != 0 {
@@ -206,7 +205,7 @@ func TestReplicateDiscoveryCancellationAndSender(t *testing.T) {
 func TestReplicateTextPartsAndMediaPreflight(t *testing.T) {
 	key := "key"
 	var calls atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		var body struct {
 			Input map[string]any `json:"input"`
