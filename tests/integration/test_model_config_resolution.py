@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -16,8 +16,26 @@ from api.db.db_models import LLM, LLMFactories, TenantLLM, get_db
 from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name
 from api.db.services.tenant_llm_service import TenantLLMService
 from common import resources, settings
+from core.llm.openrouter_auth import decode_openrouter_key
+from tests.support.resource_journal import ResourceJournal
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture
+def credential_owner(bootstrapped_engine: Engine) -> Iterator[str]:
+    owner = uuid.uuid4().hex
+    journal = ResourceJournal("provider-credential-roundtrip")
+    journal.event("reserve-sql-rows", database=bootstrapped_engine.url.database, owner=owner, table=TenantLLM.__tablename__)
+    try:
+        yield owner
+    finally:
+        with Session(bootstrapped_engine) as writer:
+            writer.execute(delete(TenantLLM).where(TenantLLM.tenant_id == owner))
+            writer.commit()
+        with Session(bootstrapped_engine) as reader:
+            assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == owner)) == 0
+        journal.event("cleanup-readback", owner=owner, remaining=0)
 
 
 def test_image_fallback_reloads_chat_registration_as_cv(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,19 +88,24 @@ def test_image_fallback_reloads_chat_registration_as_cv(bootstrapped_engine: Eng
         ("VolcEngine", {"ark_api_key": "fixture-key", "endpoint_id": "fixture-endpoint"}, {"endpoint_id": "new-endpoint"}),
     ],
 )
-def test_provider_credentials_survive_probe_save_and_reload(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, factory: str, credentials: dict[str, Any], edit: dict[str, Any]) -> None:
+def test_provider_credentials_survive_probe_save_and_reload(
+    bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, credential_owner: str, factory: str, credentials: dict[str, Any], edit: dict[str, Any]
+) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     monkeypatch.setitem(resources._state, "secret_key", "model-config-test-signing-key")
     from api.apps import llm_app
 
-    owner = uuid.uuid4().hex
+    owner = credential_owner
     probed: list[dict[str, Any]] = []
+    # OpenRouter has a known-field envelope shared by discovery and runtime.
+    # Other legacy providers retain additional stored fields during an edit.
+    retained = {} if factory == "OpenRouter" else {"opaque": {"retain": True}}
 
     class ProbeModel:
         def __init__(self, key: str, model_name: str, **kwargs: Any) -> None:
-            probed.append(json.loads(key))
+            probed.append(decode_openrouter_key(key) if factory == "OpenRouter" else json.loads(key))
 
         async def async_chat_streamly(self, *args: Any, **kwargs: Any) -> AsyncIterator[str | int]:
             yield "fixture answer"
@@ -107,14 +130,14 @@ def test_provider_credentials_survive_probe_save_and_reload(bootstrapped_engine:
         with Session(bootstrapped_engine) as db:
             row = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).one()
             assert json.loads(row.api_key) == {**credentials, "is_tools": True}
-            # Simulate a stored field unknown to the current UI, then edit without api_key.
-            row.api_key = json.dumps({**credentials, "opaque": {"retain": True}, "is_tools": True})
+            # Edit without api_key and preserve fields allowed by this provider.
+            row.api_key = json.dumps({**credentials, **retained, "is_tools": True})
             db.commit()
             row_id = row.id
         response = client.post("/v1/llm/add_llm", json={**request, **edit})
         assert response.status_code == 200 and response.json()["retcode"] == 0, response.text
 
-    expected = {**credentials, "opaque": {"retain": True}, **edit}
+    expected = {**credentials, **retained, **edit}
     assert probed[-1] == expected
     with Session(bootstrapped_engine) as db:
         row = db.scalars(select(TenantLLM).where(TenantLLM.tenant_id == owner)).one()
@@ -125,16 +148,54 @@ def test_provider_credentials_survive_probe_save_and_reload(bootstrapped_engine:
         assert json.loads(config["api_key_payload"]) == expected
 
 
+@pytest.mark.parametrize(
+    "credential",
+    [
+        '{"api_key":"fixture-key","provider_order":["first"],"opaque":{"retain":true}}',
+        '{"api_key":"fixture-key","provider_order":false}',
+        '{"api_key":"fixture-key","api_key":"second-key"}',
+    ],
+    ids=["unknown-field", "invalid-order", "duplicate-key"],
+)
+def test_invalid_openrouter_credentials_fail_before_runtime_without_rewriting_storage(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, credential_owner: str, credential: str) -> None:
+    constructed: list[str] = []
+
+    class ForbiddenModel:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            constructed.append("OpenRouter")
+            pytest.fail("Invalid credentials reached the provider constructor")
+
+    monkeypatch.setattr(provider_models, "ChatModel", {"OpenRouter": ForbiddenModel})
+    with Session(bootstrapped_engine) as writer:
+        row = TenantLLM(tenant_id=credential_owner, llm_factory="OpenRouter", llm_name="fixture-model", mdl_type="chat", api_key=credential, used_tokens=0, status="1")
+        writer.add(row)
+        writer.commit()
+        identifier = row.id
+
+    with Session(bootstrapped_engine) as db:
+        with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
+            get_model_config_by_id(db, identifier, tenant_id=credential_owner)
+        with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
+            get_model_config_by_type_and_name(db, credential_owner, "chat", "fixture-model@OpenRouter")
+        with pytest.raises(ValueError, match=r"^Invalid OpenRouter credential$"):
+            TenantLLMService.model_instance(db, credential_owner, db.get(TenantLLM, identifier).to_dict())
+        db.commit()
+
+    assert constructed == []
+    with Session(bootstrapped_engine) as reader:
+        persisted = reader.get(TenantLLM, identifier)
+        assert persisted.api_key == credential and persisted.used_tokens == 0
+        assert persisted.tenant_id == credential_owner and persisted.status == "1"
+        assert reader.scalar(select(func.count()).select_from(TenantLLM).where(TenantLLM.tenant_id == credential_owner)) == 1
+
+
 @pytest.mark.parametrize("limit,tools", [(0, False), (32768, True)])
 def test_model_record_metadata_survives_commit_all_resolvers_and_bundle(bootstrapped_engine: Engine, monkeypatch: pytest.MonkeyPatch, limit: int, tools: bool) -> None:
-    from sqlalchemy import delete, func
-
     from api.db.db_models import Tenant, TenantModel, TenantModelInstance, TenantModelProvider
     from api.db.joint_services.tenant_model_service import get_tenant_default_model_by_type
     from api.db.services.llm_service import LLMBundle
     from api.db.services.tenant_llm_service import TenantLangfuseService
     from tests.support.provider_instances import tenant
-    from tests.support.resource_journal import ResourceJournal
 
     owner, foreign, pid, iid = (uuid.uuid4().hex for _ in range(4))
     journal = ResourceJournal("model-record-metadata")
