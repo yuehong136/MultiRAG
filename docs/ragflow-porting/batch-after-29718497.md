@@ -43,6 +43,8 @@ I 将 Go 组合、Python 组合和最终 Web manifest 与最终已提交源码�
 
 I 在相关移植前实际复现并保留两项既有失败：Python OpenRouter credential probe/save/reload 的 `Invalid OpenRouter credential`，以及 Go `TestProviderFixCatalogRoutingAndCapabilities` 的 Replicate rerank catalog 断言。相关基线源码与 `42a54005` 一致；本批未擅自改无关逻辑、削弱断言或宣称全量全绿。此前批次的其他失败不能替代这次现状证据。
 
+2026-11-06 后续已按当前合同修正这两条旧测试并复验，另完成独立 Web fresh install；见[凭证、目录与安装复验](after297-provider-web-followup.md)。后续通过不覆盖本节保留的首次失败、资源记录偏差与未实现能力。
+
 每个 owner 接收后先实际 unbundle/恢复并核验 commit/tree/改动 blob，再精确删除自有 worktree/ref/实际 git admin、临时恢复库、运行环境和缓存；I 最后退役。原始命令、输入哈希、首错、raw exit、JUnit、case 资源独立清理读回与恢复 bundle 留在证据根。主树原 28 项 WIP 的内容、状态及空暂存区均保留，不编辑其脏 `PROGRESS.md`。最终独立读回以 `cleanup.json` 为准。
 
 `strictProtocolPassed=false`：I/B 首次 worktree 的事前登记脚本失败后创建仍继续，R 的首次状态输出早于明确登记，W 首次 hook bootstrap 不可用后补跑相同检查，均保留真实偏差。U 的 npm 命令曾通过借用链接改写主 Web 的 `node_modules/.package-lock.json`；原缓存未留存，无法精确恢复。保留修改后哈希与只读副本，未猜测恢复或删除共享资源；最终 Web 验证使用自有可写元数据。该共享派生缓存的改变不能声称为所有借用资源原样不动，后续 fresh install 的一致性仍待独立验证。
