@@ -30,6 +30,22 @@ from tests.support.runtime_upload import runtime_upload_api as runtime_upload_ap
 from tests.support.web_consumer import tsx_runner
 
 
+def test_http_top_size_is_independent_of_candidate_total(search_api: dict[str, Any]) -> None:
+    env = search_api
+    payload = {"question": "availability", "dataset_ids": [env["dataset"], env["second"]], "page": 1, "top_k": 1024, "search_mode": {"type": "dense"}}
+    first = request(env, "POST", "/search", json={**payload, "size": 1}).json()
+    expanded = request(env, "POST", "/search", json={**payload, "size": 2}).json()
+    assert first["code"] == expanded["code"] == 0, (first, expanded)
+    assert first["data"]["total"] == expanded["data"]["total"] == 2
+    assert len(first["data"]["chunks"]) == 1 and len(expanded["data"]["chunks"]) == 2
+    assert first["data"]["chunks"][0]["chunk_id"] == expanded["data"]["chunks"][0]["chunk_id"]
+    filtered = request(env, "POST", "/search", json={**payload, "size": 1, "doc_ids": [env["second_doc"]]}).json()
+    assert filtered["code"] == 0 and filtered["data"]["total"] == 1
+    assert len(filtered["data"]["chunks"]) == 1 and filtered["data"]["chunks"][0]["doc_id"] == env["second_doc"]
+    empty = request(env, "POST", "/search", json={**payload, "size": 1, "doc_ids": []}).json()
+    assert empty["code"] == 0 and empty["data"]["total"] == 0 and empty["data"]["chunks"] == []
+
+
 @pytest.mark.parametrize("mode", ["dense", "sparse", "hybrid", "fusion"])
 def test_http_search_filters_disabled_chunks_and_metadata(search_api: dict[str, Any], mode: str) -> None:
     env = search_api

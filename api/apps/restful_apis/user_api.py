@@ -4,11 +4,11 @@ import secrets
 import string
 from base64 import b64decode
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from api.db.services import password_recovery_service as recovery
 from api.db.services.user_service import TenantService, UserService
 from api.utils.api_utils import Principal, async_current_user, get_data_error_result, get_json_result, server_error_response
 from api.utils.crypt import decrypt
+from api.utils.nickname_validation import normalize_nickname
 from api.utils.password_recovery import check_origin as check_recovery_origin
 from api.utils.password_recovery import clear_token as clear_recovery_token
 from api.utils.password_recovery import request_token as recovery_request_token
@@ -37,6 +38,8 @@ from common.time_utils import current_timestamp, datetime_format, get_format_tim
 
 router = APIRouter()
 
+Nickname = Annotated[str, BeforeValidator(normalize_nickname)]
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -50,7 +53,7 @@ class RegisterRequest(BaseModel):
     email: str
     """用户的电子邮件地址。"""
 
-    nickname: str
+    nickname: Nickname
     """用户的昵称。"""
 
     password: str
@@ -91,7 +94,7 @@ class UserUpdateRequest(BaseModel):
     is_superuser: bool = Field(None, description="Superuser flag")
     login_channel: str = Field(None, description="Login channel")
     avatar: str = Field(None, description="User's avatar (base64 encoded)")
-    nickname: str = Field(None, description="User's nickname")
+    nickname: Nickname = Field(None, description="User's nickname; 1–100 Unicode code points after trimming")
     timezone: str = Field(None, description="User's timezone")
 
 
