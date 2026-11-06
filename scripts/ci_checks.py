@@ -157,9 +157,10 @@ GO_REQUIRED_TESTS = frozenset(
     {
         "multirag/internal/handler::TestAfter10bbeAskChatRAGJWTSQL",
         "multirag/internal/handler::TestAfter10bbeAgentMetadataHTTPAndSQL",
+        "multirag/internal/handler::TestHandlerInternalErrorsSQLHTTP",
         "multirag/internal/service::TestAfter10bbeDBProbeMySQLProtocol",
         "multirag/internal/service::TestDeepSeekCatalogDiscoveryConsumersHTTPAndSQL",
-        "multirag/internal/service::TestQwenCatalogDiscoveryConsumersHTTPAndSQL",
+        "multirag/internal/service::TestExpandedCatalogDiscoveryConsumersHTTPAndSQL",
         "multirag/internal/handler::TestAgentDownloadHTTP",
         "multirag/internal/service::TestAgentDownloadAuthority",
         "multirag/internal/service::TestAgentDownloadStorageFailures",

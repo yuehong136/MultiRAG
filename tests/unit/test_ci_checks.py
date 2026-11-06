@@ -235,6 +235,8 @@ def test_allowed_opt_ins_do_not_hide_failed_or_unfinished_packages(tmp_path: Pat
         "multirag/internal/skills::TestLegacyEmbeddingScratchPostgres",
         "multirag/internal/router::TestAfter33GManagementHTTPAndSQL",
         "multirag/internal/router::TestAfter33GManagementHTTPAndSQL/built_CLI_consumer",
+        "multirag/internal/handler::TestHandlerInternalErrorsSQLHTTP",
+        "multirag/internal/service::TestExpandedCatalogDiscoveryConsumersHTTPAndSQL",
     ],
 )
 def test_ci_go_requires_service_tests(tmp_path: Path, identity: str, monkeypatch: pytest.MonkeyPatch) -> None:
