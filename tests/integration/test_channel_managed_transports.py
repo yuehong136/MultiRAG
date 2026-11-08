@@ -34,11 +34,20 @@ from api.channels.wecom.channel import WeComChannel
 from api.channels.worker import ChannelWorker
 from api.db.db_models import ChannelSecret, ChatChannel
 from tests.support.channel_provider_http import channel_provider_http
+from tests.support.database import scratch_database
+
+
+@pytest.fixture(scope="module")
+def channel_engine(tmp_path_factory: pytest.TempPathFactory) -> Iterator[sa.Engine]:
+    # Use the explicit, journaled scratch lifecycle. The generic conftest's
+    # Testcontainers fallback cannot provide a per-database ownership receipt.
+    with scratch_database(tmp_path_factory.mktemp("managed-channel-sql")) as engine:
+        yield engine
 
 
 @pytest.fixture
-def channel_http(bootstrapped_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[str, Any]]:
-    with channel_provider_http(bootstrapped_engine, tmp_path) as env:
+def channel_http(channel_engine: sa.Engine, tmp_path: Path) -> Iterator[dict[str, Any]]:
+    with channel_provider_http(channel_engine, tmp_path) as env:
         yield env
 
 
